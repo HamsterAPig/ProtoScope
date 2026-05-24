@@ -20,6 +20,27 @@ option(PROTOSCOPE_ENABLE_GUI "Build ProtoScope GUI runtime" ON)
 add_subdirectory(3rdparty/spdlog)
 add_subdirectory(3rdparty/yaml-cpp)
 
+add_library(protoscope_asio INTERFACE)
+target_include_directories(protoscope_asio
+    INTERFACE
+        ${CMAKE_SOURCE_DIR}/3rdparty/asio/asio/include
+)
+target_compile_definitions(protoscope_asio
+    INTERFACE
+        ASIO_STANDALONE
+)
+if(WIN32)
+    target_link_libraries(protoscope_asio
+        INTERFACE
+            ws2_32
+            mswsock
+    )
+    target_compile_definitions(protoscope_asio
+        INTERFACE
+            _WIN32_WINNT=0x0601
+    )
+endif()
+
 set(PROTOSCOPE_IMGUI_ROOT ${CMAKE_SOURCE_DIR}/3rdparty/imgui)
 set(PROTOSCOPE_IMGUI_SOURCES
     ${PROTOSCOPE_IMGUI_ROOT}/imgui.cpp
@@ -87,6 +108,7 @@ target_include_directories(protoscope_transport
 target_link_libraries(protoscope_transport
     PUBLIC
         protoscope_protocol_utils
+        protoscope_asio
 )
 target_compile_features(protoscope_transport PUBLIC cxx_std_20)
 
@@ -229,9 +251,6 @@ target_link_libraries(protoscope_tests
         protoscope_scripting
         protoscope_transport
 )
-if(WIN32)
-    target_link_libraries(protoscope_tests PRIVATE ws2_32)
-endif()
 target_compile_features(protoscope_tests PRIVATE cxx_std_20)
 if(MSVC)
     target_compile_options(protoscope_tests PRIVATE /W4 /permissive- /utf-8)
@@ -245,4 +264,5 @@ message(STATUS "  spdlog      -> ${CMAKE_SOURCE_DIR}/3rdparty/spdlog")
 message(STATUS "  yaml-cpp    -> ${CMAKE_SOURCE_DIR}/3rdparty/yaml-cpp")
 message(STATUS "  imgui       -> ${CMAKE_SOURCE_DIR}/3rdparty/imgui")
 message(STATUS "  libdwarf    -> ${CMAKE_SOURCE_DIR}/3rdparty/libdwarf-code")
-message(STATUS "  lua/sol2/asio/implot -> TODO: add submodules before real runtime integration")
+message(STATUS "  asio        -> ${CMAKE_SOURCE_DIR}/3rdparty/asio")
+message(STATUS "  lua/sol2/implot -> TODO: add submodules before real runtime integration")

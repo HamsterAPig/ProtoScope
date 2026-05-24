@@ -105,3 +105,21 @@ void test_tcp_transport_roundtrip() {
     client.close();
     server.close();
 }
+
+void test_serial_transport_error_path() {
+    using namespace protoscope::transport;
+
+    SerialTransport serial;
+    const bool opened = serial.open(SerialConfig{.portName = "__PROTO_SCOPE_INVALID_PORT__", .baudRate = 115200});
+    require(!opened, "无效串口不应打开成功");
+    require(serial.state() == TransportState::Error, "无效串口应进入错误态");
+
+    const auto events = serial.takeEvents();
+    bool hasError = false;
+    for (const auto& event : events) {
+        if (const auto* error = std::get_if<TransportErrorEvent>(&event)) {
+            hasError = !error->message.empty();
+        }
+    }
+    require(hasError, "无效串口应产生错误事件");
+}

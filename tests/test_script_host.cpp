@@ -127,6 +127,7 @@ static const TestCase kAllTests[] = {
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
+    {"serial_transport_error_path", &test_serial_transport_error_path},
 };
 
 } // namespace

@@ -3,14 +3,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <deque>
-#include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
-#include <queue>
 #include <string>
-#include <unordered_map>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -94,7 +90,6 @@ public:
     TransportBase();
     ~TransportBase() override;
 
-    bool send(std::vector<std::uint8_t> bytes) override;
     TransportState state() const override;
     std::vector<TransportEvent> takeEvents() override;
     std::uint64_t txCount() const override;
@@ -106,7 +101,6 @@ protected:
     void addTx(std::size_t size);
     void addRx(std::size_t size);
     static std::uint64_t nowMs();
-    virtual void pumpIo();
 
 private:
     mutable std::mutex eventsMutex_;
@@ -118,39 +112,48 @@ private:
 
 class TcpClientTransport final : public TransportBase {
 public:
+    TcpClientTransport();
+    ~TcpClientTransport() override;
+
     bool open(const TransportConfig& config) override;
     void close() override;
     bool send(std::vector<std::uint8_t> bytes) override;
 
 private:
-    void pumpIo() override;
-
-    std::intptr_t socket_{-1};
+    struct Runtime;
+    std::unique_ptr<Runtime> runtime_;
     std::optional<ConnectionContext> context_;
 };
 
 class TcpServerTransport final : public TransportBase {
 public:
+    TcpServerTransport();
+    ~TcpServerTransport() override;
+
     bool open(const TransportConfig& config) override;
     void close() override;
     bool send(std::vector<std::uint8_t> bytes) override;
 
 private:
-    void pumpIo() override;
-
-    std::intptr_t listenerSocket_{-1};
-    std::intptr_t clientSocket_{-1};
-    std::optional<ConnectionContext> context_;
+    struct Runtime;
+    std::unique_ptr<Runtime> runtime_;
+    std::optional<ConnectionContext> listenContext_;
     std::optional<ConnectionContext> clientContext_;
     bool rejectNewConnection_{true};
 };
 
 class SerialTransport final : public TransportBase {
 public:
+    SerialTransport();
+    ~SerialTransport() override;
+
     bool open(const TransportConfig& config) override;
     void close() override;
+    bool send(std::vector<std::uint8_t> bytes) override;
 
 private:
+    struct Runtime;
+    std::unique_ptr<Runtime> runtime_;
     std::optional<ConnectionContext> context_;
 };
 

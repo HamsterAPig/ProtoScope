@@ -2,23 +2,23 @@
 
 #include <array>
 #include <atomic>
-#include <cstring>
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <utility>
 
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <cerrno>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
+#include <asio/error.hpp>
+#include <asio/connect.hpp>
+#include <asio/executor_work_guard.hpp>
+#include <asio/io_context.hpp>
+#include <asio/ip/address.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/post.hpp>
+#include <asio/serial_port.hpp>
+#include <asio/write.hpp>
 
 namespace protoscope::transport {
 
@@ -29,152 +29,72 @@ std::uint64_t makeConnectionId() {
     return counter.fetch_add(1, std::memory_order_relaxed);
 }
 
-#if defined(_WIN32)
-using SocketHandle = SOCKET;
-constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
-#else
-using SocketHandle = int;
-constexpr SocketHandle kInvalidSocket = -1;
-#endif
-
-SocketHandle socketFromStorage(std::intptr_t value) {
-    return static_cast<SocketHandle>(value);
+std::uint64_t currentTimeMs() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
 }
 
-void storeSocket(std::intptr_t& slot, SocketHandle socket) {
-    slot = static_cast<std::intptr_t>(socket);
+std::string endpointText(const asio::ip::tcp::endpoint& endpoint) {
+    return endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
 }
 
-bool ensureSocketRuntime(std::string* error = nullptr) {
-#if defined(_WIN32)
-    static const bool initialized = [] {
-        WSADATA data{};
-        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
-    }();
-
-    if (!initialized && error != nullptr) {
-        *error = "WSAStartup 初始化失败";
-    }
-    return initialized;
-#else
-    (void)error;
-    return true;
-#endif
-}
-
-void closeSocket(std::intptr_t& slot) {
-    auto socket = socketFromStorage(slot);
-    if (socket == kInvalidSocket) {
-        return;
-    }
-
-#if defined(_WIN32)
-    closesocket(socket);
-#else
-    close(socket);
-#endif
-    storeSocket(slot, kInvalidSocket);
-}
-
-std::string socketErrorText(const char* action) {
-#if defined(_WIN32)
-    return std::string(action) + " 失败，错误码=" + std::to_string(WSAGetLastError());
-#else
-    return std::string(action) + " 失败: " + std::strerror(errno);
-#endif
-}
-
-bool waitReadable(SocketHandle socket) {
-    if (socket == kInvalidSocket) {
-        return false;
-    }
-
-    fd_set readSet;
-    FD_ZERO(&readSet);
-    FD_SET(socket, &readSet);
-    timeval timeout{};
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 0;
-    return ::select(static_cast<int>(socket + 1), &readSet, nullptr, nullptr, &timeout) > 0 && FD_ISSET(socket, &readSet);
-}
-
-bool sendAll(SocketHandle socket, const std::vector<std::uint8_t>& bytes, std::string* error) {
-    std::size_t offset = 0;
-    while (offset < bytes.size()) {
-#if defined(_WIN32)
-        const int sent = ::send(socket,
-                                reinterpret_cast<const char*>(bytes.data() + offset),
-                                static_cast<int>(bytes.size() - offset),
-                                0);
-#else
-        const auto sent = ::send(socket, bytes.data() + offset, bytes.size() - offset, 0);
-#endif
-        if (sent <= 0) {
-            if (error != nullptr) {
-                *error = socketErrorText("send");
-            }
-            return false;
-        }
-        offset += static_cast<std::size_t>(sent);
-    }
-    return true;
-}
-
-std::optional<std::uint16_t> localPort(SocketHandle socket) {
-    sockaddr_storage address{};
-    socklen_t size = static_cast<socklen_t>(sizeof(address));
-    if (::getsockname(socket, reinterpret_cast<sockaddr*>(&address), &size) != 0) {
-        return std::nullopt;
-    }
-
-    if (address.ss_family == AF_INET) {
-        return ntohs(reinterpret_cast<const sockaddr_in&>(address).sin_port);
-    }
-    if (address.ss_family == AF_INET6) {
-        return ntohs(reinterpret_cast<const sockaddr_in6&>(address).sin6_port);
-    }
-    return std::nullopt;
-}
-
-std::string endpointFromSockaddr(const sockaddr_storage& address) {
-    char host[NI_MAXHOST]{};
-    char service[NI_MAXSERV]{};
-    const auto* raw = reinterpret_cast<const sockaddr*>(&address);
-    const auto length = static_cast<socklen_t>(
-        address.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6));
-    if (::getnameinfo(raw, length, host, sizeof(host), service, sizeof(service), NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
-        return "unknown";
-    }
-
-    std::string endpoint(host);
-    endpoint.push_back(':');
-    endpoint += service;
-    return endpoint;
+std::string endpointText(const std::string& host, std::uint16_t port) {
+    return host + ":" + std::to_string(port);
 }
 
 } // namespace
+
+struct TcpClientTransport::Runtime {
+    using WorkGuard = asio::executor_work_guard<asio::io_context::executor_type>;
+
+    asio::io_context ioContext;
+    std::optional<WorkGuard> workGuard{asio::make_work_guard(ioContext)};
+    asio::ip::tcp::resolver resolver{ioContext};
+    asio::ip::tcp::socket socket{ioContext};
+    std::thread ioThread;
+    std::array<std::uint8_t, 4096> readBuffer{};
+    std::mutex socketMutex;
+    std::atomic<bool> stopping{false};
+};
+
+struct TcpServerTransport::Runtime {
+    using WorkGuard = asio::executor_work_guard<asio::io_context::executor_type>;
+
+    asio::io_context ioContext;
+    std::optional<WorkGuard> workGuard{asio::make_work_guard(ioContext)};
+    asio::ip::tcp::acceptor acceptor{ioContext};
+    asio::ip::tcp::socket clientSocket{ioContext};
+    std::thread ioThread;
+    std::array<std::uint8_t, 4096> readBuffer{};
+    std::mutex socketMutex;
+    std::atomic<bool> stopping{false};
+};
+
+struct SerialTransport::Runtime {
+    using WorkGuard = asio::executor_work_guard<asio::io_context::executor_type>;
+
+    asio::io_context ioContext;
+    std::optional<WorkGuard> workGuard{asio::make_work_guard(ioContext)};
+    asio::serial_port serialPort{ioContext};
+    std::thread ioThread;
+    std::array<std::uint8_t, 4096> readBuffer{};
+    std::mutex portMutex;
+    std::atomic<bool> stopping{false};
+};
 
 TransportBase::TransportBase()
     : state_(TransportState::Closed), txCount_(0), rxCount_(0) {}
 
 TransportBase::~TransportBase() = default;
 
-bool TransportBase::send(std::vector<std::uint8_t> bytes) {
-    if (state() != TransportState::Open) {
-        return false;
-    }
-
-    addTx(bytes.size());
-    return true;
-}
-
 TransportState TransportBase::state() const {
     return state_.load(std::memory_order_relaxed);
 }
 
 std::vector<TransportEvent> TransportBase::takeEvents() {
-    pumpIo();
-
+    // UI 主线程只做无阻塞取事件，不再主动驱动底层 I/O 轮询。
     std::lock_guard lock(eventsMutex_);
     std::vector<TransportEvent> out;
     out.swap(events_);
@@ -207,15 +127,53 @@ void TransportBase::addRx(std::size_t size) {
 }
 
 std::uint64_t TransportBase::nowMs() {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+    return currentTimeMs();
 }
 
-void TransportBase::pumpIo() {}
+TcpClientTransport::TcpClientTransport()
+    : runtime_(std::make_unique<Runtime>()) {}
+
+TcpClientTransport::~TcpClientTransport() {
+    close();
+}
+
+TcpServerTransport::TcpServerTransport()
+    : runtime_(std::make_unique<Runtime>()) {}
+
+TcpServerTransport::~TcpServerTransport() {
+    close();
+}
+
+SerialTransport::SerialTransport()
+    : runtime_(std::make_unique<Runtime>()) {}
+
+SerialTransport::~SerialTransport() {
+    close();
+}
+
+ConnectionContext makeListenContext(const asio::ip::tcp::endpoint& endpoint) {
+    return ConnectionContext{
+        .kind = TransportKind::TcpServer,
+        .endpoint = endpointText(endpoint),
+        .connectionId = makeConnectionId(),
+        .timestampMs = currentTimeMs(),
+        .readyForIo = false,
+    };
+}
+
+ConnectionContext makeClientContext(const asio::ip::tcp::endpoint& endpoint) {
+    return ConnectionContext{
+        .kind = TransportKind::TcpServer,
+        .endpoint = endpointText(endpoint),
+        .connectionId = makeConnectionId(),
+        .timestampMs = currentTimeMs(),
+        .readyForIo = true,
+    };
+}
 
 bool TcpClientTransport::open(const TransportConfig& config) {
+    close();
+
     if (!std::holds_alternative<TcpClientConfig>(config)) {
         setState(TransportState::Error);
         pushEvent(TransportErrorEvent{{TransportKind::TcpClient, "", 0, nowMs(), true}, "配置类型不是 TCP Client"});
@@ -223,122 +181,129 @@ bool TcpClientTransport::open(const TransportConfig& config) {
     }
 
     const auto& tcp = std::get<TcpClientConfig>(config);
+    const auto fallbackEndpoint = endpointText(tcp.host, tcp.port);
     setState(TransportState::Opening);
 
-    std::string runtimeError;
-    if (!ensureSocketRuntime(&runtimeError)) {
+    try {
+        auto results = runtime_->resolver.resolve(tcp.host, std::to_string(tcp.port));
+        asio::connect(runtime_->socket, results);
+    } catch (const std::exception& ex) {
         setState(TransportState::Error);
-        pushEvent(TransportErrorEvent{{TransportKind::TcpClient, tcp.host, 0, nowMs(), true}, runtimeError});
+        pushEvent(TransportErrorEvent{{TransportKind::TcpClient, fallbackEndpoint, 0, nowMs(), true}, ex.what()});
         return false;
     }
 
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-
-    addrinfo* result = nullptr;
-    const auto service = std::to_string(tcp.port);
-    if (::getaddrinfo(tcp.host.c_str(), service.c_str(), &hints, &result) != 0) {
-        setState(TransportState::Error);
-        pushEvent(TransportErrorEvent{{TransportKind::TcpClient, tcp.host + ":" + service, 0, nowMs(), true}, "解析目标地址失败"});
-        return false;
+    try {
+        context_ = ConnectionContext{
+            .kind = TransportKind::TcpClient,
+            .endpoint = endpointText(runtime_->socket.remote_endpoint()),
+            .connectionId = makeConnectionId(),
+            .timestampMs = nowMs(),
+            .readyForIo = true,
+        };
+    } catch (const std::exception&) {
+        context_ = ConnectionContext{
+            .kind = TransportKind::TcpClient,
+            .endpoint = fallbackEndpoint,
+            .connectionId = makeConnectionId(),
+            .timestampMs = nowMs(),
+            .readyForIo = true,
+        };
     }
-
-    SocketHandle socket = kInvalidSocket;
-    for (auto* candidate = result; candidate != nullptr; candidate = candidate->ai_next) {
-        socket = ::socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-        if (socket == kInvalidSocket) {
-            continue;
-        }
-
-        if (::connect(socket, candidate->ai_addr, static_cast<int>(candidate->ai_addrlen)) == 0) {
-            break;
-        }
-
-#if defined(_WIN32)
-        closesocket(socket);
-#else
-        close(socket);
-#endif
-        socket = kInvalidSocket;
-    }
-    ::freeaddrinfo(result);
-
-    if (socket == kInvalidSocket) {
-        setState(TransportState::Error);
-        pushEvent(TransportErrorEvent{{TransportKind::TcpClient, tcp.host + ":" + service, 0, nowMs(), true}, "TCP 客户端连接失败"});
-        return false;
-    }
-
-    storeSocket(socket_, socket);
-    context_ = ConnectionContext{
-        .kind = TransportKind::TcpClient,
-        .endpoint = tcp.host + ":" + service,
-        .connectionId = makeConnectionId(),
-        .timestampMs = nowMs(),
-        .readyForIo = true,
-    };
 
     setState(TransportState::Open);
     pushEvent(TransportOpenEvent{*context_});
+
+    auto scheduleRead = std::make_shared<std::function<void()>>();
+    *scheduleRead = [this, scheduleRead]() {
+        // 持续异步收包，收到后直接进入线程安全事件队列。
+        runtime_->socket.async_read_some(
+            asio::buffer(runtime_->readBuffer),
+            [this, scheduleRead](const asio::error_code& ec, std::size_t bytesRead) {
+                if (ec) {
+                    if (!runtime_->stopping.load(std::memory_order_relaxed) && context_.has_value()) {
+                        setState(TransportState::Error);
+                        auto errorContext = *context_;
+                        errorContext.timestampMs = nowMs();
+                        pushEvent(TransportErrorEvent{std::move(errorContext), ec.message()});
+                    }
+                    return;
+                }
+
+                if (bytesRead > 0 && context_.has_value()) {
+                    addRx(bytesRead);
+                    auto eventContext = *context_;
+                    eventContext.timestampMs = nowMs();
+                    pushEvent(TransportBytesEvent{
+                        std::move(eventContext),
+                        std::vector<std::uint8_t>(runtime_->readBuffer.begin(),
+                                                  runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
+                    });
+                }
+                (*scheduleRead)();
+            });
+    };
+
+    (*scheduleRead)();
+    runtime_->ioThread = std::thread([this]() {
+        runtime_->ioContext.run();
+    });
     return true;
 }
 
 void TcpClientTransport::close() {
-    if (context_.has_value()) {
-        pushEvent(TransportCloseEvent{*context_, "用户主动关闭"});
+    if (runtime_ == nullptr) {
+        return;
     }
-    closeSocket(socket_);
+
+    const auto previous = context_;
+    // 先停掉后台 I/O，再重建运行时，避免旧连接残留到下一次 open。
+    runtime_->stopping.store(true, std::memory_order_relaxed);
+    asio::error_code ignored;
+    runtime_->resolver.cancel();
+    {
+        std::lock_guard lock(runtime_->socketMutex);
+        runtime_->socket.cancel(ignored);
+        runtime_->socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
+        runtime_->socket.close(ignored);
+    }
+    runtime_->workGuard.reset();
+    runtime_->ioContext.stop();
+    if (runtime_->ioThread.joinable()) {
+        runtime_->ioThread.join();
+    }
     context_.reset();
+    runtime_ = std::make_unique<Runtime>();
     setState(TransportState::Closed);
+    if (previous.has_value()) {
+        auto closedContext = *previous;
+        closedContext.timestampMs = nowMs();
+        pushEvent(TransportCloseEvent{std::move(closedContext), "用户主动关闭"});
+    }
 }
 
 bool TcpClientTransport::send(std::vector<std::uint8_t> bytes) {
-    const auto socket = socketFromStorage(socket_);
-    if (state() != TransportState::Open || socket == kInvalidSocket || bytes.empty()) {
+    if (state() != TransportState::Open || !context_.has_value() || bytes.empty()) {
         return false;
     }
 
-    std::string error;
-    if (!sendAll(socket, bytes, &error)) {
+    try {
+        std::lock_guard lock(runtime_->socketMutex);
+        asio::write(runtime_->socket, asio::buffer(bytes));
+        addTx(bytes.size());
+        return true;
+    } catch (const std::exception& ex) {
         setState(TransportState::Error);
-        if (context_.has_value()) {
-            pushEvent(TransportErrorEvent{*context_, error});
-        }
+        auto errorContext = *context_;
+        errorContext.timestampMs = nowMs();
+        pushEvent(TransportErrorEvent{std::move(errorContext), ex.what()});
         return false;
     }
-
-    addTx(bytes.size());
-    return true;
-}
-
-void TcpClientTransport::pumpIo() {
-    const auto socket = socketFromStorage(socket_);
-    if (socket == kInvalidSocket || !context_.has_value() || !waitReadable(socket)) {
-        return;
-    }
-
-    std::array<std::uint8_t, 4096> buffer{};
-#if defined(_WIN32)
-    const int received = ::recv(socket, reinterpret_cast<char*>(buffer.data()), static_cast<int>(buffer.size()), 0);
-#else
-    const auto received = ::recv(socket, buffer.data(), buffer.size(), 0);
-#endif
-    if (received > 0) {
-        std::vector<std::uint8_t> bytes(buffer.begin(), buffer.begin() + received);
-        addRx(bytes.size());
-        pushEvent(TransportBytesEvent{*context_, std::move(bytes)});
-        return;
-    }
-
-    pushEvent(TransportCloseEvent{*context_, "对端已关闭连接"});
-    closeSocket(socket_);
-    context_.reset();
-    setState(TransportState::Closed);
 }
 
 bool TcpServerTransport::open(const TransportConfig& config) {
+    close();
+
     if (!std::holds_alternative<TcpServerConfig>(config)) {
         setState(TransportState::Error);
         pushEvent(TransportErrorEvent{{TransportKind::TcpServer, "", 0, nowMs(), false}, "配置类型不是 TCP Server"});
@@ -349,173 +314,178 @@ bool TcpServerTransport::open(const TransportConfig& config) {
     rejectNewConnection_ = tcp.rejectNewConnection;
     setState(TransportState::Opening);
 
-    std::string runtimeError;
-    if (!ensureSocketRuntime(&runtimeError)) {
+    try {
+        const auto address = asio::ip::make_address(tcp.bindAddress);
+        const asio::ip::tcp::endpoint endpoint(address, tcp.port);
+        runtime_->acceptor.open(endpoint.protocol());
+        runtime_->acceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true));
+        runtime_->acceptor.bind(endpoint);
+        runtime_->acceptor.listen();
+        listenContext_ = makeListenContext(runtime_->acceptor.local_endpoint());
+    } catch (const std::exception& ex) {
         setState(TransportState::Error);
-        pushEvent(TransportErrorEvent{{TransportKind::TcpServer, tcp.bindAddress, 0, nowMs(), false}, runtimeError});
+        pushEvent(TransportErrorEvent{{TransportKind::TcpServer, endpointText(tcp.bindAddress, tcp.port), 0, nowMs(), false}, ex.what()});
         return false;
     }
-
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-    hints.ai_flags = AI_PASSIVE;
-
-    addrinfo* result = nullptr;
-    const auto service = std::to_string(tcp.port);
-    const char* host = (tcp.bindAddress.empty() || tcp.bindAddress == "0.0.0.0") ? nullptr : tcp.bindAddress.c_str();
-    if (::getaddrinfo(host, service.c_str(), &hints, &result) != 0) {
-        setState(TransportState::Error);
-        pushEvent(TransportErrorEvent{{TransportKind::TcpServer, tcp.bindAddress, 0, nowMs(), false}, "解析监听地址失败"});
-        return false;
-    }
-
-    SocketHandle listener = kInvalidSocket;
-    for (auto* candidate = result; candidate != nullptr; candidate = candidate->ai_next) {
-        listener = ::socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-        if (listener == kInvalidSocket) {
-            continue;
-        }
-
-        int reuse = 1;
-        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-        if (::bind(listener, candidate->ai_addr, static_cast<int>(candidate->ai_addrlen)) == 0 &&
-            ::listen(listener, 1) == 0) {
-            break;
-        }
-
-#if defined(_WIN32)
-        closesocket(listener);
-#else
-        close(listener);
-#endif
-        listener = kInvalidSocket;
-    }
-    ::freeaddrinfo(result);
-
-    if (listener == kInvalidSocket) {
-        setState(TransportState::Error);
-        pushEvent(TransportErrorEvent{{TransportKind::TcpServer, tcp.bindAddress + ":" + service, 0, nowMs(), false}, "TCP 服务端监听失败"});
-        return false;
-    }
-
-    storeSocket(listenerSocket_, listener);
-    const auto actualPort = localPort(listener).value_or(tcp.port);
-    context_ = ConnectionContext{
-        .kind = TransportKind::TcpServer,
-        .endpoint = (host == nullptr ? std::string("0.0.0.0") : tcp.bindAddress) + ":" + std::to_string(actualPort),
-        .connectionId = makeConnectionId(),
-        .timestampMs = nowMs(),
-        .readyForIo = false,
-    };
 
     setState(TransportState::Open);
-    pushEvent(TransportOpenEvent{*context_});
+    pushEvent(TransportOpenEvent{*listenContext_});
+
+    auto scheduleRead = std::make_shared<std::function<void()>>();
+    *scheduleRead = [this, scheduleRead]() {
+        // 服务端活动连接的读循环与客户端一致，统一走事件投递。
+        runtime_->clientSocket.async_read_some(
+            asio::buffer(runtime_->readBuffer),
+            [this, scheduleRead](const asio::error_code& ec, std::size_t bytesRead) {
+                if (ec) {
+                    if (!runtime_->stopping.load(std::memory_order_relaxed) && clientContext_.has_value()) {
+                        auto closedContext = *clientContext_;
+                        closedContext.timestampMs = nowMs();
+                        pushEvent(TransportCloseEvent{std::move(closedContext), ec.message()});
+                        clientContext_.reset();
+                    }
+                    return;
+                }
+
+                if (bytesRead > 0 && clientContext_.has_value()) {
+                    addRx(bytesRead);
+                    auto eventContext = *clientContext_;
+                    eventContext.timestampMs = nowMs();
+                    pushEvent(TransportBytesEvent{
+                        std::move(eventContext),
+                        std::vector<std::uint8_t>(runtime_->readBuffer.begin(),
+                                                  runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
+                    });
+                }
+                (*scheduleRead)();
+            });
+    };
+
+    auto scheduleAccept = std::make_shared<std::function<void()>>();
+    *scheduleAccept = [this, scheduleAccept, scheduleRead]() {
+        // 保持单活动连接语义：监听成功与真实接入客户端分开投递事件。
+        runtime_->acceptor.async_accept(
+            [this, scheduleAccept, scheduleRead](const asio::error_code& ec, asio::ip::tcp::socket socket) mutable {
+                if (ec) {
+                    if (!runtime_->stopping.load(std::memory_order_relaxed) && listenContext_.has_value()) {
+                        auto errorContext = *listenContext_;
+                        errorContext.timestampMs = nowMs();
+                        pushEvent(TransportErrorEvent{std::move(errorContext), ec.message()});
+                    }
+                    return;
+                }
+
+                if (clientContext_.has_value() && rejectNewConnection_) {
+                    asio::error_code ignored;
+                    socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
+                    socket.close(ignored);
+                    if (listenContext_.has_value()) {
+                        auto errorContext = *listenContext_;
+                        errorContext.timestampMs = nowMs();
+                        pushEvent(TransportErrorEvent{std::move(errorContext), "已有活动连接，已拒绝新客户端"});
+                    }
+                } else {
+                    if (clientContext_.has_value()) {
+                        auto closedContext = *clientContext_;
+                        closedContext.timestampMs = nowMs();
+                        pushEvent(TransportCloseEvent{std::move(closedContext), "新客户端已接管旧连接"});
+                    }
+
+                    runtime_->clientSocket = std::move(socket);
+                    clientContext_ = makeClientContext(runtime_->clientSocket.remote_endpoint());
+                    pushEvent(TransportOpenEvent{*clientContext_});
+                    (*scheduleRead)();
+                }
+
+                (*scheduleAccept)();
+            });
+    };
+
+    (*scheduleAccept)();
+    runtime_->ioThread = std::thread([this]() {
+        runtime_->ioContext.run();
+    });
     return true;
 }
 
 void TcpServerTransport::close() {
-    if (clientContext_.has_value()) {
-        pushEvent(TransportCloseEvent{*clientContext_, "客户端连接已关闭"});
-    }
-    if (context_.has_value()) {
-        pushEvent(TransportCloseEvent{*context_, "服务端关闭监听"});
+    if (runtime_ == nullptr) {
+        return;
     }
 
-    closeSocket(clientSocket_);
-    closeSocket(listenerSocket_);
+    const auto previousClient = clientContext_;
+    const auto previousListen = listenContext_;
+    runtime_->stopping.store(true, std::memory_order_relaxed);
+    asio::error_code ignored;
+    {
+        std::lock_guard lock(runtime_->socketMutex);
+        runtime_->acceptor.cancel(ignored);
+        runtime_->acceptor.close(ignored);
+        runtime_->clientSocket.cancel(ignored);
+        runtime_->clientSocket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
+        runtime_->clientSocket.close(ignored);
+    }
+    runtime_->workGuard.reset();
+    runtime_->ioContext.stop();
+    if (runtime_->ioThread.joinable()) {
+        runtime_->ioThread.join();
+    }
     clientContext_.reset();
-    context_.reset();
+    listenContext_.reset();
+    runtime_ = std::make_unique<Runtime>();
     setState(TransportState::Closed);
+
+    if (previousClient.has_value()) {
+        auto closedContext = *previousClient;
+        closedContext.timestampMs = nowMs();
+        pushEvent(TransportCloseEvent{std::move(closedContext), "用户主动关闭"});
+    }
+    if (previousListen.has_value()) {
+        auto closedContext = *previousListen;
+        closedContext.timestampMs = nowMs();
+        pushEvent(TransportCloseEvent{std::move(closedContext), "监听已关闭"});
+    }
 }
 
 bool TcpServerTransport::send(std::vector<std::uint8_t> bytes) {
-    const auto socket = socketFromStorage(clientSocket_);
-    if (state() != TransportState::Open || socket == kInvalidSocket || !clientContext_.has_value() || bytes.empty()) {
+    if (state() != TransportState::Open || !clientContext_.has_value() || bytes.empty()) {
         return false;
     }
 
-    std::string error;
-    if (!sendAll(socket, bytes, &error)) {
+    try {
+        std::lock_guard lock(runtime_->socketMutex);
+        asio::write(runtime_->clientSocket, asio::buffer(bytes));
+        addTx(bytes.size());
+        return true;
+    } catch (const std::exception& ex) {
         setState(TransportState::Error);
-        pushEvent(TransportErrorEvent{*clientContext_, error});
+        auto errorContext = *clientContext_;
+        errorContext.timestampMs = nowMs();
+        pushEvent(TransportErrorEvent{std::move(errorContext), ex.what()});
         return false;
     }
-
-    addTx(bytes.size());
-    return true;
-}
-
-void TcpServerTransport::pumpIo() {
-    const auto listener = socketFromStorage(listenerSocket_);
-    if (listener != kInvalidSocket && waitReadable(listener)) {
-        sockaddr_storage peerAddress{};
-        socklen_t peerSize = static_cast<socklen_t>(sizeof(peerAddress));
-        const SocketHandle accepted = ::accept(listener, reinterpret_cast<sockaddr*>(&peerAddress), &peerSize);
-        if (accepted != kInvalidSocket) {
-            const auto acceptedEndpoint = endpointFromSockaddr(peerAddress);
-            if (socketFromStorage(clientSocket_) != kInvalidSocket && rejectNewConnection_) {
-                SocketHandle rejected = accepted;
-#if defined(_WIN32)
-                closesocket(rejected);
-#else
-                close(rejected);
-#endif
-                if (context_.has_value()) {
-                    pushEvent(TransportErrorEvent{*context_, "已拒绝新的客户端连接: " + acceptedEndpoint});
-                }
-            } else {
-                if (clientContext_.has_value()) {
-                    pushEvent(TransportCloseEvent{*clientContext_, "已切换到新的客户端连接"});
-                }
-                closeSocket(clientSocket_);
-
-                storeSocket(clientSocket_, accepted);
-                clientContext_ = ConnectionContext{
-                    .kind = TransportKind::TcpServer,
-                    .endpoint = acceptedEndpoint,
-                    .connectionId = makeConnectionId(),
-                    .timestampMs = nowMs(),
-                    .readyForIo = true,
-                };
-                pushEvent(TransportOpenEvent{*clientContext_});
-            }
-        }
-    }
-
-    const auto client = socketFromStorage(clientSocket_);
-    if (client == kInvalidSocket || !clientContext_.has_value() || !waitReadable(client)) {
-        return;
-    }
-
-    std::array<std::uint8_t, 4096> buffer{};
-#if defined(_WIN32)
-    const int received = ::recv(client, reinterpret_cast<char*>(buffer.data()), static_cast<int>(buffer.size()), 0);
-#else
-    const auto received = ::recv(client, buffer.data(), buffer.size(), 0);
-#endif
-    if (received > 0) {
-        std::vector<std::uint8_t> bytes(buffer.begin(), buffer.begin() + received);
-        addRx(bytes.size());
-        pushEvent(TransportBytesEvent{*clientContext_, std::move(bytes)});
-        return;
-    }
-
-    pushEvent(TransportCloseEvent{*clientContext_, "客户端已断开连接"});
-    closeSocket(clientSocket_);
-    clientContext_.reset();
 }
 
 bool SerialTransport::open(const TransportConfig& config) {
+    close();
+
     if (!std::holds_alternative<SerialConfig>(config)) {
         setState(TransportState::Error);
-        pushEvent(TransportErrorEvent{{TransportKind::Serial, "", 0, nowMs(), true}, "配置类型不是串口"});
+        pushEvent(TransportErrorEvent{{TransportKind::Serial, "", 0, nowMs(), true}, "配置类型不是 Serial"});
         return false;
     }
 
     const auto& serial = std::get<SerialConfig>(config);
     setState(TransportState::Opening);
+
+    try {
+        runtime_->serialPort.open(serial.portName);
+        runtime_->serialPort.set_option(asio::serial_port_base::baud_rate(serial.baudRate));
+    } catch (const std::exception& ex) {
+        setState(TransportState::Error);
+        pushEvent(TransportErrorEvent{{TransportKind::Serial, serial.portName, 0, nowMs(), true}, ex.what()});
+        return false;
+    }
 
     context_ = ConnectionContext{
         .kind = TransportKind::Serial,
@@ -527,15 +497,89 @@ bool SerialTransport::open(const TransportConfig& config) {
 
     setState(TransportState::Open);
     pushEvent(TransportOpenEvent{*context_});
+
+    auto scheduleRead = std::make_shared<std::function<void()>>();
+    *scheduleRead = [this, scheduleRead]() {
+        runtime_->serialPort.async_read_some(
+            asio::buffer(runtime_->readBuffer),
+            [this, scheduleRead](const asio::error_code& ec, std::size_t bytesRead) {
+                if (ec) {
+                    if (!runtime_->stopping.load(std::memory_order_relaxed) && context_.has_value()) {
+                        setState(TransportState::Error);
+                        auto errorContext = *context_;
+                        errorContext.timestampMs = nowMs();
+                        pushEvent(TransportErrorEvent{std::move(errorContext), ec.message()});
+                    }
+                    return;
+                }
+
+                if (bytesRead > 0 && context_.has_value()) {
+                    addRx(bytesRead);
+                    auto eventContext = *context_;
+                    eventContext.timestampMs = nowMs();
+                    pushEvent(TransportBytesEvent{
+                        std::move(eventContext),
+                        std::vector<std::uint8_t>(runtime_->readBuffer.begin(),
+                                                  runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
+                    });
+                }
+                (*scheduleRead)();
+            });
+    };
+
+    (*scheduleRead)();
+    runtime_->ioThread = std::thread([this]() {
+        runtime_->ioContext.run();
+    });
     return true;
 }
 
 void SerialTransport::close() {
-    if (context_.has_value()) {
-        pushEvent(TransportCloseEvent{*context_, "串口关闭"});
+    if (runtime_ == nullptr) {
+        return;
+    }
+
+    const auto previous = context_;
+    // 串口关闭与 TCP 一样，先停线程，再重建运行时对象。
+    runtime_->stopping.store(true, std::memory_order_relaxed);
+    asio::error_code ignored;
+    {
+        std::lock_guard lock(runtime_->portMutex);
+        runtime_->serialPort.cancel(ignored);
+        runtime_->serialPort.close(ignored);
+    }
+    runtime_->workGuard.reset();
+    runtime_->ioContext.stop();
+    if (runtime_->ioThread.joinable()) {
+        runtime_->ioThread.join();
     }
     context_.reset();
+    runtime_ = std::make_unique<Runtime>();
     setState(TransportState::Closed);
+    if (previous.has_value()) {
+        auto closedContext = *previous;
+        closedContext.timestampMs = nowMs();
+        pushEvent(TransportCloseEvent{std::move(closedContext), "串口关闭"});
+    }
+}
+
+bool SerialTransport::send(std::vector<std::uint8_t> bytes) {
+    if (state() != TransportState::Open || !context_.has_value() || bytes.empty()) {
+        return false;
+    }
+
+    try {
+        std::lock_guard lock(runtime_->portMutex);
+        asio::write(runtime_->serialPort, asio::buffer(bytes));
+        addTx(bytes.size());
+        return true;
+    } catch (const std::exception& ex) {
+        setState(TransportState::Error);
+        auto errorContext = *context_;
+        errorContext.timestampMs = nowMs();
+        pushEvent(TransportErrorEvent{std::move(errorContext), ex.what()});
+        return false;
+    }
 }
 
 } // namespace protoscope::transport

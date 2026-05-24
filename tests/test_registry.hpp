@@ -17,6 +17,7 @@ void test_script_timeout_flow();
 void test_protocol_directory_reload();
 void test_config_default_roundtrip();
 void test_tcp_transport_roundtrip();
+void test_serial_transport_error_path();
 
 const TestCase* allTests();
 int testCount();
