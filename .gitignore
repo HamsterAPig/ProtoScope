@@ -6,5 +6,7 @@ obj/
 *.user
 *.VC.db
 *.VC.opendb
+cmake-build-*
 
-build-cmake/
+build-*
+.idea

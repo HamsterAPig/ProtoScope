@@ -11,6 +11,18 @@ function controls()
   }
 end
 
+local rx_buffer = {}
+
+local function clear_rx_buffer()
+  rx_buffer = {}
+end
+
+local function append_bytes(bytes)
+  for i = 1, #bytes do
+    rx_buffer[#rx_buffer + 1] = bytes[i]
+  end
+end
+
 local function timeout_ms()
   return proto.get_control("timeout_ms") or 1000
 end
@@ -40,27 +52,33 @@ local function parse_frame(bytes)
 end
 
 function on_open(ctx)
+  clear_rx_buffer()
   proto.log("info", "连接已打开: " .. ctx.kind .. " -> " .. ctx.endpoint)
 end
 
 function on_close(ctx)
+  clear_rx_buffer()
   proto.log("info", "连接已关闭: " .. ctx.endpoint)
 end
 
 function on_error(ctx, message)
+  clear_rx_buffer()
   proto.log("error", "连接错误: " .. message)
 end
 
 function on_control(ctx, id, value)
   if id == "read_version" and value then
+    clear_rx_buffer()
     proto.send(build_read_version_frame())
     proto.set_timer("read_version_timeout", timeout_ms())
   end
 end
 
 function on_bytes(ctx, bytes)
-  local result = parse_frame(bytes)
+  append_bytes(bytes)
+  local result = parse_frame(rx_buffer)
   if result then
+    clear_rx_buffer()
     proto.cancel_timer("read_version_timeout")
     proto.emit("frame", result)
   else
@@ -70,6 +88,7 @@ end
 
 function on_timer(ctx, name)
   if name == "read_version_timeout" then
+    clear_rx_buffer()
     proto.emit("warning", { message = "读取版本超时", connection_id = ctx.connection_id })
   end
 end

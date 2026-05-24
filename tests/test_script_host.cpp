@@ -91,6 +91,33 @@ void test_script_read_version_flow() {
     require(foundFrame, "收到 OK 响应后应产生 frame 事件");
 }
 
+void test_script_read_version_split_flow() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    host.onControl(ctx, "read_version", true);
+
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {'O'}});
+    bool foundFrameEarly = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "frame") {
+            foundFrameEarly = true;
+        }
+    }
+    require(!foundFrameEarly, "首包只有 O 时不应提前产出 frame");
+
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {'K', '\r', '\n'}});
+    bool foundFrame = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "frame") {
+            foundFrame = true;
+        }
+    }
+    require(foundFrame, "分包收到 OK 后仍应产出 frame");
+}
+
 void test_script_timeout_flow() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
@@ -194,6 +221,7 @@ static const TestCase kAllTests[] = {
     {"script_controls_snapshot", &test_script_controls_snapshot},
     {"script_on_open_log", &test_script_on_open_log},
     {"script_read_version_flow", &test_script_read_version_flow},
+    {"script_read_version_split_flow", &test_script_read_version_split_flow},
     {"script_timeout_flow", &test_script_timeout_flow},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},

@@ -150,20 +150,31 @@ end
 脚本核心片段如下：
 
 ```lua
+local rx_buffer = {}
+
 function on_control(ctx, id, value)
   if id == "read_version" and value then
+    rx_buffer = {}
     proto.send({ 0xAA, 0x55, 0x30, 0x01, 0x0D })
     proto.set_timer("read_version_timeout", proto.get_control("timeout_ms") or 1000)
   end
 end
 
 function on_bytes(ctx, bytes)
-  if #bytes >= 2 and bytes[1] == string.byte("O") and bytes[2] == string.byte("K") then
+  for i = 1, #bytes do
+    rx_buffer[#rx_buffer + 1] = bytes[i]
+  end
+
+  if #rx_buffer >= 2 and rx_buffer[1] == string.byte("O") and rx_buffer[2] == string.byte("K") then
+    local frame_size = #rx_buffer
+    rx_buffer = {}
     proto.cancel_timer("read_version_timeout")
-    proto.emit("frame", { status = "ok", size = #bytes })
+    proto.emit("frame", { status = "ok", size = frame_size })
   end
 end
 ```
+
+当前默认协议示例已经演示了“脚本侧跨包缓冲”的最小做法：即便 `OK` 被拆成多次 `on_bytes()` 回调，也会先累计再判定。
 
 ## 配置热重载说明
 
