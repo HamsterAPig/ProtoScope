@@ -328,6 +328,9 @@ void test_protocol_scan_and_root_roundtrip() {
     const auto reloaded = store.load(tempPath);
     require(reloaded.config.protocol.rootDir == tempRoot.generic_string(), "协议根目录 roundtrip 失败");
     require(reloaded.config.protocol.selectedDir == betaDir.generic_string(), "协议目录 roundtrip 失败");
+
+    const auto normalized = store.normalizeProtocolDir(tempRoot, tempRoot / "missing");
+    require(normalized == alphaDir, "root-aware 协议目录归一化应优先回退到当前 root 下的有效目录");
 }
 
 namespace {

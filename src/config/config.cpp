@@ -357,11 +357,20 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
 }
 
 std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::path& dir) const {
+    return normalizeProtocolDir(defaultProtocolDir_.parent_path(), dir);
+}
+
+std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::path& rootDir, const std::filesystem::path& dir) const {
     std::filesystem::path candidate = dir.empty() ? defaultProtocolDir_ : dir;
-    if (!std::filesystem::exists(candidate) || !protocolEntryExists(candidate)) {
-        candidate = defaultProtocolDir_;
+    if (protocolEntryExists(candidate)) {
+        return candidate;
     }
-    return candidate;
+
+    const auto scanned = scanProtocolDirectories(rootDir);
+    if (!scanned.empty()) {
+        return std::filesystem::path(scanned.front());
+    }
+    return defaultProtocolDir_;
 }
 
 std::filesystem::path ConfigStore::mainLuaPath(const std::filesystem::path& protocolDir) const {
@@ -474,7 +483,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
         comm.serialPortOptions = kDefaultSerialPorts;
     }
 
-    const auto protocolDir = normalizeProtocolDir(config.protocol.selectedDir);
+    const auto protocolDir = normalizeProtocolDir(config.protocol.rootDir, config.protocol.selectedDir);
     auto& lua = dockStore.luaState();
     lua.protocolRootDir = config.protocol.rootDir;
     lua.protocolDirOptions = scanProtocolDirectories(lua.protocolRootDir);

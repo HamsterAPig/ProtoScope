@@ -71,6 +71,7 @@ public:
     bool save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const;
 
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& dir) const;
+    std::filesystem::path normalizeProtocolDir(const std::filesystem::path& rootDir, const std::filesystem::path& dir) const;
     std::filesystem::path mainLuaPath(const std::filesystem::path& protocolDir) const;
     std::string protocolName(const std::filesystem::path& protocolDir) const;
     bool protocolEntryExists(const std::filesystem::path& protocolDir) const;

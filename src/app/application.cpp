@@ -85,10 +85,10 @@ config::AppConfig Application::captureConfig() const {
 }
 
 bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool forceReload) {
-    const auto resolvedDir = configStore_.normalizeProtocolDir(protocolDir);
+    auto& lua = dockStore_.luaState();
+    const auto resolvedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, protocolDir);
     const auto resolvedDirText = resolvedDir.generic_string();
     const auto scriptPath = configStore_.mainLuaPath(resolvedDir).generic_string();
-    auto& lua = dockStore_.luaState();
     const bool unchanged = lua.loaded && lua.protocolDir == resolvedDirText && lua.scriptPath == scriptPath;
 
     lua.protocolDir = resolvedDirText;

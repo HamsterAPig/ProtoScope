@@ -627,6 +627,8 @@ void GuiRuntime::drawProtocolDock() {
     if (ImGui::InputText("协议根目录", protocolRoot, sizeof(protocolRoot))) {
         lua.protocolRootDir = protocolRoot;
         lua.protocolDirOptions = configStore_.scanProtocolDirectories(lua.protocolRootDir);
+        const auto correctedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, lua.protocolDir);
+        lua.protocolDir = correctedDir.generic_string();
         application_.markProtocolEdited();
     }
 
@@ -654,6 +656,8 @@ void GuiRuntime::drawProtocolDock() {
 
     if (ImGui::Button("重新扫描协议目录")) {
         lua.protocolDirOptions = configStore_.scanProtocolDirectories(lua.protocolRootDir);
+        const auto correctedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, lua.protocolDir);
+        lua.protocolDir = correctedDir.generic_string();
         application_.setStatusMessage("协议目录扫描已刷新");
     }
     ImGui::SameLine();
