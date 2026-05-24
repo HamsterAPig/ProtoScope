@@ -119,12 +119,14 @@ namespace {
 static const TestCase kAllTests[] = {
     {"hex_roundtrip", &test_hex_roundtrip},
     {"hex_invalid_input", &test_hex_invalid_input},
+    {"hex_normalize_input", &test_hex_normalize_input},
     {"crc_known_vectors", &test_crc_known_vectors},
     {"script_controls_snapshot", &test_script_controls_snapshot},
     {"script_read_version_flow", &test_script_read_version_flow},
     {"script_timeout_flow", &test_script_timeout_flow},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
+    {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
 };
 
 } // namespace

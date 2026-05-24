@@ -168,7 +168,11 @@ if(PROTOSCOPE_ENABLE_GUI)
     target_compile_features(protoscope_ui PUBLIC cxx_std_20)
 endif()
 
-add_executable(ProtoScope src/main.cpp)
+if(WIN32)
+    add_executable(ProtoScope WIN32 src/main.cpp)
+else()
+    add_executable(ProtoScope src/main.cpp)
+endif()
 
 target_link_libraries(ProtoScope
     PRIVATE
@@ -178,6 +182,9 @@ target_link_libraries(ProtoScope
 )
 
 target_compile_features(ProtoScope PRIVATE cxx_std_20)
+if(WIN32)
+    target_link_libraries(ProtoScope PRIVATE ws2_32)
+endif()
 
 foreach(target_name IN ITEMS
     protoscope_protocol_utils
@@ -209,6 +216,7 @@ add_executable(protoscope_tests
     tests/test_main.cpp
     tests/test_codec.cpp
     tests/test_script_host.cpp
+    tests/test_transport.cpp
 )
 target_include_directories(protoscope_tests
     PRIVATE
@@ -221,6 +229,9 @@ target_link_libraries(protoscope_tests
         protoscope_scripting
         protoscope_transport
 )
+if(WIN32)
+    target_link_libraries(protoscope_tests PRIVATE ws2_32)
+endif()
 target_compile_features(protoscope_tests PRIVATE cxx_std_20)
 if(MSVC)
     target_compile_options(protoscope_tests PRIVATE /W4 /permissive- /utf-8)

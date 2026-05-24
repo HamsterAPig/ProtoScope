@@ -4,7 +4,9 @@
 
 #include <spdlog/spdlog.h>
 
-int main() {
+namespace {
+
+int runProtoScope() {
     protoscope::app::Application app;
     if (!app.initialize()) {
         spdlog::error("ProtoScope 初始化失败");
@@ -24,3 +26,17 @@ int main() {
     app.shutdown();
     return exitCode;
 }
+
+} // namespace
+
+int main() {
+    return runProtoScope();
+}
+
+#if defined(_WIN32)
+#include <windows.h>
+
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    return runProtoScope();
+}
+#endif

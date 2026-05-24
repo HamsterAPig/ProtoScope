@@ -72,6 +72,37 @@ std::optional<std::vector<std::uint8_t>> hexToBytes(std::string_view text) {
     return out;
 }
 
+std::string normalizeHexText(std::string_view text) {
+    std::string compact;
+    compact.reserve(text.size());
+    for (char ch : text) {
+        if (std::isspace(static_cast<unsigned char>(ch))) {
+            continue;
+        }
+
+        const int nibble = hexNibble(ch);
+        if (nibble < 0) {
+            continue;
+        }
+
+        compact.push_back(nibble < 10 ? static_cast<char>('0' + nibble) : static_cast<char>('A' + (nibble - 10)));
+    }
+
+    if (compact.empty()) {
+        return {};
+    }
+
+    std::string normalized;
+    normalized.reserve(compact.size() + compact.size() / 2);
+    for (std::size_t i = 0; i < compact.size(); ++i) {
+        normalized.push_back(compact[i]);
+        if ((i % 2) == 1 && i + 1 < compact.size()) {
+            normalized.push_back(' ');
+        }
+    }
+    return normalized;
+}
+
 std::uint16_t crc16Modbus(const std::vector<std::uint8_t>& bytes) {
     std::uint16_t crc = 0xFFFF;
     for (const auto value : bytes) {

@@ -31,6 +31,11 @@ void test_hex_invalid_input() {
     require(!bad.has_value(), "非法字符应失败");
 }
 
+void test_hex_normalize_input() {
+    const auto normalized = protoscope::protocol_utils::normalizeHexText(" aa0 10f ");
+    require(normalized == "AA 01 0F", "HEX 文本归拢格式不符合预期");
+}
+
 void test_crc_known_vectors() {
     const std::vector<std::uint8_t> text{'1', '2', '3', '4', '5', '6', '7', '8', '9'};
 

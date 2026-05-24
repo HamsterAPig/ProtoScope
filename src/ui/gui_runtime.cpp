@@ -16,8 +16,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
+#include <cfloat>
 #include <filesystem>
 #include <cstdio>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -47,6 +50,42 @@ const char* transportKindLabel(transport::TransportKind kind) {
         return "串口";
     }
     return "未知";
+}
+
+int hexInputFilter(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag != ImGuiInputTextFlags_CallbackCharFilter) {
+        return 0;
+    }
+
+    const auto ch = static_cast<unsigned int>(data->EventChar);
+    if (ch < 128U && std::isspace(static_cast<unsigned char>(ch))) {
+        data->EventChar = ' ';
+        return 0;
+    }
+
+    if (std::isxdigit(static_cast<unsigned char>(ch))) {
+        data->EventChar = static_cast<ImWchar>(std::toupper(static_cast<unsigned char>(ch)));
+        return 0;
+    }
+
+    return 1;
+}
+
+std::string formatReceiveRow(const dock::ReceiveRow& row) {
+    std::ostringstream builder;
+    builder << "[" << row.timestampMs << "] " << row.direction << " " << row.endpoint << " " << row.text;
+    return builder.str();
+}
+
+std::string formatAllReceiveRows(const std::vector<dock::ReceiveRow>& rows) {
+    std::ostringstream builder;
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        if (i != 0) {
+            builder << '\n';
+        }
+        builder << formatReceiveRow(rows[i]);
+    }
+    return builder.str();
 }
 
 } // namespace
@@ -86,7 +125,7 @@ int GuiRuntime::run() {
             double timeoutSeconds = 0.25;
             if (const auto nextWakeup = application_.nextWakeupAtMs()) {
                 const auto remainingMs = (*nextWakeup > frameStartMs) ? (*nextWakeup - frameStartMs) : 0;
-                timeoutSeconds = std::min(timeoutSeconds, static_cast<double>(remainingMs) / 1000.0);
+                timeoutSeconds = (std::min)(timeoutSeconds, static_cast<double>(remainingMs) / 1000.0);
             }
             glfwWaitEventsTimeout(timeoutSeconds);
         }
@@ -311,7 +350,7 @@ void GuiRuntime::drawCommDock() {
 
         int baudRate = static_cast<int>(comm.serial.baudRate);
         if (ImGui::InputInt("波特率", &baudRate)) {
-            comm.serial.baudRate = static_cast<std::uint32_t>(std::max(baudRate, 0));
+            comm.serial.baudRate = static_cast<std::uint32_t>((std::max)(baudRate, 0));
             application_.markCommConfigEdited(true);
         }
     }
@@ -363,7 +402,7 @@ void GuiRuntime::drawProtocolDock() {
     ImGui::Text("协议名：%s", lua.protocolName.c_str());
     ImGui::Text("入口：%s", lua.scriptPath.c_str());
     if (ImGui::Button("重新加载协议")) {
-        application_.reloadProtocolDirectory(lua.protocolDir);
+        application_.reloadProtocolDirectory(lua.protocolDir, true);
         application_.docks().configState().statusMessage = lua.loaded ? "协议已重新加载" : "协议重新加载失败";
     }
 
@@ -379,12 +418,23 @@ void GuiRuntime::drawLogDock() {
     auto& receive = application_.docks().receiveState();
 
     ImGui::Begin("收发控制 / 接收日志");
-    ImGui::Checkbox("HEX 发送", &sendState.hexMode);
+    if (ImGui::Checkbox("HEX 发送", &sendState.hexMode) && sendState.hexMode) {
+        sendState.payload = protocol_utils::normalizeHexText(sendState.payload);
+    }
 
     char payload[512]{};
     std::snprintf(payload, sizeof(payload), "%s", sendState.payload.c_str());
-    if (ImGui::InputTextMultiline("发送内容", payload, sizeof(payload))) {
-        sendState.payload = payload;
+    ImGuiInputTextFlags payloadFlags = ImGuiInputTextFlags_None;
+    if (sendState.hexMode) {
+        payloadFlags |= ImGuiInputTextFlags_CallbackCharFilter;
+    }
+    if (ImGui::InputTextMultiline("发送内容",
+                                  payload,
+                                  sizeof(payload),
+                                  ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 5.0f),
+                                  payloadFlags,
+                                  sendState.hexMode ? hexInputFilter : nullptr)) {
+        sendState.payload = sendState.hexMode ? protocol_utils::normalizeHexText(payload) : std::string(payload);
     }
 
     char actionName[128]{};
@@ -404,15 +454,26 @@ void GuiRuntime::drawLogDock() {
     if (ImGui::Button("清空日志")) {
         application_.docks().clearReceiveRows();
     }
+    ImGui::SameLine();
+    if (ImGui::Button("复制日志")) {
+        const auto allText = formatAllReceiveRows(receive.rows);
+        ImGui::SetClipboardText(allText.c_str());
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("暂停跟随", &receive.pauseScroll);
 
     ImGui::Separator();
-    for (const auto& row : receive.rows) {
-        ImGui::TextWrapped("[%llu] %s %s %s",
-                           static_cast<unsigned long long>(row.timestampMs),
-                           row.direction.c_str(),
-                           row.endpoint.c_str(),
-                           row.text.c_str());
+    // 核心流程：日志绘制固定在剩余区域内，超出后只通过子窗口滚动，不再把 Dock 自身越撑越高。
+    if (ImGui::BeginChild("receive-log-list", ImVec2(0.0f, 0.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
+        for (const auto& row : receive.rows) {
+            const auto line = formatReceiveRow(row);
+            ImGui::TextWrapped("%s", line.c_str());
+        }
+        if (!receive.pauseScroll && !receive.rows.empty()) {
+            ImGui::SetScrollHereY(1.0f);
+        }
     }
+    ImGui::EndChild();
     ImGui::End();
 }
 

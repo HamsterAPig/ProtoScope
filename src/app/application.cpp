@@ -51,12 +51,25 @@ config::AppConfig Application::captureConfig() const {
     return captured;
 }
 
-bool Application::reloadProtocolDirectory(const std::string& protocolDir) {
+bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool forceReload) {
     const auto resolvedDir = configStore_.normalizeProtocolDir(protocolDir);
+    const auto resolvedDirText = resolvedDir.generic_string();
+    const auto scriptPath = configStore_.mainLuaPath(resolvedDir).generic_string();
     auto& lua = dockStore_.luaState();
-    lua.protocolDir = resolvedDir.generic_string();
+    const bool unchanged = lua.loaded && lua.protocolDir == resolvedDirText && lua.scriptPath == scriptPath;
+
+    lua.protocolDir = resolvedDirText;
     lua.protocolName = configStore_.protocolName(resolvedDir);
-    lua.scriptPath = configStore_.mainLuaPath(resolvedDir).generic_string();
+    lua.scriptPath = scriptPath;
+
+    // 核心流程：配置热加载只在协议目录真正变化时重载脚本，避免窗口刷新阶段重复刷加载日志。
+    if (!forceReload && unchanged) {
+        lua.lastError.clear();
+        lua.controls = scriptHost_.controlsSnapshot();
+        lua.controlStates = scriptHost_.controlStatesSnapshot();
+        return true;
+    }
+
     lua.loaded = scriptHost_.loadProtocolDirectory(lua.protocolDir);
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
@@ -153,7 +166,7 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
     }
 
     if (activeConnection_.has_value()) {
-        dockStore_.appendRawSend(*activeConnection_, hexMode ? payload : protocol_utils::bytesToHex(bytes, true));
+        dockStore_.appendRawSend(*activeConnection_, protocol_utils::bytesToHex(bytes, true));
     }
     return true;
 }
@@ -237,8 +250,10 @@ bool Application::handleTransportEvents() {
             [this, &changed](const auto& evt) {
                 using T = std::decay_t<decltype(evt)>;
                 if constexpr (std::is_same_v<T, transport::TransportOpenEvent>) {
-                    activeConnection_ = evt.context;
-                    scriptHost_.onTransportOpen(evt);
+                    if (evt.context.readyForIo) {
+                        activeConnection_ = evt.context;
+                        scriptHost_.onTransportOpen(evt);
+                    }
                     dockStore_.appendReceiveRow(dock::ReceiveRow{
                         .timestampMs = evt.context.timestampMs,
                         .direction = "SYS",
@@ -247,17 +262,23 @@ bool Application::handleTransportEvents() {
                     });
                     changed = true;
                 } else if constexpr (std::is_same_v<T, transport::TransportCloseEvent>) {
-                    scriptHost_.onTransportClose(evt);
+                    if (evt.context.readyForIo) {
+                        scriptHost_.onTransportClose(evt);
+                    }
                     dockStore_.appendReceiveRow(dock::ReceiveRow{
                         .timestampMs = evt.context.timestampMs,
                         .direction = "SYS",
                         .endpoint = evt.context.endpoint,
                         .text = evt.reason.empty() ? "连接已关闭" : evt.reason,
                     });
-                    activeConnection_.reset();
+                    if (activeConnection_.has_value() && activeConnection_->connectionId == evt.context.connectionId) {
+                        activeConnection_.reset();
+                    }
                     changed = true;
                 } else if constexpr (std::is_same_v<T, transport::TransportErrorEvent>) {
-                    scriptHost_.onTransportError(evt);
+                    if (evt.context.readyForIo) {
+                        scriptHost_.onTransportError(evt);
+                    }
                     dockStore_.commState().lastError = evt.message;
                     dockStore_.appendReceiveRow(dock::ReceiveRow{
                         .timestampMs = evt.context.timestampMs,

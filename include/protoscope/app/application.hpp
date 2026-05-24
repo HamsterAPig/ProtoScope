@@ -19,7 +19,7 @@ public:
     bool initialize();
     bool applyConfig(const config::AppConfig& config);
     config::AppConfig captureConfig() const;
-    bool reloadProtocolDirectory(const std::string& protocolDir);
+    bool reloadProtocolDirectory(const std::string& protocolDir, bool forceReload = false);
     bool pumpOnce();
     void shutdown();
 

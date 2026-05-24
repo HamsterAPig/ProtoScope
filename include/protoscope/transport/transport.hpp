@@ -52,6 +52,7 @@ struct ConnectionContext {
     std::string endpoint;
     std::uint64_t connectionId{0};
     std::uint64_t timestampMs{0};
+    bool readyForIo{true};
 };
 
 struct TransportOpenEvent {
@@ -105,6 +106,7 @@ protected:
     void addTx(std::size_t size);
     void addRx(std::size_t size);
     static std::uint64_t nowMs();
+    virtual void pumpIo();
 
 private:
     mutable std::mutex eventsMutex_;
@@ -118,8 +120,12 @@ class TcpClientTransport final : public TransportBase {
 public:
     bool open(const TransportConfig& config) override;
     void close() override;
+    bool send(std::vector<std::uint8_t> bytes) override;
 
 private:
+    void pumpIo() override;
+
+    std::intptr_t socket_{-1};
     std::optional<ConnectionContext> context_;
 };
 
@@ -127,9 +133,15 @@ class TcpServerTransport final : public TransportBase {
 public:
     bool open(const TransportConfig& config) override;
     void close() override;
+    bool send(std::vector<std::uint8_t> bytes) override;
 
 private:
+    void pumpIo() override;
+
+    std::intptr_t listenerSocket_{-1};
+    std::intptr_t clientSocket_{-1};
     std::optional<ConnectionContext> context_;
+    std::optional<ConnectionContext> clientContext_;
     bool rejectNewConnection_{true};
 };
 
