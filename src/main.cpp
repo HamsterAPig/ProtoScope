@@ -1,20 +1,24 @@
-#include <spdlog/spdlog.h>
-#include <yaml-cpp/yaml.h>
+#include "protoscope/app/application.hpp"
+#include "protoscope/transport/transport.hpp"
 
-#include <string>
+#include <spdlog/spdlog.h>
 
 int main() {
-    // 核心流程：先验证日志库与配置解析库都已正确链接。
-    const auto sample = YAML::Load(R"(
-app:
-  name: ProtoScope
-  mode: bootstrap
-)");
+    // 核心流程：第一版先打通 TCP+Lua+Dock 的业务总线，GUI 渲染后续再接入 GLFW+ImGui backend。
+    protoscope::app::Application app;
+    if (!app.initialize()) {
+        spdlog::error("ProtoScope 初始化失败");
+        return 1;
+    }
 
-    // 核心流程：输出启动信息，后续可以在这里继续挂接 ELF/DWARF 与 UI 初始化。
-    const std::string appName = sample["app"]["name"].as<std::string>();
-    const std::string mode = sample["app"]["mode"].as<std::string>();
+    app.docks().commState().kind = protoscope::transport::TransportKind::TcpClient;
+    app.openTransport();
+    app.updateControlValue("device_id", std::string("01"));
+    app.triggerAction("read_version");
+    app.pumpOnce();
+    app.shutdown();
 
-    spdlog::info("Starting {} in {} mode.", appName, mode);
+    const auto& receiveRows = app.docks().receiveState().rows;
+    spdlog::info("ProtoScope v1 pipeline finished. receive_rows={}", receiveRows.size());
     return 0;
 }
