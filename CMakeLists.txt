@@ -27,7 +27,7 @@ target_include_directories(protoscope_lua
     PUBLIC
         ${CMAKE_SOURCE_DIR}/3rdparty/lua
 )
-target_compile_features(protoscope_lua PUBLIC c_std_99)
+set_target_properties(protoscope_lua PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
 target_compile_definitions(protoscope_lua PRIVATE MAKE_LIB)
 if(UNIX)
     target_link_libraries(protoscope_lua PUBLIC m)

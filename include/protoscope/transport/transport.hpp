@@ -39,6 +39,10 @@ struct TcpServerConfig {
 struct SerialConfig {
     std::string portName{"COM1"};
     std::uint32_t baudRate{115200};
+    std::uint32_t dataBits{8};
+    std::string parity{"none"};
+    std::string stopBits{"one"};
+    std::string flowControl{"none"};
 };
 
 using TransportConfig = std::variant<TcpClientConfig, TcpServerConfig, SerialConfig>;

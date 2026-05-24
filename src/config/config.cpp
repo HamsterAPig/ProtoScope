@@ -45,6 +45,51 @@ std::string toTransportKindText(transport::TransportKind kind) {
     return "tcp_client";
 }
 
+const std::vector<std::string> kDefaultSerialPorts = {"COM1", "COM2", "COM3", "COM4"};
+
+const char* kDefaultGuide = R"(# ProtoScope Lua Host Guide
+
+## 生命周期
+- `on_open(ctx)`：连接打开后触发
+- `on_close(ctx)`：连接关闭后触发
+- `on_error(ctx, message)`：通讯层错误
+- `on_bytes(ctx, bytes)`：收到原始字节
+- `on_timer(ctx, name)`：定时器触发
+- `on_control(ctx, id, value)`：宿主控件变化或按钮触发
+
+## UI 描述
+优先使用 `ui()` 返回多个 Dock：
+
+```lua
+function ui()
+  return {
+    {
+      id = "protocol",
+      title = "协议动作",
+      controls = {
+        { type = "button", id = "read_version", label = "读取版本" },
+        { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
+      }
+    }
+  }
+end
+```
+
+兼容旧脚本时也可保留 `controls()`。
+
+## proto API
+- `proto.log(level, message)`
+- `proto.send(hexStringOrByteArray)`
+- `proto.emit(name, payload)`
+- `proto.set_timer(name, delayMs)`
+- `proto.cancel_timer(name)`
+- `proto.get_control(id)`
+- `proto.set_control(id, value)`
+- `proto.crc16_modbus(payload)`
+- `proto.crc16_ccitt_false(payload)`
+- `proto.crc32_ieee(payload)`
+)";
+
 } // namespace
 
 ConfigStore::ConfigStore()
@@ -55,7 +100,7 @@ AppConfig ConfigStore::withDefaults() const {
     AppConfig config;
     config.protocol.selectedDir = normalizeTextPath(defaultProtocolDir_);
     config.configPath = normalizeTextPath(defaultConfigPath_);
-    config.communication.serialPortOptions = {"COM1", "COM2", "COM3"};
+    config.communication.serialPortOptions = kDefaultSerialPorts;
     return config;
 }
 
@@ -123,6 +168,22 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::string>(serial, "port_name", result.config.communication.serial.portName);
             result.config.communication.serial.baudRate =
                 readScalar<std::uint32_t>(serial, "baud_rate", result.config.communication.serial.baudRate);
+            result.config.communication.serial.dataBits =
+                readScalar<std::uint32_t>(serial, "data_bits", result.config.communication.serial.dataBits);
+            result.config.communication.serial.parity =
+                readScalar<std::string>(serial, "parity", result.config.communication.serial.parity);
+            result.config.communication.serial.stopBits =
+                readScalar<std::string>(serial, "stop_bits", result.config.communication.serial.stopBits);
+            result.config.communication.serial.flowControl =
+                readScalar<std::string>(serial, "flow_control", result.config.communication.serial.flowControl);
+        }
+        if (const auto receive = root["receive"]) {
+            result.config.communication.serialPortOptions = kDefaultSerialPorts;
+            result.config.communication.reconnectRequired = false;
+            result.config.communication.lastError.clear();
+            result.config.communication.txCount = 0;
+            result.config.communication.rxCount = 0;
+            (void)receive;
         }
     } catch (const std::exception& ex) {
         result.error = std::string("读取 YAML 失败: ") + ex.what();
@@ -157,24 +218,26 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["communication"]["tcp_server"]["reject_new_connection"] = config.communication.tcpServer.rejectNewConnection;
     root["communication"]["serial"]["port_name"] = config.communication.serial.portName;
     root["communication"]["serial"]["baud_rate"] = config.communication.serial.baudRate;
+    root["communication"]["serial"]["data_bits"] = config.communication.serial.dataBits;
+    root["communication"]["serial"]["parity"] = config.communication.serial.parity;
+    root["communication"]["serial"]["stop_bits"] = config.communication.serial.stopBits;
+    root["communication"]["serial"]["flow_control"] = config.communication.serial.flowControl;
 
     try {
         if (!path.parent_path().empty()) {
             std::filesystem::create_directories(path.parent_path());
         }
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        out << root;
-        out.flush();
+        std::ofstream out(path);
         if (!out.good()) {
-            error = "写入 YAML 文件失败";
+            error = "无法写入配置文件";
             return false;
         }
+        out << root;
+        return true;
     } catch (const std::exception& ex) {
         error = ex.what();
         return false;
     }
-
-    return true;
 }
 
 std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::path& dir) const {
@@ -196,6 +259,32 @@ std::string ConfigStore::protocolName(const std::filesystem::path& protocolDir) 
 
 bool ConfigStore::protocolEntryExists(const std::filesystem::path& protocolDir) const {
     return std::filesystem::exists(mainLuaPath(protocolDir));
+}
+
+std::filesystem::path ConfigStore::defaultScriptWorkspaceDir() const {
+    return "scripts";
+}
+
+std::filesystem::path ConfigStore::defaultScriptHelpPath() const {
+    return defaultScriptWorkspaceDir() / "README.txt";
+}
+
+bool ConfigStore::ensureDefaultScriptWorkspace(std::string& error) const {
+    try {
+        std::filesystem::create_directories(defaultScriptWorkspaceDir());
+        if (!std::filesystem::exists(defaultScriptHelpPath())) {
+            std::ofstream out(defaultScriptHelpPath());
+            out << kDefaultGuide;
+        }
+        const auto sampleScript = defaultScriptWorkspaceDir() / "main.lua";
+        if (!std::filesystem::exists(sampleScript) && std::filesystem::exists(mainLuaPath(defaultProtocolDir_))) {
+            std::filesystem::copy_file(mainLuaPath(defaultProtocolDir_), sampleScript, std::filesystem::copy_options::skip_existing);
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return false;
+    }
 }
 
 FileSnapshot ConfigStore::snapshot(const std::filesystem::path& path) const {
@@ -220,7 +309,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     comm.tcpServer = config.communication.tcpServer;
     comm.serial = config.communication.serial;
     if (comm.serialPortOptions.empty()) {
-        comm.serialPortOptions = {"COM1", "COM2", "COM3"};
+        comm.serialPortOptions = kDefaultSerialPorts;
     }
 
     const auto protocolDir = normalizeProtocolDir(config.protocol.selectedDir);

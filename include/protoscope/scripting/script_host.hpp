@@ -44,6 +44,17 @@ struct ControlSnapshot {
     ControlValue value;
 };
 
+struct DockDescriptor {
+    std::string id;
+    std::string title;
+    std::vector<ControlDescriptor> controls;
+};
+
+struct DockSnapshot {
+    DockDescriptor descriptor;
+    std::vector<ControlSnapshot> controls;
+};
+
 struct ScriptEvent {
     std::string name;
     std::string payload;
@@ -79,6 +90,9 @@ public:
 
     std::vector<ControlDescriptor> controlsSnapshot() const;
     std::vector<ControlSnapshot> controlStatesSnapshot() const;
+    std::vector<DockDescriptor> dockDescriptorsSnapshot() const;
+    std::vector<DockSnapshot> dockSnapshots() const;
+    std::vector<std::string> actionIdsSnapshot() const;
     std::vector<ScriptEvent> drainEvents();
     std::vector<ScriptLog> drainLogs();
     std::vector<std::vector<std::uint8_t>> drainSendQueue();
@@ -118,6 +132,7 @@ private:
     std::string scriptPath_;
     std::string protocolDirectory_;
     std::string lastError_;
+    std::vector<DockDescriptor> docks_;
     std::vector<ControlDescriptor> controls_;
     std::unordered_map<std::string, ControlValue> controlValues_;
     std::vector<ScriptEvent> events_;

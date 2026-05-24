@@ -30,3 +30,7 @@ communication:
   serial:
     port_name: COM1
     baud_rate: 115200
+    data_bits: 8
+    parity: none
+    stop_bits: one
+    flow_control: none

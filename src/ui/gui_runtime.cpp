@@ -18,9 +18,9 @@
 #include <chrono>
 #include <cctype>
 #include <cfloat>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
-#include <cstdio>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -53,22 +53,32 @@ const char* transportKindLabel(transport::TransportKind kind) {
     return "未知";
 }
 
+const char* transportStateLabel(transport::TransportState state) {
+    switch (state) {
+    case transport::TransportState::Closed:
+        return "已关闭";
+    case transport::TransportState::Opening:
+        return "连接中";
+    case transport::TransportState::Open:
+        return "已连接";
+    case transport::TransportState::Error:
+        return "错误";
+    }
+    return "未知";
+}
+
 int hexInputFilter(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag != ImGuiInputTextFlags_CallbackCharFilter) {
         return 0;
     }
 
-    const auto ch = static_cast<unsigned int>(data->EventChar);
+    const ImWchar ch = data->EventChar;
     if (ch < 128U && std::isspace(static_cast<unsigned char>(ch))) {
-        data->EventChar = ' ';
         return 0;
     }
-
     if (std::isxdigit(static_cast<unsigned char>(ch))) {
-        data->EventChar = static_cast<ImWchar>(std::toupper(static_cast<unsigned char>(ch)));
         return 0;
     }
-
     return 1;
 }
 
@@ -76,7 +86,6 @@ int hexEditorCallback(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackCharFilter) {
         return hexInputFilter(data);
     }
-
     if (data->EventFlag != ImGuiInputTextFlags_CallbackEdit) {
         return 0;
     }
@@ -97,27 +106,58 @@ int hexEditorCallback(ImGuiInputTextCallbackData* data) {
     return 0;
 }
 
-std::string formatReceiveRow(const dock::ReceiveRow& row) {
+std::string bytesToAsciiPreview(const std::vector<std::uint8_t>& bytes) {
+    std::string text;
+    text.reserve(bytes.size());
+    for (const auto byte : bytes) {
+        const char ch = static_cast<char>(byte);
+        text.push_back(std::isprint(static_cast<unsigned char>(ch)) ? ch : '.');
+    }
+    return text;
+}
+
+std::string formatReceiveRow(const dock::ReceiveRow& row, bool showHex, bool showTimestamps) {
     std::ostringstream builder;
-    builder << "[" << row.timestampMs << "] " << row.direction << " " << row.endpoint << " " << row.text;
+    if (showTimestamps) {
+        builder << "[" << row.timestampMs << "] ";
+    }
+    builder << row.direction << " " << row.endpoint;
+    if (!row.message.empty()) {
+        builder << " " << row.message;
+    } else if (!row.bytes.empty()) {
+        builder << " ";
+        builder << (showHex ? protocol_utils::bytesToHex(row.bytes) : bytesToAsciiPreview(row.bytes));
+    }
     return builder.str();
 }
 
-std::string formatAllReceiveRows(const std::vector<dock::ReceiveRow>& rows) {
+std::string formatAllReceiveRows(const std::vector<dock::ReceiveRow>& rows, bool showHex, bool showTimestamps) {
     std::ostringstream builder;
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (i != 0) {
             builder << '\n';
         }
-        builder << formatReceiveRow(rows[i]);
+        builder << formatReceiveRow(rows[i], showHex, showTimestamps);
     }
     return builder.str();
+}
+
+const char* serialOptionIndex(const std::vector<std::string>& options, const std::string& value, int& index) {
+    index = 0;
+    for (int i = 0; i < static_cast<int>(options.size()); ++i) {
+        if (options[i] == value) {
+            index = i;
+            break;
+        }
+    }
+    return options.empty() ? nullptr : options[index].c_str();
 }
 
 } // namespace
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
-    : application_(application), configStore_(configStore) {}
+    : application_(application),
+      configStore_(configStore) {}
 
 GuiRuntime::~GuiRuntime() {
     shutdown();
@@ -128,16 +168,12 @@ bool GuiRuntime::initialize() {
         return false;
     }
     if (!initializeImGui()) {
-        shutdown();
         return false;
     }
     if (!initializePlotContext()) {
-        shutdown();
         return false;
     }
-
-    configSnapshot_ = configStore_.snapshot(application_.docks().configState().loadedFromPath);
-    application_.docks().configState().fileTimestampMs = configSnapshot_.timestampMs;
+    configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
     running_ = true;
     return true;
 }
@@ -145,28 +181,34 @@ bool GuiRuntime::initialize() {
 int GuiRuntime::run() {
     while (running_ && window_ && !glfwWindowShouldClose(window_)) {
         const auto frameStartMs = nowMs();
-        const bool changed = application_.pumpOnce() || pollConfigFileChanges() || maybeAutoSave();
+        glfwPollEvents();
+
+        bool changed = application_.pumpOnce();
+        changed = pollConfigFileChanges() || changed;
+        changed = maybeAutoSave() || changed;
 
         if (!changed && lastRenderAtMs_ != 0) {
-            double timeoutSeconds = 0.25;
             if (const auto nextWakeup = application_.nextWakeupAtMs()) {
-                const auto remainingMs = (*nextWakeup > frameStartMs) ? (*nextWakeup - frameStartMs) : 0;
-                timeoutSeconds = (std::min)(timeoutSeconds, static_cast<double>(remainingMs) / 1000.0);
+                if (*nextWakeup > frameStartMs) {
+                    sleepUntilNextFrame(frameStartMs);
+                }
             }
-            glfwWaitEventsTimeout(timeoutSeconds);
         }
 
-        glfwPollEvents();
         renderFrame();
-        sleepUntilNextFrame(frameStartMs);
+        glfwSwapBuffers(window_);
+        lastRenderAtMs_ = frameStartMs;
     }
-
     return 0;
 }
 
 void GuiRuntime::shutdown() {
-    shutdownPlotContext();
+    if (!window_) {
+        return;
+    }
+    running_ = false;
     shutdownImGui();
+    shutdownPlotContext();
     shutdownWindow();
 }
 
@@ -175,17 +217,15 @@ bool GuiRuntime::initializeWindow() {
         return false;
     }
 
-    const auto captured = application_.captureConfig();
-    const auto& window = captured.gui.window;
-
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+
+    const auto& window = application_.captureConfig().gui.window;
     window_ = glfwCreateWindow(window.width, window.height, window.title.c_str(), nullptr, nullptr);
     if (!window_) {
         glfwTerminate();
         return false;
     }
-
     glfwMakeContextCurrent(window_);
     glfwSwapInterval(1);
     if (window.maximized) {
@@ -197,11 +237,9 @@ bool GuiRuntime::initializeWindow() {
 bool GuiRuntime::initializeImGui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImGui::StyleColorsDark();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-
-    ImGui::StyleColorsDark();
-    ensureChineseFont();
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window_, true)) {
         return false;
@@ -209,40 +247,34 @@ bool GuiRuntime::initializeImGui() {
     if (!ImGui_ImplOpenGL3_Init(kGlslVersion)) {
         return false;
     }
+    ensureChineseFont();
     return true;
 }
 
 bool GuiRuntime::initializePlotContext() {
-    // 核心边界：本阶段只显式保留波形子系统接入口，不提前引入真实 ImPlot 依赖。
     return true;
 }
 
 void GuiRuntime::shutdownImGui() {
-    if (ImGui::GetCurrentContext()) {
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
-    }
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
 }
 
 void GuiRuntime::shutdownPlotContext() {
-    // 核心边界：当前无真实 ImPlot 上下文，仅保留对称清理钩子。
 }
 
 void GuiRuntime::shutdownWindow() {
-    if (window_) {
-        glfwDestroyWindow(window_);
-        window_ = nullptr;
-    }
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
     glfwTerminate();
 }
 
 void GuiRuntime::ensureChineseFont() {
     ImGuiIO& io = ImGui::GetIO();
-    const ImWchar* ranges = io.Fonts->GetGlyphRangesChineseFull();
     for (const auto& candidate : candidateChineseFonts()) {
         if (std::filesystem::exists(candidate)) {
-            io.Fonts->AddFontFromFileTTF(candidate.string().c_str(), 18.0F, nullptr, ranges);
+            io.Fonts->AddFontFromFileTTF(candidate.string().c_str(), 18.0F, nullptr, io.Fonts->GetGlyphRangesChineseFull());
             break;
         }
     }
@@ -261,12 +293,14 @@ void GuiRuntime::renderFrame() {
 
         ImGuiID left = dockspaceId;
         ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right, 0.55F, nullptr, &left);
-        ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.40F, nullptr, &left);
-        ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.35F, nullptr, &right);
+        ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.45F, nullptr, &left);
+        ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.40F, nullptr, &right);
+        ImGuiID rightMid = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.45F, nullptr, &right);
 
         ImGui::DockBuilderDockWindow("通讯配置", left);
         ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
-        ImGui::DockBuilderDockWindow("收发控制 / 接收日志", right);
+        ImGui::DockBuilderDockWindow("发送", right);
+        ImGui::DockBuilderDockWindow("接收", rightMid);
         ImGui::DockBuilderDockWindow("波形", rightBottom);
         ImGui::DockBuilderFinish(dockspaceId);
         layoutInitialized_ = true;
@@ -275,7 +309,8 @@ void GuiRuntime::renderFrame() {
     drawStatusBar();
     drawCommDock();
     drawProtocolDock();
-    drawLogDock();
+    drawSendDock();
+    drawReceiveDock();
     drawWaveDock();
 
     ImGui::Render();
@@ -287,30 +322,24 @@ void GuiRuntime::renderFrame() {
     glClearColor(0.10F, 0.11F, 0.13F, 1.0F);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    glfwSwapBuffers(window_);
-    lastRenderAtMs_ = nowMs();
 }
 
 void GuiRuntime::drawStatusBar() {
-    const auto& config = application_.docks().configState();
-    const auto& comm = application_.docks().commState();
+    auto& comm = application_.docks().commState();
+    auto& config = application_.docks().configState();
     if (ImGui::BeginMainMenuBar()) {
-        ImGui::TextUnformatted(config.statusMessage.empty() ? "GUI v1 运行中" : config.statusMessage.c_str());
+        ImGui::Text("状态: %s", transportStateLabel(comm.state));
+        ImGui::Separator();
         if (config.dirty) {
-            ImGui::SameLine();
-            ImGui::TextUnformatted("· 未保存");
+            ImGui::Text("未保存");
+            ImGui::Separator();
         }
         if (comm.reconnectRequired) {
-            ImGui::SameLine();
-            ImGui::TextUnformatted("· 需重连");
+            ImGui::Text("通讯参数变更待重连");
+            ImGui::Separator();
         }
-        if (config.pendingExternalReload) {
-            ImGui::SameLine();
-            ImGui::TextUnformatted("· 检测到外部配置更新");
-        }
-        if (config.conflict.detected) {
-            ImGui::SameLine();
-            ImGui::Text("· 冲突: %s", config.conflict.message.c_str());
+        if (!config.statusMessage.empty()) {
+            ImGui::TextUnformatted(config.statusMessage.c_str());
         }
         ImGui::EndMainMenuBar();
     }
@@ -358,18 +387,11 @@ void GuiRuntime::drawCommDock() {
     } else {
         if (ImGui::Button("刷新串口列表")) {
             comm.serialPortOptions = {"COM1", "COM2", "COM3", "COM4"};
-            configState.statusMessage = "已刷新串口列表（当前为占位实现）";
         }
 
         int currentIndex = 0;
-        for (int i = 0; i < static_cast<int>(comm.serialPortOptions.size()); ++i) {
-            if (comm.serialPortOptions[i] == comm.serial.portName) {
-                currentIndex = i;
-                break;
-            }
-        }
+        serialOptionIndex(comm.serialPortOptions, comm.serial.portName, currentIndex);
         std::vector<const char*> options;
-        options.reserve(comm.serialPortOptions.size());
         for (const auto& item : comm.serialPortOptions) {
             options.push_back(item.c_str());
         }
@@ -380,16 +402,44 @@ void GuiRuntime::drawCommDock() {
 
         int baudRate = static_cast<int>(comm.serial.baudRate);
         if (ImGui::InputInt("波特率", &baudRate)) {
-            comm.serial.baudRate = static_cast<std::uint32_t>((std::max)(baudRate, 0));
+            comm.serial.baudRate = static_cast<std::uint32_t>(std::max(0, baudRate));
+            application_.markCommConfigEdited(true);
+        }
+
+        int dataBits = static_cast<int>(comm.serial.dataBits);
+        if (ImGui::InputInt("数据位", &dataBits)) {
+            comm.serial.dataBits = static_cast<std::uint32_t>(std::clamp(dataBits, 5, 8));
+            application_.markCommConfigEdited(true);
+        }
+
+        const char* parityItems[] = {"none", "odd", "even"};
+        int parityIndex = comm.serial.parity == "odd" ? 1 : (comm.serial.parity == "even" ? 2 : 0);
+        if (ImGui::Combo("奇偶校验", &parityIndex, parityItems, IM_ARRAYSIZE(parityItems))) {
+            comm.serial.parity = parityItems[parityIndex];
+            application_.markCommConfigEdited(true);
+        }
+
+        const char* stopBitItems[] = {"one", "one_point_five", "two"};
+        int stopBitIndex = comm.serial.stopBits == "two" ? 2 : (comm.serial.stopBits == "one_point_five" ? 1 : 0);
+        if (ImGui::Combo("停止位", &stopBitIndex, stopBitItems, IM_ARRAYSIZE(stopBitItems))) {
+            comm.serial.stopBits = stopBitItems[stopBitIndex];
+            application_.markCommConfigEdited(true);
+        }
+
+        const char* flowItems[] = {"none", "software", "hardware"};
+        int flowIndex = comm.serial.flowControl == "software" ? 1 : (comm.serial.flowControl == "hardware" ? 2 : 0);
+        if (ImGui::Combo("流控", &flowIndex, flowItems, IM_ARRAYSIZE(flowItems))) {
+            comm.serial.flowControl = flowItems[flowIndex];
             application_.markCommConfigEdited(true);
         }
     }
 
     ImGui::Separator();
-    ImGui::Text("状态：%s", transportKindLabel(comm.kind));
-    ImGui::Text("连接状态：%d", static_cast<int>(comm.state));
-    ImGui::Text("发送字节：%llu", static_cast<unsigned long long>(comm.txCount));
-    ImGui::Text("接收字节：%llu", static_cast<unsigned long long>(comm.rxCount));
+    ImGui::Text("当前状态: %s", transportKindLabel(comm.kind));
+    ImGui::Text("连接状态: %s", transportStateLabel(comm.state));
+    ImGui::Text("TX=%llu RX=%llu",
+                static_cast<unsigned long long>(comm.txCount),
+                static_cast<unsigned long long>(comm.rxCount));
     if (!comm.lastError.empty()) {
         ImGui::TextWrapped("错误：%s", comm.lastError.c_str());
     }
@@ -406,38 +456,11 @@ void GuiRuntime::drawCommDock() {
         std::string error;
         const auto outputPath = std::filesystem::path(configState.loadedFromPath);
         if (configStore_.save(outputPath, application_.captureConfig(), error)) {
-            configSnapshot_ = configStore_.snapshot(outputPath);
-            application_.docks().configState().fileTimestampMs = configSnapshot_.timestampMs;
-            configState.pendingExternalReload = false;
-            configState.pendingExternalReloadTimestampMs = 0;
-            configState.externalReloadMessage.clear();
             application_.docks().clearDirty("配置已保存");
-            application_.docks().clearConflict();
+            configSnapshot_ = configStore_.snapshot(outputPath);
         } else {
-            application_.docks().configState().statusMessage = "保存配置失败: " + error;
+            application_.docks().markDirty("保存配置失败: " + error);
         }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("重载配置")) {
-        reloadConfigFromDisk();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("忽略本次外部更新提示")) {
-        configState.pendingExternalReload = false;
-        configState.pendingExternalReloadTimestampMs = 0;
-        configState.externalReloadMessage.clear();
-        application_.docks().clearConflict();
-        configState.statusMessage = "已忽略本次外部配置更新";
-    }
-
-    if (ImGui::Checkbox("启用外部配置热重载提醒", &configState.configHotReloadEnabled)) {
-        application_.docks().markDirty("配置热重载选项已修改");
-    }
-    ImGui::TextWrapped("配置文件：%s", configState.loadedFromPath.c_str());
-    if (configState.pendingExternalReload) {
-        ImGui::TextWrapped("%s",
-                           configState.externalReloadMessage.empty() ? "检测到外部配置更新，等待手动重载"
-                                                                     : configState.externalReloadMessage.c_str());
     }
 
     ImGui::End();
@@ -456,90 +479,107 @@ void GuiRuntime::drawProtocolDock() {
 
     ImGui::Text("协议名：%s", lua.protocolName.c_str());
     ImGui::Text("入口：%s", lua.scriptPath.c_str());
+    ImGui::Text("脚本工作区：%s", configStore_.defaultScriptWorkspaceDir().generic_string().c_str());
+    ImGui::Text("帮助文件：%s", configStore_.defaultScriptHelpPath().generic_string().c_str());
     if (ImGui::Button("重新加载协议")) {
         application_.reloadProtocolDirectory(lua.protocolDir, true);
         application_.docks().configState().statusMessage = lua.loaded ? "协议已重新加载" : "协议重新加载失败";
     }
 
+    if (!lua.lastError.empty()) {
+        ImGui::TextWrapped("脚本错误：%s", lua.lastError.c_str());
+    }
+
     ImGui::Separator();
-    for (const auto& control : application_.docks().luaState().controlStates) {
-        drawDynamicControl(control);
+    if (lua.docks.empty()) {
+        for (const auto& control : lua.controlStates) {
+            drawDynamicControl(control);
+        }
+        ImGui::End();
+        return;
+    }
+    ImGui::End();
+
+    for (const auto& dock : lua.docks) {
+        ImGui::Begin(dock.descriptor.title.c_str());
+        for (const auto& control : dock.controls) {
+            drawDynamicControl(control);
+        }
+        ImGui::End();
+    }
+}
+
+void GuiRuntime::drawSendDock() {
+    auto& sendState = application_.docks().sendState();
+    std::vector<char> payloadBuffer((std::max)(std::size_t(512), sendState.payload.size() + 256), '\0');
+    std::memcpy(payloadBuffer.data(), sendState.payload.c_str(), sendState.payload.size());
+
+    ImGui::Begin("发送");
+    if (ImGui::Checkbox("HEX 发送", &sendState.hexMode) && sendState.hexMode) {
+        sendState.payload = protocol_utils::normalizeHexText(sendState.payload);
+        std::fill(payloadBuffer.begin(), payloadBuffer.end(), '\0');
+        std::memcpy(payloadBuffer.data(), sendState.payload.c_str(), sendState.payload.size());
+    }
+
+    if (sendState.hexMode) {
+        if (ImGui::InputTextMultiline("载荷", payloadBuffer.data(), payloadBuffer.size(),
+                                      ImVec2(-FLT_MIN, 120.0F),
+                                      ImGuiInputTextFlags_CallbackCharFilter | ImGuiInputTextFlags_CallbackEdit,
+                                      hexEditorCallback)) {
+            sendState.payload = payloadBuffer.data();
+        }
+    } else {
+        if (ImGui::InputTextMultiline("载荷", payloadBuffer.data(), payloadBuffer.size(),
+                                      ImVec2(-FLT_MIN, 120.0F))) {
+            sendState.payload = payloadBuffer.data();
+        }
+    }
+
+    if (!sendState.actionOptions.empty()) {
+        std::vector<const char*> items;
+        int actionIndex = 0;
+        for (int i = 0; i < static_cast<int>(sendState.actionOptions.size()); ++i) {
+            items.push_back(sendState.actionOptions[i].c_str());
+            if (sendState.actionOptions[i] == sendState.actionName) {
+                actionIndex = i;
+            }
+        }
+        if (ImGui::Combo("业务动作", &actionIndex, items.data(), static_cast<int>(items.size()))) {
+            sendState.actionName = sendState.actionOptions[actionIndex];
+        }
+    } else {
+        ImGui::TextDisabled("当前协议未声明按钮动作");
+    }
+
+    if (ImGui::Button("发送原始载荷")) {
+        application_.sendManualPayload(sendState.payload, sendState.hexMode);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("触发业务动作") && !sendState.actionName.empty()) {
+        application_.triggerAction(sendState.actionName);
     }
     ImGui::End();
 }
 
-void GuiRuntime::drawLogDock() {
-    auto& sendState = application_.docks().sendState();
-    auto& receive = application_.docks().receiveState();
-
-    ImGui::Begin("收发控制 / 接收日志");
-    if (ImGui::Checkbox("HEX 发送", &sendState.hexMode) && sendState.hexMode) {
-        sendState.payload = protocol_utils::normalizeHexText(sendState.payload);
-    }
-
-    char payload[512]{};
-    std::snprintf(payload, sizeof(payload), "%s", sendState.payload.c_str());
-    ImGuiInputTextFlags payloadFlags = ImGuiInputTextFlags_None;
-    if (sendState.hexMode) {
-        payloadFlags |= ImGuiInputTextFlags_CallbackCharFilter;
-        payloadFlags |= ImGuiInputTextFlags_CallbackEdit;
-    }
-    if (ImGui::InputTextMultiline("发送内容",
-                                  payload,
-                                  sizeof(payload),
-                                  ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 5.0f),
-                                  payloadFlags,
-                                  sendState.hexMode ? hexEditorCallback : nullptr)) {
-        sendState.payload = sendState.hexMode ? protocol_utils::normalizeHexText(payload) : std::string(payload);
-    }
-    const bool hexPayloadComplete = !sendState.hexMode || (protocol_utils::countHexDigits(sendState.payload) % 2 == 0);
-    if (sendState.hexMode && !hexPayloadComplete) {
-        ImGui::TextWrapped("HEX 文本存在未成对 nibble，当前禁止发送。");
-    }
-
-    char actionName[128]{};
-    std::snprintf(actionName, sizeof(actionName), "%s", sendState.actionName.c_str());
-    if (ImGui::InputText("动作名", actionName, sizeof(actionName))) {
-        sendState.actionName = actionName;
-    }
-
-    if (!hexPayloadComplete) {
-        ImGui::BeginDisabled();
-    }
-    if (ImGui::Button("发送")) {
-        application_.sendManualPayload(sendState.payload, sendState.hexMode);
-    }
-    if (!hexPayloadComplete) {
-        ImGui::EndDisabled();
-    }
+void GuiRuntime::drawReceiveDock() {
+    auto& receiveState = application_.docks().receiveState();
+    ImGui::Begin("接收");
+    ImGui::Checkbox("HEX 显示", &receiveState.showHex);
     ImGui::SameLine();
-    if (ImGui::Button("执行业务动作")) {
-        application_.triggerAction(sendState.actionName);
-    }
+    ImGui::Checkbox("显示时间戳", &receiveState.showTimestamps);
     ImGui::SameLine();
-    if (ImGui::Button("清空日志")) {
+    ImGui::Checkbox("暂停自动滚动", &receiveState.pauseScroll);
+    ImGui::SameLine();
+    if (ImGui::Button("清空")) {
         application_.docks().clearReceiveRows();
     }
-    ImGui::SameLine();
-    if (ImGui::Button("复制日志")) {
-        const auto allText = formatAllReceiveRows(receive.rows);
-        ImGui::SetClipboardText(allText.c_str());
-    }
-    ImGui::SameLine();
-    ImGui::Checkbox("暂停跟随", &receive.pauseScroll);
 
-    ImGui::Separator();
-    // 核心流程：日志绘制固定在剩余区域内，超出后只通过子窗口滚动，不再把 Dock 自身越撑越高。
-    if (ImGui::BeginChild("receive-log-list", ImVec2(0.0f, 0.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
-        for (const auto& row : receive.rows) {
-            const auto line = formatReceiveRow(row);
-            ImGui::TextWrapped("%s", line.c_str());
-        }
-        if (!receive.pauseScroll && !receive.rows.empty()) {
-            ImGui::SetScrollHereY(1.0f);
-        }
-    }
-    ImGui::EndChild();
+    std::string content = formatAllReceiveRows(receiveState.rows, receiveState.showHex, receiveState.showTimestamps);
+    ImGui::InputTextMultiline("##receive_log",
+                              content.data(),
+                              content.size() + 1,
+                              ImVec2(-FLT_MIN, -FLT_MIN),
+                              ImGuiInputTextFlags_ReadOnly);
     ImGui::End();
 }
 
@@ -557,15 +597,6 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
             application_.triggerAction(descriptor.id);
         }
         break;
-    case scripting::ControlType::InputText: {
-        std::string current = std::get<std::string>(control.value);
-        char buffer[256]{};
-        std::snprintf(buffer, sizeof(buffer), "%s", current.c_str());
-        if (ImGui::InputText(descriptor.label.c_str(), buffer, sizeof(buffer))) {
-            application_.updateControlValue(descriptor.id, std::string(buffer));
-        }
-        break;
-    }
     case scripting::ControlType::Checkbox: {
         bool checked = std::get<bool>(control.value);
         if (ImGui::Checkbox(descriptor.label.c_str(), &checked)) {
@@ -573,10 +604,17 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         }
         break;
     }
+    case scripting::ControlType::InputText: {
+        char buffer[256]{};
+        std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
+        if (ImGui::InputText(descriptor.label.c_str(), buffer, sizeof(buffer))) {
+            application_.updateControlValue(descriptor.id, std::string(buffer));
+        }
+        break;
+    }
     case scripting::ControlType::Combo: {
         int index = std::get<int>(control.value);
         std::vector<const char*> items;
-        items.reserve(descriptor.comboOptions.size());
         for (const auto& option : descriptor.comboOptions) {
             items.push_back(option.c_str());
         }
@@ -603,24 +641,11 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
 }
 
 bool GuiRuntime::reloadConfigFromDisk() {
-    auto& configState = application_.docks().configState();
-    const auto loaded = configStore_.load(std::filesystem::path(configState.loadedFromPath));
-    application_.applyConfig(loaded.config);
-
-    configSnapshot_ = configStore_.snapshot(loaded.resolvedPath);
-    configState.fileTimestampMs = configSnapshot_.timestampMs;
-    configState.pendingExternalReload = false;
-    configState.pendingExternalReloadTimestampMs = 0;
-    configState.externalReloadMessage.clear();
-    application_.docks().clearConflict();
-
-    if (loaded.loadedFromDisk) {
-        application_.docks().clearDirty("已从磁盘重载配置");
-    } else if (!loaded.error.empty()) {
-        application_.docks().markDirty(loaded.error);
-    } else {
-        application_.docks().markDirty("未找到配置文件，已重新应用默认配置");
+    const auto loaded = configStore_.load(configStore_.defaultConfigPath());
+    if (!application_.applyConfig(loaded.config)) {
+        return false;
     }
+    configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
     return true;
 }
 
@@ -629,27 +654,12 @@ bool GuiRuntime::pollConfigFileChanges() {
     if (!configState.configHotReloadEnabled) {
         return false;
     }
-
-    const auto path = std::filesystem::path(configState.loadedFromPath);
-    if (!configStore_.hasChanged(configSnapshot_)) {
+    if (!configSnapshot_.path.empty() && !configStore_.hasChanged(configSnapshot_)) {
         return false;
     }
-
-    configSnapshot_ = configStore_.snapshot(path);
-    configState.fileTimestampMs = configSnapshot_.timestampMs;
     configState.pendingExternalReload = true;
-    configState.pendingExternalReloadTimestampMs = configSnapshot_.timestampMs;
-    configState.externalReloadMessage = "检测到外部配置更新，等待手动重载";
-
-    if (configState.dirty) {
-        application_.docks().setConflict("当前存在未保存修改，无法自动重载");
-        configState.statusMessage = "当前存在未保存修改，无法自动重载";
-        return true;
-    }
-
-    application_.docks().clearConflict();
-    configState.statusMessage = "检测到外部配置更新";
-    return true;
+    configState.externalReloadMessage = "检测到外部配置更新，请手动保存或重载";
+    return false;
 }
 
 bool GuiRuntime::maybeAutoSave() {
@@ -658,7 +668,6 @@ bool GuiRuntime::maybeAutoSave() {
         return false;
     }
     if (configState.pendingExternalReload) {
-        configState.statusMessage = "当前存在未保存修改，无法自动重载";
         return false;
     }
 
@@ -671,13 +680,10 @@ bool GuiRuntime::maybeAutoSave() {
     const auto path = std::filesystem::path(configState.loadedFromPath);
     if (!configStore_.save(path, application_.captureConfig(), error)) {
         configState.statusMessage = "自动保存失败: " + error;
-        lastAutoSaveAtMs_ = currentMs;
-        return true;
+        return false;
     }
-
-    configSnapshot_ = configStore_.snapshot(path);
-    configState.fileTimestampMs = configSnapshot_.timestampMs;
     application_.docks().clearDirty("已自动保存配置");
+    configSnapshot_ = configStore_.snapshot(path);
     lastAutoSaveAtMs_ = currentMs;
     return true;
 }

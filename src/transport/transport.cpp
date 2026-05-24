@@ -44,6 +44,36 @@ std::string endpointText(const std::string& host, std::uint16_t port) {
     return host + ":" + std::to_string(port);
 }
 
+asio::serial_port_base::parity::type parseParity(const std::string& parity) {
+    if (parity == "odd") {
+        return asio::serial_port_base::parity::odd;
+    }
+    if (parity == "even") {
+        return asio::serial_port_base::parity::even;
+    }
+    return asio::serial_port_base::parity::none;
+}
+
+asio::serial_port_base::stop_bits::type parseStopBits(const std::string& stopBits) {
+    if (stopBits == "one_point_five") {
+        return asio::serial_port_base::stop_bits::onepointfive;
+    }
+    if (stopBits == "two") {
+        return asio::serial_port_base::stop_bits::two;
+    }
+    return asio::serial_port_base::stop_bits::one;
+}
+
+asio::serial_port_base::flow_control::type parseFlowControl(const std::string& flowControl) {
+    if (flowControl == "software") {
+        return asio::serial_port_base::flow_control::software;
+    }
+    if (flowControl == "hardware") {
+        return asio::serial_port_base::flow_control::hardware;
+    }
+    return asio::serial_port_base::flow_control::none;
+}
+
 } // namespace
 
 struct TcpClientTransport::Runtime {
@@ -481,6 +511,10 @@ bool SerialTransport::open(const TransportConfig& config) {
     try {
         runtime_->serialPort.open(serial.portName);
         runtime_->serialPort.set_option(asio::serial_port_base::baud_rate(serial.baudRate));
+        runtime_->serialPort.set_option(asio::serial_port_base::character_size(serial.dataBits));
+        runtime_->serialPort.set_option(asio::serial_port_base::parity(parseParity(serial.parity)));
+        runtime_->serialPort.set_option(asio::serial_port_base::stop_bits(parseStopBits(serial.stopBits)));
+        runtime_->serialPort.set_option(asio::serial_port_base::flow_control(parseFlowControl(serial.flowControl)));
     } catch (const std::exception& ex) {
         setState(TransportState::Error);
         pushEvent(TransportErrorEvent{{TransportKind::Serial, serial.portName, 0, nowMs(), true}, ex.what()});

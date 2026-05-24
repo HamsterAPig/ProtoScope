@@ -12,6 +12,9 @@ namespace protoscope::scripting {
 
 namespace {
 
+constexpr const char* kDefaultDockId = "protocol";
+constexpr const char* kDefaultDockTitle = "协议动作";
+
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -62,12 +65,12 @@ std::string luaTypeName(sol::type type) {
     switch (type) {
     case sol::type::lua_nil:
         return "nil";
-    case sol::type::boolean:
-        return "boolean";
-    case sol::type::number:
-        return "number";
     case sol::type::string:
         return "string";
+    case sol::type::number:
+        return "number";
+    case sol::type::boolean:
+        return "boolean";
     case sol::type::table:
         return "table";
     case sol::type::function:
@@ -83,31 +86,31 @@ std::string serializeLuaObject(const sol::object& object, int depth = 0) {
     }
 
     switch (object.get_type()) {
+    case sol::type::string:
+        return object.as<std::string>();
     case sol::type::boolean:
         return object.as<bool>() ? "true" : "false";
     case sol::type::number: {
-        std::ostringstream stream;
-        stream << object.as<double>();
-        return stream.str();
+        std::ostringstream builder;
+        builder << object.as<double>();
+        return builder.str();
     }
-    case sol::type::string:
-        return object.as<std::string>();
     case sol::type::table: {
         if (depth >= 3) {
             return "{...}";
         }
-        std::ostringstream stream;
-        stream << "{";
+        std::ostringstream builder;
+        builder << "{";
         bool first = true;
         for (const auto& pair : object.as<sol::table>()) {
             if (!first) {
-                stream << ", ";
+                builder << ", ";
             }
             first = false;
-            stream << serializeLuaObject(pair.first, depth + 1) << "=" << serializeLuaObject(pair.second, depth + 1);
+            builder << serializeLuaObject(pair.first, depth + 1) << "=" << serializeLuaObject(pair.second, depth + 1);
         }
-        stream << "}";
-        return stream.str();
+        builder << "}";
+        return builder.str();
     }
     default:
         return "<" + luaTypeName(object.get_type()) + ">";
@@ -155,14 +158,12 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
         if (object.is<double>()) {
             return object.as<double>() != 0.0;
         }
-        error = "期望 bool";
-        return std::nullopt;
+        break;
     case ControlType::InputText:
         if (object.is<std::string>()) {
             return object.as<std::string>();
         }
-        error = "期望 string";
-        return std::nullopt;
+        break;
     case ControlType::InputInt:
         if (object.is<int>()) {
             return object.as<int>();
@@ -170,8 +171,7 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
         if (object.is<double>()) {
             return static_cast<int>(object.as<double>());
         }
-        error = "期望 integer";
-        return std::nullopt;
+        break;
     case ControlType::InputFloat:
         if (object.is<float>()) {
             return object.as<float>();
@@ -182,46 +182,38 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
         if (object.is<int>()) {
             return static_cast<float>(object.as<int>());
         }
-        error = "期望 number";
-        return std::nullopt;
+        break;
     case ControlType::Combo: {
-        int index = 1;
+        int index = 0;
         if (object.is<int>()) {
             index = object.as<int>();
         } else if (object.is<double>()) {
             index = static_cast<int>(object.as<double>());
         } else {
-            error = "期望 integer";
+            error = "combo 控件仅支持 number";
             return std::nullopt;
         }
-
         if (descriptor.comboOptions.empty()) {
             return 0;
         }
-
-        index = std::clamp(index, 1, static_cast<int>(descriptor.comboOptions.size()));
-        return index - 1;
+        return std::clamp(index, 0, static_cast<int>(descriptor.comboOptions.size()) - 1);
     }
     }
 
-    error = "不支持的控件类型";
+    error = "控件 " + descriptor.id + " 类型不匹配，实际收到 " + luaTypeName(object.get_type());
     return std::nullopt;
 }
 
 sol::object controlValueToLua(sol::state_view lua,
                               const ControlDescriptor* descriptor,
                               const ControlValue& value) {
+    if (descriptor == nullptr) {
+        return sol::make_object(lua, sol::lua_nil);
+    }
+
     return std::visit(
-        [&](const auto& current) -> sol::object {
-            using T = std::decay_t<decltype(current)>;
-            if constexpr (std::is_same_v<T, int>) {
-                if (descriptor != nullptr && descriptor->type == ControlType::Combo) {
-                    return sol::make_object(lua, current + 1);
-                }
-                return sol::make_object(lua, current);
-            } else {
-                return sol::make_object(lua, current);
-            }
+        [&lua](const auto& current) -> sol::object {
+            return sol::make_object(lua, current);
         },
         value);
 }
@@ -265,7 +257,7 @@ std::optional<std::vector<std::uint8_t>> bytesFromLuaObject(const sol::object& o
 
 std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& object, std::string& error) {
     if (!object.is<sol::table>()) {
-        error = "controls() 每一项都必须是 table";
+        error = "控件项必须是 table";
         return std::nullopt;
     }
 
@@ -333,12 +325,113 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     return descriptor;
 }
 
+std::optional<std::vector<ControlDescriptor>> parseControlList(const sol::object& object, std::string& error) {
+    if (!object.is<sol::table>()) {
+        error = "控件列表必须返回 table";
+        return std::nullopt;
+    }
+
+    const auto table = object.as<sol::table>();
+    std::vector<ControlDescriptor> controls;
+    controls.reserve(table.size());
+    for (std::size_t index = 1; index <= table.size(); ++index) {
+        auto descriptor = parseControlDescriptor(table[index], error);
+        if (!descriptor.has_value()) {
+            return std::nullopt;
+        }
+        controls.push_back(std::move(*descriptor));
+    }
+    return controls;
+}
+
+std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view lua,
+                                                                std::string& error) {
+    const sol::object uiObject = lua["ui"];
+    if (uiObject.valid() && uiObject.get_type() != sol::type::lua_nil) {
+        if (!uiObject.is<sol::protected_function>()) {
+            error = "ui 必须是 function";
+            return std::nullopt;
+        }
+
+        auto uiFunction = uiObject.as<sol::protected_function>();
+        auto uiResult = uiFunction();
+        if (!uiResult.valid()) {
+            error = "ui() 执行失败";
+            return std::nullopt;
+        }
+
+        const sol::object docksObject = uiResult.get<sol::object>();
+        if (!docksObject.is<sol::table>()) {
+            error = "ui() 必须返回 table";
+            return std::nullopt;
+        }
+
+        const auto dockTable = docksObject.as<sol::table>();
+        std::vector<DockDescriptor> docks;
+        docks.reserve(dockTable.size());
+        for (std::size_t index = 1; index <= dockTable.size(); ++index) {
+            const sol::object dockObject = dockTable[index];
+            if (!dockObject.is<sol::table>()) {
+                error = "ui() 每个 dock 都必须是 table";
+                return std::nullopt;
+            }
+
+            const auto dockEntry = dockObject.as<sol::table>();
+            DockDescriptor dock;
+            dock.id = dockEntry.get_or("id", std::string());
+            dock.title = dockEntry.get_or("title", std::string());
+            if (dock.id.empty() || dock.title.empty()) {
+                error = "dock 必须提供 id 和 title";
+                return std::nullopt;
+            }
+
+            const sol::object controlsObject = dockEntry["controls"];
+            auto controls = parseControlList(controlsObject, error);
+            if (!controls.has_value()) {
+                return std::nullopt;
+            }
+            dock.controls = std::move(*controls);
+            docks.push_back(std::move(dock));
+        }
+        return docks;
+    }
+
+    const sol::object controlsObject = lua["controls"];
+    if (!controlsObject.valid() || controlsObject.get_type() == sol::type::lua_nil) {
+        return std::vector<DockDescriptor>{};
+    }
+    if (!controlsObject.is<sol::protected_function>()) {
+        error = "controls 必须是 function";
+        return std::nullopt;
+    }
+
+    auto controlsFunction = controlsObject.as<sol::protected_function>();
+    auto controlsResult = controlsFunction();
+    if (!controlsResult.valid()) {
+        error = "controls() 执行失败";
+        return std::nullopt;
+    }
+
+    const sol::object descriptorsObject = controlsResult.get<sol::object>();
+    auto controls = parseControlList(descriptorsObject, error);
+    if (!controls.has_value()) {
+        return std::nullopt;
+    }
+
+    DockDescriptor dock;
+    dock.id = kDefaultDockId;
+    dock.title = kDefaultDockTitle;
+    dock.controls = std::move(*controls);
+    return std::vector<DockDescriptor>{std::move(dock)};
+}
+
 sol::table makeContextTable(sol::state_view lua, const transport::ConnectionContext& connection) {
     sol::table table = lua.create_table();
     table["kind"] = kindName(connection.kind);
     table["endpoint"] = connection.endpoint;
     table["connection_id"] = connection.connectionId;
     table["timestamp_ms"] = connection.timestampMs;
+    table["ready_for_io"] = connection.readyForIo;
     return table;
 }
 
@@ -434,81 +527,70 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
             protoLog("warn", "proto.set_control 未找到控件: " + id);
             return;
         }
-
         std::string error;
         const auto converted = controlValueFromLua(*descriptor, value, error);
         if (!converted.has_value()) {
-            protoLog("error", "proto.set_control 更新失败: " + id + " -> " + error);
+            protoLog("warn", "proto.set_control 调用失败: " + error);
             return;
         }
         controlValues_[id] = *converted;
     });
+    proto.set_function("crc16_modbus", [](const sol::object& payload) -> std::uint16_t {
+        std::string error;
+        const auto bytes = bytesFromLuaObject(payload, error);
+        return bytes.has_value() ? protocol_utils::crc16Modbus(*bytes) : 0U;
+    });
+    proto.set_function("crc16_ccitt_false", [](const sol::object& payload) -> std::uint16_t {
+        std::string error;
+        const auto bytes = bytesFromLuaObject(payload, error);
+        return bytes.has_value() ? protocol_utils::crc16CcittFalse(*bytes) : 0U;
+    });
+    proto.set_function("crc32_ieee", [](const sol::object& payload) -> std::uint32_t {
+        std::string error;
+        const auto bytes = bytesFromLuaObject(payload, error);
+        return bytes.has_value() ? protocol_utils::crc32Ieee(*bytes) : 0U;
+    });
 
-    sol::protected_function_result scriptResult = lua.safe_script_file(path, sol::script_pass_on_error);
+    auto scriptResult = lua.safe_script_file(path, &sol::script_pass_on_error);
     if (!scriptResult.valid()) {
-        setLastError("脚本装载失败: " + protectedCallError(scriptResult));
+        setLastError("执行脚本失败: " + protectedCallError(scriptResult));
         protoLog("error", lastError_);
         return false;
     }
 
-    const sol::object controlsObject = lua["controls"];
-    if (controlsObject.valid() && controlsObject.get_type() != sol::type::lua_nil) {
-        if (!controlsObject.is<sol::protected_function>()) {
-            setLastError("controls 必须是 function");
-            protoLog("error", lastError_);
-            return false;
-        }
-
-        sol::protected_function controlsFunction = controlsObject.as<sol::protected_function>();
-        sol::protected_function_result controlsResult = controlsFunction();
-        if (!controlsResult.valid()) {
-            setLastError("controls() 执行失败: " + protectedCallError(controlsResult));
-            protoLog("error", lastError_);
-            return false;
-        }
-
-        const sol::object descriptorsObject = controlsResult.get<sol::object>();
-        if (!descriptorsObject.is<sol::table>()) {
-            setLastError("controls() 必须返回 table");
-            protoLog("error", lastError_);
-            return false;
-        }
-
-        std::vector<ControlDescriptor> nextControls;
-        std::unordered_map<std::string, ControlValue> nextControlValues;
-        const auto descriptors = descriptorsObject.as<sol::table>();
-        for (std::size_t index = 1; index <= descriptors.size(); ++index) {
-            std::string error;
-            const auto descriptor = parseControlDescriptor(descriptors[index], error);
-            if (!descriptor.has_value()) {
-                setLastError("controls() 定义非法: " + error);
-                protoLog("error", lastError_);
-                return false;
-            }
-
-            nextControls.push_back(*descriptor);
-            nextControlValues[descriptor->id] = defaultValueFor(*descriptor);
-        }
-
-        controls_ = std::move(nextControls);
-        controlValues_ = std::move(nextControlValues);
+    std::string parseError;
+    const auto parsedDocks = parseDockDescriptors(lua, parseError);
+    if (!parsedDocks.has_value()) {
+        setLastError(parseError);
+        protoLog("error", lastError_);
+        return false;
     }
 
+    docks_ = *parsedDocks;
+    controls_.clear();
+    std::unordered_map<std::string, ControlValue> nextControlValues;
+    for (const auto& dock : docks_) {
+        for (const auto& control : dock.controls) {
+            controls_.push_back(control);
+            const auto existing = controlValues_.find(control.id);
+            nextControlValues[control.id] = existing == controlValues_.end() ? defaultValueFor(control) : existing->second;
+        }
+    }
+    controlValues_ = std::move(nextControlValues);
+    lastError_.clear();
     scriptLoaded_ = true;
-    setLastError({});
-    protoLog("info", "已加载 Lua 脚本: " + path);
     return true;
 }
 
 bool ScriptHost::loadProtocolDirectory(const std::string& directory) {
-    const std::filesystem::path root(directory);
-    protocolDirectory_ = root.generic_string();
-    return loadScriptFile((root / "main.lua").generic_string());
+    const auto path = std::filesystem::path(directory) / "main.lua";
+    return loadScriptFile(path.generic_string());
 }
 
 void ScriptHost::resetRuntime() {
     scriptLoaded_ = false;
     lastError_.clear();
+    docks_.clear();
     controls_.clear();
     controlValues_.clear();
     events_.clear();
@@ -526,8 +608,9 @@ void ScriptHost::onTransportOpen(const transport::TransportOpenEvent& event) {
 
 void ScriptHost::onTransportClose(const transport::TransportCloseEvent& event) {
     callbackOnClose(ScriptHostContext{event.context});
-    timers_.clear();
-    activeConnection_.reset();
+    if (activeConnection_.has_value() && activeConnection_->connectionId == event.context.connectionId) {
+        activeConnection_.reset();
+    }
 }
 
 void ScriptHost::onTransportError(const transport::TransportErrorEvent& event) {
@@ -535,37 +618,50 @@ void ScriptHost::onTransportError(const transport::TransportErrorEvent& event) {
 }
 
 void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
+    if (event.context.readyForIo) {
+        activeConnection_ = event.context;
+    }
     callbackOnBytes(ScriptHostContext{event.context}, event.bytes);
 }
 
 void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value) {
+    const auto* descriptor = findControlDescriptor(controls_, id);
+    if (descriptor == nullptr) {
+        return;
+    }
     controlValues_[id] = value;
     callbackOnControl(ScriptHostContext{ctx}, id, value);
 }
 
 void ScriptHost::invokeAction(const transport::ConnectionContext& ctx, const std::string& actionName) {
-    controlValues_[actionName] = true;
-    callbackOnControl(ScriptHostContext{ctx}, actionName, true);
+    onControl(ctx, actionName, true);
 }
 
 void ScriptHost::tick(std::uint64_t currentMs) {
-    if (!scriptLoaded_ || !activeConnection_.has_value()) {
-        return;
-    }
-
-    std::vector<std::string> dueNames;
+    std::vector<std::string> dueTimers;
+    dueTimers.reserve(timers_.size());
     for (const auto& [name, timer] : timers_) {
         if (timer.active && currentMs >= timer.dueAtMs) {
-            dueNames.push_back(name);
+            dueTimers.push_back(name);
         }
     }
 
-    for (const auto& name : dueNames) {
+    for (const auto& name : dueTimers) {
         auto iter = timers_.find(name);
         if (iter != timers_.end()) {
             iter->second.active = false;
         }
-        callbackOnTimer(ScriptHostContext{*activeConnection_}, name);
+        if (activeConnection_.has_value()) {
+            callbackOnTimer(ScriptHostContext{*activeConnection_}, name);
+        } else {
+            transport::ConnectionContext context;
+            context.kind = transport::TransportKind::TcpClient;
+            context.endpoint = "detached";
+            context.connectionId = 0;
+            context.timestampMs = currentMs;
+            context.readyForIo = false;
+            callbackOnTimer(ScriptHostContext{context}, name);
+        }
     }
 }
 
@@ -574,34 +670,67 @@ std::vector<ControlDescriptor> ScriptHost::controlsSnapshot() const {
 }
 
 std::vector<ControlSnapshot> ScriptHost::controlStatesSnapshot() const {
-    std::vector<ControlSnapshot> snapshots;
-    snapshots.reserve(controls_.size());
+    std::vector<ControlSnapshot> snapshot;
+    snapshot.reserve(controls_.size());
     for (const auto& control : controls_) {
         const auto iter = controlValues_.find(control.id);
-        snapshots.push_back(ControlSnapshot{
+        snapshot.push_back(ControlSnapshot{
             .descriptor = control,
-            .value = (iter == controlValues_.end()) ? defaultValueFor(control) : iter->second,
+            .value = iter == controlValues_.end() ? defaultValueFor(control) : iter->second,
         });
     }
-    return snapshots;
+    return snapshot;
+}
+
+std::vector<DockDescriptor> ScriptHost::dockDescriptorsSnapshot() const {
+    return docks_;
+}
+
+std::vector<DockSnapshot> ScriptHost::dockSnapshots() const {
+    std::vector<DockSnapshot> docks;
+    docks.reserve(docks_.size());
+    for (const auto& dock : docks_) {
+        DockSnapshot snapshot;
+        snapshot.descriptor = dock;
+        snapshot.controls.reserve(dock.controls.size());
+        for (const auto& control : dock.controls) {
+            const auto iter = controlValues_.find(control.id);
+            snapshot.controls.push_back(ControlSnapshot{
+                .descriptor = control,
+                .value = iter == controlValues_.end() ? defaultValueFor(control) : iter->second,
+            });
+        }
+        docks.push_back(std::move(snapshot));
+    }
+    return docks;
+}
+
+std::vector<std::string> ScriptHost::actionIdsSnapshot() const {
+    std::vector<std::string> actions;
+    for (const auto& control : controls_) {
+        if (control.type == ControlType::Button) {
+            actions.push_back(control.id);
+        }
+    }
+    return actions;
 }
 
 std::vector<ScriptEvent> ScriptHost::drainEvents() {
-    std::vector<ScriptEvent> result;
-    result.swap(events_);
-    return result;
+    auto drained = std::move(events_);
+    events_.clear();
+    return drained;
 }
 
 std::vector<ScriptLog> ScriptHost::drainLogs() {
-    std::vector<ScriptLog> result;
-    result.swap(logs_);
-    return result;
+    auto drained = std::move(logs_);
+    logs_.clear();
+    return drained;
 }
 
 std::vector<std::vector<std::uint8_t>> ScriptHost::drainSendQueue() {
-    std::vector<std::vector<std::uint8_t>> result;
-    result.swap(sendQueue_);
-    return result;
+    auto drained = std::move(sendQueue_);
+    sendQueue_.clear();
+    return drained;
 }
 
 std::optional<std::uint64_t> ScriptHost::nextWakeupAtMs() const {
@@ -630,17 +759,15 @@ const std::string& ScriptHost::lastError() const {
 }
 
 void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
-    if (!scriptLoaded_ || !runtime_) {
+    if (!scriptLoaded_) {
         return;
     }
-
+    sol::state_view view(runtime_->lua.lua_state());
     const sol::object callbackObject = runtime_->lua["on_open"];
     if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
         return;
     }
-
-    sol::protected_function callback = callbackObject.as<sol::protected_function>();
-    sol::state_view view(runtime_->lua.lua_state());
+    auto callback = callbackObject.as<sol::protected_function>();
     sol::protected_function_result result = callback(makeContextTable(view, ctx.connection));
     if (!result.valid()) {
         protoLog("error", "on_open 执行失败: " + protectedCallError(result));
@@ -648,17 +775,15 @@ void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
 }
 
 void ScriptHost::callbackOnClose(const ScriptHostContext& ctx) {
-    if (!scriptLoaded_ || !runtime_) {
+    if (!scriptLoaded_) {
         return;
     }
-
+    sol::state_view view(runtime_->lua.lua_state());
     const sol::object callbackObject = runtime_->lua["on_close"];
     if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
         return;
     }
-
-    sol::protected_function callback = callbackObject.as<sol::protected_function>();
-    sol::state_view view(runtime_->lua.lua_state());
+    auto callback = callbackObject.as<sol::protected_function>();
     sol::protected_function_result result = callback(makeContextTable(view, ctx.connection));
     if (!result.valid()) {
         protoLog("error", "on_close 执行失败: " + protectedCallError(result));
@@ -666,17 +791,15 @@ void ScriptHost::callbackOnClose(const ScriptHostContext& ctx) {
 }
 
 void ScriptHost::callbackOnError(const ScriptHostContext& ctx, const std::string& message) {
-    if (!scriptLoaded_ || !runtime_) {
+    if (!scriptLoaded_) {
         return;
     }
-
+    sol::state_view view(runtime_->lua.lua_state());
     const sol::object callbackObject = runtime_->lua["on_error"];
     if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
         return;
     }
-
-    sol::protected_function callback = callbackObject.as<sol::protected_function>();
-    sol::state_view view(runtime_->lua.lua_state());
+    auto callback = callbackObject.as<sol::protected_function>();
     sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), message);
     if (!result.valid()) {
         protoLog("error", "on_error 执行失败: " + protectedCallError(result));
@@ -684,36 +807,31 @@ void ScriptHost::callbackOnError(const ScriptHostContext& ctx, const std::string
 }
 
 void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes) {
-    if (!scriptLoaded_ || !runtime_) {
+    if (!scriptLoaded_) {
         return;
     }
-
+    sol::state_view view(runtime_->lua.lua_state());
     const sol::object callbackObject = runtime_->lua["on_bytes"];
     if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
         return;
     }
-
-    sol::protected_function callback = callbackObject.as<sol::protected_function>();
-    sol::state_view view(runtime_->lua.lua_state());
-    sol::protected_function_result result =
-        callback(makeContextTable(view, ctx.connection), makeBytesTable(view, bytes));
+    auto callback = callbackObject.as<sol::protected_function>();
+    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeBytesTable(view, bytes));
     if (!result.valid()) {
         protoLog("error", "on_bytes 执行失败: " + protectedCallError(result));
     }
 }
 
 void ScriptHost::callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName) {
-    if (!scriptLoaded_ || !runtime_) {
+    if (!scriptLoaded_) {
         return;
     }
-
+    sol::state_view view(runtime_->lua.lua_state());
     const sol::object callbackObject = runtime_->lua["on_timer"];
     if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
         return;
     }
-
-    sol::protected_function callback = callbackObject.as<sol::protected_function>();
-    sol::state_view view(runtime_->lua.lua_state());
+    auto callback = callbackObject.as<sol::protected_function>();
     sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), timerName);
     if (!result.valid()) {
         protoLog("error", "on_timer 执行失败: " + protectedCallError(result));
@@ -721,17 +839,15 @@ void ScriptHost::callbackOnTimer(const ScriptHostContext& ctx, const std::string
 }
 
 void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value) {
-    if (!scriptLoaded_ || !runtime_) {
+    if (!scriptLoaded_) {
         return;
     }
-
+    sol::state_view view(runtime_->lua.lua_state());
     const sol::object callbackObject = runtime_->lua["on_control"];
     if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
         return;
     }
-
-    sol::protected_function callback = callbackObject.as<sol::protected_function>();
-    sol::state_view view(runtime_->lua.lua_state());
+    auto callback = callbackObject.as<sol::protected_function>();
     sol::protected_function_result result =
         callback(makeContextTable(view, ctx.connection), id, controlValueToLua(view, findControlDescriptor(controls_, id), value));
     if (!result.valid()) {
@@ -777,18 +893,9 @@ void ScriptHost::protoCancelTimer(const std::string& name) {
 std::string ScriptHost::valueToString(const ControlValue& value) {
     return std::visit(
         [](const auto& current) {
-            using T = std::decay_t<decltype(current)>;
-            if constexpr (std::is_same_v<T, bool>) {
-                return current ? std::string("true") : std::string("false");
-            } else if constexpr (std::is_same_v<T, int>) {
-                return std::to_string(current);
-            } else if constexpr (std::is_same_v<T, float>) {
-                std::ostringstream stream;
-                stream << current;
-                return stream.str();
-            } else {
-                return current;
-            }
+            std::ostringstream builder;
+            builder << current;
+            return builder.str();
         },
         value);
 }

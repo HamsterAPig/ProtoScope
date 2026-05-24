@@ -15,7 +15,8 @@ struct ReceiveRow {
     std::uint64_t timestampMs{0};
     std::string direction;
     std::string endpoint;
-    std::string text;
+    std::vector<std::uint8_t> bytes;
+    std::string message;
 };
 
 struct CommDockState {
@@ -33,8 +34,8 @@ struct CommDockState {
 
 struct ReceiveDockState {
     bool pauseScroll{false};
-    bool showAscii{true};
     bool showHex{true};
+    bool showTimestamps{true};
     std::vector<ReceiveRow> rows;
 };
 
@@ -42,6 +43,7 @@ struct SendDockState {
     bool hexMode{true};
     std::string payload{"AA 01 00"};
     std::string actionName{"read_version"};
+    std::vector<std::string> actionOptions;
 };
 
 struct LuaDockState {
@@ -50,6 +52,7 @@ struct LuaDockState {
     std::string protocolDir{"protocols/default_protocol"};
     std::string protocolName{"default_protocol"};
     std::string lastError;
+    std::vector<scripting::DockSnapshot> docks;
     std::vector<scripting::ControlDescriptor> controls;
     std::vector<scripting::ControlSnapshot> controlStates;
 };

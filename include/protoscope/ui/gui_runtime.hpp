@@ -32,7 +32,8 @@ private:
     void drawStatusBar();
     void drawCommDock();
     void drawProtocolDock();
-    void drawLogDock();
+    void drawSendDock();
+    void drawReceiveDock();
     void drawWaveDock();
     void drawDynamicControl(const scripting::ControlSnapshot& control);
 

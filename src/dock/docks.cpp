@@ -23,7 +23,7 @@ void DockStore::appendReceiveRow(ReceiveRow row) {
 
 void DockStore::appendLuaEvent(const scripting::ScriptEvent& event) {
     receive_.rows.push_back(
-        ReceiveRow{.timestampMs = event.timestampMs, .direction = "Lua", .endpoint = "script", .text = event.name + ": " + event.payload});
+        ReceiveRow{.timestampMs = event.timestampMs, .direction = "Lua", .endpoint = "script", .message = event.name + ": " + event.payload});
 }
 
 void DockStore::appendRawReceive(const transport::ConnectionContext& ctx, const std::string& text) {
@@ -31,7 +31,7 @@ void DockStore::appendRawReceive(const transport::ConnectionContext& ctx, const 
         .timestampMs = nowMs(),
         .direction = "RX",
         .endpoint = ctx.endpoint,
-        .text = text,
+        .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
     });
 }
 
@@ -40,7 +40,7 @@ void DockStore::appendRawSend(const transport::ConnectionContext& ctx, const std
         .timestampMs = nowMs(),
         .direction = "TX",
         .endpoint = ctx.endpoint,
-        .text = text,
+        .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
     });
 }
 

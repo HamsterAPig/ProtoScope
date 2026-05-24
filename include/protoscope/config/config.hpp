@@ -73,6 +73,9 @@ public:
     std::filesystem::path mainLuaPath(const std::filesystem::path& protocolDir) const;
     std::string protocolName(const std::filesystem::path& protocolDir) const;
     bool protocolEntryExists(const std::filesystem::path& protocolDir) const;
+    std::filesystem::path defaultScriptWorkspaceDir() const;
+    std::filesystem::path defaultScriptHelpPath() const;
+    bool ensureDefaultScriptWorkspace(std::string& error) const;
 
     FileSnapshot snapshot(const std::filesystem::path& path) const;
     bool hasChanged(const FileSnapshot& previous) const;

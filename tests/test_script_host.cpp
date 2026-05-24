@@ -65,6 +65,44 @@ void test_script_on_open_log() {
     require(foundOpenLog, "on_open 应写入打开日志");
 }
 
+void test_script_multi_dock_snapshot() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("multi_dock").generic_string()), "multi_dock 协议应可加载");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 2, "多 Dock 协议应产出两个 dock");
+    require(docks[0].descriptor.id == "protocol", "第一个 dock id 不正确");
+    require(docks[1].descriptor.title == "高级参数", "第二个 dock 标题不正确");
+
+    const auto actions = host.actionIdsSnapshot();
+    require(actions.size() == 1, "应只枚举一个按钮动作");
+    require(actions[0] == "read_version", "按钮动作 id 不正确");
+}
+
+void test_script_crc_bridge() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("crc_probe").generic_string()), "crc_probe 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onControl(ctx, "probe_crc", true);
+
+    bool found = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "crc") {
+            if (event.payload.empty()) {
+                throw std::runtime_error("crc payload 为空");
+            }
+            found = event.payload.find("modbus=") != std::string::npos &&
+                    event.payload.find("ccitt=") != std::string::npos &&
+                    event.payload.find("ieee=") != std::string::npos;
+            if (!found) {
+                throw std::runtime_error("crc payload=" + event.payload);
+            }
+        }
+    }
+    require(found, "CRC 桥接结果不正确");
+}
+
 void test_script_read_version_flow() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
@@ -199,6 +237,10 @@ void test_config_default_roundtrip() {
     auto config = store.load(tempPath).config;
     config.communication.kind = protoscope::transport::TransportKind::Serial;
     config.communication.serial.portName = "COM9";
+    config.communication.serial.dataBits = 7;
+    config.communication.serial.parity = "even";
+    config.communication.serial.stopBits = "two";
+    config.communication.serial.flowControl = "hardware";
     config.app.configHotReload.enabled = true;
 
     std::string error;
@@ -207,7 +249,19 @@ void test_config_default_roundtrip() {
     const auto reloaded = store.load(tempPath);
     require(reloaded.config.communication.kind == protoscope::transport::TransportKind::Serial, "串口模式 roundtrip 失败");
     require(reloaded.config.communication.serial.portName == "COM9", "串口端口 roundtrip 失败");
+    require(reloaded.config.communication.serial.dataBits == 7, "串口数据位 roundtrip 失败");
+    require(reloaded.config.communication.serial.parity == "even", "串口奇偶校验 roundtrip 失败");
+    require(reloaded.config.communication.serial.stopBits == "two", "串口停止位 roundtrip 失败");
+    require(reloaded.config.communication.serial.flowControl == "hardware", "串口流控 roundtrip 失败");
     require(reloaded.config.app.configHotReload.enabled, "配置热重载开关 roundtrip 失败");
+}
+
+void test_config_default_script_workspace() {
+    protoscope::config::ConfigStore store;
+    std::string error;
+    require(store.ensureDefaultScriptWorkspace(error), "scripts 工作区初始化失败");
+    require(std::filesystem::exists(store.defaultScriptWorkspaceDir()), "scripts 目录应存在");
+    require(std::filesystem::exists(store.defaultScriptHelpPath()), "README.txt 应存在");
 }
 
 namespace {
@@ -220,6 +274,8 @@ static const TestCase kAllTests[] = {
     {"crc_known_vectors", &test_crc_known_vectors},
     {"script_controls_snapshot", &test_script_controls_snapshot},
     {"script_on_open_log", &test_script_on_open_log},
+    {"script_multi_dock_snapshot", &test_script_multi_dock_snapshot},
+    {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
     {"script_read_version_split_flow", &test_script_read_version_split_flow},
     {"script_timeout_flow", &test_script_timeout_flow},
@@ -228,6 +284,7 @@ static const TestCase kAllTests[] = {
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
+    {"config_default_script_workspace", &test_config_default_script_workspace},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
     {"serial_transport_error_path", &test_serial_transport_error_path},
 };
