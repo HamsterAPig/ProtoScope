@@ -1,9 +1,11 @@
 #pragma once
 
+#include "protoscope/config/config.hpp"
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,7 +17,10 @@ public:
     Application();
 
     bool initialize();
-    void pumpOnce();
+    bool applyConfig(const config::AppConfig& config);
+    config::AppConfig captureConfig() const;
+    bool reloadProtocolDirectory(const std::string& protocolDir);
+    bool pumpOnce();
     void shutdown();
 
     dock::DockStore& docks();
@@ -26,15 +31,22 @@ public:
     bool sendManualPayload(const std::string& payload, bool hexMode);
     void triggerAction(const std::string& actionName);
     void updateControlValue(const std::string& id, const scripting::ControlValue& value);
+    void markCommConfigEdited(bool reconnectRequired);
+    void markProtocolEdited();
+
+    std::optional<std::uint64_t> nextWakeupAtMs() const;
 
 private:
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
     void syncDockState();
-    void handleTransportEvents();
-    void flushScriptOutputs();
+    bool handleTransportEvents();
+    bool flushScriptOutputs();
+    bool flushScriptLogs();
 
 private:
     dock::DockStore dockStore_;
+    config::ConfigStore configStore_{};
+    config::AppConfig runtimeConfig_{};
     scripting::ScriptHost scriptHost_;
     std::unique_ptr<transport::ITransport> transport_;
     std::optional<transport::ConnectionContext> activeConnection_;

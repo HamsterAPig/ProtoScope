@@ -1,15 +1,18 @@
 #include "test_registry.hpp"
 
+#include "protoscope/config/config.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
 #include <chrono>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
+
 void require(bool condition, const char* message) {
     if (!condition) {
         throw std::runtime_error(message);
@@ -43,7 +46,7 @@ void test_script_controls_snapshot() {
 
 void test_script_read_version_flow() {
     protoscope::scripting::ScriptHost host;
-    host.loadScriptFile("scripts/default_protocol.lua");
+    host.loadProtocolDirectory("protocols/default_protocol");
 
     const auto ctx = sampleCtx();
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
@@ -58,40 +61,61 @@ void test_script_read_version_flow() {
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, response});
     host.tick(nowMs() + 2000);
 
-    const auto events = host.drainEvents();
     bool foundFrame = false;
-    for (const auto& event : events) {
+    for (const auto& event : host.drainEvents()) {
         if (event.name == "frame") {
             foundFrame = true;
-            break;
         }
     }
-    require(foundFrame, "收到响应后应发出 frame 事件");
+    require(foundFrame, "收到 OK 响应后应产生 frame 事件");
 }
 
 void test_script_timeout_flow() {
     protoscope::scripting::ScriptHost host;
-    host.loadScriptFile("scripts/default_protocol.lua");
+    host.loadProtocolDirectory("protocols/default_protocol");
 
     const auto ctx = sampleCtx();
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
     host.onControl(ctx, "read_version", true);
-
     host.tick(nowMs() + 2000);
-    const auto events = host.drainEvents();
 
     bool foundWarning = false;
-    for (const auto& event : events) {
+    for (const auto& event : host.drainEvents()) {
         if (event.name == "warning") {
             foundWarning = true;
-            break;
         }
     }
+    require(foundWarning, "超时应产生 warning 事件");
+}
 
-    require(foundWarning, "超时后应发出 warning 事件");
+void test_protocol_directory_reload() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议目录应可加载");
+    require(host.protocolDirectory() == "protocols/default_protocol", "协议目录应被记录");
+    require(host.scriptPath().find("main.lua") != std::string::npos, "协议入口应固定为 main.lua");
+}
+
+void test_config_default_roundtrip() {
+    protoscope::config::ConfigStore store;
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-config-roundtrip.yaml";
+
+    auto loaded = store.load(tempPath);
+    require(loaded.config.protocol.selectedDir == "protocols/default_protocol", "默认协议目录不正确");
+
+    loaded.config.communication.kind = protoscope::transport::TransportKind::Serial;
+    loaded.config.communication.serial.portName = "COM9";
+    loaded.config.communication.serial.baudRate = 9600;
+
+    std::string error;
+    require(store.save(tempPath, loaded.config, error), "YAML 保存应成功");
+
+    const auto reloaded = store.load(tempPath);
+    require(reloaded.config.communication.kind == protoscope::transport::TransportKind::Serial, "串口模式 roundtrip 失败");
+    require(reloaded.config.communication.serial.portName == "COM9", "串口端口 roundtrip 失败");
 }
 
 namespace {
+
 static const TestCase kAllTests[] = {
     {"hex_roundtrip", &test_hex_roundtrip},
     {"hex_invalid_input", &test_hex_invalid_input},
@@ -99,7 +123,10 @@ static const TestCase kAllTests[] = {
     {"script_controls_snapshot", &test_script_controls_snapshot},
     {"script_read_version_flow", &test_script_read_version_flow},
     {"script_timeout_flow", &test_script_timeout_flow},
+    {"protocol_directory_reload", &test_protocol_directory_reload},
+    {"config_default_roundtrip", &test_config_default_roundtrip},
 };
+
 } // namespace
 
 const TestCase* allTests() {

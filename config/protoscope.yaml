@@ -1,0 +1,30 @@
+app:
+  language: zh-CN
+  fps_limit: 60
+  idle_render: dirty_only
+  auto_save:
+    enabled: false
+    interval_ms: 5000
+
+gui:
+  window:
+    title: ProtoScope
+    width: 1600
+    height: 900
+    maximized: false
+
+protocol:
+  selected_dir: protocols/default_protocol
+
+communication:
+  kind: tcp_client
+  tcp_client:
+    host: 127.0.0.1
+    port: 9000
+  tcp_server:
+    bind_address: 0.0.0.0
+    port: 9000
+    reject_new_connection: true
+  serial:
+    port_name: COM1
+    baud_rate: 115200

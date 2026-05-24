@@ -4,6 +4,8 @@
 #include "protoscope/transport/transport.hpp"
 
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,6 +27,8 @@ struct CommDockState {
     std::string lastError;
     std::uint64_t txCount{0};
     std::uint64_t rxCount{0};
+    bool reconnectRequired{false};
+    std::vector<std::string> serialPortOptions;
 };
 
 struct ReceiveDockState {
@@ -42,13 +46,33 @@ struct SendDockState {
 
 struct LuaDockState {
     bool loaded{false};
-    std::string scriptPath{"scripts/default_protocol.lua"};
+    std::string scriptPath{"protocols/default_protocol/main.lua"};
+    std::string protocolDir{"protocols/default_protocol"};
+    std::string protocolName{"default_protocol"};
     std::string lastError;
     std::vector<scripting::ControlDescriptor> controls;
+    std::vector<scripting::ControlSnapshot> controlStates;
 };
 
 struct WaveDockState {
     std::string placeholder{"TODO: 第一版仅保留波形 Dock 占位与后续数据接口"};
+};
+
+struct ConfigConflictState {
+    bool detected{false};
+    std::string message;
+};
+
+struct ConfigDockState {
+    bool dirty{false};
+    bool autoSaveEnabled{false};
+    std::uint64_t autoSaveIntervalMs{5000};
+    std::uint32_t fpsLimit{60};
+    std::string idleRender{"dirty_only"};
+    std::uint64_t fileTimestampMs{0};
+    std::string loadedFromPath{"config/protoscope.yaml"};
+    std::string statusMessage;
+    ConfigConflictState conflict{};
 };
 
 class DockStore {
@@ -64,12 +88,19 @@ public:
     SendDockState& sendState();
     LuaDockState& luaState();
     WaveDockState& waveState();
+    ConfigDockState& configState();
 
     const CommDockState& commState() const;
     const ReceiveDockState& receiveState() const;
     const SendDockState& sendState() const;
     const LuaDockState& luaState() const;
     const WaveDockState& waveState() const;
+    const ConfigDockState& configState() const;
+
+    void markDirty(const std::string& statusMessage);
+    void clearDirty(const std::string& statusMessage);
+    void setConflict(std::string message);
+    void clearConflict();
 
 private:
     CommDockState comm_{};
@@ -77,6 +108,7 @@ private:
     SendDockState send_{};
     LuaDockState lua_{};
     WaveDockState wave_{};
+    ConfigDockState config_{};
 };
 
 } // namespace protoscope::dock

@@ -13,6 +13,8 @@ void test_crc_known_vectors();
 void test_script_controls_snapshot();
 void test_script_read_version_flow();
 void test_script_timeout_flow();
+void test_protocol_directory_reload();
+void test_config_default_roundtrip();
 
 const TestCase* allTests();
 int testCount();

@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 project(ProtoScope VERSION 0.1.0 LANGUAGES CXX)
 
 include(CTest)
+include(FetchContent)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,9 +15,58 @@ option(SPDLOG_BUILD_TESTS "Build spdlog tests" OFF)
 option(SPDLOG_BUILD_BENCH "Build spdlog bench" OFF)
 option(YAML_CPP_BUILD_TESTS "Build yaml-cpp tests" OFF)
 option(YAML_CPP_BUILD_TOOLS "Build yaml-cpp tools" OFF)
+option(PROTOSCOPE_ENABLE_GUI "Build ProtoScope GUI runtime" ON)
 
 add_subdirectory(3rdparty/spdlog)
 add_subdirectory(3rdparty/yaml-cpp)
+
+set(PROTOSCOPE_IMGUI_ROOT ${CMAKE_SOURCE_DIR}/3rdparty/imgui)
+set(PROTOSCOPE_IMGUI_SOURCES
+    ${PROTOSCOPE_IMGUI_ROOT}/imgui.cpp
+    ${PROTOSCOPE_IMGUI_ROOT}/imgui_draw.cpp
+    ${PROTOSCOPE_IMGUI_ROOT}/imgui_tables.cpp
+    ${PROTOSCOPE_IMGUI_ROOT}/imgui_widgets.cpp
+    ${PROTOSCOPE_IMGUI_ROOT}/imgui_demo.cpp
+)
+
+if(PROTOSCOPE_ENABLE_GUI)
+    if(WIN32 AND NOT MSVC)
+        set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            glfw
+            GIT_REPOSITORY https://github.com/glfw/glfw.git
+            GIT_TAG 3.4
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(glfw)
+    endif()
+
+    add_library(protoscope_imgui STATIC
+        ${PROTOSCOPE_IMGUI_SOURCES}
+        ${PROTOSCOPE_IMGUI_ROOT}/backends/imgui_impl_glfw.cpp
+        ${PROTOSCOPE_IMGUI_ROOT}/backends/imgui_impl_opengl3.cpp
+    )
+    target_include_directories(protoscope_imgui
+        PUBLIC
+            ${CMAKE_SOURCE_DIR}/include
+            ${PROTOSCOPE_IMGUI_ROOT}
+            ${PROTOSCOPE_IMGUI_ROOT}/backends
+            ${PROTOSCOPE_IMGUI_ROOT}/examples/libs/glfw/include
+    )
+    target_compile_features(protoscope_imgui PUBLIC cxx_std_20)
+    if(WIN32)
+        target_link_libraries(protoscope_imgui PUBLIC opengl32 imm32 gdi32)
+        if(MSVC)
+            target_link_directories(protoscope_imgui PUBLIC ${PROTOSCOPE_IMGUI_ROOT}/examples/libs/glfw/lib-vc2010-64)
+            target_link_libraries(protoscope_imgui PUBLIC glfw3 legacy_stdio_definitions)
+        else()
+            target_link_libraries(protoscope_imgui PUBLIC glfw)
+        endif()
+    endif()
+endif()
 
 add_library(protoscope_protocol_utils STATIC
     src/protocol_utils/codec.cpp
@@ -68,6 +118,20 @@ target_link_libraries(protoscope_dock
 )
 target_compile_features(protoscope_dock PUBLIC cxx_std_20)
 
+add_library(protoscope_config STATIC
+    src/config/config.cpp
+)
+target_include_directories(protoscope_config
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(protoscope_config
+    PUBLIC
+        protoscope_dock
+        yaml-cpp::yaml-cpp
+)
+target_compile_features(protoscope_config PUBLIC cxx_std_20)
+
 add_library(protoscope_app STATIC
     src/app/application.cpp
 )
@@ -78,6 +142,7 @@ target_include_directories(protoscope_app
 target_link_libraries(protoscope_app
     PUBLIC
         protoscope_dock
+        protoscope_config
         protoscope_scripting
         protoscope_transport
         protoscope_protocol_utils
@@ -86,11 +151,30 @@ target_link_libraries(protoscope_app
 )
 target_compile_features(protoscope_app PUBLIC cxx_std_20)
 
+if(PROTOSCOPE_ENABLE_GUI)
+    add_library(protoscope_ui STATIC
+        src/ui/gui_runtime.cpp
+    )
+    target_include_directories(protoscope_ui
+        PUBLIC
+            ${CMAKE_SOURCE_DIR}/include
+    )
+    target_link_libraries(protoscope_ui
+        PUBLIC
+            protoscope_app
+            protoscope_config
+            protoscope_imgui
+    )
+    target_compile_features(protoscope_ui PUBLIC cxx_std_20)
+endif()
+
 add_executable(ProtoScope src/main.cpp)
 
 target_link_libraries(ProtoScope
     PRIVATE
         protoscope_app
+        protoscope_config
+        $<$<BOOL:${PROTOSCOPE_ENABLE_GUI}>:protoscope_ui>
 )
 
 target_compile_features(ProtoScope PRIVATE cxx_std_20)
@@ -100,6 +184,7 @@ foreach(target_name IN ITEMS
     protoscope_transport
     protoscope_scripting
     protoscope_dock
+    protoscope_config
     protoscope_app
     ProtoScope
 )
@@ -109,6 +194,16 @@ else()
     target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 endforeach()
+
+if(PROTOSCOPE_ENABLE_GUI)
+    foreach(target_name IN ITEMS protoscope_imgui protoscope_ui)
+        if(MSVC)
+            target_compile_options(${target_name} PRIVATE /W4 /permissive- /utf-8)
+        else()
+            target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic)
+        endif()
+    endforeach()
+endif()
 
 add_executable(protoscope_tests
     tests/test_main.cpp
@@ -121,6 +216,7 @@ target_include_directories(protoscope_tests
 )
 target_link_libraries(protoscope_tests
     PRIVATE
+        protoscope_config
         protoscope_protocol_utils
         protoscope_scripting
         protoscope_transport

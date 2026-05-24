@@ -64,6 +64,10 @@ WaveDockState& DockStore::waveState() {
     return wave_;
 }
 
+ConfigDockState& DockStore::configState() {
+    return config_;
+}
+
 const CommDockState& DockStore::commState() const {
     return comm_;
 }
@@ -82,6 +86,30 @@ const LuaDockState& DockStore::luaState() const {
 
 const WaveDockState& DockStore::waveState() const {
     return wave_;
+}
+
+const ConfigDockState& DockStore::configState() const {
+    return config_;
+}
+
+void DockStore::markDirty(const std::string& statusMessage) {
+    config_.dirty = true;
+    config_.statusMessage = statusMessage;
+}
+
+void DockStore::clearDirty(const std::string& statusMessage) {
+    config_.dirty = false;
+    config_.statusMessage = statusMessage;
+}
+
+void DockStore::setConflict(std::string message) {
+    config_.conflict.detected = true;
+    config_.conflict.message = std::move(message);
+}
+
+void DockStore::clearConflict() {
+    config_.conflict.detected = false;
+    config_.conflict.message.clear();
 }
 
 } // namespace protoscope::dock

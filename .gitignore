@@ -7,3 +7,4 @@ obj/
 *.VC.db
 *.VC.opendb
 
+build-cmake/

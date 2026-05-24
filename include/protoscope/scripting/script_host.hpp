@@ -38,6 +38,11 @@ struct ControlDescriptor {
 
 using ControlValue = std::variant<bool, int, float, std::string>;
 
+struct ControlSnapshot {
+    ControlDescriptor descriptor;
+    ControlValue value;
+};
+
 struct ScriptEvent {
     std::string name;
     std::string payload;
@@ -59,24 +64,28 @@ public:
     ScriptHost();
 
     bool loadScriptFile(const std::string& path);
+    bool loadProtocolDirectory(const std::string& directory);
     void resetRuntime();
 
     void onTransportOpen(const transport::TransportOpenEvent& event);
     void onTransportClose(const transport::TransportCloseEvent& event);
     void onTransportError(const transport::TransportErrorEvent& event);
     void onTransportBytes(const transport::TransportBytesEvent& event);
-
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
     void invokeAction(const transport::ConnectionContext& ctx, const std::string& actionName);
-    void tick(std::uint64_t nowMs);
+    void tick(std::uint64_t currentMs);
 
     std::vector<ControlDescriptor> controlsSnapshot() const;
+    std::vector<ControlSnapshot> controlStatesSnapshot() const;
     std::vector<ScriptEvent> drainEvents();
     std::vector<ScriptLog> drainLogs();
     std::vector<std::vector<std::uint8_t>> drainSendQueue();
+    std::optional<std::uint64_t> nextWakeupAtMs() const;
+
+    const std::string& scriptPath() const;
+    const std::string& protocolDirectory() const;
 
 private:
-    // 核心流程：下列方法模拟第一版 Lua 回调契约，后续可替换为 sol2 实际脚本调用。
     void callbackOnOpen(const ScriptHostContext& ctx);
     void callbackOnClose(const ScriptHostContext& ctx);
     void callbackOnError(const ScriptHostContext& ctx, const std::string& message);
@@ -90,7 +99,6 @@ private:
     void protoSetTimer(const std::string& name, std::uint64_t intervalMs);
     void protoCancelTimer(const std::string& name);
 
-    static std::uint64_t nowMs();
     static std::string valueToString(const ControlValue& value);
 
 private:
@@ -102,7 +110,9 @@ private:
 
     bool scriptLoaded_{false};
     std::string scriptPath_;
+    std::string protocolDirectory_;
     std::vector<ControlDescriptor> controls_;
+    std::unordered_map<std::string, ControlValue> controlValues_;
     std::vector<ScriptEvent> events_;
     std::vector<ScriptLog> logs_;
     std::vector<std::vector<std::uint8_t>> sendQueue_;

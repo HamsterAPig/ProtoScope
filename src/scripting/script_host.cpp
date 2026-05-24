@@ -1,11 +1,13 @@
 #include "protoscope/scripting/script_host.hpp"
 
 #include <chrono>
+#include <filesystem>
 #include <sstream>
 
 namespace protoscope::scripting {
 
 namespace {
+
 std::string kindName(transport::TransportKind kind) {
     switch (kind) {
     case transport::TransportKind::TcpClient:
@@ -17,6 +19,25 @@ std::string kindName(transport::TransportKind kind) {
     }
     return "unknown";
 }
+
+ControlValue defaultValueFor(const ControlDescriptor& descriptor) {
+    switch (descriptor.type) {
+    case ControlType::Button:
+        return false;
+    case ControlType::InputText:
+        return descriptor.textDefault;
+    case ControlType::InputInt:
+        return descriptor.intDefault;
+    case ControlType::InputFloat:
+        return descriptor.floatDefault;
+    case ControlType::Checkbox:
+        return descriptor.boolDefault;
+    case ControlType::Combo:
+        return descriptor.comboDefaultIndex;
+    }
+    return false;
+}
+
 } // namespace
 
 ScriptHost::ScriptHost() {
@@ -30,10 +51,16 @@ ScriptHost::ScriptHost() {
                           .comboOptions = {"轮询", "单次"},
                           .comboDefaultIndex = 0},
     };
+
+    for (const auto& control : controls_) {
+        controlValues_[control.id] = defaultValueFor(control);
+    }
 }
 
 bool ScriptHost::loadScriptFile(const std::string& path) {
     scriptPath_ = path;
+    std::filesystem::path fsPath(path);
+    protocolDirectory_ = fsPath.parent_path().generic_string();
     scriptLoaded_ = !path.empty();
 
     if (!scriptLoaded_) {
@@ -41,9 +68,14 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         return false;
     }
 
-    // 核心流程：第一版先记录脚本路径并启用内建回调逻辑，后续再接入真实 Lua VM。
     protoLog("info", "已加载脚本(内建模拟): " + path);
     return true;
+}
+
+bool ScriptHost::loadProtocolDirectory(const std::string& directory) {
+    std::filesystem::path root(directory);
+    protocolDirectory_ = root.generic_string();
+    return loadScriptFile((root / "main.lua").generic_string());
 }
 
 void ScriptHost::resetRuntime() {
@@ -75,11 +107,13 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
 }
 
 void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value) {
+    controlValues_[id] = value;
     callbackOnControl(ScriptHostContext{ctx}, id, value);
 }
 
 void ScriptHost::invokeAction(const transport::ConnectionContext& ctx, const std::string& actionName) {
     if (actionName == "read_version") {
+        controlValues_["read_version"] = true;
         callbackOnControl(ScriptHostContext{ctx}, "read_version", true);
         return;
     }
@@ -100,16 +134,29 @@ void ScriptHost::tick(std::uint64_t currentMs) {
     }
 
     for (const auto& name : dueNames) {
-        callbackOnTimer(ScriptHostContext{*activeConnection_}, name);
         auto iter = timers_.find(name);
         if (iter != timers_.end()) {
             iter->second.active = false;
         }
+        callbackOnTimer(ScriptHostContext{*activeConnection_}, name);
     }
 }
 
 std::vector<ControlDescriptor> ScriptHost::controlsSnapshot() const {
     return controls_;
+}
+
+std::vector<ControlSnapshot> ScriptHost::controlStatesSnapshot() const {
+    std::vector<ControlSnapshot> result;
+    result.reserve(controls_.size());
+    for (const auto& control : controls_) {
+        const auto iter = controlValues_.find(control.id);
+        result.push_back(ControlSnapshot{
+            .descriptor = control,
+            .value = (iter == controlValues_.end()) ? defaultValueFor(control) : iter->second,
+        });
+    }
+    return result;
 }
 
 std::vector<ScriptEvent> ScriptHost::drainEvents() {
@@ -130,69 +177,88 @@ std::vector<std::vector<std::uint8_t>> ScriptHost::drainSendQueue() {
     return out;
 }
 
+std::optional<std::uint64_t> ScriptHost::nextWakeupAtMs() const {
+    std::optional<std::uint64_t> result;
+    for (const auto& [_, timer] : timers_) {
+        if (!timer.active) {
+            continue;
+        }
+        if (!result.has_value() || timer.dueAtMs < *result) {
+            result = timer.dueAtMs;
+        }
+    }
+    return result;
+}
+
+const std::string& ScriptHost::scriptPath() const {
+    return scriptPath_;
+}
+
+const std::string& ScriptHost::protocolDirectory() const {
+    return protocolDirectory_;
+}
+
 void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
-    protoLog("info", "连接已打开: " + kindName(ctx.connection.kind) + " endpoint=" + ctx.connection.endpoint);
+    protoLog("info", "连接已打开: " + kindName(ctx.connection.kind));
 }
 
-void ScriptHost::callbackOnClose(const ScriptHostContext& ctx) {
-    protoLog("info", "连接已关闭: id=" + std::to_string(ctx.connection.connectionId));
+void ScriptHost::callbackOnClose(const ScriptHostContext&) {
+    protoLog("info", "连接已关闭");
 }
 
-void ScriptHost::callbackOnError(const ScriptHostContext& ctx, const std::string& message) {
-    protoLog("error", "连接错误(" + kindName(ctx.connection.kind) + "): " + message);
+void ScriptHost::callbackOnError(const ScriptHostContext&, const std::string& message) {
+    protoLog("error", "连接错误: " + message);
 }
 
-void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes) {
+void ScriptHost::callbackOnBytes(const ScriptHostContext&, const std::vector<std::uint8_t>& bytes) {
     const auto hex = protocol_utils::bytesToHex(bytes, true);
-    protoEmit("raw_frame", "id=" + std::to_string(ctx.connection.connectionId) + " hex=" + hex);
+    protoEmit("rx_bytes", hex);
 
     if (waitingResponse_ && bytes.size() >= 2 && bytes[0] == 'O' && bytes[1] == 'K') {
         waitingResponse_ = false;
         protoCancelTimer("read_version_timeout");
-        protoEmit("frame", "{\"device_id\":\"" + lastDeviceId_ + "\",\"version\":\"v1.0.0\"}");
-        protoLog("info", "解析到版本响应，流程完成");
+        protoEmit("frame", "版本读取成功");
     }
 }
 
 void ScriptHost::callbackOnTimer(const ScriptHostContext&, const std::string& timerName) {
     if (timerName == "read_version_timeout" && waitingResponse_) {
         waitingResponse_ = false;
-        protoEmit("warning", "{\"message\":\"读取版本超时\"}");
-        protoLog("warn", "read_version 超时");
+        protoEmit("warning", "读取版本超时");
     }
 }
 
 void ScriptHost::callbackOnControl(const ScriptHostContext&, const std::string& id, const ControlValue& value) {
     if (id == "device_id") {
         lastDeviceId_ = valueToString(value);
-        protoLog("info", "设备 ID 更新为 " + lastDeviceId_);
         return;
     }
 
     if (id == "read_version") {
         if (waitingResponse_) {
-            protoLog("warn", "已有请求在等待响应，拒绝重复触发");
+            protoLog("warn", "读取版本仍在等待响应，忽略重复触发");
             return;
         }
 
-        waitingResponse_ = true;
-        std::vector<std::uint8_t> frame{0xAA, 0x01, 0x00};
+        std::vector<std::uint8_t> frame{0xAA};
         auto maybeId = protocol_utils::hexToBytes(lastDeviceId_);
         if (maybeId.has_value() && !maybeId->empty()) {
-            frame[1] = maybeId->front();
+            frame.insert(frame.end(), maybeId->begin(), maybeId->end());
+        } else {
+            frame.push_back(0x01);
         }
 
+        frame.push_back(0x10);
+        frame.push_back(0x00);
+
         const auto crc = protocol_utils::crc16Modbus(frame);
-        frame.push_back(static_cast<std::uint8_t>(crc & 0x00FFU));
-        frame.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0x00FFU));
+        frame.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+        frame.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
 
         protoSend(frame);
         protoSetTimer("read_version_timeout", 1000);
-        protoLog("info", "已发送 read_version 请求");
-        return;
+        waitingResponse_ = true;
     }
-
-    protoLog("warn", "收到未处理控件事件: " + id + " value=" + valueToString(value));
 }
 
 void ScriptHost::protoSend(const std::vector<std::uint8_t>& bytes) {
@@ -200,15 +266,27 @@ void ScriptHost::protoSend(const std::vector<std::uint8_t>& bytes) {
 }
 
 void ScriptHost::protoLog(const std::string& level, const std::string& message) {
-    logs_.push_back(ScriptLog{.level = level, .message = message, .timestampMs = nowMs()});
+    const auto now = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    logs_.push_back(ScriptLog{.level = level, .message = message, .timestampMs = now});
 }
 
 void ScriptHost::protoEmit(const std::string& eventName, const std::string& payload) {
-    events_.push_back(ScriptEvent{.name = eventName, .payload = payload, .timestampMs = nowMs()});
+    const auto now = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    events_.push_back(ScriptEvent{.name = eventName, .payload = payload, .timestampMs = now});
 }
 
 void ScriptHost::protoSetTimer(const std::string& name, std::uint64_t intervalMs) {
-    timers_[name] = TimerState{.name = name, .dueAtMs = nowMs() + intervalMs, .active = true};
+    const auto now = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    timers_[name] = TimerState{.name = name, .dueAtMs = now + intervalMs, .active = true};
 }
 
 void ScriptHost::protoCancelTimer(const std::string& name) {
@@ -216,13 +294,6 @@ void ScriptHost::protoCancelTimer(const std::string& name) {
     if (iter != timers_.end()) {
         iter->second.active = false;
     }
-}
-
-std::uint64_t ScriptHost::nowMs() {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
 }
 
 std::string ScriptHost::valueToString(const ControlValue& value) {
