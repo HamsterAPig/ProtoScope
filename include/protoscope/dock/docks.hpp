@@ -106,6 +106,8 @@ public:
 
     void markDirty(const std::string& statusMessage);
     void clearDirty(const std::string& statusMessage);
+    void setPendingExternalReload(std::uint64_t timestampMs, std::string message);
+    void clearPendingExternalReload();
     void setConflict(std::string message);
     void clearConflict();
 

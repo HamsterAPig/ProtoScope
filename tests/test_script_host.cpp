@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -63,6 +64,44 @@ void test_script_on_open_log() {
         }
     }
     require(foundOpenLog, "on_open 应写入打开日志");
+}
+
+void test_script_on_close_log() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportClose(protoscope::transport::TransportCloseEvent{ctx, "manual_close"});
+    bool foundCloseLog = false;
+    for (const auto& log : host.drainLogs()) {
+        if (log.message.find("连接已关闭") != std::string::npos) {
+            foundCloseLog = true;
+        }
+    }
+    require(foundCloseLog, "on_close 应写入关闭日志");
+}
+
+void test_script_on_error_log() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportError(protoscope::transport::TransportErrorEvent{ctx, "socket_failure"});
+    bool foundErrorLog = false;
+    const auto logs = host.drainLogs();
+    for (const auto& log : logs) {
+        if (log.message.find("连接错误") != std::string::npos) {
+            foundErrorLog = true;
+        }
+    }
+    if (!foundErrorLog) {
+        std::ostringstream message;
+        message << "on_error 应写入异常日志，实际日志条数=" << logs.size();
+        for (const auto& log : logs) {
+            message << " [" << log.level << "] " << log.message;
+        }
+        throw std::runtime_error(message.str());
+    }
 }
 
 void test_script_multi_dock_snapshot() {
@@ -272,8 +311,11 @@ static const TestCase kAllTests[] = {
     {"hex_normalize_input", &test_hex_normalize_input},
     {"hex_editor_cursor_normalize", &test_hex_editor_cursor_normalize},
     {"crc_known_vectors", &test_crc_known_vectors},
+    {"config_external_reload_state", &test_config_external_reload_state},
     {"script_controls_snapshot", &test_script_controls_snapshot},
     {"script_on_open_log", &test_script_on_open_log},
+    {"script_on_close_log", &test_script_on_close_log},
+    {"script_on_error_log", &test_script_on_error_log},
     {"script_multi_dock_snapshot", &test_script_multi_dock_snapshot},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},

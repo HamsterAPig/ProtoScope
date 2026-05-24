@@ -259,6 +259,7 @@ endif()
 add_executable(protoscope_tests
     tests/test_main.cpp
     tests/test_codec.cpp
+    tests/test_dock.cpp
     tests/test_script_host.cpp
     tests/test_transport.cpp
 )

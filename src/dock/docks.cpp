@@ -102,6 +102,18 @@ void DockStore::clearDirty(const std::string& statusMessage) {
     config_.statusMessage = statusMessage;
 }
 
+void DockStore::setPendingExternalReload(std::uint64_t timestampMs, std::string message) {
+    config_.pendingExternalReload = true;
+    config_.pendingExternalReloadTimestampMs = timestampMs;
+    config_.externalReloadMessage = std::move(message);
+}
+
+void DockStore::clearPendingExternalReload() {
+    config_.pendingExternalReload = false;
+    config_.pendingExternalReloadTimestampMs = 0;
+    config_.externalReloadMessage.clear();
+}
+
 void DockStore::setConflict(std::string message) {
     config_.conflict.detected = true;
     config_.conflict.message = std::move(message);

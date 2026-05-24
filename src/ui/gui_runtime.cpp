@@ -334,6 +334,16 @@ void GuiRuntime::drawStatusBar() {
             ImGui::Text("未保存");
             ImGui::Separator();
         }
+        if (config.pendingExternalReload) {
+            ImGui::TextUnformatted(config.externalReloadMessage.empty() ? "检测到外部配置更新" : config.externalReloadMessage.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("重载配置")) {
+                if (!reloadConfigFromDisk()) {
+                    config.statusMessage = "从磁盘重载配置失败";
+                }
+            }
+            ImGui::Separator();
+        }
         if (comm.reconnectRequired) {
             ImGui::Text("通讯参数变更待重连");
             ImGui::Separator();
@@ -457,7 +467,9 @@ void GuiRuntime::drawCommDock() {
         const auto outputPath = std::filesystem::path(configState.loadedFromPath);
         if (configStore_.save(outputPath, application_.captureConfig(), error)) {
             application_.docks().clearDirty("配置已保存");
+            application_.docks().clearPendingExternalReload();
             configSnapshot_ = configStore_.snapshot(outputPath);
+            configState.fileTimestampMs = configSnapshot_.timestampMs;
         } else {
             application_.docks().markDirty("保存配置失败: " + error);
         }
@@ -646,6 +658,10 @@ bool GuiRuntime::reloadConfigFromDisk() {
         return false;
     }
     configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
+    auto& configState = application_.docks().configState();
+    application_.docks().clearPendingExternalReload();
+    application_.docks().clearDirty("已从磁盘重载配置");
+    configState.fileTimestampMs = configSnapshot_.timestampMs;
     return true;
 }
 
@@ -657,8 +673,8 @@ bool GuiRuntime::pollConfigFileChanges() {
     if (!configSnapshot_.path.empty() && !configStore_.hasChanged(configSnapshot_)) {
         return false;
     }
-    configState.pendingExternalReload = true;
-    configState.externalReloadMessage = "检测到外部配置更新，请手动保存或重载";
+    configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
+    application_.docks().setPendingExternalReload(configSnapshot_.timestampMs, "检测到外部配置更新，请手动保存或重载");
     return false;
 }
 
