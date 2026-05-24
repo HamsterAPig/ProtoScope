@@ -14,11 +14,16 @@ struct AppAutoSaveConfig {
     std::uint64_t intervalMs{5000};
 };
 
+struct AppConfigHotReloadConfig {
+    bool enabled{false};
+};
+
 struct AppRuntimeConfig {
     std::string language{"zh-CN"};
     std::uint32_t fpsLimit{60};
     std::string idleRender{"dirty_only"};
     AppAutoSaveConfig autoSave{};
+    AppConfigHotReloadConfig configHotReload{};
 };
 
 struct GuiWindowConfig {
@@ -48,6 +53,7 @@ struct ConfigLoadResult {
     AppConfig config{};
     std::filesystem::path resolvedPath;
     bool loadedFromDisk{false};
+    std::string error;
 };
 
 struct FileSnapshot {

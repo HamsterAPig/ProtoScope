@@ -13,3 +13,9 @@
 [submodule "3rdparty/asio"]
 	path = 3rdparty/asio
 	url = https://github.com/chriskohlhoff/asio.git
+[submodule "3rdparty/lua"]
+	path = 3rdparty/lua
+	url = https://github.com/lua/lua.git
+[submodule "3rdparty/sol2"]
+	path = 3rdparty/sol2
+	url = https://github.com/ThePhD/sol2.git

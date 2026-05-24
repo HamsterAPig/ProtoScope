@@ -1,5 +1,6 @@
 #include "protoscope/protocol_utils/codec.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <sstream>
@@ -40,6 +41,16 @@ int hexNibble(char c) {
 }
 } // namespace
 
+std::size_t countHexDigits(std::string_view text) {
+    std::size_t count = 0;
+    for (const char ch : text) {
+        if (hexNibble(ch) >= 0) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 std::optional<std::vector<std::uint8_t>> hexToBytes(std::string_view text) {
     std::string compact;
     compact.reserve(text.size());
@@ -73,9 +84,15 @@ std::optional<std::vector<std::uint8_t>> hexToBytes(std::string_view text) {
 }
 
 std::string normalizeHexText(std::string_view text) {
+    return normalizeHexEditorInput(text, text.size()).text;
+}
+
+HexEditorNormalization normalizeHexEditorInput(std::string_view text, std::size_t cursorPos) {
     std::string compact;
     compact.reserve(text.size());
-    for (char ch : text) {
+    std::size_t digitsBeforeCursor = 0;
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const char ch = text[index];
         if (std::isspace(static_cast<unsigned char>(ch))) {
             continue;
         }
@@ -85,11 +102,14 @@ std::string normalizeHexText(std::string_view text) {
             continue;
         }
 
+        if (index < cursorPos) {
+            ++digitsBeforeCursor;
+        }
         compact.push_back(nibble < 10 ? static_cast<char>('0' + nibble) : static_cast<char>('A' + (nibble - 10)));
     }
 
     if (compact.empty()) {
-        return {};
+        return HexEditorNormalization{};
     }
 
     std::string normalized;
@@ -100,7 +120,18 @@ std::string normalizeHexText(std::string_view text) {
             normalized.push_back(' ');
         }
     }
-    return normalized;
+
+    const auto clampedDigitsBeforeCursor = (std::min)(digitsBeforeCursor, compact.size());
+    std::size_t normalizedCursor = clampedDigitsBeforeCursor;
+    if (clampedDigitsBeforeCursor > 0) {
+        normalizedCursor += (clampedDigitsBeforeCursor - 1) / 2;
+    }
+
+    return HexEditorNormalization{
+        .text = std::move(normalized),
+        .cursorPos = normalizedCursor,
+        .digitCount = compact.size(),
+    };
 }
 
 std::uint16_t crc16Modbus(const std::vector<std::uint8_t>& bytes) {

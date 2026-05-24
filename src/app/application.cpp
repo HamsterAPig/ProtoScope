@@ -30,6 +30,8 @@ bool Application::initialize() {
     configState.fileTimestampMs = configStore_.snapshot(loaded.resolvedPath).timestampMs;
     if (loaded.loadedFromDisk) {
         dockStore_.clearDirty("已从 YAML 加载配置");
+    } else if (!loaded.error.empty()) {
+        dockStore_.markDirty(loaded.error);
     } else {
         dockStore_.markDirty("未找到配置文件，已使用默认配置");
     }
@@ -73,7 +75,7 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     lua.loaded = scriptHost_.loadProtocolDirectory(lua.protocolDir);
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
-    lua.lastError = lua.loaded ? std::string() : std::string("协议脚本加载失败");
+    lua.lastError = lua.loaded ? std::string() : scriptHost_.lastError();
 
     const bool changed = flushScriptLogs();
     syncDockState();
@@ -150,6 +152,10 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
 
     std::vector<std::uint8_t> bytes;
     if (hexMode) {
+        if (protocol_utils::countHexDigits(payload) % 2 != 0) {
+            dockStore_.commState().lastError = "HEX 文本必须按完整字节输入";
+            return false;
+        }
         const auto parsed = protocol_utils::hexToBytes(payload);
         if (!parsed.has_value()) {
             dockStore_.commState().lastError = "HEX 文本解析失败";

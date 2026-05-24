@@ -36,6 +36,7 @@ private:
     void drawWaveDock();
     void drawDynamicControl(const scripting::ControlSnapshot& control);
 
+    bool reloadConfigFromDisk();
     bool pollConfigFileChanges();
     bool maybeAutoSave();
     void sleepUntilNextFrame(std::uint64_t frameStartMs) const;

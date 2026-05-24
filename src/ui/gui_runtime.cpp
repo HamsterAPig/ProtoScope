@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cctype>
 #include <cfloat>
+#include <cstring>
 #include <filesystem>
 #include <cstdio>
 #include <sstream>
@@ -69,6 +70,31 @@ int hexInputFilter(ImGuiInputTextCallbackData* data) {
     }
 
     return 1;
+}
+
+int hexEditorCallback(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackCharFilter) {
+        return hexInputFilter(data);
+    }
+
+    if (data->EventFlag != ImGuiInputTextFlags_CallbackEdit) {
+        return 0;
+    }
+
+    const std::string current(data->Buf, static_cast<std::size_t>(data->BufTextLen));
+    const auto normalized =
+        protocol_utils::normalizeHexEditorInput(current, static_cast<std::size_t>(data->CursorPos));
+    if (normalized.text != current) {
+        data->DeleteChars(0, data->BufTextLen);
+        data->InsertChars(0, normalized.text.c_str());
+    }
+
+    const int cursorPos =
+        static_cast<int>((std::min)(normalized.cursorPos, static_cast<std::size_t>(data->BufTextLen)));
+    data->CursorPos = cursorPos;
+    data->SelectionStart = cursorPos;
+    data->SelectionEnd = cursorPos;
+    return 0;
 }
 
 std::string formatReceiveRow(const dock::ReceiveRow& row) {
@@ -278,6 +304,10 @@ void GuiRuntime::drawStatusBar() {
             ImGui::SameLine();
             ImGui::TextUnformatted("· 需重连");
         }
+        if (config.pendingExternalReload) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("· 检测到外部配置更新");
+        }
         if (config.conflict.detected) {
             ImGui::SameLine();
             ImGui::Text("· 冲突: %s", config.conflict.message.c_str());
@@ -378,11 +408,36 @@ void GuiRuntime::drawCommDock() {
         if (configStore_.save(outputPath, application_.captureConfig(), error)) {
             configSnapshot_ = configStore_.snapshot(outputPath);
             application_.docks().configState().fileTimestampMs = configSnapshot_.timestampMs;
+            configState.pendingExternalReload = false;
+            configState.pendingExternalReloadTimestampMs = 0;
+            configState.externalReloadMessage.clear();
             application_.docks().clearDirty("配置已保存");
             application_.docks().clearConflict();
         } else {
             application_.docks().configState().statusMessage = "保存配置失败: " + error;
         }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("重载配置")) {
+        reloadConfigFromDisk();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("忽略本次外部更新提示")) {
+        configState.pendingExternalReload = false;
+        configState.pendingExternalReloadTimestampMs = 0;
+        configState.externalReloadMessage.clear();
+        application_.docks().clearConflict();
+        configState.statusMessage = "已忽略本次外部配置更新";
+    }
+
+    if (ImGui::Checkbox("启用外部配置热重载提醒", &configState.configHotReloadEnabled)) {
+        application_.docks().markDirty("配置热重载选项已修改");
+    }
+    ImGui::TextWrapped("配置文件：%s", configState.loadedFromPath.c_str());
+    if (configState.pendingExternalReload) {
+        ImGui::TextWrapped("%s",
+                           configState.externalReloadMessage.empty() ? "检测到外部配置更新，等待手动重载"
+                                                                     : configState.externalReloadMessage.c_str());
     }
 
     ImGui::End();
@@ -427,14 +482,19 @@ void GuiRuntime::drawLogDock() {
     ImGuiInputTextFlags payloadFlags = ImGuiInputTextFlags_None;
     if (sendState.hexMode) {
         payloadFlags |= ImGuiInputTextFlags_CallbackCharFilter;
+        payloadFlags |= ImGuiInputTextFlags_CallbackEdit;
     }
     if (ImGui::InputTextMultiline("发送内容",
                                   payload,
                                   sizeof(payload),
                                   ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 5.0f),
                                   payloadFlags,
-                                  sendState.hexMode ? hexInputFilter : nullptr)) {
+                                  sendState.hexMode ? hexEditorCallback : nullptr)) {
         sendState.payload = sendState.hexMode ? protocol_utils::normalizeHexText(payload) : std::string(payload);
+    }
+    const bool hexPayloadComplete = !sendState.hexMode || (protocol_utils::countHexDigits(sendState.payload) % 2 == 0);
+    if (sendState.hexMode && !hexPayloadComplete) {
+        ImGui::TextWrapped("HEX 文本存在未成对 nibble，当前禁止发送。");
     }
 
     char actionName[128]{};
@@ -443,8 +503,14 @@ void GuiRuntime::drawLogDock() {
         sendState.actionName = actionName;
     }
 
+    if (!hexPayloadComplete) {
+        ImGui::BeginDisabled();
+    }
     if (ImGui::Button("发送")) {
         application_.sendManualPayload(sendState.payload, sendState.hexMode);
+    }
+    if (!hexPayloadComplete) {
+        ImGui::EndDisabled();
     }
     ImGui::SameLine();
     if (ImGui::Button("执行业务动作")) {
@@ -536,30 +602,63 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
     }
 }
 
+bool GuiRuntime::reloadConfigFromDisk() {
+    auto& configState = application_.docks().configState();
+    const auto loaded = configStore_.load(std::filesystem::path(configState.loadedFromPath));
+    application_.applyConfig(loaded.config);
+
+    configSnapshot_ = configStore_.snapshot(loaded.resolvedPath);
+    configState.fileTimestampMs = configSnapshot_.timestampMs;
+    configState.pendingExternalReload = false;
+    configState.pendingExternalReloadTimestampMs = 0;
+    configState.externalReloadMessage.clear();
+    application_.docks().clearConflict();
+
+    if (loaded.loadedFromDisk) {
+        application_.docks().clearDirty("已从磁盘重载配置");
+    } else if (!loaded.error.empty()) {
+        application_.docks().markDirty(loaded.error);
+    } else {
+        application_.docks().markDirty("未找到配置文件，已重新应用默认配置");
+    }
+    return true;
+}
+
 bool GuiRuntime::pollConfigFileChanges() {
-    const auto path = std::filesystem::path(application_.docks().configState().loadedFromPath);
+    auto& configState = application_.docks().configState();
+    if (!configState.configHotReloadEnabled) {
+        return false;
+    }
+
+    const auto path = std::filesystem::path(configState.loadedFromPath);
     if (!configStore_.hasChanged(configSnapshot_)) {
         return false;
     }
 
-    if (application_.docks().configState().dirty) {
-        application_.docks().setConflict("检测到磁盘配置改动，但当前有未保存修改");
-        configSnapshot_ = configStore_.snapshot(path);
+    configSnapshot_ = configStore_.snapshot(path);
+    configState.fileTimestampMs = configSnapshot_.timestampMs;
+    configState.pendingExternalReload = true;
+    configState.pendingExternalReloadTimestampMs = configSnapshot_.timestampMs;
+    configState.externalReloadMessage = "检测到外部配置更新，等待手动重载";
+
+    if (configState.dirty) {
+        application_.docks().setConflict("当前存在未保存修改，无法自动重载");
+        configState.statusMessage = "当前存在未保存修改，无法自动重载";
         return true;
     }
 
-    const auto loaded = configStore_.load(path);
-    application_.applyConfig(loaded.config);
-    configSnapshot_ = configStore_.snapshot(path);
-    application_.docks().configState().fileTimestampMs = configSnapshot_.timestampMs;
-    application_.docks().clearDirty("检测到磁盘配置变更，已自动重载");
     application_.docks().clearConflict();
+    configState.statusMessage = "检测到外部配置更新";
     return true;
 }
 
 bool GuiRuntime::maybeAutoSave() {
     auto& configState = application_.docks().configState();
     if (!configState.autoSaveEnabled || !configState.dirty) {
+        return false;
+    }
+    if (configState.pendingExternalReload) {
+        configState.statusMessage = "当前存在未保存修改，无法自动重载";
         return false;
     }
 

@@ -5,6 +5,8 @@ app:
   auto_save:
     enabled: false
     interval_ms: 5000
+  config_hot_reload:
+    enabled: false
 
 gui:
   window:

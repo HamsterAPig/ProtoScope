@@ -67,11 +67,15 @@ struct ConfigDockState {
     bool dirty{false};
     bool autoSaveEnabled{false};
     std::uint64_t autoSaveIntervalMs{5000};
+    bool configHotReloadEnabled{false};
     std::uint32_t fpsLimit{60};
     std::string idleRender{"dirty_only"};
     std::uint64_t fileTimestampMs{0};
     std::string loadedFromPath{"config/protoscope.yaml"};
     std::string statusMessage;
+    bool pendingExternalReload{false};
+    std::uint64_t pendingExternalReloadTimestampMs{0};
+    std::string externalReloadMessage;
     ConfigConflictState conflict{};
 };
 

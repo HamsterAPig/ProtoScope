@@ -10,10 +10,15 @@ struct TestCase {
 void test_hex_roundtrip();
 void test_hex_invalid_input();
 void test_hex_normalize_input();
+void test_hex_editor_cursor_normalize();
 void test_crc_known_vectors();
 void test_script_controls_snapshot();
+void test_script_on_open_log();
 void test_script_read_version_flow();
 void test_script_timeout_flow();
+void test_script_missing_callbacks_allowed();
+void test_script_invalid_controls_fail();
+void test_script_runtime_error_logged();
 void test_protocol_directory_reload();
 void test_config_default_roundtrip();
 void test_tcp_transport_roundtrip();

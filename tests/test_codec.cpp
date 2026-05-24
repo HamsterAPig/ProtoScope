@@ -36,6 +36,16 @@ void test_hex_normalize_input() {
     require(normalized == "AA 01 0F", "HEX 文本归拢格式不符合预期");
 }
 
+void test_hex_editor_cursor_normalize() {
+    const auto typed = protoscope::protocol_utils::normalizeHexEditorInput("5aa5", 4);
+    require(typed.text == "5A A5", "逐字符输入归一化失败");
+    require(typed.cursorPos == 5, "逐字符输入后的光标位置不正确");
+
+    const auto pasted = protoscope::protocol_utils::normalizeHexEditorInput(" 5a-a5\n0f ", 8);
+    require(pasted.text == "5A A5 0F", "混合分隔符粘贴归一化失败");
+    require(pasted.digitCount == 6, "粘贴后的 nibble 统计不正确");
+}
+
 void test_crc_known_vectors() {
     const std::vector<std::uint8_t> text{'1', '2', '3', '4', '5', '6', '7', '8', '9'};
 

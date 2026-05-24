@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -62,6 +63,7 @@ struct ScriptHostContext {
 class ScriptHost {
 public:
     ScriptHost();
+    ~ScriptHost();
 
     bool loadScriptFile(const std::string& path);
     bool loadProtocolDirectory(const std::string& directory);
@@ -84,6 +86,7 @@ public:
 
     const std::string& scriptPath() const;
     const std::string& protocolDirectory() const;
+    const std::string& lastError() const;
 
 private:
     void callbackOnOpen(const ScriptHostContext& ctx);
@@ -100,6 +103,9 @@ private:
     void protoCancelTimer(const std::string& name);
 
     static std::string valueToString(const ControlValue& value);
+    void setLastError(std::string message);
+
+    struct Runtime;
 
 private:
     struct TimerState {
@@ -111,16 +117,15 @@ private:
     bool scriptLoaded_{false};
     std::string scriptPath_;
     std::string protocolDirectory_;
+    std::string lastError_;
     std::vector<ControlDescriptor> controls_;
     std::unordered_map<std::string, ControlValue> controlValues_;
     std::vector<ScriptEvent> events_;
     std::vector<ScriptLog> logs_;
     std::vector<std::vector<std::uint8_t>> sendQueue_;
     std::unordered_map<std::string, TimerState> timers_;
-
-    bool waitingResponse_{false};
-    std::string lastDeviceId_{"01"};
     std::optional<transport::ConnectionContext> activeConnection_;
+    std::unique_ptr<Runtime> runtime_;
 };
 
 } // namespace protoscope::scripting

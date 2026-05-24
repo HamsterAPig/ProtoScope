@@ -69,55 +69,64 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         return result;
     }
 
-    const YAML::Node root = YAML::LoadFile(result.resolvedPath.string());
-    result.loadedFromDisk = true;
+    try {
+        const YAML::Node root = YAML::LoadFile(result.resolvedPath.string());
+        result.loadedFromDisk = true;
 
-    const auto app = root["app"];
-    result.config.app.language = readScalar<std::string>(app, "language", result.config.app.language);
-    result.config.app.fpsLimit = readScalar<std::uint32_t>(app, "fps_limit", result.config.app.fpsLimit);
-    result.config.app.idleRender = readScalar<std::string>(app, "idle_render", result.config.app.idleRender);
-    if (const auto autoSave = app["auto_save"]) {
-        result.config.app.autoSave.enabled = readScalar<bool>(autoSave, "enabled", result.config.app.autoSave.enabled);
-        result.config.app.autoSave.intervalMs = readScalar<std::uint64_t>(autoSave, "interval_ms", result.config.app.autoSave.intervalMs);
-    }
+        const auto app = root["app"];
+        result.config.app.language = readScalar<std::string>(app, "language", result.config.app.language);
+        result.config.app.fpsLimit = readScalar<std::uint32_t>(app, "fps_limit", result.config.app.fpsLimit);
+        result.config.app.idleRender = readScalar<std::string>(app, "idle_render", result.config.app.idleRender);
+        if (const auto autoSave = app["auto_save"]) {
+            result.config.app.autoSave.enabled = readScalar<bool>(autoSave, "enabled", result.config.app.autoSave.enabled);
+            result.config.app.autoSave.intervalMs = readScalar<std::uint64_t>(autoSave, "interval_ms", result.config.app.autoSave.intervalMs);
+        }
+        if (const auto configHotReload = app["config_hot_reload"]) {
+            result.config.app.configHotReload.enabled =
+                readScalar<bool>(configHotReload, "enabled", result.config.app.configHotReload.enabled);
+        }
 
-    const auto gui = root["gui"];
-    if (const auto window = gui["window"]) {
-        result.config.gui.window.title = readScalar<std::string>(window, "title", result.config.gui.window.title);
-        result.config.gui.window.width = readScalar<int>(window, "width", result.config.gui.window.width);
-        result.config.gui.window.height = readScalar<int>(window, "height", result.config.gui.window.height);
-        result.config.gui.window.maximized = readScalar<bool>(window, "maximized", result.config.gui.window.maximized);
-    }
+        const auto gui = root["gui"];
+        if (const auto window = gui["window"]) {
+            result.config.gui.window.title = readScalar<std::string>(window, "title", result.config.gui.window.title);
+            result.config.gui.window.width = readScalar<int>(window, "width", result.config.gui.window.width);
+            result.config.gui.window.height = readScalar<int>(window, "height", result.config.gui.window.height);
+            result.config.gui.window.maximized = readScalar<bool>(window, "maximized", result.config.gui.window.maximized);
+        }
 
-    const auto protocol = root["protocol"];
-    result.config.protocol.selectedDir = readScalar<std::string>(protocol, "selected_dir", result.config.protocol.selectedDir);
-    result.config.configPath = normalizeTextPath(result.resolvedPath);
+        const auto protocol = root["protocol"];
+        result.config.protocol.selectedDir = readScalar<std::string>(protocol, "selected_dir", result.config.protocol.selectedDir);
+        result.config.configPath = normalizeTextPath(result.resolvedPath);
 
-    const auto communication = root["communication"];
-    result.config.communication.kind =
-        parseTransportKind(readScalar<std::string>(communication, "kind", toTransportKindText(result.config.communication.kind)));
+        const auto communication = root["communication"];
+        result.config.communication.kind =
+            parseTransportKind(readScalar<std::string>(communication, "kind", toTransportKindText(result.config.communication.kind)));
 
-    if (const auto tcpClient = communication["tcp_client"]) {
-        result.config.communication.tcpClient.host =
-            readScalar<std::string>(tcpClient, "host", result.config.communication.tcpClient.host);
-        result.config.communication.tcpClient.port =
-            readScalar<std::uint16_t>(tcpClient, "port", result.config.communication.tcpClient.port);
-    }
+        if (const auto tcpClient = communication["tcp_client"]) {
+            result.config.communication.tcpClient.host =
+                readScalar<std::string>(tcpClient, "host", result.config.communication.tcpClient.host);
+            result.config.communication.tcpClient.port =
+                readScalar<std::uint16_t>(tcpClient, "port", result.config.communication.tcpClient.port);
+        }
 
-    if (const auto tcpServer = communication["tcp_server"]) {
-        result.config.communication.tcpServer.bindAddress =
-            readScalar<std::string>(tcpServer, "bind_address", result.config.communication.tcpServer.bindAddress);
-        result.config.communication.tcpServer.port =
-            readScalar<std::uint16_t>(tcpServer, "port", result.config.communication.tcpServer.port);
-        result.config.communication.tcpServer.rejectNewConnection =
-            readScalar<bool>(tcpServer, "reject_new_connection", result.config.communication.tcpServer.rejectNewConnection);
-    }
+        if (const auto tcpServer = communication["tcp_server"]) {
+            result.config.communication.tcpServer.bindAddress =
+                readScalar<std::string>(tcpServer, "bind_address", result.config.communication.tcpServer.bindAddress);
+            result.config.communication.tcpServer.port =
+                readScalar<std::uint16_t>(tcpServer, "port", result.config.communication.tcpServer.port);
+            result.config.communication.tcpServer.rejectNewConnection =
+                readScalar<bool>(tcpServer, "reject_new_connection", result.config.communication.tcpServer.rejectNewConnection);
+        }
 
-    if (const auto serial = communication["serial"]) {
-        result.config.communication.serial.portName =
-            readScalar<std::string>(serial, "port_name", result.config.communication.serial.portName);
-        result.config.communication.serial.baudRate =
-            readScalar<std::uint32_t>(serial, "baud_rate", result.config.communication.serial.baudRate);
+        if (const auto serial = communication["serial"]) {
+            result.config.communication.serial.portName =
+                readScalar<std::string>(serial, "port_name", result.config.communication.serial.portName);
+            result.config.communication.serial.baudRate =
+                readScalar<std::uint32_t>(serial, "baud_rate", result.config.communication.serial.baudRate);
+        }
+    } catch (const std::exception& ex) {
+        result.error = std::string("读取 YAML 失败: ") + ex.what();
+        result.loadedFromDisk = false;
     }
 
     return result;
@@ -131,6 +140,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["app"]["idle_render"] = config.app.idleRender;
     root["app"]["auto_save"]["enabled"] = config.app.autoSave.enabled;
     root["app"]["auto_save"]["interval_ms"] = config.app.autoSave.intervalMs;
+    root["app"]["config_hot_reload"]["enabled"] = config.app.configHotReload.enabled;
 
     root["gui"]["window"]["title"] = config.gui.window.title;
     root["gui"]["window"]["width"] = config.gui.window.width;
@@ -222,6 +232,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     auto& configState = dockStore.configState();
     configState.autoSaveEnabled = config.app.autoSave.enabled;
     configState.autoSaveIntervalMs = config.app.autoSave.intervalMs;
+    configState.configHotReloadEnabled = config.app.configHotReload.enabled;
     configState.fpsLimit = config.app.fpsLimit;
     configState.idleRender = config.app.idleRender;
     configState.loadedFromPath = config.configPath.empty() ? normalizeTextPath(defaultConfigPath_) : config.configPath;
@@ -234,6 +245,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.protocol.selectedDir = dockStore.luaState().protocolDir;
     config.app.autoSave.enabled = dockStore.configState().autoSaveEnabled;
     config.app.autoSave.intervalMs = dockStore.configState().autoSaveIntervalMs;
+    config.app.configHotReload.enabled = dockStore.configState().configHotReloadEnabled;
     config.app.fpsLimit = dockStore.configState().fpsLimit;
     config.app.idleRender = dockStore.configState().idleRender;
     config.configPath = dockStore.configState().loadedFromPath;

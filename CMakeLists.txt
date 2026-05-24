@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(ProtoScope VERSION 0.1.0 LANGUAGES CXX)
+project(ProtoScope VERSION 0.1.0 LANGUAGES C CXX)
 
 include(CTest)
 include(FetchContent)
@@ -19,6 +19,25 @@ option(PROTOSCOPE_ENABLE_GUI "Build ProtoScope GUI runtime" ON)
 
 add_subdirectory(3rdparty/spdlog)
 add_subdirectory(3rdparty/yaml-cpp)
+
+add_library(protoscope_lua STATIC
+    3rdparty/lua/onelua.c
+)
+target_include_directories(protoscope_lua
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/3rdparty/lua
+)
+target_compile_features(protoscope_lua PUBLIC c_std_99)
+target_compile_definitions(protoscope_lua PRIVATE MAKE_LIB)
+if(UNIX)
+    target_link_libraries(protoscope_lua PUBLIC m)
+endif()
+
+add_library(protoscope_sol2 INTERFACE)
+target_include_directories(protoscope_sol2
+    INTERFACE
+        ${CMAKE_SOURCE_DIR}/3rdparty/sol2/include
+)
 
 add_library(protoscope_asio INTERFACE)
 target_include_directories(protoscope_asio
@@ -123,8 +142,11 @@ target_link_libraries(protoscope_scripting
     PUBLIC
         protoscope_protocol_utils
         protoscope_transport
+        protoscope_lua
+        protoscope_sol2
 )
 target_compile_features(protoscope_scripting PUBLIC cxx_std_20)
+target_compile_definitions(protoscope_scripting PRIVATE SOL_ALL_SAFETIES_ON=1)
 
 add_library(protoscope_dock STATIC
     src/dock/docks.cpp
@@ -258,6 +280,7 @@ else()
     target_compile_options(protoscope_tests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME protoscope_unit_tests COMMAND protoscope_tests)
+set_tests_properties(protoscope_unit_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 message(STATUS "ProtoScope third-party roots:")
 message(STATUS "  spdlog      -> ${CMAKE_SOURCE_DIR}/3rdparty/spdlog")
@@ -265,4 +288,6 @@ message(STATUS "  yaml-cpp    -> ${CMAKE_SOURCE_DIR}/3rdparty/yaml-cpp")
 message(STATUS "  imgui       -> ${CMAKE_SOURCE_DIR}/3rdparty/imgui")
 message(STATUS "  libdwarf    -> ${CMAKE_SOURCE_DIR}/3rdparty/libdwarf-code")
 message(STATUS "  asio        -> ${CMAKE_SOURCE_DIR}/3rdparty/asio")
-message(STATUS "  lua/sol2/implot -> TODO: add submodules before real runtime integration")
+message(STATUS "  lua         -> ${CMAKE_SOURCE_DIR}/3rdparty/lua")
+message(STATUS "  sol2        -> ${CMAKE_SOURCE_DIR}/3rdparty/sol2")
+message(STATUS "  implot      -> TODO: keep placeholder until波形模块落地")
