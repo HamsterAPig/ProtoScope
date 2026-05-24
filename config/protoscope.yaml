@@ -16,6 +16,7 @@ gui:
     maximized: false
 
 protocol:
+  root_dir: protocols
   selected_dir: protocols/default_protocol
 
 communication:

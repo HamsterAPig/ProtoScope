@@ -64,25 +64,25 @@ local function parse_frame(bytes)
 end
 
 function on_open(ctx)
-  clear_rx_buffer()
   proto.log("info", "连接已打开: " .. ctx.kind .. " -> " .. ctx.endpoint)
 end
 
 function on_close(ctx)
-  clear_rx_buffer()
   proto.log("info", "连接已关闭: " .. ctx.endpoint)
 end
 
 function on_error(ctx, message)
-  clear_rx_buffer()
   proto.log("error", "连接错误: " .. message)
 end
 
 function on_control(ctx, id, value)
-  if id == "read_version" and value then
+  if id == "read_version" then
     clear_rx_buffer()
     proto.send(build_read_version_frame())
     proto.set_timer("read_version_timeout", timeout_ms())
+    proto.emit("request", { action = "read_version", connection_id = ctx.connection_id })
+  else
+    proto.log("info", "控件更新: " .. id .. "=" .. tostring(value))
   end
 end
 

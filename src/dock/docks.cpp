@@ -8,7 +8,7 @@ namespace {
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+            std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
 } // namespace
@@ -21,9 +21,31 @@ void DockStore::appendReceiveRow(ReceiveRow row) {
     receive_.rows.push_back(std::move(row));
 }
 
+void DockStore::appendLogRow(ReceiveRow row) {
+    log_.rows.push_back(std::move(row));
+}
+
+void DockStore::appendScriptRow(ReceiveRow row) {
+    script_.rows.push_back(std::move(row));
+}
+
+void DockStore::clearLogRows() {
+    log_.rows.clear();
+}
+
+void DockStore::clearScriptRows() {
+    script_.rows.clear();
+}
+
 void DockStore::appendLuaEvent(const scripting::ScriptEvent& event) {
-    receive_.rows.push_back(
-        ReceiveRow{.timestampMs = event.timestampMs, .direction = "Lua", .endpoint = "script", .message = event.name + ": " + event.payload});
+    appendScriptRow(
+        ReceiveRow{
+            .timestampMs = event.timestampMs,
+            .direction = "EVENT",
+            .endpoint = "script",
+            .bytes = {},
+            .message = event.name + ": " + event.payload,
+        });
 }
 
 void DockStore::appendRawReceive(const transport::ConnectionContext& ctx, const std::string& text) {
@@ -32,6 +54,7 @@ void DockStore::appendRawReceive(const transport::ConnectionContext& ctx, const 
         .direction = "RX",
         .endpoint = ctx.endpoint,
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
+        .message = {},
     });
 }
 
@@ -41,6 +64,7 @@ void DockStore::appendRawSend(const transport::ConnectionContext& ctx, const std
         .direction = "TX",
         .endpoint = ctx.endpoint,
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
+        .message = {},
     });
 }
 
@@ -50,6 +74,14 @@ CommDockState& DockStore::commState() {
 
 ReceiveDockState& DockStore::receiveState() {
     return receive_;
+}
+
+LogDockState& DockStore::logState() {
+    return log_;
+}
+
+ScriptDockState& DockStore::scriptState() {
+    return script_;
 }
 
 SendDockState& DockStore::sendState() {
@@ -74,6 +106,14 @@ const CommDockState& DockStore::commState() const {
 
 const ReceiveDockState& DockStore::receiveState() const {
     return receive_;
+}
+
+const LogDockState& DockStore::logState() const {
+    return log_;
+}
+
+const ScriptDockState& DockStore::scriptState() const {
+    return script_;
 }
 
 const SendDockState& DockStore::sendState() const {

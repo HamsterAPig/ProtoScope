@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <system_error>
@@ -46,6 +47,118 @@ std::string toTransportKindText(transport::TransportKind kind) {
 }
 
 const std::vector<std::string> kDefaultSerialPorts = {"COM1", "COM2", "COM3", "COM4"};
+
+const char* kDefaultProtocolMainLua = R"PROTO(-- 核心流程：协议脚本只描述控件、收发和超时语义，底层 I/O 与 UI 统一由宿主的 proto.* API 承担。
+
+function ui()
+  return {
+    {
+      id = "protocol",
+      title = "协议动作",
+      controls = {
+        { type = "button", id = "read_version", label = "读取版本" },
+        { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
+      }
+    },
+    {
+      id = "advanced",
+      title = "高级参数",
+      controls = {
+        { type = "checkbox", id = "hex_send", label = "HEX 发送", default = true },
+        { type = "combo", id = "mode", label = "模式", options = { "轮询", "单次" }, default = 1 },
+        { type = "input_int", id = "timeout_ms", label = "超时(ms)", default = 1000 },
+        { type = "input_float", id = "scale", label = "缩放", default = 1.0 }
+      }
+    }
+  }
+end
+
+local rx_buffer = {}
+
+local function clear_rx_buffer()
+  rx_buffer = {}
+end
+
+local function append_bytes(bytes)
+  for i = 1, #bytes do
+    rx_buffer[#rx_buffer + 1] = bytes[i]
+  end
+end
+
+local function timeout_ms()
+  return proto.get_control("timeout_ms") or 1000
+end
+
+local function device_id_byte()
+  local device_id = tostring(proto.get_control("device_id") or "01")
+  return string.byte(device_id, 1, 1) or 0x30
+end
+
+local function build_read_version_frame()
+  if proto.get_control("hex_send") then
+    return { 0xAA, 0x55, device_id_byte(), 0x01, 0x0D }
+  end
+  return "52 45 41 44 20 " .. string.format("%02X", device_id_byte())
+end
+
+local function parse_frame(bytes)
+  if #bytes >= 2 and bytes[1] == string.byte("O") and bytes[2] == string.byte("K") then
+    return {
+      status = "ok",
+      size = #bytes,
+      mode = proto.get_control("mode"),
+      scale = proto.get_control("scale")
+    }
+  end
+  return nil
+end
+
+local function send_read_version(ctx)
+  clear_rx_buffer()
+  proto.send(build_read_version_frame())
+  proto.set_timer("read_version_timeout", timeout_ms())
+  proto.emit("request", { action = "read_version", connection_id = ctx.connection_id })
+end
+
+function on_open(ctx)
+  proto.log("info", "连接已打开: " .. ctx.kind .. " -> " .. ctx.endpoint)
+end
+
+function on_close(ctx)
+  proto.log("info", "连接已关闭: " .. ctx.endpoint)
+end
+
+function on_error(ctx, message)
+  proto.log("error", "连接错误: " .. message)
+end
+
+function on_control(ctx, id, value)
+  if id == "read_version" then
+    send_read_version(ctx)
+  else
+    proto.log("info", "控件更新: " .. id .. "=" .. tostring(value))
+  end
+end
+
+function on_bytes(ctx, bytes)
+  append_bytes(bytes)
+  local result = parse_frame(rx_buffer)
+  if result then
+    clear_rx_buffer()
+    proto.cancel_timer("read_version_timeout")
+    proto.emit("frame", result)
+  else
+    proto.emit("rx_bytes", { size = #bytes })
+  end
+end
+
+function on_timer(ctx, name)
+  if name == "read_version_timeout" then
+    clear_rx_buffer()
+    proto.emit("warning", { message = "读取版本超时", connection_id = ctx.connection_id })
+  end
+end
+)PROTO";
 
 const char* kDefaultGuide = R"(# ProtoScope Lua Host Guide
 
@@ -98,6 +211,7 @@ ConfigStore::ConfigStore()
 
 AppConfig ConfigStore::withDefaults() const {
     AppConfig config;
+    config.protocol.rootDir = normalizeTextPath(defaultProtocolDir_.parent_path());
     config.protocol.selectedDir = normalizeTextPath(defaultProtocolDir_);
     config.configPath = normalizeTextPath(defaultConfigPath_);
     config.communication.serialPortOptions = kDefaultSerialPorts;
@@ -140,6 +254,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         }
 
         const auto protocol = root["protocol"];
+        result.config.protocol.rootDir = readScalar<std::string>(protocol, "root_dir", result.config.protocol.rootDir);
         result.config.protocol.selectedDir = readScalar<std::string>(protocol, "selected_dir", result.config.protocol.selectedDir);
         result.config.configPath = normalizeTextPath(result.resolvedPath);
 
@@ -208,6 +323,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["window"]["height"] = config.gui.window.height;
     root["gui"]["window"]["maximized"] = config.gui.window.maximized;
 
+    root["protocol"]["root_dir"] = config.protocol.rootDir;
     root["protocol"]["selected_dir"] = config.protocol.selectedDir;
 
     root["communication"]["kind"] = toTransportKindText(config.communication.kind);
@@ -261,6 +377,30 @@ bool ConfigStore::protocolEntryExists(const std::filesystem::path& protocolDir) 
     return std::filesystem::exists(mainLuaPath(protocolDir));
 }
 
+std::vector<std::string> ConfigStore::scanProtocolDirectories(const std::filesystem::path& rootDir) const {
+    std::vector<std::string> results;
+    std::error_code ec;
+    if (!std::filesystem::exists(rootDir, ec) || ec) {
+        return results;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(rootDir, ec)) {
+        if (ec) {
+            break;
+        }
+        if (!entry.is_directory()) {
+            continue;
+        }
+        if (!protocolEntryExists(entry.path())) {
+            continue;
+        }
+        results.push_back(normalizeTextPath(entry.path()));
+    }
+
+    std::sort(results.begin(), results.end());
+    return results;
+}
+
 std::filesystem::path ConfigStore::defaultScriptWorkspaceDir() const {
     return "scripts";
 }
@@ -269,8 +409,30 @@ std::filesystem::path ConfigStore::defaultScriptHelpPath() const {
     return defaultScriptWorkspaceDir() / "README.txt";
 }
 
+bool ConfigStore::ensureDefaultProtocolScript(const std::filesystem::path& protocolDir, std::string& error) const {
+    try {
+        std::filesystem::create_directories(protocolDir);
+        const auto scriptPath = mainLuaPath(protocolDir);
+        if (!std::filesystem::exists(scriptPath)) {
+            std::ofstream out(scriptPath);
+            if (!out.good()) {
+                error = "无法写入默认协议脚本";
+                return false;
+            }
+            out << kDefaultProtocolMainLua;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return false;
+    }
+}
+
 bool ConfigStore::ensureDefaultScriptWorkspace(std::string& error) const {
     try {
+        if (!ensureDefaultProtocolScript(defaultProtocolDir_, error)) {
+            return false;
+        }
         std::filesystem::create_directories(defaultScriptWorkspaceDir());
         if (!std::filesystem::exists(defaultScriptHelpPath())) {
             std::ofstream out(defaultScriptHelpPath());
@@ -314,6 +476,8 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
 
     const auto protocolDir = normalizeProtocolDir(config.protocol.selectedDir);
     auto& lua = dockStore.luaState();
+    lua.protocolRootDir = config.protocol.rootDir;
+    lua.protocolDirOptions = scanProtocolDirectories(lua.protocolRootDir);
     lua.protocolDir = normalizeTextPath(protocolDir);
     lua.protocolName = protocolName(protocolDir);
     lua.scriptPath = normalizeTextPath(mainLuaPath(protocolDir));
@@ -331,6 +495,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     AppConfig config = withDefaults();
 
     config.communication = dockStore.commState();
+    config.protocol.rootDir = dockStore.luaState().protocolRootDir;
     config.protocol.selectedDir = dockStore.luaState().protocolDir;
     config.app.autoSave.enabled = dockStore.configState().autoSaveEnabled;
     config.app.autoSave.intervalMs = dockStore.configState().autoSaveIntervalMs;

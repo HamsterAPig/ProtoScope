@@ -38,6 +38,7 @@ struct GuiConfig {
 };
 
 struct ProtocolConfig {
+    std::string rootDir{"protocols"};
     std::string selectedDir{"protocols/default_protocol"};
 };
 
@@ -73,8 +74,10 @@ public:
     std::filesystem::path mainLuaPath(const std::filesystem::path& protocolDir) const;
     std::string protocolName(const std::filesystem::path& protocolDir) const;
     bool protocolEntryExists(const std::filesystem::path& protocolDir) const;
+    std::vector<std::string> scanProtocolDirectories(const std::filesystem::path& rootDir) const;
     std::filesystem::path defaultScriptWorkspaceDir() const;
     std::filesystem::path defaultScriptHelpPath() const;
+    bool ensureDefaultProtocolScript(const std::filesystem::path& protocolDir, std::string& error) const;
     bool ensureDefaultScriptWorkspace(std::string& error) const;
 
     FileSnapshot snapshot(const std::filesystem::path& path) const;

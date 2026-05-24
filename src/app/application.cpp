@@ -12,7 +12,7 @@ namespace {
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+            std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
 
@@ -112,9 +112,9 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     lua.lastError = lua.loaded ? std::string() : scriptHost_.lastError();
     syncSendActionOptions(dockStore_, scriptHost_);
 
-    const bool changed = flushScriptLogs();
+    flushScriptLogs();
     syncDockState();
-    return changed;
+    return lua.loaded;
 }
 
 bool Application::pumpOnce() {
@@ -214,6 +214,12 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
         });
     }
     dockStore_.commState().lastError.clear();
+    dockStore_.appendLogRow(dock::ReceiveRow{
+        .timestampMs = nowMs(),
+        .direction = "INFO",
+        .endpoint = "transport",
+        .message = "手动发送成功",
+    });
     return true;
 }
 
@@ -246,6 +252,45 @@ void Application::markCommConfigEdited(bool reconnectRequired) {
 
 void Application::markProtocolEdited() {
     dockStore_.markDirty("协议配置已修改");
+}
+
+void Application::setStatusMessage(std::string message, bool markDirty) {
+    if (markDirty) {
+        dockStore_.markDirty(message);
+        return;
+    }
+    dockStore_.configState().statusMessage = std::move(message);
+}
+
+bool Application::setSendHexMode(bool enabled) {
+    auto& send = dockStore_.sendState();
+    if (send.hexMode == enabled) {
+        return true;
+    }
+
+    if (enabled) {
+        const std::vector<std::uint8_t> bytes(send.payload.begin(), send.payload.end());
+        send.payload = protocol_utils::bytesToHex(bytes, true);
+        send.hexMode = true;
+        setStatusMessage("发送框已切换到 HEX 模式");
+        return true;
+    }
+
+    if (protocol_utils::countHexDigits(send.payload) % 2 != 0) {
+        dockStore_.commState().lastError = "HEX 文本必须按完整字节输入，无法切回文本模式";
+        return false;
+    }
+
+    const auto parsed = protocol_utils::hexToBytes(send.payload);
+    if (!parsed.has_value()) {
+        dockStore_.commState().lastError = "HEX 文本解析失败，无法切回文本模式";
+        return false;
+    }
+
+    send.payload.assign(parsed->begin(), parsed->end());
+    send.hexMode = false;
+    setStatusMessage("发送框已切换到文本模式");
+    return true;
 }
 
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
@@ -297,7 +342,7 @@ bool Application::handleTransportEvents() {
                         activeConnection_ = evt.context;
                         scriptHost_.onTransportOpen(evt);
                     }
-                    dockStore_.appendReceiveRow(dock::ReceiveRow{
+                    dockStore_.appendLogRow(dock::ReceiveRow{
                         .timestampMs = evt.context.timestampMs,
                         .direction = "OPEN",
                         .endpoint = evt.context.endpoint,
@@ -308,7 +353,7 @@ bool Application::handleTransportEvents() {
                     if (evt.context.readyForIo) {
                         scriptHost_.onTransportClose(evt);
                     }
-                    dockStore_.appendReceiveRow(dock::ReceiveRow{
+                    dockStore_.appendLogRow(dock::ReceiveRow{
                         .timestampMs = evt.context.timestampMs,
                         .direction = "CLOSE",
                         .endpoint = evt.context.endpoint,
@@ -322,7 +367,7 @@ bool Application::handleTransportEvents() {
                     if (evt.context.readyForIo) {
                         scriptHost_.onTransportError(evt);
                     }
-                    dockStore_.appendReceiveRow(dock::ReceiveRow{
+                    dockStore_.appendLogRow(dock::ReceiveRow{
                         .timestampMs = evt.context.timestampMs,
                         .direction = "ERROR",
                         .endpoint = evt.context.endpoint,
@@ -382,7 +427,7 @@ bool Application::flushScriptLogs() {
     bool changed = false;
     auto scriptLogs = scriptHost_.drainLogs();
     for (const auto& log : scriptLogs) {
-        dockStore_.appendReceiveRow(
+        dockStore_.appendScriptRow(
             dock::ReceiveRow{.timestampMs = log.timestampMs, .direction = "LOG", .endpoint = "script", .message = "[" + log.level + "] " + log.message});
         changed = true;
     }

@@ -39,6 +39,18 @@ struct ReceiveDockState {
     std::vector<ReceiveRow> rows;
 };
 
+struct LogDockState {
+    bool pauseScroll{false};
+    bool showTimestamps{true};
+    std::vector<ReceiveRow> rows;
+};
+
+struct ScriptDockState {
+    bool pauseScroll{false};
+    bool showTimestamps{true};
+    std::vector<ReceiveRow> rows;
+};
+
 struct SendDockState {
     bool hexMode{true};
     std::string payload{"AA 01 00"};
@@ -51,7 +63,9 @@ struct LuaDockState {
     std::string scriptPath{"protocols/default_protocol/main.lua"};
     std::string protocolDir{"protocols/default_protocol"};
     std::string protocolName{"default_protocol"};
+    std::string protocolRootDir{"protocols"};
     std::string lastError;
+    std::vector<std::string> protocolDirOptions;
     std::vector<scripting::DockSnapshot> docks;
     std::vector<scripting::ControlDescriptor> controls;
     std::vector<scripting::ControlSnapshot> controlStates;
@@ -92,6 +106,8 @@ public:
 
     CommDockState& commState();
     ReceiveDockState& receiveState();
+    LogDockState& logState();
+    ScriptDockState& scriptState();
     SendDockState& sendState();
     LuaDockState& luaState();
     WaveDockState& waveState();
@@ -99,6 +115,8 @@ public:
 
     const CommDockState& commState() const;
     const ReceiveDockState& receiveState() const;
+    const LogDockState& logState() const;
+    const ScriptDockState& scriptState() const;
     const SendDockState& sendState() const;
     const LuaDockState& luaState() const;
     const WaveDockState& waveState() const;
@@ -110,10 +128,16 @@ public:
     void clearPendingExternalReload();
     void setConflict(std::string message);
     void clearConflict();
+    void appendLogRow(ReceiveRow row);
+    void appendScriptRow(ReceiveRow row);
+    void clearLogRows();
+    void clearScriptRows();
 
 private:
     CommDockState comm_{};
     ReceiveDockState receive_{};
+    LogDockState log_{};
+    ScriptDockState script_{};
     SendDockState send_{};
     LuaDockState lua_{};
     WaveDockState wave_{};

@@ -301,6 +301,33 @@ void test_config_default_script_workspace() {
     require(store.ensureDefaultScriptWorkspace(error), "scripts 工作区初始化失败");
     require(std::filesystem::exists(store.defaultScriptWorkspaceDir()), "scripts 目录应存在");
     require(std::filesystem::exists(store.defaultScriptHelpPath()), "README.txt 应存在");
+    require(std::filesystem::exists(store.mainLuaPath(store.defaultProtocolDir())), "默认协议脚本应存在");
+}
+
+void test_protocol_scan_and_root_roundtrip() {
+    protoscope::config::ConfigStore store;
+    const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-protocol-scan";
+    const auto alphaDir = tempRoot / "alpha";
+    const auto betaDir = tempRoot / "beta";
+    std::string error;
+
+    require(store.ensureDefaultProtocolScript(alphaDir, error), "alpha 协议脚本补建失败");
+    require(store.ensureDefaultProtocolScript(betaDir, error), "beta 协议脚本补建失败");
+
+    const auto scanned = store.scanProtocolDirectories(tempRoot);
+    require(scanned.size() == 2, "协议目录扫描数量不正确");
+    require(scanned[0].find("alpha") != std::string::npos, "扫描结果应包含 alpha");
+    require(scanned[1].find("beta") != std::string::npos, "扫描结果应包含 beta");
+
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-protocol-root-roundtrip.yaml";
+    auto config = store.load(tempPath).config;
+    config.protocol.rootDir = tempRoot.generic_string();
+    config.protocol.selectedDir = betaDir.generic_string();
+
+    require(store.save(tempPath, config, error), "协议根目录保存失败");
+    const auto reloaded = store.load(tempPath);
+    require(reloaded.config.protocol.rootDir == tempRoot.generic_string(), "协议根目录 roundtrip 失败");
+    require(reloaded.config.protocol.selectedDir == betaDir.generic_string(), "协议目录 roundtrip 失败");
 }
 
 namespace {
@@ -327,6 +354,8 @@ static const TestCase kAllTests[] = {
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
     {"config_default_script_workspace", &test_config_default_script_workspace},
+    {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
+    {"dock_log_and_script_split", &test_dock_log_and_script_split},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
     {"serial_transport_error_path", &test_serial_transport_error_path},
 };

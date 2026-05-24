@@ -33,6 +33,8 @@ public:
     void updateControlValue(const std::string& id, const scripting::ControlValue& value);
     void markCommConfigEdited(bool reconnectRequired);
     void markProtocolEdited();
+    void setStatusMessage(std::string message, bool markDirty = false);
+    bool setSendHexMode(bool enabled);
 
     std::optional<std::uint64_t> nextWakeupAtMs() const;
 

@@ -18,7 +18,7 @@ constexpr const char* kDefaultDockTitle = "协议动作";
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+            std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
 

@@ -30,10 +30,13 @@ private:
     void ensureChineseFont();
     void renderFrame();
     void drawStatusBar();
+    void drawMainMenu();
     void drawCommDock();
     void drawProtocolDock();
     void drawSendDock();
     void drawReceiveDock();
+    void drawLogDock();
+    void drawScriptDock();
     void drawWaveDock();
     void drawDynamicControl(const scripting::ControlSnapshot& control);
 
@@ -43,6 +46,7 @@ private:
     void sleepUntilNextFrame(std::uint64_t frameStartMs) const;
 
     static std::uint64_t nowMs();
+    static std::string formatTimestamp(std::uint64_t timestampMs);
 
 private:
     app::Application& application_;
@@ -53,6 +57,13 @@ private:
     config::FileSnapshot configSnapshot_{};
     bool layoutInitialized_{false};
     bool running_{false};
+    bool showCommDock_{true};
+    bool showProtocolDock_{true};
+    bool showSendDock_{true};
+    bool showReceiveDock_{true};
+    bool showLogDock_{true};
+    bool showScriptDock_{true};
+    bool showWaveDock_{true};
 };
 
 } // namespace protoscope::ui
