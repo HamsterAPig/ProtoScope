@@ -1,6 +1,7 @@
 #include "protoscope/ui/gui_runtime.hpp"
 
 #include "protoscope/protocol_utils/codec.hpp"
+#include "protoscope/ui/dock_layout.hpp"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -31,6 +32,7 @@
 #include <optional>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace protoscope::ui {
@@ -138,6 +140,24 @@ std::string formatReceiveRowText(const dock::ReceiveRow& row, bool showHex) {
         return {};
     }
     return showHex ? protocol_utils::bytesToHex(row.bytes, true) : bytesToAsciiPreview(row.bytes);
+}
+
+std::string visibleWindowTitle(std::string_view windowName) {
+    const auto stableIdPos = windowName.find("###");
+    if (stableIdPos == std::string_view::npos) {
+        return std::string(windowName);
+    }
+    return std::string(windowName.substr(0, stableIdPos));
+}
+
+void dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
+    const auto name = std::string(windowName);
+    const ImGuiID windowId = ImHashStr(name.c_str());
+    const auto* settings = ImGui::FindWindowSettingsByID(windowId);
+    if (targetNode == 0 || ImGui::FindWindowByName(name.c_str()) != nullptr || settings != nullptr) {
+        return;
+    }
+    ImGui::DockBuilderDockWindow(name.c_str(), targetNode);
 }
 
 std::string formatTimestampText(std::uint64_t timestampMs) {
@@ -488,11 +508,20 @@ void GuiRuntime::renderFrame() {
         ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
 
         ImGuiID left = dockspaceId;
+        ImGuiID mainBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.28F, nullptr, &left);
         ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right, 0.58F, nullptr, &left);
         ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.48F, nullptr, &left);
         ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.42F, nullptr, &right);
         ImGuiID rightMid = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.36F, nullptr, &right);
         ImGuiID rightLogs = ImGui::DockBuilderSplitNode(rightMid, ImGuiDir_Down, 0.5F, nullptr, &rightMid);
+
+        defaultLuaDockNodes_.clear();
+        defaultLuaDockNodes_[LuaDockAnchor::Left] = left;
+        defaultLuaDockNodes_[LuaDockAnchor::LeftBottom] = leftBottom;
+        defaultLuaDockNodes_[LuaDockAnchor::RightTop] = right;
+        defaultLuaDockNodes_[LuaDockAnchor::RightMid] = rightMid;
+        defaultLuaDockNodes_[LuaDockAnchor::RightBottom] = rightBottom;
+        defaultLuaDockNodes_[LuaDockAnchor::MainBottom] = mainBottom;
 
         ImGui::DockBuilderDockWindow("通讯配置", left);
         ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
@@ -504,6 +533,7 @@ void GuiRuntime::renderFrame() {
         ImGui::DockBuilderFinish(dockspaceId);
         layoutInitialized_ = true;
     }
+    updateLuaDockDefaultLayout();
 
     drawStatusBar();
     drawCommDock();
@@ -860,13 +890,51 @@ void GuiRuntime::drawProtocolDock() {
     // 核心流程：动态 Dock 中的控件点击会同步改写 `lua.docks`。
     // 这里按值复制当前帧快照，保证本帧渲染遍历期间底层容器不会被重入修改。
     const auto dockSnapshots = lua.docks;
+    const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
     for (const auto& dockSnapshot : dockSnapshots) {
-        if (ImGui::Begin(dockSnapshot.descriptor.title.c_str())) {
+        const auto windowName = luaDockWindowName(dockSnapshot.descriptor, layoutKey);
+        if (ImGui::Begin(windowName.c_str())) {
             for (const auto& control : dockSnapshot.controls) {
                 drawDynamicControl(control);
             }
         }
         ImGui::End();
+    }
+}
+
+void GuiRuntime::updateLuaDockDefaultLayout() {
+    const auto& lua = application_.docks().luaState();
+    const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
+    const auto requests = buildLuaDockLayoutRequests(lua.docks, layoutKey);
+    std::unordered_map<std::string, ImGuiID> tabGroupNodes;
+
+    for (const auto& request : requests) {
+        const auto inserted = defaultDockedLuaWindows_.insert(request.windowName).second;
+        if (!inserted) {
+            continue;
+        }
+
+        const auto anchor = parseLuaDockAnchor(request.anchor);
+        if (!anchor.has_value()) {
+            application_.setStatusMessage("Lua Dock 默认停靠点无效: " + request.anchor, true);
+            continue;
+        }
+
+        ImGuiID targetNode = 0;
+        if (const auto groupIter = tabGroupNodes.find(request.tabGroup); groupIter != tabGroupNodes.end()) {
+            targetNode = groupIter->second;
+        } else if (const auto nodeIter = defaultLuaDockNodes_.find(*anchor); nodeIter != defaultLuaDockNodes_.end()) {
+            targetNode = nodeIter->second;
+            tabGroupNodes.emplace(request.tabGroup, targetNode);
+        }
+
+        if (targetNode == 0) {
+            application_.setStatusMessage("Lua Dock 默认停靠节点不存在: " + visibleWindowTitle(request.windowName), true);
+            continue;
+        }
+
+        // 核心流程：只给首次出现、ini 尚未创建过的 Lua Dock 提供默认停靠，不覆盖用户拖拽后的布局。
+        dockWindowIfMissing(request.windowName, targetNode);
     }
 }
 

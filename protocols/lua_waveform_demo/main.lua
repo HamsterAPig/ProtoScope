@@ -162,6 +162,8 @@ function ui()
     {
       id = "wave_run",
       title = "Lua 波形演示 / 运行控制",
+      anchor = "left_bottom",
+      tab_group = "wave_tools",
       controls = {
         { type = "button", id = "start", label = "开始" },
         { type = "button", id = "pause", label = "暂停" },
@@ -172,6 +174,8 @@ function ui()
     {
       id = "wave_params",
       title = "Lua 波形演示 / 参数",
+      anchor = "left_bottom",
+      tab_group = "wave_tools",
       controls = {
         { type = "input_float", id = "frequency_hz", label = "频率(Hz)", default = defaults.frequency_hz },
         { type = "input_float", id = "amplitude", label = "幅值", default = defaults.amplitude },
@@ -185,6 +189,8 @@ function ui()
     {
       id = "wave_channels",
       title = "Lua 波形演示 / 通道",
+      anchor = "left_bottom",
+      tab_group = "wave_tools",
       controls = {
         { type = "checkbox", id = "show_sine", label = "显示正弦", default = defaults.show_sine },
         { type = "checkbox", id = "show_triangle", label = "显示三角", default = defaults.show_triangle },

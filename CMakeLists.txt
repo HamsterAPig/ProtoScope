@@ -171,6 +171,21 @@ target_link_libraries(protoscope_transport
 )
 target_compile_features(protoscope_transport PUBLIC cxx_std_20)
 
+add_library(protoscope_ui_layout STATIC
+    src/ui/dock_layout.cpp
+)
+target_include_directories(protoscope_ui_layout
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(protoscope_ui_layout
+    PUBLIC
+        protoscope_protocol_utils
+        protoscope_plot
+        protoscope_transport
+)
+target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
+
 add_library(protoscope_scripting STATIC
     src/scripting/script_host.cpp
 )
@@ -249,6 +264,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         PUBLIC
             protoscope_app
             protoscope_config
+            protoscope_ui_layout
             protoscope_imgui
             protoscope_implot
             protoscope_plot
@@ -280,6 +296,7 @@ endif()
 foreach(target_name IN ITEMS
     protoscope_protocol_utils
     protoscope_transport
+    protoscope_ui_layout
     protoscope_scripting
     protoscope_dock
     protoscope_plot
@@ -309,6 +326,7 @@ add_executable(protoscope_tests
     tests/test_application.cpp
     tests/test_codec.cpp
     tests/test_dock.cpp
+    tests/test_dock_layout.cpp
     tests/test_plot.cpp
     tests/test_script_host.cpp
     tests/test_transport.cpp
@@ -321,6 +339,7 @@ target_link_libraries(protoscope_tests
     PRIVATE
         protoscope_config
         protoscope_dock
+        protoscope_ui_layout
         protoscope_app
         protoscope_protocol_utils
         protoscope_plot

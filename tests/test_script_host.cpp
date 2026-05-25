@@ -125,6 +125,18 @@ void test_script_multi_dock_snapshot() {
     require(foundReadVersionButton, "应存在 read_version 按钮控件");
 }
 
+void test_script_dock_layout_fields() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("multi_dock").generic_string()), "multi_dock 协议应可加载");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 2, "多 Dock 协议应产出两个 dock");
+    require(docks[0].descriptor.anchor == "left_bottom", "第一个 dock 应解析 anchor");
+    require(docks[1].descriptor.anchor == "left_bottom", "第二个 dock 应解析 anchor");
+    require(docks[0].descriptor.tabGroup == "protocol_tools", "第一个 dock 应解析 tab_group");
+    require(docks[1].descriptor.tabGroup == "protocol_tools", "第二个 dock 应解析 tab_group");
+}
+
 void test_script_crc_bridge() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory(fixtureProtocolDir("crc_probe").generic_string()), "crc_probe 协议应可加载");
@@ -241,6 +253,12 @@ void test_script_invalid_controls_fail() {
     protoscope::scripting::ScriptHost host;
     require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_controls").generic_string()), "非法 controls() 应加载失败");
     require(!host.lastError().empty(), "非法 controls() 失败时应记录错误");
+}
+
+void test_script_invalid_dock_anchor_fail() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_dock_anchor").generic_string()), "非法 dock anchor 应加载失败");
+    require(host.lastError().find("dock anchor 不支持") != std::string::npos, "非法 dock anchor 应给出清晰错误");
 }
 
 void test_script_runtime_error_logged() {
@@ -372,12 +390,14 @@ static const TestCase kAllTests[] = {
     {"script_on_close_log", &test_script_on_close_log},
     {"script_on_error_log", &test_script_on_error_log},
     {"script_multi_dock_snapshot", &test_script_multi_dock_snapshot},
+    {"script_dock_layout_fields", &test_script_dock_layout_fields},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
     {"script_read_version_split_flow", &test_script_read_version_split_flow},
     {"script_timeout_flow", &test_script_timeout_flow},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},
+    {"script_invalid_dock_anchor_fail", &test_script_invalid_dock_anchor_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
@@ -385,6 +405,9 @@ static const TestCase kAllTests[] = {
     {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
+    {"lua_dock_layout_key_prefers_protocol_dir", &test_lua_dock_layout_key_prefers_protocol_dir},
+    {"lua_dock_window_name_keeps_stable_id", &test_lua_dock_window_name_keeps_stable_id},
+    {"lua_dock_layout_requests_group_tabs", &test_lua_dock_layout_requests_group_tabs},
     {"plot_cursor_snap_by_time_and_measurement", &test_plot_cursor_snap_by_time_and_measurement},
     {"wave_cursor_smart_snap_edge", &test_wave_cursor_smart_snap_edge},
     {"wave_cursor_smart_snap_extreme", &test_wave_cursor_smart_snap_extreme},

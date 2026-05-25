@@ -140,6 +140,11 @@ std::optional<ControlType> parseControlType(std::string_view value) {
     return std::nullopt;
 }
 
+bool isValidDockAnchor(std::string_view value) {
+    return value == "left" || value == "left_bottom" || value == "right_top"
+        || value == "right_mid" || value == "right_bottom" || value == "main_bottom";
+}
+
 std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descriptor,
                                                 const sol::object& object,
                                                 std::string& error) {
@@ -381,8 +386,14 @@ std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view 
             DockDescriptor dock;
             dock.id = dockEntry.get_or("id", std::string());
             dock.title = dockEntry.get_or("title", std::string());
+            dock.anchor = dockEntry.get_or("anchor", std::string("left_bottom"));
+            dock.tabGroup = dockEntry.get_or("tab_group", std::string());
             if (dock.id.empty() || dock.title.empty()) {
                 error = "dock 必须提供 id 和 title";
+                return std::nullopt;
+            }
+            if (!isValidDockAnchor(dock.anchor)) {
+                error = "dock anchor 不支持: " + dock.anchor;
                 return std::nullopt;
             }
 

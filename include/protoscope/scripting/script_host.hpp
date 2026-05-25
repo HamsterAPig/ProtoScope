@@ -48,6 +48,8 @@ struct ControlSnapshot {
 struct DockDescriptor {
     std::string id;
     std::string title;
+    std::string anchor{"left_bottom"};
+    std::string tabGroup;
     std::vector<ControlDescriptor> controls;
 };
 

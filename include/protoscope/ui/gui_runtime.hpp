@@ -2,10 +2,13 @@
 
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
+#include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 struct GLFWwindow;
 
@@ -39,6 +42,7 @@ private:
     void drawLogDock();
     void drawScriptDock();
     void drawDynamicControl(const scripting::ControlSnapshot& control);
+    void updateLuaDockDefaultLayout();
 
     bool reloadConfigFromDisk();
     bool pollConfigFileChanges();
@@ -56,6 +60,8 @@ private:
     std::uint64_t lastAutoSaveAtMs_{0};
     config::FileSnapshot configSnapshot_{};
     bool layoutInitialized_{false};
+    std::unordered_map<LuaDockAnchor, unsigned int> defaultLuaDockNodes_;
+    std::unordered_set<std::string> defaultDockedLuaWindows_;
     bool running_{false};
     bool showCommDock_{true};
     bool showProtocolDock_{true};
