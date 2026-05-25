@@ -32,7 +32,9 @@ void test_protocol_scan_and_root_roundtrip();
 void test_dock_log_and_script_split();
 void test_tcp_transport_roundtrip();
 void test_transport_enqueue_send_async_roundtrip();
+void test_tcp_server_connection_takeover_replaces_active_client();
 void test_serial_transport_error_path();
+void test_application_tcp_lua_read_version_roundtrip();
 
 const TestCase* allTests();
 int testCount();

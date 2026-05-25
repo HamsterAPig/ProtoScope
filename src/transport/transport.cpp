@@ -111,6 +111,7 @@ struct TcpServerTransport::Runtime {
     std::array<std::uint8_t, 4096> readBuffer{};
     std::mutex socketMutex;
     std::atomic<bool> stopping{false};
+    std::atomic<std::uint64_t> clientGeneration{0};
 };
 
 struct SerialTransport::Runtime {
@@ -381,12 +382,16 @@ bool TcpServerTransport::open(const TransportConfig& config) {
     setState(TransportState::Open);
     pushEvent(TransportOpenEvent{*listenContext_});
 
-    auto scheduleRead = std::make_shared<std::function<void()>>();
-    *scheduleRead = [this, scheduleRead]() {
-        // 服务端活动连接的读循环与客户端一致，统一走事件投递。
+    auto scheduleRead = std::make_shared<std::function<void(std::uint64_t)>>();
+    *scheduleRead = [this, scheduleRead](std::uint64_t generation) {
+        // 核心流程：双窗口联调允许新连接接管旧连接，因此每次读回调都绑定一代连接编号。
+        // 一旦 accept 了新客户端，旧回调即便迟到返回，也必须直接丢弃，避免把旧连接事件记到新连接上。
         runtime_->clientSocket.async_read_some(
             asio::buffer(runtime_->readBuffer),
-            [this, scheduleRead](const asio::error_code& ec, std::size_t bytesRead) {
+            [this, scheduleRead, generation](const asio::error_code& ec, std::size_t bytesRead) {
+                if (generation != runtime_->clientGeneration.load(std::memory_order_relaxed)) {
+                    return;
+                }
                 if (ec) {
                     if (!runtime_->stopping.load(std::memory_order_relaxed) && clientContext_.has_value()) {
                         auto closedContext = *clientContext_;
@@ -407,7 +412,7 @@ bool TcpServerTransport::open(const TransportConfig& config) {
                                                   runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
                     });
                 }
-                (*scheduleRead)();
+                (*scheduleRead)(generation);
             });
     };
 
@@ -442,9 +447,10 @@ bool TcpServerTransport::open(const TransportConfig& config) {
                     }
 
                     runtime_->clientSocket = std::move(socket);
+                    const auto generation = runtime_->clientGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
                     clientContext_ = makeClientContext(runtime_->clientSocket.remote_endpoint());
                     pushEvent(TransportOpenEvent{*clientContext_});
-                    (*scheduleRead)();
+                    (*scheduleRead)(generation);
                 }
 
                 (*scheduleAccept)();

@@ -2,6 +2,10 @@
 
 #include "protoscope/protocol_utils/codec.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
@@ -9,9 +13,6 @@
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-#if defined(_WIN32)
-#include <windows.h>
-#endif
 #include <GL/gl.h>
 
 #include <algorithm>
@@ -751,7 +752,10 @@ void GuiRuntime::drawProtocolDock() {
 
     ImGui::Separator();
     if (lua.docks.empty()) {
-        for (const auto& control : lua.controlStates) {
+        // 核心流程：Lua 按钮可能在点击回调里同步刷新脚本控件快照。
+        // 这里先复制当前帧的控件列表，避免遍历 `lua.controlStates` 时引用失效导致闪退。
+        const auto controls = lua.controlStates;
+        for (const auto& control : controls) {
             drawDynamicControl(control);
         }
         ImGui::End();
@@ -759,7 +763,10 @@ void GuiRuntime::drawProtocolDock() {
     }
     ImGui::End();
 
-    for (const auto& dockSnapshot : lua.docks) {
+    // 核心流程：动态 Dock 中的控件点击会同步改写 `lua.docks`。
+    // 这里按值复制当前帧快照，保证本帧渲染遍历期间底层容器不会被重入修改。
+    const auto dockSnapshots = lua.docks;
+    for (const auto& dockSnapshot : dockSnapshots) {
         if (ImGui::Begin(dockSnapshot.descriptor.title.c_str())) {
             for (const auto& control : dockSnapshot.controls) {
                 drawDynamicControl(control);

@@ -23,7 +23,7 @@ void require(bool condition, const char* message) {
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+            std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
 
@@ -367,7 +367,9 @@ static const TestCase kAllTests[] = {
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
     {"transport_enqueue_send_async_roundtrip", &test_transport_enqueue_send_async_roundtrip},
+    {"tcp_server_connection_takeover_replaces_active_client", &test_tcp_server_connection_takeover_replaces_active_client},
     {"serial_transport_error_path", &test_serial_transport_error_path},
+    {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
 };
 
 } // namespace

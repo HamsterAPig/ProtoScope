@@ -350,6 +350,12 @@ bool Application::handleTransportEvents() {
                     changed = true;
                 } else if constexpr (std::is_same_v<T, transport::TransportBytesEvent>) {
                     if (!evt.bytes.empty()) {
+                        // 核心流程：只消费当前活动连接的字节事件，旧连接的迟到回包直接忽略，
+                        // 避免双窗口接管场景下脚本状态与 UI 日志被过期连接污染。
+                        if (activeConnection_.has_value() && evt.context.readyForIo &&
+                            activeConnection_->connectionId != evt.context.connectionId) {
+                            return;
+                        }
                         scriptHost_.onTransportBytes(evt);
                         if (evt.context.readyForIo) {
                             activeConnection_ = evt.context;

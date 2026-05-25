@@ -259,6 +259,7 @@ endif()
 
 add_executable(protoscope_tests
     tests/test_main.cpp
+    tests/test_application.cpp
     tests/test_codec.cpp
     tests/test_dock.cpp
     tests/test_script_host.cpp
@@ -271,6 +272,8 @@ target_include_directories(protoscope_tests
 target_link_libraries(protoscope_tests
     PRIVATE
         protoscope_config
+        protoscope_dock
+        protoscope_app
         protoscope_protocol_utils
         protoscope_scripting
         protoscope_transport
