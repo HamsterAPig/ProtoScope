@@ -161,3 +161,18 @@ void test_application_tcp_lua_read_version_roundtrip() {
     server.shutdown();
     client.shutdown();
 }
+
+void test_application_lua_controls_without_connection() {
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory("protocols/lua_waveform_demo", true), "Lua 波形演示脚本应可加载");
+
+    application.updateControlValue("pause", true);
+    require(application.docks().commState().lastError.empty(), "未连接时 Lua 本地控件不应报告连接错误");
+
+    application.updateControlValue("clear_history", true);
+    application.pumpOnce();
+    require(application.docks().waveState().buffer.channelCount() == 4, "清空历史应能在未连接时重建波形通道");
+
+    application.shutdown();
+}

@@ -211,13 +211,20 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
 }
 
 void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value) {
-    if (!activeConnection_.has_value()) {
-        dockStore_.commState().lastError = "连接未打开，无法更新控件";
-        return;
+    if (activeConnection_.has_value()) {
+        scriptHost_.onControl(*activeConnection_, id, value);
+    } else {
+        // 核心流程：动态控件也可能只驱动 Lua 本地演示逻辑，未连接时仍允许回调脚本。
+        transport::ConnectionContext detachedContext;
+        detachedContext.endpoint = "detached";
+        detachedContext.connectionId = 0;
+        detachedContext.timestampMs = nowMs();
+        detachedContext.readyForIo = false;
+        scriptHost_.onControl(detachedContext, id, value);
     }
-    scriptHost_.onControl(*activeConnection_, id, value);
     flushScriptOutputs();
     flushScriptLogs();
+    flushScriptPlots();
     syncDockState();
 }
 

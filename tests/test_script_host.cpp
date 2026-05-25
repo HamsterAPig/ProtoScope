@@ -387,6 +387,7 @@ static const TestCase kAllTests[] = {
     {"tcp_server_connection_takeover_replaces_active_client", &test_tcp_server_connection_takeover_replaces_active_client},
     {"serial_transport_error_path", &test_serial_transport_error_path},
     {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
+    {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
 };

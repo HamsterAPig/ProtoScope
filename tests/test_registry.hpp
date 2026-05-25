@@ -38,6 +38,7 @@ void test_transport_enqueue_send_async_roundtrip();
 void test_tcp_server_connection_takeover_replaces_active_client();
 void test_serial_transport_error_path();
 void test_application_tcp_lua_read_version_roundtrip();
+void test_application_lua_controls_without_connection();
 
 const TestCase* allTests();
 int testCount();
