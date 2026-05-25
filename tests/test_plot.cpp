@@ -288,9 +288,40 @@ void test_wave_overview_viewport_normalize() {
     require(overflow.minTime >= bounds.minTime - 1e-12, "概览时间窗应夹紧到左边界");
     require(std::abs((overflow.maxTime - overflow.minTime) - 5.0) < 1e-12, "越界夹紧应保持窗口宽度");
 
+    const protoscope::plot::WaveViewport viewport{.minTime = 2.0, .maxTime = 5.0, .minValue = -0.5, .maxValue = 0.5};
+    const auto movedRight = protoscope::plot::moveViewportByDelta(viewport, 2.0, bounds, 0.5);
+    require(std::abs(movedRight.minTime - 4.0) < 1e-12, "概览整窗拖动应平移左边界");
+    require(std::abs(movedRight.maxTime - 7.0) < 1e-12, "概览整窗拖动应平移右边界");
+    require(std::abs(movedRight.minValue - viewport.minValue) < 1e-12, "概览整窗拖动不应改变纵轴最小值");
+    require(std::abs(movedRight.maxValue - viewport.maxValue) < 1e-12, "概览整窗拖动不应改变纵轴最大值");
+
+    const auto movedOverflow = protoscope::plot::moveViewportByDelta(viewport, 20.0, bounds, 0.5);
+    require(movedOverflow.maxTime <= bounds.maxTime + 1e-12, "概览整窗拖动应夹紧到右边界");
+    require(std::abs((movedOverflow.maxTime - movedOverflow.minTime) - 3.0) < 1e-12, "整窗拖动越界应保持时间窗口宽度");
+
     const auto tiny = protoscope::plot::normalizeOverviewViewport(
         {.minTime = 4.0, .maxTime = 4.01, .minValue = -1.0, .maxValue = 1.0}, bounds, 0.5);
     require((tiny.maxTime - tiny.minTime) >= 0.5 - 1e-12, "概览窗口宽度不应小于最小时间宽度");
+}
+
+void test_wave_cursor_position_in_viewport() {
+    const protoscope::plot::WaveViewport viewport{
+        .minTime = 10.0,
+        .maxTime = 20.0,
+        .minValue = -1.0,
+        .maxValue = 1.0,
+    };
+
+    require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, 0.5) - 15.0) < 1e-12,
+        "单游标快捷定位应落在视窗中点");
+    require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, 0.4) - 14.0) < 1e-12,
+        "双游标左侧快捷定位应落在视窗 40% 位置");
+    require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, 0.6) - 16.0) < 1e-12,
+        "双游标右侧快捷定位应落在视窗 60% 位置");
+    require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, -1.0) - 10.0) < 1e-12,
+        "游标快捷定位比例应夹紧到左边界");
+    require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, 2.0) - 20.0) < 1e-12,
+        "游标快捷定位比例应夹紧到右边界");
 }
 
 void test_wave_cursor_interval_text_by_axis() {

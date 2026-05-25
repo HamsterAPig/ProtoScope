@@ -81,5 +81,10 @@ CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           WaveTimeAxisSource axisSource,
                                           std::string_view timeUnit);
 void lockCursorInterval(double movedTime, double& pairedTime, double lockedInterval, bool movedLeftCursor);
+WaveViewport moveViewportByDelta(const WaveViewport& viewport,
+                                 double deltaTime,
+                                 const WaveDataBounds& bounds,
+                                 double minTimeWidth);
+double cursorTimeInViewport(const WaveViewport& viewport, double ratio);
 
 } // namespace protoscope::plot

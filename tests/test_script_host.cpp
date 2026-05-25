@@ -399,6 +399,7 @@ static const TestCase kAllTests[] = {
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
     {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
+    {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
     {"wave_cursor_interval_text_by_axis", &test_wave_cursor_interval_text_by_axis},
     {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
 };

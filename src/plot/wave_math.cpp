@@ -309,4 +309,28 @@ void lockCursorInterval(double movedTime, double& pairedTime, double lockedInter
     pairedTime = movedLeftCursor ? movedTime + lockedInterval : movedTime - lockedInterval;
 }
 
+WaveViewport moveViewportByDelta(const WaveViewport& viewport,
+                                 double deltaTime,
+                                 const WaveDataBounds& bounds,
+                                 double minTimeWidth) {
+    WaveViewport moved = viewport;
+    if (!std::isfinite(deltaTime)) {
+        deltaTime = 0.0;
+    }
+    moved.minTime += deltaTime;
+    moved.maxTime += deltaTime;
+    return normalizeOverviewViewport(moved, bounds, minTimeWidth);
+}
+
+double cursorTimeInViewport(const WaveViewport& viewport, double ratio) {
+    const double minTime = (std::min)(viewport.minTime, viewport.maxTime);
+    const double maxTime = (std::max)(viewport.minTime, viewport.maxTime);
+    if (!std::isfinite(minTime) || !std::isfinite(maxTime)) {
+        return 0.0;
+    }
+    // 快捷定位只在当前可视窗口内布点，ratio 先夹紧，避免异常输入把游标推到窗外。
+    const double clampedRatio = (std::clamp)(std::isfinite(ratio) ? ratio : 0.5, 0.0, 1.0);
+    return minTime + (maxTime - minTime) * clampedRatio;
+}
+
 } // namespace protoscope::plot
