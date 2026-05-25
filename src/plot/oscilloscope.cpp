@@ -131,6 +131,14 @@ EnvelopeView OscilloscopeBuffer::buildEnvelope(std::size_t channelIndex,
                                                double visibleMinTime,
                                                double visibleMaxTime,
                                                std::size_t pixelWidth) const {
+    return buildLimitedEnvelope(channelIndex, visibleMinTime, visibleMaxTime, pixelWidth, 0);
+}
+
+EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
+                                                      double visibleMinTime,
+                                                      double visibleMaxTime,
+                                                      std::size_t pixelWidth,
+                                                      std::size_t maxSamples) const {
     EnvelopeView view{};
     if (channelIndex >= channels_.size() || pixelWidth == 0) {
         return view;
@@ -146,15 +154,21 @@ EnvelopeView OscilloscopeBuffer::buildEnvelope(std::size_t channelIndex,
         std::swap(visibleMinTime, visibleMaxTime);
     }
 
-    const std::size_t begin = lowerBoundByTime(samples, visibleMinTime);
+    std::size_t begin = lowerBoundByTime(samples, visibleMinTime);
     const std::size_t end = upperBoundByTime(samples, visibleMaxTime);
     if (begin >= end) {
         return view;
     }
 
     view.sourceSampleCount = end - begin;
-    if (view.sourceSampleCount <= pixelWidth * 2) {
-        view.points.reserve(view.sourceSampleCount);
+    if (maxSamples > 0 && view.sourceSampleCount > maxSamples) {
+        // 核心流程：概览只读取最近的有限样本，避免历史数据过大时拖慢 UI。
+        begin = end - maxSamples;
+    }
+
+    const std::size_t sampledCount = end - begin;
+    if (sampledCount <= pixelWidth * 2) {
+        view.points.reserve(sampledCount);
         for (std::size_t index = begin; index < end; ++index) {
             const double displayValue = samples[index].value + offset;
             view.points.push_back(EnvelopePoint{

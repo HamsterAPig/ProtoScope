@@ -34,6 +34,7 @@ void test_plot_history_trim_and_envelope();
 void test_plot_cursor_snap_and_delta();
 void test_plot_cursor_snap_by_time_and_measurement();
 void test_plot_channel_offset_applies_to_display_only();
+void test_plot_limited_envelope_edges();
 void test_tcp_transport_roundtrip();
 void test_transport_enqueue_send_async_roundtrip();
 void test_tcp_server_connection_takeover_replaces_active_client();

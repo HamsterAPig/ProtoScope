@@ -134,3 +134,43 @@ void test_plot_channel_offset_applies_to_display_only() {
     require(std::abs(measurement.maxValue - 2.5) < 1e-9, "测量最大值应叠加 offset");
     require(std::abs(measurement.meanValue - 1.5) < 1e-9, "测量平均值应叠加 offset");
 }
+
+void test_plot_limited_envelope_edges() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V"});
+
+    const auto empty = buffer.buildLimitedEnvelope(0, 0.0, 1.0, 64, 10);
+    require(empty.points.empty(), "空数据包络应为空");
+    require(empty.sourceSampleCount == 0, "空数据源样本数应为 0");
+
+    protoscope::plot::WaveAppendRequest request{.source = "test"};
+    for (int index = 0; index < 10; ++index) {
+        request.samples.push_back({.time = static_cast<double>(index), .value = static_cast<double>(index * 2)});
+    }
+    require(buffer.append(0, request), "追加采样应成功");
+
+    const auto limited = buffer.buildLimitedEnvelope(0, 0.0, 9.0, 64, 3);
+    require(limited.sourceSampleCount == 10, "截断前源样本数应保留完整可视区数量");
+    require(limited.points.size() == 3, "样本上限应限制实际输出点数");
+    require(std::abs(limited.points.front().time - 7.0) < 1e-9, "截断后应保留最近样本起点");
+    require(std::abs(limited.points.back().time - 9.0) < 1e-9, "截断后应保留最近样本终点");
+
+    const auto reversed = buffer.buildLimitedEnvelope(0, 9.0, 0.0, 64, 3);
+    require(reversed.sourceSampleCount == 10, "反向可视区应先归一化再统计源样本数");
+    require(reversed.points.size() == 3, "反向可视区也应执行样本上限");
+    require(std::abs(reversed.points.front().time - 7.0) < 1e-9, "反向可视区截断起点错误");
+
+    const auto unlimited = buffer.buildLimitedEnvelope(0, 0.0, 9.0, 64, 0);
+    require(unlimited.sourceSampleCount == 10, "上限为 0 应表示不截断");
+    require(unlimited.points.size() == 10, "上限为 0 应输出完整直接包络");
+
+    const auto single = buffer.buildLimitedEnvelope(0, 0.0, 9.0, 64, 1);
+    require(single.sourceSampleCount == 10, "上限为 1 也应保留源样本数量");
+    require(single.points.size() == 1, "上限为 1 应只输出一个最近样本");
+    require(std::abs(single.points[0].time - 9.0) < 1e-9, "上限为 1 应保留最新样本");
+
+    const auto zeroWidth = buffer.buildLimitedEnvelope(0, 0.0, 9.0, 0, 3);
+    require(zeroWidth.points.empty(), "像素宽度为 0 时包络应为空");
+    require(zeroWidth.sourceSampleCount == 0, "像素宽度为 0 时不应统计源样本");
+}

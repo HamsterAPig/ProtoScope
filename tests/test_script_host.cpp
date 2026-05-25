@@ -395,6 +395,7 @@ static const TestCase kAllTests[] = {
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_offset_applies_to_display_only", &test_plot_channel_offset_applies_to_display_only},
+    {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
 };
 
 } // namespace

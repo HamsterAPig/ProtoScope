@@ -113,6 +113,11 @@ public:
                                double visibleMinTime,
                                double visibleMaxTime,
                                std::size_t pixelWidth) const;
+    EnvelopeView buildLimitedEnvelope(std::size_t channelIndex,
+                                      double visibleMinTime,
+                                      double visibleMaxTime,
+                                      std::size_t pixelWidth,
+                                      std::size_t maxSamples) const;
     std::optional<CursorReadout> findNearest(std::size_t channelIndex,
                                              double time,
                                              double value,

@@ -23,8 +23,10 @@ struct WaveViewState {
     bool lockVerticalRange{false};
     bool showPointsWhenSparse{true};
     bool showHoverReadout{true};
+    bool showCursors{true};
     bool phosphorGlowEnabled{true};
     bool initialized{false};
+    std::size_t overviewMaxSamples{20000};
     double visibleDuration{1.0};
     double persistenceWindow{0.25};
     double glowIntensity{1.0};
