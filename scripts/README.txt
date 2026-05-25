@@ -39,3 +39,18 @@ end
 - `proto.crc16_modbus(payload)`
 - `proto.crc16_ccitt_false(payload)`
 - `proto.crc32_ieee(payload)`
+
+## 纯 Lua 波形演示
+`protocols/lua_waveform_demo/main.lua` 是一个不依赖串口输入的示波器演示协议。它加载后会自动启动定时器，由 Lua 自己按固定时间步进生成采样点，并通过 `proto.plot.setup(...)` 与 `proto.plot.push(channelIndex, ...)` 推送到波形面板。
+
+入口方式：
+- 在“协议脚本 / 动态控件”面板点击“重新扫描协议目录”
+- 如需切换根目录，先在“协议根目录”输入路径或点击“浏览...”选择目录
+- 在“协议目录”中选择 `protocols/lua_waveform_demo`，再点击“重新加载协议”
+
+控件说明：
+- 运行控制：开始、暂停、恢复、清空历史
+- 参数控制：频率、幅值、偏置、相位、采样率、每次点数、刷新间隔
+- 通道控制：正弦、三角、方波、锯齿独立显示开关
+
+该 Demo 适合协议脚本作者参考：当数据来自脚本计算、仿真模型或文件回放时，也可以复用同样的 `ui()`、`on_timer()` 和 `proto.plot.*` 写法完成自定义可视化。

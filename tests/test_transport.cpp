@@ -159,6 +159,94 @@ void test_transport_enqueue_send_async_roundtrip() {
     server.close();
 }
 
+void test_tcp_server_connection_takeover_replaces_active_client() {
+    using namespace protoscope::transport;
+
+    TcpServerTransport server;
+    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = false}), "服务端打开失败");
+
+    auto serverEvents = server.takeEvents();
+    std::optional<std::uint16_t> listenPort;
+    for (const auto& event : serverEvents) {
+        if (const auto* opened = std::get_if<TransportOpenEvent>(&event)) {
+            listenPort = parsePort(opened->context.endpoint);
+            break;
+        }
+    }
+    require(listenPort.has_value(), "未拿到服务端监听端口");
+
+    TcpClientTransport clientA;
+    require(clientA.open(TcpClientConfig{.host = "127.0.0.1", .port = *listenPort}), "第一个客户端连接失败");
+
+    std::uint64_t firstConnectionId = 0;
+    const bool firstAccepted = waitUntil([&]() {
+        for (const auto& event : server.takeEvents()) {
+            if (const auto* opened = std::get_if<TransportOpenEvent>(&event)) {
+                if (opened->context.readyForIo) {
+                    firstConnectionId = opened->context.connectionId;
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+    require(firstAccepted, "服务端未接受第一个客户端");
+
+    TcpClientTransport clientB;
+    require(clientB.open(TcpClientConfig{.host = "127.0.0.1", .port = *listenPort}), "第二个客户端连接失败");
+
+    std::uint64_t secondConnectionId = 0;
+    bool sawTakeoverClose = false;
+    const bool secondAccepted = waitUntil([&]() {
+        for (const auto& event : server.takeEvents()) {
+            if (const auto* closed = std::get_if<TransportCloseEvent>(&event)) {
+                if (closed->context.readyForIo && closed->context.connectionId == firstConnectionId &&
+                    closed->reason == "新客户端已接管旧连接") {
+                    sawTakeoverClose = true;
+                }
+            }
+            if (const auto* opened = std::get_if<TransportOpenEvent>(&event)) {
+                if (opened->context.readyForIo && opened->context.connectionId != firstConnectionId) {
+                    secondConnectionId = opened->context.connectionId;
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+    require(secondAccepted, "服务端未接受第二个客户端");
+    require(sawTakeoverClose, "服务端未报告旧连接被接管");
+    require(secondConnectionId != 0 && secondConnectionId != firstConnectionId, "第二个连接 ID 不应复用旧连接");
+
+    const std::vector<std::uint8_t> payloadFromSecond{'N', 'E', 'W'};
+    require(clientB.send(payloadFromSecond), "第二个客户端发送失败");
+
+    bool receivedFromSecond = false;
+    bool receivedFromOldConnection = false;
+    const bool serverReceived = waitUntil([&]() {
+        for (const auto& event : server.takeEvents()) {
+            if (const auto* bytes = std::get_if<TransportBytesEvent>(&event)) {
+                if (bytes->bytes == payloadFromSecond) {
+                    if (bytes->context.connectionId == secondConnectionId) {
+                        receivedFromSecond = true;
+                        return true;
+                    }
+                    if (bytes->context.connectionId == firstConnectionId) {
+                        receivedFromOldConnection = true;
+                    }
+                }
+            }
+        }
+        return false;
+    });
+    require(serverReceived, "服务端未收到第二个客户端报文");
+    require(!receivedFromOldConnection, "第二个客户端报文不应记到旧连接");
+
+    clientA.close();
+    clientB.close();
+    server.close();
+}
+
 void test_serial_transport_error_path() {
     using namespace protoscope::transport;
 

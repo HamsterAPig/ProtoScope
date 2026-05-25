@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <limits>
 #include <sstream>
 #include <string_view>
 
@@ -448,6 +449,112 @@ std::string protectedCallError(sol::protected_function_result& result) {
     return error.what();
 }
 
+std::optional<double> luaNumberField(const sol::table& table, const char* key) {
+    const sol::object object = table[key];
+    if (!object.valid() || object.get_type() == sol::type::lua_nil || !object.is<double>()) {
+        return std::nullopt;
+    }
+    return object.as<double>();
+}
+
+std::optional<std::string> luaStringField(const sol::table& table, const char* key) {
+    const sol::object object = table[key];
+    if (!object.valid() || object.get_type() == sol::type::lua_nil || !object.is<std::string>()) {
+        return std::nullopt;
+    }
+    return object.as<std::string>();
+}
+
+std::optional<bool> luaBoolField(const sol::table& table, const char* key) {
+    const sol::object object = table[key];
+    if (!object.valid() || object.get_type() == sol::type::lua_nil || !object.is<bool>()) {
+        return std::nullopt;
+    }
+    return object.as<bool>();
+}
+
+std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& error) {
+    if (!object.is<sol::table>()) {
+        error = "plot.setup 参数必须是 table";
+        return std::nullopt;
+    }
+    const sol::table table = object.as<sol::table>();
+
+    PlotSetup setup{};
+    setup.source = luaStringField(table, "source").value_or("");
+    setup.resetHistory = luaBoolField(table, "reset_history").value_or(false);
+
+    const sol::object channelsObject = table["channels"];
+    if (!channelsObject.is<sol::table>()) {
+        error = "plot.setup.channels 必须是 table";
+        return std::nullopt;
+    }
+    const sol::table channelsTable = channelsObject.as<sol::table>();
+    for (std::size_t index = 1; index <= channelsTable.size(); ++index) {
+        const sol::object channelObject = channelsTable[index];
+        if (!channelObject.is<sol::table>()) {
+            error = "plot.setup.channels[" + std::to_string(index) + "] 必须是 table";
+            return std::nullopt;
+        }
+        const sol::table channelTable = channelObject.as<sol::table>();
+        PlotChannelDescriptor descriptor{};
+        descriptor.label = luaStringField(channelTable, "label").value_or("CH" + std::to_string(index));
+        descriptor.unit = luaStringField(channelTable, "unit").value_or("");
+        descriptor.offset = luaNumberField(channelTable, "offset").value_or(0.0);
+        setup.channels.push_back(std::move(descriptor));
+    }
+    if (setup.channels.empty()) {
+        error = "plot.setup.channels 不能为空";
+        return std::nullopt;
+    }
+
+    setup.view.timeScale = luaNumberField(table, "time_scale").value_or(1.0);
+    setup.view.timeUnit = luaStringField(table, "time_unit").value_or("s");
+    setup.view.verticalMin = luaNumberField(table, "vertical_min").value_or(-1.0);
+    setup.view.verticalMax = luaNumberField(table, "vertical_max").value_or(1.0);
+    setup.view.verticalUnit = luaStringField(table, "vertical_unit").value_or("V");
+    const double historyLimit = luaNumberField(table, "history_limit").value_or(200000.0);
+    setup.view.historyLimit = historyLimit <= 1.0 ? 1U : static_cast<std::size_t>(historyLimit);
+    return setup;
+}
+
+std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object, std::string& error) {
+    if (!object.is<sol::table>()) {
+        error = "plot.push 参数必须是 table";
+        return std::nullopt;
+    }
+    const sol::table table = object.as<sol::table>();
+    plot::WaveAppendRequest request{};
+    request.source = luaStringField(table, "source").value_or("");
+
+    const sol::object samplesObject = table["samples"];
+    if (!samplesObject.is<sol::table>()) {
+        error = "plot.push.samples 必须是 table";
+        return std::nullopt;
+    }
+    const sol::table samplesTable = samplesObject.as<sol::table>();
+    for (std::size_t index = 1; index <= samplesTable.size(); ++index) {
+        const sol::object sampleObject = samplesTable[index];
+        if (!sampleObject.is<sol::table>()) {
+            error = "plot.push.samples[" + std::to_string(index) + "] 必须是 table";
+            return std::nullopt;
+        }
+        const sol::table sampleTable = sampleObject.as<sol::table>();
+        const auto time = luaNumberField(sampleTable, "t");
+        const auto value = luaNumberField(sampleTable, "y");
+        if (!time.has_value() || !value.has_value()) {
+            error = "plot.push.samples[" + std::to_string(index) + "] 必须包含数字字段 t / y";
+            return std::nullopt;
+        }
+        request.samples.push_back(plot::WaveSample{.time = *time, .value = *value});
+    }
+    if (request.samples.empty()) {
+        error = "plot.push.samples 不能为空";
+        return std::nullopt;
+    }
+    return request;
+}
+
 } // namespace
 
 struct ScriptHost::Runtime {
@@ -513,6 +620,30 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
     proto.set_function("cancel_timer", [this](const std::string& name) {
         protoCancelTimer(name);
     });
+    sol::table plotApi = runtime_->lua.create_table();
+    plotApi.set_function("setup", [this](const sol::object& payload) {
+        std::string error;
+        const auto setup = parsePlotSetup(payload, error);
+        if (!setup.has_value()) {
+            protoLog("error", "proto.plot.setup 调用失败: " + error);
+            return;
+        }
+        protoPlotSetup(*setup);
+    });
+    plotApi.set_function("push", [this](int channelIndex, const sol::object& payload) {
+        if (channelIndex <= 0) {
+            protoLog("error", "proto.plot.push 调用失败: channelIndex 必须从 1 开始");
+            return;
+        }
+        std::string error;
+        const auto request = parsePlotAppend(payload, error);
+        if (!request.has_value()) {
+            protoLog("error", "proto.plot.push 调用失败: " + error);
+            return;
+        }
+        protoPlotPush(static_cast<std::size_t>(channelIndex - 1), *request);
+    });
+    proto["plot"] = plotApi;
     proto.set_function("get_control", [this](const std::string& id) {
         sol::state_view view(runtime_->lua.lua_state());
         const auto iter = controlValues_.find(id);
@@ -719,6 +850,18 @@ std::vector<std::vector<std::uint8_t>> ScriptHost::drainSendQueue() {
     return drained;
 }
 
+std::vector<PlotSetup> ScriptHost::drainPlotSetups() {
+    auto drained = std::move(plotSetups_);
+    plotSetups_.clear();
+    return drained;
+}
+
+std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> ScriptHost::drainPlotAppends() {
+    auto drained = std::move(plotAppends_);
+    plotAppends_.clear();
+    return drained;
+}
+
 std::optional<std::uint64_t> ScriptHost::nextWakeupAtMs() const {
     std::optional<std::uint64_t> nextWakeup;
     for (const auto& [_, timer] : timers_) {
@@ -874,6 +1017,14 @@ void ScriptHost::protoCancelTimer(const std::string& name) {
     if (iter != timers_.end()) {
         iter->second.active = false;
     }
+}
+
+void ScriptHost::protoPlotSetup(const PlotSetup& setup) {
+    plotSetups_.push_back(setup);
+}
+
+void ScriptHost::protoPlotPush(std::size_t channelIndex, const plot::WaveAppendRequest& request) {
+    plotAppends_.push_back(std::make_pair(channelIndex, request));
 }
 
 std::string ScriptHost::valueToString(const ControlValue& value) {

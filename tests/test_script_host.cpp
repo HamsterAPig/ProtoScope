@@ -6,6 +6,7 @@
 #include "protoscope/transport/transport.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <sstream>
 #include <stdexcept>
@@ -23,7 +24,7 @@ void require(bool condition, const char* message) {
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+            std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
 
@@ -337,6 +338,24 @@ void test_protocol_scan_and_root_roundtrip() {
 
     const auto normalized = store.normalizeProtocolDir(tempRoot, tempRoot / "missing");
     require(normalized == alphaDir, "root-aware 协议目录归一化应优先回退到当前 root 下的有效目录");
+
+}
+
+void test_script_plot_api_snapshot() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("plot_stream").generic_string()), "plot_stream 协议应可加载");
+
+    protoscope::transport::TransportOpenEvent openEvent{.context = sampleCtx()};
+    host.onTransportOpen(openEvent);
+
+    auto setups = host.drainPlotSetups();
+    auto appends = host.drainPlotAppends();
+    require(setups.size() == 1, "打开连接后应生成 1 次 plot.setup");
+    require(setups[0].channels.size() == 2, "plot.setup 应声明 2 个通道");
+    require(std::abs(setups[0].channels[0].offset - 0.0) < 1e-12, "CH1 offset 解析错误");
+    require(std::abs(setups[0].channels[1].offset - 1.0) < 1e-12, "CH2 offset 解析错误");
+    require(appends.size() == 2, "打开连接后应推送 2 组通道数据");
+    require(appends[0].second.samples.size() == 3, "通道采样点数量不正确");
 }
 
 namespace {
@@ -364,10 +383,25 @@ static const TestCase kAllTests[] = {
     {"config_default_roundtrip", &test_config_default_roundtrip},
     {"config_default_script_workspace", &test_config_default_script_workspace},
     {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
+    {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
+    {"plot_cursor_snap_by_time_and_measurement", &test_plot_cursor_snap_by_time_and_measurement},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
     {"transport_enqueue_send_async_roundtrip", &test_transport_enqueue_send_async_roundtrip},
+    {"tcp_server_connection_takeover_replaces_active_client", &test_tcp_server_connection_takeover_replaces_active_client},
     {"serial_transport_error_path", &test_serial_transport_error_path},
+    {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
+    {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
+    {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
+    {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
+    {"plot_channel_offset_applies_to_display_only", &test_plot_channel_offset_applies_to_display_only},
+    {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
+    {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
+    {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
+    {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
+    {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
+    {"wave_cursor_interval_text_by_axis", &test_wave_cursor_interval_text_by_axis},
+    {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
 };
 
 } // namespace

@@ -2,6 +2,7 @@
 
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
+#include "protoscope/ui/wave_dock_renderer.hpp"
 
 #include <cstdint>
 #include <string>
@@ -37,7 +38,6 @@ private:
     void drawReceiveDock();
     void drawLogDock();
     void drawScriptDock();
-    void drawWaveDock();
     void drawDynamicControl(const scripting::ControlSnapshot& control);
 
     bool reloadConfigFromDisk();
@@ -70,10 +70,9 @@ private:
     std::string commonBaudRateDraftModel_;
     std::string customBaudRateDraft_;
     std::string customBaudRateDraftModel_;
-    std::string protocolScanDraft_;
-    std::string protocolScanDraftModel_;
     std::string protocolDirDraft_;
     std::string protocolDirDraftModel_;
+    WaveDockRenderer waveDockRenderer_;
 };
 
 } // namespace protoscope::ui

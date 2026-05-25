@@ -2,27 +2,33 @@
 
 #include "protoscope/protocol_utils/codec.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <shlobj.h>
+#endif
+
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <implot.h>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-#if defined(_WIN32)
-#include <windows.h>
-#endif
 #include <GL/gl.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -199,6 +205,83 @@ bool digitsOnly(const std::string& text) {
     });
 }
 
+void refreshProtocolRoot(config::ConfigStore const& configStore,
+                         dock::LuaDockState& lua,
+                         std::string& protocolDirDraft,
+                         std::string& protocolDirDraftModel) {
+    // 核心流程：根目录变化后立即重扫并校正当前协议目录，避免下拉框保留失效路径。
+    lua.protocolDirOptions = configStore.scanProtocolDirectories(lua.protocolRootDir);
+    const auto correctedDir = configStore.normalizeProtocolDir(lua.protocolRootDir, lua.protocolDir);
+    lua.protocolDir = correctedDir.generic_string();
+    protocolDirDraft = lua.protocolDir;
+    protocolDirDraftModel = lua.protocolDir;
+}
+
+#if defined(_WIN32)
+int CALLBACK browseInitialDirCallback(HWND hwnd, UINT message, LPARAM, LPARAM data) {
+    if (message == BFFM_INITIALIZED && data != 0) {
+        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
+    }
+    return 0;
+}
+
+std::wstring utf8ToWide(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+
+    const int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    if (size <= 0) {
+        return {};
+    }
+
+    std::wstring result(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, result.data(), size);
+    result.pop_back();
+    return result;
+}
+
+std::string wideToUtf8(const std::wstring& text) {
+    if (text.empty()) {
+        return {};
+    }
+
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 0) {
+        return {};
+    }
+
+    std::string result(static_cast<std::size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, result.data(), size, nullptr, nullptr);
+    result.pop_back();
+    return result;
+}
+
+std::optional<std::string> chooseProtocolRootDirectory(const std::string& currentDir) {
+    BROWSEINFOW browseInfo{};
+    browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+    browseInfo.lpszTitle = L"选择协议根目录";
+
+    const auto initialDir = utf8ToWide(currentDir);
+    browseInfo.lParam = reinterpret_cast<LPARAM>(initialDir.c_str());
+    browseInfo.lpfn = browseInitialDirCallback;
+
+    PIDLIST_ABSOLUTE selected = SHBrowseForFolderW(&browseInfo);
+    if (selected == nullptr) {
+        return std::nullopt;
+    }
+
+    wchar_t path[MAX_PATH]{};
+    const bool ok = SHGetPathFromIDListW(selected, path) == TRUE;
+    CoTaskMemFree(selected);
+    if (!ok) {
+        return std::nullopt;
+    }
+
+    return wideToUtf8(path);
+}
+#endif
+
 EditableComboResult drawEditableCombo(const char* label,
                                       std::string& draft,
                                       const std::vector<std::string>& options,
@@ -211,7 +294,7 @@ EditableComboResult drawEditableCombo(const char* label,
     ImGui::TextUnformatted(label);
     ImGui::SameLine();
     const float arrowWidth = ImGui::GetFrameHeight();
-    const float inputWidth = std::max(120.0F, ImGui::GetContentRegionAvail().x - arrowWidth - ImGui::GetStyle().ItemSpacing.x);
+    const float inputWidth = (std::max)(120.0F, ImGui::GetContentRegionAvail().x - arrowWidth - ImGui::GetStyle().ItemSpacing.x);
     ImGui::SetNextItemWidth(inputWidth);
     char buffer[512]{};
     std::snprintf(buffer, sizeof(buffer), "%s", draft.c_str());
@@ -257,7 +340,8 @@ void syncDraftFromModel(std::string& draft, std::string& lastModel, const std::s
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
     : application_(application),
-      configStore_(configStore) {
+      configStore_(configStore),
+      waveDockRenderer_(application) {
     customBaudRateDraft_ = std::to_string(kCommonBaudRates[7]);
     customBaudRateDraftModel_ = customBaudRateDraft_;
 }
@@ -355,6 +439,12 @@ bool GuiRuntime::initializeImGui() {
 }
 
 bool GuiRuntime::initializePlotContext() {
+    ImPlot::CreateContext();
+    ImPlot::StyleColorsDark();
+    auto& inputMap = ImPlot::GetInputMap();
+    inputMap.Pan = ImGuiMouseButton_Left;
+    inputMap.Select = ImGuiMouseButton_Right;
+    inputMap.SelectCancel = ImGuiMouseButton_Left;
     return true;
 }
 
@@ -365,6 +455,7 @@ void GuiRuntime::shutdownImGui() {
 }
 
 void GuiRuntime::shutdownPlotContext() {
+    ImPlot::DestroyContext();
 }
 
 void GuiRuntime::shutdownWindow() {
@@ -421,7 +512,7 @@ void GuiRuntime::renderFrame() {
     drawReceiveDock();
     drawLogDock();
     drawScriptDock();
-    drawWaveDock();
+    waveDockRenderer_.draw(showWaveDock_);
 
     ImGui::Render();
 
@@ -696,44 +787,48 @@ void GuiRuntime::drawProtocolDock() {
 
     char protocolRoot[512]{};
     std::snprintf(protocolRoot, sizeof(protocolRoot), "%s", lua.protocolRootDir.c_str());
-    if (ImGui::InputText("协议根目录", protocolRoot, sizeof(protocolRoot))) {
+    ImGui::PushID("协议根目录");
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("协议根目录");
+    ImGui::SameLine();
+    const float browseButtonWidth = ImGui::CalcTextSize("浏览...").x + ImGui::GetStyle().FramePadding.x * 2.0F;
+    const float rootInputWidth =
+        (std::max)(120.0F, ImGui::GetContentRegionAvail().x - browseButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+    ImGui::SetNextItemWidth(rootInputWidth);
+    if (ImGui::InputText("##value", protocolRoot, sizeof(protocolRoot))) {
         lua.protocolRootDir = protocolRoot;
-        lua.protocolDirOptions = configStore_.scanProtocolDirectories(lua.protocolRootDir);
-        const auto correctedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, lua.protocolDir);
-        lua.protocolDir = correctedDir.generic_string();
-        protocolScanDraft_ = lua.protocolDir;
-        protocolDirDraft_ = lua.protocolDir;
-        protocolScanDraftModel_ = lua.protocolDir;
-        protocolDirDraftModel_ = lua.protocolDir;
+        refreshProtocolRoot(configStore_, lua, protocolDirDraft_, protocolDirDraftModel_);
         application_.markProtocolEdited();
     }
-
-    syncDraftFromModel(protocolScanDraft_, protocolScanDraftModel_, lua.protocolDir);
-    if (const auto scanEdit = drawEditableCombo("扫描结果", protocolScanDraft_, lua.protocolDirOptions); scanEdit.edited && scanEdit.value != lua.protocolDir) {
-        lua.protocolDir = scanEdit.value;
-        protocolDirDraft_ = scanEdit.value;
-        protocolScanDraftModel_ = scanEdit.value;
-        protocolDirDraftModel_ = scanEdit.value;
-        application_.markProtocolEdited();
+    ImGui::SameLine(0.0F, ImGui::GetStyle().ItemSpacing.x);
+#if defined(_WIN32)
+    if (ImGui::Button("浏览...")) {
+        if (const auto selectedDir = chooseProtocolRootDirectory(lua.protocolRootDir)) {
+            lua.protocolRootDir = *selectedDir;
+            refreshProtocolRoot(configStore_, lua, protocolDirDraft_, protocolDirDraftModel_);
+            application_.markProtocolEdited();
+            application_.setStatusMessage("协议根目录已更新");
+        }
     }
+#else
+    ImGui::BeginDisabled();
+    ImGui::Button("浏览...");
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("当前平台暂不支持原生目录选择，请直接输入路径。");
+    }
+#endif
+    ImGui::PopID();
 
     syncDraftFromModel(protocolDirDraft_, protocolDirDraftModel_, lua.protocolDir);
     if (const auto protocolDirEdit = drawEditableCombo("协议目录", protocolDirDraft_, lua.protocolDirOptions); protocolDirEdit.edited && protocolDirEdit.value != lua.protocolDir) {
         lua.protocolDir = protocolDirEdit.value;
-        protocolScanDraft_ = protocolDirEdit.value;
         protocolDirDraftModel_ = protocolDirEdit.value;
-        protocolScanDraftModel_ = protocolDirEdit.value;
         application_.markProtocolEdited();
     }
 
     if (ImGui::Button("重新扫描协议目录")) {
-        lua.protocolDirOptions = configStore_.scanProtocolDirectories(lua.protocolRootDir);
-        const auto correctedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, lua.protocolDir);
-        lua.protocolDir = correctedDir.generic_string();
-        protocolScanDraft_ = lua.protocolDir;
-        protocolDirDraft_ = lua.protocolDir;
-        protocolScanDraftModel_ = lua.protocolDir;
-        protocolDirDraftModel_ = lua.protocolDir;
+        refreshProtocolRoot(configStore_, lua, protocolDirDraft_, protocolDirDraftModel_);
         application_.setStatusMessage("协议目录扫描已刷新");
     }
     ImGui::SameLine();
@@ -751,7 +846,10 @@ void GuiRuntime::drawProtocolDock() {
 
     ImGui::Separator();
     if (lua.docks.empty()) {
-        for (const auto& control : lua.controlStates) {
+        // 核心流程：Lua 按钮可能在点击回调里同步刷新脚本控件快照。
+        // 这里先复制当前帧的控件列表，避免遍历 `lua.controlStates` 时引用失效导致闪退。
+        const auto controls = lua.controlStates;
+        for (const auto& control : controls) {
             drawDynamicControl(control);
         }
         ImGui::End();
@@ -759,7 +857,10 @@ void GuiRuntime::drawProtocolDock() {
     }
     ImGui::End();
 
-    for (const auto& dockSnapshot : lua.docks) {
+    // 核心流程：动态 Dock 中的控件点击会同步改写 `lua.docks`。
+    // 这里按值复制当前帧快照，保证本帧渲染遍历期间底层容器不会被重入修改。
+    const auto dockSnapshots = lua.docks;
+    for (const auto& dockSnapshot : dockSnapshots) {
         if (ImGui::Begin(dockSnapshot.descriptor.title.c_str())) {
             for (const auto& control : dockSnapshot.controls) {
                 drawDynamicControl(control);
@@ -884,18 +985,6 @@ void GuiRuntime::drawScriptDock() {
     ImGui::End();
 }
 
-void GuiRuntime::drawWaveDock() {
-    if (!showWaveDock_) {
-        return;
-    }
-
-    const auto& wave = application_.docks().waveState();
-    if (ImGui::Begin("波形", &showWaveDock_)) {
-        ImGui::TextWrapped("%s", wave.placeholder.c_str());
-    }
-    ImGui::End();
-}
-
 void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
     const auto& descriptor = control.descriptor;
     switch (descriptor.type) {
@@ -1001,7 +1090,7 @@ bool GuiRuntime::maybeAutoSave() {
 }
 
 void GuiRuntime::sleepUntilNextFrame(std::uint64_t frameStartMs) const {
-    const auto fpsLimit = std::max<std::uint32_t>(1, application_.docks().configState().fpsLimit);
+    const auto fpsLimit = (std::max)(std::uint32_t{1}, application_.docks().configState().fpsLimit);
     const auto minFrameMs = 1000ULL / fpsLimit;
     const auto elapsed = nowMs() - frameStartMs;
     if (elapsed < minFrameMs) {

@@ -3,6 +3,7 @@
 #include "protoscope/protocol_utils/codec.hpp"
 
 #include <chrono>
+#include <limits>
 #include <type_traits>
 
 namespace protoscope::app {
@@ -28,6 +29,44 @@ const char* stateMessage(transport::TransportState state) {
         return "error";
     }
     return "unknown";
+}
+
+bool sameChannelSpecs(const std::vector<scripting::PlotChannelDescriptor>& setupChannels,
+                      const plot::OscilloscopeBuffer& buffer) {
+    if (setupChannels.size() != buffer.channelCount()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < setupChannels.size(); ++i) {
+        const auto current = buffer.channelSpec(i);
+        if (!current.has_value()) {
+            return false;
+        }
+        const auto& setup = setupChannels[i];
+        if (current->label != setup.label || current->unit != setup.unit) {
+            return false;
+        }
+        if (std::abs(current->offset - setup.offset) > 1e-12) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool nearlyEqual(double left, double right) {
+    return std::abs(left - right) <= 1e-12;
+}
+
+bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config) {
+    if (!nearlyEqual(view.visibleDuration, (std::max)(config.timeScale * 1000.0, config.timeScale))) {
+        return false;
+    }
+    if (!nearlyEqual(view.manualVerticalMin, config.verticalMin) || !nearlyEqual(view.manualVerticalMax, config.verticalMax)) {
+        return false;
+    }
+    if (!nearlyEqual(view.viewMinValue, config.verticalMin) || !nearlyEqual(view.viewMaxValue, config.verticalMax)) {
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -108,6 +147,7 @@ bool Application::pumpOnce() {
     scriptHost_.tick(nowMs());
     changed = flushScriptOutputs() || changed;
     changed = flushScriptLogs() || changed;
+    changed = flushScriptPlots() || changed;
     syncDockState();
     return changed;
 }
@@ -209,13 +249,20 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
 }
 
 void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value) {
-    if (!activeConnection_.has_value()) {
-        dockStore_.commState().lastError = "连接未打开，无法更新控件";
-        return;
+    if (activeConnection_.has_value()) {
+        scriptHost_.onControl(*activeConnection_, id, value);
+    } else {
+        // 核心流程：动态控件也可能只驱动 Lua 本地演示逻辑，未连接时仍允许回调脚本。
+        transport::ConnectionContext detachedContext;
+        detachedContext.endpoint = "detached";
+        detachedContext.connectionId = 0;
+        detachedContext.timestampMs = nowMs();
+        detachedContext.readyForIo = false;
+        scriptHost_.onControl(detachedContext, id, value);
     }
-    scriptHost_.onControl(*activeConnection_, id, value);
     flushScriptOutputs();
     flushScriptLogs();
+    flushScriptPlots();
     syncDockState();
 }
 
@@ -267,6 +314,19 @@ bool Application::setSendHexMode(bool enabled) {
     return true;
 }
 
+void Application::resetWaveHistory() {
+    auto& wave = dockStore_.waveState();
+    wave.buffer.clear();
+    wave.channelSummaries.clear();
+    wave.view.initialized = false;
+    wave.view.centerTime = 0.0;
+    wave.view.viewMinTime = 0.0;
+    wave.view.viewMaxTime = wave.view.visibleDuration;
+    wave.view.viewMinValue = wave.view.manualVerticalMin;
+    wave.view.viewMaxValue = wave.view.manualVerticalMax;
+    wave.statusMessage = "波形历史已清空";
+}
+
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
     return scriptHost_.nextWakeupAtMs();
 }
@@ -297,6 +357,13 @@ void Application::syncDockState() {
     lua.docks = scriptHost_.dockSnapshots();
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
+
+    auto& wave = dockStore_.waveState();
+    wave.channelSummaries.clear();
+    const auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    for (const auto& channel : snapshot.channels) {
+        wave.channelSummaries.push_back(channel.label + " samples=" + std::to_string(channel.totalSamples));
+    }
 }
 
 bool Application::handleTransportEvents() {
@@ -350,6 +417,12 @@ bool Application::handleTransportEvents() {
                     changed = true;
                 } else if constexpr (std::is_same_v<T, transport::TransportBytesEvent>) {
                     if (!evt.bytes.empty()) {
+                        // 核心流程：只消费当前活动连接的字节事件，旧连接的迟到回包直接忽略，
+                        // 避免双窗口接管场景下脚本状态与 UI 日志被过期连接污染。
+                        if (activeConnection_.has_value() && evt.context.readyForIo &&
+                            activeConnection_->connectionId != evt.context.connectionId) {
+                            return;
+                        }
                         scriptHost_.onTransportBytes(evt);
                         if (evt.context.readyForIo) {
                             activeConnection_ = evt.context;
@@ -405,6 +478,55 @@ bool Application::flushScriptLogs() {
             dock::ReceiveRow{.timestampMs = log.timestampMs, .direction = "LOG", .endpoint = "script", .message = "[" + log.level + "] " + log.message});
         changed = true;
     }
+    return changed;
+}
+
+bool Application::flushScriptPlots() {
+    bool changed = false;
+    auto& wave = dockStore_.waveState();
+
+    for (const auto& setup : scriptHost_.drainPlotSetups()) {
+        const auto previousConfig = wave.buffer.viewConfig();
+        const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
+                                   previousConfig.timeUnit != setup.view.timeUnit ||
+                                   !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
+                                   !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax) ||
+                                   previousConfig.verticalUnit != setup.view.verticalUnit ||
+                                   previousConfig.historyLimit != setup.view.historyLimit;
+        const bool channelsChanged = !sameChannelSpecs(setup.channels, wave.buffer);
+
+        if (setup.resetHistory) {
+            wave.buffer.clear();
+        }
+        wave.buffer.setViewConfig(setup.view);
+        wave.buffer.configureChannels(setup.channels.size());
+        for (std::size_t index = 0; index < setup.channels.size(); ++index) {
+            wave.buffer.setChannelSpec(index, plot::ChannelSpec{
+                .label = setup.channels[index].label,
+                .unit = setup.channels[index].unit,
+                .offset = setup.channels[index].offset,
+            });
+        }
+        const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
+        const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
+        if (shouldResetView) {
+            wave.view.visibleDuration = (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale);
+            wave.view.manualVerticalMin = setup.view.verticalMin;
+            wave.view.manualVerticalMax = setup.view.verticalMax;
+            wave.view.viewMinValue = setup.view.verticalMin;
+            wave.view.viewMaxValue = setup.view.verticalMax;
+            wave.view.initialized = false;
+            wave.statusMessage = "Lua 已更新波形通道配置";
+        }
+        changed = true;
+    }
+
+    for (auto& [channelIndex, request] : scriptHost_.drainPlotAppends()) {
+        if (wave.buffer.append(channelIndex, std::move(request))) {
+            changed = true;
+        }
+    }
+
     return changed;
 }
 
