@@ -211,7 +211,7 @@ EditableComboResult drawEditableCombo(const char* label,
     ImGui::TextUnformatted(label);
     ImGui::SameLine();
     const float arrowWidth = ImGui::GetFrameHeight();
-    const float inputWidth = std::max(120.0F, ImGui::GetContentRegionAvail().x - arrowWidth - ImGui::GetStyle().ItemSpacing.x);
+    const float inputWidth = (std::max)(120.0F, ImGui::GetContentRegionAvail().x - arrowWidth - ImGui::GetStyle().ItemSpacing.x);
     ImGui::SetNextItemWidth(inputWidth);
     char buffer[512]{};
     std::snprintf(buffer, sizeof(buffer), "%s", draft.c_str());
@@ -1001,7 +1001,7 @@ bool GuiRuntime::maybeAutoSave() {
 }
 
 void GuiRuntime::sleepUntilNextFrame(std::uint64_t frameStartMs) const {
-    const auto fpsLimit = std::max<std::uint32_t>(1, application_.docks().configState().fpsLimit);
+    const auto fpsLimit = (std::max)(std::uint32_t{1}, application_.docks().configState().fpsLimit);
     const auto minFrameMs = 1000ULL / fpsLimit;
     const auto elapsed = nowMs() - frameStartMs;
     if (elapsed < minFrameMs) {
