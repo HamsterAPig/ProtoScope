@@ -29,6 +29,7 @@ struct WaveViewState {
     bool initialized{false};
     bool cursorIntervalLocked{false};
     bool overviewWindowDragging{false};
+    bool forceNextMainPlotLimits{false};
     std::size_t overviewMaxSamples{20000};
     std::size_t measurementChannelIndex{0};
     double visibleDuration{1.0};

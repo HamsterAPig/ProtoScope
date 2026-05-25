@@ -268,6 +268,66 @@ void test_wave_viewport_zoom_modes_and_clamp() {
     require((clamped.maxTime - clamped.minTime) >= 0.1, "缩放宽度不应小于最小范围");
 }
 
+void test_wave_overview_viewport_normalize() {
+    const protoscope::plot::WaveDataBounds bounds{
+        .minTime = 0.0,
+        .maxTime = 10.0,
+        .minValue = -1.0,
+        .maxValue = 1.0,
+        .minStep = 0.1,
+        .valid = true,
+    };
+
+    const auto reversed = protoscope::plot::normalizeOverviewViewport(
+        {.minTime = 8.0, .maxTime = 3.0, .minValue = -1.0, .maxValue = 1.0}, bounds, 0.5);
+    require(std::abs(reversed.minTime - 3.0) < 1e-12, "反向拖动后左边界应归一化");
+    require(std::abs(reversed.maxTime - 8.0) < 1e-12, "反向拖动后右边界应归一化");
+
+    const auto overflow = protoscope::plot::normalizeOverviewViewport(
+        {.minTime = -2.0, .maxTime = 3.0, .minValue = -1.0, .maxValue = 1.0}, bounds, 0.5);
+    require(overflow.minTime >= bounds.minTime - 1e-12, "概览时间窗应夹紧到左边界");
+    require(std::abs((overflow.maxTime - overflow.minTime) - 5.0) < 1e-12, "越界夹紧应保持窗口宽度");
+
+    const auto tiny = protoscope::plot::normalizeOverviewViewport(
+        {.minTime = 4.0, .maxTime = 4.01, .minValue = -1.0, .maxValue = 1.0}, bounds, 0.5);
+    require((tiny.maxTime - tiny.minTime) >= 0.5 - 1e-12, "概览窗口宽度不应小于最小时间宽度");
+}
+
+void test_wave_cursor_interval_text_by_axis() {
+    const protoscope::plot::CursorReadout left{
+        .valid = true,
+        .channelIndex = 0,
+        .sampleIndex = 1,
+        .time = 2.0,
+        .value = 1.0,
+    };
+    const protoscope::plot::CursorReadout right{
+        .valid = true,
+        .channelIndex = 0,
+        .sampleIndex = 5,
+        .time = 6.0,
+        .value = 3.0,
+    };
+
+    const auto sample = protoscope::plot::makeCursorIntervalText(
+        left, right, protoscope::plot::WaveTimeAxisSource::SampleIndex, "sample");
+    require(sample.valid, "点数轴游标间隔应有效");
+    require(!sample.showFrequency, "点数轴不应伪装显示 Hz");
+    require(sample.deltaUnit == "sample", "点数轴间隔单位应为 sample");
+
+    const auto scriptTime = protoscope::plot::makeCursorIntervalText(
+        left, right, protoscope::plot::WaveTimeAxisSource::ScriptTime, "ms");
+    require(scriptTime.valid, "脚本时间轴游标间隔应有效");
+    require(scriptTime.showFrequency, "脚本时间轴应显示倒数频率");
+    require(std::abs(scriptTime.frequencyHz - 0.25) < 1e-12, "脚本时间轴频率计算错误");
+
+    const auto sampledTime = protoscope::plot::makeCursorIntervalText(
+        left, right, protoscope::plot::WaveTimeAxisSource::SampleFrequency, "s");
+    require(sampledTime.valid, "采样频率时间轴游标间隔应有效");
+    require(sampledTime.showFrequency, "采样频率时间轴应显示倒数频率");
+    require(std::abs(sampledTime.frequencyHz - 0.25) < 1e-12, "采样频率时间轴频率计算错误");
+}
+
 void test_wave_cursor_interval_lock() {
     double right = 3.0;
     protoscope::plot::lockCursorInterval(1.0, right, 2.0, true);

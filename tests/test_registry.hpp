@@ -37,6 +37,8 @@ void test_plot_channel_offset_applies_to_display_only();
 void test_plot_limited_envelope_edges();
 void test_wave_frequency_parse_and_axis_mapping();
 void test_wave_viewport_zoom_modes_and_clamp();
+void test_wave_overview_viewport_normalize();
+void test_wave_cursor_interval_text_by_axis();
 void test_wave_cursor_interval_lock();
 void test_tcp_transport_roundtrip();
 void test_transport_enqueue_send_async_roundtrip();

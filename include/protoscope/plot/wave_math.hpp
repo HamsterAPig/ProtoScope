@@ -53,10 +53,21 @@ struct WaveDataBounds {
     bool valid{false};
 };
 
+struct CursorIntervalText {
+    bool valid{false};
+    bool showFrequency{false};
+    double delta{0.0};
+    double frequencyHz{0.0};
+    std::string deltaUnit{"sample"};
+};
+
 FrequencyParseResult parseSampleFrequencyText(std::string_view text);
 bool scriptTimeUsable(const std::vector<WaveSample>& samples);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep);
+WaveViewport normalizeOverviewViewport(const WaveViewport& viewport,
+                                       const WaveDataBounds& bounds,
+                                       double minTimeWidth);
 WaveViewport zoomViewport(const WaveViewport& viewport,
                           WaveZoomMode mode,
                           double wheelDelta,
@@ -65,6 +76,10 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
                           const WaveDataBounds& bounds,
                           double minTimeWidth,
                           bool clampTimeToBounds);
+CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
+                                          const CursorReadout& right,
+                                          WaveTimeAxisSource axisSource,
+                                          std::string_view timeUnit);
 void lockCursorInterval(double movedTime, double& pairedTime, double lockedInterval, bool movedLeftCursor);
 
 } // namespace protoscope::plot

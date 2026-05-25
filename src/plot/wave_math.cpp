@@ -195,6 +195,43 @@ WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallback
     return bounds;
 }
 
+WaveViewport normalizeOverviewViewport(const WaveViewport& viewport,
+                                       const WaveDataBounds& bounds,
+                                       double minTimeWidth) {
+    WaveViewport next = viewport;
+    if (next.maxTime < next.minTime) {
+        std::swap(next.minTime, next.maxTime);
+    }
+
+    const double fallbackMin = bounds.valid ? bounds.minTime : 0.0;
+    const double fallbackMax = bounds.valid ? bounds.maxTime : fallbackMin + clampPositiveWidth(minTimeWidth, 1e-6);
+    if (!std::isfinite(next.minTime)) {
+        next.minTime = fallbackMin;
+    }
+    if (!std::isfinite(next.maxTime)) {
+        next.maxTime = fallbackMax;
+    }
+
+    const double minWidth = clampPositiveWidth(minTimeWidth, bounds.minStep);
+    double width = clampPositiveWidth(next.maxTime - next.minTime, minWidth);
+    const double center = std::isfinite(0.5 * (next.minTime + next.maxTime))
+        ? 0.5 * (next.minTime + next.maxTime)
+        : 0.5 * (fallbackMin + fallbackMax);
+    next.minTime = center - 0.5 * width;
+    next.maxTime = next.minTime + width;
+
+    // 概览框只约束时间窗：反向拖动、越界和过窄窗口都在这里统一收口。
+    clampTimeRange(next.minTime, next.maxTime, bounds);
+    width = next.maxTime - next.minTime;
+    if (width < minWidth && bounds.valid) {
+        const double dataWidth = (std::max)(bounds.maxTime - bounds.minTime, kEpsilon);
+        width = (std::min)(minWidth, dataWidth);
+        next.minTime = (std::clamp)(center - 0.5 * width, bounds.minTime, bounds.maxTime - width);
+        next.maxTime = next.minTime + width;
+    }
+    return next;
+}
+
 WaveViewport zoomViewport(const WaveViewport& viewport,
                           WaveZoomMode mode,
                           double wheelDelta,
@@ -239,6 +276,30 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
         clampValueRange(next.minValue, next.maxValue, bounds);
     }
     return next;
+}
+
+CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
+                                          const CursorReadout& right,
+                                          WaveTimeAxisSource axisSource,
+                                          std::string_view timeUnit) {
+    if (!left.valid || !right.valid) {
+        return {};
+    }
+    const double delta = std::abs(right.time - left.time);
+    if (!std::isfinite(delta)) {
+        return {};
+    }
+    CursorIntervalText text{
+        .valid = true,
+        .showFrequency = axisSource != WaveTimeAxisSource::SampleIndex && delta > kEpsilon,
+        .delta = delta,
+        .frequencyHz = delta > kEpsilon ? 1.0 / delta : 0.0,
+        .deltaUnit = std::string(timeUnit.empty() ? "sample" : timeUnit),
+    };
+    if (axisSource == WaveTimeAxisSource::SampleIndex) {
+        text.deltaUnit = "sample";
+    }
+    return text;
 }
 
 void lockCursorInterval(double movedTime, double& pairedTime, double lockedInterval, bool movedLeftCursor) {
