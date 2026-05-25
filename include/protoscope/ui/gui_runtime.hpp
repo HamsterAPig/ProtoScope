@@ -70,8 +70,6 @@ private:
     std::string commonBaudRateDraftModel_;
     std::string customBaudRateDraft_;
     std::string customBaudRateDraftModel_;
-    std::string protocolScanDraft_;
-    std::string protocolScanDraftModel_;
     std::string protocolDirDraft_;
     std::string protocolDirDraftModel_;
     WaveDockRenderer waveDockRenderer_;
