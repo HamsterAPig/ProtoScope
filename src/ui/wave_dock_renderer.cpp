@@ -6,9 +6,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace protoscope::ui {
@@ -173,10 +176,208 @@ void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits, c
     }
 }
 
+const char* axisSourceName(plot::WaveTimeAxisSource source) {
+    switch (source) {
+    case plot::WaveTimeAxisSource::SampleFrequency:
+        return "控件频率";
+    case plot::WaveTimeAxisSource::ScriptTime:
+        return "脚本时间";
+    case plot::WaveTimeAxisSource::SampleIndex:
+        return "点数轴";
+    }
+    return "未知";
+}
+
+void applyFrequencyInput(plot::WaveViewState& view) {
+    const auto parsed = plot::parseSampleFrequencyText(view.sampleFrequencyInput);
+    if (parsed.accepted) {
+        view.sampleFrequencyHz = parsed.valueHz;
+        view.sampleFrequencyError.clear();
+    } else {
+        view.sampleFrequencyError = parsed.error;
+    }
+}
+
+void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport, const plot::ViewConfig& config) {
+    view.viewMinTime = viewport.minTime;
+    view.viewMaxTime = viewport.maxTime;
+    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, config.timeScale);
+    view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+    if (!view.lockVerticalRange) {
+        view.viewMinValue = viewport.minValue;
+        view.viewMaxValue = viewport.maxValue;
+    }
+    view.autoFollowLatest = false;
+}
+
+plot::WaveViewport currentViewport(const plot::WaveViewState& view) {
+    return {
+        .minTime = view.viewMinTime,
+        .maxTime = view.viewMaxTime,
+        .minValue = view.lockVerticalRange ? view.manualVerticalMin : view.viewMinValue,
+        .maxValue = view.lockVerticalRange ? view.manualVerticalMax : view.viewMaxValue,
+    };
+}
+
+std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::WaveSample>& samples,
+                                                      double visibleMinTime,
+                                                      double visibleMaxTime,
+                                                      std::size_t pixelWidth) {
+    std::vector<plot::EnvelopePoint> envelope;
+    if (samples.empty() || pixelWidth == 0) {
+        return envelope;
+    }
+    if (visibleMaxTime < visibleMinTime) {
+        std::swap(visibleMinTime, visibleMaxTime);
+    }
+    auto begin = std::lower_bound(samples.begin(), samples.end(), visibleMinTime, [](const plot::WaveSample& sample, double value) {
+        return sample.time < value;
+    });
+    auto end = std::upper_bound(samples.begin(), samples.end(), visibleMaxTime, [](double value, const plot::WaveSample& sample) {
+        return value < sample.time;
+    });
+    if (begin >= end) {
+        return envelope;
+    }
+
+    const std::size_t visibleCount = static_cast<std::size_t>(std::distance(begin, end));
+    const std::size_t bucketCount = (std::min)(pixelWidth, visibleCount);
+    envelope.reserve(bucketCount);
+    for (std::size_t bucket = 0; bucket < bucketCount; ++bucket) {
+        const std::size_t bucketBegin = bucket * visibleCount / bucketCount;
+        const std::size_t bucketEnd = (bucket + 1) * visibleCount / bucketCount;
+        double minValue = std::numeric_limits<double>::infinity();
+        double maxValue = -std::numeric_limits<double>::infinity();
+        double timeSum = 0.0;
+        std::size_t count = 0;
+        for (std::size_t offset = bucketBegin; offset < bucketEnd; ++offset) {
+            const auto& sample = *(begin + static_cast<std::ptrdiff_t>(offset));
+            minValue = (std::min)(minValue, sample.value);
+            maxValue = (std::max)(maxValue, sample.value);
+            timeSum += sample.time;
+            ++count;
+        }
+        if (count > 0) {
+            envelope.push_back({
+                .time = timeSum / static_cast<double>(count),
+                .minValue = minValue,
+                .maxValue = maxValue,
+                .sampleCount = count,
+            });
+        }
+    }
+    return envelope;
+}
+
+std::optional<plot::CursorReadout> findNearestDisplayByTime(const plot::WaveDisplayData& displayData,
+                                                            std::size_t channelIndex,
+                                                            double time,
+                                                            double maxTimeDistance) {
+    if (channelIndex >= displayData.channels.size()) {
+        return std::nullopt;
+    }
+    const auto& samples = displayData.channels[channelIndex].samples;
+    auto lower = std::lower_bound(samples.begin(), samples.end(), time, [](const plot::WaveSample& sample, double value) {
+        return sample.time < value;
+    });
+    std::optional<plot::CursorReadout> best;
+    auto consider = [&](std::vector<plot::WaveSample>::const_iterator iterator) {
+        if (iterator == samples.end()) {
+            return;
+        }
+        const double distance = std::abs(iterator->time - time);
+        if (distance > maxTimeDistance) {
+            return;
+        }
+        if (!best.has_value() || distance < std::abs(best->time - time)) {
+            best = plot::CursorReadout{
+                .valid = true,
+                .channelIndex = channelIndex,
+                .sampleIndex = static_cast<std::size_t>(std::distance(samples.begin(), iterator)),
+                .time = iterator->time,
+                .value = iterator->value,
+            };
+        }
+    };
+    consider(lower);
+    if (lower != samples.begin()) {
+        consider(std::prev(lower));
+    }
+    return best;
+}
+
+std::optional<plot::CursorReadout> findNearestDisplayPoint(const plot::WaveDisplayData& displayData,
+                                                           double time,
+                                                           double value,
+                                                           double maxTimeDistance,
+                                                           double maxValueDistance) {
+    std::optional<plot::CursorReadout> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
+        const auto nearest = findNearestDisplayByTime(displayData, channelIndex, time, maxTimeDistance);
+        if (!nearest.has_value()) {
+            continue;
+        }
+        const double valueDistance = std::abs(nearest->value - value);
+        if (valueDistance > maxValueDistance) {
+            continue;
+        }
+        const double timeDistance = std::abs(nearest->time - time);
+        const double score = timeDistance * timeDistance + valueDistance * valueDistance;
+        if (score < bestScore) {
+            bestScore = score;
+            best = nearest;
+        }
+    }
+    return best;
+}
+
+plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
+                                              std::size_t channelIndex,
+                                              double beginTime,
+                                              double endTime) {
+    plot::MeasurementReadout result{};
+    if (channelIndex >= displayData.channels.size()) {
+        return result;
+    }
+    if (endTime < beginTime) {
+        std::swap(beginTime, endTime);
+    }
+    const auto& samples = displayData.channels[channelIndex].samples;
+    const auto begin = std::lower_bound(samples.begin(), samples.end(), beginTime, [](const plot::WaveSample& sample, double value) {
+        return sample.time < value;
+    });
+    const auto end = std::upper_bound(samples.begin(), samples.end(), endTime, [](double value, const plot::WaveSample& sample) {
+        return value < sample.time;
+    });
+    if (begin >= end) {
+        return result;
+    }
+
+    result.valid = true;
+    result.channelIndex = channelIndex;
+    result.sampleCount = static_cast<std::size_t>(std::distance(begin, end));
+    result.minValue = std::numeric_limits<double>::infinity();
+    result.maxValue = -std::numeric_limits<double>::infinity();
+    double sum = 0.0;
+    double squareSum = 0.0;
+    for (auto iterator = begin; iterator != end; ++iterator) {
+        result.minValue = (std::min)(result.minValue, iterator->value);
+        result.maxValue = (std::max)(result.maxValue, iterator->value);
+        sum += iterator->value;
+        squareSum += iterator->value * iterator->value;
+    }
+    result.duration = std::prev(end)->time - begin->time;
+    result.peakToPeak = result.maxValue - result.minValue;
+    result.meanValue = sum / static_cast<double>(result.sampleCount);
+    result.rmsValue = std::sqrt(squareSum / static_cast<double>(result.sampleCount));
+    return result;
+}
+
 void drawCursorAnnotation(std::size_t cursorIndex,
                           const plot::CursorReadout& readout,
                           const plot::ChannelView& channel,
-                          const plot::ViewConfig& config) {
+                          std::string_view timeUnit) {
     ImPlot::Annotation(readout.time,
                        readout.value,
                        ImVec4(1.0F, 1.0F, 1.0F, 0.92F),
@@ -184,34 +385,37 @@ void drawCursorAnnotation(std::size_t cursorIndex,
                        true,
                        "C%zu %s\n%s %.6g",
                        cursorIndex + 1,
-                       formatMetricText(readout.time, config.timeUnit.c_str()).c_str(),
+                       formatMetricText(readout.time, std::string(timeUnit).c_str()).c_str(),
                        channel.label.c_str(),
                        readout.value);
 }
 
-void drawOverviewWindow(plot::WaveDockState& wave,
-                        plot::WaveViewState& view,
+void drawOverviewWindow(plot::WaveViewState& view,
                         const plot::ViewConfig& config,
-                        const plot::WaveSnapshot& fullSnapshot) {
+                        const plot::WaveSnapshot& fullSnapshot,
+                        const plot::WaveDisplayData& displayData,
+                        const plot::WaveDataBounds& displayBounds) {
     if (fullSnapshot.channels.empty()) {
         return;
     }
 
-    double overviewMinTime = std::numeric_limits<double>::infinity();
-    double overviewMaxTime = -std::numeric_limits<double>::infinity();
-    double overviewMinValue = std::numeric_limits<double>::infinity();
-    double overviewMaxValue = -std::numeric_limits<double>::infinity();
-    for (const auto& channel : fullSnapshot.channels) {
-        if (channel.totalSamples == 0 || channel.samples == nullptr) {
-            continue;
-        }
-        const auto& first = channel.samples[0];
-        const auto& last = channel.samples[channel.totalSamples - 1];
-        overviewMinTime = (std::min)(overviewMinTime, first.time);
-        overviewMaxTime = (std::max)(overviewMaxTime, last.time);
-        if (channel.stats.visibleSamples > 0) {
-            overviewMinValue = (std::min)(overviewMinValue, channel.stats.minValue);
-            overviewMaxValue = (std::max)(overviewMaxValue, channel.stats.maxValue);
+    double overviewMinTime = displayBounds.valid ? displayBounds.minTime : std::numeric_limits<double>::infinity();
+    double overviewMaxTime = displayBounds.valid ? displayBounds.maxTime : -std::numeric_limits<double>::infinity();
+    double overviewMinValue = displayBounds.valid ? displayBounds.minValue : std::numeric_limits<double>::infinity();
+    double overviewMaxValue = displayBounds.valid ? displayBounds.maxValue : -std::numeric_limits<double>::infinity();
+    if (!displayBounds.valid) {
+        for (const auto& channel : fullSnapshot.channels) {
+            if (channel.totalSamples == 0 || channel.samples == nullptr) {
+                continue;
+            }
+            const auto& first = channel.samples[0];
+            const auto& last = channel.samples[channel.totalSamples - 1];
+            overviewMinTime = (std::min)(overviewMinTime, first.time);
+            overviewMaxTime = (std::max)(overviewMaxTime, last.time);
+            if (channel.stats.visibleSamples > 0) {
+                overviewMinValue = (std::min)(overviewMinValue, channel.stats.minValue);
+                overviewMaxValue = (std::max)(overviewMaxValue, channel.stats.maxValue);
+            }
         }
     }
     if (!std::isfinite(overviewMinTime) || !std::isfinite(overviewMaxTime) || overviewMinTime >= overviewMaxTime) {
@@ -242,17 +446,20 @@ void drawOverviewWindow(plot::WaveDockState& wave,
         const float contentWidth = ImGui::GetContentRegionAvail().x;
         const std::size_t pixelWidth = static_cast<std::size_t>((std::max)(contentWidth, 64.0F));
         for (std::size_t channelIndex = 0; channelIndex < fullSnapshot.channels.size(); ++channelIndex) {
-            const auto overview = wave.buffer.buildLimitedEnvelope(channelIndex, overviewMinTime, overviewMaxTime, pixelWidth, view.overviewMaxSamples);
-            if (overview.points.empty()) {
+            auto overview = buildDisplayEnvelope(displayData.channels[channelIndex].samples, overviewMinTime, overviewMaxTime, pixelWidth);
+            if (overview.size() > view.overviewMaxSamples && view.overviewMaxSamples > 0) {
+                overview.erase(overview.begin(), overview.end() - static_cast<std::ptrdiff_t>(view.overviewMaxSamples));
+            }
+            if (overview.empty()) {
                 continue;
             }
-            PlotGetterPayload payload{.points = overview.points.data()};
+            PlotGetterPayload payload{.points = overview.data()};
             const auto color = withAlpha(channelColor(channelIndex), 0.65F);
             ImPlotSpec spec{};
             spec.LineColor = color;
             spec.LineWeight = 1.0F;
-            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview min").c_str(), &envelopeLineMinGetter, &payload, static_cast<int>(overview.points.size()), spec);
-            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview max").c_str(), &envelopeLineMaxGetter, &payload, static_cast<int>(overview.points.size()), spec);
+            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview min").c_str(), &envelopeLineMinGetter, &payload, static_cast<int>(overview.size()), spec);
+            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview max").c_str(), &envelopeLineMaxGetter, &payload, static_cast<int>(overview.size()), spec);
         }
 
         double rectMinTime = view.viewMinTime;
@@ -278,6 +485,41 @@ void drawOverviewWindow(plot::WaveDockState& wave,
         }
         if ((rectHovered || rectHeld) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
             view.autoFollowLatest = false;
+        }
+        const auto& io = ImGui::GetIO();
+        if (ImPlot::IsPlotHovered() && io.MouseWheel != 0.0F) {
+            const plot::WaveDataBounds bounds{
+                .minTime = overviewMinTime,
+                .maxTime = overviewMaxTime,
+                .minValue = overviewMinValue,
+                .maxValue = overviewMaxValue,
+                .minStep = (std::max)(config.timeScale, 1e-6),
+                .valid = true,
+            };
+            const auto mousePos = ImPlot::GetPlotMousePos();
+            const double centerTime = std::isfinite(mousePos.x) ? mousePos.x : 0.5 * (view.viewMinTime + view.viewMaxTime);
+            const auto zoomed = plot::zoomViewport(currentViewport(view),
+                                                   plot::WaveZoomMode::XOnly,
+                                                   io.MouseWheel,
+                                                   centerTime,
+                                                   0.0,
+                                                   bounds,
+                                                   (std::max)(config.timeScale, 1e-6),
+                                                   true);
+            applyViewport(view, zoomed, config);
+        }
+        for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
+            const auto& cursor = view.cursors[cursorIndex];
+            if (!cursor.enabled) {
+                continue;
+            }
+            double lineTime = cursor.time;
+            const bool highlighted = lineTime >= view.viewMinTime && lineTime <= view.viewMaxTime;
+            ImPlot::DragLineX(static_cast<int>(400 + cursorIndex),
+                              &lineTime,
+                              highlighted ? ImVec4(1.0F, 0.95F, 0.2F, 0.95F) : ImVec4(1.0F, 1.0F, 1.0F, 0.35F),
+                              highlighted ? 1.3F : 1.0F,
+                              ImPlotDragToolFlags_NoInputs | ImPlotDragToolFlags_NoFit);
         }
         ImPlot::EndPlot();
     }
@@ -322,6 +564,22 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         ImGui::SameLine();
         ImGui::Checkbox("磷光辉光", &view.phosphorGlowEnabled);
 
+        char frequencyBuffer[64]{};
+        std::strncpy(frequencyBuffer, view.sampleFrequencyInput.c_str(), sizeof(frequencyBuffer) - 1);
+        ImGui::SetNextItemWidth(160.0F);
+        if (ImGui::InputText("发送频率 Hz", frequencyBuffer, sizeof(frequencyBuffer))) {
+            view.sampleFrequencyInput = frequencyBuffer;
+            applyFrequencyInput(view);
+        }
+        ImGui::SameLine();
+        if (ImGui::Checkbox(view.cursorIntervalLocked ? "锁定游标间隔" : "解锁游标间隔", &view.cursorIntervalLocked)) {
+            view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
+        }
+        if (!view.sampleFrequencyError.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.25F, 1.0F), "%s", view.sampleFrequencyError.c_str());
+        }
+
         ImGui::SetNextItemWidth(180.0F);
         ImGui::InputDouble("余辉时间窗", &view.persistenceWindow, config.timeScale, config.timeScale * 10.0, "%.6f");
         if (view.persistenceWindow <= 0.0) {
@@ -352,12 +610,34 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         }
         auto snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
         const auto fullSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+        auto displayData = plot::buildDisplayData(fullSnapshot, view.sampleFrequencyHz);
+        for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
+            const auto spec = wave.buffer.channelSpec(channelIndex);
+            if (!spec.has_value() || spec->offset == 0.0) {
+                continue;
+            }
+            for (auto& sample : displayData.channels[channelIndex].samples) {
+                sample.value += spec->offset;
+            }
+        }
+        view.timeAxisSource = displayData.axisSource;
+        const auto displayBounds = plot::computeDisplayBounds(displayData, (std::max)(config.timeScale, 1e-6));
+        if (displayBounds.valid && view.autoFollowLatest) {
+            view.viewMaxTime = displayBounds.maxTime;
+            view.viewMinTime = view.viewMaxTime - view.visibleDuration;
+            if (view.viewMinTime < displayBounds.minTime) {
+                view.viewMinTime = displayBounds.minTime;
+                view.viewMaxTime = (std::min)(displayBounds.maxTime, view.viewMinTime + view.visibleDuration);
+            }
+            view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+        }
+        ImGui::Text("时间轴: %s (%s)", axisSourceName(view.timeAxisSource), displayData.timeUnit.c_str());
 
-        if (snapshot.channels.empty()) {
+        if (fullSnapshot.channels.empty()) {
             ImGui::TextUnformatted("Lua 尚未通过 proto.plot.setup / proto.plot.push 提供波形数据。");
         } else if (ImPlot::BeginPlot("##oscilloscope", ImVec2(-1.0F, (std::max)(220.0F, ImGui::GetContentRegionAvail().y - 150.0F)), ImPlotFlags_None)) {
             constexpr ImPlotAxisFlags axisFlags = ImPlotAxisFlags_NoHighlight;
-            ImPlot::SetupAxis(ImAxis_X1, "Time", axisFlags);
+            ImPlot::SetupAxis(ImAxis_X1, displayData.timeUnit == "sample" ? "Sample" : "Time", axisFlags);
             ImPlot::SetupAxis(ImAxis_Y1, snapshot.config.verticalUnit.c_str(), axisFlags);
             if (view.autoFollowLatest) {
                 ImPlot::SetupAxisLimits(ImAxis_X1, view.viewMinTime, view.viewMaxTime, ImPlotCond_Always);
@@ -376,40 +656,77 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
             const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
             std::array<std::optional<plot::CursorReadout>, 2> cursorReadouts{};
             std::optional<plot::MeasurementReadout> measurement;
+            const auto& io = ImGui::GetIO();
+            if (io.MouseWheel != 0.0F && (ImPlot::IsPlotHovered() || ImPlot::IsAxisHovered(ImAxis_X1) || ImPlot::IsAxisHovered(ImAxis_Y1))) {
+                plot::WaveZoomMode zoomMode = plot::WaveZoomMode::XY;
+                if (ImPlot::IsAxisHovered(ImAxis_X1)) {
+                    zoomMode = plot::WaveZoomMode::XOnly;
+                } else if (ImPlot::IsAxisHovered(ImAxis_Y1)) {
+                    zoomMode = plot::WaveZoomMode::YOnly;
+                }
+                const plot::WaveDataBounds bounds{
+                    .minTime = -std::numeric_limits<double>::infinity(),
+                    .maxTime = std::numeric_limits<double>::infinity(),
+                    .minValue = -std::numeric_limits<double>::infinity(),
+                    .maxValue = std::numeric_limits<double>::infinity(),
+                    .minStep = (std::max)(config.timeScale, 1e-6),
+                    .valid = false,
+                };
+                const auto zoomed = plot::zoomViewport(currentViewport(view),
+                                                       zoomMode,
+                                                       io.MouseWheel,
+                                                       mousePos.x,
+                                                       mousePos.y,
+                                                       bounds,
+                                                       (std::max)(config.timeScale, 1e-6),
+                                                       false);
+                applyViewport(view, zoomed, config);
+            }
 
             for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
                 const auto& channel = snapshot.channels[channelIndex];
                 const float contentWidth = ImGui::GetContentRegionAvail().x;
-                const auto envelope = wave.buffer.buildEnvelope(channelIndex, limits.X.Min, limits.X.Max, static_cast<std::size_t>((std::max)(contentWidth, 64.0F)));
-                if (envelope.points.empty()) {
+                const auto envelope = buildDisplayEnvelope(displayData.channels[channelIndex].samples,
+                                                           limits.X.Min,
+                                                           limits.X.Max,
+                                                           static_cast<std::size_t>((std::max)(contentWidth, 64.0F)));
+                if (envelope.empty()) {
                     continue;
                 }
 
-                PlotGetterPayload payload{.points = envelope.points.data()};
+                PlotGetterPayload payload{.points = envelope.data()};
                 const ImVec4 color = channelColor(channelIndex);
-                ImPlot::PlotLineG((channel.label + " min").c_str(), &envelopeLineMinGetter, &payload, static_cast<int>(envelope.points.size()));
-                ImPlot::PlotLineG((channel.label + " max").c_str(), &envelopeLineMaxGetter, &payload, static_cast<int>(envelope.points.size()));
+                ImPlot::PlotLineG((channel.label + " min").c_str(), &envelopeLineMinGetter, &payload, static_cast<int>(envelope.size()));
+                ImPlot::PlotLineG((channel.label + " max").c_str(), &envelopeLineMaxGetter, &payload, static_cast<int>(envelope.size()));
                 if (view.phosphorGlowEnabled) {
-                    renderPhosphorEnvelope(envelope.points, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);
+                    renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);
                 } else {
-                    renderEnvelopeAsBars(envelope.points, color);
+                    renderEnvelopeAsBars(envelope, color);
                 }
 
-                if (view.showCursors && ImPlot::IsPlotHovered() && view.showHoverReadout) {
-                    auto hovered = wave.buffer.findNearest(channelIndex, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
-                    if (hovered.has_value()) {
-                        ImPlot::Annotation(hovered->time, hovered->value, ImVec4(1.0F, 1.0F, 0.2F, 1.0F), ImVec2(12.0F, -12.0F), true,
-                            "%s t=%s y=%.6g %s",
-                            channel.label.c_str(),
-                            formatMetric(hovered->time, config.timeUnit.c_str()).c_str(),
-                            hovered->value,
-                            channel.unit.c_str());
+            }
+
+            if (view.showCursors && ImPlot::IsPlotHovered() && view.showHoverReadout) {
+                auto hovered = findNearestDisplayPoint(displayData, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
+                if (hovered.has_value() && hovered->channelIndex < snapshot.channels.size()) {
+                    const auto& hoveredChannel = snapshot.channels[hovered->channelIndex];
+                    ImPlot::Annotation(hovered->time, hovered->value, ImVec4(1.0F, 1.0F, 0.2F, 1.0F), ImVec2(12.0F, -12.0F), true,
+                        "%s t=%s y=%.6g %s",
+                        hoveredChannel.label.c_str(),
+                        formatMetric(hovered->time, displayData.timeUnit.c_str()).c_str(),
+                        hovered->value,
+                        hoveredChannel.unit.c_str());
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                        view.measurementChannelIndex = hovered->channelIndex;
                     }
                 }
             }
 
             bool anyCursorHeld = false;
             if (view.showCursors) {
+                if (view.measurementChannelIndex >= snapshot.channels.size()) {
+                    view.measurementChannelIndex = 0;
+                }
                 for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
                     auto& cursor = view.cursors[cursorIndex];
                     if (!cursor.enabled) {
@@ -426,21 +743,22 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                         &hovered,
                         &held);
                     anyCursorHeld = anyCursorHeld || held;
+                    if (held && view.cursorIntervalLocked && view.lockedCursorInterval > 0.0) {
+                        auto& pairedCursor = view.cursors[cursorIndex == 0 ? 1 : 0];
+                        plot::lockCursorInterval(cursor.time, pairedCursor.time, view.lockedCursorInterval, cursorIndex == 0);
+                    } else if (held && !view.cursorIntervalLocked && view.cursors[0].enabled && view.cursors[1].enabled) {
+                        view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
+                    }
 
                     if (held || hovered || cursor.pinned) {
                         std::optional<plot::CursorReadout> best;
-                        for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
-                            auto nearest = wave.buffer.findNearestByTime(channelIndex, cursor.time, timeSnapDistance);
-                            if (!nearest.has_value()) {
-                                continue;
-                            }
-                            if (!best.has_value() || std::abs(nearest->time - cursor.time) < std::abs(best->time - cursor.time)) {
-                                best = nearest;
-                            }
+                        auto nearest = findNearestDisplayByTime(displayData, view.measurementChannelIndex, cursor.time, timeSnapDistance);
+                        if (nearest.has_value()) {
+                            best = nearest;
                         }
                         if (best.has_value()) {
                             // 核心流程：拖动中保持用户手里的连续时间，避免被最近采样点每帧抢写导致抖动。
-                            cursor.channelIndex = best->channelIndex;
+                            cursor.channelIndex = view.measurementChannelIndex;
                             if (!held) {
                                 cursor.time = best->time;
                             }
@@ -449,7 +767,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                                 best->time = cursor.time;
                             }
                             cursorReadouts[cursorIndex] = best;
-                            drawCursorAnnotation(cursorIndex, *best, snapshot.channels[best->channelIndex], config);
+                            drawCursorAnnotation(cursorIndex, *best, snapshot.channels[best->channelIndex], displayData.timeUnit);
                         }
                     }
                 }
@@ -463,27 +781,43 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                 view.autoFollowLatest = false;
             }
 
+            if (view.showCursors && cursorReadouts[0].has_value() && cursorReadouts[1].has_value() && view.sampleFrequencyHz > 0.0) {
+                const auto delta = plot::OscilloscopeBuffer::makeDelta(*cursorReadouts[0], *cursorReadouts[1]);
+                const double beginTime = (std::min)(cursorReadouts[0]->time, cursorReadouts[1]->time);
+                const double endTime = (std::max)(cursorReadouts[0]->time, cursorReadouts[1]->time);
+                const double centerTime = 0.5 * (beginTime + endTime);
+                const double centerValue = 0.5 * (cursorReadouts[0]->value + cursorReadouts[1]->value);
+                ImPlot::Annotation(centerTime,
+                                   centerValue,
+                                   ImVec4(1.0F, 0.95F, 0.35F, 1.0F),
+                                   ImVec2(0.0F, -28.0F),
+                                   true,
+                                   "周期 %s\n频率 %s",
+                                   formatMetric(delta.deltaTime, displayData.timeUnit.c_str()).c_str(),
+                                   formatMetric(delta.frequencyHz, "Hz").c_str());
+            }
+
             ImPlot::EndPlot();
 
             if (view.showCursors && cursorReadouts[0].has_value()) {
                 const auto& c0 = *cursorReadouts[0];
                 ImGui::Text("Cursor A: %s  t=%s  y=%.6g",
                     snapshot.channels[c0.channelIndex].label.c_str(),
-                    formatMetric(c0.time, config.timeUnit.c_str()).c_str(),
+                    formatMetric(c0.time, displayData.timeUnit.c_str()).c_str(),
                     c0.value);
             }
             if (view.showCursors && cursorReadouts[1].has_value()) {
                 const auto& c1 = *cursorReadouts[1];
                 ImGui::Text("Cursor B: %s  t=%s  y=%.6g",
                     snapshot.channels[c1.channelIndex].label.c_str(),
-                    formatMetric(c1.time, config.timeUnit.c_str()).c_str(),
+                    formatMetric(c1.time, displayData.timeUnit.c_str()).c_str(),
                     c1.value);
             }
             if (view.showCursors && cursorReadouts[0].has_value() && cursorReadouts[1].has_value()) {
                 const auto delta = plot::OscilloscopeBuffer::makeDelta(*cursorReadouts[0], *cursorReadouts[1]);
-                measurement = wave.buffer.measureWindow(cursorReadouts[0]->channelIndex, cursorReadouts[0]->time, cursorReadouts[1]->time);
+                measurement = measureDisplayWindow(displayData, view.measurementChannelIndex, cursorReadouts[0]->time, cursorReadouts[1]->time);
                 ImGui::Text("Δt=%s  Δy=%.6g  f=%s",
-                    formatMetric(delta.deltaTime, config.timeUnit.c_str()).c_str(),
+                    formatMetric(delta.deltaTime, displayData.timeUnit.c_str()).c_str(),
                     delta.deltaValue,
                     formatMetric(delta.frequencyHz, "Hz").c_str());
             }
@@ -493,7 +827,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                 ImGui::Text("Measure %s: N=%zu  span=%s  Vpp=%.6g %s",
                     channel.label.c_str(),
                     m.sampleCount,
-                    formatMetric(m.duration, config.timeUnit.c_str()).c_str(),
+                    formatMetric(m.duration, displayData.timeUnit.c_str()).c_str(),
                     m.peakToPeak,
                     channel.unit.c_str());
                 ImGui::Text("min=%.6g  max=%.6g  mean=%.6g  rms=%.6g",
@@ -502,7 +836,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                     m.meanValue,
                     m.rmsValue);
             }
-            drawOverviewWindow(wave, view, config, fullSnapshot);
+            drawOverviewWindow(view, config, fullSnapshot, displayData, displayBounds);
         }
 
         if (!wave.channelSummaries.empty()) {

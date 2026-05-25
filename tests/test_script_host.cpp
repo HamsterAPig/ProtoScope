@@ -396,6 +396,9 @@ static const TestCase kAllTests[] = {
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_offset_applies_to_display_only", &test_plot_channel_offset_applies_to_display_only},
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
+    {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
+    {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
+    {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
 };
 
 } // namespace

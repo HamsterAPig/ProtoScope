@@ -140,6 +140,7 @@ endif()
 
 add_library(protoscope_plot STATIC
     src/plot/oscilloscope.cpp
+    src/plot/wave_math.cpp
 )
 target_include_directories(protoscope_plot
     PUBLIC

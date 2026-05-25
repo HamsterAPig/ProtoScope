@@ -1,6 +1,7 @@
 #include "test_registry.hpp"
 
 #include "protoscope/plot/oscilloscope.hpp"
+#include "protoscope/plot/wave_math.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -173,4 +174,106 @@ void test_plot_limited_envelope_edges() {
     const auto zeroWidth = buffer.buildLimitedEnvelope(0, 0.0, 9.0, 0, 3);
     require(zeroWidth.points.empty(), "像素宽度为 0 时包络应为空");
     require(zeroWidth.sourceSampleCount == 0, "像素宽度为 0 时不应统计源样本");
+}
+
+void test_wave_frequency_parse_and_axis_mapping() {
+    using protoscope::plot::WaveSample;
+    const auto tenK = protoscope::plot::parseSampleFrequencyText("10e3");
+    require(tenK.accepted && std::abs(tenK.valueHz - 10000.0) < 1e-9, "10e3 应解析为 10000Hz");
+    const auto tenMilli = protoscope::plot::parseSampleFrequencyText("10e-3");
+    require(tenMilli.accepted && std::abs(tenMilli.valueHz - 0.01) < 1e-12, "10e-3 应解析为 0.01Hz");
+    const auto oneK = protoscope::plot::parseSampleFrequencyText("1e3");
+    require(oneK.accepted && std::abs(oneK.valueHz - 1000.0) < 1e-9, "1e3 应解析为 1000Hz");
+    require(protoscope::plot::parseSampleFrequencyText("0").accepted, "0 应表示不使用控件频率");
+    require(protoscope::plot::parseSampleFrequencyText("").accepted, "空字符串应表示不使用控件频率");
+    require(!protoscope::plot::parseSampleFrequencyText("abc").accepted, "非法字符串不应生效");
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.config.timeUnit = "ms";
+    std::vector<WaveSample> scriptSamples{
+        {.time = 2.0, .value = 1.0},
+        {.time = 4.0, .value = 2.0},
+        {.time = 6.0, .value = 3.0},
+    };
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = scriptSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = scriptSamples.size(),
+        .samples = scriptSamples.data(),
+    });
+
+    auto mapped = protoscope::plot::buildDisplayData(snapshot, 1000.0);
+    require(mapped.axisSource == protoscope::plot::WaveTimeAxisSource::SampleFrequency, "控件频率应优先作为时间轴来源");
+    require(std::abs(mapped.channels[0].samples[2].time - 0.002) < 1e-12, "频率时间轴应按样本序号换算秒");
+
+    mapped = protoscope::plot::buildDisplayData(snapshot, 0.0);
+    require(mapped.axisSource == protoscope::plot::WaveTimeAxisSource::ScriptTime, "无控件频率时应使用脚本时间");
+    require(mapped.timeUnit == "ms", "脚本时间轴应保留配置单位");
+
+    const std::vector<WaveSample> badScriptSamples{
+        {.time = 2.0, .value = 1.0},
+        {.time = 2.0, .value = 2.0},
+    };
+    snapshot.channels[0].totalSamples = badScriptSamples.size();
+    snapshot.channels[0].visibleEnd = badScriptSamples.size();
+    snapshot.channels[0].samples = badScriptSamples.data();
+    mapped = protoscope::plot::buildDisplayData(snapshot, 0.0);
+    require(mapped.axisSource == protoscope::plot::WaveTimeAxisSource::SampleIndex, "脚本时间不可用时应退回点数轴");
+    require(mapped.timeUnit == "sample", "点数轴单位应为 sample");
+}
+
+void test_wave_viewport_zoom_modes_and_clamp() {
+    const protoscope::plot::WaveViewport viewport{
+        .minTime = 2.0,
+        .maxTime = 6.0,
+        .minValue = -2.0,
+        .maxValue = 2.0,
+    };
+    const protoscope::plot::WaveDataBounds bounds{
+        .minTime = 0.0,
+        .maxTime = 10.0,
+        .minValue = -5.0,
+        .maxValue = 5.0,
+        .minStep = 0.1,
+        .valid = true,
+    };
+
+    const auto xOnly = protoscope::plot::zoomViewport(
+        viewport, protoscope::plot::WaveZoomMode::XOnly, 1.0, 4.0, 0.0, bounds, 0.1, true);
+    require((xOnly.maxTime - xOnly.minTime) < 4.0, "X-only 滚轮应缩小横轴范围");
+    require(std::abs(xOnly.minValue - viewport.minValue) < 1e-12, "X-only 不应改变纵轴最小值");
+    require(std::abs(xOnly.maxValue - viewport.maxValue) < 1e-12, "X-only 不应改变纵轴最大值");
+
+    const auto yOnly = protoscope::plot::zoomViewport(
+        viewport, protoscope::plot::WaveZoomMode::YOnly, 1.0, 4.0, 0.0, bounds, 0.1, true);
+    require(std::abs(yOnly.minTime - viewport.minTime) < 1e-12, "Y-only 不应改变横轴最小值");
+    require((yOnly.maxValue - yOnly.minValue) < 4.0, "Y-only 滚轮应缩小纵轴范围");
+
+    const auto xy = protoscope::plot::zoomViewport(
+        viewport, protoscope::plot::WaveZoomMode::XY, 1.0, 4.0, 0.0, bounds, 0.1, true);
+    require((xy.maxTime - xy.minTime) < 4.0, "XY 滚轮应缩小横轴范围");
+    require((xy.maxValue - xy.minValue) < 4.0, "XY 滚轮应缩小纵轴范围");
+
+    const protoscope::plot::WaveViewport nearLeft{
+        .minTime = 0.0,
+        .maxTime = 1.0,
+        .minValue = -1.0,
+        .maxValue = 1.0,
+    };
+    const auto clamped = protoscope::plot::zoomViewport(
+        nearLeft, protoscope::plot::WaveZoomMode::XOnly, -5.0, 0.0, 0.0, bounds, 0.1, true);
+    require(clamped.minTime >= bounds.minTime - 1e-12, "概览缩放应夹紧到数据左边界");
+    require((clamped.maxTime - clamped.minTime) >= 0.1, "缩放宽度不应小于最小范围");
+}
+
+void test_wave_cursor_interval_lock() {
+    double right = 3.0;
+    protoscope::plot::lockCursorInterval(1.0, right, 2.0, true);
+    require(std::abs(right - 3.0) < 1e-12, "移动左游标时右游标应保持锁定间隔");
+
+    double left = 1.0;
+    protoscope::plot::lockCursorInterval(5.0, left, 2.0, false);
+    require(std::abs(left - 3.0) < 1e-12, "移动右游标时左游标应保持锁定间隔");
 }
