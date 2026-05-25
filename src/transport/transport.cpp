@@ -74,6 +74,17 @@ asio::serial_port_base::flow_control::type parseFlowControl(const std::string& f
     return asio::serial_port_base::flow_control::none;
 }
 
+template <typename Writer>
+bool enqueueWrite(asio::io_context& ioContext, std::atomic<bool>& stopping, std::vector<std::uint8_t> bytes, Writer&& writer) {
+    if (bytes.empty() || stopping.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    asio::post(ioContext, [bytes = std::move(bytes), writer = std::forward<Writer>(writer)]() mutable {
+        writer(bytes);
+    });
+    return true;
+}
+
 } // namespace
 
 struct TcpClientTransport::Runtime {
@@ -331,6 +342,15 @@ bool TcpClientTransport::send(std::vector<std::uint8_t> bytes) {
     }
 }
 
+bool TcpClientTransport::enqueueSend(std::vector<std::uint8_t> bytes) {
+    if (state() != TransportState::Open || !context_.has_value()) {
+        return false;
+    }
+    return enqueueWrite(runtime_->ioContext, runtime_->stopping, std::move(bytes), [this](const std::vector<std::uint8_t>& payload) {
+        send(payload);
+    });
+}
+
 bool TcpServerTransport::open(const TransportConfig& config) {
     close();
 
@@ -496,6 +516,15 @@ bool TcpServerTransport::send(std::vector<std::uint8_t> bytes) {
     }
 }
 
+bool TcpServerTransport::enqueueSend(std::vector<std::uint8_t> bytes) {
+    if (state() != TransportState::Open || !clientContext_.has_value()) {
+        return false;
+    }
+    return enqueueWrite(runtime_->ioContext, runtime_->stopping, std::move(bytes), [this](const std::vector<std::uint8_t>& payload) {
+        send(payload);
+    });
+}
+
 bool SerialTransport::open(const TransportConfig& config) {
     close();
 
@@ -614,6 +643,15 @@ bool SerialTransport::send(std::vector<std::uint8_t> bytes) {
         pushEvent(TransportErrorEvent{std::move(errorContext), ex.what()});
         return false;
     }
+}
+
+bool SerialTransport::enqueueSend(std::vector<std::uint8_t> bytes) {
+    if (state() != TransportState::Open || !context_.has_value()) {
+        return false;
+    }
+    return enqueueWrite(runtime_->ioContext, runtime_->stopping, std::move(bytes), [this](const std::vector<std::uint8_t>& payload) {
+        send(payload);
+    });
 }
 
 } // namespace protoscope::transport

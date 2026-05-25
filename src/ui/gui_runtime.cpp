@@ -22,6 +22,7 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -32,6 +33,13 @@ namespace {
 
 const char* kGlslVersion = "#version 130";
 constexpr std::uint32_t kCommonBaudRates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
+
+struct EditableComboResult {
+    bool edited{false};
+    bool selectedFromList{false};
+    bool valid{true};
+    std::string value;
+};
 
 std::vector<std::filesystem::path> candidateChineseFonts() {
     return {
@@ -185,22 +193,74 @@ void drawRowList(const char* childId,
     ImGui::EndChild();
 }
 
-const char* serialOptionIndex(const std::vector<std::string>& options, const std::string& value, int& index) {
-    index = 0;
-    for (int i = 0; i < static_cast<int>(options.size()); ++i) {
-        if (options[i] == value) {
-            index = i;
-            break;
-        }
+bool digitsOnly(const std::string& text) {
+    return !text.empty() && std::all_of(text.begin(), text.end(), [](unsigned char ch) {
+        return std::isdigit(ch) != 0;
+    });
+}
+
+EditableComboResult drawEditableCombo(const char* label,
+                                      std::string& draft,
+                                      const std::vector<std::string>& options,
+                                      const std::function<bool(const std::string&)>& validator = {}) {
+    EditableComboResult result;
+    result.value = draft;
+
+    ImGui::PushID(label);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine();
+    const float arrowWidth = ImGui::GetFrameHeight();
+    const float inputWidth = std::max(120.0F, ImGui::GetContentRegionAvail().x - arrowWidth - ImGui::GetStyle().ItemSpacing.x);
+    ImGui::SetNextItemWidth(inputWidth);
+    char buffer[512]{};
+    std::snprintf(buffer, sizeof(buffer), "%s", draft.c_str());
+    if (ImGui::InputText("##value", buffer, sizeof(buffer))) {
+        draft = buffer;
+        result.edited = true;
+        result.value = draft;
     }
-    return options.empty() ? nullptr : options[index].c_str();
+
+    ImGui::SameLine(0.0F, ImGui::GetStyle().ItemSpacing.x);
+    if (ImGui::BeginCombo("##options", "", ImGuiComboFlags_NoPreview)) {
+        for (const auto& option : options) {
+            const bool selected = option == draft;
+            if (ImGui::Selectable(option.c_str(), selected)) {
+                draft = option;
+                result.edited = true;
+                result.selectedFromList = true;
+                result.value = draft;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopID();
+
+    if (validator) {
+        result.valid = validator(draft);
+    }
+    result.value = draft;
+    return result;
+}
+
+void syncDraftFromModel(std::string& draft, std::string& lastModel, const std::string& model) {
+    if (draft.empty() || lastModel != model) {
+        draft = model;
+        lastModel = model;
+    }
 }
 
 } // namespace
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
     : application_(application),
-      configStore_(configStore) {}
+      configStore_(configStore) {
+    customBaudRateDraft_ = std::to_string(kCommonBaudRates[7]);
+    customBaudRateDraftModel_ = customBaudRateDraft_;
+}
 
 GuiRuntime::~GuiRuntime() {
     shutdown();
@@ -514,40 +574,52 @@ void GuiRuntime::drawCommDock() {
             comm.serialPortOptions = {"COM1", "COM2", "COM3", "COM4"};
         }
 
-        int currentIndex = 0;
-        serialOptionIndex(comm.serialPortOptions, comm.serial.portName, currentIndex);
-        std::vector<const char*> options;
-        for (const auto& item : comm.serialPortOptions) {
-            options.push_back(item.c_str());
-        }
-        if (!options.empty() && ImGui::Combo("端口", &currentIndex, options.data(), static_cast<int>(options.size()))) {
-            comm.serial.portName = comm.serialPortOptions[currentIndex];
+        syncDraftFromModel(serialPortDraft_, serialPortDraftModel_, comm.serial.portName);
+        if (const auto portEdit = drawEditableCombo("端口", serialPortDraft_, comm.serialPortOptions); portEdit.edited && portEdit.value != comm.serial.portName) {
+            comm.serial.portName = portEdit.value;
+            serialPortDraftModel_ = comm.serial.portName;
             application_.markCommConfigEdited(true);
         }
 
         std::vector<std::string> baudRateOptions;
-        int baudIndex = -1;
         for (std::size_t i = 0; i < std::size(kCommonBaudRates); ++i) {
             baudRateOptions.push_back(std::to_string(kCommonBaudRates[i]));
-            if (kCommonBaudRates[i] == comm.serial.baudRate) {
-                baudIndex = static_cast<int>(i);
-            }
         }
-        std::vector<const char*> baudItems;
-        for (const auto& item : baudRateOptions) {
-            baudItems.push_back(item.c_str());
+
+        const std::string currentBaudText = std::to_string(comm.serial.baudRate);
+        if (std::find(baudRateOptions.begin(), baudRateOptions.end(), currentBaudText) != baudRateOptions.end()) {
+            syncDraftFromModel(commonBaudRateDraft_, commonBaudRateDraftModel_, currentBaudText);
         }
-        if (!baudItems.empty() && ImGui::Combo("常用波特率", &baudIndex, baudItems.data(), static_cast<int>(baudItems.size()))) {
-            if (baudIndex >= 0) {
-                comm.serial.baudRate = kCommonBaudRates[baudIndex];
+        if (const auto baudEdit = drawEditableCombo("常用波特率", commonBaudRateDraft_, baudRateOptions, digitsOnly); baudEdit.edited && baudEdit.valid) {
+            const auto baudRate = static_cast<std::uint32_t>(std::stoul(baudEdit.value));
+            if (baudRate != comm.serial.baudRate) {
+                comm.serial.baudRate = baudRate;
+                customBaudRateDraft_ = baudEdit.value;
+                commonBaudRateDraftModel_ = baudEdit.value;
+                customBaudRateDraftModel_ = baudEdit.value;
                 application_.markCommConfigEdited(true);
             }
         }
 
-        int baudRate = static_cast<int>(comm.serial.baudRate);
-        if (ImGui::InputInt("自定义波特率", &baudRate)) {
-            comm.serial.baudRate = static_cast<std::uint32_t>(std::max(0, baudRate));
-            application_.markCommConfigEdited(true);
+        syncDraftFromModel(customBaudRateDraft_, customBaudRateDraftModel_, currentBaudText);
+        if (const auto customBaudEdit = drawEditableCombo("自定义波特率", customBaudRateDraft_, {}, digitsOnly); customBaudEdit.edited) {
+            if (customBaudEdit.valid) {
+                const auto baudRate = static_cast<std::uint32_t>(std::stoul(customBaudEdit.value));
+                if (baudRate != comm.serial.baudRate) {
+                    comm.serial.baudRate = baudRate;
+                    customBaudRateDraftModel_ = customBaudEdit.value;
+                    if (std::find(baudRateOptions.begin(), baudRateOptions.end(), customBaudEdit.value) != baudRateOptions.end()) {
+                        commonBaudRateDraft_ = customBaudEdit.value;
+                        commonBaudRateDraftModel_ = customBaudEdit.value;
+                    }
+                    application_.markCommConfigEdited(true);
+                }
+            } else {
+                application_.setStatusMessage("自定义波特率仅接受纯数字");
+            }
+        }
+        if (!digitsOnly(customBaudRateDraft_)) {
+            ImGui::TextDisabled("自定义波特率仅接受纯数字");
         }
 
         int dataBits = static_cast<int>(comm.serial.dataBits);
@@ -629,28 +701,28 @@ void GuiRuntime::drawProtocolDock() {
         lua.protocolDirOptions = configStore_.scanProtocolDirectories(lua.protocolRootDir);
         const auto correctedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, lua.protocolDir);
         lua.protocolDir = correctedDir.generic_string();
+        protocolScanDraft_ = lua.protocolDir;
+        protocolDirDraft_ = lua.protocolDir;
+        protocolScanDraftModel_ = lua.protocolDir;
+        protocolDirDraftModel_ = lua.protocolDir;
         application_.markProtocolEdited();
     }
 
-    std::vector<const char*> protocolItems;
-    int protocolIndex = -1;
-    for (int i = 0; i < static_cast<int>(lua.protocolDirOptions.size()); ++i) {
-        protocolItems.push_back(lua.protocolDirOptions[i].c_str());
-        if (lua.protocolDirOptions[i] == lua.protocolDir) {
-            protocolIndex = i;
-        }
-    }
-    if (!protocolItems.empty() && ImGui::Combo("扫描结果", &protocolIndex, protocolItems.data(), static_cast<int>(protocolItems.size()))) {
-        if (protocolIndex >= 0) {
-            lua.protocolDir = lua.protocolDirOptions[protocolIndex];
-            application_.markProtocolEdited();
-        }
+    syncDraftFromModel(protocolScanDraft_, protocolScanDraftModel_, lua.protocolDir);
+    if (const auto scanEdit = drawEditableCombo("扫描结果", protocolScanDraft_, lua.protocolDirOptions); scanEdit.edited && scanEdit.value != lua.protocolDir) {
+        lua.protocolDir = scanEdit.value;
+        protocolDirDraft_ = scanEdit.value;
+        protocolScanDraftModel_ = scanEdit.value;
+        protocolDirDraftModel_ = scanEdit.value;
+        application_.markProtocolEdited();
     }
 
-    char protocolDir[512]{};
-    std::snprintf(protocolDir, sizeof(protocolDir), "%s", lua.protocolDir.c_str());
-    if (ImGui::InputText("协议目录", protocolDir, sizeof(protocolDir))) {
-        lua.protocolDir = protocolDir;
+    syncDraftFromModel(protocolDirDraft_, protocolDirDraftModel_, lua.protocolDir);
+    if (const auto protocolDirEdit = drawEditableCombo("协议目录", protocolDirDraft_, lua.protocolDirOptions); protocolDirEdit.edited && protocolDirEdit.value != lua.protocolDir) {
+        lua.protocolDir = protocolDirEdit.value;
+        protocolScanDraft_ = protocolDirEdit.value;
+        protocolDirDraftModel_ = protocolDirEdit.value;
+        protocolScanDraftModel_ = protocolDirEdit.value;
         application_.markProtocolEdited();
     }
 
@@ -658,6 +730,10 @@ void GuiRuntime::drawProtocolDock() {
         lua.protocolDirOptions = configStore_.scanProtocolDirectories(lua.protocolRootDir);
         const auto correctedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, lua.protocolDir);
         lua.protocolDir = correctedDir.generic_string();
+        protocolScanDraft_ = lua.protocolDir;
+        protocolDirDraft_ = lua.protocolDir;
+        protocolScanDraftModel_ = lua.protocolDir;
+        protocolDirDraftModel_ = lua.protocolDir;
         application_.setStatusMessage("协议目录扫描已刷新");
     }
     ImGui::SameLine();
@@ -728,30 +804,10 @@ void GuiRuntime::drawSendDock() {
         }
     }
 
-    if (!sendState.actionOptions.empty()) {
-        std::vector<const char*> items;
-        int actionIndex = 0;
-        for (int i = 0; i < static_cast<int>(sendState.actionOptions.size()); ++i) {
-            items.push_back(sendState.actionOptions[i].c_str());
-            if (sendState.actionOptions[i] == sendState.actionName) {
-                actionIndex = i;
-            }
-        }
-        if (ImGui::Combo("业务动作", &actionIndex, items.data(), static_cast<int>(items.size()))) {
-            sendState.actionName = sendState.actionOptions[actionIndex];
-        }
-    } else {
-        ImGui::TextDisabled("当前协议未声明业务动作");
-    }
-
     if (ImGui::Button("发送原始载荷")) {
         if (!application_.sendManualPayload(sendState.payload, sendState.hexMode)) {
             application_.setStatusMessage(comm.lastError, true);
         }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("触发业务动作") && !sendState.actionName.empty()) {
-        application_.triggerAction(sendState.actionName);
     }
 
     ImGui::End();

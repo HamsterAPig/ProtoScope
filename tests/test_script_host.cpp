@@ -113,9 +113,15 @@ void test_script_multi_dock_snapshot() {
     require(docks[0].descriptor.id == "protocol", "第一个 dock id 不正确");
     require(docks[1].descriptor.title == "高级参数", "第二个 dock 标题不正确");
 
-    const auto actions = host.actionIdsSnapshot();
-    require(actions.size() == 1, "应只枚举一个按钮动作");
-    require(actions[0] == "read_version", "按钮动作 id 不正确");
+    const auto controls = host.controlsSnapshot();
+    bool foundReadVersionButton = false;
+    for (const auto& control : controls) {
+        if (control.type == protoscope::scripting::ControlType::Button && control.id == "read_version") {
+            foundReadVersionButton = true;
+            break;
+        }
+    }
+    require(foundReadVersionButton, "应存在 read_version 按钮控件");
 }
 
 void test_script_crc_bridge() {
@@ -360,6 +366,7 @@ static const TestCase kAllTests[] = {
     {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
+    {"transport_enqueue_send_async_roundtrip", &test_transport_enqueue_send_async_roundtrip},
     {"serial_transport_error_path", &test_serial_transport_error_path},
 };
 

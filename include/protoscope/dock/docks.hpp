@@ -54,8 +54,6 @@ struct ScriptDockState {
 struct SendDockState {
     bool hexMode{true};
     std::string payload{"AA 01 00"};
-    std::string actionName{"read_version"};
-    std::vector<std::string> actionOptions;
 };
 
 struct LuaDockState {

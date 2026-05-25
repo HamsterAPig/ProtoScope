@@ -83,6 +83,7 @@ public:
     virtual bool open(const TransportConfig& config) = 0;
     virtual void close() = 0;
     virtual bool send(std::vector<std::uint8_t> bytes) = 0;
+    virtual bool enqueueSend(std::vector<std::uint8_t> bytes) = 0;
     virtual TransportState state() const = 0;
     virtual std::vector<TransportEvent> takeEvents() = 0;
     virtual std::uint64_t txCount() const = 0;
@@ -122,6 +123,7 @@ public:
     bool open(const TransportConfig& config) override;
     void close() override;
     bool send(std::vector<std::uint8_t> bytes) override;
+    bool enqueueSend(std::vector<std::uint8_t> bytes) override;
 
 private:
     struct Runtime;
@@ -137,6 +139,7 @@ public:
     bool open(const TransportConfig& config) override;
     void close() override;
     bool send(std::vector<std::uint8_t> bytes) override;
+    bool enqueueSend(std::vector<std::uint8_t> bytes) override;
 
 private:
     struct Runtime;
@@ -154,6 +157,7 @@ public:
     bool open(const TransportConfig& config) override;
     void close() override;
     bool send(std::vector<std::uint8_t> bytes) override;
+    bool enqueueSend(std::vector<std::uint8_t> bytes) override;
 
 private:
     struct Runtime;

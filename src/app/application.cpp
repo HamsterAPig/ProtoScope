@@ -16,18 +16,6 @@ std::uint64_t nowMs() {
             .count());
 }
 
-void syncSendActionOptions(dock::DockStore& dockStore, const scripting::ScriptHost& scriptHost) {
-    auto& send = dockStore.sendState();
-    send.actionOptions = scriptHost.actionIdsSnapshot();
-    if (send.actionOptions.empty()) {
-        send.actionName.clear();
-        return;
-    }
-    if (std::find(send.actionOptions.begin(), send.actionOptions.end(), send.actionName) == send.actionOptions.end()) {
-        send.actionName = send.actionOptions.front();
-    }
-}
-
 const char* stateMessage(transport::TransportState state) {
     switch (state) {
     case transport::TransportState::Closed:
@@ -101,7 +89,6 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         lua.docks = scriptHost_.dockSnapshots();
         lua.controls = scriptHost_.controlsSnapshot();
         lua.controlStates = scriptHost_.controlStatesSnapshot();
-        syncSendActionOptions(dockStore_, scriptHost_);
         return true;
     }
 
@@ -110,8 +97,6 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
     lua.lastError = lua.loaded ? std::string() : scriptHost_.lastError();
-    syncSendActionOptions(dockStore_, scriptHost_);
-
     flushScriptLogs();
     syncDockState();
     return lua.loaded;
@@ -223,17 +208,6 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
     return true;
 }
 
-void Application::triggerAction(const std::string& actionName) {
-    if (!activeConnection_.has_value()) {
-        dockStore_.commState().lastError = "连接未打开，无法触发动作";
-        return;
-    }
-    scriptHost_.invokeAction(*activeConnection_, actionName);
-    flushScriptOutputs();
-    flushScriptLogs();
-    syncDockState();
-}
-
 void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value) {
     if (!activeConnection_.has_value()) {
         dockStore_.commState().lastError = "连接未打开，无法更新控件";
@@ -323,7 +297,6 @@ void Application::syncDockState() {
     lua.docks = scriptHost_.dockSnapshots();
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
-    syncSendActionOptions(dockStore_, scriptHost_);
 }
 
 bool Application::handleTransportEvents() {
@@ -404,7 +377,8 @@ bool Application::flushScriptOutputs() {
             dockStore_.commState().lastError = "脚本产生了待发数据，但连接未打开";
             continue;
         }
-        if (transport_->send(bytes) && activeConnection_.has_value()) {
+        // 核心流程：脚本动作发送改成异步投递到 transport I/O 线程，避免 GUI 线程卡在同步写。
+        if (transport_->enqueueSend(bytes) && activeConnection_.has_value()) {
             dockStore_.appendReceiveRow(dock::ReceiveRow{
                 .timestampMs = nowMs(),
                 .direction = "TX",

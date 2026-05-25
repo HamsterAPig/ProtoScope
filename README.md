@@ -75,13 +75,24 @@ protocols/
   - 读取当前控件值
 - `proto.set_control(id, value)`
   - 从脚本侧更新控件值，更新后 UI 会在下一帧反映
+- `proto.crc16_modbus(payload)`
+  - 计算 Modbus CRC16，返回整数校验值
+- `proto.crc16_ccitt_false(payload)`
+  - 计算 CRC16/CCITT-FALSE，返回整数校验值
+- `proto.crc32_ieee(payload)`
+  - 计算 CRC32/IEEE，返回整数校验值
 
 ## Lua 回调生命周期
 
 当前约定的回调面如下：
 
+- `ui()`
+  - 返回 Dock 描述数组
+  - 每个 Dock 需提供 `id`、`title`、`controls`
+  - 当前默认脚本优先使用该入口组织多面板 UI
 - `controls()`
   - 返回控件描述数组
+  - 当 `ui()` 不存在时，作为兼容旧脚本的回退入口
   - 若结构非法，脚本加载失败
 - `on_open(ctx)`
   - 连接建立后调用
@@ -102,10 +113,13 @@ protocols/
 - `ctx.endpoint`
 - `ctx.connection_id`
 - `ctx.timestamp_ms`
+- `ctx.ready_for_io`
 
 `bytes` 当前统一是 `number[]`。
 
 ## 控件声明格式
+
+当前默认脚本使用 `ui()` 返回 Dock 数组；若只需单面板，也可继续返回 `controls()`。
 
 `controls()` 返回值示例：
 

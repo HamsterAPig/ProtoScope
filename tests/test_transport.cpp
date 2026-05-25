@@ -106,6 +106,59 @@ void test_tcp_transport_roundtrip() {
     server.close();
 }
 
+void test_transport_enqueue_send_async_roundtrip() {
+    using namespace protoscope::transport;
+
+    TcpServerTransport server;
+    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = true}), "服务端打开失败");
+
+    const auto serverEvents = server.takeEvents();
+    std::optional<std::uint16_t> listenPort;
+    for (const auto& event : serverEvents) {
+        if (const auto* opened = std::get_if<TransportOpenEvent>(&event)) {
+            listenPort = parsePort(opened->context.endpoint);
+            break;
+        }
+    }
+    require(listenPort.has_value(), "未拿到服务端监听端口");
+
+    TcpClientTransport client;
+    require(client.open(TcpClientConfig{.host = "127.0.0.1", .port = *listenPort}), "客户端连接失败");
+
+    const bool serverAccepted = waitUntil([&]() {
+        for (const auto& event : server.takeEvents()) {
+            if (const auto* opened = std::get_if<TransportOpenEvent>(&event)) {
+                if (opened->context.readyForIo) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+    require(serverAccepted, "服务端未接受客户端连接");
+
+    const std::vector<std::uint8_t> payload{'Q', 'U', 'E', 'U', 'E'};
+    const auto enqueueStart = std::chrono::steady_clock::now();
+    require(client.enqueueSend(payload), "客户端异步发送入队失败");
+    const auto enqueueElapsed = std::chrono::steady_clock::now() - enqueueStart;
+    require(enqueueElapsed < std::chrono::milliseconds(50), "enqueueSend 不应在调用线程里长时间阻塞");
+
+    const bool serverReceived = waitUntil([&]() {
+        for (const auto& event : server.takeEvents()) {
+            if (const auto* bytes = std::get_if<TransportBytesEvent>(&event)) {
+                if (bytes->bytes == payload) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+    require(serverReceived, "服务端未收到 enqueueSend 投递的报文");
+
+    client.close();
+    server.close();
+}
+
 void test_serial_transport_error_path() {
     using namespace protoscope::transport;
 

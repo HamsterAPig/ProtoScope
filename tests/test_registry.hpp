@@ -31,6 +31,7 @@ void test_config_default_script_workspace();
 void test_protocol_scan_and_root_roundtrip();
 void test_dock_log_and_script_split();
 void test_tcp_transport_roundtrip();
+void test_transport_enqueue_send_async_roundtrip();
 void test_serial_transport_error_path();
 
 const TestCase* allTests();

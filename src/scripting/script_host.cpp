@@ -633,10 +633,6 @@ void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::s
     callbackOnControl(ScriptHostContext{ctx}, id, value);
 }
 
-void ScriptHost::invokeAction(const transport::ConnectionContext& ctx, const std::string& actionName) {
-    onControl(ctx, actionName, true);
-}
-
 void ScriptHost::tick(std::uint64_t currentMs) {
     std::vector<std::string> dueTimers;
     dueTimers.reserve(timers_.size());
@@ -703,16 +699,6 @@ std::vector<DockSnapshot> ScriptHost::dockSnapshots() const {
         docks.push_back(std::move(snapshot));
     }
     return docks;
-}
-
-std::vector<std::string> ScriptHost::actionIdsSnapshot() const {
-    std::vector<std::string> actions;
-    for (const auto& control : controls_) {
-        if (control.type == ControlType::Button) {
-            actions.push_back(control.id);
-        }
-    }
-    return actions;
 }
 
 std::vector<ScriptEvent> ScriptHost::drainEvents() {

@@ -8,5 +8,6 @@ obj/
 *.VC.opendb
 cmake-build-*
 
-build-*
+build-*/
+build_*/
 .idea

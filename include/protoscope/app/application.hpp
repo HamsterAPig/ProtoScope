@@ -29,7 +29,6 @@ public:
     void openTransport();
     void closeTransport();
     bool sendManualPayload(const std::string& payload, bool hexMode);
-    void triggerAction(const std::string& actionName);
     void updateControlValue(const std::string& id, const scripting::ControlValue& value);
     void markCommConfigEdited(bool reconnectRequired);
     void markProtocolEdited();

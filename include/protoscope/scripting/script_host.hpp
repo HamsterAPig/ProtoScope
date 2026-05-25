@@ -85,14 +85,12 @@ public:
     void onTransportError(const transport::TransportErrorEvent& event);
     void onTransportBytes(const transport::TransportBytesEvent& event);
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
-    void invokeAction(const transport::ConnectionContext& ctx, const std::string& actionName);
     void tick(std::uint64_t currentMs);
 
     std::vector<ControlDescriptor> controlsSnapshot() const;
     std::vector<ControlSnapshot> controlStatesSnapshot() const;
     std::vector<DockDescriptor> dockDescriptorsSnapshot() const;
     std::vector<DockSnapshot> dockSnapshots() const;
-    std::vector<std::string> actionIdsSnapshot() const;
     std::vector<ScriptEvent> drainEvents();
     std::vector<ScriptLog> drainLogs();
     std::vector<std::vector<std::uint8_t>> drainSendQueue();
