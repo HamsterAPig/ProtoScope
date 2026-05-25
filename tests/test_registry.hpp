@@ -36,6 +36,7 @@ void test_plot_cursor_snap_by_time_and_measurement();
 void test_wave_cursor_smart_snap_edge();
 void test_wave_cursor_smart_snap_extreme();
 void test_wave_cursor_smart_snap_fallback_to_nearest();
+void test_wave_cursor_drag_time_uses_smart_snap();
 void test_plot_channel_offset_applies_to_display_only();
 void test_plot_limited_envelope_edges();
 void test_wave_frequency_parse_and_axis_mapping();

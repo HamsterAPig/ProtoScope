@@ -95,6 +95,7 @@ std::optional<CursorReadout> findLocalExtremeNearTime(const std::vector<WaveSamp
                                                       double centerTime,
                                                       double maxTimeDistance,
                                                       WaveExtremeKind kind);
+double applyCursorDragSnap(double dragTime, const std::optional<CursorReadout>& smartSnap);
 void lockCursorInterval(double movedTime, double& pairedTime, double lockedInterval, bool movedLeftCursor);
 WaveViewport moveViewportByDelta(const WaveViewport& viewport,
                                  double deltaTime,

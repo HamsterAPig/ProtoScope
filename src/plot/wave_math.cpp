@@ -389,6 +389,14 @@ std::optional<CursorReadout> findLocalExtremeNearTime(const std::vector<WaveSamp
     return best;
 }
 
+double applyCursorDragSnap(double dragTime, const std::optional<CursorReadout>& smartSnap) {
+    if (smartSnap.has_value() && std::isfinite(smartSnap->time)) {
+        // 拖动时智能吸附结果必须覆盖鼠标时间，否则 UI 游标线会继续跟随鼠标移动。
+        return smartSnap->time;
+    }
+    return dragTime;
+}
+
 void lockCursorInterval(double movedTime, double& pairedTime, double lockedInterval, bool movedLeftCursor) {
     if (!std::isfinite(lockedInterval) || lockedInterval <= 0.0) {
         return;

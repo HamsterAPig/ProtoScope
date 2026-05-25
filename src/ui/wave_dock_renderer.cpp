@@ -341,12 +341,17 @@ bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io) {
         || (view.cursorSnapMode == plot::WaveCursorSnapMode::ModifierSnap && (io.KeyShift || io.KeyCtrl));
 }
 
-std::optional<plot::CursorReadout> findSmartCursorSnap(const plot::WaveDisplayData& displayData,
-                                                       std::size_t channelIndex,
-                                                       double time,
-                                                       double mouseValue,
-                                                       const ImPlotRect& limits,
-                                                       double maxTimeDistance) {
+struct SmartCursorSnap {
+    plot::CursorReadout readout;
+    std::string_view label;
+};
+
+std::optional<SmartCursorSnap> findSmartCursorSnap(const plot::WaveDisplayData& displayData,
+                                                   std::size_t channelIndex,
+                                                   double time,
+                                                   double mouseValue,
+                                                   const ImPlotRect& limits,
+                                                   double maxTimeDistance) {
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
     }
@@ -361,19 +366,23 @@ std::optional<plot::CursorReadout> findSmartCursorSnap(const plot::WaveDisplayDa
             auto peak = plot::findLocalExtremeNearTime(
                 samples, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Maximum);
             if (peak.has_value()) {
-                return peak;
+                return SmartCursorSnap{.readout = *peak, .label = "Peak"};
             }
         }
         if (mouseValue <= minValue + valueHeight * kExtremeSnapZoneRatio) {
             auto trough = plot::findLocalExtremeNearTime(
                 samples, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Minimum);
             if (trough.has_value()) {
-                return trough;
+                return SmartCursorSnap{.readout = *trough, .label = "Trough"};
             }
         }
     }
     // 常规智能吸附优先找最大跳变；找不到再交给调用方使用按时间最近点兜底。
-    return plot::findStrongestEdgeNearTime(samples, channelIndex, time, maxTimeDistance);
+    auto edge = plot::findStrongestEdgeNearTime(samples, channelIndex, time, maxTimeDistance);
+    if (edge.has_value()) {
+        return SmartCursorSnap{.readout = *edge, .label = "Edge"};
+    }
+    return std::nullopt;
 }
 
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
@@ -421,14 +430,17 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
 void drawCursorAnnotation(std::size_t cursorIndex,
                           const plot::CursorReadout& readout,
                           const plot::ChannelView& channel,
-                          std::string_view timeUnit) {
+                          std::string_view timeUnit,
+                          std::string_view snapLabel) {
+    const std::string labelPrefix = snapLabel.empty() ? "" : std::string(snapLabel) + " ";
     ImPlot::Annotation(readout.time,
                        readout.value,
                        ImVec4(1.0F, 1.0F, 1.0F, 0.92F),
                        ImVec2(10.0F, cursorIndex == 0 ? -18.0F : 18.0F),
                        true,
-                       "C%zu %s\n%s %.6g",
+                       "C%zu %s%s\n%s %.6g",
                        cursorIndex + 1,
+                       labelPrefix.c_str(),
                        formatMetricText(readout.time, std::string(timeUnit).c_str()).c_str(),
                        channel.label.c_str(),
                         readout.value);
@@ -890,38 +902,47 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                     if (!cursor.enabled) {
                         continue;
                     }
+                    std::optional<plot::CursorReadout> smartSnap;
+                    std::string_view snapLabel;
+                    const bool smartSnapActive = cursorSmartSnapActive(view, io);
                     bool clicked = false;
                     bool hovered = false;
                     bool held = false;
-                    ImPlot::DragLineX(static_cast<int>(100 + cursorIndex), &cursor.time,
+                    double dragTime = cursor.time;
+                    ImPlotDragToolFlags dragFlags = ImPlotDragToolFlags_NoFit;
+                    if (smartSnapActive) {
+                        dragFlags |= ImPlotDragToolFlags_Delayed;
+                    }
+                    ImPlot::DragLineX(static_cast<int>(100 + cursorIndex), &dragTime,
                         ImVec4(cursorIndex == 0 ? 0.2F : 1.0F, 0.9F, 0.3F, 1.0F),
                         1.5F,
-                        ImPlotDragToolFlags_NoFit,
+                        dragFlags,
                         &clicked,
                         &hovered,
                         &held);
                     anyCursorHeld = anyCursorHeld || held;
-                    if (held && view.cursorIntervalLocked && view.lockedCursorInterval > 0.0) {
-                        auto& pairedCursor = view.cursors[cursorIndex == 0 ? 1 : 0];
-                        plot::lockCursorInterval(cursor.time, pairedCursor.time, view.lockedCursorInterval, cursorIndex == 0);
-                    } else if (held && !view.cursorIntervalLocked && view.cursors[0].enabled && view.cursors[1].enabled) {
+                    if (held && smartSnapActive) {
+                        // 核心流程：先用 DragLineX 写入的鼠标时间查吸附，再回写游标时间，配合 Delayed 让绘制使用受约束位置。
+                        auto smartSnapTarget = findSmartCursorSnap(
+                            displayData, view.measurementChannelIndex, dragTime, mousePos.y, limits, smartSnapDistance);
+                        if (smartSnapTarget.has_value()) {
+                            smartSnap = smartSnapTarget->readout;
+                            snapLabel = smartSnapTarget->label;
+                        }
+                    }
+                    cursor.time = held ? plot::applyCursorDragSnap(dragTime, smartSnap) : dragTime;
+                    if (held && !view.cursorIntervalLocked && view.cursors[0].enabled && view.cursors[1].enabled) {
                         view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
                     }
 
                     auto best = findNearestDisplayByTime(displayData, view.measurementChannelIndex, cursor.time, timeSnapDistance);
-                    if (held && cursorSmartSnapActive(view, io)) {
-                        // 核心流程：智能吸附只在拖动激活时改落点，优先极值/边沿，找不到再回落到时间最近点读数。
-                        auto smartSnap = findSmartCursorSnap(
-                            displayData, view.measurementChannelIndex, cursor.time, mousePos.y, limits, smartSnapDistance);
-                        if (smartSnap.has_value()) {
-                            best = smartSnap;
-                            cursor.time = smartSnap->time;
-                        }
+                    if (smartSnap.has_value()) {
+                        best = smartSnap;
                     }
                     if (best.has_value()) {
                         // 核心流程：每帧都刷新游标读数；拖动中保留连续时间，避免采样点吸附导致抖动。
                         cursor.channelIndex = view.measurementChannelIndex;
-                        if (!held || cursorSmartSnapActive(view, io)) {
+                        if (!held || smartSnapActive) {
                             cursor.time = best->time;
                         }
                         cursor.value = best->value;
@@ -934,7 +955,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                         }
                         cursorReadouts[cursorIndex] = best;
                         if (held || hovered || cursor.pinned) {
-                            drawCursorAnnotation(cursorIndex, *best, snapshot.channels[best->channelIndex], displayData.timeUnit);
+                            drawCursorAnnotation(cursorIndex, *best, snapshot.channels[best->channelIndex], displayData.timeUnit, snapLabel);
                         }
                     }
                 }

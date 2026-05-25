@@ -4,6 +4,7 @@
 #include "protoscope/plot/wave_math.hpp"
 
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -163,6 +164,23 @@ void test_wave_cursor_smart_snap_fallback_to_nearest() {
     const auto nearest = buffer.findNearestByTime(0, 0.9, 0.2);
     require(nearest.has_value(), "无智能吸附目标时应保留按时间最近点兜底能力");
     require(nearest->sampleIndex == 1, "兜底最近点索引错误");
+}
+
+void test_wave_cursor_drag_time_uses_smart_snap() {
+    const double dragTime = 1.02;
+    const std::optional<protoscope::plot::CursorReadout> smartSnap = protoscope::plot::CursorReadout{
+        .valid = true,
+        .channelIndex = 0,
+        .sampleIndex = 2,
+        .time = 1.05,
+        .value = 2.5,
+    };
+
+    const double snappedTime = protoscope::plot::applyCursorDragSnap(dragTime, smartSnap);
+    require(std::abs(snappedTime - 1.05) < 1e-9, "智能吸附时间应覆盖 DragLineX 写入的鼠标时间");
+
+    const double fallbackTime = protoscope::plot::applyCursorDragSnap(dragTime, std::nullopt);
+    require(std::abs(fallbackTime - dragTime) < 1e-9, "无智能吸附结果时应保留拖动时间");
 }
 
 void test_plot_channel_offset_applies_to_display_only() {
