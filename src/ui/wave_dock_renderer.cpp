@@ -336,6 +336,46 @@ std::optional<plot::CursorReadout> findNearestDisplayPoint(const plot::WaveDispl
     return best;
 }
 
+bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io) {
+    return view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap
+        || (view.cursorSnapMode == plot::WaveCursorSnapMode::ModifierSnap && (io.KeyShift || io.KeyCtrl));
+}
+
+std::optional<plot::CursorReadout> findSmartCursorSnap(const plot::WaveDisplayData& displayData,
+                                                       std::size_t channelIndex,
+                                                       double time,
+                                                       double mouseValue,
+                                                       const ImPlotRect& limits,
+                                                       double maxTimeDistance) {
+    if (channelIndex >= displayData.channels.size()) {
+        return std::nullopt;
+    }
+    const auto& samples = displayData.channels[channelIndex].samples;
+    const double minValue = (std::min)(limits.Y.Min, limits.Y.Max);
+    const double maxValue = (std::max)(limits.Y.Min, limits.Y.Max);
+    const double valueHeight = maxValue - minValue;
+    constexpr double kExtremeSnapZoneRatio = 0.15;
+    if (std::isfinite(mouseValue) && valueHeight > 0.0) {
+        // 鼠标靠近绘图区顶部/底部时，极值优先于边沿，方便直接锁峰值或谷值。
+        if (mouseValue >= maxValue - valueHeight * kExtremeSnapZoneRatio) {
+            auto peak = plot::findLocalExtremeNearTime(
+                samples, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Maximum);
+            if (peak.has_value()) {
+                return peak;
+            }
+        }
+        if (mouseValue <= minValue + valueHeight * kExtremeSnapZoneRatio) {
+            auto trough = plot::findLocalExtremeNearTime(
+                samples, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Minimum);
+            if (trough.has_value()) {
+                return trough;
+            }
+        }
+    }
+    // 常规智能吸附优先找最大跳变；找不到再交给调用方使用按时间最近点兜底。
+    return plot::findStrongestEdgeNearTime(samples, channelIndex, time, maxTimeDistance);
+}
+
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
                                               std::size_t channelIndex,
                                               double beginTime,
@@ -630,6 +670,16 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         ImGui::SameLine();
         ImGui::Checkbox("显示游标", &view.showCursors);
         ImGui::SameLine();
+        const bool smartSnapMode = view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap;
+        if (ImGui::Button(smartSnapMode ? "智能吸附" : "按键吸附")) {
+            view.cursorSnapMode = smartSnapMode ? plot::WaveCursorSnapMode::ModifierSnap : plot::WaveCursorSnapMode::SmartSnap;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(smartSnapMode ? "拖动游标时自动吸附边沿/极值" : "按住 Shift 或 Ctrl 拖动时启用智能吸附");
+            ImGui::EndTooltip();
+        }
+        ImGui::SameLine();
         ImGui::Checkbox("磷光辉光", &view.phosphorGlowEnabled);
 
         char frequencyBuffer[64]{};
@@ -753,7 +803,12 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
 
             const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
             const ImPlotRect limits = ImPlot::GetPlotLimits();
-            const double timeSnapDistance = (limits.X.Max - limits.X.Min) / 80.0;
+            const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
+            const double timeSnapDistance = visibleTimeWidth / 80.0;
+            double smartSnapDistance = (std::max)(timeSnapDistance, visibleTimeWidth * 0.02);
+            if (displayBounds.valid) {
+                smartSnapDistance = (std::max)(smartSnapDistance, displayBounds.minStep * 2.0);
+            }
             const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
             std::array<std::optional<plot::CursorReadout>, 2> cursorReadouts{};
             std::optional<plot::MeasurementReadout> measurement;
@@ -854,13 +909,26 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                     }
 
                     auto best = findNearestDisplayByTime(displayData, view.measurementChannelIndex, cursor.time, timeSnapDistance);
+                    if (held && cursorSmartSnapActive(view, io)) {
+                        // 核心流程：智能吸附只在拖动激活时改落点，优先极值/边沿，找不到再回落到时间最近点读数。
+                        auto smartSnap = findSmartCursorSnap(
+                            displayData, view.measurementChannelIndex, cursor.time, mousePos.y, limits, smartSnapDistance);
+                        if (smartSnap.has_value()) {
+                            best = smartSnap;
+                            cursor.time = smartSnap->time;
+                        }
+                    }
                     if (best.has_value()) {
                         // 核心流程：每帧都刷新游标读数；拖动中保留连续时间，避免采样点吸附导致抖动。
                         cursor.channelIndex = view.measurementChannelIndex;
-                        if (!held) {
+                        if (!held || cursorSmartSnapActive(view, io)) {
                             cursor.time = best->time;
                         }
                         cursor.value = best->value;
+                        if (held && view.cursorIntervalLocked && view.lockedCursorInterval > 0.0) {
+                            auto& pairedCursor = view.cursors[cursorIndex == 0 ? 1 : 0];
+                            plot::lockCursorInterval(cursor.time, pairedCursor.time, view.lockedCursorInterval, cursorIndex == 0);
+                        }
                         if (held) {
                             best->time = cursor.time;
                         }

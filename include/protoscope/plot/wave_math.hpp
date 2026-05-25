@@ -3,6 +3,7 @@
 #include "protoscope/plot/oscilloscope.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,6 +20,11 @@ enum class WaveZoomMode {
     XOnly,
     YOnly,
     XY,
+};
+
+enum class WaveExtremeKind {
+    Maximum,
+    Minimum,
 };
 
 struct FrequencyParseResult {
@@ -80,6 +86,15 @@ CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           const CursorReadout& right,
                                           WaveTimeAxisSource axisSource,
                                           std::string_view timeUnit);
+std::optional<CursorReadout> findStrongestEdgeNearTime(const std::vector<WaveSample>& samples,
+                                                       std::size_t channelIndex,
+                                                       double centerTime,
+                                                       double maxTimeDistance);
+std::optional<CursorReadout> findLocalExtremeNearTime(const std::vector<WaveSample>& samples,
+                                                      std::size_t channelIndex,
+                                                      double centerTime,
+                                                      double maxTimeDistance,
+                                                      WaveExtremeKind kind);
 void lockCursorInterval(double movedTime, double& pairedTime, double lockedInterval, bool movedLeftCursor);
 WaveViewport moveViewportByDelta(const WaveViewport& viewport,
                                  double deltaTime,

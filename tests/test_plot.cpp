@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -95,6 +96,73 @@ void test_plot_cursor_snap_by_time_and_measurement() {
     require(std::abs(measurement.minValue + 1.0) < 1e-9, "最小值错误");
     require(std::abs(measurement.maxValue - 1.0) < 1e-9, "最大值错误");
     require(std::abs(measurement.peakToPeak - 2.0) < 1e-9, "峰峰值错误");
+}
+
+void test_wave_cursor_smart_snap_edge() {
+    const std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 0.0},
+        {.time = 1.1, .value = 5.0},
+        {.time = 2.0, .value = 5.0},
+    };
+
+    const auto edge = protoscope::plot::findStrongestEdgeNearTime(samples, 0, 1.02, 0.08);
+    require(edge.has_value(), "智能吸附应找到附近最大跳变边沿");
+    require(edge->sampleIndex == 2, "边沿吸附应记录跳变右侧样本索引");
+    require(std::abs(edge->time - 1.05) < 1e-9, "边沿吸附应落到跳变中点");
+    require(std::abs(edge->value - 2.5) < 1e-9, "边沿吸附值应取跳变中点值");
+
+    const auto farEdge = protoscope::plot::findStrongestEdgeNearTime(samples, 0, 0.5, 0.1);
+    require(!farEdge.has_value(), "窗口外边沿不应被吸附");
+}
+
+void test_wave_cursor_smart_snap_extreme() {
+    const std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 2.0},
+        {.time = 2.0, .value = 0.0},
+        {.time = 3.0, .value = -3.0},
+        {.time = 4.0, .value = 0.0},
+        {.time = 5.0, .value = 1.0},
+        {.time = 6.0, .value = 0.0},
+    };
+
+    const auto peak = protoscope::plot::findLocalExtremeNearTime(
+        samples, 0, 1.2, 0.4, protoscope::plot::WaveExtremeKind::Maximum);
+    require(peak.has_value(), "顶部极值吸附应找到局部最大值");
+    require(peak->sampleIndex == 1, "顶部极值吸附样本索引错误");
+    require(std::abs(peak->value - 2.0) < 1e-9, "顶部极值吸附值错误");
+
+    const auto trough = protoscope::plot::findLocalExtremeNearTime(
+        samples, 0, 2.8, 0.4, protoscope::plot::WaveExtremeKind::Minimum);
+    require(trough.has_value(), "底部极值吸附应找到局部最小值");
+    require(trough->sampleIndex == 3, "底部极值吸附样本索引错误");
+    require(std::abs(trough->value + 3.0) < 1e-9, "底部极值吸附值错误");
+
+    const auto farPeak = protoscope::plot::findLocalExtremeNearTime(
+        samples, 0, 4.5, 0.2, protoscope::plot::WaveExtremeKind::Maximum);
+    require(!farPeak.has_value(), "窗口外极值不应被吸附");
+}
+
+void test_wave_cursor_smart_snap_fallback_to_nearest() {
+    const std::vector<protoscope::plot::WaveSample> flatSamples{
+        {.time = 0.0, .value = 1.0},
+        {.time = 1.0, .value = 1.0},
+        {.time = 2.0, .value = 1.0},
+    };
+    require(!protoscope::plot::findStrongestEdgeNearTime(flatSamples, 0, 1.0, 0.5).has_value(),
+        "平坦波形不应产生边沿吸附");
+    require(!protoscope::plot::findLocalExtremeNearTime(
+                flatSamples, 0, 1.0, 0.5, protoscope::plot::WaveExtremeKind::Maximum)
+                 .has_value(),
+        "平坦波形不应产生极值吸附");
+
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(1);
+    buffer.append(0, protoscope::plot::WaveAppendRequest{.source = "test", .samples = flatSamples});
+    const auto nearest = buffer.findNearestByTime(0, 0.9, 0.2);
+    require(nearest.has_value(), "无智能吸附目标时应保留按时间最近点兜底能力");
+    require(nearest->sampleIndex == 1, "兜底最近点索引错误");
 }
 
 void test_plot_channel_offset_applies_to_display_only() {

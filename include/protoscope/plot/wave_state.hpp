@@ -10,6 +10,11 @@
 
 namespace protoscope::plot {
 
+enum class WaveCursorSnapMode {
+    SmartSnap,
+    ModifierSnap,
+};
+
 struct WaveCursorState {
     bool enabled{true};
     bool pinned{false};
@@ -48,6 +53,7 @@ struct WaveViewState {
     std::string sampleFrequencyInput;
     std::string sampleFrequencyError;
     WaveTimeAxisSource timeAxisSource{WaveTimeAxisSource::SampleIndex};
+    WaveCursorSnapMode cursorSnapMode{WaveCursorSnapMode::SmartSnap};
     std::array<WaveCursorState, 2> cursors{};
 };
 

@@ -302,6 +302,93 @@ CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
     return text;
 }
 
+std::optional<CursorReadout> findStrongestEdgeNearTime(const std::vector<WaveSample>& samples,
+                                                       std::size_t channelIndex,
+                                                       double centerTime,
+                                                       double maxTimeDistance) {
+    if (samples.size() < 2 || !std::isfinite(centerTime) || !std::isfinite(maxTimeDistance) || maxTimeDistance <= 0.0) {
+        return std::nullopt;
+    }
+
+    std::optional<CursorReadout> best;
+    double bestScore = 0.0;
+    double bestDistance = std::numeric_limits<double>::infinity();
+    for (std::size_t index = 1; index < samples.size(); ++index) {
+        const auto& left = samples[index - 1];
+        const auto& right = samples[index];
+        if (!std::isfinite(left.time) || !std::isfinite(left.value) || !std::isfinite(right.time) || !std::isfinite(right.value)) {
+            continue;
+        }
+        const double edgeTime = 0.5 * (left.time + right.time);
+        const double distance = std::abs(edgeTime - centerTime);
+        if (distance > maxTimeDistance) {
+            continue;
+        }
+        // 边沿评分只关注相邻样本的幅值突变，平坦片段不参与吸附，避免游标无意义跳动。
+        const double score = std::abs(right.value - left.value);
+        if (score <= kEpsilon) {
+            continue;
+        }
+        if (score > bestScore || (std::abs(score - bestScore) <= kEpsilon && distance < bestDistance)) {
+            bestScore = score;
+            bestDistance = distance;
+            best = CursorReadout{
+                .valid = true,
+                .channelIndex = channelIndex,
+                .sampleIndex = index,
+                .time = edgeTime,
+                .value = 0.5 * (left.value + right.value),
+            };
+        }
+    }
+    return best;
+}
+
+std::optional<CursorReadout> findLocalExtremeNearTime(const std::vector<WaveSample>& samples,
+                                                      std::size_t channelIndex,
+                                                      double centerTime,
+                                                      double maxTimeDistance,
+                                                      WaveExtremeKind kind) {
+    if (samples.size() < 3 || !std::isfinite(centerTime) || !std::isfinite(maxTimeDistance) || maxTimeDistance <= 0.0) {
+        return std::nullopt;
+    }
+
+    std::optional<CursorReadout> best;
+    double bestDistance = std::numeric_limits<double>::infinity();
+    for (std::size_t index = 1; index + 1 < samples.size(); ++index) {
+        const auto& previous = samples[index - 1];
+        const auto& current = samples[index];
+        const auto& next = samples[index + 1];
+        if (!std::isfinite(previous.value) || !std::isfinite(current.time) || !std::isfinite(current.value)
+            || !std::isfinite(next.value)) {
+            continue;
+        }
+        const double distance = std::abs(current.time - centerTime);
+        if (distance > maxTimeDistance) {
+            continue;
+        }
+        // 极值吸附只接受局部峰/谷，防止普通斜坡点在顶部/底部区域误触发。
+        const bool isMaximum = current.value > previous.value && current.value > next.value;
+        const bool isMinimum = current.value < previous.value && current.value < next.value;
+        if ((kind == WaveExtremeKind::Maximum && !isMaximum) || (kind == WaveExtremeKind::Minimum && !isMinimum)) {
+            continue;
+        }
+        const bool betterValue = !best.has_value()
+            || (kind == WaveExtremeKind::Maximum ? current.value > best->value : current.value < best->value);
+        if (betterValue || (best.has_value() && std::abs(current.value - best->value) <= kEpsilon && distance < bestDistance)) {
+            bestDistance = distance;
+            best = CursorReadout{
+                .valid = true,
+                .channelIndex = channelIndex,
+                .sampleIndex = index,
+                .time = current.time,
+                .value = current.value,
+            };
+        }
+    }
+    return best;
+}
+
 void lockCursorInterval(double movedTime, double& pairedTime, double lockedInterval, bool movedLeftCursor) {
     if (!std::isfinite(lockedInterval) || lockedInterval <= 0.0) {
         return;
