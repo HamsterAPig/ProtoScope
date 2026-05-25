@@ -90,10 +90,10 @@ local function setup_plot(reset_history)
     vertical_unit = "V",
     history_limit = 12000,
     channels = {
-      { label = "正弦", unit = "V" },
-      { label = "三角", unit = "V" },
-      { label = "方波", unit = "V" },
-      { label = "锯齿", unit = "V" }
+      { label = "正弦", unit = "V", offset = 0.0 },
+      { label = "三角", unit = "V", offset = 0.0 },
+      { label = "方波", unit = "V", offset = 0.0 },
+      { label = "锯齿", unit = "V", offset = 0.0 }
     }
   })
   plot_ready = true

@@ -500,6 +500,7 @@ std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& 
         PlotChannelDescriptor descriptor{};
         descriptor.label = luaStringField(channelTable, "label").value_or("CH" + std::to_string(index));
         descriptor.unit = luaStringField(channelTable, "unit").value_or("");
+        descriptor.offset = luaNumberField(channelTable, "offset").value_or(0.0);
         setup.channels.push_back(std::move(descriptor));
     }
     if (setup.channels.empty()) {

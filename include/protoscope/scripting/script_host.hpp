@@ -71,6 +71,7 @@ struct ScriptLog {
 struct PlotChannelDescriptor {
     std::string label;
     std::string unit;
+    double offset{0.0};
 };
 
 struct PlotSetup {

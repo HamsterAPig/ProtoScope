@@ -6,6 +6,7 @@
 #include "protoscope/transport/transport.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <sstream>
 #include <stdexcept>
@@ -337,6 +338,7 @@ void test_protocol_scan_and_root_roundtrip() {
 
     const auto normalized = store.normalizeProtocolDir(tempRoot, tempRoot / "missing");
     require(normalized == alphaDir, "root-aware 协议目录归一化应优先回退到当前 root 下的有效目录");
+
 }
 
 void test_script_plot_api_snapshot() {
@@ -350,6 +352,8 @@ void test_script_plot_api_snapshot() {
     auto appends = host.drainPlotAppends();
     require(setups.size() == 1, "打开连接后应生成 1 次 plot.setup");
     require(setups[0].channels.size() == 2, "plot.setup 应声明 2 个通道");
+    require(std::abs(setups[0].channels[0].offset - 0.0) < 1e-12, "CH1 offset 解析错误");
+    require(std::abs(setups[0].channels[1].offset - 1.0) < 1e-12, "CH2 offset 解析错误");
     require(appends.size() == 2, "打开连接后应推送 2 组通道数据");
     require(appends[0].second.samples.size() == 3, "通道采样点数量不正确");
 }
@@ -390,6 +394,7 @@ static const TestCase kAllTests[] = {
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
+    {"plot_channel_offset_applies_to_display_only", &test_plot_channel_offset_applies_to_display_only},
 };
 
 } // namespace

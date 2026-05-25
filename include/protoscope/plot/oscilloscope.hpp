@@ -21,6 +21,7 @@ struct WaveAppendRequest {
 struct ChannelSpec {
     std::string label;
     std::string unit;
+    double offset{0.0};
 };
 
 struct ViewConfig {
@@ -103,6 +104,7 @@ public:
     void setViewConfig(const ViewConfig& config);
 
     std::size_t channelCount() const;
+    std::optional<ChannelSpec> channelSpec(std::size_t channelIndex) const;
     const ViewConfig& viewConfig() const;
 
     bool append(std::size_t channelIndex, WaveAppendRequest request);
@@ -134,7 +136,7 @@ private:
     std::size_t lowerBoundByTime(const std::vector<WaveSample>& samples, double time) const;
     std::size_t upperBoundByTime(const std::vector<WaveSample>& samples, double time) const;
     void trimHistory(ChannelBuffer& channel);
-    WaveStats makeStats(const std::vector<WaveSample>& samples, std::size_t begin, std::size_t end) const;
+    WaveStats makeStats(const std::vector<WaveSample>& samples, std::size_t begin, std::size_t end, double offset) const;
 
 private:
     std::string source_;

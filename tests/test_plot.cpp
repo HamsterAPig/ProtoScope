@@ -95,3 +95,42 @@ void test_plot_cursor_snap_by_time_and_measurement() {
     require(std::abs(measurement.maxValue - 1.0) < 1e-9, "最大值错误");
     require(std::abs(measurement.peakToPeak - 2.0) < 1e-9, "峰峰值错误");
 }
+
+void test_plot_channel_offset_applies_to_display_only() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .offset = 1.5});
+    buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .source = "test",
+        .samples = {
+            {.time = 0.0, .value = -1.0},
+            {.time = 0.5, .value = 1.0},
+            {.time = 1.0, .value = 0.0},
+        },
+    });
+
+    const auto snapshot = buffer.snapshot(0.0, 1.0);
+    require(snapshot.channels.size() == 1, "应存在 1 个通道");
+    require(snapshot.channels[0].samples != nullptr, "原始样本指针不应为空");
+    require(std::abs(snapshot.channels[0].samples[0].value + 1.0) < 1e-9, "原始样本值不应被 offset 污染");
+    require(std::abs(snapshot.channels[0].stats.minValue - 0.5) < 1e-9, "统计最小值应叠加 offset");
+    require(std::abs(snapshot.channels[0].stats.maxValue - 2.5) < 1e-9, "统计最大值应叠加 offset");
+
+    const auto envelope = buffer.buildEnvelope(0, 0.0, 1.0, 64);
+    require(!envelope.points.empty(), "包络点不应为空");
+    require(std::abs(envelope.points[0].minValue - 0.5) < 1e-9, "包络最小值应叠加 offset");
+
+    const auto nearestByTime = buffer.findNearestByTime(0, 0.52, 0.2);
+    require(nearestByTime.has_value(), "按时间吸附应成功");
+    require(std::abs(nearestByTime->value - 2.5) < 1e-9, "游标读数应叠加 offset");
+
+    const auto nearestByPoint = buffer.findNearest(0, 0.52, 2.4, 0.2, 0.3);
+    require(nearestByPoint.has_value(), "按点吸附应成功");
+    require(std::abs(nearestByPoint->value - 2.5) < 1e-9, "点吸附读数应叠加 offset");
+
+    const auto measurement = buffer.measureWindow(0, 0.0, 1.0);
+    require(measurement.valid, "窗口测量应有效");
+    require(std::abs(measurement.minValue - 0.5) < 1e-9, "测量最小值应叠加 offset");
+    require(std::abs(measurement.maxValue - 2.5) < 1e-9, "测量最大值应叠加 offset");
+    require(std::abs(measurement.meanValue - 1.5) < 1e-9, "测量平均值应叠加 offset");
+}

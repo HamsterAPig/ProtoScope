@@ -21,8 +21,8 @@ local function send_scope(reset_history)
     vertical_unit = "V",
     history_limit = 2048,
     channels = {
-      { label = "CH1", unit = "V" },
-      { label = "CH2", unit = "V" }
+      { label = "CH1", unit = "V", offset = 0.0 },
+      { label = "CH2", unit = "V", offset = 1.0 }
     }
   })
 

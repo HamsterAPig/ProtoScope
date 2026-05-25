@@ -264,6 +264,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                 }
             }
 
+            bool anyCursorHeld = false;
             for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
                 auto& cursor = view.cursors[cursorIndex];
                 if (!cursor.enabled) {
@@ -279,6 +280,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                     &clicked,
                     &hovered,
                     &held);
+                anyCursorHeld = anyCursorHeld || held;
 
                 if (held || hovered || cursor.pinned) {
                     std::optional<plot::CursorReadout> best;
@@ -292,9 +294,15 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
                         }
                     }
                     if (best.has_value()) {
+                        // 核心流程：拖动中保持用户手里的连续时间，避免被最近采样点每帧抢写导致抖动。
                         cursor.channelIndex = best->channelIndex;
-                        cursor.time = best->time;
+                        if (!held) {
+                            cursor.time = best->time;
+                        }
                         cursor.value = best->value;
+                        if (held) {
+                            best->time = cursor.time;
+                        }
                         cursorReadouts[cursorIndex] = best;
                         ImPlot::TagX(cursor.time, ImVec4(1.0F, 1.0F, 1.0F, 0.85F), "C%zu %s", cursorIndex + 1, formatMetric(cursor.time, config.timeUnit.c_str()).c_str());
                         ImPlot::TagY(cursor.value, ImVec4(1.0F, 1.0F, 1.0F, 0.85F), "%.6g", cursor.value);
@@ -310,7 +318,8 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
             view.viewMaxTime = limits.X.Max;
             view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, config.timeScale);
             view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
-            const bool userInteracting = ImPlot::IsPlotHovered() && (ImGui::IsMouseDragging(ImGuiMouseButton_Left) || ImGui::GetIO().MouseWheel != 0.0F || ImGui::IsMouseClicked(ImGuiMouseButton_Right));
+            // 核心流程：游标拖动也算用户交互，确保自动跟随暂停，避免拖动时轴范围变化引发闪烁。
+            const bool userInteracting = anyCursorHeld || (ImPlot::IsPlotHovered() && (ImGui::IsMouseDragging(ImGuiMouseButton_Left) || ImGui::GetIO().MouseWheel != 0.0F || ImGui::IsMouseClicked(ImGuiMouseButton_Right)));
             if (userInteracting && view.pauseAutoFollowOnInteraction) {
                 view.autoFollowLatest = false;
             }

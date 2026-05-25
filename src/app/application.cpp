@@ -31,6 +31,44 @@ const char* stateMessage(transport::TransportState state) {
     return "unknown";
 }
 
+bool sameChannelSpecs(const std::vector<scripting::PlotChannelDescriptor>& setupChannels,
+                      const plot::OscilloscopeBuffer& buffer) {
+    if (setupChannels.size() != buffer.channelCount()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < setupChannels.size(); ++i) {
+        const auto current = buffer.channelSpec(i);
+        if (!current.has_value()) {
+            return false;
+        }
+        const auto& setup = setupChannels[i];
+        if (current->label != setup.label || current->unit != setup.unit) {
+            return false;
+        }
+        if (std::abs(current->offset - setup.offset) > 1e-12) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool nearlyEqual(double left, double right) {
+    return std::abs(left - right) <= 1e-12;
+}
+
+bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config) {
+    if (!nearlyEqual(view.visibleDuration, (std::max)(config.timeScale * 1000.0, config.timeScale))) {
+        return false;
+    }
+    if (!nearlyEqual(view.manualVerticalMin, config.verticalMin) || !nearlyEqual(view.manualVerticalMax, config.verticalMax)) {
+        return false;
+    }
+    if (!nearlyEqual(view.viewMinValue, config.verticalMin) || !nearlyEqual(view.viewMaxValue, config.verticalMax)) {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 Application::Application() = default;
@@ -448,6 +486,15 @@ bool Application::flushScriptPlots() {
     auto& wave = dockStore_.waveState();
 
     for (const auto& setup : scriptHost_.drainPlotSetups()) {
+        const auto previousConfig = wave.buffer.viewConfig();
+        const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
+                                   previousConfig.timeUnit != setup.view.timeUnit ||
+                                   !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
+                                   !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax) ||
+                                   previousConfig.verticalUnit != setup.view.verticalUnit ||
+                                   previousConfig.historyLimit != setup.view.historyLimit;
+        const bool channelsChanged = !sameChannelSpecs(setup.channels, wave.buffer);
+
         if (setup.resetHistory) {
             wave.buffer.clear();
         }
@@ -457,15 +504,20 @@ bool Application::flushScriptPlots() {
             wave.buffer.setChannelSpec(index, plot::ChannelSpec{
                 .label = setup.channels[index].label,
                 .unit = setup.channels[index].unit,
+                .offset = setup.channels[index].offset,
             });
         }
-        wave.view.visibleDuration = (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale);
-        wave.view.manualVerticalMin = setup.view.verticalMin;
-        wave.view.manualVerticalMax = setup.view.verticalMax;
-        wave.view.viewMinValue = setup.view.verticalMin;
-        wave.view.viewMaxValue = setup.view.verticalMax;
-        wave.view.initialized = false;
-        wave.statusMessage = "Lua 已更新波形通道配置";
+        const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
+        const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
+        if (shouldResetView) {
+            wave.view.visibleDuration = (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale);
+            wave.view.manualVerticalMin = setup.view.verticalMin;
+            wave.view.manualVerticalMax = setup.view.verticalMax;
+            wave.view.viewMinValue = setup.view.verticalMin;
+            wave.view.viewMaxValue = setup.view.verticalMax;
+            wave.view.initialized = false;
+            wave.statusMessage = "Lua 已更新波形通道配置";
+        }
         changed = true;
     }
 
