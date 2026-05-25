@@ -92,7 +92,7 @@ LuaDockState& DockStore::luaState() {
     return lua_;
 }
 
-WaveDockState& DockStore::waveState() {
+plot::WaveDockState& DockStore::waveState() {
     return wave_;
 }
 
@@ -124,7 +124,7 @@ const LuaDockState& DockStore::luaState() const {
     return lua_;
 }
 
-const WaveDockState& DockStore::waveState() const {
+const plot::WaveDockState& DockStore::waveState() const {
     return wave_;
 }
 

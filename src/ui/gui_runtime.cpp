@@ -10,15 +10,18 @@
 #include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <implot.h>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <GL/gl.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -258,7 +261,8 @@ void syncDraftFromModel(std::string& draft, std::string& lastModel, const std::s
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
     : application_(application),
-      configStore_(configStore) {
+      configStore_(configStore),
+      waveDockRenderer_(application) {
     customBaudRateDraft_ = std::to_string(kCommonBaudRates[7]);
     customBaudRateDraftModel_ = customBaudRateDraft_;
 }
@@ -356,6 +360,12 @@ bool GuiRuntime::initializeImGui() {
 }
 
 bool GuiRuntime::initializePlotContext() {
+    ImPlot::CreateContext();
+    ImPlot::StyleColorsDark();
+    auto& inputMap = ImPlot::GetInputMap();
+    inputMap.Pan = ImGuiMouseButton_Left;
+    inputMap.Select = ImGuiMouseButton_Right;
+    inputMap.SelectCancel = ImGuiMouseButton_Left;
     return true;
 }
 
@@ -366,6 +376,7 @@ void GuiRuntime::shutdownImGui() {
 }
 
 void GuiRuntime::shutdownPlotContext() {
+    ImPlot::DestroyContext();
 }
 
 void GuiRuntime::shutdownWindow() {
@@ -422,7 +433,7 @@ void GuiRuntime::renderFrame() {
     drawReceiveDock();
     drawLogDock();
     drawScriptDock();
-    drawWaveDock();
+    waveDockRenderer_.draw(showWaveDock_);
 
     ImGui::Render();
 
@@ -888,18 +899,6 @@ void GuiRuntime::drawScriptDock() {
     }
 
     drawRowList("script_rows", scriptState.rows, scriptState.showTimestamps, false, scriptState.pauseScroll, "暂无 Lua 日志或事件");
-    ImGui::End();
-}
-
-void GuiRuntime::drawWaveDock() {
-    if (!showWaveDock_) {
-        return;
-    }
-
-    const auto& wave = application_.docks().waveState();
-    if (ImGui::Begin("波形", &showWaveDock_)) {
-        ImGui::TextWrapped("%s", wave.placeholder.c_str());
-    }
     ImGui::End();
 }
 

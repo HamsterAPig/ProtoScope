@@ -339,6 +339,21 @@ void test_protocol_scan_and_root_roundtrip() {
     require(normalized == alphaDir, "root-aware 协议目录归一化应优先回退到当前 root 下的有效目录");
 }
 
+void test_script_plot_api_snapshot() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("plot_stream").generic_string()), "plot_stream 协议应可加载");
+
+    protoscope::transport::TransportOpenEvent openEvent{.context = sampleCtx()};
+    host.onTransportOpen(openEvent);
+
+    auto setups = host.drainPlotSetups();
+    auto appends = host.drainPlotAppends();
+    require(setups.size() == 1, "打开连接后应生成 1 次 plot.setup");
+    require(setups[0].channels.size() == 2, "plot.setup 应声明 2 个通道");
+    require(appends.size() == 2, "打开连接后应推送 2 组通道数据");
+    require(appends[0].second.samples.size() == 3, "通道采样点数量不正确");
+}
+
 namespace {
 
 static const TestCase kAllTests[] = {
@@ -364,12 +379,16 @@ static const TestCase kAllTests[] = {
     {"config_default_roundtrip", &test_config_default_roundtrip},
     {"config_default_script_workspace", &test_config_default_script_workspace},
     {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
+    {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
+    {"plot_cursor_snap_by_time_and_measurement", &test_plot_cursor_snap_by_time_and_measurement},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
     {"transport_enqueue_send_async_roundtrip", &test_transport_enqueue_send_async_roundtrip},
     {"tcp_server_connection_takeover_replaces_active_client", &test_tcp_server_connection_takeover_replaces_active_client},
     {"serial_transport_error_path", &test_serial_transport_error_path},
     {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
+    {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
+    {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
 };
 
 } // namespace

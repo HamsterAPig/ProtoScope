@@ -24,6 +24,39 @@ function ui()
 end
 
 local rx_buffer = {}
+local next_scope_t = 0.0
+
+local function init_scope(reset_history)
+  proto.plot.setup({
+    source = "default_protocol",
+    reset_history = reset_history,
+    time_scale = 0.001,
+    time_unit = "s",
+    vertical_min = -2.0,
+    vertical_max = 2.0,
+    vertical_unit = "V",
+    history_limit = 20000,
+    channels = {
+      { label = "CH1", unit = "V" },
+      { label = "CH2", unit = "V" }
+    }
+  })
+end
+
+local function push_scope_samples(bytes)
+  local ch1 = {}
+  local ch2 = {}
+  for i = 1, #bytes do
+    local value = bytes[i]
+    ch1[#ch1 + 1] = { t = next_scope_t, y = (value - 128.0) / 64.0 }
+    ch2[#ch2 + 1] = { t = next_scope_t, y = ((value % 32) - 16.0) / 8.0 }
+    next_scope_t = next_scope_t + 0.001
+  end
+  if #ch1 > 0 then
+    proto.plot.push(1, { samples = ch1 })
+    proto.plot.push(2, { samples = ch2 })
+  end
+end
 
 local function clear_rx_buffer()
   rx_buffer = {}
@@ -64,6 +97,7 @@ local function parse_frame(bytes)
 end
 
 function on_open(ctx)
+  init_scope(true)
   proto.log("info", "连接已打开: " .. ctx.kind .. " -> " .. ctx.endpoint)
 end
 
@@ -87,6 +121,7 @@ function on_control(ctx, id, value)
 end
 
 function on_bytes(ctx, bytes)
+  push_scope_samples(bytes)
   append_bytes(bytes)
   local result = parse_frame(rx_buffer)
   if result then

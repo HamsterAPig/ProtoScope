@@ -34,6 +34,7 @@ public:
     void markProtocolEdited();
     void setStatusMessage(std::string message, bool markDirty = false);
     bool setSendHexMode(bool enabled);
+    void resetWaveHistory();
 
     std::optional<std::uint64_t> nextWakeupAtMs() const;
 
@@ -43,6 +44,7 @@ private:
     bool handleTransportEvents();
     bool flushScriptOutputs();
     bool flushScriptLogs();
+    bool flushScriptPlots();
 
 private:
     dock::DockStore dockStore_;

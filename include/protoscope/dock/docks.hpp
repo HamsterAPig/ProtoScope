@@ -1,5 +1,6 @@
 #pragma once
 
+#include "protoscope/plot/wave_state.hpp"
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
@@ -69,10 +70,6 @@ struct LuaDockState {
     std::vector<scripting::ControlSnapshot> controlStates;
 };
 
-struct WaveDockState {
-    std::string placeholder{"TODO: 第一版仅保留波形 Dock 占位与后续数据接口"};
-};
-
 struct ConfigConflictState {
     bool detected{false};
     std::string message;
@@ -108,7 +105,7 @@ public:
     ScriptDockState& scriptState();
     SendDockState& sendState();
     LuaDockState& luaState();
-    WaveDockState& waveState();
+    plot::WaveDockState& waveState();
     ConfigDockState& configState();
 
     const CommDockState& commState() const;
@@ -117,7 +114,7 @@ public:
     const ScriptDockState& scriptState() const;
     const SendDockState& sendState() const;
     const LuaDockState& luaState() const;
-    const WaveDockState& waveState() const;
+    const plot::WaveDockState& waveState() const;
     const ConfigDockState& configState() const;
 
     void markDirty(const std::string& statusMessage);
@@ -138,7 +135,7 @@ private:
     ScriptDockState script_{};
     SendDockState send_{};
     LuaDockState lua_{};
-    WaveDockState wave_{};
+    plot::WaveDockState wave_{};
     ConfigDockState config_{};
 };
 

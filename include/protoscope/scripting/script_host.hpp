@@ -1,5 +1,6 @@
 #pragma once
 
+#include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/transport/transport.hpp"
 
@@ -67,6 +68,18 @@ struct ScriptLog {
     std::uint64_t timestampMs{0};
 };
 
+struct PlotChannelDescriptor {
+    std::string label;
+    std::string unit;
+};
+
+struct PlotSetup {
+    std::string source;
+    std::vector<PlotChannelDescriptor> channels;
+    plot::ViewConfig view{};
+    bool resetHistory{false};
+};
+
 struct ScriptHostContext {
     transport::ConnectionContext connection;
 };
@@ -94,6 +107,8 @@ public:
     std::vector<ScriptEvent> drainEvents();
     std::vector<ScriptLog> drainLogs();
     std::vector<std::vector<std::uint8_t>> drainSendQueue();
+    std::vector<PlotSetup> drainPlotSetups();
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends();
     std::optional<std::uint64_t> nextWakeupAtMs() const;
 
     const std::string& scriptPath() const;
@@ -113,6 +128,8 @@ private:
     void protoEmit(const std::string& eventName, const std::string& payload);
     void protoSetTimer(const std::string& name, std::uint64_t intervalMs);
     void protoCancelTimer(const std::string& name);
+    void protoPlotSetup(const PlotSetup& setup);
+    void protoPlotPush(std::size_t channelIndex, const plot::WaveAppendRequest& request);
 
     static std::string valueToString(const ControlValue& value);
     void setLastError(std::string message);
@@ -136,6 +153,8 @@ private:
     std::vector<ScriptEvent> events_;
     std::vector<ScriptLog> logs_;
     std::vector<std::vector<std::uint8_t>> sendQueue_;
+    std::vector<PlotSetup> plotSetups_;
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends_;
     std::unordered_map<std::string, TimerState> timers_;
     std::optional<transport::ConnectionContext> activeConnection_;
     std::unique_ptr<Runtime> runtime_;

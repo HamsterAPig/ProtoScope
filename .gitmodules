@@ -19,3 +19,6 @@
 [submodule "3rdparty/sol2"]
 	path = 3rdparty/sol2
 	url = https://github.com/ThePhD/sol2.git
+[submodule "3rdparty/implot"]
+	path = 3rdparty/implot
+	url = https://github.com/epezent/implot.git

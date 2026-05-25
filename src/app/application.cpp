@@ -3,6 +3,7 @@
 #include "protoscope/protocol_utils/codec.hpp"
 
 #include <chrono>
+#include <limits>
 #include <type_traits>
 
 namespace protoscope::app {
@@ -108,6 +109,7 @@ bool Application::pumpOnce() {
     scriptHost_.tick(nowMs());
     changed = flushScriptOutputs() || changed;
     changed = flushScriptLogs() || changed;
+    changed = flushScriptPlots() || changed;
     syncDockState();
     return changed;
 }
@@ -267,6 +269,19 @@ bool Application::setSendHexMode(bool enabled) {
     return true;
 }
 
+void Application::resetWaveHistory() {
+    auto& wave = dockStore_.waveState();
+    wave.buffer.clear();
+    wave.channelSummaries.clear();
+    wave.view.initialized = false;
+    wave.view.centerTime = 0.0;
+    wave.view.viewMinTime = 0.0;
+    wave.view.viewMaxTime = wave.view.visibleDuration;
+    wave.view.viewMinValue = wave.view.manualVerticalMin;
+    wave.view.viewMaxValue = wave.view.manualVerticalMax;
+    wave.statusMessage = "波形历史已清空";
+}
+
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
     return scriptHost_.nextWakeupAtMs();
 }
@@ -297,6 +312,13 @@ void Application::syncDockState() {
     lua.docks = scriptHost_.dockSnapshots();
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
+
+    auto& wave = dockStore_.waveState();
+    wave.channelSummaries.clear();
+    const auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    for (const auto& channel : snapshot.channels) {
+        wave.channelSummaries.push_back(channel.label + " samples=" + std::to_string(channel.totalSamples));
+    }
 }
 
 bool Application::handleTransportEvents() {
@@ -411,6 +433,41 @@ bool Application::flushScriptLogs() {
             dock::ReceiveRow{.timestampMs = log.timestampMs, .direction = "LOG", .endpoint = "script", .message = "[" + log.level + "] " + log.message});
         changed = true;
     }
+    return changed;
+}
+
+bool Application::flushScriptPlots() {
+    bool changed = false;
+    auto& wave = dockStore_.waveState();
+
+    for (const auto& setup : scriptHost_.drainPlotSetups()) {
+        if (setup.resetHistory) {
+            wave.buffer.clear();
+        }
+        wave.buffer.setViewConfig(setup.view);
+        wave.buffer.configureChannels(setup.channels.size());
+        for (std::size_t index = 0; index < setup.channels.size(); ++index) {
+            wave.buffer.setChannelSpec(index, plot::ChannelSpec{
+                .label = setup.channels[index].label,
+                .unit = setup.channels[index].unit,
+            });
+        }
+        wave.view.visibleDuration = (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale);
+        wave.view.manualVerticalMin = setup.view.verticalMin;
+        wave.view.manualVerticalMax = setup.view.verticalMax;
+        wave.view.viewMinValue = setup.view.verticalMin;
+        wave.view.viewMaxValue = setup.view.verticalMax;
+        wave.view.initialized = false;
+        wave.statusMessage = "Lua 已更新波形通道配置";
+        changed = true;
+    }
+
+    for (auto& [channelIndex, request] : scriptHost_.drainPlotAppends()) {
+        if (wave.buffer.append(channelIndex, std::move(request))) {
+            changed = true;
+        }
+    }
+
     return changed;
 }
 

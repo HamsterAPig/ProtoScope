@@ -109,6 +109,44 @@ if(PROTOSCOPE_ENABLE_GUI)
     endif()
 endif()
 
+set(PROTOSCOPE_IMPLOT_ROOT ${CMAKE_SOURCE_DIR}/3rdparty/implot)
+if(PROTOSCOPE_ENABLE_GUI)
+    if(NOT EXISTS ${PROTOSCOPE_IMPLOT_ROOT}/implot.h)
+        FetchContent_Declare(
+            implot
+            GIT_REPOSITORY https://github.com/epezent/implot.git
+            GIT_TAG v1.0
+            GIT_SHALLOW TRUE
+            SOURCE_DIR ${PROTOSCOPE_IMPLOT_ROOT}
+        )
+        FetchContent_MakeAvailable(implot)
+    endif()
+
+    add_library(protoscope_implot STATIC
+        ${PROTOSCOPE_IMPLOT_ROOT}/implot.cpp
+        ${PROTOSCOPE_IMPLOT_ROOT}/implot_items.cpp
+    )
+    target_include_directories(protoscope_implot
+        PUBLIC
+            ${PROTOSCOPE_IMPLOT_ROOT}
+            ${PROTOSCOPE_IMGUI_ROOT}
+    )
+    target_link_libraries(protoscope_implot
+        PUBLIC
+            protoscope_imgui
+    )
+    target_compile_features(protoscope_implot PUBLIC cxx_std_20)
+endif()
+
+add_library(protoscope_plot STATIC
+    src/plot/oscilloscope.cpp
+)
+target_include_directories(protoscope_plot
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_features(protoscope_plot PUBLIC cxx_std_20)
+
 add_library(protoscope_protocol_utils STATIC
     src/protocol_utils/codec.cpp
 )
@@ -158,6 +196,7 @@ target_include_directories(protoscope_dock
 )
 target_link_libraries(protoscope_dock
     PUBLIC
+        protoscope_plot
         protoscope_scripting
         protoscope_transport
 )
@@ -199,6 +238,7 @@ target_compile_features(protoscope_app PUBLIC cxx_std_20)
 if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
         src/ui/gui_runtime.cpp
+        src/ui/wave_dock_renderer.cpp
     )
     target_include_directories(protoscope_ui
         PUBLIC
@@ -209,6 +249,8 @@ if(PROTOSCOPE_ENABLE_GUI)
             protoscope_app
             protoscope_config
             protoscope_imgui
+            protoscope_implot
+            protoscope_plot
     )
     target_compile_features(protoscope_ui PUBLIC cxx_std_20)
 endif()
@@ -236,6 +278,7 @@ foreach(target_name IN ITEMS
     protoscope_transport
     protoscope_scripting
     protoscope_dock
+    protoscope_plot
     protoscope_config
     protoscope_app
     ProtoScope
@@ -262,6 +305,7 @@ add_executable(protoscope_tests
     tests/test_application.cpp
     tests/test_codec.cpp
     tests/test_dock.cpp
+    tests/test_plot.cpp
     tests/test_script_host.cpp
     tests/test_transport.cpp
 )
@@ -275,6 +319,7 @@ target_link_libraries(protoscope_tests
         protoscope_dock
         protoscope_app
         protoscope_protocol_utils
+        protoscope_plot
         protoscope_scripting
         protoscope_transport
 )
@@ -295,4 +340,4 @@ message(STATUS "  libdwarf    -> ${CMAKE_SOURCE_DIR}/3rdparty/libdwarf-code")
 message(STATUS "  asio        -> ${CMAKE_SOURCE_DIR}/3rdparty/asio")
 message(STATUS "  lua         -> ${CMAKE_SOURCE_DIR}/3rdparty/lua")
 message(STATUS "  sol2        -> ${CMAKE_SOURCE_DIR}/3rdparty/sol2")
-message(STATUS "  implot      -> TODO: keep placeholder until波形模块落地")
+    message(STATUS "  implot      -> ${PROTOSCOPE_IMPLOT_ROOT}")
