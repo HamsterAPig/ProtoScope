@@ -344,6 +344,12 @@ void refreshProtocolRoot(config::ConfigStore const& configStore,
     protocolDirDraftModel = lua.protocolDir;
 }
 
+std::string normalizeProtocolDraft(const config::ConfigStore& configStore,
+                                   const std::string& protocolRootDir,
+                                   const std::string& protocolDir) {
+    return configStore.normalizeProtocolDir(protocolRootDir, protocolDir).generic_string();
+}
+
 #if defined(_WIN32)
 int CALLBACK browseInitialDirCallback(HWND hwnd, UINT message, LPARAM, LPARAM data) {
     if (message == BFFM_INITIALIZED && data != 0) {
@@ -629,14 +635,6 @@ void GuiRuntime::renderFrame() {
     drawMainMenu();
 
     ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
-    mainDockspaceId_ = dockspaceId;
-    const bool needsLoadedLayoutApply = workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsLoadedLayoutApply;
-    if (needsLoadedLayoutApply) {
-        workspaceLayoutMode_ = workspaceLayoutModeAfterLoadedLayoutApply(workspaceLayoutMode_);
-        pendingLuaDefaultDockLayout_ = false;
-        defaultDockedLuaWindows_.clear();
-        defaultLuaDockNodes_.clear();
-    }
 
     if (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild) {
         ImGui::DockBuilderRemoveNode(dockspaceId);
@@ -990,10 +988,8 @@ void GuiRuntime::drawProtocolDock() {
     ImGui::PopID();
 
     syncDraftFromModel(protocolDirDraft_, protocolDirDraftModel_, lua.protocolDir);
-    if (const auto protocolDirEdit = drawEditableCombo("协议目录", protocolDirDraft_, lua.protocolDirOptions); protocolDirEdit.edited && protocolDirEdit.value != lua.protocolDir) {
-        lua.protocolDir = protocolDirEdit.value;
-        protocolDirDraftModel_ = protocolDirEdit.value;
-        application_.markProtocolEdited();
+    if (const auto protocolDirEdit = drawEditableCombo("协议目录", protocolDirDraft_, lua.protocolDirOptions); protocolDirEdit.edited) {
+        protocolDirDraft_ = normalizeProtocolDraft(configStore_, lua.protocolRootDir, protocolDirEdit.value);
     }
 
     if (ImGui::Button("重新扫描协议目录")) {
@@ -1002,11 +998,17 @@ void GuiRuntime::drawProtocolDock() {
     }
     ImGui::SameLine();
     if (ImGui::Button("重新加载协议")) {
-        requestProtocolWorkspaceSwitch(lua.protocolDir, true);
+        const auto decision = decideProtocolWorkspaceSwitch(lua.protocolDir, protocolDirDraft_, true);
+        if (decision.reloadProtocolDir.has_value()) {
+            requestProtocolWorkspaceSwitch(*decision.reloadProtocolDir, true);
+        }
     }
 
     ImGui::Text("协议名称: %s", lua.protocolName.c_str());
     ImGui::TextWrapped("入口脚本: %s", lua.scriptPath.c_str());
+    if (decideProtocolWorkspaceSwitch(lua.protocolDir, protocolDirDraft_, false).draftChanged) {
+        ImGui::TextDisabled("待加载协议: %s", protocolDirDraft_.c_str());
+    }
     if (!lua.lastError.empty()) {
         ImGui::TextWrapped("脚本错误：%s", lua.lastError.c_str());
     }
@@ -1141,12 +1143,6 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
     defaultLuaDockNodes_.clear();
     workspaceLayoutMode_ = workspaceLayoutModeAfterLoad(layoutPaths);
     pendingLuaDefaultDockLayout_ = false;
-
-    if (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsLoadedLayoutApply && mainDockspaceId_ != 0) {
-        // 核心流程：先清理上一协议的 live DockSpace，再加载当前协议 ini，避免旧节点压过新布局。
-        ImGui::DockBuilderRemoveNode(mainDockspaceId_);
-        mainDockspaceId_ = 0;
-    }
 
     ImGui::ClearIniSettings();
     if (layoutPaths.hasUserLayout) {

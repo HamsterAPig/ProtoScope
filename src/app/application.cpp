@@ -117,12 +117,9 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     auto& lua = dockStore_.luaState();
     const auto resolvedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, protocolDir);
     const auto resolvedDirText = resolvedDir.generic_string();
+    const auto protocolName = configStore_.protocolName(resolvedDir);
     const auto scriptPath = configStore_.mainLuaPath(resolvedDir).generic_string();
     const bool unchanged = lua.loaded && lua.protocolDir == resolvedDirText && lua.scriptPath == scriptPath;
-
-    lua.protocolDir = resolvedDirText;
-    lua.protocolName = configStore_.protocolName(resolvedDir);
-    lua.scriptPath = scriptPath;
 
     // 核心流程：配置热加载只在协议目录真正变化时重载脚本，避免窗口刷新阶段重复刷加载日志。
     if (!forceReload && unchanged) {
@@ -133,14 +130,37 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         return true;
     }
 
-    lua.loaded = scriptHost_.loadProtocolDirectory(lua.protocolDir);
+    scripting::ScriptHost probeHost;
+    if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
+        lua.lastError = probeHost.lastError();
+        lua.docks = scriptHost_.dockSnapshots();
+        lua.controls = scriptHost_.controlsSnapshot();
+        lua.controlStates = scriptHost_.controlStatesSnapshot();
+        return false;
+    }
+
+    // 核心流程：先用临时宿主探测目标协议能否完整加载，确认成功后再在当前宿主上重载，
+    // 避免失败场景先清空旧运行态，也避免 Lua 回调把临时宿主地址固化进运行时对象。
+    if (!scriptHost_.loadProtocolDirectory(resolvedDirText)) {
+        lua.lastError = scriptHost_.lastError();
+        lua.loaded = false;
+        lua.docks = scriptHost_.dockSnapshots();
+        lua.controls = scriptHost_.controlsSnapshot();
+        lua.controlStates = scriptHost_.controlStatesSnapshot();
+        return false;
+    }
+
+    lua.protocolDir = resolvedDirText;
+    lua.protocolName = protocolName;
+    lua.scriptPath = scriptPath;
+    lua.loaded = true;
     lua.docks = scriptHost_.dockSnapshots();
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
-    lua.lastError = lua.loaded ? std::string() : scriptHost_.lastError();
+    lua.lastError.clear();
     flushScriptLogs();
     syncDockState();
-    return lua.loaded;
+    return true;
 }
 
 bool Application::pumpOnce() {

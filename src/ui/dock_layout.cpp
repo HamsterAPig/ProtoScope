@@ -176,12 +176,22 @@ LuaDockLayoutPaths resolveLuaDockLayoutPaths(
 
 WorkspaceLayoutMode workspaceLayoutModeAfterLoad(const LuaDockLayoutPaths& layoutPaths) {
     return layoutPaths.hasUserLayout || layoutPaths.hasLegacyLayout
-        ? WorkspaceLayoutMode::NeedsLoadedLayoutApply
+        ? WorkspaceLayoutMode::Ready
         : WorkspaceLayoutMode::NeedsDefaultBuild;
 }
 
-WorkspaceLayoutMode workspaceLayoutModeAfterLoadedLayoutApply(WorkspaceLayoutMode mode) {
-    return mode == WorkspaceLayoutMode::NeedsLoadedLayoutApply ? WorkspaceLayoutMode::Ready : mode;
+ProtocolWorkspaceSwitchDecision decideProtocolWorkspaceSwitch(
+    std::string_view loadedProtocolDir,
+    std::string_view draftProtocolDir,
+    bool reloadClicked) {
+    ProtocolWorkspaceSwitchDecision decision;
+    decision.draftChanged = loadedProtocolDir != draftProtocolDir;
+    if (reloadClicked) {
+        decision.reloadProtocolDir = decision.draftChanged
+            ? std::string(draftProtocolDir)
+            : std::string(loadedProtocolDir);
+    }
+    return decision;
 }
 
 bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol) {

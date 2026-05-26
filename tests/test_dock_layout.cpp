@@ -145,7 +145,7 @@ void test_lua_dock_settings_filter_removes_lua_windows_when_no_docks() {
         "空 Dock 集合不应影响静态窗口状态");
 }
 
-void test_workspace_layout_mode_after_load_uses_existing_layout_apply() {
+void test_workspace_layout_mode_after_load_prefers_default_build_only_when_missing() {
     protoscope::ui::LuaDockLayoutPaths layoutPaths;
 
     require(
@@ -156,28 +156,36 @@ void test_workspace_layout_mode_after_load_uses_existing_layout_apply() {
     layoutPaths.hasUserLayout = true;
     require(
         protoscope::ui::workspaceLayoutModeAfterLoad(layoutPaths)
-            == protoscope::ui::WorkspaceLayoutMode::NeedsLoadedLayoutApply,
-        "加载用户布局后应进入下一帧同步流程");
+            == protoscope::ui::WorkspaceLayoutMode::Ready,
+        "加载用户布局后应直接进入 Ready");
 
     layoutPaths.hasUserLayout = false;
     layoutPaths.hasLegacyLayout = true;
     require(
         protoscope::ui::workspaceLayoutModeAfterLoad(layoutPaths)
-            == protoscope::ui::WorkspaceLayoutMode::NeedsLoadedLayoutApply,
-        "加载 legacy 布局后应进入下一帧同步流程");
+            == protoscope::ui::WorkspaceLayoutMode::Ready,
+        "加载 legacy 布局后应直接进入 Ready");
 }
 
-void test_workspace_layout_mode_after_loaded_apply_becomes_ready() {
+void test_protocol_workspace_switch_decision_uses_draft_only_until_reload() {
+    const auto decision = protoscope::ui::decideProtocolWorkspaceSwitch(
+        "protocols/default_protocol",
+        "protocols/lua_waveform_demo",
+        false);
+    require(decision.draftChanged, "草稿协议与已加载协议不一致时应标记 draftChanged");
+    require(!decision.reloadProtocolDir.has_value(), "未点击重载前不应发起真实协议切换");
+}
+
+void test_protocol_workspace_switch_decision_reloads_draft_when_clicked() {
+    const auto decision = protoscope::ui::decideProtocolWorkspaceSwitch(
+        "protocols/default_protocol",
+        "protocols/lua_waveform_demo",
+        true);
+    require(decision.draftChanged, "点击重载时仍应保留草稿差异语义");
+    require(decision.reloadProtocolDir.has_value(), "点击重载后应返回真实切换目标");
     require(
-        protoscope::ui::workspaceLayoutModeAfterLoadedLayoutApply(
-            protoscope::ui::WorkspaceLayoutMode::NeedsLoadedLayoutApply)
-            == protoscope::ui::WorkspaceLayoutMode::Ready,
-        "已加载布局同步一次后应进入 Ready");
-    require(
-        protoscope::ui::workspaceLayoutModeAfterLoadedLayoutApply(
-            protoscope::ui::WorkspaceLayoutMode::NeedsDefaultBuild)
-            == protoscope::ui::WorkspaceLayoutMode::NeedsDefaultBuild,
-        "默认布局构建状态不应被 loaded apply helper 改写");
+        *decision.reloadProtocolDir == "protocols/lua_waveform_demo",
+        "点击重载时必须使用草稿协议目录");
 }
 
 void test_protocol_switch_resets_lua_default_dock_state_only_when_changed() {

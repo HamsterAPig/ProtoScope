@@ -33,9 +33,13 @@ struct LuaDockLayoutPaths {
     bool hasLegacyLayout{false};
 };
 
+struct ProtocolWorkspaceSwitchDecision {
+    bool draftChanged{false};
+    std::optional<std::string> reloadProtocolDir;
+};
+
 enum class WorkspaceLayoutMode {
     NeedsDefaultBuild,
-    NeedsLoadedLayoutApply,
     Ready,
 };
 
@@ -49,8 +53,11 @@ LuaDockLayoutPaths resolveLuaDockLayoutPaths(
     const std::filesystem::path& executableDir,
     std::string_view protocolDir,
     std::string_view scriptPath);
+ProtocolWorkspaceSwitchDecision decideProtocolWorkspaceSwitch(
+    std::string_view loadedProtocolDir,
+    std::string_view draftProtocolDir,
+    bool reloadClicked);
 WorkspaceLayoutMode workspaceLayoutModeAfterLoad(const LuaDockLayoutPaths& layoutPaths);
-WorkspaceLayoutMode workspaceLayoutModeAfterLoadedLayoutApply(WorkspaceLayoutMode mode);
 bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol);
 std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey);
 std::vector<std::string> buildLuaDockStableIds(

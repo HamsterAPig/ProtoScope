@@ -80,7 +80,6 @@ private:
     std::filesystem::path executableDir_;
     bool pendingLuaDefaultDockLayout_{false};
     bool pendingProtocolWorkspaceSave_{false};
-    unsigned int mainDockspaceId_{0};
     std::unordered_map<LuaDockAnchor, unsigned int> defaultLuaDockNodes_;
     std::unordered_set<std::string> defaultDockedLuaWindows_;
     bool running_{false};

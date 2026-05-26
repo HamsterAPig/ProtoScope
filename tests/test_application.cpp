@@ -176,3 +176,23 @@ void test_application_lua_controls_without_connection() {
 
     application.shutdown();
 }
+
+void test_application_failed_protocol_reload_keeps_previous_runtime() {
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory("protocols/lua_waveform_demo", true), "Lua 波形演示脚本应可加载");
+
+    const auto before = application.docks().luaState();
+    require(
+        !application.reloadProtocolDirectory("tests/fixtures/protocols/invalid_controls", true),
+        "非法协议脚本应加载失败");
+
+    const auto& after = application.docks().luaState();
+    require(after.protocolDir == before.protocolDir, "加载失败后不应改写当前运行协议目录");
+    require(after.protocolName == before.protocolName, "加载失败后不应改写当前运行协议名称");
+    require(after.scriptPath == before.scriptPath, "加载失败后不应改写当前入口脚本路径");
+    require(!after.controlStates.empty(), "加载失败后应保留上一份动态控件快照");
+    require(!after.lastError.empty(), "加载失败后应保留错误信息供界面展示");
+
+    application.shutdown();
+}
