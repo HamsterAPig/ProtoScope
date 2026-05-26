@@ -52,6 +52,7 @@ private:
     void saveCurrentProtocolWorkspace();
     void loadCurrentProtocolControlState();
     void saveCurrentProtocolControlState();
+    void pruneCurrentLuaDockSettings();
     std::filesystem::path currentProtocolLayoutPath() const;
     std::filesystem::path legacyProtocolLayoutPath() const;
     std::filesystem::path protocolControlStatePath() const;
@@ -81,7 +82,9 @@ private:
     bool pendingProtocolForceReload_{false};
     bool protocolWorkspaceLoaded_{false};
     WorkspaceLayoutMode workspaceLayoutMode_{WorkspaceLayoutMode::NeedsDefaultBuild};
+    std::filesystem::path executableDir_;
     bool pendingLuaDefaultDockLayout_{false};
+    bool pendingProtocolWorkspaceSave_{false};
     std::unordered_map<LuaDockAnchor, unsigned int> defaultLuaDockNodes_;
     std::unordered_set<std::string> defaultDockedLuaWindows_;
     bool running_{false};

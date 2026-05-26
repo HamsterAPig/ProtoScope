@@ -2,6 +2,7 @@
 
 #include "protoscope/scripting/script_host.hpp"
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,10 +25,32 @@ struct LuaDockLayoutRequest {
     std::string tabGroup;
 };
 
+struct LuaDockLayoutPaths {
+    std::string protocolKey;
+    std::filesystem::path layoutPath;
+    std::filesystem::path legacyLayoutPath;
+    bool hasUserLayout{false};
+    bool hasLegacyLayout{false};
+};
+
 std::optional<LuaDockAnchor> parseLuaDockAnchor(std::string_view value);
 bool isValidLuaDockAnchor(std::string_view value);
 std::string luaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath);
 std::string legacyLuaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath);
+std::filesystem::path executableDirectory();
+std::filesystem::path luaDockLayoutPath(const std::filesystem::path& executableDir, std::string_view layoutKey);
+LuaDockLayoutPaths resolveLuaDockLayoutPaths(
+    const std::filesystem::path& executableDir,
+    std::string_view protocolDir,
+    std::string_view scriptPath);
+std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey);
+std::vector<std::string> buildLuaDockStableIds(
+    const std::vector<scripting::DockSnapshot>& docks,
+    std::string_view layoutKey);
+bool shouldKeepLuaWindowSettings(
+    std::string_view stableId,
+    std::string_view layoutKey,
+    const std::vector<std::string>& activeStableIds);
 std::string luaDockWindowName(const scripting::DockDescriptor& dock, std::string_view layoutKey);
 std::vector<LuaDockLayoutRequest> buildLuaDockLayoutRequests(
     const std::vector<scripting::DockSnapshot>& docks,
