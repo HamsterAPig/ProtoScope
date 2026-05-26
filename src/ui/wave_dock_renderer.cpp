@@ -55,6 +55,11 @@ struct PlotGetterPayload {
     const plot::EnvelopePoint* points{nullptr};
 };
 
+struct RenderBudget {
+    std::size_t pointsPerChannel{1};
+    std::size_t estimatedVerticesPerPoint{4};
+};
+
 ImPlotPoint envelopeLineMinGetter(int index, void* data) {
     const auto* payload = static_cast<const PlotGetterPayload*>(data);
     return ImPlotPoint{payload->points[index].time, payload->points[index].minValue};
@@ -63,6 +68,31 @@ ImPlotPoint envelopeLineMinGetter(int index, void* data) {
 ImPlotPoint envelopeLineMaxGetter(int index, void* data) {
     const auto* payload = static_cast<const PlotGetterPayload*>(data);
     return ImPlotPoint{payload->points[index].time, payload->points[index].maxValue};
+}
+
+std::size_t clampRenderConfig(std::size_t value, std::size_t fallback) {
+    return value == 0 ? fallback : value;
+}
+
+std::size_t estimateVerticesPerPoint(bool phosphorGlowEnabled) {
+    return phosphorGlowEnabled ? 16 : 6;
+}
+
+RenderBudget makeRenderBudget(const plot::WaveViewState& view,
+                              std::size_t channelCount,
+                              std::size_t pixelWidth,
+                              bool phosphorGlowEnabled) {
+    const std::size_t safeChannelCount = (std::max)(std::size_t{1}, channelCount);
+    const std::size_t estimatedVerticesPerPoint = estimateVerticesPerPoint(phosphorGlowEnabled);
+    const std::size_t configuredPointLimit = clampRenderConfig(view.maxRenderPointsPerChannel, 1200);
+    const std::size_t configuredVertexLimit = clampRenderConfig(view.maxRenderVertices, 60000);
+    const std::size_t pointsByVertexBudget = (std::max)(
+        std::size_t{1}, configuredVertexLimit / (safeChannelCount * estimatedVerticesPerPoint));
+    // 核心流程：每通道最终点数同时受像素宽度、用户配置和 16-bit 顶点预算约束，避免单帧 DrawList 溢出。
+    const std::size_t pointsPerChannel = (std::max)(
+        std::size_t{1},
+        (std::min)({pixelWidth, configuredPointLimit, pointsByVertexBudget}));
+    return RenderBudget{.pointsPerChannel = pointsPerChannel, .estimatedVerticesPerPoint = estimatedVerticesPerPoint};
 }
 
 void renderEnvelopeAsBars(const std::vector<plot::EnvelopePoint>& points, const ImVec4& color) {
@@ -223,9 +253,13 @@ plot::WaveViewport currentViewport(const plot::WaveViewState& view) {
 std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::WaveSample>& samples,
                                                       double visibleMinTime,
                                                       double visibleMaxTime,
-                                                      std::size_t pixelWidth) {
+                                                      std::size_t pointLimit,
+                                                      std::size_t* sourceSampleCount = nullptr) {
     std::vector<plot::EnvelopePoint> envelope;
-    if (samples.empty() || pixelWidth == 0) {
+    if (sourceSampleCount != nullptr) {
+        *sourceSampleCount = 0;
+    }
+    if (samples.empty() || pointLimit == 0) {
         return envelope;
     }
     if (visibleMaxTime < visibleMinTime) {
@@ -242,7 +276,10 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
     }
 
     const std::size_t visibleCount = static_cast<std::size_t>(std::distance(begin, end));
-    const std::size_t bucketCount = (std::min)(pixelWidth, visibleCount);
+    if (sourceSampleCount != nullptr) {
+        *sourceSampleCount = visibleCount;
+    }
+    const std::size_t bucketCount = (std::min)(pointLimit, visibleCount);
     envelope.reserve(bucketCount);
     for (std::size_t bucket = 0; bucket < bucketCount; ++bucket) {
         const std::size_t bucketBegin = bucket * visibleCount / bucketCount;
@@ -488,7 +525,8 @@ void drawOverviewWindow(plot::WaveViewState& view,
                         const plot::ViewConfig& config,
                         const plot::WaveSnapshot& fullSnapshot,
                         const plot::WaveDisplayData& displayData,
-                        const plot::WaveDataBounds& displayBounds) {
+                        const plot::WaveDataBounds& displayBounds,
+                        const RenderBudget& renderBudget) {
     if (fullSnapshot.channels.empty()) {
         return;
     }
@@ -539,11 +577,12 @@ void drawOverviewWindow(plot::WaveViewState& view,
 
         const float contentWidth = ImGui::GetContentRegionAvail().x;
         const std::size_t pixelWidth = static_cast<std::size_t>((std::max)(contentWidth, 64.0F));
+        const std::size_t overviewPointLimit = view.overviewMaxSamples > 0
+            ? (std::min)({pixelWidth, renderBudget.pointsPerChannel, view.overviewMaxSamples})
+            : (std::min)(pixelWidth, renderBudget.pointsPerChannel);
         for (std::size_t channelIndex = 0; channelIndex < fullSnapshot.channels.size(); ++channelIndex) {
-            auto overview = buildDisplayEnvelope(displayData.channels[channelIndex].samples, overviewMinTime, overviewMaxTime, pixelWidth);
-            if (overview.size() > view.overviewMaxSamples && view.overviewMaxSamples > 0) {
-                overview.erase(overview.begin(), overview.end() - static_cast<std::ptrdiff_t>(view.overviewMaxSamples));
-            }
+            auto overview =
+                buildDisplayEnvelope(displayData.channels[channelIndex].samples, overviewMinTime, overviewMaxTime, overviewPointLimit);
             if (overview.empty()) {
                 continue;
             }
@@ -693,6 +732,8 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         }
         ImGui::SameLine();
         ImGui::Checkbox("磷光辉光", &view.phosphorGlowEnabled);
+        ImGui::SameLine();
+        ImGui::Text("渲染点: %zu / 源样本: %zu", view.lastRenderPointCount, view.lastRenderSourceSampleCount);
 
         char frequencyBuffer[64]{};
         std::strncpy(frequencyBuffer, view.sampleFrequencyInput.c_str(), sizeof(frequencyBuffer) - 1);
@@ -752,6 +793,12 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         }
         view.timeAxisSource = displayData.axisSource;
         const auto displayBounds = plot::computeDisplayBounds(displayData, (std::max)(config.timeScale, 1e-6));
+        const auto renderBudget = makeRenderBudget(view,
+                                                   displayData.channels.size(),
+                                                   static_cast<std::size_t>((std::max)(ImGui::GetContentRegionAvail().x, 64.0F)),
+                                                   view.phosphorGlowEnabled);
+        view.lastRenderPointCount = 0;
+        view.lastRenderSourceSampleCount = 0;
         if (displayBounds.valid && view.autoFollowLatest) {
             view.viewMaxTime = displayBounds.maxTime;
             view.viewMinTime = view.viewMaxTime - view.visibleDuration;
@@ -855,14 +902,17 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
 
             for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
                 const auto& channel = snapshot.channels[channelIndex];
-                const float contentWidth = ImGui::GetContentRegionAvail().x;
+                std::size_t sourceSampleCount = 0;
                 const auto envelope = buildDisplayEnvelope(displayData.channels[channelIndex].samples,
                                                            limits.X.Min,
                                                            limits.X.Max,
-                                                           static_cast<std::size_t>((std::max)(contentWidth, 64.0F)));
+                                                           renderBudget.pointsPerChannel,
+                                                           &sourceSampleCount);
+                view.lastRenderSourceSampleCount += sourceSampleCount;
                 if (envelope.empty()) {
                     continue;
                 }
+                view.lastRenderPointCount += envelope.size();
 
                 PlotGetterPayload payload{.points = envelope.data()};
                 const ImVec4 color = channelColor(channelIndex);
@@ -980,7 +1030,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
             if (view.showCursors && cursorReadouts[0].has_value() && cursorReadouts[1].has_value()) {
                 measurement = measureDisplayWindow(displayData, view.measurementChannelIndex, cursorReadouts[0]->time, cursorReadouts[1]->time);
             }
-            drawOverviewWindow(view, config, fullSnapshot, displayData, displayBounds);
+            drawOverviewWindow(view, config, fullSnapshot, displayData, displayBounds, renderBudget);
 
             if (view.showCursors && cursorReadouts[0].has_value()) {
                 const auto& c0 = *cursorReadouts[0];

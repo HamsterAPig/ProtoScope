@@ -39,7 +39,7 @@ namespace protoscope::ui {
 
 namespace {
 
-const char* kGlslVersion = "#version 130";
+const char* kGlslVersion = "#version 150";
 constexpr std::uint32_t kCommonBaudRates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
 
 struct EditableComboResult {
@@ -425,10 +425,20 @@ bool GuiRuntime::initializeWindow() {
     }
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
     const auto& window = application_.captureConfig().gui.window;
     window_ = glfwCreateWindow(window.width, window.height, window.title.c_str(), nullptr, nullptr);
+    if (!window_) {
+        // 核心流程：优先使用 3.2 Core 以启用 ImGui 顶点偏移能力；失败时回退 3.0，兼容老显卡/驱动。
+        glfwDefaultWindowHints();
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+        kGlslVersion = "#version 130";
+        window_ = glfwCreateWindow(window.width, window.height, window.title.c_str(), nullptr, nullptr);
+    }
     if (!window_) {
         glfwTerminate();
         return false;

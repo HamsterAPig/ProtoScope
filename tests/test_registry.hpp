@@ -36,6 +36,7 @@ void test_lua_dock_layout_key_prefers_protocol_dir();
 void test_lua_dock_window_name_keeps_stable_id();
 void test_lua_dock_layout_requests_group_tabs();
 void test_plot_history_trim_and_envelope();
+void test_plot_limited_envelope_preserves_spikes();
 void test_plot_cursor_snap_and_delta();
 void test_plot_cursor_snap_by_time_and_measurement();
 void test_wave_cursor_smart_snap_edge();

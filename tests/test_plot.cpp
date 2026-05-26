@@ -4,6 +4,7 @@
 #include "protoscope/plot/wave_math.hpp"
 
 #include <cmath>
+#include <utility>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -45,6 +46,43 @@ void test_plot_history_trim_and_envelope() {
     require(!envelope.points.empty(), "降采样包络不应为空");
     require(envelope.sourceSampleCount == 5, "可视区样本数应匹配");
     require(envelope.points[0].sampleCount >= 1, "包络点应记录桶内样本数");
+}
+
+void test_plot_limited_envelope_preserves_spikes() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.setViewConfig(protoscope::plot::ViewConfig{
+        .timeScale = 1.0,
+        .timeUnit = "s",
+        .verticalMin = -20.0,
+        .verticalMax = 20.0,
+        .verticalUnit = "V",
+        .historyLimit = 200,
+    });
+    buffer.configureChannels(1);
+
+    protoscope::plot::WaveAppendRequest request{.source = "spike"};
+    for (int index = 0; index < 100; ++index) {
+        double value = 0.0;
+        if (index == 20) {
+            value = 12.0;
+        } else if (index == 70) {
+            value = -9.0;
+        }
+        request.samples.push_back({.time = static_cast<double>(index), .value = value});
+    }
+    require(buffer.append(0, std::move(request)), "追加尖峰采样应成功");
+
+    const auto envelope = buffer.buildLimitedEnvelope(0, 0.0, 99.0, 5, 0);
+    require(envelope.points.size() <= 5, "受限包络点数不应超过预算");
+
+    bool foundPositiveSpike = false;
+    bool foundNegativeSpike = false;
+    for (const auto& point : envelope.points) {
+        foundPositiveSpike = foundPositiveSpike || point.maxValue >= 12.0;
+        foundNegativeSpike = foundNegativeSpike || point.minValue <= -9.0;
+    }
+    require(foundPositiveSpike, "min/max 桶应保留正向尖峰");
+    require(foundNegativeSpike, "min/max 桶应保留负向尖峰");
 }
 
 void test_plot_cursor_snap_and_delta() {

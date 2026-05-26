@@ -35,7 +35,11 @@ struct WaveViewState {
     bool cursorIntervalLocked{false};
     bool overviewWindowDragging{false};
     bool forceNextMainPlotLimits{false};
+    std::size_t maxRenderPointsPerChannel{1200};
+    std::size_t maxRenderVertices{60000};
     std::size_t overviewMaxSamples{20000};
+    std::size_t lastRenderPointCount{0};
+    std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};
     double visibleDuration{1.0};
     double persistenceWindow{0.25};

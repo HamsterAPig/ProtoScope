@@ -252,6 +252,14 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.gui.window.height = readScalar<int>(window, "height", result.config.gui.window.height);
             result.config.gui.window.maximized = readScalar<bool>(window, "maximized", result.config.gui.window.maximized);
         }
+        if (const auto wave = gui["wave"]) {
+            result.config.gui.wave.maxRenderPointsPerChannel =
+                readScalar<std::size_t>(wave, "max_render_points_per_channel", result.config.gui.wave.maxRenderPointsPerChannel);
+            result.config.gui.wave.maxRenderVertices =
+                readScalar<std::size_t>(wave, "max_render_vertices", result.config.gui.wave.maxRenderVertices);
+            result.config.gui.wave.overviewMaxSamples =
+                readScalar<std::size_t>(wave, "overview_max_samples", result.config.gui.wave.overviewMaxSamples);
+        }
 
         const auto protocol = root["protocol"];
         result.config.protocol.rootDir = readScalar<std::string>(protocol, "root_dir", result.config.protocol.rootDir);
@@ -322,6 +330,9 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["window"]["width"] = config.gui.window.width;
     root["gui"]["window"]["height"] = config.gui.window.height;
     root["gui"]["window"]["maximized"] = config.gui.window.maximized;
+    root["gui"]["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
+    root["gui"]["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
+    root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
     root["protocol"]["selected_dir"] = config.protocol.selectedDir;
@@ -498,6 +509,11 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     configState.fpsLimit = config.app.fpsLimit;
     configState.idleRender = config.app.idleRender;
     configState.loadedFromPath = config.configPath.empty() ? normalizeTextPath(defaultConfigPath_) : config.configPath;
+
+    auto& wave = dockStore.waveState().view;
+    wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
+    wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
+    wave.overviewMaxSamples = config.gui.wave.overviewMaxSamples;
 }
 
 AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
@@ -511,6 +527,9 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.app.configHotReload.enabled = dockStore.configState().configHotReloadEnabled;
     config.app.fpsLimit = dockStore.configState().fpsLimit;
     config.app.idleRender = dockStore.configState().idleRender;
+    config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
+    config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
+    config.gui.wave.overviewMaxSamples = dockStore.waveState().view.overviewMaxSamples;
     config.configPath = dockStore.configState().loadedFromPath;
 
     return config;

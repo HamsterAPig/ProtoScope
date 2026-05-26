@@ -3,6 +3,7 @@
 #include "protoscope/dock/docks.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -33,8 +34,15 @@ struct GuiWindowConfig {
     bool maximized{false};
 };
 
+struct GuiWaveConfig {
+    std::size_t maxRenderPointsPerChannel{1200};
+    std::size_t maxRenderVertices{60000};
+    std::size_t overviewMaxSamples{20000};
+};
+
 struct GuiConfig {
     GuiWindowConfig window{};
+    GuiWaveConfig wave{};
 };
 
 struct ProtocolConfig {

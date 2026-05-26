@@ -306,6 +306,9 @@ void test_config_default_roundtrip() {
     config.communication.serial.stopBits = "two";
     config.communication.serial.flowControl = "hardware";
     config.app.configHotReload.enabled = true;
+    config.gui.wave.maxRenderPointsPerChannel = 64;
+    config.gui.wave.maxRenderVertices = 4096;
+    config.gui.wave.overviewMaxSamples = 128;
 
     std::string error;
     require(store.save(tempPath, config, error), "默认配置写回失败");
@@ -318,6 +321,9 @@ void test_config_default_roundtrip() {
     require(reloaded.config.communication.serial.stopBits == "two", "串口停止位 roundtrip 失败");
     require(reloaded.config.communication.serial.flowControl == "hardware", "串口流控 roundtrip 失败");
     require(reloaded.config.app.configHotReload.enabled, "配置热重载开关 roundtrip 失败");
+    require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
+    require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
+    require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
 }
 
 void test_config_default_script_workspace() {
@@ -420,6 +426,7 @@ static const TestCase kAllTests[] = {
     {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
+    {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_offset_applies_to_display_only", &test_plot_channel_offset_applies_to_display_only},
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
