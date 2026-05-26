@@ -160,15 +160,32 @@ std::string stableWindowId(std::string_view windowName) {
     return std::string(windowName.substr(stableIdPos + 3));
 }
 
-void dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
+bool dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
     const auto name = std::string(windowName);
     const auto stableId = stableWindowId(windowName);
     const ImGuiID windowId = ImHashStr(stableId.c_str());
     const auto* settings = ImGui::FindWindowSettingsByID(windowId);
     if (targetNode == 0 || ImGui::FindWindowByName(name.c_str()) != nullptr || settings != nullptr) {
-        return;
+        return settings != nullptr;
     }
     ImGui::DockBuilderDockWindow(name.c_str(), targetNode);
+    return true;
+}
+
+void keepOnlyCurrentLuaDockSettings(std::string_view layoutKey) {
+    auto& settings = ImGui::GetCurrentContext()->SettingsWindows;
+    const auto activePrefix = std::string("LuaDock:") + std::string(layoutKey) + ':';
+
+    // 核心逻辑：兼容迁移旧 ini 时，只丢弃其它 Lua 脚本的窗口状态，静态 Dock 和 Dock 树仍交给 ImGui 恢复。
+    for (ImGuiWindowSettings* setting = settings.begin(); setting != nullptr; setting = settings.next_chunk(setting)) {
+        const std::string_view name = setting->GetName();
+        const auto stableIdPos = name.find("###");
+        const auto stableId = stableIdPos == std::string_view::npos ? name : name.substr(stableIdPos + 3);
+        if (stableId.starts_with("LuaDock:") && !stableId.starts_with(activePrefix)) {
+            setting->WantDelete = true;
+            setting->ID = 0;
+        }
+    }
 }
 
 const char* controlTypeName(scripting::ControlType type) {
@@ -491,10 +508,10 @@ int GuiRuntime::run() {
             }
         }
 
+        processPendingProtocolWorkspaceSwitch();
         renderFrame();
         glfwSwapBuffers(window_);
         lastRenderAtMs_ = frameStartMs;
-        processPendingProtocolWorkspaceSwitch();
         if (ImGui::GetIO().WantSaveIniSettings) {
             saveCurrentProtocolWorkspace();
         }
@@ -607,7 +624,7 @@ void GuiRuntime::renderFrame() {
     drawMainMenu();
 
     ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
-    if (!layoutInitialized_) {
+    if (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild) {
         ImGui::DockBuilderRemoveNode(dockspaceId);
         ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
@@ -636,9 +653,14 @@ void GuiRuntime::renderFrame() {
         ImGui::DockBuilderDockWindow("脚本", rightBottom);
         ImGui::DockBuilderDockWindow("波形", rightBottom);
         ImGui::DockBuilderFinish(dockspaceId);
-        layoutInitialized_ = true;
+        workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
+        pendingLuaDefaultDockLayout_ = true;
     }
-    updateLuaDockDefaultLayout();
+    if (pendingLuaDefaultDockLayout_) {
+        // 核心流程：Lua 动态 Dock 的默认停靠只属于默认布局事务，避免用户拖拽后被下一帧拉回。
+        updateLuaDockDefaultLayout();
+        pendingLuaDefaultDockLayout_ = false;
+    }
 
     drawStatusBar();
     drawCommDock();
@@ -1015,8 +1037,7 @@ void GuiRuntime::updateLuaDockDefaultLayout() {
     std::unordered_map<std::string, ImGuiID> tabGroupNodes;
 
     for (const auto& request : requests) {
-        const auto inserted = defaultDockedLuaWindows_.insert(request.windowName).second;
-        if (!inserted) {
+        if (defaultDockedLuaWindows_.contains(request.windowName)) {
             continue;
         }
 
@@ -1040,7 +1061,9 @@ void GuiRuntime::updateLuaDockDefaultLayout() {
         }
 
         // 核心流程：只给首次出现、ini 尚未创建过的 Lua Dock 提供默认停靠，不覆盖用户拖拽后的布局。
-        dockWindowIfMissing(request.windowName, targetNode);
+        if (dockWindowIfMissing(request.windowName, targetNode)) {
+            defaultDockedLuaWindows_.insert(request.windowName);
+        }
     }
 }
 
@@ -1066,6 +1089,8 @@ bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool fo
     defaultDockedLuaWindows_.clear();
     defaultLuaDockNodes_.clear();
     protocolWorkspaceLoaded_ = false;
+    workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
+    pendingLuaDefaultDockLayout_ = false;
 
     if (!application_.reloadProtocolDirectory(protocolDir, forceReload)) {
         loadCurrentProtocolWorkspace();
@@ -1082,13 +1107,22 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
     protocolWorkspaceLoaded_ = true;
     defaultDockedLuaWindows_.clear();
     defaultLuaDockNodes_.clear();
-    layoutInitialized_ = false;
+    workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
+    pendingLuaDefaultDockLayout_ = false;
 
     ImGui::ClearIniSettings();
     const auto layoutPath = currentProtocolLayoutPath();
     if (std::filesystem::exists(layoutPath)) {
         ImGui::LoadIniSettingsFromDisk(layoutPath.string().c_str());
-        layoutInitialized_ = true;
+        workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
+        keepOnlyCurrentLuaDockSettings(activeWorkspaceProtocolKey_);
+    } else {
+        const auto legacyLayoutPath = legacyProtocolLayoutPath();
+        if (legacyLayoutPath != layoutPath && std::filesystem::exists(legacyLayoutPath)) {
+            ImGui::LoadIniSettingsFromDisk(legacyLayoutPath.string().c_str());
+            workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
+            keepOnlyCurrentLuaDockSettings(activeWorkspaceProtocolKey_);
+        }
     }
     ImGui::GetIO().WantSaveIniSettings = false;
     loadCurrentProtocolControlState();
@@ -1174,7 +1208,13 @@ void GuiRuntime::saveCurrentProtocolControlState() {
 }
 
 std::filesystem::path GuiRuntime::currentProtocolLayoutPath() const {
-    return std::filesystem::path("config") / "ui" / (activeWorkspaceProtocolKey_ + ".imgui.ini");
+    return std::filesystem::path("build") / "config" / "ui" / (activeWorkspaceProtocolKey_ + ".imgui.ini");
+}
+
+std::filesystem::path GuiRuntime::legacyProtocolLayoutPath() const {
+    const auto& lua = application_.docks().luaState();
+    return std::filesystem::path("build") / "config" / "ui"
+        / (legacyLuaDockLayoutKey(lua.protocolDir, lua.scriptPath) + ".imgui.ini");
 }
 
 std::filesystem::path GuiRuntime::protocolControlStatePath() const {

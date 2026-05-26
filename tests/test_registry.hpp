@@ -32,7 +32,7 @@ void test_config_default_roundtrip();
 void test_config_default_script_workspace();
 void test_protocol_scan_and_root_roundtrip();
 void test_dock_log_and_script_split();
-void test_lua_dock_layout_key_prefers_protocol_dir();
+void test_lua_dock_layout_key_uses_protocol_and_script();
 void test_lua_dock_window_name_keeps_stable_id();
 void test_lua_dock_layout_requests_group_tabs();
 void test_plot_history_trim_and_envelope();

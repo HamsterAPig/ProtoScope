@@ -25,9 +25,19 @@ protoscope::scripting::DockSnapshot makeDock(const char* id, const char* title, 
 
 } // namespace
 
-void test_lua_dock_layout_key_prefers_protocol_dir() {
+void test_lua_dock_layout_key_uses_protocol_and_script() {
     const auto key = protoscope::ui::luaDockLayoutKey("protocols\\default_protocol\\", "scripts/main.lua");
-    require(key == "protocols_default_protocol", "布局 key 应优先来自规范化协议目录");
+    require(key == "protocols_default_protocol__scripts_main.lua", "布局 key 应由协议目录和入口脚本共同组成");
+    require(
+        protoscope::ui::luaDockLayoutKey("protocols/default_protocol", "scripts\\main.lua") == key,
+        "路径分隔符差异不应改变布局 key");
+    require(
+        protoscope::ui::luaDockLayoutKey("protocols/default_protocol", "scripts/advanced.lua") != key,
+        "同协议目录下不同入口脚本应生成不同布局 key");
+    require(
+        protoscope::ui::legacyLuaDockLayoutKey("protocols\\default_protocol\\", "scripts/main.lua")
+            == "protocols_default_protocol",
+        "旧布局 key 应继续支持按协议目录迁移");
     require(protoscope::ui::luaDockLayoutKey("", "") == "default", "空路径应回退到 default");
 }
 

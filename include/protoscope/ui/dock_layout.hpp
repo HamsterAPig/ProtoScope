@@ -27,6 +27,7 @@ struct LuaDockLayoutRequest {
 std::optional<LuaDockAnchor> parseLuaDockAnchor(std::string_view value);
 bool isValidLuaDockAnchor(std::string_view value);
 std::string luaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath);
+std::string legacyLuaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath);
 std::string luaDockWindowName(const scripting::DockDescriptor& dock, std::string_view layoutKey);
 std::vector<LuaDockLayoutRequest> buildLuaDockLayoutRequests(
     const std::vector<scripting::DockSnapshot>& docks,

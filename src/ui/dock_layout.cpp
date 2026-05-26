@@ -36,7 +36,7 @@ std::string normalizeKeyPart(std::string_view value) {
         text.pop_back();
     }
 
-    // 核心逻辑：ImGui ID 中避免混入空白和路径分隔符，让同一协议目录稳定映射到同一个布局 key。
+    // 核心逻辑：ImGui ID 中避免混入空白和路径分隔符，让同一路径稳定映射到同一个布局 key。
     for (char& ch : text) {
         const auto code = static_cast<unsigned char>(ch);
         if (std::isspace(code) != 0 || ch == '/' || ch == ':' || ch == '*'
@@ -76,6 +76,21 @@ bool isValidLuaDockAnchor(std::string_view value) {
 }
 
 std::string luaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath) {
+    const auto protocolKey = normalizeKeyPart(protocolDir);
+    const auto scriptKey = normalizeKeyPart(scriptPath);
+    if (!protocolKey.empty() && !scriptKey.empty()) {
+        return protocolKey + "__" + scriptKey;
+    }
+    if (!protocolKey.empty()) {
+        return protocolKey;
+    }
+    if (!scriptKey.empty()) {
+        return scriptKey;
+    }
+    return kDefaultLayoutKey;
+}
+
+std::string legacyLuaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath) {
     if (auto key = normalizeKeyPart(protocolDir); !key.empty()) {
         return key;
     }

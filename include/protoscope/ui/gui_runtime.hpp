@@ -53,6 +53,7 @@ private:
     void loadCurrentProtocolControlState();
     void saveCurrentProtocolControlState();
     std::filesystem::path currentProtocolLayoutPath() const;
+    std::filesystem::path legacyProtocolLayoutPath() const;
     std::filesystem::path protocolControlStatePath() const;
 
     bool reloadConfigFromDisk();
@@ -62,6 +63,11 @@ private:
 
     static std::uint64_t nowMs();
     static std::string formatTimestamp(std::uint64_t timestampMs);
+
+    enum class WorkspaceLayoutMode {
+        NeedsDefaultBuild,
+        Ready,
+    };
 
 private:
     app::Application& application_;
@@ -74,7 +80,8 @@ private:
     std::optional<std::string> pendingProtocolDir_;
     bool pendingProtocolForceReload_{false};
     bool protocolWorkspaceLoaded_{false};
-    bool layoutInitialized_{false};
+    WorkspaceLayoutMode workspaceLayoutMode_{WorkspaceLayoutMode::NeedsDefaultBuild};
+    bool pendingLuaDefaultDockLayout_{false};
     std::unordered_map<LuaDockAnchor, unsigned int> defaultLuaDockNodes_;
     std::unordered_set<std::string> defaultDockedLuaWindows_;
     bool running_{false};
