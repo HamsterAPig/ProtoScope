@@ -130,3 +130,61 @@ void test_lua_dock_settings_filter_keeps_only_current_windows() {
         protoscope::ui::shouldKeepLuaWindowSettings("通讯配置", "protocols_demo", activeIds),
         "静态窗口状态不应被 Lua Dock 过滤影响");
 }
+
+void test_lua_dock_settings_filter_removes_lua_windows_when_no_docks() {
+    const std::vector<std::string> activeIds;
+
+    require(
+        !protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:protocols_demo:removed", "protocols_demo", activeIds),
+        "当前协议已不存在的 Lua Dock 状态应清理");
+    require(
+        !protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:other:active", "protocols_demo", activeIds),
+        "空 Dock 集合也应清理其它协议 Lua Dock 状态");
+    require(
+        protoscope::ui::shouldKeepLuaWindowSettings("通讯配置", "protocols_demo", activeIds),
+        "空 Dock 集合不应影响静态窗口状态");
+}
+
+void test_workspace_layout_mode_after_load_uses_existing_layout_apply() {
+    protoscope::ui::LuaDockLayoutPaths layoutPaths;
+
+    require(
+        protoscope::ui::workspaceLayoutModeAfterLoad(layoutPaths)
+            == protoscope::ui::WorkspaceLayoutMode::NeedsDefaultBuild,
+        "没有布局文件时应构建默认 Dock 布局");
+
+    layoutPaths.hasUserLayout = true;
+    require(
+        protoscope::ui::workspaceLayoutModeAfterLoad(layoutPaths)
+            == protoscope::ui::WorkspaceLayoutMode::NeedsLoadedLayoutApply,
+        "加载用户布局后应进入下一帧同步流程");
+
+    layoutPaths.hasUserLayout = false;
+    layoutPaths.hasLegacyLayout = true;
+    require(
+        protoscope::ui::workspaceLayoutModeAfterLoad(layoutPaths)
+            == protoscope::ui::WorkspaceLayoutMode::NeedsLoadedLayoutApply,
+        "加载 legacy 布局后应进入下一帧同步流程");
+}
+
+void test_workspace_layout_mode_after_loaded_apply_becomes_ready() {
+    require(
+        protoscope::ui::workspaceLayoutModeAfterLoadedLayoutApply(
+            protoscope::ui::WorkspaceLayoutMode::NeedsLoadedLayoutApply)
+            == protoscope::ui::WorkspaceLayoutMode::Ready,
+        "已加载布局同步一次后应进入 Ready");
+    require(
+        protoscope::ui::workspaceLayoutModeAfterLoadedLayoutApply(
+            protoscope::ui::WorkspaceLayoutMode::NeedsDefaultBuild)
+            == protoscope::ui::WorkspaceLayoutMode::NeedsDefaultBuild,
+        "默认布局构建状态不应被 loaded apply helper 改写");
+}
+
+void test_protocol_switch_resets_lua_default_dock_state_only_when_changed() {
+    require(
+        protoscope::ui::shouldResetLuaDefaultDockStateOnProtocolSwitch(false),
+        "协议切换时应清空 Lua 默认停靠缓存");
+    require(
+        !protoscope::ui::shouldResetLuaDefaultDockStateOnProtocolSwitch(true),
+        "同协议重载不应清空 Lua 默认停靠缓存");
+}

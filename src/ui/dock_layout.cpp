@@ -174,6 +174,20 @@ LuaDockLayoutPaths resolveLuaDockLayoutPaths(
     return paths;
 }
 
+WorkspaceLayoutMode workspaceLayoutModeAfterLoad(const LuaDockLayoutPaths& layoutPaths) {
+    return layoutPaths.hasUserLayout || layoutPaths.hasLegacyLayout
+        ? WorkspaceLayoutMode::NeedsLoadedLayoutApply
+        : WorkspaceLayoutMode::NeedsDefaultBuild;
+}
+
+WorkspaceLayoutMode workspaceLayoutModeAfterLoadedLayoutApply(WorkspaceLayoutMode mode) {
+    return mode == WorkspaceLayoutMode::NeedsLoadedLayoutApply ? WorkspaceLayoutMode::Ready : mode;
+}
+
+bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol) {
+    return !sameProtocol;
+}
+
 std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey) {
     std::ostringstream stream;
     stream << "LuaDock:" << layoutKey << ':' << dock.id;
@@ -204,8 +218,7 @@ bool shouldKeepLuaWindowSettings(
         return false;
     }
 
-    return activeStableIds.empty()
-        || std::find(activeStableIds.begin(), activeStableIds.end(), stableId) != activeStableIds.end();
+    return std::find(activeStableIds.begin(), activeStableIds.end(), stableId) != activeStableIds.end();
 }
 
 std::string luaDockWindowName(const scripting::DockDescriptor& dock, std::string_view layoutKey) {

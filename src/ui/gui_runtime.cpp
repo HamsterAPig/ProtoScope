@@ -629,6 +629,15 @@ void GuiRuntime::renderFrame() {
     drawMainMenu();
 
     ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
+    mainDockspaceId_ = dockspaceId;
+    const bool needsLoadedLayoutApply = workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsLoadedLayoutApply;
+    if (needsLoadedLayoutApply) {
+        workspaceLayoutMode_ = workspaceLayoutModeAfterLoadedLayoutApply(workspaceLayoutMode_);
+        pendingLuaDefaultDockLayout_ = false;
+        defaultDockedLuaWindows_.clear();
+        defaultLuaDockNodes_.clear();
+    }
+
     if (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild) {
         ImGui::DockBuilderRemoveNode(dockspaceId);
         ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
@@ -1097,7 +1106,7 @@ bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool fo
         && previousLua.protocolDir == requestedDir
         && activeWorkspaceProtocolKey_ == luaDockLayoutKey(requestedDir, configStore_.mainLuaPath(requestedDir).generic_string());
 
-    if (!sameProtocol) {
+    if (shouldResetLuaDefaultDockStateOnProtocolSwitch(sameProtocol)) {
         saveCurrentProtocolWorkspace();
         defaultDockedLuaWindows_.clear();
         defaultLuaDockNodes_.clear();
@@ -1130,16 +1139,20 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
     protocolWorkspaceLoaded_ = true;
     defaultDockedLuaWindows_.clear();
     defaultLuaDockNodes_.clear();
-    workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
+    workspaceLayoutMode_ = workspaceLayoutModeAfterLoad(layoutPaths);
     pendingLuaDefaultDockLayout_ = false;
+
+    if (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsLoadedLayoutApply && mainDockspaceId_ != 0) {
+        // 核心流程：先清理上一协议的 live DockSpace，再加载当前协议 ini，避免旧节点压过新布局。
+        ImGui::DockBuilderRemoveNode(mainDockspaceId_);
+        mainDockspaceId_ = 0;
+    }
 
     ImGui::ClearIniSettings();
     if (layoutPaths.hasUserLayout) {
         ImGui::LoadIniSettingsFromDisk(layoutPaths.layoutPath.string().c_str());
-        workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
     } else if (layoutPaths.hasLegacyLayout) {
         ImGui::LoadIniSettingsFromDisk(layoutPaths.legacyLayoutPath.string().c_str());
-        workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
         pendingProtocolWorkspaceSave_ = true;
     } else {
         pendingProtocolWorkspaceSave_ = true;

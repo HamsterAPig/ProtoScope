@@ -65,11 +65,6 @@ private:
     static std::uint64_t nowMs();
     static std::string formatTimestamp(std::uint64_t timestampMs);
 
-    enum class WorkspaceLayoutMode {
-        NeedsDefaultBuild,
-        Ready,
-    };
-
 private:
     app::Application& application_;
     const config::ConfigStore& configStore_;
@@ -85,6 +80,7 @@ private:
     std::filesystem::path executableDir_;
     bool pendingLuaDefaultDockLayout_{false};
     bool pendingProtocolWorkspaceSave_{false};
+    unsigned int mainDockspaceId_{0};
     std::unordered_map<LuaDockAnchor, unsigned int> defaultLuaDockNodes_;
     std::unordered_set<std::string> defaultDockedLuaWindows_;
     bool running_{false};
