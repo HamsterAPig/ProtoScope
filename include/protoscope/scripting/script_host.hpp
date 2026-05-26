@@ -101,6 +101,7 @@ public:
     void onTransportError(const transport::TransportErrorEvent& event);
     void onTransportBytes(const transport::TransportBytesEvent& event);
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
+    bool setControlValue(const std::string& id, const ControlValue& value);
     void tick(std::uint64_t currentMs);
 
     std::vector<ControlDescriptor> controlsSnapshot() const;

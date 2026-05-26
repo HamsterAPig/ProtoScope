@@ -268,6 +268,14 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
     syncDockState();
 }
 
+bool Application::restoreControlValue(const std::string& id, const scripting::ControlValue& value) {
+    if (!scriptHost_.setControlValue(id, value)) {
+        return false;
+    }
+    syncDockState();
+    return true;
+}
+
 void Application::markCommConfigEdited(bool reconnectRequired) {
     dockStore_.commState().reconnectRequired = reconnectRequired;
     dockStore_.markDirty(reconnectRequired ? "通讯配置已修改，需重新连接" : "通讯配置已修改");

@@ -775,6 +775,15 @@ void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::s
     callbackOnControl(ScriptHostContext{ctx}, id, value);
 }
 
+bool ScriptHost::setControlValue(const std::string& id, const ControlValue& value) {
+    const auto* descriptor = findControlDescriptor(controls_, id);
+    if (descriptor == nullptr) {
+        return false;
+    }
+    controlValues_[id] = value;
+    return true;
+}
+
 void ScriptHost::tick(std::uint64_t currentMs) {
     std::vector<std::string> dueTimers;
     dueTimers.reserve(timers_.size());

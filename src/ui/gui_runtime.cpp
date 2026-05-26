@@ -13,6 +13,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <implot.h>
+#include <yaml-cpp/yaml.h>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -29,6 +30,7 @@
 #include <ctime>
 #include <filesystem>
 #include <functional>
+#include <fstream>
 #include <optional>
 #include <sstream>
 #include <thread>
@@ -150,14 +152,100 @@ std::string visibleWindowTitle(std::string_view windowName) {
     return std::string(windowName.substr(0, stableIdPos));
 }
 
+std::string stableWindowId(std::string_view windowName) {
+    const auto stableIdPos = windowName.find("###");
+    if (stableIdPos == std::string_view::npos) {
+        return std::string(windowName);
+    }
+    return std::string(windowName.substr(stableIdPos + 3));
+}
+
 void dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
     const auto name = std::string(windowName);
-    const ImGuiID windowId = ImHashStr(name.c_str());
+    const auto stableId = stableWindowId(windowName);
+    const ImGuiID windowId = ImHashStr(stableId.c_str());
     const auto* settings = ImGui::FindWindowSettingsByID(windowId);
     if (targetNode == 0 || ImGui::FindWindowByName(name.c_str()) != nullptr || settings != nullptr) {
         return;
     }
     ImGui::DockBuilderDockWindow(name.c_str(), targetNode);
+}
+
+const char* controlTypeName(scripting::ControlType type) {
+    switch (type) {
+    case scripting::ControlType::Button:
+        return "button";
+    case scripting::ControlType::InputText:
+        return "input_text";
+    case scripting::ControlType::InputInt:
+        return "input_int";
+    case scripting::ControlType::InputFloat:
+        return "input_float";
+    case scripting::ControlType::Checkbox:
+        return "checkbox";
+    case scripting::ControlType::Combo:
+        return "combo";
+    }
+    return "unknown";
+}
+
+bool isPersistedControlType(scripting::ControlType type) {
+    return type == scripting::ControlType::Checkbox || type == scripting::ControlType::InputText ||
+           type == scripting::ControlType::Combo || type == scripting::ControlType::InputInt ||
+           type == scripting::ControlType::InputFloat;
+}
+
+std::optional<scripting::ControlValue> readControlValue(const YAML::Node& node, scripting::ControlType type) {
+    try {
+        switch (type) {
+        case scripting::ControlType::Checkbox:
+            if (node.IsScalar()) {
+                return node.as<bool>();
+            }
+            break;
+        case scripting::ControlType::InputText:
+            if (node.IsScalar()) {
+                return node.as<std::string>();
+            }
+            break;
+        case scripting::ControlType::Combo:
+        case scripting::ControlType::InputInt:
+            if (node.IsScalar()) {
+                return node.as<int>();
+            }
+            break;
+        case scripting::ControlType::InputFloat:
+            if (node.IsScalar()) {
+                return node.as<float>();
+            }
+            break;
+        case scripting::ControlType::Button:
+            break;
+        }
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+void writeControlValue(YAML::Node node, const scripting::ControlSnapshot& control) {
+    switch (control.descriptor.type) {
+    case scripting::ControlType::Checkbox:
+        node = std::get<bool>(control.value);
+        break;
+    case scripting::ControlType::InputText:
+        node = std::get<std::string>(control.value);
+        break;
+    case scripting::ControlType::Combo:
+    case scripting::ControlType::InputInt:
+        node = std::get<int>(control.value);
+        break;
+    case scripting::ControlType::InputFloat:
+        node = std::get<float>(control.value);
+        break;
+    case scripting::ControlType::Button:
+        break;
+    }
 }
 
 std::string formatTimestampText(std::uint64_t timestampMs) {
@@ -380,6 +468,7 @@ bool GuiRuntime::initialize() {
     if (!initializePlotContext()) {
         return false;
     }
+    loadCurrentProtocolWorkspace();
     configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
     running_ = true;
     return true;
@@ -405,6 +494,10 @@ int GuiRuntime::run() {
         renderFrame();
         glfwSwapBuffers(window_);
         lastRenderAtMs_ = frameStartMs;
+        processPendingProtocolWorkspaceSwitch();
+        if (ImGui::GetIO().WantSaveIniSettings) {
+            saveCurrentProtocolWorkspace();
+        }
     }
     return 0;
 }
@@ -414,6 +507,7 @@ void GuiRuntime::shutdown() {
         return;
     }
     running_ = false;
+    saveCurrentProtocolWorkspace();
     shutdownImGui();
     shutdownPlotContext();
     shutdownWindow();
@@ -457,6 +551,7 @@ bool GuiRuntime::initializeImGui() {
     ImGui::StyleColorsDark();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.IniFilename = nullptr;
     ensureChineseFont();
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window_, true)) {
@@ -588,9 +683,7 @@ void GuiRuntime::drawMainMenu() {
             }
         }
         if (ImGui::MenuItem("重新加载协议")) {
-            if (!application_.reloadProtocolDirectory(application_.docks().luaState().protocolDir, true)) {
-                application_.setStatusMessage("协议重载失败", true);
-            }
+            requestProtocolWorkspaceSwitch(application_.docks().luaState().protocolDir, true);
         }
         ImGui::EndMenu();
     }
@@ -873,9 +966,7 @@ void GuiRuntime::drawProtocolDock() {
     }
     ImGui::SameLine();
     if (ImGui::Button("重新加载协议")) {
-        if (!application_.reloadProtocolDirectory(lua.protocolDir, true)) {
-            application_.setStatusMessage("协议重载失败", true);
-        }
+        requestProtocolWorkspaceSwitch(lua.protocolDir, true);
     }
 
     ImGui::Text("协议名称: %s", lua.protocolName.c_str());
@@ -903,7 +994,8 @@ void GuiRuntime::drawProtocolDock() {
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
     for (const auto& dockSnapshot : dockSnapshots) {
         const auto windowName = luaDockWindowName(dockSnapshot.descriptor, layoutKey);
-        if (ImGui::Begin(windowName.c_str())) {
+        const bool windowVisible = ImGui::Begin(windowName.c_str());
+        if (windowVisible) {
             for (const auto& control : dockSnapshot.controls) {
                 drawDynamicControl(control);
             }
@@ -913,6 +1005,10 @@ void GuiRuntime::drawProtocolDock() {
 }
 
 void GuiRuntime::updateLuaDockDefaultLayout() {
+    if (defaultLuaDockNodes_.empty()) {
+        return;
+    }
+
     const auto& lua = application_.docks().luaState();
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
     const auto requests = buildLuaDockLayoutRequests(lua.docks, layoutKey);
@@ -946,6 +1042,143 @@ void GuiRuntime::updateLuaDockDefaultLayout() {
         // 核心流程：只给首次出现、ini 尚未创建过的 Lua Dock 提供默认停靠，不覆盖用户拖拽后的布局。
         dockWindowIfMissing(request.windowName, targetNode);
     }
+}
+
+void GuiRuntime::requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload) {
+    pendingProtocolDir_ = std::move(protocolDir);
+    pendingProtocolForceReload_ = forceReload;
+}
+
+void GuiRuntime::processPendingProtocolWorkspaceSwitch() {
+    if (!pendingProtocolDir_.has_value()) {
+        return;
+    }
+
+    const auto protocolDir = std::move(*pendingProtocolDir_);
+    pendingProtocolDir_.reset();
+    if (!switchProtocolWorkspace(protocolDir, pendingProtocolForceReload_)) {
+        application_.setStatusMessage("协议重载失败", true);
+    }
+}
+
+bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool forceReload) {
+    saveCurrentProtocolWorkspace();
+    defaultDockedLuaWindows_.clear();
+    defaultLuaDockNodes_.clear();
+    protocolWorkspaceLoaded_ = false;
+
+    if (!application_.reloadProtocolDirectory(protocolDir, forceReload)) {
+        loadCurrentProtocolWorkspace();
+        return false;
+    }
+
+    loadCurrentProtocolWorkspace();
+    return true;
+}
+
+void GuiRuntime::loadCurrentProtocolWorkspace() {
+    const auto& lua = application_.docks().luaState();
+    activeWorkspaceProtocolKey_ = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
+    protocolWorkspaceLoaded_ = true;
+    defaultDockedLuaWindows_.clear();
+    defaultLuaDockNodes_.clear();
+    layoutInitialized_ = false;
+
+    ImGui::ClearIniSettings();
+    const auto layoutPath = currentProtocolLayoutPath();
+    if (std::filesystem::exists(layoutPath)) {
+        ImGui::LoadIniSettingsFromDisk(layoutPath.string().c_str());
+        layoutInitialized_ = true;
+    }
+    ImGui::GetIO().WantSaveIniSettings = false;
+    loadCurrentProtocolControlState();
+}
+
+void GuiRuntime::saveCurrentProtocolWorkspace() {
+    if (!protocolWorkspaceLoaded_ || activeWorkspaceProtocolKey_.empty()) {
+        return;
+    }
+
+    const auto layoutPath = currentProtocolLayoutPath();
+    std::filesystem::create_directories(layoutPath.parent_path());
+    ImGui::SaveIniSettingsToDisk(layoutPath.string().c_str());
+    ImGui::GetIO().WantSaveIniSettings = false;
+    saveCurrentProtocolControlState();
+}
+
+void GuiRuntime::loadCurrentProtocolControlState() {
+    const auto statePath = protocolControlStatePath();
+    if (!std::filesystem::exists(statePath)) {
+        return;
+    }
+
+    try {
+        const auto root = YAML::LoadFile(statePath.string());
+        const auto protocolState = root["protocols"][activeWorkspaceProtocolKey_]["controls"];
+        if (!protocolState) {
+            return;
+        }
+
+        const auto controls = application_.docks().luaState().controlStates;
+        for (const auto& control : controls) {
+            const auto& descriptor = control.descriptor;
+            if (!isPersistedControlType(descriptor.type)) {
+                continue;
+            }
+            const auto saved = protocolState[descriptor.id];
+            if (!saved || saved["type"].as<std::string>("") != controlTypeName(descriptor.type)) {
+                continue;
+            }
+            if (const auto value = readControlValue(saved["value"], descriptor.type)) {
+                application_.restoreControlValue(descriptor.id, *value);
+            }
+        }
+    } catch (const std::exception& ex) {
+        application_.setStatusMessage(std::string("加载协议控件状态失败: ") + ex.what(), true);
+    }
+}
+
+void GuiRuntime::saveCurrentProtocolControlState() {
+    YAML::Node root;
+    const auto statePath = protocolControlStatePath();
+    try {
+        if (std::filesystem::exists(statePath)) {
+            root = YAML::LoadFile(statePath.string());
+        }
+
+        YAML::Node controlsNode;
+        const auto controls = application_.docks().luaState().controlStates;
+        for (const auto& control : controls) {
+            const auto& descriptor = control.descriptor;
+            if (!isPersistedControlType(descriptor.type)) {
+                continue;
+            }
+
+            YAML::Node controlNode;
+            controlNode["type"] = controlTypeName(descriptor.type);
+            writeControlValue(controlNode["value"], control);
+            controlsNode[descriptor.id] = controlNode;
+        }
+
+        root["protocols"][activeWorkspaceProtocolKey_]["controls"] = controlsNode;
+        std::filesystem::create_directories(statePath.parent_path());
+        std::ofstream out(statePath);
+        if (!out.good()) {
+            application_.setStatusMessage("保存协议控件状态失败: 无法写入文件", true);
+            return;
+        }
+        out << root;
+    } catch (const std::exception& ex) {
+        application_.setStatusMessage(std::string("保存协议控件状态失败: ") + ex.what(), true);
+    }
+}
+
+std::filesystem::path GuiRuntime::currentProtocolLayoutPath() const {
+    return std::filesystem::path("config") / "ui" / (activeWorkspaceProtocolKey_ + ".imgui.ini");
+}
+
+std::filesystem::path GuiRuntime::protocolControlStatePath() const {
+    return std::filesystem::path("config") / "ui" / "protocol-control-state.yaml";
 }
 
 void GuiRuntime::drawSendDock() {
@@ -1115,10 +1348,12 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
 }
 
 bool GuiRuntime::reloadConfigFromDisk() {
+    saveCurrentProtocolWorkspace();
     const auto loaded = configStore_.load(configStore_.defaultConfigPath());
     if (!application_.applyConfig(loaded.config)) {
         return false;
     }
+    loadCurrentProtocolWorkspace();
     configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
     auto& configState = application_.docks().configState();
     application_.docks().clearPendingExternalReload();

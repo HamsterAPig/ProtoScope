@@ -6,6 +6,8 @@
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -43,6 +45,15 @@ private:
     void drawScriptDock();
     void drawDynamicControl(const scripting::ControlSnapshot& control);
     void updateLuaDockDefaultLayout();
+    void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
+    void processPendingProtocolWorkspaceSwitch();
+    bool switchProtocolWorkspace(const std::string& protocolDir, bool forceReload);
+    void loadCurrentProtocolWorkspace();
+    void saveCurrentProtocolWorkspace();
+    void loadCurrentProtocolControlState();
+    void saveCurrentProtocolControlState();
+    std::filesystem::path currentProtocolLayoutPath() const;
+    std::filesystem::path protocolControlStatePath() const;
 
     bool reloadConfigFromDisk();
     bool pollConfigFileChanges();
@@ -59,6 +70,10 @@ private:
     std::uint64_t lastRenderAtMs_{0};
     std::uint64_t lastAutoSaveAtMs_{0};
     config::FileSnapshot configSnapshot_{};
+    std::string activeWorkspaceProtocolKey_;
+    std::optional<std::string> pendingProtocolDir_;
+    bool pendingProtocolForceReload_{false};
+    bool protocolWorkspaceLoaded_{false};
     bool layoutInitialized_{false};
     std::unordered_map<LuaDockAnchor, unsigned int> defaultLuaDockNodes_;
     std::unordered_set<std::string> defaultDockedLuaWindows_;
