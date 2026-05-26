@@ -55,6 +55,8 @@ function ui()
     {
       id = "protocol",
       title = "协议动作",
+      anchor = "left_bottom",
+      tab_group = "protocol_tools",
       controls = {
         { type = "button", id = "read_version", label = "读取版本" },
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
@@ -63,6 +65,8 @@ function ui()
     {
       id = "advanced",
       title = "高级参数",
+      anchor = "left_bottom",
+      tab_group = "protocol_tools",
       controls = {
         { type = "checkbox", id = "hex_send", label = "HEX 发送", default = true },
         { type = "combo", id = "mode", label = "模式", options = { "轮询", "单次" }, default = 1 },
@@ -74,6 +78,39 @@ function ui()
 end
 
 local rx_buffer = {}
+local next_scope_t = 0.0
+
+local function init_scope(reset_history)
+  proto.plot.setup({
+    source = "default_protocol",
+    reset_history = reset_history,
+    time_scale = 0.001,
+    time_unit = "s",
+    vertical_min = -2.0,
+    vertical_max = 2.0,
+    vertical_unit = "V",
+    history_limit = 20000,
+    channels = {
+      { label = "CH1", unit = "V" },
+      { label = "CH2", unit = "V" }
+    }
+  })
+end
+
+local function push_scope_samples(bytes)
+  local ch1 = {}
+  local ch2 = {}
+  for i = 1, #bytes do
+    local value = bytes[i]
+    ch1[#ch1 + 1] = { t = next_scope_t, y = (value - 128.0) / 64.0 }
+    ch2[#ch2 + 1] = { t = next_scope_t, y = ((value % 32) - 16.0) / 8.0 }
+    next_scope_t = next_scope_t + 0.001
+  end
+  if #ch1 > 0 then
+    proto.plot.push(1, { samples = ch1 })
+    proto.plot.push(2, { samples = ch2 })
+  end
+end
 
 local function clear_rx_buffer()
   rx_buffer = {}
@@ -113,14 +150,8 @@ local function parse_frame(bytes)
   return nil
 end
 
-local function send_read_version(ctx)
-  clear_rx_buffer()
-  proto.send(build_read_version_frame())
-  proto.set_timer("read_version_timeout", timeout_ms())
-  proto.emit("request", { action = "read_version", connection_id = ctx.connection_id })
-end
-
 function on_open(ctx)
+  init_scope(true)
   proto.log("info", "连接已打开: " .. ctx.kind .. " -> " .. ctx.endpoint)
 end
 
@@ -134,13 +165,17 @@ end
 
 function on_control(ctx, id, value)
   if id == "read_version" then
-    send_read_version(ctx)
+    clear_rx_buffer()
+    proto.send(build_read_version_frame())
+    proto.set_timer("read_version_timeout", timeout_ms())
+    proto.emit("request", { action = "read_version", connection_id = ctx.connection_id })
   else
     proto.log("info", "控件更新: " .. id .. "=" .. tostring(value))
   end
 end
 
 function on_bytes(ctx, bytes)
+  push_scope_samples(bytes)
   append_bytes(bytes)
   local result = parse_frame(rx_buffer)
   if result then
@@ -159,6 +194,533 @@ function on_timer(ctx, name)
   end
 end
 )PROTO";
+
+const char* kDefaultWaveformDemoLua = R"WAVE(-- 核心流程：本脚本不依赖串口输入，Lua 定时生成采样点并推送到波形面板。
+
+local timer_name = "lua_waveform_tick"
+local running = true
+local time_cursor = 0.0
+local plot_ready = false
+
+local defaults = {
+  frequency_hz = 1.0,
+  amplitude = 1.0,
+  offset = 0.0,
+  phase_deg = 0.0,
+  sample_rate_hz = 200,
+  points_per_tick = 8,
+  timer_ms = 40,
+  show_sine = true,
+  show_triangle = true,
+  show_square = true,
+  show_saw = false
+}
+
+local function read_number(id, fallback)
+  local value = proto.get_control(id)
+  if type(value) ~= "number" then
+    return fallback
+  end
+  return value
+end
+
+local function read_bool(id, fallback)
+  local value = proto.get_control(id)
+  if type(value) ~= "boolean" then
+    return fallback
+  end
+  return value
+end
+
+local function read_positive_number(id, fallback, minimum)
+  local value = read_number(id, fallback)
+  if value < minimum then
+    return minimum
+  end
+  return value
+end
+
+local function phase_ratio()
+  return read_number("phase_deg", defaults.phase_deg) / 360.0
+end
+
+local function wrap01(value)
+  return value - math.floor(value)
+end
+
+local function sine_wave(cycle)
+  return math.sin(cycle * 2.0 * math.pi)
+end
+
+local function triangle_wave(cycle)
+  local position = wrap01(cycle)
+  return 1.0 - 4.0 * math.abs(position - 0.5)
+end
+
+local function square_wave(cycle)
+  return wrap01(cycle) < 0.5 and 1.0 or -1.0
+end
+
+local function saw_wave(cycle)
+  return wrap01(cycle) * 2.0 - 1.0
+end
+
+local function scaled(value)
+  local amplitude = read_number("amplitude", defaults.amplitude)
+  local offset = read_number("offset", defaults.offset)
+  return offset + amplitude * value
+end
+
+local function channel_enabled(channel_id)
+  return read_bool(channel_id, defaults[channel_id])
+end
+
+local function setup_plot(reset_history)
+  local vertical_range = math.abs(read_number("amplitude", defaults.amplitude)) + math.abs(read_number("offset", defaults.offset)) + 0.5
+  proto.plot.setup({
+    source = "lua_waveform_demo",
+    reset_history = reset_history,
+    time_scale = 1.0,
+    time_unit = "s",
+    vertical_min = -vertical_range,
+    vertical_max = vertical_range,
+    vertical_unit = "V",
+    history_limit = 12000,
+    channels = {
+      { label = "正弦", unit = "V", offset = 0.0 },
+      { label = "三角", unit = "V", offset = 0.0 },
+      { label = "方波", unit = "V", offset = 0.0 },
+      { label = "锯齿", unit = "V", offset = 0.0 }
+    }
+  })
+  plot_ready = true
+end
+
+local function push_channel(channel_index, samples)
+  if #samples > 0 then
+    proto.plot.push(channel_index, {
+      source = "lua_waveform_demo",
+      samples = samples
+    })
+  end
+end
+
+local function emit_samples()
+  if not plot_ready then
+    setup_plot(true)
+  end
+
+  local frequency = read_positive_number("frequency_hz", defaults.frequency_hz, 0.01)
+  local sample_rate = read_positive_number("sample_rate_hz", defaults.sample_rate_hz, 1.0)
+  local points_per_tick = math.floor(read_positive_number("points_per_tick", defaults.points_per_tick, 1.0))
+  local time_step = 1.0 / sample_rate
+  local phase = phase_ratio()
+  local sine_samples = {}
+  local triangle_samples = {}
+  local square_samples = {}
+  local saw_samples = {}
+
+  -- 核心流程：固定步长推进逻辑时间，避免串口状态或系统刷新抖动影响演示曲线连续性。
+  for _ = 1, points_per_tick do
+    local time_value = time_cursor
+    local cycle = time_value * frequency + phase
+    if channel_enabled("show_sine") then
+      sine_samples[#sine_samples + 1] = { t = time_value, y = scaled(sine_wave(cycle)) }
+    end
+    if channel_enabled("show_triangle") then
+      triangle_samples[#triangle_samples + 1] = { t = time_value, y = scaled(triangle_wave(cycle)) }
+    end
+    if channel_enabled("show_square") then
+      square_samples[#square_samples + 1] = { t = time_value, y = scaled(square_wave(cycle)) }
+    end
+    if channel_enabled("show_saw") then
+      saw_samples[#saw_samples + 1] = { t = time_value, y = scaled(saw_wave(cycle)) }
+    end
+    time_cursor = time_cursor + time_step
+  end
+
+  push_channel(1, sine_samples)
+  push_channel(2, triangle_samples)
+  push_channel(3, square_samples)
+  push_channel(4, saw_samples)
+end
+
+local function schedule_next_tick()
+  proto.set_timer(timer_name, math.floor(read_positive_number("timer_ms", defaults.timer_ms, 10.0)))
+end
+
+local function restart(reset_history)
+  setup_plot(reset_history)
+  schedule_next_tick()
+end
+
+function ui()
+  return {
+    {
+      id = "wave_run",
+      title = "Lua 波形演示 / 运行控制",
+      anchor = "left_bottom",
+      tab_group = "wave_tools",
+      controls = {
+        { type = "button", id = "start", label = "开始" },
+        { type = "button", id = "pause", label = "暂停" },
+        { type = "button", id = "resume", label = "恢复" },
+        { type = "button", id = "clear_history", label = "清空历史" }
+      }
+    },
+    {
+      id = "wave_params",
+      title = "Lua 波形演示 / 参数",
+      anchor = "left_bottom",
+      tab_group = "wave_tools",
+      controls = {
+        { type = "input_float", id = "frequency_hz", label = "频率(Hz)", default = defaults.frequency_hz },
+        { type = "input_float", id = "amplitude", label = "幅值", default = defaults.amplitude },
+        { type = "input_float", id = "offset", label = "偏置", default = defaults.offset },
+        { type = "input_float", id = "phase_deg", label = "相位(度)", default = defaults.phase_deg },
+        { type = "input_float", id = "sample_rate_hz", label = "采样率(Hz)", default = defaults.sample_rate_hz },
+        { type = "input_int", id = "points_per_tick", label = "每次点数", default = defaults.points_per_tick },
+        { type = "input_int", id = "timer_ms", label = "刷新间隔(ms)", default = defaults.timer_ms }
+      }
+    },
+    {
+      id = "wave_channels",
+      title = "Lua 波形演示 / 通道",
+      anchor = "left_bottom",
+      tab_group = "wave_tools",
+      controls = {
+        { type = "checkbox", id = "show_sine", label = "显示正弦", default = defaults.show_sine },
+        { type = "checkbox", id = "show_triangle", label = "显示三角", default = defaults.show_triangle },
+        { type = "checkbox", id = "show_square", label = "显示方波", default = defaults.show_square },
+        { type = "checkbox", id = "show_saw", label = "显示锯齿", default = defaults.show_saw }
+      }
+    }
+  }
+end
+
+function on_control(ctx, id, value)
+  if id == "start" then
+    running = true
+    time_cursor = 0.0
+    restart(true)
+  elseif id == "pause" then
+    running = false
+  elseif id == "resume" then
+    running = true
+    schedule_next_tick()
+  elseif id == "clear_history" then
+    time_cursor = 0.0
+    restart(true)
+  elseif id == "frequency_hz" or id == "amplitude" or id == "offset" or id == "phase_deg"
+      or id == "sample_rate_hz" or id == "points_per_tick" or id == "timer_ms"
+      or id == "show_sine" or id == "show_triangle" or id == "show_square" or id == "show_saw" then
+    setup_plot(true)
+  end
+end
+
+function on_timer(ctx, name)
+  if name ~= timer_name then
+    return
+  end
+  if running then
+    emit_samples()
+    schedule_next_tick()
+  end
+end
+
+-- 加载后自动启动，让用户无需串口连接即可立即看到波形。
+restart(true)
+)WAVE";
+
+const char* kDefaultProtocolsReadme = R"README(# ProtoScope Lua 协议脚本指南
+
+`protocols` 是 ProtoScope 的 Lua 协议工作区。每个协议目录至少包含一个 `main.lua`：
+
+```text
+protocols/
+├── default_protocol/
+│   └── main.lua
+├── lua_waveform_demo/
+│   └── main.lua
+├── README.md
+└── protoscope_api.lua
+```
+
+启动时如果当前工作目录不存在 `protocols` 目录，程序会自动生成以上默认工作区。若目录已存在，程序不会覆盖用户脚本。
+
+## 快速开始
+
+协议脚本由宿主加载执行，不需要 `require` 任何 ProtoScope 模块。脚本通过全局对象 `proto` 与宿主通信：
+
+```lua
+function ui()
+  return {
+    {
+      id = "protocol",
+      title = "协议动作",
+      anchor = "left_bottom",
+      tab_group = "protocol_tools",
+      controls = {
+        { type = "button", id = "read_version", label = "读取版本" },
+        { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
+      }
+    }
+  }
+end
+
+function on_control(ctx, id, value)
+  if id == "read_version" then
+    proto.send({ 0xAA, 0x55, 0x01, 0x0D })
+    proto.set_timer("read_version_timeout", 1000)
+  end
+end
+```
+
+## UI 定义
+
+脚本可定义 `ui()`，返回 Dock 面板数组。每个 Dock 支持：
+
+- `id`：Dock 唯一 ID。
+- `title`：面板标题。
+- `anchor`：停靠位置，可用值为 `left`、`left_bottom`、`right_top`、`right_mid`、`right_bottom`、`main_bottom`，默认 `left_bottom`。
+- `tab_group`：同组 Dock 以标签页形式组织，可省略。
+- `controls`：控件数组。
+
+控件类型：
+
+- `button`：按钮，点击后触发 `on_control(ctx, id, true)`。
+- `input_text`：文本输入，`default` 为字符串。
+- `input_int`：整数输入，`default` 为整数。
+- `input_float`：浮点输入，`default` 为数字。
+- `checkbox`：复选框，`default` 为布尔值。
+- `combo`：下拉框，必须提供 `options` 字符串数组，`default` 为从 1 开始的选项序号。
+
+## 生命周期回调
+
+按需定义以下全局函数即可：
+
+- `on_open(ctx)`：连接打开。
+- `on_close(ctx)`：连接关闭。
+- `on_error(ctx, message)`：连接或传输错误。
+- `on_control(ctx, id, value)`：UI 控件变化或按钮点击。
+- `on_bytes(ctx, bytes)`：收到字节数组，`bytes` 为 `number[]`，元素范围 `0..255`。
+- `on_timer(ctx, name)`：定时器触发。
+
+`ctx` 包含：
+
+- `connection_id`：连接 ID。
+- `kind`：连接类型，例如 `serial`、`tcp_client`、`tcp_server`。
+- `endpoint`：端点描述。
+
+## 通信与事件 API
+
+- `proto.send(payload)`：发送数据，`payload` 可为字符串或 `number[]`。
+- `proto.log(level, message)`：写日志，`level` 常用 `debug`、`info`、`warn`、`error`。
+- `proto.emit(name, payload)`：向宿主发出结构化脚本事件，`payload` 会序列化显示。
+- `proto.get_control(id)`：读取控件当前值。
+- `proto.set_control(id, value)`：设置控件当前值。
+- `proto.set_timer(name, delay_ms)`：设置一次性定时器。
+- `proto.cancel_timer(name)`：取消定时器。
+
+CRC 辅助函数：
+
+- `proto.crc16_modbus(payload)`：返回 Modbus CRC16。
+- `proto.crc16_ccitt_false(payload)`：返回 CRC16/CCITT-FALSE。
+- `proto.crc32_ieee(payload)`：返回 IEEE CRC32。
+
+## 波形绘图 API
+
+调用 `proto.plot.setup(payload)` 配置波形通道：
+
+```lua
+proto.plot.setup({
+  source = "demo",
+  reset_history = true,
+  time_scale = 0.001,
+  time_unit = "s",
+  vertical_min = -2.0,
+  vertical_max = 2.0,
+  vertical_unit = "V",
+  history_limit = 20000,
+  channels = {
+    { label = "CH1", unit = "V" },
+    { label = "CH2", unit = "V", offset = 1.0 },
+  }
+})
+```
+
+调用 `proto.plot.push(channel_index, payload)` 追加采样点。`channel_index` 从 1 开始：
+
+```lua
+proto.plot.push(1, {
+  samples = {
+    { t = 0.000, y = 0.0 },
+    { t = 0.001, y = 0.5 },
+  }
+})
+```
+
+## LuaLS 类型提示
+
+`protocols/protoscope_api.lua` 是给 LuaLS 使用的虚拟 API 文件，只包含注解和空实现，不参与运行时协议逻辑。
+
+在 LuaLS 中把 `protocols/protoscope_api.lua` 加入 workspace/library 后，打开 `default_protocol/main.lua` 或 `lua_waveform_demo/main.lua` 即可获得 `proto.*`、`proto.plot.*` 和回调参数的基础类型提示。
+
+业务脚本无需 `require("protoscope_api")`，运行时由 ProtoScope 注入全局 `proto`。
+)README";
+
+const char* kDefaultLuaLsApi = R"LUALS(---@meta
+
+---@alias ProtoLogLevel '"debug"'|'"info"'|'"warn"'|'"error"'
+---@alias ProtoControlType '"button"'|'"input_text"'|'"input_int"'|'"input_float"'|'"checkbox"'|'"combo"'
+---@alias ProtoDockAnchor '"left"'|'"left_bottom"'|'"right_top"'|'"right_mid"'|'"right_bottom"'|'"main_bottom"'
+---@alias ProtoControlValue boolean|integer|number|string|nil
+---@alias ProtoBytes integer[]
+---@alias ProtoPayload string|ProtoBytes
+
+---@class ProtoConnectionContext
+---@field connection_id integer 连接 ID。
+---@field kind string 连接类型，例如 serial、tcp_client、tcp_server。
+---@field endpoint string 端点描述。
+
+---@class ProtoControlDescriptor
+---@field type ProtoControlType 控件类型。
+---@field id string 控件 ID。
+---@field label string 控件标签。
+---@field default? ProtoControlValue 默认值；combo 为从 1 开始的选项序号。
+---@field options? string[] combo 控件选项。
+
+---@class ProtoDockDescriptor
+---@field id string Dock 唯一 ID。
+---@field title string Dock 标题。
+---@field anchor? ProtoDockAnchor 停靠位置，默认 left_bottom。
+---@field tab_group? string 标签页分组。
+---@field controls ProtoControlDescriptor[] 控件列表。
+
+---@class ProtoEventPayload
+---@field [string] any
+
+---@class ProtoPlotChannel
+---@field label string 通道名称。
+---@field unit? string 通道单位。
+---@field offset? number 通道显示偏移。
+
+---@class ProtoPlotSetup
+---@field source? string 数据来源名称。
+---@field reset_history? boolean 是否清空历史数据。
+---@field time_scale? number 时间缩放。
+---@field time_unit? string 时间单位。
+---@field vertical_min? number 垂直轴最小值。
+---@field vertical_max? number 垂直轴最大值。
+---@field vertical_unit? string 垂直轴单位。
+---@field history_limit? integer 历史采样保留上限。
+---@field channels ProtoPlotChannel[] 通道定义。
+
+---@class ProtoPlotSample
+---@field t number 时间戳。
+---@field y number 采样值。
+
+---@class ProtoPlotPushPayload
+---@field samples ProtoPlotSample[] 采样点数组。
+
+---@class ProtoPlotApi
+local plot_api = {}
+
+---配置 Lua 波形通道和显示参数。
+---@param payload ProtoPlotSetup
+function plot_api.setup(payload) end
+
+---向指定通道追加采样点；channel_index 从 1 开始。
+---@param channel_index integer
+---@param payload ProtoPlotPushPayload
+function plot_api.push(channel_index, payload) end
+
+---@class ProtoApi
+---@field plot ProtoPlotApi
+proto = {}
+proto.plot = plot_api
+
+---写入脚本日志。
+---@param level ProtoLogLevel
+---@param message string
+function proto.log(level, message) end
+
+---发送字节数组或字符串。
+---@param payload ProtoPayload
+function proto.send(payload) end
+
+---发出结构化脚本事件。
+---@param name string
+---@param payload any
+function proto.emit(name, payload) end
+
+---读取控件当前值。
+---@param id string
+---@return ProtoControlValue
+function proto.get_control(id) return nil end
+
+---设置控件当前值。
+---@param id string
+---@param value ProtoControlValue
+function proto.set_control(id, value) end
+
+---设置一次性定时器。
+---@param name string
+---@param delay_ms integer
+function proto.set_timer(name, delay_ms) end
+
+---取消定时器。
+---@param name string
+function proto.cancel_timer(name) end
+
+---计算 Modbus CRC16。
+---@param payload ProtoPayload
+---@return integer
+function proto.crc16_modbus(payload) return 0 end
+
+---计算 CRC16/CCITT-FALSE。
+---@param payload ProtoPayload
+---@return integer
+function proto.crc16_ccitt_false(payload) return 0 end
+
+---计算 IEEE CRC32。
+---@param payload ProtoPayload
+---@return integer
+function proto.crc32_ieee(payload) return 0 end
+
+---定义 Dock UI。
+---@return ProtoDockDescriptor[]
+function ui() return {} end
+
+---连接打开回调。
+---@param ctx ProtoConnectionContext
+function on_open(ctx) end
+
+---连接关闭回调。
+---@param ctx ProtoConnectionContext
+function on_close(ctx) end
+
+---连接错误回调。
+---@param ctx ProtoConnectionContext
+---@param message string
+function on_error(ctx, message) end
+
+---控件变化回调。
+---@param ctx ProtoConnectionContext
+---@param id string
+---@param value ProtoControlValue
+function on_control(ctx, id, value) end
+
+---收到字节回调。
+---@param ctx ProtoConnectionContext
+---@param bytes ProtoBytes
+function on_bytes(ctx, bytes) end
+
+---定时器触发回调。
+---@param ctx ProtoConnectionContext
+---@param name string
+function on_timer(ctx, name) end
+)LUALS";
 
 const char* kDefaultGuide = R"(# ProtoScope Lua Host Guide
 
@@ -448,11 +1010,58 @@ bool ConfigStore::ensureDefaultProtocolScript(const std::filesystem::path& proto
     }
 }
 
+bool ConfigStore::ensureDefaultProtocolWorkspace(std::string& error) const {
+    try {
+        const auto protocolRoot = defaultProtocolDir_.parent_path();
+        if (std::filesystem::exists(protocolRoot)) {
+            return true;
+        }
+
+        std::filesystem::create_directories(defaultProtocolDir_);
+        std::filesystem::create_directories(protocolRoot / "lua_waveform_demo");
+
+        // 核心流程：仅在 protocols 根目录缺失时生成完整默认工作区，避免覆盖用户已有协议资产。
+        {
+            std::ofstream out(mainLuaPath(defaultProtocolDir_));
+            if (!out.good()) {
+                error = "无法写入默认协议脚本";
+                return false;
+            }
+            out << kDefaultProtocolMainLua;
+        }
+        {
+            std::ofstream out(protocolRoot / "lua_waveform_demo" / "main.lua");
+            if (!out.good()) {
+                error = "无法写入 Lua 波形示例脚本";
+                return false;
+            }
+            out << kDefaultWaveformDemoLua;
+        }
+        {
+            std::ofstream out(protocolRoot / "README.md");
+            if (!out.good()) {
+                error = "无法写入 protocols README";
+                return false;
+            }
+            out << kDefaultProtocolsReadme;
+        }
+        {
+            std::ofstream out(protocolRoot / "protoscope_api.lua");
+            if (!out.good()) {
+                error = "无法写入 LuaLS API 提示文件";
+                return false;
+            }
+            out << kDefaultLuaLsApi;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return false;
+    }
+}
+
 bool ConfigStore::ensureDefaultScriptWorkspace(std::string& error) const {
     try {
-        if (!ensureDefaultProtocolScript(defaultProtocolDir_, error)) {
-            return false;
-        }
         std::filesystem::create_directories(defaultScriptWorkspaceDir());
         if (!std::filesystem::exists(defaultScriptHelpPath())) {
             std::ofstream out(defaultScriptHelpPath());

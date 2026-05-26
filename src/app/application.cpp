@@ -75,7 +75,9 @@ Application::Application() = default;
 
 bool Application::initialize() {
     std::string workspaceError;
-    if (!configStore_.ensureDefaultScriptWorkspace(workspaceError)) {
+    if (!configStore_.ensureDefaultProtocolWorkspace(workspaceError)) {
+        dockStore_.markDirty("初始化 protocols 工作目录失败: " + workspaceError);
+    } else if (!configStore_.ensureDefaultScriptWorkspace(workspaceError)) {
         dockStore_.markDirty("初始化 scripts 工作目录失败: " + workspaceError);
     }
 

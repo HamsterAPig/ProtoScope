@@ -87,6 +87,7 @@ public:
     std::filesystem::path defaultScriptWorkspaceDir() const;
     std::filesystem::path defaultScriptHelpPath() const;
     bool ensureDefaultProtocolScript(const std::filesystem::path& protocolDir, std::string& error) const;
+    bool ensureDefaultProtocolWorkspace(std::string& error) const;
     bool ensureDefaultScriptWorkspace(std::string& error) const;
 
     FileSnapshot snapshot(const std::filesystem::path& path) const;
