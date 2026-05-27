@@ -262,6 +262,11 @@ bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol) {
     return !sameProtocol;
 }
 
+bool shouldRunLuaDefaultDockLayout(WorkspaceLayoutMode layoutMode, bool pendingDefaultDockLayout) {
+    // Lua Dock 默认停靠只属于默认布局初始化事务；用户布局 Ready 后不再运行时补停靠。
+    return layoutMode == WorkspaceLayoutMode::NeedsDefaultBuild && pendingDefaultDockLayout;
+}
+
 std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey) {
     std::ostringstream stream;
     stream << "LuaDock:" << layoutKey << ':' << dock.id;

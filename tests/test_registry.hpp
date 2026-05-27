@@ -49,6 +49,7 @@ void test_workspace_layout_mode_after_load_prefers_default_build_only_when_missi
 void test_protocol_workspace_switch_decision_uses_draft_only_until_reload();
 void test_protocol_workspace_switch_decision_reloads_draft_when_clicked();
 void test_protocol_switch_resets_lua_default_dock_state_only_when_changed();
+void test_lua_default_dock_layout_runs_only_during_default_build();
 void test_plot_history_trim_and_envelope();
 void test_plot_limited_envelope_preserves_spikes();
 void test_plot_cursor_snap_and_delta();

@@ -282,3 +282,21 @@ void test_protocol_switch_resets_lua_default_dock_state_only_when_changed() {
         !protoscope::ui::shouldResetLuaDefaultDockStateOnProtocolSwitch(true),
         "同协议重载不应清空 Lua 默认停靠缓存");
 }
+
+void test_lua_default_dock_layout_runs_only_during_default_build() {
+    require(
+        protoscope::ui::shouldRunLuaDefaultDockLayout(
+            protoscope::ui::WorkspaceLayoutMode::NeedsDefaultBuild,
+            true),
+        "默认布局初始化事务应允许首次停靠 Lua Dock");
+    require(
+        !protoscope::ui::shouldRunLuaDefaultDockLayout(
+            protoscope::ui::WorkspaceLayoutMode::Ready,
+            true),
+        "已有用户布局 Ready 后不应再次执行 Lua Dock 默认停靠");
+    require(
+        !protoscope::ui::shouldRunLuaDefaultDockLayout(
+            protoscope::ui::WorkspaceLayoutMode::NeedsDefaultBuild,
+            false),
+        "没有待处理事务时不应执行 Lua Dock 默认停靠");
+}

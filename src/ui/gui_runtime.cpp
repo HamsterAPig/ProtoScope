@@ -662,13 +662,13 @@ void GuiRuntime::renderFrame() {
         ImGui::DockBuilderDockWindow("脚本", rightBottom);
         ImGui::DockBuilderDockWindow("波形", rightBottom);
         ImGui::DockBuilderFinish(dockspaceId);
-        workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
         pendingLuaDefaultDockLayout_ = true;
-    }
-    if (pendingLuaDefaultDockLayout_) {
-        // 核心流程：Lua 动态 Dock 的默认停靠只属于默认布局事务，避免用户拖拽后被下一帧拉回。
-        updateLuaDockDefaultLayout();
-        pendingLuaDefaultDockLayout_ = false;
+        if (shouldRunLuaDefaultDockLayout(workspaceLayoutMode_, pendingLuaDefaultDockLayout_)) {
+            // 核心流程：Lua 动态 Dock 的默认停靠只属于默认布局事务，避免用户拖拽后被下一帧拉回。
+            updateLuaDockDefaultLayout();
+            pendingLuaDefaultDockLayout_ = false;
+        }
+        workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
     }
 
     drawStatusBar();
