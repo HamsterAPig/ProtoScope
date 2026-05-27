@@ -254,6 +254,7 @@ target_compile_features(protoscope_app PUBLIC cxx_std_20)
 
 if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
+        src/ui/editable_combo.cpp
         src/ui/gui_runtime.cpp
         src/ui/wave_dock_renderer.cpp
     )
