@@ -596,12 +596,10 @@ void GuiRuntime::renderFrame() {
         ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
 
         ImGuiID left = dockspaceId;
-        ImGuiID mainBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.28F, nullptr, &left);
-        ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right, 0.58F, nullptr, &left);
+        ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right, 0.75f, nullptr, &left);
         ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.48F, nullptr, &left);
-        ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.42F, nullptr, &right);
+        ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.75f, nullptr, &right);
         ImGuiID rightMid = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.36F, nullptr, &right);
-        ImGuiID rightLogs = ImGui::DockBuilderSplitNode(rightMid, ImGuiDir_Down, 0.5F, nullptr, &rightMid);
 
         defaultLuaDockNodes_.clear();
         defaultLuaDockNodes_[LuaDockAnchor::Left] = left;
@@ -609,13 +607,12 @@ void GuiRuntime::renderFrame() {
         defaultLuaDockNodes_[LuaDockAnchor::RightTop] = right;
         defaultLuaDockNodes_[LuaDockAnchor::RightMid] = rightMid;
         defaultLuaDockNodes_[LuaDockAnchor::RightBottom] = rightBottom;
-        defaultLuaDockNodes_[LuaDockAnchor::MainBottom] = mainBottom;
 
         ImGui::DockBuilderDockWindow("通讯配置", left);
         ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
         ImGui::DockBuilderDockWindow("发送", right);
-        ImGui::DockBuilderDockWindow("接收数据", rightMid);
-        ImGui::DockBuilderDockWindow("日志", rightLogs);
+        ImGui::DockBuilderDockWindow("接收数据", rightBottom);
+        ImGui::DockBuilderDockWindow("日志", rightBottom);
         ImGui::DockBuilderDockWindow("脚本", rightBottom);
         ImGui::DockBuilderDockWindow("波形", rightBottom);
         ImGui::DockBuilderFinish(dockspaceId);
