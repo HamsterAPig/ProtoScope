@@ -172,18 +172,15 @@ bool dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
     return true;
 }
 
-void keepOnlyCurrentLuaDockSettings(
-    std::string_view layoutKey,
-    const std::unordered_set<std::string>& activeLuaDockIdSet = {}) {
+void keepOnlyCurrentLuaDockSettings(std::string_view layoutKey) {
     auto& settings = ImGui::GetCurrentContext()->SettingsWindows;
-    const std::vector<std::string> activeLuaDockIds(activeLuaDockIdSet.begin(), activeLuaDockIdSet.end());
 
-    // 核心逻辑：清理其它协议或已删除 Lua Dock 的窗口状态，避免失效窗口继续污染当前协议布局。
+    // 核心逻辑：只清理其它协议的 Lua Dock 状态，当前协议状态留给 ini 归档以避免运行时 Dock 树抖动。
     for (ImGuiWindowSettings* setting = settings.begin(); setting != nullptr; setting = settings.next_chunk(setting)) {
         const std::string_view name = setting->GetName();
         const auto stableIdPos = name.find("###");
         const auto stableId = stableIdPos == std::string_view::npos ? name : name.substr(stableIdPos + 3);
-        if (!shouldKeepLuaWindowSettings(stableId, layoutKey, activeLuaDockIds)) {
+        if (!shouldKeepLuaWindowSettings(stableId, layoutKey)) {
             setting->WantDelete = true;
             setting->ID = 0;
         }
@@ -1126,7 +1123,6 @@ bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool fo
     }
 
     if (sameProtocol) {
-        pruneCurrentLuaDockSettings();
         loadCurrentProtocolControlState();
     } else {
         loadCurrentProtocolWorkspace();
@@ -1156,7 +1152,6 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
     } else {
         pendingProtocolWorkspaceSave_ = true;
     }
-    pruneCurrentLuaDockSettings();
     ImGui::GetIO().WantSaveIniSettings = false;
     loadCurrentProtocolControlState();
 }
@@ -1168,6 +1163,7 @@ void GuiRuntime::saveCurrentProtocolWorkspace() {
 
     const auto layoutPath = currentProtocolLayoutPath();
     std::filesystem::create_directories(layoutPath.parent_path());
+    pruneCurrentLuaDockSettings();
     ImGui::SaveIniSettingsToDisk(layoutPath.string().c_str());
     try {
         writeLuaDockLayoutMeta(luaDockLayoutMetaPath(executableDir_, activeWorkspaceProtocolKey_), 2);
@@ -1184,13 +1180,7 @@ void GuiRuntime::pruneCurrentLuaDockSettings() {
         return;
     }
 
-    const auto& lua = application_.docks().luaState();
-    std::unordered_set<std::string> activeLuaDockIds;
-    activeLuaDockIds.reserve(lua.docks.size());
-    for (const auto& dock : lua.docks) {
-        activeLuaDockIds.insert(std::string("LuaDock:") + activeWorkspaceProtocolKey_ + ':' + dock.descriptor.id);
-    }
-    keepOnlyCurrentLuaDockSettings(activeWorkspaceProtocolKey_, activeLuaDockIds);
+    keepOnlyCurrentLuaDockSettings(activeWorkspaceProtocolKey_);
 }
 
 void GuiRuntime::loadCurrentProtocolControlState() {

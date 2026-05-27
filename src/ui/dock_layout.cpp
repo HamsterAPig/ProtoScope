@@ -281,18 +281,14 @@ std::vector<std::string> buildLuaDockStableIds(
 
 bool shouldKeepLuaWindowSettings(
     std::string_view stableId,
-    std::string_view layoutKey,
-    const std::vector<std::string>& activeStableIds) {
+    std::string_view layoutKey) {
     if (!stableId.starts_with("LuaDock:")) {
         return true;
     }
 
     const auto activePrefix = std::string("LuaDock:") + std::string(layoutKey) + ':';
-    if (!stableId.starts_with(activePrefix)) {
-        return false;
-    }
-
-    return std::find(activeStableIds.begin(), activeStableIds.end(), stableId) != activeStableIds.end();
+    // 当前协议的 Lua Dock settings 即使暂时没有对应脚本声明也保留，避免加载/刷新时反复删加。
+    return stableId.starts_with(activePrefix);
 }
 
 std::string luaDockWindowName(const scripting::DockDescriptor& dock, std::string_view layoutKey) {

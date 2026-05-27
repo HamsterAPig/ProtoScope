@@ -7,6 +7,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -175,38 +176,54 @@ void test_lua_dock_layout_requests_group_tabs() {
     require(requests[2].tabGroup == "single", "缺省 tab_group 应按自身 id 独立停靠");
 }
 
-void test_lua_dock_settings_filter_keeps_only_current_windows() {
-    std::vector<protoscope::scripting::DockSnapshot> docks{
-        makeDock("active", "活动面板", "left_bottom", ""),
-    };
-    const auto activeIds = protoscope::ui::buildLuaDockStableIds(docks, "protocols_demo");
-
+void test_lua_dock_settings_filter_keeps_current_protocol_windows() {
     require(
-        protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:protocols_demo:active", "protocols_demo", activeIds),
+        protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:protocols_demo:active", "protocols_demo"),
         "当前协议真实存在的 Lua Dock 状态应保留");
     require(
-        !protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:protocols_demo:removed", "protocols_demo", activeIds),
-        "当前协议已删除的 Lua Dock 状态应清理");
+        protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:protocols_demo:removed", "protocols_demo"),
+        "当前协议暂未声明的 Lua Dock 状态也应保留");
     require(
-        !protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:other:active", "protocols_demo", activeIds),
+        !protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:other:active", "protocols_demo"),
         "其它协议的 Lua Dock 状态应清理");
     require(
-        protoscope::ui::shouldKeepLuaWindowSettings("通讯配置", "protocols_demo", activeIds),
+        protoscope::ui::shouldKeepLuaWindowSettings("通讯配置", "protocols_demo"),
         "静态窗口状态不应被 Lua Dock 过滤影响");
 }
 
-void test_lua_dock_settings_filter_removes_lua_windows_when_no_docks() {
-    const std::vector<std::string> activeIds;
-
+void test_lua_dock_settings_filter_keeps_current_windows_without_active_docks() {
     require(
-        !protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:protocols_demo:removed", "protocols_demo", activeIds),
-        "当前协议已不存在的 Lua Dock 状态应清理");
+        protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:protocols_demo:removed", "protocols_demo"),
+        "空 Dock 集合不应清理当前协议 Lua Dock 状态");
     require(
-        !protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:other:active", "protocols_demo", activeIds),
+        !protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:other:active", "protocols_demo"),
         "空 Dock 集合也应清理其它协议 Lua Dock 状态");
     require(
-        protoscope::ui::shouldKeepLuaWindowSettings("通讯配置", "protocols_demo", activeIds),
+        protoscope::ui::shouldKeepLuaWindowSettings("通讯配置", "protocols_demo"),
         "空 Dock 集合不应影响静态窗口状态");
+}
+
+void test_lua_dock_settings_filter_keeps_same_dock_id_tab_stack() {
+    const auto root = uniqueLayoutRoot("protoscope-layout-no-meta");
+    const auto metaPath = protoscope::ui::luaDockLayoutMetaPath(root, "protocols_demo");
+    const auto iniSnippet =
+        "[Window][协议脚本]\n"
+        "DockId=0x00000001\n"
+        "[Window][协议动作###LuaDock:protocols_demo:protocol]\n"
+        "DockId=0x00000001\n";
+
+    require(
+        std::string_view(iniSnippet).find("DockId=0x00000001") != std::string_view::npos,
+        "回归样本应包含同 Tab 栈 DockId");
+    require(
+        !std::filesystem::exists(metaPath),
+        "回归行为不应依赖 .layout.yaml 是否存在");
+    require(
+        protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:protocols_demo:protocol", "protocols_demo"),
+        "Lua Dock 与静态 Dock 同 Tab 时不应按 stable ID 判定删除");
+    require(
+        protoscope::ui::shouldKeepLuaWindowSettings("协议脚本", "protocols_demo"),
+        "静态 Dock 与 Lua Dock 共用 DockId 时也必须保留");
 }
 
 void test_workspace_layout_mode_after_load_prefers_default_build_only_when_missing() {

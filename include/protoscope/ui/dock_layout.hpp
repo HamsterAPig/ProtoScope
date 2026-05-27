@@ -71,8 +71,7 @@ std::vector<std::string> buildLuaDockStableIds(
     std::string_view layoutKey);
 bool shouldKeepLuaWindowSettings(
     std::string_view stableId,
-    std::string_view layoutKey,
-    const std::vector<std::string>& activeStableIds);
+    std::string_view layoutKey);
 std::string luaDockWindowName(const scripting::DockDescriptor& dock, std::string_view layoutKey);
 std::vector<LuaDockLayoutRequest> buildLuaDockLayoutRequests(
     const std::vector<scripting::DockSnapshot>& docks,
