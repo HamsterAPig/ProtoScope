@@ -6,6 +6,47 @@
 ---@alias ProtoControlValue boolean|integer|number|string|nil
 ---@alias ProtoBytes integer[]
 ---@alias ProtoPayload string|ProtoBytes
+---@alias ProtoFormLayoutItem ProtoFormControlItem|ProtoFormControlsItem|ProtoFormGroupItem|ProtoFormCollapseItem|ProtoFormSeparatorItem|ProtoFormTextItem
+
+---@class ProtoTableCell
+---@field control? string 控件 ID。
+---@field spacer? boolean 占位单元格，必须为 true。
+
+---@class ProtoTableLayout
+---@field kind '"table"' 表格布局。
+---@field columns integer 列数，必须 >= 1。
+---@field borders? boolean 是否显示边框。
+---@field resizable? boolean 是否允许列宽拖拽。
+---@field row_bg? boolean 是否启用隔行底色。
+---@field sizing? '"stretch"' 列宽模式，当前仅支持 stretch。
+---@field rows ProtoTableCell[][] 行定义。
+
+---@class ProtoFormControlItem
+---@field control string 单个控件 ID。
+
+---@class ProtoFormControlsItem
+---@field controls string[] 同一行控件 ID 列表。
+
+---@class ProtoFormGroupItem
+---@field group string 分组标题。
+---@field items ProtoFormLayoutItem[] 分组内布局项，仅支持一层递归。
+
+---@class ProtoFormCollapseItem
+---@field collapse string 折叠区标题。
+---@field default_open? boolean 是否默认展开。
+---@field items ProtoFormLayoutItem[] 折叠区内布局项，仅支持一层递归。
+
+---@class ProtoFormSeparatorItem
+---@field separator true 分隔线标记。
+
+---@class ProtoFormTextItem
+---@field text string 说明文本。
+
+---@class ProtoFormLayout
+---@field kind '"form"' 表单布局。
+---@field items ProtoFormLayoutItem[] 布局项数组。
+
+---@alias ProtoDockLayout ProtoTableLayout|ProtoFormLayout
 
 ---@class ProtoConnectionContext
 ---@field connection_id integer 连接 ID。
@@ -25,6 +66,7 @@
 ---@field anchor? ProtoDockAnchor 停靠位置，默认 left_bottom。
 ---@field tab_group? string 标签页分组。
 ---@field controls ProtoControlDescriptor[] 控件列表。
+---@field layout? ProtoDockLayout 可选布局描述，未声明时按 flow 顺序渲染。
 
 ---@class ProtoEventPayload
 ---@field [string] any
