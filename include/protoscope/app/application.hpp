@@ -2,6 +2,7 @@
 
 #include "protoscope/config/config.hpp"
 #include "protoscope/dock/docks.hpp"
+#include "protoscope/logging/logging.hpp"
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
@@ -37,6 +38,8 @@ public:
     void setStatusMessage(std::string message, bool markDirty = false);
     bool setSendHexMode(bool enabled);
     void resetWaveHistory();
+    logging::LoggingFacade& logger();
+    const logging::LoggingFacade& logger() const;
 
     std::optional<std::uint64_t> nextWakeupAtMs() const;
     void setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
@@ -53,6 +56,7 @@ private:
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
     config::AppConfig runtimeConfig_{};
+    logging::LoggingFacade loggingFacade_{};
     scripting::ScriptHost scriptHost_;
     std::unique_ptr<transport::ITransport> transport_;
     std::optional<transport::ConnectionContext> activeConnection_;

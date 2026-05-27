@@ -23,6 +23,9 @@ protocol:
   root_dir: protocols
   selected_dir: protocols/default_protocol
 
+logging:
+  level: info
+
 communication:
   kind: tcp_client
   tcp_client:

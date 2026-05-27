@@ -34,6 +34,7 @@ void test_script_table_layout_row_overflow_fail();
 void test_script_runtime_error_logged();
 void test_protocol_directory_reload();
 void test_config_default_roundtrip();
+void test_config_logging_roundtrip();
 void test_config_default_script_workspace();
 void test_protocol_scan_and_root_roundtrip();
 void test_dock_log_and_script_split();
@@ -81,6 +82,7 @@ void test_application_tcp_lua_read_version_roundtrip();
 void test_application_lua_controls_without_connection();
 void test_application_failed_protocol_reload_keeps_previous_runtime();
 void test_application_open_transport_uses_serial_runtime_config();
+void test_application_logging_filters_script_and_host();
 
 const TestCase* allTests();
 int testCount();

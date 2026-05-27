@@ -370,6 +370,33 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
 }
 
+void test_config_logging_roundtrip() {
+    protoscope::config::ConfigStore store;
+    const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-config-logging";
+    const auto tempPath = tempRoot / "logging.yaml";
+    std::filesystem::create_directories(tempRoot);
+
+    auto base = store.load(tempPath).config;
+    base.logging.level = protoscope::config::LogLevel::Warn;
+    base.logging.filePath = "logs/protoscope.log";
+
+    std::string error;
+    require(store.save(tempPath, base, error), "日志配置写回失败");
+    auto reloaded = store.load(tempPath).config;
+    require(reloaded.logging.level == protoscope::config::LogLevel::Warn, "日志等级 roundtrip 失败");
+    require(reloaded.logging.filePath == "logs/protoscope.log", "日志相对路径 roundtrip 失败");
+
+    base.logging.filePath.clear();
+    require(store.save(tempPath, base, error), "空日志路径写回失败");
+    reloaded = store.load(tempPath).config;
+    require(reloaded.logging.filePath.empty(), "空日志路径应保持为空");
+
+    const auto missingPath = tempRoot / "missing.yaml";
+    const auto missing = store.load(missingPath).config;
+    require(missing.logging.filePath.empty(), "缺失日志路径时应默认为空");
+    require(missing.logging.level == protoscope::config::LogLevel::Info, "缺失日志等级时应回退到 info");
+}
+
 void test_config_default_script_workspace() {
     protoscope::config::ConfigStore store;
     std::string error;
@@ -458,6 +485,7 @@ static const TestCase kAllTests[] = {
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
+    {"config_logging_roundtrip", &test_config_logging_roundtrip},
     {"config_default_script_workspace", &test_config_default_script_workspace},
     {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
@@ -494,6 +522,7 @@ static const TestCase kAllTests[] = {
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
     {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
+    {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},

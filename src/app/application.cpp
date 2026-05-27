@@ -3,6 +3,7 @@
 #include "protoscope/protocol_utils/codec.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <type_traits>
 
@@ -77,15 +78,19 @@ bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& 
 Application::Application() = default;
 
 bool Application::initialize() {
+    loggingFacade_.bindDockStore(&dockStore_);
     std::string workspaceError;
     if (!configStore_.ensureDefaultProtocolWorkspace(workspaceError)) {
         dockStore_.markDirty("初始化 protocols 工作目录失败: " + workspaceError);
+        loggingFacade_.warn("config", "初始化 protocols 工作目录失败: " + workspaceError);
     } else if (!configStore_.ensureDefaultScriptWorkspace(workspaceError)) {
         dockStore_.markDirty("初始化 scripts 工作目录失败: " + workspaceError);
+        loggingFacade_.warn("config", "初始化 scripts 工作目录失败: " + workspaceError);
     }
 
     const auto loaded = configStore_.load(configStore_.defaultConfigPath());
     runtimeConfig_ = loaded.config;
+    loggingFacade_.applyConfig(loaded.config.logging);
     applyConfig(loaded.config);
 
     auto& configState = dockStore_.configState();
@@ -106,6 +111,7 @@ bool Application::initialize() {
 bool Application::applyConfig(const config::AppConfig& config) {
     runtimeConfig_ = config;
     configStore_.applyToDock(config, dockStore_);
+    loggingFacade_.applyConfig(config.logging);
     return reloadProtocolDirectory(dockStore_.luaState().protocolDir);
 }
 
@@ -113,6 +119,7 @@ config::AppConfig Application::captureConfig() const {
     auto captured = configStore_.captureFromDock(dockStore_);
     captured.gui = runtimeConfig_.gui;
     captured.app.language = runtimeConfig_.app.language;
+    captured.logging = loggingFacade_.currentConfig();
     return captured;
 }
 
@@ -136,6 +143,7 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     scripting::ScriptHost probeHost;
     if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
         lua.lastError = probeHost.lastError();
+        loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
         lua.docks = scriptHost_.dockSnapshots();
         lua.controls = scriptHost_.controlsSnapshot();
         lua.controlStates = scriptHost_.controlStatesSnapshot();
@@ -146,6 +154,7 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     // 避免失败场景先清空旧运行态，也避免 Lua 回调把临时宿主地址固化进运行时对象。
     if (!scriptHost_.loadProtocolDirectory(resolvedDirText)) {
         lua.lastError = scriptHost_.lastError();
+        loggingFacade_.error("protocol", "协议重载失败: " + lua.lastError);
         lua.loaded = false;
         lua.docks = scriptHost_.dockSnapshots();
         lua.controls = scriptHost_.controlsSnapshot();
@@ -161,6 +170,7 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
     lua.lastError.clear();
+    loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
     flushScriptLogs();
     syncDockState();
     return true;
@@ -194,6 +204,7 @@ void Application::openTransport() {
     transport_ = createTransport(kind);
     if (!transport_) {
         dockStore_.commState().lastError = "创建 transport 失败";
+        loggingFacade_.error("transport", dockStore_.commState().lastError);
         return;
     }
 
@@ -213,9 +224,11 @@ void Application::openTransport() {
     const bool opened = transport_->open(config);
     if (!opened) {
         dockStore_.commState().lastError = "打开连接失败";
+        loggingFacade_.error("transport", dockStore_.commState().lastError);
     } else {
         dockStore_.commState().lastError.clear();
         dockStore_.commState().reconnectRequired = false;
+        loggingFacade_.info("transport", "连接打开请求已提交");
     }
 
     syncDockState();
@@ -232,6 +245,7 @@ void Application::closeTransport() {
 bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
     if (!transport_ || transport_->state() != transport::TransportState::Open) {
         dockStore_.commState().lastError = "连接未打开，无法发送";
+        loggingFacade_.warn("transport", dockStore_.commState().lastError);
         return false;
     }
 
@@ -239,11 +253,13 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
     if (hexMode) {
         if (protocol_utils::countHexDigits(payload) % 2 != 0) {
             dockStore_.commState().lastError = "HEX 文本必须按完整字节输入";
+            loggingFacade_.warn("transport", dockStore_.commState().lastError);
             return false;
         }
         const auto parsed = protocol_utils::hexToBytes(payload);
         if (!parsed.has_value()) {
             dockStore_.commState().lastError = "HEX 文本解析失败";
+            loggingFacade_.warn("transport", dockStore_.commState().lastError);
             return false;
         }
         bytes = *parsed;
@@ -253,6 +269,7 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
 
     if (!transport_->send(bytes)) {
         dockStore_.commState().lastError = "发送失败";
+        loggingFacade_.error("transport", dockStore_.commState().lastError);
         return false;
     }
     if (activeConnection_.has_value()) {
@@ -261,15 +278,11 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
             .direction = "TX",
             .endpoint = activeConnection_->endpoint,
             .bytes = bytes,
+            .message = {},
         });
     }
     dockStore_.commState().lastError.clear();
-    dockStore_.appendLogRow(dock::ReceiveRow{
-        .timestampMs = nowMs(),
-        .direction = "INFO",
-        .endpoint = "transport",
-        .message = "手动发送成功",
-    });
+    loggingFacade_.info("transport", "手动发送成功");
     return true;
 }
 
@@ -332,12 +345,14 @@ bool Application::setSendHexMode(bool enabled) {
 
     if (protocol_utils::countHexDigits(send.payload) % 2 != 0) {
         dockStore_.commState().lastError = "HEX 文本必须按完整字节输入，无法切回文本模式";
+        loggingFacade_.warn("transport", dockStore_.commState().lastError);
         return false;
     }
 
     const auto parsed = protocol_utils::hexToBytes(send.payload);
     if (!parsed.has_value()) {
         dockStore_.commState().lastError = "HEX 文本解析失败，无法切回文本模式";
+        loggingFacade_.warn("transport", dockStore_.commState().lastError);
         return false;
     }
 
@@ -422,23 +437,17 @@ bool Application::handleTransportEvents() {
                         activeConnection_ = evt.context;
                         scriptHost_.onTransportOpen(evt);
                     }
-                    dockStore_.appendLogRow(dock::ReceiveRow{
-                        .timestampMs = evt.context.timestampMs,
-                        .direction = "OPEN",
-                        .endpoint = evt.context.endpoint,
-                        .message = stateMessage(dockStore_.commState().state),
-                    });
+                    loggingFacade_.host(config::LogLevel::Info,
+                                        "OPEN",
+                                        evt.context.endpoint,
+                                        stateMessage(dockStore_.commState().state),
+                                        evt.context.timestampMs);
                     changed = true;
                 } else if constexpr (std::is_same_v<T, transport::TransportCloseEvent>) {
                     if (evt.context.readyForIo) {
                         scriptHost_.onTransportClose(evt);
                     }
-                    dockStore_.appendLogRow(dock::ReceiveRow{
-                        .timestampMs = evt.context.timestampMs,
-                        .direction = "CLOSE",
-                        .endpoint = evt.context.endpoint,
-                        .message = evt.reason,
-                    });
+                    loggingFacade_.host(config::LogLevel::Info, "CLOSE", evt.context.endpoint, evt.reason, evt.context.timestampMs);
                     if (activeConnection_.has_value() && activeConnection_->connectionId == evt.context.connectionId) {
                         activeConnection_.reset();
                     }
@@ -447,12 +456,7 @@ bool Application::handleTransportEvents() {
                     if (evt.context.readyForIo) {
                         scriptHost_.onTransportError(evt);
                     }
-                    dockStore_.appendLogRow(dock::ReceiveRow{
-                        .timestampMs = evt.context.timestampMs,
-                        .direction = "ERROR",
-                        .endpoint = evt.context.endpoint,
-                        .message = evt.message,
-                    });
+                    loggingFacade_.host(config::LogLevel::Error, "ERROR", evt.context.endpoint, evt.message, evt.context.timestampMs);
                     dockStore_.commState().lastError = evt.message;
                     changed = true;
                 } else if constexpr (std::is_same_v<T, transport::TransportBytesEvent>) {
@@ -497,6 +501,7 @@ bool Application::flushScriptOutputs() {
                 .direction = "TX",
                 .endpoint = activeConnection_->endpoint,
                 .bytes = bytes,
+                .message = {},
             });
             changed = true;
         }
@@ -514,11 +519,18 @@ bool Application::flushScriptLogs() {
     bool changed = false;
     auto scriptLogs = scriptHost_.drainLogs();
     for (const auto& log : scriptLogs) {
-        dockStore_.appendScriptRow(
-            dock::ReceiveRow{.timestampMs = log.timestampMs, .direction = "LOG", .endpoint = "script", .message = "[" + log.level + "] " + log.message});
+        loggingFacade_.script(log.level, log.message, log.timestampMs);
         changed = true;
     }
     return changed;
+}
+
+logging::LoggingFacade& Application::logger() {
+    return loggingFacade_;
+}
+
+const logging::LoggingFacade& Application::logger() const {
+    return loggingFacade_;
 }
 
 bool Application::flushScriptPlots() {

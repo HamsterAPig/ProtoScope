@@ -24,6 +24,33 @@ std::string normalizeTextPath(std::filesystem::path path) {
     return path.generic_string();
 }
 
+LogLevel parseLogLevel(const std::string& value) {
+    if (value == "debug") {
+        return LogLevel::Debug;
+    }
+    if (value == "warn" || value == "warning") {
+        return LogLevel::Warn;
+    }
+    if (value == "error") {
+        return LogLevel::Error;
+    }
+    return LogLevel::Info;
+}
+
+std::string toLogLevelText(const LogLevel level) {
+    switch (level) {
+    case LogLevel::Debug:
+        return "debug";
+    case LogLevel::Info:
+        return "info";
+    case LogLevel::Warn:
+        return "warn";
+    case LogLevel::Error:
+        return "error";
+    }
+    return "info";
+}
+
 transport::TransportKind parseTransportKind(const std::string& value) {
     if (value == "tcp_server") {
         return transport::TransportKind::TcpServer;
@@ -828,6 +855,10 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         const auto protocol = root["protocol"];
         result.config.protocol.rootDir = readScalar<std::string>(protocol, "root_dir", result.config.protocol.rootDir);
         result.config.protocol.selectedDir = readScalar<std::string>(protocol, "selected_dir", result.config.protocol.selectedDir);
+        const auto logging = root["logging"];
+        result.config.logging.level =
+            parseLogLevel(readScalar<std::string>(logging, "level", toLogLevelText(result.config.logging.level)));
+        result.config.logging.filePath = readScalar<std::string>(logging, "file_path", result.config.logging.filePath);
         result.config.configPath = normalizeTextPath(result.resolvedPath);
 
         const auto communication = root["communication"];
@@ -901,6 +932,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
     root["protocol"]["selected_dir"] = config.protocol.selectedDir;
+    root["logging"]["level"] = toLogLevelText(config.logging.level);
+    if (!config.logging.filePath.empty()) {
+        root["logging"]["file_path"] = config.logging.filePath;
+    }
 
     root["communication"]["kind"] = toTransportKindText(config.communication.kind);
     root["communication"]["tcp_client"]["host"] = config.communication.tcpClient.host;

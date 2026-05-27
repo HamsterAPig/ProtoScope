@@ -3,6 +3,8 @@
 #include "protoscope/app/application.hpp"
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -279,6 +281,51 @@ void test_application_open_transport_uses_serial_runtime_config() {
     require(serial.parity == "even", "open 应使用当前运行态奇偶校验");
     require(serial.stopBits == "two", "open 应使用当前运行态停止位");
     require(serial.flowControl == "hardware", "open 应使用当前运行态流控");
+
+    application.shutdown();
+}
+
+void test_application_logging_filters_script_and_host() {
+    const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-logging-test";
+    std::filesystem::create_directories(tempRoot);
+    const auto logPath = tempRoot / "runtime.log";
+    std::error_code ec;
+    std::filesystem::remove(logPath, ec);
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto config = application.captureConfig();
+    config.logging.level = protoscope::config::LogLevel::Warn;
+    config.logging.filePath = logPath.generic_string();
+    require(application.applyConfig(config), "日志配置应用失败");
+
+    application.logger().info("host", "this should be filtered");
+    application.logger().warn("host", "host warn visible");
+    application.logger().script("info", "script info filtered");
+    application.logger().script("error", "script error visible");
+
+    const auto& logRows = application.docks().logState().rows;
+    const auto& scriptRows = application.docks().scriptState().rows;
+    require(!logRows.empty(), "宿主 warn 日志应进入日志面板");
+    require(logRows.back().message == "host warn visible", "日志面板应只保留通过阈值的宿主日志");
+    require(logRows.back().direction == "WARN", "宿主 warn 日志方向应为 WARN");
+    require(!scriptRows.empty(), "脚本 error 日志应进入脚本面板");
+    require(scriptRows.back().message == "[error] script error visible", "脚本面板应只保留通过阈值的脚本日志");
+
+    std::ifstream in(logPath);
+    require(in.good(), "配置日志文件路径后应创建日志文件");
+    const std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    require(contents.find("host warn visible") != std::string::npos, "日志文件应包含宿主 warn 日志");
+    require(contents.find("script error visible") != std::string::npos, "日志文件应包含脚本 error 日志");
+    require(contents.find("this should be filtered") == std::string::npos, "日志文件不应包含被过滤的 info 日志");
+
+    config.logging.filePath.clear();
+    require(application.applyConfig(config), "禁用日志文件落盘失败");
+    application.logger().error("host", "after disable file logging");
+    const auto fileSize = std::filesystem::file_size(logPath);
+    application.logger().error("host", "after disable file logging second");
+    require(std::filesystem::file_size(logPath) == fileSize, "清空 file_path 后不应继续追加文件日志");
 
     application.shutdown();
 }

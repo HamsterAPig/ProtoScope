@@ -233,6 +233,21 @@ target_link_libraries(protoscope_config
 )
 target_compile_features(protoscope_config PUBLIC cxx_std_20)
 
+add_library(protoscope_logging STATIC
+    src/logging/logging.cpp
+)
+target_include_directories(protoscope_logging
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(protoscope_logging
+    PUBLIC
+        protoscope_config
+        protoscope_dock
+        spdlog::spdlog
+)
+target_compile_features(protoscope_logging PUBLIC cxx_std_20)
+
 add_library(protoscope_app STATIC
     src/app/application.cpp
 )
@@ -244,10 +259,10 @@ target_link_libraries(protoscope_app
     PUBLIC
         protoscope_dock
         protoscope_config
+        protoscope_logging
         protoscope_scripting
         protoscope_transport
         protoscope_protocol_utils
-        spdlog::spdlog
         yaml-cpp::yaml-cpp
 )
 target_compile_features(protoscope_app PUBLIC cxx_std_20)

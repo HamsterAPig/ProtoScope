@@ -19,6 +19,18 @@ struct AppConfigHotReloadConfig {
     bool enabled{false};
 };
 
+enum class LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+};
+
+struct AppLoggingConfig {
+    LogLevel level{LogLevel::Info};
+    std::string filePath;
+};
+
 struct AppRuntimeConfig {
     std::string language{"zh-CN"};
     std::uint32_t fpsLimit{60};
@@ -55,6 +67,7 @@ struct AppConfig {
     AppRuntimeConfig app{};
     GuiConfig gui{};
     ProtocolConfig protocol{};
+    AppLoggingConfig logging{};
     dock::CommDockState communication{};
     std::string configPath{"config/protoscope.yaml"};
 };
