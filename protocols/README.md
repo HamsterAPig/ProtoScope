@@ -29,6 +29,20 @@ function ui()
       controls = {
         { type = "button", id = "read_version", label = "读取版本" },
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
+      },
+      layout = {
+        kind = "table",
+        columns = 2,
+        borders = false,
+        resizable = true,
+        row_bg = false,
+        sizing = "stretch",
+        rows = {
+          {
+            { control = "read_version" },
+            { control = "device_id" },
+          },
+        }
       }
     }
   }

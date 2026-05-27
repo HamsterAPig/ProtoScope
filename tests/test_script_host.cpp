@@ -135,6 +135,26 @@ void test_script_dock_layout_fields() {
     require(docks[1].descriptor.anchor == "left_bottom", "第二个 dock 应解析 anchor");
     require(docks[0].descriptor.tabGroup == "protocol_tools", "第一个 dock 应解析 tab_group");
     require(docks[1].descriptor.tabGroup == "protocol_tools", "第二个 dock 应解析 tab_group");
+    require(!docks[0].descriptor.layout.has_value(), "未声明 layout 的 dock 应保持旧 flow 行为");
+    require(!docks[1].descriptor.layout.has_value(), "未声明 layout 的 dock 应保持旧 flow 行为");
+}
+
+void test_script_table_layout_snapshot() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("table_layout").generic_string()), "table_layout 协议应可加载");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 1, "table_layout 协议应只产出一个 dock");
+    require(docks[0].descriptor.layout.has_value(), "table_layout 应解析 layout");
+    require(docks[0].descriptor.layout->kind == protoscope::scripting::DockLayoutKind::Table, "layout.kind 应为 table");
+
+    const auto& table = docks[0].descriptor.layout->table;
+    require(table.columns == 2, "table_layout 列数应为 2");
+    require(table.rows.size() == 3, "table_layout 应解析三行");
+    require(table.rows[0].cells.size() == 2, "第一行应有两列");
+    require(table.rows[0].cells[0].controlId == "device_id", "第一行第一列应绑定 device_id");
+    require(table.rows[1].cells[1].spacer, "第二行第二列应为 spacer");
+    require(table.rows[2].cells[0].controlId == "read_version", "第三行第一列应绑定 read_version");
 }
 
 void test_script_crc_bridge() {
@@ -259,6 +279,30 @@ void test_script_invalid_dock_anchor_fail() {
     protoscope::scripting::ScriptHost host;
     require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_dock_anchor").generic_string()), "非法 dock anchor 应加载失败");
     require(host.lastError().find("dock anchor 不支持") != std::string::npos, "非法 dock anchor 应给出清晰错误");
+}
+
+void test_script_table_layout_unknown_control_fail() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_table_unknown_control").generic_string()), "引用未知控件的 table layout 应加载失败");
+    require(host.lastError().find("未声明控件") != std::string::npos, "未知控件错误应包含未声明控件提示");
+}
+
+void test_script_table_layout_duplicate_control_fail() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_table_duplicate_control").generic_string()), "重复引用控件的 table layout 应加载失败");
+    require(host.lastError().find("重复引用控件") != std::string::npos, "重复引用错误应包含重复控件提示");
+}
+
+void test_script_table_layout_missing_control_fail() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_table_missing_control").generic_string()), "遗漏控件的 table layout 应加载失败");
+    require(host.lastError().find("缺少控件") != std::string::npos, "遗漏控件错误应包含缺少控件提示");
+}
+
+void test_script_table_layout_row_overflow_fail() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_table_row_overflow").generic_string()), "超出列数的 table layout 应加载失败");
+    require(host.lastError().find("单元格数量不能超过 columns") != std::string::npos, "超列错误应包含 columns 提示");
 }
 
 void test_script_runtime_error_logged() {
@@ -399,6 +443,7 @@ static const TestCase kAllTests[] = {
     {"script_on_error_log", &test_script_on_error_log},
     {"script_multi_dock_snapshot", &test_script_multi_dock_snapshot},
     {"script_dock_layout_fields", &test_script_dock_layout_fields},
+    {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
     {"script_read_version_split_flow", &test_script_read_version_split_flow},
@@ -406,6 +451,10 @@ static const TestCase kAllTests[] = {
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},
     {"script_invalid_dock_anchor_fail", &test_script_invalid_dock_anchor_fail},
+    {"script_table_layout_unknown_control_fail", &test_script_table_layout_unknown_control_fail},
+    {"script_table_layout_duplicate_control_fail", &test_script_table_layout_duplicate_control_fail},
+    {"script_table_layout_missing_control_fail", &test_script_table_layout_missing_control_fail},
+    {"script_table_layout_row_overflow_fail", &test_script_table_layout_row_overflow_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},

@@ -9,8 +9,10 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -44,6 +46,10 @@ private:
     void drawReceiveDock();
     void drawLogDock();
     void drawScriptDock();
+    void drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls);
+    void drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
+                          const scripting::TableLayoutDescriptor& layout,
+                          std::string_view stableId);
     void drawDynamicControl(const scripting::ControlSnapshot& control);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);

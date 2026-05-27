@@ -168,7 +168,25 @@ function ui()
         { type = "button", id = "start", label = "开始" },
         { type = "button", id = "pause", label = "暂停" },
         { type = "button", id = "resume", label = "恢复" },
-        { type = "button", id = "clear_history", label = "清空历史" }
+        { type = "button", id = "clear_history", label = "清空历史" },
+      },
+      layout = {
+        kind = "table",
+        columns = 2,
+        borders = false,
+        resizable = true,
+        row_bg = false,
+        sizing = "stretch",
+        rows = {
+          {
+            { control = "start" },
+            { control = "pause" },
+          },
+          {
+            { control = "resume" },
+            { control = "clear_history" },
+          },
+        }
       }
     },
     {
@@ -183,7 +201,33 @@ function ui()
         { type = "input_float", id = "phase_deg", label = "相位(度)", default = defaults.phase_deg },
         { type = "input_float", id = "sample_rate_hz", label = "采样率(Hz)", default = defaults.sample_rate_hz },
         { type = "input_int", id = "points_per_tick", label = "每次点数", default = defaults.points_per_tick },
-        { type = "input_int", id = "timer_ms", label = "刷新间隔(ms)", default = defaults.timer_ms }
+        { type = "input_int", id = "timer_ms", label = "刷新间隔(ms)", default = defaults.timer_ms },
+      },
+      layout = {
+        kind = "table",
+        columns = 2,
+        borders = false,
+        resizable = true,
+        row_bg = false,
+        sizing = "stretch",
+        rows = {
+          {
+            { control = "frequency_hz" },
+            { control = "amplitude" },
+          },
+          {
+            { control = "offset" },
+            { control = "phase_deg" },
+          },
+          {
+            { control = "sample_rate_hz" },
+            { control = "points_per_tick" },
+          },
+          {
+            { control = "timer_ms" },
+            { spacer = true },
+          },
+        }
       }
     },
     {
@@ -195,7 +239,25 @@ function ui()
         { type = "checkbox", id = "show_sine", label = "显示正弦", default = defaults.show_sine },
         { type = "checkbox", id = "show_triangle", label = "显示三角", default = defaults.show_triangle },
         { type = "checkbox", id = "show_square", label = "显示方波", default = defaults.show_square },
-        { type = "checkbox", id = "show_saw", label = "显示锯齿", default = defaults.show_saw }
+        { type = "checkbox", id = "show_saw", label = "显示锯齿", default = defaults.show_saw },
+      },
+      layout = {
+        kind = "table",
+        columns = 2,
+        borders = false,
+        resizable = true,
+        row_bg = false,
+        sizing = "stretch",
+        rows = {
+          {
+            { control = "show_sine" },
+            { control = "show_triangle" },
+          },
+          {
+            { control = "show_square" },
+            { control = "show_saw" },
+          },
+        }
       }
     }
   }
