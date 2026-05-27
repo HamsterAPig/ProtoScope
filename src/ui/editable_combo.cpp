@@ -11,19 +11,28 @@ namespace {
 
 constexpr std::size_t kEditableComboBufferSize = 512;
 
+void clearPendingOpenState(ImGuiStorage* storage, ImGuiID pendingOpenKey, ImGuiID pendingOpenTimeKey) {
+    storage->SetBool(pendingOpenKey, false);
+    storage->SetInt(pendingOpenTimeKey, 0);
+}
+
 bool beginEditableComboPopup(const char* label, const char* previewValue, bool& enterEditMode) {
     ImGuiContext& context = *GImGui;
     ImGuiWindow* window = ImGui::GetCurrentWindow();
+    ImGuiStorage* storage = ImGui::GetStateStorage();
+    const ImGuiID id = window->GetID(label);
+    const ImGuiID popupId = ImHashStr("##ComboPopup", 0, id);
+    const ImGuiID pendingOpenKey = window->GetID("pending-open");
+    const ImGuiID pendingOpenTimeKey = window->GetID("pending-open-time-ms");
 
     ImGuiNextWindowDataFlags backupNextWindowDataFlags = context.NextWindowData.HasFlags;
     context.NextWindowData.ClearFlags();
     if (window->SkipItems) {
+        clearPendingOpenState(storage, pendingOpenKey, pendingOpenTimeKey);
         return false;
     }
 
     const ImGuiStyle& style = context.Style;
-    const ImGuiID id = window->GetID(label);
-    const ImGuiID popupId = ImHashStr("##ComboPopup", 0, id);
     const float arrowSize = ImGui::GetFrameHeight();
     const char* labelEnd = ImGui::FindRenderedTextEnd(label);
     const ImVec2 labelSize = ImGui::CalcTextSize(label, labelEnd, false);
@@ -36,6 +45,7 @@ bool beginEditableComboPopup(const char* label, const char* previewValue, bool& 
         ImVec2(bb.Max.x + (labelSize.x > 0.0f ? style.ItemInnerSpacing.x + labelSize.x : 0.0f), bb.Max.y));
     ImGui::ItemSize(totalBb, style.FramePadding.y);
     if (!ImGui::ItemAdd(totalBb, id, &bb)) {
+        clearPendingOpenState(storage, pendingOpenKey, pendingOpenTimeKey);
         return false;
     }
 
@@ -44,17 +54,27 @@ bool beginEditableComboPopup(const char* label, const char* previewValue, bool& 
     const ImGuiButtonFlags buttonFlags = ImGuiButtonFlags_PressedOnClickRelease | ImGuiButtonFlags_PressedOnDoubleClick;
     const bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held, buttonFlags);
     bool popupOpen = ImGui::IsPopupOpen(popupId, ImGuiPopupFlags_None);
+    const bool pendingOpen = storage->GetBool(pendingOpenKey, false);
+    const int pendingOpenTimeMs = storage->GetInt(pendingOpenTimeKey, 0);
+    const int nowMs = static_cast<int>(ImGui::GetTime() * 1000.0);
+    const int doubleClickTimeMs = static_cast<int>(ImGui::GetIO().MouseDoubleClickTime * 1000.0f);
+    const bool doubleClicked = pressed && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left, id);
 
-    // 先在 popup 打开前截获双击；双击进入编辑态，单击仍保持原有下拉行为。
-    enterEditMode = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-    if (enterEditMode) {
-        if (popupOpen) {
-            ImGui::ClosePopupToLevel(context.BeginPopupStack.Size, true);
-            popupOpen = false;
-        }
-    } else if (pressed && !popupOpen) {
+    // 同一区域同时支持“单击展开”和“双击编辑”时，先挂起单击，等双击窗口结束后再决定是否展开。
+    enterEditMode = doubleClicked;
+    if (popupOpen) {
+        clearPendingOpenState(storage, pendingOpenKey, pendingOpenTimeKey);
+    } else if (enterEditMode) {
+        clearPendingOpenState(storage, pendingOpenKey, pendingOpenTimeKey);
+    } else if (pendingOpen && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !hovered) {
+        clearPendingOpenState(storage, pendingOpenKey, pendingOpenTimeKey);
+    } else if (pressed) {
+        storage->SetBool(pendingOpenKey, true);
+        storage->SetInt(pendingOpenTimeKey, nowMs);
+    } else if (pendingOpen && nowMs - pendingOpenTimeMs >= doubleClickTimeMs) {
         ImGui::OpenPopupEx(popupId, ImGuiPopupFlags_None);
         popupOpen = true;
+        clearPendingOpenState(storage, pendingOpenKey, pendingOpenTimeKey);
     }
 
     const ImU32 frameColor = ImGui::GetColorU32(hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
@@ -121,9 +141,13 @@ EditableComboResult drawEditableCombo(const char* label,
     ImGuiStorage* storage = ImGui::GetStateStorage();
     const ImGuiID editingKey = ImGui::GetID("editing");
     const ImGuiID focusKey = ImGui::GetID("focus-on-edit");
+    const ImGuiID suppressFirstDeactivateKey = ImGui::GetID("suppress-first-deactivate");
+    const ImGuiID pendingOpenKey = ImGui::GetID("pending-open");
+    const ImGuiID pendingOpenTimeKey = ImGui::GetID("pending-open-time-ms");
     const bool editing = storage->GetBool(editingKey, false);
 
     if (editing) {
+        clearPendingOpenState(storage, pendingOpenKey, pendingOpenTimeKey);
         char buffer[kEditableComboBufferSize]{};
         std::snprintf(buffer, sizeof(buffer), "%s", draft.c_str());
 
@@ -140,15 +164,22 @@ EditableComboResult drawEditableCombo(const char* label,
         }
 
         if (ImGui::IsItemDeactivated()) {
-            storage->SetBool(editingKey, false);
+            // 双击第二次抬起会落在输入框刚创建的第一帧，这一帧只吞掉失焦事件，不立刻退出编辑态。
+            if (storage->GetBool(suppressFirstDeactivateKey, false)) {
+                storage->SetBool(suppressFirstDeactivateKey, false);
+            } else {
+                storage->SetBool(editingKey, false);
+            }
         }
     } else {
         bool enterEditMode = false;
         const char* preview = draft.empty() ? "" : draft.c_str();
         const bool popupOpened = beginEditableComboPopup(label, preview, enterEditMode);
         if (enterEditMode) {
+            clearPendingOpenState(storage, pendingOpenKey, pendingOpenTimeKey);
             storage->SetBool(editingKey, true);
             storage->SetBool(focusKey, true);
+            storage->SetBool(suppressFirstDeactivateKey, true);
         } else if (popupOpened) {
             for (const std::string& option : options) {
                 const bool selected = draft == option;
@@ -163,6 +194,9 @@ EditableComboResult drawEditableCombo(const char* label,
                 }
             }
             ImGui::EndCombo();
+        }
+        if (!enterEditMode) {
+            storage->SetBool(suppressFirstDeactivateKey, false);
         }
     }
 
