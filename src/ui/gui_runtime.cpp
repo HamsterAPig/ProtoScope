@@ -1050,7 +1050,7 @@ void GuiRuntime::updateLuaDockDefaultLayout() {
     std::unordered_map<std::string, ImGuiID> tabGroupNodes;
 
     for (const auto& request : requests) {
-        if (defaultDockedLuaWindows_.contains(request.windowName)) {
+        if (defaultDockedLuaStableIds_.contains(stableWindowId(request.windowName))) {
             continue;
         }
 
@@ -1074,8 +1074,16 @@ void GuiRuntime::updateLuaDockDefaultLayout() {
         }
 
         // 核心流程：只给首次出现、ini 尚未创建过的 Lua Dock 提供默认停靠，不覆盖用户拖拽后的布局。
-        if (dockWindowIfMissing(request.windowName, targetNode)) {
-            defaultDockedLuaWindows_.insert(request.windowName);
+        const bool debugLayout = application_.docks().configState().luaDockLayoutDebug;
+        if (debugLayout) {
+            application_.setStatusMessage("LuaDockLayout: stableId=" + stableWindowId(request.windowName) + " anchor=" + request.anchor + " tabGroup=" + request.tabGroup + " targetNode=" + std::to_string(targetNode));
+        }
+        const bool docked = dockWindowIfMissing(request.windowName, targetNode);
+        if (debugLayout) {
+            application_.setStatusMessage("LuaDockLayout: stableId=" + stableWindowId(request.windowName) + " docked=" + (docked ? "true(settings_exist)" : "false(new_dock)") + " schemaRebuild=" + (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild ? "true" : "false"));
+        }
+        if (docked) {
+            defaultDockedLuaStableIds_.insert(stableWindowId(request.windowName));
         }
     }
 }
@@ -1107,7 +1115,7 @@ bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool fo
 
     if (shouldResetLuaDefaultDockStateOnProtocolSwitch(sameProtocol)) {
         saveCurrentProtocolWorkspace();
-        defaultDockedLuaWindows_.clear();
+        defaultDockedLuaStableIds_.clear();
         defaultLuaDockNodes_.clear();
         protocolWorkspaceLoaded_ = false;
         workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
@@ -1135,9 +1143,13 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
     const auto layoutPaths = resolveLuaDockLayoutPaths(executableDir_, lua.protocolDir, lua.scriptPath);
     activeWorkspaceProtocolKey_ = layoutPaths.protocolKey;
     protocolWorkspaceLoaded_ = true;
-    defaultDockedLuaWindows_.clear();
+    defaultDockedLuaStableIds_.clear();
     defaultLuaDockNodes_.clear();
     workspaceLayoutMode_ = workspaceLayoutModeAfterLoad(layoutPaths);
+    if (application_.docks().configState().luaDockLayoutDebug) {
+        const char* modeLabel = workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild ? "rebuilding" : "ready";
+        application_.setStatusMessage("LuaDockLayout: load protocol=" + activeWorkspaceProtocolKey_ + " schemaVersion=" + std::to_string(layoutPaths.schemaVersion) + " isLegacy=" + (layoutPaths.isLegacyLayout ? "true" : "false") + " mode=" + modeLabel);
+    }
     pendingLuaDefaultDockLayout_ = false;
 
     ImGui::ClearIniSettings();
@@ -1166,7 +1178,7 @@ void GuiRuntime::saveCurrentProtocolWorkspace() {
     pruneCurrentLuaDockSettings();
     ImGui::SaveIniSettingsToDisk(layoutPath.string().c_str());
     try {
-        writeLuaDockLayoutMeta(luaDockLayoutMetaPath(executableDir_, activeWorkspaceProtocolKey_), 2);
+        writeLuaDockLayoutMeta(luaDockLayoutMetaPath(executableDir_, activeWorkspaceProtocolKey_), 3);
     } catch (const std::exception& ex) {
         application_.setStatusMessage(std::string("保存协议布局 meta 失败: ") + ex.what(), true);
     }

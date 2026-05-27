@@ -25,7 +25,7 @@ namespace protoscope::ui {
 namespace {
 
 constexpr const char* kDefaultLayoutKey = "default";
-constexpr int kModernLuaLayoutSchemaVersion = 2;
+constexpr int kModernLuaLayoutSchemaVersion = 3;
 constexpr const char* kLayoutMetaOwner = "protoscope";
 
 struct LuaDockLayoutMeta {

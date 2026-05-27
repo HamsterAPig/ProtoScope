@@ -416,6 +416,7 @@ static const TestCase kAllTests[] = {
     {"lua_dock_layout_paths_prefer_user_layout", &test_lua_dock_layout_paths_prefer_user_layout},
     {"lua_dock_layout_paths_detect_legacy_source", &test_lua_dock_layout_paths_detect_legacy_source},
     {"lua_dock_layout_meta_path_is_sibling_yaml", &test_lua_dock_layout_meta_path_is_sibling_yaml},
+    {"lua_dock_layout_meta_schema_v3_marks_modern_layout", &test_lua_dock_layout_meta_schema_v3_marks_modern_layout},
     {"lua_dock_layout_meta_schema_v2_marks_modern_layout", &test_lua_dock_layout_meta_schema_v2_marks_modern_layout},
     {"lua_dock_layout_meta_read_failure_falls_back_to_legacy", &test_lua_dock_layout_meta_read_failure_falls_back_to_legacy},
     {"lua_dock_layout_dock_id_sharing_does_not_mark_modern_legacy", &test_lua_dock_layout_dock_id_sharing_does_not_mark_modern_legacy},

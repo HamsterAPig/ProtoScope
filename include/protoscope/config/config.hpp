@@ -43,6 +43,7 @@ struct GuiWaveConfig {
 struct GuiConfig {
     GuiWindowConfig window{};
     GuiWaveConfig wave{};
+    bool luaDockLayoutDebug{false};
 };
 
 struct ProtocolConfig {
