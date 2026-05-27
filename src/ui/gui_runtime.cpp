@@ -180,6 +180,20 @@ void keepOnlyCurrentLuaDockSettings(std::string_view layoutKey) {
         if (!shouldKeepLuaWindowSettings(stableId, layoutKey)) {
             setting->WantDelete = true;
             setting->ID = 0;
+
+            // 同步清除引用该 chunk 的 window->SettingsOffset,
+            // 防止 WriteAll 时 FindWindowSettingsByWindow 通过原始 offset
+            // 返回 ID=0 的 chunk 导致 settings->ID == window->ID 断言失败。
+            auto& g = *ImGui::GetCurrentContext();
+            for (int j = 0; j < g.Windows.Size; j++) {
+                auto* w = g.Windows[j];
+                if (w && w->SettingsOffset != -1) {
+                    auto* ws = g.SettingsWindows.ptr_from_offset(w->SettingsOffset);
+                    if (ws == setting) {
+                        w->SettingsOffset = -1;
+                    }
+                }
+            }
         }
     }
 }
@@ -671,6 +685,7 @@ void GuiRuntime::renderFrame() {
     drawStatusBar();
     drawCommDock();
     drawProtocolDock();
+    drawLuaDockWindows();
     drawSendDock();
     drawReceiveDock();
     drawLogDock();
@@ -1020,7 +1035,14 @@ void GuiRuntime::drawProtocolDock() {
     }
     ImGui::End();
 
-    // 核心流程：动态 Dock 中的控件点击会同步改写 `lua.docks`。
+}
+
+void GuiRuntime::drawLuaDockWindows() {
+    auto& lua = application_.docks().luaState();
+    if (lua.docks.empty()) {
+        return;
+    }
+
     // 这里按值复制当前帧快照，保证本帧渲染遍历期间底层容器不会被重入修改。
     const auto dockSnapshots = lua.docks;
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);

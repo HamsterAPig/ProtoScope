@@ -39,6 +39,7 @@ private:
     void drawMainMenu();
     void drawCommDock();
     void drawProtocolDock();
+    void drawLuaDockWindows();
     void drawSendDock();
     void drawReceiveDock();
     void drawLogDock();
