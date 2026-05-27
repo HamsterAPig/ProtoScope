@@ -970,14 +970,78 @@ void GuiRuntime::drawProtocolDock() {
         // 核心流程：Lua 按钮可能在点击回调里同步刷新脚本控件快照。
         // 这里先复制当前帧的控件列表，避免遍历 `lua.controlStates` 时引用失效导致闪退。
         const auto controls = lua.controlStates;
-        for (const auto& control : controls) {
-            drawDynamicControl(control);
-        }
+        drawLuaDockFlow(controls);
         ImGui::End();
         return;
     }
     ImGui::End();
 
+}
+
+void GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls) {
+    for (const auto& control : controls) {
+        drawDynamicControl(control);
+    }
+}
+
+void GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
+                                  const scripting::TableLayoutDescriptor& layout,
+                                  std::string_view stableId) {
+    std::unordered_map<std::string, const scripting::ControlSnapshot*> controlsById;
+    controlsById.reserve(dockSnapshot.controls.size());
+    for (const auto& control : dockSnapshot.controls) {
+        controlsById.emplace(control.descriptor.id, &control);
+    }
+
+    ImGuiTableFlags flags = ImGuiTableFlags_None;
+    if (layout.borders) {
+        flags |= ImGuiTableFlags_Borders;
+    }
+    if (layout.resizable) {
+        flags |= ImGuiTableFlags_Resizable;
+    }
+    if (layout.rowBg) {
+        flags |= ImGuiTableFlags_RowBg;
+    }
+    if (layout.sizing == "stretch") {
+        flags |= ImGuiTableFlags_SizingStretchSame;
+    }
+
+    const std::string tableId = "##lua_dock_table_" + std::string(stableId);
+    if (!ImGui::BeginTable(tableId.c_str(), static_cast<int>(layout.columns), flags)) {
+        return;
+    }
+
+    for (std::size_t columnIndex = 0; columnIndex < layout.columns; ++columnIndex) {
+        ImGui::TableSetupColumn(nullptr, ImGuiTableColumnFlags_WidthStretch);
+    }
+
+    // 核心流程：表格布局只负责按声明式 rows/cells 摆放控件，
+    // 具体控件行为仍然复用 drawDynamicControl，避免改动现有控件契约。
+    for (const auto& row : layout.rows) {
+        ImGui::TableNextRow();
+        for (std::size_t columnIndex = 0; columnIndex < layout.columns; ++columnIndex) {
+            ImGui::TableSetColumnIndex(static_cast<int>(columnIndex));
+            if (columnIndex >= row.cells.size()) {
+                continue;
+            }
+
+            const auto& cell = row.cells[columnIndex];
+            if (cell.spacer) {
+                continue;
+            }
+
+            const auto controlIter = controlsById.find(cell.controlId);
+            if (controlIter == controlsById.end()) {
+                continue;
+            }
+
+            ImGui::PushID(controlIter->second->descriptor.id.c_str());
+            drawDynamicControl(*controlIter->second);
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndTable();
 }
 
 void GuiRuntime::drawLuaDockWindows() {
@@ -990,11 +1054,15 @@ void GuiRuntime::drawLuaDockWindows() {
     const auto dockSnapshots = lua.docks;
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
     for (const auto& dockSnapshot : dockSnapshots) {
+        const auto stableId = luaDockStableId(dockSnapshot.descriptor, layoutKey);
         const auto windowName = luaDockWindowName(dockSnapshot.descriptor, layoutKey);
         const bool windowVisible = ImGui::Begin(windowName.c_str());
         if (windowVisible) {
-            for (const auto& control : dockSnapshot.controls) {
-                drawDynamicControl(control);
+            if (dockSnapshot.descriptor.layout.has_value()
+                && dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Table) {
+                drawLuaDockTable(dockSnapshot, dockSnapshot.descriptor.layout->table, stableId);
+            } else {
+                drawLuaDockFlow(dockSnapshot.controls);
             }
         }
         ImGui::End();

@@ -45,12 +45,41 @@ struct ControlSnapshot {
     ControlValue value;
 };
 
+enum class DockLayoutKind {
+    Flow,
+    Table,
+};
+
+struct TableCellDescriptor {
+    std::string controlId;
+    bool spacer{false};
+};
+
+struct TableRowDescriptor {
+    std::vector<TableCellDescriptor> cells;
+};
+
+struct TableLayoutDescriptor {
+    std::size_t columns{1};
+    bool borders{false};
+    bool resizable{true};
+    bool rowBg{false};
+    std::string sizing{"stretch"};
+    std::vector<TableRowDescriptor> rows;
+};
+
+struct DockLayoutDescriptor {
+    DockLayoutKind kind{DockLayoutKind::Flow};
+    TableLayoutDescriptor table;
+};
+
 struct DockDescriptor {
     std::string id;
     std::string title;
     std::string anchor{"left_bottom"};
     std::string tabGroup;
     std::vector<ControlDescriptor> controls;
+    std::optional<DockLayoutDescriptor> layout;
 };
 
 struct DockSnapshot {
