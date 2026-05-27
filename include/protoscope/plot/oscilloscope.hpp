@@ -21,8 +21,11 @@ struct WaveAppendRequest {
 struct ChannelSpec {
     std::string label;
     std::string unit;
+    double scale{1.0};
     double offset{0.0};
 };
+
+double applyChannelDisplayTransform(double rawValue, const ChannelSpec& spec);
 
 struct ViewConfig {
     double timeScale{1.0};
@@ -71,6 +74,8 @@ struct MeasurementReadout {
 struct ChannelView {
     std::string label;
     std::string unit;
+    double scale{1.0};
+    double offset{0.0};
     std::size_t totalSamples{0};
     std::size_t visibleBegin{0};
     std::size_t visibleEnd{0};
@@ -141,7 +146,10 @@ private:
     std::size_t lowerBoundByTime(const std::vector<WaveSample>& samples, double time) const;
     std::size_t upperBoundByTime(const std::vector<WaveSample>& samples, double time) const;
     void trimHistory(ChannelBuffer& channel);
-    WaveStats makeStats(const std::vector<WaveSample>& samples, std::size_t begin, std::size_t end, double offset) const;
+    WaveStats makeStats(const std::vector<WaveSample>& samples,
+                        std::size_t begin,
+                        std::size_t end,
+                        const ChannelSpec& spec) const;
 
 private:
     std::string source_;

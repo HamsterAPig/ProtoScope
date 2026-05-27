@@ -603,6 +603,7 @@ const char* kDefaultLuaLsApi = R"LUALS(---@meta
 ---@class ProtoPlotChannel
 ---@field label string 通道名称。
 ---@field unit? string 通道单位。
+---@field scale? number 通道显示缩放，按 raw * scale + offset 参与显示。
 ---@field offset? number 通道显示偏移。
 
 ---@class ProtoPlotSetup

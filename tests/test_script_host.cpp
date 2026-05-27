@@ -376,6 +376,8 @@ void test_script_plot_api_snapshot() {
     auto appends = host.drainPlotAppends();
     require(setups.size() == 1, "打开连接后应生成 1 次 plot.setup");
     require(setups[0].channels.size() == 2, "plot.setup 应声明 2 个通道");
+    require(std::abs(setups[0].channels[0].scale - 2.0) < 1e-12, "CH1 scale 解析错误");
+    require(std::abs(setups[0].channels[1].scale - 1.0) < 1e-12, "CH2 scale 默认值错误");
     require(std::abs(setups[0].channels[0].offset - 0.0) < 1e-12, "CH1 offset 解析错误");
     require(std::abs(setups[0].channels[1].offset - 1.0) < 1e-12, "CH2 offset 解析错误");
     require(appends.size() == 2, "打开连接后应推送 2 组通道数据");
@@ -445,7 +447,8 @@ static const TestCase kAllTests[] = {
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
-    {"plot_channel_offset_applies_to_display_only", &test_plot_channel_offset_applies_to_display_only},
+    {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
+    {"plot_cursor_snap_scope_selection", &test_plot_cursor_snap_scope_selection},
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},

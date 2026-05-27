@@ -221,10 +221,10 @@ void test_wave_cursor_drag_time_uses_smart_snap() {
     require(std::abs(fallbackTime - dragTime) < 1e-9, "无智能吸附结果时应保留拖动时间");
 }
 
-void test_plot_channel_offset_applies_to_display_only() {
+void test_plot_channel_scale_and_offset_apply_to_display_only() {
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
-    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .offset = 1.5});
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = -2.0, .offset = 1.5});
     buffer.append(0, protoscope::plot::WaveAppendRequest{
         .source = "test",
         .samples = {
@@ -238,26 +238,71 @@ void test_plot_channel_offset_applies_to_display_only() {
     require(snapshot.channels.size() == 1, "应存在 1 个通道");
     require(snapshot.channels[0].samples != nullptr, "原始样本指针不应为空");
     require(std::abs(snapshot.channels[0].samples[0].value + 1.0) < 1e-9, "原始样本值不应被 offset 污染");
-    require(std::abs(snapshot.channels[0].stats.minValue - 0.5) < 1e-9, "统计最小值应叠加 offset");
-    require(std::abs(snapshot.channels[0].stats.maxValue - 2.5) < 1e-9, "统计最大值应叠加 offset");
+    require(std::abs(snapshot.channels[0].stats.minValue + 0.5) < 1e-9, "统计最小值应应用 scale + offset");
+    require(std::abs(snapshot.channels[0].stats.maxValue - 3.5) < 1e-9, "统计最大值应应用 scale + offset");
 
     const auto envelope = buffer.buildEnvelope(0, 0.0, 1.0, 64);
     require(!envelope.points.empty(), "包络点不应为空");
-    require(std::abs(envelope.points[0].minValue - 0.5) < 1e-9, "包络最小值应叠加 offset");
+    require(std::abs(envelope.points[0].minValue - 3.5) < 1e-9, "包络最小值应应用 scale + offset");
+
+    const auto mapped = protoscope::plot::buildDisplayData(snapshot, 0.0);
+    require(mapped.channels.size() == 1, "显示数据应保留 1 个通道");
+    require(std::abs(mapped.channels[0].samples[0].value - 3.5) < 1e-9, "显示数据应应用 scale + offset");
+    require(std::abs(mapped.channels[0].samples[1].value + 0.5) < 1e-9, "显示数据应保留负缩放后的值");
 
     const auto nearestByTime = buffer.findNearestByTime(0, 0.52, 0.2);
     require(nearestByTime.has_value(), "按时间吸附应成功");
-    require(std::abs(nearestByTime->value - 2.5) < 1e-9, "游标读数应叠加 offset");
+    require(std::abs(nearestByTime->value + 0.5) < 1e-9, "游标读数应应用 scale + offset");
 
-    const auto nearestByPoint = buffer.findNearest(0, 0.52, 2.4, 0.2, 0.3);
+    const auto nearestByPoint = buffer.findNearest(0, 0.52, -0.4, 0.2, 0.3);
     require(nearestByPoint.has_value(), "按点吸附应成功");
-    require(std::abs(nearestByPoint->value - 2.5) < 1e-9, "点吸附读数应叠加 offset");
+    require(std::abs(nearestByPoint->value + 0.5) < 1e-9, "点吸附读数应应用 scale + offset");
 
     const auto measurement = buffer.measureWindow(0, 0.0, 1.0);
     require(measurement.valid, "窗口测量应有效");
-    require(std::abs(measurement.minValue - 0.5) < 1e-9, "测量最小值应叠加 offset");
-    require(std::abs(measurement.maxValue - 2.5) < 1e-9, "测量最大值应叠加 offset");
+    require(std::abs(measurement.minValue + 0.5) < 1e-9, "测量最小值应应用 scale + offset");
+    require(std::abs(measurement.maxValue - 3.5) < 1e-9, "测量最大值应应用 scale + offset");
     require(std::abs(measurement.meanValue - 1.5) < 1e-9, "测量平均值应叠加 offset");
+
+    protoscope::plot::OscilloscopeBuffer zeroScaleBuffer;
+    zeroScaleBuffer.configureChannels(1);
+    zeroScaleBuffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 0.0, .offset = 1.25});
+    zeroScaleBuffer.append(0, protoscope::plot::WaveAppendRequest{
+        .source = "test",
+        .samples = {
+            {.time = 0.0, .value = -10.0},
+            {.time = 0.5, .value = 5.0},
+            {.time = 1.0, .value = 9.0},
+        },
+    });
+    const auto zeroMeasurement = zeroScaleBuffer.measureWindow(0, 0.0, 1.0);
+    require(zeroMeasurement.valid, "zero-scale 测量应有效");
+    require(std::abs(zeroMeasurement.minValue - 1.25) < 1e-9, "scale=0 时最小值应退化为常量线");
+    require(std::abs(zeroMeasurement.maxValue - 1.25) < 1e-9, "scale=0 时最大值应退化为常量线");
+    require(std::abs(zeroMeasurement.rmsValue - 1.25) < 1e-9, "scale=0 时 RMS 应按常量线计算");
+}
+
+void test_plot_cursor_snap_scope_selection() {
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.resize(2);
+    displayData.channels[0].samples = {
+        {.time = 0.0, .value = 0.0},
+        {.time = 0.7, .value = 7.0},
+    };
+    displayData.channels[1].samples = {
+        {.time = 0.5, .value = 5.0},
+        {.time = 1.2, .value = 12.0},
+    };
+
+    const auto activeOnly = protoscope::plot::findNearestDisplayByTime(displayData, 0, 0.52, 0.3);
+    require(activeOnly.has_value(), "当前激活通道模式应返回当前通道候选");
+    require(activeOnly->channelIndex == 0, "当前激活通道模式不应跳到其他通道");
+    require(std::abs(activeOnly->time - 0.7) < 1e-9, "当前激活通道模式应保留当前通道最近点");
+
+    const auto allChannels = protoscope::plot::findNearestDisplayByTimeAcrossChannels(displayData, 0.52, 0.3);
+    require(allChannels.has_value(), "全部波形模式应返回跨通道候选");
+    require(allChannels->channelIndex == 1, "全部波形模式应选择跨通道最近点");
+    require(std::abs(allChannels->time - 0.5) < 1e-9, "全部波形模式应命中真正最近的时间点");
 }
 
 void test_plot_limited_envelope_edges() {
@@ -322,6 +367,8 @@ void test_wave_frequency_parse_and_axis_mapping() {
     snapshot.channels.push_back({
         .label = "CH1",
         .unit = "V",
+        .scale = 1.0,
+        .offset = 0.0,
         .totalSamples = scriptSamples.size(),
         .visibleBegin = 0,
         .visibleEnd = scriptSamples.size(),

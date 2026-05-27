@@ -18,7 +18,19 @@ double safeFrequency(double deltaTime) {
     return 1.0 / std::abs(deltaTime);
 }
 
+double sanitizeScale(double scale) {
+    return std::isfinite(scale) ? scale : 1.0;
+}
+
+double sanitizeOffset(double offset) {
+    return std::isfinite(offset) ? offset : 0.0;
+}
+
 } // namespace
+
+double applyChannelDisplayTransform(double rawValue, const ChannelSpec& spec) {
+    return rawValue * sanitizeScale(spec.scale) + sanitizeOffset(spec.offset);
+}
 
 void OscilloscopeBuffer::clear() {
     source_.clear();
@@ -42,6 +54,8 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
     if (spec.label.empty()) {
         spec.label = "CH" + std::to_string(channelIndex + 1);
     }
+    spec.scale = sanitizeScale(spec.scale);
+    spec.offset = sanitizeOffset(spec.offset);
     channels_[channelIndex].spec = std::move(spec);
 }
 
@@ -117,11 +131,13 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
         ChannelView view{};
         view.label = channel.spec.label;
         view.unit = channel.spec.unit;
+        view.scale = channel.spec.scale;
+        view.offset = channel.spec.offset;
         view.totalSamples = channel.samples.size();
         view.samples = channel.samples.data();
         view.visibleBegin = lowerBoundByTime(channel.samples, visibleMinTime);
         view.visibleEnd = upperBoundByTime(channel.samples, visibleMaxTime);
-        view.stats = makeStats(channel.samples, view.visibleBegin, view.visibleEnd, channel.spec.offset);
+        view.stats = makeStats(channel.samples, view.visibleBegin, view.visibleEnd, channel.spec);
         snapshot.channels.push_back(view);
     }
     return snapshot;
@@ -145,7 +161,7 @@ EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
     }
 
     const auto& samples = channels_[channelIndex].samples;
-    const double offset = channels_[channelIndex].spec.offset;
+    const auto& spec = channels_[channelIndex].spec;
     if (samples.empty()) {
         return view;
     }
@@ -170,7 +186,7 @@ EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
     if (sampledCount <= pixelWidth * 2) {
         view.points.reserve(sampledCount);
         for (std::size_t index = begin; index < end; ++index) {
-            const double displayValue = samples[index].value + offset;
+            const double displayValue = applyChannelDisplayTransform(samples[index].value, spec);
             view.points.push_back(EnvelopePoint{
                 .time = samples[index].time,
                 .minValue = displayValue,
@@ -201,7 +217,7 @@ EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
                 break;
             }
             if (sample.time >= bucketStart && sample.time <= bucketEnd) {
-                const double displayValue = sample.value + offset;
+                const double displayValue = applyChannelDisplayTransform(sample.value, spec);
                 minValue = (std::min)(minValue, displayValue);
                 maxValue = (std::max)(maxValue, displayValue);
                 timeAccumulator += sample.time;
@@ -225,7 +241,7 @@ EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
 
     if (view.points.empty()) {
         for (std::size_t index = begin; index < end; ++index) {
-            const double displayValue = samples[index].value + offset;
+            const double displayValue = applyChannelDisplayTransform(samples[index].value, spec);
             view.points.push_back(EnvelopePoint{
                 .time = samples[index].time,
                 .minValue = displayValue,
@@ -247,7 +263,7 @@ std::optional<CursorReadout> OscilloscopeBuffer::findNearest(std::size_t channel
         return std::nullopt;
     }
     const auto& samples = channels_[channelIndex].samples;
-    const double offset = channels_[channelIndex].spec.offset;
+    const auto& spec = channels_[channelIndex].spec;
     if (samples.empty()) {
         return std::nullopt;
     }
@@ -260,7 +276,7 @@ std::optional<CursorReadout> OscilloscopeBuffer::findNearest(std::size_t channel
     std::optional<CursorReadout> best;
     for (std::size_t index = begin; index < end; ++index) {
         const auto& sample = samples[index];
-        const double displayValue = sample.value + offset;
+        const double displayValue = applyChannelDisplayTransform(sample.value, spec);
         const double dt = std::abs(sample.time - time);
         const double dv = std::abs(displayValue - value);
         if (dt > maxTimeDistance || dv > maxValueDistance) {
@@ -288,7 +304,7 @@ std::optional<CursorReadout> OscilloscopeBuffer::findNearestByTime(std::size_t c
         return std::nullopt;
     }
     const auto& samples = channels_[channelIndex].samples;
-    const double offset = channels_[channelIndex].spec.offset;
+    const auto& spec = channels_[channelIndex].spec;
     if (samples.empty()) {
         return std::nullopt;
     }
@@ -309,7 +325,7 @@ std::optional<CursorReadout> OscilloscopeBuffer::findNearestByTime(std::size_t c
             .channelIndex = channelIndex,
             .sampleIndex = index,
             .time = samples[index].time,
-            .value = samples[index].value + offset,
+            .value = applyChannelDisplayTransform(samples[index].value, spec),
         };
     }
     return best;
@@ -327,7 +343,7 @@ MeasurementReadout OscilloscopeBuffer::measureWindow(std::size_t channelIndex,
     }
 
     const auto& samples = channels_[channelIndex].samples;
-    const double offset = channels_[channelIndex].spec.offset;
+    const auto& spec = channels_[channelIndex].spec;
     if (samples.empty()) {
         return result;
     }
@@ -347,7 +363,7 @@ MeasurementReadout OscilloscopeBuffer::measureWindow(std::size_t channelIndex,
     double sum = 0.0;
     double squareSum = 0.0;
     for (std::size_t index = begin; index < end; ++index) {
-        const double value = samples[index].value + offset;
+        const double value = applyChannelDisplayTransform(samples[index].value, spec);
         result.minValue = (std::min)(result.minValue, value);
         result.maxValue = (std::max)(result.maxValue, value);
         sum += value;
@@ -398,7 +414,10 @@ void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel) {
     channel.samples.erase(channel.samples.begin(), channel.samples.begin() + static_cast<std::ptrdiff_t>(removeCount));
 }
 
-WaveStats OscilloscopeBuffer::makeStats(const std::vector<WaveSample>& samples, std::size_t begin, std::size_t end, double offset) const {
+WaveStats OscilloscopeBuffer::makeStats(const std::vector<WaveSample>& samples,
+                                        std::size_t begin,
+                                        std::size_t end,
+                                        const ChannelSpec& spec) const {
     WaveStats stats{};
     stats.totalSamples = samples.size();
     if (begin >= end || begin >= samples.size() || end > samples.size()) {
@@ -409,7 +428,7 @@ WaveStats OscilloscopeBuffer::makeStats(const std::vector<WaveSample>& samples, 
     stats.minValue = std::numeric_limits<double>::infinity();
     stats.maxValue = -std::numeric_limits<double>::infinity();
     for (std::size_t index = begin; index < end; ++index) {
-        const double displayValue = samples[index].value + offset;
+        const double displayValue = applyChannelDisplayTransform(samples[index].value, spec);
         stats.minValue = (std::min)(stats.minValue, displayValue);
         stats.maxValue = (std::max)(stats.maxValue, displayValue);
     }

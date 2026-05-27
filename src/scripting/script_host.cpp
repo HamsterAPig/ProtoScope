@@ -3,6 +3,7 @@
 #include <sol/sol.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <filesystem>
 #include <limits>
@@ -51,6 +52,10 @@ ControlValue defaultValueFor(const ControlDescriptor& descriptor) {
         return descriptor.comboDefaultIndex;
     }
     return false;
+}
+
+double finiteOrDefault(double value, double fallback) {
+    return std::isfinite(value) ? value : fallback;
 }
 
 const ControlDescriptor* findControlDescriptor(const std::vector<ControlDescriptor>& controls, const std::string& id) {
@@ -511,7 +516,8 @@ std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& 
         PlotChannelDescriptor descriptor{};
         descriptor.label = luaStringField(channelTable, "label").value_or("CH" + std::to_string(index));
         descriptor.unit = luaStringField(channelTable, "unit").value_or("");
-        descriptor.offset = luaNumberField(channelTable, "offset").value_or(0.0);
+        descriptor.scale = finiteOrDefault(luaNumberField(channelTable, "scale").value_or(1.0), 1.0);
+        descriptor.offset = finiteOrDefault(luaNumberField(channelTable, "offset").value_or(0.0), 0.0);
         setup.channels.push_back(std::move(descriptor));
     }
     if (setup.channels.empty()) {

@@ -45,6 +45,9 @@ bool sameChannelSpecs(const std::vector<scripting::PlotChannelDescriptor>& setup
         if (current->label != setup.label || current->unit != setup.unit) {
             return false;
         }
+        if (std::abs(current->scale - setup.scale) > 1e-12) {
+            return false;
+        }
         if (std::abs(current->offset - setup.offset) > 1e-12) {
             return false;
         }
@@ -530,12 +533,17 @@ bool Application::flushScriptPlots() {
         }
         wave.buffer.setViewConfig(setup.view);
         wave.buffer.configureChannels(setup.channels.size());
+        wave.defaultChannelSpecs.clear();
+        wave.defaultChannelSpecs.reserve(setup.channels.size());
         for (std::size_t index = 0; index < setup.channels.size(); ++index) {
-            wave.buffer.setChannelSpec(index, plot::ChannelSpec{
+            auto spec = plot::ChannelSpec{
                 .label = setup.channels[index].label,
                 .unit = setup.channels[index].unit,
+                .scale = setup.channels[index].scale,
                 .offset = setup.channels[index].offset,
-            });
+            };
+            wave.defaultChannelSpecs.push_back(spec);
+            wave.buffer.setChannelSpec(index, std::move(spec));
         }
         const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
         const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;

@@ -15,6 +15,11 @@ enum class WaveCursorSnapMode {
     ModifierSnap,
 };
 
+enum class WaveCursorSnapScope {
+    AllChannels,
+    ActiveChannel,
+};
+
 struct WaveCursorState {
     bool enabled{true};
     bool pinned{false};
@@ -58,6 +63,7 @@ struct WaveViewState {
     std::string sampleFrequencyError;
     WaveTimeAxisSource timeAxisSource{WaveTimeAxisSource::SampleIndex};
     WaveCursorSnapMode cursorSnapMode{WaveCursorSnapMode::SmartSnap};
+    WaveCursorSnapScope cursorSnapScope{WaveCursorSnapScope::AllChannels};
     std::array<WaveCursorState, 2> cursors{};
 };
 
@@ -66,6 +72,7 @@ struct WaveDockState {
     WaveViewState view{};
     std::string statusMessage;
     std::vector<std::string> channelSummaries;
+    std::vector<ChannelSpec> defaultChannelSpecs;
 };
 
 } // namespace protoscope::plot

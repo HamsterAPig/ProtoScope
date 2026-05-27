@@ -307,70 +307,30 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
     return envelope;
 }
 
-std::optional<plot::CursorReadout> findNearestDisplayByTime(const plot::WaveDisplayData& displayData,
-                                                            std::size_t channelIndex,
-                                                            double time,
-                                                            double maxTimeDistance) {
-    if (channelIndex >= displayData.channels.size()) {
-        return std::nullopt;
+void clampActiveChannel(plot::WaveViewState& view, std::size_t channelCount) {
+    if (channelCount == 0 || view.measurementChannelIndex >= channelCount) {
+        view.measurementChannelIndex = 0;
     }
-    const auto& samples = displayData.channels[channelIndex].samples;
-    if (samples.empty()) {
-        return std::nullopt;
-    }
-    auto lower = std::lower_bound(samples.begin(), samples.end(), time, [](const plot::WaveSample& sample, double value) {
-        return sample.time < value;
-    });
-    std::optional<plot::CursorReadout> best;
-    auto consider = [&](std::vector<plot::WaveSample>::const_iterator iterator) {
-        if (iterator == samples.end()) {
-            return;
-        }
-        const double distance = std::abs(iterator->time - time);
-        if (distance > maxTimeDistance) {
-            return;
-        }
-        if (!best.has_value() || distance < std::abs(best->time - time)) {
-            best = plot::CursorReadout{
-                .valid = true,
-                .channelIndex = channelIndex,
-                .sampleIndex = static_cast<std::size_t>(std::distance(samples.begin(), iterator)),
-                .time = iterator->time,
-                .value = iterator->value,
-            };
-        }
-    };
-    consider(lower);
-    if (lower != samples.begin()) {
-        consider(std::prev(lower));
-    }
-    return best;
 }
 
-std::optional<plot::CursorReadout> findNearestDisplayPoint(const plot::WaveDisplayData& displayData,
-                                                           double time,
-                                                           double value,
-                                                           double maxTimeDistance,
-                                                           double maxValueDistance) {
-    std::optional<plot::CursorReadout> best;
-    double bestScore = std::numeric_limits<double>::infinity();
-    for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
-        const auto nearest = findNearestDisplayByTime(displayData, channelIndex, time, maxTimeDistance);
-        if (!nearest.has_value()) {
-            continue;
-        }
-        const double valueDistance = std::abs(nearest->value - value);
-        if (valueDistance > maxValueDistance) {
-            continue;
-        }
-        const double timeDistance = std::abs(nearest->time - time);
-        const double score = timeDistance * timeDistance + valueDistance * valueDistance;
-        if (score < bestScore) {
-            bestScore = score;
-            best = nearest;
-        }
+const char* snapScopeName(plot::WaveCursorSnapScope scope) {
+    switch (scope) {
+    case plot::WaveCursorSnapScope::AllChannels:
+        return "全部波形";
+    case plot::WaveCursorSnapScope::ActiveChannel:
+        return "当前激活波形";
     }
-    return best;
+    return "未知";
+}
+
+std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDisplayData& displayData,
+                                                             const plot::WaveViewState& view,
+                                                             double time,
+                                                             double maxTimeDistance) {
+    if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
+        return plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, time, maxTimeDistance);
+    }
+    return plot::findNearestDisplayByTimeAcrossChannels(displayData, time, maxTimeDistance);
 }
 
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io) {
@@ -383,12 +343,12 @@ struct SmartCursorSnap {
     std::string_view label;
 };
 
-std::optional<SmartCursorSnap> findSmartCursorSnap(const plot::WaveDisplayData& displayData,
-                                                   std::size_t channelIndex,
-                                                   double time,
-                                                   double mouseValue,
-                                                   const ImPlotRect& limits,
-                                                   double maxTimeDistance) {
+std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDisplayData& displayData,
+                                                             std::size_t channelIndex,
+                                                             double time,
+                                                             double mouseValue,
+                                                             const ImPlotRect& limits,
+                                                             double maxTimeDistance) {
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
     }
@@ -420,6 +380,34 @@ std::optional<SmartCursorSnap> findSmartCursorSnap(const plot::WaveDisplayData& 
         return SmartCursorSnap{.readout = *edge, .label = "Edge"};
     }
     return std::nullopt;
+}
+
+std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDisplayData& displayData,
+                                                          const plot::WaveViewState& view,
+                                                          double time,
+                                                          double mouseValue,
+                                                          const ImPlotRect& limits,
+                                                          double maxTimeDistance) {
+    if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
+        return findSmartCursorSnapForChannel(displayData, view.measurementChannelIndex, time, mouseValue, limits, maxTimeDistance);
+    }
+
+    std::optional<SmartCursorSnap> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
+        const auto candidate = findSmartCursorSnapForChannel(displayData, channelIndex, time, mouseValue, limits, maxTimeDistance);
+        if (!candidate.has_value()) {
+            continue;
+        }
+        const double timeDistance = std::abs(candidate->readout.time - time);
+        const double valueDistance = std::isfinite(mouseValue) ? std::abs(candidate->readout.value - mouseValue) : 0.0;
+        const double score = timeDistance * timeDistance + valueDistance * valueDistance;
+        if (!best.has_value() || score < bestScore) {
+            bestScore = score;
+            best = candidate;
+        }
+    }
+    return best;
 }
 
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
@@ -789,15 +777,6 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
     frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
     frame.fullSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     frame.displayData = plot::buildDisplayData(frame.fullSnapshot, view.sampleFrequencyHz);
-    for (std::size_t channelIndex = 0; channelIndex < frame.displayData.channels.size(); ++channelIndex) {
-        const auto spec = wave.buffer.channelSpec(channelIndex);
-        if (!spec.has_value() || spec->offset == 0.0) {
-            continue;
-        }
-        for (auto& sample : frame.displayData.channels[channelIndex].samples) {
-            sample.value += spec->offset;
-        }
-    }
 
     view.timeAxisSource = frame.displayData.axisSource;
     frame.displayBounds = plot::computeDisplayBounds(frame.displayData, (std::max)(config.timeScale, 1e-6));
@@ -828,16 +807,14 @@ void drawCursorToolbar(plot::WaveViewState& view,
     if (!view.showCursors || displayData.channels.empty()) {
         return;
     }
-    if (view.measurementChannelIndex >= displayData.channels.size()) {
-        view.measurementChannelIndex = 0;
-    }
+    clampActiveChannel(view, displayData.channels.size());
     const double cursorSnapDistance = (std::max)(view.viewMaxTime - view.viewMinTime, config.timeScale) / 80.0;
     auto placeCursorInViewport = [&](std::size_t cursorIndex, double ratio) {
         auto& cursor = view.cursors[cursorIndex];
         cursor.enabled = true;
         cursor.time = plot::cursorTimeInViewport(currentViewport(view), ratio);
         cursor.channelIndex = view.measurementChannelIndex;
-        const auto best = findNearestDisplayByTime(displayData, view.measurementChannelIndex, cursor.time, cursorSnapDistance);
+        const auto best = findNearestDisplayByScope(displayData, view, cursor.time, cursorSnapDistance);
         if (best.has_value()) {
             cursor.time = best->time;
             cursor.value = best->value;
@@ -954,7 +931,7 @@ void handleHoverReadout(plot::WaveViewState& view,
     if (!view.showCursors || !ImPlot::IsPlotHovered() || !view.showHoverReadout) {
         return;
     }
-    auto hovered = findNearestDisplayPoint(displayData, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
+    auto hovered = plot::findNearestDisplayPoint(displayData, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
     if (!hovered.has_value() || hovered->channelIndex >= snapshot.channels.size()) {
         return;
     }
@@ -981,9 +958,7 @@ bool handlePlotCursors(plot::WaveViewState& view,
     if (!view.showCursors) {
         return false;
     }
-    if (view.measurementChannelIndex >= snapshot.channels.size()) {
-        view.measurementChannelIndex = 0;
-    }
+    clampActiveChannel(view, snapshot.channels.size());
 
     const auto& io = ImGui::GetIO();
     bool anyCursorHeld = false;
@@ -1013,8 +988,7 @@ bool handlePlotCursors(plot::WaveViewState& view,
         anyCursorHeld = anyCursorHeld || held;
         if (held && smartSnapActive) {
             // 核心流程：先用 DragLineX 写入的鼠标时间查吸附，再回写游标时间，配合 Delayed 让绘制使用受约束位置。
-            auto smartSnapTarget = findSmartCursorSnap(
-                displayData, view.measurementChannelIndex, dragTime, mousePos.y, limits, smartSnapDistance);
+            auto smartSnapTarget = findSmartCursorSnapByScope(displayData, view, dragTime, mousePos.y, limits, smartSnapDistance);
             if (smartSnapTarget.has_value()) {
                 smartSnap = smartSnapTarget->readout;
                 snapLabel = smartSnapTarget->label;
@@ -1025,7 +999,7 @@ bool handlePlotCursors(plot::WaveViewState& view,
             view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
         }
 
-        auto best = findNearestDisplayByTime(displayData, view.measurementChannelIndex, cursor.time, timeSnapDistance);
+        auto best = findNearestDisplayByScope(displayData, view, cursor.time, timeSnapDistance);
         if (smartSnap.has_value()) {
             best = smartSnap;
         }
@@ -1034,7 +1008,7 @@ bool handlePlotCursors(plot::WaveViewState& view,
         }
 
         // 核心流程：每帧都刷新游标读数；拖动中保留连续时间，避免采样点吸附导致抖动。
-        cursor.channelIndex = view.measurementChannelIndex;
+        cursor.channelIndex = best->channelIndex;
         if (!held || smartSnapActive) {
             cursor.time = best->time;
         }
@@ -1167,13 +1141,117 @@ void drawWaveReadouts(const plot::WaveViewState& view,
     }
 }
 
-void drawChannelSummaries(const plot::WaveDockState& wave) {
-    if (wave.channelSummaries.empty()) {
+void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
+    if (snapshot.channels.empty()) {
         return;
     }
+    auto& view = wave.view;
+    clampActiveChannel(view, snapshot.channels.size());
+
     ImGui::Separator();
-    for (const auto& summary : wave.channelSummaries) {
-        ImGui::TextUnformatted(summary.c_str());
+    ImGui::TextUnformatted("波形图例");
+    ImGui::SameLine();
+
+    int scopeIndex = view.cursorSnapScope == plot::WaveCursorSnapScope::AllChannels ? 0 : 1;
+    const char* scopeItems[] = {"全部波形", "当前激活波形"};
+    ImGui::SetNextItemWidth(150.0F);
+    if (ImGui::Combo("吸附范围", &scopeIndex, scopeItems, IM_ARRAYSIZE(scopeItems))) {
+        view.cursorSnapScope = scopeIndex == 0 ? plot::WaveCursorSnapScope::AllChannels : plot::WaveCursorSnapScope::ActiveChannel;
+    }
+
+    const auto& activeChannel = snapshot.channels[view.measurementChannelIndex];
+    ImGui::SameLine();
+    ImGui::Text("当前激活: %s", activeChannel.label.c_str());
+
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        const auto spec = wave.buffer.channelSpec(channelIndex);
+        if (!spec.has_value()) {
+            continue;
+        }
+        ImGui::PushID(static_cast<int>(channelIndex));
+        if (channelIndex > 0) {
+            ImGui::SameLine();
+        }
+        ImGui::ColorButton("##legend_color", channelColor(channelIndex), ImGuiColorEditFlags_NoTooltip, ImVec2(12.0F, 12.0F));
+        ImGui::SameLine(0.0F, 4.0F);
+        const bool active = channelIndex == view.measurementChannelIndex;
+        if (active) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22F, 0.36F, 0.24F, 0.9F));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28F, 0.44F, 0.30F, 1.0F));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20F, 0.32F, 0.22F, 1.0F));
+        }
+        if (ImGui::Button(spec->label.c_str())) {
+            view.measurementChannelIndex = channelIndex;
+        }
+        if (active) {
+            ImGui::PopStyleColor(3);
+        }
+        ImGui::PopID();
+    }
+}
+
+void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
+    if (snapshot.channels.empty()) {
+        return;
+    }
+    auto& view = wave.view;
+    clampActiveChannel(view, snapshot.channels.size());
+
+    ImGui::Separator();
+    ImGui::Text("通道控制（吸附范围：%s）", snapScopeName(view.cursorSnapScope));
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        const auto current = wave.buffer.channelSpec(channelIndex);
+        if (!current.has_value()) {
+            continue;
+        }
+        const plot::ChannelSpec fallbackDefault{
+            .label = current->label,
+            .unit = current->unit,
+            .scale = 1.0,
+            .offset = 0.0,
+        };
+        const plot::ChannelSpec defaultSpec = channelIndex < wave.defaultChannelSpecs.size()
+            ? wave.defaultChannelSpecs[channelIndex]
+            : fallbackDefault;
+
+        ImGui::PushID(static_cast<int>(channelIndex));
+        ImGui::ColorButton("##channel_color", channelColor(channelIndex), ImGuiColorEditFlags_NoTooltip, ImVec2(14.0F, 14.0F));
+        ImGui::SameLine();
+
+        const bool active = channelIndex == view.measurementChannelIndex;
+        if (active) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22F, 0.36F, 0.24F, 0.9F));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28F, 0.44F, 0.30F, 1.0F));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20F, 0.32F, 0.22F, 1.0F));
+        }
+        if (ImGui::Button(active ? "激活中" : "设为激活")) {
+            view.measurementChannelIndex = channelIndex;
+        }
+        if (active) {
+            ImGui::PopStyleColor(3);
+        }
+        ImGui::SameLine();
+        ImGui::Text("%s  samples=%zu", snapshot.channels[channelIndex].label.c_str(), snapshot.channels[channelIndex].totalSamples);
+        if (!current->unit.empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("[%s]", current->unit.c_str());
+        }
+
+        auto updated = *current;
+        ImGui::SetNextItemWidth(120.0F);
+        if (ImGui::InputDouble("Scale", &updated.scale, 0.1, 1.0, "%.6g")) {
+            wave.buffer.setChannelSpec(channelIndex, updated);
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120.0F);
+        if (ImGui::InputDouble("Offset", &updated.offset, 0.1, 1.0, "%.6g")) {
+            wave.buffer.setChannelSpec(channelIndex, updated);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("恢复默认")) {
+            wave.buffer.setChannelSpec(channelIndex, defaultSpec);
+        }
+        ImGui::PopID();
     }
 }
 
@@ -1202,12 +1280,13 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
 
         auto frame = prepareWaveFrame(wave, ImGui::GetContentRegionAvail().x);
         drawCursorToolbar(view, config, frame.displayData);
+        drawChannelLegendBar(wave, frame.fullSnapshot);
         const auto plotResult = drawOscilloscopePlot(view, config, frame);
         if (plotResult.plotRendered) {
             drawOverviewWindow(view, config, frame.fullSnapshot, frame.displayData, frame.displayBounds, frame.renderBudget);
             drawWaveReadouts(view, frame.snapshot, frame.displayData, plotResult);
         }
-        drawChannelSummaries(wave);
+        drawChannelControls(wave, frame.fullSnapshot);
     }
     ImGui::End();
 }

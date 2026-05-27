@@ -144,10 +144,104 @@ WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFreq
             } else if (data.axisSource == WaveTimeAxisSource::ScriptTime) {
                 time = source.time;
             }
-            display.push_back({.time = time, .value = source.value});
+            display.push_back({
+                .time = time,
+                .value = applyChannelDisplayTransform(source.value, ChannelSpec{
+                    .label = channel.label,
+                    .unit = channel.unit,
+                    .scale = channel.scale,
+                    .offset = channel.offset,
+                }),
+            });
         }
     }
     return data;
+}
+
+std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
+                                                      std::size_t channelIndex,
+                                                      double time,
+                                                      double maxTimeDistance) {
+    if (channelIndex >= displayData.channels.size()) {
+        return std::nullopt;
+    }
+    const auto& samples = displayData.channels[channelIndex].samples;
+    if (samples.empty() || !std::isfinite(time) || !std::isfinite(maxTimeDistance) || maxTimeDistance < 0.0) {
+        return std::nullopt;
+    }
+
+    auto lower = std::lower_bound(samples.begin(), samples.end(), time, [](const WaveSample& sample, double value) {
+        return sample.time < value;
+    });
+    std::optional<CursorReadout> best;
+    auto consider = [&](std::vector<WaveSample>::const_iterator iterator) {
+        if (iterator == samples.end()) {
+            return;
+        }
+        const double distance = std::abs(iterator->time - time);
+        if (distance > maxTimeDistance) {
+            return;
+        }
+        if (!best.has_value() || distance < std::abs(best->time - time)) {
+            best = CursorReadout{
+                .valid = true,
+                .channelIndex = channelIndex,
+                .sampleIndex = static_cast<std::size_t>(std::distance(samples.begin(), iterator)),
+                .time = iterator->time,
+                .value = iterator->value,
+            };
+        }
+    };
+    consider(lower);
+    if (lower != samples.begin()) {
+        consider(std::prev(lower));
+    }
+    return best;
+}
+
+std::optional<CursorReadout> findNearestDisplayByTimeAcrossChannels(const WaveDisplayData& displayData,
+                                                                    double time,
+                                                                    double maxTimeDistance) {
+    std::optional<CursorReadout> best;
+    double bestDistance = std::numeric_limits<double>::infinity();
+    for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
+        const auto candidate = findNearestDisplayByTime(displayData, channelIndex, time, maxTimeDistance);
+        if (!candidate.has_value()) {
+            continue;
+        }
+        const double distance = std::abs(candidate->time - time);
+        if (!best.has_value() || distance < bestDistance) {
+            bestDistance = distance;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+std::optional<CursorReadout> findNearestDisplayPoint(const WaveDisplayData& displayData,
+                                                     double time,
+                                                     double value,
+                                                     double maxTimeDistance,
+                                                     double maxValueDistance) {
+    std::optional<CursorReadout> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
+        const auto nearest = findNearestDisplayByTime(displayData, channelIndex, time, maxTimeDistance);
+        if (!nearest.has_value()) {
+            continue;
+        }
+        const double valueDistance = std::abs(nearest->value - value);
+        if (valueDistance > maxValueDistance) {
+            continue;
+        }
+        const double timeDistance = std::abs(nearest->time - time);
+        const double score = timeDistance * timeDistance + valueDistance * valueDistance;
+        if (score < bestScore) {
+            bestScore = score;
+            best = nearest;
+        }
+    }
+    return best;
 }
 
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep) {

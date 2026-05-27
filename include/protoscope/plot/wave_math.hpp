@@ -71,6 +71,18 @@ FrequencyParseResult parseSampleFrequencyText(std::string_view text);
 bool scriptTimeUsable(const std::vector<WaveSample>& samples);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep);
+std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
+                                                      std::size_t channelIndex,
+                                                      double time,
+                                                      double maxTimeDistance);
+std::optional<CursorReadout> findNearestDisplayByTimeAcrossChannels(const WaveDisplayData& displayData,
+                                                                    double time,
+                                                                    double maxTimeDistance);
+std::optional<CursorReadout> findNearestDisplayPoint(const WaveDisplayData& displayData,
+                                                     double time,
+                                                     double value,
+                                                     double maxTimeDistance,
+                                                     double maxValueDistance);
 WaveViewport normalizeOverviewViewport(const WaveViewport& viewport,
                                        const WaveDataBounds& bounds,
                                        double minTimeWidth);
