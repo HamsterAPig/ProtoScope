@@ -162,11 +162,8 @@ std::string stableWindowId(std::string_view windowName) {
 
 bool dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
     const auto name = std::string(windowName);
-    const auto stableId = stableWindowId(windowName);
-    const ImGuiID windowId = ImHashStr(stableId.c_str());
-    const auto* settings = ImGui::FindWindowSettingsByID(windowId);
-    if (targetNode == 0 || ImGui::FindWindowByName(name.c_str()) != nullptr || settings != nullptr) {
-        return settings != nullptr;
+    if (targetNode == 0 || ImGui::FindWindowByName(name.c_str()) != nullptr) {
+        return false;
     }
     ImGui::DockBuilderDockWindow(name.c_str(), targetNode);
     return true;
@@ -1080,11 +1077,9 @@ void GuiRuntime::updateLuaDockDefaultLayout() {
         }
         const bool docked = dockWindowIfMissing(request.windowName, targetNode);
         if (debugLayout) {
-            application_.setStatusMessage("LuaDockLayout: stableId=" + stableWindowId(request.windowName) + " docked=" + (docked ? "true(settings_exist)" : "false(new_dock)") + " schemaRebuild=" + (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild ? "true" : "false"));
+            application_.setStatusMessage("LuaDockLayout: stableId=" + stableWindowId(request.windowName) + " docked=" + (docked ? "true" : "false") + " schemaRebuild=" + (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild ? "true" : "false"));
         }
-        if (docked) {
-            defaultDockedLuaStableIds_.insert(stableWindowId(request.windowName));
-        }
+        defaultDockedLuaStableIds_.insert(stableWindowId(request.windowName));
     }
 }
 
