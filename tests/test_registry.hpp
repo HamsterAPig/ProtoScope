@@ -75,6 +75,7 @@ void test_serial_transport_error_path();
 void test_application_tcp_lua_read_version_roundtrip();
 void test_application_lua_controls_without_connection();
 void test_application_failed_protocol_reload_keeps_previous_runtime();
+void test_application_open_transport_uses_serial_runtime_config();
 
 const TestCase* allTests();
 int testCount();

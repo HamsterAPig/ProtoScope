@@ -444,6 +444,7 @@ static const TestCase kAllTests[] = {
     {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
+    {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},

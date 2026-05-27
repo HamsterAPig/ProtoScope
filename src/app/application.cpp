@@ -364,7 +364,14 @@ std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
     return scriptHost_.nextWakeupAtMs();
 }
 
+void Application::setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory) {
+    transportFactoryForTest_ = std::move(factory);
+}
+
 std::unique_ptr<transport::ITransport> Application::createTransport(transport::TransportKind kind) const {
+    if (transportFactoryForTest_) {
+        return transportFactoryForTest_(kind);
+    }
     switch (kind) {
     case transport::TransportKind::TcpClient:
         return std::make_unique<transport::TcpClientTransport>();

@@ -3,6 +3,7 @@
 #include "protoscope/app/application.hpp"
 
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -15,6 +16,57 @@ void require(bool condition, const char* message) {
         throw std::runtime_error(message);
     }
 }
+
+struct RecordingTransport final : protoscope::transport::ITransport {
+    struct State {
+        bool openCalled{false};
+        bool opened{false};
+        std::optional<protoscope::transport::TransportConfig> lastConfig;
+        std::vector<std::uint8_t> sentBytes;
+    };
+
+    explicit RecordingTransport(std::shared_ptr<State> sharedState)
+        : sharedState_(std::move(sharedState)) {}
+
+    bool open(const protoscope::transport::TransportConfig& config) override {
+        sharedState_->lastConfig = config;
+        sharedState_->openCalled = true;
+        sharedState_->opened = true;
+        return true;
+    }
+
+    void close() override {
+        sharedState_->opened = false;
+    }
+
+    bool send(std::vector<std::uint8_t> bytes) override {
+        sharedState_->sentBytes = std::move(bytes);
+        return sharedState_->opened;
+    }
+
+    bool enqueueSend(std::vector<std::uint8_t> bytes) override {
+        sharedState_->sentBytes = std::move(bytes);
+        return sharedState_->opened;
+    }
+
+    protoscope::transport::TransportState state() const override {
+        return sharedState_->opened ? protoscope::transport::TransportState::Open : protoscope::transport::TransportState::Closed;
+    }
+
+    std::vector<protoscope::transport::TransportEvent> takeEvents() override {
+        return {};
+    }
+
+    std::uint64_t txCount() const override {
+        return 0;
+    }
+
+    std::uint64_t rxCount() const override {
+        return 0;
+    }
+
+    std::shared_ptr<State> sharedState_;
+};
 
 bool waitUntil(auto&& predicate) {
     for (int i = 0; i < 80; ++i) {
@@ -193,6 +245,40 @@ void test_application_failed_protocol_reload_keeps_previous_runtime() {
     require(after.scriptPath == before.scriptPath, "加载失败后不应改写当前入口脚本路径");
     require(!after.controlStates.empty(), "加载失败后应保留上一份动态控件快照");
     require(!after.lastError.empty(), "加载失败后应保留错误信息供界面展示");
+
+    application.shutdown();
+}
+
+void test_application_open_transport_uses_serial_runtime_config() {
+    protoscope::app::Application application;
+    auto state = std::make_shared<RecordingTransport::State>();
+    application.setTransportFactoryForTest([state](protoscope::transport::TransportKind kind) {
+        require(kind == protoscope::transport::TransportKind::Serial, "测试工厂应收到串口 transport kind");
+        return std::unique_ptr<protoscope::transport::ITransport>(new RecordingTransport(state));
+    });
+
+    auto& comm = application.docks().commState();
+    comm.kind = protoscope::transport::TransportKind::Serial;
+    comm.serial.portName = "COM42";
+    comm.serial.baudRate = 230400;
+    comm.serial.dataBits = 7;
+    comm.serial.parity = "even";
+    comm.serial.stopBits = "two";
+    comm.serial.flowControl = "hardware";
+
+    application.openTransport();
+
+    require(state->openCalled, "打开连接时应调用 transport.open");
+    require(state->lastConfig.has_value(), "应记录 open 的真实入参");
+    require(std::holds_alternative<protoscope::transport::SerialConfig>(*state->lastConfig), "串口模式应传入 SerialConfig");
+
+    const auto& serial = std::get<protoscope::transport::SerialConfig>(*state->lastConfig);
+    require(serial.portName == "COM42", "open 应使用当前运行态端口名");
+    require(serial.baudRate == 230400, "open 应使用当前运行态波特率");
+    require(serial.dataBits == 7, "open 应使用当前运行态数据位");
+    require(serial.parity == "even", "open 应使用当前运行态奇偶校验");
+    require(serial.stopBits == "two", "open 应使用当前运行态停止位");
+    require(serial.flowControl == "hardware", "open 应使用当前运行态流控");
 
     application.shutdown();
 }

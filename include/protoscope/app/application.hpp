@@ -6,6 +6,7 @@
 #include "protoscope/transport/transport.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -38,6 +39,7 @@ public:
     void resetWaveHistory();
 
     std::optional<std::uint64_t> nextWakeupAtMs() const;
+    void setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
 
 private:
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
@@ -54,6 +56,7 @@ private:
     scripting::ScriptHost scriptHost_;
     std::unique_ptr<transport::ITransport> transport_;
     std::optional<transport::ConnectionContext> activeConnection_;
+    std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> transportFactoryForTest_;
 };
 
 } // namespace protoscope::app
