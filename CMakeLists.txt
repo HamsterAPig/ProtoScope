@@ -183,6 +183,7 @@ target_link_libraries(protoscope_ui_layout
         protoscope_protocol_utils
         protoscope_plot
         protoscope_transport
+        yaml-cpp::yaml-cpp
 )
 target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 

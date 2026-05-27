@@ -5,8 +5,12 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <stdexcept>
 #include <sstream>
 #include <unordered_map>
+
+#include <yaml-cpp/yaml.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -21,6 +25,13 @@ namespace protoscope::ui {
 namespace {
 
 constexpr const char* kDefaultLayoutKey = "default";
+constexpr int kModernLuaLayoutSchemaVersion = 3;
+constexpr const char* kLayoutMetaOwner = "protoscope";
+
+struct LuaDockLayoutMeta {
+    bool hasMeta{false};
+    int schemaVersion{0};
+};
 
 std::string trimCopy(std::string_view value) {
     const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
@@ -161,6 +172,53 @@ std::filesystem::path luaDockLayoutPath(const std::filesystem::path& executableD
     return executableDir / "config" / "ui" / ((key.empty() ? std::string(kDefaultLayoutKey) : key) + ".imgui.ini");
 }
 
+std::filesystem::path luaDockLayoutMetaPath(const std::filesystem::path& executableDir, std::string_view layoutKey) {
+    const auto key = normalizeKeyPart(layoutKey);
+    return executableDir / "config" / "ui" / ((key.empty() ? std::string(kDefaultLayoutKey) : key) + ".layout.yaml");
+}
+
+namespace {
+
+LuaDockLayoutMeta readLuaDockLayoutMeta(const std::filesystem::path& path) {
+    try {
+        if (!std::filesystem::exists(path)) {
+            return {};
+        }
+        const auto root = YAML::LoadFile(path.string());
+        if (!root || !root.IsMap() || root["owner"].as<std::string>("") != kLayoutMetaOwner) {
+            return {};
+        }
+        return LuaDockLayoutMeta{
+            .hasMeta = true,
+            .schemaVersion = root["schema_version"].as<int>(0),
+        };
+    } catch (const std::exception&) {
+        // 关键边界：meta 缺失或损坏都按 legacy 处理，避免因旁路文件阻断布局加载。
+        return {};
+    }
+}
+
+bool isModernLuaDockLayout(const LuaDockLayoutMeta& meta) {
+    return meta.hasMeta && meta.schemaVersion >= kModernLuaLayoutSchemaVersion;
+}
+
+} // namespace
+
+void writeLuaDockLayoutMeta(const std::filesystem::path& path, int schemaVersion) {
+    YAML::Node root;
+    root["schema_version"] = schemaVersion;
+    root["owner"] = kLayoutMetaOwner;
+    root["lua_layout_participates"] = true;
+
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path);
+    output << root;
+    output << '\n';
+    if (!output) {
+        throw std::runtime_error("failed to write lua dock layout meta");
+    }
+}
+
 LuaDockLayoutPaths resolveLuaDockLayoutPaths(
     const std::filesystem::path& executableDir,
     std::string_view protocolDir,
@@ -169,13 +227,19 @@ LuaDockLayoutPaths resolveLuaDockLayoutPaths(
     paths.protocolKey = luaDockLayoutKey(protocolDir, scriptPath);
     paths.layoutPath = luaDockLayoutPath(executableDir, paths.protocolKey);
     paths.legacyLayoutPath = luaDockLayoutPath(executableDir, legacyLuaDockLayoutKey(protocolDir, scriptPath));
+    paths.metaPath = luaDockLayoutMetaPath(executableDir, paths.protocolKey);
     paths.hasUserLayout = std::filesystem::exists(paths.layoutPath);
     paths.hasLegacyLayout = paths.legacyLayoutPath != paths.layoutPath && std::filesystem::exists(paths.legacyLayoutPath);
+    const auto meta = readLuaDockLayoutMeta(paths.metaPath);
+    const bool hasModernUserLayout = paths.hasUserLayout && isModernLuaDockLayout(meta);
+    paths.hasMeta = meta.hasMeta;
+    paths.schemaVersion = meta.schemaVersion;
+    paths.isLegacyLayout = !hasModernUserLayout && (paths.hasUserLayout || paths.hasLegacyLayout);
     return paths;
 }
 
 WorkspaceLayoutMode workspaceLayoutModeAfterLoad(const LuaDockLayoutPaths& layoutPaths) {
-    return layoutPaths.hasUserLayout || layoutPaths.hasLegacyLayout
+    return layoutPaths.hasUserLayout && !layoutPaths.isLegacyLayout
         ? WorkspaceLayoutMode::Ready
         : WorkspaceLayoutMode::NeedsDefaultBuild;
 }
@@ -198,6 +262,11 @@ bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol) {
     return !sameProtocol;
 }
 
+bool shouldRunLuaDefaultDockLayout(WorkspaceLayoutMode layoutMode, bool pendingDefaultDockLayout) {
+    // Lua Dock 默认停靠只属于默认布局初始化事务；用户布局 Ready 后不再运行时补停靠。
+    return layoutMode == WorkspaceLayoutMode::NeedsDefaultBuild && pendingDefaultDockLayout;
+}
+
 std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey) {
     std::ostringstream stream;
     stream << "LuaDock:" << layoutKey << ':' << dock.id;
@@ -217,18 +286,14 @@ std::vector<std::string> buildLuaDockStableIds(
 
 bool shouldKeepLuaWindowSettings(
     std::string_view stableId,
-    std::string_view layoutKey,
-    const std::vector<std::string>& activeStableIds) {
+    std::string_view layoutKey) {
     if (!stableId.starts_with("LuaDock:")) {
         return true;
     }
 
     const auto activePrefix = std::string("LuaDock:") + std::string(layoutKey) + ':';
-    if (!stableId.starts_with(activePrefix)) {
-        return false;
-    }
-
-    return std::find(activeStableIds.begin(), activeStableIds.end(), stableId) != activeStableIds.end();
+    // 当前协议的 Lua Dock settings 即使暂时没有对应脚本声明也保留，避免加载/刷新时反复删加。
+    return stableId.starts_with(activePrefix);
 }
 
 std::string luaDockWindowName(const scripting::DockDescriptor& dock, std::string_view layoutKey) {

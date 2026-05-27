@@ -39,6 +39,7 @@ private:
     void drawMainMenu();
     void drawCommDock();
     void drawProtocolDock();
+    void drawLuaDockWindows();
     void drawSendDock();
     void drawReceiveDock();
     void drawLogDock();
@@ -81,7 +82,7 @@ private:
     bool pendingLuaDefaultDockLayout_{false};
     bool pendingProtocolWorkspaceSave_{false};
     std::unordered_map<LuaDockAnchor, unsigned int> defaultLuaDockNodes_;
-    std::unordered_set<std::string> defaultDockedLuaWindows_;
+    std::unordered_set<std::string> defaultDockedLuaStableIds_;
     bool running_{false};
     bool showCommDock_{true};
     bool showProtocolDock_{true};

@@ -821,6 +821,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::size_t>(wave, "max_render_vertices", result.config.gui.wave.maxRenderVertices);
             result.config.gui.wave.overviewMaxSamples =
                 readScalar<std::size_t>(wave, "overview_max_samples", result.config.gui.wave.overviewMaxSamples);
+            result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
         }
 
         const auto protocol = root["protocol"];
@@ -895,6 +896,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
     root["gui"]["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
     root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
+    root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
     root["protocol"]["selected_dir"] = config.protocol.selectedDir;
@@ -1117,6 +1119,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     configState.configHotReloadEnabled = config.app.configHotReload.enabled;
     configState.fpsLimit = config.app.fpsLimit;
     configState.idleRender = config.app.idleRender;
+    configState.luaDockLayoutDebug = config.gui.luaDockLayoutDebug;
     configState.loadedFromPath = config.configPath.empty() ? normalizeTextPath(defaultConfigPath_) : config.configPath;
 
     auto& wave = dockStore.waveState().view;
@@ -1136,6 +1139,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.app.configHotReload.enabled = dockStore.configState().configHotReloadEnabled;
     config.app.fpsLimit = dockStore.configState().fpsLimit;
     config.app.idleRender = dockStore.configState().idleRender;
+    config.gui.luaDockLayoutDebug = dockStore.configState().luaDockLayoutDebug;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.overviewMaxSamples = dockStore.waveState().view.overviewMaxSamples;
