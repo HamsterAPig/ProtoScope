@@ -56,6 +56,32 @@ function on_control(ctx, id, value)
 end
 ```
 
+除了 `table`，现在也支持更适合协议面板的 `form` 布局：
+
+```lua
+layout = {
+  kind = "form",
+  items = {
+    { text = "发送前请确认设备地址和模式。" },
+    { controls = { "read_version", "device_id" } },
+    { separator = true },
+    {
+      group = "高级参数",
+      items = {
+        { controls = { "hex_send", "mode" } },
+      }
+    },
+    {
+      collapse = "波形选项",
+      default_open = false,
+      items = {
+        { controls = { "timeout_ms", "scale" } },
+      }
+    }
+  }
+}
+```
+
 ## UI 定义
 
 脚本可定义 `ui()`，返回 Dock 面板数组。每个 Dock 支持：
@@ -65,6 +91,9 @@ end
 - `anchor`：停靠位置，可用值为 `left`、`left_bottom`、`right_top`、`right_mid`、`right_bottom`、`main_bottom`，默认 `left_bottom`。
 - `tab_group`：同组 Dock 以标签页形式组织，可省略。
 - `controls`：控件数组。
+- `layout`：可选布局描述；未声明时按 `controls` 原始顺序做纵向 `flow` 布局。
+- `layout.kind = "table"`：要求所有控件在 `rows` 中恰好引用一次，支持 `control` / `spacer` 单元格。
+- `layout.kind = "form"`：要求所有控件在 `items` 中恰好引用一次；支持 `{ control = "id" }`、`{ controls = { ... } }`、`group`、`collapse`、`separator`、`text` 六种项，其中 `group/collapse` 当前仅支持一层递归。
 
 控件类型：
 

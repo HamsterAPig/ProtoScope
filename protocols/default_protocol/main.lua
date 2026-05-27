@@ -38,21 +38,17 @@ function ui()
         { type = "input_float", id = "scale", label = "缩放", default = 1.0 },
       },
       layout = {
-        kind = "table",
-        columns = 2,
-        borders = false,
-        resizable = true,
-        row_bg = false,
-        sizing = "stretch",
-        rows = {
+        kind = "form",
+        items = {
+          { text = "这些参数会影响发送方式和波形显示，修改后立即生效。" },
+          { controls = { "hex_send", "mode" } },
+          { separator = true },
           {
-            { control = "hex_send" },
-            { control = "mode" },
-          },
-          {
-            { control = "timeout_ms" },
-            { control = "scale" },
-          },
+            group = "采样参数",
+            items = {
+              { controls = { "timeout_ms", "scale" } },
+            }
+          }
         }
       }
     }

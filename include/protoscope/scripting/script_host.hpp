@@ -48,6 +48,7 @@ struct ControlSnapshot {
 enum class DockLayoutKind {
     Flow,
     Table,
+    Form,
 };
 
 struct TableCellDescriptor {
@@ -68,9 +69,58 @@ struct TableLayoutDescriptor {
     std::vector<TableRowDescriptor> rows;
 };
 
+struct FormControlRowDescriptor {
+    std::vector<std::string> controlIds;
+};
+
+struct FormTextDescriptor {
+    std::string text;
+};
+
+struct FormSeparatorDescriptor {
+};
+
+enum class FormLayoutItemKind {
+    Control,
+    Controls,
+    Group,
+    Collapse,
+    Separator,
+    Text,
+};
+
+struct FormGroupDescriptor;
+struct FormCollapseDescriptor;
+
+struct FormLayoutItemDescriptor {
+    FormLayoutItemKind kind{FormLayoutItemKind::Control};
+    std::string controlId;
+    FormControlRowDescriptor controls;
+    std::shared_ptr<FormGroupDescriptor> group;
+    std::shared_ptr<FormCollapseDescriptor> collapse;
+    FormTextDescriptor text;
+    FormSeparatorDescriptor separator;
+};
+
+struct FormGroupDescriptor {
+    std::string title;
+    std::vector<FormLayoutItemDescriptor> items;
+};
+
+struct FormCollapseDescriptor {
+    std::string title;
+    bool defaultOpen{true};
+    std::vector<FormLayoutItemDescriptor> items;
+};
+
+struct FormLayoutDescriptor {
+    std::vector<FormLayoutItemDescriptor> items;
+};
+
 struct DockLayoutDescriptor {
     DockLayoutKind kind{DockLayoutKind::Flow};
     TableLayoutDescriptor table;
+    FormLayoutDescriptor form;
 };
 
 struct DockDescriptor {

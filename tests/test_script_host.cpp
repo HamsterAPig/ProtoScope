@@ -157,6 +157,33 @@ void test_script_table_layout_snapshot() {
     require(table.rows[2].cells[0].controlId == "read_version", "第三行第一列应绑定 read_version");
 }
 
+void test_script_form_layout_snapshot() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("form_layout").generic_string()), "form_layout 协议应可加载");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 1, "form_layout 协议应只产出一个 dock");
+    require(docks[0].descriptor.layout.has_value(), "form_layout 应解析 layout");
+    require(docks[0].descriptor.layout->kind == protoscope::scripting::DockLayoutKind::Form, "layout.kind 应为 form");
+
+    const auto& items = docks[0].descriptor.layout->form.items;
+    require(items.size() == 5, "form_layout 应解析 5 个顶层布局项");
+    require(items[0].kind == protoscope::scripting::FormLayoutItemKind::Text, "第一项应为 text");
+    require(items[1].kind == protoscope::scripting::FormLayoutItemKind::Controls, "第二项应为 controls");
+    require(items[1].controls.controlIds.size() == 2, "controls 应包含两个控件");
+    require(items[1].controls.controlIds[0] == "read_version", "同排第一个控件顺序错误");
+    require(items[1].controls.controlIds[1] == "device_id", "同排第二个控件顺序错误");
+    require(items[2].kind == protoscope::scripting::FormLayoutItemKind::Separator, "第三项应为 separator");
+    require(items[3].kind == protoscope::scripting::FormLayoutItemKind::Group, "第四项应为 group");
+    require(items[3].group && items[3].group->items.size() == 1, "group 内应有 1 个子项");
+    require(items[3].group->items[0].controls.controlIds[0] == "hex_send", "group 内第一个控件顺序错误");
+    require(items[3].group->items[0].controls.controlIds[1] == "mode", "group 内第二个控件顺序错误");
+    require(items[4].kind == protoscope::scripting::FormLayoutItemKind::Collapse, "第五项应为 collapse");
+    require(items[4].collapse && !items[4].collapse->defaultOpen, "collapse 默认展开状态解析错误");
+    require(items[4].collapse->items[0].controls.controlIds[0] == "timeout_ms", "collapse 内第一个控件顺序错误");
+    require(items[4].collapse->items[0].controls.controlIds[1] == "scale", "collapse 内第二个控件顺序错误");
+}
+
 void test_script_crc_bridge() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory(fixtureProtocolDir("crc_probe").generic_string()), "crc_probe 协议应可加载");
@@ -305,6 +332,24 @@ void test_script_table_layout_row_overflow_fail() {
     require(host.lastError().find("单元格数量不能超过 columns") != std::string::npos, "超列错误应包含 columns 提示");
 }
 
+void test_script_form_layout_unknown_control_fail() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_form_unknown_control").generic_string()), "引用未知控件的 form layout 应加载失败");
+    require(host.lastError().find("未声明控件") != std::string::npos, "未知控件错误应包含未声明控件提示");
+}
+
+void test_script_form_layout_duplicate_control_fail() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_form_duplicate_control").generic_string()), "重复引用控件的 form layout 应加载失败");
+    require(host.lastError().find("重复引用控件") != std::string::npos, "重复引用错误应包含重复控件提示");
+}
+
+void test_script_form_layout_missing_control_fail() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_form_missing_control").generic_string()), "遗漏控件的 form layout 应加载失败");
+    require(host.lastError().find("缺少控件") != std::string::npos, "遗漏控件错误应包含缺少控件提示");
+}
+
 void test_script_runtime_error_logged() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory(fixtureProtocolDir("runtime_error").generic_string()), "运行时错误脚本应可加载");
@@ -444,6 +489,7 @@ static const TestCase kAllTests[] = {
     {"script_multi_dock_snapshot", &test_script_multi_dock_snapshot},
     {"script_dock_layout_fields", &test_script_dock_layout_fields},
     {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
+    {"script_form_layout_snapshot", &test_script_form_layout_snapshot},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
     {"script_read_version_split_flow", &test_script_read_version_split_flow},
@@ -455,6 +501,9 @@ static const TestCase kAllTests[] = {
     {"script_table_layout_duplicate_control_fail", &test_script_table_layout_duplicate_control_fail},
     {"script_table_layout_missing_control_fail", &test_script_table_layout_missing_control_fail},
     {"script_table_layout_row_overflow_fail", &test_script_table_layout_row_overflow_fail},
+    {"script_form_layout_unknown_control_fail", &test_script_form_layout_unknown_control_fail},
+    {"script_form_layout_duplicate_control_fail", &test_script_form_layout_duplicate_control_fail},
+    {"script_form_layout_missing_control_fail", &test_script_form_layout_missing_control_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},

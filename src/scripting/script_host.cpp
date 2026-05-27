@@ -358,6 +358,209 @@ std::optional<std::vector<ControlDescriptor>> parseControlList(const sol::object
     return controls;
 }
 
+bool registerFormControlUse(const DockDescriptor& dock,
+                            const std::unordered_map<std::string, const ControlDescriptor*>& controlsById,
+                            std::unordered_set<std::string>& usedControls,
+                            const std::string& controlId,
+                            std::string& error) {
+    if (controlId.empty()) {
+        error = "dock '" + dock.id + "' 的 form layout control 不能为空字符串";
+        return false;
+    }
+    if (!controlsById.contains(controlId)) {
+        error = "dock '" + dock.id + "' 的 form layout 引用了未声明控件 '" + controlId + "'";
+        return false;
+    }
+    if (!usedControls.emplace(controlId).second) {
+        error = "dock '" + dock.id + "' 的 form layout 重复引用控件 '" + controlId + "'";
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::vector<FormLayoutItemDescriptor>> parseFormLayoutItems(const DockDescriptor& dock,
+                                                                          const sol::table& itemsTable,
+                                                                          const std::unordered_map<std::string, const ControlDescriptor*>& controlsById,
+                                                                          std::unordered_set<std::string>& usedControls,
+                                                                          std::string& error,
+                                                                          int depth = 0) {
+    if (itemsTable.size() == 0) {
+        error = "dock '" + dock.id + "' 的 form layout.items 不能为空";
+        return std::nullopt;
+    }
+
+    // 核心流程：form 布局在解析阶段就完成控件引用校验，
+    // 渲染层只按声明顺序输出，避免运行时再做结构推断。
+    std::vector<FormLayoutItemDescriptor> items;
+    items.reserve(itemsTable.size());
+    for (std::size_t itemIndex = 1; itemIndex <= itemsTable.size(); ++itemIndex) {
+        const sol::object itemObject = itemsTable[itemIndex];
+        if (!itemObject.is<sol::table>()) {
+            error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "] 必须是 table";
+            return std::nullopt;
+        }
+
+        const auto itemTable = itemObject.as<sol::table>();
+        const bool hasControl = itemTable["control"].valid() && itemTable["control"].get_type() != sol::type::lua_nil;
+        const bool hasControls = itemTable["controls"].valid() && itemTable["controls"].get_type() != sol::type::lua_nil;
+        const bool hasGroup = itemTable["group"].valid() && itemTable["group"].get_type() != sol::type::lua_nil;
+        const bool hasCollapse = itemTable["collapse"].valid() && itemTable["collapse"].get_type() != sol::type::lua_nil;
+        const bool hasSeparator = itemTable["separator"].valid() && itemTable["separator"].get_type() != sol::type::lua_nil;
+        const bool hasText = itemTable["text"].valid() && itemTable["text"].get_type() != sol::type::lua_nil;
+        const int declaredKinds = static_cast<int>(hasControl) + static_cast<int>(hasControls) + static_cast<int>(hasGroup)
+            + static_cast<int>(hasCollapse) + static_cast<int>(hasSeparator) + static_cast<int>(hasText);
+        if (declaredKinds != 1) {
+            error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex)
+                + "] 必须且只能声明 control / controls / group / collapse / separator / text 之一";
+            return std::nullopt;
+        }
+
+        FormLayoutItemDescriptor item;
+        if (hasControl) {
+            const sol::object controlObject = itemTable["control"];
+            if (!controlObject.is<std::string>()) {
+                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "].control 必须是字符串";
+                return std::nullopt;
+            }
+            item.kind = FormLayoutItemKind::Control;
+            item.controlId = controlObject.as<std::string>();
+            if (!registerFormControlUse(dock, controlsById, usedControls, item.controlId, error)) {
+                return std::nullopt;
+            }
+        } else if (hasControls) {
+            const sol::object controlsObject = itemTable["controls"];
+            if (!controlsObject.is<sol::table>()) {
+                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "].controls 必须是非空数组";
+                return std::nullopt;
+            }
+            const auto controlsTable = controlsObject.as<sol::table>();
+            if (controlsTable.size() == 0) {
+                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "].controls 不能为空";
+                return std::nullopt;
+            }
+            item.kind = FormLayoutItemKind::Controls;
+            item.controls.controlIds.reserve(controlsTable.size());
+            for (std::size_t controlIndex = 1; controlIndex <= controlsTable.size(); ++controlIndex) {
+                const sol::object controlIdObject = controlsTable[controlIndex];
+                if (!controlIdObject.is<std::string>()) {
+                    error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex)
+                        + "].controls[" + std::to_string(controlIndex) + "] 必须是字符串";
+                    return std::nullopt;
+                }
+                const auto controlId = controlIdObject.as<std::string>();
+                if (!registerFormControlUse(dock, controlsById, usedControls, controlId, error)) {
+                    return std::nullopt;
+                }
+                item.controls.controlIds.push_back(controlId);
+            }
+        } else if (hasGroup || hasCollapse) {
+            if (depth >= 1) {
+                error = "dock '" + dock.id + "' 的 form layout 仅支持一层 group/collapse 嵌套";
+                return std::nullopt;
+            }
+            const char* keyName = hasGroup ? "group" : "collapse";
+            const sol::object titleObject = itemTable[keyName];
+            if (!titleObject.is<std::string>()) {
+                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "]." + keyName + " 必须是字符串";
+                return std::nullopt;
+            }
+            const sol::object nestedItemsObject = itemTable["items"];
+            if (!nestedItemsObject.is<sol::table>()) {
+                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "].items 必须是非空数组";
+                return std::nullopt;
+            }
+            auto nestedItems = parseFormLayoutItems(
+                dock,
+                nestedItemsObject.as<sol::table>(),
+                controlsById,
+                usedControls,
+                error,
+                depth + 1);
+            if (!nestedItems.has_value()) {
+                return std::nullopt;
+            }
+            if (hasGroup) {
+                item.kind = FormLayoutItemKind::Group;
+                item.group = std::make_shared<FormGroupDescriptor>();
+                item.group->title = titleObject.as<std::string>();
+                item.group->items = std::move(*nestedItems);
+            } else {
+                item.kind = FormLayoutItemKind::Collapse;
+                item.collapse = std::make_shared<FormCollapseDescriptor>();
+                item.collapse->title = titleObject.as<std::string>();
+                item.collapse->defaultOpen = itemTable.get_or("default_open", true);
+                item.collapse->items = std::move(*nestedItems);
+            }
+        } else if (hasSeparator) {
+            const sol::object separatorObject = itemTable["separator"];
+            if (!separatorObject.is<bool>() || !separatorObject.as<bool>()) {
+                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "].separator 必须是 true";
+                return std::nullopt;
+            }
+            item.kind = FormLayoutItemKind::Separator;
+        } else if (hasText) {
+            const sol::object textObject = itemTable["text"];
+            if (!textObject.is<std::string>()) {
+                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "].text 必须是字符串";
+                return std::nullopt;
+            }
+            item.kind = FormLayoutItemKind::Text;
+            item.text.text = textObject.as<std::string>();
+        }
+
+        items.push_back(std::move(item));
+    }
+
+    return items;
+}
+
+std::optional<FormLayoutDescriptor> parseFormLayout(const DockDescriptor& dock,
+                                                    const sol::table& layoutTable,
+                                                    std::string& error) {
+    const sol::object itemsObject = layoutTable["items"];
+    if (!itemsObject.valid() || itemsObject.get_type() == sol::type::lua_nil || !itemsObject.is<sol::table>()) {
+        error = "dock '" + dock.id + "' 的 form layout.items 必须是非空数组";
+        return std::nullopt;
+    }
+
+    std::unordered_map<std::string, const ControlDescriptor*> controlsById;
+    controlsById.reserve(dock.controls.size());
+    for (const auto& control : dock.controls) {
+        if (!controlsById.emplace(control.id, &control).second) {
+            error = "dock '" + dock.id + "' 的控件 id 重复: " + control.id;
+            return std::nullopt;
+        }
+    }
+
+    std::unordered_set<std::string> usedControls;
+    usedControls.reserve(dock.controls.size());
+
+    auto items = parseFormLayoutItems(dock, itemsObject.as<sol::table>(), controlsById, usedControls, error);
+    if (!items.has_value()) {
+        return std::nullopt;
+    }
+
+    if (usedControls.size() != dock.controls.size()) {
+        std::vector<std::string> missingControls;
+        for (const auto& control : dock.controls) {
+            if (!usedControls.contains(control.id)) {
+                missingControls.push_back(control.id);
+            }
+        }
+        std::ostringstream stream;
+        stream << "dock '" << dock.id << "' 的 form layout 缺少控件:";
+        for (const auto& controlId : missingControls) {
+            stream << ' ' << controlId;
+        }
+        error = stream.str();
+        return std::nullopt;
+    }
+
+    FormLayoutDescriptor layout;
+    layout.items = std::move(*items);
+    return layout;
+}
+
 std::optional<DockLayoutDescriptor> parseDockLayout(const DockDescriptor& dock,
                                                     const sol::object& object,
                                                     std::string& error) {
@@ -369,13 +572,24 @@ std::optional<DockLayoutDescriptor> parseDockLayout(const DockDescriptor& dock,
     const auto layoutTable = object.as<sol::table>();
     const sol::object kindObject = layoutTable["kind"];
     if (!kindObject.valid() || kindObject.get_type() == sol::type::lua_nil || !kindObject.is<std::string>()) {
-        error = "dock '" + dock.id + "' 的 layout.kind 必须是字符串 'table'";
+        error = "dock '" + dock.id + "' 的 layout.kind 必须是字符串 'table' 或 'form'";
         return std::nullopt;
     }
 
     const auto kind = kindObject.as<std::string>();
+    if (kind == "form") {
+        auto formLayout = parseFormLayout(dock, layoutTable, error);
+        if (!formLayout.has_value()) {
+            return std::nullopt;
+        }
+        DockLayoutDescriptor layout;
+        layout.kind = DockLayoutKind::Form;
+        layout.form = std::move(*formLayout);
+        return layout;
+    }
+
     if (kind != "table") {
-        error = "dock '" + dock.id + "' 的 layout.kind 仅支持 'table'";
+        error = "dock '" + dock.id + "' 的 layout.kind 仅支持 'table' 或 'form'";
         return std::nullopt;
     }
 
