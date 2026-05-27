@@ -2,6 +2,7 @@
 
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/ui/dock_layout.hpp"
+#include "protoscope/ui/editable_combo.hpp"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -29,7 +30,6 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
-#include <functional>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -43,13 +43,6 @@ namespace {
 
 const char* kGlslVersion = "#version 150";
 constexpr std::uint32_t kCommonBaudRates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
-
-struct EditableComboResult {
-    bool edited{false};
-    bool selectedFromList{false};
-    bool valid{true};
-    std::string value;
-};
 
 std::vector<std::filesystem::path> candidateChineseFonts() {
     return {
@@ -422,53 +415,6 @@ std::optional<std::string> chooseProtocolRootDirectory(const std::string& curren
     return wideToUtf8(path);
 }
 #endif
-
-EditableComboResult drawEditableCombo(const char* label,
-                                      std::string& draft,
-                                      const std::vector<std::string>& options,
-                                      const std::function<bool(const std::string&)>& validator = {}) {
-    EditableComboResult result;
-    result.value = draft;
-
-    ImGui::PushID(label);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::SameLine();
-    const float arrowWidth = ImGui::GetFrameHeight();
-    const float inputWidth = (std::max)(120.0F, ImGui::GetContentRegionAvail().x - arrowWidth - ImGui::GetStyle().ItemSpacing.x);
-    ImGui::SetNextItemWidth(inputWidth);
-    char buffer[512]{};
-    std::snprintf(buffer, sizeof(buffer), "%s", draft.c_str());
-    if (ImGui::InputText("##value", buffer, sizeof(buffer))) {
-        draft = buffer;
-        result.edited = true;
-        result.value = draft;
-    }
-
-    ImGui::SameLine(0.0F, ImGui::GetStyle().ItemSpacing.x);
-    if (ImGui::BeginCombo("##options", "", ImGuiComboFlags_NoPreview)) {
-        for (const auto& option : options) {
-            const bool selected = option == draft;
-            if (ImGui::Selectable(option.c_str(), selected)) {
-                draft = option;
-                result.edited = true;
-                result.selectedFromList = true;
-                result.value = draft;
-            }
-            if (selected) {
-                ImGui::SetItemDefaultFocus();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::PopID();
-
-    if (validator) {
-        result.valid = validator(draft);
-    }
-    result.value = draft;
-    return result;
-}
 
 void syncDraftFromModel(std::string& draft, std::string& lastModel, const std::string& model) {
     if (draft.empty() || lastModel != model) {
