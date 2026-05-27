@@ -121,6 +121,42 @@ protocols/
 
 当前默认脚本使用 `ui()` 返回 Dock 数组；若只需单面板，也可继续返回 `controls()`。
 
+`ui()` 下的 dock 现在也支持显式 `layout`。默认 demo 已切到 `layout.kind = "table"`，
+用 `rows/cells` 声明控件在 dock 内的排布。
+
+`ui()` + `table layout` 示例：
+
+```lua
+function ui()
+  return {
+    {
+      id = "protocol",
+      title = "协议动作",
+      anchor = "left_bottom",
+      tab_group = "protocol_tools",
+      controls = {
+        { type = "button", id = "read_version", label = "读取版本" },
+        { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
+      },
+      layout = {
+        kind = "table",
+        columns = 2,
+        borders = false,
+        resizable = true,
+        row_bg = false,
+        sizing = "stretch",
+        rows = {
+          {
+            { control = "read_version" },
+            { control = "device_id" },
+          },
+        }
+      }
+    }
+  }
+end
+```
+
 `controls()` 返回值示例：
 
 ```lua
@@ -155,6 +191,7 @@ end
 
 默认脚本 `protocols/default_protocol/main.lua` 已是可运行示例，覆盖了：
 
+- 两个 table layout dock
 - 一个按钮
 - 一个文本输入
 - 一次发送
