@@ -1145,10 +1145,13 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
     pendingLuaDefaultDockLayout_ = false;
 
     ImGui::ClearIniSettings();
-    if (layoutPaths.hasUserLayout) {
+    if (layoutPaths.hasUserLayout && !layoutPaths.isLegacyLayout) {
         ImGui::LoadIniSettingsFromDisk(layoutPaths.layoutPath.string().c_str());
     } else if (layoutPaths.hasLegacyLayout) {
         ImGui::LoadIniSettingsFromDisk(layoutPaths.legacyLayoutPath.string().c_str());
+        pendingProtocolWorkspaceSave_ = true;
+    } else if (layoutPaths.hasUserLayout) {
+        ImGui::LoadIniSettingsFromDisk(layoutPaths.layoutPath.string().c_str());
         pendingProtocolWorkspaceSave_ = true;
     } else {
         pendingProtocolWorkspaceSave_ = true;
@@ -1166,6 +1169,11 @@ void GuiRuntime::saveCurrentProtocolWorkspace() {
     const auto layoutPath = currentProtocolLayoutPath();
     std::filesystem::create_directories(layoutPath.parent_path());
     ImGui::SaveIniSettingsToDisk(layoutPath.string().c_str());
+    try {
+        writeLuaDockLayoutMeta(luaDockLayoutMetaPath(executableDir_, activeWorkspaceProtocolKey_), 2);
+    } catch (const std::exception& ex) {
+        application_.setStatusMessage(std::string("保存协议布局 meta 失败: ") + ex.what(), true);
+    }
     ImGui::GetIO().WantSaveIniSettings = false;
     pendingProtocolWorkspaceSave_ = false;
     saveCurrentProtocolControlState();

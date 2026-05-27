@@ -29,8 +29,12 @@ struct LuaDockLayoutPaths {
     std::string protocolKey;
     std::filesystem::path layoutPath;
     std::filesystem::path legacyLayoutPath;
+    std::filesystem::path metaPath;
     bool hasUserLayout{false};
     bool hasLegacyLayout{false};
+    bool hasMeta{false};
+    int schemaVersion{0};
+    bool isLegacyLayout{false};
 };
 
 struct ProtocolWorkspaceSwitchDecision {
@@ -49,6 +53,8 @@ std::string luaDockLayoutKey(std::string_view protocolDir, std::string_view scri
 std::string legacyLuaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath);
 std::filesystem::path executableDirectory();
 std::filesystem::path luaDockLayoutPath(const std::filesystem::path& executableDir, std::string_view layoutKey);
+std::filesystem::path luaDockLayoutMetaPath(const std::filesystem::path& executableDir, std::string_view layoutKey);
+void writeLuaDockLayoutMeta(const std::filesystem::path& path, int schemaVersion);
 LuaDockLayoutPaths resolveLuaDockLayoutPaths(
     const std::filesystem::path& executableDir,
     std::string_view protocolDir,

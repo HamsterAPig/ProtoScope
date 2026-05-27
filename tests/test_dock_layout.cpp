@@ -68,6 +68,7 @@ void test_lua_dock_layout_paths_prefer_user_layout() {
     require(paths.protocolKey == "protocols_demo", "协议布局 key 应按目录生成");
     require(paths.layoutPath == layoutPath, "新布局路径应位于 exe/config/ui 下");
     require(paths.hasUserLayout, "已有用户布局文件时应优先识别为用户持久化布局");
+    require(paths.isLegacyLayout, "已有 ini 但缺少 meta 时应按 legacy 布局迁移");
 }
 
 void test_lua_dock_layout_paths_detect_legacy_source() {
@@ -81,6 +82,69 @@ void test_lua_dock_layout_paths_detect_legacy_source() {
     const auto paths = protoscope::ui::resolveLuaDockLayoutPaths(root, protocolDir.generic_string(), scriptPath.generic_string());
     require(!paths.hasUserLayout, "新布局不存在时不应误判为用户布局");
     require(paths.hasLegacyLayout, "旧脚本级布局文件应作为迁移来源");
+    require(paths.isLegacyLayout, "旧脚本级布局文件应触发一次性迁移");
+}
+
+void test_lua_dock_layout_meta_path_is_sibling_yaml() {
+    const auto root = uniqueLayoutRoot("protoscope-layout-meta-path");
+
+    const auto layoutPath = protoscope::ui::luaDockLayoutPath(root, "protocols_demo");
+    const auto metaPath = protoscope::ui::luaDockLayoutMetaPath(root, "protocols_demo");
+
+    require(metaPath.parent_path() == layoutPath.parent_path(), "layout meta 应与 ImGui ini 并列保存");
+    require(metaPath.filename() == "protocols_demo.layout.yaml", "layout meta 文件名应使用 layout key");
+}
+
+void test_lua_dock_layout_meta_schema_v2_marks_modern_layout() {
+    const auto root = uniqueLayoutRoot("protoscope-layout-modern");
+    const auto protocolDir = std::filesystem::path("protocols") / "demo";
+    const auto scriptPath = protocolDir / "main.lua";
+    const auto layoutPath = protoscope::ui::luaDockLayoutPath(root, "protocols_demo");
+    const auto metaPath = protoscope::ui::luaDockLayoutMetaPath(root, "protocols_demo");
+    std::filesystem::create_directories(layoutPath.parent_path());
+    std::ofstream(layoutPath) << "[Window][demo]\nDockId=0x1\n";
+    protoscope::ui::writeLuaDockLayoutMeta(metaPath, 2);
+
+    const auto paths = protoscope::ui::resolveLuaDockLayoutPaths(root, protocolDir.generic_string(), scriptPath.generic_string());
+    require(paths.hasUserLayout, "现代布局仍应识别已有 ImGui ini");
+    require(paths.hasMeta, "schema v2 meta 应被读取");
+    require(paths.schemaVersion == 2, "schema version 应从 meta 读取");
+    require(!paths.isLegacyLayout, "schema v2 meta 应标记为现代布局");
+    require(
+        protoscope::ui::workspaceLayoutModeAfterLoad(paths) == protoscope::ui::WorkspaceLayoutMode::Ready,
+        "现代布局应直接尊重用户布局");
+}
+
+void test_lua_dock_layout_meta_read_failure_falls_back_to_legacy() {
+    const auto root = uniqueLayoutRoot("protoscope-layout-broken-meta");
+    const auto protocolDir = std::filesystem::path("protocols") / "demo";
+    const auto scriptPath = protocolDir / "main.lua";
+    const auto layoutPath = protoscope::ui::luaDockLayoutPath(root, "protocols_demo");
+    const auto metaPath = protoscope::ui::luaDockLayoutMetaPath(root, "protocols_demo");
+    std::filesystem::create_directories(layoutPath.parent_path());
+    std::ofstream(layoutPath) << "[Window][demo]\n";
+    std::ofstream(metaPath) << "schema_version: [\n";
+
+    const auto paths = protoscope::ui::resolveLuaDockLayoutPaths(root, protocolDir.generic_string(), scriptPath.generic_string());
+    require(paths.hasUserLayout, "损坏 meta 不应影响 ini 识别");
+    require(!paths.hasMeta, "损坏 meta 应视为缺失");
+    require(paths.isLegacyLayout, "损坏 meta 应回退为 legacy 布局");
+}
+
+void test_lua_dock_layout_dock_id_sharing_does_not_mark_modern_legacy() {
+    const auto root = uniqueLayoutRoot("protoscope-layout-shared-dockid");
+    const auto protocolDir = std::filesystem::path("protocols") / "demo";
+    const auto scriptPath = protocolDir / "main.lua";
+    const auto layoutPath = protoscope::ui::luaDockLayoutPath(root, "protocols_demo");
+    const auto metaPath = protoscope::ui::luaDockLayoutMetaPath(root, "protocols_demo");
+    std::filesystem::create_directories(layoutPath.parent_path());
+    std::ofstream(layoutPath)
+        << "[Window][协议脚本 / 动态控件]\nDockId=0x00000001\n"
+        << "[Window][协议动作###LuaDock:protocols_demo:protocol]\nDockId=0x00000001\n";
+    protoscope::ui::writeLuaDockLayoutMeta(metaPath, 2);
+
+    const auto paths = protoscope::ui::resolveLuaDockLayoutPaths(root, protocolDir.generic_string(), scriptPath.generic_string());
+    require(!paths.isLegacyLayout, "现代布局不应因 Lua Dock 与静态 Dock 共用 DockId 被迁移");
 }
 
 void test_lua_dock_window_name_keeps_stable_id() {
@@ -154,17 +218,22 @@ void test_workspace_layout_mode_after_load_prefers_default_build_only_when_missi
         "没有布局文件时应构建默认 Dock 布局");
 
     layoutPaths.hasUserLayout = true;
+    layoutPaths.hasMeta = true;
+    layoutPaths.schemaVersion = 2;
     require(
         protoscope::ui::workspaceLayoutModeAfterLoad(layoutPaths)
             == protoscope::ui::WorkspaceLayoutMode::Ready,
         "加载用户布局后应直接进入 Ready");
 
     layoutPaths.hasUserLayout = false;
+    layoutPaths.hasMeta = false;
+    layoutPaths.schemaVersion = 0;
     layoutPaths.hasLegacyLayout = true;
+    layoutPaths.isLegacyLayout = true;
     require(
         protoscope::ui::workspaceLayoutModeAfterLoad(layoutPaths)
-            == protoscope::ui::WorkspaceLayoutMode::Ready,
-        "加载 legacy 布局后应直接进入 Ready");
+            == protoscope::ui::WorkspaceLayoutMode::NeedsDefaultBuild,
+        "加载 legacy 布局后应触发默认布局迁移");
 }
 
 void test_protocol_workspace_switch_decision_uses_draft_only_until_reload() {
