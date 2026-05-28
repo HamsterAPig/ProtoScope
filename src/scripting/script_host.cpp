@@ -1102,10 +1102,14 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
 
     auto& lua = runtime_->lua;
     // 将协议脚本目录加入 Lua 模块搜索路径，使 main.lua 可 require 同目录模块。
-    // 使用 protocolDirectory_（已转为 generic_string 格式，路径分隔符统一为 /）。
+    // 额外放开父目录，方便 protocols/<demo>/main.lua 共享 protocols/*.lua 公共脚本。
+    // 使用 generic_string 格式，统一为 /，避免 Windows 反斜杠干扰 Lua package.path。
     const auto pkgPath = lua["package"]["path"].get<std::string>();
+    const auto protocolParent = std::filesystem::path(protocolDirectory_).parent_path().generic_string();
     lua["package"]["path"] = protocolDirectory_ + "/?.lua;"
                            + protocolDirectory_ + "/?/init.lua;"
+                           + (protocolParent.empty() ? std::string() : protocolParent + "/?.lua;")
+                           + (protocolParent.empty() ? std::string() : protocolParent + "/?/init.lua;")
                            + pkgPath;
     auto proto = lua.create_named_table("proto");
 
@@ -1698,10 +1702,12 @@ void ScriptHost::protoStatusSet(const std::string& text, const sol::object& opts
 }
 
 void ScriptHost::protoStatusClear() {
-    statusUpdates_.push_back(StatusUpdate{
-        .clear = true,
-        .timestampMs = nowMs(),
-    });
+    StatusUpdate update{};
+    update.text.clear();
+    update.level = "info";
+    update.clear = true;
+    update.timestampMs = nowMs();
+    statusUpdates_.push_back(std::move(update));
 }
 
 std::optional<DialogRequest> ScriptHost::protoDialog(DialogKind kind, const sol::object& opts, std::string& error) {

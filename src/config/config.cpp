@@ -543,6 +543,1022 @@ end
 -- 加载后自动启动，让用户无需串口连接即可立即看到波形。
 restart(true)
 )WAVE";
+const char* kHalfDuplexModbusCommonLua = R"MODBUS_COMMON(-- 核心流程：主从两端共用这一份 schema/组帧/解帧工具，避免把半双工细节复制到两个脚本里。
+
+local M = {}
+
+M.DEFAULT_HEADER = { 0xA5, 0x5A }
+M.LENGTH_SPEC = { type = "u16", endian = "le", unit = "bytes" }
+M.SEQUENCE_BITS = 8
+
+M.FUNC_WRITE_REGISTERS = 0x10
+M.FUNC_WRITE_ACK = 0x90
+M.FUNC_STREAM_DATA = 0x91
+
+M.STATUS_OK = 0
+M.STATUS_ERROR = 1
+
+M.REG_CH1 = 0x5AA5
+M.REG_CH2 = 0x5AA6
+M.REG_CH3 = 0x5AA7
+M.REG_CH4 = 0x5AA8
+M.REG_START = 0x5AA9
+
+M.CHANNEL_COUNT = 4
+M.CHANNEL_SCALE = 0.001
+M.DEFAULT_INTERVAL_MS = 100
+M.DEFAULT_SAMPLE_COUNT = 16
+
+local TYPE_WIDTH = {
+  u8 = 1,
+  i8 = 1,
+  u16 = 2,
+  i16 = 2,
+  u32 = 4,
+  i32 = 4,
+  bytes = 1,
+}
+
+local UNIT_WIDTH = {
+  bytes = 1,
+  u16 = 2,
+  u32 = 4,
+}
+
+local function append_bytes(target, source)
+  for index = 1, #source do
+    target[#target + 1] = source[index]
+  end
+end
+
+local function copy_bytes(source, first_index, last_index)
+  local bytes = {}
+  for index = first_index or 1, last_index or #source do
+    bytes[#bytes + 1] = source[index]
+  end
+  return bytes
+end
+
+local function clamp_byte(value)
+  return math.floor(value) & 0xFF
+end
+
+local function scalar_width(type_name)
+  return TYPE_WIDTH[type_name]
+end
+
+local function unit_width(unit_name)
+  return UNIT_WIDTH[unit_name or "bytes"] or 1
+end
+
+local function read_unsigned(bytes, offset, width, endian)
+  local value = 0
+  if endian == "be" then
+    for step = 0, width - 1 do
+      value = (value << 8) | (bytes[offset + step + 1] or 0)
+    end
+  else
+    for step = width - 1, 0, -1 do
+      value = (value << 8) | (bytes[offset + step + 1] or 0)
+    end
+  end
+  return value
+end
+
+local function write_unsigned(value, width, endian)
+  local unsigned = math.floor(value)
+  local bytes = {}
+  if endian == "be" then
+    for step = width - 1, 0, -1 do
+      bytes[#bytes + 1] = clamp_byte(unsigned >> (step * 8))
+    end
+  else
+    for step = 0, width - 1 do
+      bytes[#bytes + 1] = clamp_byte(unsigned >> (step * 8))
+    end
+  end
+  return bytes
+end
+
+local function signed_from_unsigned(value, width)
+  local bits = width * 8
+  local sign_bit = 1 << (bits - 1)
+  local modulus = 1 << bits
+  if value >= sign_bit then
+    return value - modulus
+  end
+  return value
+end
+
+local function unsigned_from_signed(value, width)
+  local bits = width * 8
+  local modulus = 1 << bits
+  if value < 0 then
+    return value + modulus
+  end
+  return value
+end
+
+local function resolve_reference(ref, values, bytes_remaining, field)
+  if type(ref) == "function" then
+    return ref(values, bytes_remaining, field)
+  end
+  if type(ref) == "string" then
+    return values[ref]
+  end
+  return ref
+end
+
+local function resolve_repeat_count(field, values, bytes_remaining, item_width)
+  if field.count ~= nil then
+    return resolve_reference(field.count, values, bytes_remaining, field), nil
+  end
+  if field.count_from ~= nil then
+    return resolve_reference(field.count_from, values, bytes_remaining, field), nil
+  end
+  if field.length_from ~= nil then
+    local byte_length = resolve_reference(field.length_from, values, bytes_remaining, field) or 0
+    if (byte_length % item_width) ~= 0 then
+      return nil, string.format("字段 %s 长度 %d 无法按 %d 字节对齐", field.name, byte_length, item_width)
+    end
+    return math.floor(byte_length / item_width), nil
+  end
+  if field.until_end then
+    if (bytes_remaining % item_width) ~= 0 then
+      return nil, string.format("字段 %s 剩余长度 %d 无法按 %d 字节对齐", field.name, bytes_remaining, item_width)
+    end
+    return math.floor(bytes_remaining / item_width), nil
+  end
+  return 1, nil
+end
+
+local function is_array_field(field)
+  return field.count ~= nil
+      or field.count_from ~= nil
+      or field.length_from ~= nil
+      or field.until_end == true
+      or field.is_array == true
+end
+
+local function encode_scalar(type_name, value, endian)
+  local width = scalar_width(type_name)
+  if not width then
+    return nil, "不支持的字段类型: " .. tostring(type_name)
+  end
+  local unsigned = type_name:sub(1, 1) == "i" and unsigned_from_signed(value, width) or math.floor(value)
+  return write_unsigned(unsigned, width, endian or "le"), nil
+end
+
+local function decode_scalar(type_name, bytes, offset, endian)
+  local width = scalar_width(type_name)
+  if not width then
+    return nil, "不支持的字段类型: " .. tostring(type_name)
+  end
+  local value = read_unsigned(bytes, offset, width, endian or "le")
+  if type_name:sub(1, 1) == "i" then
+    value = signed_from_unsigned(value, width)
+  end
+  return value, nil
+end
+
+function M.encode_fields(fields, values)
+  local buffer = {}
+  local cursor = 0
+  for _, field in ipairs(fields) do
+    local offset = field.offset ~= nil and field.offset or cursor
+    while #buffer < offset do
+      buffer[#buffer + 1] = 0
+    end
+
+    local field_bytes = {}
+    if field.type == "bytes" then
+      local source = values[field.name] or {}
+      if type(source) ~= "table" then
+        return nil, "字段 " .. field.name .. " 必须提供 bytes table"
+      end
+      field_bytes = copy_bytes(source)
+    elseif is_array_field(field) then
+      local items = values[field.name] or {}
+      if type(items) ~= "table" then
+        return nil, "字段 " .. field.name .. " 必须提供数组"
+      end
+      local width = scalar_width(field.type)
+      local expected_count, count_error = resolve_repeat_count(field, values, #items * width, width)
+      if not expected_count then
+        return nil, count_error
+      end
+      if expected_count ~= #items then
+        return nil, string.format("字段 %s 期望 %d 项，实际 %d 项", field.name, expected_count, #items)
+      end
+      for item_index = 1, #items do
+        local encoded, encode_error = encode_scalar(field.type, items[item_index], field.endian)
+        if not encoded then
+          return nil, encode_error
+        end
+        append_bytes(field_bytes, encoded)
+      end
+    else
+      local encoded, encode_error = encode_scalar(field.type, values[field.name] or 0, field.endian)
+      if not encoded then
+        return nil, encode_error
+      end
+      field_bytes = encoded
+    end
+
+    append_bytes(buffer, field_bytes)
+    cursor = math.max(cursor, offset + #field_bytes)
+  end
+  return buffer, nil
+end
+
+function M.decode_fields(fields, bytes)
+  local values = {}
+  local cursor = 0
+  for _, field in ipairs(fields) do
+    local offset = field.offset ~= nil and field.offset or cursor
+    if offset > #bytes then
+      return nil, string.format("字段 %s 偏移 %d 超出负载长度 %d", field.name, offset, #bytes)
+    end
+
+    if field.type == "bytes" then
+      local byte_length, count_error = resolve_repeat_count(field, values, #bytes - offset, 1)
+      if not byte_length then
+        return nil, count_error
+      end
+      if offset + byte_length > #bytes then
+        return nil, string.format("字段 %s 长度不足", field.name)
+      end
+      values[field.name] = copy_bytes(bytes, offset + 1, offset + byte_length)
+      cursor = math.max(cursor, offset + byte_length)
+    elseif is_array_field(field) then
+      local width = scalar_width(field.type)
+      local item_count, count_error = resolve_repeat_count(field, values, #bytes - offset, width)
+      if not item_count then
+        return nil, count_error
+      end
+      local total_width = item_count * width
+      if offset + total_width > #bytes then
+        return nil, string.format("字段 %s 长度不足，期望 %d 字节，实际剩余 %d", field.name, total_width, #bytes - offset)
+      end
+      local decoded = {}
+      for item_index = 0, item_count - 1 do
+        local value, decode_error = decode_scalar(field.type, bytes, offset + item_index * width, field.endian)
+        if decode_error then
+          return nil, decode_error
+        end
+        decoded[#decoded + 1] = value
+      end
+      values[field.name] = decoded
+      cursor = math.max(cursor, offset + total_width)
+    else
+      local width = scalar_width(field.type)
+      if offset + width > #bytes then
+        return nil, string.format("字段 %s 长度不足", field.name)
+      end
+      local value, decode_error = decode_scalar(field.type, bytes, offset, field.endian)
+      if decode_error then
+        return nil, decode_error
+      end
+      values[field.name] = value
+      cursor = math.max(cursor, offset + width)
+    end
+  end
+  return values, nil
+end
+
+local function encode_length(payload_size, length_spec)
+  local unit = unit_width(length_spec.unit)
+  if (payload_size % unit) ~= 0 then
+    return nil, string.format("长度 %d 不能按 %s 单位编码", payload_size, length_spec.unit or "bytes")
+  end
+  local length_value = math.floor(payload_size / unit)
+  return encode_scalar(length_spec.type or "u16", length_value, length_spec.endian or "le")
+end
+
+local function decode_length(bytes, offset, length_spec)
+  local length_value, decode_error = decode_scalar(length_spec.type or "u16", bytes, offset, length_spec.endian or "le")
+  if decode_error then
+    return nil, decode_error
+  end
+  return length_value * unit_width(length_spec.unit), nil
+end
+
+local function find_header(buffer, header)
+  for start = 1, #buffer - #header + 1 do
+    local matched = true
+    for offset = 1, #header do
+      if buffer[start + offset - 1] ~= header[offset] then
+        matched = false
+        break
+      end
+    end
+    if matched then
+      return start
+    end
+  end
+  return nil
+end
+
+local function popcount(mask)
+  local count = 0
+  local current = mask or 0
+  while current > 0 do
+    count = count + (current & 1)
+    current = current >> 1
+  end
+  return count
+end
+
+M.popcount = popcount
+
+function M.channel_mask_from_values(values)
+  local mask = 0
+  for channel_index = 1, M.CHANNEL_COUNT do
+    if values[channel_index] and values[channel_index] ~= 0 then
+      mask = mask | (1 << (channel_index - 1))
+    end
+  end
+  return mask
+end
+
+function M.enabled_channels_from_mask(mask)
+  local channels = {}
+  for channel_index = 1, M.CHANNEL_COUNT do
+    if (mask & (1 << (channel_index - 1))) ~= 0 then
+      channels[#channels + 1] = channel_index
+    end
+  end
+  return channels
+end
+
+function M.register_mask(registers)
+  return M.channel_mask_from_values({
+    registers[M.REG_CH1] or 0,
+    registers[M.REG_CH2] or 0,
+    registers[M.REG_CH3] or 0,
+    registers[M.REG_CH4] or 0,
+  })
+end
+
+function M.track_sequence(tracker, key, sequence, bits)
+  local modulus = 1 << (bits or M.SEQUENCE_BITS)
+  local slot = tracker[key]
+  if not slot then
+    slot = {
+      initialized = false,
+      expected = 0,
+      lost_total = 0,
+    }
+    tracker[key] = slot
+  end
+
+  local result = {
+    expected = slot.expected,
+    current = sequence,
+    lost = 0,
+    lost_total = slot.lost_total,
+  }
+
+  if not slot.initialized then
+    slot.initialized = true
+    slot.expected = (sequence + 1) % modulus
+    result.expected = sequence
+    return result
+  end
+
+  local lost = (sequence - slot.expected) % modulus
+  if lost > 0 then
+    slot.lost_total = slot.lost_total + lost
+  end
+  slot.expected = (sequence + 1) % modulus
+  result.lost = lost
+  result.expected = slot.expected
+  result.lost_total = slot.lost_total
+  return result
+end
+
+local function message_schema(protocol, func)
+  return protocol.messages[func]
+end
+
+local function remove_prefix(buffer, count)
+  for _ = 1, count do
+    table.remove(buffer, 1)
+  end
+end
+
+function M.new_parser(protocol)
+  return {
+    protocol = protocol or M.protocol,
+    buffer = {},
+    sequence = {},
+  }
+end
+
+function M.build_frame(protocol, func, sequence, payload_values)
+  local codec = protocol or M.protocol
+  local schema = message_schema(codec, func)
+  if not schema then
+    return nil, string.format("未定义的功能码: 0x%02X", func)
+  end
+
+  local payload, payload_error = M.encode_fields(schema.fields or {}, payload_values or {})
+  if not payload then
+    return nil, payload_error
+  end
+
+  local length_bytes, length_error = encode_length(#payload, codec.length or M.LENGTH_SPEC)
+  if not length_bytes then
+    return nil, length_error
+  end
+
+  local frame = copy_bytes(codec.header or M.DEFAULT_HEADER)
+  frame[#frame + 1] = clamp_byte(func)
+  frame[#frame + 1] = clamp_byte(sequence or 0)
+  append_bytes(frame, length_bytes)
+  append_bytes(frame, payload)
+
+  local crc = proto.crc16_modbus(frame)
+  frame[#frame + 1] = clamp_byte(crc)
+  frame[#frame + 1] = clamp_byte(crc >> 8)
+  return frame, nil
+end
+
+function M.build_write_register_frame(sequence, start_address, values)
+  return M.build_frame(M.protocol, M.FUNC_WRITE_REGISTERS, sequence, {
+    start_address = start_address,
+    register_count = #values,
+    values = values,
+  })
+end
+
+function M.build_ack_frame(sequence, start_address, register_count, status)
+  return M.build_frame(M.protocol, M.FUNC_WRITE_ACK, sequence, {
+    status = status or M.STATUS_OK,
+    start_address = start_address,
+    register_count = register_count,
+  })
+end
+
+function M.build_stream_frame(sequence, timestamp_ms, channel_mask, sample_count, samples)
+  return M.build_frame(M.protocol, M.FUNC_STREAM_DATA, sequence, {
+    timestamp_ms = timestamp_ms,
+    channel_mask = channel_mask,
+    sample_count = sample_count,
+    samples = samples,
+  })
+end
+
+function M.feed_parser(state, incoming_bytes)
+  append_bytes(state.buffer, incoming_bytes)
+
+  local frames = {}
+  local errors = {}
+  local header = state.protocol.header or M.DEFAULT_HEADER
+  local length_width = scalar_width((state.protocol.length or M.LENGTH_SPEC).type or "u16")
+  local frame_prefix_size = #header + 1 + 1 + length_width
+  local frame_min_size = frame_prefix_size + 2
+
+  while true do
+    local start = find_header(state.buffer, header)
+    if not start then
+      if #state.buffer > (#header - 1) then
+        state.buffer = copy_bytes(state.buffer, #state.buffer - #header + 2, #state.buffer)
+      end
+      break
+    end
+
+    if start > 1 then
+      remove_prefix(state.buffer, start - 1)
+    end
+
+    if #state.buffer < frame_min_size then
+      break
+    end
+
+    local payload_size, length_error = decode_length(state.buffer, #header + 2, state.protocol.length or M.LENGTH_SPEC)
+    if not payload_size then
+      errors[#errors + 1] = { kind = "length", message = length_error }
+      remove_prefix(state.buffer, 1)
+      goto continue
+    end
+
+    local total_size = frame_prefix_size + payload_size + 2
+    if #state.buffer < total_size then
+      break
+    end
+
+    local frame_bytes = copy_bytes(state.buffer, 1, total_size)
+    remove_prefix(state.buffer, total_size)
+
+    local crc_expected = proto.crc16_modbus(copy_bytes(frame_bytes, 1, #frame_bytes - 2))
+    local crc_low = frame_bytes[#frame_bytes - 1]
+    local crc_high = frame_bytes[#frame_bytes]
+    local crc_actual = crc_low | (crc_high << 8)
+    if crc_expected ~= crc_actual then
+      errors[#errors + 1] = {
+        kind = "crc",
+        message = string.format("CRC 不匹配，期望 0x%04X，实际 0x%04X", crc_expected, crc_actual),
+      }
+      goto continue
+    end
+
+    local func = frame_bytes[#header + 1]
+    local sequence = frame_bytes[#header + 2]
+    local payload = copy_bytes(frame_bytes, frame_prefix_size + 1, frame_prefix_size + payload_size)
+    local schema = message_schema(state.protocol, func)
+    if not schema then
+      errors[#errors + 1] = {
+        kind = "func",
+        func = func,
+        sequence = sequence,
+        message = string.format("未知功能码 0x%02X", func),
+      }
+      goto continue
+    end
+
+    local decoded, decode_error = M.decode_fields(schema.fields or {}, payload)
+    if not decoded then
+      errors[#errors + 1] = {
+        kind = "schema",
+        func = func,
+        sequence = sequence,
+        message = decode_error,
+      }
+      goto continue
+    end
+
+    local frame = {
+      func = func,
+      name = schema.name,
+      sequence = sequence,
+      payload_size = payload_size,
+      payload = decoded,
+      payload_bytes = payload,
+      raw = frame_bytes,
+      sequence_state = M.track_sequence(state.sequence, func, sequence, state.protocol.sequence_bits or M.SEQUENCE_BITS),
+    }
+    frames[#frames + 1] = frame
+
+    ::continue::
+  end
+
+  return frames, errors
+end
+
+M.protocol = {
+  header = M.DEFAULT_HEADER,
+  length = M.LENGTH_SPEC,
+  sequence_bits = M.SEQUENCE_BITS,
+  messages = {
+    [M.FUNC_WRITE_REGISTERS] = {
+      name = "write_registers",
+      fields = {
+        { name = "start_address", type = "u16", endian = "le", offset = 0 },
+        { name = "register_count", type = "u8", offset = 2 },
+        { name = "values", type = "u16", endian = "le", count_from = "register_count" },
+      },
+    },
+    [M.FUNC_WRITE_ACK] = {
+      name = "write_ack",
+      fields = {
+        { name = "status", type = "u8", offset = 0 },
+        { name = "start_address", type = "u16", endian = "le", offset = 1 },
+        { name = "register_count", type = "u8", offset = 3 },
+      },
+    },
+    [M.FUNC_STREAM_DATA] = {
+      name = "stream_data",
+      fields = {
+        { name = "timestamp_ms", type = "u32", endian = "le", offset = 0 },
+        { name = "channel_mask", type = "u8" },
+        { name = "sample_count", type = "u8" },
+        {
+          name = "samples",
+          type = "i16",
+          endian = "le",
+          count_from = function(values)
+            return (values.sample_count or 0) * popcount(values.channel_mask or 0)
+          end,
+        },
+      },
+    },
+  },
+}
+
+return M
+)MODBUS_COMMON";
+
+const char* kHalfDuplexModbusMasterLua = R"MODBUS_MASTER(-- 核心流程：上位机只做三件事——按寄存器分批入队 request、在 ACK 到达时 request_done、把主动上报帧推成波形。
+
+local modbus = require("half_duplex_modbus_common")
+
+local controls = {
+  ch1 = true,
+  ch2 = true,
+  ch3 = true,
+  ch4 = true,
+  interval_ms = modbus.DEFAULT_INTERVAL_MS,
+  samples_per_frame = modbus.DEFAULT_SAMPLE_COUNT,
+}
+
+local parser = modbus.new_parser(modbus.protocol)
+local next_request_sequence = 0
+
+local function next_sequence()
+  local value = next_request_sequence
+  next_request_sequence = (next_request_sequence + 1) % 256
+  return value
+end
+
+local function read_checkbox(id)
+  return controls[id] and 1 or 0
+end
+
+local function read_positive_int(id, fallback)
+  local value = tonumber(controls[id]) or fallback
+  value = math.floor(value)
+  if value < 1 then
+    return fallback
+  end
+  return value
+end
+
+local function configured_channel_mask()
+  return modbus.channel_mask_from_values({
+    read_checkbox("ch1"),
+    read_checkbox("ch2"),
+    read_checkbox("ch3"),
+    read_checkbox("ch4"),
+  })
+end
+
+local function setup_plot(reset_history)
+  proto.plot.setup({
+    source = "half_duplex_modbus_master",
+    reset_history = reset_history,
+    channels = {
+      { label = "CH1 正弦", unit = "V", scale = 1.0, color = "#4FC3F7" },
+      { label = "CH2 偏置正弦", unit = "V", scale = 1.0, color = "#81C784" },
+      { label = "CH3 高斯噪声", unit = "V", scale = 1.0, color = "#FFB74D" },
+      { label = "CH4 三角波", unit = "V", scale = 1.0, color = "#E57373" },
+    },
+  })
+end
+
+local function request_frame(frame, tag)
+  local request_id, err = proto.request(frame, {
+    timeout_ms = 1000,
+    tag = tag,
+  })
+  if not request_id then
+    proto.status.set("请求入队失败: " .. tostring(err), { level = "error" })
+    return false
+  end
+  return true
+end
+
+local function queue_write(start_address, values, tag)
+  local frame, err = modbus.build_write_register_frame(next_sequence(), start_address, values)
+  if not frame then
+    proto.status.set("组帧失败: " .. tostring(err), { level = "error" })
+    return false
+  end
+  return request_frame(frame, tag)
+end
+
+local function auto_configure_and_start()
+  local batches = {
+    { start = modbus.REG_CH1, values = { read_checkbox("ch1"), read_checkbox("ch2") }, tag = "cfg_ch12" },
+    { start = modbus.REG_CH3, values = { read_checkbox("ch3"), read_checkbox("ch4") }, tag = "cfg_ch34" },
+    { start = modbus.REG_START, values = { 1 }, tag = "cfg_start" },
+  }
+
+  for _, batch in ipairs(batches) do
+    if not queue_write(batch.start, batch.values, batch.tag) then
+      return
+    end
+  end
+
+  proto.status.set(string.format("已入队 3 组半双工请求，目标通道掩码 0x%02X", configured_channel_mask()), {
+    level = "info",
+  })
+end
+
+local function send_start_stop(start_value)
+  local tag = start_value == 1 and "start_stream" or "stop_stream"
+  queue_write(modbus.REG_START, { start_value }, tag)
+end
+
+local function handle_ack(frame)
+  local ok = (frame.payload.status or modbus.STATUS_ERROR) == modbus.STATUS_OK
+  local message = string.format("ACK 0x%04X x %d", frame.payload.start_address or 0, frame.payload.register_count or 0)
+  proto.request_done({
+    ok = ok,
+    message = message,
+  })
+  if ok then
+    proto.status.set(message, { level = "info" })
+  else
+    proto.status.set("从机 ACK 报错: " .. message, { level = "error" })
+  end
+end
+
+local function handle_stream(frame)
+  local enabled_channels = modbus.enabled_channels_from_mask(frame.payload.channel_mask or 0)
+  local sample_count = frame.payload.sample_count or 0
+  local flat_samples = frame.payload.samples or {}
+  local interval_ms = read_positive_int("interval_ms", modbus.DEFAULT_INTERVAL_MS)
+  local dt = (interval_ms / 1000.0) / math.max(sample_count, 1)
+  local base_t = (frame.payload.timestamp_ms or 0) / 1000.0
+
+  local sequence_state = frame.sequence_state
+  if sequence_state and sequence_state.lost > 0 then
+    proto.status.set(string.format("丢帧: %d", sequence_state.lost_total), { level = "warn" })
+  end
+
+  local sample_index = 1
+  for _, channel_index in ipairs(enabled_channels) do
+    local samples = {}
+    for point_index = 1, sample_count do
+      local raw = flat_samples[sample_index] or 0
+      samples[#samples + 1] = {
+        t = base_t + (point_index - 1) * dt,
+        y = raw * modbus.CHANNEL_SCALE,
+      }
+      sample_index = sample_index + 1
+    end
+    proto.plot.push(channel_index, {
+      source = "half_duplex_modbus_stream",
+      samples = samples,
+    })
+  end
+end
+
+local function report_parse_errors(errors)
+  for _, item in ipairs(errors) do
+    proto.status.set("解析失败: " .. tostring(item.message), { level = "error" })
+  end
+end
+
+function ui()
+  return {
+    {
+      id = "half_duplex_master",
+      title = "半双工 Modbus Master",
+      anchor = "left_bottom",
+      controls = {
+        { type = "checkbox", id = "ch1", label = "CH1 正弦", default = true },
+        { type = "checkbox", id = "ch2", label = "CH2 偏置正弦", default = true },
+        { type = "checkbox", id = "ch3", label = "CH3 高斯噪声", default = true },
+        { type = "checkbox", id = "ch4", label = "CH4 三角波", default = true },
+        { type = "input_int", id = "interval_ms", label = "发送间隔(ms)", default = modbus.DEFAULT_INTERVAL_MS },
+        { type = "input_int", id = "samples_per_frame", label = "每帧点数", default = modbus.DEFAULT_SAMPLE_COUNT },
+        { type = "button", id = "auto_start", label = "自动配置并启动" },
+        { type = "button", id = "start_stream", label = "仅启动" },
+        { type = "button", id = "stop_stream", label = "停止" },
+        { type = "button", id = "clear_plot", label = "清空波形" },
+      },
+    },
+  }
+end
+
+function on_open(ctx)
+  parser = modbus.new_parser(modbus.protocol)
+  proto.status.clear()
+  setup_plot(true)
+end
+
+function on_close(ctx)
+  proto.status.clear()
+end
+
+function on_error(ctx, message)
+  proto.status.set("连接错误: " .. tostring(message), { level = "error" })
+end
+
+function on_tx(ctx, evt)
+  if evt.kind == "request" and evt.state == "timeout" then
+    proto.status.set("请求超时: " .. tostring(evt.tag), { level = "warn" })
+  elseif evt.kind == "request" and evt.state == "rejected" then
+    proto.status.set("请求被拒绝: " .. tostring(evt.tag), { level = "error" })
+  end
+end
+
+function on_control(ctx, id, value)
+  controls[id] = value
+
+  if id == "auto_start" then
+    auto_configure_and_start()
+  elseif id == "start_stream" then
+    send_start_stop(1)
+  elseif id == "stop_stream" then
+    send_start_stop(0)
+  elseif id == "clear_plot" then
+    setup_plot(true)
+    proto.status.set("波形已清空", { level = "info" })
+  end
+end
+
+function on_bytes(ctx, bytes)
+  local frames, errors = modbus.feed_parser(parser, bytes)
+  if #errors > 0 then
+    report_parse_errors(errors)
+  end
+
+  for _, frame in ipairs(frames) do
+    if frame.func == modbus.FUNC_WRITE_ACK then
+      handle_ack(frame)
+    elseif frame.func == modbus.FUNC_STREAM_DATA then
+      handle_stream(frame)
+    end
+  end
+end
+)MODBUS_MASTER";
+
+const char* kHalfDuplexModbusSlaveLua = R"MODBUS_SLAVE(-- 核心流程：从机只接写寄存器请求，回 ACK；当 start 寄存器置 1 后，由定时器主动发波形帧。
+
+local modbus = require("half_duplex_modbus_common")
+
+local parser = modbus.new_parser(modbus.protocol)
+local registers = {
+  [modbus.REG_CH1] = 1,
+  [modbus.REG_CH2] = 1,
+  [modbus.REG_CH3] = 1,
+  [modbus.REG_CH4] = 1,
+  [modbus.REG_START] = 0,
+}
+
+local wave_sequence = 0
+local timestamp_ms = 0
+local sample_cursor = 0
+
+local function clamp_i16(value)
+  if value > 32767 then
+    return 32767
+  end
+  if value < -32768 then
+    return -32768
+  end
+  return math.floor(value)
+end
+
+local function gaussian_noise(seed)
+  local x1 = math.abs(math.sin(seed * 12.9898))
+  local x2 = math.abs(math.sin((seed + 17.0) * 78.233))
+  local u1 = math.max(x1 % 1.0, 1e-6)
+  local u2 = x2 % 1.0
+  return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+end
+
+local function triangle_wave(phase)
+  local cycle = (phase / (2.0 * math.pi)) % 1.0
+  return 4.0 * math.abs(cycle - 0.5) - 1.0
+end
+
+local function channel_value(channel_index, sample_index)
+  local phase = sample_index * 0.15
+  if channel_index == 1 then
+    return math.sin(phase)
+  elseif channel_index == 2 then
+    return 0.35 + 0.65 * math.sin(phase * 0.8 + 0.6)
+  elseif channel_index == 3 then
+    return gaussian_noise(sample_index) * 0.2
+  end
+  return triangle_wave(phase * 0.6)
+end
+
+local function build_samples(channel_mask, sample_count)
+  local samples = {}
+  local channels = modbus.enabled_channels_from_mask(channel_mask)
+  for point_index = 1, sample_count do
+    for _, channel_index in ipairs(channels) do
+      local raw = channel_value(channel_index, sample_cursor + point_index)
+      samples[#samples + 1] = clamp_i16(raw / modbus.CHANNEL_SCALE)
+    end
+  end
+  sample_cursor = sample_cursor + sample_count
+  return samples
+end
+
+local function start_streaming()
+  if registers[modbus.REG_START] ~= 1 then
+    registers[modbus.REG_START] = 1
+  end
+  proto.set_timer("stream_tick", modbus.DEFAULT_INTERVAL_MS)
+end
+
+local function stop_streaming()
+  registers[modbus.REG_START] = 0
+  proto.cancel_timer("stream_tick")
+end
+
+local function apply_register_write(start_address, values)
+  for offset = 1, #values do
+    registers[start_address + offset - 1] = values[offset]
+  end
+  if (registers[modbus.REG_START] or 0) == 1 then
+    start_streaming()
+  else
+    stop_streaming()
+  end
+end
+
+local function send_ack(sequence, start_address, register_count)
+  local frame, err = modbus.build_ack_frame(sequence, start_address, register_count, modbus.STATUS_OK)
+  if not frame then
+    proto.status.set("ACK 组帧失败: " .. tostring(err), { level = "error" })
+    return
+  end
+  proto.send(frame, { tag = "write_ack" })
+end
+
+local function handle_write_request(frame)
+  apply_register_write(frame.payload.start_address, frame.payload.values or {})
+  send_ack(frame.sequence, frame.payload.start_address, frame.payload.register_count or 0)
+end
+
+local function report_parse_errors(errors)
+  for _, item in ipairs(errors) do
+    proto.status.set("请求解析失败: " .. tostring(item.message), { level = "error" })
+  end
+end
+
+function ui()
+  return {
+    {
+      id = "half_duplex_slave",
+      title = "半双工 Modbus Slave",
+      anchor = "left_bottom",
+      controls = {
+        { type = "button", id = "noop", label = "从机自动模式" },
+      },
+    },
+  }
+end
+
+function on_open(ctx)
+  parser = modbus.new_parser(modbus.protocol)
+  timestamp_ms = 0
+  wave_sequence = 0
+  sample_cursor = 0
+  stop_streaming()
+  proto.status.set("从机已就绪，等待写寄存器请求", { level = "info" })
+end
+
+function on_close(ctx)
+  stop_streaming()
+  proto.status.clear()
+end
+
+function on_error(ctx, message)
+  proto.status.set("从机连接错误: " .. tostring(message), { level = "error" })
+end
+
+function on_control(ctx, id, value)
+end
+
+function on_bytes(ctx, bytes)
+  local frames, errors = modbus.feed_parser(parser, bytes)
+  if #errors > 0 then
+    report_parse_errors(errors)
+  end
+
+  for _, frame in ipairs(frames) do
+    if frame.func == modbus.FUNC_WRITE_REGISTERS then
+      handle_write_request(frame)
+    end
+  end
+end
+
+function on_timer(ctx, timer_name)
+  if timer_name ~= "stream_tick" then
+    return
+  end
+  if (registers[modbus.REG_START] or 0) ~= 1 then
+    return
+  end
+
+  local channel_mask = modbus.register_mask(registers)
+  if channel_mask == 0 then
+    proto.set_timer("stream_tick", modbus.DEFAULT_INTERVAL_MS)
+    return
+  end
+
+  local sample_count = modbus.DEFAULT_SAMPLE_COUNT
+  local samples = build_samples(channel_mask, sample_count)
+  local frame, err = modbus.build_stream_frame(wave_sequence, timestamp_ms, channel_mask, sample_count, samples)
+  if not frame then
+    proto.status.set("波形组帧失败: " .. tostring(err), { level = "error" })
+    return
+  end
+
+  proto.send(frame, { tag = "stream_data" })
+  wave_sequence = (wave_sequence + 1) % 256
+  timestamp_ms = timestamp_ms + modbus.DEFAULT_INTERVAL_MS
+  proto.set_timer("stream_tick", modbus.DEFAULT_INTERVAL_MS)
+end
+)MODBUS_SLAVE";
 
 const char* kDefaultProtocolsReadme = R"README(# ProtoScope Lua 协议脚本指南
 
@@ -586,6 +1602,31 @@ end
 ---@field finished_ms integer
 ---@field error? string
 ```
+
+## 半双工 Modbus Schema Demo
+
+仓库内新增了一组双端 demo：
+
+- `protocols/half_duplex_modbus_master`：上位机脚本。用 `proto.request()` 分 3 组写寄存器：`0x5AA5~0x5AA6`、`0x5AA7~0x5AA8`、`0x5AA9`。
+- `protocols/half_duplex_modbus_slave`：从机脚本。收到写寄存器请求后回复 ACK；当 `0x5AA9 = 1` 时，通过 `proto.set_timer()` 主动上报波形。
+- `protocols/half_duplex_modbus_common.lua`：共享 schema/组帧/解帧工具，默认帧格式为 `header + func + seq + len + payload + crc16_modbus`。
+
+### 固定寄存器语义
+
+- `0x5AA5~0x5AA8`：4 个通道开关，写 `1` 开启，其他值关闭。
+- `0x5AA9`：启动位，写 `1` 开始传输，写 `0` 停止。
+
+### 主机端行为
+
+- “自动配置并启动”会一次入队 3 条半双工请求，由宿主 request 队列串行下发。
+- 主机不主动轮询；只在收到完整 ACK 时调用 `proto.request_done()`，并在收到主动上报帧后推送 `proto.plot.push()`。
+- 当流式数据序列号跳号时，主机会累计丢帧数，并通过 `proto.status.set(string.format("丢帧: %d", lost_total), { level = "warn" })` 提示。
+
+### 从机端行为
+
+- ACK 与主动上报共用同一套 schema，长度字段默认按字节计数，CRC 为 `proto.crc16_modbus()`。
+- 波形帧载荷固定包含 `timestamp_ms`、`channel_mask`、`sample_count` 和按启用通道展开的 `i16` 采样值。
+- 4 个通道分别输出正弦、带偏置正弦、高斯噪声、三角波；只对开启的通道生成数据。
 
 其中：
 
@@ -1246,49 +2287,40 @@ bool ConfigStore::ensureDefaultProtocolWorkspace(std::string& error) const {
             return true;
         }
 
+        const auto luaWaveformDir = protocolRoot / "lua_waveform_demo";
+        const auto halfDuplexMasterDir = protocolRoot / "half_duplex_modbus_master";
+        const auto halfDuplexSlaveDir = protocolRoot / "half_duplex_modbus_slave";
+
         std::filesystem::create_directories(defaultProtocolDir_);
-        std::filesystem::create_directories(protocolRoot / "lua_waveform_demo");
+        std::filesystem::create_directories(luaWaveformDir);
+        std::filesystem::create_directories(halfDuplexMasterDir);
+        std::filesystem::create_directories(halfDuplexSlaveDir);
+
+        const auto writeTextFile = [&](const std::filesystem::path& path,
+                                       const char* text,
+                                       const char* failureMessage) -> bool {
+            std::ofstream out(path);
+            if (!out.good()) {
+                error = failureMessage;
+                return false;
+            }
+            out << text;
+            return true;
+        };
 
         // 核心流程：仅在 protocols 根目录缺失时生成完整默认工作区，避免覆盖用户已有协议资产。
-        {
-            std::ofstream out(mainLuaPath(defaultProtocolDir_));
-            if (!out.good()) {
-                error = "无法写入默认协议脚本";
-                return false;
-            }
-            out << kDefaultProtocolMainLua;
-        }
-        {
-            std::ofstream out(protocolRoot / "lua_waveform_demo" / "main.lua");
-            if (!out.good()) {
-                error = "无法写入 Lua 波形示例脚本";
-                return false;
-            }
-            out << kDefaultWaveformDemoLua;
-        }
-        {
-            std::ofstream out(protocolRoot / "README.md");
-            if (!out.good()) {
-                error = "无法写入 protocols README";
-                return false;
-            }
-            out << kDefaultProtocolsReadme;
-        }
-        {
-            std::ofstream out(protocolRoot / "protoscope_api.lua");
-            if (!out.good()) {
-                error = "无法写入 LuaLS API 提示文件";
-                return false;
-            }
-            out << kDefaultLuaLsApi;
-        }
-        return true;
+        return writeTextFile(mainLuaPath(defaultProtocolDir_), kDefaultProtocolMainLua, "无法写入默认协议脚本")
+            && writeTextFile(luaWaveformDir / "main.lua", kDefaultWaveformDemoLua, "无法写入 Lua 波形示例脚本")
+            && writeTextFile(halfDuplexMasterDir / "main.lua", kHalfDuplexModbusMasterLua, "无法写入半双工 Modbus 主机示例脚本")
+            && writeTextFile(halfDuplexSlaveDir / "main.lua", kHalfDuplexModbusSlaveLua, "无法写入半双工 Modbus 从机示例脚本")
+            && writeTextFile(protocolRoot / "half_duplex_modbus_common.lua", kHalfDuplexModbusCommonLua, "无法写入半双工 Modbus 共享脚本")
+            && writeTextFile(protocolRoot / "README.md", kDefaultProtocolsReadme, "无法写入 protocols README")
+            && writeTextFile(protocolRoot / "protoscope_api.lua", kDefaultLuaLsApi, "无法写入 LuaLS API 提示文件");
     } catch (const std::exception& ex) {
         error = ex.what();
         return false;
     }
 }
-
 bool ConfigStore::ensureDefaultScriptWorkspace(std::string& error) const {
     try {
         std::filesystem::create_directories(defaultScriptWorkspaceDir());

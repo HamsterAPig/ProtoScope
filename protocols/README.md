@@ -41,6 +41,31 @@ end
 ---@field error? string
 ```
 
+## 半双工 Modbus Schema Demo
+
+仓库内新增了一组双端 demo：
+
+- `protocols/half_duplex_modbus_master`：上位机脚本。用 `proto.request()` 分 3 组写寄存器：`0x5AA5~0x5AA6`、`0x5AA7~0x5AA8`、`0x5AA9`。
+- `protocols/half_duplex_modbus_slave`：从机脚本。收到写寄存器请求后回复 ACK；当 `0x5AA9 = 1` 时，通过 `proto.set_timer()` 主动上报波形。
+- `protocols/half_duplex_modbus_common.lua`：共享 schema/组帧/解帧工具，默认帧格式为 `header + func + seq + len + payload + crc16_modbus`。
+
+### 固定寄存器语义
+
+- `0x5AA5~0x5AA8`：4 个通道开关，写 `1` 开启，其他值关闭。
+- `0x5AA9`：启动位，写 `1` 开始传输，写 `0` 停止。
+
+### 主机端行为
+
+- “自动配置并启动”会一次入队 3 条半双工请求，由宿主 request 队列串行下发。
+- 主机不主动轮询；只在收到完整 ACK 时调用 `proto.request_done()`，并在收到主动上报帧后推送 `proto.plot.push()`。
+- 当流式数据序列号跳号时，主机会累计丢帧数，并通过 `proto.status.set(string.format("丢帧: %d", lost_total), { level = "warn" })` 提示。
+
+### 从机端行为
+
+- ACK 与主动上报共用同一套 schema，长度字段默认按字节计数，CRC 为 `proto.crc16_modbus()`。
+- 波形帧载荷固定包含 `timestamp_ms`、`channel_mask`、`sample_count` 和按启用通道展开的 `i16` 采样值。
+- 4 个通道分别输出正弦、带偏置正弦、高斯噪声、三角波；只对开启的通道生成数据。
+
 其中：
 
 - `sent`：字节已经写出。
