@@ -106,10 +106,9 @@ private:
     bool showWaveDock_{true};
     std::string serialPortDraft_;
     std::string serialPortDraftModel_;
+    bool serialPortsScanned_{false};
     std::string commonBaudRateDraft_;
     std::string commonBaudRateDraftModel_;
-    std::string customBaudRateDraft_;
-    std::string customBaudRateDraftModel_;
     std::string protocolDirDraft_;
     std::string protocolDirDraftModel_;
     WaveDockRenderer waveDockRenderer_;

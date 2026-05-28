@@ -567,6 +567,7 @@ static const TestCase kAllTests[] = {
     {"transport_enqueue_send_async_roundtrip", &test_transport_enqueue_send_async_roundtrip},
     {"tcp_server_connection_takeover_replaces_active_client", &test_tcp_server_connection_takeover_replaces_active_client},
     {"serial_transport_error_path", &test_serial_transport_error_path},
+    {"serial_port_name_normalization", &test_serial_port_name_normalization},
     {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
