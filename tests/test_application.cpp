@@ -2,6 +2,7 @@
 
 #include "protoscope/app/application.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -94,16 +95,18 @@ std::optional<std::uint16_t> findListenPort(const protoscope::dock::LogDockState
     return std::nullopt;
 }
 
-bool hasReceiveMessage(const protoscope::dock::ReceiveDockState& receiveState, const std::string& message) {
+bool hasReceiveBytes(const protoscope::dock::ReceiveDockState& receiveState, const std::vector<std::uint8_t>& bytes) {
+    std::vector<std::uint8_t> receivedBytes;
     for (const auto& row : receiveState.rows) {
-        if (row.direction != "RX") {
-            continue;
+        if (row.direction == "RX") {
+            receivedBytes.insert(receivedBytes.end(), row.bytes.begin(), row.bytes.end());
         }
-        if (row.message.find(message) != std::string::npos) {
-            return true;
-        }
-        const std::string payload(row.bytes.begin(), row.bytes.end());
-        if (payload.find(message) != std::string::npos) {
+    }
+    if (bytes.empty() || receivedBytes.size() < bytes.size()) {
+        return false;
+    }
+    for (std::size_t offset = 0; offset + bytes.size() <= receivedBytes.size(); ++offset) {
+        if (std::equal(bytes.begin(), bytes.end(), receivedBytes.begin() + offset)) {
             return true;
         }
     }
@@ -182,9 +185,10 @@ void test_application_tcp_lua_read_version_roundtrip() {
     client.updateControlValue("hex_send", false);
     server.updateControlValue("read_version", true);
 
+    const std::vector<std::uint8_t> readVersionRequest{0xAA, 0x55, 0x01, 0x0D};
     const bool clientReceivedRequest = waitUntil([&]() {
         pumpPair(server, client);
-        return hasReceiveMessage(client.docks().receiveState(), "READ O");
+        return hasReceiveBytes(client.docks().receiveState(), readVersionRequest);
     });
     require(clientReceivedRequest, "客户端未收到服务端 Lua 发出的读版本请求");
 
@@ -200,7 +204,7 @@ void test_application_tcp_lua_read_version_roundtrip() {
 
     const bool serverReceivedRequest = waitUntil([&]() {
         pumpPair(server, client);
-        return hasReceiveMessage(server.docks().receiveState(), "READ O");
+        return hasReceiveBytes(server.docks().receiveState(), readVersionRequest);
     });
     require(serverReceivedRequest, "服务端未收到客户端 Lua 发出的读版本请求");
 
