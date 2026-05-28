@@ -541,6 +541,8 @@ static const TestCase kAllTests[] = {
     {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
+    {"dock_receive_row_single_line_hex_and_ascii", &test_dock_receive_row_single_line_hex_and_ascii},
+    {"dock_receive_row_single_line_message_and_timestamp", &test_dock_receive_row_single_line_message_and_timestamp},
     {"lua_dock_layout_key_uses_protocol_and_script", &test_lua_dock_layout_key_uses_protocol_and_script},
     {"lua_dock_layout_key_falls_back_to_script_directory", &test_lua_dock_layout_key_falls_back_to_script_directory},
     {"lua_dock_layout_paths_prefer_user_layout", &test_lua_dock_layout_paths_prefer_user_layout},

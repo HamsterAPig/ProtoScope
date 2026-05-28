@@ -74,11 +74,6 @@ ImPlotPoint envelopeLineMaxGetter(int index, void* data) {
     return ImPlotPoint{payload->points[index].time, payload->points[index].maxValue};
 }
 
-ImPlotPoint envelopeLineValueGetter(int index, void* data) {
-    const auto* payload = static_cast<const PlotGetterPayload*>(data);
-    return ImPlotPoint{payload->points[index].time, payload->points[index].minValue};
-}
-
 ImPlotPoint waveSampleGetter(int index, void* data) {
     const auto* payload = static_cast<const WaveSampleGetterPayload*>(data);
     return ImPlotPoint{payload->samples[index].time, payload->samples[index].value};
@@ -246,7 +241,7 @@ bool drawHorizontalSplitter(const char* id, float& topHeight, float minTopHeight
     return false;
 }
 
-void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits, const plot::ViewConfig& config) {
+void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits) {
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     view.viewMinTime = limits.X.Min;
     view.viewMaxTime = limits.X.Max;
@@ -258,7 +253,7 @@ void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits, c
     }
 }
 
-bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits, const plot::ViewConfig& config) {
+bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits) {
     constexpr double kLimitEpsilon = 1e-9;
     const bool xChanged = std::abs(limits.X.Min - view.viewMinTime) > kLimitEpsilon
         || std::abs(limits.X.Max - view.viewMaxTime) > kLimitEpsilon;
@@ -270,7 +265,7 @@ bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits, 
     }
 
     // 核心流程：ImPlot 双击坐标轴会直接改当前帧轴限，这里回写视口状态，避免下一帧被旧的 viewMin/viewMax 覆盖。
-    recordMainPlotLimits(view, limits, config);
+    recordMainPlotLimits(view, limits);
     if (xChanged) {
         view.autoFollowLatest = false;
     }
@@ -326,7 +321,7 @@ void applyFrequencyInput(plot::WaveViewState& view) {
     }
 }
 
-void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport, const plot::ViewConfig& config) {
+void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport) {
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     view.viewMinTime = viewport.minTime;
     view.viewMaxTime = viewport.maxTime;
@@ -741,7 +736,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
             const double deltaTime = mousePlotPos.x - view.overviewDragLastTime;
             const auto moved = plot::moveViewportByDelta(
                 currentViewport(view), deltaTime, overviewBounds, minVisibleTimeSpan);
-            applyViewport(view, moved, config);
+            applyViewport(view, moved);
             view.overviewDragLastTime = mousePlotPos.x;
         }
         if ((rectHovered || rectHeld) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
@@ -759,7 +754,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
                                                    overviewBounds,
                                                    minVisibleTimeSpan,
                                                    true);
-            applyViewport(view, zoomed, config);
+            applyViewport(view, zoomed);
         }
         for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
             const auto& cursor = view.cursors[cursorIndex];
@@ -798,9 +793,7 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveDisplayData& displayData,
                             const PlotRenderResult& result);
 
-void drawWaveToolbar(app::Application& application,
-                     plot::WaveDockState& wave,
-                     const plot::ViewConfig& config) {
+void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
     auto& view = wave.view;
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     if (view.visibleDuration <= 0.0) {
@@ -971,7 +964,6 @@ void initializeWaveViewIfNeeded(plot::WaveViewState& view) {
 
 WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) {
     auto& view = wave.view;
-    const auto& config = wave.buffer.viewConfig();
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
 
     WaveFrameData frame;
@@ -1072,9 +1064,7 @@ void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
     }
 }
 
-bool handleMainPlotZoom(plot::WaveViewState& view,
-                        const plot::ViewConfig& config,
-                        const ImPlotPoint& mousePos) {
+bool handleMainPlotZoom(plot::WaveViewState& view, const ImPlotPoint& mousePos) {
     const auto& io = ImGui::GetIO();
     if (io.MouseWheel == 0.0F
         || (!ImPlot::IsPlotHovered() && !ImPlot::IsAxisHovered(ImAxis_X1) && !ImPlot::IsAxisHovered(ImAxis_Y1))) {
@@ -1104,7 +1094,7 @@ bool handleMainPlotZoom(plot::WaveViewState& view,
                                            bounds,
                                            minVisibleTimeSpan,
                                            false);
-    applyViewport(view, zoomed, config);
+    applyViewport(view, zoomed);
     return true;
 }
 
@@ -1178,7 +1168,6 @@ void renderWaveChannels(plot::WaveViewState& view,
         }
 
         view.lastRenderPointCount += envelope.size();
-        PlotGetterPayload payload{.points = envelope.data()};
         ImPlotSpec legendSpec{};
         legendSpec.LineColor = color;
         legendSpec.LineWeight = 1.5F;
@@ -1298,9 +1287,7 @@ bool handlePlotCursors(plot::WaveViewState& view,
     return anyCursorHeld;
 }
 
-PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
-                                      const plot::ViewConfig& config,
-                                      const WaveFrameData& frame) {
+PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view, const WaveFrameData& frame) {
     PlotRenderResult result;
     if (frame.fullSnapshot == nullptr || frame.displayData == nullptr || frame.fullSnapshot->channels.empty()) {
         ImGui::TextUnformatted("Lua 尚未通过 proto.plot.setup / proto.plot.push 提供波形数据。");
@@ -1335,7 +1322,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
     const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
 
     const bool viewportChangedThisFrame =
-        handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, config, mousePos);
+        handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, mousePos);
     renderWaveChannels(view, frame.snapshot, displayData, frame.renderBudget, limits);
     handleHoverReadout(view, frame.snapshot, displayData, mousePos, timeSnapDistance, valueSnapDistance);
 
@@ -1350,9 +1337,9 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
     const bool userInteracting = plotInteractionActive(anyCursorHeld);
     if (!viewportChangedThisFrame) {
         const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
-        const bool limitsSynced = syncAutoFitAxisLimits(view, updatedLimits, config);
+        const bool limitsSynced = syncAutoFitAxisLimits(view, updatedLimits);
         if (userInteracting && !limitsSynced) {
-            recordMainPlotLimits(view, updatedLimits, config);
+            recordMainPlotLimits(view, updatedLimits);
         }
     }
     if (userInteracting && view.pauseAutoFollowOnInteraction) {
@@ -1531,7 +1518,7 @@ void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& sn
     static_cast<void>(snapshot);
 }
 
-float measureChannelLegendHeight(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
+float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot) {
     if (snapshot.channels.empty()) {
         return 0.0F;
     }
@@ -1564,7 +1551,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
         const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
-        const float legendHeight = measureChannelLegendHeight(wave, wave.cachedFullSnapshot);
+        const float legendHeight = measureChannelLegendHeight(wave.cachedFullSnapshot);
         const float overviewRequestedHeight = wave.overviewCollapsed
             ? wave.overviewCollapsedHeight
             : wave.overviewPanelHeight;
@@ -1619,7 +1606,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         drawChannelLegendBar(wave, fullSnapshot);
 
         ImGui::BeginChild("##wave_main_panel", ImVec2(0.0F, layout.mainHeight), false, ImGuiWindowFlags_NoScrollbar);
-        drawOscilloscopePlot(view, config, frame);
+        drawOscilloscopePlot(view, frame);
         ImGui::EndChild();
         ImGui::EndChild();
 
@@ -1637,11 +1624,11 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         }
         if (!wave.toolsCollapsed) {
             ImGui::Separator();
-            drawWaveToolbar(application_, wave, config);
+            drawWaveToolbar(application_, wave);
             ImGui::Separator();
             drawCursorToolbar(view, config, displayData);
         } else {
-            drawWaveToolbar(application_, wave, config);
+            drawWaveToolbar(application_, wave);
         }
         drawChannelControls(wave, fullSnapshot);
         ImGui::EndChild();

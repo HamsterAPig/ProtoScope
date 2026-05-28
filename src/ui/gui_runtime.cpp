@@ -118,26 +118,6 @@ int hexEditorCallback(ImGuiInputTextCallbackData* data) {
     return 0;
 }
 
-std::string bytesToAsciiPreview(const std::vector<std::uint8_t>& bytes) {
-    std::string text;
-    text.reserve(bytes.size());
-    for (const auto byte : bytes) {
-        const char ch = static_cast<char>(byte);
-        text.push_back(std::isprint(static_cast<unsigned char>(ch)) ? ch : '.');
-    }
-    return text;
-}
-
-std::string formatReceiveRowText(const dock::ReceiveRow& row, bool showHex) {
-    if (!row.message.empty()) {
-        return row.message;
-    }
-    if (row.bytes.empty()) {
-        return {};
-    }
-    return showHex ? protocol_utils::bytesToHex(row.bytes, true) : bytesToAsciiPreview(row.bytes);
-}
-
 std::string visibleWindowTitle(std::string_view windowName) {
     const auto stableIdPos = windowName.find("###");
     if (stableIdPos == std::string_view::npos) {
@@ -269,31 +249,30 @@ void writeControlValue(YAML::Node node, const scripting::ControlSnapshot& contro
     }
 }
 
-std::string formatTimestampText(std::uint64_t timestampMs) {
-    const auto timePoint = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestampMs));
-    const auto secondsPoint = std::chrono::time_point_cast<std::chrono::seconds>(timePoint);
-    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint - secondsPoint).count();
-    const std::time_t timeValue = std::chrono::system_clock::to_time_t(timePoint);
+std::string multilineChildWindowName(const char* label) {
+    ImGuiWindow* parentWindow = ImGui::GetCurrentWindow();
+    const ImGuiID id = parentWindow->GetID(label);
 
-    std::tm localTm{};
-#if defined(_WIN32)
-    localtime_s(&localTm, &timeValue);
-#else
-    localtime_r(&timeValue, &localTm);
-#endif
+    char windowName[512]{};
+    std::snprintf(windowName, sizeof(windowName), "%s/%s_%08X", parentWindow->Name, label, id);
+    return windowName;
+}
 
-    char buffer[64]{};
-    std::snprintf(buffer,
-                  sizeof(buffer),
-                  "%04d-%02d-%02d %02d:%02d:%02d:%03d",
-                  localTm.tm_year + 1900,
-                  localTm.tm_mon + 1,
-                  localTm.tm_mday,
-                  localTm.tm_hour,
-                  localTm.tm_min,
-                  localTm.tm_sec,
-                  static_cast<int>(millis));
-    return buffer;
+ImGuiWindow* findMultilineChildWindow(const char* label) {
+    const auto childWindowName = multilineChildWindowName(label);
+    return ImGui::FindWindowByName(childWindowName.c_str());
+}
+
+std::string buildRowListText(const std::vector<dock::ReceiveRow>& rows, bool showTimestamps, bool showHex) {
+    std::string text;
+    text.reserve(rows.size() * 64);
+    for (const auto& row : rows) {
+        if (!text.empty()) {
+            text.push_back('\n');
+        }
+        text.append(dock::formatReceiveRowSingleLine(row, showTimestamps, showHex));
+    }
+    return text;
 }
 
 void drawRowList(const char* childId,
@@ -302,30 +281,37 @@ void drawRowList(const char* childId,
                  bool showHex,
                  bool& pauseScroll,
                  const std::string& emptyText) {
-    if (ImGui::BeginChild(childId, ImVec2(0.0F, 0.0F), true, ImGuiWindowFlags_HorizontalScrollbar)) {
-        if (rows.empty()) {
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    const ImVec2 textBoxSize(available.x, (std::max)(available.y, ImGui::GetTextLineHeightWithSpacing() * 4.0F));
+    if (rows.empty()) {
+        if (ImGui::BeginChild(childId, textBoxSize, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
             ImGui::TextDisabled("%s", emptyText.c_str());
-        } else {
-            for (const auto& row : rows) {
-                if (showTimestamps) {
-                    ImGui::Text("[%s] %s %s",
-                                formatTimestampText(row.timestampMs).c_str(),
-                                row.direction.c_str(),
-                                row.endpoint.c_str());
-                } else {
-                    ImGui::Text("%s %s", row.direction.c_str(), row.endpoint.c_str());
-                }
-                const auto content = formatReceiveRowText(row, showHex);
-                if (!content.empty()) {
-                    ImGui::TextWrapped("  %s", content.c_str());
-                }
-            }
-            if (!pauseScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0F) {
-                ImGui::SetScrollHereY(1.0F);
-            }
+        }
+        ImGui::EndChild();
+        return;
+    }
+
+    constexpr auto kTextBoxLabel = "##row_list_text";
+    const ImGuiWindow* existingWindow = findMultilineChildWindow(kTextBoxLabel);
+    const bool stickToBottom = existingWindow == nullptr || existingWindow->Scroll.y >= existingWindow->ScrollMax.y - 4.0F;
+
+    auto text = buildRowListText(rows, showTimestamps, showHex);
+    std::vector<char> buffer(text.begin(), text.end());
+    buffer.push_back('\0');
+
+    // 核心流程：统一改为只读多行文本框，保持每条记录单行显示，同时支持拖选复制与横向滚动。
+    ImGui::InputTextMultiline(kTextBoxLabel,
+                              buffer.data(),
+                              buffer.size(),
+                              textBoxSize,
+                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoUndoRedo);
+
+    // 核心流程：仅在用户原本停留在底部时自动滚到底，避免查看历史记录时被打断。
+    if (!pauseScroll && stickToBottom) {
+        if (ImGuiWindow* childWindow = findMultilineChildWindow(kTextBoxLabel)) {
+            ImGui::SetScrollY(childWindow, childWindow->ScrollMax.y);
         }
     }
-    ImGui::EndChild();
 }
 
 bool digitsOnly(const std::string& text) {
@@ -1611,7 +1597,30 @@ std::uint64_t GuiRuntime::nowMs() {
 }
 
 std::string GuiRuntime::formatTimestamp(std::uint64_t timestampMs) {
-    return formatTimestampText(timestampMs);
+    const auto timePoint = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestampMs));
+    const auto secondsPoint = std::chrono::time_point_cast<std::chrono::seconds>(timePoint);
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint - secondsPoint).count();
+    const std::time_t timeValue = std::chrono::system_clock::to_time_t(timePoint);
+
+    std::tm localTm{};
+#if defined(_WIN32)
+    localtime_s(&localTm, &timeValue);
+#else
+    localtime_r(&timeValue, &localTm);
+#endif
+
+    char buffer[64]{};
+    std::snprintf(buffer,
+                  sizeof(buffer),
+                  "%04d-%02d-%02d %02d:%02d:%02d:%03d",
+                  localTm.tm_year + 1900,
+                  localTm.tm_mon + 1,
+                  localTm.tm_mday,
+                  localTm.tm_hour,
+                  localTm.tm_min,
+                  localTm.tm_sec,
+                  static_cast<int>(millis));
+    return buffer;
 }
 
 } // namespace protoscope::ui

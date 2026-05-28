@@ -1,6 +1,12 @@
 #include "protoscope/dock/docks.hpp"
 
+#include "protoscope/protocol_utils/codec.hpp"
+
 #include <chrono>
+#include <cctype>
+#include <cstdio>
+#include <ctime>
+#include <string_view>
 
 namespace protoscope::dock {
 
@@ -11,7 +17,99 @@ std::uint64_t nowMs() {
             std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
+
+std::string formatTimestampText(std::uint64_t timestampMs) {
+    const auto timePoint = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestampMs));
+    const auto secondsPoint = std::chrono::time_point_cast<std::chrono::seconds>(timePoint);
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint - secondsPoint).count();
+    const std::time_t timeValue = std::chrono::system_clock::to_time_t(timePoint);
+
+    std::tm localTm{};
+#if defined(_WIN32)
+    localtime_s(&localTm, &timeValue);
+#else
+    localtime_r(&timeValue, &localTm);
+#endif
+
+    char buffer[64]{};
+    std::snprintf(buffer,
+                  sizeof(buffer),
+                  "%04d-%02d-%02d %02d:%02d:%02d:%03d",
+                  localTm.tm_year + 1900,
+                  localTm.tm_mon + 1,
+                  localTm.tm_mday,
+                  localTm.tm_hour,
+                  localTm.tm_min,
+                  localTm.tm_sec,
+                  static_cast<int>(millis));
+    return buffer;
+}
+
+std::string bytesToAsciiPreview(const std::vector<std::uint8_t>& bytes) {
+    std::string text;
+    text.reserve(bytes.size());
+    for (const auto byte : bytes) {
+        const char ch = static_cast<char>(byte);
+        text.push_back(std::isprint(static_cast<unsigned char>(ch)) ? ch : '.');
+    }
+    return text;
+}
+
+std::string flattenSingleLineText(std::string_view text) {
+    std::string flattened;
+    flattened.reserve(text.size());
+    for (const char ch : text) {
+        switch (ch) {
+        case '\r':
+        case '\n':
+        case '\t':
+            flattened.push_back(' ');
+            break;
+        default:
+            flattened.push_back(ch);
+            break;
+        }
+    }
+    return flattened;
+}
+
+std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex) {
+    if (!row.message.empty()) {
+        return flattenSingleLineText(row.message);
+    }
+    if (row.bytes.empty()) {
+        return {};
+    }
+    return showHex ? protocol_utils::bytesToHex(row.bytes, true) : bytesToAsciiPreview(row.bytes);
+}
 } // namespace
+
+std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamps, bool showHex) {
+    std::string line;
+    if (showTimestamps) {
+        line.append("[");
+        line.append(formatTimestampText(row.timestampMs));
+        line.append("] ");
+    }
+    if (!row.direction.empty()) {
+        line.append(row.direction);
+    }
+    if (!row.endpoint.empty()) {
+        if (!line.empty() && line.back() != ' ') {
+            line.push_back(' ');
+        }
+        line.append(row.endpoint);
+    }
+
+    const auto content = formatReceiveRowContent(row, showHex);
+    if (!content.empty()) {
+        if (!line.empty()) {
+            line.append(" | ");
+        }
+        line.append(content);
+    }
+    return line;
+}
 
 void DockStore::clearReceiveRows() {
     receive_.rows.clear();

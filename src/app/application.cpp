@@ -471,6 +471,7 @@ bool Application::handleTransportEvents() {
                             .direction = "RX",
                             .endpoint = evt.context.endpoint,
                             .bytes = evt.bytes,
+                            .message = {},
                         });
                         changed = true;
                     }
