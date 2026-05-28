@@ -995,6 +995,12 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         sol::lib::os);
 
     auto& lua = runtime_->lua;
+    // 将协议脚本目录加入 Lua 模块搜索路径，使 main.lua 可 require 同目录模块。
+    // 使用 protocolDirectory_（已转为 generic_string 格式，路径分隔符统一为 /）。
+    const auto pkgPath = lua["package"]["path"].get<std::string>();
+    lua["package"]["path"] = protocolDirectory_ + "/?.lua;"
+                           + protocolDirectory_ + "/?/init.lua;"
+                           + pkgPath;
     auto proto = lua.create_named_table("proto");
 
     // 核心流程：所有脚本侧能力统一经由 proto.* 回调回宿主，避免脚本直接接触底层 I/O 与 UI 状态。
