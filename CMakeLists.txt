@@ -215,6 +215,7 @@ target_include_directories(protoscope_dock
 target_link_libraries(protoscope_dock
     PUBLIC
         protoscope_plot
+        protoscope_protocol_utils
         protoscope_scripting
         protoscope_transport
 )

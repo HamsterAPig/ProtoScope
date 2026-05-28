@@ -20,6 +20,8 @@ struct ReceiveRow {
     std::string message;
 };
 
+std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamps, bool showHex);
+
 struct CommDockState {
     transport::TransportKind kind{transport::TransportKind::TcpClient};
     transport::TcpClientConfig tcpClient{};
