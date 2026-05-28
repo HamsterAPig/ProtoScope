@@ -67,7 +67,26 @@ struct CursorIntervalText {
     std::string deltaUnit{"sample"};
 };
 
+struct WaveLayoutSizes {
+    float overviewHeight{0.0F};
+    float mainHeight{0.0F};
+    float toolsWidth{0.0F};
+};
+
 FrequencyParseResult parseSampleFrequencyText(std::string_view text);
+WaveLayoutSizes solveWaveLayout(float contentWidth,
+                                float contentHeight,
+                                float requestedOverviewHeight,
+                                float requestedToolsWidth,
+                                float toolsCollapsedWidth,
+                                bool toolsCollapsed,
+                                float contentToolsSplitterWidth,
+                                float overviewMainSplitterHeight,
+                                float minOverviewHeight,
+                                float minMainHeight,
+                                float minToolsWidth,
+                                float maxToolsWidth,
+                                float fixedContentHeight);
 bool scriptTimeUsable(const std::vector<WaveSample>& samples);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep);

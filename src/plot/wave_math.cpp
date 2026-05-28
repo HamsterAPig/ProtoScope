@@ -84,6 +84,56 @@ FrequencyParseResult parseSampleFrequencyText(std::string_view text) {
     return {.accepted = true, .valueHz = parsed, .error = {}};
 }
 
+WaveLayoutSizes solveWaveLayout(float contentWidth,
+                                float contentHeight,
+                                float requestedOverviewHeight,
+                                float requestedToolsWidth,
+                                float toolsCollapsedWidth,
+                                bool toolsCollapsed,
+                                float contentToolsSplitterWidth,
+                                float overviewMainSplitterHeight,
+                                float minOverviewHeight,
+                                float minMainHeight,
+                                float minToolsWidth,
+                                float maxToolsWidth,
+                                float fixedContentHeight) {
+    (void)contentToolsSplitterWidth;
+    WaveLayoutSizes result{};
+    const float safeContentWidth = (std::max)(contentWidth, 0.0F);
+    const float safeContentHeight = (std::max)(contentHeight, 0.0F);
+    const float safeSplitterHeight = (std::max)(overviewMainSplitterHeight, 0.0F);
+    const float safeFixedHeight = (std::max)(fixedContentHeight, 0.0F);
+    const float safeMinOverview = (std::max)(minOverviewHeight, 0.0F);
+    const float safeMinMain = (std::max)(minMainHeight, 0.0F);
+
+    if (toolsCollapsed) {
+        result.toolsWidth = (std::clamp)(toolsCollapsedWidth, 0.0F, safeContentWidth);
+    } else {
+        const float safeMinToolsWidth = (std::max)(minToolsWidth, 0.0F);
+        const float safeMaxToolsWidth = (std::max)(maxToolsWidth, safeMinToolsWidth);
+        result.toolsWidth = (std::clamp)(requestedToolsWidth, safeMinToolsWidth, safeMaxToolsWidth);
+        result.toolsWidth = (std::min)(result.toolsWidth, safeContentWidth);
+    }
+
+    const float availableHeight = (std::max)(0.0F, safeContentHeight - safeFixedHeight - safeSplitterHeight);
+    if (availableHeight <= 0.0F) {
+        return result;
+    }
+
+    if (availableHeight < safeMinOverview + safeMinMain) {
+        const float overviewRatio = safeMinOverview + safeMinMain > 0.0F
+            ? safeMinOverview / (safeMinOverview + safeMinMain)
+            : 0.35F;
+        result.overviewHeight = std::floor(availableHeight * overviewRatio);
+        result.mainHeight = availableHeight - result.overviewHeight;
+        return result;
+    }
+
+    result.overviewHeight = (std::clamp)(requestedOverviewHeight, safeMinOverview, availableHeight - safeMinMain);
+    result.mainHeight = availableHeight - result.overviewHeight;
+    return result;
+}
+
 bool scriptTimeUsable(const std::vector<WaveSample>& samples) {
     if (samples.empty()) {
         return false;

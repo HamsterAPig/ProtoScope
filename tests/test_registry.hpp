@@ -58,6 +58,7 @@ void test_protocol_workspace_switch_decision_reloads_draft_when_clicked();
 void test_protocol_switch_resets_lua_default_dock_state_only_when_changed();
 void test_lua_default_dock_layout_runs_only_during_default_build();
 void test_plot_history_trim_and_envelope();
+void test_wave_layout_solver_clamps_without_overflow();
 void test_plot_limited_envelope_preserves_spikes();
 void test_plot_low_density_envelope_keeps_single_value_line();
 void test_plot_cursor_snap_and_delta();

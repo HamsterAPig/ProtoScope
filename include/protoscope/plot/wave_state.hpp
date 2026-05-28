@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,7 @@ struct WaveViewState {
     bool showPointsWhenSparse{true};
     bool showHoverReadout{true};
     bool showCursors{true};
+    bool showMeasurementOverlay{true};
     bool phosphorGlowEnabled{true};
     bool initialized{false};
     bool cursorIntervalLocked{false};
@@ -86,6 +88,17 @@ struct WaveDockState {
     float toolsExpandedWidth{280.0F};
     float toolsCollapsedWidth{34.0F};
     float overviewPanelHeight{120.0F};
+    float contentToolsSplitterWidth{6.0F};
+    float overviewMainSplitterHeight{6.0F};
+    float minOverviewPanelHeight{72.0F};
+    float minMainPanelHeight{160.0F};
+    float minToolsExpandedWidth{220.0F};
+    float maxToolsExpandedWidth{520.0F};
+    std::uint64_t displayDataRevision{0};
+    double displayDataSampleFrequencyHz{0.0};
+    WaveSnapshot cachedFullSnapshot{};
+    WaveDisplayData cachedDisplayData{};
+    WaveDataBounds cachedDisplayBounds{};
 };
 
 } // namespace protoscope::plot
