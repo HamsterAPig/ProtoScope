@@ -158,6 +158,7 @@ target_include_directories(protoscope_protocol_utils
 target_compile_features(protoscope_protocol_utils PUBLIC cxx_std_20)
 
 add_library(protoscope_transport STATIC
+    src/transport/serial_ports.cpp
     src/transport/transport.cpp
 )
 target_include_directories(protoscope_transport
@@ -346,6 +347,7 @@ add_executable(protoscope_tests
     tests/test_dock_layout.cpp
     tests/test_plot.cpp
     tests/test_script_host.cpp
+    tests/test_serial_ports.cpp
     tests/test_transport.cpp
 )
 target_include_directories(protoscope_tests

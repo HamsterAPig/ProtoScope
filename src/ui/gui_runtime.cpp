@@ -1,6 +1,7 @@
 #include "protoscope/ui/gui_runtime.hpp"
 
 #include "protoscope/protocol_utils/codec.hpp"
+#include "protoscope/transport/transport.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/editable_combo.hpp"
 
@@ -423,16 +424,24 @@ void syncDraftFromModel(std::string& draft, std::string& lastModel, const std::s
     }
 }
 
+void refreshSerialPortOptions(dock::CommDockState& comm) {
+    auto ports = transport::listAvailableSerialPorts();
+    if (!comm.serial.portName.empty() && std::find(ports.begin(), ports.end(), comm.serial.portName) == ports.end()) {
+        ports.push_back(comm.serial.portName);
+        ports = transport::normalizeSerialPortNames(std::move(ports));
+    }
+    if (!ports.empty()) {
+        comm.serialPortOptions = std::move(ports);
+    }
+}
+
 } // namespace
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
     : application_(application),
       configStore_(configStore),
       executableDir_(executableDirectory()),
-      waveDockRenderer_(application) {
-    customBaudRateDraft_ = std::to_string(kCommonBaudRates[7]);
-    customBaudRateDraftModel_ = customBaudRateDraft_;
-}
+      waveDockRenderer_(application) {}
 
 GuiRuntime::~GuiRuntime() {
     shutdown();
@@ -780,8 +789,12 @@ void GuiRuntime::drawCommDock() {
             application_.markCommConfigEdited(true);
         }
     } else {
+        if (!serialPortsScanned_) {
+            refreshSerialPortOptions(comm);
+            serialPortsScanned_ = true;
+        }
         if (ImGui::Button("刷新串口列表")) {
-            comm.serialPortOptions = {"COM1", "COM2", "COM3", "COM4"};
+            refreshSerialPortOptions(comm);
         }
 
         syncDraftFromModel(serialPortDraft_, serialPortDraftModel_, comm.serial.portName);
@@ -797,39 +810,21 @@ void GuiRuntime::drawCommDock() {
         }
 
         const std::string currentBaudText = std::to_string(comm.serial.baudRate);
-        if (std::find(baudRateOptions.begin(), baudRateOptions.end(), currentBaudText) != baudRateOptions.end()) {
-            syncDraftFromModel(commonBaudRateDraft_, commonBaudRateDraftModel_, currentBaudText);
-        }
-        if (const auto baudEdit = drawEditableCombo("常用波特率", commonBaudRateDraft_, baudRateOptions, digitsOnly); baudEdit.edited && baudEdit.valid) {
-            const auto baudRate = static_cast<std::uint32_t>(std::stoul(baudEdit.value));
-            if (baudRate != comm.serial.baudRate) {
-                comm.serial.baudRate = baudRate;
-                customBaudRateDraft_ = baudEdit.value;
-                commonBaudRateDraftModel_ = baudEdit.value;
-                customBaudRateDraftModel_ = baudEdit.value;
-                application_.markCommConfigEdited(true);
-            }
-        }
-
-        syncDraftFromModel(customBaudRateDraft_, customBaudRateDraftModel_, currentBaudText);
-        if (const auto customBaudEdit = drawEditableCombo("自定义波特率", customBaudRateDraft_, {}, digitsOnly); customBaudEdit.edited) {
-            if (customBaudEdit.valid) {
-                const auto baudRate = static_cast<std::uint32_t>(std::stoul(customBaudEdit.value));
+        syncDraftFromModel(commonBaudRateDraft_, commonBaudRateDraftModel_, currentBaudText);
+        if (const auto baudEdit = drawEditableCombo("波特率", commonBaudRateDraft_, baudRateOptions, digitsOnly); baudEdit.edited) {
+            if (!baudEdit.valid) {
+                application_.setStatusMessage("波特率仅接受纯数字");
+            } else {
+                const auto baudRate = static_cast<std::uint32_t>(std::stoul(baudEdit.value));
                 if (baudRate != comm.serial.baudRate) {
                     comm.serial.baudRate = baudRate;
-                    customBaudRateDraftModel_ = customBaudEdit.value;
-                    if (std::find(baudRateOptions.begin(), baudRateOptions.end(), customBaudEdit.value) != baudRateOptions.end()) {
-                        commonBaudRateDraft_ = customBaudEdit.value;
-                        commonBaudRateDraftModel_ = customBaudEdit.value;
-                    }
+                    commonBaudRateDraftModel_ = baudEdit.value;
                     application_.markCommConfigEdited(true);
                 }
-            } else {
-                application_.setStatusMessage("自定义波特率仅接受纯数字");
             }
         }
-        if (!digitsOnly(customBaudRateDraft_)) {
-            ImGui::TextDisabled("自定义波特率仅接受纯数字");
+        if (!digitsOnly(commonBaudRateDraft_)) {
+            ImGui::TextDisabled("波特率仅接受纯数字");
         }
 
         int dataBits = static_cast<int>(comm.serial.dataBits);

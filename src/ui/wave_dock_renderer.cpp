@@ -55,6 +55,10 @@ struct PlotGetterPayload {
     const plot::EnvelopePoint* points{nullptr};
 };
 
+struct WaveSampleGetterPayload {
+    const plot::WaveSample* samples{nullptr};
+};
+
 struct RenderBudget {
     std::size_t pointsPerChannel{1};
     std::size_t estimatedVerticesPerPoint{4};
@@ -68,6 +72,16 @@ ImPlotPoint envelopeLineMinGetter(int index, void* data) {
 ImPlotPoint envelopeLineMaxGetter(int index, void* data) {
     const auto* payload = static_cast<const PlotGetterPayload*>(data);
     return ImPlotPoint{payload->points[index].time, payload->points[index].maxValue};
+}
+
+ImPlotPoint envelopeLineValueGetter(int index, void* data) {
+    const auto* payload = static_cast<const PlotGetterPayload*>(data);
+    return ImPlotPoint{payload->points[index].time, payload->points[index].minValue};
+}
+
+ImPlotPoint waveSampleGetter(int index, void* data) {
+    const auto* payload = static_cast<const WaveSampleGetterPayload*>(data);
+    return ImPlotPoint{payload->samples[index].time, payload->samples[index].value};
 }
 
 std::size_t clampRenderConfig(std::size_t value, std::size_t fallback) {
@@ -195,15 +209,99 @@ bool plotInteractionActive(bool toolHeld) {
     return toolHeld || (mouseAction && interactionAreaHovered);
 }
 
+bool drawRightPanelSplitter(const char* id, float& rightWidth, float minRightWidth, float minLeftWidth, float totalWidth, float thickness) {
+    const float safeThickness = (std::max)(thickness, 4.0F);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
+    ImGui::Button(id, ImVec2(safeThickness, ImGui::GetContentRegionAvail().y));
+    ImGui::PopStyleColor(3);
+    if (ImGui::IsItemActive()) {
+        // 右侧 splitter 位于工具栏左边界：手柄向左时右侧宽度变大，向右时变小。
+        rightWidth -= ImGui::GetIO().MouseDelta.x;
+        rightWidth = (std::clamp)(rightWidth, minRightWidth, (std::max)(minRightWidth, totalWidth - minLeftWidth - safeThickness));
+        return true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+    return false;
+}
+
+bool drawHorizontalSplitter(const char* id, float& topHeight, float minTopHeight, float minBottomHeight, float totalHeight, float thickness) {
+    const float safeThickness = (std::max)(thickness, 4.0F);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
+    ImGui::Button(id, ImVec2(-1.0F, safeThickness));
+    ImGui::PopStyleColor(3);
+    if (ImGui::IsItemActive()) {
+        topHeight += ImGui::GetIO().MouseDelta.y;
+        topHeight = (std::clamp)(topHeight, minTopHeight, (std::max)(minTopHeight, totalHeight - minBottomHeight - safeThickness));
+        return true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    }
+    return false;
+}
+
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits, const plot::ViewConfig& config) {
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     view.viewMinTime = limits.X.Min;
     view.viewMaxTime = limits.X.Max;
-    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, config.timeScale);
+    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
     view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
     if (!view.lockVerticalRange) {
         view.viewMinValue = limits.Y.Min;
         view.viewMaxValue = limits.Y.Max;
     }
+}
+
+bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits, const plot::ViewConfig& config) {
+    constexpr double kLimitEpsilon = 1e-9;
+    const bool xChanged = std::abs(limits.X.Min - view.viewMinTime) > kLimitEpsilon
+        || std::abs(limits.X.Max - view.viewMaxTime) > kLimitEpsilon;
+    const bool yChanged = !view.lockVerticalRange
+        && (std::abs(limits.Y.Min - view.viewMinValue) > kLimitEpsilon
+            || std::abs(limits.Y.Max - view.viewMaxValue) > kLimitEpsilon);
+    if (!xChanged && !yChanged) {
+        return false;
+    }
+
+    // 核心流程：ImPlot 双击坐标轴会直接改当前帧轴限，这里回写视口状态，避免下一帧被旧的 viewMin/viewMax 覆盖。
+    recordMainPlotLimits(view, limits, config);
+    if (xChanged) {
+        view.autoFollowLatest = false;
+    }
+    return true;
+}
+
+bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDataBounds& bounds) {
+    if (!bounds.valid || !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        return false;
+    }
+
+    bool changed = false;
+    if (ImPlot::IsAxisHovered(ImAxis_X1)) {
+        // 核心流程：横轴双击要同步应用层视口；否则 autoFollow/Once 条件会在下一帧把 ImPlot autofit 覆盖回旧范围。
+        view.viewMinTime = bounds.minTime;
+        view.viewMaxTime = bounds.maxTime;
+        view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, (std::max)(view.minVisibleTimeSpan, 1e-6));
+        view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+        view.autoFollowLatest = false;
+        changed = true;
+    }
+    if (ImPlot::IsAxisHovered(ImAxis_Y1) && !view.lockVerticalRange) {
+        view.viewMinValue = bounds.minValue;
+        view.viewMaxValue = bounds.maxValue;
+        changed = true;
+    }
+
+    if (changed) {
+        view.forceNextMainPlotLimits = true;
+    }
+    return changed;
 }
 
 const char* axisSourceName(plot::WaveTimeAxisSource source) {
@@ -229,9 +327,10 @@ void applyFrequencyInput(plot::WaveViewState& view) {
 }
 
 void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport, const plot::ViewConfig& config) {
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     view.viewMinTime = viewport.minTime;
     view.viewMaxTime = viewport.maxTime;
-    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, config.timeScale);
+    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
     view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
     if (!view.lockVerticalRange) {
         view.viewMinValue = viewport.minValue;
@@ -271,14 +370,25 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
     auto end = std::upper_bound(samples.begin(), samples.end(), visibleMaxTime, [](double value, const plot::WaveSample& sample) {
         return value < sample.time;
     });
+    const std::size_t visibleSampleCount = begin < end ? static_cast<std::size_t>(std::distance(begin, end)) : 0;
+    if (sourceSampleCount != nullptr) {
+        *sourceSampleCount = visibleSampleCount;
+    }
+
+    // 核心流程：高倍缩放可能落在两个采样点之间，此时可视区内没有点。
+    // 额外纳入左右相邻保护点，让 ImPlot 仍能裁剪并绘制穿过视窗的线段。
+    if (begin != samples.begin()) {
+        --begin;
+    }
+    if (end != samples.end()) {
+        ++end;
+    }
+
     if (begin >= end) {
         return envelope;
     }
 
     const std::size_t visibleCount = static_cast<std::size_t>(std::distance(begin, end));
-    if (sourceSampleCount != nullptr) {
-        *sourceSampleCount = visibleCount;
-    }
     const std::size_t bucketCount = (std::min)(pointLimit, visibleCount);
     envelope.reserve(bucketCount);
     for (std::size_t bucket = 0; bucket < bucketCount; ++bucket) {
@@ -546,20 +656,16 @@ void drawOverviewWindow(plot::WaveViewState& view,
         overviewMaxValue = config.verticalMax;
     }
 
-    ImGui::Separator();
-    ImGui::TextUnformatted("概览");
-    ImGui::SetNextItemWidth(180.0F);
-    int maxSamplesInput = static_cast<int>((std::min)(view.overviewMaxSamples, static_cast<std::size_t>(1000000)));
-    if (ImGui::InputInt("概览最大样本/通道", &maxSamplesInput, 1000, 10000)) {
-        view.overviewMaxSamples = static_cast<std::size_t>((std::max)(0, maxSamplesInput));
-    }
-
-    const ImPlotFlags plotFlags = ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoMenus;
-    constexpr float kOverviewHeight = 110.0F;
-    if (ImPlot::BeginPlot("##wave_overview", ImVec2(-1.0F, kOverviewHeight), plotFlags)) {
-        constexpr ImPlotAxisFlags axisFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoMenus;
+    const ImPlotFlags plotFlags =
+        ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoMenus | ImPlotFlags_NoFrame;
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    // 概览图需要跟随 splitter 压缩，避免 ImPlot 默认 150px 最小高度撑住内部绘图区。
+    ImPlot::PushStyleVar(ImPlotStyleVar_PlotMinSize, ImVec2(64.0F, 24.0F));
+    ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(2.0F, 2.0F));
+    if (ImPlot::BeginPlot("##wave_overview", ImVec2(-1.0F, -1.0F), plotFlags)) {
+        constexpr ImPlotAxisFlags axisFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoDecorations;
         ImPlot::SetupAxis(ImAxis_X1, nullptr, axisFlags);
-        ImPlot::SetupAxis(ImAxis_Y1, nullptr, axisFlags | ImPlotAxisFlags_NoTickLabels);
+        ImPlot::SetupAxis(ImAxis_Y1, nullptr, axisFlags);
         ImPlot::SetupAxisLimits(ImAxis_X1, overviewMinTime, overviewMaxTime, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, overviewMinValue, overviewMaxValue, ImPlotCond_Always);
 
@@ -594,7 +700,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
             .maxTime = overviewMaxTime,
             .minValue = overviewMinValue,
             .maxValue = overviewMaxValue,
-            .minStep = (std::max)(config.timeScale, 1e-6),
+            .minStep = minVisibleTimeSpan,
             .valid = true,
         };
         if (ImPlot::DragRect(300, &rectMinTime, &rectMinValue, &rectMaxTime, &rectMaxValue,
@@ -606,10 +712,10 @@ void drawOverviewWindow(plot::WaveViewState& view,
             const auto normalized = plot::normalizeOverviewViewport(
                 {.minTime = rectMinTime, .maxTime = rectMaxTime, .minValue = view.viewMinValue, .maxValue = view.viewMaxValue},
                 overviewBounds,
-                (std::max)(config.timeScale, 1e-6));
+                minVisibleTimeSpan);
             view.viewMinTime = normalized.minTime;
             view.viewMaxTime = normalized.maxTime;
-            view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, config.timeScale);
+            view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
             view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
             view.autoFollowLatest = false;
             view.forceNextMainPlotLimits = true;
@@ -634,7 +740,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
         if (view.overviewWindowDragging && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
             const double deltaTime = mousePlotPos.x - view.overviewDragLastTime;
             const auto moved = plot::moveViewportByDelta(
-                currentViewport(view), deltaTime, overviewBounds, (std::max)(config.timeScale, 1e-6));
+                currentViewport(view), deltaTime, overviewBounds, minVisibleTimeSpan);
             applyViewport(view, moved, config);
             view.overviewDragLastTime = mousePlotPos.x;
         }
@@ -651,7 +757,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
                                                    centerTime,
                                                    0.0,
                                                    overviewBounds,
-                                                   (std::max)(config.timeScale, 1e-6),
+                                                   minVisibleTimeSpan,
                                                    true);
             applyViewport(view, zoomed, config);
         }
@@ -670,13 +776,14 @@ void drawOverviewWindow(plot::WaveViewState& view,
         }
         ImPlot::EndPlot();
     }
+    ImPlot::PopStyleVar(2);
 }
 
 struct WaveFrameData {
     plot::WaveSnapshot snapshot;
-    plot::WaveSnapshot fullSnapshot;
-    plot::WaveDisplayData displayData;
-    plot::WaveDataBounds displayBounds;
+    const plot::WaveSnapshot* fullSnapshot{nullptr};
+    const plot::WaveDisplayData* displayData{nullptr};
+    plot::WaveDataBounds displayBounds{};
     RenderBudget renderBudget;
 };
 
@@ -686,74 +793,166 @@ struct PlotRenderResult {
     std::optional<plot::MeasurementReadout> measurement;
 };
 
+void drawMeasurementOverlay(const plot::WaveViewState& view,
+                            const plot::WaveSnapshot& snapshot,
+                            const plot::WaveDisplayData& displayData,
+                            const PlotRenderResult& result);
+
 void drawWaveToolbar(app::Application& application,
-                     plot::WaveViewState& view,
+                     plot::WaveDockState& wave,
                      const plot::ViewConfig& config) {
-    ImGui::Checkbox("自动跟随最新数据", &view.autoFollowLatest);
-    ImGui::SameLine();
-    ImGui::Checkbox("交互后暂停跟随", &view.pauseAutoFollowOnInteraction);
-    ImGui::SameLine();
-    ImGui::Checkbox("锁定纵轴", &view.lockVerticalRange);
-    ImGui::SameLine();
-    if (ImGui::Button("清空历史")) {
-        application.resetWaveHistory();
-    }
-
-    ImGui::SetNextItemWidth(180.0F);
-    ImGui::InputDouble("可视时长", &view.visibleDuration, config.timeScale, config.timeScale * 10.0, "%.6f");
+    auto& view = wave.view;
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     if (view.visibleDuration <= 0.0) {
-        view.visibleDuration = (std::max)(config.timeScale, 1e-6);
+        view.visibleDuration = minVisibleTimeSpan;
     }
-    ImGui::SameLine();
-    ImGui::Checkbox("显示游标", &view.showCursors);
-    ImGui::SameLine();
-    const bool smartSnapMode = view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap;
-    if (ImGui::Button(smartSnapMode ? "智能吸附" : "按键吸附")) {
-        view.cursorSnapMode = smartSnapMode ? plot::WaveCursorSnapMode::ModifierSnap : plot::WaveCursorSnapMode::SmartSnap;
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::BeginTooltip();
-        ImGui::TextUnformatted(smartSnapMode ? "拖动游标时自动吸附边沿/极值" : "按住 Shift 或 Ctrl 拖动时启用智能吸附");
-        ImGui::EndTooltip();
-    }
-    ImGui::SameLine();
-    ImGui::Checkbox("磷光辉光", &view.phosphorGlowEnabled);
-    ImGui::SameLine();
-    ImGui::Text("渲染点: %zu / 源样本: %zu", view.lastRenderPointCount, view.lastRenderSourceSampleCount);
-
-    char frequencyBuffer[64]{};
-    std::strncpy(frequencyBuffer, view.sampleFrequencyInput.c_str(), sizeof(frequencyBuffer) - 1);
-    ImGui::SetNextItemWidth(160.0F);
-    if (ImGui::InputText("发送频率 Hz", frequencyBuffer, sizeof(frequencyBuffer))) {
-        view.sampleFrequencyInput = frequencyBuffer;
-        applyFrequencyInput(view);
-    }
-    ImGui::SameLine();
-    if (ImGui::Checkbox(view.cursorIntervalLocked ? "锁定游标间隔" : "解锁游标间隔", &view.cursorIntervalLocked)) {
-        view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
-    }
-    if (!view.sampleFrequencyError.empty()) {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.25F, 1.0F), "%s", view.sampleFrequencyError.c_str());
-    }
-
-    ImGui::SetNextItemWidth(180.0F);
-    ImGui::InputDouble("余辉时间窗", &view.persistenceWindow, config.timeScale, config.timeScale * 10.0, "%.6f");
+    view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
     if (view.persistenceWindow <= 0.0) {
-        view.persistenceWindow = (std::max)(config.timeScale, 1e-6);
+        view.persistenceWindow = minVisibleTimeSpan;
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(140.0F);
-    const double glowMin = 0.2;
-    const double glowMax = 2.5;
-    ImGui::SliderScalar("辉光强度", ImGuiDataType_Double, &view.glowIntensity, &glowMin, &glowMax, "%.2f");
 
-    if (view.lockVerticalRange) {
-        ImGui::SetNextItemWidth(140.0F);
-        ImGui::InputDouble("纵轴最小", &view.manualVerticalMin, 0.1, 1.0, "%.6f");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(140.0F);
-        ImGui::InputDouble("纵轴最大", &view.manualVerticalMax, 0.1, 1.0, "%.6f");
+    if (wave.toolsCollapsed) {
+        if (ImGui::Button(view.autoFollowLatest ? "跟" : "停")) {
+            view.autoFollowLatest = !view.autoFollowLatest;
+        }
+        if (ImGui::Button("清")) {
+            application.resetWaveHistory();
+        }
+        if (ImGui::Button(">")) {
+            wave.toolsCollapsed = false;
+        }
+        return;
+    }
+
+    if (ImGui::CollapsingHeader("视图控制", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("自动跟随最新数据", &view.autoFollowLatest);
+        ImGui::Checkbox("交互后暂停跟随", &view.pauseAutoFollowOnInteraction);
+        ImGui::Checkbox("锁定纵轴", &view.lockVerticalRange);
+        ImGui::Checkbox("稀疏时显示点", &view.showPointsWhenSparse);
+        ImGui::Checkbox("显示坐标轴标签", &view.showAxisLabels);
+        if (ImGui::Button("清空历史")) {
+            application.resetWaveHistory();
+        }
+        if (ImGui::BeginTable("##view_controls", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("可视时长");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputDouble("##visible_duration", &view.visibleDuration, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
+            view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("最小可视跨度");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputDouble("##min_visible_span", &view.minVisibleTimeSpan, 0.001, 0.01, "%.6f");
+            view.minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+            view.visibleDuration = (std::max)(view.visibleDuration, view.minVisibleTimeSpan);
+            ImGui::EndTable();
+        }
+    }
+
+    if (ImGui::CollapsingHeader("光标控制", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("显示游标", &view.showCursors);
+        ImGui::Checkbox("悬浮读数", &view.showHoverReadout);
+        ImGui::Checkbox("测量浮层", &view.showMeasurementOverlay);
+        const bool smartSnapMode = view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap;
+        if (ImGui::Button(smartSnapMode ? "智能吸附" : "按键吸附")) {
+            view.cursorSnapMode = smartSnapMode ? plot::WaveCursorSnapMode::ModifierSnap : plot::WaveCursorSnapMode::SmartSnap;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(smartSnapMode ? "拖动游标时自动吸附边沿/极值" : "按住 Shift 或 Ctrl 拖动时启用智能吸附");
+            ImGui::EndTooltip();
+        }
+        int scopeIndex = view.cursorSnapScope == plot::WaveCursorSnapScope::AllChannels ? 0 : 1;
+        const char* scopeItems[] = {"全部波形", "当前激活波形"};
+        if (ImGui::Combo("吸附范围", &scopeIndex, scopeItems, IM_ARRAYSIZE(scopeItems))) {
+            view.cursorSnapScope = scopeIndex == 0 ? plot::WaveCursorSnapScope::AllChannels : plot::WaveCursorSnapScope::ActiveChannel;
+        }
+        if (ImGui::Checkbox(view.cursorIntervalLocked ? "锁定游标间隔" : "解锁游标间隔", &view.cursorIntervalLocked)) {
+            view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
+        }
+    }
+
+    if (ImGui::CollapsingHeader("渲染设置", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("磷光辉光", &view.phosphorGlowEnabled);
+        ImGui::Text("渲染点: %zu / 源样本: %zu", view.lastRenderPointCount, view.lastRenderSourceSampleCount);
+        char frequencyBuffer[64]{};
+        std::strncpy(frequencyBuffer, view.sampleFrequencyInput.c_str(), sizeof(frequencyBuffer) - 1);
+        if (ImGui::BeginTable("##render_controls", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("发送频率 Hz");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::InputText("##sample_frequency", frequencyBuffer, sizeof(frequencyBuffer))) {
+                view.sampleFrequencyInput = frequencyBuffer;
+                applyFrequencyInput(view);
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("余辉时间窗");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputDouble("##persistence_window", &view.persistenceWindow, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
+            view.persistenceWindow = (std::max)(view.persistenceWindow, minVisibleTimeSpan);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("降采样启动倍数");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputDouble("##downsample_multiplier", &view.downsampleStartMultiplier, 0.1, 0.5, "%.2f");
+            view.downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("辉光强度");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0F);
+            const double glowMin = 0.2;
+            const double glowMax = 2.5;
+            ImGui::SliderScalar("##glow_intensity", ImGuiDataType_Double, &view.glowIntensity, &glowMin, &glowMax, "%.2f");
+
+            if (view.lockVerticalRange) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("纵轴最小");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-1.0F);
+                ImGui::InputDouble("##manual_vertical_min", &view.manualVerticalMin, 0.1, 1.0, "%.6f");
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("纵轴最大");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-1.0F);
+                ImGui::InputDouble("##manual_vertical_max", &view.manualVerticalMax, 0.1, 1.0, "%.6f");
+            }
+            ImGui::EndTable();
+        }
+        if (!view.sampleFrequencyError.empty()) {
+            ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.25F, 1.0F), "%s", view.sampleFrequencyError.c_str());
+        }
+    }
+
+    if (ImGui::CollapsingHeader("概览设置", ImGuiTreeNodeFlags_DefaultOpen)) {
+        int maxSamplesInput = static_cast<int>((std::min)(view.overviewMaxSamples, static_cast<std::size_t>(1000000)));
+        if (ImGui::BeginTable("##overview_controls", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("概览最大样本/通道");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::InputInt("##overview_max_samples", &maxSamplesInput, 1000, 10000)) {
+                view.overviewMaxSamples = static_cast<std::size_t>((std::max)(0, maxSamplesInput));
+            }
+            ImGui::EndTable();
+        }
     }
 }
 
@@ -761,6 +960,7 @@ void initializeWaveViewIfNeeded(plot::WaveViewState& view) {
     if (view.initialized) {
         return;
     }
+    view.visibleDuration = (std::max)(view.visibleDuration, (std::max)(view.minVisibleTimeSpan, 1e-6));
     const double halfDuration = view.visibleDuration * 0.5;
     view.viewMinTime = view.centerTime - halfDuration;
     view.viewMaxTime = view.centerTime + halfDuration;
@@ -772,20 +972,30 @@ void initializeWaveViewIfNeeded(plot::WaveViewState& view) {
 WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) {
     auto& view = wave.view;
     const auto& config = wave.buffer.viewConfig();
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
 
     WaveFrameData frame;
-    frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
-    frame.fullSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
-    frame.displayData = plot::buildDisplayData(frame.fullSnapshot, view.sampleFrequencyHz);
+    const auto dataRevision = wave.buffer.dataRevision();
+    if (wave.displayDataRevision != dataRevision || wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) {
+        // 核心流程：全量显示数据只在采样数据或时间轴配置变化时重建，避免拖动视图时每帧复制全历史样本。
+        wave.cachedFullSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+        wave.cachedDisplayData = plot::buildDisplayData(wave.cachedFullSnapshot, view.sampleFrequencyHz);
+        wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
+        wave.displayDataRevision = dataRevision;
+        wave.displayDataSampleFrequencyHz = view.sampleFrequencyHz;
+    }
 
-    view.timeAxisSource = frame.displayData.axisSource;
-    frame.displayBounds = plot::computeDisplayBounds(frame.displayData, (std::max)(config.timeScale, 1e-6));
+    frame.fullSnapshot = &wave.cachedFullSnapshot;
+    frame.displayData = &wave.cachedDisplayData;
+    frame.displayBounds = wave.cachedDisplayBounds;
+    view.timeAxisSource = frame.displayData->axisSource;
     frame.renderBudget = makeRenderBudget(view,
-                                          frame.displayData.channels.size(),
+                                          frame.displayData->channels.size(),
                                           static_cast<std::size_t>((std::max)(availableWidth, 64.0F)),
                                           view.phosphorGlowEnabled);
     view.lastRenderPointCount = 0;
     view.lastRenderSourceSampleCount = 0;
+    view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
     if (frame.displayBounds.valid && view.autoFollowLatest) {
         view.viewMaxTime = frame.displayBounds.maxTime;
         view.viewMinTime = view.viewMaxTime - view.visibleDuration;
@@ -841,8 +1051,14 @@ void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
                                 const plot::WaveSnapshot& snapshot,
                                 const plot::WaveDisplayData& displayData) {
     constexpr ImPlotAxisFlags axisFlags = ImPlotAxisFlags_NoHighlight;
-    ImPlot::SetupAxis(ImAxis_X1, displayData.timeUnit == "sample" ? "Sample" : "Time", axisFlags);
-    ImPlot::SetupAxis(ImAxis_Y1, snapshot.config.verticalUnit.c_str(), axisFlags);
+    const char* xAxisLabel = nullptr;
+    const char* yAxisLabel = nullptr;
+    if (view.showAxisLabels) {
+        xAxisLabel = displayData.timeUnit == "sample" ? "Sample" : "Time";
+        yAxisLabel = snapshot.config.verticalUnit.c_str();
+    }
+    ImPlot::SetupAxis(ImAxis_X1, xAxisLabel, axisFlags);
+    ImPlot::SetupAxis(ImAxis_Y1, yAxisLabel, axisFlags);
     const bool forceMainPlotLimits = view.forceNextMainPlotLimits;
     ImPlot::SetupAxisLimits(ImAxis_X1,
                             view.viewMinTime,
@@ -871,12 +1087,13 @@ bool handleMainPlotZoom(plot::WaveViewState& view,
     } else if (ImPlot::IsAxisHovered(ImAxis_Y1)) {
         zoomMode = plot::WaveZoomMode::YOnly;
     }
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     const plot::WaveDataBounds bounds{
         .minTime = -std::numeric_limits<double>::infinity(),
         .maxTime = std::numeric_limits<double>::infinity(),
         .minValue = -std::numeric_limits<double>::infinity(),
         .maxValue = std::numeric_limits<double>::infinity(),
-        .minStep = (std::max)(config.timeScale, 1e-6),
+        .minStep = minVisibleTimeSpan,
         .valid = false,
     };
     const auto zoomed = plot::zoomViewport(currentViewport(view),
@@ -885,7 +1102,7 @@ bool handleMainPlotZoom(plot::WaveViewState& view,
                                            mousePos.x,
                                            mousePos.y,
                                            bounds,
-                                           (std::max)(config.timeScale, 1e-6),
+                                           minVisibleTimeSpan,
                                            false);
     applyViewport(view, zoomed, config);
     return true;
@@ -898,6 +1115,7 @@ void renderWaveChannels(plot::WaveViewState& view,
                         const ImPlotRect& limits) {
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
+        const auto& channelSamples = displayData.channels[channelIndex].samples;
         std::size_t sourceSampleCount = 0;
         const auto envelope = buildDisplayEnvelope(displayData.channels[channelIndex].samples,
                                                    limits.X.Min,
@@ -908,12 +1126,64 @@ void renderWaveChannels(plot::WaveViewState& view,
         if (envelope.empty()) {
             continue;
         }
-        view.lastRenderPointCount += envelope.size();
-
-        PlotGetterPayload payload{.points = envelope.data()};
         const ImVec4 color = channelColor(channelIndex);
-        ImPlot::PlotLineG((channel.label + " min").c_str(), &envelopeLineMinGetter, &payload, static_cast<int>(envelope.size()));
-        ImPlot::PlotLineG((channel.label + " max").c_str(), &envelopeLineMaxGetter, &payload, static_cast<int>(envelope.size()));
+        const double downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
+        const std::size_t downsampleThreshold =
+            static_cast<std::size_t>(std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
+        if (sourceSampleCount <= downsampleThreshold) {
+            auto begin = std::lower_bound(channelSamples.begin(),
+                                          channelSamples.end(),
+                                          limits.X.Min,
+                                          [](const plot::WaveSample& sample, double value) {
+                                              return sample.time < value;
+                                          });
+            auto end = std::upper_bound(channelSamples.begin(),
+                                        channelSamples.end(),
+                                        limits.X.Max,
+                                        [](double value, const plot::WaveSample& sample) {
+                                            return value < sample.time;
+                                        });
+            if (begin != channelSamples.begin()) {
+                --begin;
+            }
+            if (end != channelSamples.end()) {
+                ++end;
+            }
+            if (begin >= end) {
+                continue;
+            }
+            const std::size_t rawVisibleCount = static_cast<std::size_t>(std::distance(begin, end));
+            view.lastRenderPointCount += rawVisibleCount;
+
+            // 核心流程：低密度视图直接绘制原始点，避免桶包络把单条波形误画成双边界。
+            WaveSampleGetterPayload payload{.samples = &(*begin)};
+            ImPlotSpec spec{};
+            spec.LineColor = color;
+            spec.LineWeight = 1.5F;
+            ImPlot::PlotLineG(channel.label.c_str(), &waveSampleGetter, &payload, static_cast<int>(rawVisibleCount), spec);
+            if (view.showPointsWhenSparse) {
+                ImPlotSpec pointSpec{};
+                pointSpec.Marker = ImPlotMarker_Circle;
+                pointSpec.MarkerSize = 2.5F;
+                pointSpec.MarkerFillColor = color;
+                pointSpec.MarkerLineColor = color;
+                pointSpec.LineWeight = 0.0F;
+                ImPlot::PlotScatterG((channel.label + " samples").c_str(),
+                                     &waveSampleGetter,
+                                     &payload,
+                                     static_cast<int>(rawVisibleCount),
+                                     pointSpec);
+            }
+            continue;
+        }
+
+        view.lastRenderPointCount += envelope.size();
+        PlotGetterPayload payload{.points = envelope.data()};
+        ImPlotSpec legendSpec{};
+        legendSpec.LineColor = color;
+        legendSpec.LineWeight = 1.5F;
+        legendSpec.Flags = ImPlotItemFlags_NoFit;
+        ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
         if (view.phosphorGlowEnabled) {
             renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);
         } else {
@@ -928,7 +1198,7 @@ void handleHoverReadout(plot::WaveViewState& view,
                         const ImPlotPoint& mousePos,
                         double timeSnapDistance,
                         double valueSnapDistance) {
-    if (!view.showCursors || !ImPlot::IsPlotHovered() || !view.showHoverReadout) {
+    if (!ImPlot::IsPlotHovered() || !view.showHoverReadout) {
         return;
     }
     auto hovered = plot::findNearestDisplayPoint(displayData, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
@@ -942,7 +1212,7 @@ void handleHoverReadout(plot::WaveViewState& view,
         formatMetricText(hovered->time, displayData.timeUnit.c_str()).c_str(),
         hovered->value,
         hoveredChannel.unit.c_str());
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (view.showCursors && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         view.measurementChannelIndex = hovered->channelIndex;
     }
 }
@@ -1032,19 +1302,27 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
                                       const plot::ViewConfig& config,
                                       const WaveFrameData& frame) {
     PlotRenderResult result;
-    if (frame.fullSnapshot.channels.empty()) {
+    if (frame.fullSnapshot == nullptr || frame.displayData == nullptr || frame.fullSnapshot->channels.empty()) {
         ImGui::TextUnformatted("Lua 尚未通过 proto.plot.setup / proto.plot.push 提供波形数据。");
         return result;
     }
 
+    if (!view.showAxisLabels) {
+        ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(10.0F, 10.0F));
+        ImPlot::PushStyleVar(ImPlotStyleVar_LabelPadding, ImVec2(8.0F, 6.0F));
+    }
     if (!ImPlot::BeginPlot("##oscilloscope",
-            ImVec2(-1.0F, (std::max)(220.0F, ImGui::GetContentRegionAvail().y - 150.0F)),
-            ImPlotFlags_None)) {
+            ImVec2(-1.0F, -1.0F),
+            ImPlotFlags_NoLegend)) {
+        if (!view.showAxisLabels) {
+            ImPlot::PopStyleVar(2);
+        }
         return result;
     }
 
     result.plotRendered = true;
-    applyMainPlotAxesAndLimits(view, frame.snapshot, frame.displayData);
+    const auto& displayData = *frame.displayData;
+    applyMainPlotAxesAndLimits(view, frame.snapshot, displayData);
 
     const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
     const ImPlotRect limits = ImPlot::GetPlotLimits();
@@ -1056,21 +1334,26 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
     }
     const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
 
-    const bool viewportChangedThisFrame = handleMainPlotZoom(view, config, mousePos);
-    renderWaveChannels(view, frame.snapshot, frame.displayData, frame.renderBudget, limits);
-    handleHoverReadout(view, frame.snapshot, frame.displayData, mousePos, timeSnapDistance, valueSnapDistance);
+    const bool viewportChangedThisFrame =
+        handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, config, mousePos);
+    renderWaveChannels(view, frame.snapshot, displayData, frame.renderBudget, limits);
+    handleHoverReadout(view, frame.snapshot, displayData, mousePos, timeSnapDistance, valueSnapDistance);
 
     const bool anyCursorHeld = handlePlotCursors(view,
                                                  frame.snapshot,
-                                                 frame.displayData,
+                                                 displayData,
                                                  mousePos,
                                                  limits,
                                                  timeSnapDistance,
                                                  smartSnapDistance,
                                                  result.cursorReadouts);
     const bool userInteracting = plotInteractionActive(anyCursorHeld);
-    if (userInteracting && !viewportChangedThisFrame) {
-        recordMainPlotLimits(view, limits, config);
+    if (!viewportChangedThisFrame) {
+        const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
+        const bool limitsSynced = syncAutoFitAxisLimits(view, updatedLimits, config);
+        if (userInteracting && !limitsSynced) {
+            recordMainPlotLimits(view, updatedLimits, config);
+        }
     }
     if (userInteracting && view.pauseAutoFollowOnInteraction) {
         view.autoFollowLatest = false;
@@ -1078,66 +1361,88 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
 
     if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {
         const auto intervalText = plot::makeCursorIntervalText(
-            *result.cursorReadouts[0], *result.cursorReadouts[1], frame.displayData.axisSource, frame.displayData.timeUnit);
+            *result.cursorReadouts[0], *result.cursorReadouts[1], displayData.axisSource, displayData.timeUnit);
         drawCursorIntervalHint(*result.cursorReadouts[0], *result.cursorReadouts[1], intervalText, limits);
     }
 
-    ImPlot::EndPlot();
-
     if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {
-        result.measurement = measureDisplayWindow(
-            frame.displayData, view.measurementChannelIndex, result.cursorReadouts[0]->time, result.cursorReadouts[1]->time);
+        result.measurement =
+            measureDisplayWindow(displayData, view.measurementChannelIndex, result.cursorReadouts[0]->time, result.cursorReadouts[1]->time);
+    }
+    drawMeasurementOverlay(view, frame.snapshot, displayData, result);
+
+    ImPlot::EndPlot();
+    if (!view.showAxisLabels) {
+        ImPlot::PopStyleVar(2);
     }
     return result;
 }
 
-void drawWaveReadouts(const plot::WaveViewState& view,
-                      const plot::WaveSnapshot& snapshot,
-                      const plot::WaveDisplayData& displayData,
-                      const PlotRenderResult& result) {
+void drawMeasurementOverlay(const plot::WaveViewState& view,
+                            const plot::WaveSnapshot& snapshot,
+                            const plot::WaveDisplayData& displayData,
+                            const PlotRenderResult& result) {
+    if (!view.showMeasurementOverlay) {
+        return;
+    }
+    std::vector<std::string> lines;
     if (view.showCursors && result.cursorReadouts[0].has_value()) {
         const auto& c0 = *result.cursorReadouts[0];
-        ImGui::Text("Cursor A: %s  t=%s  y=%.6g",
-            snapshot.channels[c0.channelIndex].label.c_str(),
-            formatMetricText(c0.time, displayData.timeUnit.c_str()).c_str(),
-            c0.value);
+        lines.push_back("Cursor A: " + snapshot.channels[c0.channelIndex].label + "  t="
+            + formatMetricText(c0.time, displayData.timeUnit.c_str()) + "  y=" + formatMetricText(c0.value, nullptr));
     }
     if (view.showCursors && result.cursorReadouts[1].has_value()) {
         const auto& c1 = *result.cursorReadouts[1];
-        ImGui::Text("Cursor B: %s  t=%s  y=%.6g",
-            snapshot.channels[c1.channelIndex].label.c_str(),
-            formatMetricText(c1.time, displayData.timeUnit.c_str()).c_str(),
-            c1.value);
+        lines.push_back("Cursor B: " + snapshot.channels[c1.channelIndex].label + "  t="
+            + formatMetricText(c1.time, displayData.timeUnit.c_str()) + "  y=" + formatMetricText(c1.value, nullptr));
     }
     if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {
         const auto delta = plot::OscilloscopeBuffer::makeDelta(*result.cursorReadouts[0], *result.cursorReadouts[1]);
         const auto intervalText = plot::makeCursorIntervalText(
             *result.cursorReadouts[0], *result.cursorReadouts[1], displayData.axisSource, displayData.timeUnit);
         if (intervalText.valid && intervalText.showFrequency) {
-            ImGui::Text("Δt=%s  Δy=%.6g  f=%s",
-                formatMetricText(delta.deltaTime, displayData.timeUnit.c_str()).c_str(),
-                delta.deltaValue,
-                formatMetricText(intervalText.frequencyHz, "Hz").c_str());
+            lines.push_back("Δt=" + formatMetricText(delta.deltaTime, displayData.timeUnit.c_str()) + "  Δy="
+                + formatMetricText(delta.deltaValue, nullptr) + "  f=" + formatMetricText(intervalText.frequencyHz, "Hz"));
         } else if (intervalText.valid) {
-            ImGui::Text("Δsample=%s  Δy=%.6g",
-                formatMetricText(intervalText.delta, intervalText.deltaUnit.c_str()).c_str(),
-                delta.deltaValue);
+            lines.push_back("Δsample=" + formatMetricText(intervalText.delta, intervalText.deltaUnit.c_str()) + "  Δy="
+                + formatMetricText(delta.deltaValue, nullptr));
         }
     }
     if (view.showCursors && result.measurement.has_value() && result.measurement->valid) {
         const auto& m = *result.measurement;
         const auto& channel = snapshot.channels[m.channelIndex];
-        ImGui::Text("Measure %s: N=%zu  span=%s  Vpp=%.6g %s",
-            channel.label.c_str(),
-            m.sampleCount,
-            formatMetricText(m.duration, displayData.timeUnit.c_str()).c_str(),
-            m.peakToPeak,
-            channel.unit.c_str());
-        ImGui::Text("min=%.6g  max=%.6g  mean=%.6g  rms=%.6g",
-            m.minValue,
-            m.maxValue,
-            m.meanValue,
-            m.rmsValue);
+        lines.push_back("Measure " + channel.label + ": N=" + std::to_string(m.sampleCount) + "  span="
+            + formatMetricText(m.duration, displayData.timeUnit.c_str()) + "  Vpp=" + formatMetricText(m.peakToPeak, channel.unit.c_str()));
+        lines.push_back("min=" + formatMetricText(m.minValue, channel.unit.c_str()) + "  max="
+            + formatMetricText(m.maxValue, channel.unit.c_str()) + "  mean=" + formatMetricText(m.meanValue, channel.unit.c_str())
+            + "  rms=" + formatMetricText(m.rmsValue, channel.unit.c_str()));
+    }
+    if (lines.empty()) {
+        return;
+    }
+
+    const ImVec2 plotPos = ImPlot::GetPlotPos();
+    const ImVec2 plotSize = ImPlot::GetPlotSize();
+    const float padding = 7.0F;
+    const float lineSpacing = ImGui::GetTextLineHeightWithSpacing();
+    ImVec2 textSize(0.0F, 0.0F);
+    for (const auto& line : lines) {
+        const ImVec2 size = ImGui::CalcTextSize(line.c_str());
+        textSize.x = (std::max)(textSize.x, size.x);
+        textSize.y += lineSpacing;
+    }
+    textSize.y = (std::max)(0.0F, textSize.y - ImGui::GetStyle().ItemSpacing.y);
+
+    const ImVec2 overlayMax(plotPos.x + plotSize.x - padding, plotPos.y + padding + textSize.y + padding * 2.0F);
+    const ImVec2 overlayMin(overlayMax.x - textSize.x - padding * 2.0F, plotPos.y + padding);
+    auto* drawList = ImPlot::GetPlotDrawList();
+    drawList->AddRectFilled(overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.045F, 0.05F, 0.68F)), 5.0F);
+    drawList->AddRect(overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 1.0F, 1.0F, 0.18F)), 5.0F);
+    ImVec2 textPos(overlayMin.x + padding, overlayMin.y + padding);
+    const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.92F, 0.94F, 0.98F, 0.95F));
+    for (const auto& line : lines) {
+        drawList->AddText(textPos, textColor, line.c_str());
+        textPos.y += lineSpacing;
     }
 }
 
@@ -1148,21 +1453,8 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
     auto& view = wave.view;
     clampActiveChannel(view, snapshot.channels.size());
 
+    ImGui::Text("图例 / 吸附范围：%s", snapScopeName(view.cursorSnapScope));
     ImGui::Separator();
-    ImGui::TextUnformatted("波形图例");
-    ImGui::SameLine();
-
-    int scopeIndex = view.cursorSnapScope == plot::WaveCursorSnapScope::AllChannels ? 0 : 1;
-    const char* scopeItems[] = {"全部波形", "当前激活波形"};
-    ImGui::SetNextItemWidth(150.0F);
-    if (ImGui::Combo("吸附范围", &scopeIndex, scopeItems, IM_ARRAYSIZE(scopeItems))) {
-        view.cursorSnapScope = scopeIndex == 0 ? plot::WaveCursorSnapScope::AllChannels : plot::WaveCursorSnapScope::ActiveChannel;
-    }
-
-    const auto& activeChannel = snapshot.channels[view.measurementChannelIndex];
-    ImGui::SameLine();
-    ImGui::Text("当前激活: %s", activeChannel.label.c_str());
-
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto spec = wave.buffer.channelSpec(channelIndex);
         if (!spec.has_value()) {
@@ -1183,6 +1475,50 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
         if (ImGui::Button(spec->label.c_str())) {
             view.measurementChannelIndex = channelIndex;
         }
+        if (ImGui::BeginPopupContextItem("##channel_popup")) {
+            const plot::ChannelSpec fallbackDefault{
+                .label = spec->label,
+                .unit = spec->unit,
+                .scale = 1.0,
+                .offset = 0.0,
+            };
+            const plot::ChannelSpec defaultSpec = channelIndex < wave.defaultChannelSpecs.size()
+                ? wave.defaultChannelSpecs[channelIndex]
+                : fallbackDefault;
+            if (channelIndex >= wave.channelOverrides.size()) {
+                wave.channelOverrides.resize(channelIndex + 1);
+            }
+            auto& overrideState = wave.channelOverrides[channelIndex];
+            auto updated = *spec;
+            ImGui::Text("%s", spec->label.c_str());
+            if (!spec->unit.empty()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("[%s]", spec->unit.c_str());
+            }
+            ImGui::TextDisabled(active ? "当前激活通道" : "非激活通道");
+            ImGui::Separator();
+            if (ImGui::InputDouble("Scale", &updated.scale, 0.1, 1.0, "%.6g")) {
+                overrideState.scaleOverridden = true;
+                overrideState.scale = updated.scale;
+                wave.buffer.setChannelSpec(channelIndex, updated);
+            }
+            if (ImGui::InputDouble("Offset", &updated.offset, 0.1, 1.0, "%.6g")) {
+                overrideState.offsetOverridden = true;
+                overrideState.offset = updated.offset;
+                wave.buffer.setChannelSpec(channelIndex, updated);
+            }
+            if (ImGui::Button(active ? "激活中" : "设为激活")) {
+                view.measurementChannelIndex = channelIndex;
+            }
+            if (ImGui::Button("恢复 Lua 默认")) {
+                overrideState.scaleOverridden = false;
+                overrideState.offsetOverridden = false;
+                overrideState.scale = defaultSpec.scale;
+                overrideState.offset = defaultSpec.offset;
+                wave.buffer.setChannelSpec(channelIndex, defaultSpec);
+            }
+            ImGui::EndPopup();
+        }
         if (active) {
             ImGui::PopStyleColor(3);
         }
@@ -1191,70 +1527,18 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
 }
 
 void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
-    if (snapshot.channels.empty()) {
-        return;
-    }
-    auto& view = wave.view;
-    clampActiveChannel(view, snapshot.channels.size());
-
-    ImGui::Separator();
-    ImGui::Text("通道控制（吸附范围：%s）", snapScopeName(view.cursorSnapScope));
-    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
-        const auto current = wave.buffer.channelSpec(channelIndex);
-        if (!current.has_value()) {
-            continue;
-        }
-        const plot::ChannelSpec fallbackDefault{
-            .label = current->label,
-            .unit = current->unit,
-            .scale = 1.0,
-            .offset = 0.0,
-        };
-        const plot::ChannelSpec defaultSpec = channelIndex < wave.defaultChannelSpecs.size()
-            ? wave.defaultChannelSpecs[channelIndex]
-            : fallbackDefault;
-
-        ImGui::PushID(static_cast<int>(channelIndex));
-        ImGui::ColorButton("##channel_color", channelColor(channelIndex), ImGuiColorEditFlags_NoTooltip, ImVec2(14.0F, 14.0F));
-        ImGui::SameLine();
-
-        const bool active = channelIndex == view.measurementChannelIndex;
-        if (active) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22F, 0.36F, 0.24F, 0.9F));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28F, 0.44F, 0.30F, 1.0F));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20F, 0.32F, 0.22F, 1.0F));
-        }
-        if (ImGui::Button(active ? "激活中" : "设为激活")) {
-            view.measurementChannelIndex = channelIndex;
-        }
-        if (active) {
-            ImGui::PopStyleColor(3);
-        }
-        ImGui::SameLine();
-        ImGui::Text("%s  samples=%zu", snapshot.channels[channelIndex].label.c_str(), snapshot.channels[channelIndex].totalSamples);
-        if (!current->unit.empty()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("[%s]", current->unit.c_str());
-        }
-
-        auto updated = *current;
-        ImGui::SetNextItemWidth(120.0F);
-        if (ImGui::InputDouble("Scale", &updated.scale, 0.1, 1.0, "%.6g")) {
-            wave.buffer.setChannelSpec(channelIndex, updated);
-        }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(120.0F);
-        if (ImGui::InputDouble("Offset", &updated.offset, 0.1, 1.0, "%.6g")) {
-            wave.buffer.setChannelSpec(channelIndex, updated);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("恢复默认")) {
-            wave.buffer.setChannelSpec(channelIndex, defaultSpec);
-        }
-        ImGui::PopID();
-    }
+    static_cast<void>(wave);
+    static_cast<void>(snapshot);
 }
 
+float measureChannelLegendHeight(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
+    if (snapshot.channels.empty()) {
+        return 0.0F;
+    }
+    const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+    const float separatorHeight = ImGui::GetStyle().ItemSpacing.y + 1.0F;
+    return lineHeight * 2.0F + separatorHeight;
+}
 } // namespace
 
 WaveDockRenderer::WaveDockRenderer(app::Application& application)
@@ -1274,19 +1558,93 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         auto& view = wave.view;
         const auto& config = wave.buffer.viewConfig();
 
-        drawWaveToolbar(application_, view, config);
         syncWaveViewToLatest();
         initializeWaveViewIfNeeded(view);
 
-        auto frame = prepareWaveFrame(wave, ImGui::GetContentRegionAvail().x);
-        drawCursorToolbar(view, config, frame.displayData);
-        drawChannelLegendBar(wave, frame.fullSnapshot);
-        const auto plotResult = drawOscilloscopePlot(view, config, frame);
-        if (plotResult.plotRendered) {
-            drawOverviewWindow(view, config, frame.fullSnapshot, frame.displayData, frame.displayBounds, frame.renderBudget);
-            drawWaveReadouts(view, frame.snapshot, frame.displayData, plotResult);
+        const ImVec2 available = ImGui::GetContentRegionAvail();
+        const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
+        const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
+        const float legendHeight = measureChannelLegendHeight(wave, wave.cachedFullSnapshot);
+        const float overviewRequestedHeight = wave.overviewCollapsed
+            ? wave.overviewCollapsedHeight
+            : wave.overviewPanelHeight;
+        const float overviewMinHeight = wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.minOverviewPanelHeight;
+        const float mainPlotAxisReserve = ImGui::GetTextLineHeightWithSpacing() + spacingHeight;
+        const float fixedContentHeight = legendHeight + spacingHeight * 2.0F + mainPlotAxisReserve;
+        const auto layout = plot::solveWaveLayout(available.x,
+                                                  available.y,
+                                                  overviewRequestedHeight,
+                                                  wave.toolsExpandedWidth,
+                                                  wave.toolsCollapsedWidth,
+                                                  wave.toolsCollapsed,
+                                                  wave.contentToolsSplitterWidth + spacingWidth * 2.0F,
+                                                  wave.overviewCollapsed ? 0.0F : wave.overviewMainSplitterHeight,
+                                                  overviewMinHeight,
+                                                  wave.minMainPanelHeight,
+                                                  wave.minToolsExpandedWidth,
+                                                  wave.maxToolsExpandedWidth,
+                                                  fixedContentHeight);
+        wave.toolsExpandedWidth = wave.toolsCollapsed ? wave.toolsExpandedWidth : layout.toolsWidth;
+        const float toolsWidth = layout.toolsWidth;
+        const float contentWidth =
+            (std::max)(0.0F, available.x - toolsWidth - wave.contentToolsSplitterWidth - spacingWidth * 2.0F);
+        auto frame = prepareWaveFrame(wave, contentWidth);
+        const auto& fullSnapshot = *frame.fullSnapshot;
+        const auto& displayData = *frame.displayData;
+
+        ImGui::BeginChild("##wave_content", ImVec2(contentWidth, available.y), false, ImGuiWindowFlags_NoScrollbar);
+        ImGui::BeginChild("##wave_overview_panel", ImVec2(0.0F, layout.overviewHeight), true, ImGuiWindowFlags_NoScrollbar);
+        const ImVec2 overviewPanelCursor = ImGui::GetCursorPos();
+        if (!wave.overviewCollapsed) {
+            // 核心流程：先完整绘制概览，再把折叠按钮覆盖到左上角，避免按钮外区域失去概览交互。
+            drawOverviewWindow(view, config, fullSnapshot, displayData, frame.displayBounds, frame.renderBudget);
         }
-        drawChannelControls(wave, frame.fullSnapshot);
+        ImGui::SetCursorPos(overviewPanelCursor);
+        if (ImGui::Button(wave.overviewCollapsed ? "v" : "^", ImVec2(20.0F, 18.0F))) {
+            wave.overviewCollapsed = !wave.overviewCollapsed;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(wave.overviewCollapsed ? "展开概览图" : "折叠概览图");
+        }
+        ImGui::EndChild();
+        if (!wave.overviewCollapsed) {
+            drawHorizontalSplitter("##wave_overview_splitter",
+                                   wave.overviewPanelHeight,
+                                   wave.minOverviewPanelHeight,
+                                   wave.minMainPanelHeight,
+                                   layout.overviewHeight + layout.mainHeight + wave.overviewMainSplitterHeight,
+                                   wave.overviewMainSplitterHeight);
+        }
+
+        drawChannelLegendBar(wave, fullSnapshot);
+
+        ImGui::BeginChild("##wave_main_panel", ImVec2(0.0F, layout.mainHeight), false, ImGuiWindowFlags_NoScrollbar);
+        drawOscilloscopePlot(view, config, frame);
+        ImGui::EndChild();
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+        drawRightPanelSplitter("##wave_tools_splitter",
+                               wave.toolsExpandedWidth,
+                               wave.minToolsExpandedWidth,
+                               (std::max)(240.0F, contentWidth * 0.35F),
+                               available.x,
+                               wave.contentToolsSplitterWidth);
+        ImGui::SameLine();
+        ImGui::BeginChild("##wave_tools", ImVec2(toolsWidth, available.y), true);
+        if (ImGui::Button(wave.toolsCollapsed ? "<" : ">")) {
+            wave.toolsCollapsed = !wave.toolsCollapsed;
+        }
+        if (!wave.toolsCollapsed) {
+            ImGui::Separator();
+            drawWaveToolbar(application_, wave, config);
+            ImGui::Separator();
+            drawCursorToolbar(view, config, displayData);
+        } else {
+            drawWaveToolbar(application_, wave, config);
+        }
+        drawChannelControls(wave, fullSnapshot);
+        ImGui::EndChild();
     }
     ImGui::End();
 }
@@ -1297,19 +1655,9 @@ void WaveDockRenderer::syncWaveViewToLatest() {
         return;
     }
 
-    const auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
-    double latestTime = 0.0;
-    bool found = false;
-    for (const auto& channel : snapshot.channels) {
-        if (channel.totalSamples == 0 || channel.samples == nullptr) {
-            continue;
-        }
-        latestTime = (std::max)(latestTime, channel.samples[channel.totalSamples - 1].time);
-        found = true;
-    }
-    if (found) {
-        wave.view.viewMaxTime = latestTime;
-        wave.view.viewMinTime = latestTime - wave.view.visibleDuration;
+    if (const auto latestTime = wave.buffer.latestTime()) {
+        wave.view.viewMaxTime = *latestTime;
+        wave.view.viewMinTime = *latestTime - wave.view.visibleDuration;
         wave.view.centerTime = 0.5 * (wave.view.viewMinTime + wave.view.viewMaxTime);
         if (!wave.view.lockVerticalRange && !wave.view.initialized) {
             wave.view.viewMinValue = wave.view.manualVerticalMin;

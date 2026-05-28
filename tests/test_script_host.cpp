@@ -398,6 +398,7 @@ void test_config_default_roundtrip() {
     config.gui.wave.maxRenderPointsPerChannel = 64;
     config.gui.wave.maxRenderVertices = 4096;
     config.gui.wave.overviewMaxSamples = 128;
+    config.gui.wave.minVisibleTimeSpan = 0.0025;
 
     std::string error;
     require(store.save(tempPath, config, error), "默认配置写回失败");
@@ -413,6 +414,7 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
+    require(std::abs(reloaded.config.gui.wave.minVisibleTimeSpan - 0.0025) < 1e-12, "波形最小可视跨度 roundtrip 失败");
 }
 
 void test_config_logging_roundtrip() {
@@ -567,13 +569,16 @@ static const TestCase kAllTests[] = {
     {"transport_enqueue_send_async_roundtrip", &test_transport_enqueue_send_async_roundtrip},
     {"tcp_server_connection_takeover_replaces_active_client", &test_tcp_server_connection_takeover_replaces_active_client},
     {"serial_transport_error_path", &test_serial_transport_error_path},
+    {"serial_port_name_normalization", &test_serial_port_name_normalization},
     {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
     {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
+    {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
+    {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
     {"plot_cursor_snap_scope_selection", &test_plot_cursor_snap_scope_selection},

@@ -21,6 +21,7 @@ void require(bool condition, const char* message) {
 
 void test_plot_history_trim_and_envelope() {
     protoscope::plot::OscilloscopeBuffer buffer;
+    const auto initialRevision = buffer.dataRevision();
     buffer.setViewConfig(protoscope::plot::ViewConfig{
         .timeScale = 1.0,
         .timeUnit = "s",
@@ -31,16 +32,21 @@ void test_plot_history_trim_and_envelope() {
     });
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V"});
+    require(buffer.dataRevision() > initialRevision, "配置变更应推进波形数据版本");
 
     protoscope::plot::WaveAppendRequest request{.source = "test"};
     for (int i = 0; i < 8; ++i) {
         request.samples.push_back({.time = static_cast<double>(i), .value = std::sin(static_cast<double>(i))});
     }
     require(buffer.append(0, request), "追加采样应成功");
+    const auto appendRevision = buffer.dataRevision();
 
     const auto snapshot = buffer.snapshot(0.0, 10.0);
     require(snapshot.channels.size() == 1, "应存在 1 个通道");
     require(snapshot.channels[0].totalSamples == 5, "历史长度应裁剪到 5");
+    const auto latest = buffer.latestTime();
+    require(latest.has_value() && std::abs(*latest - 7.0) < 1e-12, "最新时间应来自裁剪后的尾部样本");
+    require(buffer.dataRevision() == appendRevision, "只读快照不应推进波形数据版本");
 
     const auto envelope = buffer.buildEnvelope(0, 3.0, 7.0, 2);
     require(!envelope.points.empty(), "降采样包络不应为空");
@@ -83,6 +89,107 @@ void test_plot_limited_envelope_preserves_spikes() {
     }
     require(foundPositiveSpike, "min/max 桶应保留正向尖峰");
     require(foundNegativeSpike, "min/max 桶应保留负向尖峰");
+}
+
+void test_wave_layout_solver_clamps_without_overflow() {
+    const auto layout = protoscope::plot::solveWaveLayout(900.0F,
+                                                          420.0F,
+                                                          240.0F,
+                                                          300.0F,
+                                                          34.0F,
+                                                          false,
+                                                          6.0F,
+                                                          6.0F,
+                                                          72.0F,
+                                                          160.0F,
+                                                          220.0F,
+                                                          520.0F,
+                                                          58.0F);
+    require(layout.toolsWidth >= 220.0F && layout.toolsWidth <= 520.0F, "工具栏宽度应被夹取到允许范围");
+    require(layout.overviewHeight >= 72.0F, "概览高度不应低于最小值");
+    require(layout.mainHeight >= 160.0F, "主视图高度不应低于最小值");
+    require(layout.overviewHeight + layout.mainHeight + 6.0F + 58.0F <= 420.0F + 1e-3F, "布局总高度不应溢出父窗口");
+
+    const auto draggedOverview = protoscope::plot::solveWaveLayout(900.0F,
+                                                                   600.0F,
+                                                                   260.0F,
+                                                                   300.0F,
+                                                                   34.0F,
+                                                                   false,
+                                                                   6.0F,
+                                                                   6.0F,
+                                                                   72.0F,
+                                                                   160.0F,
+                                                                   220.0F,
+                                                                   520.0F,
+                                                                   70.0F);
+    require(std::abs(draggedOverview.overviewHeight - 260.0F) < 1e-3F, "概览高度应尊重用户拖拽值，不应被 35% 上限拉回");
+
+    const auto splitterReserved = protoscope::plot::solveWaveLayout(230.0F,
+                                                                    420.0F,
+                                                                    120.0F,
+                                                                    280.0F,
+                                                                    34.0F,
+                                                                    false,
+                                                                    6.0F,
+                                                                    6.0F,
+                                                                    72.0F,
+                                                                    160.0F,
+                                                                    220.0F,
+                                                                    520.0F,
+                                                                    58.0F);
+    require(splitterReserved.toolsWidth <= 224.0F, "工具栏宽度应为内容区保留 splitter 空间");
+
+    const auto compact = protoscope::plot::solveWaveLayout(320.0F,
+                                                           120.0F,
+                                                           160.0F,
+                                                           300.0F,
+                                                           34.0F,
+                                                           true,
+                                                           6.0F,
+                                                           6.0F,
+                                                           72.0F,
+                                                           160.0F,
+                                                           220.0F,
+                                                           520.0F,
+                                                           40.0F);
+    require(compact.toolsWidth == 34.0F, "折叠工具栏应使用折叠宽度");
+    require(compact.overviewHeight + compact.mainHeight + 6.0F + 40.0F <= 120.0F + 1e-3F, "紧凑布局也不应产生纵向溢出");
+}
+
+void test_plot_low_density_envelope_keeps_single_value_line() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.setViewConfig(protoscope::plot::ViewConfig{
+        .timeScale = 1.0,
+        .timeUnit = "s",
+        .verticalMin = -10.0,
+        .verticalMax = 10.0,
+        .verticalUnit = "V",
+        .historyLimit = 20,
+    });
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 2.0, .offset = -1.0});
+
+    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
+                               .source = "low-density",
+                               .samples = {
+                                   {.time = 0.0, .value = 1.0},
+                                   {.time = 1.0, .value = -2.0},
+                                   {.time = 2.0, .value = 3.0},
+                               },
+                           }),
+            "追加低密度采样应成功");
+
+    const auto envelope = buffer.buildEnvelope(0, 0.0, 2.0, 4);
+    require(envelope.sourceSampleCount == 3, "低密度包络应记录原始样本数量");
+    require(envelope.points.size() == 3, "低密度包络应保留每个原始样本");
+    for (const auto& point : envelope.points) {
+        require(point.sampleCount == 1, "低密度包络每点应只对应一个样本");
+        require(std::abs(point.minValue - point.maxValue) < 1e-12, "低密度包络应退化为单值折线");
+    }
+    require(std::abs(envelope.points[0].minValue - 1.0) < 1e-12, "低密度包络应应用显示缩放和偏移");
+    require(std::abs(envelope.points[1].minValue + 5.0) < 1e-12, "低密度包络应保留变换后的负值");
+    require(std::abs(envelope.points[2].minValue - 5.0) < 1e-12, "低密度包络应保留变换后的正值");
 }
 
 void test_plot_cursor_snap_and_delta() {

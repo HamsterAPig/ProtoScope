@@ -36,14 +36,19 @@ void OscilloscopeBuffer::clear() {
     source_.clear();
     channels_.clear();
     config_ = ViewConfig{};
+    ++dataRevision_;
 }
 
 void OscilloscopeBuffer::configureChannels(std::size_t channelCount) {
+    const auto previousCount = channels_.size();
     channels_.resize(channelCount);
     for (std::size_t index = 0; index < channels_.size(); ++index) {
         if (channels_[index].spec.label.empty()) {
             channels_[index].spec.label = "CH" + std::to_string(index + 1);
         }
+    }
+    if (channels_.size() != previousCount) {
+        ++dataRevision_;
     }
 }
 
@@ -56,7 +61,14 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
     }
     spec.scale = sanitizeScale(spec.scale);
     spec.offset = sanitizeOffset(spec.offset);
-    channels_[channelIndex].spec = std::move(spec);
+    auto& channelSpec = channels_[channelIndex].spec;
+    if (channelSpec.label != spec.label
+        || channelSpec.unit != spec.unit
+        || channelSpec.scale != spec.scale
+        || channelSpec.offset != spec.offset) {
+        channelSpec = std::move(spec);
+        ++dataRevision_;
+    }
 }
 
 void OscilloscopeBuffer::setViewConfig(const ViewConfig& config) {
@@ -67,6 +79,7 @@ void OscilloscopeBuffer::setViewConfig(const ViewConfig& config) {
     if (std::abs(config_.timeScale) <= kEpsilon) {
         config_.timeScale = 1.0;
     }
+    ++dataRevision_;
 }
 
 std::size_t OscilloscopeBuffer::channelCount() const {
@@ -82,6 +95,24 @@ std::optional<ChannelSpec> OscilloscopeBuffer::channelSpec(std::size_t channelIn
 
 const ViewConfig& OscilloscopeBuffer::viewConfig() const {
     return config_;
+}
+
+std::uint64_t OscilloscopeBuffer::dataRevision() const {
+    return dataRevision_;
+}
+
+std::optional<double> OscilloscopeBuffer::latestTime() const {
+    std::optional<double> latest;
+    for (const auto& channel : channels_) {
+        if (channel.samples.empty()) {
+            continue;
+        }
+        const double candidate = channel.samples.back().time;
+        if (!latest.has_value() || candidate > *latest) {
+            latest = candidate;
+        }
+    }
+    return latest;
 }
 
 bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest request) {
@@ -115,6 +146,7 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
 
     channel.samples.insert(channel.samples.end(), request.samples.begin(), request.samples.end());
     trimHistory(channel);
+    ++dataRevision_;
     return true;
 }
 

@@ -111,6 +111,8 @@ public:
     std::size_t channelCount() const;
     std::optional<ChannelSpec> channelSpec(std::size_t channelIndex) const;
     const ViewConfig& viewConfig() const;
+    std::uint64_t dataRevision() const;
+    std::optional<double> latestTime() const;
 
     bool append(std::size_t channelIndex, WaveAppendRequest request);
     WaveSnapshot snapshot(double visibleMinTime, double visibleMaxTime) const;
@@ -155,6 +157,7 @@ private:
     std::string source_;
     ViewConfig config_{};
     std::vector<ChannelBuffer> channels_;
+    std::uint64_t dataRevision_{0};
 };
 
 } // namespace protoscope::plot

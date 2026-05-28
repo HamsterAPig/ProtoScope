@@ -45,6 +45,9 @@ struct SerialConfig {
     std::string flowControl{"none"};
 };
 
+std::vector<std::string> normalizeSerialPortNames(std::vector<std::string> ports);
+std::vector<std::string> listAvailableSerialPorts();
+
 using TransportConfig = std::variant<TcpClientConfig, TcpServerConfig, SerialConfig>;
 
 struct ConnectionContext {

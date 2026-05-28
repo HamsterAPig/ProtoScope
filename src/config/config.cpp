@@ -847,8 +847,14 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::size_t>(wave, "max_render_points_per_channel", result.config.gui.wave.maxRenderPointsPerChannel);
             result.config.gui.wave.maxRenderVertices =
                 readScalar<std::size_t>(wave, "max_render_vertices", result.config.gui.wave.maxRenderVertices);
+            result.config.gui.wave.downsampleStartMultiplier =
+                readScalar<double>(wave, "downsample_start_multiplier", result.config.gui.wave.downsampleStartMultiplier);
             result.config.gui.wave.overviewMaxSamples =
                 readScalar<std::size_t>(wave, "overview_max_samples", result.config.gui.wave.overviewMaxSamples);
+            result.config.gui.wave.minVisibleTimeSpan =
+                readScalar<double>(wave, "min_visible_time_span", result.config.gui.wave.minVisibleTimeSpan);
+            result.config.gui.wave.showAxisLabels =
+                readScalar<bool>(wave, "show_axis_labels", result.config.gui.wave.showAxisLabels);
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
         }
 
@@ -927,7 +933,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["window"]["maximized"] = config.gui.window.maximized;
     root["gui"]["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
     root["gui"]["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
+    root["gui"]["wave"]["downsample_start_multiplier"] = config.gui.wave.downsampleStartMultiplier;
     root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
+    root["gui"]["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
+    root["gui"]["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
     root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
@@ -1161,7 +1170,10 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     auto& wave = dockStore.waveState().view;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
+    wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
     wave.overviewMaxSamples = config.gui.wave.overviewMaxSamples;
+    wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
+    wave.showAxisLabels = config.gui.wave.showAxisLabels;
 }
 
 AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
@@ -1178,7 +1190,10 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.luaDockLayoutDebug = dockStore.configState().luaDockLayoutDebug;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
+    config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;
     config.gui.wave.overviewMaxSamples = dockStore.waveState().view.overviewMaxSamples;
+    config.gui.wave.minVisibleTimeSpan = dockStore.waveState().view.minVisibleTimeSpan;
+    config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
     config.configPath = dockStore.configState().loadedFromPath;
 
     return config;
