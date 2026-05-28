@@ -55,6 +55,10 @@ struct PlotGetterPayload {
     const plot::EnvelopePoint* points{nullptr};
 };
 
+struct WaveSampleGetterPayload {
+    const plot::WaveSample* samples{nullptr};
+};
+
 struct RenderBudget {
     std::size_t pointsPerChannel{1};
     std::size_t estimatedVerticesPerPoint{4};
@@ -73,6 +77,11 @@ ImPlotPoint envelopeLineMaxGetter(int index, void* data) {
 ImPlotPoint envelopeLineValueGetter(int index, void* data) {
     const auto* payload = static_cast<const PlotGetterPayload*>(data);
     return ImPlotPoint{payload->points[index].time, payload->points[index].minValue};
+}
+
+ImPlotPoint waveSampleGetter(int index, void* data) {
+    const auto* payload = static_cast<const WaveSampleGetterPayload*>(data);
+    return ImPlotPoint{payload->samples[index].time, payload->samples[index].value};
 }
 
 std::size_t clampRenderConfig(std::size_t value, std::size_t fallback) {
@@ -200,16 +209,17 @@ bool plotInteractionActive(bool toolHeld) {
     return toolHeld || (mouseAction && interactionAreaHovered);
 }
 
-bool drawVerticalSplitter(const char* id, float& leftWidth, float minLeftWidth, float minRightWidth, float totalWidth, float thickness) {
+bool drawRightPanelSplitter(const char* id, float& rightWidth, float minRightWidth, float minLeftWidth, float totalWidth, float thickness) {
     const float safeThickness = (std::max)(thickness, 4.0F);
     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
-    ImGui::Button(id, ImVec2(safeThickness, -1.0F));
+    ImGui::Button(id, ImVec2(safeThickness, ImGui::GetContentRegionAvail().y));
     ImGui::PopStyleColor(3);
     if (ImGui::IsItemActive()) {
-        leftWidth += ImGui::GetIO().MouseDelta.x;
-        leftWidth = (std::clamp)(leftWidth, minLeftWidth, (std::max)(minLeftWidth, totalWidth - minRightWidth - safeThickness));
+        // 右侧 splitter 位于工具栏左边界：手柄向左时右侧宽度变大，向右时变小。
+        rightWidth -= ImGui::GetIO().MouseDelta.x;
+        rightWidth = (std::clamp)(rightWidth, minRightWidth, (std::max)(minRightWidth, totalWidth - minLeftWidth - safeThickness));
         return true;
     }
     if (ImGui::IsItemHovered()) {
@@ -246,6 +256,52 @@ void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits, c
         view.viewMinValue = limits.Y.Min;
         view.viewMaxValue = limits.Y.Max;
     }
+}
+
+bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits, const plot::ViewConfig& config) {
+    constexpr double kLimitEpsilon = 1e-9;
+    const bool xChanged = std::abs(limits.X.Min - view.viewMinTime) > kLimitEpsilon
+        || std::abs(limits.X.Max - view.viewMaxTime) > kLimitEpsilon;
+    const bool yChanged = !view.lockVerticalRange
+        && (std::abs(limits.Y.Min - view.viewMinValue) > kLimitEpsilon
+            || std::abs(limits.Y.Max - view.viewMaxValue) > kLimitEpsilon);
+    if (!xChanged && !yChanged) {
+        return false;
+    }
+
+    // 核心流程：ImPlot 双击坐标轴会直接改当前帧轴限，这里回写视口状态，避免下一帧被旧的 viewMin/viewMax 覆盖。
+    recordMainPlotLimits(view, limits, config);
+    if (xChanged) {
+        view.autoFollowLatest = false;
+    }
+    return true;
+}
+
+bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDataBounds& bounds) {
+    if (!bounds.valid || !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        return false;
+    }
+
+    bool changed = false;
+    if (ImPlot::IsAxisHovered(ImAxis_X1)) {
+        // 核心流程：横轴双击要同步应用层视口；否则 autoFollow/Once 条件会在下一帧把 ImPlot autofit 覆盖回旧范围。
+        view.viewMinTime = bounds.minTime;
+        view.viewMaxTime = bounds.maxTime;
+        view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, (std::max)(view.minVisibleTimeSpan, 1e-6));
+        view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+        view.autoFollowLatest = false;
+        changed = true;
+    }
+    if (ImPlot::IsAxisHovered(ImAxis_Y1) && !view.lockVerticalRange) {
+        view.viewMinValue = bounds.minValue;
+        view.viewMaxValue = bounds.maxValue;
+        changed = true;
+    }
+
+    if (changed) {
+        view.forceNextMainPlotLimits = true;
+    }
+    return changed;
 }
 
 const char* axisSourceName(plot::WaveTimeAxisSource source) {
@@ -314,14 +370,25 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
     auto end = std::upper_bound(samples.begin(), samples.end(), visibleMaxTime, [](double value, const plot::WaveSample& sample) {
         return value < sample.time;
     });
+    const std::size_t visibleSampleCount = begin < end ? static_cast<std::size_t>(std::distance(begin, end)) : 0;
+    if (sourceSampleCount != nullptr) {
+        *sourceSampleCount = visibleSampleCount;
+    }
+
+    // 核心流程：高倍缩放可能落在两个采样点之间，此时可视区内没有点。
+    // 额外纳入左右相邻保护点，让 ImPlot 仍能裁剪并绘制穿过视窗的线段。
+    if (begin != samples.begin()) {
+        --begin;
+    }
+    if (end != samples.end()) {
+        ++end;
+    }
+
     if (begin >= end) {
         return envelope;
     }
 
     const std::size_t visibleCount = static_cast<std::size_t>(std::distance(begin, end));
-    if (sourceSampleCount != nullptr) {
-        *sourceSampleCount = visibleCount;
-    }
     const std::size_t bucketCount = (std::min)(pointLimit, visibleCount);
     envelope.reserve(bucketCount);
     for (std::size_t bucket = 0; bucket < bucketCount; ++bucket) {
@@ -589,12 +656,16 @@ void drawOverviewWindow(plot::WaveViewState& view,
         overviewMaxValue = config.verticalMax;
     }
 
-    const ImPlotFlags plotFlags = ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoMenus;
+    const ImPlotFlags plotFlags =
+        ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoMenus | ImPlotFlags_NoFrame;
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    // 概览图需要跟随 splitter 压缩，避免 ImPlot 默认 150px 最小高度撑住内部绘图区。
+    ImPlot::PushStyleVar(ImPlotStyleVar_PlotMinSize, ImVec2(64.0F, 24.0F));
+    ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(2.0F, 2.0F));
     if (ImPlot::BeginPlot("##wave_overview", ImVec2(-1.0F, -1.0F), plotFlags)) {
-        constexpr ImPlotAxisFlags axisFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoMenus;
+        constexpr ImPlotAxisFlags axisFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoDecorations;
         ImPlot::SetupAxis(ImAxis_X1, nullptr, axisFlags);
-        ImPlot::SetupAxis(ImAxis_Y1, nullptr, axisFlags | ImPlotAxisFlags_NoTickLabels);
+        ImPlot::SetupAxis(ImAxis_Y1, nullptr, axisFlags);
         ImPlot::SetupAxisLimits(ImAxis_X1, overviewMinTime, overviewMaxTime, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, overviewMinValue, overviewMaxValue, ImPlotCond_Always);
 
@@ -705,6 +776,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
         }
         ImPlot::EndPlot();
     }
+    ImPlot::PopStyleVar(2);
 }
 
 struct WaveFrameData {
@@ -757,6 +829,7 @@ void drawWaveToolbar(app::Application& application,
         ImGui::Checkbox("交互后暂停跟随", &view.pauseAutoFollowOnInteraction);
         ImGui::Checkbox("锁定纵轴", &view.lockVerticalRange);
         ImGui::Checkbox("稀疏时显示点", &view.showPointsWhenSparse);
+        ImGui::Checkbox("显示坐标轴标签", &view.showAxisLabels);
         if (ImGui::Button("清空历史")) {
             application.resetWaveHistory();
         }
@@ -827,6 +900,14 @@ void drawWaveToolbar(app::Application& application,
             ImGui::SetNextItemWidth(-1.0F);
             ImGui::InputDouble("##persistence_window", &view.persistenceWindow, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
             view.persistenceWindow = (std::max)(view.persistenceWindow, minVisibleTimeSpan);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("降采样启动倍数");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputDouble("##downsample_multiplier", &view.downsampleStartMultiplier, 0.1, 0.5, "%.2f");
+            view.downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -970,8 +1051,14 @@ void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
                                 const plot::WaveSnapshot& snapshot,
                                 const plot::WaveDisplayData& displayData) {
     constexpr ImPlotAxisFlags axisFlags = ImPlotAxisFlags_NoHighlight;
-    ImPlot::SetupAxis(ImAxis_X1, displayData.timeUnit == "sample" ? "Sample" : "Time", axisFlags);
-    ImPlot::SetupAxis(ImAxis_Y1, snapshot.config.verticalUnit.c_str(), axisFlags);
+    const char* xAxisLabel = nullptr;
+    const char* yAxisLabel = nullptr;
+    if (view.showAxisLabels) {
+        xAxisLabel = displayData.timeUnit == "sample" ? "Sample" : "Time";
+        yAxisLabel = snapshot.config.verticalUnit.c_str();
+    }
+    ImPlot::SetupAxis(ImAxis_X1, xAxisLabel, axisFlags);
+    ImPlot::SetupAxis(ImAxis_Y1, yAxisLabel, axisFlags);
     const bool forceMainPlotLimits = view.forceNextMainPlotLimits;
     ImPlot::SetupAxisLimits(ImAxis_X1,
                             view.viewMinTime,
@@ -1028,6 +1115,7 @@ void renderWaveChannels(plot::WaveViewState& view,
                         const ImPlotRect& limits) {
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
+        const auto& channelSamples = displayData.channels[channelIndex].samples;
         std::size_t sourceSampleCount = 0;
         const auto envelope = buildDisplayEnvelope(displayData.channels[channelIndex].samples,
                                                    limits.X.Min,
@@ -1038,17 +1126,65 @@ void renderWaveChannels(plot::WaveViewState& view,
         if (envelope.empty()) {
             continue;
         }
-        view.lastRenderPointCount += envelope.size();
-
-        PlotGetterPayload payload{.points = envelope.data()};
         const ImVec4 color = channelColor(channelIndex);
-        if (sourceSampleCount <= renderBudget.pointsPerChannel * 2) {
-            // 低密度数据保持单条普通波形，避免 min/max 辅助边界被误认为额外通道。
+        const double downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
+        const std::size_t downsampleThreshold =
+            static_cast<std::size_t>(std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
+        if (sourceSampleCount <= downsampleThreshold) {
+            auto begin = std::lower_bound(channelSamples.begin(),
+                                          channelSamples.end(),
+                                          limits.X.Min,
+                                          [](const plot::WaveSample& sample, double value) {
+                                              return sample.time < value;
+                                          });
+            auto end = std::upper_bound(channelSamples.begin(),
+                                        channelSamples.end(),
+                                        limits.X.Max,
+                                        [](double value, const plot::WaveSample& sample) {
+                                            return value < sample.time;
+                                        });
+            if (begin != channelSamples.begin()) {
+                --begin;
+            }
+            if (end != channelSamples.end()) {
+                ++end;
+            }
+            if (begin >= end) {
+                continue;
+            }
+            const std::size_t rawVisibleCount = static_cast<std::size_t>(std::distance(begin, end));
+            view.lastRenderPointCount += rawVisibleCount;
+
+            // 核心流程：低密度视图直接绘制原始点，避免桶包络把单条波形误画成双边界。
+            WaveSampleGetterPayload payload{.samples = &(*begin)};
             ImPlotSpec spec{};
             spec.LineColor = color;
             spec.LineWeight = 1.5F;
-            ImPlot::PlotLineG(channel.label.c_str(), &envelopeLineValueGetter, &payload, static_cast<int>(envelope.size()), spec);
-        } else if (view.phosphorGlowEnabled) {
+            ImPlot::PlotLineG(channel.label.c_str(), &waveSampleGetter, &payload, static_cast<int>(rawVisibleCount), spec);
+            if (view.showPointsWhenSparse) {
+                ImPlotSpec pointSpec{};
+                pointSpec.Marker = ImPlotMarker_Circle;
+                pointSpec.MarkerSize = 2.5F;
+                pointSpec.MarkerFillColor = color;
+                pointSpec.MarkerLineColor = color;
+                pointSpec.LineWeight = 0.0F;
+                ImPlot::PlotScatterG((channel.label + " samples").c_str(),
+                                     &waveSampleGetter,
+                                     &payload,
+                                     static_cast<int>(rawVisibleCount),
+                                     pointSpec);
+            }
+            continue;
+        }
+
+        view.lastRenderPointCount += envelope.size();
+        PlotGetterPayload payload{.points = envelope.data()};
+        ImPlotSpec legendSpec{};
+        legendSpec.LineColor = color;
+        legendSpec.LineWeight = 1.5F;
+        legendSpec.Flags = ImPlotItemFlags_NoFit;
+        ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
+        if (view.phosphorGlowEnabled) {
             renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);
         } else {
             renderEnvelopeAsBars(envelope, color);
@@ -1171,9 +1307,16 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
         return result;
     }
 
+    if (!view.showAxisLabels) {
+        ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(10.0F, 10.0F));
+        ImPlot::PushStyleVar(ImPlotStyleVar_LabelPadding, ImVec2(8.0F, 6.0F));
+    }
     if (!ImPlot::BeginPlot("##oscilloscope",
             ImVec2(-1.0F, -1.0F),
             ImPlotFlags_NoLegend)) {
+        if (!view.showAxisLabels) {
+            ImPlot::PopStyleVar(2);
+        }
         return result;
     }
 
@@ -1191,7 +1334,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
     }
     const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
 
-    const bool viewportChangedThisFrame = handleMainPlotZoom(view, config, mousePos);
+    const bool viewportChangedThisFrame =
+        handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, config, mousePos);
     renderWaveChannels(view, frame.snapshot, displayData, frame.renderBudget, limits);
     handleHoverReadout(view, frame.snapshot, displayData, mousePos, timeSnapDistance, valueSnapDistance);
 
@@ -1204,8 +1348,12 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
                                                  smartSnapDistance,
                                                  result.cursorReadouts);
     const bool userInteracting = plotInteractionActive(anyCursorHeld);
-    if (userInteracting && !viewportChangedThisFrame) {
-        recordMainPlotLimits(view, limits, config);
+    if (!viewportChangedThisFrame) {
+        const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
+        const bool limitsSynced = syncAutoFitAxisLimits(view, updatedLimits, config);
+        if (userInteracting && !limitsSynced) {
+            recordMainPlotLimits(view, updatedLimits, config);
+        }
     }
     if (userInteracting && view.pauseAutoFollowOnInteraction) {
         view.autoFollowLatest = false;
@@ -1224,6 +1372,9 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
     drawMeasurementOverlay(view, frame.snapshot, displayData, result);
 
     ImPlot::EndPlot();
+    if (!view.showAxisLabels) {
+        ImPlot::PopStyleVar(2);
+    }
     return result;
 }
 
@@ -1412,23 +1563,28 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
 
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
-        const float titleHeight = ImGui::GetTextLineHeightWithSpacing();
+        const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
         const float legendHeight = measureChannelLegendHeight(wave, wave.cachedFullSnapshot);
+        const float overviewRequestedHeight = wave.overviewCollapsed
+            ? wave.overviewCollapsedHeight
+            : wave.overviewPanelHeight;
+        const float overviewMinHeight = wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.minOverviewPanelHeight;
+        const float mainPlotAxisReserve = ImGui::GetTextLineHeightWithSpacing() + spacingHeight;
+        const float fixedContentHeight = legendHeight + spacingHeight * 2.0F + mainPlotAxisReserve;
         const auto layout = plot::solveWaveLayout(available.x,
                                                   available.y,
-                                                  wave.overviewPanelHeight,
+                                                  overviewRequestedHeight,
                                                   wave.toolsExpandedWidth,
                                                   wave.toolsCollapsedWidth,
                                                   wave.toolsCollapsed,
                                                   wave.contentToolsSplitterWidth + spacingWidth * 2.0F,
-                                                  wave.overviewMainSplitterHeight,
-                                                  wave.minOverviewPanelHeight,
+                                                  wave.overviewCollapsed ? 0.0F : wave.overviewMainSplitterHeight,
+                                                  overviewMinHeight,
                                                   wave.minMainPanelHeight,
                                                   wave.minToolsExpandedWidth,
                                                   wave.maxToolsExpandedWidth,
-                                                  titleHeight + legendHeight + ImGui::GetStyle().ItemSpacing.y * 2.0F);
+                                                  fixedContentHeight);
         wave.toolsExpandedWidth = wave.toolsCollapsed ? wave.toolsExpandedWidth : layout.toolsWidth;
-        wave.overviewPanelHeight = layout.overviewHeight;
         const float toolsWidth = layout.toolsWidth;
         const float contentWidth =
             (std::max)(0.0F, available.x - toolsWidth - wave.contentToolsSplitterWidth - spacingWidth * 2.0F);
@@ -1437,16 +1593,28 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         const auto& displayData = *frame.displayData;
 
         ImGui::BeginChild("##wave_content", ImVec2(contentWidth, available.y), false, ImGuiWindowFlags_NoScrollbar);
-        ImGui::TextUnformatted("概览");
         ImGui::BeginChild("##wave_overview_panel", ImVec2(0.0F, layout.overviewHeight), true, ImGuiWindowFlags_NoScrollbar);
-        drawOverviewWindow(view, config, fullSnapshot, displayData, frame.displayBounds, frame.renderBudget);
+        const ImVec2 overviewPanelCursor = ImGui::GetCursorPos();
+        if (!wave.overviewCollapsed) {
+            // 核心流程：先完整绘制概览，再把折叠按钮覆盖到左上角，避免按钮外区域失去概览交互。
+            drawOverviewWindow(view, config, fullSnapshot, displayData, frame.displayBounds, frame.renderBudget);
+        }
+        ImGui::SetCursorPos(overviewPanelCursor);
+        if (ImGui::Button(wave.overviewCollapsed ? "v" : "^", ImVec2(20.0F, 18.0F))) {
+            wave.overviewCollapsed = !wave.overviewCollapsed;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(wave.overviewCollapsed ? "展开概览图" : "折叠概览图");
+        }
         ImGui::EndChild();
-        drawHorizontalSplitter("##wave_overview_splitter",
-                               wave.overviewPanelHeight,
-                               wave.minOverviewPanelHeight,
-                               wave.minMainPanelHeight,
-                               layout.overviewHeight + layout.mainHeight + wave.overviewMainSplitterHeight,
-                               wave.overviewMainSplitterHeight);
+        if (!wave.overviewCollapsed) {
+            drawHorizontalSplitter("##wave_overview_splitter",
+                                   wave.overviewPanelHeight,
+                                   wave.minOverviewPanelHeight,
+                                   wave.minMainPanelHeight,
+                                   layout.overviewHeight + layout.mainHeight + wave.overviewMainSplitterHeight,
+                                   wave.overviewMainSplitterHeight);
+        }
 
         drawChannelLegendBar(wave, fullSnapshot);
 
@@ -1456,12 +1624,12 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         ImGui::EndChild();
 
         ImGui::SameLine();
-        drawVerticalSplitter("##wave_tools_splitter",
-                             wave.toolsExpandedWidth,
-                             wave.minToolsExpandedWidth,
-                             (std::max)(240.0F, contentWidth * 0.35F),
-                             available.x,
-                             wave.contentToolsSplitterWidth);
+        drawRightPanelSplitter("##wave_tools_splitter",
+                               wave.toolsExpandedWidth,
+                               wave.minToolsExpandedWidth,
+                               (std::max)(240.0F, contentWidth * 0.35F),
+                               available.x,
+                               wave.contentToolsSplitterWidth);
         ImGui::SameLine();
         ImGui::BeginChild("##wave_tools", ImVec2(toolsWidth, available.y), true);
         if (ImGui::Button(wave.toolsCollapsed ? "<" : ">")) {
