@@ -4,6 +4,9 @@
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/transport/transport.hpp"
 
+#include <sol/sol.hpp>
+
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -154,6 +157,7 @@ struct PlotChannelDescriptor {
     std::string unit;
     double scale{1.0};
     double offset{0.0};
+    std::optional<std::array<float, 4>> color;
 };
 
 struct PlotSetup {
@@ -165,6 +169,82 @@ struct PlotSetup {
 
 struct ScriptHostContext {
     transport::ConnectionContext connection;
+};
+
+enum class TxRequestKind {
+    Send,
+    Request,
+};
+
+struct TxRequest {
+    std::uint64_t id{0};
+    TxRequestKind kind{TxRequestKind::Send};
+    transport::ConnectionContext connection{};
+    std::vector<std::uint8_t> payload;
+    std::uint64_t timeoutMs{1000};
+    std::string tag;
+    std::uint64_t createdAtMs{0};
+};
+
+enum class TxEventState {
+    Sent,
+    Completed,
+    Timeout,
+    Rejected,
+    Dropped,
+    Canceled,
+};
+
+struct TxEvent {
+    std::uint64_t id{0};
+    TxRequestKind kind{TxRequestKind::Send};
+    TxEventState state{TxEventState::Sent};
+    std::string tag;
+    std::size_t bytes{0};
+    std::uint64_t queuedMs{0};
+    std::uint64_t finishedMs{0};
+    std::optional<std::string> error;
+};
+
+struct RequestDoneResult {
+    bool ok{true};
+    std::string message;
+    std::uint64_t timestampMs{0};
+};
+
+struct StatusUpdate {
+    std::string text;
+    std::string level{"info"};
+    bool clear{false};
+    std::uint64_t timestampMs{0};
+};
+
+enum class DialogKind {
+    Alert,
+    Confirm,
+};
+
+struct DialogRequest {
+    std::uint64_t id{0};
+    DialogKind kind{DialogKind::Alert};
+    transport::ConnectionContext connection{};
+    std::string title;
+    std::string message;
+    std::string level{"info"};
+    std::string dedupeKey;
+    std::uint64_t createdAtMs{0};
+};
+
+struct DialogEvent {
+    std::uint64_t id{0};
+    DialogKind kind{DialogKind::Alert};
+    std::string state;
+    std::optional<bool> confirmed;
+    std::string title;
+    std::string message;
+    std::string level{"info"};
+    std::string dedupeKey;
+    std::uint64_t timestampMs{0};
 };
 
 class ScriptHost {
@@ -190,14 +270,21 @@ public:
     std::vector<DockSnapshot> dockSnapshots() const;
     std::vector<ScriptEvent> drainEvents();
     std::vector<ScriptLog> drainLogs();
-    std::vector<std::vector<std::uint8_t>> drainSendQueue();
+    std::vector<TxRequest> drainTxRequests();
     std::vector<PlotSetup> drainPlotSetups();
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends();
+    std::vector<RequestDoneResult> drainRequestDoneResults();
+    std::vector<StatusUpdate> drainStatusUpdates();
+    std::vector<DialogRequest> drainDialogRequests();
     std::optional<std::uint64_t> nextWakeupAtMs() const;
 
     const std::string& scriptPath() const;
     const std::string& protocolDirectory() const;
     const std::string& lastError() const;
+
+    void onTxEvent(const transport::ConnectionContext& ctx, const TxEvent& event);
+    void onDialogEvent(const transport::ConnectionContext& ctx, const DialogEvent& event);
+    void setRequestAwaitingCompletion(bool active);
 
 private:
     void callbackOnOpen(const ScriptHostContext& ctx);
@@ -206,14 +293,25 @@ private:
     void callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes);
     void callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName);
     void callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value);
+    void callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event);
+    void callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event);
 
-    void protoSend(const std::vector<std::uint8_t>& bytes);
+    std::optional<TxRequest> protoSendLike(TxRequestKind kind,
+                                           const sol::object& payload,
+                                           const sol::object& opts,
+                                           std::string& error);
     void protoLog(const std::string& level, const std::string& message);
     void protoEmit(const std::string& eventName, const std::string& payload);
     void protoSetTimer(const std::string& name, std::uint64_t intervalMs);
     void protoCancelTimer(const std::string& name);
     void protoPlotSetup(const PlotSetup& setup);
     void protoPlotPush(std::size_t channelIndex, const plot::WaveAppendRequest& request);
+    bool protoRequestDone(const sol::object& result, std::string& error);
+    void protoStatusSet(const std::string& text, const sol::object& opts);
+    void protoStatusClear();
+    std::optional<DialogRequest> protoDialog(DialogKind kind, const sol::object& opts, std::string& error);
+    std::uint64_t nextTxRequestId();
+    std::uint64_t nextDialogId();
 
     static std::string valueToString(const ControlValue& value);
     void setLastError(std::string message);
@@ -236,12 +334,18 @@ private:
     std::unordered_map<std::string, ControlValue> controlValues_;
     std::vector<ScriptEvent> events_;
     std::vector<ScriptLog> logs_;
-    std::vector<std::vector<std::uint8_t>> sendQueue_;
+    std::vector<TxRequest> txRequests_;
     std::vector<PlotSetup> plotSetups_;
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends_;
+    std::vector<RequestDoneResult> requestDoneResults_;
+    std::vector<StatusUpdate> statusUpdates_;
+    std::vector<DialogRequest> dialogRequests_;
     std::unordered_map<std::string, TimerState> timers_;
     std::optional<transport::ConnectionContext> activeConnection_;
     std::unique_ptr<Runtime> runtime_;
+    std::uint64_t nextTxRequestId_{1};
+    std::uint64_t nextDialogId_{1};
+    bool requestAwaitingCompletion_{false};
 };
 
 } // namespace protoscope::scripting

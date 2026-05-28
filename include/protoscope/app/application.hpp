@@ -7,10 +7,12 @@
 #include "protoscope/transport/transport.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace protoscope::app {
 
@@ -40,6 +42,8 @@ public:
     void resetWaveHistory();
     logging::LoggingFacade& logger();
     const logging::LoggingFacade& logger() const;
+    std::vector<scripting::DialogRequest> drainDialogRequests();
+    void respondDialog(const scripting::DialogEvent& event);
 
     std::optional<std::uint64_t> nextWakeupAtMs() const;
     void setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
@@ -51,8 +55,26 @@ private:
     bool flushScriptOutputs();
     bool flushScriptLogs();
     bool flushScriptPlots();
+    bool flushScriptStatusAndDialogs();
+    bool processScriptRequestCompletions();
+    bool processRequestTimeouts();
+    bool driveTxScheduler();
+    bool enqueueTxRequest(scripting::TxRequest request);
+    void finishTxRequest(const scripting::TxRequest& request,
+                         scripting::TxEventState state,
+                         std::optional<std::string> error,
+                         std::uint64_t finishedAtMs);
+    void cancelAllTxRequests(const std::string& reason);
+    void notifyTxOverflow(const std::string& message);
+    void enqueueDialogRequest(const scripting::DialogRequest& request);
 
 private:
+    struct ActiveTxRequest {
+        scripting::TxRequest request;
+        std::uint64_t sentAtMs{0};
+        std::uint64_t waitDeadlineMs{0};
+    };
+
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
     config::AppConfig runtimeConfig_{};
@@ -61,6 +83,12 @@ private:
     std::unique_ptr<transport::ITransport> transport_;
     std::optional<transport::ConnectionContext> activeConnection_;
     std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> transportFactoryForTest_;
+    std::deque<scripting::TxRequest> pendingTxQueue_;
+    std::optional<ActiveTxRequest> activeWrite_;
+    std::optional<ActiveTxRequest> activeHalfDuplexRequest_;
+    std::deque<scripting::DialogRequest> pendingDialogs_;
+    std::unordered_map<std::uint64_t, scripting::DialogRequest> openDialogs_;
+    std::unordered_map<std::string, std::uint64_t> dialogDedupeKeys_;
 };
 
 } // namespace protoscope::app

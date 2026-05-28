@@ -24,6 +24,7 @@ void test_script_crc_bridge();
 void test_script_read_version_flow();
 void test_script_read_version_split_flow();
 void test_script_timeout_flow();
+void test_luals_api_sync_contains_tx_and_dialog_api();
 void test_script_missing_callbacks_allowed();
 void test_script_invalid_controls_fail();
 void test_script_invalid_dock_anchor_fail();

@@ -46,8 +46,8 @@ struct RecordingTransport final : protoscope::transport::ITransport {
         return sharedState_->opened;
     }
 
-    bool enqueueSend(std::vector<std::uint8_t> bytes) override {
-        sharedState_->sentBytes = std::move(bytes);
+    bool enqueueSend(protoscope::transport::TransportTxTask task) override {
+        sharedState_->sentBytes = std::move(task.payload);
         return sharedState_->opened;
     }
 

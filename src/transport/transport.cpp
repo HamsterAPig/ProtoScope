@@ -75,14 +75,25 @@ asio::serial_port_base::flow_control::type parseFlowControl(const std::string& f
 }
 
 template <typename Writer>
-bool enqueueWrite(asio::io_context& ioContext, std::atomic<bool>& stopping, std::vector<std::uint8_t> bytes, Writer&& writer) {
-    if (bytes.empty() || stopping.load(std::memory_order_relaxed)) {
+bool enqueueWrite(asio::io_context& ioContext, std::atomic<bool>& stopping, TransportTxTask task, Writer&& writer) {
+    if (task.payload.empty() || stopping.load(std::memory_order_relaxed)) {
         return false;
     }
-    asio::post(ioContext, [bytes = std::move(bytes), writer = std::forward<Writer>(writer)]() mutable {
-        writer(bytes);
+    asio::post(ioContext, [task = std::move(task), writer = std::forward<Writer>(writer)]() mutable {
+        writer(task);
     });
     return true;
+}
+
+template <typename Writable>
+std::pair<bool, std::string> writeBytes(Writable& writable, std::mutex& mutex, const std::vector<std::uint8_t>& bytes) {
+    try {
+        std::lock_guard lock(mutex);
+        asio::write(writable, asio::buffer(bytes));
+        return {true, {}};
+    } catch (const std::exception& ex) {
+        return {false, ex.what()};
+    }
 }
 
 } // namespace
@@ -329,26 +340,54 @@ bool TcpClientTransport::send(std::vector<std::uint8_t> bytes) {
         return false;
     }
 
-    try {
-        std::lock_guard lock(runtime_->socketMutex);
-        asio::write(runtime_->socket, asio::buffer(bytes));
+    const auto [ok, error] = writeBytes(runtime_->socket, runtime_->socketMutex, bytes);
+    if (ok) {
         addTx(bytes.size());
         return true;
-    } catch (const std::exception& ex) {
-        setState(TransportState::Error);
-        auto errorContext = *context_;
-        errorContext.timestampMs = nowMs();
-        pushEvent(TransportErrorEvent{std::move(errorContext), ex.what()});
-        return false;
     }
+
+    setState(TransportState::Error);
+    auto errorContext = *context_;
+    errorContext.timestampMs = nowMs();
+    pushEvent(TransportErrorEvent{std::move(errorContext), error});
+    return false;
 }
 
-bool TcpClientTransport::enqueueSend(std::vector<std::uint8_t> bytes) {
+bool TcpClientTransport::enqueueSend(TransportTxTask task) {
     if (state() != TransportState::Open || !context_.has_value()) {
         return false;
     }
-    return enqueueWrite(runtime_->ioContext, runtime_->stopping, std::move(bytes), [this](const std::vector<std::uint8_t>& payload) {
-        send(payload);
+    return enqueueWrite(runtime_->ioContext, runtime_->stopping, std::move(task), [this](TransportTxTask txTask) {
+        const auto writeStartedAtMs = nowMs();
+        const auto [ok, error] = writeBytes(runtime_->socket, runtime_->socketMutex, txTask.payload);
+        const auto finishedAtMs = nowMs();
+
+        TransportTxState state = TransportTxState::Sent;
+        if (!ok) {
+            setState(TransportState::Error);
+            if (context_.has_value()) {
+                auto errorContext = *context_;
+                errorContext.timestampMs = finishedAtMs;
+                pushEvent(TransportErrorEvent{std::move(errorContext), error});
+            }
+            state = TransportTxState::Rejected;
+        } else {
+            addTx(txTask.payload.size());
+            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs
+                && finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
+                state = TransportTxState::Timeout;
+            }
+        }
+
+        pushEvent(TransportTxEvent{
+            .requestId = txTask.requestId,
+            .kind = txTask.kind,
+            .state = state,
+            .error = error,
+            .bytes = txTask.payload.size(),
+            .queuedAtMs = txTask.queuedAtMs,
+            .finishedAtMs = finishedAtMs,
+        });
     });
 }
 
@@ -508,26 +547,54 @@ bool TcpServerTransport::send(std::vector<std::uint8_t> bytes) {
         return false;
     }
 
-    try {
-        std::lock_guard lock(runtime_->socketMutex);
-        asio::write(runtime_->clientSocket, asio::buffer(bytes));
+    const auto [ok, error] = writeBytes(runtime_->clientSocket, runtime_->socketMutex, bytes);
+    if (ok) {
         addTx(bytes.size());
         return true;
-    } catch (const std::exception& ex) {
-        setState(TransportState::Error);
-        auto errorContext = *clientContext_;
-        errorContext.timestampMs = nowMs();
-        pushEvent(TransportErrorEvent{std::move(errorContext), ex.what()});
-        return false;
     }
+
+    setState(TransportState::Error);
+    auto errorContext = *clientContext_;
+    errorContext.timestampMs = nowMs();
+    pushEvent(TransportErrorEvent{std::move(errorContext), error});
+    return false;
 }
 
-bool TcpServerTransport::enqueueSend(std::vector<std::uint8_t> bytes) {
+bool TcpServerTransport::enqueueSend(TransportTxTask task) {
     if (state() != TransportState::Open || !clientContext_.has_value()) {
         return false;
     }
-    return enqueueWrite(runtime_->ioContext, runtime_->stopping, std::move(bytes), [this](const std::vector<std::uint8_t>& payload) {
-        send(payload);
+    return enqueueWrite(runtime_->ioContext, runtime_->stopping, std::move(task), [this](TransportTxTask txTask) {
+        const auto writeStartedAtMs = nowMs();
+        const auto [ok, error] = writeBytes(runtime_->clientSocket, runtime_->socketMutex, txTask.payload);
+        const auto finishedAtMs = nowMs();
+
+        TransportTxState state = TransportTxState::Sent;
+        if (!ok) {
+            setState(TransportState::Error);
+            if (clientContext_.has_value()) {
+                auto errorContext = *clientContext_;
+                errorContext.timestampMs = finishedAtMs;
+                pushEvent(TransportErrorEvent{std::move(errorContext), error});
+            }
+            state = TransportTxState::Rejected;
+        } else {
+            addTx(txTask.payload.size());
+            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs
+                && finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
+                state = TransportTxState::Timeout;
+            }
+        }
+
+        pushEvent(TransportTxEvent{
+            .requestId = txTask.requestId,
+            .kind = txTask.kind,
+            .state = state,
+            .error = error,
+            .bytes = txTask.payload.size(),
+            .queuedAtMs = txTask.queuedAtMs,
+            .finishedAtMs = finishedAtMs,
+        });
     });
 }
 
@@ -637,26 +704,54 @@ bool SerialTransport::send(std::vector<std::uint8_t> bytes) {
         return false;
     }
 
-    try {
-        std::lock_guard lock(runtime_->portMutex);
-        asio::write(runtime_->serialPort, asio::buffer(bytes));
+    const auto [ok, error] = writeBytes(runtime_->serialPort, runtime_->portMutex, bytes);
+    if (ok) {
         addTx(bytes.size());
         return true;
-    } catch (const std::exception& ex) {
-        setState(TransportState::Error);
-        auto errorContext = *context_;
-        errorContext.timestampMs = nowMs();
-        pushEvent(TransportErrorEvent{std::move(errorContext), ex.what()});
-        return false;
     }
+
+    setState(TransportState::Error);
+    auto errorContext = *context_;
+    errorContext.timestampMs = nowMs();
+    pushEvent(TransportErrorEvent{std::move(errorContext), error});
+    return false;
 }
 
-bool SerialTransport::enqueueSend(std::vector<std::uint8_t> bytes) {
+bool SerialTransport::enqueueSend(TransportTxTask task) {
     if (state() != TransportState::Open || !context_.has_value()) {
         return false;
     }
-    return enqueueWrite(runtime_->ioContext, runtime_->stopping, std::move(bytes), [this](const std::vector<std::uint8_t>& payload) {
-        send(payload);
+    return enqueueWrite(runtime_->ioContext, runtime_->stopping, std::move(task), [this](TransportTxTask txTask) {
+        const auto writeStartedAtMs = nowMs();
+        const auto [ok, error] = writeBytes(runtime_->serialPort, runtime_->portMutex, txTask.payload);
+        const auto finishedAtMs = nowMs();
+
+        TransportTxState state = TransportTxState::Sent;
+        if (!ok) {
+            setState(TransportState::Error);
+            if (context_.has_value()) {
+                auto errorContext = *context_;
+                errorContext.timestampMs = finishedAtMs;
+                pushEvent(TransportErrorEvent{std::move(errorContext), error});
+            }
+            state = TransportTxState::Rejected;
+        } else {
+            addTx(txTask.payload.size());
+            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs
+                && finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
+                state = TransportTxState::Timeout;
+            }
+        }
+
+        pushEvent(TransportTxEvent{
+            .requestId = txTask.requestId,
+            .kind = txTask.kind,
+            .state = state,
+            .error = error,
+            .bytes = txTask.payload.size(),
+            .queuedAtMs = txTask.queuedAtMs,
+            .finishedAtMs = finishedAtMs,
+        });
     });
 }
 

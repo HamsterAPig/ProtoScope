@@ -139,7 +139,14 @@ void test_transport_enqueue_send_async_roundtrip() {
 
     const std::vector<std::uint8_t> payload{'Q', 'U', 'E', 'U', 'E'};
     const auto enqueueStart = std::chrono::steady_clock::now();
-    require(client.enqueueSend(payload), "客户端异步发送入队失败");
+    require(client.enqueueSend(TransportTxTask{
+                .requestId = 7,
+                .kind = TransportTxKind::Send,
+                .payload = payload,
+                .timeoutMs = 1000,
+                .queuedAtMs = 123,
+            }),
+            "客户端异步发送入队失败");
     const auto enqueueElapsed = std::chrono::steady_clock::now() - enqueueStart;
     require(enqueueElapsed < std::chrono::milliseconds(50), "enqueueSend 不应在调用线程里长时间阻塞");
 
@@ -154,6 +161,18 @@ void test_transport_enqueue_send_async_roundtrip() {
         return false;
     });
     require(serverReceived, "服务端未收到 enqueueSend 投递的报文");
+
+    const bool clientObservedTxEvent = waitUntil([&]() {
+        for (const auto& event : client.takeEvents()) {
+            if (const auto* tx = std::get_if<TransportTxEvent>(&event)) {
+                if (tx->requestId == 7 && tx->state == TransportTxState::Sent) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+    require(clientObservedTxEvent, "客户端未收到带 requestId 的发送结果事件");
 
     client.close();
     server.close();

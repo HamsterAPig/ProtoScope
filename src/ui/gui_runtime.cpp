@@ -629,6 +629,7 @@ void GuiRuntime::renderFrame() {
     drawLogDock();
     drawScriptDock();
     waveDockRenderer_.draw(showWaveDock_);
+    drawDialogs();
 
     ImGui::Render();
 
@@ -963,6 +964,74 @@ void GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& 
     for (const auto& control : controls) {
         drawDynamicControl(control);
     }
+}
+
+void GuiRuntime::syncDialogQueue() {
+    for (auto& request : application_.drainDialogRequests()) {
+        dialogQueue_.push_back(std::move(request));
+    }
+    if (!activeDialog_.has_value() && !dialogQueue_.empty()) {
+        activeDialog_ = std::move(dialogQueue_.front());
+        dialogQueue_.pop_front();
+        activeDialogOpened_ = false;
+    }
+}
+
+void GuiRuntime::drawDialogs() {
+    syncDialogQueue();
+    if (!activeDialog_.has_value()) {
+        return;
+    }
+
+    auto dialog = *activeDialog_;
+    const std::string popupId = dialog.title + "##proto_dialog_" + std::to_string(dialog.id);
+    if (!activeDialogOpened_) {
+        ImGui::OpenPopup(popupId.c_str());
+        activeDialogOpened_ = true;
+    }
+
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    if (!ImGui::BeginPopupModal(popupId.c_str(), nullptr, flags)) {
+        return;
+    }
+
+    ImGui::TextUnformatted(dialog.title.c_str());
+    ImGui::Separator();
+    ImGui::TextWrapped("%s", dialog.message.c_str());
+    ImGui::Spacing();
+
+    auto respond = [&](std::string state, std::optional<bool> confirmed) {
+        application_.respondDialog(scripting::DialogEvent{
+            .id = dialog.id,
+            .kind = dialog.kind,
+            .state = std::move(state),
+            .confirmed = confirmed,
+            .title = dialog.title,
+            .message = dialog.message,
+            .level = dialog.level,
+            .dedupeKey = dialog.dedupeKey,
+            .timestampMs = nowMs(),
+        });
+        activeDialog_.reset();
+        activeDialogOpened_ = false;
+        ImGui::CloseCurrentPopup();
+    };
+
+    if (dialog.kind == scripting::DialogKind::Confirm) {
+        if (ImGui::Button("确认", ImVec2(90.0F, 0.0F))) {
+            respond("confirmed", true);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+            respond("canceled", false);
+        }
+    } else {
+        if (ImGui::Button("关闭", ImVec2(90.0F, 0.0F))) {
+            respond("closed", std::nullopt);
+        }
+    }
+
+    ImGui::EndPopup();
 }
 
 void GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,

@@ -77,7 +77,38 @@ struct TransportBytesEvent {
     std::vector<std::uint8_t> bytes;
 };
 
-using TransportEvent = std::variant<TransportOpenEvent, TransportCloseEvent, TransportErrorEvent, TransportBytesEvent>;
+enum class TransportTxKind {
+    Send,
+    Request,
+};
+
+enum class TransportTxState {
+    Sent,
+    Timeout,
+    Rejected,
+    Dropped,
+    Canceled,
+};
+
+struct TransportTxTask {
+    std::uint64_t requestId{0};
+    TransportTxKind kind{TransportTxKind::Send};
+    std::vector<std::uint8_t> payload;
+    std::uint64_t timeoutMs{1000};
+    std::uint64_t queuedAtMs{0};
+};
+
+struct TransportTxEvent {
+    std::uint64_t requestId{0};
+    TransportTxKind kind{TransportTxKind::Send};
+    TransportTxState state{TransportTxState::Sent};
+    std::string error;
+    std::size_t bytes{0};
+    std::uint64_t queuedAtMs{0};
+    std::uint64_t finishedAtMs{0};
+};
+
+using TransportEvent = std::variant<TransportOpenEvent, TransportCloseEvent, TransportErrorEvent, TransportBytesEvent, TransportTxEvent>;
 
 class ITransport {
 public:
@@ -86,7 +117,7 @@ public:
     virtual bool open(const TransportConfig& config) = 0;
     virtual void close() = 0;
     virtual bool send(std::vector<std::uint8_t> bytes) = 0;
-    virtual bool enqueueSend(std::vector<std::uint8_t> bytes) = 0;
+    virtual bool enqueueSend(TransportTxTask task) = 0;
     virtual TransportState state() const = 0;
     virtual std::vector<TransportEvent> takeEvents() = 0;
     virtual std::uint64_t txCount() const = 0;
@@ -126,7 +157,7 @@ public:
     bool open(const TransportConfig& config) override;
     void close() override;
     bool send(std::vector<std::uint8_t> bytes) override;
-    bool enqueueSend(std::vector<std::uint8_t> bytes) override;
+    bool enqueueSend(TransportTxTask task) override;
 
 private:
     struct Runtime;
@@ -142,7 +173,7 @@ public:
     bool open(const TransportConfig& config) override;
     void close() override;
     bool send(std::vector<std::uint8_t> bytes) override;
-    bool enqueueSend(std::vector<std::uint8_t> bytes) override;
+    bool enqueueSend(TransportTxTask task) override;
 
 private:
     struct Runtime;
@@ -160,7 +191,7 @@ public:
     bool open(const TransportConfig& config) override;
     void close() override;
     bool send(std::vector<std::uint8_t> bytes) override;
-    bool enqueueSend(std::vector<std::uint8_t> bytes) override;
+    bool enqueueSend(TransportTxTask task) override;
 
 private:
     struct Runtime;

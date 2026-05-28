@@ -6,6 +6,7 @@
 #include <cmath>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <sstream>
@@ -37,6 +38,72 @@ std::string kindName(transport::TransportKind kind) {
         return "serial";
     }
     return "unknown";
+}
+
+std::string txKindName(TxRequestKind kind) {
+    switch (kind) {
+    case TxRequestKind::Send:
+        return "send";
+    case TxRequestKind::Request:
+        return "request";
+    }
+    return "send";
+}
+
+std::string txEventStateName(TxEventState state) {
+    switch (state) {
+    case TxEventState::Sent:
+        return "sent";
+    case TxEventState::Completed:
+        return "completed";
+    case TxEventState::Timeout:
+        return "timeout";
+    case TxEventState::Rejected:
+        return "rejected";
+    case TxEventState::Dropped:
+        return "dropped";
+    case TxEventState::Canceled:
+        return "canceled";
+    }
+    return "rejected";
+}
+
+std::string dialogKindName(DialogKind kind) {
+    switch (kind) {
+    case DialogKind::Alert:
+        return "alert";
+    case DialogKind::Confirm:
+        return "confirm";
+    }
+    return "alert";
+}
+
+std::optional<std::array<float, 4>> parseColorText(std::string_view text) {
+    if (text.size() != 7 && text.size() != 9) {
+        return std::nullopt;
+    }
+    if (text.front() != '#') {
+        return std::nullopt;
+    }
+
+    auto parseComponent = [&](std::size_t offset) -> std::optional<float> {
+        const std::string component{text.substr(offset, 2)};
+        char* end = nullptr;
+        const auto value = std::strtoul(component.c_str(), &end, 16);
+        if (end == nullptr || *end != '\0' || value > 255UL) {
+            return std::nullopt;
+        }
+        return static_cast<float>(value) / 255.0F;
+    };
+
+    const auto red = parseComponent(1);
+    const auto green = parseComponent(3);
+    const auto blue = parseComponent(5);
+    const auto alpha = text.size() == 9 ? parseComponent(7) : std::optional<float>{1.0F};
+    if (!red.has_value() || !green.has_value() || !blue.has_value() || !alpha.has_value()) {
+        return std::nullopt;
+    }
+    return std::array<float, 4>{*red, *green, *blue, *alpha};
 }
 
 ControlValue defaultValueFor(const ControlDescriptor& descriptor) {
@@ -842,6 +909,37 @@ sol::table makeBytesTable(sol::state_view lua, const std::vector<std::uint8_t>& 
     return table;
 }
 
+sol::table makeTxEventTable(sol::state_view lua, const TxEvent& event) {
+    sol::table table = lua.create_table();
+    table["id"] = event.id;
+    table["kind"] = txKindName(event.kind);
+    table["state"] = txEventStateName(event.state);
+    table["tag"] = event.tag;
+    table["bytes"] = static_cast<int>(event.bytes);
+    table["queued_ms"] = event.queuedMs;
+    table["finished_ms"] = event.finishedMs;
+    if (event.error.has_value()) {
+        table["error"] = *event.error;
+    }
+    return table;
+}
+
+sol::table makeDialogEventTable(sol::state_view lua, const DialogEvent& event) {
+    sol::table table = lua.create_table();
+    table["id"] = event.id;
+    table["kind"] = dialogKindName(event.kind);
+    table["state"] = event.state;
+    table["title"] = event.title;
+    table["message"] = event.message;
+    table["level"] = event.level;
+    table["dedupe_key"] = event.dedupeKey;
+    table["timestamp_ms"] = event.timestampMs;
+    if (event.confirmed.has_value()) {
+        table["confirmed"] = *event.confirmed;
+    }
+    return table;
+}
+
 std::string protectedCallError(sol::protected_function_result& result) {
     sol::error error = result;
     return error.what();
@@ -900,6 +998,14 @@ std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& 
         descriptor.unit = luaStringField(channelTable, "unit").value_or("");
         descriptor.scale = finiteOrDefault(luaNumberField(channelTable, "scale").value_or(1.0), 1.0);
         descriptor.offset = finiteOrDefault(luaNumberField(channelTable, "offset").value_or(0.0), 0.0);
+        if (const auto colorText = luaStringField(channelTable, "color"); colorText.has_value()) {
+            descriptor.color = parseColorText(*colorText);
+            if (!descriptor.color.has_value()) {
+                error = "plot.setup.channels[" + std::to_string(index)
+                    + "].color 必须是 #RRGGBB 或 #RRGGBBAA";
+                return std::nullopt;
+            }
+        }
         setup.channels.push_back(std::move(descriptor));
     }
     if (setup.channels.empty()) {
@@ -1007,14 +1113,34 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
     proto.set_function("log", [this](const std::string& level, const std::string& message) {
         protoLog(level, message);
     });
-    proto.set_function("send", [this](const sol::object& payload) {
+    proto.set_function("send", [this](const sol::object& payload, const sol::object& opts) {
         std::string error;
-        const auto maybeBytes = bytesFromLuaObject(payload, error);
-        if (!maybeBytes.has_value()) {
-            protoLog("error", "proto.send 调用失败: " + error);
-            return;
+        const auto request = protoSendLike(TxRequestKind::Send, payload, opts, error);
+        if (!request.has_value()) {
+            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
+                                   sol::make_object(runtime_->lua, error));
         }
-        protoSend(*maybeBytes);
+        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
+                               sol::make_object(runtime_->lua, sol::lua_nil));
+    });
+    proto.set_function("request", [this](const sol::object& payload, const sol::object& opts) {
+        std::string error;
+        const auto request = protoSendLike(TxRequestKind::Request, payload, opts, error);
+        if (!request.has_value()) {
+            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
+                                   sol::make_object(runtime_->lua, error));
+        }
+        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
+                               sol::make_object(runtime_->lua, sol::lua_nil));
+    });
+    proto.set_function("request_done", [this](const sol::object& result) {
+        std::string error;
+        if (protoRequestDone(result, error)) {
+            return std::make_tuple(sol::make_object(runtime_->lua, true),
+                                   sol::make_object(runtime_->lua, sol::lua_nil));
+        }
+        return std::make_tuple(sol::make_object(runtime_->lua, false),
+                               sol::make_object(runtime_->lua, error));
     });
     proto.set_function("emit", [this](const std::string& name, const sol::object& payload) {
         protoEmit(name, serializeLuaObject(payload));
@@ -1025,6 +1151,36 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
     proto.set_function("cancel_timer", [this](const std::string& name) {
         protoCancelTimer(name);
     });
+    sol::table statusApi = runtime_->lua.create_table();
+    statusApi.set_function("set", [this](const std::string& text, const sol::object& opts) {
+        protoStatusSet(text, opts);
+    });
+    statusApi.set_function("clear", [this]() {
+        protoStatusClear();
+    });
+    proto["status"] = statusApi;
+    sol::table uiApi = runtime_->lua.create_table();
+    uiApi.set_function("alert", [this](const sol::object& opts) {
+        std::string error;
+        const auto dialog = protoDialog(DialogKind::Alert, opts, error);
+        if (!dialog.has_value()) {
+            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
+                                   sol::make_object(runtime_->lua, error));
+        }
+        return std::make_tuple(sol::make_object(runtime_->lua, dialog->id),
+                               sol::make_object(runtime_->lua, sol::lua_nil));
+    });
+    uiApi.set_function("confirm", [this](const sol::object& opts) {
+        std::string error;
+        const auto dialog = protoDialog(DialogKind::Confirm, opts, error);
+        if (!dialog.has_value()) {
+            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
+                                   sol::make_object(runtime_->lua, error));
+        }
+        return std::make_tuple(sol::make_object(runtime_->lua, dialog->id),
+                               sol::make_object(runtime_->lua, sol::lua_nil));
+    });
+    proto["ui"] = uiApi;
     sol::table plotApi = runtime_->lua.create_table();
     plotApi.set_function("setup", [this](const sol::object& payload) {
         std::string error;
@@ -1131,9 +1287,13 @@ void ScriptHost::resetRuntime() {
     controlValues_.clear();
     events_.clear();
     logs_.clear();
-    sendQueue_.clear();
+    txRequests_.clear();
     timers_.clear();
+    requestDoneResults_.clear();
+    statusUpdates_.clear();
+    dialogRequests_.clear();
     activeConnection_.reset();
+    requestAwaitingCompletion_ = false;
     runtime_ = std::make_unique<Runtime>();
 }
 
@@ -1258,9 +1418,9 @@ std::vector<ScriptLog> ScriptHost::drainLogs() {
     return drained;
 }
 
-std::vector<std::vector<std::uint8_t>> ScriptHost::drainSendQueue() {
-    auto drained = std::move(sendQueue_);
-    sendQueue_.clear();
+std::vector<TxRequest> ScriptHost::drainTxRequests() {
+    auto drained = std::move(txRequests_);
+    txRequests_.clear();
     return drained;
 }
 
@@ -1273,6 +1433,24 @@ std::vector<PlotSetup> ScriptHost::drainPlotSetups() {
 std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> ScriptHost::drainPlotAppends() {
     auto drained = std::move(plotAppends_);
     plotAppends_.clear();
+    return drained;
+}
+
+std::vector<RequestDoneResult> ScriptHost::drainRequestDoneResults() {
+    auto drained = std::move(requestDoneResults_);
+    requestDoneResults_.clear();
+    return drained;
+}
+
+std::vector<StatusUpdate> ScriptHost::drainStatusUpdates() {
+    auto drained = std::move(statusUpdates_);
+    statusUpdates_.clear();
+    return drained;
+}
+
+std::vector<DialogRequest> ScriptHost::drainDialogRequests() {
+    auto drained = std::move(dialogRequests_);
+    dialogRequests_.clear();
     return drained;
 }
 
@@ -1299,6 +1477,18 @@ const std::string& ScriptHost::protocolDirectory() const {
 
 const std::string& ScriptHost::lastError() const {
     return lastError_;
+}
+
+void ScriptHost::onTxEvent(const transport::ConnectionContext& ctx, const TxEvent& event) {
+    callbackOnTx(ScriptHostContext{ctx}, event);
+}
+
+void ScriptHost::onDialogEvent(const transport::ConnectionContext& ctx, const DialogEvent& event) {
+    callbackOnDialog(ScriptHostContext{ctx}, event);
+}
+
+void ScriptHost::setRequestAwaitingCompletion(bool active) {
+    requestAwaitingCompletion_ = active;
 }
 
 void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
@@ -1398,8 +1588,161 @@ void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::stri
     }
 }
 
-void ScriptHost::protoSend(const std::vector<std::uint8_t>& bytes) {
-    sendQueue_.push_back(bytes);
+void ScriptHost::callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event) {
+    if (!scriptLoaded_) {
+        return;
+    }
+    sol::state_view view(runtime_->lua.lua_state());
+    const sol::object callbackObject = runtime_->lua["on_tx"];
+    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
+        return;
+    }
+    auto callback = callbackObject.as<sol::protected_function>();
+    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeTxEventTable(view, event));
+    if (!result.valid()) {
+        protoLog("error", "on_tx 执行失败: " + protectedCallError(result));
+    }
+}
+
+void ScriptHost::callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event) {
+    if (!scriptLoaded_) {
+        return;
+    }
+    sol::state_view view(runtime_->lua.lua_state());
+    const sol::object callbackObject = runtime_->lua["on_dialog"];
+    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
+        return;
+    }
+    auto callback = callbackObject.as<sol::protected_function>();
+    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeDialogEventTable(view, event));
+    if (!result.valid()) {
+        protoLog("error", "on_dialog 执行失败: " + protectedCallError(result));
+    }
+}
+
+std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
+                                                   const sol::object& payload,
+                                                   const sol::object& opts,
+                                                   std::string& error) {
+    const auto maybeBytes = bytesFromLuaObject(payload, error);
+    if (!maybeBytes.has_value()) {
+        protoLog("error", std::string(kind == TxRequestKind::Request ? "proto.request" : "proto.send") + " 调用失败: " + error);
+        return std::nullopt;
+    }
+
+    TxRequest request{};
+    request.id = nextTxRequestId();
+    request.kind = kind;
+    request.payload = *maybeBytes;
+    request.timeoutMs = 0;
+    request.createdAtMs = nowMs();
+    if (activeConnection_.has_value()) {
+        request.connection = *activeConnection_;
+    } else {
+        request.connection.endpoint = "detached";
+        request.connection.connectionId = 0;
+        request.connection.timestampMs = request.createdAtMs;
+        request.connection.readyForIo = false;
+    }
+
+    if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
+        if (!opts.is<sol::table>()) {
+            error = "opts 必须是 table";
+            protoLog("error", std::string(kind == TxRequestKind::Request ? "proto.request" : "proto.send") + " 调用失败: " + error);
+            return std::nullopt;
+        }
+        const sol::table options = opts.as<sol::table>();
+        if (const auto timeoutMs = luaNumberField(options, "timeout_ms"); timeoutMs.has_value()) {
+            request.timeoutMs = static_cast<std::uint64_t>(std::max(0.0, *timeoutMs));
+        }
+        request.tag = luaStringField(options, "tag").value_or("");
+    }
+
+    txRequests_.push_back(request);
+    return request;
+}
+
+bool ScriptHost::protoRequestDone(const sol::object& result, std::string& error) {
+    if (!requestAwaitingCompletion_) {
+        error = "当前没有活动 request";
+        protoLog("warn", "proto.request_done 被忽略: " + error);
+        return false;
+    }
+
+    RequestDoneResult requestDone{};
+    requestDone.timestampMs = nowMs();
+    if (result.valid() && result.get_type() != sol::type::lua_nil) {
+        if (!result.is<sol::table>()) {
+            error = "result 必须是 table";
+            protoLog("error", "proto.request_done 调用失败: " + error);
+            return false;
+        }
+        const sol::table table = result.as<sol::table>();
+        requestDone.ok = luaBoolField(table, "ok").value_or(true);
+        requestDone.message = luaStringField(table, "message").value_or("");
+    }
+
+    requestDoneResults_.push_back(requestDone);
+    return true;
+}
+
+void ScriptHost::protoStatusSet(const std::string& text, const sol::object& opts) {
+    StatusUpdate update{};
+    update.text = text;
+    update.level = "info";
+    update.timestampMs = nowMs();
+    if (opts.valid() && opts.get_type() != sol::type::lua_nil && opts.is<sol::table>()) {
+        update.level = luaStringField(opts.as<sol::table>(), "level").value_or(update.level);
+    }
+    statusUpdates_.push_back(std::move(update));
+}
+
+void ScriptHost::protoStatusClear() {
+    statusUpdates_.push_back(StatusUpdate{
+        .clear = true,
+        .timestampMs = nowMs(),
+    });
+}
+
+std::optional<DialogRequest> ScriptHost::protoDialog(DialogKind kind, const sol::object& opts, std::string& error) {
+    if (!opts.is<sol::table>()) {
+        error = "opts 必须是 table";
+        protoLog("error", std::string(kind == DialogKind::Alert ? "proto.ui.alert" : "proto.ui.confirm") + " 调用失败: " + error);
+        return std::nullopt;
+    }
+
+    const sol::table table = opts.as<sol::table>();
+    DialogRequest request{};
+    request.id = nextDialogId();
+    request.kind = kind;
+    request.title = luaStringField(table, "title").value_or("");
+    request.message = luaStringField(table, "message").value_or("");
+    request.level = luaStringField(table, "level").value_or("info");
+    request.dedupeKey = luaStringField(table, "dedupe_key").value_or("");
+    request.createdAtMs = nowMs();
+    if (activeConnection_.has_value()) {
+        request.connection = *activeConnection_;
+    } else {
+        request.connection.endpoint = "detached";
+        request.connection.connectionId = 0;
+        request.connection.timestampMs = request.createdAtMs;
+        request.connection.readyForIo = false;
+    }
+    if (request.title.empty() || request.message.empty()) {
+        error = "title 和 message 不能为空";
+        protoLog("error", std::string(kind == DialogKind::Alert ? "proto.ui.alert" : "proto.ui.confirm") + " 调用失败: " + error);
+        return std::nullopt;
+    }
+    dialogRequests_.push_back(request);
+    return request;
+}
+
+std::uint64_t ScriptHost::nextTxRequestId() {
+    return nextTxRequestId_++;
+}
+
+std::uint64_t ScriptHost::nextDialogId() {
+    return nextDialogId_++;
 }
 
 void ScriptHost::protoLog(const std::string& level, const std::string& message) {

@@ -138,11 +138,18 @@ float densityStrength(std::size_t sampleCount) {
     return static_cast<float>((std::clamp)(0.35 + strength, 0.35, 1.0));
 }
 
-ImVec4 channelColor(std::size_t channelIndex) {
+ImVec4 fallbackChannelColor(std::size_t channelIndex) {
     return ImVec4(0.15F + 0.25F * static_cast<float>(channelIndex % 3),
                   0.75F,
                   0.35F + 0.2F * static_cast<float>((channelIndex + 1) % 3),
                   1.0F);
+}
+
+ImVec4 channelColor(const plot::ChannelSpec& spec, std::size_t channelIndex) {
+    if (!spec.color.has_value()) {
+        return fallbackChannelColor(channelIndex);
+    }
+    return ImVec4((*spec.color)[0], (*spec.color)[1], (*spec.color)[2], (*spec.color)[3]);
 }
 
 void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
@@ -676,7 +683,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
                 continue;
             }
             PlotGetterPayload payload{.points = overview.data()};
-            const auto color = withAlpha(channelColor(channelIndex), 0.65F);
+            const auto color = withAlpha(channelColor(fullSnapshot.channels[channelIndex], channelIndex), 0.65F);
             ImPlotSpec spec{};
             spec.LineColor = color;
             spec.LineWeight = 1.0F;
@@ -1116,7 +1123,7 @@ void renderWaveChannels(plot::WaveViewState& view,
         if (envelope.empty()) {
             continue;
         }
-        const ImVec4 color = channelColor(channelIndex);
+        const ImVec4 color = channelColor(*spec, channelIndex);
         const double downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
         const std::size_t downsampleThreshold =
             static_cast<std::size_t>(std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
@@ -1451,7 +1458,7 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
         if (channelIndex > 0) {
             ImGui::SameLine();
         }
-        ImGui::ColorButton("##legend_color", channelColor(channelIndex), ImGuiColorEditFlags_NoTooltip, ImVec2(12.0F, 12.0F));
+        ImGui::ColorButton("##legend_color", channelColor(*spec, channelIndex), ImGuiColorEditFlags_NoTooltip, ImVec2(12.0F, 12.0F));
         ImGui::SameLine(0.0F, 4.0F);
         const bool active = channelIndex == view.measurementChannelIndex;
         if (active) {
@@ -1468,6 +1475,7 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
                 .unit = spec->unit,
                 .scale = 1.0,
                 .offset = 0.0,
+                .color = spec->color,
             };
             const plot::ChannelSpec defaultSpec = channelIndex < wave.defaultChannelSpecs.size()
                 ? wave.defaultChannelSpecs[channelIndex]

@@ -75,7 +75,7 @@ std::string toTransportKindText(transport::TransportKind kind) {
 
 const std::vector<std::string> kDefaultSerialPorts = {"COM1", "COM2", "COM3", "COM4"};
 
-const char* kDefaultProtocolMainLua = R"PROTO(-- 核心流程：协议脚本只描述控件、收发和超时语义，底层 I/O 与 UI 统一由宿主的 proto.* API 承担。
+const char* kDefaultProtocolMainLua = R"PROTO(-- 核心流程：协议脚本只描述控件、收发和完整应答，发送排队、半双工、超时与弹窗都交给宿主处理。
 
 function ui()
   return {
@@ -87,6 +87,20 @@ function ui()
       controls = {
         { type = "button", id = "read_version", label = "读取版本" },
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
+      },
+      layout = {
+        kind = "table",
+        columns = 2,
+        borders = false,
+        resizable = true,
+        row_bg = false,
+        sizing = "stretch",
+        rows = {
+          {
+            { control = "read_version" },
+            { control = "device_id" },
+          },
+        }
       }
     },
     {
@@ -98,7 +112,21 @@ function ui()
         { type = "checkbox", id = "hex_send", label = "HEX 发送", default = true },
         { type = "combo", id = "mode", label = "模式", options = { "轮询", "单次" }, default = 1 },
         { type = "input_int", id = "timeout_ms", label = "超时(ms)", default = 1000 },
-        { type = "input_float", id = "scale", label = "缩放", default = 1.0 }
+        { type = "input_float", id = "scale", label = "缩放", default = 1.0 },
+      },
+      layout = {
+        kind = "form",
+        items = {
+          { text = "超时由宿主 request 队列管理；脚本只在拿到完整应答后调用 proto.request_done。" },
+          { controls = { "hex_send", "mode" } },
+          { separator = true },
+          {
+            group = "采样参数",
+            items = {
+              { controls = { "timeout_ms", "scale" } },
+            }
+          }
+        }
       }
     }
   }
@@ -106,46 +134,32 @@ end
 
 local rx_buffer = {}
 local next_scope_t = 0.0
+local current_request_id = nil
+local current_request_tag = nil
 
-local function init_scope(reset_history)
-  proto.plot.setup({
-    source = "default_protocol",
-    reset_history = reset_history,
-    time_scale = 0.001,
+proto.plot.setup({
+  source = "default_protocol",
+  channels = {
+    { label = "CH1", unit = "V", color = "#47C971" },
+    { label = "CH2", unit = "V", color = "#5B8FF9" },
+  },
+  view = {
+    time_scale = 0.2,
     time_unit = "s",
-    vertical_min = -2.0,
-    vertical_max = 2.0,
+    vertical_min = -1.5,
+    vertical_max = 1.5,
     vertical_unit = "V",
-    history_limit = 20000,
-    channels = {
-      { label = "CH1", unit = "V" },
-      { label = "CH2", unit = "V" }
-    }
-  })
-end
-
-local function push_scope_samples(bytes)
-  local ch1 = {}
-  local ch2 = {}
-  for i = 1, #bytes do
-    local value = bytes[i]
-    ch1[#ch1 + 1] = { t = next_scope_t, y = (value - 128.0) / 64.0 }
-    ch2[#ch2 + 1] = { t = next_scope_t, y = ((value % 32) - 16.0) / 8.0 }
-    next_scope_t = next_scope_t + 0.001
-  end
-  if #ch1 > 0 then
-    proto.plot.push(1, { samples = ch1 })
-    proto.plot.push(2, { samples = ch2 })
-  end
-end
+    history_limit = 2000,
+  }
+})
 
 local function clear_rx_buffer()
   rx_buffer = {}
 end
 
 local function append_bytes(bytes)
-  for i = 1, #bytes do
-    rx_buffer[#rx_buffer + 1] = bytes[i]
+  for _, value in ipairs(bytes) do
+    rx_buffer[#rx_buffer + 1] = value
   end
 end
 
@@ -153,51 +167,94 @@ local function timeout_ms()
   return proto.get_control("timeout_ms") or 1000
 end
 
-local function device_id_byte()
-  local device_id = tostring(proto.get_control("device_id") or "01")
-  return string.byte(device_id, 1, 1) or 0x30
+local function current_scale()
+  local scale = proto.get_control("scale") or 1.0
+  if scale == 0 then
+    return 1.0
+  end
+  return scale
 end
 
 local function build_read_version_frame()
-  if proto.get_control("hex_send") then
-    return { 0xAA, 0x55, device_id_byte(), 0x01, 0x0D }
-  end
-  return "52 45 41 44 20 " .. string.format("%02X", device_id_byte())
+  local text = tostring(proto.get_control("device_id") or "01")
+  local device = tonumber(text, 16) or 0x01
+  return { 0xAA, 0x55, device & 0xFF, 0x0D }
 end
 
-local function parse_frame(bytes)
-  if #bytes >= 2 and bytes[1] == string.byte("O") and bytes[2] == string.byte("K") then
-    return {
-      status = "ok",
-      size = #bytes,
-      mode = proto.get_control("mode"),
-      scale = proto.get_control("scale")
-    }
+local function parse_frame(buffer)
+  if #buffer < 4 then
+    return nil
   end
-  return nil
+  if buffer[#buffer - 1] ~= 0x0D or buffer[#buffer] ~= 0x0A then
+    return nil
+  end
+  local chars = {}
+  for i = 1, #buffer - 2 do
+    chars[i] = string.char(buffer[i])
+  end
+  return {
+    raw = table.concat(chars),
+    text = table.concat(chars),
+    size = #buffer,
+  }
+end
+
+local function push_scope_samples(bytes)
+  local scale = current_scale()
+  local samples = {}
+  for _, value in ipairs(bytes) do
+    local normalized = (value - 128.0) / 128.0
+    samples[#samples + 1] = { t = next_scope_t, y = normalized * scale }
+    next_scope_t = next_scope_t + 0.001
+  end
+  if #samples > 0 then
+    proto.plot.push(1, { source = "rx", samples = samples })
+  end
+end
+
+local function clear_pending_request()
+  current_request_id = nil
+  current_request_tag = nil
 end
 
 function on_open(ctx)
-  init_scope(true)
   proto.log("info", "连接已打开: " .. ctx.kind .. " -> " .. ctx.endpoint)
+  proto.status.set("连接已打开，等待发送请求", { level = "info" })
 end
 
 function on_close(ctx)
   proto.log("info", "连接已关闭: " .. ctx.endpoint)
+  proto.status.clear()
+  clear_pending_request()
 end
 
 function on_error(ctx, message)
   proto.log("error", "连接错误: " .. message)
+  proto.status.set("连接错误: " .. message, { level = "error" })
+  clear_pending_request()
 end
 
 function on_control(ctx, id, value)
   if id == "read_version" then
     clear_rx_buffer()
-    proto.send(build_read_version_frame())
-    proto.set_timer("read_version_timeout", timeout_ms())
-    proto.emit("request", { action = "read_version", connection_id = ctx.connection_id })
-  else
-    proto.log("info", "控件更新: " .. id .. "=" .. tostring(value))
+    local request_id, err = proto.request(build_read_version_frame(), {
+      timeout_ms = timeout_ms(),
+      tag = "read_version",
+    })
+    if not request_id then
+      proto.status.set("读取版本请求入队失败: " .. tostring(err), { level = "error" })
+      proto.ui.alert({
+        title = "请求失败",
+        message = "读取版本请求入队失败: " .. tostring(err),
+        level = "error",
+        dedupe_key = "read_version_request_failed",
+      })
+      return
+    end
+    current_request_id = request_id
+    current_request_tag = "read_version"
+    proto.status.set("读取版本请求已入队", { level = "info" })
+    proto.emit("request", { action = "read_version", request_id = request_id, connection_id = ctx.connection_id })
   end
 end
 
@@ -207,18 +264,46 @@ function on_bytes(ctx, bytes)
   local result = parse_frame(rx_buffer)
   if result then
     clear_rx_buffer()
-    proto.cancel_timer("read_version_timeout")
     proto.emit("frame", result)
+    proto.status.set("已收到完整版本帧", { level = "info" })
+    if current_request_id then
+      proto.request_done({ ok = true, message = "版本应答完成" })
+      clear_pending_request()
+    end
   else
     proto.emit("rx_bytes", { size = #bytes })
   end
 end
 
-function on_timer(ctx, name)
-  if name == "read_version_timeout" then
-    clear_rx_buffer()
-    proto.emit("warning", { message = "读取版本超时", connection_id = ctx.connection_id })
+function on_tx(ctx, evt)
+  if evt.kind == "request" and evt.tag == "read_version" then
+    if evt.state == "sent" then
+      proto.status.set("读取版本请求已写出，等待完整应答", { level = "info" })
+    elseif evt.state == "completed" then
+      proto.status.set("读取版本流程完成", { level = "info" })
+      clear_pending_request()
+    elseif evt.state == "timeout" then
+      clear_rx_buffer()
+      clear_pending_request()
+      proto.status.set("读取版本超时", { level = "warn" })
+      proto.ui.alert({
+        title = "请求超时",
+        message = "读取版本请求在宿主等待 request_done 时超时。",
+        level = "warn",
+        dedupe_key = "read_version_timeout",
+      })
+    elseif evt.state == "rejected" or evt.state == "dropped" or evt.state == "canceled" then
+      clear_rx_buffer()
+      clear_pending_request()
+      proto.status.set("读取版本请求失败: " .. tostring(evt.error or evt.state), { level = "error" })
+    end
+  elseif evt.state == "rejected" then
+    proto.status.set("发送失败: " .. tostring(evt.error or "unknown"), { level = "error" })
   end
+end
+
+function on_dialog(ctx, evt)
+  proto.emit("dialog", evt)
 end
 )PROTO";
 
@@ -461,293 +546,367 @@ restart(true)
 
 const char* kDefaultProtocolsReadme = R"README(# ProtoScope Lua 协议脚本指南
 
-`protocols` 是 ProtoScope 的 Lua 协议工作区。每个协议目录至少包含一个 `main.lua`：
+`protocols` 是 ProtoScope 的 Lua 协议工作区。宿主会自动注入全局 `proto`，脚本只负责描述 UI、协议解析和在“完整应答完成”时调用 `proto.request_done()`。
 
-```text
-protocols/
-├── default_protocol/
-│   └── main.lua
-├── lua_waveform_demo/
-│   └── main.lua
-├── README.md
-└── protoscope_api.lua
-```
+## 发送模型
 
-启动时如果当前工作目录不存在 `protocols` 目录，程序会自动生成以上默认工作区。若目录已存在，程序不会覆盖用户脚本。
+新的发送 API 分成两类：
 
-## 快速开始
+- `proto.send(payload, opts?)`：普通异步发送，写出成功后会收到一次 `on_tx(..., { state = "sent" })`。
+- `proto.request(payload, opts?)`：半双工请求。宿主负责排队、串行下发、超时、取消和下一条自动推进。
+- `proto.request_done(result?)`：脚本在**确认收到完整应答**后调用；不需要传 `request_id`。
 
-协议脚本由宿主加载执行，不需要 `require` 任何 ProtoScope 模块。脚本通过全局对象 `proto` 与宿主通信：
+示例：
 
 ```lua
-function ui()
-  return {
-    {
-      id = "protocol",
-      title = "协议动作",
-      anchor = "left_bottom",
-      tab_group = "protocol_tools",
-      controls = {
-        { type = "button", id = "read_version", label = "读取版本" },
-        { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
-      }
-    }
-  }
-end
+local request_id, err = proto.request({ 0xAA, 0x55, 0x01, 0x0D }, {
+  timeout_ms = 1000,
+  tag = "read_version",
+})
 
-function on_control(ctx, id, value)
-  if id == "read_version" then
-    proto.send({ 0xAA, 0x55, 0x01, 0x0D })
-    proto.set_timer("read_version_timeout", 1000)
+function on_bytes(ctx, bytes)
+  if has_full_response(bytes) then
+    proto.request_done({ ok = true, message = "版本应答完成" })
   end
 end
 ```
 
-## UI 定义
+## `on_tx` 回调
 
-脚本可定义 `ui()`，返回 Dock 面板数组。每个 Dock 支持：
+宿主只在主线程回调 `on_tx(ctx, evt)`：
 
-- `id`：Dock 唯一 ID。
-- `title`：面板标题。
-- `anchor`：停靠位置，可用值为 `left`、`left_bottom`、`right_top`、`right_mid`、`right_bottom`、`main_bottom`，默认 `left_bottom`。
-- `tab_group`：同组 Dock 以标签页形式组织，可省略。
-- `controls`：控件数组。
+```lua
+---@class ProtoTxEvent
+---@field id integer
+---@field kind 'send'|'request'
+---@field state 'sent'|'completed'|'timeout'|'rejected'|'dropped'|'canceled'
+---@field tag string
+---@field bytes integer
+---@field queued_ms integer
+---@field finished_ms integer
+---@field error? string
+```
 
-控件类型：
+其中：
 
-- `button`：按钮，点击后触发 `on_control(ctx, id, true)`。
-- `input_text`：文本输入，`default` 为字符串。
-- `input_int`：整数输入，`default` 为整数。
-- `input_float`：浮点输入，`default` 为数字。
-- `checkbox`：复选框，`default` 为布尔值。
-- `combo`：下拉框，必须提供 `options` 字符串数组，`default` 为从 1 开始的选项序号。
+- `sent`：字节已经写出。
+- `completed`：仅 `request` 在 `proto.request_done()` 后触发。
+- `timeout` / `rejected` / `dropped` / `canceled`：都属于宿主终态。
 
-## 生命周期回调
+## 状态栏与弹窗 API
 
-按需定义以下全局函数即可：
+```lua
+proto.status.set("读取版本请求已写出", { level = "info" })
+proto.status.clear()
 
-- `on_open(ctx)`：连接打开。
-- `on_close(ctx)`：连接关闭。
-- `on_error(ctx, message)`：连接或传输错误。
-- `on_control(ctx, id, value)`：UI 控件变化或按钮点击。
-- `on_bytes(ctx, bytes)`：收到字节数组，`bytes` 为 `number[]`，元素范围 `0..255`。
-- `on_timer(ctx, name)`：定时器触发。
+proto.ui.alert({
+  title = "请求超时",
+  message = "读取版本请求超时",
+  level = "warn",
+  dedupe_key = "read_version_timeout",
+})
+```
 
-`ctx` 包含：
+- `proto.status.set(text, opts?)`：写入底部状态栏，`opts.level` 当前只做轻量级语义标记。
+- `proto.ui.alert(opts)`：宿主管理的模态框，固定“关闭”按钮。
+- `proto.ui.confirm(opts)`：宿主管理的确认框，固定“确认 / 取消”。
+- `dedupe_key`：同一个 key 在未关闭前只保留一个弹窗。
+- 用户关闭/确认后会回调 `on_dialog(ctx, evt)`。
 
-- `connection_id`：连接 ID。
-- `kind`：连接类型，例如 `serial`、`tcp_client`、`tcp_server`。
-- `endpoint`：端点描述。
+## 波形颜色
 
-## 通信与事件 API
-
-- `proto.send(payload)`：发送数据，`payload` 可为字符串或 `number[]`。
-- `proto.log(level, message)`：写日志，`level` 常用 `debug`、`info`、`warn`、`error`。
-- `proto.emit(name, payload)`：向宿主发出结构化脚本事件，`payload` 会序列化显示。
-- `proto.get_control(id)`：读取控件当前值。
-- `proto.set_control(id, value)`：设置控件当前值。
-- `proto.set_timer(name, delay_ms)`：设置一次性定时器。
-- `proto.cancel_timer(name)`：取消定时器。
-
-CRC 辅助函数：
-
-- `proto.crc16_modbus(payload)`：返回 Modbus CRC16。
-- `proto.crc16_ccitt_false(payload)`：返回 CRC16/CCITT-FALSE。
-- `proto.crc32_ieee(payload)`：返回 IEEE CRC32。
-
-## 波形绘图 API
-
-调用 `proto.plot.setup(payload)` 配置波形通道：
+`proto.plot.setup()` 的 `channels[]` 现在支持颜色：
 
 ```lua
 proto.plot.setup({
-  source = "demo",
-  reset_history = true,
-  time_scale = 0.001,
-  time_unit = "s",
-  vertical_min = -2.0,
-  vertical_max = 2.0,
-  vertical_unit = "V",
-  history_limit = 20000,
+  source = "default_protocol",
   channels = {
-    { label = "CH1", unit = "V" },
-    { label = "CH2", unit = "V", offset = 1.0 },
+    { label = "CH1", unit = "V", color = "#47C971" },
+    { label = "CH2", unit = "V", color = "#5B8FF9AA" },
   }
 })
 ```
 
-调用 `proto.plot.push(channel_index, payload)` 追加采样点。`channel_index` 从 1 开始：
+支持：
 
-```lua
-proto.plot.push(1, {
-  samples = {
-    { t = 0.000, y = 0.0 },
-    { t = 0.001, y = 0.5 },
-  }
-})
-```
+- `#RRGGBB`
+- `#RRGGBBAA`
+
+只改颜色不会清空历史波形；宿主只刷新显示配置。
 
 ## LuaLS 类型提示
 
-`protocols/protoscope_api.lua` 是给 LuaLS 使用的虚拟 API 文件，只包含注解和空实现，不参与运行时协议逻辑。
+`protocols/protoscope_api.lua` 仅供 LuaLS 使用，不参与运行时。
 
-在 LuaLS 中把 `protocols/protoscope_api.lua` 加入 workspace/library 后，打开 `default_protocol/main.lua` 或 `lua_waveform_demo/main.lua` 即可获得 `proto.*`、`proto.plot.*` 和回调参数的基础类型提示。
+把 `protocols/protoscope_api.lua` 加入 LuaLS 的 `workspace.library` 后，就能获得：
 
-业务脚本无需 `require("protoscope_api")`，运行时由 ProtoScope 注入全局 `proto`。
+- `proto.send / proto.request / proto.request_done`
+- `proto.status.* / proto.ui.*`
+- `on_tx / on_dialog`
+- `ProtoPlotChannel.color`
+
+## 默认协议示例
+
+`protocols/default_protocol/main.lua` 已经示范新的半双工语义：
+
+- “读取版本”使用 `proto.request(...)`
+- 收到完整帧后调用 `proto.request_done(...)`
+- 超时由宿主 request timeout 主导
+- 状态栏和弹窗都走新的 `proto.status.* / proto.ui.*`
 )README";
 
 const char* kDefaultLuaLsApi = R"LUALS(---@meta
 
----@alias ProtoLogLevel '"debug"'|'"info"'|'"warn"'|'"error"'
----@alias ProtoControlType '"button"'|'"input_text"'|'"input_int"'|'"input_float"'|'"checkbox"'|'"combo"'
----@alias ProtoDockAnchor '"left"'|'"left_bottom"'|'"right_top"'|'"right_mid"'|'"right_bottom"'|'"main_bottom"'
+---@alias ProtoLogLevel 'debug'|'info'|'warn'|'error'
+---@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'
+---@alias ProtoDockAnchor 'left'|'left_bottom'|'right_top'|'right_mid'|'right_bottom'|'main_bottom'
 ---@alias ProtoControlValue boolean|integer|number|string|nil
 ---@alias ProtoBytes integer[]
 ---@alias ProtoPayload string|ProtoBytes
+---@alias ProtoFormLayoutItem ProtoFormControlItem|ProtoFormControlsItem|ProtoFormGroupItem|ProtoFormCollapseItem|ProtoFormSeparatorItem|ProtoFormTextItem
+---@alias ProtoTxKind 'send'|'request'
+---@alias ProtoTxState 'sent'|'completed'|'timeout'|'rejected'|'dropped'|'canceled'
+---@alias ProtoDialogKind 'alert'|'confirm'
+---@alias ProtoDialogState 'closed'|'confirmed'|'canceled'
+
+---@class ProtoTableCell
+---@field control? string
+---@field spacer? boolean
+
+---@class ProtoTableLayout
+---@field kind 'table'
+---@field columns integer
+---@field borders? boolean
+---@field resizable? boolean
+---@field row_bg? boolean
+---@field sizing? 'stretch'
+---@field rows ProtoTableCell[][]
+
+---@class ProtoFormControlItem
+---@field control string
+
+---@class ProtoFormControlsItem
+---@field controls string[]
+
+---@class ProtoFormGroupItem
+---@field group string
+---@field items ProtoFormLayoutItem[]
+
+---@class ProtoFormCollapseItem
+---@field collapse string
+---@field default_open? boolean
+---@field items ProtoFormLayoutItem[]
+
+---@class ProtoFormSeparatorItem
+---@field separator true
+
+---@class ProtoFormTextItem
+---@field text string
+
+---@class ProtoFormLayout
+---@field kind 'form'
+---@field items ProtoFormLayoutItem[]
+
+---@alias ProtoDockLayout ProtoTableLayout|ProtoFormLayout
 
 ---@class ProtoConnectionContext
----@field connection_id integer 连接 ID。
----@field kind string 连接类型，例如 serial、tcp_client、tcp_server。
----@field endpoint string 端点描述。
+---@field connection_id integer
+---@field kind string
+---@field endpoint string
+---@field timestamp_ms integer
+---@field ready_for_io boolean
 
 ---@class ProtoControlDescriptor
----@field type ProtoControlType 控件类型。
----@field id string 控件 ID。
----@field label string 控件标签。
----@field default? ProtoControlValue 默认值；combo 为从 1 开始的选项序号。
----@field options? string[] combo 控件选项。
+---@field type ProtoControlType
+---@field id string
+---@field label string
+---@field default? ProtoControlValue
+---@field options? string[]
 
 ---@class ProtoDockDescriptor
----@field id string Dock 唯一 ID。
----@field title string Dock 标题。
----@field anchor? ProtoDockAnchor 停靠位置，默认 left_bottom。
----@field tab_group? string 标签页分组。
----@field controls ProtoControlDescriptor[] 控件列表。
-
----@class ProtoEventPayload
----@field [string] any
+---@field id string
+---@field title string
+---@field anchor? ProtoDockAnchor
+---@field tab_group? string
+---@field controls ProtoControlDescriptor[]
+---@field layout? ProtoDockLayout
 
 ---@class ProtoPlotChannel
----@field label string 通道名称。
----@field unit? string 通道单位。
----@field scale? number 通道显示缩放，按 raw * scale + offset 参与显示。
----@field offset? number 通道显示偏移。
+---@field label string
+---@field unit? string
+---@field scale? number
+---@field offset? number
+---@field color? string @支持 '#RRGGBB' 或 '#RRGGBBAA'。
 
 ---@class ProtoPlotSetup
----@field source? string 数据来源名称。
----@field reset_history? boolean 是否清空历史数据。
----@field time_scale? number 时间缩放。
----@field time_unit? string 时间单位。
----@field vertical_min? number 垂直轴最小值。
----@field vertical_max? number 垂直轴最大值。
----@field vertical_unit? string 垂直轴单位。
----@field history_limit? integer 历史采样保留上限。
----@field channels ProtoPlotChannel[] 通道定义。
+---@field source? string
+---@field channels ProtoPlotChannel[]
+---@field reset_history? boolean
+---@field view? { time_scale?: number, time_unit?: string, vertical_min?: number, vertical_max?: number, vertical_unit?: string, history_limit?: integer }
 
 ---@class ProtoPlotSample
----@field t number 时间戳。
----@field y number 采样值。
+---@field t number
+---@field y number
 
----@class ProtoPlotPushPayload
----@field samples ProtoPlotSample[] 采样点数组。
+---@class ProtoPlotAppendRequest
+---@field source? string
+---@field samples ProtoPlotSample[]
 
----@class ProtoPlotApi
-local plot_api = {}
+---@class ProtoSendOptions
+---@field timeout_ms? integer
+---@field tag? string
 
----配置 Lua 波形通道和显示参数。
----@param payload ProtoPlotSetup
-function plot_api.setup(payload) end
+---@class ProtoRequestOptions
+---@field timeout_ms? integer
+---@field tag? string
 
----向指定通道追加采样点；channel_index 从 1 开始。
----@param channel_index integer
----@param payload ProtoPlotPushPayload
-function plot_api.push(channel_index, payload) end
+---@class ProtoRequestDoneResult
+---@field ok? boolean
+---@field message? string
 
----@class ProtoApi
----@field plot ProtoPlotApi
-proto = {}
-proto.plot = plot_api
+---@class ProtoTxEvent
+---@field id integer
+---@field kind ProtoTxKind
+---@field state ProtoTxState
+---@field tag string
+---@field bytes integer
+---@field queued_ms integer
+---@field finished_ms integer
+---@field error? string
 
----写入脚本日志。
+---@class ProtoStatusOptions
+---@field level? ProtoLogLevel
+
+---@class ProtoDialogOptions
+---@field title string
+---@field message string
+---@field level? ProtoLogLevel
+---@field dedupe_key? string
+
+---@class ProtoDialogEvent
+---@field id integer
+---@field kind ProtoDialogKind
+---@field state ProtoDialogState
+---@field confirmed? boolean
+---@field title string
+---@field message string
+---@field level ProtoLogLevel
+---@field dedupe_key string
+---@field timestamp_ms integer
+
+proto = proto or {}
+proto.plot = proto.plot or {}
+proto.status = proto.status or {}
+proto.ui = proto.ui or {}
+
 ---@param level ProtoLogLevel
 ---@param message string
 function proto.log(level, message) end
 
----发送字节数组或字符串。
 ---@param payload ProtoPayload
-function proto.send(payload) end
+---@param opts? ProtoSendOptions
+---@return integer|nil request_id
+---@return string|nil error
+function proto.send(payload, opts) end
 
----发出结构化脚本事件。
+---@param payload ProtoPayload
+---@param opts? ProtoRequestOptions
+---@return integer|nil request_id
+---@return string|nil error
+function proto.request(payload, opts) end
+
+---@param result? ProtoRequestDoneResult
+---@return boolean ok
+---@return string|nil error
+function proto.request_done(result) end
+
 ---@param name string
 ---@param payload any
 function proto.emit(name, payload) end
 
----读取控件当前值。
----@param id string
----@return ProtoControlValue
-function proto.get_control(id) return nil end
-
----设置控件当前值。
----@param id string
----@param value ProtoControlValue
-function proto.set_control(id, value) end
-
----设置一次性定时器。
 ---@param name string
 ---@param delay_ms integer
 function proto.set_timer(name, delay_ms) end
 
----取消定时器。
 ---@param name string
 function proto.cancel_timer(name) end
 
----计算 Modbus CRC16。
+---@param text string
+---@param opts? ProtoStatusOptions
+function proto.status.set(text, opts) end
+
+function proto.status.clear() end
+
+---@param opts ProtoDialogOptions
+---@return integer|nil dialog_id
+---@return string|nil error
+function proto.ui.alert(opts) end
+
+---@param opts ProtoDialogOptions
+---@return integer|nil dialog_id
+---@return string|nil error
+function proto.ui.confirm(opts) end
+
+---@param payload ProtoPlotSetup
+function proto.plot.setup(payload) end
+
+---@param channel_index integer
+---@param payload ProtoPlotAppendRequest
+function proto.plot.push(channel_index, payload) end
+
+---@param id string
+---@return ProtoControlValue
+function proto.get_control(id) end
+
+---@param id string
+---@param value ProtoControlValue
+function proto.set_control(id, value) end
+
 ---@param payload ProtoPayload
 ---@return integer
-function proto.crc16_modbus(payload) return 0 end
+function proto.crc16_modbus(payload) end
 
----计算 CRC16/CCITT-FALSE。
 ---@param payload ProtoPayload
 ---@return integer
-function proto.crc16_ccitt_false(payload) return 0 end
+function proto.crc16_ccitt_false(payload) end
 
----计算 IEEE CRC32。
 ---@param payload ProtoPayload
 ---@return integer
-function proto.crc32_ieee(payload) return 0 end
+function proto.crc32_ieee(payload) end
 
----定义 Dock UI。
 ---@return ProtoDockDescriptor[]
-function ui() return {} end
+function ui() end
 
----连接打开回调。
 ---@param ctx ProtoConnectionContext
 function on_open(ctx) end
 
----连接关闭回调。
 ---@param ctx ProtoConnectionContext
 function on_close(ctx) end
 
----连接错误回调。
 ---@param ctx ProtoConnectionContext
 ---@param message string
 function on_error(ctx, message) end
 
----控件变化回调。
 ---@param ctx ProtoConnectionContext
 ---@param id string
 ---@param value ProtoControlValue
 function on_control(ctx, id, value) end
 
----收到字节回调。
 ---@param ctx ProtoConnectionContext
 ---@param bytes ProtoBytes
 function on_bytes(ctx, bytes) end
 
----定时器触发回调。
 ---@param ctx ProtoConnectionContext
 ---@param name string
 function on_timer(ctx, name) end
+
+---@param ctx ProtoConnectionContext
+---@param evt ProtoTxEvent
+function on_tx(ctx, evt) end
+
+---@param ctx ProtoConnectionContext
+---@param evt ProtoDialogEvent
+function on_dialog(ctx, evt) end
 )LUALS";
 
 const char* kDefaultGuide = R"(# ProtoScope Lua Host Guide
@@ -782,10 +941,16 @@ end
 
 ## proto API
 - `proto.log(level, message)`
-- `proto.send(hexStringOrByteArray)`
+- `proto.send(payload, opts?)`
+- `proto.request(payload, opts?)`
+- `proto.request_done(result?)`
 - `proto.emit(name, payload)`
 - `proto.set_timer(name, delayMs)`
 - `proto.cancel_timer(name)`
+- `proto.status.set(text, opts?)`
+- `proto.status.clear()`
+- `proto.ui.alert(opts)`
+- `proto.ui.confirm(opts)`
 - `proto.get_control(id)`
 - `proto.set_control(id, value)`
 - `proto.crc16_modbus(payload)`
@@ -861,6 +1026,18 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         const auto protocol = root["protocol"];
         result.config.protocol.rootDir = readScalar<std::string>(protocol, "root_dir", result.config.protocol.rootDir);
         result.config.protocol.selectedDir = readScalar<std::string>(protocol, "selected_dir", result.config.protocol.selectedDir);
+        if (const auto tx = protocol["tx"]) {
+            result.config.protocol.tx.sendTimeoutMs =
+                readScalar<std::uint64_t>(tx, "send_timeout_ms", result.config.protocol.tx.sendTimeoutMs);
+            result.config.protocol.tx.requestTimeoutMs =
+                readScalar<std::uint64_t>(tx, "request_timeout_ms", result.config.protocol.tx.requestTimeoutMs);
+            result.config.protocol.tx.maxPending =
+                readScalar<std::size_t>(tx, "max_pending", result.config.protocol.tx.maxPending);
+            result.config.protocol.tx.overflowPolicy =
+                readScalar<std::string>(tx, "overflow_policy", result.config.protocol.tx.overflowPolicy);
+            result.config.protocol.tx.overflowNotify =
+                readScalar<std::string>(tx, "overflow_notify", result.config.protocol.tx.overflowNotify);
+        }
         const auto logging = root["logging"];
         result.config.logging.level =
             parseLogLevel(readScalar<std::string>(logging, "level", toLogLevelText(result.config.logging.level)));
@@ -941,6 +1118,11 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
     root["protocol"]["selected_dir"] = config.protocol.selectedDir;
+    root["protocol"]["tx"]["send_timeout_ms"] = config.protocol.tx.sendTimeoutMs;
+    root["protocol"]["tx"]["request_timeout_ms"] = config.protocol.tx.requestTimeoutMs;
+    root["protocol"]["tx"]["max_pending"] = config.protocol.tx.maxPending;
+    root["protocol"]["tx"]["overflow_policy"] = config.protocol.tx.overflowPolicy;
+    root["protocol"]["tx"]["overflow_notify"] = config.protocol.tx.overflowNotify;
     root["logging"]["level"] = toLogLevelText(config.logging.level);
     if (!config.logging.filePath.empty()) {
         root["logging"]["file_path"] = config.logging.filePath;

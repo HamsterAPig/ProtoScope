@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -23,6 +24,7 @@ struct ChannelSpec {
     std::string unit;
     double scale{1.0};
     double offset{0.0};
+    std::optional<std::array<float, 4>> color;
 };
 
 double applyChannelDisplayTransform(double rawValue, const ChannelSpec& spec);

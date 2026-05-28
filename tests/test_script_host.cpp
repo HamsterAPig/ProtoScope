@@ -217,13 +217,14 @@ void test_script_read_version_flow() {
     host.onControl(ctx, "device_id", std::string("01"));
     host.onControl(ctx, "read_version", true);
 
-    const auto sendQueue = host.drainSendQueue();
-    require(sendQueue.size() == 1, "read_version 应产生一次发送");
-    require(sendQueue[0].size() >= 5, "发送帧长度不正确");
+    const auto requests = host.drainTxRequests();
+    require(requests.size() == 1, "read_version 应产生一次请求");
+    require(requests[0].kind == protoscope::scripting::TxRequestKind::Request, "read_version 应走 proto.request");
+    require(requests[0].payload.size() >= 4, "发送帧长度不正确");
 
     const std::vector<std::uint8_t> response{'O', 'K', '\r', '\n'};
+    host.setRequestAwaitingCompletion(true);
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, response});
-    host.tick(nowMs() + 2000);
 
     bool foundFrame = false;
     for (const auto& event : host.drainEvents()) {
@@ -232,6 +233,7 @@ void test_script_read_version_flow() {
         }
     }
     require(foundFrame, "收到 OK 响应后应产生 frame 事件");
+    require(!host.drainRequestDoneResults().empty(), "收到完整帧后应调用 proto.request_done");
 }
 
 void test_script_read_version_split_flow() {
@@ -268,15 +270,40 @@ void test_script_timeout_flow() {
     const auto ctx = sampleCtx();
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
     host.onControl(ctx, "read_version", true);
-    host.tick(nowMs() + 2000);
+    host.onTxEvent(ctx,
+                   protoscope::scripting::TxEvent{
+                       .id = 1,
+                       .kind = protoscope::scripting::TxRequestKind::Request,
+                       .state = protoscope::scripting::TxEventState::Timeout,
+                       .tag = "read_version",
+                       .bytes = 4,
+                       .queuedMs = nowMs(),
+                       .finishedMs = nowMs(),
+                       .error = std::string("timeout"),
+                   });
 
-    bool foundWarning = false;
-    for (const auto& event : host.drainEvents()) {
-        if (event.name == "warning") {
-            foundWarning = true;
+    bool foundWarnStatus = false;
+    for (const auto& update : host.drainStatusUpdates()) {
+        if (update.text.find("超时") != std::string::npos) {
+            foundWarnStatus = true;
         }
     }
-    require(foundWarning, "超时应产生 warning 事件");
+    require(foundWarnStatus, "超时应更新状态栏");
+    require(!host.drainDialogRequests().empty(), "超时应弹出 alert");
+}
+
+void test_luals_api_sync_contains_tx_and_dialog_api() {
+    std::ifstream input("protocols/protoscope_api.lua");
+    require(input.good(), "应能读取 protoscope_api.lua");
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    const std::string text = buffer.str();
+    require(text.find("function proto.request(payload, opts) end") != std::string::npos, "LuaLS API 应声明 proto.request");
+    require(text.find("function proto.request_done(result) end") != std::string::npos, "LuaLS API 应声明 proto.request_done");
+    require(text.find("function proto.ui.alert(opts) end") != std::string::npos, "LuaLS API 应声明 proto.ui.alert");
+    require(text.find("function on_tx(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_tx");
+    require(text.find("function on_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_dialog");
+    require(text.find("@field color? string") != std::string::npos, "LuaLS API 应声明 ProtoPlotChannel.color");
 }
 
 void test_script_missing_callbacks_allowed() {
@@ -523,6 +550,7 @@ static const TestCase kAllTests[] = {
     {"script_read_version_flow", &test_script_read_version_flow},
     {"script_read_version_split_flow", &test_script_read_version_split_flow},
     {"script_timeout_flow", &test_script_timeout_flow},
+    {"luals_api_sync_contains_tx_and_dialog_api", &test_luals_api_sync_contains_tx_and_dialog_api},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},
     {"script_invalid_dock_anchor_fail", &test_script_invalid_dock_anchor_fail},

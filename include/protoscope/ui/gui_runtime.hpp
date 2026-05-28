@@ -6,6 +6,7 @@
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -38,6 +39,8 @@ private:
     void ensureChineseFont();
     void renderFrame();
     void drawStatusBar();
+    void syncDialogQueue();
+    void drawDialogs();
     void drawMainMenu();
     void drawCommDock();
     void drawProtocolDock();
@@ -111,6 +114,9 @@ private:
     std::string commonBaudRateDraftModel_;
     std::string protocolDirDraft_;
     std::string protocolDirDraftModel_;
+    std::deque<scripting::DialogRequest> dialogQueue_;
+    std::optional<scripting::DialogRequest> activeDialog_;
+    bool activeDialogOpened_{false};
     WaveDockRenderer waveDockRenderer_;
 };
 

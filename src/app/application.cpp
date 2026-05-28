@@ -32,8 +32,41 @@ const char* stateMessage(transport::TransportState state) {
     return "unknown";
 }
 
+bool sameColor(const std::optional<std::array<float, 4>>& left, const std::optional<std::array<float, 4>>& right) {
+    if (left.has_value() != right.has_value()) {
+        return false;
+    }
+    if (!left.has_value()) {
+        return true;
+    }
+    for (std::size_t index = 0; index < left->size(); ++index) {
+        if (std::abs((*left)[index] - (*right)[index]) > 1e-6F) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool sameChannelSpecs(const std::vector<scripting::PlotChannelDescriptor>& setupChannels,
                       const plot::OscilloscopeBuffer& buffer) {
+    if (setupChannels.size() != buffer.channelCount()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < setupChannels.size(); ++i) {
+        const auto current = buffer.channelSpec(i);
+        if (!current.has_value()) {
+            return false;
+        }
+        const auto& setup = setupChannels[i];
+        if (current->label != setup.label || current->unit != setup.unit || !sameColor(current->color, setup.color)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sameChannelIdentity(const std::vector<scripting::PlotChannelDescriptor>& setupChannels,
+                         const plot::OscilloscopeBuffer& buffer) {
     if (setupChannels.size() != buffer.channelCount()) {
         return false;
     }
@@ -48,6 +81,32 @@ bool sameChannelSpecs(const std::vector<scripting::PlotChannelDescriptor>& setup
         }
     }
     return true;
+}
+
+transport::TransportTxKind toTransportTxKind(scripting::TxRequestKind kind) {
+    switch (kind) {
+    case scripting::TxRequestKind::Send:
+        return transport::TransportTxKind::Send;
+    case scripting::TxRequestKind::Request:
+        return transport::TransportTxKind::Request;
+    }
+    return transport::TransportTxKind::Send;
+}
+
+scripting::TxEventState toScriptTxState(transport::TransportTxState state) {
+    switch (state) {
+    case transport::TransportTxState::Sent:
+        return scripting::TxEventState::Sent;
+    case transport::TransportTxState::Timeout:
+        return scripting::TxEventState::Timeout;
+    case transport::TransportTxState::Rejected:
+        return scripting::TxEventState::Rejected;
+    case transport::TransportTxState::Dropped:
+        return scripting::TxEventState::Dropped;
+    case transport::TransportTxState::Canceled:
+        return scripting::TxEventState::Canceled;
+    }
+    return scripting::TxEventState::Rejected;
 }
 
 bool nearlyEqual(double left, double right) {
@@ -135,6 +194,8 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         return true;
     }
 
+    cancelAllTxRequests("协议已重新加载");
+
     scripting::ScriptHost probeHost;
     if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
         lua.lastError = probeHost.lastError();
@@ -175,6 +236,7 @@ bool Application::pumpOnce() {
     bool changed = false;
     changed = handleTransportEvents() || changed;
     scriptHost_.tick(nowMs());
+    changed = processRequestTimeouts() || changed;
     changed = flushScriptOutputs() || changed;
     changed = flushScriptLogs() || changed;
     changed = flushScriptPlots() || changed;
@@ -195,6 +257,7 @@ const dock::DockStore& Application::docks() const {
 }
 
 void Application::openTransport() {
+    cancelAllTxRequests("连接重新打开");
     const auto kind = dockStore_.commState().kind;
     transport_ = createTransport(kind);
     if (!transport_) {
@@ -230,10 +293,12 @@ void Application::openTransport() {
 }
 
 void Application::closeTransport() {
+    cancelAllTxRequests("连接已关闭");
     if (transport_) {
         transport_->close();
     }
     activeConnection_.reset();
+    transport_.reset();
     syncDockState();
 }
 
@@ -371,7 +436,13 @@ void Application::resetWaveHistory() {
 }
 
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
-    return scriptHost_.nextWakeupAtMs();
+    auto nextWakeup = scriptHost_.nextWakeupAtMs();
+    if (activeHalfDuplexRequest_.has_value()) {
+        if (!nextWakeup.has_value() || activeHalfDuplexRequest_->waitDeadlineMs < *nextWakeup) {
+            nextWakeup = activeHalfDuplexRequest_->waitDeadlineMs;
+        }
+    }
+    return nextWakeup;
 }
 
 void Application::setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory) {
@@ -446,6 +517,7 @@ bool Application::handleTransportEvents() {
                     if (activeConnection_.has_value() && activeConnection_->connectionId == evt.context.connectionId) {
                         activeConnection_.reset();
                     }
+                    cancelAllTxRequests(evt.reason.empty() ? "连接已关闭" : evt.reason);
                     changed = true;
                 } else if constexpr (std::is_same_v<T, transport::TransportErrorEvent>) {
                     if (evt.context.readyForIo) {
@@ -475,6 +547,44 @@ bool Application::handleTransportEvents() {
                         });
                         changed = true;
                     }
+                } else if constexpr (std::is_same_v<T, transport::TransportTxEvent>) {
+                    if (!activeWrite_.has_value() || activeWrite_->request.id != evt.requestId) {
+                        return;
+                    }
+
+                    auto activeWrite = *activeWrite_;
+                    activeWrite_.reset();
+                    const auto state = toScriptTxState(evt.state);
+                    const std::optional<std::string> error = evt.error.empty() ? std::nullopt
+                                                                               : std::optional<std::string>{evt.error};
+                    if (state == scripting::TxEventState::Sent && activeWrite.request.kind == scripting::TxRequestKind::Request) {
+                        scriptHost_.onTxEvent(activeWrite.request.connection,
+                                              scripting::TxEvent{
+                                                  .id = activeWrite.request.id,
+                                                  .kind = activeWrite.request.kind,
+                                                  .state = scripting::TxEventState::Sent,
+                                                  .tag = activeWrite.request.tag,
+                                                  .bytes = evt.bytes,
+                                                  .queuedMs = activeWrite.request.createdAtMs,
+                                                  .finishedMs = evt.finishedAtMs,
+                                              });
+                        dockStore_.appendReceiveRow(dock::ReceiveRow{
+                            .timestampMs = evt.finishedAtMs,
+                            .direction = "TX",
+                            .endpoint = activeWrite.request.connection.endpoint,
+                            .bytes = activeWrite.request.payload,
+                        });
+                        activeWrite.sentAtMs = evt.finishedAtMs;
+                        activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
+                        activeHalfDuplexRequest_ = activeWrite;
+                        scriptHost_.setRequestAwaitingCompletion(true);
+                        changed = true;
+                        return;
+                    }
+
+                    finishTxRequest(activeWrite.request, state, error, evt.finishedAtMs);
+                    changed = true;
+                    changed = driveTxScheduler() || changed;
                 }
             },
             event);
@@ -484,31 +594,226 @@ bool Application::handleTransportEvents() {
 
 bool Application::flushScriptOutputs() {
     bool changed = false;
-    auto pendingSend = scriptHost_.drainSendQueue();
-    for (const auto& bytes : pendingSend) {
-        if (!transport_ || transport_->state() != transport::TransportState::Open) {
-            dockStore_.commState().lastError = "脚本产生了待发数据，但连接未打开";
-            continue;
-        }
-        // 核心流程：脚本动作发送改成异步投递到 transport I/O 线程，避免 GUI 线程卡在同步写。
-        if (transport_->enqueueSend(bytes) && activeConnection_.has_value()) {
-            dockStore_.appendReceiveRow(dock::ReceiveRow{
-                .timestampMs = nowMs(),
-                .direction = "TX",
-                .endpoint = activeConnection_->endpoint,
-                .bytes = bytes,
-                .message = {},
-            });
-            changed = true;
-        }
+    for (auto& request : scriptHost_.drainTxRequests()) {
+        changed = enqueueTxRequest(std::move(request)) || changed;
     }
+    changed = processScriptRequestCompletions() || changed;
+    changed = flushScriptStatusAndDialogs() || changed;
+    changed = driveTxScheduler() || changed;
 
-    auto scriptEvents = scriptHost_.drainEvents();
-    for (const auto& event : scriptEvents) {
+    for (const auto& event : scriptHost_.drainEvents()) {
         dockStore_.appendLuaEvent(event);
         changed = true;
     }
     return changed;
+}
+
+bool Application::flushScriptStatusAndDialogs() {
+    bool changed = false;
+    for (const auto& update : scriptHost_.drainStatusUpdates()) {
+        setStatusMessage(update.clear ? std::string{} : update.text, false);
+        changed = true;
+    }
+    for (const auto& request : scriptHost_.drainDialogRequests()) {
+        enqueueDialogRequest(request);
+        changed = true;
+    }
+    return changed;
+}
+
+bool Application::processScriptRequestCompletions() {
+    bool changed = false;
+    bool completionConsumed = false;
+    for (const auto& result : scriptHost_.drainRequestDoneResults()) {
+        if (completionConsumed) {
+            loggingFacade_.warn("protocol", "同一轮收到多次 request_done，后续结果已忽略");
+            changed = true;
+            continue;
+        }
+        if (!activeHalfDuplexRequest_.has_value()) {
+            loggingFacade_.warn("protocol", "收到 request_done，但当前没有活动 request");
+            changed = true;
+            continue;
+        }
+        const auto activeRequest = activeHalfDuplexRequest_->request;
+        activeHalfDuplexRequest_.reset();
+        scriptHost_.setRequestAwaitingCompletion(false);
+        finishTxRequest(activeRequest,
+                        scripting::TxEventState::Completed,
+                        result.message.empty() ? std::nullopt : std::optional<std::string>{result.message},
+                        result.timestampMs);
+        completionConsumed = true;
+        changed = true;
+        changed = driveTxScheduler() || changed;
+    }
+    return changed;
+}
+
+bool Application::processRequestTimeouts() {
+    if (!activeHalfDuplexRequest_.has_value()) {
+        return false;
+    }
+    const auto currentMs = nowMs();
+    if (currentMs < activeHalfDuplexRequest_->waitDeadlineMs) {
+        return false;
+    }
+
+    const auto request = activeHalfDuplexRequest_->request;
+    activeHalfDuplexRequest_.reset();
+    scriptHost_.setRequestAwaitingCompletion(false);
+    finishTxRequest(request, scripting::TxEventState::Timeout, std::string("等待 request_done 超时"), currentMs);
+    driveTxScheduler();
+    return true;
+}
+
+bool Application::driveTxScheduler() {
+    bool changed = false;
+    while (!activeWrite_.has_value() && !activeHalfDuplexRequest_.has_value() && !pendingTxQueue_.empty()) {
+        if (!transport_ || transport_->state() != transport::TransportState::Open) {
+            auto request = std::move(pendingTxQueue_.front());
+            pendingTxQueue_.pop_front();
+            finishTxRequest(request, scripting::TxEventState::Rejected, std::string("连接未打开"), nowMs());
+            changed = true;
+            continue;
+        }
+
+        ActiveTxRequest active{};
+        active.request = std::move(pendingTxQueue_.front());
+        pendingTxQueue_.pop_front();
+
+        transport::TransportTxTask task{};
+        task.requestId = active.request.id;
+        task.kind = toTransportTxKind(active.request.kind);
+        task.payload = active.request.payload;
+        task.timeoutMs = active.request.timeoutMs;
+        task.queuedAtMs = active.request.createdAtMs;
+        if (!transport_->enqueueSend(std::move(task))) {
+            finishTxRequest(active.request, scripting::TxEventState::Rejected, std::string("transport enqueueSend 失败"), nowMs());
+            changed = true;
+            continue;
+        }
+
+        activeWrite_ = std::move(active);
+        changed = true;
+    }
+    return changed;
+}
+
+bool Application::enqueueTxRequest(scripting::TxRequest request) {
+    request.timeoutMs = request.timeoutMs > 0
+        ? request.timeoutMs
+        : (request.kind == scripting::TxRequestKind::Request
+               ? runtimeConfig_.protocol.tx.requestTimeoutMs
+               : runtimeConfig_.protocol.tx.sendTimeoutMs);
+
+    const std::size_t activeCount = pendingTxQueue_.size()
+        + (activeWrite_.has_value() ? 1U : 0U)
+        + (activeHalfDuplexRequest_.has_value() ? 1U : 0U);
+    if (activeCount < runtimeConfig_.protocol.tx.maxPending) {
+        pendingTxQueue_.push_back(std::move(request));
+        return true;
+    }
+
+    const std::string overflowMessage = "发送队列已满";
+    if (runtimeConfig_.protocol.tx.overflowPolicy == "drop_oldest_waiting" && !pendingTxQueue_.empty()) {
+        auto dropped = std::move(pendingTxQueue_.front());
+        pendingTxQueue_.pop_front();
+        finishTxRequest(dropped, scripting::TxEventState::Dropped, overflowMessage, nowMs());
+        pendingTxQueue_.push_back(std::move(request));
+        notifyTxOverflow(overflowMessage);
+        return true;
+    }
+
+    if (runtimeConfig_.protocol.tx.overflowPolicy == "drop_newest") {
+        finishTxRequest(request, scripting::TxEventState::Dropped, overflowMessage, nowMs());
+        notifyTxOverflow(overflowMessage);
+        return true;
+    }
+
+    finishTxRequest(request, scripting::TxEventState::Rejected, overflowMessage, nowMs());
+    notifyTxOverflow(overflowMessage);
+    return true;
+}
+
+void Application::finishTxRequest(const scripting::TxRequest& request,
+                                  scripting::TxEventState state,
+                                  std::optional<std::string> error,
+                                  std::uint64_t finishedAtMs) {
+    if (state == scripting::TxEventState::Canceled && activeHalfDuplexRequest_.has_value()
+        && activeHalfDuplexRequest_->request.id == request.id) {
+        scriptHost_.setRequestAwaitingCompletion(false);
+    }
+
+    if (state == scripting::TxEventState::Sent) {
+        dockStore_.appendReceiveRow(dock::ReceiveRow{
+            .timestampMs = finishedAtMs,
+            .direction = "TX",
+            .endpoint = request.connection.endpoint,
+            .bytes = request.payload,
+        });
+    }
+    if (error.has_value()) {
+        dockStore_.commState().lastError = *error;
+        loggingFacade_.warn("protocol", *error);
+    }
+
+    scriptHost_.onTxEvent(request.connection,
+                          scripting::TxEvent{
+                              .id = request.id,
+                              .kind = request.kind,
+                              .state = state,
+                              .tag = request.tag,
+                              .bytes = request.payload.size(),
+                              .queuedMs = request.createdAtMs,
+                              .finishedMs = finishedAtMs,
+                              .error = std::move(error),
+                          });
+}
+
+void Application::cancelAllTxRequests(const std::string& reason) {
+    const auto finishedAtMs = nowMs();
+    if (activeWrite_.has_value()) {
+        finishTxRequest(activeWrite_->request, scripting::TxEventState::Canceled, reason, finishedAtMs);
+        activeWrite_.reset();
+    }
+    if (activeHalfDuplexRequest_.has_value()) {
+        scriptHost_.setRequestAwaitingCompletion(false);
+        finishTxRequest(activeHalfDuplexRequest_->request, scripting::TxEventState::Canceled, reason, finishedAtMs);
+        activeHalfDuplexRequest_.reset();
+    }
+    while (!pendingTxQueue_.empty()) {
+        auto request = std::move(pendingTxQueue_.front());
+        pendingTxQueue_.pop_front();
+        finishTxRequest(request, scripting::TxEventState::Canceled, reason, finishedAtMs);
+    }
+}
+
+void Application::notifyTxOverflow(const std::string& message) {
+    setStatusMessage(message, false);
+    loggingFacade_.warn("protocol", message);
+    if (runtimeConfig_.protocol.tx.overflowNotify == "popup_once") {
+        scripting::DialogRequest request{};
+        request.id = static_cast<std::uint64_t>(nowMs());
+        request.kind = scripting::DialogKind::Alert;
+        request.connection = activeConnection_.value_or(transport::ConnectionContext{});
+        request.title = "发送队列已满";
+        request.message = message;
+        request.level = "warn";
+        request.dedupeKey = "protocol.tx.overflow";
+        request.createdAtMs = nowMs();
+        enqueueDialogRequest(request);
+    }
+}
+
+void Application::enqueueDialogRequest(const scripting::DialogRequest& request) {
+    if (!request.dedupeKey.empty() && dialogDedupeKeys_.contains(request.dedupeKey)) {
+        return;
+    }
+    pendingDialogs_.push_back(request);
+    openDialogs_[request.id] = request;
+    if (!request.dedupeKey.empty()) {
+        dialogDedupeKeys_[request.dedupeKey] = request.id;
+    }
 }
 
 bool Application::flushScriptLogs() {
@@ -529,6 +834,29 @@ const logging::LoggingFacade& Application::logger() const {
     return loggingFacade_;
 }
 
+std::vector<scripting::DialogRequest> Application::drainDialogRequests() {
+    std::vector<scripting::DialogRequest> drained;
+    drained.reserve(pendingDialogs_.size());
+    while (!pendingDialogs_.empty()) {
+        drained.push_back(std::move(pendingDialogs_.front()));
+        pendingDialogs_.pop_front();
+    }
+    return drained;
+}
+
+void Application::respondDialog(const scripting::DialogEvent& event) {
+    const auto iter = openDialogs_.find(event.id);
+    if (iter == openDialogs_.end()) {
+        return;
+    }
+    const auto request = iter->second;
+    if (!request.dedupeKey.empty()) {
+        dialogDedupeKeys_.erase(request.dedupeKey);
+    }
+    openDialogs_.erase(iter);
+    scriptHost_.onDialogEvent(request.connection, event);
+}
+
 bool Application::flushScriptPlots() {
     bool changed = false;
     auto& wave = dockStore_.waveState();
@@ -542,6 +870,7 @@ bool Application::flushScriptPlots() {
                                    previousConfig.verticalUnit != setup.view.verticalUnit ||
                                    previousConfig.historyLimit != setup.view.historyLimit;
         const bool channelsChanged = !sameChannelSpecs(setup.channels, wave.buffer);
+        const bool channelIdentityChanged = !sameChannelIdentity(setup.channels, wave.buffer);
 
         if (setup.resetHistory) {
             wave.buffer.clear();
@@ -550,7 +879,7 @@ bool Application::flushScriptPlots() {
         wave.buffer.configureChannels(setup.channels.size());
         wave.defaultChannelSpecs.clear();
         wave.defaultChannelSpecs.reserve(setup.channels.size());
-        const bool shouldResetOverrides = setup.resetHistory || channelsChanged;
+        const bool shouldResetOverrides = setup.resetHistory || channelIdentityChanged;
         if (shouldResetOverrides) {
             wave.channelOverrides.clear();
         }
@@ -561,6 +890,7 @@ bool Application::flushScriptPlots() {
                 .unit = setup.channels[index].unit,
                 .scale = setup.channels[index].scale,
                 .offset = setup.channels[index].offset,
+                .color = setup.channels[index].color,
             };
             auto effectiveSpec = defaultSpec;
             if (!shouldResetOverrides && index < wave.channelOverrides.size()) {

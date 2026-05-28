@@ -61,9 +61,18 @@ struct GuiConfig {
     bool luaDockLayoutDebug{false};
 };
 
+struct ProtocolTxConfig {
+    std::uint64_t sendTimeoutMs{1000};
+    std::uint64_t requestTimeoutMs{1000};
+    std::size_t maxPending{64};
+    std::string overflowPolicy{"reject_new"};
+    std::string overflowNotify{"popup_once"};
+};
+
 struct ProtocolConfig {
     std::string rootDir{"protocols"};
     std::string selectedDir{"protocols/default_protocol"};
+    ProtocolTxConfig tx{};
 };
 
 struct AppConfig {
