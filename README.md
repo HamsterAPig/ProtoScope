@@ -305,12 +305,189 @@ app:
 
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| wave.max_render_points_per_channel | size_t | 1200 | 每通道最大渲染点数 |
-| wave.max_render_vertices | size_t | 60000 | 最大渲染顶点数 |
-| wave.downsample_start_multiplier | double | 2.0 | 降采样起始倍数 |
-| wave.overview_max_samples | size_t | 20000 | 总览图最大采样数 |
+| wave.max_render_points_per_channel | size_t | 1200 | 每通道目标渲染点预算，控制主波形区最多显示多少个点/包络桶 |
+| wave.max_render_vertices | size_t | 60000 | 总渲染顶点预算，多通道或开启磷光辉光时会进一步压缩每通道可显示点数 |
+| wave.downsample_start_multiplier | double | 2.0 | 降采样启动倍数；源样本数超过“渲染点预算 × 该系数”后切换到包络降采样 |
+| wave.overview_max_samples | size_t | 20000 | 总览图最多参与绘制的最近样本数，限制长历史下 overview 的开销 |
 | wave.min_visible_time_span | double | 0.001 | 最小可见时间跨度（秒） |
 | wave.show_axis_labels | bool | false | 显示坐标轴标签 |
+
+#### 波形点数配置关系
+
+波形相关配置里最容易混淆的是下面 3 个概念：
+
+1. **历史采样点数**
+   - 指每个通道最多在内存里保留多少原始样本。
+   - 这个值**不是** `gui.wave.*` 里的 YAML 配置项，而是协议脚本里 `proto.plot.setup()` 的 `view.history_limit`。
+   - 超过上限后，最旧的样本会被裁掉。
+
+2. **当前视口源样本数**
+   - 指当前时间窗内，真正落入可视范围的原始样本数。
+   - UI 工具栏里的 `源样本` 显示的就是这个数量。
+   - 这个值会随着缩放、拖动、时间轴模式变化而变化。
+
+3. **最终显示点数**
+   - 指本帧真正送给 ImPlot 渲染的点数。
+   - UI 工具栏里的 `渲染点` 显示的就是这个数量。
+   - 当视口内样本较少时，直接画原始点；样本过多时，会先降采样成包络点再绘制。
+
+可以把链路理解为：
+
+```text
+proto.plot.setup().view.history_limit
+    -> 决定每通道最多保留多少原始样本
+    -> 当前视口内会取出一部分样本，形成“源样本”
+    -> 如果源样本过多，按 gui.wave.* 的预算做降采样
+    -> 得到最终“渲染点”
+```
+
+#### 历史采样点数：`view.history_limit`
+
+如果你想控制“每个通道最多累计多少采样点”，要在协议脚本里配置：
+
+```lua
+proto.plot.setup({
+  source = "default_protocol",
+  channels = {
+    { label = "CH1", unit = "V" },
+  },
+  view = {
+    time_scale = 0.2,
+    time_unit = "s",
+    vertical_min = -1.5,
+    vertical_max = 1.5,
+    vertical_unit = "V",
+    history_limit = 12000,
+  }
+})
+```
+
+- `history_limit` 是**每通道历史保留上限**。
+- 例如设成 `12000`，表示单个通道最多保留 `12000` 个样本；新样本继续进入时，最旧的样本会被丢弃。
+- 这个值影响的是“能保留多少采样历史”和内存占用，不直接决定屏幕上一次显示多少点。
+
+#### 显示点数与降采样：`gui.wave.*`
+
+`config/protoscope.yaml` 里的 `gui.wave.*` 负责控制“显示预算”和“何时降采样”：
+
+```yaml
+gui:
+  wave:
+    max_render_points_per_channel: 1200
+    max_render_vertices: 60000
+    downsample_start_multiplier: 2.0
+    overview_max_samples: 20000
+```
+
+主波形区每通道的实际渲染点预算由下面 3 个约束一起决定：
+
+```text
+每通道渲染点预算
+  = min(
+      当前绘图区像素宽度,
+      wave.max_render_points_per_channel,
+      wave.max_render_vertices / (通道数 × 每点估算顶点数)
+    )
+```
+
+说明：
+
+- `wave.max_render_points_per_channel`
+  - 直接限制主波形区每个通道最多显示多少个点或包络桶。
+  - 调大后细节保留更多，但渲染负担也更高。
+
+- `wave.max_render_vertices`
+  - 是总顶点保护阈值，用来避免单帧绘制过重。
+  - 通道越多、开启磷光辉光后每个点估算的顶点数越高，最终能分给每个通道的点数就越少。
+  - 所以多通道场景下，即使 `max_render_points_per_channel` 很大，最终显示点数也可能被它压下来。
+
+- `wave.downsample_start_multiplier`
+  - 用来控制什么时候从“直接画原始点”切到“先做包络降采样再画”。
+  - 触发条件可以理解为：
+
+```text
+当 源样本数 > 每通道渲染点预算 × wave.downsample_start_multiplier
+时，开始降采样
+```
+
+  - 例如预算是 `1200`，系数是 `2.0`，那么源样本数超过约 `2400` 时，会改为画包络。
+  - 调大这个值：更晚触发降采样，细节更多，但更吃性能。
+  - 调小这个值：更早触发降采样，性能更稳，但显示会更“概览化”。
+
+- `wave.overview_max_samples`
+  - 只影响底部总览图 overview，不影响主波形区的历史保留上限。
+  - 当历史很长时，overview 只取最近的这部分样本参与绘制，避免总览图拖慢界面。
+
+#### 怎么判断该调哪个参数
+
+- 想保留更长历史，或者“旧波形太快被顶掉”
+  - 调大 Lua 里的 `view.history_limit`
+
+- 想让主波形区显示更多细节、少一点包络感
+  - 先调大 `wave.max_render_points_per_channel`
+  - 再按需要调大 `wave.downsample_start_multiplier`
+
+- 想降低多通道、高刷新率下的渲染压力
+  - 先调小 `wave.max_render_points_per_channel`
+  - 或者调小 `wave.downsample_start_multiplier`
+  - 如果是 overview 卡顿，再调小 `wave.overview_max_samples`
+
+- 发现单通道设置很高，但多通道时显示点数还是不多
+  - 检查 `wave.max_render_vertices`
+  - 通道数变多后，它会按总预算把每通道点数继续压缩
+
+#### 推荐配置示例
+
+**1）高细节调试**
+
+适合单通道或少量通道，优先看清尖峰、边沿和细节：
+
+```yaml
+gui:
+  wave:
+    max_render_points_per_channel: 2400
+    max_render_vertices: 120000
+    downsample_start_multiplier: 3.0
+    overview_max_samples: 50000
+```
+
+```lua
+proto.plot.setup({
+  channels = {
+    { label = "CH1", unit = "V" },
+  },
+  view = {
+    history_limit = 20000,
+  }
+})
+```
+
+**2）长时间运行、偏稳定低负载**
+
+适合长时间挂着看趋势，优先保证界面稳定和资源可控：
+
+```yaml
+gui:
+  wave:
+    max_render_points_per_channel: 800
+    max_render_vertices: 40000
+    downsample_start_multiplier: 1.5
+    overview_max_samples: 8000
+```
+
+```lua
+proto.plot.setup({
+  channels = {
+    { label = "CH1", unit = "V" },
+    { label = "CH2", unit = "V" },
+  },
+  view = {
+    history_limit = 6000,
+  }
+})
+```
+
+如果你看到工具栏里 `源样本` 很大、`渲染点` 明显更小，说明当前视口已经进入降采样绘制路径；这是预期行为，不代表数据丢失，只是显示层做了包络压缩。
 
 **其他**：
 
