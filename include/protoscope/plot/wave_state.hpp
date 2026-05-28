@@ -47,6 +47,7 @@ struct WaveViewState {
     std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};
     double visibleDuration{1.0};
+    double minVisibleTimeSpan{0.001};
     double persistenceWindow{0.25};
     double glowIntensity{1.0};
     double sampleFrequencyHz{0.0};
@@ -68,11 +69,23 @@ struct WaveViewState {
 };
 
 struct WaveDockState {
+    struct ChannelTransformOverride {
+        bool scaleOverridden{false};
+        bool offsetOverridden{false};
+        double scale{1.0};
+        double offset{0.0};
+    };
+
     OscilloscopeBuffer buffer{};
     WaveViewState view{};
     std::string statusMessage;
     std::vector<std::string> channelSummaries;
     std::vector<ChannelSpec> defaultChannelSpecs;
+    std::vector<ChannelTransformOverride> channelOverrides;
+    bool toolsCollapsed{false};
+    float toolsExpandedWidth{280.0F};
+    float toolsCollapsedWidth{34.0F};
+    float overviewPanelHeight{120.0F};
 };
 
 } // namespace protoscope::plot

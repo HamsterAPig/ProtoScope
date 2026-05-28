@@ -849,6 +849,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::size_t>(wave, "max_render_vertices", result.config.gui.wave.maxRenderVertices);
             result.config.gui.wave.overviewMaxSamples =
                 readScalar<std::size_t>(wave, "overview_max_samples", result.config.gui.wave.overviewMaxSamples);
+            result.config.gui.wave.minVisibleTimeSpan =
+                readScalar<double>(wave, "min_visible_time_span", result.config.gui.wave.minVisibleTimeSpan);
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
         }
 
@@ -928,6 +930,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
     root["gui"]["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
     root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
+    root["gui"]["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
     root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
@@ -1162,6 +1165,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
     wave.overviewMaxSamples = config.gui.wave.overviewMaxSamples;
+    wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
 }
 
 AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
@@ -1179,6 +1183,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.overviewMaxSamples = dockStore.waveState().view.overviewMaxSamples;
+    config.gui.wave.minVisibleTimeSpan = dockStore.waveState().view.minVisibleTimeSpan;
     config.configPath = dockStore.configState().loadedFromPath;
 
     return config;

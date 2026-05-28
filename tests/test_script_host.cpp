@@ -398,6 +398,7 @@ void test_config_default_roundtrip() {
     config.gui.wave.maxRenderPointsPerChannel = 64;
     config.gui.wave.maxRenderVertices = 4096;
     config.gui.wave.overviewMaxSamples = 128;
+    config.gui.wave.minVisibleTimeSpan = 0.0025;
 
     std::string error;
     require(store.save(tempPath, config, error), "默认配置写回失败");
@@ -413,6 +414,7 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
+    require(std::abs(reloaded.config.gui.wave.minVisibleTimeSpan - 0.0025) < 1e-12, "波形最小可视跨度 roundtrip 失败");
 }
 
 void test_config_logging_roundtrip() {

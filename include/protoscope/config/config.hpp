@@ -50,6 +50,7 @@ struct GuiWaveConfig {
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     std::size_t overviewMaxSamples{20000};
+    double minVisibleTimeSpan{0.001};
 };
 
 struct GuiConfig {

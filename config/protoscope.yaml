@@ -18,6 +18,7 @@ gui:
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
     overview_max_samples: 20000
+    min_visible_time_span: 0.001
 
 protocol:
   root_dir: protocols

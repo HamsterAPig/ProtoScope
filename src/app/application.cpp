@@ -46,12 +46,6 @@ bool sameChannelSpecs(const std::vector<scripting::PlotChannelDescriptor>& setup
         if (current->label != setup.label || current->unit != setup.unit) {
             return false;
         }
-        if (std::abs(current->scale - setup.scale) > 1e-12) {
-            return false;
-        }
-        if (std::abs(current->offset - setup.offset) > 1e-12) {
-            return false;
-        }
     }
     return true;
 }
@@ -61,7 +55,8 @@ bool nearlyEqual(double left, double right) {
 }
 
 bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config) {
-    if (!nearlyEqual(view.visibleDuration, (std::max)(config.timeScale * 1000.0, config.timeScale))) {
+    const double defaultVisibleDuration = (std::max)(view.minVisibleTimeSpan, (std::max)(config.timeScale * 1000.0, config.timeScale));
+    if (!nearlyEqual(view.visibleDuration, defaultVisibleDuration)) {
         return false;
     }
     if (!nearlyEqual(view.manualVerticalMin, config.verticalMin) || !nearlyEqual(view.manualVerticalMax, config.verticalMax)) {
@@ -554,20 +549,36 @@ bool Application::flushScriptPlots() {
         wave.buffer.configureChannels(setup.channels.size());
         wave.defaultChannelSpecs.clear();
         wave.defaultChannelSpecs.reserve(setup.channels.size());
+        const bool shouldResetOverrides = setup.resetHistory || channelsChanged;
+        if (shouldResetOverrides) {
+            wave.channelOverrides.clear();
+        }
+        wave.channelOverrides.resize(setup.channels.size());
         for (std::size_t index = 0; index < setup.channels.size(); ++index) {
-            auto spec = plot::ChannelSpec{
+            const auto defaultSpec = plot::ChannelSpec{
                 .label = setup.channels[index].label,
                 .unit = setup.channels[index].unit,
                 .scale = setup.channels[index].scale,
                 .offset = setup.channels[index].offset,
             };
-            wave.defaultChannelSpecs.push_back(spec);
-            wave.buffer.setChannelSpec(index, std::move(spec));
+            auto effectiveSpec = defaultSpec;
+            if (!shouldResetOverrides && index < wave.channelOverrides.size()) {
+                const auto& overrideState = wave.channelOverrides[index];
+                if (overrideState.scaleOverridden) {
+                    effectiveSpec.scale = overrideState.scale;
+                }
+                if (overrideState.offsetOverridden) {
+                    effectiveSpec.offset = overrideState.offset;
+                }
+            }
+            wave.defaultChannelSpecs.push_back(defaultSpec);
+            wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
         }
         const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
         const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
         if (shouldResetView) {
-            wave.view.visibleDuration = (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale);
+            wave.view.visibleDuration = (std::max)(wave.view.minVisibleTimeSpan,
+                                                   (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
             wave.view.manualVerticalMin = setup.view.verticalMin;
             wave.view.manualVerticalMax = setup.view.verticalMax;
             wave.view.viewMinValue = setup.view.verticalMin;
