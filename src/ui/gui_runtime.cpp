@@ -459,10 +459,10 @@ int GuiRuntime::run() {
         changed = maybeAutoSave() || changed;
 
         if (!changed && lastRenderAtMs_ != 0) {
-            if (const auto nextWakeup = application_.nextWakeupAtMs()) {
-                if (*nextWakeup > frameStartMs) {
-                    sleepUntilNextFrame(frameStartMs);
-                }
+            const auto nextWakeup = application_.nextWakeupAtMs();
+            // 空闲且没有脚本定时器/半双工请求时也要限帧休眠，避免停止传输后 GUI 主循环忙转。
+            if (!nextWakeup.has_value() || *nextWakeup > frameStartMs) {
+                sleepUntilNextFrame(frameStartMs);
             }
         }
 

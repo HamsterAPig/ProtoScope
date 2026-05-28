@@ -1277,16 +1277,16 @@ local function handle_stream(frame)
     proto.status.set(string.format("丢帧: %d", sequence_state.lost_total), { level = "warn" })
   end
 
-  local sample_index = 1
-  for _, channel_index in ipairs(enabled_channels) do
+  for channel_slot, channel_index in ipairs(enabled_channels) do
     local samples = {}
     for point_index = 1, sample_count do
+      -- 从机按“采样点 -> 通道”的交错顺序发送，主机必须按同样布局拆回各通道。
+      local sample_index = (point_index - 1) * #enabled_channels + channel_slot
       local raw = flat_samples[sample_index] or 0
       samples[#samples + 1] = {
         t = base_t + (point_index - 1) * dt,
         y = raw * modbus.CHANNEL_SCALE,
       }
-      sample_index = sample_index + 1
     end
     proto.plot.push(channel_index, {
       source = "half_duplex_modbus_stream",

@@ -696,7 +696,12 @@ void test_half_duplex_modbus_ack_and_plot_flow() {
 
     const auto appends = master.drainPlotAppends();
     require(appends.size() == 4, "默认四通道启用时应推送 4 组波形");
+    require(appends[0].first == 0, "第一组波形应对应 CH1");
     require(appends[0].second.samples.size() == 16, "每个通道应推送 16 个采样点");
+    for (std::size_t index = 0; index < appends[0].second.samples.size(); ++index) {
+        const auto expected = std::floor(std::sin(static_cast<double>(index + 1) * 0.15) / 0.001) * 0.001;
+        require(std::abs(appends[0].second.samples[index].value - expected) < 1e-12, "CH1 应按正弦通道解交错");
+    }
 }
 
 void test_half_duplex_modbus_loss_status_keeps_valid_frame() {
