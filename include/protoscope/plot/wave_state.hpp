@@ -34,6 +34,7 @@ struct WaveViewState {
     bool pauseAutoFollowOnInteraction{true};
     bool lockVerticalRange{false};
     bool showPointsWhenSparse{true};
+    bool showAxisLabels{false};
     bool showHoverReadout{true};
     bool showCursors{true};
     bool showMeasurementOverlay{true};
@@ -50,6 +51,7 @@ struct WaveViewState {
     std::size_t measurementChannelIndex{0};
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
+    double downsampleStartMultiplier{2.0};
     double persistenceWindow{0.25};
     double glowIntensity{1.0};
     double sampleFrequencyHz{0.0};
@@ -85,12 +87,14 @@ struct WaveDockState {
     std::vector<ChannelSpec> defaultChannelSpecs;
     std::vector<ChannelTransformOverride> channelOverrides;
     bool toolsCollapsed{false};
+    bool overviewCollapsed{false};
     float toolsExpandedWidth{280.0F};
     float toolsCollapsedWidth{34.0F};
     float overviewPanelHeight{120.0F};
+    float overviewCollapsedHeight{30.0F};
     float contentToolsSplitterWidth{6.0F};
     float overviewMainSplitterHeight{6.0F};
-    float minOverviewPanelHeight{72.0F};
+    float minOverviewPanelHeight{32.0F};
     float minMainPanelHeight{160.0F};
     float minToolsExpandedWidth{220.0F};
     float maxToolsExpandedWidth{520.0F};

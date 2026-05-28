@@ -110,6 +110,36 @@ void test_wave_layout_solver_clamps_without_overflow() {
     require(layout.mainHeight >= 160.0F, "主视图高度不应低于最小值");
     require(layout.overviewHeight + layout.mainHeight + 6.0F + 58.0F <= 420.0F + 1e-3F, "布局总高度不应溢出父窗口");
 
+    const auto draggedOverview = protoscope::plot::solveWaveLayout(900.0F,
+                                                                   600.0F,
+                                                                   260.0F,
+                                                                   300.0F,
+                                                                   34.0F,
+                                                                   false,
+                                                                   6.0F,
+                                                                   6.0F,
+                                                                   72.0F,
+                                                                   160.0F,
+                                                                   220.0F,
+                                                                   520.0F,
+                                                                   70.0F);
+    require(std::abs(draggedOverview.overviewHeight - 260.0F) < 1e-3F, "概览高度应尊重用户拖拽值，不应被 35% 上限拉回");
+
+    const auto splitterReserved = protoscope::plot::solveWaveLayout(230.0F,
+                                                                    420.0F,
+                                                                    120.0F,
+                                                                    280.0F,
+                                                                    34.0F,
+                                                                    false,
+                                                                    6.0F,
+                                                                    6.0F,
+                                                                    72.0F,
+                                                                    160.0F,
+                                                                    220.0F,
+                                                                    520.0F,
+                                                                    58.0F);
+    require(splitterReserved.toolsWidth <= 224.0F, "工具栏宽度应为内容区保留 splitter 空间");
+
     const auto compact = protoscope::plot::solveWaveLayout(320.0F,
                                                            120.0F,
                                                            160.0F,

@@ -271,3 +271,101 @@ app:
 - `src/app`：主循环装配、Transport/Script/Dock 事件泵
 - `src/protocol_utils`：HEX 编解码、CRC 与输入归一化
 - `src/ui`：ImGui Dock 渲染与配置/发送交互
+
+---
+---
+
+## 配置文件参考
+
+配置文件路径：config/protoscope.yaml，YAML 格式。以下列出所有可配置项及其含义。
+
+### app —— 应用运行时
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| language | string | zh-CN | 界面语言 |
+| fps_limit | uint32 | 60 | 渲染帧率上限 |
+| idle_render | string | dirty_only | 闲置渲染模式 |
+| auto_save.enabled | bool | false | 配置自动保存开关 |
+| auto_save.interval_ms | uint64 | 5000 | 自动保存间隔（毫秒） |
+| config_hot_reload.enabled | bool | false | 外部配置变更检测开关 |
+
+### gui —— 界面与波形
+
+**window**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| window.title | string | ProtoScope | 窗口标题 |
+| window.width | int | 1600 | 窗口初始宽度 |
+| window.height | int | 900 | 窗口初始高度 |
+| window.maximized | bool | false | 启动时是否最大化 |
+
+**wave**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| wave.max_render_points_per_channel | size_t | 1200 | 每通道最大渲染点数 |
+| wave.max_render_vertices | size_t | 60000 | 最大渲染顶点数 |
+| wave.downsample_start_multiplier | double | 2.0 | 降采样起始倍数 |
+| wave.overview_max_samples | size_t | 20000 | 总览图最大采样数 |
+| wave.min_visible_time_span | double | 0.001 | 最小可见时间跨度（秒） |
+| wave.show_axis_labels | bool | false | 显示坐标轴标签 |
+
+**其他**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| lua_dock_layout_debug | bool | false | Lua Dock 布局调试开关 |
+
+### protocol —— 协议脚本
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| root_dir | string | protocols | 协议脚本根目录 |
+| selected_dir | string | protocols/default_protocol | 当前选中的协议目录 |
+
+### logging —— 日志
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| level | enum | info | 日志级别：debug / info / warn / error |
+| file_path | string | (空) | 日志文件路径，为空则不写文件 |
+
+### communication —— 通讯连接
+
+**通用**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| kind | enum | tcp_client | 通讯类型：tcp_client / tcp_server / serial |
+
+**tcp_client**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| tcp_client.host | string | 127.0.0.1 | 目标地址 |
+| tcp_client.port | uint16 | 9000 | 目标端口 |
+
+**tcp_server**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| tcp_server.bind_address | string | 0.0.0.0 | 绑定地址 |
+| tcp_server.port | uint16 | 9000 | 监听端口 |
+| tcp_server.reject_new_connection | bool | true | 拒绝新连接 |
+
+**serial**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| serial.port_name | string | COM1 | 串口名称 |
+| serial.baud_rate | uint32 | 115200 | 波特率 |
+| serial.data_bits | uint32 | 8 | 数据位 |
+| serial.parity | string | none | 校验位：none / even / odd / mark / space |
+| serial.stop_bits | string | one | 停止位：one / onepointfive / two |
+| serial.flow_control | string | none | 流控制：none / hardware / software |
+
+### 完整默认配置文件参考
+
+[config/protoscope.yaml](config/protoscope.yaml)
