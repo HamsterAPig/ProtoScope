@@ -78,6 +78,7 @@ struct ChannelView {
     std::string unit;
     double scale{1.0};
     double offset{0.0};
+    std::optional<std::array<float, 4>> color;
     std::size_t totalSamples{0};
     std::size_t visibleBegin{0};
     std::size_t visibleEnd{0};

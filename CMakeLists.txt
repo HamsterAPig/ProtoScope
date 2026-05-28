@@ -184,6 +184,7 @@ target_link_libraries(protoscope_ui_layout
         protoscope_protocol_utils
         protoscope_plot
         protoscope_transport
+        protoscope_sol2
         yaml-cpp::yaml-cpp
 )
 target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
@@ -204,6 +205,11 @@ target_link_libraries(protoscope_scripting
 )
 target_compile_features(protoscope_scripting PUBLIC cxx_std_20)
 target_compile_definitions(protoscope_scripting PRIVATE SOL_ALL_SAFETIES_ON=1)
+
+target_link_libraries(protoscope_ui_layout
+    PUBLIC
+        protoscope_scripting
+)
 
 add_library(protoscope_dock STATIC
     src/dock/docks.cpp

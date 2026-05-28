@@ -165,6 +165,7 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
         view.unit = channel.spec.unit;
         view.scale = channel.spec.scale;
         view.offset = channel.spec.offset;
+        view.color = channel.spec.color;
         view.totalSamples = channel.samples.size();
         view.samples = channel.samples.data();
         view.visibleBegin = lowerBoundByTime(channel.samples, visibleMinTime);

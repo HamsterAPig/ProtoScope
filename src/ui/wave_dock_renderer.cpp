@@ -152,6 +152,13 @@ ImVec4 channelColor(const plot::ChannelSpec& spec, std::size_t channelIndex) {
     return ImVec4((*spec.color)[0], (*spec.color)[1], (*spec.color)[2], (*spec.color)[3]);
 }
 
+ImVec4 channelColor(const plot::ChannelView& channel, std::size_t channelIndex) {
+    if (!channel.color.has_value()) {
+        return fallbackChannelColor(channelIndex);
+    }
+    return ImVec4((*channel.color)[0], (*channel.color)[1], (*channel.color)[2], (*channel.color)[3]);
+}
+
 void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
                             const ImVec4& color,
                             double latestTime,
@@ -1123,7 +1130,7 @@ void renderWaveChannels(plot::WaveViewState& view,
         if (envelope.empty()) {
             continue;
         }
-        const ImVec4 color = channelColor(*spec, channelIndex);
+        const ImVec4 color = channelColor(channel, channelIndex);
         const double downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
         const std::size_t downsampleThreshold =
             static_cast<std::size_t>(std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
