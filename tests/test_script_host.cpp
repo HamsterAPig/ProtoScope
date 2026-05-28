@@ -575,6 +575,7 @@ static const TestCase kAllTests[] = {
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
+    {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
     {"plot_cursor_snap_scope_selection", &test_plot_cursor_snap_scope_selection},

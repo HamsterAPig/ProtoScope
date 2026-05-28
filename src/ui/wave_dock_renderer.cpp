@@ -70,6 +70,11 @@ ImPlotPoint envelopeLineMaxGetter(int index, void* data) {
     return ImPlotPoint{payload->points[index].time, payload->points[index].maxValue};
 }
 
+ImPlotPoint envelopeLineValueGetter(int index, void* data) {
+    const auto* payload = static_cast<const PlotGetterPayload*>(data);
+    return ImPlotPoint{payload->points[index].time, payload->points[index].minValue};
+}
+
 std::size_t clampRenderConfig(std::size_t value, std::size_t fallback) {
     return value == 0 ? fallback : value;
 }
@@ -912,9 +917,13 @@ void renderWaveChannels(plot::WaveViewState& view,
 
         PlotGetterPayload payload{.points = envelope.data()};
         const ImVec4 color = channelColor(channelIndex);
-        ImPlot::PlotLineG((channel.label + " min").c_str(), &envelopeLineMinGetter, &payload, static_cast<int>(envelope.size()));
-        ImPlot::PlotLineG((channel.label + " max").c_str(), &envelopeLineMaxGetter, &payload, static_cast<int>(envelope.size()));
-        if (view.phosphorGlowEnabled) {
+        if (sourceSampleCount <= renderBudget.pointsPerChannel * 2) {
+            // 低密度数据保持单条普通波形，避免 min/max 辅助边界被误认为额外通道。
+            ImPlotSpec spec{};
+            spec.LineColor = color;
+            spec.LineWeight = 1.5F;
+            ImPlot::PlotLineG(channel.label.c_str(), &envelopeLineValueGetter, &payload, static_cast<int>(envelope.size()), spec);
+        } else if (view.phosphorGlowEnabled) {
             renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);
         } else {
             renderEnvelopeAsBars(envelope, color);
@@ -1039,7 +1048,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view,
 
     if (!ImPlot::BeginPlot("##oscilloscope",
             ImVec2(-1.0F, (std::max)(220.0F, ImGui::GetContentRegionAvail().y - 150.0F)),
-            ImPlotFlags_None)) {
+            ImPlotFlags_NoLegend)) {
         return result;
     }
 

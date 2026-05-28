@@ -85,6 +85,41 @@ void test_plot_limited_envelope_preserves_spikes() {
     require(foundNegativeSpike, "min/max 桶应保留负向尖峰");
 }
 
+void test_plot_low_density_envelope_keeps_single_value_line() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.setViewConfig(protoscope::plot::ViewConfig{
+        .timeScale = 1.0,
+        .timeUnit = "s",
+        .verticalMin = -10.0,
+        .verticalMax = 10.0,
+        .verticalUnit = "V",
+        .historyLimit = 20,
+    });
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 2.0, .offset = -1.0});
+
+    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
+                               .source = "low-density",
+                               .samples = {
+                                   {.time = 0.0, .value = 1.0},
+                                   {.time = 1.0, .value = -2.0},
+                                   {.time = 2.0, .value = 3.0},
+                               },
+                           }),
+            "追加低密度采样应成功");
+
+    const auto envelope = buffer.buildEnvelope(0, 0.0, 2.0, 4);
+    require(envelope.sourceSampleCount == 3, "低密度包络应记录原始样本数量");
+    require(envelope.points.size() == 3, "低密度包络应保留每个原始样本");
+    for (const auto& point : envelope.points) {
+        require(point.sampleCount == 1, "低密度包络每点应只对应一个样本");
+        require(std::abs(point.minValue - point.maxValue) < 1e-12, "低密度包络应退化为单值折线");
+    }
+    require(std::abs(envelope.points[0].minValue - 1.0) < 1e-12, "低密度包络应应用显示缩放和偏移");
+    require(std::abs(envelope.points[1].minValue + 5.0) < 1e-12, "低密度包络应保留变换后的负值");
+    require(std::abs(envelope.points[2].minValue - 5.0) < 1e-12, "低密度包络应保留变换后的正值");
+}
+
 void test_plot_cursor_snap_and_delta() {
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
