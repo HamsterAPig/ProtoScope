@@ -734,6 +734,11 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
     return plot::findNearestDisplayByTimeAcrossChannels(displayData, time, maxTimeDistance);
 }
 
+bool currentPlotItemVisible(const std::string& label) {
+    const ImPlotItem* item = ImPlot::GetItem(label.c_str());
+    return item != nullptr && item->Show;
+}
+
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io) {
     return view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap
         || (view.cursorSnapMode == plot::WaveCursorSnapMode::ModifierSnap && (io.KeyShift || io.KeyCtrl));
@@ -1408,7 +1413,9 @@ void renderWaveChannels(plot::WaveViewState& view,
                         const plot::WaveSnapshot& snapshot,
                         const plot::WaveDisplayData& displayData,
                         const RenderBudget& renderBudget,
-                        const ImPlotRect& limits) {
+                        const ImPlotRect& limits,
+                        std::vector<std::size_t>& visibleChannelIndices) {
+    visibleChannelIndices.clear();
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
         const auto& channelSamples = displayData.channels[channelIndex].samples;
@@ -1457,6 +1464,10 @@ void renderWaveChannels(plot::WaveViewState& view,
             spec.LineColor = color;
             spec.LineWeight = 1.5F;
             ImPlot::PlotLineG(channel.label.c_str(), &waveSampleGetter, &payload, static_cast<int>(rawVisibleCount), spec);
+            if (!currentPlotItemVisible(channel.label)) {
+                continue;
+            }
+            visibleChannelIndices.push_back(channelIndex);
             if (view.showPointsWhenSparse) {
                 ImPlotSpec pointSpec{};
                 pointSpec.Marker = ImPlotMarker_Circle;
@@ -1479,6 +1490,10 @@ void renderWaveChannels(plot::WaveViewState& view,
         legendSpec.LineWeight = 1.5F;
         legendSpec.Flags = ImPlotItemFlags_NoFit;
         ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
+        if (!currentPlotItemVisible(channel.label)) {
+            continue;
+        }
+        visibleChannelIndices.push_back(channelIndex);
         if (view.phosphorGlowEnabled) {
             renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);
         } else {
@@ -1490,13 +1505,15 @@ void renderWaveChannels(plot::WaveViewState& view,
 void handleHoverReadout(plot::WaveViewState& view,
                         const plot::WaveSnapshot& snapshot,
                         const plot::WaveDisplayData& displayData,
+                        const std::vector<std::size_t>& visibleChannelIndices,
                         const ImPlotPoint& mousePos,
                         double timeSnapDistance,
                         double valueSnapDistance) {
-    if (!ImPlot::IsPlotHovered() || !view.showHoverReadout) {
+    if (!ImPlot::IsPlotHovered() || !view.showHoverReadout || visibleChannelIndices.empty()) {
         return;
     }
-    auto hovered = plot::findNearestDisplayPoint(displayData, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
+    auto hovered = plot::findNearestDisplayPointInChannels(
+        displayData, visibleChannelIndices, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
     if (!hovered.has_value() || hovered->channelIndex >= snapshot.channels.size()) {
         return;
     }
@@ -1637,9 +1654,11 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
 
     bool viewportChangedThisFrame =
         handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, mousePos);
-    renderWaveChannels(view, frame.snapshot, displayData, frame.renderBudget, limits);
+    // 悬停读数必须跟随 ImPlot 图例隐藏状态，只对真实可见波形做吸附。
+    std::vector<std::size_t> visibleChannelIndices;
+    renderWaveChannels(view, frame.snapshot, displayData, frame.renderBudget, limits, visibleChannelIndices);
     viewportChangedThisFrame = applyPendingVerticalAutoFitOverride(view, frame.displayBounds) || viewportChangedThisFrame;
-    handleHoverReadout(view, frame.snapshot, displayData, mousePos, timeSnapDistance, valueSnapDistance);
+    handleHoverReadout(view, frame.snapshot, displayData, visibleChannelIndices, mousePos, timeSnapDistance, valueSnapDistance);
     viewportChangedThisFrame = handleOscilloscopeChannelInteractions(wave,
                                                                      displayData,
                                                                      mousePos,

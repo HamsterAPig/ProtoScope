@@ -88,6 +88,7 @@ void test_plot_channel_scale_and_offset_apply_to_display_only();
 void test_plot_channel_ratio_and_formula_modes();
 void test_plot_channel_transform_updates_are_isolated();
 void test_plot_cursor_snap_scope_selection();
+void test_plot_hover_readout_ignores_hidden_channels();
 void test_plot_limited_envelope_edges();
 void test_wave_frequency_parse_and_axis_mapping();
 void test_wave_viewport_zoom_modes_and_clamp();

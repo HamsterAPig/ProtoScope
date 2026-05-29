@@ -1324,6 +1324,7 @@ static const TestCase kAllTests[] = {
     {"plot_channel_ratio_and_formula_modes", &test_plot_channel_ratio_and_formula_modes},
     {"plot_channel_transform_updates_are_isolated", &test_plot_channel_transform_updates_are_isolated},
     {"plot_cursor_snap_scope_selection", &test_plot_cursor_snap_scope_selection},
+    {"plot_hover_readout_ignores_hidden_channels", &test_plot_hover_readout_ignores_hidden_channels},
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},

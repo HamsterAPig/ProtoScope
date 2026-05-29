@@ -312,6 +312,36 @@ std::optional<CursorReadout> findNearestDisplayPoint(const WaveDisplayData& disp
     return best;
 }
 
+std::optional<CursorReadout> findNearestDisplayPointInChannels(const WaveDisplayData& displayData,
+                                                               const std::vector<std::size_t>& channelIndices,
+                                                               double time,
+                                                               double value,
+                                                               double maxTimeDistance,
+                                                               double maxValueDistance) {
+    std::optional<CursorReadout> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (const std::size_t channelIndex : channelIndices) {
+        if (channelIndex >= displayData.channels.size()) {
+            continue;
+        }
+        const auto nearest = findNearestDisplayByTime(displayData, channelIndex, time, maxTimeDistance);
+        if (!nearest.has_value()) {
+            continue;
+        }
+        const double valueDistance = std::abs(nearest->displayValue - value);
+        if (valueDistance > maxValueDistance) {
+            continue;
+        }
+        const double timeDistance = std::abs(nearest->time - time);
+        const double score = timeDistance * timeDistance + valueDistance * valueDistance;
+        if (score < bestScore) {
+            bestScore = score;
+            best = nearest;
+        }
+    }
+    return best;
+}
+
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep) {
     WaveDataBounds bounds{};
     bounds.minTime = std::numeric_limits<double>::infinity();

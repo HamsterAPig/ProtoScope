@@ -498,6 +498,26 @@ void test_plot_cursor_snap_scope_selection() {
     require(std::abs(allChannels->time - 0.5) < 1e-9, "全部波形模式应命中真正最近的时间点");
 }
 
+void test_plot_hover_readout_ignores_hidden_channels() {
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.resize(2);
+    displayData.channels[0].samples = {
+        {.time = 1.0, .value = 10.0},
+    };
+    displayData.channels[1].samples = {
+        {.time = 1.02, .value = 10.1},
+    };
+
+    const std::vector<std::size_t> onlyFirstVisible{0};
+    const auto visibleOnly = protoscope::plot::findNearestDisplayPointInChannels(displayData, onlyFirstVisible, 1.02, 10.1, 0.1, 0.2);
+    require(visibleOnly.has_value(), "悬停吸附应在可见通道内继续命中候选");
+    require(visibleOnly->channelIndex == 0, "隐藏通道不应参与悬停吸附评分");
+
+    const std::vector<std::size_t> noVisibleChannels{};
+    const auto allHidden = protoscope::plot::findNearestDisplayPointInChannels(displayData, noVisibleChannels, 1.02, 10.1, 0.1, 0.2);
+    require(!allHidden.has_value(), "所有候选通道隐藏时悬停吸附应为空");
+}
+
 void test_plot_limited_envelope_edges() {
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
