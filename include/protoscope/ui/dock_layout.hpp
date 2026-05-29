@@ -37,6 +37,11 @@ struct LuaDockLayoutPaths {
     bool isLegacyLayout{false};
 };
 
+struct DockLayoutIniHealth {
+    int centralNodeCount{0};
+    bool centralNodeInLegacyLeftPane{false};
+};
+
 struct ProtocolWorkspaceSwitchDecision {
     bool draftChanged{false};
     std::optional<std::string> reloadProtocolDir;
@@ -67,6 +72,8 @@ WorkspaceLayoutMode workspaceLayoutModeAfterLoad(const LuaDockLayoutPaths& layou
 bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol);
 bool shouldRunLuaDefaultDockLayout(WorkspaceLayoutMode layoutMode, bool pendingDefaultDockLayout);
 bool canResetProtocolWorkspaceLayout(bool protocolWorkspaceLoaded, std::string_view activeWorkspaceProtocolKey);
+DockLayoutIniHealth inspectDockLayoutIni(std::string_view iniContent);
+bool shouldRebuildDockLayout(const DockLayoutIniHealth& health);
 std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey);
 std::vector<std::string> buildLuaDockStableIds(
     const std::vector<scripting::DockSnapshot>& docks,

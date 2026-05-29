@@ -194,6 +194,95 @@ void test_lua_dock_layout_requests_group_tabs() {
     require(requests[2].tabGroup == "single", "缺省 tab_group 应按自身 id 独立停靠");
 }
 
+void test_dock_layout_ini_requires_exactly_one_central_node() {
+    const char* noCentralNodeIni = R"ini(
+[Docking][Data]
+DockSpace     ID=0x08BD597D Window=0x1BBC0F80 Pos=0,24 Size=2560,1345 Split=X
+  DockNode    ID=0x00000001 Parent=0x08BD597D SizeRef=370,1369 Split=Y
+    DockNode  ID=0x00000003 Parent=0x00000001 SizeRef=639,710 Selected=0x39C767C0
+    DockNode  ID=0x00000004 Parent=0x00000001 SizeRef=639,657 Selected=0x7ED89664
+  DockNode    ID=0x00000002 Parent=0x08BD597D SizeRef=2188,1369 Split=Y
+    DockNode  ID=0x00000005 Parent=0x00000002 SizeRef=1919,341
+    DockNode  ID=0x00000006 Parent=0x00000002 SizeRef=1919,1026 Selected=0x4F544A96
+)ini";
+    const auto noCentralNodeHealth = protoscope::ui::inspectDockLayoutIni(noCentralNodeIni);
+    require(noCentralNodeHealth.centralNodeCount == 0, "无 CentralNode 布局应统计为 0");
+    require(protoscope::ui::shouldRebuildDockLayout(noCentralNodeHealth), "没有 CentralNode 的布局必须回退默认布局");
+
+    const char* singleCentralNodeIni = R"ini(
+[Docking][Data]
+DockSpace     ID=0x08BD597D Window=0x1BBC0F80 Pos=0,24 Size=2560,1345 Split=X
+  DockNode    ID=0x00000001 Parent=0x08BD597D SizeRef=370,1369 Split=Y
+    DockNode  ID=0x00000003 Parent=0x00000001 SizeRef=639,710 Selected=0x39C767C0
+    DockNode  ID=0x00000004 Parent=0x00000001 SizeRef=639,657 Selected=0x7ED89664
+  DockNode    ID=0x00000002 Parent=0x08BD597D SizeRef=2188,1369 Split=Y
+    DockNode  ID=0x00000005 Parent=0x00000002 SizeRef=1919,341
+    DockNode  ID=0x00000006 Parent=0x00000002 SizeRef=1919,1026 CentralNode=1 Selected=0x4F544A96
+)ini";
+    const auto singleCentralNodeHealth = protoscope::ui::inspectDockLayoutIni(singleCentralNodeIni);
+    require(singleCentralNodeHealth.centralNodeCount == 1, "单一 CentralNode 布局应统计为 1");
+    require(!singleCentralNodeHealth.centralNodeInLegacyLeftPane, "健康布局的 CentralNode 不应落在旧左栏分支");
+    require(!protoscope::ui::shouldRebuildDockLayout(singleCentralNodeHealth), "单一且位置正确的 CentralNode 布局不应重建");
+
+    const char* duplicateCentralNodeIni = R"ini(
+[Docking][Data]
+DockSpace     ID=0x08BD597D Window=0x1BBC0F80 Pos=0,24 Size=2560,1345 Split=X
+  DockNode    ID=0x00000001 Parent=0x08BD597D SizeRef=370,1369 Split=Y
+    DockNode  ID=0x00000003 Parent=0x00000001 SizeRef=639,710 CentralNode=1 Selected=0x39C767C0
+    DockNode  ID=0x00000004 Parent=0x00000001 SizeRef=639,657 Selected=0x7ED89664
+  DockNode    ID=0x00000002 Parent=0x08BD597D SizeRef=2188,1369 Split=Y
+    DockNode  ID=0x00000005 Parent=0x00000002 SizeRef=1919,341
+    DockNode  ID=0x00000006 Parent=0x00000002 SizeRef=1919,1026 CentralNode=1 Selected=0x4F544A96
+)ini";
+    const auto duplicateCentralNodeHealth = protoscope::ui::inspectDockLayoutIni(duplicateCentralNodeIni);
+    require(duplicateCentralNodeHealth.centralNodeCount == 2, "双 CentralNode 布局应统计为 2");
+    require(protoscope::ui::shouldRebuildDockLayout(duplicateCentralNodeHealth), "多个 CentralNode 的布局必须回退默认布局");
+}
+
+void test_dock_layout_ini_rebuilds_legacy_left_central_node() {
+    const char* legacyRootCentralNodeIni = R"ini(
+[Docking][Data]
+DockSpace     ID=0x08BD597D Window=0x1BBC0F80 Pos=0,24 Size=2560,1345 Split=X
+  DockNode    ID=0x00000001 Parent=0x08BD597D SizeRef=32,900 CentralNode=1
+  DockNode    ID=0x00000002 Parent=0x08BD597D SizeRef=2526,900 Split=Y
+    DockNode  ID=0x00000005 Parent=0x00000002 SizeRef=1199,224
+    DockNode  ID=0x00000006 Parent=0x00000002 SizeRef=1199,674 Selected=0x4F544A96
+)ini";
+    const auto legacyRootHealth = protoscope::ui::inspectDockLayoutIni(legacyRootCentralNodeIni);
+    require(legacyRootHealth.centralNodeCount == 1, "左栏根节点坏样本也应只有一个 CentralNode");
+    require(legacyRootHealth.centralNodeInLegacyLeftPane, "左栏根节点 CentralNode 必须识别为坏布局");
+    require(protoscope::ui::shouldRebuildDockLayout(legacyRootHealth), "左栏根节点 CentralNode 布局必须重建");
+
+    const char* legacyNestedCentralNodeIni = R"ini(
+[Docking][Data]
+DockSpace     ID=0x08BD597D Window=0x1BBC0F80 Pos=0,24 Size=2560,1345 Split=X
+  DockNode    ID=0x00000001 Parent=0x08BD597D SizeRef=370,1369 Split=Y
+    DockNode  ID=0x00000003 Parent=0x00000001 SizeRef=639,710 CentralNode=1 Selected=0x39C767C0
+    DockNode  ID=0x00000004 Parent=0x00000001 SizeRef=639,657 Selected=0x7ED89664
+  DockNode    ID=0x00000002 Parent=0x08BD597D SizeRef=2188,1369 Split=Y
+    DockNode  ID=0x00000005 Parent=0x00000002 SizeRef=1919,341
+    DockNode  ID=0x00000006 Parent=0x00000002 SizeRef=1919,1026 Selected=0x4F544A96
+)ini";
+    const auto legacyNestedHealth = protoscope::ui::inspectDockLayoutIni(legacyNestedCentralNodeIni);
+    require(legacyNestedHealth.centralNodeCount == 1, "左栏子树坏样本也应只有一个 CentralNode");
+    require(legacyNestedHealth.centralNodeInLegacyLeftPane, "左栏子树 CentralNode 必须识别为坏布局");
+    require(protoscope::ui::shouldRebuildDockLayout(legacyNestedHealth), "左栏子树 CentralNode 布局必须重建");
+}
+
+void test_lua_dock_layout_requests_preserve_supported_anchors() {
+    std::vector<protoscope::scripting::DockSnapshot> docks{
+        makeDock("top", "顶部", "right_top", ""),
+        makeDock("bottom", "底部", "right_bottom", ""),
+        makeDock("main", "主区", "main_bottom", ""),
+    };
+
+    const auto requests = protoscope::ui::buildLuaDockLayoutRequests(docks, "demo");
+    require(requests.size() == 3, "应为每个 anchor 生成默认停靠请求");
+    require(requests[0].anchor == "right_top", "right_top 应保留为有效默认停靠点");
+    require(requests[1].anchor == "right_bottom", "right_bottom 应保留为有效默认停靠点");
+    require(requests[2].anchor == "main_bottom", "main_bottom 应保留为有效默认停靠点");
+}
+
 void test_lua_dock_settings_filter_keeps_current_protocol_windows() {
     require(
         protoscope::ui::shouldKeepLuaWindowSettings("LuaDock:protocols_demo:active", "protocols_demo"),

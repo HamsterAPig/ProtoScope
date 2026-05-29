@@ -33,6 +33,11 @@ struct LuaDockLayoutMeta {
     int schemaVersion{0};
 };
 
+struct DockTreeStackEntry {
+    std::string nodeId;
+    std::size_t indent{0};
+};
+
 std::string trimCopy(std::string_view value) {
     const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
         return std::isspace(ch) != 0;
@@ -44,6 +49,30 @@ std::string trimCopy(std::string_view value) {
         return {};
     }
     return std::string(first, last);
+}
+
+std::string_view trimView(std::string_view value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
+        value.remove_suffix(1);
+    }
+    return value;
+}
+
+std::string extractIniAttribute(std::string_view line, std::string_view key) {
+    const auto begin = line.find(key);
+    if (begin == std::string_view::npos) {
+        return {};
+    }
+
+    const auto valueBegin = begin + key.size();
+    auto valueEnd = valueBegin;
+    while (valueEnd < line.size() && std::isspace(static_cast<unsigned char>(line[valueEnd])) == 0) {
+        ++valueEnd;
+    }
+    return std::string(line.substr(valueBegin, valueEnd - valueBegin));
 }
 
 std::string normalizeKeyPart(std::string_view value) {
@@ -269,6 +298,80 @@ bool shouldRunLuaDefaultDockLayout(WorkspaceLayoutMode layoutMode, bool pendingD
 
 bool canResetProtocolWorkspaceLayout(bool protocolWorkspaceLoaded, std::string_view activeWorkspaceProtocolKey) {
     return protocolWorkspaceLoaded && !activeWorkspaceProtocolKey.empty();
+}
+
+DockLayoutIniHealth inspectDockLayoutIni(std::string_view iniContent) {
+    DockLayoutIniHealth health;
+    std::vector<DockTreeStackEntry> stack;
+    bool inDockingData = false;
+    bool rootSplitX = false;
+    std::string rootNodeId;
+    std::string leftRootNodeId;
+
+    std::istringstream input{std::string(iniContent)};
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+
+        const auto trimmed = trimView(line);
+        if (!inDockingData) {
+            inDockingData = trimmed == "[Docking][Data]";
+            continue;
+        }
+        if (!trimmed.empty() && trimmed.front() == '[') {
+            break;
+        }
+        if (!trimmed.starts_with("DockSpace") && !trimmed.starts_with("DockNode")) {
+            continue;
+        }
+
+        const auto indentPos = line.find_first_not_of(' ');
+        const auto indent = indentPos == std::string::npos ? std::size_t{0} : indentPos;
+        while (!stack.empty() && stack.back().indent >= indent) {
+            stack.pop_back();
+        }
+
+        const auto nodeId = extractIniAttribute(trimmed, "ID=");
+        if (nodeId.empty()) {
+            continue;
+        }
+
+        if (trimmed.starts_with("DockSpace")) {
+            rootNodeId = nodeId;
+            leftRootNodeId.clear();
+            rootSplitX = trimmed.find("Split=X") != std::string_view::npos;
+            stack.push_back({nodeId, indent});
+            continue;
+        }
+
+        if (rootSplitX && !rootNodeId.empty() && !stack.empty()
+            && stack.back().nodeId == rootNodeId && leftRootNodeId.empty()) {
+            leftRootNodeId = nodeId;
+        }
+
+        if (trimmed.find("CentralNode=1") != std::string_view::npos) {
+            ++health.centralNodeCount;
+
+            // 关键边界：旧坏布局会把 CentralNode 放进根节点左分支，即使数量只有 1 也必须重建默认布局。
+            if (rootSplitX && !leftRootNodeId.empty()) {
+                const bool centralInLeftBranch = nodeId == leftRootNodeId
+                    || std::any_of(stack.begin(), stack.end(), [&](const DockTreeStackEntry& entry) {
+                           return entry.nodeId == leftRootNodeId;
+                       });
+                health.centralNodeInLegacyLeftPane = health.centralNodeInLegacyLeftPane || centralInLeftBranch;
+            }
+        }
+
+        stack.push_back({nodeId, indent});
+    }
+
+    return health;
+}
+
+bool shouldRebuildDockLayout(const DockLayoutIniHealth& health) {
+    return health.centralNodeCount != 1 || health.centralNodeInLegacyLeftPane;
 }
 
 std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey) {

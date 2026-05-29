@@ -215,16 +215,18 @@ bool dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
     return true;
 }
 
-void markCentralDockNode(ImGuiID dockspaceId, ImGuiID centralNodeId) {
-    ImGuiDockNode* rootNode = ImGui::DockBuilderGetNode(dockspaceId);
-    ImGuiDockNode* centralNode = ImGui::DockBuilderGetNode(centralNodeId);
-    if (rootNode == nullptr || centralNode == nullptr) {
-        return;
+std::optional<DockLayoutIniHealth> readDockLayoutIniHealth(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    if (!input) {
+        return std::nullopt;
     }
 
-    // 核心边界：只把默认布局的主内容区标记为 CentralNode，让左侧空节点可被 Dock 系统自然回收。
-    centralNode->SetLocalFlags(centralNode->LocalFlags | ImGuiDockNodeFlags_CentralNode);
-    rootNode->CentralNode = centralNode;
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    if (input.bad()) {
+        return std::nullopt;
+    }
+    return inspectDockLayoutIni(buffer.str());
 }
 
 void keepOnlyCurrentLuaDockSettings(std::string_view layoutKey) {
@@ -680,28 +682,29 @@ void GuiRuntime::renderFrame() {
         ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
 
-        ImGuiID mainTop = dockspaceId;
-        ImGuiID left = ImGui::DockBuilderSplitNode(mainTop, ImGuiDir_Left, 0.25f, nullptr, &mainTop);
+        ImGuiID mainArea = dockspaceId;
+        ImGuiID left = ImGui::DockBuilderSplitNode(mainArea, ImGuiDir_Left, 0.25f, nullptr, &mainArea);
         ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.48F, nullptr, &left);
-        ImGuiID rightBottom = ImGui::DockBuilderSplitNode(mainTop, ImGuiDir_Down, 0.75f, nullptr, &mainTop);
-        ImGuiID rightMid = ImGui::DockBuilderSplitNode(mainTop, ImGuiDir_Down, 0.36F, nullptr, &mainTop);
-        markCentralDockNode(dockspaceId, rightBottom);
+        ImGuiID rightTop = ImGui::DockBuilderSplitNode(mainArea, ImGuiDir_Up, 0.25f, nullptr, &mainArea);
+        ImGuiID rightMid = ImGui::DockBuilderSplitNode(mainArea, ImGuiDir_Up, 0.36F, nullptr, &mainArea);
+        const ImGuiID mainBottom = mainArea;
 
         defaultLuaDockNodes_.clear();
         defaultLuaDockNodes_[LuaDockAnchor::Left] = left;
         defaultLuaDockNodes_[LuaDockAnchor::LeftBottom] = leftBottom;
-        defaultLuaDockNodes_[LuaDockAnchor::RightTop] = mainTop;
+        defaultLuaDockNodes_[LuaDockAnchor::RightTop] = rightTop;
         defaultLuaDockNodes_[LuaDockAnchor::RightMid] = rightMid;
-        defaultLuaDockNodes_[LuaDockAnchor::RightBottom] = rightBottom;
-        defaultLuaDockNodes_[LuaDockAnchor::MainBottom] = rightBottom;
+        defaultLuaDockNodes_[LuaDockAnchor::RightBottom] = mainBottom;
+        defaultLuaDockNodes_[LuaDockAnchor::MainBottom] = mainBottom;
 
+        // 核心流程：先切左栏，再从主区向上切辅助区，让 DockBuilder 自然保留唯一的 CentralNode。
         ImGui::DockBuilderDockWindow("通讯配置", left);
         ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
-        ImGui::DockBuilderDockWindow("发送", mainTop);
-        ImGui::DockBuilderDockWindow("接收数据", rightBottom);
-        ImGui::DockBuilderDockWindow("日志", rightBottom);
-        ImGui::DockBuilderDockWindow("脚本", rightBottom);
-        ImGui::DockBuilderDockWindow("波形", rightBottom);
+        ImGui::DockBuilderDockWindow("发送", rightTop);
+        ImGui::DockBuilderDockWindow("接收数据", mainBottom);
+        ImGui::DockBuilderDockWindow("日志", mainBottom);
+        ImGui::DockBuilderDockWindow("脚本", mainBottom);
+        ImGui::DockBuilderDockWindow("波形", mainBottom);
         ImGui::DockBuilderFinish(dockspaceId);
         pendingLuaDefaultDockLayout_ = true;
         if (shouldRunLuaDefaultDockLayout(workspaceLayoutMode_, pendingLuaDefaultDockLayout_)) {
@@ -1676,10 +1679,21 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
         application_.setStatusMessage("LuaDockLayout: load protocol=" + activeWorkspaceProtocolKey_ + " schemaVersion=" + std::to_string(layoutPaths.schemaVersion) + " isLegacy=" + (layoutPaths.isLegacyLayout ? "true" : "false") + " mode=" + modeLabel);
     }
     pendingLuaDefaultDockLayout_ = false;
+    pendingProtocolWorkspaceSave_ = false;
 
     ImGui::ClearIniSettings();
     if (layoutPaths.hasUserLayout && !layoutPaths.isLegacyLayout) {
-        ImGui::LoadIniSettingsFromDisk(layoutPaths.layoutPath.string().c_str());
+        const auto savedLayoutHealth = readDockLayoutIniHealth(layoutPaths.layoutPath);
+        if (savedLayoutHealth.has_value() && shouldRebuildDockLayout(*savedLayoutHealth)) {
+            workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
+            pendingProtocolWorkspaceSave_ = true;
+            application_.setStatusMessage(
+                std::string("检测到损坏的协议 Dock 布局，已回退默认布局: CentralNode=")
+                + std::to_string(savedLayoutHealth->centralNodeCount)
+                + (savedLayoutHealth->centralNodeInLegacyLeftPane ? " left-pane=true" : " left-pane=false"));
+        } else {
+            ImGui::LoadIniSettingsFromDisk(layoutPaths.layoutPath.string().c_str());
+        }
     } else if (layoutPaths.hasLegacyLayout) {
         ImGui::LoadIniSettingsFromDisk(layoutPaths.legacyLayoutPath.string().c_str());
         pendingProtocolWorkspaceSave_ = true;
