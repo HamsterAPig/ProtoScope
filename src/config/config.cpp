@@ -52,6 +52,46 @@ std::string toLogLevelText(const LogLevel level) {
     return "info";
 }
 
+plot::WaveControlMode parseWaveControlMode(const std::string& value, plot::WaveControlMode fallback) {
+    if (value == "legacy_global") {
+        return plot::WaveControlMode::LegacyGlobal;
+    }
+    if (value == "oscilloscope") {
+        return plot::WaveControlMode::Oscilloscope;
+    }
+    return fallback;
+}
+
+const char* toWaveControlModeText(const plot::WaveControlMode mode) {
+    switch (mode) {
+    case plot::WaveControlMode::Oscilloscope:
+        return "oscilloscope";
+    case plot::WaveControlMode::LegacyGlobal:
+        return "legacy_global";
+    }
+    return "oscilloscope";
+}
+
+plot::WaveDisplayFormula parseWaveDisplayFormula(const std::string& value, plot::WaveDisplayFormula fallback) {
+    if (value == "scale_then_offset") {
+        return plot::WaveDisplayFormula::ScaleThenOffset;
+    }
+    if (value == "offset_then_scale") {
+        return plot::WaveDisplayFormula::OffsetThenScale;
+    }
+    return fallback;
+}
+
+const char* toWaveDisplayFormulaText(const plot::WaveDisplayFormula formula) {
+    switch (formula) {
+    case plot::WaveDisplayFormula::OffsetThenScale:
+        return "offset_then_scale";
+    case plot::WaveDisplayFormula::ScaleThenOffset:
+        return "scale_then_offset";
+    }
+    return "offset_then_scale";
+}
+
 transport::TransportKind parseTransportKind(const std::string& value) {
     if (value == "tcp_server") {
         return transport::TransportKind::TcpServer;
@@ -125,6 +165,16 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.gui.window.maximized = readScalar<bool>(window, "maximized", result.config.gui.window.maximized);
         }
         if (const auto wave = gui["wave"]) {
+            result.config.gui.wave.controlMode =
+                parseWaveControlMode(readScalar<std::string>(wave,
+                                                             "control_mode",
+                                                             toWaveControlModeText(result.config.gui.wave.controlMode)),
+                                     result.config.gui.wave.controlMode);
+            result.config.gui.wave.displayFormula =
+                parseWaveDisplayFormula(readScalar<std::string>(wave,
+                                                                "display_formula",
+                                                                toWaveDisplayFormulaText(result.config.gui.wave.displayFormula)),
+                                        result.config.gui.wave.displayFormula);
             result.config.gui.wave.maxRenderPointsPerChannel =
                 readScalar<std::size_t>(wave, "max_render_points_per_channel", result.config.gui.wave.maxRenderPointsPerChannel);
             result.config.gui.wave.maxRenderVertices =
@@ -225,6 +275,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["window"]["width"] = config.gui.window.width;
     root["gui"]["window"]["height"] = config.gui.window.height;
     root["gui"]["window"]["maximized"] = config.gui.window.maximized;
+    root["gui"]["wave"]["control_mode"] = toWaveControlModeText(config.gui.wave.controlMode);
+    root["gui"]["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
     root["gui"]["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
     root["gui"]["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
     root["gui"]["wave"]["downsample_start_multiplier"] = config.gui.wave.downsampleStartMultiplier;
@@ -422,13 +474,19 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     configState.luaDockLayoutDebug = config.gui.luaDockLayoutDebug;
     configState.loadedFromPath = config.configPath.empty() ? normalizeTextPath(defaultConfigPath_) : config.configPath;
 
-    auto& wave = dockStore.waveState().view;
+    auto& waveState = dockStore.waveState();
+    auto& wave = waveState.view;
+    wave.controlMode = config.gui.wave.controlMode;
+    wave.displayFormula = config.gui.wave.displayFormula;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
     wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
     wave.overviewMaxSamples = config.gui.wave.overviewMaxSamples;
     wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
+    auto viewConfig = waveState.buffer.viewConfig();
+    viewConfig.displayFormula = config.gui.wave.displayFormula;
+    waveState.buffer.setViewConfig(viewConfig);
 }
 
 AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
@@ -443,6 +501,8 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.app.fpsLimit = dockStore.configState().fpsLimit;
     config.app.idleRender = dockStore.configState().idleRender;
     config.gui.luaDockLayoutDebug = dockStore.configState().luaDockLayoutDebug;
+    config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
+    config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;

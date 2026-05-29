@@ -1479,6 +1479,7 @@ std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& 
         PlotChannelDescriptor descriptor{};
         descriptor.label = luaStringField(channelTable, "label").value_or("CH" + std::to_string(index));
         descriptor.unit = luaStringField(channelTable, "unit").value_or("");
+        descriptor.ratio = finiteOrDefault(luaNumberField(channelTable, "ratio").value_or(1.0), 1.0);
         descriptor.scale = finiteOrDefault(luaNumberField(channelTable, "scale").value_or(1.0), 1.0);
         descriptor.offset = finiteOrDefault(luaNumberField(channelTable, "offset").value_or(0.0), 0.0);
         if (const auto colorText = luaStringField(channelTable, "color"); colorText.has_value()) {

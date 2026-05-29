@@ -68,6 +68,9 @@ void applyChannelOverrides(plot::WaveDockState& wave) {
             if (overrideState.labelOverridden) {
                 updated.label = overrideState.label;
             }
+            if (overrideState.ratioOverridden) {
+                updated.ratio = overrideState.ratio;
+            }
             if (overrideState.scaleOverridden) {
                 updated.scale = overrideState.scale;
             }
@@ -134,15 +137,20 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     YAML::Node overridesNode;
     for (std::size_t channelIndex = 0; channelIndex < wave.channelOverrides.size(); ++channelIndex) {
         const auto& overrideState = wave.channelOverrides[channelIndex];
-        if (!overrideState.labelOverridden && !overrideState.scaleOverridden && !overrideState.offsetOverridden) {
+        if (!overrideState.labelOverridden
+            && !overrideState.ratioOverridden
+            && !overrideState.scaleOverridden
+            && !overrideState.offsetOverridden) {
             continue;
         }
         YAML::Node entry;
         entry["channel_index"] = channelIndex;
         entry["label_overridden"] = overrideState.labelOverridden;
+        entry["ratio_overridden"] = overrideState.ratioOverridden;
         entry["scale_overridden"] = overrideState.scaleOverridden;
         entry["offset_overridden"] = overrideState.offsetOverridden;
         entry["label"] = overrideState.label;
+        entry["ratio"] = overrideState.ratio;
         entry["scale"] = overrideState.scale;
         entry["offset"] = overrideState.offset;
         overridesNode.push_back(entry);
@@ -204,9 +212,11 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
             }
             auto& overrideState = wave.channelOverrides[channelIndex];
             overrideState.labelOverridden = entry["label_overridden"].as<bool>(overrideState.labelOverridden);
+            overrideState.ratioOverridden = entry["ratio_overridden"].as<bool>(overrideState.ratioOverridden);
             overrideState.scaleOverridden = entry["scale_overridden"].as<bool>(overrideState.scaleOverridden);
             overrideState.offsetOverridden = entry["offset_overridden"].as<bool>(overrideState.offsetOverridden);
             overrideState.label = entry["label"].as<std::string>(overrideState.label);
+            overrideState.ratio = entry["ratio"].as<double>(overrideState.ratio);
             overrideState.scale = entry["scale"].as<double>(overrideState.scale);
             overrideState.offset = entry["offset"].as<double>(overrideState.offset);
         }

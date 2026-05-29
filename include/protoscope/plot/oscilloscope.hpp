@@ -9,6 +9,16 @@
 
 namespace protoscope::plot {
 
+enum class WaveControlMode {
+    Oscilloscope,
+    LegacyGlobal,
+};
+
+enum class WaveDisplayFormula {
+    OffsetThenScale,
+    ScaleThenOffset,
+};
+
 struct WaveSample {
     double time{0.0};
     double value{0.0};
@@ -22,12 +32,16 @@ struct WaveAppendRequest {
 struct ChannelSpec {
     std::string label;
     std::string unit;
+    double ratio{1.0};
     double scale{1.0};
     double offset{0.0};
     std::optional<std::array<float, 4>> color;
 };
 
-double applyChannelDisplayTransform(double rawValue, const ChannelSpec& spec);
+double applyChannelActualValue(double rawValue, const ChannelSpec& spec);
+double applyChannelDisplayTransform(double rawValue,
+                                    const ChannelSpec& spec,
+                                    WaveDisplayFormula formula = WaveDisplayFormula::OffsetThenScale);
 
 struct ViewConfig {
     double timeScale{1.0};
@@ -36,6 +50,7 @@ struct ViewConfig {
     double verticalMax{1.0};
     std::string verticalUnit{"V"};
     std::size_t historyLimit{200000};
+    WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
 };
 
 struct WaveStats {
@@ -52,6 +67,7 @@ struct CursorReadout {
     std::size_t sampleIndex{0};
     double time{0.0};
     double value{0.0};
+    double displayValue{0.0};
 };
 
 struct DeltaReadout {
@@ -76,6 +92,7 @@ struct MeasurementReadout {
 struct ChannelView {
     std::string label;
     std::string unit;
+    double ratio{1.0};
     double scale{1.0};
     double offset{0.0};
     std::optional<std::array<float, 4>> color;

@@ -35,6 +35,7 @@ struct FrequencyParseResult {
 
 struct WaveDisplayChannel {
     std::vector<WaveSample> samples;
+    std::vector<double> actualValues;
 };
 
 struct WaveDisplayData {
@@ -117,11 +118,11 @@ CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           const CursorReadout& right,
                                           WaveTimeAxisSource axisSource,
                                           std::string_view timeUnit);
-std::optional<CursorReadout> findStrongestEdgeNearTime(const std::vector<WaveSample>& samples,
+std::optional<CursorReadout> findStrongestEdgeNearTime(const WaveDisplayData& displayData,
                                                        std::size_t channelIndex,
                                                        double centerTime,
                                                        double maxTimeDistance);
-std::optional<CursorReadout> findLocalExtremeNearTime(const std::vector<WaveSample>& samples,
+std::optional<CursorReadout> findLocalExtremeNearTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double centerTime,
                                                       double maxTimeDistance,

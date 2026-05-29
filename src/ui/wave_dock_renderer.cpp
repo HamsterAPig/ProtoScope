@@ -301,7 +301,9 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDa
         view.autoFollowLatest = false;
         changed = true;
     }
-    if (ImPlot::IsAxisHovered(ImAxis_Y1) && !view.lockVerticalRange) {
+    if (ImPlot::IsAxisHovered(ImAxis_Y1)
+        && view.controlMode == plot::WaveControlMode::LegacyGlobal
+        && !view.lockVerticalRange) {
         view.viewMinValue = bounds.minValue;
         view.viewMaxValue = bounds.maxValue;
         changed = true;
@@ -356,6 +358,246 @@ plot::WaveViewport currentViewport(const plot::WaveViewState& view) {
         .minValue = view.lockVerticalRange ? view.manualVerticalMin : view.viewMinValue,
         .maxValue = view.lockVerticalRange ? view.manualVerticalMax : view.viewMaxValue,
     };
+}
+
+plot::ChannelSpec fallbackChannelDefaultSpec(const plot::ChannelSpec& spec) {
+    return plot::ChannelSpec{
+        .label = spec.label,
+        .unit = spec.unit,
+        .ratio = 1.0,
+        .scale = 1.0,
+        .offset = 0.0,
+        .color = spec.color,
+    };
+}
+
+plot::ChannelSpec channelDefaultSpec(const plot::WaveDockState& wave,
+                                     std::size_t channelIndex,
+                                     const plot::ChannelSpec& current) {
+    if (channelIndex < wave.defaultChannelSpecs.size()) {
+        return wave.defaultChannelSpecs[channelIndex];
+    }
+    return fallbackChannelDefaultSpec(current);
+}
+
+void applyChannelTransformOverride(plot::WaveDockState& wave,
+                                   std::size_t channelIndex,
+                                   const plot::ChannelSpec& updated,
+                                   const plot::ChannelSpec& defaultSpec) {
+    if (channelIndex >= wave.channelOverrides.size()) {
+        wave.channelOverrides.resize(channelIndex + 1);
+    }
+    auto& overrideState = wave.channelOverrides[channelIndex];
+    overrideState.labelOverridden = updated.label != defaultSpec.label;
+    overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > 1e-12;
+    overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > 1e-12;
+    overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > 1e-12;
+    overrideState.label = updated.label;
+    overrideState.ratio = updated.ratio;
+    overrideState.scale = updated.scale;
+    overrideState.offset = updated.offset;
+    wave.buffer.setChannelSpec(channelIndex, updated);
+}
+
+struct ChannelLegendMetrics {
+    float cardWidth{180.0F};
+    float cardHeight{0.0F};
+    float stripHeight{0.0F};
+    float totalHeight{0.0F};
+};
+
+ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth) {
+    const auto& style = ImGui::GetStyle();
+    const float titleHeight = ImGui::GetTextLineHeightWithSpacing();
+    const float lineHeight = ImGui::GetTextLineHeight();
+    const float cardWidth = (std::clamp)(availableWidth * 0.22F, 160.0F, 220.0F);
+    const float cardHeight = 18.0F + lineHeight * 2.0F;
+    const float stripHeight = cardHeight + style.FramePadding.y * 2.0F + style.ScrollbarSize + 6.0F;
+    const float separatorHeight = style.ItemSpacing.y + 1.0F + style.ItemSpacing.y;
+    return {
+        .cardWidth = cardWidth,
+        .cardHeight = cardHeight,
+        .stripHeight = stripHeight,
+        .totalHeight = titleHeight + separatorHeight + stripHeight,
+    };
+}
+
+void drawChannelCardText(const ImVec2& min, const ImVec2& max, const std::string& text, ImU32 color) {
+    auto* drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(min, max, true);
+    drawList->AddText(min, color, text.c_str());
+    drawList->PopClipRect();
+}
+
+void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active) {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted(spec.label.c_str());
+    ImGui::Text("单位：%s", spec.unit.empty() ? "-" : spec.unit.c_str());
+    ImGui::Text("Ratio：%.6g", spec.ratio);
+    ImGui::Text("Scale：%.6g", spec.scale);
+    ImGui::Text("Offset：%.6g", spec.offset);
+    ImGui::TextUnformatted(active ? "状态：激活" : "状态：未激活");
+    ImGui::EndTooltip();
+}
+
+void drawChannelLegendPopup(plot::WaveDockState& wave,
+                            std::size_t channelIndex,
+                            const plot::ChannelSpec& spec,
+                            bool active) {
+    const plot::ChannelSpec defaultSpec = channelDefaultSpec(wave, channelIndex, spec);
+    auto updated = spec;
+    ImGui::Text("%s", spec.label.c_str());
+    if (!spec.unit.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("[%s]", spec.unit.c_str());
+    }
+
+    char labelBuffer[128]{};
+    std::snprintf(labelBuffer, sizeof(labelBuffer), "%s", updated.label.c_str());
+    if (ImGui::InputText("标签", labelBuffer, sizeof(labelBuffer))) {
+        updated.label = labelBuffer;
+        applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+    }
+
+    ImGui::TextDisabled(active ? "当前激活通道" : "非激活通道");
+    ImGui::Separator();
+    if (ImGui::InputDouble("比率", &updated.ratio, 0.01, 0.1, "%.6g")) {
+        applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+    }
+    if (ImGui::InputDouble("缩放", &updated.scale, 0.1, 1.0, "%.6g")) {
+        applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+    }
+    if (ImGui::InputDouble("偏移", &updated.offset, 0.1, 1.0, "%.6g")) {
+        applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+    }
+    if (ImGui::Button(active ? "激活中" : "设为激活")) {
+        wave.view.measurementChannelIndex = channelIndex;
+    }
+    if (ImGui::Button("恢复默认标签")) {
+        updated.label = defaultSpec.label;
+        applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+    }
+    if (ImGui::Button("恢复默认变换")) {
+        updated.ratio = defaultSpec.ratio;
+        updated.scale = defaultSpec.scale;
+        updated.offset = defaultSpec.offset;
+        applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+    }
+    if (ImGui::Button("恢复全部默认")) {
+        applyChannelTransformOverride(wave, channelIndex, defaultSpec, defaultSpec);
+    }
+}
+
+double offsetParameterDeltaFromDisplayDelta(const plot::ChannelSpec& spec,
+                                            plot::WaveDisplayFormula formula,
+                                            double displayDelta) {
+    if (formula == plot::WaveDisplayFormula::ScaleThenOffset) {
+        return displayDelta;
+    }
+    if (std::abs(spec.scale) <= 1e-12) {
+        return 0.0;
+    }
+    return displayDelta / spec.scale;
+}
+
+double scaleFromInteractionFactor(double scale, double factor) {
+    if (!std::isfinite(factor) || factor <= 0.0) {
+        return scale;
+    }
+    const double direction = scale < 0.0 ? -1.0 : 1.0;
+    double magnitude = std::abs(scale);
+    if (magnitude <= 1e-12) {
+        magnitude = 1.0;
+    }
+    return direction * magnitude * factor;
+}
+
+bool updateActiveChannelScale(plot::WaveDockState& wave, double factor) {
+    const auto channelIndex = wave.view.measurementChannelIndex;
+    const auto spec = wave.buffer.channelSpec(channelIndex);
+    if (!spec.has_value()) {
+        return false;
+    }
+    auto updated = *spec;
+    updated.scale = scaleFromInteractionFactor(updated.scale, factor);
+    applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
+    return true;
+}
+
+bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta) {
+    const auto channelIndex = wave.view.measurementChannelIndex;
+    const auto spec = wave.buffer.channelSpec(channelIndex);
+    if (!spec.has_value()) {
+        return false;
+    }
+    auto updated = *spec;
+    updated.offset += offsetParameterDeltaFromDisplayDelta(updated, wave.view.displayFormula, displayDelta);
+    applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
+    return true;
+}
+
+bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
+                                           const plot::WaveDisplayData& displayData,
+                                           const ImPlotPoint& mousePos,
+                                           double timeSnapDistance,
+                                           double valueSnapDistance) {
+    auto& view = wave.view;
+    if (view.controlMode != plot::WaveControlMode::Oscilloscope) {
+        view.activeChannelOffsetDrag = false;
+        view.activeChannelScaleDrag = false;
+        return false;
+    }
+
+    const auto& io = ImGui::GetIO();
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        view.activeChannelOffsetDrag = false;
+        view.activeChannelScaleDrag = false;
+    }
+
+    bool changed = false;
+    if (ImPlot::IsAxisHovered(ImAxis_Y1) && io.MouseWheel != 0.0F) {
+        changed = updateActiveChannelScale(wave, std::pow(1.1, io.MouseWheel)) || changed;
+    }
+    if (ImPlot::IsAxisHovered(ImAxis_Y1) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        view.activeChannelScaleDrag = true;
+    }
+    if (view.activeChannelScaleDrag && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && ImPlot::IsAxisHovered(ImAxis_Y1)) {
+        changed = updateActiveChannelScale(wave, std::exp(-static_cast<double>(io.MouseDelta.y) * 0.01)) || changed;
+    }
+
+    if (!ImPlot::IsPlotHovered()) {
+        return changed;
+    }
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const auto activePoint =
+            plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, mousePos.x, timeSnapDistance);
+        if (activePoint.has_value() && std::abs(activePoint->displayValue - mousePos.y) <= valueSnapDistance) {
+            view.activeChannelOffsetDrag = true;
+        }
+    }
+
+    if (!ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        return changed;
+    }
+
+    const ImVec2 mousePixel = ImGui::GetMousePos();
+    const ImVec2 previousPixel{mousePixel.x - io.MouseDelta.x, mousePixel.y - io.MouseDelta.y};
+    const ImPlotPoint currentPlot = ImPlot::PixelsToPlot(mousePixel);
+    const ImPlotPoint previousPlot = ImPlot::PixelsToPlot(previousPixel);
+
+    // 核心流程：新示波器模式下，左键拖动统一保留横向时间平移；
+    // 只有命中当前激活波形时，纵向拖动才写回该通道 offset。
+    auto viewport = currentViewport(view);
+    viewport.minTime += previousPlot.x - currentPlot.x;
+    viewport.maxTime += previousPlot.x - currentPlot.x;
+    applyViewport(view, viewport);
+    changed = true;
+
+    if (view.activeChannelOffsetDrag) {
+        changed = updateActiveChannelOffset(wave, currentPlot.y - previousPlot.y) || changed;
+    }
+    return changed;
 }
 
 std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::WaveSample>& samples,
@@ -471,7 +713,6 @@ std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDis
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
     }
-    const auto& samples = displayData.channels[channelIndex].samples;
     const double minValue = (std::min)(limits.Y.Min, limits.Y.Max);
     const double maxValue = (std::max)(limits.Y.Min, limits.Y.Max);
     const double valueHeight = maxValue - minValue;
@@ -480,21 +721,21 @@ std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDis
         // 鼠标靠近绘图区顶部/底部时，极值优先于边沿，方便直接锁峰值或谷值。
         if (mouseValue >= maxValue - valueHeight * kExtremeSnapZoneRatio) {
             auto peak = plot::findLocalExtremeNearTime(
-                samples, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Maximum);
+                displayData, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Maximum);
             if (peak.has_value()) {
                 return SmartCursorSnap{.readout = *peak, .label = "Peak"};
             }
         }
         if (mouseValue <= minValue + valueHeight * kExtremeSnapZoneRatio) {
             auto trough = plot::findLocalExtremeNearTime(
-                samples, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Minimum);
+                displayData, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Minimum);
             if (trough.has_value()) {
                 return SmartCursorSnap{.readout = *trough, .label = "Trough"};
             }
         }
     }
     // 常规智能吸附优先找最大跳变；找不到再交给调用方使用按时间最近点兜底。
-    auto edge = plot::findStrongestEdgeNearTime(samples, channelIndex, time, maxTimeDistance);
+    auto edge = plot::findStrongestEdgeNearTime(displayData, channelIndex, time, maxTimeDistance);
     if (edge.has_value()) {
         return SmartCursorSnap{.readout = *edge, .label = "Edge"};
     }
@@ -519,7 +760,7 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
             continue;
         }
         const double timeDistance = std::abs(candidate->readout.time - time);
-        const double valueDistance = std::isfinite(mouseValue) ? std::abs(candidate->readout.value - mouseValue) : 0.0;
+        const double valueDistance = std::isfinite(mouseValue) ? std::abs(candidate->readout.displayValue - mouseValue) : 0.0;
         const double score = timeDistance * timeDistance + valueDistance * valueDistance;
         if (!best.has_value() || score < bestScore) {
             bestScore = score;
@@ -558,11 +799,15 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
     result.maxValue = -std::numeric_limits<double>::infinity();
     double sum = 0.0;
     double squareSum = 0.0;
-    for (auto iterator = begin; iterator != end; ++iterator) {
-        result.minValue = (std::min)(result.minValue, iterator->value);
-        result.maxValue = (std::max)(result.maxValue, iterator->value);
-        sum += iterator->value;
-        squareSum += iterator->value * iterator->value;
+    const auto beginIndex = static_cast<std::size_t>(std::distance(samples.begin(), begin));
+    const auto endIndex = static_cast<std::size_t>(std::distance(samples.begin(), end));
+    const auto& actualValues = displayData.channels[channelIndex].actualValues;
+    for (std::size_t sampleIndex = beginIndex; sampleIndex < endIndex; ++sampleIndex) {
+        const double value = sampleIndex < actualValues.size() ? actualValues[sampleIndex] : samples[sampleIndex].value;
+        result.minValue = (std::min)(result.minValue, value);
+        result.maxValue = (std::max)(result.maxValue, value);
+        sum += value;
+        squareSum += value * value;
     }
     result.duration = std::prev(end)->time - begin->time;
     result.peakToPeak = result.maxValue - result.minValue;
@@ -578,7 +823,7 @@ void drawCursorAnnotation(std::size_t cursorIndex,
                           std::string_view snapLabel) {
     const std::string labelPrefix = snapLabel.empty() ? "" : std::string(snapLabel) + " ";
     ImPlot::Annotation(readout.time,
-                       readout.value,
+                       readout.displayValue,
                        ImVec4(1.0F, 1.0F, 1.0F, 0.92F),
                        ImVec2(10.0F, cursorIndex == 0 ? -18.0F : 18.0F),
                        true,
@@ -1085,10 +1330,14 @@ bool handleMainPlotZoom(plot::WaveViewState& view, const ImPlotPoint& mousePos) 
         return false;
     }
 
-    plot::WaveZoomMode zoomMode = plot::WaveZoomMode::XY;
+    plot::WaveZoomMode zoomMode =
+        view.controlMode == plot::WaveControlMode::Oscilloscope ? plot::WaveZoomMode::XOnly : plot::WaveZoomMode::XY;
     if (ImPlot::IsAxisHovered(ImAxis_X1)) {
         zoomMode = plot::WaveZoomMode::XOnly;
     } else if (ImPlot::IsAxisHovered(ImAxis_Y1)) {
+        if (view.controlMode == plot::WaveControlMode::Oscilloscope) {
+            return false;
+        }
         zoomMode = plot::WaveZoomMode::YOnly;
     }
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
@@ -1209,7 +1458,7 @@ void handleHoverReadout(plot::WaveViewState& view,
         return;
     }
     const auto& hoveredChannel = snapshot.channels[hovered->channelIndex];
-    ImPlot::Annotation(hovered->time, hovered->value, ImVec4(1.0F, 1.0F, 0.2F, 1.0F), ImVec2(12.0F, -12.0F), true,
+    ImPlot::Annotation(hovered->time, hovered->displayValue, ImVec4(1.0F, 1.0F, 0.2F, 1.0F), ImVec2(12.0F, -12.0F), true,
         "%s t=%s y=%.6g %s",
         hoveredChannel.label.c_str(),
         formatMetricText(hovered->time, displayData.timeUnit.c_str()).c_str(),
@@ -1279,7 +1528,6 @@ bool handlePlotCursors(plot::WaveViewState& view,
         if (!best.has_value()) {
             continue;
         }
-
         // 核心流程：每帧都刷新游标读数；拖动中保留连续时间，避免采样点吸附导致抖动。
         cursor.channelIndex = best->channelIndex;
         if (!held || smartSnapActive) {
@@ -1301,20 +1549,29 @@ bool handlePlotCursors(plot::WaveViewState& view,
     return anyCursorHeld;
 }
 
-PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view, const WaveFrameData& frame) {
+PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame) {
     PlotRenderResult result;
     if (frame.fullSnapshot == nullptr || frame.displayData == nullptr || frame.fullSnapshot->channels.empty()) {
         ImGui::TextUnformatted("Lua 尚未通过 proto.plot.setup / proto.plot.push 提供波形数据。");
         return result;
     }
+    auto& view = wave.view;
 
     if (!view.showAxisLabels) {
         ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(10.0F, 10.0F));
         ImPlot::PushStyleVar(ImPlotStyleVar_LabelPadding, ImVec2(8.0F, 6.0F));
     }
+    auto& inputMap = ImPlot::GetInputMap();
+    const auto savedInputMap = inputMap;
+    if (view.controlMode == plot::WaveControlMode::Oscilloscope) {
+        inputMap.PanMod = ImGuiMod_Ctrl;
+        inputMap.Fit = ImGuiMouseButton_Middle;
+        inputMap.ZoomMod = ImGuiMod_Ctrl;
+    }
     if (!ImPlot::BeginPlot("##oscilloscope",
             ImVec2(-1.0F, -1.0F),
             ImPlotFlags_NoLegend)) {
+        inputMap = savedInputMap;
         if (!view.showAxisLabels) {
             ImPlot::PopStyleVar(2);
         }
@@ -1335,10 +1592,16 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view, const WaveFrame
     }
     const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
 
-    const bool viewportChangedThisFrame =
+    bool viewportChangedThisFrame =
         handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, mousePos);
     renderWaveChannels(view, frame.snapshot, displayData, frame.renderBudget, limits);
     handleHoverReadout(view, frame.snapshot, displayData, mousePos, timeSnapDistance, valueSnapDistance);
+    viewportChangedThisFrame = handleOscilloscopeChannelInteractions(wave,
+                                                                     displayData,
+                                                                     mousePos,
+                                                                     timeSnapDistance,
+                                                                     valueSnapDistance)
+        || viewportChangedThisFrame;
 
     const bool anyCursorHeld = handlePlotCursors(view,
                                                  frame.snapshot,
@@ -1373,6 +1636,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view, const WaveFrame
     drawMeasurementOverlay(view, frame.snapshot, displayData, result);
 
     ImPlot::EndPlot();
+    inputMap = savedInputMap;
     if (!view.showAxisLabels) {
         ImPlot::PopStyleVar(2);
     }
@@ -1453,104 +1717,95 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
     }
     auto& view = wave.view;
     clampActiveChannel(view, snapshot.channels.size());
+    const ChannelLegendMetrics metrics = measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x);
+    const bool scrollActiveIntoView = wave.lastLegendMeasurementChannelIndex != view.measurementChannelIndex;
 
     ImGui::Text("图例 / 吸附范围：%s", snapScopeName(view.cursorSnapScope));
     ImGui::Separator();
-    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
-        const auto spec = wave.buffer.channelSpec(channelIndex);
-        if (!spec.has_value()) {
-            continue;
-        }
-        ImGui::PushID(static_cast<int>(channelIndex));
-        if (channelIndex > 0) {
-            ImGui::SameLine();
-        }
-        ImGui::ColorButton("##legend_color", channelColor(*spec, channelIndex), ImGuiColorEditFlags_NoTooltip, ImVec2(12.0F, 12.0F));
-        ImGui::SameLine(0.0F, 4.0F);
-        const bool active = channelIndex == view.measurementChannelIndex;
-        if (active) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22F, 0.36F, 0.24F, 0.9F));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28F, 0.44F, 0.30F, 1.0F));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20F, 0.32F, 0.22F, 1.0F));
-        }
-        if (ImGui::Button(spec->label.c_str())) {
-            view.measurementChannelIndex = channelIndex;
-        }
-        if (ImGui::BeginPopupContextItem("##channel_popup")) {
-            const plot::ChannelSpec fallbackDefault{
-                .label = spec->label,
-                .unit = spec->unit,
-                .scale = 1.0,
-                .offset = 0.0,
-                .color = spec->color,
-            };
-            const plot::ChannelSpec defaultSpec = channelIndex < wave.defaultChannelSpecs.size()
-                ? wave.defaultChannelSpecs[channelIndex]
-                : fallbackDefault;
-            if (channelIndex >= wave.channelOverrides.size()) {
-                wave.channelOverrides.resize(channelIndex + 1);
+
+    if (ImGui::BeginChild("##wave_channel_legend_strip",
+                          ImVec2(0.0F, metrics.stripHeight),
+                          ImGuiChildFlags_Borders,
+                          ImGuiWindowFlags_HorizontalScrollbar)) {
+        const auto& style = ImGui::GetStyle();
+        const float spacing = style.ItemSpacing.x;
+        const float innerPaddingX = 10.0F;
+        const float innerPaddingY = 8.0F;
+        const float textSpacingY = 3.0F;
+        const float colorBandWidth = 4.0F;
+        const float rounding = 6.0F;
+
+        // 核心流程：顶部通道区固定为单行卡片，通道再多也只走横向滚动，不再向下堆高。
+        for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+            const auto spec = wave.buffer.channelSpec(channelIndex);
+            if (!spec.has_value()) {
+                continue;
             }
-            auto& overrideState = wave.channelOverrides[channelIndex];
-            auto updated = *spec;
-            ImGui::Text("%s", spec->label.c_str());
-            if (!spec->unit.empty()) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("[%s]", spec->unit.c_str());
+            if (channelIndex > 0) {
+                ImGui::SameLine(0.0F, spacing);
             }
-            char labelBuffer[128]{};
-            std::snprintf(labelBuffer, sizeof(labelBuffer), "%s", updated.label.c_str());
-            if (ImGui::InputText("标签", labelBuffer, sizeof(labelBuffer))) {
-                updated.label = labelBuffer;
-                overrideState.labelOverridden = updated.label != defaultSpec.label;
-                overrideState.label = updated.label;
-                wave.buffer.setChannelSpec(channelIndex, updated);
-            }
-            ImGui::TextDisabled(active ? "当前激活通道" : "非激活通道");
-            ImGui::Separator();
-            if (ImGui::InputDouble("缩放", &updated.scale, 0.1, 1.0, "%.6g")) {
-                overrideState.scaleOverridden = true;
-                overrideState.scale = updated.scale;
-                wave.buffer.setChannelSpec(channelIndex, updated);
-            }
-            if (ImGui::InputDouble("偏移", &updated.offset, 0.1, 1.0, "%.6g")) {
-                overrideState.offsetOverridden = true;
-                overrideState.offset = updated.offset;
-                wave.buffer.setChannelSpec(channelIndex, updated);
-            }
-            if (ImGui::Button(active ? "激活中" : "设为激活")) {
+
+            ImGui::PushID(static_cast<int>(channelIndex));
+            const ImVec2 cardMin = ImGui::GetCursorScreenPos();
+            const ImVec2 cardSize(metrics.cardWidth, metrics.cardHeight);
+            ImGui::InvisibleButton("##channel_card", cardSize);
+
+            bool active = channelIndex == view.measurementChannelIndex;
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
                 view.measurementChannelIndex = channelIndex;
+                active = true;
             }
-            if (ImGui::Button("恢复默认标签")) {
-                overrideState.labelOverridden = false;
-                overrideState.label = defaultSpec.label;
-                updated.label = defaultSpec.label;
-                wave.buffer.setChannelSpec(channelIndex, updated);
+            if (active && (scrollActiveIntoView || ImGui::IsItemClicked(ImGuiMouseButton_Left))) {
+                ImGui::SetScrollHereX(0.5F);
             }
-            if (ImGui::Button("恢复默认变换")) {
-                overrideState.scaleOverridden = false;
-                overrideState.offsetOverridden = false;
-                overrideState.scale = defaultSpec.scale;
-                overrideState.offset = defaultSpec.offset;
-                updated.scale = defaultSpec.scale;
-                updated.offset = defaultSpec.offset;
-                wave.buffer.setChannelSpec(channelIndex, updated);
+
+            const bool hovered = ImGui::IsItemHovered();
+            const ImVec2 cardMax(cardMin.x + cardSize.x, cardMin.y + cardSize.y);
+            const ImU32 fillColor = ImGui::GetColorU32(active ? ImVec4(0.18F, 0.28F, 0.20F, 0.95F)
+                                                              : ImVec4(0.11F, 0.12F, 0.14F, 0.95F));
+            const ImU32 borderColor = ImGui::GetColorU32(active ? ImVec4(0.50F, 0.82F, 0.56F, 1.0F)
+                                                                : ImVec4(1.0F, 1.0F, 1.0F, 0.14F));
+            auto* drawList = ImGui::GetWindowDrawList();
+            drawList->AddRectFilled(cardMin, cardMax, fillColor, rounding);
+            drawList->AddRect(cardMin, cardMax, borderColor, rounding, 0, active ? 2.0F : 1.0F);
+            drawList->AddRectFilled(cardMin,
+                                    ImVec2(cardMin.x + colorBandWidth, cardMax.y),
+                                    ImGui::ColorConvertFloat4ToU32(channelColor(*spec, channelIndex)),
+                                    rounding,
+                                    ImDrawFlags_RoundCornersLeft);
+
+            const ImVec2 textMin(cardMin.x + colorBandWidth + innerPaddingX, cardMin.y + innerPaddingY);
+            const ImVec2 textMax(cardMax.x - innerPaddingX, cardMax.y - innerPaddingY);
+            const float lineHeight = ImGui::GetTextLineHeight();
+            const ImVec2 titleMax(textMax.x, textMin.y + lineHeight);
+            const ImVec2 summaryMin(textMin.x, titleMax.y + textSpacingY);
+            const ImVec2 summaryMax(textMax.x, summaryMin.y + lineHeight);
+            drawChannelCardText(textMin, titleMax, spec->label, ImGui::GetColorU32(ImGuiCol_Text));
+            const std::string summary = "R " + formatMetricText(spec->ratio, nullptr)
+                + "  S " + formatMetricText(spec->scale, nullptr)
+                + "  O " + formatMetricText(spec->offset, nullptr);
+            drawChannelCardText(summaryMin, summaryMax, summary, ImGui::GetColorU32(ImGuiCol_TextDisabled));
+
+            if (hovered) {
+                drawChannelCardTooltip(*spec, active);
             }
-            if (ImGui::Button("恢复全部默认")) {
-                overrideState.labelOverridden = false;
-                overrideState.scaleOverridden = false;
-                overrideState.offsetOverridden = false;
-                overrideState.label = defaultSpec.label;
-                overrideState.scale = defaultSpec.scale;
-                overrideState.offset = defaultSpec.offset;
-                wave.buffer.setChannelSpec(channelIndex, defaultSpec);
+            if (ImGui::BeginPopupContextItem("##channel_popup")) {
+                drawChannelLegendPopup(wave, channelIndex, *spec, active);
+                ImGui::EndPopup();
             }
-            ImGui::EndPopup();
+            ImGui::PopID();
         }
-        if (active) {
-            ImGui::PopStyleColor(3);
+
+        // 交互约定：鼠标停在卡片条上滚轮优先转成横向滚动，减少必须拖滚动条的成本。
+        if (ImGui::IsWindowHovered() && ImGui::GetScrollMaxX() > 0.0F && std::abs(ImGui::GetIO().MouseWheel) > 0.0F) {
+            const float targetScroll = (std::clamp)(ImGui::GetScrollX() - ImGui::GetIO().MouseWheel * metrics.cardWidth * 0.85F,
+                                                    0.0F,
+                                                    ImGui::GetScrollMaxX());
+            ImGui::SetScrollX(targetScroll);
         }
-        ImGui::PopID();
     }
+    ImGui::EndChild();
+    wave.lastLegendMeasurementChannelIndex = view.measurementChannelIndex;
 }
 
 void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
@@ -1562,9 +1817,7 @@ float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot) {
     if (snapshot.channels.empty()) {
         return 0.0F;
     }
-    const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
-    const float separatorHeight = ImGui::GetStyle().ItemSpacing.y + 1.0F;
-    return lineHeight * 2.0F + separatorHeight;
+    return measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x).totalHeight;
 }
 } // namespace
 
@@ -1646,7 +1899,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         drawChannelLegendBar(wave, fullSnapshot);
 
         ImGui::BeginChild("##wave_main_panel", ImVec2(0.0F, layout.mainHeight), false, ImGuiWindowFlags_NoScrollbar);
-        drawOscilloscopePlot(view, frame);
+        drawOscilloscopePlot(wave, frame);
         ImGui::EndChild();
         ImGui::EndChild();
 

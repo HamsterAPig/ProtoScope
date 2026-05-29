@@ -20,6 +20,16 @@ void require(bool condition, const char* message) {
     }
 }
 
+protoscope::plot::WaveDisplayData makeDisplayData(std::vector<protoscope::plot::WaveSample> displaySamples,
+                                                  std::vector<double> actualValues) {
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = std::move(displaySamples),
+        .actualValues = std::move(actualValues),
+    });
+    return displayData;
+}
+
 } // namespace
 
 void test_plot_history_trim_and_envelope() {
@@ -190,9 +200,9 @@ void test_plot_low_density_envelope_keeps_single_value_line() {
         require(point.sampleCount == 1, "低密度包络每点应只对应一个样本");
         require(std::abs(point.minValue - point.maxValue) < 1e-12, "低密度包络应退化为单值折线");
     }
-    require(std::abs(envelope.points[0].minValue - 1.0) < 1e-12, "低密度包络应应用显示缩放和偏移");
-    require(std::abs(envelope.points[1].minValue + 5.0) < 1e-12, "低密度包络应保留变换后的负值");
-    require(std::abs(envelope.points[2].minValue - 5.0) < 1e-12, "低密度包络应保留变换后的正值");
+    require(std::abs(envelope.points[0].minValue) < 1e-12, "低密度包络应应用 offset_then_scale");
+    require(std::abs(envelope.points[1].minValue + 6.0) < 1e-12, "低密度包络应保留 offset_then_scale 后的负值");
+    require(std::abs(envelope.points[2].minValue - 4.0) < 1e-12, "低密度包络应保留 offset_then_scale 后的正值");
 }
 
 void test_plot_cursor_snap_and_delta() {
@@ -248,48 +258,51 @@ void test_plot_cursor_snap_by_time_and_measurement() {
 }
 
 void test_wave_cursor_smart_snap_edge() {
-    const std::vector<protoscope::plot::WaveSample> samples{
+    const auto displayData = makeDisplayData({
         {.time = 0.0, .value = 0.0},
         {.time = 1.0, .value = 0.0},
-        {.time = 1.1, .value = 5.0},
-        {.time = 2.0, .value = 5.0},
-    };
+        {.time = 1.1, .value = -10.0},
+        {.time = 2.0, .value = -10.0},
+    }, {0.0, 0.0, 5.0, 5.0});
 
-    const auto edge = protoscope::plot::findStrongestEdgeNearTime(samples, 0, 1.02, 0.08);
+    const auto edge = protoscope::plot::findStrongestEdgeNearTime(displayData, 0, 1.02, 0.08);
     require(edge.has_value(), "智能吸附应找到附近最大跳变边沿");
     require(edge->sampleIndex == 2, "边沿吸附应记录跳变右侧样本索引");
     require(std::abs(edge->time - 1.05) < 1e-9, "边沿吸附应落到跳变中点");
-    require(std::abs(edge->value - 2.5) < 1e-9, "边沿吸附值应取跳变中点值");
+    require(std::abs(edge->value - 5.0) < 1e-9, "边沿吸附文本值应取右侧样本真实值");
+    require(std::abs(edge->displayValue + 5.0) < 1e-9, "边沿吸附锚点应取显示几何中点");
 
-    const auto farEdge = protoscope::plot::findStrongestEdgeNearTime(samples, 0, 0.5, 0.1);
+    const auto farEdge = protoscope::plot::findStrongestEdgeNearTime(displayData, 0, 0.5, 0.1);
     require(!farEdge.has_value(), "窗口外边沿不应被吸附");
 }
 
 void test_wave_cursor_smart_snap_extreme() {
-    const std::vector<protoscope::plot::WaveSample> samples{
+    const auto displayData = makeDisplayData({
         {.time = 0.0, .value = 0.0},
-        {.time = 1.0, .value = 2.0},
+        {.time = 1.0, .value = -4.0},
         {.time = 2.0, .value = 0.0},
-        {.time = 3.0, .value = -3.0},
+        {.time = 3.0, .value = 6.0},
         {.time = 4.0, .value = 0.0},
-        {.time = 5.0, .value = 1.0},
+        {.time = 5.0, .value = -2.0},
         {.time = 6.0, .value = 0.0},
-    };
+    }, {0.0, 2.0, 0.0, -3.0, 0.0, 1.0, 0.0});
 
     const auto peak = protoscope::plot::findLocalExtremeNearTime(
-        samples, 0, 1.2, 0.4, protoscope::plot::WaveExtremeKind::Maximum);
+        displayData, 0, 2.8, 0.4, protoscope::plot::WaveExtremeKind::Maximum);
     require(peak.has_value(), "顶部极值吸附应找到局部最大值");
-    require(peak->sampleIndex == 1, "顶部极值吸附样本索引错误");
-    require(std::abs(peak->value - 2.0) < 1e-9, "顶部极值吸附值错误");
+    require(peak->sampleIndex == 3, "顶部极值吸附样本索引错误");
+    require(std::abs(peak->value + 3.0) < 1e-9, "顶部极值吸附文本值应保持真实值");
+    require(std::abs(peak->displayValue - 6.0) < 1e-9, "顶部极值吸附锚点应使用显示值");
 
     const auto trough = protoscope::plot::findLocalExtremeNearTime(
-        samples, 0, 2.8, 0.4, protoscope::plot::WaveExtremeKind::Minimum);
+        displayData, 0, 1.2, 0.4, protoscope::plot::WaveExtremeKind::Minimum);
     require(trough.has_value(), "底部极值吸附应找到局部最小值");
-    require(trough->sampleIndex == 3, "底部极值吸附样本索引错误");
-    require(std::abs(trough->value + 3.0) < 1e-9, "底部极值吸附值错误");
+    require(trough->sampleIndex == 1, "底部极值吸附样本索引错误");
+    require(std::abs(trough->value - 2.0) < 1e-9, "底部极值吸附文本值应保持真实值");
+    require(std::abs(trough->displayValue + 4.0) < 1e-9, "底部极值吸附锚点应使用显示值");
 
     const auto farPeak = protoscope::plot::findLocalExtremeNearTime(
-        samples, 0, 4.5, 0.2, protoscope::plot::WaveExtremeKind::Maximum);
+        displayData, 0, 4.5, 0.2, protoscope::plot::WaveExtremeKind::Maximum);
     require(!farPeak.has_value(), "窗口外极值不应被吸附");
 }
 
@@ -299,10 +312,11 @@ void test_wave_cursor_smart_snap_fallback_to_nearest() {
         {.time = 1.0, .value = 1.0},
         {.time = 2.0, .value = 1.0},
     };
-    require(!protoscope::plot::findStrongestEdgeNearTime(flatSamples, 0, 1.0, 0.5).has_value(),
+    const auto displayData = makeDisplayData(flatSamples, {1.0, 1.0, 1.0});
+    require(!protoscope::plot::findStrongestEdgeNearTime(displayData, 0, 1.0, 0.5).has_value(),
         "平坦波形不应产生边沿吸附");
     require(!protoscope::plot::findLocalExtremeNearTime(
-                flatSamples, 0, 1.0, 0.5, protoscope::plot::WaveExtremeKind::Maximum)
+                displayData, 0, 1.0, 0.5, protoscope::plot::WaveExtremeKind::Maximum)
                  .has_value(),
         "平坦波形不应产生极值吸附");
 
@@ -348,31 +362,33 @@ void test_plot_channel_scale_and_offset_apply_to_display_only() {
     require(snapshot.channels.size() == 1, "应存在 1 个通道");
     require(snapshot.channels[0].samples != nullptr, "原始样本指针不应为空");
     require(std::abs(snapshot.channels[0].samples[0].value + 1.0) < 1e-9, "原始样本值不应被 offset 污染");
-    require(std::abs(snapshot.channels[0].stats.minValue + 0.5) < 1e-9, "统计最小值应应用 scale + offset");
-    require(std::abs(snapshot.channels[0].stats.maxValue - 3.5) < 1e-9, "统计最大值应应用 scale + offset");
+    require(std::abs(snapshot.channels[0].stats.minValue + 5.0) < 1e-9, "统计最小值应应用 offset_then_scale");
+    require(std::abs(snapshot.channels[0].stats.maxValue + 1.0) < 1e-9, "统计最大值应应用 offset_then_scale");
 
     const auto envelope = buffer.buildEnvelope(0, 0.0, 1.0, 64);
     require(!envelope.points.empty(), "包络点不应为空");
-    require(std::abs(envelope.points[0].minValue - 3.5) < 1e-9, "包络最小值应应用 scale + offset");
+    require(std::abs(envelope.points[0].minValue + 1.0) < 1e-9, "包络首点应应用 offset_then_scale");
 
     const auto mapped = protoscope::plot::buildDisplayData(snapshot, 0.0);
     require(mapped.channels.size() == 1, "显示数据应保留 1 个通道");
-    require(std::abs(mapped.channels[0].samples[0].value - 3.5) < 1e-9, "显示数据应应用 scale + offset");
-    require(std::abs(mapped.channels[0].samples[1].value + 0.5) < 1e-9, "显示数据应保留负缩放后的值");
+    require(std::abs(mapped.channels[0].samples[0].value + 1.0) < 1e-9, "显示数据应应用 offset_then_scale");
+    require(std::abs(mapped.channels[0].samples[1].value + 5.0) < 1e-9, "显示数据应保留负缩放后的值");
 
     const auto nearestByTime = buffer.findNearestByTime(0, 0.52, 0.2);
     require(nearestByTime.has_value(), "按时间吸附应成功");
-    require(std::abs(nearestByTime->value + 0.5) < 1e-9, "游标读数应应用 scale + offset");
+    require(std::abs(nearestByTime->value - 1.0) < 1e-9, "游标真实值应保持原始测量值");
+    require(std::abs(nearestByTime->displayValue + 5.0) < 1e-9, "游标显示值应继续应用 offset_then_scale");
 
-    const auto nearestByPoint = buffer.findNearest(0, 0.52, -0.4, 0.2, 0.3);
+    const auto nearestByPoint = buffer.findNearest(0, 0.52, -5.1, 0.2, 0.3);
     require(nearestByPoint.has_value(), "按点吸附应成功");
-    require(std::abs(nearestByPoint->value + 0.5) < 1e-9, "点吸附读数应应用 scale + offset");
+    require(std::abs(nearestByPoint->value - 1.0) < 1e-9, "点吸附真实值应保持原始测量值");
+    require(std::abs(nearestByPoint->displayValue + 5.0) < 1e-9, "点吸附显示值应继续应用 offset_then_scale");
 
     const auto measurement = buffer.measureWindow(0, 0.0, 1.0);
     require(measurement.valid, "窗口测量应有效");
-    require(std::abs(measurement.minValue + 0.5) < 1e-9, "测量最小值应应用 scale + offset");
-    require(std::abs(measurement.maxValue - 3.5) < 1e-9, "测量最大值应应用 scale + offset");
-    require(std::abs(measurement.meanValue - 1.5) < 1e-9, "测量平均值应叠加 offset");
+    require(std::abs(measurement.minValue + 1.0) < 1e-9, "测量最小值应回到真实值");
+    require(std::abs(measurement.maxValue - 1.0) < 1e-9, "测量最大值应回到真实值");
+    require(std::abs(measurement.meanValue) < 1e-9, "测量平均值应回到真实值");
 
     protoscope::plot::OscilloscopeBuffer zeroScaleBuffer;
     zeroScaleBuffer.configureChannels(1);
@@ -387,9 +403,76 @@ void test_plot_channel_scale_and_offset_apply_to_display_only() {
     });
     const auto zeroMeasurement = zeroScaleBuffer.measureWindow(0, 0.0, 1.0);
     require(zeroMeasurement.valid, "zero-scale 测量应有效");
-    require(std::abs(zeroMeasurement.minValue - 1.25) < 1e-9, "scale=0 时最小值应退化为常量线");
-    require(std::abs(zeroMeasurement.maxValue - 1.25) < 1e-9, "scale=0 时最大值应退化为常量线");
-    require(std::abs(zeroMeasurement.rmsValue - 1.25) < 1e-9, "scale=0 时 RMS 应按常量线计算");
+    require(std::abs(zeroMeasurement.minValue + 10.0) < 1e-9, "scale=0 时最小值仍应保持真实值");
+    require(std::abs(zeroMeasurement.maxValue - 9.0) < 1e-9, "scale=0 时最大值仍应保持真实值");
+    require(std::abs(zeroMeasurement.rmsValue - std::sqrt(206.0 / 3.0)) < 1e-9, "scale=0 时 RMS 仍应按真实值计算");
+}
+
+void test_plot_channel_ratio_and_formula_modes() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.setViewConfig({
+        .timeScale = 1.0,
+        .timeUnit = "s",
+        .verticalMin = -10.0,
+        .verticalMax = 10.0,
+        .verticalUnit = "V",
+        .historyLimit = 32,
+        .displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
+    });
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .ratio = 0.25, .scale = 3.0, .offset = 1.0});
+    buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .source = "test",
+        .samples = {
+            {.time = 0.0, .value = 8.0},
+            {.time = 1.0, .value = -4.0},
+        },
+    });
+
+    const auto snapshot = buffer.snapshot(0.0, 1.0);
+    require(std::abs(snapshot.channels[0].stats.maxValue - 7.0) < 1e-9, "scale_then_offset 最大值错误");
+    require(std::abs(snapshot.channels[0].stats.minValue + 2.0) < 1e-9, "scale_then_offset 最小值错误");
+
+    const auto mapped = protoscope::plot::buildDisplayData(snapshot, 0.0);
+    require(std::abs(mapped.channels[0].samples[0].value - 7.0) < 1e-9, "ratio 后再 scale_then_offset 结果错误");
+    require(std::abs(mapped.channels[0].samples[1].value + 2.0) < 1e-9, "负值 ratio 结果错误");
+    require(std::abs(mapped.channels[0].actualValues[0] - 2.0) < 1e-9, "display data 应保留 ratio 后真实值");
+    require(std::abs(mapped.channels[0].actualValues[1] + 1.0) < 1e-9, "display data 应保留负值真实值");
+
+    const auto nearest = protoscope::plot::findNearestDisplayByTime(mapped, 0, 0.05, 0.2);
+    require(nearest.has_value(), "display data 按时间吸附应成功");
+    require(std::abs(nearest->value - 2.0) < 1e-9, "display data 读数应返回真实值");
+    require(std::abs(nearest->displayValue - 7.0) < 1e-9, "display data 应同时返回显示值");
+}
+
+void test_plot_channel_transform_updates_are_isolated() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(2);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .ratio = 1.0, .scale = 2.0, .offset = 0.5});
+    buffer.setChannelSpec(1, {.label = "CH2", .unit = "V", .ratio = 3.0, .scale = -1.0, .offset = -2.0});
+
+    auto first = *buffer.channelSpec(0);
+    const double originalOffset = first.offset;
+    first.scale = 4.0;
+    buffer.setChannelSpec(0, first);
+    const auto afterScale = *buffer.channelSpec(0);
+    require(std::abs(afterScale.scale - 4.0) < 1e-9, "更新 scale 应生效");
+    require(std::abs(afterScale.offset - originalOffset) < 1e-9, "更新 scale 不应改动 offset");
+
+    first = afterScale;
+    const double originalScale = first.scale;
+    first.offset = -3.0;
+    first.ratio = 0.125;
+    buffer.setChannelSpec(0, first);
+    const auto afterOffset = *buffer.channelSpec(0);
+    require(std::abs(afterOffset.offset + 3.0) < 1e-9, "更新 offset 应生效");
+    require(std::abs(afterOffset.scale - originalScale) < 1e-9, "更新 offset 不应改动 scale");
+    require(std::abs(afterOffset.ratio - 0.125) < 1e-9, "更新 ratio 应生效");
+
+    const auto second = *buffer.channelSpec(1);
+    require(std::abs(second.ratio - 3.0) < 1e-9, "单通道 ratio 变更不应影响其他通道");
+    require(std::abs(second.scale + 1.0) < 1e-9, "单通道 scale 变更不应影响其他通道");
+    require(std::abs(second.offset + 2.0) < 1e-9, "单通道 offset 变更不应影响其他通道");
 }
 
 void test_plot_cursor_snap_scope_selection() {

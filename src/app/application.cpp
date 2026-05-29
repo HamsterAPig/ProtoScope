@@ -977,7 +977,9 @@ bool Application::flushScriptPlots() {
         if (setup.resetHistory) {
             wave.buffer.clear();
         }
-        wave.buffer.setViewConfig(setup.view);
+        auto viewConfig = setup.view;
+        viewConfig.displayFormula = wave.view.displayFormula;
+        wave.buffer.setViewConfig(viewConfig);
         wave.buffer.configureChannels(setup.channels.size());
         wave.defaultChannelSpecs.clear();
         wave.defaultChannelSpecs.reserve(setup.channels.size());
@@ -990,6 +992,7 @@ bool Application::flushScriptPlots() {
             const auto defaultSpec = plot::ChannelSpec{
                 .label = setup.channels[index].label,
                 .unit = setup.channels[index].unit,
+                .ratio = setup.channels[index].ratio,
                 .scale = setup.channels[index].scale,
                 .offset = setup.channels[index].offset,
                 .color = setup.channels[index].color,
@@ -999,6 +1002,9 @@ bool Application::flushScriptPlots() {
                 const auto& overrideState = wave.channelOverrides[index];
                 if (overrideState.labelOverridden) {
                     effectiveSpec.label = overrideState.label;
+                }
+                if (overrideState.ratioOverridden) {
+                    effectiveSpec.ratio = overrideState.ratio;
                 }
                 if (overrideState.scaleOverridden) {
                     effectiveSpec.scale = overrideState.scale;

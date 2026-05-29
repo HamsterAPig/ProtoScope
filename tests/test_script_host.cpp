@@ -656,9 +656,14 @@ void test_protocol_directory_reload() {
 
 void test_config_default_roundtrip() {
     protoscope::config::ConfigStore store;
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-config-roundtrip.yaml";
+    const auto tempRoot = makeUniqueTempDir("protoscope-config-roundtrip");
+    const auto tempPath = tempRoot / "protoscope.yaml";
 
     auto config = store.load(tempPath).config;
+    require(config.gui.wave.controlMode == protoscope::plot::WaveControlMode::Oscilloscope,
+            "波形控制模式默认值应为 oscilloscope");
+    require(config.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+            "波形显示公式默认值应为 offset_then_scale");
     config.communication.kind = protoscope::transport::TransportKind::Serial;
     config.communication.serial.portName = "COM9";
     config.communication.serial.dataBits = 7;
@@ -670,6 +675,8 @@ void test_config_default_roundtrip() {
     config.gui.wave.maxRenderVertices = 4096;
     config.gui.wave.overviewMaxSamples = 128;
     config.gui.wave.minVisibleTimeSpan = 0.0025;
+    config.gui.wave.controlMode = protoscope::plot::WaveControlMode::LegacyGlobal;
+    config.gui.wave.displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset;
 
     std::string error;
     require(store.save(tempPath, config, error), "默认配置写回失败");
@@ -682,10 +689,31 @@ void test_config_default_roundtrip() {
     require(reloaded.config.communication.serial.stopBits == "two", "串口停止位 roundtrip 失败");
     require(reloaded.config.communication.serial.flowControl == "hardware", "串口流控 roundtrip 失败");
     require(reloaded.config.app.configHotReload.enabled, "配置热重载开关 roundtrip 失败");
+    require(reloaded.config.gui.wave.controlMode == protoscope::plot::WaveControlMode::LegacyGlobal,
+            "波形控制模式 roundtrip 失败");
+    require(reloaded.config.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
+            "波形显示公式 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.minVisibleTimeSpan - 0.0025) < 1e-12, "波形最小可视跨度 roundtrip 失败");
+}
+
+void test_config_wave_mode_invalid_fallback() {
+    protoscope::config::ConfigStore store;
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-config-wave-invalid.yaml";
+    std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
+    out << "gui:\n"
+           "  wave:\n"
+           "    control_mode: weird\n"
+           "    display_formula: wrong\n";
+    out.close();
+
+    const auto loaded = store.load(tempPath).config;
+    require(loaded.gui.wave.controlMode == protoscope::plot::WaveControlMode::Oscilloscope,
+            "非法 control_mode 应回退到 oscilloscope");
+    require(loaded.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+            "非法 display_formula 应回退到 offset_then_scale");
 }
 
 void test_config_logging_roundtrip() {
@@ -813,6 +841,8 @@ void test_script_plot_api_snapshot() {
     auto appends = host.drainPlotAppends();
     require(setups.size() == 1, "打开连接后应生成 1 次 plot.setup");
     require(setups[0].channels.size() == 2, "plot.setup 应声明 2 个通道");
+    require(std::abs(setups[0].channels[0].ratio - 0.5) < 1e-12, "CH1 ratio 解析错误");
+    require(std::abs(setups[0].channels[1].ratio - 1.0) < 1e-12, "CH2 ratio 默认值错误");
     require(std::abs(setups[0].channels[0].scale - 2.0) < 1e-12, "CH1 scale 解析错误");
     require(std::abs(setups[0].channels[1].scale - 1.0) < 1e-12, "CH2 scale 默认值错误");
     require(std::abs(setups[0].channels[0].offset - 0.0) < 1e-12, "CH1 offset 解析错误");
@@ -1208,6 +1238,7 @@ static const TestCase kAllTests[] = {
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
+    {"config_wave_mode_invalid_fallback", &test_config_wave_mode_invalid_fallback},
     {"config_logging_roundtrip", &test_config_logging_roundtrip},
     {"config_default_script_workspace", &test_config_default_script_workspace},
     {"config_default_protocol_workspace_initializes_half_duplex_demos", &test_config_default_protocol_workspace_initializes_half_duplex_demos},
@@ -1267,6 +1298,8 @@ static const TestCase kAllTests[] = {
     {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
+    {"plot_channel_ratio_and_formula_modes", &test_plot_channel_ratio_and_formula_modes},
+    {"plot_channel_transform_updates_are_isolated", &test_plot_channel_transform_updates_are_isolated},
     {"plot_cursor_snap_scope_selection", &test_plot_cursor_snap_scope_selection},
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},

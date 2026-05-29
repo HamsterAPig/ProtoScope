@@ -165,6 +165,7 @@ struct ScriptLog {
 struct PlotChannelDescriptor {
     std::string label;
     std::string unit;
+    double ratio{1.0};
     double scale{1.0};
     double offset{0.0};
     std::optional<std::array<float, 4>> color;

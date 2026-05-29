@@ -44,12 +44,16 @@ struct WaveViewState {
     bool cursorIntervalLocked{false};
     bool overviewWindowDragging{false};
     bool forceNextMainPlotLimits{false};
+    bool activeChannelOffsetDrag{false};
+    bool activeChannelScaleDrag{false};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     std::size_t overviewMaxSamples{20000};
     std::size_t lastRenderPointCount{0};
     std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};
+    WaveControlMode controlMode{WaveControlMode::Oscilloscope};
+    WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
     double downsampleStartMultiplier{2.0};
@@ -76,9 +80,11 @@ struct WaveViewState {
 struct WaveDockState {
     struct ChannelTransformOverride {
         bool labelOverridden{false};
+        bool ratioOverridden{false};
         bool scaleOverridden{false};
         bool offsetOverridden{false};
         std::string label;
+        double ratio{1.0};
         double scale{1.0};
         double offset{0.0};
     };
@@ -104,6 +110,7 @@ struct WaveDockState {
     float maxToolsExpandedWidth{520.0F};
     std::uint64_t displayDataRevision{0};
     double displayDataSampleFrequencyHz{0.0};
+    std::size_t lastLegendMeasurementChannelIndex{static_cast<std::size_t>(-1)};
     WaveSnapshot cachedFullSnapshot{};
     WaveDisplayData cachedDisplayData{};
     WaveDataBounds cachedDisplayBounds{};

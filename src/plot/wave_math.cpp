@@ -25,6 +25,13 @@ double clampPositiveWidth(double width, double minWidth) {
     return (std::max)(width, (std::max)(minWidth, kEpsilon));
 }
 
+double resolveActualValue(const WaveDisplayChannel& channel, std::size_t sampleIndex, double fallbackValue) {
+    if (sampleIndex < channel.actualValues.size()) {
+        return channel.actualValues[sampleIndex];
+    }
+    return fallbackValue;
+}
+
 void clampTimeRange(double& minTime, double& maxTime, const WaveDataBounds& bounds) {
     if (!bounds.valid) {
         return;
@@ -183,11 +190,13 @@ WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFreq
 
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
-        auto& display = data.channels[channelIndex].samples;
+        auto& displayChannel = data.channels[channelIndex];
+        auto& display = displayChannel.samples;
         if (channel.samples == nullptr || channel.totalSamples == 0) {
             continue;
         }
         display.reserve(channel.totalSamples);
+        displayChannel.actualValues.reserve(channel.totalSamples);
         for (std::size_t sampleIndex = 0; sampleIndex < channel.totalSamples; ++sampleIndex) {
             const auto& source = channel.samples[sampleIndex];
             double time = static_cast<double>(sampleIndex);
@@ -196,15 +205,19 @@ WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFreq
             } else if (data.axisSource == WaveTimeAxisSource::ScriptTime) {
                 time = source.time;
             }
+            const ChannelSpec spec{
+                .label = channel.label,
+                .unit = channel.unit,
+                .ratio = channel.ratio,
+                .scale = channel.scale,
+                .offset = channel.offset,
+                .color = channel.color,
+            };
             display.push_back({
                 .time = time,
-                .value = applyChannelDisplayTransform(source.value, ChannelSpec{
-                    .label = channel.label,
-                    .unit = channel.unit,
-                    .scale = channel.scale,
-                    .offset = channel.offset,
-                }),
+                .value = applyChannelDisplayTransform(source.value, spec, snapshot.config.displayFormula),
             });
+            displayChannel.actualValues.push_back(applyChannelActualValue(source.value, spec));
         }
     }
     return data;
@@ -217,7 +230,8 @@ std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& dis
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
     }
-    const auto& samples = displayData.channels[channelIndex].samples;
+    const auto& channel = displayData.channels[channelIndex];
+    const auto& samples = channel.samples;
     if (samples.empty() || !std::isfinite(time) || !std::isfinite(maxTimeDistance) || maxTimeDistance < 0.0) {
         return std::nullopt;
     }
@@ -235,12 +249,14 @@ std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& dis
             return;
         }
         if (!best.has_value() || distance < std::abs(best->time - time)) {
+            const std::size_t sampleIndex = static_cast<std::size_t>(std::distance(samples.begin(), iterator));
             best = CursorReadout{
                 .valid = true,
                 .channelIndex = channelIndex,
-                .sampleIndex = static_cast<std::size_t>(std::distance(samples.begin(), iterator)),
+                .sampleIndex = sampleIndex,
                 .time = iterator->time,
-                .value = iterator->value,
+                .value = resolveActualValue(channel, sampleIndex, iterator->value),
+                .displayValue = iterator->value,
             };
         }
     };
@@ -282,7 +298,7 @@ std::optional<CursorReadout> findNearestDisplayPoint(const WaveDisplayData& disp
         if (!nearest.has_value()) {
             continue;
         }
-        const double valueDistance = std::abs(nearest->value - value);
+        const double valueDistance = std::abs(nearest->displayValue - value);
         if (valueDistance > maxValueDistance) {
             continue;
         }
@@ -448,10 +464,15 @@ CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
     return text;
 }
 
-std::optional<CursorReadout> findStrongestEdgeNearTime(const std::vector<WaveSample>& samples,
+std::optional<CursorReadout> findStrongestEdgeNearTime(const WaveDisplayData& displayData,
                                                        std::size_t channelIndex,
                                                        double centerTime,
                                                        double maxTimeDistance) {
+    if (channelIndex >= displayData.channels.size()) {
+        return std::nullopt;
+    }
+    const auto& channel = displayData.channels[channelIndex];
+    const auto& samples = channel.samples;
     if (samples.size() < 2 || !std::isfinite(centerTime) || !std::isfinite(maxTimeDistance) || maxTimeDistance <= 0.0) {
         return std::nullopt;
     }
@@ -478,23 +499,31 @@ std::optional<CursorReadout> findStrongestEdgeNearTime(const std::vector<WaveSam
         if (score > bestScore || (std::abs(score - bestScore) <= kEpsilon && distance < bestDistance)) {
             bestScore = score;
             bestDistance = distance;
+            const double displayValue = 0.5 * (left.value + right.value);
+            // 边沿时间位于两个样本之间：锚点按显示几何放在中点，读数文本取跳变右侧样本真实值。
             best = CursorReadout{
                 .valid = true,
                 .channelIndex = channelIndex,
                 .sampleIndex = index,
                 .time = edgeTime,
-                .value = 0.5 * (left.value + right.value),
+                .value = resolveActualValue(channel, index, right.value),
+                .displayValue = displayValue,
             };
         }
     }
     return best;
 }
 
-std::optional<CursorReadout> findLocalExtremeNearTime(const std::vector<WaveSample>& samples,
+std::optional<CursorReadout> findLocalExtremeNearTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double centerTime,
                                                       double maxTimeDistance,
                                                       WaveExtremeKind kind) {
+    if (channelIndex >= displayData.channels.size()) {
+        return std::nullopt;
+    }
+    const auto& channel = displayData.channels[channelIndex];
+    const auto& samples = channel.samples;
     if (samples.size() < 3 || !std::isfinite(centerTime) || !std::isfinite(maxTimeDistance) || maxTimeDistance <= 0.0) {
         return std::nullopt;
     }
@@ -520,15 +549,16 @@ std::optional<CursorReadout> findLocalExtremeNearTime(const std::vector<WaveSamp
             continue;
         }
         const bool betterValue = !best.has_value()
-            || (kind == WaveExtremeKind::Maximum ? current.value > best->value : current.value < best->value);
-        if (betterValue || (best.has_value() && std::abs(current.value - best->value) <= kEpsilon && distance < bestDistance)) {
+            || (kind == WaveExtremeKind::Maximum ? current.value > best->displayValue : current.value < best->displayValue);
+        if (betterValue || (best.has_value() && std::abs(current.value - best->displayValue) <= kEpsilon && distance < bestDistance)) {
             bestDistance = distance;
             best = CursorReadout{
                 .valid = true,
                 .channelIndex = channelIndex,
                 .sampleIndex = index,
                 .time = current.time,
-                .value = current.value,
+                .value = resolveActualValue(channel, index, current.value),
+                .displayValue = current.value,
             };
         }
     }

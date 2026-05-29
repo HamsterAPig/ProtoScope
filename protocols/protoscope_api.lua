@@ -98,6 +98,7 @@ ProtoScope 脚本 API 定义文件。
 ---@class ProtoPlotChannel
 ---@field label string
 ---@field unit? string
+---@field ratio? number @原始值先按 `actual = raw * ratio` 转成实际值。
 ---@field scale? number
 ---@field offset? number
 ---@field color? string @支持 '#RRGGBB' 或 '#RRGGBBAA'。
