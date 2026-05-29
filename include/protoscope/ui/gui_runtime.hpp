@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <future>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -79,6 +80,11 @@ private:
     void exportRawCaptureToPath(const std::filesystem::path& path);
     void loadElfStaticAddressFromPath(const std::filesystem::path& path);
     void drawElfStaticAddressDialog();
+    void refreshWindowTitle();
+    void requestAboutDialog();
+    void drawAboutDialog();
+    void startUpdateCheck();
+    void drawUpdateCheckDialog();
     std::filesystem::path currentProtocolLayoutPath() const;
     std::filesystem::path legacyProtocolLayoutPath() const;
     std::filesystem::path protocolControlStatePath() const;
@@ -92,12 +98,30 @@ private:
     static std::string formatTimestamp(std::uint64_t timestampMs);
 
 private:
+    struct UpdateCheckResult {
+        enum class State {
+            UpToDate,
+            NewerAvailable,
+            DevelopmentBuild,
+            Failed,
+            Unsupported,
+        };
+
+        State state{State::Failed};
+        std::string title;
+        std::string message;
+        std::string latestTag;
+    };
+
+    static UpdateCheckResult checkForUpdates();
+
     app::Application& application_;
     const config::ConfigStore& configStore_;
     GLFWwindow* window_{nullptr};
     std::uint64_t lastRenderAtMs_{0};
     std::uint64_t lastAutoSaveAtMs_{0};
     config::FileSnapshot configSnapshot_{};
+    std::string lastWindowTitle_;
     std::string activeWorkspaceProtocolKey_;
     std::optional<std::string> pendingProtocolDir_;
     bool pendingProtocolForceReload_{false};
@@ -116,6 +140,11 @@ private:
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};
+    bool aboutDialogRequested_{false};
+    bool updateCheckDialogRequested_{false};
+    bool updateCheckInProgress_{false};
+    std::optional<UpdateCheckResult> updateCheckResult_;
+    std::future<UpdateCheckResult> updateCheckFuture_;
     std::string serialPortDraft_;
     std::string serialPortDraftModel_;
     bool serialPortsScanned_{false};

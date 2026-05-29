@@ -1,0 +1,15 @@
+#pragma once
+
+namespace protoscope::build {
+
+inline constexpr const char* kProjectName = "@PROJECT_NAME@";
+inline constexpr const char* kVersion = "@PROTOSCOPE_VERSION_STRING@";
+inline constexpr const char* kCurrentTag = "@PROTOSCOPE_VERSION_CURRENT_TAG@";
+inline constexpr const char* kBaseTag = "@PROTOSCOPE_VERSION_BASE_TAG@";
+inline constexpr const char* kCommitSha = "@PROTOSCOPE_VERSION_COMMIT_SHA@";
+inline constexpr bool kIsExactTag = @PROTOSCOPE_VERSION_IS_EXACT_TAG@;
+inline constexpr const char* kProjectUrl = "https://github.com/HamsterAPig/ProtoScope";
+inline constexpr const char* kAuthor = "HamsterAPig";
+inline constexpr const char* kAuthorEmail = "diyhome@outlook.com";
+
+} // namespace protoscope::build

@@ -1,5 +1,6 @@
 #include "protoscope/ui/gui_runtime.hpp"
 
+#include "protoscope/build/version.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/transport/transport.hpp"
@@ -10,7 +11,9 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <commdlg.h>
+#include <shellapi.h>
 #include <shlobj.h>
+#include <winhttp.h>
 #endif
 
 #include <imgui.h>
@@ -33,6 +36,7 @@
 #include <chrono>
 #include <cctype>
 #include <cfloat>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cwchar>
@@ -41,6 +45,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <regex>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -52,6 +57,194 @@ namespace {
 
 const char* kGlslVersion = "#version 150";
 constexpr std::uint32_t kCommonBaudRates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
+
+struct SemanticVersion {
+    int major{0};
+    int minor{0};
+    int patch{0};
+};
+
+std::optional<SemanticVersion> parseSemanticTag(std::string_view tag) {
+    if (tag.size() < 6 || tag.front() != 'v') {
+        return std::nullopt;
+    }
+
+    SemanticVersion version{};
+    const char* cursor = tag.data() + 1;
+    const char* const end = tag.data() + tag.size();
+
+    const auto readNumber = [&](int& value) {
+        const auto result = std::from_chars(cursor, end, value);
+        if (result.ec != std::errc{}) {
+            return false;
+        }
+        cursor = result.ptr;
+        return true;
+    };
+
+    if (!readNumber(version.major) || cursor == end || *cursor != '.') {
+        return std::nullopt;
+    }
+    ++cursor;
+    if (!readNumber(version.minor) || cursor == end || *cursor != '.') {
+        return std::nullopt;
+    }
+    ++cursor;
+    if (!readNumber(version.patch) || cursor != end) {
+        return std::nullopt;
+    }
+    return version;
+}
+
+int compareSemanticVersion(const SemanticVersion& lhs, const SemanticVersion& rhs) {
+    if (lhs.major != rhs.major) {
+        return lhs.major < rhs.major ? -1 : 1;
+    }
+    if (lhs.minor != rhs.minor) {
+        return lhs.minor < rhs.minor ? -1 : 1;
+    }
+    if (lhs.patch != rhs.patch) {
+        return lhs.patch < rhs.patch ? -1 : 1;
+    }
+    return 0;
+}
+
+std::optional<std::string> findLatestSemanticTag(const std::string& responseBody) {
+    static const std::regex nameRegex(R"json("name"\s*:\s*"([^"]+)")json");
+    std::optional<std::string> latestTag;
+    std::optional<SemanticVersion> latestVersion;
+
+    for (auto iter = std::sregex_iterator(responseBody.begin(), responseBody.end(), nameRegex);
+         iter != std::sregex_iterator();
+         ++iter) {
+        const auto tag = (*iter)[1].str();
+        const auto version = parseSemanticTag(tag);
+        if (!version.has_value()) {
+            continue;
+        }
+        if (!latestVersion.has_value() || compareSemanticVersion(*latestVersion, *version) < 0) {
+            latestVersion = version;
+            latestTag = tag;
+        }
+    }
+    return latestTag;
+}
+
+std::string currentProtocolTitle(const dock::LuaDockState& lua) {
+    if (!lua.protocolName.empty()) {
+        return lua.protocolName;
+    }
+    const auto filename = std::filesystem::path(lua.protocolDir).filename().string();
+    return filename.empty() ? std::string("unknown_protocol") : filename;
+}
+
+#if defined(_WIN32)
+struct WinHttpHandle {
+    HINTERNET value{nullptr};
+
+    ~WinHttpHandle() {
+        if (value) {
+            WinHttpCloseHandle(value);
+        }
+    }
+
+    WinHttpHandle() = default;
+    explicit WinHttpHandle(HINTERNET handle) : value(handle) {}
+    WinHttpHandle(const WinHttpHandle&) = delete;
+    WinHttpHandle& operator=(const WinHttpHandle&) = delete;
+    WinHttpHandle(WinHttpHandle&& other) noexcept : value(other.value) {
+        other.value = nullptr;
+    }
+    WinHttpHandle& operator=(WinHttpHandle&& other) noexcept {
+        if (this != &other) {
+            if (value) {
+                WinHttpCloseHandle(value);
+            }
+            value = other.value;
+            other.value = nullptr;
+        }
+        return *this;
+    }
+};
+
+bool httpGetGitHubTags(std::string& responseBody, std::string& error) {
+    WinHttpHandle session(WinHttpOpen(L"ProtoScope/1.0",
+                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                      WINHTTP_NO_PROXY_NAME,
+                                      WINHTTP_NO_PROXY_BYPASS,
+                                      0));
+    if (!session.value) {
+        error = "WinHTTP 会话创建失败";
+        return false;
+    }
+    WinHttpSetTimeouts(session.value, 5000, 5000, 5000, 5000);
+
+    WinHttpHandle connect(WinHttpConnect(session.value, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0));
+    if (!connect.value) {
+        error = "连接 GitHub 失败";
+        return false;
+    }
+
+    WinHttpHandle request(WinHttpOpenRequest(connect.value,
+                                             L"GET",
+                                             L"/repos/HamsterAPig/ProtoScope/tags?per_page=30",
+                                             nullptr,
+                                             WINHTTP_NO_REFERER,
+                                             WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                             WINHTTP_FLAG_SECURE));
+    if (!request.value) {
+        error = "创建 GitHub 请求失败";
+        return false;
+    }
+
+    constexpr wchar_t kHeaders[] = L"User-Agent: ProtoScope\r\nAccept: application/vnd.github+json\r\n";
+    if (!WinHttpSendRequest(request.value,
+                            kHeaders,
+                            static_cast<DWORD>(-1L),
+                            WINHTTP_NO_REQUEST_DATA,
+                            0,
+                            0,
+                            0)
+        || !WinHttpReceiveResponse(request.value, nullptr)) {
+        error = "发送 GitHub 请求失败";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    if (WinHttpQueryHeaders(request.value,
+                            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX,
+                            &statusCode,
+                            &statusSize,
+                            WINHTTP_NO_HEADER_INDEX)
+        && statusCode >= 400) {
+        error = "GitHub 返回 HTTP " + std::to_string(statusCode);
+        return false;
+    }
+
+    responseBody.clear();
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(request.value, &available)) {
+            error = "读取 GitHub 响应失败";
+            return false;
+        }
+        if (available == 0) {
+            break;
+        }
+        std::string chunk(available, '\0');
+        DWORD read = 0;
+        if (!WinHttpReadData(request.value, chunk.data(), available, &read)) {
+            error = "读取 GitHub 响应内容失败";
+            return false;
+        }
+        chunk.resize(read);
+        responseBody += chunk;
+    }
+    return true;
+}
+#endif
 
 std::vector<std::filesystem::path> candidateChineseFonts() {
     return {
@@ -683,6 +876,7 @@ bool GuiRuntime::initializeWindow() {
     if (window.maximized) {
         glfwMaximizeWindow(window_);
     }
+    refreshWindowTitle();
     return true;
 }
 
@@ -741,11 +935,15 @@ void GuiRuntime::ensureChineseFont() {
 }
 
 void GuiRuntime::renderFrame() {
+    refreshWindowTitle();
+
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
     drawMainMenu();
+    drawAboutDialog();
+    drawUpdateCheckDialog();
 
     ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 
@@ -867,7 +1065,197 @@ void GuiRuntime::drawMainMenu() {
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu("帮助")) {
+        if (ImGui::MenuItem("检查更新")) {
+            startUpdateCheck();
+        }
+        if (ImGui::MenuItem("关于 ProtoScope")) {
+            requestAboutDialog();
+        }
+        ImGui::EndMenu();
+    }
+
     ImGui::EndMainMenuBar();
+}
+
+void GuiRuntime::refreshWindowTitle() {
+    if (!window_) {
+        return;
+    }
+
+    const auto title = std::string("ProtoScope ") + build::kVersion + " - " + currentProtocolTitle(application_.docks().luaState());
+    if (title == lastWindowTitle_) {
+        return;
+    }
+
+    lastWindowTitle_ = title;
+    glfwSetWindowTitle(window_, lastWindowTitle_.c_str());
+}
+
+void GuiRuntime::requestAboutDialog() {
+    aboutDialogRequested_ = true;
+}
+
+void GuiRuntime::drawAboutDialog() {
+    constexpr const char* popupId = "关于 ProtoScope";
+    if (aboutDialogRequested_) {
+        ImGui::OpenPopup(popupId);
+        aboutDialogRequested_ = false;
+    }
+
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    if (!ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+        return;
+    }
+
+    const auto& lua = application_.docks().luaState();
+    ImGui::TextUnformatted("ProtoScope");
+    ImGui::Separator();
+    ImGui::Text("版本: %s", build::kVersion);
+    ImGui::Text("当前协议: %s", currentProtocolTitle(lua).c_str());
+    ImGui::Text("项目地址: %s", build::kProjectUrl);
+    ImGui::Text("作者: %s", build::kAuthor);
+    ImGui::Text("邮箱: %s", build::kAuthorEmail);
+    ImGui::Spacing();
+
+    if (ImGui::Button("复制项目地址")) {
+        ImGui::SetClipboardText(build::kProjectUrl);
+        application_.setStatusMessage("项目地址已复制", false);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("打开项目地址")) {
+#if defined(_WIN32)
+        ShellExecuteA(nullptr, "open", build::kProjectUrl, nullptr, nullptr, SW_SHOWNORMAL);
+#else
+        application_.setStatusMessage("当前平台暂未实现打开外部链接", true);
+#endif
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("关闭")) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+void GuiRuntime::startUpdateCheck() {
+    updateCheckDialogRequested_ = true;
+    if (updateCheckInProgress_) {
+        return;
+    }
+
+    updateCheckResult_.reset();
+    updateCheckInProgress_ = true;
+    updateCheckFuture_ = std::async(std::launch::async, [] {
+        return GuiRuntime::checkForUpdates();
+    });
+}
+
+GuiRuntime::UpdateCheckResult GuiRuntime::checkForUpdates() {
+#if defined(_WIN32)
+    std::string body;
+    std::string error;
+    if (!httpGetGitHubTags(body, error)) {
+        return {UpdateCheckResult::State::Failed, "检查更新失败", error, ""};
+    }
+
+    const auto latestTag = findLatestSemanticTag(body);
+    if (!latestTag.has_value()) {
+        return {UpdateCheckResult::State::Failed, "检查更新失败", "GitHub tags 中未找到 vX.Y.Z 格式版本", ""};
+    }
+
+    const auto latestVersion = parseSemanticTag(*latestTag);
+    const std::string baseTag = std::string(build::kBaseTag).empty() ? std::string(build::kCurrentTag) : std::string(build::kBaseTag);
+    const auto currentVersion = parseSemanticTag(baseTag);
+    if (!currentVersion.has_value()) {
+        return {UpdateCheckResult::State::DevelopmentBuild,
+                "当前是开发构建",
+                "当前版本没有可比较的 vX.Y.Z 基准，远端最新版本为 " + *latestTag,
+                *latestTag};
+    }
+
+    const int compare = compareSemanticVersion(*currentVersion, *latestVersion);
+    if (compare < 0) {
+        return {UpdateCheckResult::State::NewerAvailable,
+                "发现新版本",
+                "远端最新版本为 " + *latestTag + "，当前版本为 " + std::string(build::kVersion),
+                *latestTag};
+    }
+    if (!build::kIsExactTag) {
+        return {UpdateCheckResult::State::DevelopmentBuild,
+                "当前是开发构建",
+                "当前构建基于 " + baseTag + " 之后的提交，远端最新版本为 " + *latestTag,
+                *latestTag};
+    }
+
+    return {UpdateCheckResult::State::UpToDate,
+            "已是最新版本",
+            "当前版本 " + std::string(build::kVersion) + " 已是远端最新版本",
+            *latestTag};
+#else
+    return {UpdateCheckResult::State::Unsupported,
+            "暂不支持检查更新",
+            "当前平台暂未实现联网检查更新",
+            ""};
+#endif
+}
+
+void GuiRuntime::drawUpdateCheckDialog() {
+    constexpr const char* popupId = "检查更新";
+    if (updateCheckDialogRequested_) {
+        ImGui::OpenPopup(popupId);
+        updateCheckDialogRequested_ = false;
+    }
+
+    if (updateCheckInProgress_ && updateCheckFuture_.valid()
+        && updateCheckFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+        updateCheckResult_ = updateCheckFuture_.get();
+        updateCheckInProgress_ = false;
+    }
+
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    if (!ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+        return;
+    }
+
+    ImGui::Text("当前版本: %s", build::kVersion);
+    if (!std::string(build::kBaseTag).empty()) {
+        ImGui::Text("版本基准: %s", build::kBaseTag);
+    }
+    ImGui::Separator();
+
+    if (updateCheckInProgress_) {
+        ImGui::TextUnformatted("正在连接 GitHub 检查更新...");
+    } else if (updateCheckResult_.has_value()) {
+        ImGui::TextUnformatted(updateCheckResult_->title.c_str());
+        ImGui::TextWrapped("%s", updateCheckResult_->message.c_str());
+        if (!updateCheckResult_->latestTag.empty()) {
+            ImGui::Text("远端版本: %s", updateCheckResult_->latestTag.c_str());
+        }
+    } else {
+        ImGui::TextUnformatted("尚未开始检查。");
+    }
+
+    ImGui::Spacing();
+    if (!updateCheckInProgress_ && ImGui::Button("重新检查")) {
+        startUpdateCheck();
+    }
+    if (!updateCheckInProgress_) {
+        ImGui::SameLine();
+    }
+    if (ImGui::Button("打开项目地址")) {
+#if defined(_WIN32)
+        ShellExecuteA(nullptr, "open", build::kProjectUrl, nullptr, nullptr, SW_SHOWNORMAL);
+#else
+        application_.setStatusMessage("当前平台暂未实现打开外部链接", true);
+#endif
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("关闭")) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
 }
 
 void GuiRuntime::drawStatusBar() {

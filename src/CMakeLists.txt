@@ -168,6 +168,8 @@ if(PROTOSCOPE_ENABLE_GUI)
     target_include_directories(protoscope_ui
         PUBLIC
             ${PROJECT_SOURCE_DIR}/include
+        PRIVATE
+            ${PROJECT_BINARY_DIR}/generated/include
     )
     target_link_libraries(protoscope_ui
         PUBLIC
@@ -180,7 +182,7 @@ if(PROTOSCOPE_ENABLE_GUI)
     )
     target_compile_features(protoscope_ui PUBLIC cxx_std_20)
     if(WIN32)
-        target_link_libraries(protoscope_ui PUBLIC shell32 ole32 comdlg32)
+        target_link_libraries(protoscope_ui PUBLIC shell32 ole32 comdlg32 winhttp)
     endif()
 endif()
 
