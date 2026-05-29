@@ -80,6 +80,52 @@ void rewriteModbusCrc(std::vector<std::uint8_t>& frame) {
     frame[frame.size() - 1] = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
 }
 
+void appendBytes(std::vector<std::uint8_t>& target, const std::vector<std::uint8_t>& source) {
+    target.insert(target.end(), source.begin(), source.end());
+}
+
+void completeHalfDuplexStartup(protoscope::scripting::ScriptHost& master,
+                               protoscope::scripting::ScriptHost& slave,
+                               const protoscope::transport::ConnectionContext& ctx) {
+    master.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    slave.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    master.drainPlotSetups();
+    master.onControl(ctx, "auto_start", true);
+
+    const auto requests = master.drainTxRequests();
+    require(requests.size() == 3, "应先生成 3 条配置请求");
+    for (const auto& request : requests) {
+        slave.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, request.payload});
+        const auto replies = slave.drainTxRequests();
+        if (replies.size() != 1) {
+            std::ostringstream detail;
+            detail << "每次写寄存器都应返回 1 个 ACK"
+                   << " | request_size=" << request.payload.size()
+                   << " | request_length=" << readLe16(request.payload, 4);
+            for (const auto& update : slave.drainStatusUpdates()) {
+                detail << " | slave_status=" << update.text;
+            }
+            throw std::runtime_error(detail.str());
+        }
+        require(replies[0].kind == protoscope::scripting::TxRequestKind::Send, "从机 ACK 应走 proto.send");
+
+        master.setRequestAwaitingCompletion(true);
+        master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, replies[0].payload});
+        require(!master.drainRequestDoneResults().empty(), "主机收到 ACK 后应调用 proto.request_done");
+    }
+}
+
+std::vector<std::uint8_t> nextHalfDuplexWaveFrame(protoscope::scripting::ScriptHost& slave) {
+    const auto wakeup = slave.nextWakeupAtMs();
+    require(wakeup.has_value(), "从机启动后应注册定时器");
+    slave.tick(*wakeup);
+
+    const auto waveRequests = slave.drainTxRequests();
+    require(waveRequests.size() == 1, "定时器触发后应主动发送 1 帧波形");
+    require(waveRequests[0].kind == protoscope::scripting::TxRequestKind::Send, "主动上报应走 proto.send");
+    return waveRequests[0].payload;
+}
+
 } // namespace
 
 void test_script_controls_snapshot() {
@@ -643,10 +689,13 @@ void test_half_duplex_modbus_request_batches() {
     }
 
     require(readLe16(requests[0].payload, 6) == 0x5AA5U, "第一批请求起始地址错误");
+    require(readLe16(requests[0].payload, 4) == 7U, "第一批请求载荷长度应为 7 字节");
     require(requests[0].payload[8] == 2U, "第一批请求应写两个寄存器");
     require(readLe16(requests[1].payload, 6) == 0x5AA7U, "第二批请求起始地址错误");
+    require(readLe16(requests[1].payload, 4) == 7U, "第二批请求载荷长度应为 7 字节");
     require(requests[1].payload[8] == 2U, "第二批请求应写两个寄存器");
     require(readLe16(requests[2].payload, 6) == 0x5AA9U, "第三批请求起始地址错误");
+    require(readLe16(requests[2].payload, 4) == 5U, "第三批请求载荷长度应为 5 字节");
     require(requests[2].payload[8] == 1U, "第三批请求应只写启动位");
 }
 
@@ -657,34 +706,8 @@ void test_half_duplex_modbus_ack_and_plot_flow() {
     require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
 
     const auto ctx = sampleCtx();
-    master.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
-    slave.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
-    master.drainPlotSetups();
-
-    master.onControl(ctx, "auto_start", true);
-    const auto requests = master.drainTxRequests();
-    require(requests.size() == 3, "应先生成 3 条配置请求");
-
-    for (const auto& request : requests) {
-        slave.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, request.payload});
-        const auto replies = slave.drainTxRequests();
-        require(replies.size() == 1, "每次写寄存器都应返回 1 个 ACK");
-        require(replies[0].kind == protoscope::scripting::TxRequestKind::Send, "从机 ACK 应走 proto.send");
-
-        master.setRequestAwaitingCompletion(true);
-        master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, replies[0].payload});
-        require(!master.drainRequestDoneResults().empty(), "主机收到 ACK 后应调用 proto.request_done");
-    }
-
-    const auto wakeup = slave.nextWakeupAtMs();
-    require(wakeup.has_value(), "从机启动后应注册定时器");
-    slave.tick(*wakeup);
-
-    const auto waveRequests = slave.drainTxRequests();
-    require(waveRequests.size() == 1, "定时器触发后应主动发送 1 帧波形");
-    require(waveRequests[0].kind == protoscope::scripting::TxRequestKind::Send, "主动上报应走 proto.send");
-
-    const auto& frame = waveRequests[0].payload;
+    completeHalfDuplexStartup(master, slave, ctx);
+    const auto frame = nextHalfDuplexWaveFrame(slave);
     require(frame.size() > 12, "波形帧长度不足");
     const auto splitAt = frame.size() / 2;
     const std::vector<std::uint8_t> part1(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(splitAt));
@@ -711,30 +734,14 @@ void test_half_duplex_modbus_loss_status_keeps_valid_frame() {
     require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
 
     const auto ctx = sampleCtx();
-    master.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
-    slave.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
-    master.drainPlotSetups();
+    completeHalfDuplexStartup(master, slave, ctx);
+    auto firstWave = nextHalfDuplexWaveFrame(slave);
 
-    master.onControl(ctx, "auto_start", true);
-    for (const auto& request : master.drainTxRequests()) {
-        slave.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, request.payload});
-        const auto replies = slave.drainTxRequests();
-        master.setRequestAwaitingCompletion(true);
-        master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, replies[0].payload});
-        master.drainRequestDoneResults();
-    }
-
-    const auto wakeup = slave.nextWakeupAtMs();
-    require(wakeup.has_value(), "从机启动后应注册定时器");
-    slave.tick(*wakeup);
-    auto firstWave = slave.drainTxRequests();
-    require(firstWave.size() == 1, "应先生成一帧基线波形");
-
-    master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, firstWave[0].payload});
+    master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, firstWave});
     master.drainPlotAppends();
     master.drainStatusUpdates();
 
-    std::vector<std::uint8_t> skippedFrame = firstWave[0].payload;
+    std::vector<std::uint8_t> skippedFrame = firstWave;
     skippedFrame[3] = static_cast<std::uint8_t>((skippedFrame[3] + 2U) & 0xFFU);
     rewriteModbusCrc(skippedFrame);
 
@@ -758,31 +765,13 @@ void test_half_duplex_modbus_invalid_length_rejected() {
     require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
 
     const auto ctx = sampleCtx();
-    master.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
-    slave.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
-    master.drainPlotSetups();
+    completeHalfDuplexStartup(master, slave, ctx);
+    master.drainStatusUpdates();
 
-    master.onControl(ctx, "auto_start", true);
-    for (const auto& request : master.drainTxRequests()) {
-        slave.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, request.payload});
-        const auto replies = slave.drainTxRequests();
-        master.setRequestAwaitingCompletion(true);
-        master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, replies[0].payload});
-        master.drainRequestDoneResults();
-    }
-
-    const auto wakeup = slave.nextWakeupAtMs();
-    require(wakeup.has_value(), "从机启动后应注册定时器");
-    slave.tick(*wakeup);
-    auto waveRequests = slave.drainTxRequests();
-    require(waveRequests.size() == 1, "应生成 1 帧有效波形用于篡改");
-
-    std::vector<std::uint8_t> broken = waveRequests[0].payload;
+    std::vector<std::uint8_t> broken = nextHalfDuplexWaveFrame(slave);
     const auto originalLength = readLe16(broken, 4);
-    require(originalLength > 7U, "原始波形负载长度过短，无法执行长度破坏测试");
-    writeLe16(broken, 4, static_cast<std::uint16_t>(originalLength - 1U));
-    broken.erase(broken.end() - 3);
-    rewriteModbusCrc(broken);
+    require(originalLength > 8U, "原始波形负载长度过短，无法执行长度破坏测试");
+    writeLe16(broken, 4, static_cast<std::uint16_t>(originalLength - 4U));
 
     master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, broken});
     require(master.drainPlotAppends().empty(), "长度非法的波形帧不应推送 plot");
@@ -794,6 +783,201 @@ void test_half_duplex_modbus_invalid_length_rejected() {
         }
     }
     require(foundParseError, "长度非法时应上报解析失败状态");
+}
+
+void test_half_duplex_modbus_sticky_frames() {
+    protoscope::scripting::ScriptHost master;
+    protoscope::scripting::ScriptHost slave;
+    require(master.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
+    require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    completeHalfDuplexStartup(master, slave, ctx);
+    master.drainStatusUpdates();
+
+    const auto firstWave = nextHalfDuplexWaveFrame(slave);
+    const auto secondWave = nextHalfDuplexWaveFrame(slave);
+    std::vector<std::uint8_t> combined;
+    appendBytes(combined, firstWave);
+    appendBytes(combined, secondWave);
+
+    master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, combined});
+    const auto appends = master.drainPlotAppends();
+    require(appends.size() == 8, "粘包输入两帧后应推送 8 组波形");
+}
+
+void test_half_duplex_modbus_noise_prefix_ignored() {
+    protoscope::scripting::ScriptHost master;
+    protoscope::scripting::ScriptHost slave;
+    require(master.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
+    require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    completeHalfDuplexStartup(master, slave, ctx);
+    master.drainStatusUpdates();
+
+    std::vector<std::uint8_t> noisy = {0x00U, 0x7EU, 0x11U, 0x22U, 0x33U};
+    appendBytes(noisy, nextHalfDuplexWaveFrame(slave));
+
+    master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, noisy});
+    const auto appends = master.drainPlotAppends();
+    require(appends.size() == 4, "噪声前缀后仍应解析出完整波形帧");
+}
+
+void test_half_duplex_modbus_crc_resync_keeps_following_frame() {
+    protoscope::scripting::ScriptHost master;
+    protoscope::scripting::ScriptHost slave;
+    require(master.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
+    require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    completeHalfDuplexStartup(master, slave, ctx);
+    master.drainStatusUpdates();
+
+    auto broken = nextHalfDuplexWaveFrame(slave);
+    require(broken.size() > 10, "波形帧长度不足，无法执行 CRC 破坏测试");
+    broken[9] = static_cast<std::uint8_t>(broken[9] ^ 0x01U);
+    const auto good = nextHalfDuplexWaveFrame(slave);
+
+    std::vector<std::uint8_t> combined;
+    appendBytes(combined, broken);
+    appendBytes(combined, good);
+
+    master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, combined});
+    const auto appends = master.drainPlotAppends();
+    require(appends.size() == 4, "CRC 坏帧后仍应继续解析后续好帧");
+
+    bool foundCrcError = false;
+    for (const auto& update : master.drainStatusUpdates()) {
+        if (update.text.find("CRC") != std::string::npos) {
+            foundCrcError = true;
+        }
+    }
+    require(foundCrcError, "CRC 校验失败后应上报解析错误");
+}
+
+void test_half_duplex_modbus_multi_schema_candidates() {
+    const auto tempRoot = makeUniqueTempDir("protoscope-half-duplex-multi-schema");
+    const auto protocolDir = tempRoot / "multi_schema";
+    std::filesystem::create_directories(protocolDir);
+
+    const auto sharedProtocols = (std::filesystem::current_path() / "protocols").generic_string();
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "多 schema 测试脚本应可写入");
+        out << "package.path = [[" << sharedProtocols << "/?.lua;" << sharedProtocols << "/?/init.lua;]] .. package.path\n";
+        out << "local modbus = require(\"half_duplex_modbus_common\")\n";
+        out << "local FRAME_ALPHA = \"alpha_frame\"\n";
+        out << "local FRAME_BETA = \"beta_frame\"\n";
+        out << "local FUNC_ALPHA = 0x31\n";
+        out << "local FUNC_BETA = 0x41\n";
+        out << "local protocol = {\n";
+        out << "  frames = {\n";
+        out << "    {\n";
+        out << "      id = FRAME_ALPHA,\n";
+        out << "      header = { 0xA1, 0x1A },\n";
+        out << "      func = modbus.DEFAULT_FUNC,\n";
+        out << "      sequence = { type = \"u8\", bits = 8 },\n";
+        out << "      length = { type = \"u8\", unit = \"bytes\" },\n";
+        out << "      crc = modbus.CRC_SPEC,\n";
+        out << "      messages = {\n";
+        out << "        [FUNC_ALPHA] = { name = \"alpha\", fields = { { name = \"value\", type = \"u8\", offset = 0 } } },\n";
+        out << "      },\n";
+        out << "    },\n";
+        out << "    {\n";
+        out << "      id = FRAME_BETA,\n";
+        out << "      header = { 0xB2, 0x2B },\n";
+        out << "      func = modbus.DEFAULT_FUNC,\n";
+        out << "      sequence = { type = \"u8\", bits = 8 },\n";
+        out << "      length = modbus.LENGTH_SPEC,\n";
+        out << "      crc = modbus.CRC_SPEC,\n";
+        out << "      messages = {\n";
+        out << "        [FUNC_BETA] = { name = \"beta\", fields = { { name = \"value\", type = \"u16\", endian = \"le\", offset = 0 } } },\n";
+        out << "      },\n";
+        out << "    },\n";
+        out << "  },\n";
+        out << "}\n";
+        out << "local parser = modbus.new_parser(protocol)\n";
+        out << "function describe()\n";
+        out << "  return {\n";
+        out << "    {\n";
+        out << "      id = \"multi_schema\",\n";
+        out << "      title = \"Multi Schema\",\n";
+        out << "      controls = {},\n";
+        out << "    },\n";
+        out << "  }\n";
+        out << "end\n";
+        out << "function on_open(ctx)\n";
+        out << "  parser = modbus.new_parser(protocol)\n";
+        out << "  proto.status.set(\"multi schema on_open\", { level = \"info\" })\n";
+        out << "  local alpha, alpha_err = modbus.build_frame(protocol, FRAME_ALPHA, FUNC_ALPHA, 1, { value = 7 })\n";
+        out << "  if not alpha then\n";
+        out << "    proto.status.set(\"alpha 组帧失败: \" .. tostring(alpha_err), { level = \"error\" })\n";
+        out << "    return\n";
+        out << "  end\n";
+        out << "  local beta, beta_err = modbus.build_frame(protocol, FRAME_BETA, FUNC_BETA, 2, { value = 0x1234 })\n";
+        out << "  if not beta then\n";
+        out << "    proto.status.set(\"beta 组帧失败: \" .. tostring(beta_err), { level = \"error\" })\n";
+        out << "    return\n";
+        out << "  end\n";
+        out << "  local alpha_id, alpha_send_err = proto.send(alpha, { tag = \"alpha\" })\n";
+        out << "  if not alpha_id then\n";
+        out << "    proto.status.set(\"alpha 发送失败: \" .. tostring(alpha_send_err), { level = \"error\" })\n";
+        out << "    return\n";
+        out << "  end\n";
+        out << "  local beta_id, beta_send_err = proto.send(beta, { tag = \"beta\" })\n";
+        out << "  if not beta_id then\n";
+        out << "    proto.status.set(\"beta 发送失败: \" .. tostring(beta_send_err), { level = \"error\" })\n";
+        out << "    return\n";
+        out << "  end\n";
+        out << "end\n";
+        out << "function on_bytes(ctx, bytes)\n";
+        out << "  local frames, errors = modbus.feed_parser(parser, bytes)\n";
+        out << "  for _, item in ipairs(errors) do\n";
+        out << "    proto.status.set(\"解析失败: \" .. tostring(item.message), { level = \"error\" })\n";
+        out << "  end\n";
+        out << "  for _, frame in ipairs(frames) do\n";
+        out << "    proto.emit(\"frame\", { frame_id = frame.frame_id, func = frame.func, value = frame.payload.value })\n";
+        out << "  end\n";
+        out << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "多 schema 测试协议应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+
+    const auto requests = host.drainTxRequests();
+    if (requests.size() != 2) {
+        std::ostringstream detail;
+        detail << "多 schema 测试应发送两帧不同 schema 的数据";
+        for (const auto& update : host.drainStatusUpdates()) {
+            detail << " | status=" << update.text;
+        }
+        throw std::runtime_error(detail.str());
+    }
+
+    std::vector<std::uint8_t> combined;
+    appendBytes(combined, requests[0].payload);
+    appendBytes(combined, requests[1].payload);
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, combined});
+
+    bool foundAlpha = false;
+    bool foundBeta = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name != "frame") {
+            continue;
+        }
+        if (event.payload.find("alpha_frame") != std::string::npos && event.payload.find("value=7") != std::string::npos) {
+            foundAlpha = true;
+        }
+        if (event.payload.find("beta_frame") != std::string::npos && event.payload.find("4660") != std::string::npos) {
+            foundBeta = true;
+        }
+    }
+    require(foundAlpha, "应按首个候选 schema 解析 alpha_frame");
+    require(foundBeta, "应按第二个候选 schema 解析 beta_frame");
 }
 
 namespace {
@@ -841,6 +1025,10 @@ static const TestCase kAllTests[] = {
     {"half_duplex_modbus_ack_and_plot_flow", &test_half_duplex_modbus_ack_and_plot_flow},
     {"half_duplex_modbus_loss_status_keeps_valid_frame", &test_half_duplex_modbus_loss_status_keeps_valid_frame},
     {"half_duplex_modbus_invalid_length_rejected", &test_half_duplex_modbus_invalid_length_rejected},
+    {"half_duplex_modbus_sticky_frames", &test_half_duplex_modbus_sticky_frames},
+    {"half_duplex_modbus_noise_prefix_ignored", &test_half_duplex_modbus_noise_prefix_ignored},
+    {"half_duplex_modbus_crc_resync_keeps_following_frame", &test_half_duplex_modbus_crc_resync_keeps_following_frame},
+    {"half_duplex_modbus_multi_schema_candidates", &test_half_duplex_modbus_multi_schema_candidates},
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
     {"dock_receive_row_single_line_hex_and_ascii", &test_dock_receive_row_single_line_hex_and_ascii},
     {"dock_receive_row_single_line_message_and_timestamp", &test_dock_receive_row_single_line_message_and_timestamp},

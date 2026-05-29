@@ -5,6 +5,7 @@ local modbus = require("half_duplex_modbus_common")
 local FUNC_WRITE_REGISTERS = 0x10
 local FUNC_WRITE_ACK = 0x90
 local FUNC_STREAM_DATA = 0x91
+local FRAME_ID = "half_duplex_modbus"
 
 local REG_CH1 = 0x5AA5
 local REG_CH2 = 0x5AA6
@@ -21,39 +22,46 @@ local DEFAULT_SAMPLE_COUNT = 16
 
 -- 协议 schema 放在具体协议脚本里；common 只按这里的定义做编解码。
 local protocol = {
-  header = modbus.DEFAULT_HEADER,
-  length = modbus.LENGTH_SPEC,
-  sequence_bits = modbus.SEQUENCE_BITS,
-  messages = {
-    [FUNC_WRITE_REGISTERS] = {
-      name = "write_registers",
-      fields = {
-        { name = "start_address", type = "u16", endian = "le", offset = 0 },
-        { name = "register_count", type = "u8", offset = 2 },
-        { name = "values", type = "u16", endian = "le", count_from = "register_count" },
-      },
-    },
-    [FUNC_WRITE_ACK] = {
-      name = "write_ack",
-      fields = {
-        { name = "status", type = "u8", offset = 0 },
-        { name = "start_address", type = "u16", endian = "le", offset = 1 },
-        { name = "register_count", type = "u8", offset = 3 },
-      },
-    },
-    [FUNC_STREAM_DATA] = {
-      name = "stream_data",
-      fields = {
-        { name = "timestamp_ms", type = "u32", endian = "le", offset = 0 },
-        { name = "channel_mask", type = "u8" },
-        { name = "sample_count", type = "u8" },
-        {
-          name = "samples",
-          type = "i16",
-          endian = "le",
-          count_from = function(values)
-            return (values.sample_count or 0) * modbus.popcount(values.channel_mask or 0)
-          end,
+  frames = {
+    {
+      id = FRAME_ID,
+      header = modbus.DEFAULT_HEADER,
+      func = modbus.DEFAULT_FUNC,
+      sequence = { type = "u8", bits = modbus.SEQUENCE_BITS },
+      length = modbus.LENGTH_SPEC,
+      crc = modbus.CRC_SPEC,
+      messages = {
+        [FUNC_WRITE_REGISTERS] = {
+          name = "write_registers",
+          fields = {
+            { name = "start_address", type = "u16", endian = "le", offset = 0 },
+            { name = "register_count", type = "u8", offset = 2 },
+            { name = "values", type = "u16", endian = "le", count_from = "register_count" },
+          },
+        },
+        [FUNC_WRITE_ACK] = {
+          name = "write_ack",
+          fields = {
+            { name = "status", type = "u8", offset = 0 },
+            { name = "start_address", type = "u16", endian = "le", offset = 1 },
+            { name = "register_count", type = "u8", offset = 3 },
+          },
+        },
+        [FUNC_STREAM_DATA] = {
+          name = "stream_data",
+          fields = {
+            { name = "timestamp_ms", type = "u32", endian = "le", offset = 0 },
+            { name = "channel_mask", type = "u8" },
+            { name = "sample_count", type = "u8" },
+            {
+              name = "samples",
+              type = "i16",
+              endian = "le",
+              count_from = function(values)
+                return (values.sample_count or 0) * modbus.popcount(values.channel_mask or 0)
+              end,
+            },
+          },
         },
       },
     },
@@ -126,7 +134,7 @@ local function request_frame(frame, tag)
 end
 
 local function queue_write(start_address, values, tag)
-  local frame, err = modbus.build_frame(protocol, FUNC_WRITE_REGISTERS, next_sequence(), {
+  local frame, err = modbus.build_frame(protocol, FRAME_ID, FUNC_WRITE_REGISTERS, next_sequence(), {
     start_address = start_address,
     register_count = #values,
     values = values,
