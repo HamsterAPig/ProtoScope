@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 #include <implot.h>
+#include <implot_internal.h>
 
 #include <algorithm>
 #include <array>
@@ -286,8 +287,15 @@ bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits) 
     return true;
 }
 
+bool isFitDoubleClicked() {
+    const int fitButton = ImPlot::GetInputMap().Fit;
+    const bool fitButtonDoubleClicked =
+        fitButton >= 0 && fitButton < ImGuiMouseButton_COUNT && ImGui::IsMouseDoubleClicked(fitButton);
+    return ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) || fitButtonDoubleClicked;
+}
+
 bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDataBounds& bounds) {
-    if (!bounds.valid || !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    if (!bounds.valid || !isFitDoubleClicked()) {
         return false;
     }
 
@@ -301,9 +309,8 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDa
         view.autoFollowLatest = false;
         changed = true;
     }
-    if (ImPlot::IsAxisHovered(ImAxis_Y1)
-        && view.controlMode == plot::WaveControlMode::LegacyGlobal
-        && !view.lockVerticalRange) {
+    if (ImPlot::IsAxisHovered(ImAxis_Y1) && !view.lockVerticalRange) {
+        // 核心流程：Y 轴双击 auto fit 在所有控制模式下都统一走倍率逻辑，避免默认 oscilloscope 模式退回 ImPlot 的 1x 紧贴范围。
         const auto range = plot::makeVerticalAutoFitRange(bounds.minValue, bounds.maxValue, view.verticalAutoFitMultiplier);
         view.viewMinValue = range.minValue;
         view.viewMaxValue = range.maxValue;
@@ -600,6 +607,37 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
         changed = updateActiveChannelOffset(wave, currentPlot.y - previousPlot.y) || changed;
     }
     return changed;
+}
+
+bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::WaveDataBounds& bounds) {
+    if (GImPlot == nullptr || GImPlot->CurrentPlot == nullptr) {
+        return false;
+    }
+
+    ImPlotPlot& currentPlot = *GImPlot->CurrentPlot;
+    ImPlotAxis& yAxis = currentPlot.YAxis(0);
+    if (!yAxis.Enabled || (!yAxis.FitThisFrame && !yAxis.IsAutoFitting())) {
+        return false;
+    }
+
+    // 核心流程：ImPlot 内置 fit 会在 EndPlot 末尾按原始数据边界套用 1x/默认 padding。
+    // 这里在 EndPlot 前接管 Y 轴 fit 请求，统一改成配置文件控制的倍率范围。
+    if (view.lockVerticalRange) {
+        yAxis.SetRange(view.manualVerticalMin, view.manualVerticalMax);
+        yAxis.FitThisFrame = false;
+        return true;
+    }
+    if (!bounds.valid) {
+        return false;
+    }
+
+    const auto range = plot::makeVerticalAutoFitRange(bounds.minValue, bounds.maxValue, view.verticalAutoFitMultiplier);
+    yAxis.SetRange(range.minValue, range.maxValue);
+    yAxis.FitThisFrame = false;
+    view.viewMinValue = range.minValue;
+    view.viewMaxValue = range.maxValue;
+    view.forceNextMainPlotLimits = true;
+    return true;
 }
 
 std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::WaveSample>& samples,
@@ -1321,7 +1359,10 @@ void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
     if (view.lockVerticalRange) {
         ImPlot::SetupAxisLimits(ImAxis_Y1, view.manualVerticalMin, view.manualVerticalMax, ImPlotCond_Always);
     } else {
-        ImPlot::SetupAxisLimits(ImAxis_Y1, view.viewMinValue, view.viewMaxValue, ImPlotCond_Once);
+        ImPlot::SetupAxisLimits(ImAxis_Y1,
+                                view.viewMinValue,
+                                view.viewMaxValue,
+                                forceMainPlotLimits ? ImPlotCond_Always : ImPlotCond_Once);
     }
 }
 
@@ -1597,6 +1638,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     bool viewportChangedThisFrame =
         handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, mousePos);
     renderWaveChannels(view, frame.snapshot, displayData, frame.renderBudget, limits);
+    viewportChangedThisFrame = applyPendingVerticalAutoFitOverride(view, frame.displayBounds) || viewportChangedThisFrame;
     handleHoverReadout(view, frame.snapshot, displayData, mousePos, timeSnapDistance, valueSnapDistance);
     viewportChangedThisFrame = handleOscilloscopeChannelInteractions(wave,
                                                                      displayData,
