@@ -22,6 +22,11 @@ enum class WaveZoomMode {
     XY,
 };
 
+enum class WaveChannelCardWidthMode {
+    Fixed,
+    Adaptive,
+};
+
 enum class WaveExtremeKind {
     Maximum,
     Minimum,
@@ -58,6 +63,11 @@ struct WaveDataBounds {
     double maxValue{1.0};
     double minStep{1.0};
     bool valid{false};
+};
+
+struct WaveValueRange {
+    double minValue{-1.0};
+    double maxValue{1.0};
 };
 
 struct CursorIntervalText {
@@ -134,5 +144,10 @@ WaveViewport moveViewportByDelta(const WaveViewport& viewport,
                                  const WaveDataBounds& bounds,
                                  double minTimeWidth);
 double cursorTimeInViewport(const WaveViewport& viewport, double ratio);
+double resolveChannelCardWidth(WaveChannelCardWidthMode mode,
+                               double fixedWidth,
+                               double adaptiveRatio,
+                               double availableWidth);
+WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double multiplier);
 
 } // namespace protoscope::plot

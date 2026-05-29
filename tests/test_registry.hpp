@@ -95,6 +95,8 @@ void test_wave_overview_viewport_normalize();
 void test_wave_cursor_position_in_viewport();
 void test_wave_cursor_interval_text_by_axis();
 void test_wave_cursor_interval_lock();
+void test_wave_channel_card_width_modes();
+void test_wave_vertical_auto_fit_multiplier();
 void test_raw_capture_file_roundtrip();
 void test_raw_capture_file_rejects_size_mismatch();
 void test_raw_capture_file_requires_protocol_fields();

@@ -373,6 +373,10 @@ proto.plot.setup({
 ```yaml
 gui:
   wave:
+    channel_card_width_mode: fixed
+    channel_card_fixed_width: 128.0
+    channel_card_adaptive_ratio: 0.22
+    vertical_auto_fit_multiplier: 1.2
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
     downsample_start_multiplier: 2.0
@@ -417,6 +421,12 @@ gui:
 - `wave.overview_max_samples`
   - 只影响底部总览图 overview，不影响主波形区的历史保留上限。
   - 当历史很长时，overview 只取最近的这部分样本参与绘制，避免总览图拖慢界面。
+
+- `wave.channel_card_width_mode`
+  - 控制顶部 CH 卡片宽度，默认 `fixed` 使用 `channel_card_fixed_width`，可改为 `adaptive` 按 `channel_card_adaptive_ratio` 随内容宽度计算。
+
+- `wave.vertical_auto_fit_multiplier`
+  - 控制 Y 轴 Auto Fit 的留白系数，默认 `1.2`，例如显示值范围 `[-10, 5]` 会自动扩到 `[-12, 12]`。
 
 #### 怎么判断该调哪个参数
 

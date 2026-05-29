@@ -92,6 +92,27 @@ const char* toWaveDisplayFormulaText(const plot::WaveDisplayFormula formula) {
     return "offset_then_scale";
 }
 
+plot::WaveChannelCardWidthMode parseWaveChannelCardWidthMode(const std::string& value) {
+    if (value == "adaptive") {
+        return plot::WaveChannelCardWidthMode::Adaptive;
+    }
+    return plot::WaveChannelCardWidthMode::Fixed;
+}
+
+const char* toWaveChannelCardWidthModeText(const plot::WaveChannelCardWidthMode mode) {
+    switch (mode) {
+    case plot::WaveChannelCardWidthMode::Fixed:
+        return "fixed";
+    case plot::WaveChannelCardWidthMode::Adaptive:
+        return "adaptive";
+    }
+    return "fixed";
+}
+
+double positiveOrFallback(double value, double fallback) {
+    return value > 0.0 ? value : fallback;
+}
+
 transport::TransportKind parseTransportKind(const std::string& value) {
     if (value == "tcp_server") {
         return transport::TransportKind::TcpServer;
@@ -175,6 +196,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                                                 "display_formula",
                                                                 toWaveDisplayFormulaText(result.config.gui.wave.displayFormula)),
                                         result.config.gui.wave.displayFormula);
+            result.config.gui.wave.channelCardWidthMode =
+                parseWaveChannelCardWidthMode(readScalar<std::string>(wave, "channel_card_width_mode", "fixed"));
             result.config.gui.wave.maxRenderPointsPerChannel =
                 readScalar<std::size_t>(wave, "max_render_points_per_channel", result.config.gui.wave.maxRenderPointsPerChannel);
             result.config.gui.wave.maxRenderVertices =
@@ -185,6 +208,14 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::size_t>(wave, "overview_max_samples", result.config.gui.wave.overviewMaxSamples);
             result.config.gui.wave.minVisibleTimeSpan =
                 readScalar<double>(wave, "min_visible_time_span", result.config.gui.wave.minVisibleTimeSpan);
+            result.config.gui.wave.channelCardFixedWidth =
+                positiveOrFallback(readScalar<double>(wave, "channel_card_fixed_width", result.config.gui.wave.channelCardFixedWidth), 128.0);
+            result.config.gui.wave.channelCardAdaptiveRatio =
+                positiveOrFallback(readScalar<double>(wave, "channel_card_adaptive_ratio", result.config.gui.wave.channelCardAdaptiveRatio),
+                                   0.22);
+            result.config.gui.wave.verticalAutoFitMultiplier =
+                positiveOrFallback(readScalar<double>(wave, "vertical_auto_fit_multiplier", result.config.gui.wave.verticalAutoFitMultiplier),
+                                   1.2);
             result.config.gui.wave.showAxisLabels =
                 readScalar<bool>(wave, "show_axis_labels", result.config.gui.wave.showAxisLabels);
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
@@ -277,6 +308,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["window"]["maximized"] = config.gui.window.maximized;
     root["gui"]["wave"]["control_mode"] = toWaveControlModeText(config.gui.wave.controlMode);
     root["gui"]["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
+    root["gui"]["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
+    root["gui"]["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
+    root["gui"]["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
+    root["gui"]["wave"]["vertical_auto_fit_multiplier"] = config.gui.wave.verticalAutoFitMultiplier;
     root["gui"]["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
     root["gui"]["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
     root["gui"]["wave"]["downsample_start_multiplier"] = config.gui.wave.downsampleStartMultiplier;
@@ -478,11 +513,15 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     auto& wave = waveState.view;
     wave.controlMode = config.gui.wave.controlMode;
     wave.displayFormula = config.gui.wave.displayFormula;
+    wave.channelCardWidthMode = config.gui.wave.channelCardWidthMode;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
     wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
     wave.overviewMaxSamples = config.gui.wave.overviewMaxSamples;
     wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
+    wave.channelCardFixedWidth = positiveOrFallback(config.gui.wave.channelCardFixedWidth, 128.0);
+    wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
+    wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.2);
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
     auto viewConfig = waveState.buffer.viewConfig();
     viewConfig.displayFormula = config.gui.wave.displayFormula;
@@ -503,11 +542,15 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.luaDockLayoutDebug = dockStore.configState().luaDockLayoutDebug;
     config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
     config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
+    config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;
     config.gui.wave.overviewMaxSamples = dockStore.waveState().view.overviewMaxSamples;
     config.gui.wave.minVisibleTimeSpan = dockStore.waveState().view.minVisibleTimeSpan;
+    config.gui.wave.channelCardFixedWidth = dockStore.waveState().view.channelCardFixedWidth;
+    config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;
+    config.gui.wave.verticalAutoFitMultiplier = dockStore.waveState().view.verticalAutoFitMultiplier;
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
     config.configPath = dockStore.configState().loadedFromPath;
 

@@ -49,11 +49,15 @@ struct GuiWindowConfig {
 struct GuiWaveConfig {
     plot::WaveControlMode controlMode{plot::WaveControlMode::Oscilloscope};
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
+    plot::WaveChannelCardWidthMode channelCardWidthMode{plot::WaveChannelCardWidthMode::Fixed};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     double downsampleStartMultiplier{2.0};
     std::size_t overviewMaxSamples{20000};
     double minVisibleTimeSpan{0.001};
+    double channelCardFixedWidth{128.0};
+    double channelCardAdaptiveRatio{0.22};
+    double verticalAutoFitMultiplier{1.2};
     bool showAxisLabels{false};
 };
 

@@ -733,6 +733,26 @@ void test_wave_cursor_interval_lock() {
     require(std::abs(left - 3.0) < 1e-12, "移动右游标时左游标应保持锁定间隔");
 }
 
+void test_wave_channel_card_width_modes() {
+    const double fixedWidth = protoscope::plot::resolveChannelCardWidth(
+        protoscope::plot::WaveChannelCardWidthMode::Fixed, 128.0, 0.22, 1000.0);
+    require(std::abs(fixedWidth - 128.0) < 1e-12, "固定模式应直接使用配置宽度");
+
+    const double adaptiveWidth = protoscope::plot::resolveChannelCardWidth(
+        protoscope::plot::WaveChannelCardWidthMode::Adaptive, 128.0, 0.22, 1000.0);
+    require(std::abs(adaptiveWidth - 220.0) < 1e-12, "自适应模式应按比例计算并保留上限夹取");
+}
+
+void test_wave_vertical_auto_fit_multiplier() {
+    const auto negativeRange = protoscope::plot::makeVerticalAutoFitRange(-10.0, 5.0, 1.2);
+    require(std::abs(negativeRange.minValue + 12.0) < 1e-12, "负向范围 Auto Fit 下限应乘以系数");
+    require(std::abs(negativeRange.maxValue - 12.0) < 1e-12, "负向范围 Auto Fit 上限应乘以系数");
+
+    const auto positiveRange = protoscope::plot::makeVerticalAutoFitRange(2.0, 3.0, 1.2);
+    require(std::abs(positiveRange.minValue + 3.6) < 1e-12, "正向范围 Auto Fit 下限应围绕 0 对称");
+    require(std::abs(positiveRange.maxValue - 3.6) < 1e-12, "正向范围 Auto Fit 上限应围绕 0 对称");
+}
+
 void test_raw_capture_file_roundtrip() {
     const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-roundtrip.psraw";
     std::filesystem::remove(tempPath);

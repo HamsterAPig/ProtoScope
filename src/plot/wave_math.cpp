@@ -604,4 +604,30 @@ double cursorTimeInViewport(const WaveViewport& viewport, double ratio) {
     return minTime + (maxTime - minTime) * clampedRatio;
 }
 
+double resolveChannelCardWidth(WaveChannelCardWidthMode mode,
+                               double fixedWidth,
+                               double adaptiveRatio,
+                               double availableWidth) {
+    if (mode == WaveChannelCardWidthMode::Fixed) {
+        return fixedWidth > 0.0 ? fixedWidth : 128.0;
+    }
+
+    // 核心流程：自适应模式沿用原有比例布局，同时保留安全夹取，避免极窄或极宽卡片影响可读性。
+    const double safeRatio = adaptiveRatio > 0.0 ? adaptiveRatio : 0.22;
+    return (std::clamp)(availableWidth * safeRatio, 160.0, 220.0);
+}
+
+WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double multiplier) {
+    const double safeMultiplier = multiplier > 0.0 ? multiplier : 1.2;
+    double maxAbs = (std::max)(std::abs(minValue), std::abs(maxValue));
+    if (maxAbs <= kEpsilon) {
+        maxAbs = 1.0;
+    }
+    const double halfRange = maxAbs * safeMultiplier;
+    return {
+        .minValue = -halfRange,
+        .maxValue = halfRange,
+    };
+}
+
 } // namespace protoscope::plot

@@ -54,9 +54,13 @@ struct WaveViewState {
     std::size_t measurementChannelIndex{0};
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
+    WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
     double downsampleStartMultiplier{2.0};
+    double channelCardFixedWidth{128.0};
+    double channelCardAdaptiveRatio{0.22};
+    double verticalAutoFitMultiplier{1.2};
     double persistenceWindow{0.25};
     double glowIntensity{1.0};
     double sampleFrequencyHz{0.0};

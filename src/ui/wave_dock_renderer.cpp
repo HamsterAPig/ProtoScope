@@ -304,8 +304,9 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDa
     if (ImPlot::IsAxisHovered(ImAxis_Y1)
         && view.controlMode == plot::WaveControlMode::LegacyGlobal
         && !view.lockVerticalRange) {
-        view.viewMinValue = bounds.minValue;
-        view.viewMaxValue = bounds.maxValue;
+        const auto range = plot::makeVerticalAutoFitRange(bounds.minValue, bounds.maxValue, view.verticalAutoFitMultiplier);
+        view.viewMinValue = range.minValue;
+        view.viewMaxValue = range.maxValue;
         changed = true;
     }
 
@@ -406,11 +407,12 @@ struct ChannelLegendMetrics {
     float totalHeight{0.0F};
 };
 
-ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth) {
+ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth, const plot::WaveViewState& view) {
     const auto& style = ImGui::GetStyle();
     const float titleHeight = ImGui::GetTextLineHeightWithSpacing();
     const float lineHeight = ImGui::GetTextLineHeight();
-    const float cardWidth = (std::clamp)(availableWidth * 0.22F, 160.0F, 220.0F);
+    const float cardWidth = static_cast<float>(
+        plot::resolveChannelCardWidth(view.channelCardWidthMode, view.channelCardFixedWidth, view.channelCardAdaptiveRatio, availableWidth));
     const float cardHeight = 18.0F + lineHeight * 2.0F;
     const float stripHeight = cardHeight + style.FramePadding.y * 2.0F + style.ScrollbarSize + 6.0F;
     const float separatorHeight = style.ItemSpacing.y + 1.0F + style.ItemSpacing.y;
@@ -1717,7 +1719,7 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
     }
     auto& view = wave.view;
     clampActiveChannel(view, snapshot.channels.size());
-    const ChannelLegendMetrics metrics = measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x);
+    const ChannelLegendMetrics metrics = measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x, view);
     const bool scrollActiveIntoView = wave.lastLegendMeasurementChannelIndex != view.measurementChannelIndex;
 
     ImGui::Text("图例 / 吸附范围：%s", snapScopeName(view.cursorSnapScope));
@@ -1813,11 +1815,11 @@ void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& sn
     static_cast<void>(snapshot);
 }
 
-float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot) {
+float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveViewState& view) {
     if (snapshot.channels.empty()) {
         return 0.0F;
     }
-    return measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x).totalHeight;
+    return measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x, view).totalHeight;
 }
 } // namespace
 
@@ -1844,7 +1846,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
         const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
-        const float legendHeight = measureChannelLegendHeight(wave.cachedFullSnapshot);
+        const float legendHeight = measureChannelLegendHeight(wave.cachedFullSnapshot, view);
         const float overviewRequestedHeight = wave.overviewCollapsed
             ? wave.overviewCollapsedHeight
             : wave.overviewPanelHeight;

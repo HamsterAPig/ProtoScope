@@ -664,6 +664,11 @@ void test_config_default_roundtrip() {
             "波形控制模式默认值应为 oscilloscope");
     require(config.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::OffsetThenScale,
             "波形显示公式默认值应为 offset_then_scale");
+    require(config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
+            "CH 卡片宽度模式默认值应为 fixed");
+    require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
+    require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
+    require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.2");
     config.communication.kind = protoscope::transport::TransportKind::Serial;
     config.communication.serial.portName = "COM9";
     config.communication.serial.dataBits = 7;
@@ -677,6 +682,10 @@ void test_config_default_roundtrip() {
     config.gui.wave.minVisibleTimeSpan = 0.0025;
     config.gui.wave.controlMode = protoscope::plot::WaveControlMode::LegacyGlobal;
     config.gui.wave.displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset;
+    config.gui.wave.channelCardWidthMode = protoscope::plot::WaveChannelCardWidthMode::Adaptive;
+    config.gui.wave.channelCardFixedWidth = 144.0;
+    config.gui.wave.channelCardAdaptiveRatio = 0.3;
+    config.gui.wave.verticalAutoFitMultiplier = 1.5;
 
     std::string error;
     require(store.save(tempPath, config, error), "默认配置写回失败");
@@ -693,6 +702,11 @@ void test_config_default_roundtrip() {
             "波形控制模式 roundtrip 失败");
     require(reloaded.config.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
             "波形显示公式 roundtrip 失败");
+    require(reloaded.config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Adaptive,
+            "CH 卡片宽度模式 roundtrip 失败");
+    require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
+    require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12, "CH 卡片自适应比例 roundtrip 失败");
+    require(std::abs(reloaded.config.gui.wave.verticalAutoFitMultiplier - 1.5) < 1e-12, "Y 轴 Auto Fit 系数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
@@ -706,7 +720,11 @@ void test_config_wave_mode_invalid_fallback() {
     out << "gui:\n"
            "  wave:\n"
            "    control_mode: weird\n"
-           "    display_formula: wrong\n";
+           "    display_formula: wrong\n"
+           "    channel_card_width_mode: weird\n"
+           "    channel_card_fixed_width: 0\n"
+           "    channel_card_adaptive_ratio: -0.5\n"
+           "    vertical_auto_fit_multiplier: 0\n";
     out.close();
 
     const auto loaded = store.load(tempPath).config;
@@ -714,6 +732,11 @@ void test_config_wave_mode_invalid_fallback() {
             "非法 control_mode 应回退到 oscilloscope");
     require(loaded.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::OffsetThenScale,
             "非法 display_formula 应回退到 offset_then_scale");
+    require(loaded.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
+            "非法 channel_card_width_mode 应回退到 fixed");
+    require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
+    require(std::abs(loaded.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "非正自适应比例应回退到 0.22");
+    require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "非正 Auto Fit 系数应回退到 1.2");
 }
 
 void test_config_logging_roundtrip() {
@@ -1308,6 +1331,8 @@ static const TestCase kAllTests[] = {
     {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
     {"wave_cursor_interval_text_by_axis", &test_wave_cursor_interval_text_by_axis},
     {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
+    {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},
+    {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
     {"raw_capture_file_roundtrip", &test_raw_capture_file_roundtrip},
     {"raw_capture_file_rejects_size_mismatch", &test_raw_capture_file_rejects_size_mismatch},
     {"raw_capture_file_requires_protocol_fields", &test_raw_capture_file_requires_protocol_fields},
