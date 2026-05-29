@@ -470,6 +470,7 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     wave.view.sampleFrequencyHz = capture.sampleFrequencyHz;
     wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
     wave.view.sampleFrequencyError.clear();
+    wave.buffer.setHistoryTrimSuspended(true);
 
     if (!capture.payload.empty()) {
         transport::ConnectionContext replayContext;
@@ -484,6 +485,14 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     flushScriptLogs();
     flushScriptPlots();
     flushScriptStatusAndDialogs();
+    const auto importedSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(),
+                                                       std::numeric_limits<double>::infinity());
+    std::size_t importedHistoryLimit = 0;
+    for (const auto& channel : importedSnapshot.channels) {
+        importedHistoryLimit = (std::max)(importedHistoryLimit, channel.totalSamples);
+    }
+    wave.buffer.setHistoryTrimSuspended(false);
+    wave.buffer.preserveHistoryLimitAtLeast(importedHistoryLimit);
     syncDockState();
     wave.statusMessage = "原始波形已导入";
     return true;

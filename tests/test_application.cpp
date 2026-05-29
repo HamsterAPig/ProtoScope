@@ -454,3 +454,36 @@ void test_application_raw_capture_export_import_roundtrip() {
     std::filesystem::remove(tempPath);
     application.shutdown();
 }
+
+void test_application_raw_capture_import_preserves_full_history() {
+    constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_history_limit";
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory(protocolDir, true), "低历史上限协议应可加载");
+
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "raw_import_history_limit",
+        .protocolDir = protocolDir,
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 123,
+        .payload = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19},
+    };
+
+    std::string error;
+    require(application.importWaveRawCapture(capture, error), "导入 psraw 应成功");
+    const auto importedSnapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity());
+    require(!importedSnapshot.channels.empty(), "导入后应生成波形通道");
+    require(importedSnapshot.channels.front().totalSamples == capture.payload.size(),
+            "导入回放应保留完整原始数据生成的波形历史");
+
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-application-full-history.psraw";
+    std::filesystem::remove(tempPath);
+    require(application.exportWaveRawCapture(tempPath, error), "完整历史导入后应仍可导出 psraw");
+    const auto exported = protoscope::plot::readRawCaptureFile(tempPath, error);
+    require(exported.has_value(), "导出的 psraw 应可重新读取");
+    require(exported->payload == capture.payload, "再次导出应保留完整原始 payload");
+    std::filesystem::remove(tempPath);
+    application.shutdown();
+}

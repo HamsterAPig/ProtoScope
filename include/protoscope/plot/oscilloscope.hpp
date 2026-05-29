@@ -127,6 +127,8 @@ public:
     void configureChannels(std::size_t channelCount);
     void setChannelSpec(std::size_t channelIndex, ChannelSpec spec);
     void setViewConfig(const ViewConfig& config);
+    void setHistoryTrimSuspended(bool suspended);
+    void preserveHistoryLimitAtLeast(std::size_t sampleCount);
 
     std::size_t channelCount() const;
     std::optional<ChannelSpec> channelSpec(std::size_t channelIndex) const;
@@ -167,6 +169,7 @@ private:
 
     std::size_t lowerBoundByTime(const std::vector<WaveSample>& samples, double time) const;
     std::size_t upperBoundByTime(const std::vector<WaveSample>& samples, double time) const;
+    std::size_t effectiveHistoryLimit() const;
     void trimHistory(ChannelBuffer& channel);
     WaveStats makeStats(const std::vector<WaveSample>& samples,
                         std::size_t begin,
@@ -178,6 +181,8 @@ private:
     ViewConfig config_{};
     std::vector<ChannelBuffer> channels_;
     std::uint64_t dataRevision_{0};
+    std::size_t preservedHistoryLimit_{0};
+    bool historyTrimSuspended_{false};
 };
 
 } // namespace protoscope::plot
