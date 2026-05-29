@@ -5,6 +5,7 @@
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -62,22 +63,9 @@ std::filesystem::path makeUniqueTempDir(const char* prefix) {
     return path;
 }
 
-std::uint16_t readLe16(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
-    return static_cast<std::uint16_t>(bytes.at(offset))
-         | (static_cast<std::uint16_t>(bytes.at(offset + 1)) << 8U);
-}
-
-void writeLe16(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint16_t value) {
-    bytes.at(offset) = static_cast<std::uint8_t>(value & 0xFFU);
-    bytes.at(offset + 1) = static_cast<std::uint8_t>((value >> 8U) & 0xFFU);
-}
-
-void rewriteModbusCrc(std::vector<std::uint8_t>& frame) {
-    require(frame.size() >= 2, "CRC 重算时帧长度不足");
-    const std::vector<std::uint8_t> payload(frame.begin(), frame.end() - 2);
-    const auto crc = protoscope::protocol_utils::crc16Modbus(payload);
-    frame[frame.size() - 2] = static_cast<std::uint8_t>(crc & 0xFFU);
-    frame[frame.size() - 1] = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
+std::uint16_t readBe16(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+    return (static_cast<std::uint16_t>(bytes.at(offset)) << 8U)
+         | static_cast<std::uint16_t>(bytes.at(offset + 1));
 }
 
 std::vector<std::uint8_t> makeStreamFixtureFrame(std::uint8_t value) {
@@ -89,8 +77,77 @@ std::vector<std::uint8_t> makeStreamFixtureFrame(std::uint8_t value) {
     return frame;
 }
 
+void rewriteModbusCrcHiLo(std::vector<std::uint8_t>& frame) {
+    require(frame.size() >= 2, "CRC 重算时帧长度不足");
+    const std::vector<std::uint8_t> payload(frame.begin(), frame.end() - 2);
+    const auto crc = protoscope::protocol_utils::crc16Modbus(payload);
+    frame[frame.size() - 2] = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
+    frame[frame.size() - 1] = static_cast<std::uint8_t>(crc & 0xFFU);
+}
+
 void appendBytes(std::vector<std::uint8_t>& target, const std::vector<std::uint8_t>& source) {
     target.insert(target.end(), source.begin(), source.end());
+}
+
+void requireProtocolLoaded(protoscope::scripting::ScriptHost& host, const char* directory) {
+    if (!host.loadProtocolDirectory(directory)) {
+        throw std::runtime_error(std::string(directory) + " 加载失败: " + host.lastError());
+    }
+}
+
+std::vector<std::uint8_t> makeSnScopeFc06Ack(std::uint16_t address, std::uint16_t value) {
+    std::vector<std::uint8_t> frame{
+        0xFF,
+        0x06,
+        static_cast<std::uint8_t>((address >> 8U) & 0xFFU),
+        static_cast<std::uint8_t>(address & 0xFFU),
+        static_cast<std::uint8_t>((value >> 8U) & 0xFFU),
+        static_cast<std::uint8_t>(value & 0xFFU),
+        0x00,
+        0x00,
+    };
+    rewriteModbusCrcHiLo(frame);
+    return frame;
+}
+
+std::vector<std::uint8_t> makeSnScopeFc16Ack(std::uint16_t address, std::uint16_t count) {
+    std::vector<std::uint8_t> frame{
+        0xFF,
+        0x10,
+        static_cast<std::uint8_t>((address >> 8U) & 0xFFU),
+        static_cast<std::uint8_t>(address & 0xFFU),
+        static_cast<std::uint8_t>((count >> 8U) & 0xFFU),
+        static_cast<std::uint8_t>(count & 0xFFU),
+        0x00,
+        0x00,
+    };
+    rewriteModbusCrcHiLo(frame);
+    return frame;
+}
+
+std::vector<std::uint8_t> makeSnScopeUploadFrame(std::uint16_t sequence,
+                                                 std::int16_t ch1,
+                                                 std::int16_t ch2,
+                                                 std::int16_t ch3,
+                                                 std::int16_t ch4) {
+    std::vector<std::uint8_t> frame{
+        0xFF,
+        0x26,
+        static_cast<std::uint8_t>((sequence >> 8U) & 0xFFU),
+        static_cast<std::uint8_t>(sequence & 0xFFU),
+        static_cast<std::uint8_t>((static_cast<std::uint16_t>(ch1) >> 8U) & 0xFFU),
+        static_cast<std::uint8_t>(static_cast<std::uint16_t>(ch1) & 0xFFU),
+        static_cast<std::uint8_t>((static_cast<std::uint16_t>(ch2) >> 8U) & 0xFFU),
+        static_cast<std::uint8_t>(static_cast<std::uint16_t>(ch2) & 0xFFU),
+        static_cast<std::uint8_t>((static_cast<std::uint16_t>(ch3) >> 8U) & 0xFFU),
+        static_cast<std::uint8_t>(static_cast<std::uint16_t>(ch3) & 0xFFU),
+        static_cast<std::uint8_t>((static_cast<std::uint16_t>(ch4) >> 8U) & 0xFFU),
+        static_cast<std::uint8_t>(static_cast<std::uint16_t>(ch4) & 0xFFU),
+        0x00,
+        0x00,
+    };
+    rewriteModbusCrcHiLo(frame);
+    return frame;
 }
 
 void completeHalfDuplexStartup(protoscope::scripting::ScriptHost& master,
@@ -102,15 +159,26 @@ void completeHalfDuplexStartup(protoscope::scripting::ScriptHost& master,
     master.onControl(ctx, "auto_start", true);
 
     const auto requests = master.drainTxRequests();
-    require(requests.size() == 3, "应先生成 3 条配置请求");
+    require(requests.size() == 5, "应先生成 5 条配置/启动请求");
     for (const auto& request : requests) {
+        master.onTxEvent(ctx,
+                         protoscope::scripting::TxEvent{
+                             .id = request.id,
+                             .kind = protoscope::scripting::TxRequestKind::Request,
+                             .state = protoscope::scripting::TxEventState::Sent,
+                             .tag = request.tag,
+                             .bytes = request.payload.size(),
+                             .queuedMs = nowMs(),
+                             .finishedMs = nowMs(),
+                             .error = std::nullopt,
+                         });
         slave.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, request.payload});
         const auto replies = slave.drainTxRequests();
         if (replies.size() != 1) {
             std::ostringstream detail;
-            detail << "每次写寄存器都应返回 1 个 ACK"
+            detail << "每次 SN Scope 请求都应返回 1 个 ACK"
                    << " | request_size=" << request.payload.size()
-                   << " | request_length=" << readLe16(request.payload, 4);
+                   << " | func=0x" << std::hex << static_cast<int>(request.payload[1]);
             for (const auto& update : slave.drainStatusUpdates()) {
                 detail << " | slave_status=" << update.text;
             }
@@ -120,7 +188,20 @@ void completeHalfDuplexStartup(protoscope::scripting::ScriptHost& master,
 
         master.setRequestAwaitingCompletion(true);
         master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, replies[0].payload});
-        require(!master.drainRequestDoneResults().empty(), "主机收到 ACK 后应调用 proto.request_done");
+        const auto results = master.drainRequestDoneResults();
+        require(results.size() == 1, "主机收到 ACK 后应调用一次 proto.request_done");
+        require(results[0].ok, "自动配置阶段 ACK 应全部匹配成功");
+        master.onTxEvent(ctx,
+                         protoscope::scripting::TxEvent{
+                             .id = request.id,
+                             .kind = protoscope::scripting::TxRequestKind::Request,
+                             .state = protoscope::scripting::TxEventState::Completed,
+                             .tag = request.tag,
+                             .bytes = request.payload.size(),
+                             .queuedMs = nowMs(),
+                             .finishedMs = nowMs(),
+                             .error = std::nullopt,
+                         });
     }
 }
 
@@ -132,6 +213,7 @@ std::vector<std::uint8_t> nextHalfDuplexWaveFrame(protoscope::scripting::ScriptH
     const auto waveRequests = slave.drainTxRequests();
     require(waveRequests.size() == 1, "定时器触发后应主动发送 1 帧波形");
     require(waveRequests[0].kind == protoscope::scripting::TxRequestKind::Send, "主动上报应走 proto.send");
+    require(waveRequests[0].payload.size() == 1680, "SN Scope 每次 tick 应拼成 1680 字节上传批");
     return waveRequests[0].payload;
 }
 
@@ -797,7 +879,10 @@ void test_config_default_protocol_workspace_initializes_half_duplex_demos() {
     std::ifstream readmeInput(protocolRoot / "README.md");
     std::stringstream readmeBuffer;
     readmeBuffer << readmeInput.rdbuf();
-    require(readmeBuffer.str().find("半双工 Modbus Schema Demo") != std::string::npos, "默认 README 应包含半双工 Modbus 说明");
+    const auto readmeText = readmeBuffer.str();
+    require(readmeText.find("SN Scope Schema Demo") != std::string::npos
+                || readmeText.find("半双工 Modbus Schema Demo") != std::string::npos,
+            "默认 README 应包含半双工/SN Scope 说明");
 }
 
 void test_config_default_protocol_workspace_skips_existing_root() {
@@ -876,7 +961,7 @@ void test_script_plot_api_snapshot() {
 
 void test_half_duplex_modbus_request_batches() {
     protoscope::scripting::ScriptHost host;
-    require(host.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
+    requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
 
     const auto ctx = sampleCtx();
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
@@ -884,36 +969,41 @@ void test_half_duplex_modbus_request_batches() {
     host.onControl(ctx, "auto_start", true);
 
     const auto requests = host.drainTxRequests();
-    require(requests.size() == 3, "自动配置并启动应入队 3 条请求");
-    for (const auto& request : requests) {
+    require(requests.size() == 5, "自动配置并启动应入队 5 条请求");
+    for (std::size_t index = 0; index < requests.size(); ++index) {
+        const auto& request = requests[index];
         require(request.kind == protoscope::scripting::TxRequestKind::Request, "主机寄存器写入应全部走 proto.request");
-        require(request.payload.size() >= 11, "寄存器请求帧长度不足");
-        require(request.payload[0] == 0xA5 && request.payload[1] == 0x5A, "请求帧头不正确");
-        require(request.payload[2] == 0x10, "请求功能码应为写寄存器");
+        require(request.payload[0] == 0xFF, "请求帧头不正确");
+        if (index < 4) {
+            require(request.payload.size() == 13, "前 4 条请求都应是 13 字节 FC16");
+            require(request.payload[1] == 0x10, "前 4 条请求应为 FC16");
+            require(readBe16(request.payload, 4) == 2U, "FC16 请求应固定写 2 个寄存器");
+            require(request.payload[6] == 4U, "FC16 请求 byte_count 应为 4");
+        } else {
+            require(request.payload.size() == 8, "最后 1 条请求应是 8 字节 FC06");
+            require(request.payload[1] == 0x06, "最后 1 条请求应为 FC06");
+        }
     }
 
-    require(readLe16(requests[0].payload, 6) == 0x5AA5U, "第一批请求起始地址错误");
-    require(readLe16(requests[0].payload, 4) == 7U, "第一批请求载荷长度应为 7 字节");
-    require(requests[0].payload[8] == 2U, "第一批请求应写两个寄存器");
-    require(readLe16(requests[1].payload, 6) == 0x5AA7U, "第二批请求起始地址错误");
-    require(readLe16(requests[1].payload, 4) == 7U, "第二批请求载荷长度应为 7 字节");
-    require(requests[1].payload[8] == 2U, "第二批请求应写两个寄存器");
-    require(readLe16(requests[2].payload, 6) == 0x5AA9U, "第三批请求起始地址错误");
-    require(readLe16(requests[2].payload, 4) == 5U, "第三批请求载荷长度应为 5 字节");
-    require(requests[2].payload[8] == 1U, "第三批请求应只写启动位");
+    require(readBe16(requests[0].payload, 2) == 0x1010U, "第一批请求起始地址错误");
+    require(readBe16(requests[1].payload, 2) == 0x1012U, "第二批请求起始地址错误");
+    require(readBe16(requests[2].payload, 2) == 0x5A5AU, "第三批请求起始地址错误");
+    require(readBe16(requests[3].payload, 2) == 0x5A5CU, "第四批请求起始地址错误");
+    require(readBe16(requests[4].payload, 2) == 0x8888U, "第五批请求起始地址错误");
+    require(readBe16(requests[4].payload, 4) == 0x0001U, "启动请求应写 0x8888=0x0001");
 }
 
 void test_half_duplex_modbus_ack_and_plot_flow() {
     protoscope::scripting::ScriptHost master;
     protoscope::scripting::ScriptHost slave;
-    require(master.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
-    require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
+    requireProtocolLoaded(master, "protocols/half_duplex_modbus_master");
+    requireProtocolLoaded(slave, "protocols/half_duplex_modbus_slave");
 
     const auto ctx = sampleCtx();
     completeHalfDuplexStartup(master, slave, ctx);
     const auto frame = nextHalfDuplexWaveFrame(slave);
-    require(frame.size() > 12, "波形帧长度不足");
-    const auto splitAt = frame.size() / 2;
+    require(frame.size() == 1680, "波形批长度应为 1680");
+    const auto splitAt = static_cast<std::size_t>(7);
     const std::vector<std::uint8_t> part1(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(splitAt));
     const std::vector<std::uint8_t> part2(frame.begin() + static_cast<std::ptrdiff_t>(splitAt), frame.end());
 
@@ -922,32 +1012,33 @@ void test_half_duplex_modbus_ack_and_plot_flow() {
     master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, part2});
 
     const auto appends = master.drainPlotAppends();
-    require(appends.size() == 4, "默认四通道启用时应推送 4 组波形");
-    require(appends[0].first == 0, "第一组波形应对应 CH1");
-    require(appends[0].second.samples.size() == 16, "每个通道应推送 16 个采样点");
-    for (std::size_t index = 0; index < appends[0].second.samples.size(); ++index) {
-        const auto expected = std::floor(std::sin(static_cast<double>(index + 1) * 0.15) / 0.001) * 0.001;
-        require(std::abs(appends[0].second.samples[index].value - expected) < 1e-12, "CH1 应按正弦通道解交错");
+    require(appends.size() == 480, "120 帧 x 4 通道后应推送 480 组单点波形");
+    std::array<std::size_t, 4> perChannel{};
+    std::size_t totalSamples = 0;
+    for (const auto& append : appends) {
+        require(append.second.samples.size() == 1, "SN Scope 上传帧应按单点推送");
+        require(append.first < perChannel.size(), "通道编号应落在 0~3");
+        perChannel[append.first] += append.second.samples.size();
+        totalSamples += append.second.samples.size();
     }
+    require(totalSamples == 480, "总样本数应为 480");
+    require(perChannel[0] == 120 && perChannel[1] == 120 && perChannel[2] == 120 && perChannel[3] == 120,
+            "四个通道都应各收到 120 个样本");
 }
 
 void test_half_duplex_modbus_loss_status_keeps_valid_frame() {
     protoscope::scripting::ScriptHost master;
-    protoscope::scripting::ScriptHost slave;
-    require(master.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
-    require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
+    requireProtocolLoaded(master, "protocols/half_duplex_modbus_master");
 
     const auto ctx = sampleCtx();
-    completeHalfDuplexStartup(master, slave, ctx);
-    auto firstWave = nextHalfDuplexWaveFrame(slave);
+    master.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    master.drainPlotSetups();
 
-    master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, firstWave});
+    master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeUploadFrame(1, 100, 200, 300, 400)});
     master.drainPlotAppends();
     master.drainStatusUpdates();
 
-    std::vector<std::uint8_t> skippedFrame = firstWave;
-    skippedFrame[3] = static_cast<std::uint8_t>((skippedFrame[3] + 2U) & 0xFFU);
-    rewriteModbusCrc(skippedFrame);
+    const auto skippedFrame = makeSnScopeUploadFrame(3, 110, 210, 310, 410);
 
     master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, skippedFrame});
     const auto appends = master.drainPlotAppends();
@@ -962,38 +1053,94 @@ void test_half_duplex_modbus_loss_status_keeps_valid_frame() {
     require(foundLostWarn, "序列号跳号后应提示累计丢帧数");
 }
 
-void test_half_duplex_modbus_invalid_length_rejected() {
-    protoscope::scripting::ScriptHost master;
-    protoscope::scripting::ScriptHost slave;
-    require(master.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
-    require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
+void test_half_duplex_modbus_ack_matching_rules() {
+    const auto runRequest = [](const char* controlId,
+                               const std::vector<std::uint8_t>& ack,
+                               bool expectedOk,
+                               const char* expectedStatus) {
+        protoscope::scripting::ScriptHost host;
+        requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
 
+        const auto ctx = sampleCtx();
+        host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+        host.drainPlotSetups();
+        host.onControl(ctx, controlId, true);
+
+        const auto requests = host.drainTxRequests();
+        require(requests.size() == 1, "单次按钮操作应只生成 1 条 request");
+        const auto& request = requests.front();
+        host.onTxEvent(ctx,
+                       protoscope::scripting::TxEvent{
+                           .id = request.id,
+                           .kind = protoscope::scripting::TxRequestKind::Request,
+                           .state = protoscope::scripting::TxEventState::Sent,
+                           .tag = request.tag,
+                           .bytes = request.payload.size(),
+                           .queuedMs = nowMs(),
+                           .finishedMs = nowMs(),
+                           .error = std::nullopt,
+                       });
+        host.setRequestAwaitingCompletion(true);
+        host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, ack});
+
+        const auto results = host.drainRequestDoneResults();
+        require(results.size() == 1, "收到 ACK 后应产生 1 条 request_done 结果");
+        require(results[0].ok == expectedOk, "ACK 匹配结果不符合预期");
+
+        bool foundStatus = false;
+        for (const auto& update : host.drainStatusUpdates()) {
+            if (update.text.find(expectedStatus) != std::string::npos) {
+                foundStatus = true;
+            }
+        }
+        require(foundStatus, "状态栏应包含 ACK 匹配结果");
+    };
+
+    runRequest("start_stream", makeSnScopeFc06Ack(0x8888U, 0x0001U), true, "FC06 ACK 匹配");
+    runRequest("start_stream", makeSnScopeFc06Ack(0x8888U, 0x0000U), false, "期望");
+    runRequest("stop_stream", makeSnScopeFc06Ack(0x8888U, 0x0000U), true, "FC06 ACK 匹配");
+
+    protoscope::scripting::ScriptHost host;
+    requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
     const auto ctx = sampleCtx();
-    completeHalfDuplexStartup(master, slave, ctx);
-    master.drainStatusUpdates();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    host.drainPlotSetups();
+    host.onControl(ctx, "auto_start", true);
 
-    std::vector<std::uint8_t> broken = nextHalfDuplexWaveFrame(slave);
-    const auto originalLength = readLe16(broken, 4);
-    require(originalLength > 8U, "原始波形负载长度过短，无法执行长度破坏测试");
-    writeLe16(broken, 4, static_cast<std::uint16_t>(originalLength - 4U));
+    const auto requests = host.drainTxRequests();
+    require(!requests.empty(), "自动启动应生成 FC16 请求");
+    const auto& fc16 = requests.front();
+    host.onTxEvent(ctx,
+                   protoscope::scripting::TxEvent{
+                       .id = fc16.id,
+                       .kind = protoscope::scripting::TxRequestKind::Request,
+                       .state = protoscope::scripting::TxEventState::Sent,
+                       .tag = fc16.tag,
+                       .bytes = fc16.payload.size(),
+                       .queuedMs = nowMs(),
+                       .finishedMs = nowMs(),
+                       .error = std::nullopt,
+                   });
+    host.setRequestAwaitingCompletion(true);
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc16Ack(0x1010U, 1U)});
 
-    master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, broken});
-    require(master.drainPlotAppends().empty(), "长度非法的波形帧不应推送 plot");
-
-    bool foundParseError = false;
-    for (const auto& update : master.drainStatusUpdates()) {
-        if (update.text.find("解析失败") != std::string::npos) {
-            foundParseError = true;
+    const auto results = host.drainRequestDoneResults();
+    require(results.size() == 1, "FC16 ACK 返回后应调用 request_done");
+    require(!results[0].ok, "FC16 ACK 数量不匹配时应失败");
+    bool foundExpected = false;
+    for (const auto& update : host.drainStatusUpdates()) {
+        if (update.text.find("期望") != std::string::npos) {
+            foundExpected = true;
         }
     }
-    require(foundParseError, "长度非法时应上报解析失败状态");
+    require(foundExpected, "FC16 ACK 不匹配时应提示收到/期望信息");
 }
 
 void test_half_duplex_modbus_sticky_frames() {
     protoscope::scripting::ScriptHost master;
     protoscope::scripting::ScriptHost slave;
-    require(master.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
-    require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
+    requireProtocolLoaded(master, "protocols/half_duplex_modbus_master");
+    requireProtocolLoaded(slave, "protocols/half_duplex_modbus_slave");
 
     const auto ctx = sampleCtx();
     completeHalfDuplexStartup(master, slave, ctx);
@@ -1007,14 +1154,14 @@ void test_half_duplex_modbus_sticky_frames() {
 
     master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, combined});
     const auto appends = master.drainPlotAppends();
-    require(appends.size() == 8, "粘包输入两帧后应推送 8 组波形");
+    require(appends.size() == 960, "两批粘包输入后应推送 960 组单点波形");
 }
 
 void test_half_duplex_modbus_noise_prefix_ignored() {
     protoscope::scripting::ScriptHost master;
     protoscope::scripting::ScriptHost slave;
-    require(master.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
-    require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
+    requireProtocolLoaded(master, "protocols/half_duplex_modbus_master");
+    requireProtocolLoaded(slave, "protocols/half_duplex_modbus_slave");
 
     const auto ctx = sampleCtx();
     completeHalfDuplexStartup(master, slave, ctx);
@@ -1025,23 +1172,21 @@ void test_half_duplex_modbus_noise_prefix_ignored() {
 
     master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, noisy});
     const auto appends = master.drainPlotAppends();
-    require(appends.size() == 4, "噪声前缀后仍应解析出完整波形帧");
+    require(appends.size() == 480, "噪声前缀后仍应解析出完整上传批");
 }
 
 void test_half_duplex_modbus_crc_resync_keeps_following_frame() {
     protoscope::scripting::ScriptHost master;
-    protoscope::scripting::ScriptHost slave;
-    require(master.loadProtocolDirectory("protocols/half_duplex_modbus_master"), "half_duplex_modbus_master 协议应可加载");
-    require(slave.loadProtocolDirectory("protocols/half_duplex_modbus_slave"), "half_duplex_modbus_slave 协议应可加载");
+    requireProtocolLoaded(master, "protocols/half_duplex_modbus_master");
 
     const auto ctx = sampleCtx();
-    completeHalfDuplexStartup(master, slave, ctx);
+    master.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    master.drainPlotSetups();
     master.drainStatusUpdates();
 
-    auto broken = nextHalfDuplexWaveFrame(slave);
-    require(broken.size() > 10, "波形帧长度不足，无法执行 CRC 破坏测试");
-    broken[9] = static_cast<std::uint8_t>(broken[9] ^ 0x01U);
-    const auto good = nextHalfDuplexWaveFrame(slave);
+    auto broken = makeSnScopeUploadFrame(1, 100, 200, 300, 400);
+    broken[12] = static_cast<std::uint8_t>(broken[12] ^ 0x01U);
+    const auto good = makeSnScopeUploadFrame(2, 101, 201, 301, 401);
 
     std::vector<std::uint8_t> combined;
     appendBytes(combined, broken);
@@ -1271,7 +1416,7 @@ static const TestCase kAllTests[] = {
     {"half_duplex_modbus_request_batches", &test_half_duplex_modbus_request_batches},
     {"half_duplex_modbus_ack_and_plot_flow", &test_half_duplex_modbus_ack_and_plot_flow},
     {"half_duplex_modbus_loss_status_keeps_valid_frame", &test_half_duplex_modbus_loss_status_keeps_valid_frame},
-    {"half_duplex_modbus_invalid_length_rejected", &test_half_duplex_modbus_invalid_length_rejected},
+    {"half_duplex_modbus_ack_matching_rules", &test_half_duplex_modbus_ack_matching_rules},
     {"half_duplex_modbus_sticky_frames", &test_half_duplex_modbus_sticky_frames},
     {"half_duplex_modbus_noise_prefix_ignored", &test_half_duplex_modbus_noise_prefix_ignored},
     {"half_duplex_modbus_crc_resync_keeps_following_frame", &test_half_duplex_modbus_crc_resync_keeps_following_frame},

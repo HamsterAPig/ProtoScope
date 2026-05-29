@@ -1,85 +1,32 @@
--- 核心流程：上位机只做三件事——按寄存器分批入队 request、在 ACK 到达时 request_done、把主动上报帧推成波形。
+-- 核心流程：主机只负责三件事——把 SN Scope 请求交给 proto.request 排队、在 ACK 到达时 request_done、把 4 路上传帧推成波形。
 
-local DEFAULT_HEADER = { 0xA5, 0x5A }
-local DEFAULT_FUNC = { type = "u8" }
-local LENGTH_SPEC = { type = "u16", endian = "le", unit = "bytes" }
-local CRC_SPEC = { type = "crc16_modbus", endian = "le" }
-local SEQUENCE_BITS = 8
+local FUNC_READ_HOLDING = 0x03
+local FUNC_WRITE_SINGLE = 0x06
+local FUNC_WRITE_MULTI = 0x10
+local FUNC_UPLOAD_CH4 = 0x26
 
-local FUNC_WRITE_REGISTERS = 0x10
-local FUNC_WRITE_ACK = 0x90
-local FUNC_STREAM_DATA = 0x91
-local FRAME_ID = "half_duplex_modbus"
+local FUNC_EXCEPTION_READ = 0x83
+local FUNC_EXCEPTION_WRITE_SINGLE = 0x86
+local FUNC_EXCEPTION_WRITE_MULTI = 0x90
 
-local REG_CH1 = 0x5AA5
-local REG_CH2 = 0x5AA6
-local REG_CH3 = 0x5AA7
-local REG_CH4 = 0x5AA8
-local REG_START = 0x5AA9
+local REG_SELECT_CH12 = 0x1010
+local REG_SELECT_CH34 = 0x1012
+local REG_GAIN_CH12 = 0x5A5A
+local REG_GAIN_CH34 = 0x5A5C
+local REG_STREAM_SWITCH = 0x8888
 
-local STATUS_OK = 0
-local STATUS_ERROR = 1
 local CHANNEL_COUNT = 4
+local REQUEST_TIMEOUT_MS = 1000
+local UPLOAD_TICK_MS = 10
+local UPLOAD_BATCH_FRAMES = 120
+local UPLOAD_SAMPLE_DT = (UPLOAD_TICK_MS / 1000.0) / UPLOAD_BATCH_FRAMES
 local CHANNEL_SCALE = 0.001
-local DEFAULT_INTERVAL_MS = 100
-local DEFAULT_SAMPLE_COUNT = 16
 
--- 协议 schema 放在具体协议脚本里；common 只按这里的定义做编解码。
-local protocol = {
-  frames = {
-    {
-      id = FRAME_ID,
-      header = DEFAULT_HEADER,
-      func = DEFAULT_FUNC,
-      sequence = { type = "u8", bits = SEQUENCE_BITS },
-      length = LENGTH_SPEC,
-      crc = CRC_SPEC,
-      messages = {
-        [FUNC_WRITE_REGISTERS] = {
-          name = "write_registers",
-          fields = {
-            { name = "start_address", type = "u16", endian = "le", offset = 0 },
-            { name = "register_count", type = "u8", offset = 2 },
-            { name = "values", type = "u16", endian = "le", count_from = "register_count" },
-          },
-        },
-        [FUNC_WRITE_ACK] = {
-          name = "write_ack",
-          fields = {
-            { name = "status", type = "u8", offset = 0 },
-            { name = "start_address", type = "u16", endian = "le", offset = 1 },
-            { name = "register_count", type = "u8", offset = 3 },
-          },
-        },
-        [FUNC_STREAM_DATA] = {
-          name = "stream_data",
-          fields = {
-            { name = "timestamp_ms", type = "u32", endian = "le", offset = 0 },
-            { name = "channel_mask", type = "u8" },
-            { name = "sample_count", type = "u8" },
-            {
-              name = "samples",
-              type = "i16",
-              endian = "le",
-              count_from = function(values)
-                return (values.sample_count or 0) * popcount(values.channel_mask or 0)
-              end,
-            },
-          },
-        },
-      },
-    },
-  },
-}
-
-local TYPE_WIDTH = {
-  u8 = 1,
-  i8 = 1,
-  u16 = 2,
-  i16 = 2,
-  u32 = 4,
-  i32 = 4,
-}
+local controls = {}
+local pending_requests = {}
+local active_request_id = nil
+local upload_frame_cursor = 0
+local upload_sequence_state = nil
 
 local function append_bytes(target, source)
   for index = 1, #source do
@@ -87,496 +34,497 @@ local function append_bytes(target, source)
   end
 end
 
-local function copy_bytes(source)
-  local bytes = {}
-  append_bytes(bytes, source)
-  return bytes
+local function push_u16_be(target, value)
+  local clamped = math.floor(tonumber(value) or 0) & 0xFFFF
+  target[#target + 1] = (clamped >> 8) & 0xFF
+  target[#target + 1] = clamped & 0xFF
 end
 
-local function clamp_byte(value)
-  local current = math.floor(tonumber(value) or 0)
-  if current < 0 then
-    current = current % 256
+local function push_i16_be(target, value)
+  local raw = math.floor(tonumber(value) or 0)
+  if raw < -32768 then
+    raw = -32768
+  elseif raw > 32767 then
+    raw = 32767
   end
-  return current & 0xFF
+  push_u16_be(target, raw & 0xFFFF)
 end
 
-local function type_width(type_name)
-  local width = TYPE_WIDTH[type_name]
-  if not width then
-    error("不支持的字段类型: " .. tostring(type_name))
-  end
-  return width
-end
-
-local function unit_width(unit_name)
-  if unit_name == nil or unit_name == "bytes" then
-    return 1
-  end
-  if unit_name == "u16" then
-    return 2
-  end
-  if unit_name == "u32" then
-    return 4
-  end
-  error("不支持的长度单位: " .. tostring(unit_name))
-end
-
-local function encode_scalar(type_name, value, endian)
-  local current = math.floor(tonumber(value) or 0)
-  if type_name == "u8" or type_name == "i8" then
-    return { clamp_byte(current) }
-  end
-
-  local width = type_width(type_name)
-  local bytes = {}
-  for index = 1, width do
-    local shift = (index - 1) * 8
-    bytes[index] = clamp_byte(current >> shift)
-  end
-  if endian == "be" then
-    local reversed = {}
-    for index = width, 1, -1 do
-      reversed[#reversed + 1] = bytes[index]
-    end
-    return reversed
-  end
-  return bytes
-end
-
-local function field_is_array(field)
-  return field.count ~= nil or field.count_from ~= nil
-end
-
-local function resolve_count(field, values)
-  if field.count ~= nil then
-    return field.count
-  end
-  if type(field.count_from) == "string" then
-    return tonumber(values[field.count_from]) or 0
-  end
-  if type(field.count_from) == "function" then
-    return tonumber(field.count_from(values)) or 0
-  end
-  return 1
-end
-
-local function encode_fields(fields, values)
+local function rewrite_crc_hi_lo(frame)
   local payload = {}
-  for _, field in ipairs(fields or {}) do
-    local width = type_width(field.type)
-    local count = resolve_count(field, values)
-    local offset = field.offset and (field.offset + 1) or (#payload + 1)
-    while #payload < (offset - 1) do
-      payload[#payload + 1] = 0
-    end
-
-    if field_is_array(field) then
-      local items = values[field.name] or {}
-      for index = 1, count do
-        local encoded = encode_scalar(field.type, items[index], field.endian or "le")
-        for byte_index = 1, width do
-          payload[offset + (index - 1) * width + byte_index - 1] = encoded[byte_index]
-        end
-      end
-    else
-      local encoded = encode_scalar(field.type, values[field.name], field.endian or "le")
-      for byte_index = 1, width do
-        payload[offset + byte_index - 1] = encoded[byte_index]
-      end
-    end
+  for index = 1, #frame - 2 do
+    payload[#payload + 1] = frame[index]
   end
-  return payload
+  local crc = proto.crc16_modbus(payload)
+  frame[#frame - 1] = (crc >> 8) & 0xFF
+  frame[#frame] = crc & 0xFF
 end
 
-local function encode_length(length_value, spec)
-  local unit = unit_width(spec.unit)
-  return encode_scalar(spec.type or "u16", math.floor((length_value or 0) / unit), spec.endian or "le")
+local function build_fc06_request(address, value)
+  local frame = { 0xFF, FUNC_WRITE_SINGLE }
+  push_u16_be(frame, address)
+  push_u16_be(frame, value)
+  frame[#frame + 1] = 0x00
+  frame[#frame + 1] = 0x00
+  rewrite_crc_hi_lo(frame)
+  return frame
 end
 
-local function crc16_modbus(bytes)
-  local crc = 0xFFFF
-  for index = 1, #bytes do
-    crc = crc ~ clamp_byte(bytes[index])
-    for _ = 1, 8 do
-      local lsb = crc & 0x0001
-      crc = crc >> 1
-      if lsb ~= 0 then
-        crc = crc ~ 0xA001
-      end
-    end
+local function build_fc16_request(address, values)
+  local frame = { 0xFF, FUNC_WRITE_MULTI }
+  push_u16_be(frame, address)
+  push_u16_be(frame, #values)
+  frame[#frame + 1] = #values * 2
+  for _, value in ipairs(values) do
+    push_u16_be(frame, value)
   end
-  return crc & 0xFFFF
+  frame[#frame + 1] = 0x00
+  frame[#frame + 1] = 0x00
+  rewrite_crc_hi_lo(frame)
+  return frame
 end
 
-local function encode_crc(bytes, spec)
-  if (spec.type or "crc16_modbus") ~= "crc16_modbus" then
-    return nil, "不支持的 CRC 类型: " .. tostring(spec.type)
+local function read_control(id, fallback)
+  local value = controls[id]
+  if value == nil then
+    value = proto.get_control(id)
   end
-  return encode_scalar("u16", crc16_modbus(bytes), spec.endian or "le")
-end
-
-local function frame_messages(frame_schema)
-  return frame_schema.messages or {}
-end
-
-local function find_frame_schema(protocol_schema, frame_id)
-  local frames = protocol_schema.frames or {}
-  if frame_id == nil then
-    if #frames == 1 then
-      return frames[1]
-    end
-    return nil, "存在多个 frame schema，必须指定 frame_id"
+  if value == nil then
+    return fallback
   end
-
-  for _, frame_schema in ipairs(frames) do
-    if frame_schema.id == frame_id then
-      return frame_schema
-    end
-  end
-  return nil, "未找到 frame schema: " .. tostring(frame_id)
-end
-
-local function build_frame(protocol_schema, frame_id, func, sequence, payload_values)
-  local frame_schema, frame_error = find_frame_schema(protocol_schema, frame_id)
-  if not frame_schema then
-    return nil, frame_error
-  end
-
-  local message_schema = frame_messages(frame_schema)[func]
-  if not message_schema then
-    return nil, string.format("未定义的功能码: 0x%02X", func)
-  end
-
-  local payload = encode_fields(message_schema.fields or {}, payload_values or {})
-  local func_spec = frame_schema.func or DEFAULT_FUNC
-  local sequence_spec = frame_schema.sequence or { type = "u8", bits = SEQUENCE_BITS }
-  local frame = copy_bytes(frame_schema.header or DEFAULT_HEADER)
-  append_bytes(frame, encode_scalar(func_spec.type or "u8", func, func_spec.endian or "le"))
-  append_bytes(frame, encode_scalar(sequence_spec.type or "u8", sequence or 0, sequence_spec.endian or "le"))
-  append_bytes(frame, encode_length(#payload, frame_schema.length or LENGTH_SPEC))
-  append_bytes(frame, payload)
-  local crc_bytes, crc_error = encode_crc(frame, frame_schema.crc or CRC_SPEC)
-  if not crc_bytes then
-    return nil, crc_error
-  end
-  append_bytes(frame, crc_bytes)
-  return frame, nil
-end
-
-function popcount(mask)
-  local count = 0
-  local current = mask or 0
-  while current > 0 do
-    count = count + (current & 1)
-    current = current >> 1
-  end
-  return count
-end
-
-local function channel_mask_from_values(values, channel_count)
-  local mask = 0
-  local count = channel_count or #values
-  for channel_index = 1, count do
-    if values[channel_index] and values[channel_index] ~= 0 then
-      mask = mask | (1 << (channel_index - 1))
-    end
-  end
-  return mask
-end
-
-local function enabled_channels_from_mask(mask, channel_count)
-  local channels = {}
-  local count = channel_count or 32
-  for channel_index = 1, count do
-    if (mask & (1 << (channel_index - 1))) ~= 0 then
-      channels[#channels + 1] = channel_index
-    end
-  end
-  return channels
-end
-
-local function track_sequence(tracker, key, sequence, bits)
-  local modulus = 1 << (bits or SEQUENCE_BITS)
-  local slot = tracker[key]
-  if not slot then
-    slot = {
-      initialized = false,
-      expected = 0,
-      lost_total = 0,
-    }
-    tracker[key] = slot
-  end
-
-  local result = {
-    initialized = slot.initialized,
-    expected = slot.expected,
-    lost = 0,
-    lost_total = slot.lost_total,
-  }
-
-  if not slot.initialized then
-    slot.initialized = true
-    slot.expected = (sequence + 1) % modulus
-    result.expected = sequence
-    return result
-  end
-
-  local lost = (sequence - slot.expected) % modulus
-  if lost > 0 then
-    slot.lost_total = slot.lost_total + lost
-  end
-  slot.expected = (sequence + 1) % modulus
-  result.lost = lost
-  result.expected = slot.expected
-  result.lost_total = slot.lost_total
-  return result
-end
-
-local controls = {
-  ch1 = true,
-  ch2 = true,
-  ch3 = true,
-  ch4 = true,
-  interval_ms = DEFAULT_INTERVAL_MS,
-  samples_per_frame = DEFAULT_SAMPLE_COUNT,
-}
-
-local sequence_tracker = {}
-local next_request_sequence = 0
-
-local function next_sequence()
-  local value = next_request_sequence
-  next_request_sequence = (next_request_sequence + 1) % 256
   return value
 end
 
-local function read_checkbox(id)
-  return controls[id] and 1 or 0
+local function read_positive_int(id, fallback)
+  local value = math.floor(tonumber(read_control(id, fallback)) or fallback or 0)
+  if value < 0 then
+    return fallback
+  end
+  return value
 end
 
-local function read_positive_int(id, fallback)
-  local value = tonumber(controls[id]) or fallback
-  value = math.floor(value)
+local function read_selector(id, fallback)
+  local value = read_positive_int(id, fallback)
   if value < 1 then
     return fallback
   end
   return value
 end
 
-local function configured_channel_mask()
-  return channel_mask_from_values({
-    read_checkbox("ch1"),
-    read_checkbox("ch2"),
-    read_checkbox("ch3"),
-    read_checkbox("ch4"),
-  }, CHANNEL_COUNT)
+local function read_gain(id, fallback)
+  local value = math.floor(tonumber(read_control(id, fallback)) or fallback or 0)
+  if value < 0 then
+    return fallback
+  end
+  return value
 end
 
 local function setup_plot(reset_history)
   proto.plot.setup({
-    source = "half_duplex_modbus_master",
+    source = "sn_scope_master",
     reset_history = reset_history,
     channels = {
-      { label = "CH1 正弦", unit = "V", scale = 1.0, color = "#4FC3F7" },
-      { label = "CH2 偏置正弦", unit = "V", scale = 1.0, color = "#81C784" },
-      { label = "CH3 高斯噪声", unit = "V", scale = 1.0, color = "#FFB74D" },
-      { label = "CH4 三角波", unit = "V", scale = 1.0, color = "#E57373" },
+      { label = "CH1", unit = "V", scale = 1.0, color = "#4FC3F7" },
+      { label = "CH2", unit = "V", scale = 1.0, color = "#81C784" },
+      { label = "CH3", unit = "V", scale = 1.0, color = "#FFB74D" },
+      { label = "CH4", unit = "V", scale = 1.0, color = "#E57373" },
     },
   })
 end
 
-local function request_frame(frame, tag)
+local function clear_request_state(request_id)
+  pending_requests[request_id] = nil
+  if active_request_id == request_id then
+    active_request_id = nil
+  end
+end
+
+local function current_request()
+  if not active_request_id then
+    return nil
+  end
+  return pending_requests[active_request_id]
+end
+
+local function format_u16(value)
+  return string.format("0x%04X", math.floor(tonumber(value) or 0) & 0xFFFF)
+end
+
+local function request_summary(meta)
+  if not meta then
+    return "无活动请求"
+  end
+  if meta.kind == "fc06" then
+    return string.format("%s=%s", format_u16(meta.address), format_u16(meta.value))
+  end
+  return string.format("%s x %d", format_u16(meta.address), meta.register_count or 0)
+end
+
+local function finish_active_request(ok, message, level)
+  local meta = current_request()
+  proto.request_done({
+    ok = ok,
+    message = message,
+  })
+  if meta then
+    clear_request_state(meta.id)
+  end
+  proto.status.set(message, { level = level or (ok and "info" or "error") })
+end
+
+local function enqueue_request(frame, meta)
   local request_id, err = proto.request(frame, {
-    timeout_ms = 1000,
-    tag = tag,
+    timeout_ms = REQUEST_TIMEOUT_MS,
+    tag = meta.tag,
   })
   if not request_id then
     proto.status.set("请求入队失败: " .. tostring(err), { level = "error" })
     return false
   end
+  meta.id = request_id
+  pending_requests[request_id] = meta
   return true
 end
 
-local function queue_write(start_address, values, tag)
-  local frame, err = build_frame(protocol, FRAME_ID, FUNC_WRITE_REGISTERS, next_sequence(), {
-    start_address = start_address,
+local function queue_fc16(address, values, tag)
+  local frame = build_fc16_request(address, values)
+  return enqueue_request(frame, {
+    kind = "fc16",
+    address = address,
     register_count = #values,
     values = values,
+    tag = tag,
   })
-  if not frame then
-    proto.status.set("组帧失败: " .. tostring(err), { level = "error" })
-    return false
-  end
-  return request_frame(frame, tag)
+end
+
+local function queue_fc06(address, value, tag)
+  local frame = build_fc06_request(address, value)
+  return enqueue_request(frame, {
+    kind = "fc06",
+    address = address,
+    value = value,
+    tag = tag,
+  })
 end
 
 local function auto_configure_and_start()
-  local batches = {
-    { start = REG_CH1, values = { read_checkbox("ch1"), read_checkbox("ch2") }, tag = "cfg_ch12" },
-    { start = REG_CH3, values = { read_checkbox("ch3"), read_checkbox("ch4") }, tag = "cfg_ch34" },
-    { start = REG_START, values = { 1 }, tag = "cfg_start" },
+  local requests = {
+    {
+      kind = "fc16",
+      address = REG_SELECT_CH12,
+      values = {
+        read_selector("selector_ch1", 1),
+        read_selector("selector_ch2", 2),
+      },
+      tag = "cfg_select_ch12",
+    },
+    {
+      kind = "fc16",
+      address = REG_SELECT_CH34,
+      values = {
+        read_selector("selector_ch3", 3),
+        read_selector("selector_ch4", 4),
+      },
+      tag = "cfg_select_ch34",
+    },
+    {
+      kind = "fc16",
+      address = REG_GAIN_CH12,
+      values = {
+        read_gain("gain_ch1", 1000),
+        read_gain("gain_ch2", 1000),
+      },
+      tag = "cfg_gain_ch12",
+    },
+    {
+      kind = "fc16",
+      address = REG_GAIN_CH34,
+      values = {
+        read_gain("gain_ch3", 1000),
+        read_gain("gain_ch4", 1000),
+      },
+      tag = "cfg_gain_ch34",
+    },
+    {
+      kind = "fc06",
+      address = REG_STREAM_SWITCH,
+      value = 0x0001,
+      tag = "start_stream",
+    },
   }
 
-  for _, batch in ipairs(batches) do
-    if not queue_write(batch.start, batch.values, batch.tag) then
+  for _, item in ipairs(requests) do
+    local ok = false
+    if item.kind == "fc16" then
+      ok = queue_fc16(item.address, item.values, item.tag)
+    else
+      ok = queue_fc06(item.address, item.value, item.tag)
+    end
+    if not ok then
       return
     end
   end
 
-  proto.status.set(string.format("已入队 3 组半双工请求，目标通道掩码 0x%02X", configured_channel_mask()), {
-    level = "info",
-  })
+  proto.status.set("已入队 5 条 SN Scope 请求，等待宿主半双工调度", { level = "info" })
 end
 
 local function send_start_stop(start_value)
-  local tag = start_value == 1 and "start_stream" or "stop_stream"
-  queue_write(REG_START, { start_value }, tag)
+  local tag = start_value == 0 and "stop_stream" or "start_stream"
+  queue_fc06(REG_STREAM_SWITCH, start_value, tag)
 end
 
-local function make_legacy_frame(frame)
-  local fields = frame.fields or {}
-  if frame.name == "stream_data" and fields.samples ~= nil and type(fields.samples) ~= "table" then
-    fields.samples = { fields.samples }
+local function track_upload_sequence(sequence)
+  local state = upload_sequence_state
+  if not state then
+    upload_sequence_state = {
+      initialized = true,
+      expected = (sequence + 1) % 0x10000,
+      lost_total = 0,
+    }
+    return { lost = 0, lost_total = 0 }
   end
-  local sequence = fields.sequence
-  local sequence_state = nil
-  if sequence ~= nil then
-    sequence_state = track_sequence(sequence_tracker, frame.name, sequence, SEQUENCE_BITS)
+
+  local delta = (sequence - state.expected) % 0x10000
+  local lost = delta
+  if lost > 0 then
+    state.lost_total = state.lost_total + lost
   end
+  state.expected = (sequence + 1) % 0x10000
   return {
-    name = frame.name,
-    raw = frame.raw,
-    payload = fields,
-    sequence = sequence,
-    sequence_state = sequence_state,
-    crc_ok = frame.crc_ok,
+    lost = lost,
+    lost_total = state.lost_total,
   }
 end
 
-local function handle_ack(frame)
-  local ok = (frame.payload.status or STATUS_ERROR) == STATUS_OK
-  local message = string.format("ACK 0x%04X x %d", frame.payload.start_address or 0, frame.payload.register_count or 0)
-  proto.request_done({
-    ok = ok,
-    message = message,
+local function push_upload_sample(channel_index, value)
+  local sample_time = upload_frame_cursor * UPLOAD_SAMPLE_DT
+  proto.plot.push(channel_index, {
+    source = "sn_scope_upload",
+    samples = {
+      {
+        t = sample_time,
+        y = (tonumber(value) or 0) * CHANNEL_SCALE,
+      },
+    },
   })
-  if ok then
-    proto.status.set(message, { level = "info" })
+end
+
+local function handle_fc03_response(ctx, frame)
+  local fields = frame.fields or {}
+  proto.status.set(
+    string.format("读取应答: %d byte / %d regs", fields.byte_count or 0, #(fields.register_values or {})),
+    { level = "info" }
+  )
+end
+
+local function handle_fc06_ack(ctx, frame)
+  local active = current_request()
+  if not active then
+    proto.status.set("收到 FC06 ACK，但当前没有活动 request", { level = "warn" })
+    return
+  end
+
+  local fields = frame.fields or {}
+  local received_address = fields.address or 0
+  local received_value = fields.value or 0
+  if active.kind == "fc06" and received_address == active.address and received_value == active.value then
+    finish_active_request(true, "FC06 ACK 匹配: " .. request_summary(active), "info")
+    return
+  end
+
+  finish_active_request(
+    false,
+    string.format(
+      "FC06 ACK 不匹配，收到 %s=%s，期望 %s",
+      format_u16(received_address),
+      format_u16(received_value),
+      request_summary(active)
+    ),
+    "error"
+  )
+end
+
+local function handle_fc16_ack(ctx, frame)
+  local active = current_request()
+  if not active then
+    proto.status.set("收到 FC16 ACK，但当前没有活动 request", { level = "warn" })
+    return
+  end
+
+  local fields = frame.fields or {}
+  local received_address = fields.address or 0
+  local received_count = fields.register_count or 0
+  if active.kind == "fc16" and received_address == active.address and received_count == (active.register_count or 0) then
+    finish_active_request(true, "FC16 ACK 匹配: " .. request_summary(active), "info")
+    return
+  end
+
+  finish_active_request(
+    false,
+    string.format(
+      "FC16 ACK 不匹配，收到 %s x %d，期望 %s",
+      format_u16(received_address),
+      received_count,
+      request_summary(active)
+    ),
+    "error"
+  )
+end
+
+local function handle_exception(ctx, frame)
+  local active = current_request()
+  local fields = frame.fields or {}
+  local message = string.format(
+    "从机异常应答: %s code=%s",
+    tostring(frame.name or "exception"),
+    format_u16(fields.exception_code or 0)
+  )
+  if active then
+    finish_active_request(false, message .. "，活动请求 " .. request_summary(active), "error")
   else
-    proto.status.set("从机 ACK 报错: " .. message, { level = "error" })
+    proto.status.set(message, { level = "error" })
   end
 end
 
-local function handle_stream(frame)
-  local enabled_channels = enabled_channels_from_mask(frame.payload.channel_mask or 0, CHANNEL_COUNT)
-  local sample_count = frame.payload.sample_count or 0
-  local flat_samples = frame.payload.samples or {}
-  local interval_ms = read_positive_int("interval_ms", DEFAULT_INTERVAL_MS)
-  local dt = (interval_ms / 1000.0) / math.max(sample_count, 1)
-  local base_t = (frame.payload.timestamp_ms or 0) / 1000.0
-
-  local sequence_state = frame.sequence_state
-  if sequence_state and sequence_state.lost > 0 then
+local function handle_upload_frame(ctx, frame)
+  local fields = frame.fields or {}
+  local sequence_state = track_upload_sequence(fields.sequence or 0)
+  if sequence_state.lost > 0 then
     proto.status.set(string.format("丢帧: %d", sequence_state.lost_total), { level = "warn" })
   end
 
-  for channel_slot, channel_index in ipairs(enabled_channels) do
-    local samples = {}
-    for point_index = 1, sample_count do
-      -- 从机按“采样点 -> 通道”的交错顺序发送，主机必须按同样布局拆回各通道。
-      local sample_index = (point_index - 1) * #enabled_channels + channel_slot
-      local raw = flat_samples[sample_index] or 0
-      samples[#samples + 1] = {
-        t = base_t + (point_index - 1) * dt,
-        y = raw * CHANNEL_SCALE,
-      }
-    end
-    proto.plot.push(channel_index, {
-      source = "half_duplex_modbus_stream",
-      samples = samples,
-    })
-  end
-end
-
-local function report_parse_errors(errors)
-  for _, item in ipairs(errors) do
-    proto.status.set("解析失败: " .. tostring(item.message), { level = "error" })
-  end
-end
-
-local function handle_stream_frame(ctx, frame)
-  local legacy = make_legacy_frame(frame)
-  if frame.name == "write_ack" then
-    handle_ack(legacy)
-  elseif frame.name == "stream_data" then
-    handle_stream(legacy)
-  end
+  push_upload_sample(1, fields.ch1 or 0)
+  push_upload_sample(2, fields.ch2 or 0)
+  push_upload_sample(3, fields.ch3 or 0)
+  push_upload_sample(4, fields.ch4 or 0)
+  upload_frame_cursor = upload_frame_cursor + 1
 end
 
 local function handle_stream_error(ctx, err)
-  local level = err.code == "crc_mismatch" and "warn" or "error"
-  proto.status.set("解析失败: " .. tostring(err.message), { level = level })
+  if err.code == "crc_mismatch" then
+    proto.status.set("CRC 校验失败: " .. tostring(err.message), { level = "warn" })
+  elseif err.code == "noise_discarded" then
+    proto.status.set("已丢弃噪声前缀: " .. tostring(err.message), { level = "warn" })
+  elseif err.code == "invalid_length" then
+    proto.status.set("长度非法: " .. tostring(err.message), { level = "error" })
+  else
+    proto.status.set("解析失败: " .. tostring(err.message), { level = "error" })
+  end
 end
 
 function stream()
-  return {
+  ---@type ProtoStreamSchema
+  local schema = {
     buffer = {
       capacity = 4096,
       overflow = "drop_oldest",
     },
     frames = {
       {
-        name = "write_ack",
-        header = { 0xA5, 0x5A, FUNC_WRITE_ACK },
-        len = { offset = 5, type = "u16_le", means = "payload", extra = 8 },
-        crc = { type = "crc16_modbus", order = "lo_hi" },
+        name = "fc03_response",
+        header = { 0xFF, FUNC_READ_HOLDING },
+        len = { offset = 3, type = "u8", means = "payload", extra = 5 },
+        crc = { type = "crc16_modbus", order = "hi_lo" },
         fields = {
-          { name = "sequence", type = "u8", offset = 4 },
-          { name = "status", type = "u8", offset = 7 },
-          { name = "start_address", type = "u16_le", offset = 8 },
-          { name = "register_count", type = "u8", offset = 10 },
-        },
-        on_frame = handle_stream_frame,
-      },
-      {
-        name = "stream_data",
-        header = { 0xA5, 0x5A, FUNC_STREAM_DATA },
-        len = { offset = 5, type = "u16_le", means = "payload", extra = 8 },
-        crc = { type = "crc16_modbus", order = "lo_hi" },
-        fields = {
-          { name = "sequence", type = "u8", offset = 4 },
-          { name = "timestamp_ms", type = "u32_le", offset = 7 },
-          { name = "channel_mask", type = "u8" },
-          { name = "sample_count", type = "u8" },
+          { name = "byte_count", type = "u8", offset = 3 },
           {
-            name = "samples",
-            type = "i16_le",
+            name = "register_values",
+            type = "u16_be",
+            offset = 4,
             count = function(parsed)
-              return (parsed.sample_count or 0) * proto.bits.count(parsed.channel_mask or 0)
+              return math.floor((parsed.byte_count or 0) / 2)
             end,
           },
         },
-        on_frame = handle_stream_frame,
+        on_frame = handle_fc03_response,
+      },
+      {
+        name = "fc06_ack",
+        header = { 0xFF, FUNC_WRITE_SINGLE },
+        size = 8,
+        crc = { type = "crc16_modbus", order = "hi_lo" },
+        fields = {
+          { name = "address", type = "u16_be", offset = 3 },
+          { name = "value", type = "u16_be", offset = 5 },
+        },
+        on_frame = handle_fc06_ack,
+      },
+      {
+        name = "fc16_ack",
+        header = { 0xFF, FUNC_WRITE_MULTI },
+        size = 8,
+        crc = { type = "crc16_modbus", order = "hi_lo" },
+        fields = {
+          { name = "address", type = "u16_be", offset = 3 },
+          { name = "register_count", type = "u16_be", offset = 5 },
+        },
+        on_frame = handle_fc16_ack,
+      },
+      {
+        name = "exception_fc03",
+        header = { 0xFF, FUNC_EXCEPTION_READ },
+        size = 5,
+        crc = { type = "crc16_modbus", order = "hi_lo" },
+        fields = {
+          { name = "exception_code", type = "u8", offset = 3 },
+        },
+        on_frame = handle_exception,
+      },
+      {
+        name = "exception_fc06",
+        header = { 0xFF, FUNC_EXCEPTION_WRITE_SINGLE },
+        size = 5,
+        crc = { type = "crc16_modbus", order = "hi_lo" },
+        fields = {
+          { name = "exception_code", type = "u8", offset = 3 },
+        },
+        on_frame = handle_exception,
+      },
+      {
+        name = "exception_fc16",
+        header = { 0xFF, FUNC_EXCEPTION_WRITE_MULTI },
+        size = 5,
+        crc = { type = "crc16_modbus", order = "hi_lo" },
+        fields = {
+          { name = "exception_code", type = "u8", offset = 3 },
+        },
+        on_frame = handle_exception,
+      },
+      {
+        name = "upload_ch4",
+        header = { 0xFF, FUNC_UPLOAD_CH4 },
+        size = 14,
+        crc = { type = "crc16_modbus", order = "hi_lo" },
+        fields = {
+          { name = "sequence", type = "u16_be", offset = 3 },
+          { name = "ch1", type = "i16_be", offset = 5 },
+          { name = "ch2", type = "i16_be", offset = 7 },
+          { name = "ch3", type = "i16_be", offset = 9 },
+          { name = "ch4", type = "i16_be", offset = 11 },
+        },
+        on_frame = handle_upload_frame,
       },
     },
     on_error = handle_stream_error,
   }
+  return schema
 end
 
 function ui()
   return {
     {
-      id = "half_duplex_master",
-      title = "半双工 Modbus Master",
+      id = "sn_scope_master",
+      title = "SN Scope Master",
       anchor = "left_bottom",
       controls = {
-        { type = "checkbox", id = "ch1", label = "CH1 正弦", default = true },
-        { type = "checkbox", id = "ch2", label = "CH2 偏置正弦", default = true },
-        { type = "checkbox", id = "ch3", label = "CH3 高斯噪声", default = true },
-        { type = "checkbox", id = "ch4", label = "CH4 三角波", default = true },
-        { type = "input_int", id = "interval_ms", label = "发送间隔(ms)", default = DEFAULT_INTERVAL_MS },
-        { type = "input_int", id = "samples_per_frame", label = "每帧点数", default = DEFAULT_SAMPLE_COUNT },
+        { type = "input_int", id = "selector_ch1", label = "CH1 选择", default = 1 },
+        { type = "input_int", id = "selector_ch2", label = "CH2 选择", default = 2 },
+        { type = "input_int", id = "selector_ch3", label = "CH3 选择", default = 3 },
+        { type = "input_int", id = "selector_ch4", label = "CH4 选择", default = 4 },
+        { type = "input_int", id = "gain_ch1", label = "CH1 系数", default = 1000 },
+        { type = "input_int", id = "gain_ch2", label = "CH2 系数", default = 1000 },
+        { type = "input_int", id = "gain_ch3", label = "CH3 系数", default = 1000 },
+        { type = "input_int", id = "gain_ch4", label = "CH4 系数", default = 1000 },
         { type = "button", id = "auto_start", label = "自动配置并启动" },
         { type = "button", id = "start_stream", label = "仅启动" },
         { type = "button", id = "stop_stream", label = "停止" },
@@ -587,7 +535,10 @@ function ui()
 end
 
 function on_open(ctx)
-  sequence_tracker = {}
+  pending_requests = {}
+  active_request_id = nil
+  upload_frame_cursor = 0
+  upload_sequence_state = nil
   proto.status.clear()
   setup_plot(true)
 end
@@ -601,23 +552,46 @@ function on_error(ctx, message)
 end
 
 function on_tx(ctx, evt)
-  if evt.kind == "request" and evt.state == "timeout" then
-    proto.status.set("请求超时: " .. tostring(evt.tag), { level = "warn" })
-  elseif evt.kind == "request" and evt.state == "rejected" then
-    proto.status.set("请求被拒绝: " .. tostring(evt.tag), { level = "error" })
+  if evt.kind ~= "request" then
+    if evt.state == "rejected" then
+      proto.status.set("发送失败: " .. tostring(evt.error or evt.state), { level = "error" })
+    end
+    return
+  end
+
+  local meta = pending_requests[evt.id]
+  if evt.state == "sent" then
+    active_request_id = evt.id
+    if meta then
+      proto.status.set("请求已写出，等待 ACK: " .. request_summary(meta), { level = "info" })
+    end
+  elseif evt.state == "completed" then
+    if meta then
+      proto.status.set("请求流程完成: " .. tostring(evt.tag), { level = "info" })
+      clear_request_state(evt.id)
+    end
+  elseif evt.state == "timeout" then
+    local label = meta and request_summary(meta) or tostring(evt.tag)
+    clear_request_state(evt.id)
+    proto.status.set("请求超时: " .. label, { level = "warn" })
+  elseif evt.state == "rejected" or evt.state == "dropped" or evt.state == "canceled" then
+    local label = meta and request_summary(meta) or tostring(evt.tag)
+    clear_request_state(evt.id)
+    proto.status.set("请求失败: " .. label .. " / " .. tostring(evt.error or evt.state), { level = "error" })
   end
 end
 
 function on_control(ctx, id, value)
   controls[id] = value
-
   if id == "auto_start" then
     auto_configure_and_start()
   elseif id == "start_stream" then
-    send_start_stop(1)
+    send_start_stop(0x0001)
   elseif id == "stop_stream" then
-    send_start_stop(0)
+    send_start_stop(0x0000)
   elseif id == "clear_plot" then
+    upload_frame_cursor = 0
+    upload_sequence_state = nil
     setup_plot(true)
     proto.status.set("波形已清空", { level = "info" })
   end

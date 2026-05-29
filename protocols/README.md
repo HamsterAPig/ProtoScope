@@ -1,26 +1,51 @@
 # ProtoScope Lua 协议脚本指南
 
-`protocols` 是 ProtoScope 的 Lua 协议工作区。宿主会自动注入全局 `proto`，脚本只负责描述 UI、协议解析和在“完整应答完成”时调用 `proto.request_done()`。
+`protocols` 是 ProtoScope 的 Lua 协议工作区。宿主会自动注入全局 `proto`，脚本主要负责 4 件事：
+
+- 描述 UI 布局与控件。
+- 描述接收流的 `stream()` schema。
+- 在业务确认“完整应答已完成”时调用 `proto.request_done()`。
+- 在需要时推送状态、弹窗和波形数据。
+
+配套提示文件：
+
+- `protocols/protoscope_api.lua`：LuaLS 用的宿主 API 声明。
+- `protocols/stream_types.lua`：`stream()` schema 的类型注解。
 
 ## 发送模型
 
-新的发送 API 分成两类：
+发送 API 分成两类：
 
-- `proto.send(payload, opts?)`：普通异步发送，写出成功后会收到一次 `on_tx(..., { state = "sent" })`。
-- `proto.request(payload, opts?)`：半双工请求。宿主负责排队、串行下发、超时、取消和下一条自动推进。
-- `proto.request_done(result?)`：脚本在**确认收到完整应答**后调用；不需要传 `request_id`。
+- `proto.send(payload, opts?)`：普通异步发送。适合从机 ACK、主动上报、广播或不需要宿主排队等待的报文。
+- `proto.request(payload, opts?)`：半双工请求。宿主负责排队、串行下发、超时、取消，以及前一条完成后的自动推进。
+- `proto.request_done(result?)`：脚本在确认收到完整业务应答后调用；不需要传 `request_id`。
 
-示例：
+最小示例：
 
 ```lua
+local pending = {}
+local active_request_id = nil
+
 local request_id, err = proto.request({ 0xAA, 0x55, 0x01, 0x0D }, {
   timeout_ms = 1000,
   tag = "read_version",
 })
 
-function on_bytes(ctx, bytes)
-  if has_full_response(bytes) then
-    proto.request_done({ ok = true, message = "版本应答完成" })
+if request_id then
+  pending[request_id] = { tag = "read_version" }
+end
+
+function on_tx(ctx, evt)
+  if evt.kind ~= "request" then
+    return
+  end
+  if evt.state == "sent" then
+    active_request_id = evt.id
+  elseif evt.state == "completed" or evt.state == "timeout" or evt.state == "rejected" then
+    pending[evt.id] = nil
+    if active_request_id == evt.id then
+      active_request_id = nil
+    end
   end
 end
 ```
@@ -41,96 +66,192 @@ end
 ---@field error? string
 ```
 
-## 半双工 Modbus Schema Demo
-
-仓库内新增了一组双端 demo：
-
-- `protocols/half_duplex_modbus_master`：上位机脚本。用 `proto.request()` 分 3 组写寄存器：`0x5AA5~0x5AA6`、`0x5AA7~0x5AA8`、`0x5AA9`。
-- `protocols/half_duplex_modbus_slave`：从机脚本。收到写寄存器请求后回复 ACK；当 `0x5AA9 = 1` 时，通过 `proto.set_timer()` 主动上报波形。
-- 半双工主从 demo 现在各自自包含：本地 helper 负责组帧，接收侧统一走宿主 `stream()` schema 解析。
-
-### 固定寄存器语义
-
-- `0x5AA5~0x5AA8`：4 个通道开关，写 `1` 开启，其他值关闭。
-- `0x5AA9`：启动位，写 `1` 开始传输，写 `0` 停止。
-
-### 主机端行为
-
-- “自动配置并启动”会一次入队 3 条半双工请求，由宿主 request 队列串行下发。
-- 主机不主动轮询；只在收到完整 ACK 时调用 `proto.request_done()`，并在收到主动上报帧后推送 `proto.plot.push()`。
-- 当流式数据序列号跳号时，主机会累计丢帧数，并通过 `proto.status.set(string.format("丢帧: %d", lost_total), { level = "warn" })` 提示。
-
-### 从机端行为
-
-- master/slave 各自声明同一套 `frame schema`，默认帧格式为 `header + func + seq + len + payload + crc16_modbus`。
-- 接收侧统一使用宿主 `stream()` 按 `protocol.frames[]` 顺序流式匹配候选帧头，支持半包、粘包、噪声前缀与 CRC 失败后的重同步。
-- ACK 与主动上报共用同一套 wire format，长度字段默认按字节计数，CRC 为 `proto.crc16_modbus()`。
-- 波形帧载荷固定包含 `timestamp_ms`、`channel_mask`、`sample_count` 和按启用通道展开的 `i16` 采样值。
-- 4 个通道分别输出正弦、带偏置正弦、高斯噪声、三角波；只对开启的通道生成数据。
-
 其中：
 
 - `sent`：字节已经写出。
-- `completed`：仅 `request` 在 `proto.request_done()` 后触发。
+- `completed`：仅 `request` 在 `proto.request_done()` 之后触发。
 - `timeout` / `rejected` / `dropped` / `canceled`：都属于宿主终态。
 
-## 状态栏与弹窗 API
+推荐做法：
+
+- 在 `sent` 时记录当前活动 request。
+- 在 `completed` / `timeout` / `rejected` 时清理脚本侧状态。
+- 不要自己再实现第二套 `request_queue/send_next_request` 调度器。
+
+## 推荐接收模型：`stream()`
+
+如果协议是“固定帧头 + 长度/定长 + CRC + 字段解析”，优先使用 `stream()`，不要再用 `on_bytes()` 手写缓冲、切帧和 CRC。
+
+典型返回值：
 
 ```lua
-proto.status.set("读取版本请求已写出", { level = "info" })
-proto.status.clear()
+---@type ProtoStreamSchema
+local schema = {
+  buffer = {
+    capacity = 4096,
+    overflow = "drop_oldest",
+  },
+  frames = {
+    {
+      name = "fc06_ack",
+      header = { 0xFF, 0x06 },
+      size = 8,
+      crc = { type = "crc16_modbus", order = "hi_lo" },
+      fields = {
+        { name = "address", type = "u16_be", offset = 3 },
+        { name = "value", type = "u16_be", offset = 5 },
+      },
+      on_frame = handle_fc06_ack,
+    },
+  },
+  on_error = handle_stream_error,
+}
 
-proto.ui.alert({
-  title = "请求超时",
-  message = "读取版本请求超时",
-  level = "warn",
-  dedupe_key = "read_version_timeout",
-})
+return schema
 ```
 
-- `proto.status.set(text, opts?)`：写入底部状态栏，`opts.level` 当前只做轻量级语义标记。
-- `proto.ui.alert(opts)`：宿主管理的模态框，固定“关闭”按钮。
-- `proto.ui.confirm(opts)`：宿主管理的确认框，固定“确认 / 取消”。
-- `dedupe_key`：同一个 key 在未关闭前只保留一个弹窗。
-- 用户关闭/确认后会回调 `on_dialog(ctx, evt)`。
+宿主负责：
 
-## 波形颜色
+- 半包累计。
+- 粘包连续解析。
+- 噪声前缀丢弃。
+- CRC 校验。
+- 固定长度或变长长度解析。
+- 字段解码后再回调 `on_frame`。
 
-`proto.plot.setup()` 的 `channels[]` 现在支持颜色：
+`stream()` 里的常用字段：
+
+- `header`：固定帧头字节。
+- `size`：整帧固定长度；适合 `FC06` / `FC16 ACK` 这种固定 8 字节帧。
+- `len`：变长帧定义；适合 `FC03` 这类带字节数的响应。
+- `crc`：CRC 类型与字节顺序。
+- `fields`：字段定义，`offset` 从 1 开始计数。
+- `on_frame`：完整有效帧回调。
+- `on_error`：解析错误回调。
+
+字段类型、`crc.order`、`len.means` 的可选值请直接参考 `protocols/stream_types.lua`。
+
+## `on_bytes()` 仍然可用，但只建议用于两类场景
+
+- 协议不是标准帧流，而是纯文本、终止符协议或临时调试输入。
+- 你还在做最初的抓包验证，暂时不想先写 schema。
+
+如果已经能明确写出：
+
+- 固定帧头；
+- 固定长度或长度字段；
+- CRC 或其他校验；
+- 结构化字段；
+
+那就应当优先迁到 `stream()`。
+
+## 状态、弹窗和波形
+
+常用辅助 API：
+
+- `proto.status.set(text, { level = "info"|"warn"|"error" })`
+- `proto.status.clear()`
+- `proto.ui.alert({ title = "...", message = "...", level = "warn" })`
+- `proto.plot.setup({ source = "...", reset_history = true, channels = { ... } })`
+- `proto.plot.push(channel_index, { source = "...", samples = { { t = 0.0, y = 1.23 } } })`
+
+最小波形示例：
 
 ```lua
 proto.plot.setup({
-  source = "default_protocol",
+  source = "demo",
+  reset_history = true,
   channels = {
-    { label = "CH1", unit = "V", color = "#47C971" },
-    { label = "CH2", unit = "V", color = "#5B8FF9AA" },
-  }
+    { label = "CH1", unit = "V", color = "#4FC3F7" },
+    { label = "CH2", unit = "V", color = "#81C784" },
+  },
+})
+
+proto.plot.push(1, {
+  source = "demo",
+  samples = {
+    { t = 0.000, y = 1.2 },
+    { t = 0.001, y = 1.3 },
+  },
 })
 ```
 
-支持：
+## SN Scope Lua Demo
 
-- `#RRGGBB`
-- `#RRGGBBAA`
+仓库里现在有两类 SN Scope 相关示例：
 
-只改颜色不会清空历史波形；宿主只刷新显示配置。
+- `protocols/half_duplex_modbus_master` / `protocols/half_duplex_modbus_slave`
+- `cmake-build-debug/protocols/sn_scope_master` / `cmake-build-debug/protocols/sn_scope_slave_sim`
 
-## LuaLS 类型提示
+它们表达的是同一类协议约束：主机请求、从机 ACK、以及 `0x26` 上传帧。
 
-`protocols/protoscope_api.lua` 仅供 LuaLS 使用，不参与运行时。
+### 固定寄存器语义
 
-把 `protocols/protoscope_api.lua` 加入 LuaLS 的 `workspace.library` 后，就能获得：
+- `0x1010`：CH1/CH2 选择寄存器。
+- `0x1012`：CH3/CH4 选择寄存器。
+- `0x5A5A`：CH1/CH2 系数寄存器。
+- `0x5A5C`：CH3/CH4 系数寄存器。
+- `0x8888`：启动位，写 `1` 开始上传，写 `0` 停止。
 
-- `proto.send / proto.request / proto.request_done`
-- `proto.status.* / proto.ui.*`
-- `on_tx / on_dialog`
-- `ProtoPlotChannel.color`
+### 主机端推荐写法
 
-## 默认协议示例
+主机端推荐把自动配置拆成 5 个 request：
 
-`protocols/default_protocol/main.lua` 已经示范新的半双工语义：
+- `FC16 0x1010`：写 CH1/CH2 选择。
+- `FC16 0x1012`：写 CH3/CH4 选择。
+- `FC16 0x5A5A`：写 CH1/CH2 系数。
+- `FC16 0x5A5C`：写 CH3/CH4 系数。
+- `FC06 0x8888=0x0001`：启动上传。
 
-- “读取版本”使用 `proto.request(...)`
-- 收到完整帧后调用 `proto.request_done(...)`
-- 超时由宿主 request timeout 主导
-- 状态栏和弹窗都走新的 `proto.status.* / proto.ui.*`
+脚本侧只维护：
+
+- `pending_requests[id]`
+- `active_request_id`
+
+不要自己维护发送推进队列；宿主 `proto.request()` 已经负责串行调度。
+
+### ACK 匹配规则
+
+主机在 `on_frame` 中只校验当前活动 request：
+
+- `FC06 ACK`：`address` 和 `value` 都必须与当前 request 一致。
+- `FC16 ACK`：`address` 和 `register_count` 都必须与当前 request 一致。
+- 不匹配时直接 `proto.request_done({ ok = false })`，并把“收到/期望”写入状态栏，避免迟到 ACK 污染后续请求。
+
+### 从机端推荐写法
+
+从机接收侧统一走 `stream()`：
+
+- `fc03_request`：固定 8 字节。
+- `fc06_request`：固定 8 字节。
+- `fc16_request`：固定 13 字节。
+
+业务逻辑放在对应 `on_frame` 回调里：
+
+- `FC03`：回读 `0x5A5A..0x5A61`。
+- `FC06`：处理 `0x8888` 启停上传。
+- `FC16`：固定要求 `count = 2`、`byte_count = 4`，写 2 个寄存器。
+
+### 上传帧建议
+
+SN Scope 上传帧固定 14 字节：
+
+```text
+0xFF 0x26 + sequence(u16_be) + ch1(i16_be) + ch2(i16_be) + ch3(i16_be) + ch4(i16_be) + crc16(hi_lo)
+```
+
+推荐节拍：
+
+- 每 `10ms` 生成 `120` 个上传帧。
+- 把 `120 * 14 = 1680` 字节拼成一个 payload。
+- 每个 tick 只调用一次 `proto.send(payload)`。
+
+这样主机端的 `stream().frames[].on_frame` 可以从一个粘包 payload 中连续解析出 120 个 `upload_ch4` 帧。
+
+## 文档同步约定
+
+当你改了以下任一项时，建议同步更新文档或提示文件：
+
+- 宿主暴露的 Lua API：同步 `protocols/protoscope_api.lua`
+- `stream()` schema 类型：同步 `protocols/stream_types.lua`
+- 协议脚本约定、推荐模式或 demo 行为：同步 `protocols/README.md`
