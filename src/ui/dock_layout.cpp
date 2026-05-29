@@ -267,6 +267,10 @@ bool shouldRunLuaDefaultDockLayout(WorkspaceLayoutMode layoutMode, bool pendingD
     return layoutMode == WorkspaceLayoutMode::NeedsDefaultBuild && pendingDefaultDockLayout;
 }
 
+bool canResetProtocolWorkspaceLayout(bool protocolWorkspaceLoaded, std::string_view activeWorkspaceProtocolKey) {
+    return protocolWorkspaceLoaded && !activeWorkspaceProtocolKey.empty();
+}
+
 std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey) {
     std::ostringstream stream;
     stream << "LuaDock:" << layoutKey << ':' << dock.id;

@@ -66,6 +66,7 @@ ProtocolWorkspaceSwitchDecision decideProtocolWorkspaceSwitch(
 WorkspaceLayoutMode workspaceLayoutModeAfterLoad(const LuaDockLayoutPaths& layoutPaths);
 bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol);
 bool shouldRunLuaDefaultDockLayout(WorkspaceLayoutMode layoutMode, bool pendingDefaultDockLayout);
+bool canResetProtocolWorkspaceLayout(bool protocolWorkspaceLoaded, std::string_view activeWorkspaceProtocolKey);
 std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey);
 std::vector<std::string> buildLuaDockStableIds(
     const std::vector<scripting::DockSnapshot>& docks,

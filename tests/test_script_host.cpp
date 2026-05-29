@@ -1299,6 +1299,7 @@ static const TestCase kAllTests[] = {
     {"protocol_workspace_switch_decision_reloads_draft_when_clicked", &test_protocol_workspace_switch_decision_reloads_draft_when_clicked},
     {"protocol_switch_resets_lua_default_dock_state_only_when_changed", &test_protocol_switch_resets_lua_default_dock_state_only_when_changed},
     {"lua_default_dock_layout_runs_only_during_default_build", &test_lua_default_dock_layout_runs_only_during_default_build},
+    {"protocol_workspace_layout_reset_requires_loaded_protocol", &test_protocol_workspace_layout_reset_requires_loaded_protocol},
     {"plot_cursor_snap_by_time_and_measurement", &test_plot_cursor_snap_by_time_and_measurement},
     {"wave_cursor_smart_snap_edge", &test_wave_cursor_smart_snap_edge},
     {"wave_cursor_smart_snap_extreme", &test_wave_cursor_smart_snap_extreme},

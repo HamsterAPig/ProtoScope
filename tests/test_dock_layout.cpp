@@ -318,3 +318,15 @@ void test_lua_default_dock_layout_runs_only_during_default_build() {
             false),
         "没有待处理事务时不应执行 Lua Dock 默认停靠");
 }
+
+void test_protocol_workspace_layout_reset_requires_loaded_protocol() {
+    require(
+        !protoscope::ui::canResetProtocolWorkspaceLayout(false, "protocols_demo"),
+        "未加载协议工作区时不应允许重置布局");
+    require(
+        !protoscope::ui::canResetProtocolWorkspaceLayout(true, ""),
+        "缺少当前协议布局 key 时不应允许重置布局");
+    require(
+        protoscope::ui::canResetProtocolWorkspaceLayout(true, "protocols_demo"),
+        "已加载协议且有布局 key 时应允许手动重置布局");
+}

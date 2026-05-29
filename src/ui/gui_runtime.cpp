@@ -215,6 +215,18 @@ bool dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
     return true;
 }
 
+void markCentralDockNode(ImGuiID dockspaceId, ImGuiID centralNodeId) {
+    ImGuiDockNode* rootNode = ImGui::DockBuilderGetNode(dockspaceId);
+    ImGuiDockNode* centralNode = ImGui::DockBuilderGetNode(centralNodeId);
+    if (rootNode == nullptr || centralNode == nullptr) {
+        return;
+    }
+
+    // 核心边界：只把默认布局的主内容区标记为 CentralNode，让左侧空节点可被 Dock 系统自然回收。
+    centralNode->SetLocalFlags(centralNode->LocalFlags | ImGuiDockNodeFlags_CentralNode);
+    rootNode->CentralNode = centralNode;
+}
+
 void keepOnlyCurrentLuaDockSettings(std::string_view layoutKey) {
     auto& settings = ImGui::GetCurrentContext()->SettingsWindows;
 
@@ -548,9 +560,9 @@ int GuiRuntime::run() {
         renderFrame();
         glfwSwapBuffers(window_);
         lastRenderAtMs_ = frameStartMs;
-        if (ImGui::GetIO().WantSaveIniSettings) {
+        if (ImGui::GetIO().WantSaveIniSettings && workspaceLayoutMode_ == WorkspaceLayoutMode::Ready) {
             saveCurrentProtocolWorkspace();
-        } else if (pendingProtocolWorkspaceSave_) {
+        } else if (pendingProtocolWorkspaceSave_ && workspaceLayoutMode_ == WorkspaceLayoutMode::Ready) {
             saveCurrentProtocolWorkspace();
         }
     }
@@ -668,22 +680,24 @@ void GuiRuntime::renderFrame() {
         ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
 
-        ImGuiID left = dockspaceId;
-        ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right, 0.75f, nullptr, &left);
+        ImGuiID mainTop = dockspaceId;
+        ImGuiID left = ImGui::DockBuilderSplitNode(mainTop, ImGuiDir_Left, 0.25f, nullptr, &mainTop);
         ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.48F, nullptr, &left);
-        ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.75f, nullptr, &right);
-        ImGuiID rightMid = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.36F, nullptr, &right);
+        ImGuiID rightBottom = ImGui::DockBuilderSplitNode(mainTop, ImGuiDir_Down, 0.75f, nullptr, &mainTop);
+        ImGuiID rightMid = ImGui::DockBuilderSplitNode(mainTop, ImGuiDir_Down, 0.36F, nullptr, &mainTop);
+        markCentralDockNode(dockspaceId, rightBottom);
 
         defaultLuaDockNodes_.clear();
         defaultLuaDockNodes_[LuaDockAnchor::Left] = left;
         defaultLuaDockNodes_[LuaDockAnchor::LeftBottom] = leftBottom;
-        defaultLuaDockNodes_[LuaDockAnchor::RightTop] = right;
+        defaultLuaDockNodes_[LuaDockAnchor::RightTop] = mainTop;
         defaultLuaDockNodes_[LuaDockAnchor::RightMid] = rightMid;
         defaultLuaDockNodes_[LuaDockAnchor::RightBottom] = rightBottom;
+        defaultLuaDockNodes_[LuaDockAnchor::MainBottom] = rightBottom;
 
         ImGui::DockBuilderDockWindow("通讯配置", left);
         ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
-        ImGui::DockBuilderDockWindow("发送", right);
+        ImGui::DockBuilderDockWindow("发送", mainTop);
         ImGui::DockBuilderDockWindow("接收数据", rightBottom);
         ImGui::DockBuilderDockWindow("日志", rightBottom);
         ImGui::DockBuilderDockWindow("脚本", rightBottom);
@@ -767,6 +781,14 @@ void GuiRuntime::drawMainMenu() {
         ImGui::MenuItem("日志", nullptr, &showLogDock_);
         ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
         ImGui::MenuItem("波形", nullptr, &showWaveDock_);
+        ImGui::Separator();
+        if (ImGui::MenuItem(
+                "重置当前协议 Dock 布局",
+                nullptr,
+                false,
+                canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_))) {
+            resetCurrentProtocolWorkspaceLayout();
+        }
         ImGui::EndMenu();
     }
 
@@ -1688,6 +1710,23 @@ void GuiRuntime::saveCurrentProtocolWorkspace() {
     ImGui::GetIO().WantSaveIniSettings = false;
     pendingProtocolWorkspaceSave_ = false;
     saveCurrentProtocolControlState();
+}
+
+void GuiRuntime::resetCurrentProtocolWorkspaceLayout() {
+    if (!canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_)) {
+        application_.setStatusMessage("当前没有可重置的协议 Dock 布局", true);
+        return;
+    }
+
+    // 核心流程：手动重置只清空当前运行时 Dock 状态，下一帧按新默认布局重建并覆盖当前协议布局文件。
+    ImGui::ClearIniSettings();
+    defaultDockedLuaStableIds_.clear();
+    defaultLuaDockNodes_.clear();
+    workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
+    pendingLuaDefaultDockLayout_ = false;
+    pendingProtocolWorkspaceSave_ = true;
+    ImGui::GetIO().WantSaveIniSettings = false;
+    application_.setStatusMessage("当前协议 Dock 布局将在下一帧重置");
 }
 
 void GuiRuntime::pruneCurrentLuaDockSettings() {

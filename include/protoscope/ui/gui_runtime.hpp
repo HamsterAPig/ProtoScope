@@ -68,6 +68,7 @@ private:
     bool switchProtocolWorkspace(const std::string& protocolDir, bool forceReload);
     void loadCurrentProtocolWorkspace();
     void saveCurrentProtocolWorkspace();
+    void resetCurrentProtocolWorkspaceLayout();
     void loadCurrentProtocolControlState();
     void saveCurrentProtocolControlState();
     void pruneCurrentLuaDockSettings();
