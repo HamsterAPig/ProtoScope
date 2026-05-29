@@ -67,7 +67,6 @@ local protocol = {
   },
 }
 
-local parser = modbus.new_parser(protocol)
 local registers = {
   [REG_CH1] = 1,
   [REG_CH2] = 1,
@@ -175,6 +174,56 @@ local function report_parse_errors(errors)
   end
 end
 
+local function make_legacy_frame(frame)
+  local fields = frame.fields or {}
+  if frame.name == "write_registers" and fields.values ~= nil and type(fields.values) ~= "table" then
+    fields.values = { fields.values }
+  end
+  return {
+    name = frame.name,
+    raw = frame.raw,
+    payload = fields,
+    sequence = fields.sequence,
+    crc_ok = frame.crc_ok,
+  }
+end
+
+local function handle_stream_frame(ctx, frame)
+  if frame.name == "write_registers" then
+    handle_write_request(make_legacy_frame(frame))
+  end
+end
+
+local function handle_stream_error(ctx, err)
+  local level = err.code == "crc_mismatch" and "warn" or "error"
+  proto.status.set("请求解析失败: " .. tostring(err.message), { level = level })
+end
+
+function stream()
+  return {
+    buffer = {
+      capacity = 4096,
+      overflow = "drop_oldest",
+    },
+    frames = {
+      {
+        name = "write_registers",
+        header = { 0xA5, 0x5A, FUNC_WRITE_REGISTERS },
+        len = { offset = 5, type = "u16_le", means = "payload", extra = 8 },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
+        fields = {
+          { name = "sequence", type = "u8", offset = 4 },
+          { name = "start_address", type = "u16_le", offset = 7 },
+          { name = "register_count", type = "u8", offset = 9 },
+          { name = "values", type = "u16_le", count = "register_count" },
+        },
+        on_frame = handle_stream_frame,
+      },
+    },
+    on_error = handle_stream_error,
+  }
+end
+
 function ui()
   return {
     {
@@ -189,7 +238,6 @@ function ui()
 end
 
 function on_open(ctx)
-  parser = modbus.new_parser(protocol)
   timestamp_ms = 0
   wave_sequence = 0
   sample_cursor = 0
@@ -207,19 +255,6 @@ function on_error(ctx, message)
 end
 
 function on_control(ctx, id, value)
-end
-
-function on_bytes(ctx, bytes)
-  local frames, errors = modbus.feed_parser(parser, bytes)
-  if #errors > 0 then
-    report_parse_errors(errors)
-  end
-
-  for _, frame in ipairs(frames) do
-    if frame.func == FUNC_WRITE_REGISTERS then
-      handle_write_request(frame)
-    end
-  end
 end
 
 

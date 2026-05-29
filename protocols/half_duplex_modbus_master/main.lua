@@ -171,6 +171,9 @@ end
 
 local function make_legacy_frame(frame)
   local fields = frame.fields or {}
+  if frame.name == "stream_data" and fields.samples ~= nil and type(fields.samples) ~= "table" then
+    fields.samples = { fields.samples }
+  end
   local sequence = fields.sequence
   local sequence_state = nil
   if sequence ~= nil then
