@@ -1314,7 +1314,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view, const WaveFrame
     }
     if (!ImPlot::BeginPlot("##oscilloscope",
             ImVec2(-1.0F, -1.0F),
-            ImPlotFlags_NoLegend | ImPlotFlags_NoMenus)) {
+            ImPlotFlags_NoLegend)) {
         if (!view.showAxisLabels) {
             ImPlot::PopStyleVar(2);
         }
