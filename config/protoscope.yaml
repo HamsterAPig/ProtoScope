@@ -32,6 +32,24 @@ protocol:
   root_dir: protocols
   selected_dir: protocols/default_protocol
 
+scripting:
+  file_io:
+    enabled: true
+    allow_protocol_dir: true
+    allow_dialog_paths: true
+    extra_allowed_roots: []
+    max_open_files: 8
+    default_chunk_bytes: 65536
+    max_chunk_bytes: 1048576
+    max_file_size_bytes: 1073741824
+    max_write_file_size_bytes: 1073741824
+    dialog:
+      enabled: true
+      remember_last_dir: true
+    send_file:
+      default_chunk_bytes: 65536
+      max_inflight_chunks: 2
+
 logging:
   level: info
 

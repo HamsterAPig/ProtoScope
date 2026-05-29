@@ -623,12 +623,16 @@ void test_luals_api_sync_contains_tx_and_dialog_api() {
     require(text.find("function proto.status.set(text, opts) end") != std::string::npos, "LuaLS API 应声明 proto.status.set");
     require(text.find("function proto.plot.push(channel_index, payload) end") != std::string::npos, "LuaLS API 应声明 proto.plot.push");
     require(text.find("function proto.ui.alert(opts) end") != std::string::npos, "LuaLS API 应声明 proto.ui.alert");
+    require(text.find("function proto.fs.open(path, opts) end") != std::string::npos, "LuaLS API 应声明 proto.fs.open");
+    require(text.find("function proto.fs.read(handle, opts) end") != std::string::npos, "LuaLS API 应声明 proto.fs.read");
+    require(text.find("@class ProtoBuffer") != std::string::npos, "LuaLS API 应声明 ProtoBuffer");
     require(text.find("function proto.bits.count(value) end") != std::string::npos, "LuaLS API 应声明 proto.bits.count");
     require(text.find("'elf_symbol_combo'") != std::string::npos, "LuaLS API 应声明 elf_symbol_combo");
     require(text.find("@class ProtoElfSymbolValue") != std::string::npos, "LuaLS API 应声明 ProtoElfSymbolValue");
     require(text.find("function stream() end") != std::string::npos, "LuaLS API 应声明 stream()");
     require(text.find("function on_tx(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_tx");
     require(text.find("function on_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_dialog");
+    require(text.find("function on_file_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_file_dialog");
     require(text.find("@field color? string") != std::string::npos, "LuaLS API 应声明 ProtoPlotChannel.color");
 }
 
@@ -768,6 +772,11 @@ void test_config_default_roundtrip() {
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
+    config.scripting.fileIo.enabled = true;
+    config.scripting.fileIo.maxOpenFiles = 3;
+    config.scripting.fileIo.defaultChunkBytes = 32;
+    config.scripting.fileIo.maxChunkBytes = 64;
+    config.scripting.fileIo.extraAllowedRoots = {"firmware"};
 
     std::string error;
     require(store.save(tempPath, config, error), "默认配置写回失败");
@@ -793,6 +802,50 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.minVisibleTimeSpan - 0.0025) < 1e-12, "波形最小可视跨度 roundtrip 失败");
+    require(reloaded.config.scripting.fileIo.enabled, "Lua 文件 IO 开关 roundtrip 失败");
+    require(reloaded.config.scripting.fileIo.maxOpenFiles == 3, "Lua 文件 IO 打开数上限 roundtrip 失败");
+    require(reloaded.config.scripting.fileIo.defaultChunkBytes == 32, "Lua 文件 IO 默认分块 roundtrip 失败");
+    require(reloaded.config.scripting.fileIo.maxChunkBytes == 64, "Lua 文件 IO 最大分块 roundtrip 失败");
+    require(reloaded.config.scripting.fileIo.extraAllowedRoots.size() == 1
+                && reloaded.config.scripting.fileIo.extraAllowedRoots[0] == "firmware",
+            "Lua 文件 IO 额外授权根 roundtrip 失败");
+}
+
+void test_script_file_io_proto_buffer_roundtrip() {
+    const auto tempRoot = makeUniqueTempDir("protoscope-script-file-io");
+    const auto protocolDir = tempRoot / "proto";
+    std::filesystem::create_directories(protocolDir);
+    {
+        std::ofstream data(protocolDir / "input.bin", std::ios::binary);
+        data << "abcdef";
+    }
+    {
+        std::ofstream script(protocolDir / "main.lua");
+        script << "function on_open(ctx)\n";
+        script << "  local h = assert(proto.fs.open('input.bin', { mode = 'read' }))\n";
+        script << "  local chunk, err = proto.fs.read(h, { max_bytes = 3 })\n";
+        script << "  assert(chunk, err)\n";
+        script << "  assert(chunk:size() == 3)\n";
+        script << "  proto.fs.close(h)\n";
+        script << "  local out = assert(proto.fs.open('out.bin', { mode = 'write', overwrite = true }))\n";
+        script << "  assert(proto.fs.write(out, chunk))\n";
+        script << "  proto.fs.close(out)\n";
+        script << "  proto.send(chunk, { tag = 'file-chunk' })\n";
+        script << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "文件 IO 协议应可加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+    const auto requests = host.drainTxRequests();
+    require(requests.size() == 1, "ProtoBuffer 应可直接传给 proto.send");
+    require(requests[0].payload == std::vector<std::uint8_t>{'a', 'b', 'c'}, "发送 payload 应来自文件分块");
+    require(requests[0].tag == "file-chunk", "发送 tag 应保留");
+
+    std::ifstream out(protocolDir / "out.bin", std::ios::binary);
+    std::string text;
+    out >> text;
+    require(text == "abc", "ProtoBuffer 写入文件后内容应一致");
 }
 
 void test_config_wave_mode_invalid_fallback() {
@@ -1411,6 +1464,7 @@ static const TestCase kAllTests[] = {
     {"config_default_script_workspace", &test_config_default_script_workspace},
     {"config_default_protocol_workspace_initializes_half_duplex_demos", &test_config_default_protocol_workspace_initializes_half_duplex_demos},
     {"config_default_protocol_workspace_skips_existing_root", &test_config_default_protocol_workspace_skips_existing_root},
+    {"script_file_io_proto_buffer_roundtrip", &test_script_file_io_proto_buffer_roundtrip},
     {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
     {"half_duplex_modbus_request_batches", &test_half_duplex_modbus_request_batches},

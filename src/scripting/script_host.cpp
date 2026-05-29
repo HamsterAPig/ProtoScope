@@ -7,8 +7,10 @@
 #include <cmath>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <sstream>
 #include <string_view>
@@ -17,6 +19,35 @@
 #include <unordered_set>
 
 namespace protoscope::scripting {
+
+std::size_t ProtoBuffer::size() const {
+    return bytes.size();
+}
+
+ProtoBuffer ProtoBuffer::slice(std::size_t offset, std::size_t size) const {
+    if (offset >= bytes.size()) {
+        return {};
+    }
+    const auto end = std::min(bytes.size(), offset + size);
+    return ProtoBuffer{std::vector<std::uint8_t>(bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+                                                bytes.begin() + static_cast<std::ptrdiff_t>(end))};
+}
+
+std::string ProtoBuffer::toHex(std::size_t maxBytes) const {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    const auto limit = maxBytes == 0 ? bytes.size() : std::min(bytes.size(), maxBytes);
+    std::string text;
+    text.reserve(limit * 3);
+    for (std::size_t index = 0; index < limit; ++index) {
+        if (!text.empty()) {
+            text.push_back(' ');
+        }
+        const auto value = bytes[index];
+        text.push_back(kHex[(value >> 4U) & 0x0FU]);
+        text.push_back(kHex[value & 0x0FU]);
+    }
+    return text;
+}
 
 namespace {
 
@@ -78,6 +109,18 @@ std::string dialogKindName(DialogKind kind) {
         return "confirm";
     }
     return "alert";
+}
+
+std::string fileDialogKindName(FileDialogKind kind) {
+    switch (kind) {
+    case FileDialogKind::OpenFile:
+        return "open_file";
+    case FileDialogKind::SaveFile:
+        return "save_file";
+    case FileDialogKind::OpenDir:
+        return "open_dir";
+    }
+    return "open_file";
 }
 
 std::optional<std::array<float, 4>> parseColorText(std::string_view text) {
@@ -356,8 +399,12 @@ std::optional<std::vector<std::uint8_t>> bytesFromLuaObject(const sol::object& o
         return parsed;
     }
 
+    if (object.is<ProtoBuffer>()) {
+        return object.as<ProtoBuffer>().bytes;
+    }
+
     if (!object.is<sol::table>()) {
-        error = "仅支持 hex 字符串或 number[]";
+        error = "仅支持 hex 字符串、ProtoBuffer 或 number[]";
         return std::nullopt;
     }
 
@@ -976,6 +1023,12 @@ sol::table makeTxEventTable(sol::state_view lua, const TxEvent& event) {
     table["bytes"] = static_cast<int>(event.bytes);
     table["queued_ms"] = event.queuedMs;
     table["finished_ms"] = event.finishedMs;
+    if (event.fileJobId != 0) {
+        table["file_job_id"] = event.fileJobId;
+        table["offset"] = event.offset;
+        table["total"] = event.total;
+        table["progress"] = event.progress;
+    }
     if (event.error.has_value()) {
         table["error"] = *event.error;
     }
@@ -996,6 +1049,58 @@ sol::table makeDialogEventTable(sol::state_view lua, const DialogEvent& event) {
         table["confirmed"] = *event.confirmed;
     }
     return table;
+}
+
+sol::table makeFileDialogEventTable(sol::state_view lua, const FileDialogEvent& event) {
+    sol::table table = lua.create_table();
+    table["id"] = event.id;
+    table["kind"] = fileDialogKindName(event.kind);
+    table["state"] = event.state;
+    table["timestamp_ms"] = event.timestampMs;
+    if (!event.path.empty()) {
+        table["path"] = event.path;
+    }
+    if (!event.error.empty()) {
+        table["error"] = event.error;
+    }
+    return table;
+}
+
+std::filesystem::path canonicalPath(const std::filesystem::path& path) {
+    std::error_code errorCode;
+    auto canonical = std::filesystem::weakly_canonical(std::filesystem::absolute(path), errorCode);
+    if (errorCode) {
+        canonical = std::filesystem::absolute(path).lexically_normal();
+    }
+    return canonical;
+}
+
+std::string comparablePath(std::filesystem::path path) {
+    path = path.lexically_normal();
+    auto text = path.generic_string();
+#if defined(_WIN32)
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+#endif
+    return text;
+}
+
+bool isSameOrChildPath(const std::filesystem::path& root, const std::filesystem::path& path, bool recursive) {
+    const auto rootText = comparablePath(root);
+    const auto pathText = comparablePath(path);
+    if (rootText == pathText) {
+        return true;
+    }
+    if (!recursive || rootText.empty()) {
+        return false;
+    }
+    const auto prefix = rootText.back() == '/' ? rootText : rootText + "/";
+    return pathText.rfind(prefix, 0) == 0;
+}
+
+std::size_t positiveSizeOrDefault(std::size_t value, std::size_t fallback) {
+    return value == 0 ? fallback : value;
 }
 
 std::string protectedCallError(sol::protected_function_result& result) {
@@ -1551,10 +1656,42 @@ struct ScriptHost::Runtime {
     std::unique_ptr<LoadedStreamSchema> stream;
 };
 
+struct ScriptHost::FileHandle {
+    std::uint64_t id{0};
+    std::filesystem::path path;
+    std::fstream stream;
+    bool readable{false};
+    bool writable{false};
+    std::uint64_t bytesWritten{0};
+};
+
+struct ScriptHost::AuthorizedPath {
+    std::filesystem::path path;
+    bool recursive{false};
+    bool readable{true};
+    bool writable{true};
+};
+
+struct ScriptHost::FileSendJob {
+    std::uint64_t id{0};
+    std::uint64_t handleId{0};
+    TxRequestKind kind{TxRequestKind::Send};
+    std::string tag;
+    std::size_t chunkSize{0};
+    std::uint64_t total{0};
+    std::uint64_t nextOffset{0};
+    std::size_t inflight{0};
+    bool eof{false};
+};
+
 ScriptHost::ScriptHost()
     : runtime_(std::make_unique<Runtime>()) {}
 
 ScriptHost::~ScriptHost() = default;
+
+void ScriptHost::setFileIoConfig(FileIoConfig config) {
+    fileIoConfig_ = std::move(config);
+}
 
 bool ScriptHost::loadScriptFile(const std::string& path) {
     resetRuntime();
@@ -1586,6 +1723,27 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         sol::lib::os);
 
     auto& lua = runtime_->lua;
+    lua.new_usertype<ProtoBuffer>("ProtoBuffer",
+                                  "size",
+                                  &ProtoBuffer::size,
+                                  "slice",
+                                  &ProtoBuffer::slice,
+                                  "to_hex",
+                                  &ProtoBuffer::toHex,
+                                  "bytes",
+                                  [this](const ProtoBuffer& buffer, const sol::object& maxBytes) {
+                                      std::size_t limit = buffer.bytes.size();
+                                      if (maxBytes.valid() && maxBytes.get_type() != sol::type::lua_nil && maxBytes.is<int>()) {
+                                          limit = std::min<std::size_t>(limit, static_cast<std::size_t>(std::max(0, maxBytes.as<int>())));
+                                      }
+                                      limit = std::min(limit, fileIoConfig_.maxChunkBytes);
+                                      sol::table table = runtime_->lua.create_table(static_cast<int>(limit), 0);
+                                      for (std::size_t index = 0; index < limit; ++index) {
+                                          table[index + 1] = buffer.bytes[index];
+                                      }
+                                      return table;
+                                  });
+
     // 将协议脚本目录加入 Lua 模块搜索路径，使 main.lua 可 require 同目录模块。
     // 额外放开父目录，方便 protocols/<demo>/main.lua 共享 protocols/*.lua 公共脚本。
     // 使用 generic_string 格式，统一为 /，避免 Windows 反斜杠干扰 Lua package.path。
@@ -1675,6 +1833,48 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
                                sol::make_object(runtime_->lua, sol::lua_nil));
     });
     proto["ui"] = uiApi;
+
+    sol::table fsApi = runtime_->lua.create_table();
+    fsApi.set_function("open_file_dialog", [this](const sol::object& opts) {
+        std::string error;
+        const auto request = protoFileDialog(FileDialogKind::OpenFile, opts, error);
+        if (!request.has_value()) {
+            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
+                                   sol::make_object(runtime_->lua, error));
+        }
+        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
+                               sol::make_object(runtime_->lua, sol::lua_nil));
+    });
+    fsApi.set_function("open_dir_dialog", [this](const sol::object& opts) {
+        std::string error;
+        const auto request = protoFileDialog(FileDialogKind::OpenDir, opts, error);
+        if (!request.has_value()) {
+            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
+                                   sol::make_object(runtime_->lua, error));
+        }
+        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
+                               sol::make_object(runtime_->lua, sol::lua_nil));
+    });
+    fsApi.set_function("open", [this](const std::string& path, const sol::object& opts) {
+        return protoFsOpen(path, opts);
+    });
+    fsApi.set_function("read", [this](std::uint64_t handle, const sol::object& opts) {
+        return protoFsRead(handle, opts);
+    });
+    fsApi.set_function("write", [this](std::uint64_t handle, const sol::object& payload) {
+        return protoFsWrite(handle, payload);
+    });
+    fsApi.set_function("close", [this](std::uint64_t handle) {
+        return protoFsClose(handle);
+    });
+    fsApi.set_function("stat", [this](const std::string& path) {
+        return protoFsStat(path);
+    });
+    fsApi.set_function("send_file", [this](const std::string& path, const sol::object& opts) {
+        return protoFsSendFile(path, opts);
+    });
+    proto["fs"] = fsApi;
+
     sol::table plotApi = runtime_->lua.create_table();
     plotApi.set_function("setup", [this](const sol::object& payload) {
         std::string error;
@@ -1795,6 +1995,10 @@ void ScriptHost::resetRuntime() {
     requestDoneResults_.clear();
     statusUpdates_.clear();
     dialogRequests_.clear();
+    fileDialogRequests_.clear();
+    fileSendJobs_.clear();
+    fileHandles_.clear();
+    dialogAuthorizedPaths_.clear();
     activeConnection_.reset();
     requestAwaitingCompletion_ = false;
     runtime_ = std::make_unique<Runtime>();
@@ -1973,6 +2177,12 @@ std::vector<DialogRequest> ScriptHost::drainDialogRequests() {
     return drained;
 }
 
+std::vector<FileDialogRequest> ScriptHost::drainFileDialogRequests() {
+    auto drained = std::move(fileDialogRequests_);
+    fileDialogRequests_.clear();
+    return drained;
+}
+
 std::optional<std::uint64_t> ScriptHost::nextWakeupAtMs() const {
     std::optional<std::uint64_t> nextWakeup;
     for (const auto& [_, timer] : timers_) {
@@ -1999,11 +2209,40 @@ const std::string& ScriptHost::lastError() const {
 }
 
 void ScriptHost::onTxEvent(const transport::ConnectionContext& ctx, const TxEvent& event) {
+    const bool releaseFileChunk = event.state == TxEventState::Sent
+        || event.state == TxEventState::Rejected
+        || event.state == TxEventState::Dropped
+        || event.state == TxEventState::Canceled
+        || event.state == TxEventState::Timeout;
+    if (event.fileJobId != 0 && releaseFileChunk) {
+        const auto iter = fileSendJobs_.find(event.fileJobId);
+        if (iter != fileSendJobs_.end()) {
+            iter->second.inflight = iter->second.inflight == 0 ? 0 : iter->second.inflight - 1;
+            pumpFileSendJob(event.fileJobId);
+        }
+    }
     callbackOnTx(ScriptHostContext{ctx}, event);
 }
 
 void ScriptHost::onDialogEvent(const transport::ConnectionContext& ctx, const DialogEvent& event) {
     callbackOnDialog(ScriptHostContext{ctx}, event);
+}
+
+void ScriptHost::onFileDialogEvent(const transport::ConnectionContext& ctx, const FileDialogEvent& event) {
+    if (event.state == "selected" && !event.path.empty() && fileIoConfig_.allowDialogPaths) {
+        std::error_code errorCode;
+        auto path = std::filesystem::weakly_canonical(std::filesystem::absolute(event.path), errorCode);
+        if (errorCode) {
+            path = std::filesystem::absolute(event.path).lexically_normal();
+        }
+        dialogAuthorizedPaths_.push_back(AuthorizedPath{
+            .path = path,
+            .recursive = event.kind == FileDialogKind::OpenDir,
+            .readable = event.kind != FileDialogKind::SaveFile,
+            .writable = event.kind != FileDialogKind::OpenFile,
+        });
+    }
+    callbackOnFileDialog(ScriptHostContext{ctx}, event);
 }
 
 void ScriptHost::setRequestAwaitingCompletion(bool active) {
@@ -2170,6 +2409,22 @@ void ScriptHost::callbackOnDialog(const ScriptHostContext& ctx, const DialogEven
     }
 }
 
+void ScriptHost::callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event) {
+    if (!scriptLoaded_) {
+        return;
+    }
+    sol::state_view view(runtime_->lua.lua_state());
+    const sol::object callbackObject = runtime_->lua["on_file_dialog"];
+    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
+        return;
+    }
+    auto callback = callbackObject.as<sol::protected_function>();
+    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeFileDialogEventTable(view, event));
+    if (!result.valid()) {
+        protoLog("error", "on_file_dialog 执行失败: " + protectedCallError(result));
+    }
+}
+
 std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
                                                    const sol::object& payload,
                                                    const sol::object& opts,
@@ -2289,12 +2544,383 @@ std::optional<DialogRequest> ScriptHost::protoDialog(DialogKind kind, const sol:
     return request;
 }
 
+std::optional<FileDialogRequest> ScriptHost::protoFileDialog(FileDialogKind kind, const sol::object& opts, std::string& error) {
+    if (!fileIoConfig_.enabled) {
+        error = "scripting.file_io 已禁用";
+        return std::nullopt;
+    }
+    if (!fileIoConfig_.dialog.enabled) {
+        error = "scripting.file_io.dialog 已禁用";
+        return std::nullopt;
+    }
+    if (!opts.is<sol::table>()) {
+        error = "opts 必须是 table";
+        return std::nullopt;
+    }
+
+    const auto table = opts.as<sol::table>();
+    if (kind == FileDialogKind::OpenFile) {
+        const auto mode = luaStringField(table, "mode").value_or("open");
+        if (mode == "save") {
+            kind = FileDialogKind::SaveFile;
+        } else if (mode != "open") {
+            error = "mode 必须是 open 或 save";
+            return std::nullopt;
+        }
+    }
+
+    FileDialogRequest request{};
+    request.id = nextFileDialogId();
+    request.kind = kind;
+    request.title = luaStringField(table, "title").value_or(kind == FileDialogKind::OpenDir ? "选择目录" : "选择文件");
+    request.defaultPath = luaStringField(table, "default_path").value_or(".");
+    request.createdAtMs = nowMs();
+    if (activeConnection_.has_value()) {
+        request.connection = *activeConnection_;
+    } else {
+        request.connection.timestampMs = request.createdAtMs;
+        request.connection.endpoint = "detached";
+    }
+
+    const sol::object filtersObject = table["filters"];
+    if (filtersObject.valid() && filtersObject.get_type() != sol::type::lua_nil) {
+        if (!filtersObject.is<sol::table>()) {
+            error = "filters 必须是数组";
+            return std::nullopt;
+        }
+        const auto filters = filtersObject.as<sol::table>();
+        for (std::size_t index = 1; index <= filters.size(); ++index) {
+            const sol::object filterObject = filters[index];
+            if (!filterObject.is<sol::table>()) {
+                error = "filters 元素必须是 table";
+                return std::nullopt;
+            }
+            const auto filterTable = filterObject.as<sol::table>();
+            FileDialogFilter filter;
+            filter.name = luaStringField(filterTable, "name").value_or("Files");
+            const sol::object patternsObject = filterTable["patterns"];
+            if (patternsObject.is<sol::table>()) {
+                const auto patterns = patternsObject.as<sol::table>();
+                for (std::size_t patternIndex = 1; patternIndex <= patterns.size(); ++patternIndex) {
+                    const sol::object pattern = patterns[patternIndex];
+                    if (pattern.is<std::string>()) {
+                        filter.patterns.push_back(pattern.as<std::string>());
+                    }
+                }
+            }
+            request.filters.push_back(std::move(filter));
+        }
+    }
+
+    fileDialogRequests_.push_back(request);
+    return request;
+}
+
+std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(const std::string& pathText, const sol::object& opts) {
+    auto fail = [this](const std::string& error) {
+        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, error));
+    };
+    if (!fileIoConfig_.enabled) {
+        return fail("scripting.file_io 已禁用");
+    }
+    if (fileHandles_.size() >= fileIoConfig_.maxOpenFiles) {
+        return fail("打开文件数超过 max_open_files");
+    }
+
+    std::string mode = "read";
+    bool createDirs = false;
+    bool overwrite = false;
+    if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
+        if (!opts.is<sol::table>()) {
+            return fail("opts 必须是 table");
+        }
+        const auto table = opts.as<sol::table>();
+        mode = luaStringField(table, "mode").value_or(mode);
+        createDirs = luaBoolField(table, "create_dirs").value_or(false);
+        overwrite = luaBoolField(table, "overwrite").value_or(false);
+    }
+    const bool writeMode = mode == "write" || mode == "append";
+    const bool readMode = mode == "read";
+    if (!readMode && !writeMode) {
+        return fail("mode 必须是 read/write/append");
+    }
+
+    auto path = std::filesystem::path(pathText);
+    if (path.is_relative() && !protocolDirectory_.empty()) {
+        path = std::filesystem::path(protocolDirectory_) / path;
+    }
+    path = canonicalPath(path);
+
+    auto authorized = [&](bool writeAccess) {
+        if (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty()
+            && isSameOrChildPath(canonicalPath(protocolDirectory_), path, true)) {
+            return true;
+        }
+        for (const auto& root : fileIoConfig_.extraAllowedRoots) {
+            if (!root.empty() && isSameOrChildPath(canonicalPath(root), path, true)) {
+                return true;
+            }
+        }
+        for (const auto& root : dialogAuthorizedPaths_) {
+            if ((!writeAccess || root.writable) && (writeAccess || root.readable)
+                && isSameOrChildPath(root.path, path, root.recursive)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!authorized(writeMode)) {
+        return fail("路径未授权: " + path.generic_string());
+    }
+
+    std::error_code errorCode;
+    if (readMode) {
+        if (!std::filesystem::is_regular_file(path, errorCode)) {
+            return fail("文件不存在或不是普通文件: " + path.generic_string());
+        }
+        if (std::filesystem::file_size(path, errorCode) > fileIoConfig_.maxFileSizeBytes) {
+            return fail("文件大小超过 max_file_size_bytes");
+        }
+    } else {
+        if (createDirs) {
+            std::filesystem::create_directories(path.parent_path(), errorCode);
+            if (errorCode) {
+                return fail("创建目录失败: " + errorCode.message());
+            }
+        }
+        if (mode == "write" && std::filesystem::exists(path, errorCode) && !overwrite) {
+            return fail("文件已存在，需设置 overwrite=true");
+        }
+    }
+
+    auto handle = std::make_unique<FileHandle>();
+    handle->id = nextFileHandleId();
+    handle->path = path;
+    handle->readable = readMode;
+    handle->writable = writeMode;
+    auto openMode = std::ios::binary;
+    if (readMode) {
+        openMode |= std::ios::in;
+    } else {
+        openMode |= std::ios::out;
+        openMode |= mode == "append" ? std::ios::app : std::ios::trunc;
+    }
+    handle->stream.open(path, openMode);
+    if (!handle->stream.is_open()) {
+        return fail("打开文件失败: " + path.generic_string());
+    }
+
+    const auto id = handle->id;
+    fileHandles_[id] = std::move(handle);
+    return std::make_tuple(sol::make_object(runtime_->lua, id), sol::make_object(runtime_->lua, sol::lua_nil));
+}
+
+std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(std::uint64_t handleId, const sol::object& opts) {
+    auto fail = [this](const std::string& error) {
+        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, error));
+    };
+    const auto iter = fileHandles_.find(handleId);
+    if (iter == fileHandles_.end() || !iter->second->readable) {
+        return fail("文件句柄不可读或已关闭");
+    }
+
+    std::size_t maxBytes = fileIoConfig_.defaultChunkBytes;
+    if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
+        if (!opts.is<sol::table>()) {
+            return fail("opts 必须是 table");
+        }
+        const sol::object value = opts.as<sol::table>()["max_bytes"];
+        if (value.valid() && value.is<int>()) {
+            maxBytes = static_cast<std::size_t>(std::max(1, value.as<int>()));
+        }
+    }
+    maxBytes = std::min(positiveSizeOrDefault(maxBytes, fileIoConfig_.defaultChunkBytes), fileIoConfig_.maxChunkBytes);
+
+    ProtoBuffer buffer;
+    buffer.bytes.resize(maxBytes);
+    auto& stream = iter->second->stream;
+    stream.read(reinterpret_cast<char*>(buffer.bytes.data()), static_cast<std::streamsize>(buffer.bytes.size()));
+    const auto readCount = stream.gcount();
+    if (readCount <= 0) {
+        return fail("eof");
+    }
+    buffer.bytes.resize(static_cast<std::size_t>(readCount));
+    return std::make_tuple(sol::make_object(runtime_->lua, std::move(buffer)), sol::make_object(runtime_->lua, sol::lua_nil));
+}
+
+std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(std::uint64_t handleId, const sol::object& payload) {
+    auto fail = [this](const std::string& error) {
+        return std::make_tuple(sol::make_object(runtime_->lua, false), sol::make_object(runtime_->lua, error));
+    };
+    const auto iter = fileHandles_.find(handleId);
+    if (iter == fileHandles_.end() || !iter->second->writable) {
+        return fail("文件句柄不可写或已关闭");
+    }
+    std::string error;
+    const auto bytes = bytesFromLuaObject(payload, error);
+    if (!bytes.has_value()) {
+        return fail(error);
+    }
+    auto& handle = *iter->second;
+    if (handle.bytesWritten + bytes->size() > fileIoConfig_.maxWriteFileSizeBytes) {
+        return fail("写入大小超过 max_write_file_size_bytes");
+    }
+    handle.stream.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
+    if (!handle.stream.good()) {
+        return fail("写入文件失败");
+    }
+    handle.bytesWritten += bytes->size();
+    return std::make_tuple(sol::make_object(runtime_->lua, true), sol::make_object(runtime_->lua, sol::lua_nil));
+}
+
+std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(std::uint64_t handleId) {
+    const auto iter = fileHandles_.find(handleId);
+    if (iter == fileHandles_.end()) {
+        return std::make_tuple(sol::make_object(runtime_->lua, false), sol::make_object(runtime_->lua, "文件句柄已关闭"));
+    }
+    fileHandles_.erase(iter);
+    return std::make_tuple(sol::make_object(runtime_->lua, true), sol::make_object(runtime_->lua, sol::lua_nil));
+}
+
+std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(const std::string& pathText) {
+    auto fail = [this](const std::string& error) {
+        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, error));
+    };
+    if (!fileIoConfig_.enabled) {
+        return fail("scripting.file_io 已禁用");
+    }
+    auto path = std::filesystem::path(pathText);
+    if (path.is_relative() && !protocolDirectory_.empty()) {
+        path = std::filesystem::path(protocolDirectory_) / path;
+    }
+    path = canonicalPath(path);
+    const bool authorized = (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty()
+                             && isSameOrChildPath(canonicalPath(protocolDirectory_), path, true))
+        || std::any_of(fileIoConfig_.extraAllowedRoots.begin(),
+                       fileIoConfig_.extraAllowedRoots.end(),
+                       [&](const std::string& root) {
+                           return !root.empty() && isSameOrChildPath(canonicalPath(root), path, true);
+                       })
+        || std::any_of(dialogAuthorizedPaths_.begin(),
+                       dialogAuthorizedPaths_.end(),
+                       [&](const AuthorizedPath& root) {
+                           return root.readable && isSameOrChildPath(root.path, path, root.recursive);
+                       });
+    if (!authorized) {
+        return fail("路径未授权: " + path.generic_string());
+    }
+
+    std::error_code errorCode;
+    if (!std::filesystem::exists(path, errorCode)) {
+        return fail("路径不存在: " + path.generic_string());
+    }
+    sol::table table = runtime_->lua.create_table();
+    table["size"] = std::filesystem::is_regular_file(path, errorCode)
+        ? static_cast<std::uint64_t>(std::filesystem::file_size(path, errorCode))
+        : 0U;
+    table["mtime_ms"] = 0;
+    table["is_file"] = std::filesystem::is_regular_file(path, errorCode);
+    table["is_dir"] = std::filesystem::is_directory(path, errorCode);
+    return std::make_tuple(sol::make_object(runtime_->lua, table), sol::make_object(runtime_->lua, sol::lua_nil));
+}
+
+std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(const std::string& pathText, const sol::object& opts) {
+    std::string kind = "send";
+    std::string tag = "file";
+    std::size_t chunkSize = fileIoConfig_.sendFile.defaultChunkBytes;
+    if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
+        if (!opts.is<sol::table>()) {
+            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, "opts 必须是 table"));
+        }
+        const auto table = opts.as<sol::table>();
+        kind = luaStringField(table, "kind").value_or(kind);
+        tag = luaStringField(table, "tag").value_or(tag);
+        const sol::object chunk = table["chunk_size"];
+        if (chunk.valid() && chunk.is<int>()) {
+            chunkSize = static_cast<std::size_t>(std::max(1, chunk.as<int>()));
+        }
+    }
+    chunkSize = std::min(chunkSize, fileIoConfig_.maxChunkBytes);
+    const auto [handleObject, openError] = protoFsOpen(pathText, sol::make_object(runtime_->lua, sol::lua_nil));
+    if (!handleObject.valid() || handleObject.get_type() == sol::type::lua_nil) {
+        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), openError);
+    }
+
+    const auto handleId = handleObject.as<std::uint64_t>();
+    const auto total = std::filesystem::file_size(fileHandles_[handleId]->path);
+    const auto jobId = nextFileJobId();
+    fileSendJobs_[jobId] = FileSendJob{
+        .id = jobId,
+        .handleId = handleId,
+        .kind = kind == "request" ? TxRequestKind::Request : TxRequestKind::Send,
+        .tag = tag,
+        .chunkSize = chunkSize,
+        .total = total,
+    };
+    pumpFileSendJob(jobId);
+    return std::make_tuple(sol::make_object(runtime_->lua, jobId), sol::make_object(runtime_->lua, sol::lua_nil));
+}
+
+void ScriptHost::pumpFileSendJob(std::uint64_t jobId) {
+    auto jobIter = fileSendJobs_.find(jobId);
+    if (jobIter == fileSendJobs_.end()) {
+        return;
+    }
+    auto& job = jobIter->second;
+    const std::size_t maxInflight = std::max<std::size_t>(1, fileIoConfig_.sendFile.maxInflightChunks);
+    while (!job.eof && job.inflight < maxInflight) {
+        sol::table readOpts = runtime_->lua.create_table();
+        readOpts["max_bytes"] = static_cast<int>(job.chunkSize);
+        const auto offset = job.nextOffset;
+        const auto [bufferObject, readError] = protoFsRead(job.handleId, sol::make_object(runtime_->lua, readOpts));
+        if (!bufferObject.valid() || bufferObject.get_type() == sol::type::lua_nil) {
+            job.eof = true;
+            break;
+        }
+
+        std::string error;
+        const auto nilObject = sol::make_object(runtime_->lua, sol::lua_nil);
+        const auto request = protoSendLike(job.kind, bufferObject, nilObject, error);
+        if (!request.has_value()) {
+            protoLog("error", "proto.fs.send_file 发送分块失败: " + error);
+            job.eof = true;
+            break;
+        }
+        if (!job.tag.empty()) {
+            txRequests_.back().tag = job.tag;
+        }
+        txRequests_.back().fileJobId = job.id;
+        txRequests_.back().fileOffset = offset;
+        txRequests_.back().fileTotal = job.total;
+        job.nextOffset += txRequests_.back().payload.size();
+        ++job.inflight;
+    }
+
+    if (job.eof && job.inflight == 0) {
+        const auto handleId = job.handleId;
+        fileSendJobs_.erase(jobIter);
+        protoFsClose(handleId);
+    }
+}
+
 std::uint64_t ScriptHost::nextTxRequestId() {
     return nextTxRequestId_++;
 }
 
 std::uint64_t ScriptHost::nextDialogId() {
     return nextDialogId_++;
+}
+
+std::uint64_t ScriptHost::nextFileDialogId() {
+    return nextFileDialogId_++;
+}
+
+std::uint64_t ScriptHost::nextFileHandleId() {
+    return nextFileHandleId_++;
+}
+
+std::uint64_t ScriptHost::nextFileJobId() {
+    return nextFileJobId_++;
 }
 
 void ScriptHost::protoLog(const std::string& level, const std::string& message) {

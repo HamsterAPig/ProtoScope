@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protoscope/dock/docks.hpp"
+#include "protoscope/scripting/file_io_config.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -81,10 +82,15 @@ struct ProtocolConfig {
     ProtocolTxConfig tx{};
 };
 
+struct ScriptingConfig {
+    scripting::FileIoConfig fileIo{};
+};
+
 struct AppConfig {
     AppRuntimeConfig app{};
     GuiConfig gui{};
     ProtocolConfig protocol{};
+    ScriptingConfig scripting{};
     AppLoggingConfig logging{};
     dock::CommDockState communication{};
     std::string configPath{"config/protoscope.yaml"};

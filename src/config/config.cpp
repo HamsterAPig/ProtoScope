@@ -20,6 +20,18 @@ T readScalar(const YAML::Node& node, const char* key, T fallback) {
     return node[key].as<T>();
 }
 
+std::vector<std::string> readStringList(const YAML::Node& node, const char* key, std::vector<std::string> fallback) {
+    if (!node || !node[key] || !node[key].IsSequence()) {
+        return fallback;
+    }
+
+    std::vector<std::string> values;
+    for (const auto& item : node[key]) {
+        values.push_back(item.as<std::string>());
+    }
+    return values;
+}
+
 std::string normalizeTextPath(std::filesystem::path path) {
     path.make_preferred();
     return path.generic_string();
@@ -236,6 +248,32 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.protocol.tx.overflowNotify =
                 readScalar<std::string>(tx, "overflow_notify", result.config.protocol.tx.overflowNotify);
         }
+
+        const auto scripting = root["scripting"];
+        if (const auto fileIo = scripting["file_io"]) {
+            auto& config = result.config.scripting.fileIo;
+            config.enabled = readScalar<bool>(fileIo, "enabled", config.enabled);
+            config.allowProtocolDir = readScalar<bool>(fileIo, "allow_protocol_dir", config.allowProtocolDir);
+            config.allowDialogPaths = readScalar<bool>(fileIo, "allow_dialog_paths", config.allowDialogPaths);
+            config.extraAllowedRoots = readStringList(fileIo, "extra_allowed_roots", config.extraAllowedRoots);
+            config.maxOpenFiles = readScalar<std::size_t>(fileIo, "max_open_files", config.maxOpenFiles);
+            config.defaultChunkBytes = readScalar<std::size_t>(fileIo, "default_chunk_bytes", config.defaultChunkBytes);
+            config.maxChunkBytes = readScalar<std::size_t>(fileIo, "max_chunk_bytes", config.maxChunkBytes);
+            config.maxFileSizeBytes = readScalar<std::uint64_t>(fileIo, "max_file_size_bytes", config.maxFileSizeBytes);
+            config.maxWriteFileSizeBytes =
+                readScalar<std::uint64_t>(fileIo, "max_write_file_size_bytes", config.maxWriteFileSizeBytes);
+            if (const auto dialog = fileIo["dialog"]) {
+                config.dialog.enabled = readScalar<bool>(dialog, "enabled", config.dialog.enabled);
+                config.dialog.rememberLastDir = readScalar<bool>(dialog, "remember_last_dir", config.dialog.rememberLastDir);
+            }
+            if (const auto sendFile = fileIo["send_file"]) {
+                config.sendFile.defaultChunkBytes =
+                    readScalar<std::size_t>(sendFile, "default_chunk_bytes", config.sendFile.defaultChunkBytes);
+                config.sendFile.maxInflightChunks =
+                    readScalar<std::size_t>(sendFile, "max_inflight_chunks", config.sendFile.maxInflightChunks);
+            }
+        }
+
         const auto logging = root["logging"];
         result.config.logging.level =
             parseLogLevel(readScalar<std::string>(logging, "level", toLogLevelText(result.config.logging.level)));
@@ -327,6 +365,26 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["protocol"]["tx"]["max_pending"] = config.protocol.tx.maxPending;
     root["protocol"]["tx"]["overflow_policy"] = config.protocol.tx.overflowPolicy;
     root["protocol"]["tx"]["overflow_notify"] = config.protocol.tx.overflowNotify;
+
+    root["scripting"]["file_io"]["enabled"] = config.scripting.fileIo.enabled;
+    root["scripting"]["file_io"]["allow_protocol_dir"] = config.scripting.fileIo.allowProtocolDir;
+    root["scripting"]["file_io"]["allow_dialog_paths"] = config.scripting.fileIo.allowDialogPaths;
+    for (const auto& rootPath : config.scripting.fileIo.extraAllowedRoots) {
+        root["scripting"]["file_io"]["extra_allowed_roots"].push_back(rootPath);
+    }
+    if (config.scripting.fileIo.extraAllowedRoots.empty()) {
+        root["scripting"]["file_io"]["extra_allowed_roots"] = YAML::Node(YAML::NodeType::Sequence);
+    }
+    root["scripting"]["file_io"]["max_open_files"] = config.scripting.fileIo.maxOpenFiles;
+    root["scripting"]["file_io"]["default_chunk_bytes"] = config.scripting.fileIo.defaultChunkBytes;
+    root["scripting"]["file_io"]["max_chunk_bytes"] = config.scripting.fileIo.maxChunkBytes;
+    root["scripting"]["file_io"]["max_file_size_bytes"] = config.scripting.fileIo.maxFileSizeBytes;
+    root["scripting"]["file_io"]["max_write_file_size_bytes"] = config.scripting.fileIo.maxWriteFileSizeBytes;
+    root["scripting"]["file_io"]["dialog"]["enabled"] = config.scripting.fileIo.dialog.enabled;
+    root["scripting"]["file_io"]["dialog"]["remember_last_dir"] = config.scripting.fileIo.dialog.rememberLastDir;
+    root["scripting"]["file_io"]["send_file"]["default_chunk_bytes"] = config.scripting.fileIo.sendFile.defaultChunkBytes;
+    root["scripting"]["file_io"]["send_file"]["max_inflight_chunks"] = config.scripting.fileIo.sendFile.maxInflightChunks;
+
     root["logging"]["level"] = toLogLevelText(config.logging.level);
     if (!config.logging.filePath.empty()) {
         root["logging"]["file_path"] = config.logging.filePath;

@@ -2,6 +2,7 @@
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
+#include "protoscope/scripting/file_io_config.hpp"
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/transport/transport.hpp"
 
@@ -10,10 +11,13 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -187,6 +191,14 @@ enum class TxRequestKind {
     Request,
 };
 
+struct ProtoBuffer {
+    std::vector<std::uint8_t> bytes;
+
+    [[nodiscard]] std::size_t size() const;
+    [[nodiscard]] ProtoBuffer slice(std::size_t offset, std::size_t size) const;
+    [[nodiscard]] std::string toHex(std::size_t maxBytes = 0) const;
+};
+
 struct TxRequest {
     std::uint64_t id{0};
     TxRequestKind kind{TxRequestKind::Send};
@@ -195,6 +207,9 @@ struct TxRequest {
     std::uint64_t timeoutMs{1000};
     std::string tag;
     std::uint64_t createdAtMs{0};
+    std::uint64_t fileJobId{0};
+    std::uint64_t fileOffset{0};
+    std::uint64_t fileTotal{0};
 };
 
 enum class TxEventState {
@@ -214,6 +229,10 @@ struct TxEvent {
     std::size_t bytes{0};
     std::uint64_t queuedMs{0};
     std::uint64_t finishedMs{0};
+    std::uint64_t fileJobId{0};
+    std::uint64_t offset{0};
+    std::uint64_t total{0};
+    double progress{0.0};
     std::optional<std::string> error;
 };
 
@@ -233,6 +252,36 @@ struct StatusUpdate {
 enum class DialogKind {
     Alert,
     Confirm,
+};
+
+enum class FileDialogKind {
+    OpenFile,
+    SaveFile,
+    OpenDir,
+};
+
+struct FileDialogFilter {
+    std::string name;
+    std::vector<std::string> patterns;
+};
+
+struct FileDialogRequest {
+    std::uint64_t id{0};
+    FileDialogKind kind{FileDialogKind::OpenFile};
+    transport::ConnectionContext connection{};
+    std::string title;
+    std::string defaultPath;
+    std::vector<FileDialogFilter> filters;
+    std::uint64_t createdAtMs{0};
+};
+
+struct FileDialogEvent {
+    std::uint64_t id{0};
+    FileDialogKind kind{FileDialogKind::OpenFile};
+    std::string state;
+    std::string path;
+    std::string error;
+    std::uint64_t timestampMs{0};
 };
 
 struct DialogRequest {
@@ -265,6 +314,7 @@ public:
 
     bool loadScriptFile(const std::string& path);
     bool loadProtocolDirectory(const std::string& directory);
+    void setFileIoConfig(FileIoConfig config);
     void resetRuntime();
 
     void onTransportOpen(const transport::TransportOpenEvent& event);
@@ -287,6 +337,7 @@ public:
     std::vector<RequestDoneResult> drainRequestDoneResults();
     std::vector<StatusUpdate> drainStatusUpdates();
     std::vector<DialogRequest> drainDialogRequests();
+    std::vector<FileDialogRequest> drainFileDialogRequests();
     std::optional<std::uint64_t> nextWakeupAtMs() const;
 
     const std::string& scriptPath() const;
@@ -295,6 +346,7 @@ public:
 
     void onTxEvent(const transport::ConnectionContext& ctx, const TxEvent& event);
     void onDialogEvent(const transport::ConnectionContext& ctx, const DialogEvent& event);
+    void onFileDialogEvent(const transport::ConnectionContext& ctx, const FileDialogEvent& event);
     void setRequestAwaitingCompletion(bool active);
 
 private:
@@ -308,6 +360,7 @@ private:
     void callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value);
     void callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event);
     void callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event);
+    void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
 
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
@@ -323,13 +376,27 @@ private:
     void protoStatusSet(const std::string& text, const sol::object& opts);
     void protoStatusClear();
     std::optional<DialogRequest> protoDialog(DialogKind kind, const sol::object& opts, std::string& error);
+    std::optional<FileDialogRequest> protoFileDialog(FileDialogKind kind, const sol::object& opts, std::string& error);
+    std::tuple<sol::object, sol::object> protoFsOpen(const std::string& path, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsRead(std::uint64_t handle, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsWrite(std::uint64_t handle, const sol::object& payload);
+    std::tuple<sol::object, sol::object> protoFsClose(std::uint64_t handle);
+    std::tuple<sol::object, sol::object> protoFsStat(const std::string& path);
+    std::tuple<sol::object, sol::object> protoFsSendFile(const std::string& path, const sol::object& opts);
     std::uint64_t nextTxRequestId();
     std::uint64_t nextDialogId();
+    std::uint64_t nextFileDialogId();
+    std::uint64_t nextFileHandleId();
+    std::uint64_t nextFileJobId();
+    void pumpFileSendJob(std::uint64_t jobId);
 
     static std::string valueToString(const ControlValue& value);
     void setLastError(std::string message);
 
     struct Runtime;
+    struct FileHandle;
+    struct AuthorizedPath;
+    struct FileSendJob;
 
 private:
     struct TimerState {
@@ -353,11 +420,19 @@ private:
     std::vector<RequestDoneResult> requestDoneResults_;
     std::vector<StatusUpdate> statusUpdates_;
     std::vector<DialogRequest> dialogRequests_;
+    std::vector<FileDialogRequest> fileDialogRequests_;
     std::unordered_map<std::string, TimerState> timers_;
+    std::unordered_map<std::uint64_t, std::unique_ptr<FileHandle>> fileHandles_;
+    std::unordered_map<std::uint64_t, FileSendJob> fileSendJobs_;
+    std::vector<AuthorizedPath> dialogAuthorizedPaths_;
     std::optional<transport::ConnectionContext> activeConnection_;
     std::unique_ptr<Runtime> runtime_;
+    FileIoConfig fileIoConfig_{};
     std::uint64_t nextTxRequestId_{1};
     std::uint64_t nextDialogId_{1};
+    std::uint64_t nextFileDialogId_{1};
+    std::uint64_t nextFileHandleId_{1};
+    std::uint64_t nextFileJobId_{1};
     bool requestAwaitingCompletion_{false};
 };
 

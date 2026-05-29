@@ -12,12 +12,37 @@ ProtoScope 脚本 API 定义文件。
 ---@alias ProtoDockAnchor 'left'|'left_bottom'|'right_top'|'right_mid'|'right_bottom'|'main_bottom'
 ---@alias ProtoControlValue boolean|integer|number|string|ProtoElfSymbolValue|nil
 ---@alias ProtoBytes integer[]
----@alias ProtoPayload string|ProtoBytes
+---@alias ProtoPayload string|ProtoBytes|ProtoBuffer
 ---@alias ProtoFormLayoutItem ProtoFormControlItem|ProtoFormControlsItem|ProtoFormGroupItem|ProtoFormCollapseItem|ProtoFormSeparatorItem|ProtoFormTextItem
 ---@alias ProtoTxKind 'send'|'request'
 ---@alias ProtoTxState 'sent'|'completed'|'timeout'|'rejected'|'dropped'|'canceled'
 ---@alias ProtoDialogKind 'alert'|'confirm'
 ---@alias ProtoDialogState 'closed'|'confirmed'|'canceled'
+---@alias ProtoFileDialogKind 'open_file'|'save_file'|'open_dir'
+---@alias ProtoFileDialogState 'selected'|'canceled'|'error'
+
+---@class ProtoBuffer
+local ProtoBuffer = {}
+
+-- 返回缓冲区字节数。
+---@return integer
+function ProtoBuffer:size() end
+
+-- 按 0 基偏移切片，返回新的轻量二进制缓冲。
+---@param offset integer
+---@param size integer
+---@return ProtoBuffer
+function ProtoBuffer:slice(offset, size) end
+
+-- 转成十六进制文本，适合小数据调试。
+---@param max_bytes? integer
+---@return string
+function ProtoBuffer:to_hex(max_bytes) end
+
+-- 转成 Lua number[]，仅建议小数据调试使用。
+---@param max_bytes? integer
+---@return ProtoBytes
+function ProtoBuffer:bytes(max_bytes) end
 
 -- 表格布局：用于以表格方式组织停靠面板中的控件。
 ---@class ProtoTableCell
@@ -144,6 +169,10 @@ ProtoScope 脚本 API 定义文件。
 ---@field bytes integer
 ---@field queued_ms integer
 ---@field finished_ms integer
+---@field file_job_id? integer
+---@field offset? integer
+---@field total? integer
+---@field progress? number
 ---@field error? string
 
 -- 状态栏配置：控制状态文本的提示级别。
@@ -169,10 +198,53 @@ ProtoScope 脚本 API 定义文件。
 ---@field dedupe_key string
 ---@field timestamp_ms integer
 
+---@class ProtoFileDialogFilter
+---@field name string
+---@field patterns string[]
+
+---@class ProtoFileDialogOptions
+---@field mode? 'open'|'save'
+---@field title? string
+---@field default_path? string
+---@field filters? ProtoFileDialogFilter[]
+
+---@class ProtoDirDialogOptions
+---@field title? string
+---@field default_path? string
+
+---@class ProtoFileOpenOptions
+---@field mode? 'read'|'write'|'append'
+---@field binary? boolean
+---@field create_dirs? boolean
+---@field overwrite? boolean
+
+---@class ProtoFileReadOptions
+---@field max_bytes? integer
+
+---@class ProtoFileStat
+---@field size integer
+---@field mtime_ms integer
+---@field is_file boolean
+---@field is_dir boolean
+
+---@class ProtoSendFileOptions
+---@field kind? 'send'|'request'
+---@field chunk_size? integer
+---@field tag? string
+
+---@class ProtoFileDialogEvent
+---@field id integer
+---@field kind ProtoFileDialogKind
+---@field state ProtoFileDialogState
+---@field path? string
+---@field error? string
+---@field timestamp_ms integer
+
 proto = proto or {}
 proto.plot = proto.plot or {}
 proto.status = proto.status or {}
 proto.ui = proto.ui or {}
+proto.fs = proto.fs or {}
 proto.bits = proto.bits or {}
 
 -- 记录脚本日志，便于调试协议、状态流转和异常定位。
@@ -238,6 +310,58 @@ function proto.ui.alert(opts) end
 ---@return integer|nil dialog_id
 ---@return string|nil error
 function proto.ui.confirm(opts) end
+
+-- 打开系统文件选择对话框，结果通过 on_file_dialog 异步返回。
+---@param opts ProtoFileDialogOptions
+---@return integer|nil dialog_id
+---@return string|nil error
+function proto.fs.open_file_dialog(opts) end
+
+-- 打开系统目录选择对话框，授权所选目录及子路径。
+---@param opts ProtoDirDialogOptions
+---@return integer|nil dialog_id
+---@return string|nil error
+function proto.fs.open_dir_dialog(opts) end
+
+-- 打开已授权路径，返回宿主文件句柄。
+---@param path string
+---@param opts? ProtoFileOpenOptions
+---@return integer|nil handle
+---@return string|nil error
+function proto.fs.open(path, opts) end
+
+-- 从文件句柄读取一个二进制分块；EOF 固定返回 nil, "eof"。
+---@param handle integer
+---@param opts? ProtoFileReadOptions
+---@return ProtoBuffer|nil chunk
+---@return string|nil error
+function proto.fs.read(handle, opts) end
+
+-- 向文件句柄写入二进制数据。
+---@param handle integer
+---@param chunk ProtoPayload
+---@return boolean ok
+---@return string|nil error
+function proto.fs.write(handle, chunk) end
+
+-- 关闭文件句柄。
+---@param handle integer
+---@return boolean ok
+---@return string|nil error
+function proto.fs.close(handle) end
+
+-- 查询已授权路径的文件状态。
+---@param path string
+---@return ProtoFileStat|nil info
+---@return string|nil error
+function proto.fs.stat(path) end
+
+-- 由宿主分块读取文件并排队发送，适合纯透传。
+---@param path string
+---@param opts? ProtoSendFileOptions
+---@return integer|nil job_id
+---@return string|nil error
+function proto.fs.send_file(path, opts) end
 
 -- 配置波形视图，通常在连接建立后先调用一次完成通道初始化。
 ---@param payload ProtoPlotSetup
@@ -319,3 +443,8 @@ function on_tx(ctx, evt) end
 ---@param ctx ProtoConnectionContext
 ---@param evt ProtoDialogEvent
 function on_dialog(ctx, evt) end
+
+-- 文件对话框事件回调：用于接收文件/目录选择、取消或错误。
+---@param ctx ProtoConnectionContext
+---@param evt ProtoFileDialogEvent
+function on_file_dialog(ctx, evt) end

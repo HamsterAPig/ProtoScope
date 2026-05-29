@@ -470,6 +470,31 @@ std::string wideToUtf8(const std::wstring& text) {
     return result;
 }
 
+std::wstring fileDialogFilterText(const std::vector<scripting::FileDialogFilter>& filters) {
+    if (filters.empty()) {
+        return std::wstring(L"All Files\0*.*\0\0", 15);
+    }
+
+    std::wstring text;
+    for (const auto& filter : filters) {
+        text += utf8ToWide(filter.name.empty() ? "Files" : filter.name);
+        text.push_back(L'\0');
+        if (filter.patterns.empty()) {
+            text += L"*.*";
+        } else {
+            for (std::size_t index = 0; index < filter.patterns.size(); ++index) {
+                if (index > 0) {
+                    text.push_back(L';');
+                }
+                text += utf8ToWide(filter.patterns[index]);
+            }
+        }
+        text.push_back(L'\0');
+    }
+    text.push_back(L'\0');
+    return text;
+}
+
 std::optional<std::string> chooseProtocolRootDirectory(const std::string& currentDir) {
     BROWSEINFOW browseInfo{};
     browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
@@ -494,6 +519,53 @@ std::optional<std::string> chooseProtocolRootDirectory(const std::string& curren
     return wideToUtf8(path);
 }
 #endif
+
+scripting::FileDialogEvent runLuaFileDialog(GLFWwindow* window, const scripting::FileDialogRequest& request) {
+    scripting::FileDialogEvent event{};
+    event.id = request.id;
+    event.kind = request.kind;
+    event.timestampMs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+
+#if defined(_WIN32)
+    if (request.kind == scripting::FileDialogKind::OpenDir) {
+        const auto selected = chooseProtocolRootDirectory(request.defaultPath);
+        if (selected.has_value()) {
+            event.state = "selected";
+            event.path = *selected;
+        } else {
+            event.state = "canceled";
+        }
+        return event;
+    }
+
+    std::string error;
+    const auto title = utf8ToWide(request.title.empty() ? "选择文件" : request.title);
+    const auto filters = fileDialogFilterText(request.filters);
+    const auto selected = nativeFileDialog(window,
+                                           title.c_str(),
+                                           filters.c_str(),
+                                           request.defaultPath.empty() ? std::filesystem::path{} : std::filesystem::path(request.defaultPath),
+                                           request.kind == scripting::FileDialogKind::SaveFile,
+                                           nullptr,
+                                           error);
+    if (selected.has_value()) {
+        event.state = "selected";
+        event.path = selected->generic_string();
+    } else if (!error.empty()) {
+        event.state = "error";
+        event.error = error;
+    } else {
+        event.state = "canceled";
+    }
+    return event;
+#else
+    (void)window;
+    event.state = "error";
+    event.error = "当前平台尚未实现原生文件对话框";
+    return event;
+#endif
+}
 
 void syncDraftFromModel(std::string& draft, std::string& lastModel, const std::string& model) {
     if (draft.empty() || lastModel != model) {
@@ -1083,6 +1155,9 @@ void GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& 
 void GuiRuntime::syncDialogQueue() {
     for (auto& request : application_.drainDialogRequests()) {
         dialogQueue_.push_back(std::move(request));
+    }
+    for (auto& request : application_.drainFileDialogRequests()) {
+        application_.respondFileDialog(runLuaFileDialog(window_, request));
     }
     if (!activeDialog_.has_value() && !dialogQueue_.empty()) {
         activeDialog_ = std::move(dialogQueue_.front());

@@ -174,6 +174,7 @@ bool Application::initialize() {
 
 bool Application::applyConfig(const config::AppConfig& config) {
     runtimeConfig_ = config;
+    scriptHost_.setFileIoConfig(config.scripting.fileIo);
     configStore_.applyToDock(config, dockStore_);
     loggingFacade_.applyConfig(config.logging);
     return reloadProtocolDirectory(dockStore_.luaState().protocolDir);
@@ -183,6 +184,7 @@ config::AppConfig Application::captureConfig() const {
     auto captured = configStore_.captureFromDock(dockStore_);
     captured.gui = runtimeConfig_.gui;
     captured.app.language = runtimeConfig_.app.language;
+    captured.scripting = runtimeConfig_.scripting;
     captured.logging = loggingFacade_.currentConfig();
     return captured;
 }
@@ -207,6 +209,7 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     cancelAllTxRequests("协议已重新加载");
 
     scripting::ScriptHost probeHost;
+    probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
     if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
         lua.lastError = probeHost.lastError();
         loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
@@ -729,6 +732,11 @@ bool Application::flushScriptStatusAndDialogs() {
         enqueueDialogRequest(request);
         changed = true;
     }
+    for (const auto& request : scriptHost_.drainFileDialogRequests()) {
+        pendingFileDialogs_.push_back(request);
+        openFileDialogs_[request.id] = request;
+        changed = true;
+    }
     return changed;
 }
 
@@ -877,6 +885,12 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
                               .bytes = request.payload.size(),
                               .queuedMs = request.createdAtMs,
                               .finishedMs = finishedAtMs,
+                              .fileJobId = request.fileJobId,
+                              .offset = request.fileOffset,
+                              .total = request.fileTotal,
+                              .progress = request.fileTotal == 0
+                                  ? 0.0
+                                  : static_cast<double>(request.fileOffset + request.payload.size()) / static_cast<double>(request.fileTotal),
                               .error = std::move(error),
                           });
 }
@@ -966,6 +980,26 @@ void Application::respondDialog(const scripting::DialogEvent& event) {
     }
     openDialogs_.erase(iter);
     scriptHost_.onDialogEvent(request.connection, event);
+}
+
+std::vector<scripting::FileDialogRequest> Application::drainFileDialogRequests() {
+    std::vector<scripting::FileDialogRequest> drained;
+    drained.reserve(pendingFileDialogs_.size());
+    while (!pendingFileDialogs_.empty()) {
+        drained.push_back(std::move(pendingFileDialogs_.front()));
+        pendingFileDialogs_.pop_front();
+    }
+    return drained;
+}
+
+void Application::respondFileDialog(const scripting::FileDialogEvent& event) {
+    const auto iter = openFileDialogs_.find(event.id);
+    if (iter == openFileDialogs_.end()) {
+        return;
+    }
+    const auto request = iter->second;
+    openFileDialogs_.erase(iter);
+    scriptHost_.onFileDialogEvent(request.connection, event);
 }
 
 bool Application::flushScriptPlots() {

@@ -52,6 +52,8 @@ public:
     const logging::LoggingFacade& logger() const;
     std::vector<scripting::DialogRequest> drainDialogRequests();
     void respondDialog(const scripting::DialogEvent& event);
+    std::vector<scripting::FileDialogRequest> drainFileDialogRequests();
+    void respondFileDialog(const scripting::FileDialogEvent& event);
 
     std::optional<std::uint64_t> nextWakeupAtMs() const;
     void setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
@@ -97,6 +99,8 @@ private:
     std::optional<ActiveTxRequest> activeHalfDuplexRequest_;
     std::deque<scripting::DialogRequest> pendingDialogs_;
     std::unordered_map<std::uint64_t, scripting::DialogRequest> openDialogs_;
+    std::deque<scripting::FileDialogRequest> pendingFileDialogs_;
+    std::unordered_map<std::uint64_t, scripting::FileDialogRequest> openFileDialogs_;
     std::unordered_map<std::string, std::uint64_t> dialogDedupeKeys_;
 };
 
