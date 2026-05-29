@@ -1,0 +1,53 @@
+protocols:
+  D__Code_Cpp_ProtoScope-AI_build_src_protocols_default_protocol:
+    controls:
+      device_id:
+        type: input_text
+        value: 01
+      hex_send:
+        type: checkbox
+        value: true
+      mode:
+        type: combo
+        value: 0
+      timeout_ms:
+        type: input_int
+        value: 1000
+      scale:
+        type: input_float
+        value: 1
+    wave:
+      auto_follow_latest: true
+      pause_auto_follow_on_interaction: true
+      lock_vertical_range: false
+      show_points_when_sparse: true
+      show_axis_labels: false
+      show_hover_readout: true
+      show_cursors: true
+      show_measurement_overlay: true
+      phosphor_glow_enabled: true
+      cursor_interval_locked: false
+      measurement_channel_index: 0
+      sample_frequency_hz: 0
+      sample_frequency_input: ""
+      time_axis_source: sample_index
+      cursor_snap_mode: smart
+      cursor_snap_scope: all_channels
+      locked_cursor_interval: 0
+      tools_collapsed: false
+      overview_collapsed: false
+      tools_expanded_width: 280
+      overview_panel_height: 120
+      overview_collapsed_height: 30
+      cursors:
+        - enabled: true
+          pinned: false
+          channel_index: 0
+          time: 0
+          value: 0
+        - enabled: true
+          pinned: false
+          channel_index: 0
+          time: 0
+          value: 0
+      channel_overrides: ~

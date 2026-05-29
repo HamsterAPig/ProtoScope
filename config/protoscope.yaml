@@ -27,10 +27,17 @@ gui:
     overview_max_samples: 20000
     min_visible_time_span: 0.001
     show_axis_labels: false
+  lua_dock_layout_debug: false
 
 protocol:
   root_dir: protocols
   selected_dir: protocols/default_protocol
+  tx:
+    send_timeout_ms: 1000
+    request_timeout_ms: 1000
+    max_pending: 64
+    overflow_policy: reject_new
+    overflow_notify: popup_once
 
 scripting:
   file_io:
