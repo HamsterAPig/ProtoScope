@@ -36,17 +36,25 @@ function ui()
         { type = "combo", id = "mode", label = "模式", options = { "轮询", "单次" }, default = 1 },
         { type = "input_int", id = "timeout_ms", label = "超时(ms)", default = 1000 },
         { type = "input_float", id = "scale", label = "缩放", default = 1.0 },
+        { type = "elf_symbol_combo", id = "target_symbol", label = "ELF 变量", debounce_ms = 150, limit = 64 },
       },
       layout = {
         kind = "form",
         items = {
           { text = "超时由宿主 request 队列管理；脚本只在拿到完整应答后调用 proto.request_done。" },
+          { text = "先通过“文件 -> 打开 ELF/JSON...”加载符号，再在 ELF 变量下拉中筛选静态地址。" },
           { controls = { "hex_send", "mode" } },
           { separator = true },
           {
             group = "采样参数",
             items = {
               { controls = { "timeout_ms", "scale" } },
+            }
+          },
+          {
+            group = "ElfStaticView 静态地址",
+            items = {
+              { control = "target_symbol" },
             }
           }
         }
@@ -157,6 +165,23 @@ function on_error(ctx, message)
   clear_pending_request()
 end
 
+local function log_symbol_info(symbol)
+  if type(symbol) ~= "table" then
+    proto.log("info", "尚未选择 ELF 静态变量")
+    return
+  end
+
+  local label = tostring(symbol.label or "")
+  local address = tostring(symbol.value or "")
+  local value_type = tostring(symbol.type or "")
+  if label == "" or address == "" or value_type == "" then
+    proto.log("info", "ELF 静态变量信息不完整")
+    return
+  end
+
+  proto.log("info", string.format("ELF 静态变量: %s, 地址: %s, 类型: %s", label, address, value_type))
+end
+
 function on_control(ctx, id, value)
   if id == "read_version" then
     clear_rx_buffer()
@@ -178,6 +203,9 @@ function on_control(ctx, id, value)
     current_request_tag = "read_version"
     proto.status.set("读取版本请求已入队", { level = "info" })
     proto.emit("request", { action = "read_version", request_id = request_id, connection_id = ctx.connection_id })
+  elseif id == "target_symbol" then
+    -- 核心流程：示范从新增 elf_symbol_combo 读取 `{ label, value, type }`，并用 info 日志输出变量信息。
+    log_symbol_info(proto.get_control("target_symbol") or value)
   end
 end
 

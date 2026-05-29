@@ -145,6 +145,36 @@ void test_script_controls_snapshot() {
     require(!controls.empty(), "controls 不能为空");
     require(controls[0].id == "read_version", "第一个控件应为 read_version");
     require(controls.size() >= 6, "默认协议脚本应暴露完整控件集合");
+    bool foundElfSymbolCombo = false;
+    for (const auto& control : controls) {
+        if (control.id == "target_symbol") {
+            foundElfSymbolCombo = control.type == protoscope::scripting::ControlType::ElfSymbolCombo;
+        }
+    }
+    require(foundElfSymbolCombo, "默认协议应示范 elf_symbol_combo 控件");
+}
+
+void test_default_protocol_logs_elf_symbol_info() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
+
+    host.onControl(sampleCtx(),
+                   "target_symbol",
+                   protoscope::scripting::ElfSymbolValue{
+                       .label = "global.counter",
+                       .value = "0x20000010",
+                       .type = "uint32_t",
+                   });
+
+    bool foundInfoLog = false;
+    for (const auto& log : host.drainLogs()) {
+        if (log.level == "info" && log.message.find("global.counter") != std::string::npos
+            && log.message.find("0x20000010") != std::string::npos
+            && log.message.find("uint32_t") != std::string::npos) {
+            foundInfoLog = true;
+        }
+    }
+    require(foundInfoLog, "默认协议应把 ELF 变量信息以 info 日志输出");
 }
 
 void test_script_elf_symbol_combo_descriptor_defaults() {
@@ -1141,6 +1171,7 @@ static const TestCase kAllTests[] = {
     {"crc_known_vectors", &test_crc_known_vectors},
     {"config_external_reload_state", &test_config_external_reload_state},
     {"script_controls_snapshot", &test_script_controls_snapshot},
+    {"default_protocol_logs_elf_symbol_info", &test_default_protocol_logs_elf_symbol_info},
     {"script_elf_symbol_combo_descriptor_defaults", &test_script_elf_symbol_combo_descriptor_defaults},
     {"script_elf_symbol_combo_invalid_config_fails", &test_script_elf_symbol_combo_invalid_config_fails},
     {"script_elf_symbol_combo_get_control_returns_table", &test_script_elf_symbol_combo_get_control_returns_table},
