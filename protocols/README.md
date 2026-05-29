@@ -47,7 +47,7 @@ end
 
 - `protocols/half_duplex_modbus_master`：上位机脚本。用 `proto.request()` 分 3 组写寄存器：`0x5AA5~0x5AA6`、`0x5AA7~0x5AA8`、`0x5AA9`。
 - `protocols/half_duplex_modbus_slave`：从机脚本。收到写寄存器请求后回复 ACK；当 `0x5AA9 = 1` 时，通过 `proto.set_timer()` 主动上报波形。
-- `protocols/half_duplex_modbus_common.lua`：共享 schema/组帧/解帧工具，默认帧格式为 `header + func + seq + len + payload + crc16_modbus`。
+- `protocols/half_duplex_modbus_common.lua`：通用流式 codec，只负责按各协议脚本传入的 schema 组帧/解帧，默认帧格式为 `header + func + seq + len + payload + crc16_modbus`。
 
 ### 固定寄存器语义
 

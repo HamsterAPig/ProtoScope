@@ -1,28 +1,11 @@
--- 核心流程：主从两端共用这一份 schema/组帧/解帧工具，避免把半双工细节复制到两个脚本里。
+-- 核心流程：这里是通用半双工帧 codec，只负责按调用方传入的 schema 组帧、解帧和流式解析。
 
 local M = {}
 
+-- 默认帧头和长度字段配置；具体协议可以在自己的 protocol 表中覆盖。
 M.DEFAULT_HEADER = { 0xA5, 0x5A }
 M.LENGTH_SPEC = { type = "u16", endian = "le", unit = "bytes" }
 M.SEQUENCE_BITS = 8
-
-M.FUNC_WRITE_REGISTERS = 0x10
-M.FUNC_WRITE_ACK = 0x90
-M.FUNC_STREAM_DATA = 0x91
-
-M.STATUS_OK = 0
-M.STATUS_ERROR = 1
-
-M.REG_CH1 = 0x5AA5
-M.REG_CH2 = 0x5AA6
-M.REG_CH3 = 0x5AA7
-M.REG_CH4 = 0x5AA8
-M.REG_START = 0x5AA9
-
-M.CHANNEL_COUNT = 4
-M.CHANNEL_SCALE = 0.001
-M.DEFAULT_INTERVAL_MS = 100
-M.DEFAULT_SAMPLE_COUNT = 16
 
 local TYPE_WIDTH = {
   u8 = 1,
@@ -176,6 +159,8 @@ local function decode_scalar(type_name, bytes, offset, endian)
   return value, nil
 end
 
+-- 按 schema.fields 把 Lua table 编码成 payload 字节数组。
+-- 支持标量字段、定长/动态数组字段和 bytes 字段；offset 可用于跳过保留字节。
 function M.encode_fields(fields, values)
   local buffer = {}
   local cursor = 0
@@ -226,6 +211,8 @@ function M.encode_fields(fields, values)
   return buffer, nil
 end
 
+-- 按 schema.fields 从 payload 字节数组解出 Lua table。
+-- 数组字段可通过 count/count_from/length_from/until_end 描述长度来源。
 function M.decode_fields(fields, bytes)
   local values = {}
   local cursor = 0
@@ -326,9 +313,16 @@ end
 
 M.popcount = popcount
 
-function M.channel_mask_from_values(values)
+-- 统计 bitmask 中置 1 的位数，常用于按通道掩码推导数组长度。
+function M.popcount(mask)
+  return popcount(mask)
+end
+
+-- 把 1-based 通道开关数组转换成 bitmask；channel_count 缺省时按 values 长度计算。
+function M.channel_mask_from_values(values, channel_count)
   local mask = 0
-  for channel_index = 1, M.CHANNEL_COUNT do
+  local count = channel_count or #values
+  for channel_index = 1, count do
     if values[channel_index] and values[channel_index] ~= 0 then
       mask = mask | (1 << (channel_index - 1))
     end
@@ -336,9 +330,11 @@ function M.channel_mask_from_values(values)
   return mask
 end
 
-function M.enabled_channels_from_mask(mask)
+-- 把 bitmask 转回 1-based 通道序号数组；channel_count 用于限制最高检查位。
+function M.enabled_channels_from_mask(mask, channel_count)
   local channels = {}
-  for channel_index = 1, M.CHANNEL_COUNT do
+  local count = channel_count or 32
+  for channel_index = 1, count do
     if (mask & (1 << (channel_index - 1))) ~= 0 then
       channels[#channels + 1] = channel_index
     end
@@ -346,15 +342,7 @@ function M.enabled_channels_from_mask(mask)
   return channels
 end
 
-function M.register_mask(registers)
-  return M.channel_mask_from_values({
-    registers[M.REG_CH1] or 0,
-    registers[M.REG_CH2] or 0,
-    registers[M.REG_CH3] or 0,
-    registers[M.REG_CH4] or 0,
-  })
-end
-
+-- 追踪每个 key 的连续序号，返回本帧是否初始化、是否丢帧以及累计丢帧数。
 function M.track_sequence(tracker, key, sequence, bits)
   local modulus = 1 << (bits or M.SEQUENCE_BITS)
   local slot = tracker[key]
@@ -402,16 +390,21 @@ local function remove_prefix(buffer, count)
   end
 end
 
+-- 创建流式解析器状态。调用方必须传入具体 protocol schema。
 function M.new_parser(protocol)
   return {
-    protocol = protocol or M.protocol,
+    protocol = protocol,
     buffer = {},
     sequence = {},
   }
 end
 
+-- 按具体 protocol schema 组一帧：header + func + seq + len + payload + crc16_modbus。
 function M.build_frame(protocol, func, sequence, payload_values)
-  local codec = protocol or M.protocol
+  local codec = protocol
+  if not codec then
+    return nil, "必须提供 protocol schema"
+  end
   local schema = message_schema(codec, func)
   if not schema then
     return nil, string.format("未定义的功能码: 0x%02X", func)
@@ -439,31 +432,7 @@ function M.build_frame(protocol, func, sequence, payload_values)
   return frame, nil
 end
 
-function M.build_write_register_frame(sequence, start_address, values)
-  return M.build_frame(M.protocol, M.FUNC_WRITE_REGISTERS, sequence, {
-    start_address = start_address,
-    register_count = #values,
-    values = values,
-  })
-end
-
-function M.build_ack_frame(sequence, start_address, register_count, status)
-  return M.build_frame(M.protocol, M.FUNC_WRITE_ACK, sequence, {
-    status = status or M.STATUS_OK,
-    start_address = start_address,
-    register_count = register_count,
-  })
-end
-
-function M.build_stream_frame(sequence, timestamp_ms, channel_mask, sample_count, samples)
-  return M.build_frame(M.protocol, M.FUNC_STREAM_DATA, sequence, {
-    timestamp_ms = timestamp_ms,
-    channel_mask = channel_mask,
-    sample_count = sample_count,
-    samples = samples,
-  })
-end
-
+-- 追加输入字节并尽可能解析完整帧；半包保留在 state.buffer，坏帧以 errors 返回。
 function M.feed_parser(state, incoming_bytes)
   append_bytes(state.buffer, incoming_bytes)
 
@@ -560,45 +529,5 @@ function M.feed_parser(state, incoming_bytes)
 
   return frames, errors
 end
-
-M.protocol = {
-  header = M.DEFAULT_HEADER,
-  length = M.LENGTH_SPEC,
-  sequence_bits = M.SEQUENCE_BITS,
-  messages = {
-    [M.FUNC_WRITE_REGISTERS] = {
-      name = "write_registers",
-      fields = {
-        { name = "start_address", type = "u16", endian = "le", offset = 0 },
-        { name = "register_count", type = "u8", offset = 2 },
-        { name = "values", type = "u16", endian = "le", count_from = "register_count" },
-      },
-    },
-    [M.FUNC_WRITE_ACK] = {
-      name = "write_ack",
-      fields = {
-        { name = "status", type = "u8", offset = 0 },
-        { name = "start_address", type = "u16", endian = "le", offset = 1 },
-        { name = "register_count", type = "u8", offset = 3 },
-      },
-    },
-    [M.FUNC_STREAM_DATA] = {
-      name = "stream_data",
-      fields = {
-        { name = "timestamp_ms", type = "u32", endian = "le", offset = 0 },
-        { name = "channel_mask", type = "u8" },
-        { name = "sample_count", type = "u8" },
-        {
-          name = "samples",
-          type = "i16",
-          endian = "le",
-          count_from = function(values)
-            return (values.sample_count or 0) * popcount(values.channel_mask or 0)
-          end,
-        },
-      },
-    },
-  },
-}
 
 return M

@@ -543,31 +543,14 @@ end
 -- 加载后自动启动，让用户无需串口连接即可立即看到波形。
 restart(true)
 )WAVE";
-const char* kHalfDuplexModbusCommonLua = R"MODBUS_COMMON(-- 核心流程：主从两端共用这一份 schema/组帧/解帧工具，避免把半双工细节复制到两个脚本里。
+const char* kHalfDuplexModbusCommonLua = R"MODBUS_COMMON(-- 核心流程：这里是通用半双工帧 codec，只负责按调用方传入的 schema 组帧、解帧和流式解析。
 
 local M = {}
 
+-- 默认帧头和长度字段配置；具体协议可以在自己的 protocol 表中覆盖。
 M.DEFAULT_HEADER = { 0xA5, 0x5A }
 M.LENGTH_SPEC = { type = "u16", endian = "le", unit = "bytes" }
 M.SEQUENCE_BITS = 8
-
-M.FUNC_WRITE_REGISTERS = 0x10
-M.FUNC_WRITE_ACK = 0x90
-M.FUNC_STREAM_DATA = 0x91
-
-M.STATUS_OK = 0
-M.STATUS_ERROR = 1
-
-M.REG_CH1 = 0x5AA5
-M.REG_CH2 = 0x5AA6
-M.REG_CH3 = 0x5AA7
-M.REG_CH4 = 0x5AA8
-M.REG_START = 0x5AA9
-
-M.CHANNEL_COUNT = 4
-M.CHANNEL_SCALE = 0.001
-M.DEFAULT_INTERVAL_MS = 100
-M.DEFAULT_SAMPLE_COUNT = 16
 
 local TYPE_WIDTH = {
   u8 = 1,
@@ -721,6 +704,8 @@ local function decode_scalar(type_name, bytes, offset, endian)
   return value, nil
 end
 
+-- 按 schema.fields 把 Lua table 编码成 payload 字节数组。
+-- 支持标量字段、定长/动态数组字段和 bytes 字段；offset 可用于跳过保留字节。
 function M.encode_fields(fields, values)
   local buffer = {}
   local cursor = 0
@@ -771,6 +756,8 @@ function M.encode_fields(fields, values)
   return buffer, nil
 end
 
+-- 按 schema.fields 从 payload 字节数组解出 Lua table。
+-- 数组字段可通过 count/count_from/length_from/until_end 描述长度来源。
 function M.decode_fields(fields, bytes)
   local values = {}
   local cursor = 0
@@ -871,9 +858,16 @@ end
 
 M.popcount = popcount
 
-function M.channel_mask_from_values(values)
+-- 统计 bitmask 中置 1 的位数，常用于按通道掩码推导数组长度。
+function M.popcount(mask)
+  return popcount(mask)
+end
+
+-- 把 1-based 通道开关数组转换成 bitmask；channel_count 缺省时按 values 长度计算。
+function M.channel_mask_from_values(values, channel_count)
   local mask = 0
-  for channel_index = 1, M.CHANNEL_COUNT do
+  local count = channel_count or #values
+  for channel_index = 1, count do
     if values[channel_index] and values[channel_index] ~= 0 then
       mask = mask | (1 << (channel_index - 1))
     end
@@ -881,9 +875,11 @@ function M.channel_mask_from_values(values)
   return mask
 end
 
-function M.enabled_channels_from_mask(mask)
+-- 把 bitmask 转回 1-based 通道序号数组；channel_count 用于限制最高检查位。
+function M.enabled_channels_from_mask(mask, channel_count)
   local channels = {}
-  for channel_index = 1, M.CHANNEL_COUNT do
+  local count = channel_count or 32
+  for channel_index = 1, count do
     if (mask & (1 << (channel_index - 1))) ~= 0 then
       channels[#channels + 1] = channel_index
     end
@@ -891,15 +887,7 @@ function M.enabled_channels_from_mask(mask)
   return channels
 end
 
-function M.register_mask(registers)
-  return M.channel_mask_from_values({
-    registers[M.REG_CH1] or 0,
-    registers[M.REG_CH2] or 0,
-    registers[M.REG_CH3] or 0,
-    registers[M.REG_CH4] or 0,
-  })
-end
-
+-- 追踪每个 key 的连续序号，返回本帧是否初始化、是否丢帧以及累计丢帧数。
 function M.track_sequence(tracker, key, sequence, bits)
   local modulus = 1 << (bits or M.SEQUENCE_BITS)
   local slot = tracker[key]
@@ -947,16 +935,21 @@ local function remove_prefix(buffer, count)
   end
 end
 
+-- 创建流式解析器状态。调用方必须传入具体 protocol schema。
 function M.new_parser(protocol)
   return {
-    protocol = protocol or M.protocol,
+    protocol = protocol,
     buffer = {},
     sequence = {},
   }
 end
 
+-- 按具体 protocol schema 组一帧：header + func + seq + len + payload + crc16_modbus。
 function M.build_frame(protocol, func, sequence, payload_values)
-  local codec = protocol or M.protocol
+  local codec = protocol
+  if not codec then
+    return nil, "必须提供 protocol schema"
+  end
   local schema = message_schema(codec, func)
   if not schema then
     return nil, string.format("未定义的功能码: 0x%02X", func)
@@ -984,31 +977,7 @@ function M.build_frame(protocol, func, sequence, payload_values)
   return frame, nil
 end
 
-function M.build_write_register_frame(sequence, start_address, values)
-  return M.build_frame(M.protocol, M.FUNC_WRITE_REGISTERS, sequence, {
-    start_address = start_address,
-    register_count = #values,
-    values = values,
-  })
-end
-
-function M.build_ack_frame(sequence, start_address, register_count, status)
-  return M.build_frame(M.protocol, M.FUNC_WRITE_ACK, sequence, {
-    status = status or M.STATUS_OK,
-    start_address = start_address,
-    register_count = register_count,
-  })
-end
-
-function M.build_stream_frame(sequence, timestamp_ms, channel_mask, sample_count, samples)
-  return M.build_frame(M.protocol, M.FUNC_STREAM_DATA, sequence, {
-    timestamp_ms = timestamp_ms,
-    channel_mask = channel_mask,
-    sample_count = sample_count,
-    samples = samples,
-  })
-end
-
+-- 追加输入字节并尽可能解析完整帧；半包保留在 state.buffer，坏帧以 errors 返回。
 function M.feed_parser(state, incoming_bytes)
   append_bytes(state.buffer, incoming_bytes)
 
@@ -1106,12 +1075,36 @@ function M.feed_parser(state, incoming_bytes)
   return frames, errors
 end
 
-M.protocol = {
-  header = M.DEFAULT_HEADER,
-  length = M.LENGTH_SPEC,
-  sequence_bits = M.SEQUENCE_BITS,
+return M)MODBUS_COMMON";
+
+const char* kHalfDuplexModbusMasterLua = R"MODBUS_MASTER(-- 核心流程：上位机只做三件事——按寄存器分批入队 request、在 ACK 到达时 request_done、把主动上报帧推成波形。
+
+local modbus = require("half_duplex_modbus_common")
+
+local FUNC_WRITE_REGISTERS = 0x10
+local FUNC_WRITE_ACK = 0x90
+local FUNC_STREAM_DATA = 0x91
+
+local REG_CH1 = 0x5AA5
+local REG_CH2 = 0x5AA6
+local REG_CH3 = 0x5AA7
+local REG_CH4 = 0x5AA8
+local REG_START = 0x5AA9
+
+local STATUS_OK = 0
+local STATUS_ERROR = 1
+local CHANNEL_COUNT = 4
+local CHANNEL_SCALE = 0.001
+local DEFAULT_INTERVAL_MS = 100
+local DEFAULT_SAMPLE_COUNT = 16
+
+-- 协议 schema 放在具体协议脚本里；common 只按这里的定义做编解码。
+local protocol = {
+  header = modbus.DEFAULT_HEADER,
+  length = modbus.LENGTH_SPEC,
+  sequence_bits = modbus.SEQUENCE_BITS,
   messages = {
-    [M.FUNC_WRITE_REGISTERS] = {
+    [FUNC_WRITE_REGISTERS] = {
       name = "write_registers",
       fields = {
         { name = "start_address", type = "u16", endian = "le", offset = 0 },
@@ -1119,7 +1112,7 @@ M.protocol = {
         { name = "values", type = "u16", endian = "le", count_from = "register_count" },
       },
     },
-    [M.FUNC_WRITE_ACK] = {
+    [FUNC_WRITE_ACK] = {
       name = "write_ack",
       fields = {
         { name = "status", type = "u8", offset = 0 },
@@ -1127,7 +1120,7 @@ M.protocol = {
         { name = "register_count", type = "u8", offset = 3 },
       },
     },
-    [M.FUNC_STREAM_DATA] = {
+    [FUNC_STREAM_DATA] = {
       name = "stream_data",
       fields = {
         { name = "timestamp_ms", type = "u32", endian = "le", offset = 0 },
@@ -1138,7 +1131,7 @@ M.protocol = {
           type = "i16",
           endian = "le",
           count_from = function(values)
-            return (values.sample_count or 0) * popcount(values.channel_mask or 0)
+            return (values.sample_count or 0) * modbus.popcount(values.channel_mask or 0)
           end,
         },
       },
@@ -1146,23 +1139,16 @@ M.protocol = {
   },
 }
 
-return M
-)MODBUS_COMMON";
-
-const char* kHalfDuplexModbusMasterLua = R"MODBUS_MASTER(-- 核心流程：上位机只做三件事——按寄存器分批入队 request、在 ACK 到达时 request_done、把主动上报帧推成波形。
-
-local modbus = require("half_duplex_modbus_common")
-
 local controls = {
   ch1 = true,
   ch2 = true,
   ch3 = true,
   ch4 = true,
-  interval_ms = modbus.DEFAULT_INTERVAL_MS,
-  samples_per_frame = modbus.DEFAULT_SAMPLE_COUNT,
+  interval_ms = DEFAULT_INTERVAL_MS,
+  samples_per_frame = DEFAULT_SAMPLE_COUNT,
 }
 
-local parser = modbus.new_parser(modbus.protocol)
+local parser = modbus.new_parser(protocol)
 local next_request_sequence = 0
 
 local function next_sequence()
@@ -1190,7 +1176,7 @@ local function configured_channel_mask()
     read_checkbox("ch2"),
     read_checkbox("ch3"),
     read_checkbox("ch4"),
-  })
+  }, CHANNEL_COUNT)
 end
 
 local function setup_plot(reset_history)
@@ -1219,7 +1205,11 @@ local function request_frame(frame, tag)
 end
 
 local function queue_write(start_address, values, tag)
-  local frame, err = modbus.build_write_register_frame(next_sequence(), start_address, values)
+  local frame, err = modbus.build_frame(protocol, FUNC_WRITE_REGISTERS, next_sequence(), {
+    start_address = start_address,
+    register_count = #values,
+    values = values,
+  })
   if not frame then
     proto.status.set("组帧失败: " .. tostring(err), { level = "error" })
     return false
@@ -1229,9 +1219,9 @@ end
 
 local function auto_configure_and_start()
   local batches = {
-    { start = modbus.REG_CH1, values = { read_checkbox("ch1"), read_checkbox("ch2") }, tag = "cfg_ch12" },
-    { start = modbus.REG_CH3, values = { read_checkbox("ch3"), read_checkbox("ch4") }, tag = "cfg_ch34" },
-    { start = modbus.REG_START, values = { 1 }, tag = "cfg_start" },
+    { start = REG_CH1, values = { read_checkbox("ch1"), read_checkbox("ch2") }, tag = "cfg_ch12" },
+    { start = REG_CH3, values = { read_checkbox("ch3"), read_checkbox("ch4") }, tag = "cfg_ch34" },
+    { start = REG_START, values = { 1 }, tag = "cfg_start" },
   }
 
   for _, batch in ipairs(batches) do
@@ -1247,11 +1237,11 @@ end
 
 local function send_start_stop(start_value)
   local tag = start_value == 1 and "start_stream" or "stop_stream"
-  queue_write(modbus.REG_START, { start_value }, tag)
+  queue_write(REG_START, { start_value }, tag)
 end
 
 local function handle_ack(frame)
-  local ok = (frame.payload.status or modbus.STATUS_ERROR) == modbus.STATUS_OK
+  local ok = (frame.payload.status or STATUS_ERROR) == STATUS_OK
   local message = string.format("ACK 0x%04X x %d", frame.payload.start_address or 0, frame.payload.register_count or 0)
   proto.request_done({
     ok = ok,
@@ -1265,10 +1255,10 @@ local function handle_ack(frame)
 end
 
 local function handle_stream(frame)
-  local enabled_channels = modbus.enabled_channels_from_mask(frame.payload.channel_mask or 0)
+  local enabled_channels = modbus.enabled_channels_from_mask(frame.payload.channel_mask or 0, CHANNEL_COUNT)
   local sample_count = frame.payload.sample_count or 0
   local flat_samples = frame.payload.samples or {}
-  local interval_ms = read_positive_int("interval_ms", modbus.DEFAULT_INTERVAL_MS)
+  local interval_ms = read_positive_int("interval_ms", DEFAULT_INTERVAL_MS)
   local dt = (interval_ms / 1000.0) / math.max(sample_count, 1)
   local base_t = (frame.payload.timestamp_ms or 0) / 1000.0
 
@@ -1285,7 +1275,7 @@ local function handle_stream(frame)
       local raw = flat_samples[sample_index] or 0
       samples[#samples + 1] = {
         t = base_t + (point_index - 1) * dt,
-        y = raw * modbus.CHANNEL_SCALE,
+        y = raw * CHANNEL_SCALE,
       }
     end
     proto.plot.push(channel_index, {
@@ -1312,8 +1302,8 @@ function ui()
         { type = "checkbox", id = "ch2", label = "CH2 偏置正弦", default = true },
         { type = "checkbox", id = "ch3", label = "CH3 高斯噪声", default = true },
         { type = "checkbox", id = "ch4", label = "CH4 三角波", default = true },
-        { type = "input_int", id = "interval_ms", label = "发送间隔(ms)", default = modbus.DEFAULT_INTERVAL_MS },
-        { type = "input_int", id = "samples_per_frame", label = "每帧点数", default = modbus.DEFAULT_SAMPLE_COUNT },
+        { type = "input_int", id = "interval_ms", label = "发送间隔(ms)", default = DEFAULT_INTERVAL_MS },
+        { type = "input_int", id = "samples_per_frame", label = "每帧点数", default = DEFAULT_SAMPLE_COUNT },
         { type = "button", id = "auto_start", label = "自动配置并启动" },
         { type = "button", id = "start_stream", label = "仅启动" },
         { type = "button", id = "stop_stream", label = "停止" },
@@ -1324,7 +1314,7 @@ function ui()
 end
 
 function on_open(ctx)
-  parser = modbus.new_parser(modbus.protocol)
+  parser = modbus.new_parser(protocol)
   proto.status.clear()
   setup_plot(true)
 end
@@ -1367,26 +1357,82 @@ function on_bytes(ctx, bytes)
   end
 
   for _, frame in ipairs(frames) do
-    if frame.func == modbus.FUNC_WRITE_ACK then
+    if frame.func == FUNC_WRITE_ACK then
       handle_ack(frame)
-    elseif frame.func == modbus.FUNC_STREAM_DATA then
+    elseif frame.func == FUNC_STREAM_DATA then
       handle_stream(frame)
     end
   end
-end
-)MODBUS_MASTER";
+end)MODBUS_MASTER";
 
 const char* kHalfDuplexModbusSlaveLua = R"MODBUS_SLAVE(-- 核心流程：从机只接写寄存器请求，回 ACK；当 start 寄存器置 1 后，由定时器主动发波形帧。
 
 local modbus = require("half_duplex_modbus_common")
 
-local parser = modbus.new_parser(modbus.protocol)
+local FUNC_WRITE_REGISTERS = 0x10
+local FUNC_WRITE_ACK = 0x90
+local FUNC_STREAM_DATA = 0x91
+
+local REG_CH1 = 0x5AA5
+local REG_CH2 = 0x5AA6
+local REG_CH3 = 0x5AA7
+local REG_CH4 = 0x5AA8
+local REG_START = 0x5AA9
+
+local STATUS_OK = 0
+local CHANNEL_COUNT = 4
+local CHANNEL_SCALE = 0.001
+local DEFAULT_INTERVAL_MS = 100
+local DEFAULT_SAMPLE_COUNT = 16
+
+-- 协议 schema 放在具体协议脚本里；common 只按这里的定义做编解码。
+local protocol = {
+  header = modbus.DEFAULT_HEADER,
+  length = modbus.LENGTH_SPEC,
+  sequence_bits = modbus.SEQUENCE_BITS,
+  messages = {
+    [FUNC_WRITE_REGISTERS] = {
+      name = "write_registers",
+      fields = {
+        { name = "start_address", type = "u16", endian = "le", offset = 0 },
+        { name = "register_count", type = "u8", offset = 2 },
+        { name = "values", type = "u16", endian = "le", count_from = "register_count" },
+      },
+    },
+    [FUNC_WRITE_ACK] = {
+      name = "write_ack",
+      fields = {
+        { name = "status", type = "u8", offset = 0 },
+        { name = "start_address", type = "u16", endian = "le", offset = 1 },
+        { name = "register_count", type = "u8", offset = 3 },
+      },
+    },
+    [FUNC_STREAM_DATA] = {
+      name = "stream_data",
+      fields = {
+        { name = "timestamp_ms", type = "u32", endian = "le", offset = 0 },
+        { name = "channel_mask", type = "u8" },
+        { name = "sample_count", type = "u8" },
+        {
+          name = "samples",
+          type = "i16",
+          endian = "le",
+          count_from = function(values)
+            return (values.sample_count or 0) * modbus.popcount(values.channel_mask or 0)
+          end,
+        },
+      },
+    },
+  },
+}
+
+local parser = modbus.new_parser(protocol)
 local registers = {
-  [modbus.REG_CH1] = 1,
-  [modbus.REG_CH2] = 1,
-  [modbus.REG_CH3] = 1,
-  [modbus.REG_CH4] = 1,
-  [modbus.REG_START] = 0,
+  [REG_CH1] = 1,
+  [REG_CH2] = 1,
+  [REG_CH3] = 1,
+  [REG_CH4] = 1,
+  [REG_START] = 0,
 }
 
 local wave_sequence = 0
@@ -1430,11 +1476,11 @@ end
 
 local function build_samples(channel_mask, sample_count)
   local samples = {}
-  local channels = modbus.enabled_channels_from_mask(channel_mask)
+  local channels = modbus.enabled_channels_from_mask(channel_mask, CHANNEL_COUNT)
   for point_index = 1, sample_count do
     for _, channel_index in ipairs(channels) do
       local raw = channel_value(channel_index, sample_cursor + point_index)
-      samples[#samples + 1] = clamp_i16(raw / modbus.CHANNEL_SCALE)
+      samples[#samples + 1] = clamp_i16(raw / CHANNEL_SCALE)
     end
   end
   sample_cursor = sample_cursor + sample_count
@@ -1442,14 +1488,14 @@ local function build_samples(channel_mask, sample_count)
 end
 
 local function start_streaming()
-  if registers[modbus.REG_START] ~= 1 then
-    registers[modbus.REG_START] = 1
+  if registers[REG_START] ~= 1 then
+    registers[REG_START] = 1
   end
-  proto.set_timer("stream_tick", modbus.DEFAULT_INTERVAL_MS)
+  proto.set_timer("stream_tick", DEFAULT_INTERVAL_MS)
 end
 
 local function stop_streaming()
-  registers[modbus.REG_START] = 0
+  registers[REG_START] = 0
   proto.cancel_timer("stream_tick")
 end
 
@@ -1457,7 +1503,7 @@ local function apply_register_write(start_address, values)
   for offset = 1, #values do
     registers[start_address + offset - 1] = values[offset]
   end
-  if (registers[modbus.REG_START] or 0) == 1 then
+  if (registers[REG_START] or 0) == 1 then
     start_streaming()
   else
     stop_streaming()
@@ -1465,7 +1511,11 @@ local function apply_register_write(start_address, values)
 end
 
 local function send_ack(sequence, start_address, register_count)
-  local frame, err = modbus.build_ack_frame(sequence, start_address, register_count, modbus.STATUS_OK)
+  local frame, err = modbus.build_frame(protocol, FUNC_WRITE_ACK, sequence, {
+    status = STATUS_OK,
+    start_address = start_address,
+    register_count = register_count,
+  })
   if not frame then
     proto.status.set("ACK 组帧失败: " .. tostring(err), { level = "error" })
     return
@@ -1498,7 +1548,7 @@ function ui()
 end
 
 function on_open(ctx)
-  parser = modbus.new_parser(modbus.protocol)
+  parser = modbus.new_parser(protocol)
   timestamp_ms = 0
   wave_sequence = 0
   sample_cursor = 0
@@ -1525,7 +1575,7 @@ function on_bytes(ctx, bytes)
   end
 
   for _, frame in ipairs(frames) do
-    if frame.func == modbus.FUNC_WRITE_REGISTERS then
+    if frame.func == FUNC_WRITE_REGISTERS then
       handle_write_request(frame)
     end
   end
@@ -1535,19 +1585,29 @@ function on_timer(ctx, timer_name)
   if timer_name ~= "stream_tick" then
     return
   end
-  if (registers[modbus.REG_START] or 0) ~= 1 then
+  if (registers[REG_START] or 0) ~= 1 then
     return
   end
 
-  local channel_mask = modbus.register_mask(registers)
+  local channel_mask = modbus.channel_mask_from_values({
+    registers[REG_CH1] or 0,
+    registers[REG_CH2] or 0,
+    registers[REG_CH3] or 0,
+    registers[REG_CH4] or 0,
+  }, CHANNEL_COUNT)
   if channel_mask == 0 then
-    proto.set_timer("stream_tick", modbus.DEFAULT_INTERVAL_MS)
+    proto.set_timer("stream_tick", DEFAULT_INTERVAL_MS)
     return
   end
 
-  local sample_count = modbus.DEFAULT_SAMPLE_COUNT
+  local sample_count = DEFAULT_SAMPLE_COUNT
   local samples = build_samples(channel_mask, sample_count)
-  local frame, err = modbus.build_stream_frame(wave_sequence, timestamp_ms, channel_mask, sample_count, samples)
+  local frame, err = modbus.build_frame(protocol, FUNC_STREAM_DATA, wave_sequence, {
+    timestamp_ms = timestamp_ms,
+    channel_mask = channel_mask,
+    sample_count = sample_count,
+    samples = samples,
+  })
   if not frame then
     proto.status.set("波形组帧失败: " .. tostring(err), { level = "error" })
     return
@@ -1555,10 +1615,9 @@ function on_timer(ctx, timer_name)
 
   proto.send(frame, { tag = "stream_data" })
   wave_sequence = (wave_sequence + 1) % 256
-  timestamp_ms = timestamp_ms + modbus.DEFAULT_INTERVAL_MS
-  proto.set_timer("stream_tick", modbus.DEFAULT_INTERVAL_MS)
-end
-)MODBUS_SLAVE";
+  timestamp_ms = timestamp_ms + DEFAULT_INTERVAL_MS
+  proto.set_timer("stream_tick", DEFAULT_INTERVAL_MS)
+end)MODBUS_SLAVE";
 
 const char* kDefaultProtocolsReadme = R"README(# ProtoScope Lua 协议脚本指南
 
@@ -1609,7 +1668,7 @@ end
 
 - `protocols/half_duplex_modbus_master`：上位机脚本。用 `proto.request()` 分 3 组写寄存器：`0x5AA5~0x5AA6`、`0x5AA7~0x5AA8`、`0x5AA9`。
 - `protocols/half_duplex_modbus_slave`：从机脚本。收到写寄存器请求后回复 ACK；当 `0x5AA9 = 1` 时，通过 `proto.set_timer()` 主动上报波形。
-- `protocols/half_duplex_modbus_common.lua`：共享 schema/组帧/解帧工具，默认帧格式为 `header + func + seq + len + payload + crc16_modbus`。
+- `protocols/half_duplex_modbus_common.lua`：通用流式 codec，只负责按各协议脚本传入的 schema 组帧/解帧，默认帧格式为 `header + func + seq + len + payload + crc16_modbus`。
 
 ### 固定寄存器语义
 
@@ -1693,11 +1752,17 @@ proto.plot.setup({
 - “读取版本”使用 `proto.request(...)`
 - 收到完整帧后调用 `proto.request_done(...)`
 - 超时由宿主 request timeout 主导
-- 状态栏和弹窗都走新的 `proto.status.* / proto.ui.*`
-)README";
+- 状态栏和弹窗都走新的 `proto.status.* / proto.ui.*`)README";
 
 const char* kDefaultLuaLsApi = R"LUALS(---@meta
 
+--[[
+ProtoScope 脚本 API 定义文件。
+这里只提供 LuaLS / EmmyLua 需要的类型、结构和回调签名，
+不包含任何实际运行逻辑。
+]]
+
+-- 基础枚举：覆盖日志、控件、停靠、传输和弹窗状态。
 ---@alias ProtoLogLevel 'debug'|'info'|'warn'|'error'
 ---@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'
 ---@alias ProtoDockAnchor 'left'|'left_bottom'|'right_top'|'right_mid'|'right_bottom'|'main_bottom'
@@ -1710,6 +1775,7 @@ const char* kDefaultLuaLsApi = R"LUALS(---@meta
 ---@alias ProtoDialogKind 'alert'|'confirm'
 ---@alias ProtoDialogState 'closed'|'confirmed'|'canceled'
 
+-- 表格布局：用于以表格方式组织停靠面板中的控件。
 ---@class ProtoTableCell
 ---@field control? string
 ---@field spacer? boolean
@@ -1723,6 +1789,7 @@ const char* kDefaultLuaLsApi = R"LUALS(---@meta
 ---@field sizing? 'stretch'
 ---@field rows ProtoTableCell[][]
 
+-- 表单布局：用于把控件按分组、折叠、文本说明等结构组合起来。
 ---@class ProtoFormControlItem
 ---@field control string
 
@@ -1750,6 +1817,7 @@ const char* kDefaultLuaLsApi = R"LUALS(---@meta
 
 ---@alias ProtoDockLayout ProtoTableLayout|ProtoFormLayout
 
+-- 连接上下文：宿主在打开、关闭、收发数据时传入的基础运行信息。
 ---@class ProtoConnectionContext
 ---@field connection_id integer
 ---@field kind string
@@ -1757,6 +1825,7 @@ const char* kDefaultLuaLsApi = R"LUALS(---@meta
 ---@field timestamp_ms integer
 ---@field ready_for_io boolean
 
+-- 控件描述：声明一个可交互控件及其默认值、枚举选项。
 ---@class ProtoControlDescriptor
 ---@field type ProtoControlType
 ---@field id string
@@ -1764,6 +1833,7 @@ const char* kDefaultLuaLsApi = R"LUALS(---@meta
 ---@field default? ProtoControlValue
 ---@field options? string[]
 
+-- 停靠面板描述：定义一个脚本 UI 面板的标题、锚点和控件布局。
 ---@class ProtoDockDescriptor
 ---@field id string
 ---@field title string
@@ -1772,6 +1842,7 @@ const char* kDefaultLuaLsApi = R"LUALS(---@meta
 ---@field controls ProtoControlDescriptor[]
 ---@field layout? ProtoDockLayout
 
+-- 波形通道描述：定义曲线显示名称、单位、缩放和颜色。
 ---@class ProtoPlotChannel
 ---@field label string
 ---@field unit? string
@@ -1779,32 +1850,39 @@ const char* kDefaultLuaLsApi = R"LUALS(---@meta
 ---@field offset? number
 ---@field color? string @支持 '#RRGGBB' 或 '#RRGGBBAA'。
 
+-- 波形初始化参数：用于一次性配置波形来源、通道和视图范围。
 ---@class ProtoPlotSetup
 ---@field source? string
 ---@field channels ProtoPlotChannel[]
 ---@field reset_history? boolean
 ---@field view? { time_scale?: number, time_unit?: string, vertical_min?: number, vertical_max?: number, vertical_unit?: string, history_limit?: integer }
 
+-- 单个波形采样点：t 是横轴时间，y 是纵轴数值。
 ---@class ProtoPlotSample
 ---@field t number
 ---@field y number
 
+-- 波形追加请求：向已有通道持续推送采样点。
 ---@class ProtoPlotAppendRequest
 ---@field source? string
 ---@field samples ProtoPlotSample[]
 
+-- 发送类操作的附加参数：常用于超时和业务标签标记。
 ---@class ProtoSendOptions
 ---@field timeout_ms? integer
 ---@field tag? string
 
+-- 请求类操作的附加参数：和发送类似，但语义上表示等待响应。
 ---@class ProtoRequestOptions
 ---@field timeout_ms? integer
 ---@field tag? string
 
+-- 请求完成回传结果：脚本在收到响应后可上报最终处理状态。
 ---@class ProtoRequestDoneResult
 ---@field ok? boolean
 ---@field message? string
 
+-- 传输事件：描述一次发送/请求在宿主侧的生命周期变化。
 ---@class ProtoTxEvent
 ---@field id integer
 ---@field kind ProtoTxKind
@@ -1815,15 +1893,18 @@ const char* kDefaultLuaLsApi = R"LUALS(---@meta
 ---@field finished_ms integer
 ---@field error? string
 
+-- 状态栏配置：控制状态文本的提示级别。
 ---@class ProtoStatusOptions
 ---@field level? ProtoLogLevel
 
+-- 弹窗参数：用于 alert / confirm 的标题、内容和去重键。
 ---@class ProtoDialogOptions
 ---@field title string
 ---@field message string
 ---@field level? ProtoLogLevel
 ---@field dedupe_key? string
 
+-- 弹窗事件：回传弹窗的最终状态与确认结果。
 ---@class ProtoDialogEvent
 ---@field id integer
 ---@field kind ProtoDialogKind
@@ -1840,115 +1921,141 @@ proto.plot = proto.plot or {}
 proto.status = proto.status or {}
 proto.ui = proto.ui or {}
 
+-- 记录脚本日志，便于调试协议、状态流转和异常定位。
 ---@param level ProtoLogLevel
 ---@param message string
 function proto.log(level, message) end
 
+-- 发送一段原始载荷到宿主，通常用于下行串口数据或主动写入。
 ---@param payload ProtoPayload
 ---@param opts? ProtoSendOptions
 ---@return integer|nil request_id
 ---@return string|nil error
 function proto.send(payload, opts) end
 
+-- 发起一次带响应语义的请求，适合需要等待对端应答的场景。
 ---@param payload ProtoPayload
 ---@param opts? ProtoRequestOptions
 ---@return integer|nil request_id
 ---@return string|nil error
 function proto.request(payload, opts) end
 
+-- 标记当前请求已经完成，宿主可据此结束等待并释放关联状态。
 ---@param result? ProtoRequestDoneResult
 ---@return boolean ok
 ---@return string|nil error
 function proto.request_done(result) end
 
+-- 向脚本内部广播一个自定义事件，供同脚本的其他逻辑分发处理。
 ---@param name string
 ---@param payload any
 function proto.emit(name, payload) end
 
+-- 创建或刷新一次定时器，适合轮询、延迟重试或 UI 延迟刷新。
 ---@param name string
 ---@param delay_ms integer
 function proto.set_timer(name, delay_ms) end
 
+-- 取消指定定时器，避免超时回调在脚本不需要时继续触发。
 ---@param name string
 function proto.cancel_timer(name) end
 
+-- 设置状态栏文本，适合反馈当前处理进度、错误或提示信息。
 ---@param text string
 ---@param opts? ProtoStatusOptions
 function proto.status.set(text, opts) end
 
+-- 清空状态栏文本，恢复为无状态提示。
 function proto.status.clear() end
 
+-- 弹出提示型对话框，适合告警、信息确认前的提示展示。
 ---@param opts ProtoDialogOptions
 ---@return integer|nil dialog_id
 ---@return string|nil error
 function proto.ui.alert(opts) end
 
+-- 弹出确认型对话框，常用于需要用户二次确认的操作。
 ---@param opts ProtoDialogOptions
 ---@return integer|nil dialog_id
 ---@return string|nil error
 function proto.ui.confirm(opts) end
 
+-- 配置波形视图，通常在连接建立后先调用一次完成通道初始化。
 ---@param payload ProtoPlotSetup
 function proto.plot.setup(payload) end
 
+-- 追加波形采样点，适合持续推送实时数据。
 ---@param channel_index integer
 ---@param payload ProtoPlotAppendRequest
 function proto.plot.push(channel_index, payload) end
 
+-- 读取某个控件的当前值，常用于界面联动或提交前取回最新状态。
 ---@param id string
 ---@return ProtoControlValue
 function proto.get_control(id) end
 
+-- 设置某个控件的值，适合脚本根据协议结果反向驱动界面状态。
 ---@param id string
 ---@param value ProtoControlValue
 function proto.set_control(id, value) end
 
+-- 计算 Modbus CRC16，适合构造或校验常见串口帧尾。
 ---@param payload ProtoPayload
 ---@return integer
 function proto.crc16_modbus(payload) end
 
+-- 计算 CCITT-FALSE CRC16，适合部分自定义协议或设备协议。
 ---@param payload ProtoPayload
 ---@return integer
 function proto.crc16_ccitt_false(payload) end
 
+-- 计算 IEEE CRC32，适合需要 32 位校验的协议场景。
 ---@param payload ProtoPayload
 ---@return integer
 function proto.crc32_ieee(payload) end
 
+-- 返回当前脚本要展示的 Dock 面板描述列表。
 ---@return ProtoDockDescriptor[]
 function ui() end
 
+-- 连接打开回调：宿主建立连接后触发，用于初始化状态、定时器或 UI。
 ---@param ctx ProtoConnectionContext
 function on_open(ctx) end
 
+-- 连接关闭回调：连接断开时触发，适合清理缓存、定时器和临时状态。
 ---@param ctx ProtoConnectionContext
 function on_close(ctx) end
 
+-- 错误回调：脚本或宿主运行时发生异常时触发，用于记录和提示。
 ---@param ctx ProtoConnectionContext
 ---@param message string
 function on_error(ctx, message) end
 
+-- 控件变化回调：当 UI 控件被用户修改时触发。
 ---@param ctx ProtoConnectionContext
 ---@param id string
 ---@param value ProtoControlValue
 function on_control(ctx, id, value) end
 
+-- 原始字节回调：宿主收到串口/输入字节流后调用脚本解析。
 ---@param ctx ProtoConnectionContext
 ---@param bytes ProtoBytes
 function on_bytes(ctx, bytes) end
 
+-- 定时器回调：由 proto.set_timer 创建的定时器到期后触发。
 ---@param ctx ProtoConnectionContext
 ---@param name string
 function on_timer(ctx, name) end
 
+-- 传输事件回调：用于跟踪 send/request 的发送结果、超时或失败。
 ---@param ctx ProtoConnectionContext
 ---@param evt ProtoTxEvent
 function on_tx(ctx, evt) end
 
+-- 弹窗事件回调：用于接收 alert / confirm 的最终状态。
 ---@param ctx ProtoConnectionContext
 ---@param evt ProtoDialogEvent
-function on_dialog(ctx, evt) end
-)LUALS";
+function on_dialog(ctx, evt) end)LUALS";
 
 const char* kDefaultGuide = R"(# ProtoScope Lua Host Guide
 
