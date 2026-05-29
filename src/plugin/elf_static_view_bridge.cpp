@@ -39,6 +39,15 @@ std::string formatAddress(std::uint64_t value) {
     return builder.str();
 }
 
+std::string normalizeNameQuery(std::string queryText) {
+    for (char& ch : queryText) {
+        if (ch == '*' || ch == '?') {
+            ch = ' ';
+        }
+    }
+    return queryText;
+}
+
 std::optional<elf_static_view::ProjectModel> parseJsonModel(const std::string& text, std::string& error) {
     try {
         return elf_static_view::parse_snapshot_json(text).model;
@@ -110,7 +119,9 @@ std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryT
     }
 
     elf_static_view::StaticAddressQueryOptions options;
-    options.name_query_text = std::move(queryText);
+    // 核心流程：Lua 下拉输入习惯用 `a_var*` 这类通配符，ElfStaticView 当前按普通子串 token 查询，
+    // 因此在宿主桥接层把通配符转为空白，让 `a_var*` 能命中 `a_var_int`。
+    options.name_query_text = normalizeNameQuery(std::move(queryText));
     options.only_static_known = true;
     options.include_runtime_only = false;
     options.max_array_elements = limit;

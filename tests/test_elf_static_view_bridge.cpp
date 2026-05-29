@@ -41,6 +41,14 @@ elf_static_view::ProjectModel sampleProjectModel() {
         .absolute_address = 0x20000010ULL,
     });
     model.expanded.push_back(elf_static_view::ExpandedNode{
+        .path = "global.a_var_int",
+        .display_name = "a_var_int",
+        .type_name = "int",
+        .type_kind = elf_static_view::TypeKind::Base,
+        .availability = elf_static_view::Availability::StaticAddressKnown,
+        .absolute_address = 0x20000000ULL,
+    });
+    model.expanded.push_back(elf_static_view::ExpandedNode{
         .path = "global.runtime_only",
         .display_name = "runtime_only",
         .type_name = "int",
@@ -67,6 +75,11 @@ void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols() {
     require(results[0].label == "global.counter", "结果 label 应来自 ElfStaticView key");
     require(results[0].value == "0x20000010", "结果 value 应格式化为十六进制字符串");
     require(results[0].type == "uint32_t", "结果 type 应来自 ElfStaticView value_type");
+
+    const auto wildcardResults = bridge.query("a_var*", 64);
+    require(wildcardResults.size() == 1, "应兼容 Lua 下拉输入的通配符后缀");
+    require(wildcardResults[0].label == "global.a_var_int", "a_var* 应命中 a_var_int");
+    require(wildcardResults[0].value == "0x20000000", "a_var_int 地址应格式化为十六进制字符串");
 
     std::filesystem::remove(path);
 }
