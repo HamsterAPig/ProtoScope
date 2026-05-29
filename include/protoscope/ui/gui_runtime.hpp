@@ -74,6 +74,9 @@ private:
     void openRawCaptureImportDialog();
     void openRawCaptureExportDialog();
     void openElfStaticAddressDialog();
+    void importRawCaptureFromPath(const std::filesystem::path& path);
+    void exportRawCaptureToPath(const std::filesystem::path& path);
+    void loadElfStaticAddressFromPath(const std::filesystem::path& path);
     void drawElfStaticAddressDialog();
     std::filesystem::path currentProtocolLayoutPath() const;
     std::filesystem::path legacyProtocolLayoutPath() const;

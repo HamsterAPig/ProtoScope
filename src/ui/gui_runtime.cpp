@@ -9,6 +9,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <commdlg.h>
 #include <shlobj.h>
 #endif
 
@@ -22,6 +23,10 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <GL/gl.h>
+#if defined(_WIN32)
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -30,6 +35,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cwchar>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -97,6 +103,70 @@ int hexInputFilter(ImGuiInputTextCallbackData* data) {
     }
     return 1;
 }
+
+#if defined(_WIN32)
+HWND nativeWindowHandle(GLFWwindow* window) {
+    return window == nullptr ? nullptr : glfwGetWin32Window(window);
+}
+
+std::optional<std::filesystem::path> nativeFileDialog(GLFWwindow* window,
+                                                      const wchar_t* title,
+                                                      const wchar_t* filter,
+                                                      const std::filesystem::path& defaultPath,
+                                                      bool saveDialog,
+                                                      const wchar_t* defaultExtension,
+                                                      std::string& error) {
+    // 核心流程：Windows 下文件选择统一走系统原生对话框，避免在 ImGui 弹窗里手输路径。
+    std::array<wchar_t, 32768> buffer{};
+    std::wstring initialDir;
+    try {
+        if (!defaultPath.empty()) {
+            const bool isDirectory = std::filesystem::exists(defaultPath) && std::filesystem::is_directory(defaultPath);
+            const auto fileName = isDirectory ? std::filesystem::path{} : defaultPath.filename();
+            if (!fileName.empty()) {
+                const auto text = fileName.wstring();
+                std::wcsncpy(buffer.data(), text.c_str(), buffer.size() - 1);
+            }
+            const auto dir = isDirectory ? defaultPath : defaultPath.parent_path();
+            if (!dir.empty()) {
+                initialDir = dir.wstring();
+            }
+        }
+    } catch (const std::exception&) {
+        initialDir.clear();
+    }
+
+    OPENFILENAMEW options{};
+    options.lStructSize = sizeof(options);
+    options.hwndOwner = nativeWindowHandle(window);
+    options.lpstrTitle = title;
+    options.lpstrFilter = filter;
+    options.lpstrFile = buffer.data();
+    options.nMaxFile = static_cast<DWORD>(buffer.size());
+    options.lpstrInitialDir = initialDir.empty() ? nullptr : initialDir.c_str();
+    options.lpstrDefExt = defaultExtension;
+    options.Flags = OFN_NOCHANGEDIR | OFN_EXPLORER | OFN_HIDEREADONLY;
+    if (saveDialog) {
+        options.Flags |= OFN_OVERWRITEPROMPT;
+    } else {
+        options.Flags |= OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    }
+
+    const BOOL ok = saveDialog ? GetSaveFileNameW(&options) : GetOpenFileNameW(&options);
+    if (ok == TRUE) {
+        error.clear();
+        return std::filesystem::path(buffer.data());
+    }
+
+    const DWORD code = CommDlgExtendedError();
+    if (code != 0) {
+        error = "Windows 文件对话框失败: " + std::to_string(code);
+    } else {
+        error.clear();
+    }
+    return std::nullopt;
+}
+#endif
 
 int hexEditorCallback(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackCharFilter) {
@@ -1054,30 +1124,150 @@ void GuiRuntime::drawDialogs() {
 }
 
 void GuiRuntime::openRawCaptureImportDialog() {
+#if defined(_WIN32)
+    const auto defaultPath = rawCaptureImportPath_.empty()
+                               ? executableDir_ / "captures" / "capture.psraw"
+                               : std::filesystem::path(rawCaptureImportPath_);
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"导入原始波形",
+                                       L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       false,
+                                       L"psraw",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        importRawCaptureFromPath(*path);
+    }
+#else
     rawCaptureImportDialogOpen_ = true;
     rawCaptureImportDialogOpened_ = false;
     rawCaptureImportError_.clear();
     if (rawCaptureImportPath_.empty()) {
         rawCaptureImportPath_ = (executableDir_ / "captures" / "capture.psraw").generic_string();
     }
+#endif
 }
 
 void GuiRuntime::openRawCaptureExportDialog() {
+    const auto& lua = application_.docks().luaState();
+    const std::string baseName = lua.protocolName.empty() ? std::string("wave-capture") : lua.protocolName + "-wave";
+    const auto defaultPath = rawCaptureExportPath_.empty()
+                               ? executableDir_ / "captures" / (baseName + ".psraw")
+                               : std::filesystem::path(rawCaptureExportPath_);
+#if defined(_WIN32)
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"导出原始波形",
+                                       L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       true,
+                                       L"psraw",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        exportRawCaptureToPath(*path);
+    }
+#else
     rawCaptureExportDialogOpen_ = true;
     rawCaptureExportDialogOpened_ = false;
     rawCaptureExportError_.clear();
-    const auto& lua = application_.docks().luaState();
-    const std::string baseName = lua.protocolName.empty() ? std::string("wave-capture") : lua.protocolName + "-wave";
-    rawCaptureExportPath_ = (executableDir_ / "captures" / (baseName + ".psraw")).generic_string();
+    rawCaptureExportPath_ = defaultPath.generic_string();
+#endif
 }
 
 void GuiRuntime::openElfStaticAddressDialog() {
+#if defined(_WIN32)
+    const auto defaultPath =
+        elfStaticAddressPath_.empty() ? executableDir_ : std::filesystem::path(elfStaticAddressPath_);
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"打开 ELF/JSON",
+                                       L"ELF/JSON Files (*.elf;*.out;*.axf;*.json)\0*.elf;*.out;*.axf;*.json\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       false,
+                                       nullptr,
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        loadElfStaticAddressFromPath(*path);
+    }
+#else
     elfStaticAddressDialogOpen_ = true;
     elfStaticAddressDialogOpened_ = false;
     elfStaticAddressError_.clear();
     if (elfStaticAddressPath_.empty()) {
         elfStaticAddressPath_ = executableDir_.generic_string();
     }
+#endif
+}
+
+void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path) {
+    // 核心流程：原生对话框和非 Windows 回退弹窗共用同一条导入链路，避免两套行为分叉。
+    rawCaptureImportPath_ = path.generic_string();
+    std::string error;
+    const auto capture = plot::readRawCaptureFile(path, error);
+    if (!capture.has_value()) {
+        rawCaptureImportError_ = error;
+        application_.setStatusMessage("原始波形导入失败: " + error);
+        return;
+    }
+    if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir))) {
+        rawCaptureImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
+        application_.setStatusMessage("原始波形导入失败: " + rawCaptureImportError_);
+        return;
+    }
+
+    const auto& currentLua = application_.docks().luaState();
+    if (currentLua.protocolDir != capture->protocolDir && !switchProtocolWorkspace(capture->protocolDir, false)) {
+        rawCaptureImportError_ = "切换导入协议失败";
+        application_.setStatusMessage("原始波形导入失败: " + rawCaptureImportError_);
+    } else if (!application_.importWaveRawCapture(*capture, error)) {
+        rawCaptureImportError_ = error;
+        application_.setStatusMessage("原始波形导入失败: " + error);
+    } else {
+        application_.setStatusMessage("原始波形导入成功");
+        rawCaptureImportDialogOpen_ = false;
+        rawCaptureImportDialogOpened_ = false;
+        rawCaptureImportError_.clear();
+    }
+}
+
+void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path) {
+    // 核心流程：导出路径只在 UI 层选择，实际写入仍交给 Application 统一处理。
+    rawCaptureExportPath_ = path.generic_string();
+    std::string error;
+    if (!application_.exportWaveRawCapture(path, error)) {
+        rawCaptureExportError_ = error;
+        application_.setStatusMessage("原始波形导出失败: " + error);
+        return;
+    }
+    application_.setStatusMessage("原始波形导出成功");
+    rawCaptureExportDialogOpen_ = false;
+    rawCaptureExportDialogOpened_ = false;
+    rawCaptureExportError_.clear();
+}
+
+void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path) {
+    // 核心流程：加载成功后清空符号下拉缓存，让 Lua 控件基于新模型重新查询。
+    elfStaticAddressPath_ = path.generic_string();
+    std::string error;
+    if (!application_.loadElfStaticAddressFile(path, error)) {
+        elfStaticAddressError_ = error;
+        application_.setStatusMessage("ELF/JSON 加载失败: " + error);
+        return;
+    }
+    elfSymbolComboStates_.clear();
+    elfStaticAddressDialogOpen_ = false;
+    elfStaticAddressDialogOpened_ = false;
+    elfStaticAddressError_.clear();
 }
 
 void GuiRuntime::drawElfStaticAddressDialog() {
@@ -1104,14 +1294,8 @@ void GuiRuntime::drawElfStaticAddressDialog() {
         }
         ImGui::Spacing();
         if (ImGui::Button("打开", ImVec2(90.0F, 0.0F))) {
-            std::string error;
-            if (!application_.loadElfStaticAddressFile(elfStaticAddressPath_, error)) {
-                elfStaticAddressError_ = error;
-            } else {
-                elfSymbolComboStates_.clear();
-                elfStaticAddressDialogOpen_ = false;
-                elfStaticAddressDialogOpened_ = false;
-                elfStaticAddressError_.clear();
+            loadElfStaticAddressFromPath(elfStaticAddressPath_);
+            if (!elfStaticAddressDialogOpen_) {
                 ImGui::CloseCurrentPopup();
             }
         }
@@ -1147,25 +1331,9 @@ void GuiRuntime::drawRawCaptureFileDialogs() {
             }
             ImGui::Spacing();
             if (ImGui::Button("导入", ImVec2(90.0F, 0.0F))) {
-                std::string error;
-                const auto capture = plot::readRawCaptureFile(rawCaptureImportPath_, error);
-                if (!capture.has_value()) {
-                    rawCaptureImportError_ = error;
-                } else if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir))) {
-                    rawCaptureImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
-                } else {
-                    const auto& currentLua = application_.docks().luaState();
-                    if (currentLua.protocolDir != capture->protocolDir && !switchProtocolWorkspace(capture->protocolDir, false)) {
-                        rawCaptureImportError_ = "切换导入协议失败";
-                    } else if (!application_.importWaveRawCapture(*capture, error)) {
-                        rawCaptureImportError_ = error;
-                    } else {
-                        application_.setStatusMessage("原始波形导入成功");
-                        rawCaptureImportDialogOpen_ = false;
-                        rawCaptureImportDialogOpened_ = false;
-                        rawCaptureImportError_.clear();
-                        ImGui::CloseCurrentPopup();
-                    }
+                importRawCaptureFromPath(rawCaptureImportPath_);
+                if (!rawCaptureImportDialogOpen_) {
+                    ImGui::CloseCurrentPopup();
                 }
             }
             ImGui::SameLine();
@@ -1199,14 +1367,8 @@ void GuiRuntime::drawRawCaptureFileDialogs() {
             }
             ImGui::Spacing();
             if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
-                std::string error;
-                if (!application_.exportWaveRawCapture(rawCaptureExportPath_, error)) {
-                    rawCaptureExportError_ = error;
-                } else {
-                    application_.setStatusMessage("原始波形导出成功");
-                    rawCaptureExportDialogOpen_ = false;
-                    rawCaptureExportDialogOpened_ = false;
-                    rawCaptureExportError_.clear();
+                exportRawCaptureToPath(rawCaptureExportPath_);
+                if (!rawCaptureExportDialogOpen_) {
                     ImGui::CloseCurrentPopup();
                 }
             }

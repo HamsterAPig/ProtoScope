@@ -398,7 +398,7 @@ if(PROTOSCOPE_ENABLE_GUI)
     )
     target_compile_features(protoscope_ui PUBLIC cxx_std_20)
     if(WIN32)
-        target_link_libraries(protoscope_ui PUBLIC shell32 ole32)
+        target_link_libraries(protoscope_ui PUBLIC shell32 ole32 comdlg32)
     endif()
 endif()
 
