@@ -47,7 +47,7 @@ end
 
 - `protocols/half_duplex_modbus_master`：上位机脚本。用 `proto.request()` 分 3 组写寄存器：`0x5AA5~0x5AA6`、`0x5AA7~0x5AA8`、`0x5AA9`。
 - `protocols/half_duplex_modbus_slave`：从机脚本。收到写寄存器请求后回复 ACK；当 `0x5AA9 = 1` 时，通过 `proto.set_timer()` 主动上报波形。
-- `protocols/half_duplex_modbus_common.lua`：通用流式 codec，只负责按各协议脚本传入的 `protocol.frames[]` 做组帧/解帧；`common` 不内置功能码和业务语义。
+- 半双工主从 demo 现在各自自包含：本地 helper 负责组帧，接收侧统一走宿主 `stream()` schema 解析。
 
 ### 固定寄存器语义
 
@@ -63,7 +63,7 @@ end
 ### 从机端行为
 
 - master/slave 各自声明同一套 `frame schema`，默认帧格式为 `header + func + seq + len + payload + crc16_modbus`。
-- `feed_parser()` 会按 `protocol.frames[]` 顺序流式匹配候选帧头，支持半包、粘包、噪声前缀与 CRC 失败后的重同步。
+- 接收侧统一使用宿主 `stream()` 按 `protocol.frames[]` 顺序流式匹配候选帧头，支持半包、粘包、噪声前缀与 CRC 失败后的重同步。
 - ACK 与主动上报共用同一套 wire format，长度字段默认按字节计数，CRC 为 `proto.crc16_modbus()`。
 - 波形帧载荷固定包含 `timestamp_ms`、`channel_mask`、`sample_count` 和按启用通道展开的 `i16` 采样值。
 - 4 个通道分别输出正弦、带偏置正弦、高斯噪声、三角波；只对开启的通道生成数据。
