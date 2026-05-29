@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <sstream>
 #include <type_traits>
 
 namespace protoscope::app {
@@ -111,6 +112,15 @@ scripting::TxEventState toScriptTxState(transport::TransportTxState state) {
 
 bool nearlyEqual(double left, double right) {
     return std::abs(left - right) <= 1e-12;
+}
+
+std::string formatFrequencyInput(double valueHz) {
+    if (!(std::isfinite(valueHz)) || valueHz <= 0.0) {
+        return {};
+    }
+    std::ostringstream out;
+    out << valueHz;
+    return out.str();
 }
 
 bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config) {
@@ -422,9 +432,67 @@ bool Application::setSendHexMode(bool enabled) {
     return true;
 }
 
+bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const {
+    const auto& lua = dockStore_.luaState();
+    const auto& wave = dockStore_.waveState();
+
+    plot::RawCaptureFileData capture = wave.rawCapture;
+    capture.protocolName = lua.protocolName.empty() ? capture.protocolName : lua.protocolName;
+    capture.protocolDir = lua.protocolDir.empty() ? capture.protocolDir : lua.protocolDir;
+    capture.sampleFrequencyHz = wave.view.sampleFrequencyHz;
+    if (capture.capturedAtMs == 0) {
+        capture.capturedAtMs = nowMs();
+    }
+
+    if (capture.protocolName.empty() || capture.protocolDir.empty()) {
+        error = "当前协议元数据不完整，无法导出";
+        return false;
+    }
+    return plot::writeRawCaptureFile(path, capture, error);
+}
+
+bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error) {
+    auto& lua = dockStore_.luaState();
+    if (!lua.loaded) {
+        error = "当前协议尚未加载";
+        return false;
+    }
+    if (capture.protocolDir.empty() || capture.protocolDir != lua.protocolDir) {
+        error = "导入文件协议目录与当前工作区不一致";
+        return false;
+    }
+
+    // 核心流程：导入回放必须先清空旧波形与旧原始缓冲，再走一次 on_bytes -> flushScriptPlots，
+    // 避免导入样本与现场采集样本混在同一份波形/原始容器里。
+    resetWaveHistory();
+    auto& wave = dockStore_.waveState();
+    wave.rawCapture = capture;
+    wave.view.sampleFrequencyHz = capture.sampleFrequencyHz;
+    wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
+    wave.view.sampleFrequencyError.clear();
+
+    if (!capture.payload.empty()) {
+        transport::ConnectionContext replayContext;
+        replayContext.endpoint = "psraw-import";
+        replayContext.connectionId = 0;
+        replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
+        replayContext.readyForIo = false;
+        scriptHost_.onTransportBytes(transport::TransportBytesEvent{replayContext, capture.payload});
+    }
+
+    flushScriptOutputs();
+    flushScriptLogs();
+    flushScriptPlots();
+    flushScriptStatusAndDialogs();
+    syncDockState();
+    wave.statusMessage = "原始波形已导入";
+    return true;
+}
+
 void Application::resetWaveHistory() {
     auto& wave = dockStore_.waveState();
     wave.buffer.clear();
+    wave.rawCapture = {};
     wave.channelSummaries.clear();
     wave.view.initialized = false;
     wave.view.centerTime = 0.0;
@@ -534,6 +602,19 @@ bool Application::handleTransportEvents() {
                             activeConnection_->connectionId != evt.context.connectionId) {
                             return;
                         }
+                        auto& wave = dockStore_.waveState();
+                        const auto& lua = dockStore_.luaState();
+                        if (!wave.rawCapture.payload.empty()
+                            && (wave.rawCapture.protocolDir != lua.protocolDir || wave.rawCapture.protocolName != lua.protocolName)) {
+                            wave.rawCapture = {};
+                        }
+                        if (wave.rawCapture.payload.empty()) {
+                            wave.rawCapture.capturedAtMs = evt.context.timestampMs;
+                        }
+                        wave.rawCapture.protocolName = lua.protocolName;
+                        wave.rawCapture.protocolDir = lua.protocolDir;
+                        wave.rawCapture.sampleFrequencyHz = wave.view.sampleFrequencyHz;
+                        wave.rawCapture.payload.insert(wave.rawCapture.payload.end(), evt.bytes.begin(), evt.bytes.end());
                         scriptHost_.onTransportBytes(evt);
                         if (evt.context.readyForIo) {
                             activeConnection_ = evt.context;
@@ -895,6 +976,9 @@ bool Application::flushScriptPlots() {
             auto effectiveSpec = defaultSpec;
             if (!shouldResetOverrides && index < wave.channelOverrides.size()) {
                 const auto& overrideState = wave.channelOverrides[index];
+                if (overrideState.labelOverridden) {
+                    effectiveSpec.label = overrideState.label;
+                }
                 if (overrideState.scaleOverridden) {
                     effectiveSpec.scale = overrideState.scale;
                 }

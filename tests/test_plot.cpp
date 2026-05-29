@@ -1,12 +1,15 @@
 #include "test_registry.hpp"
 
 #include "protoscope/plot/oscilloscope.hpp"
+#include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plot/wave_math.hpp"
 
 #include <cmath>
-#include <utility>
+#include <filesystem>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -645,4 +648,57 @@ void test_wave_cursor_interval_lock() {
     double left = 1.0;
     protoscope::plot::lockCursorInterval(5.0, left, 2.0, false);
     require(std::abs(left - 3.0) < 1e-12, "移动右游标时左游标应保持锁定间隔");
+}
+
+void test_raw_capture_file_roundtrip() {
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-roundtrip.psraw";
+    std::filesystem::remove(tempPath);
+
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "default_protocol",
+        .protocolDir = "protocols/default_protocol",
+        .sampleFrequencyHz = 4096.0,
+        .capturedAtMs = 123456789,
+        .payload = {0x01, 0x02, 0x7F, 0x00, 0x41},
+    };
+
+    std::string error;
+    require(protoscope::plot::writeRawCaptureFile(tempPath, capture, error), "psraw 写入应成功");
+    const auto loaded = protoscope::plot::readRawCaptureFile(tempPath, error);
+    require(loaded.has_value(), "psraw 读回应成功");
+    require(loaded->protocolName == capture.protocolName, "psraw 应保留协议名");
+    require(loaded->protocolDir == capture.protocolDir, "psraw 应保留协议目录");
+    require(loaded->sampleFrequencyHz == capture.sampleFrequencyHz, "psraw 应保留采样频率");
+    require(loaded->capturedAtMs == capture.capturedAtMs, "psraw 应保留采集时间");
+    require(loaded->payload == capture.payload, "psraw 应保留原始 payload");
+
+    std::filesystem::remove(tempPath);
+}
+
+void test_raw_capture_file_rejects_size_mismatch() {
+    const std::string broken = "ProtoScopeRawCapture\n"
+                               "version: 1\n"
+                               "protocol_name: default_protocol\n"
+                               "protocol_dir: protocols/default_protocol\n"
+                               "sample_frequency_hz: 1024\n"
+                               "raw_size: 5\n"
+                               "captured_at_ms: 1\n"
+                               "\n"
+                               "abc";
+    std::string error;
+    const auto parsed = protoscope::plot::decodeRawCaptureFile(broken, error);
+    require(!parsed.has_value(), "raw_size 不匹配时应拒绝解析");
+}
+
+void test_raw_capture_file_requires_protocol_fields() {
+    const std::string broken = "ProtoScopeRawCapture\n"
+                               "version: 1\n"
+                               "sample_frequency_hz: 1024\n"
+                               "raw_size: 3\n"
+                               "captured_at_ms: 1\n"
+                               "\n"
+                               "abc";
+    std::string error;
+    const auto parsed = protoscope::plot::decodeRawCaptureFile(broken, error);
+    require(!parsed.has_value(), "缺少 protocol 字段时应拒绝解析");
 }

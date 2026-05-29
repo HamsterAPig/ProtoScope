@@ -140,6 +140,7 @@ endif()
 
 add_library(protoscope_plot STATIC
     src/plot/oscilloscope.cpp
+    src/plot/raw_capture_file.cpp
     src/plot/wave_math.cpp
 )
 target_include_directories(protoscope_plot
@@ -174,6 +175,7 @@ target_compile_features(protoscope_transport PUBLIC cxx_std_20)
 
 add_library(protoscope_ui_layout STATIC
     src/ui/dock_layout.cpp
+    src/ui/protocol_ui_state.cpp
 )
 target_include_directories(protoscope_ui_layout
     PUBLIC
@@ -268,6 +270,7 @@ target_link_libraries(protoscope_app
         protoscope_dock
         protoscope_config
         protoscope_logging
+        protoscope_plot
         protoscope_scripting
         protoscope_transport
         protoscope_protocol_utils

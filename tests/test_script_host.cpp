@@ -844,6 +844,7 @@ static const TestCase kAllTests[] = {
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
     {"dock_receive_row_single_line_hex_and_ascii", &test_dock_receive_row_single_line_hex_and_ascii},
     {"dock_receive_row_single_line_message_and_timestamp", &test_dock_receive_row_single_line_message_and_timestamp},
+    {"wave_protocol_state_isolated_by_protocol_key", &test_wave_protocol_state_isolated_by_protocol_key},
     {"lua_dock_layout_key_uses_protocol_and_script", &test_lua_dock_layout_key_uses_protocol_and_script},
     {"lua_dock_layout_key_falls_back_to_script_directory", &test_lua_dock_layout_key_falls_back_to_script_directory},
     {"lua_dock_layout_paths_prefer_user_layout", &test_lua_dock_layout_paths_prefer_user_layout},
@@ -878,6 +879,7 @@ static const TestCase kAllTests[] = {
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
     {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
+    {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
@@ -892,6 +894,9 @@ static const TestCase kAllTests[] = {
     {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
     {"wave_cursor_interval_text_by_axis", &test_wave_cursor_interval_text_by_axis},
     {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
+    {"raw_capture_file_roundtrip", &test_raw_capture_file_roundtrip},
+    {"raw_capture_file_rejects_size_mismatch", &test_raw_capture_file_rejects_size_mismatch},
+    {"raw_capture_file_requires_protocol_fields", &test_raw_capture_file_requires_protocol_fields},
 };
 
 } // namespace

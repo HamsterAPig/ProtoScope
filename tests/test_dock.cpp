@@ -1,8 +1,10 @@
 #include "test_registry.hpp"
 
 #include "protoscope/dock/docks.hpp"
+#include "protoscope/ui/protocol_ui_state.hpp"
 
 #include <stdexcept>
+#include <yaml-cpp/yaml.h>
 
 namespace {
 
@@ -91,4 +93,62 @@ void test_dock_receive_row_single_line_message_and_timestamp() {
         false,
         false);
     require(headerOnly == "WARN", "空内容行不应追加多余分隔符");
+}
+
+void test_wave_protocol_state_isolated_by_protocol_key() {
+    YAML::Node root;
+
+    protoscope::plot::WaveDockState waveA;
+    waveA.buffer.configureChannels(1);
+    waveA.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 1.0, .offset = 0.0});
+    waveA.view.showHoverReadout = false;
+    waveA.view.sampleFrequencyHz = 2048.0;
+    waveA.view.sampleFrequencyInput = "2048";
+    waveA.toolsCollapsed = true;
+    waveA.channelOverrides.resize(1);
+    waveA.channelOverrides[0].labelOverridden = true;
+    waveA.channelOverrides[0].label = "总线A";
+    waveA.channelOverrides[0].scaleOverridden = true;
+    waveA.channelOverrides[0].scale = 2.5;
+    waveA.channelOverrides[0].offsetOverridden = true;
+    waveA.channelOverrides[0].offset = -0.25;
+    protoscope::ui::storeWaveProtocolState(root, "proto_a", waveA);
+
+    protoscope::plot::WaveDockState waveB;
+    waveB.buffer.configureChannels(1);
+    waveB.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 1.0, .offset = 0.0});
+    waveB.view.showHoverReadout = true;
+    waveB.view.sampleFrequencyHz = 512.0;
+    waveB.view.sampleFrequencyInput = "512";
+    waveB.channelOverrides.resize(1);
+    waveB.channelOverrides[0].labelOverridden = true;
+    waveB.channelOverrides[0].label = "总线B";
+    waveB.channelOverrides[0].scaleOverridden = true;
+    waveB.channelOverrides[0].scale = 0.5;
+    protoscope::ui::storeWaveProtocolState(root, "proto_b", waveB);
+
+    protoscope::plot::WaveDockState restoredA;
+    restoredA.buffer.configureChannels(1);
+    restoredA.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 1.0, .offset = 0.0});
+    protoscope::ui::restoreWaveProtocolState(root, "proto_a", restoredA);
+
+    const auto restoredASpec = restoredA.buffer.channelSpec(0);
+    require(restoredASpec.has_value(), "proto_a 恢复后应保留通道配置");
+    require(restoredASpec->label == "总线A", "proto_a 应恢复自己的标签覆盖");
+    require(restoredASpec->scale == 2.5, "proto_a 应恢复自己的缩放覆盖");
+    require(restoredASpec->offset == -0.25, "proto_a 应恢复自己的偏移覆盖");
+    require(restoredA.view.sampleFrequencyHz == 2048.0, "proto_a 应恢复自己的采样频率");
+    require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
+    require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
+
+    protoscope::plot::WaveDockState restoredB;
+    restoredB.buffer.configureChannels(1);
+    restoredB.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 1.0, .offset = 0.0});
+    protoscope::ui::restoreWaveProtocolState(root, "proto_b", restoredB);
+
+    const auto restoredBSpec = restoredB.buffer.channelSpec(0);
+    require(restoredBSpec.has_value(), "proto_b 恢复后应保留通道配置");
+    require(restoredBSpec->label == "总线B", "不同协议不应串用 proto_a 标签");
+    require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
+    require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
 }

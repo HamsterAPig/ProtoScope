@@ -1,9 +1,11 @@
 #include "protoscope/ui/gui_runtime.hpp"
 
+#include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/transport/transport.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/editable_combo.hpp"
+#include "protoscope/ui/protocol_ui_state.hpp"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -630,6 +632,7 @@ void GuiRuntime::renderFrame() {
     drawScriptDock();
     waveDockRenderer_.draw(showWaveDock_);
     drawDialogs();
+    drawRawCaptureFileDialogs();
 
     ImGui::Render();
 
@@ -666,6 +669,12 @@ void GuiRuntime::drawMainMenu() {
         }
         if (ImGui::MenuItem("重新加载协议")) {
             requestProtocolWorkspaceSwitch(application_.docks().luaState().protocolDir, true);
+        }
+        if (ImGui::MenuItem("导入原始波形...")) {
+            openRawCaptureImportDialog();
+        }
+        if (ImGui::MenuItem("导出原始波形...")) {
+            openRawCaptureExportDialog();
         }
         ImGui::EndMenu();
     }
@@ -1034,6 +1043,120 @@ void GuiRuntime::drawDialogs() {
     ImGui::EndPopup();
 }
 
+void GuiRuntime::openRawCaptureImportDialog() {
+    rawCaptureImportDialogOpen_ = true;
+    rawCaptureImportDialogOpened_ = false;
+    rawCaptureImportError_.clear();
+    if (rawCaptureImportPath_.empty()) {
+        rawCaptureImportPath_ = (executableDir_ / "captures" / "capture.psraw").generic_string();
+    }
+}
+
+void GuiRuntime::openRawCaptureExportDialog() {
+    rawCaptureExportDialogOpen_ = true;
+    rawCaptureExportDialogOpened_ = false;
+    rawCaptureExportError_.clear();
+    const auto& lua = application_.docks().luaState();
+    const std::string baseName = lua.protocolName.empty() ? std::string("wave-capture") : lua.protocolName + "-wave";
+    rawCaptureExportPath_ = (executableDir_ / "captures" / (baseName + ".psraw")).generic_string();
+}
+
+void GuiRuntime::drawRawCaptureFileDialogs() {
+    if (rawCaptureImportDialogOpen_) {
+        const char* popupId = "导入原始波形##psraw_import";
+        if (!rawCaptureImportDialogOpened_) {
+            ImGui::OpenPopup(popupId);
+            rawCaptureImportDialogOpened_ = true;
+        }
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+            ImGui::TextUnformatted("请输入 .psraw 文件路径");
+            char buffer[1024]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", rawCaptureImportPath_.c_str());
+            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+                rawCaptureImportPath_ = buffer;
+            }
+            if (!rawCaptureImportError_.empty()) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureImportError_.c_str());
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("导入", ImVec2(90.0F, 0.0F))) {
+                std::string error;
+                const auto capture = plot::readRawCaptureFile(rawCaptureImportPath_, error);
+                if (!capture.has_value()) {
+                    rawCaptureImportError_ = error;
+                } else if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir))) {
+                    rawCaptureImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
+                } else {
+                    const auto& currentLua = application_.docks().luaState();
+                    if (currentLua.protocolDir != capture->protocolDir && !switchProtocolWorkspace(capture->protocolDir, false)) {
+                        rawCaptureImportError_ = "切换导入协议失败";
+                    } else if (!application_.importWaveRawCapture(*capture, error)) {
+                        rawCaptureImportError_ = error;
+                    } else {
+                        application_.setStatusMessage("原始波形导入成功");
+                        rawCaptureImportDialogOpen_ = false;
+                        rawCaptureImportDialogOpened_ = false;
+                        rawCaptureImportError_.clear();
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+                rawCaptureImportDialogOpen_ = false;
+                rawCaptureImportDialogOpened_ = false;
+                rawCaptureImportError_.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    if (rawCaptureExportDialogOpen_) {
+        const char* popupId = "导出原始波形##psraw_export";
+        if (!rawCaptureExportDialogOpened_) {
+            ImGui::OpenPopup(popupId);
+            rawCaptureExportDialogOpened_ = true;
+        }
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+            ImGui::TextUnformatted("请输入导出 .psraw 文件路径");
+            char buffer[1024]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", rawCaptureExportPath_.c_str());
+            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+                rawCaptureExportPath_ = buffer;
+            }
+            if (!rawCaptureExportError_.empty()) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureExportError_.c_str());
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
+                std::string error;
+                if (!application_.exportWaveRawCapture(rawCaptureExportPath_, error)) {
+                    rawCaptureExportError_ = error;
+                } else {
+                    application_.setStatusMessage("原始波形导出成功");
+                    rawCaptureExportDialogOpen_ = false;
+                    rawCaptureExportDialogOpened_ = false;
+                    rawCaptureExportError_.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+                rawCaptureExportDialogOpen_ = false;
+                rawCaptureExportDialogOpened_ = false;
+                rawCaptureExportError_.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+}
+
 void GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
                                   const scripting::TableLayoutDescriptor& layout,
                                   std::string_view stableId) {
@@ -1356,6 +1479,7 @@ void GuiRuntime::loadCurrentProtocolControlState() {
 
     try {
         const auto root = YAML::LoadFile(statePath.string());
+        restoreWaveProtocolState(root, activeWorkspaceProtocolKey_, application_.docks().waveState());
         const auto protocolState = root["protocols"][activeWorkspaceProtocolKey_]["controls"];
         if (!protocolState) {
             return;
@@ -1375,6 +1499,7 @@ void GuiRuntime::loadCurrentProtocolControlState() {
                 application_.restoreControlValue(descriptor.id, *value);
             }
         }
+        application_.docks().waveState().statusMessage = "协议波形状态已恢复";
     } catch (const std::exception& ex) {
         application_.setStatusMessage(std::string("加载协议控件状态失败: ") + ex.what(), true);
     }
@@ -1403,6 +1528,7 @@ void GuiRuntime::saveCurrentProtocolControlState() {
         }
 
         root["protocols"][activeWorkspaceProtocolKey_]["controls"] = controlsNode;
+        storeWaveProtocolState(root, activeWorkspaceProtocolKey_, application_.docks().waveState());
         std::filesystem::create_directories(statePath.parent_path());
         std::ofstream out(statePath);
         if (!out.good()) {

@@ -1314,7 +1314,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveViewState& view, const WaveFrame
     }
     if (!ImPlot::BeginPlot("##oscilloscope",
             ImVec2(-1.0F, -1.0F),
-            ImPlotFlags_NoLegend)) {
+            ImPlotFlags_NoLegend | ImPlotFlags_NoMenus)) {
         if (!view.showAxisLabels) {
             ImPlot::PopStyleVar(2);
         }
@@ -1497,14 +1497,22 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
                 ImGui::SameLine();
                 ImGui::TextDisabled("[%s]", spec->unit.c_str());
             }
+            char labelBuffer[128]{};
+            std::snprintf(labelBuffer, sizeof(labelBuffer), "%s", updated.label.c_str());
+            if (ImGui::InputText("标签", labelBuffer, sizeof(labelBuffer))) {
+                updated.label = labelBuffer;
+                overrideState.labelOverridden = updated.label != defaultSpec.label;
+                overrideState.label = updated.label;
+                wave.buffer.setChannelSpec(channelIndex, updated);
+            }
             ImGui::TextDisabled(active ? "当前激活通道" : "非激活通道");
             ImGui::Separator();
-            if (ImGui::InputDouble("Scale", &updated.scale, 0.1, 1.0, "%.6g")) {
+            if (ImGui::InputDouble("缩放", &updated.scale, 0.1, 1.0, "%.6g")) {
                 overrideState.scaleOverridden = true;
                 overrideState.scale = updated.scale;
                 wave.buffer.setChannelSpec(channelIndex, updated);
             }
-            if (ImGui::InputDouble("Offset", &updated.offset, 0.1, 1.0, "%.6g")) {
+            if (ImGui::InputDouble("偏移", &updated.offset, 0.1, 1.0, "%.6g")) {
                 overrideState.offsetOverridden = true;
                 overrideState.offset = updated.offset;
                 wave.buffer.setChannelSpec(channelIndex, updated);
@@ -1512,9 +1520,26 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
             if (ImGui::Button(active ? "激活中" : "设为激活")) {
                 view.measurementChannelIndex = channelIndex;
             }
-            if (ImGui::Button("恢复 Lua 默认")) {
+            if (ImGui::Button("恢复默认标签")) {
+                overrideState.labelOverridden = false;
+                overrideState.label = defaultSpec.label;
+                updated.label = defaultSpec.label;
+                wave.buffer.setChannelSpec(channelIndex, updated);
+            }
+            if (ImGui::Button("恢复默认变换")) {
                 overrideState.scaleOverridden = false;
                 overrideState.offsetOverridden = false;
+                overrideState.scale = defaultSpec.scale;
+                overrideState.offset = defaultSpec.offset;
+                updated.scale = defaultSpec.scale;
+                updated.offset = defaultSpec.offset;
+                wave.buffer.setChannelSpec(channelIndex, updated);
+            }
+            if (ImGui::Button("恢复全部默认")) {
+                overrideState.labelOverridden = false;
+                overrideState.scaleOverridden = false;
+                overrideState.offsetOverridden = false;
+                overrideState.label = defaultSpec.label;
                 overrideState.scale = defaultSpec.scale;
                 overrideState.offset = defaultSpec.offset;
                 wave.buffer.setChannelSpec(channelIndex, defaultSpec);

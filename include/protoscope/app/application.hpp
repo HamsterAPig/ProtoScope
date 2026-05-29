@@ -3,11 +3,13 @@
 #include "protoscope/config/config.hpp"
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/logging/logging.hpp"
+#include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -39,6 +41,8 @@ public:
     void markProtocolEdited();
     void setStatusMessage(std::string message, bool markDirty = false);
     bool setSendHexMode(bool enabled);
+    bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
+    bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
     void resetWaveHistory();
     logging::LoggingFacade& logger();
     const logging::LoggingFacade& logger() const;

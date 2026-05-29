@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protoscope/plot/oscilloscope.hpp"
+#include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plot/wave_math.hpp"
 
 #include <array>
@@ -74,13 +75,16 @@ struct WaveViewState {
 
 struct WaveDockState {
     struct ChannelTransformOverride {
+        bool labelOverridden{false};
         bool scaleOverridden{false};
         bool offsetOverridden{false};
+        std::string label;
         double scale{1.0};
         double offset{0.0};
     };
 
     OscilloscopeBuffer buffer{};
+    RawCaptureFileData rawCapture{};
     WaveViewState view{};
     std::string statusMessage;
     std::vector<std::string> channelSummaries;

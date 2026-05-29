@@ -41,6 +41,7 @@ private:
     void drawStatusBar();
     void syncDialogQueue();
     void drawDialogs();
+    void drawRawCaptureFileDialogs();
     void drawMainMenu();
     void drawCommDock();
     void drawProtocolDock();
@@ -70,6 +71,8 @@ private:
     void loadCurrentProtocolControlState();
     void saveCurrentProtocolControlState();
     void pruneCurrentLuaDockSettings();
+    void openRawCaptureImportDialog();
+    void openRawCaptureExportDialog();
     std::filesystem::path currentProtocolLayoutPath() const;
     std::filesystem::path legacyProtocolLayoutPath() const;
     std::filesystem::path protocolControlStatePath() const;
@@ -117,6 +120,14 @@ private:
     std::deque<scripting::DialogRequest> dialogQueue_;
     std::optional<scripting::DialogRequest> activeDialog_;
     bool activeDialogOpened_{false};
+    bool rawCaptureImportDialogOpen_{false};
+    bool rawCaptureImportDialogOpened_{false};
+    std::string rawCaptureImportPath_;
+    std::string rawCaptureImportError_;
+    bool rawCaptureExportDialogOpen_{false};
+    bool rawCaptureExportDialogOpened_{false};
+    std::string rawCaptureExportPath_;
+    std::string rawCaptureExportError_;
     WaveDockRenderer waveDockRenderer_;
 };
 

@@ -1,12 +1,14 @@
 #include "test_registry.hpp"
 
 #include "protoscope/app/application.hpp"
+#include "protoscope/plot/raw_capture_file.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -68,6 +70,72 @@ struct RecordingTransport final : protoscope::transport::ITransport {
         return 0;
     }
 
+    std::shared_ptr<State> sharedState_;
+};
+
+struct QueuedEventTransport final : protoscope::transport::ITransport {
+    struct State {
+        bool openCalled{false};
+        bool opened{false};
+        std::optional<protoscope::transport::TransportConfig> lastConfig;
+        std::vector<std::uint8_t> queuedRxBytes;
+        std::vector<protoscope::transport::TransportEvent> pendingEvents;
+    };
+
+    explicit QueuedEventTransport(std::shared_ptr<State> sharedState)
+        : sharedState_(std::move(sharedState)) {}
+
+    bool open(const protoscope::transport::TransportConfig& config) override {
+        sharedState_->lastConfig = config;
+        sharedState_->openCalled = true;
+        sharedState_->opened = true;
+
+        const protoscope::transport::ConnectionContext context{
+            .endpoint = "queued://wave",
+            .connectionId = 7,
+            .timestampMs = 100,
+            .readyForIo = true,
+        };
+        sharedState_->pendingEvents.push_back(protoscope::transport::TransportOpenEvent{context});
+        if (!sharedState_->queuedRxBytes.empty()) {
+            sharedState_->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, sharedState_->queuedRxBytes});
+        }
+        return true;
+    }
+
+    void close() override {
+        sharedState_->opened = false;
+    }
+
+    bool send(std::vector<std::uint8_t> bytes) override {
+        static_cast<void>(bytes);
+        return sharedState_->opened;
+    }
+
+    bool enqueueSend(protoscope::transport::TransportTxTask task) override {
+        static_cast<void>(task);
+        return sharedState_->opened;
+    }
+
+    protoscope::transport::TransportState state() const override {
+        return sharedState_->opened ? protoscope::transport::TransportState::Open : protoscope::transport::TransportState::Closed;
+    }
+
+    std::vector<protoscope::transport::TransportEvent> takeEvents() override {
+        std::vector<protoscope::transport::TransportEvent> drained;
+        drained.swap(sharedState_->pendingEvents);
+        return drained;
+    }
+
+    std::uint64_t txCount() const override {
+        return 0;
+    }
+
+    std::uint64_t rxCount() const override {
+        return static_cast<std::uint64_t>(sharedState_->queuedRxBytes.size());
+    }
+
+private:
     std::shared_ptr<State> sharedState_;
 };
 
@@ -331,5 +399,58 @@ void test_application_logging_filters_script_and_host() {
     application.logger().error("host", "after disable file logging second");
     require(std::filesystem::file_size(logPath) == fileSize, "清空 file_path 后不应继续追加文件日志");
 
+    application.shutdown();
+}
+
+void test_application_raw_capture_export_import_roundtrip() {
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    transportState->queuedRxBytes = {'O', 'K', '\r', '\n'};
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+
+    application.openTransport();
+    for (int i = 0; i < 4; ++i) {
+        application.pumpOnce();
+    }
+
+    auto& wave = application.docks().waveState();
+    wave.view.sampleFrequencyHz = 2048.0;
+    wave.view.sampleFrequencyInput = "2048";
+    require(wave.rawCapture.payload == transportState->queuedRxBytes, "实时 RX 后应缓存原始字节");
+
+    const auto liveSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(!liveSnapshot.channels.empty(), "实时 RX 后应生成波形通道");
+    require(liveSnapshot.channels.front().totalSamples > 0, "实时 RX 后应生成波形样本");
+
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-application-roundtrip.psraw";
+    std::filesystem::remove(tempPath);
+
+    std::string error;
+    require(application.exportWaveRawCapture(tempPath, error), "应用导出 psraw 应成功");
+    const auto capture = protoscope::plot::readRawCaptureFile(tempPath, error);
+    require(capture.has_value(), "导出后的 psraw 应可重新读取");
+    require(capture->payload == transportState->queuedRxBytes, "导出文件应保留实时 RX 原始字节");
+
+    application.resetWaveHistory();
+    const auto emptySnapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity());
+    require(emptySnapshot.channels.empty() || emptySnapshot.channels.front().totalSamples == 0, "清空历史后不应保留旧波形样本");
+
+    require(application.importWaveRawCapture(*capture, error), "应用导入 psraw 应成功");
+    const auto importedSnapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity());
+    require(!importedSnapshot.channels.empty(), "导入 psraw 后应恢复波形通道");
+    require(importedSnapshot.channels.front().totalSamples > 0, "导入 psraw 后应重新触发 on_bytes 生成样本");
+    require(application.docks().waveState().view.sampleFrequencyHz == 2048.0, "导入 psraw 后应恢复文件中的采样频率");
+    require(application.docks().waveState().rawCapture.payload == transportState->queuedRxBytes, "导入 psraw 后应回填原始缓冲");
+
+    std::filesystem::remove(tempPath);
     application.shutdown();
 }
