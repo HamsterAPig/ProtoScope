@@ -8,9 +8,9 @@ ProtoScope 脚本 API 定义文件。
 
 -- 基础枚举：覆盖日志、控件、停靠、传输和弹窗状态。
 ---@alias ProtoLogLevel 'debug'|'info'|'warn'|'error'
----@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'
+---@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'
 ---@alias ProtoDockAnchor 'left'|'left_bottom'|'right_top'|'right_mid'|'right_bottom'|'main_bottom'
----@alias ProtoControlValue boolean|integer|number|string|nil
+---@alias ProtoControlValue boolean|integer|number|string|ProtoElfSymbolValue|nil
 ---@alias ProtoBytes integer[]
 ---@alias ProtoPayload string|ProtoBytes
 ---@alias ProtoFormLayoutItem ProtoFormControlItem|ProtoFormControlsItem|ProtoFormGroupItem|ProtoFormCollapseItem|ProtoFormSeparatorItem|ProtoFormTextItem
@@ -76,6 +76,14 @@ ProtoScope 脚本 API 定义文件。
 ---@field label string
 ---@field default? ProtoControlValue
 ---@field options? string[]
+---@field debounce_ms? integer @elf_symbol_combo 输入消抖毫秒数，默认 150。
+---@field limit? integer @elf_symbol_combo 单次候选结果上限，默认 64。
+
+-- ElfStaticView 静态地址候选：value 使用十六进制字符串，避免 64 位地址精度丢失。
+---@class ProtoElfSymbolValue
+---@field label string
+---@field value string
+---@field type string
 
 -- 停靠面板描述：定义一个脚本 UI 面板的标题、锚点和控件布局。
 ---@class ProtoDockDescriptor

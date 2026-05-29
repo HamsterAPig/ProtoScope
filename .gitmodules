@@ -25,3 +25,6 @@
 [submodule "3rdparty/cmrc"]
 	path = 3rdparty/cmrc
 	url = https://github.com/vector-of-bool/cmrc.git
+[submodule "3rdparty/ElfStaticView"]
+	path = 3rdparty/ElfStaticView
+	url = https://github.com/HamsterAPig/ElfStaticView.git

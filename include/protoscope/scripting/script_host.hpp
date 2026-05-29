@@ -28,6 +28,13 @@ enum class ControlType {
     InputFloat,
     Checkbox,
     Combo,
+    ElfSymbolCombo,
+};
+
+struct ElfSymbolValue {
+    std::string label;
+    std::string value;
+    std::string type;
 };
 
 struct ControlDescriptor {
@@ -40,9 +47,11 @@ struct ControlDescriptor {
     bool boolDefault{false};
     std::vector<std::string> comboOptions;
     int comboDefaultIndex{0};
+    int debounceMs{150};
+    std::size_t limit{64};
 };
 
-using ControlValue = std::variant<bool, int, float, std::string>;
+using ControlValue = std::variant<bool, int, float, std::string, ElfSymbolValue>;
 
 struct ControlSnapshot {
     ControlDescriptor descriptor;

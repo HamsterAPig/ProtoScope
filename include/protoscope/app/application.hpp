@@ -4,6 +4,7 @@
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/logging/logging.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
+#include "protoscope/plugin/elf_static_view_bridge.hpp"
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
@@ -44,6 +45,9 @@ public:
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
     void resetWaveHistory();
+    bool loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error);
+    [[nodiscard]] std::vector<scripting::ElfSymbolValue> queryElfStaticAddresses(const std::string& queryText,
+                                                                                 std::size_t limit) const;
     logging::LoggingFacade& logger();
     const logging::LoggingFacade& logger() const;
     std::vector<scripting::DialogRequest> drainDialogRequests();
@@ -84,6 +88,7 @@ private:
     config::AppConfig runtimeConfig_{};
     logging::LoggingFacade loggingFacade_{};
     scripting::ScriptHost scriptHost_;
+    plugin::ElfStaticViewBridge elfStaticView_;
     std::unique_ptr<transport::ITransport> transport_;
     std::optional<transport::ConnectionContext> activeConnection_;
     std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> transportFactoryForTest_;

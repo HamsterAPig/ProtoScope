@@ -188,6 +188,8 @@ const char* controlTypeName(scripting::ControlType type) {
         return "checkbox";
     case scripting::ControlType::Combo:
         return "combo";
+    case scripting::ControlType::ElfSymbolCombo:
+        return "elf_symbol_combo";
     }
     return "unknown";
 }
@@ -222,6 +224,8 @@ std::optional<scripting::ControlValue> readControlValue(const YAML::Node& node, 
                 return node.as<float>();
             }
             break;
+        case scripting::ControlType::ElfSymbolCombo:
+            break;
         case scripting::ControlType::Button:
             break;
         }
@@ -245,6 +249,8 @@ void writeControlValue(YAML::Node node, const scripting::ControlSnapshot& contro
         break;
     case scripting::ControlType::InputFloat:
         node = std::get<float>(control.value);
+        break;
+    case scripting::ControlType::ElfSymbolCombo:
         break;
     case scripting::ControlType::Button:
         break;
@@ -633,6 +639,7 @@ void GuiRuntime::renderFrame() {
     waveDockRenderer_.draw(showWaveDock_);
     drawDialogs();
     drawRawCaptureFileDialogs();
+    drawElfStaticAddressDialog();
 
     ImGui::Render();
 
@@ -669,6 +676,9 @@ void GuiRuntime::drawMainMenu() {
         }
         if (ImGui::MenuItem("重新加载协议")) {
             requestProtocolWorkspaceSwitch(application_.docks().luaState().protocolDir, true);
+        }
+        if (ImGui::MenuItem("打开 ELF/JSON...")) {
+            openElfStaticAddressDialog();
         }
         if (ImGui::MenuItem("导入原始波形...")) {
             openRawCaptureImportDialog();
@@ -1059,6 +1069,61 @@ void GuiRuntime::openRawCaptureExportDialog() {
     const auto& lua = application_.docks().luaState();
     const std::string baseName = lua.protocolName.empty() ? std::string("wave-capture") : lua.protocolName + "-wave";
     rawCaptureExportPath_ = (executableDir_ / "captures" / (baseName + ".psraw")).generic_string();
+}
+
+void GuiRuntime::openElfStaticAddressDialog() {
+    elfStaticAddressDialogOpen_ = true;
+    elfStaticAddressDialogOpened_ = false;
+    elfStaticAddressError_.clear();
+    if (elfStaticAddressPath_.empty()) {
+        elfStaticAddressPath_ = executableDir_.generic_string();
+    }
+}
+
+void GuiRuntime::drawElfStaticAddressDialog() {
+    if (!elfStaticAddressDialogOpen_) {
+        return;
+    }
+
+    const char* popupId = "打开 ELF/JSON##elf_static_view";
+    if (!elfStaticAddressDialogOpened_) {
+        ImGui::OpenPopup(popupId);
+        elfStaticAddressDialogOpened_ = true;
+    }
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+        ImGui::TextUnformatted("请输入 ELF 或 ElfStaticView JSON 文件路径");
+        char buffer[1024]{};
+        std::snprintf(buffer, sizeof(buffer), "%s", elfStaticAddressPath_.c_str());
+        if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+            elfStaticAddressPath_ = buffer;
+        }
+        if (!elfStaticAddressError_.empty()) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", elfStaticAddressError_.c_str());
+        }
+        ImGui::Spacing();
+        if (ImGui::Button("打开", ImVec2(90.0F, 0.0F))) {
+            std::string error;
+            if (!application_.loadElfStaticAddressFile(elfStaticAddressPath_, error)) {
+                elfStaticAddressError_ = error;
+            } else {
+                elfSymbolComboStates_.clear();
+                elfStaticAddressDialogOpen_ = false;
+                elfStaticAddressDialogOpened_ = false;
+                elfStaticAddressError_.clear();
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+            elfStaticAddressDialogOpen_ = false;
+            elfStaticAddressDialogOpened_ = false;
+            elfStaticAddressError_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void GuiRuntime::drawRawCaptureFileDialogs() {
@@ -1700,6 +1765,44 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         }
         if (!items.empty() && ImGui::Combo(descriptor.label.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
             application_.updateControlValue(descriptor.id, index);
+        }
+        break;
+    }
+    case scripting::ControlType::ElfSymbolCombo: {
+        auto& state = elfSymbolComboStates_[descriptor.id];
+        const auto& current = std::get<scripting::ElfSymbolValue>(control.value);
+        if (state.draft.empty() && !current.label.empty()) {
+            state.draft = current.label;
+        }
+
+        const auto currentMs = nowMs();
+        if (state.editedAtMs == 0) {
+            state.editedAtMs = currentMs;
+        }
+        if (state.queriedDraft != state.draft
+            && currentMs >= state.editedAtMs + static_cast<std::uint64_t>(descriptor.debounceMs)) {
+            state.options = application_.queryElfStaticAddresses(state.draft, descriptor.limit);
+            state.queriedDraft = state.draft;
+        }
+
+        std::vector<std::string> labels;
+        labels.reserve(state.options.size());
+        for (const auto& option : state.options) {
+            labels.push_back(option.label);
+        }
+
+        const auto edit = drawEditableCombo(descriptor.label.c_str(), state.draft, labels);
+        if (edit.edited) {
+            state.draft = edit.value;
+            state.editedAtMs = currentMs;
+        }
+        if (edit.selectedFromList) {
+            const auto selected = std::find_if(state.options.begin(), state.options.end(), [&](const auto& option) {
+                return option.label == edit.value;
+            });
+            if (selected != state.options.end()) {
+                application_.updateControlValue(descriptor.id, *selected);
+            }
         }
         break;
     }

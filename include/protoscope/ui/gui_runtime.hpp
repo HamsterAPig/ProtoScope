@@ -73,6 +73,8 @@ private:
     void pruneCurrentLuaDockSettings();
     void openRawCaptureImportDialog();
     void openRawCaptureExportDialog();
+    void openElfStaticAddressDialog();
+    void drawElfStaticAddressDialog();
     std::filesystem::path currentProtocolLayoutPath() const;
     std::filesystem::path legacyProtocolLayoutPath() const;
     std::filesystem::path protocolControlStatePath() const;
@@ -128,6 +130,17 @@ private:
     bool rawCaptureExportDialogOpened_{false};
     std::string rawCaptureExportPath_;
     std::string rawCaptureExportError_;
+    bool elfStaticAddressDialogOpen_{false};
+    bool elfStaticAddressDialogOpened_{false};
+    std::string elfStaticAddressPath_;
+    std::string elfStaticAddressError_;
+    struct ElfSymbolComboUiState {
+        std::string draft;
+        std::string queriedDraft;
+        std::uint64_t editedAtMs{0};
+        std::vector<scripting::ElfSymbolValue> options;
+    };
+    std::unordered_map<std::string, ElfSymbolComboUiState> elfSymbolComboStates_;
     WaveDockRenderer waveDockRenderer_;
 };
 

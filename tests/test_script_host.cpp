@@ -147,6 +147,52 @@ void test_script_controls_snapshot() {
     require(controls.size() >= 6, "默认协议脚本应暴露完整控件集合");
 }
 
+void test_script_elf_symbol_combo_descriptor_defaults() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("elf_symbol_combo").generic_string()),
+            "elf_symbol_combo 协议脚本应可加载");
+
+    const auto controls = host.controlsSnapshot();
+    require(controls.size() == 2, "elf_symbol_combo fixture 应暴露 2 个控件");
+    require(controls[0].type == protoscope::scripting::ControlType::ElfSymbolCombo,
+            "应解析 elf_symbol_combo 控件类型");
+    require(controls[0].debounceMs == 150, "debounce_ms 默认值应为 150");
+    require(controls[0].limit == 64, "limit 默认值应为 64");
+    require(controls[1].debounceMs == 25, "应解析自定义 debounce_ms");
+    require(controls[1].limit == 3, "应解析自定义 limit");
+}
+
+void test_script_elf_symbol_combo_invalid_config_fails() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_elf_symbol_combo").generic_string()),
+            "非法 elf_symbol_combo 配置应加载失败");
+    require(host.lastError().find("elf_symbol_combo") != std::string::npos,
+            "非法 elf_symbol_combo 应记录明确错误");
+}
+
+void test_script_elf_symbol_combo_get_control_returns_table() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("elf_symbol_combo").generic_string()),
+            "elf_symbol_combo 协议脚本应可加载");
+
+    host.onControl(sampleCtx(),
+                   "target",
+                   protoscope::scripting::ElfSymbolValue{
+                       .label = "global.counter",
+                       .value = "0x20000010",
+                       .type = "uint32_t",
+                   });
+
+    const auto events = host.drainEvents();
+    require(events.size() == 1, "on_control 应 emit 一条事件");
+    require(events[0].payload.find("label=global.counter") != std::string::npos,
+            "proto.get_control 应返回 label 字段");
+    require(events[0].payload.find("value=0x20000010") != std::string::npos,
+            "proto.get_control 应返回 value 字段");
+    require(events[0].payload.find("type=uint32_t") != std::string::npos,
+            "proto.get_control 应返回 type 字段");
+}
+
 void test_script_on_open_log() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
@@ -466,6 +512,8 @@ void test_luals_api_sync_contains_tx_and_dialog_api() {
     require(text.find("function proto.plot.push(channel_index, payload) end") != std::string::npos, "LuaLS API 应声明 proto.plot.push");
     require(text.find("function proto.ui.alert(opts) end") != std::string::npos, "LuaLS API 应声明 proto.ui.alert");
     require(text.find("function proto.bits.count(value) end") != std::string::npos, "LuaLS API 应声明 proto.bits.count");
+    require(text.find("'elf_symbol_combo'") != std::string::npos, "LuaLS API 应声明 elf_symbol_combo");
+    require(text.find("@class ProtoElfSymbolValue") != std::string::npos, "LuaLS API 应声明 ProtoElfSymbolValue");
     require(text.find("function stream() end") != std::string::npos, "LuaLS API 应声明 stream()");
     require(text.find("function on_tx(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_tx");
     require(text.find("function on_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_dialog");
@@ -1093,6 +1141,9 @@ static const TestCase kAllTests[] = {
     {"crc_known_vectors", &test_crc_known_vectors},
     {"config_external_reload_state", &test_config_external_reload_state},
     {"script_controls_snapshot", &test_script_controls_snapshot},
+    {"script_elf_symbol_combo_descriptor_defaults", &test_script_elf_symbol_combo_descriptor_defaults},
+    {"script_elf_symbol_combo_invalid_config_fails", &test_script_elf_symbol_combo_invalid_config_fails},
+    {"script_elf_symbol_combo_get_control_returns_table", &test_script_elf_symbol_combo_get_control_returns_table},
     {"script_on_open_log", &test_script_on_open_log},
     {"script_on_close_log", &test_script_on_close_log},
     {"script_on_error_log", &test_script_on_error_log},
@@ -1196,6 +1247,8 @@ static const TestCase kAllTests[] = {
     {"raw_capture_file_roundtrip", &test_raw_capture_file_roundtrip},
     {"raw_capture_file_rejects_size_mismatch", &test_raw_capture_file_rejects_size_mismatch},
     {"raw_capture_file_requires_protocol_fields", &test_raw_capture_file_requires_protocol_fields},
+    {"elf_static_view_bridge_loads_dump_json_and_queries_symbols", &test_elf_static_view_bridge_loads_dump_json_and_queries_symbols},
+    {"elf_static_view_bridge_keeps_old_model_on_load_failure", &test_elf_static_view_bridge_keeps_old_model_on_load_failure},
 };
 
 } // namespace

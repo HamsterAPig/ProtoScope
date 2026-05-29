@@ -12,6 +12,7 @@
 #include <limits>
 #include <sstream>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -121,6 +122,8 @@ ControlValue defaultValueFor(const ControlDescriptor& descriptor) {
         return descriptor.boolDefault;
     case ControlType::Combo:
         return descriptor.comboDefaultIndex;
+    case ControlType::ElfSymbolCombo:
+        return ElfSymbolValue{};
     }
     return false;
 }
@@ -213,6 +216,9 @@ std::optional<ControlType> parseControlType(std::string_view value) {
     if (value == "combo") {
         return ControlType::Combo;
     }
+    if (value == "elf_symbol_combo") {
+        return ControlType::ElfSymbolCombo;
+    }
     return std::nullopt;
 }
 
@@ -280,6 +286,26 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
         }
         return std::clamp(index, 0, static_cast<int>(descriptor.comboOptions.size()) - 1);
     }
+    case ControlType::ElfSymbolCombo: {
+        if (object.get_type() == sol::type::lua_nil) {
+            return ElfSymbolValue{};
+        }
+        if (!object.is<sol::table>()) {
+            error = "elf_symbol_combo 控件仅支持 table 或 nil";
+            return std::nullopt;
+        }
+
+        const auto table = object.as<sol::table>();
+        ElfSymbolValue symbol;
+        symbol.label = table.get_or("label", std::string());
+        symbol.value = table.get_or("value", std::string());
+        symbol.type = table.get_or("type", std::string());
+        if (symbol.label.empty() || symbol.value.empty() || symbol.type.empty()) {
+            error = "elf_symbol_combo 控件值必须包含 label、value、type";
+            return std::nullopt;
+        }
+        return symbol;
+    }
     }
 
     error = "控件 " + descriptor.id + " 类型不匹配，实际收到 " + luaTypeName(object.get_type());
@@ -293,9 +319,26 @@ sol::object controlValueToLua(sol::state_view lua,
         return sol::make_object(lua, sol::lua_nil);
     }
 
+    if (descriptor->type == ControlType::ElfSymbolCombo) {
+        const auto* symbol = std::get_if<ElfSymbolValue>(&value);
+        if (symbol == nullptr || symbol->label.empty() || symbol->value.empty() || symbol->type.empty()) {
+            return sol::make_object(lua, sol::lua_nil);
+        }
+        sol::table table = lua.create_table();
+        table["label"] = symbol->label;
+        table["value"] = symbol->value;
+        table["type"] = symbol->type;
+        return sol::make_object(lua, table);
+    }
+
     return std::visit(
         [&lua](const auto& current) -> sol::object {
-            return sol::make_object(lua, current);
+            using ValueType = std::decay_t<decltype(current)>;
+            if constexpr (std::is_same_v<ValueType, ElfSymbolValue>) {
+                return sol::make_object(lua, sol::lua_nil);
+            } else {
+                return sol::make_object(lua, current);
+            }
         },
         value);
 }
@@ -400,6 +443,20 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
         const int defaultIndex = table.get_or("default", 1);
         descriptor.comboDefaultIndex =
             std::clamp(defaultIndex, 1, static_cast<int>(descriptor.comboOptions.size())) - 1;
+        break;
+    }
+    case ControlType::ElfSymbolCombo: {
+        descriptor.debounceMs = table.get_or("debounce_ms", 150);
+        const int limit = table.get_or("limit", 64);
+        if (descriptor.debounceMs <= 0) {
+            error = "elf_symbol_combo debounce_ms 必须大于 0";
+            return std::nullopt;
+        }
+        if (limit <= 0) {
+            error = "elf_symbol_combo limit 必须大于 0";
+            return std::nullopt;
+        }
+        descriptor.limit = static_cast<std::size_t>(limit);
         break;
     }
     }
@@ -2281,9 +2338,17 @@ void ScriptHost::protoPlotPush(std::size_t channelIndex, const plot::WaveAppendR
 std::string ScriptHost::valueToString(const ControlValue& value) {
     return std::visit(
         [](const auto& current) {
-            std::ostringstream builder;
-            builder << current;
-            return builder.str();
+            using ValueType = std::decay_t<decltype(current)>;
+            if constexpr (std::is_same_v<ValueType, ElfSymbolValue>) {
+                if (current.label.empty() || current.value.empty() || current.type.empty()) {
+                    return std::string("nil");
+                }
+                return current.label + "=" + current.value + " (" + current.type + ")";
+            } else {
+                std::ostringstream builder;
+                builder << current;
+                return builder.str();
+            }
         },
         value);
 }

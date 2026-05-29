@@ -489,6 +489,27 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     return true;
 }
 
+bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error) {
+    if (!elfStaticView_.loadFile(path, error)) {
+        return false;
+    }
+    setStatusMessage("ELF/JSON 已加载: " + elfStaticView_.sourcePath());
+    return true;
+}
+
+std::vector<scripting::ElfSymbolValue> Application::queryElfStaticAddresses(const std::string& queryText,
+                                                                            std::size_t limit) const {
+    std::vector<scripting::ElfSymbolValue> symbols;
+    for (const auto& entry : elfStaticView_.query(queryText, limit)) {
+        symbols.push_back(scripting::ElfSymbolValue{
+            .label = entry.label,
+            .value = entry.value,
+            .type = entry.type,
+        });
+    }
+    return symbols;
+}
+
 void Application::resetWaveHistory() {
     auto& wave = dockStore_.waveState();
     wave.buffer.clear();

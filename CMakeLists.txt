@@ -19,8 +19,43 @@ option(PROTOSCOPE_ENABLE_GUI "Build ProtoScope GUI runtime" ON)
 
 add_subdirectory(3rdparty/spdlog)
 add_subdirectory(3rdparty/yaml-cpp)
+add_subdirectory(3rdparty/libdwarf-code EXCLUDE_FROM_ALL)
 # cmrc: 本地 3rdparty 引入，不使用 FetchContent
 include(${CMAKE_SOURCE_DIR}/3rdparty/cmrc/CMakeRC.cmake)
+
+add_library(elf_static_view_core
+    3rdparty/ElfStaticView/src/analysis/address_bias.cpp
+    3rdparty/ElfStaticView/src/analysis/expander.cpp
+    3rdparty/ElfStaticView/src/analysis/model_json.cpp
+    3rdparty/ElfStaticView/src/analysis/model_utils.cpp
+    3rdparty/ElfStaticView/src/analysis/project.cpp
+    3rdparty/ElfStaticView/src/analysis/project_summary.cpp
+    3rdparty/ElfStaticView/src/analysis/static_address_query.cpp
+    3rdparty/ElfStaticView/src/elf/elf_symbol_table.cpp
+    3rdparty/ElfStaticView/src/elf/dwarf_reader.cpp
+    3rdparty/ElfStaticView/src/elf/raw_dwarf_reader.cpp
+    3rdparty/ElfStaticView/src/elf/dwarf_wrappers.cpp
+    3rdparty/ElfStaticView/src/elf/ti_coff_object.cpp
+    3rdparty/ElfStaticView/src/logging/logger.cpp
+)
+target_include_directories(elf_static_view_core
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/3rdparty/ElfStaticView/include
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/3rdparty/ElfStaticView/src
+        ${CMAKE_SOURCE_DIR}/3rdparty/yaml-cpp/include
+)
+target_link_libraries(elf_static_view_core
+    PUBLIC
+        libdwarf::dwarf-static
+    PRIVATE
+        yaml-cpp::yaml-cpp
+)
+target_compile_features(elf_static_view_core PUBLIC cxx_std_20)
+if(WIN32)
+    target_compile_definitions(elf_static_view_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
+add_library(elf_static_view::core ALIAS elf_static_view_core)
 
 add_library(protoscope_lua STATIC
     3rdparty/lua/onelua.c
@@ -211,6 +246,19 @@ target_link_libraries(protoscope_scripting
 target_compile_features(protoscope_scripting PUBLIC cxx_std_20)
 target_compile_definitions(protoscope_scripting PRIVATE SOL_ALL_SAFETIES_ON=1)
 
+add_library(protoscope_elf_static_view STATIC
+    src/plugin/elf_static_view_bridge.cpp
+)
+target_include_directories(protoscope_elf_static_view
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(protoscope_elf_static_view
+    PUBLIC
+        elf_static_view::core
+)
+target_compile_features(protoscope_elf_static_view PUBLIC cxx_std_20)
+
 target_link_libraries(protoscope_ui_layout
     PUBLIC
         protoscope_scripting
@@ -322,6 +370,7 @@ target_link_libraries(protoscope_app
         protoscope_logging
         protoscope_plot
         protoscope_scripting
+        protoscope_elf_static_view
         protoscope_transport
         protoscope_protocol_utils
         yaml-cpp::yaml-cpp
@@ -376,6 +425,7 @@ foreach(target_name IN ITEMS
     protoscope_transport
     protoscope_ui_layout
     protoscope_scripting
+    protoscope_elf_static_view
     protoscope_dock
     protoscope_plot
     protoscope_config
@@ -407,6 +457,7 @@ add_executable(protoscope_tests
     tests/test_dock_layout.cpp
     tests/test_frame_stream_parser.cpp
     tests/test_plot.cpp
+    tests/test_elf_static_view_bridge.cpp
     tests/test_script_host.cpp
     tests/test_serial_ports.cpp
     tests/test_transport.cpp
@@ -421,6 +472,7 @@ target_link_libraries(protoscope_tests
         protoscope_dock
         protoscope_ui_layout
         protoscope_app
+        protoscope_elf_static_view
         protoscope_protocol_utils
         protoscope_plot
         protoscope_scripting
