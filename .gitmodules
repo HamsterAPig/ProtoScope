@@ -22,3 +22,6 @@
 [submodule "3rdparty/implot"]
 	path = 3rdparty/implot
 	url = https://github.com/epezent/implot.git
+[submodule "3rdparty/cmrc"]
+	path = 3rdparty/cmrc
+	url = https://github.com/vector-of-bool/cmrc.git

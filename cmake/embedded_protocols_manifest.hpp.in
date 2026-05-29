@@ -1,0 +1,27 @@
+/*
+ * @Author: jinming xi
+ * @Date: 2026-05-29 09:39:33
+ * @LastEditors: jinming xi
+ * @LastEditTime: 2026-05-29 09:39:45
+ * @FilePath: embedded_protocols_manifest.hpp.in
+ * @Description: 
+ * 
+ * Copyright (c) 2026 by SINENG, All Rights Reserved. 
+ */
+#pragma once
+
+#include <array>
+#include <cstddef>
+
+namespace protoscope::config::embedded {
+
+struct ProtocolResourceEntry {
+    const char* resource_path;
+    const char* output_path;
+};
+
+inline constexpr std::array<ProtocolResourceEntry, @PROTOSCOPE_EMBEDDED_PROTOCOL_FILE_COUNT@> kProtocolResources = {{
+@PROTOSCOPE_EMBEDDED_PROTOCOL_FILE_INITIALIZERS@
+}};
+
+} // namespace protoscope::config::embedded

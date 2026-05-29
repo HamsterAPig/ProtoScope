@@ -19,6 +19,8 @@ option(PROTOSCOPE_ENABLE_GUI "Build ProtoScope GUI runtime" ON)
 
 add_subdirectory(3rdparty/spdlog)
 add_subdirectory(3rdparty/yaml-cpp)
+# cmrc: 本地 3rdparty 引入，不使用 FetchContent
+include(${CMAKE_SOURCE_DIR}/3rdparty/cmrc/CMakeRC.cmake)
 
 add_library(protoscope_lua STATIC
     3rdparty/lua/onelua.c
@@ -229,17 +231,64 @@ target_link_libraries(protoscope_dock
 )
 target_compile_features(protoscope_dock PUBLIC cxx_std_20)
 
+# ------------------------------------------------------------
+# Embedded default protocol resources
+# ------------------------------------------------------------
+
+file(GLOB_RECURSE PROTOSCOPE_PROTOCOL_RESOURCE_FILES
+    CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/protocols/*"
+)
+
+set(PROTOSCOPE_EMBEDDED_PROTOCOL_FILE_INITIALIZERS "")
+set(PROTOSCOPE_EMBEDDED_PROTOCOL_FILE_COUNT 0)
+
+foreach(resource_file IN LISTS PROTOSCOPE_PROTOCOL_RESOURCE_FILES)
+    if(IS_DIRECTORY "${resource_file}")
+        continue()
+    endif()
+
+    file(RELATIVE_PATH resource_path "${CMAKE_SOURCE_DIR}" "${resource_file}")
+    string(REPLACE "\\" "/" resource_path "${resource_path}")
+
+    file(RELATIVE_PATH output_path "${CMAKE_SOURCE_DIR}/protocols" "${resource_file}")
+    string(REPLACE "\\" "/" output_path "${output_path}")
+
+    string(APPEND PROTOSCOPE_EMBEDDED_PROTOCOL_FILE_INITIALIZERS
+        "    {\"${resource_path}\", \"${output_path}\"},\n"
+    )
+
+    math(EXPR PROTOSCOPE_EMBEDDED_PROTOCOL_FILE_COUNT "${PROTOSCOPE_EMBEDDED_PROTOCOL_FILE_COUNT} + 1")
+endforeach()
+
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/embedded_protocols_manifest.hpp.in"
+    "${CMAKE_BINARY_DIR}/generated/protoscope/config/embedded_protocols_manifest.hpp"
+    @ONLY
+)
+
+cmrc_add_resource_library(proto_resources
+    NAMESPACE proto_resources
+    WHENCE "${CMAKE_SOURCE_DIR}"
+    ${PROTOSCOPE_PROTOCOL_RESOURCE_FILES}
+)
+
 add_library(protoscope_config STATIC
     src/config/config.cpp
+    src/config/embedded_protocols.cpp
 )
 target_include_directories(protoscope_config
     PUBLIC
         ${CMAKE_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(protoscope_config
     PUBLIC
         protoscope_dock
         yaml-cpp::yaml-cpp
+    PRIVATE
+        proto_resources
 )
 target_compile_features(protoscope_config PUBLIC cxx_std_20)
 
