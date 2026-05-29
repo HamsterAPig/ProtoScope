@@ -222,6 +222,7 @@ function on_bytes(ctx, bytes)
   end
 end
 
+
 function on_timer(ctx, timer_name)
   if timer_name ~= "stream_tick" then
     return

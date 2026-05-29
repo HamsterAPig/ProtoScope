@@ -347,6 +347,11 @@ bool ConfigStore::ensureDefaultProtocolWorkspace(std::string& error) const {
 
 bool ConfigStore::ensureDefaultScriptWorkspace(std::string& error) const {
     try {
+        if (!std::filesystem::exists(mainLuaPath(defaultProtocolDir_))
+            && !ensureDefaultProtocolWorkspace(error)) {
+            return false;
+        }
+
         std::filesystem::create_directories(defaultScriptWorkspaceDir());
 
         if (!std::filesystem::exists(defaultScriptHelpPath())) {

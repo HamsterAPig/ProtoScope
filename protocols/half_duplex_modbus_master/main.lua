@@ -77,7 +77,7 @@ local controls = {
   samples_per_frame = DEFAULT_SAMPLE_COUNT,
 }
 
-local parser = modbus.new_parser(protocol)
+local sequence_tracker = {}
 local next_request_sequence = 0
 
 local function next_sequence()
@@ -169,6 +169,23 @@ local function send_start_stop(start_value)
   queue_write(REG_START, { start_value }, tag)
 end
 
+local function make_legacy_frame(frame)
+  local fields = frame.fields or {}
+  local sequence = fields.sequence
+  local sequence_state = nil
+  if sequence ~= nil then
+    sequence_state = modbus.track_sequence(sequence_tracker, frame.name, sequence, modbus.SEQUENCE_BITS)
+  end
+  return {
+    name = frame.name,
+    raw = frame.raw,
+    payload = fields,
+    sequence = sequence,
+    sequence_state = sequence_state,
+    crc_ok = frame.crc_ok,
+  }
+end
+
 local function handle_ack(frame)
   local ok = (frame.payload.status or STATUS_ERROR) == STATUS_OK
   local message = string.format("ACK 0x%04X x %d", frame.payload.start_address or 0, frame.payload.register_count or 0)
@@ -220,6 +237,65 @@ local function report_parse_errors(errors)
   end
 end
 
+local function handle_stream_frame(ctx, frame)
+  local legacy = make_legacy_frame(frame)
+  if frame.name == "write_ack" then
+    handle_ack(legacy)
+  elseif frame.name == "stream_data" then
+    handle_stream(legacy)
+  end
+end
+
+local function handle_stream_error(ctx, err)
+  local level = err.code == "crc_mismatch" and "warn" or "error"
+  proto.status.set("解析失败: " .. tostring(err.message), { level = level })
+end
+
+function stream()
+  return {
+    buffer = {
+      capacity = 4096,
+      overflow = "drop_oldest",
+    },
+    frames = {
+      {
+        name = "write_ack",
+        header = { 0xA5, 0x5A, FUNC_WRITE_ACK },
+        len = { offset = 5, type = "u16_le", means = "payload", extra = 8 },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
+        fields = {
+          { name = "sequence", type = "u8", offset = 4 },
+          { name = "status", type = "u8", offset = 7 },
+          { name = "start_address", type = "u16_le", offset = 8 },
+          { name = "register_count", type = "u8", offset = 10 },
+        },
+        on_frame = handle_stream_frame,
+      },
+      {
+        name = "stream_data",
+        header = { 0xA5, 0x5A, FUNC_STREAM_DATA },
+        len = { offset = 5, type = "u16_le", means = "payload", extra = 8 },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
+        fields = {
+          { name = "sequence", type = "u8", offset = 4 },
+          { name = "timestamp_ms", type = "u32_le", offset = 7 },
+          { name = "channel_mask", type = "u8" },
+          { name = "sample_count", type = "u8" },
+          {
+            name = "samples",
+            type = "i16_le",
+            count = function(parsed)
+              return (parsed.sample_count or 0) * proto.bits.count(parsed.channel_mask or 0)
+            end,
+          },
+        },
+        on_frame = handle_stream_frame,
+      },
+    },
+    on_error = handle_stream_error,
+  }
+end
+
 function ui()
   return {
     {
@@ -243,7 +319,7 @@ function ui()
 end
 
 function on_open(ctx)
-  parser = modbus.new_parser(protocol)
+  sequence_tracker = {}
   proto.status.clear()
   setup_plot(true)
 end
@@ -276,20 +352,5 @@ function on_control(ctx, id, value)
   elseif id == "clear_plot" then
     setup_plot(true)
     proto.status.set("波形已清空", { level = "info" })
-  end
-end
-
-function on_bytes(ctx, bytes)
-  local frames, errors = modbus.feed_parser(parser, bytes)
-  if #errors > 0 then
-    report_parse_errors(errors)
-  end
-
-  for _, frame in ipairs(frames) do
-    if frame.func == FUNC_WRITE_ACK then
-      handle_ack(frame)
-    elseif frame.func == FUNC_STREAM_DATA then
-      handle_stream(frame)
-    end
   end
 end

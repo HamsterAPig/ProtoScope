@@ -80,6 +80,15 @@ void rewriteModbusCrc(std::vector<std::uint8_t>& frame) {
     frame[frame.size() - 1] = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
 }
 
+std::vector<std::uint8_t> makeStreamFixtureFrame(std::uint8_t value) {
+    std::vector<std::uint8_t> frame{0xAA, 0x55, 0x01, value, 0x00, 0x00};
+    const std::vector<std::uint8_t> payload(frame.begin(), frame.end() - 2);
+    const auto crc = protoscope::protocol_utils::crc16Modbus(payload);
+    frame[4] = static_cast<std::uint8_t>(crc & 0xFFU);
+    frame[5] = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
+    return frame;
+}
+
 void appendBytes(std::vector<std::uint8_t>& target, const std::vector<std::uint8_t>& source) {
     target.insert(target.end(), source.begin(), source.end());
 }
@@ -348,6 +357,74 @@ void test_script_read_version_split_flow() {
     require(foundFrame, "分包收到 OK 后仍应产出 frame");
 }
 
+void test_script_stream_schema_legacy_on_bytes_still_works() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("bytes_only").generic_string()), "bytes_only 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0x01, 0x02, 0x03}});
+
+    bool foundLegacy = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "legacy_bytes" && event.payload.find("size=3") != std::string::npos) {
+            foundLegacy = true;
+        }
+    }
+    require(foundLegacy, "未启用 stream() 时仍应走 on_bytes");
+}
+
+void test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("stream_frame_only").generic_string()), "stream_frame_only 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeStreamFixtureFrame(0x23)});
+
+    bool foundFrame = false;
+    bool foundLegacy = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "legacy_bytes") {
+            foundLegacy = true;
+        }
+        if (event.name == "stream_frame"
+            && event.payload.find("stream_sample") != std::string::npos
+            && event.payload.find("value=35") != std::string::npos
+            && event.payload.find("crc_ok=true") != std::string::npos) {
+            foundFrame = true;
+        }
+    }
+    require(foundFrame, "启用 stream() 后应回调 on_frame");
+    require(!foundLegacy, "启用 stream() 后不应继续把每批 bytes 传给 on_bytes");
+}
+
+void test_script_stream_schema_reports_overflow_and_crc_error() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("stream_frame_only").generic_string()), "stream_frame_only 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18}});
+
+    auto broken = makeStreamFixtureFrame(0x45);
+    broken[4] = static_cast<std::uint8_t>(broken[4] ^ 0x01U);
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, broken});
+
+    bool foundOverflow = false;
+    bool foundCrc = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name != "stream_error") {
+            continue;
+        }
+        if (event.payload.find("overflow") != std::string::npos) {
+            foundOverflow = true;
+        }
+        if (event.payload.find("crc_mismatch") != std::string::npos) {
+            foundCrc = true;
+        }
+    }
+    require(foundOverflow, "buffer overflow 时应回调 stream.on_error");
+    require(foundCrc, "CRC 校验失败时应回调 stream.on_error");
+}
+
 void test_script_timeout_flow() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
@@ -388,6 +465,8 @@ void test_luals_api_sync_contains_tx_and_dialog_api() {
     require(text.find("function proto.status.set(text, opts) end") != std::string::npos, "LuaLS API 应声明 proto.status.set");
     require(text.find("function proto.plot.push(channel_index, payload) end") != std::string::npos, "LuaLS API 应声明 proto.plot.push");
     require(text.find("function proto.ui.alert(opts) end") != std::string::npos, "LuaLS API 应声明 proto.ui.alert");
+    require(text.find("function proto.bits.count(value) end") != std::string::npos, "LuaLS API 应声明 proto.bits.count");
+    require(text.find("function stream() end") != std::string::npos, "LuaLS API 应声明 stream()");
     require(text.find("function on_tx(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_tx");
     require(text.find("function on_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_dialog");
     require(text.find("@field color? string") != std::string::npos, "LuaLS API 应声明 ProtoPlotChannel.color");
@@ -569,18 +648,17 @@ void test_config_default_script_workspace() {
 
 void test_config_default_protocol_workspace_initializes_half_duplex_demos() {
     protoscope::config::ConfigStore store;
-    const auto tempRoot = makeUniqueTempDir("protoscope-default-protocol-workspace");
-    const ScopedCurrentPath scopedPath(tempRoot);
     std::string error;
 
     require(store.ensureDefaultProtocolWorkspace(error), "protocols 工作区初始化失败");
 
-    const auto protocolRoot = tempRoot / "protocols";
+    const auto protocolRoot = store.defaultProtocolDir().parent_path();
     require(std::filesystem::exists(protocolRoot / "default_protocol" / "main.lua"), "默认协议脚本应生成");
     require(std::filesystem::exists(protocolRoot / "lua_waveform_demo" / "main.lua"), "Lua 波形示例脚本应生成");
     require(std::filesystem::exists(protocolRoot / "half_duplex_modbus_master" / "main.lua"), "半双工主机示例脚本应生成");
     require(std::filesystem::exists(protocolRoot / "half_duplex_modbus_slave" / "main.lua"), "半双工从机示例脚本应生成");
     require(std::filesystem::exists(protocolRoot / "half_duplex_modbus_common.lua"), "半双工共享脚本应生成");
+    require(std::filesystem::exists(protocolRoot / "stream_types.lua"), "stream schema 类型提示文件应生成");
     require(std::filesystem::exists(protocolRoot / "README.md"), "protocols README 应生成");
     require(std::filesystem::exists(protocolRoot / "protoscope_api.lua"), "LuaLS API 提示文件应生成");
 
@@ -1000,7 +1078,15 @@ static const TestCase kAllTests[] = {
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
     {"script_read_version_split_flow", &test_script_read_version_split_flow},
+    {"script_stream_schema_legacy_on_bytes_still_works", &test_script_stream_schema_legacy_on_bytes_still_works},
+    {"script_stream_schema_bypasses_on_bytes_and_calls_on_frame", &test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame},
+    {"script_stream_schema_reports_overflow_and_crc_error", &test_script_stream_schema_reports_overflow_and_crc_error},
     {"script_timeout_flow", &test_script_timeout_flow},
+    {"frame_stream_parser_waits_for_full_frame", &test_frame_stream_parser_waits_for_full_frame},
+    {"frame_stream_parser_handles_sticky_frames_and_noise_prefix", &test_frame_stream_parser_handles_sticky_frames_and_noise_prefix},
+    {"frame_stream_parser_crc_resync_keeps_following_frame", &test_frame_stream_parser_crc_resync_keeps_following_frame},
+    {"frame_stream_parser_reports_overflow_drop_oldest", &test_frame_stream_parser_reports_overflow_drop_oldest},
+    {"frame_stream_parser_supports_fixed_size_raw_frame", &test_frame_stream_parser_supports_fixed_size_raw_frame},
     {"luals_api_sync_contains_tx_and_dialog_api", &test_luals_api_sync_contains_tx_and_dialog_api},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},

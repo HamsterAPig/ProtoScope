@@ -194,6 +194,7 @@ target_link_libraries(protoscope_ui_layout
 target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
+    src/scripting/frame_stream_parser.cpp
     src/scripting/script_host.cpp
 )
 target_include_directories(protoscope_scripting
@@ -404,6 +405,7 @@ add_executable(protoscope_tests
     tests/test_codec.cpp
     tests/test_dock.cpp
     tests/test_dock_layout.cpp
+    tests/test_frame_stream_parser.cpp
     tests/test_plot.cpp
     tests/test_script_host.cpp
     tests/test_serial_ports.cpp

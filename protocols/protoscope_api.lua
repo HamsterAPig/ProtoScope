@@ -164,6 +164,7 @@ proto = proto or {}
 proto.plot = proto.plot or {}
 proto.status = proto.status or {}
 proto.ui = proto.ui or {}
+proto.bits = proto.bits or {}
 
 -- 记录脚本日志，便于调试协议、状态流转和异常定位。
 ---@param level ProtoLogLevel
@@ -194,6 +195,11 @@ function proto.request_done(result) end
 ---@param name string
 ---@param payload any
 function proto.emit(name, payload) end
+
+-- 统计 bitmask 中置 1 的位数，常用于按通道掩码推导动态数组长度。
+---@param value integer
+---@return integer
+function proto.bits.count(value) end
 
 -- 创建或刷新一次定时器，适合轮询、延迟重试或 UI 延迟刷新。
 ---@param name string
@@ -280,6 +286,10 @@ function on_error(ctx, message) end
 ---@param id string
 ---@param value ProtoControlValue
 function on_control(ctx, id, value) end
+
+-- 可选流解析 schema：定义后由宿主负责组帧、CRC 和字段解码。
+---@return ProtoStreamSchema|nil
+function stream() end
 
 -- 原始字节回调：宿主收到串口/输入字节流后调用脚本解析。
 ---@param ctx ProtoConnectionContext

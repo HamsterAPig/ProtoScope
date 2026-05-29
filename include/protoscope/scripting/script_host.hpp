@@ -2,6 +2,7 @@
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
+#include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/transport/transport.hpp"
 
 #include <sol/sol.hpp>
@@ -291,6 +292,8 @@ private:
     void callbackOnClose(const ScriptHostContext& ctx);
     void callbackOnError(const ScriptHostContext& ctx, const std::string& message);
     void callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes);
+    void callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame);
+    void callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error);
     void callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName);
     void callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value);
     void callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event);
