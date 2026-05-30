@@ -46,13 +46,16 @@ git submodule update --init --recursive
 
 ```text
 protocols/
-└── <protocol_name>/
-    └── main.lua
+├── protoscope_api.lua
+├── stream_types.lua
+└── templates/
+    └── <protocol_name>/
+        └── main.lua
 ```
 
 - 入口脚本固定为 `main.lua`
 - 主程序当前只要求协议目录下存在 `main.lua`，后续拆分可通过 `require()` 自行组织
-- 默认示例目录为 `protocols/default_protocol`
+- 默认示例目录为 `protocols/templates/default_protocol`
 
 ## Lua 宿主 API
 
@@ -189,7 +192,7 @@ end
 
 ## 最小可运行脚本示例
 
-默认脚本 `protocols/default_protocol/main.lua` 已是可运行示例，覆盖了：
+默认脚本 `protocols/templates/default_protocol/main.lua` 已是可运行示例，覆盖了：
 
 - 两个 table layout dock
 - 一个按钮
@@ -509,8 +512,8 @@ proto.plot.setup({
 
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| root_dir | string | protocols | 协议脚本根目录 |
-| selected_dir | string | protocols/default_protocol | 当前选中的协议目录 |
+| root_dir | string | protocols/templates | 协议模板根目录 |
+| selected_dir | string | protocols/templates/default_protocol | 当前选中的协议目录 |
 
 ### logging —— 日志
 

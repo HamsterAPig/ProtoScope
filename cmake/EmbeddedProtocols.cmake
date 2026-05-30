@@ -20,6 +20,11 @@ foreach(resource_file IN LISTS PROTOSCOPE_PROTOCOL_RESOURCE_FILES)
     file(RELATIVE_PATH output_path "${PROJECT_SOURCE_DIR}/protocols" "${resource_file}")
     string(REPLACE "\\" "/" output_path "${output_path}")
 
+    # 运行时 protocols 根目录保留 LuaLS 注解和 API 说明；协议示例统一释放到 templates。
+    if(output_path MATCHES "^[^/]+/.+" AND NOT output_path MATCHES "^templates/")
+        set(output_path "templates/${output_path}")
+    endif()
+
     string(APPEND PROTOSCOPE_EMBEDDED_PROTOCOL_FILE_INITIALIZERS
         "    {\"${resource_path}\", \"${output_path}\"},\n"
     )

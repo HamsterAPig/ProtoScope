@@ -119,6 +119,8 @@ HWND nativeWindowHandle(GLFWwindow* window) {
     return window == nullptr ? nullptr : glfwGetWin32Window(window);
 }
 
+int CALLBACK browseInitialDirCallback(HWND hwnd, UINT message, LPARAM, LPARAM data);
+
 std::optional<std::filesystem::path> nativeFileDialog(GLFWwindow* window,
                                                       const wchar_t* title,
                                                       const wchar_t* filter,
@@ -175,6 +177,43 @@ std::optional<std::filesystem::path> nativeFileDialog(GLFWwindow* window,
         error.clear();
     }
     return std::nullopt;
+}
+
+std::optional<std::filesystem::path> nativeDirectoryDialog(GLFWwindow* window,
+                                                           const wchar_t* title,
+                                                           const std::filesystem::path& defaultPath,
+                                                           std::string& error) {
+    // 核心流程：目录选择和文件导入导出一样走系统原生对话框，并显式指定初始目录。
+    BROWSEINFOW browseInfo{};
+    browseInfo.hwndOwner = nativeWindowHandle(window);
+    browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+    browseInfo.lpszTitle = title;
+
+    std::wstring initialDir;
+    try {
+        initialDir = defaultPath.wstring();
+    } catch (const std::exception&) {
+        initialDir.clear();
+    }
+    browseInfo.lParam = reinterpret_cast<LPARAM>(initialDir.empty() ? nullptr : initialDir.c_str());
+    browseInfo.lpfn = browseInitialDirCallback;
+
+    PIDLIST_ABSOLUTE selected = SHBrowseForFolderW(&browseInfo);
+    if (selected == nullptr) {
+        error.clear();
+        return std::nullopt;
+    }
+
+    wchar_t path[MAX_PATH]{};
+    const bool ok = SHGetPathFromIDListW(selected, path) == TRUE;
+    CoTaskMemFree(selected);
+    if (!ok) {
+        error = "Windows 目录对话框返回路径失败";
+        return std::nullopt;
+    }
+
+    error.clear();
+    return std::filesystem::path(path);
 }
 #endif
 
@@ -464,22 +503,6 @@ std::wstring utf8ToWide(const std::string& text) {
     return result;
 }
 
-std::string wideToUtf8(const std::wstring& text) {
-    if (text.empty()) {
-        return {};
-    }
-
-    const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) {
-        return {};
-    }
-
-    std::string result(static_cast<std::size_t>(size), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, result.data(), size, nullptr, nullptr);
-    result.pop_back();
-    return result;
-}
-
 std::wstring fileDialogFilterText(const std::vector<scripting::FileDialogFilter>& filters) {
     if (filters.empty()) {
         return std::wstring(L"All Files\0*.*\0\0", 15);
@@ -504,30 +527,6 @@ std::wstring fileDialogFilterText(const std::vector<scripting::FileDialogFilter>
     text.push_back(L'\0');
     return text;
 }
-
-std::optional<std::string> chooseProtocolRootDirectory(const std::string& currentDir) {
-    BROWSEINFOW browseInfo{};
-    browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
-    browseInfo.lpszTitle = L"选择协议根目录";
-
-    const auto initialDir = utf8ToWide(currentDir);
-    browseInfo.lParam = reinterpret_cast<LPARAM>(initialDir.c_str());
-    browseInfo.lpfn = browseInitialDirCallback;
-
-    PIDLIST_ABSOLUTE selected = SHBrowseForFolderW(&browseInfo);
-    if (selected == nullptr) {
-        return std::nullopt;
-    }
-
-    wchar_t path[MAX_PATH]{};
-    const bool ok = SHGetPathFromIDListW(selected, path) == TRUE;
-    CoTaskMemFree(selected);
-    if (!ok) {
-        return std::nullopt;
-    }
-
-    return wideToUtf8(path);
-}
 #endif
 
 scripting::FileDialogEvent runLuaFileDialog(GLFWwindow* window, const scripting::FileDialogRequest& request) {
@@ -539,10 +538,18 @@ scripting::FileDialogEvent runLuaFileDialog(GLFWwindow* window, const scripting:
 
 #if defined(_WIN32)
     if (request.kind == scripting::FileDialogKind::OpenDir) {
-        const auto selected = chooseProtocolRootDirectory(request.defaultPath);
+        std::string error;
+        const auto title = utf8ToWide(request.title.empty() ? "选择目录" : request.title);
+        const auto selected = nativeDirectoryDialog(window,
+                                                    title.c_str(),
+                                                    request.defaultPath.empty() ? std::filesystem::path{} : std::filesystem::path(request.defaultPath),
+                                                    error);
         if (selected.has_value()) {
             event.state = "selected";
-            event.path = *selected;
+            event.path = selected->generic_string();
+        } else if (!error.empty()) {
+            event.state = "error";
+            event.error = error;
         } else {
             event.state = "canceled";
         }
@@ -1246,8 +1253,13 @@ void GuiRuntime::drawProtocolDock() {
     ImGui::SameLine(0.0F, ImGui::GetStyle().ItemSpacing.x);
 #if defined(_WIN32)
     if (ImGui::Button("浏览...")) {
-        if (const auto selectedDir = chooseProtocolRootDirectory(lua.protocolRootDir)) {
-            lua.protocolRootDir = *selectedDir;
+        std::string dialogError;
+        const auto selectedDir = nativeDirectoryDialog(window_, L"选择协议根目录", std::filesystem::path(lua.protocolRootDir), dialogError);
+        if (!dialogError.empty()) {
+            application_.setStatusMessage(dialogError);
+        }
+        if (selectedDir.has_value()) {
+            lua.protocolRootDir = selectedDir->generic_string();
             refreshProtocolRoot(configStore_, lua, protocolDirDraft_, protocolDirDraftModel_);
             application_.markProtocolEdited();
             application_.setStatusMessage("协议根目录已更新");

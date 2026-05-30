@@ -1,6 +1,6 @@
 # ProtoScope Lua 协议脚本指南
 
-`protocols` 是 ProtoScope 的 Lua 协议工作区。宿主会自动注入全局 `proto`，脚本主要负责 4 件事：
+`protocols` 是 ProtoScope 的 Lua 协议资源根目录。宿主会自动注入全局 `proto`，协议脚本主要负责 4 件事：
 
 - 描述 UI 布局与控件。
 - 描述接收流的 `stream()` schema。
@@ -11,6 +11,10 @@
 
 - `protocols/protoscope_api.lua`：LuaLS 用的宿主 API 声明。
 - `protocols/stream_types.lua`：`stream()` schema 的类型注解。
+- `protocols/templates/README.md`：内置协议模板列表和复制使用说明。
+
+默认协议模板位于 `protocols/templates`。每个协议目录只要求存在 `main.lua`，
+例如 `protocols/templates/default_protocol/main.lua`。
 
 ## 发送模型
 
@@ -176,12 +180,12 @@ proto.plot.push(1, {
 })
 ```
 
-## SN Scope Lua Demo
+## 半双工 Modbus Schema Demo
 
-仓库里现在有两类 SN Scope 相关示例：
+仓库内置两个半双工 Modbus 模板：
 
-- `protocols/half_duplex_modbus_master` / `protocols/half_duplex_modbus_slave`
-- `cmake-build-debug/protocols/sn_scope_master` / `cmake-build-debug/protocols/sn_scope_slave_sim`
+- `protocols/templates/half_duplex_modbus_master`
+- `protocols/templates/half_duplex_modbus_slave`
 
 它们表达的是同一类协议约束：主机请求、从机 ACK、以及 `0x26` 上传帧。
 
@@ -234,7 +238,7 @@ proto.plot.push(1, {
 
 ### 上传帧建议
 
-SN Scope 上传帧固定 14 字节：
+上传帧固定 14 字节：
 
 ```text
 0xFF 0x26 + sequence(u16_be) + ch1(i16_be) + ch2(i16_be) + ch3(i16_be) + ch4(i16_be) + crc16(hi_lo)

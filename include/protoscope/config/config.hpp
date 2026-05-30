@@ -77,8 +77,8 @@ struct ProtocolTxConfig {
 };
 
 struct ProtocolConfig {
-    std::string rootDir{"protocols"};
-    std::string selectedDir{"protocols/default_protocol"};
+    std::string rootDir{"protocols/templates"};
+    std::string selectedDir{"protocols/templates/default_protocol"};
     ProtocolTxConfig tx{};
 };
 
@@ -122,11 +122,8 @@ public:
     std::string protocolName(const std::filesystem::path& protocolDir) const;
     bool protocolEntryExists(const std::filesystem::path& protocolDir) const;
     std::vector<std::string> scanProtocolDirectories(const std::filesystem::path& rootDir) const;
-    std::filesystem::path defaultScriptWorkspaceDir() const;
-    std::filesystem::path defaultScriptHelpPath() const;
     bool ensureDefaultProtocolScript(const std::filesystem::path& protocolDir, std::string& error) const;
     bool ensureDefaultProtocolWorkspace(std::string& error) const;
-    bool ensureDefaultScriptWorkspace(std::string& error) const;
 
     FileSnapshot snapshot(const std::filesystem::path& path) const;
     bool hasChanged(const FileSnapshot& previous) const;
@@ -143,6 +140,7 @@ private:
 
 private:
     std::filesystem::path defaultConfigPath_;
+    std::filesystem::path defaultProtocolRootDir_;
     std::filesystem::path defaultProtocolDir_;
 };
 

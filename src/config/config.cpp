@@ -152,7 +152,8 @@ const std::vector<std::string> kDefaultSerialPorts = {"COM1", "COM2", "COM3", "C
 
 ConfigStore::ConfigStore()
     : defaultConfigPath_(embedded::executableDirectory() / "config" / "protoscope.yaml"),
-      defaultProtocolDir_(embedded::executableDirectory() / "protocols" / "default_protocol") {}
+      defaultProtocolRootDir_(embedded::executableDirectory() / "protocols"),
+      defaultProtocolDir_(defaultProtocolRootDir_ / "templates" / "default_protocol") {}
 
 AppConfig ConfigStore::withDefaults() const {
     AppConfig config;
@@ -474,55 +475,12 @@ std::vector<std::string> ConfigStore::scanProtocolDirectories(const std::filesys
     return results;
 }
 
-std::filesystem::path ConfigStore::defaultScriptWorkspaceDir() const {
-    return "scripts";
-}
-
-std::filesystem::path ConfigStore::defaultScriptHelpPath() const {
-    return defaultScriptWorkspaceDir() / "README.txt";
-}
-
 bool ConfigStore::ensureDefaultProtocolScript(const std::filesystem::path& protocolDir, std::string& error) const {
     return embedded::ensureDefaultProtocolScript(protocolDir, error);
 }
 
 bool ConfigStore::ensureDefaultProtocolWorkspace(std::string& error) const {
-    return embedded::ensureProtocolWorkspace(defaultProtocolDir_.parent_path(), error);
-}
-
-bool ConfigStore::ensureDefaultScriptWorkspace(std::string& error) const {
-    try {
-        if (!std::filesystem::exists(mainLuaPath(defaultProtocolDir_))
-            && !ensureDefaultProtocolWorkspace(error)) {
-            return false;
-        }
-
-        std::filesystem::create_directories(defaultScriptWorkspaceDir());
-
-        if (!std::filesystem::exists(defaultScriptHelpPath())) {
-            if (!embedded::extractResourceToFile(
-                    "protocols/README.md",
-                    defaultScriptHelpPath(),
-                    error)) {
-                return false;
-            }
-        }
-
-        const auto sampleScript = defaultScriptWorkspaceDir() / "main.lua";
-        if (!std::filesystem::exists(sampleScript) &&
-            std::filesystem::exists(mainLuaPath(defaultProtocolDir_))) {
-            std::filesystem::copy_file(
-                mainLuaPath(defaultProtocolDir_),
-                sampleScript,
-                std::filesystem::copy_options::skip_existing
-            );
-        }
-
-        return true;
-    } catch (const std::exception& ex) {
-        error = ex.what();
-        return false;
-    }
+    return embedded::ensureProtocolWorkspace(defaultProtocolRootDir_, error);
 }
 
 FileSnapshot ConfigStore::snapshot(const std::filesystem::path& path) const {

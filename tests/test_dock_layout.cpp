@@ -35,17 +35,21 @@ std::filesystem::path uniqueLayoutRoot(const char* name) {
 } // namespace
 
 void test_lua_dock_layout_key_uses_protocol_and_script() {
-    const auto key = protoscope::ui::luaDockLayoutKey("protocols\\default_protocol\\", "scripts/main.lua");
-    require(key == "protocols_default_protocol", "布局 key 应按协议目录生成");
+    const auto key = protoscope::ui::luaDockLayoutKey("protocols\\templates\\default_protocol\\",
+                                                      "protocols/templates/default_protocol/main.lua");
+    require(key == "protocols_templates_default_protocol", "布局 key 应按协议目录生成");
     require(
-        protoscope::ui::luaDockLayoutKey("protocols/default_protocol", "scripts\\main.lua") == key,
+        protoscope::ui::luaDockLayoutKey("protocols/templates/default_protocol",
+                                         "protocols\\templates\\default_protocol\\main.lua") == key,
         "路径分隔符差异不应改变布局 key");
     require(
-        protoscope::ui::luaDockLayoutKey("protocols/default_protocol", "scripts/advanced.lua") == key,
+        protoscope::ui::luaDockLayoutKey("protocols/templates/default_protocol",
+                                         "protocols/templates/default_protocol/advanced.lua") == key,
         "同协议目录下不同入口脚本应共享布局 key");
     require(
-        protoscope::ui::legacyLuaDockLayoutKey("protocols\\default_protocol\\", "scripts/main.lua")
-            == "protocols_default_protocol__scripts_main.lua",
+        protoscope::ui::legacyLuaDockLayoutKey("protocols\\templates\\default_protocol\\",
+                                               "protocols/templates/default_protocol/main.lua")
+            == "protocols_templates_default_protocol__protocols_templates_default_protocol_main.lua",
         "旧布局 key 应支持从脚本级布局迁移");
     require(protoscope::ui::luaDockLayoutKey("", "") == "default", "空路径应回退到 default");
 }
@@ -362,7 +366,7 @@ void test_workspace_layout_mode_after_load_prefers_default_build_only_when_missi
 
 void test_protocol_workspace_switch_decision_uses_draft_only_until_reload() {
     const auto decision = protoscope::ui::decideProtocolWorkspaceSwitch(
-        "protocols/default_protocol",
+        "protocols/templates/default_protocol",
         "protocols/lua_waveform_demo",
         false);
     require(decision.draftChanged, "草稿协议与已加载协议不一致时应标记 draftChanged");
@@ -371,7 +375,7 @@ void test_protocol_workspace_switch_decision_uses_draft_only_until_reload() {
 
 void test_protocol_workspace_switch_decision_reloads_draft_when_clicked() {
     const auto decision = protoscope::ui::decideProtocolWorkspaceSwitch(
-        "protocols/default_protocol",
+        "protocols/templates/default_protocol",
         "protocols/lua_waveform_demo",
         true);
     require(decision.draftChanged, "点击重载时仍应保留草稿差异语义");

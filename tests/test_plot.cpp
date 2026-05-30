@@ -779,7 +779,7 @@ void test_raw_capture_file_roundtrip() {
 
     const protoscope::plot::RawCaptureFileData capture{
         .protocolName = "default_protocol",
-        .protocolDir = "protocols/default_protocol",
+        .protocolDir = "protocols/templates/default_protocol",
         .sampleFrequencyHz = 4096.0,
         .capturedAtMs = 123456789,
         .payload = {0x01, 0x02, 0x7F, 0x00, 0x41},
@@ -802,7 +802,7 @@ void test_raw_capture_file_rejects_size_mismatch() {
     const std::string broken = "ProtoScopeRawCapture\n"
                                "version: 1\n"
                                "protocol_name: default_protocol\n"
-                               "protocol_dir: protocols/default_protocol\n"
+                               "protocol_dir: protocols/templates/default_protocol\n"
                                "sample_frequency_hz: 1024\n"
                                "raw_size: 5\n"
                                "captured_at_ms: 1\n"

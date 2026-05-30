@@ -612,6 +612,44 @@ void test_script_timeout_flow() {
     require(!host.drainDialogRequests().empty(), "超时应弹出 alert");
 }
 
+void test_script_dialog_requests_keep_connection_context() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("dialog_requests").generic_string()), "dialog_requests 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+
+    const auto dialogs = host.drainDialogRequests();
+    require(dialogs.size() == 1, "on_open 应生成一条 alert 请求");
+    const auto& dialog = dialogs.front();
+    require(dialog.kind == protoscope::scripting::DialogKind::Alert, "on_open 应生成 alert");
+    require(dialog.connection.endpoint == ctx.endpoint, "alert 应保留活动连接 endpoint");
+    require(dialog.connection.connectionId == ctx.connectionId, "alert 应保留活动连接 ID");
+    require(dialog.title == "连接弹窗", "alert title 不应改变");
+    require(dialog.message == ctx.endpoint, "alert message 不应改变");
+    require(dialog.level == "warn", "alert level 不应改变");
+    require(dialog.dedupeKey == "dialog-open", "alert dedupe_key 不应改变");
+}
+
+void test_script_dialog_requests_detached_without_active_connection() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("dialog_requests").generic_string()), "dialog_requests 协议应可加载");
+
+    host.onControl(sampleCtx(), "detached_dialog", true);
+
+    const auto dialogs = host.drainDialogRequests();
+    require(dialogs.size() == 1, "未建立活动连接时仍应允许脚本弹窗");
+    const auto& dialog = dialogs.front();
+    require(dialog.kind == protoscope::scripting::DialogKind::Confirm, "detached_dialog 应生成 confirm");
+    require(dialog.connection.endpoint == "detached", "无活动连接时 endpoint 应为 detached");
+    require(dialog.connection.connectionId == 0, "无活动连接时 connectionId 应为 0");
+    require(!dialog.connection.readyForIo, "无活动连接时 readyForIo 应为 false");
+    require(dialog.connection.timestampMs == dialog.createdAtMs, "detached 连接时间戳应来自请求创建时间");
+    require(dialog.title == "离线确认", "confirm title 不应改变");
+    require(dialog.message == "detached path", "confirm message 不应改变");
+    require(dialog.dedupeKey == "dialog-detached", "confirm dedupe_key 不应改变");
+}
+
 void test_luals_api_sync_contains_tx_and_dialog_api() {
     std::ifstream input("protocols/protoscope_api.lua");
     require(input.good(), "应能读取 protoscope_api.lua");
@@ -746,6 +784,10 @@ void test_config_default_roundtrip() {
     const auto tempPath = tempRoot / "protoscope.yaml";
 
     auto config = store.load(tempPath).config;
+    require(config.protocol.rootDir.find("protocols/templates") != std::string::npos,
+            "默认协议根目录应指向 protocols/templates");
+    require(config.protocol.selectedDir.find("protocols/templates/default_protocol") != std::string::npos,
+            "默认协议目录应指向 protocols/templates/default_protocol");
     require(config.gui.wave.controlMode == protoscope::plot::WaveControlMode::Oscilloscope,
             "波形控制模式默认值应为 oscilloscope");
     require(config.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::OffsetThenScale,
@@ -901,48 +943,38 @@ void test_config_logging_roundtrip() {
     require(missing.logging.level == protoscope::config::LogLevel::Info, "缺失日志等级时应回退到 info");
 }
 
-void test_config_default_script_workspace() {
-    protoscope::config::ConfigStore store;
-    std::string error;
-    require(store.ensureDefaultScriptWorkspace(error), "scripts 工作区初始化失败");
-    require(std::filesystem::exists(store.defaultScriptWorkspaceDir()), "scripts 目录应存在");
-    require(std::filesystem::exists(store.defaultScriptHelpPath()), "README.txt 应存在");
-    require(std::filesystem::exists(store.mainLuaPath(store.defaultProtocolDir())), "默认协议脚本应存在");
-}
-
 void test_config_default_protocol_workspace_initializes_half_duplex_demos() {
     protoscope::config::ConfigStore store;
     std::string error;
 
     require(store.ensureDefaultProtocolWorkspace(error), "protocols 工作区初始化失败");
 
-    const auto protocolRoot = store.defaultProtocolDir().parent_path();
-    require(std::filesystem::exists(protocolRoot / "default_protocol" / "main.lua"), "默认协议脚本应生成");
-    require(std::filesystem::exists(protocolRoot / "lua_waveform_demo" / "main.lua"), "Lua 波形示例脚本应生成");
-    require(std::filesystem::exists(protocolRoot / "half_duplex_modbus_master" / "main.lua"), "半双工主机示例脚本应生成");
-    require(std::filesystem::exists(protocolRoot / "half_duplex_modbus_slave" / "main.lua"), "半双工从机示例脚本应生成");
+    const auto protocolRoot = store.defaultProtocolDir().parent_path().parent_path();
+    const auto templateRoot = protocolRoot / "templates";
+    require(std::filesystem::exists(templateRoot / "default_protocol" / "main.lua"), "默认协议模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "lua_waveform_demo" / "main.lua"), "Lua 波形模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "half_duplex_modbus_master" / "main.lua"), "半双工主机模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "half_duplex_modbus_slave" / "main.lua"), "半双工从机模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "README.md"), "模板 README 应生成");
     require(std::filesystem::exists(protocolRoot / "stream_types.lua"), "stream schema 类型提示文件应生成");
     require(std::filesystem::exists(protocolRoot / "README.md"), "protocols README 应生成");
     require(std::filesystem::exists(protocolRoot / "protoscope_api.lua"), "LuaLS API 提示文件应生成");
 
-    std::ifstream masterScript(protocolRoot / "half_duplex_modbus_master" / "main.lua");
+    std::ifstream masterScript(templateRoot / "half_duplex_modbus_master" / "main.lua");
     require(masterScript.good(), "半双工主机示例脚本应可读取");
-    std::ifstream slaveScript(protocolRoot / "half_duplex_modbus_slave" / "main.lua");
+    std::ifstream slaveScript(templateRoot / "half_duplex_modbus_slave" / "main.lua");
     require(slaveScript.good(), "半双工从机示例脚本应可读取");
     std::ifstream readmeInput(protocolRoot / "README.md");
     std::stringstream readmeBuffer;
     readmeBuffer << readmeInput.rdbuf();
     const auto readmeText = readmeBuffer.str();
-    require(readmeText.find("SN Scope Schema Demo") != std::string::npos
-                || readmeText.find("半双工 Modbus Schema Demo") != std::string::npos,
-            "默认 README 应包含半双工/SN Scope 说明");
+    require(readmeText.find("Lua 协议脚本指南") != std::string::npos,
+            "默认 README 应包含 Lua 协议脚本指南");
 }
 
-void test_config_default_protocol_workspace_skips_existing_root() {
+void test_config_default_protocol_workspace_fills_missing_resources() {
     protoscope::config::ConfigStore store;
-    const auto tempRoot = makeUniqueTempDir("protoscope-existing-protocol-root");
-    const ScopedCurrentPath scopedPath(tempRoot);
-    const auto protocolRoot = tempRoot / "protocols";
+    const auto protocolRoot = store.defaultProtocolDir().parent_path().parent_path();
     std::string error;
 
     std::filesystem::create_directories(protocolRoot);
@@ -953,12 +985,12 @@ void test_config_default_protocol_workspace_skips_existing_root() {
 
     require(store.ensureDefaultProtocolWorkspace(error), "已有 protocols 根目录时初始化不应失败");
     require(std::filesystem::exists(protocolRoot / "keep.txt"), "已有 protocols 内容不应丢失");
-    require(!std::filesystem::exists(protocolRoot / "default_protocol" / "main.lua"), "已有 protocols 根目录时不应补写默认协议");
-    require(!std::filesystem::exists(protocolRoot / "lua_waveform_demo" / "main.lua"), "已有 protocols 根目录时不应补写波形示例");
-    require(!std::filesystem::exists(protocolRoot / "half_duplex_modbus_master" / "main.lua"), "已有 protocols 根目录时不应补写半双工主机示例");
-    require(!std::filesystem::exists(protocolRoot / "half_duplex_modbus_slave" / "main.lua"), "已有 protocols 根目录时不应补写半双工从机示例");
-    require(!std::filesystem::exists(protocolRoot / "README.md"), "已有 protocols 根目录时不应补写 README");
-    require(!std::filesystem::exists(protocolRoot / "protoscope_api.lua"), "已有 protocols 根目录时不应补写 LuaLS API 提示文件");
+    require(std::filesystem::exists(protocolRoot / "templates" / "default_protocol" / "main.lua"),
+            "已有 protocols 根目录时也应补齐默认模板");
+    require(std::filesystem::exists(protocolRoot / "templates" / "lua_waveform_demo" / "main.lua"),
+            "已有 protocols 根目录时也应补齐波形模板");
+    require(std::filesystem::exists(protocolRoot / "README.md"), "已有 protocols 根目录时应补齐 README");
+    require(std::filesystem::exists(protocolRoot / "protoscope_api.lua"), "已有 protocols 根目录时应补齐 LuaLS API 提示文件");
 }
 
 void test_protocol_scan_and_root_roundtrip() {
@@ -1466,9 +1498,8 @@ static const TestCase kAllTests[] = {
     {"config_default_roundtrip", &test_config_default_roundtrip},
     {"config_wave_mode_invalid_fallback", &test_config_wave_mode_invalid_fallback},
     {"config_logging_roundtrip", &test_config_logging_roundtrip},
-    {"config_default_script_workspace", &test_config_default_script_workspace},
     {"config_default_protocol_workspace_initializes_half_duplex_demos", &test_config_default_protocol_workspace_initializes_half_duplex_demos},
-    {"config_default_protocol_workspace_skips_existing_root", &test_config_default_protocol_workspace_skips_existing_root},
+    {"config_default_protocol_workspace_fills_missing_resources", &test_config_default_protocol_workspace_fills_missing_resources},
     {"script_file_io_proto_buffer_roundtrip", &test_script_file_io_proto_buffer_roundtrip},
     {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},

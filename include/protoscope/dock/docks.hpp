@@ -61,10 +61,10 @@ struct SendDockState {
 
 struct LuaDockState {
     bool loaded{false};
-    std::string scriptPath{"protocols/default_protocol/main.lua"};
-    std::string protocolDir{"protocols/default_protocol"};
+    std::string scriptPath{"protocols/templates/default_protocol/main.lua"};
+    std::string protocolDir{"protocols/templates/default_protocol"};
     std::string protocolName{"default_protocol"};
-    std::string protocolRootDir{"protocols"};
+    std::string protocolRootDir{"protocols/templates"};
     std::string lastError;
     std::vector<std::string> protocolDirOptions;
     std::vector<scripting::DockSnapshot> docks;

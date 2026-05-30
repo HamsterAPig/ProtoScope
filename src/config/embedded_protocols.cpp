@@ -171,19 +171,27 @@ bool ensureProtocolWorkspace(const fs::path& rootDir, std::string& error) {
             return false;
         }
 
-        // 核心策略：只要 protocols 根目录存在，就认为用户已经有工作区。
-        // 不覆盖，不补齐，避免误改用户脚本。
-        return true;
-    }
-
-    fs::create_directories(rootDir, ec);
-    if (ec) {
-        error = "创建协议目录失败: " + rootDir.string() + ", " + ec.message();
-        return false;
+        // 核心策略：允许已有 protocols 根目录存在，但只补齐缺失的内置资源。
+        // 这样升级后能拿到 templates 和注解文件，同时不覆盖用户改过的脚本。
+    } else {
+        fs::create_directories(rootDir, ec);
+        if (ec) {
+            error = "创建协议目录失败: " + rootDir.string() + ", " + ec.message();
+            return false;
+        }
     }
 
     for (const auto& entry : kProtocolResources) {
         const auto outputPath = rootDir / fs::path(entry.output_path);
+        ec.clear();
+        const bool outputExists = fs::exists(outputPath, ec);
+        if (ec) {
+            error = "检查内置协议文件失败: " + outputPath.string() + ", " + ec.message();
+            return false;
+        }
+        if (outputExists) {
+            continue;
+        }
 
         if (!extractOneResource(entry.resource_path, outputPath, error)) {
             return false;

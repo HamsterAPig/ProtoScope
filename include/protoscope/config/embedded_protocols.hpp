@@ -15,7 +15,7 @@ std::filesystem::path executableDirectory();
 // rootDir 通常传入：executableDirectory() / "protocols"
 // 行为：
 // - rootDir 不存在：创建并释放所有内嵌 protocols 文件
-// - rootDir 已存在且是目录：直接返回 true，不覆盖
+// - rootDir 已存在且是目录：补齐缺失的内嵌文件，不覆盖已有文件
 // - rootDir 已存在但不是目录：返回 false
 bool ensureProtocolWorkspace(const std::filesystem::path& rootDir, std::string& error);
 

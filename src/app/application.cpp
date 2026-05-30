@@ -147,9 +147,6 @@ bool Application::initialize() {
     if (!configStore_.ensureDefaultProtocolWorkspace(workspaceError)) {
         dockStore_.markDirty("初始化 protocols 工作目录失败: " + workspaceError);
         loggingFacade_.warn("config", "初始化 protocols 工作目录失败: " + workspaceError);
-    } else if (!configStore_.ensureDefaultScriptWorkspace(workspaceError)) {
-        dockStore_.markDirty("初始化 scripts 工作目录失败: " + workspaceError);
-        loggingFacade_.warn("config", "初始化 scripts 工作目录失败: " + workspaceError);
     }
 
     const auto loaded = configStore_.load(configStore_.defaultConfigPath());

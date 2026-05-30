@@ -30,8 +30,8 @@ gui:
   lua_dock_layout_debug: false
 
 protocol:
-  root_dir: protocols
-  selected_dir: protocols/default_protocol
+  root_dir: protocols/templates
+  selected_dir: protocols/templates/default_protocol
   tx:
     send_timeout_ms: 1000
     request_timeout_ms: 1000
