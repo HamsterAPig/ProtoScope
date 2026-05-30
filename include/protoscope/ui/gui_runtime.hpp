@@ -52,6 +52,7 @@ private:
     void drawDialogs();
     void drawRawCaptureFileDialogs();
     void drawMainMenu();
+    void drawHelpMenu();
     void drawLuaViewMenu();
     void drawCommDock();
     void drawProtocolDock();
