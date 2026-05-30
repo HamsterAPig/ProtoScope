@@ -10,6 +10,7 @@ add_executable(protoscope_tests
     test_script_host.cpp
     test_serial_ports.cpp
     test_version_utils.cpp
+    test_update_check.cpp
     test_transport.cpp
 )
 target_include_directories(protoscope_tests
@@ -27,6 +28,7 @@ target_link_libraries(protoscope_tests
         protoscope_plot
         protoscope_scripting
         protoscope_transport
+        protoscope_update_check
 )
 target_compile_features(protoscope_tests PRIVATE cxx_std_20)
 protoscope_enable_warnings(protoscope_tests)

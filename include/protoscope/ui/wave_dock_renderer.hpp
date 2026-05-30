@@ -1,6 +1,10 @@
 #pragma once
 
-#include "protoscope/app/application.hpp"
+#include <string>
+
+namespace protoscope::app {
+class Application;
+}
 
 namespace protoscope::ui {
 

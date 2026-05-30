@@ -1,5 +1,7 @@
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
+#include "protoscope/app/application.hpp"
+
 #include <imgui.h>
 #include <implot.h>
 #include <implot_internal.h>

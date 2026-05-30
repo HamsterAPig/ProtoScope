@@ -159,6 +159,20 @@ target_link_libraries(protoscope_app
 )
 target_compile_features(protoscope_app PUBLIC cxx_std_20)
 
+add_library(protoscope_update_check STATIC
+    ui/update_check.cpp
+)
+target_include_directories(protoscope_update_check
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/include
+    PRIVATE
+        ${PROJECT_BINARY_DIR}/generated/include
+)
+target_compile_features(protoscope_update_check PUBLIC cxx_std_20)
+if(WIN32)
+    target_link_libraries(protoscope_update_check PUBLIC winhttp)
+endif()
+
 if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
         ui/editable_combo.cpp
@@ -176,13 +190,14 @@ if(PROTOSCOPE_ENABLE_GUI)
             protoscope_app
             protoscope_config
             protoscope_ui_layout
+            protoscope_update_check
             protoscope_imgui
             protoscope_implot
             protoscope_plot
     )
     target_compile_features(protoscope_ui PUBLIC cxx_std_20)
     if(WIN32)
-        target_link_libraries(protoscope_ui PUBLIC shell32 ole32 comdlg32 winhttp)
+        target_link_libraries(protoscope_ui PUBLIC shell32 ole32 comdlg32)
     endif()
 endif()
 
@@ -214,6 +229,7 @@ foreach(target_name IN ITEMS
     protoscope_plot
     protoscope_config
     protoscope_app
+    protoscope_update_check
     ProtoScope
 )
     protoscope_enable_warnings(${target_name})

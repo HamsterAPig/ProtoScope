@@ -3,6 +3,7 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
+#include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
 #include <cstdint>
@@ -96,24 +97,6 @@ private:
 
     static std::uint64_t nowMs();
     static std::string formatTimestamp(std::uint64_t timestampMs);
-
-private:
-    struct UpdateCheckResult {
-        enum class State {
-            UpToDate,
-            NewerAvailable,
-            DevelopmentBuild,
-            Failed,
-            Unsupported,
-        };
-
-        State state{State::Failed};
-        std::string title;
-        std::string message;
-        std::string latestTag;
-    };
-
-    static UpdateCheckResult checkForUpdates();
 
     app::Application& application_;
     const config::ConfigStore& configStore_;
