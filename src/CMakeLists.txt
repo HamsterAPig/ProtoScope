@@ -195,6 +195,8 @@ if(PROTOSCOPE_ENABLE_GUI)
             protoscope_imgui
             protoscope_implot
             protoscope_plot
+        PRIVATE
+            ui_resources
     )
     target_compile_features(protoscope_ui PUBLIC cxx_std_20)
     if(WIN32)

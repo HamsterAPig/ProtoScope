@@ -19,6 +19,7 @@ option(PROTOSCOPE_ENABLE_GUI "Build ProtoScope GUI runtime" ON)
 include(cmake/CompilerWarnings.cmake)
 include(cmake/Dependencies.cmake)
 include(cmake/EmbeddedProtocols.cmake)
+include(cmake/EmbeddedUiResources.cmake)
 include(cmake/VersionInfo.cmake)
 
 add_subdirectory(src)

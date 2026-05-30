@@ -22,6 +22,7 @@
 #include <imgui_impl_opengl3.h>
 #include <implot.h>
 #include <yaml-cpp/yaml.h>
+#include <cmrc/cmrc.hpp>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -30,6 +31,8 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 #endif
+
+CMRC_DECLARE(ui_resources);
 
 #include <algorithm>
 #include <array>
@@ -71,12 +74,6 @@ std::vector<std::filesystem::path> candidateChineseFonts() {
         "C:/Windows/Fonts/simhei.ttf",
         "C:/Windows/Fonts/simsun.ttc",
         "3rdparty/imgui/misc/fonts/DroidSans.ttf",
-    };
-}
-
-std::vector<std::filesystem::path> candidateIconFonts() {
-    return {
-        "assets/fonts/fa-solid-900.ttf",
     };
 }
 
@@ -933,17 +930,22 @@ void GuiRuntime::ensureChineseFont() {
             break;
         }
     }
-    for (const auto& candidate : candidateIconFonts()) {
-        if (!std::filesystem::exists(candidate)) {
-            continue;
-        }
+    try {
+        const auto resourceFs = cmrc::ui_resources::get_filesystem();
+        const auto iconFont = resourceFs.open("assets/fonts/fa-solid-900.ttf");
         ImFontConfig iconConfig;
         iconConfig.MergeMode = true;
         iconConfig.PixelSnapH = true;
+        iconConfig.FontDataOwnedByAtlas = false;
         iconConfig.GlyphMinAdvanceX = 18.0F;
         static constexpr ImWchar kIconRanges[] = {0xf000, 0xf8ff, 0};
-        io.Fonts->AddFontFromFileTTF(candidate.string().c_str(), 16.0F, &iconConfig, kIconRanges);
-        break;
+        io.Fonts->AddFontFromMemoryTTF(const_cast<char*>(iconFont.begin()),
+                                       static_cast<int>(iconFont.size()),
+                                       16.0F,
+                                       &iconConfig,
+                                       kIconRanges);
+    } catch (const std::exception&) {
+        // 图标字体是体验增强资源，缺失时保留中文 UI 可用，不阻断主窗口启动。
     }
 }
 
