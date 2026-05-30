@@ -396,6 +396,19 @@ ImGuiWindow* findMultilineChildWindow(const char* label) {
     return ImGui::FindWindowByName(childWindowName.c_str());
 }
 
+bool shouldStickMultilineChildToBottom(const ImGuiWindow* window) {
+    if (window == nullptr || window->ScrollMax.y <= 4.0F) {
+        return true;
+    }
+
+    const bool alreadyAtBottom =
+        window->Scroll.y >= window->ScrollMax.y - 4.0F;
+    const bool pendingScrollToBottom =
+        window->ScrollTarget.y != FLT_MAX &&
+        window->ScrollTarget.y >= window->ScrollMax.y - 4.0F;
+    return alreadyAtBottom || pendingScrollToBottom;
+}
+
 std::string buildRowListText(const std::vector<dock::ReceiveRow>& rows, bool showTimestamps, bool showHex) {
     std::string text;
     text.reserve(rows.size() * 64);
@@ -559,7 +572,8 @@ void drawTransferLogRows(const char* childId,
     }
 
     const ImGuiWindow* existingWindow = findMultilineChildWindow(childId);
-    const bool stickToBottom = existingWindow == nullptr || existingWindow->Scroll.y >= existingWindow->ScrollMax.y - 4.0F;
+    const bool stickToBottom = shouldStickMultilineChildToBottom(existingWindow);
+    const float previousScrollY = existingWindow != nullptr ? existingWindow->Scroll.y : 0.0F;
 
     auto text = buildTransferRowListText(rows, showTimestamps, showHex);
     std::vector<char> buffer(text.begin(), text.end());
@@ -574,6 +588,13 @@ void drawTransferLogRows(const char* childId,
 
     if (!pauseScroll && stickToBottom) {
         if (ImGuiWindow* childWindow = findMultilineChildWindow(childId)) {
+            // 用户向上滚动代表显式退出跟随；内容新增导致的 ScrollMax 变大不应打断跟随。
+            const bool userScrolledUpThisFrame =
+                existingWindow != nullptr &&
+                childWindow->Scroll.y < previousScrollY - 1.0F;
+            if (userScrolledUpThisFrame) {
+                return;
+            }
             ImGui::SetScrollY(childWindow, childWindow->ScrollMax.y);
         }
     }
