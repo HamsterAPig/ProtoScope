@@ -1160,6 +1160,13 @@ void GuiRuntime::renderFrame() {
         workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
     }
 
+    const bool previousShowCommDock = showCommDock_;
+    const bool previousShowProtocolDock = showProtocolDock_;
+    const bool previousShowTransferDock = showTransferDock_;
+    const bool previousShowLogDock = showLogDock_;
+    const bool previousShowScriptDock = showScriptDock_;
+    const bool previousShowWaveDock = showWaveDock_;
+
     drawStatusBar();
     drawCommDock();
     drawProtocolDock();
@@ -1172,6 +1179,14 @@ void GuiRuntime::renderFrame() {
     drawRawCaptureFileDialogs();
     drawLogExportFileDialog();
     drawElfStaticAddressDialog();
+    if (previousShowCommDock != showCommDock_
+        || previousShowProtocolDock != showProtocolDock_
+        || previousShowTransferDock != showTransferDock_
+        || previousShowLogDock != showLogDock_
+        || previousShowScriptDock != showScriptDock_
+        || previousShowWaveDock != showWaveDock_) {
+        pendingProtocolWorkspaceSave_ = true;
+    }
 
     ImGui::Render();
 
@@ -1185,6 +1200,8 @@ void GuiRuntime::renderFrame() {
 }
 
 void GuiRuntime::drawMainMenu() {
+    syncLuaDockVisibilityDefaults();
+
     if (!ImGui::BeginMainMenuBar()) {
         return;
     }
@@ -1222,12 +1239,27 @@ void GuiRuntime::drawMainMenu() {
     }
 
     if (ImGui::BeginMenu("视图")) {
+        const bool previousShowCommDock = showCommDock_;
+        const bool previousShowProtocolDock = showProtocolDock_;
+        const bool previousShowTransferDock = showTransferDock_;
+        const bool previousShowLogDock = showLogDock_;
+        const bool previousShowScriptDock = showScriptDock_;
+        const bool previousShowWaveDock = showWaveDock_;
+
         ImGui::MenuItem("通讯配置", nullptr, &showCommDock_);
         ImGui::MenuItem("协议脚本 / 动态控件", nullptr, &showProtocolDock_);
         ImGui::MenuItem("收发数据", nullptr, &showTransferDock_);
         ImGui::MenuItem("日志", nullptr, &showLogDock_);
         ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
         ImGui::MenuItem("波形", nullptr, &showWaveDock_);
+        if (previousShowCommDock != showCommDock_
+            || previousShowProtocolDock != showProtocolDock_
+            || previousShowTransferDock != showTransferDock_
+            || previousShowLogDock != showLogDock_
+            || previousShowScriptDock != showScriptDock_
+            || previousShowWaveDock != showWaveDock_) {
+            pendingProtocolWorkspaceSave_ = true;
+        }
         ImGui::Separator();
         if (ImGui::MenuItem(
                 "重置当前协议 Dock 布局",
@@ -1238,6 +1270,8 @@ void GuiRuntime::drawMainMenu() {
         }
         ImGui::EndMenu();
     }
+
+    drawLuaViewMenu();
 
     if (ImGui::BeginMenu("帮助")) {
         if (ImGui::MenuItem("检查更新")) {
@@ -1250,6 +1284,31 @@ void GuiRuntime::drawMainMenu() {
     }
 
     ImGui::EndMainMenuBar();
+}
+
+void GuiRuntime::drawLuaViewMenu() {
+    if (!ImGui::BeginMenu("Lua视图")) {
+        return;
+    }
+
+    const auto& lua = application_.docks().luaState();
+    if (lua.docks.empty()) {
+        ImGui::TextDisabled("当前协议没有 Lua Dock");
+        ImGui::EndMenu();
+        return;
+    }
+
+    const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
+    for (const auto& dockSnapshot : lua.docks) {
+        const auto stableId = luaDockStableId(dockSnapshot.descriptor, layoutKey);
+        bool visible = isLuaDockVisible(stableId);
+        if (ImGui::MenuItem(dockSnapshot.descriptor.title.c_str(), nullptr, &visible)) {
+            if (setLuaDockVisible(stableId, visible)) {
+                pendingProtocolWorkspaceSave_ = true;
+            }
+        }
+    }
+    ImGui::EndMenu();
 }
 
 void GuiRuntime::refreshWindowTitle() {
@@ -2393,10 +2452,20 @@ void GuiRuntime::drawLuaDockWindows() {
     // 这里按值复制当前帧快照，保证本帧渲染遍历期间底层容器不会被重入修改。
     const auto dockSnapshots = lua.docks;
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
+    syncLuaDockVisibilityDefaults();
     for (const auto& dockSnapshot : dockSnapshots) {
         const auto stableId = luaDockStableId(dockSnapshot.descriptor, layoutKey);
+        if (!isLuaDockVisible(stableId)) {
+            continue;
+        }
         const auto windowName = luaDockWindowName(dockSnapshot.descriptor, layoutKey);
-        const bool windowVisible = ImGui::Begin(windowName.c_str());
+        bool windowOpen = true;
+        const bool windowVisible = ImGui::Begin(windowName.c_str(), &windowOpen);
+        if (!windowOpen) {
+            if (setLuaDockVisible(stableId, false)) {
+                pendingProtocolWorkspaceSave_ = true;
+            }
+        }
         if (windowVisible) {
             if (dockSnapshot.descriptor.layout.has_value()) {
                 if (dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Table) {
@@ -2596,20 +2665,71 @@ void GuiRuntime::pruneCurrentLuaDockSettings() {
     keepOnlyCurrentLuaDockSettings(activeWorkspaceProtocolKey_);
 }
 
+bool GuiRuntime::isLuaDockVisible(std::string_view stableId) const {
+    const auto iter = luaDockVisibility_.find(std::string(stableId));
+    if (iter == luaDockVisibility_.end()) {
+        return true;
+    }
+    return iter->second;
+}
+
+bool GuiRuntime::setLuaDockVisible(std::string_view stableId, bool visible) {
+    const auto key = std::string(stableId);
+    const auto iter = luaDockVisibility_.find(key);
+    if (iter != luaDockVisibility_.end() && iter->second == visible) {
+        return false;
+    }
+    luaDockVisibility_[key] = visible;
+    return true;
+}
+
+void GuiRuntime::syncLuaDockVisibilityDefaults() {
+    const auto& lua = application_.docks().luaState();
+    const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
+    for (const auto& dockSnapshot : lua.docks) {
+        const auto stableId = luaDockStableId(dockSnapshot.descriptor, layoutKey);
+        if (!luaDockVisibility_.contains(stableId)) {
+            luaDockVisibility_.emplace(std::move(stableId), true);
+        }
+    }
+}
+
 void GuiRuntime::loadCurrentProtocolControlState() {
+    showCommDock_ = true;
+    showProtocolDock_ = true;
+    showTransferDock_ = true;
+    showLogDock_ = true;
+    showScriptDock_ = true;
+    showWaveDock_ = true;
+    luaDockVisibility_.clear();
+
     const auto statePath = protocolControlStatePath();
     if (!std::filesystem::exists(statePath)) {
+        syncLuaDockVisibilityDefaults();
         return;
     }
 
     try {
         const auto root = YAML::LoadFile(statePath.string());
+        const auto protocolNode = root["protocols"][activeWorkspaceProtocolKey_];
+        // 核心流程：Dock 可见性按协议工作区存储，旧文件缺字段时自动回退默认可见。
+        ProtocolDockVisibilityState visibilityState;
+        restoreDockVisibilityState(root, activeWorkspaceProtocolKey_, visibilityState);
+        showCommDock_ = visibilityState.showCommDock;
+        showProtocolDock_ = visibilityState.showProtocolDock;
+        showTransferDock_ = visibilityState.showTransferDock;
+        showLogDock_ = visibilityState.showLogDock;
+        showScriptDock_ = visibilityState.showScriptDock;
+        showWaveDock_ = visibilityState.showWaveDock;
+        luaDockVisibility_ = std::move(visibilityState.luaDockVisibility);
+
         restoreWaveProtocolState(root, activeWorkspaceProtocolKey_, application_.docks().waveState());
         auto& sendState = application_.docks().sendState();
         const auto historyLimit = configuredSendHistoryLimit(application_.captureConfig());
-        restoreSendHistoryFromNode(root["protocols"][activeWorkspaceProtocolKey_]["send"], sendState, historyLimit);
-        const auto protocolState = root["protocols"][activeWorkspaceProtocolKey_]["controls"];
+        restoreSendHistoryFromNode(protocolNode["send"], sendState, historyLimit);
+        const auto protocolState = protocolNode["controls"];
         if (!protocolState) {
+            syncLuaDockVisibilityDefaults();
             return;
         }
 
@@ -2627,8 +2747,10 @@ void GuiRuntime::loadCurrentProtocolControlState() {
                 application_.restoreControlValue(descriptor.id, *value);
             }
         }
+        syncLuaDockVisibilityDefaults();
         application_.docks().waveState().statusMessage = "协议波形状态已恢复";
     } catch (const std::exception& ex) {
+        syncLuaDockVisibilityDefaults();
         application_.setStatusMessage(std::string("加载协议控件状态失败: ") + ex.what(), true);
     }
 }
@@ -2640,6 +2762,19 @@ void GuiRuntime::saveCurrentProtocolControlState() {
         if (std::filesystem::exists(statePath)) {
             root = YAML::LoadFile(statePath.string());
         }
+
+        auto protocolNode = root["protocols"][activeWorkspaceProtocolKey_];
+        // 核心流程：Dock 可见性和控件状态共用同一协议状态文件，保证切协议时行为一致。
+        ProtocolDockVisibilityState visibilityState;
+        visibilityState.showCommDock = showCommDock_;
+        visibilityState.showProtocolDock = showProtocolDock_;
+        visibilityState.showTransferDock = showTransferDock_;
+        visibilityState.showLogDock = showLogDock_;
+        visibilityState.showScriptDock = showScriptDock_;
+        visibilityState.showWaveDock = showWaveDock_;
+        visibilityState.luaDockVisibility = luaDockVisibility_;
+        storeDockVisibilityState(root, activeWorkspaceProtocolKey_, visibilityState);
+        protocolNode = root["protocols"][activeWorkspaceProtocolKey_];
 
         YAML::Node controlsNode;
         const auto controls = application_.docks().luaState().controlStates;
@@ -2655,9 +2790,8 @@ void GuiRuntime::saveCurrentProtocolControlState() {
             controlsNode[descriptor.id] = controlNode;
         }
 
-        root["protocols"][activeWorkspaceProtocolKey_]["controls"] = controlsNode;
+        protocolNode["controls"] = controlsNode;
         storeWaveProtocolState(root, activeWorkspaceProtocolKey_, application_.docks().waveState());
-        auto protocolNode = root["protocols"][activeWorkspaceProtocolKey_];
         writeSendHistoryNode(protocolNode,
                              application_.docks().sendState(),
                              configuredSendHistoryLimit(application_.captureConfig()));

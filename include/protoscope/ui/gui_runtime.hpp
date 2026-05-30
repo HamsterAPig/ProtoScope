@@ -52,6 +52,7 @@ private:
     void drawDialogs();
     void drawRawCaptureFileDialogs();
     void drawMainMenu();
+    void drawLuaViewMenu();
     void drawCommDock();
     void drawProtocolDock();
     void drawLuaDockWindows();
@@ -80,6 +81,9 @@ private:
     void loadCurrentProtocolControlState();
     void saveCurrentProtocolControlState();
     void pruneCurrentLuaDockSettings();
+    bool isLuaDockVisible(std::string_view stableId) const;
+    bool setLuaDockVisible(std::string_view stableId, bool visible);
+    void syncLuaDockVisibilityDefaults();
     void openRawCaptureImportDialog();
     void openRawCaptureExportDialog();
     void openTransferLogExportDialog();
@@ -140,6 +144,7 @@ private:
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};
+    std::unordered_map<std::string, bool> luaDockVisibility_;
     float transferSendSectionHeight_{210.0F};
     bool aboutDialogRequested_{false};
     bool updateCheckDialogRequested_{false};

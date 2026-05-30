@@ -233,4 +233,56 @@ void restoreWaveProtocolState(const YAML::Node& root, std::string_view protocolK
     decodeWaveProtocolState(root["protocols"][std::string(protocolKey)]["wave"], wave);
 }
 
+YAML::Node encodeDockVisibilityState(const ProtocolDockVisibilityState& state) {
+    YAML::Node node;
+    YAML::Node staticNode;
+    staticNode["comm"] = state.showCommDock;
+    staticNode["protocol"] = state.showProtocolDock;
+    staticNode["transfer"] = state.showTransferDock;
+    staticNode["log"] = state.showLogDock;
+    staticNode["script"] = state.showScriptDock;
+    staticNode["wave"] = state.showWaveDock;
+    node["static"] = staticNode;
+
+    YAML::Node luaNode;
+    for (const auto& [stableId, visible] : state.luaDockVisibility) {
+        luaNode[stableId] = visible;
+    }
+    node["lua"] = luaNode;
+    return node;
+}
+
+void decodeDockVisibilityState(const YAML::Node& node, ProtocolDockVisibilityState& state) {
+    if (!node || !node.IsMap()) {
+        return;
+    }
+
+    if (const auto staticNode = node["static"]) {
+        state.showCommDock = staticNode["comm"].as<bool>(state.showCommDock);
+        state.showProtocolDock = staticNode["protocol"].as<bool>(state.showProtocolDock);
+        state.showTransferDock = staticNode["transfer"].as<bool>(state.showTransferDock);
+        state.showLogDock = staticNode["log"].as<bool>(state.showLogDock);
+        state.showScriptDock = staticNode["script"].as<bool>(state.showScriptDock);
+        state.showWaveDock = staticNode["wave"].as<bool>(state.showWaveDock);
+    }
+
+    if (const auto luaNode = node["lua"]; luaNode && luaNode.IsMap()) {
+        for (const auto& entry : luaNode) {
+            const auto stableId = entry.first.as<std::string>("");
+            if (stableId.empty()) {
+                continue;
+            }
+            state.luaDockVisibility[stableId] = entry.second.as<bool>(true);
+        }
+    }
+}
+
+void storeDockVisibilityState(YAML::Node& root, std::string_view protocolKey, const ProtocolDockVisibilityState& state) {
+    root["protocols"][std::string(protocolKey)]["dock_visibility"] = encodeDockVisibilityState(state);
+}
+
+void restoreDockVisibilityState(const YAML::Node& root, std::string_view protocolKey, ProtocolDockVisibilityState& state) {
+    decodeDockVisibilityState(root["protocols"][std::string(protocolKey)]["dock_visibility"], state);
+}
+
 } // namespace protoscope::ui

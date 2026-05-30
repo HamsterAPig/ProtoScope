@@ -224,3 +224,75 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
 }
+
+void test_dock_visibility_state_isolated_by_protocol_key() {
+    YAML::Node root;
+
+    protoscope::ui::ProtocolDockVisibilityState protoA;
+    protoA.showCommDock = false;
+    protoA.showProtocolDock = true;
+    protoA.showTransferDock = false;
+    protoA.showLogDock = true;
+    protoA.showScriptDock = false;
+    protoA.showWaveDock = true;
+    protoA.luaDockVisibility["LuaDock:proto_a:main"] = false;
+    protoA.luaDockVisibility["LuaDock:proto_a:advanced"] = true;
+    protoscope::ui::storeDockVisibilityState(root, "proto_a", protoA);
+
+    protoscope::ui::ProtocolDockVisibilityState protoB;
+    protoB.showCommDock = true;
+    protoB.showProtocolDock = false;
+    protoB.showTransferDock = true;
+    protoB.showLogDock = false;
+    protoB.showScriptDock = true;
+    protoB.showWaveDock = false;
+    protoB.luaDockVisibility["LuaDock:proto_b:main"] = true;
+    protoscope::ui::storeDockVisibilityState(root, "proto_b", protoB);
+
+    protoscope::ui::ProtocolDockVisibilityState restoredA;
+    protoscope::ui::restoreDockVisibilityState(root, "proto_a", restoredA);
+    require(!restoredA.showCommDock, "proto_a 应恢复自己的通讯配置可见性");
+    require(restoredA.showProtocolDock, "proto_a 应恢复自己的协议脚本可见性");
+    require(!restoredA.showTransferDock, "proto_a 应恢复自己的收发可见性");
+    require(restoredA.showLogDock, "proto_a 应恢复自己的日志可见性");
+    require(!restoredA.showScriptDock, "proto_a 应恢复自己的脚本可见性");
+    require(restoredA.showWaveDock, "proto_a 应恢复自己的波形可见性");
+    require(!restoredA.luaDockVisibility["LuaDock:proto_a:main"], "proto_a 应恢复 Lua Dock 关闭状态");
+    require(restoredA.luaDockVisibility["LuaDock:proto_a:advanced"], "proto_a 应恢复 Lua Dock 打开状态");
+    require(!restoredA.luaDockVisibility.contains("LuaDock:proto_b:main"), "proto_a 不应串用 proto_b 的 Lua Dock 可见性");
+
+    protoscope::ui::ProtocolDockVisibilityState restoredB;
+    protoscope::ui::restoreDockVisibilityState(root, "proto_b", restoredB);
+    require(restoredB.showCommDock, "proto_b 应恢复自己的通讯配置可见性");
+    require(!restoredB.showProtocolDock, "proto_b 应恢复自己的协议脚本可见性");
+    require(restoredB.showTransferDock, "proto_b 应恢复自己的收发可见性");
+    require(!restoredB.showLogDock, "proto_b 应恢复自己的日志可见性");
+    require(restoredB.showScriptDock, "proto_b 应恢复自己的脚本可见性");
+    require(!restoredB.showWaveDock, "proto_b 应恢复自己的波形可见性");
+    require(restoredB.luaDockVisibility["LuaDock:proto_b:main"], "proto_b 应恢复 Lua Dock 打开状态");
+    require(!restoredB.luaDockVisibility.contains("LuaDock:proto_a:main"), "proto_b 不应串用 proto_a 的 Lua Dock 可见性");
+}
+
+void test_dock_visibility_state_decode_missing_fields_defaults() {
+    protoscope::ui::ProtocolDockVisibilityState state;
+    state.showCommDock = false;
+    state.luaDockVisibility["LuaDock:before:stale"] = false;
+
+    const YAML::Node emptyNode;
+    protoscope::ui::decodeDockVisibilityState(emptyNode, state);
+    require(!state.showCommDock, "空节点解码不应覆盖现有状态");
+    require(!state.luaDockVisibility["LuaDock:before:stale"], "空节点解码不应清空现有 Lua 可见性");
+
+    YAML::Node partialNode;
+    partialNode["static"]["log"] = false;
+    partialNode["lua"]["LuaDock:demo:panel"] = false;
+    protoscope::ui::ProtocolDockVisibilityState defaultState;
+    protoscope::ui::decodeDockVisibilityState(partialNode, defaultState);
+    require(defaultState.showCommDock, "缺失的 comm 字段应保持默认可见");
+    require(defaultState.showProtocolDock, "缺失的 protocol 字段应保持默认可见");
+    require(defaultState.showTransferDock, "缺失的 transfer 字段应保持默认可见");
+    require(!defaultState.showLogDock, "存在的 log 字段应按配置恢复");
+    require(defaultState.showScriptDock, "缺失的 script 字段应保持默认可见");
+    require(defaultState.showWaveDock, "缺失的 wave 字段应保持默认可见");
+    require(!defaultState.luaDockVisibility["LuaDock:demo:panel"], "Lua 可见性字段应按配置恢复");
+}

@@ -64,6 +64,8 @@ void test_dock_receive_rows_text_export_format();
 void test_dock_receive_row_visual_kind_classification();
 void test_dock_send_history_deduplicates_and_trims();
 void test_wave_protocol_state_isolated_by_protocol_key();
+void test_dock_visibility_state_isolated_by_protocol_key();
+void test_dock_visibility_state_decode_missing_fields_defaults();
 void test_lua_dock_layout_key_uses_protocol_and_script();
 void test_lua_dock_layout_key_falls_back_to_script_directory();
 void test_lua_dock_layout_paths_prefer_user_layout();
