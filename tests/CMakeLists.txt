@@ -9,6 +9,7 @@ add_executable(protoscope_tests
     test_elf_static_view_bridge.cpp
     test_script_host.cpp
     test_serial_ports.cpp
+    test_version_utils.cpp
     test_transport.cpp
 )
 target_include_directories(protoscope_tests

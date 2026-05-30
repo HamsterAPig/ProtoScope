@@ -1457,6 +1457,7 @@ static const TestCase kAllTests[] = {
     {"script_form_layout_duplicate_control_fail", &test_script_form_layout_duplicate_control_fail},
     {"script_form_layout_missing_control_fail", &test_script_form_layout_missing_control_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
+    {"gui_runtime_version_utils", &test_gui_runtime_version_utils},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
     {"config_wave_mode_invalid_fallback", &test_config_wave_mode_invalid_fallback},

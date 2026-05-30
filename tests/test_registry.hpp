@@ -45,6 +45,7 @@ void test_script_table_layout_duplicate_control_fail();
 void test_script_table_layout_missing_control_fail();
 void test_script_table_layout_row_overflow_fail();
 void test_script_runtime_error_logged();
+void test_gui_runtime_version_utils();
 void test_protocol_directory_reload();
 void test_config_default_roundtrip();
 void test_config_wave_mode_invalid_fallback();

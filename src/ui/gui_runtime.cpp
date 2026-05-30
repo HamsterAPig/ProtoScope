@@ -7,6 +7,7 @@
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/editable_combo.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
+#include "protoscope/ui/version_utils.hpp"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -36,7 +37,6 @@
 #include <chrono>
 #include <cctype>
 #include <cfloat>
-#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cwchar>
@@ -57,57 +57,6 @@ namespace {
 
 const char* kGlslVersion = "#version 150";
 constexpr std::uint32_t kCommonBaudRates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
-
-struct SemanticVersion {
-    int major{0};
-    int minor{0};
-    int patch{0};
-};
-
-std::optional<SemanticVersion> parseSemanticTag(std::string_view tag) {
-    if (tag.size() < 6 || tag.front() != 'v') {
-        return std::nullopt;
-    }
-
-    SemanticVersion version{};
-    const char* cursor = tag.data() + 1;
-    const char* const end = tag.data() + tag.size();
-
-    const auto readNumber = [&](int& value) {
-        const auto result = std::from_chars(cursor, end, value);
-        if (result.ec != std::errc{}) {
-            return false;
-        }
-        cursor = result.ptr;
-        return true;
-    };
-
-    if (!readNumber(version.major) || cursor == end || *cursor != '.') {
-        return std::nullopt;
-    }
-    ++cursor;
-    if (!readNumber(version.minor) || cursor == end || *cursor != '.') {
-        return std::nullopt;
-    }
-    ++cursor;
-    if (!readNumber(version.patch) || cursor != end) {
-        return std::nullopt;
-    }
-    return version;
-}
-
-int compareSemanticVersion(const SemanticVersion& lhs, const SemanticVersion& rhs) {
-    if (lhs.major != rhs.major) {
-        return lhs.major < rhs.major ? -1 : 1;
-    }
-    if (lhs.minor != rhs.minor) {
-        return lhs.minor < rhs.minor ? -1 : 1;
-    }
-    if (lhs.patch != rhs.patch) {
-        return lhs.patch < rhs.patch ? -1 : 1;
-    }
-    return 0;
-}
 
 std::optional<std::string> findLatestSemanticTag(const std::string& responseBody) {
     static const std::regex nameRegex(R"json("name"\s*:\s*"([^"]+)")json");
