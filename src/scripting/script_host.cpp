@@ -2519,22 +2519,26 @@ std::optional<DialogRequest> ScriptHost::protoDialog(DialogKind kind, const sol:
     }
 
     const sol::table table = opts.as<sol::table>();
-    DialogRequest request{};
-    request.id = nextDialogId();
-    request.kind = kind;
-    request.title = luaStringField(table, "title").value_or("");
-    request.message = luaStringField(table, "message").value_or("");
-    request.level = luaStringField(table, "level").value_or("info");
-    request.dedupeKey = luaStringField(table, "dedupe_key").value_or("");
-    request.createdAtMs = nowMs();
+    const auto createdAtMs = nowMs();
+    transport::ConnectionContext connection{};
     if (activeConnection_.has_value()) {
-        request.connection = *activeConnection_;
+        connection = *activeConnection_;
     } else {
-        request.connection.endpoint = "detached";
-        request.connection.connectionId = 0;
-        request.connection.timestampMs = request.createdAtMs;
-        request.connection.readyForIo = false;
+        connection.endpoint = "detached";
+        connection.connectionId = 0;
+        connection.timestampMs = createdAtMs;
+        connection.readyForIo = false;
     }
+    const DialogRequest request{
+        .id = nextDialogId(),
+        .kind = kind,
+        .connection = connection,
+        .title = luaStringField(table, "title").value_or(""),
+        .message = luaStringField(table, "message").value_or(""),
+        .level = luaStringField(table, "level").value_or("info"),
+        .dedupeKey = luaStringField(table, "dedupe_key").value_or(""),
+        .createdAtMs = createdAtMs,
+    };
     if (request.title.empty() || request.message.empty()) {
         error = "title 和 message 不能为空";
         protoLog("error", std::string(kind == DialogKind::Alert ? "proto.ui.alert" : "proto.ui.confirm") + " 调用失败: " + error);
@@ -2569,18 +2573,23 @@ std::optional<FileDialogRequest> ScriptHost::protoFileDialog(FileDialogKind kind
         }
     }
 
-    FileDialogRequest request{};
-    request.id = nextFileDialogId();
-    request.kind = kind;
-    request.title = luaStringField(table, "title").value_or(kind == FileDialogKind::OpenDir ? "选择目录" : "选择文件");
-    request.defaultPath = luaStringField(table, "default_path").value_or(".");
-    request.createdAtMs = nowMs();
+    const auto createdAtMs = nowMs();
+    transport::ConnectionContext connection{};
     if (activeConnection_.has_value()) {
-        request.connection = *activeConnection_;
+        connection = *activeConnection_;
     } else {
-        request.connection.timestampMs = request.createdAtMs;
-        request.connection.endpoint = "detached";
+        connection.timestampMs = createdAtMs;
+        connection.endpoint = "detached";
     }
+    FileDialogRequest request{
+        .id = nextFileDialogId(),
+        .kind = kind,
+        .connection = connection,
+        .title = luaStringField(table, "title").value_or(kind == FileDialogKind::OpenDir ? "选择目录" : "选择文件"),
+        .defaultPath = luaStringField(table, "default_path").value_or("."),
+        .filters = {},
+        .createdAtMs = createdAtMs,
+    };
 
     const sol::object filtersObject = table["filters"];
     if (filtersObject.valid() && filtersObject.get_type() != sol::type::lua_nil) {

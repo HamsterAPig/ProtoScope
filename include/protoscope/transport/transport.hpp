@@ -52,7 +52,7 @@ using TransportConfig = std::variant<TcpClientConfig, TcpServerConfig, SerialCon
 
 struct ConnectionContext {
     TransportKind kind{TransportKind::TcpClient};
-    std::string endpoint;
+    std::string endpoint{};
     std::uint64_t connectionId{0};
     std::uint64_t timestampMs{0};
     bool readyForIo{true};

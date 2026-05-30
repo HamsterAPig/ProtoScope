@@ -303,6 +303,33 @@ void test_application_lua_controls_without_connection() {
     application.shutdown();
 }
 
+void test_application_tx_overflow_popup_keeps_dialog_payload() {
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+
+    auto config = application.captureConfig();
+    config.protocol.tx.maxPending = 0;
+    config.protocol.tx.overflowPolicy = "reject_new";
+    config.protocol.tx.overflowNotify = "popup_once";
+    require(application.applyConfig(config), "应用应接受测试 TX 配置");
+    require(application.reloadProtocolDirectory("tests/fixtures/protocols/dialog_requests", true), "dialog_requests 协议应可加载");
+
+    application.updateControlValue("send_one", true);
+
+    const auto dialogs = application.drainDialogRequests();
+    require(dialogs.size() == 1, "发送队列溢出应生成一条弹窗请求");
+    const auto& dialog = dialogs.front();
+    require(dialog.kind == protoscope::scripting::DialogKind::Alert, "发送队列溢出应生成 alert");
+    require(dialog.title == "发送队列已满", "溢出弹窗 title 不应改变");
+    require(dialog.message == "发送队列已满", "溢出弹窗 message 不应改变");
+    require(dialog.level == "warn", "溢出弹窗 level 不应改变");
+    require(dialog.dedupeKey == "protocol.tx.overflow", "溢出弹窗 dedupeKey 不应改变");
+    require(dialog.connection.endpoint.empty(), "无活动连接时应用层溢出弹窗仍应使用默认空 endpoint");
+    require(dialog.connection.connectionId == 0, "无活动连接时应用层溢出弹窗 connectionId 应为 0");
+
+    application.shutdown();
+}
+
 void test_application_failed_protocol_reload_keeps_previous_runtime() {
     protoscope::app::Application application;
     require(application.initialize(), "应用应可初始化默认 Lua 工作区");

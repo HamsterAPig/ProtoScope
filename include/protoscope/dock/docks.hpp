@@ -14,10 +14,10 @@ namespace protoscope::dock {
 
 struct ReceiveRow {
     std::uint64_t timestampMs{0};
-    std::string direction;
-    std::string endpoint;
-    std::vector<std::uint8_t> bytes;
-    std::string message;
+    std::string direction{};
+    std::string endpoint{};
+    std::vector<std::uint8_t> bytes{};
+    std::string message{};
 };
 
 std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamps, bool showHex);

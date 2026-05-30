@@ -29,32 +29,46 @@ std::filesystem::path makeUniqueTempFile(const char* name) {
     return std::filesystem::temp_directory_path() / (std::string(name) + "-" + std::to_string(nowMs()) + ".json");
 }
 
+elf_static_view::ExpandedNode makeExpandedNode(std::string path,
+                                               std::string displayName,
+                                               std::string typeName,
+                                               elf_static_view::Availability availability,
+                                               std::optional<std::uint64_t> absoluteAddress = std::nullopt) {
+    return elf_static_view::ExpandedNode{
+        .path = std::move(path),
+        .display_name = std::move(displayName),
+        .type_name = std::move(typeName),
+        .type_id = {},
+        .type_kind = elf_static_view::TypeKind::Base,
+        .availability = availability,
+        .absolute_address = absoluteAddress,
+        .relative_offset = std::nullopt,
+        .byte_size = std::nullopt,
+        .array_count = std::nullopt,
+        .array_stride = std::nullopt,
+        .depth = 0,
+        .children_lazy = false,
+        .children = {},
+    };
+}
+
 elf_static_view::ProjectModel sampleProjectModel() {
     elf_static_view::ProjectModel model;
     model.file = "sample.elf";
-    model.expanded.push_back(elf_static_view::ExpandedNode{
-        .path = "global.counter",
-        .display_name = "counter",
-        .type_name = "uint32_t",
-        .type_kind = elf_static_view::TypeKind::Base,
-        .availability = elf_static_view::Availability::StaticAddressKnown,
-        .absolute_address = 0x20000010ULL,
-    });
-    model.expanded.push_back(elf_static_view::ExpandedNode{
-        .path = "global.a_var_int",
-        .display_name = "a_var_int",
-        .type_name = "int",
-        .type_kind = elf_static_view::TypeKind::Base,
-        .availability = elf_static_view::Availability::StaticAddressKnown,
-        .absolute_address = 0x20000000ULL,
-    });
-    model.expanded.push_back(elf_static_view::ExpandedNode{
-        .path = "global.runtime_only",
-        .display_name = "runtime_only",
-        .type_name = "int",
-        .type_kind = elf_static_view::TypeKind::Base,
-        .availability = elf_static_view::Availability::RuntimeOnly,
-    });
+    model.expanded.push_back(makeExpandedNode("global.counter",
+                                              "counter",
+                                              "uint32_t",
+                                              elf_static_view::Availability::StaticAddressKnown,
+                                              0x20000010ULL));
+    model.expanded.push_back(makeExpandedNode("global.a_var_int",
+                                              "a_var_int",
+                                              "int",
+                                              elf_static_view::Availability::StaticAddressKnown,
+                                              0x20000000ULL));
+    model.expanded.push_back(makeExpandedNode("global.runtime_only",
+                                              "runtime_only",
+                                              "int",
+                                              elf_static_view::Availability::RuntimeOnly));
     return model;
 }
 

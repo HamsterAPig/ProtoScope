@@ -225,7 +225,7 @@ struct TxEvent {
     std::uint64_t id{0};
     TxRequestKind kind{TxRequestKind::Send};
     TxEventState state{TxEventState::Sent};
-    std::string tag;
+    std::string tag{};
     std::size_t bytes{0};
     std::uint64_t queuedMs{0};
     std::uint64_t finishedMs{0};
@@ -233,7 +233,7 @@ struct TxEvent {
     std::uint64_t offset{0};
     std::uint64_t total{0};
     double progress{0.0};
-    std::optional<std::string> error;
+    std::optional<std::string> error{};
 };
 
 struct RequestDoneResult {
@@ -261,26 +261,26 @@ enum class FileDialogKind {
 };
 
 struct FileDialogFilter {
-    std::string name;
-    std::vector<std::string> patterns;
+    std::string name{};
+    std::vector<std::string> patterns{};
 };
 
 struct FileDialogRequest {
     std::uint64_t id{0};
     FileDialogKind kind{FileDialogKind::OpenFile};
     transport::ConnectionContext connection{};
-    std::string title;
-    std::string defaultPath;
-    std::vector<FileDialogFilter> filters;
+    std::string title{};
+    std::string defaultPath{};
+    std::vector<FileDialogFilter> filters{};
     std::uint64_t createdAtMs{0};
 };
 
 struct FileDialogEvent {
     std::uint64_t id{0};
     FileDialogKind kind{FileDialogKind::OpenFile};
-    std::string state;
-    std::string path;
-    std::string error;
+    std::string state{};
+    std::string path{};
+    std::string error{};
     std::uint64_t timestampMs{0};
 };
 
@@ -288,22 +288,22 @@ struct DialogRequest {
     std::uint64_t id{0};
     DialogKind kind{DialogKind::Alert};
     transport::ConnectionContext connection{};
-    std::string title;
-    std::string message;
+    std::string title{};
+    std::string message{};
     std::string level{"info"};
-    std::string dedupeKey;
+    std::string dedupeKey{};
     std::uint64_t createdAtMs{0};
 };
 
 struct DialogEvent {
     std::uint64_t id{0};
     DialogKind kind{DialogKind::Alert};
-    std::string state;
-    std::optional<bool> confirmed;
-    std::string title;
-    std::string message;
+    std::string state{};
+    std::optional<bool> confirmed{};
+    std::string title{};
+    std::string message{};
     std::string level{"info"};
-    std::string dedupeKey;
+    std::string dedupeKey{};
     std::uint64_t timestampMs{0};
 };
 

@@ -58,8 +58,7 @@ bool sameChannelSpecs(const std::vector<scripting::PlotChannelDescriptor>& setup
         if (!current.has_value()) {
             return false;
         }
-        const auto& setup = setupChannels[i];
-        if (current->label != setup.label || current->unit != setup.unit || !sameColor(current->color, setup.color)) {
+        if (const auto& setup = setupChannels[i]; current->label != setup.label || current->unit != setup.unit || !sameColor(current->color, setup.color)) {
             return false;
         }
     }
@@ -594,8 +593,8 @@ bool Application::handleTransportEvents() {
     auto events = transport_->takeEvents();
     for (const auto& event : events) {
         std::visit(
-            [this, &changed](const auto& evt) {
-                using T = std::decay_t<decltype(evt)>;
+            [this, &changed]<typename T0>(const T0& evt) {
+                using T = std::decay_t<T0>;
                 if constexpr (std::is_same_v<T, transport::TransportOpenEvent>) {
                     if (evt.context.readyForIo) {
                         activeConnection_ = evt.context;
@@ -678,12 +677,14 @@ bool Application::handleTransportEvents() {
                                                   .bytes = evt.bytes,
                                                   .queuedMs = activeWrite.request.createdAtMs,
                                                   .finishedMs = evt.finishedAtMs,
+                                                  .error = error,
                                               });
                         dockStore_.appendReceiveRow(dock::ReceiveRow{
                             .timestampMs = evt.finishedAtMs,
                             .direction = "TX",
                             .endpoint = activeWrite.request.connection.endpoint,
                             .bytes = activeWrite.request.payload,
+                            .message = {},
                         });
                         activeWrite.sentAtMs = evt.finishedAtMs;
                         activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
@@ -867,6 +868,7 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
             .direction = "TX",
             .endpoint = request.connection.endpoint,
             .bytes = request.payload,
+            .message = {},
         });
     }
     if (error.has_value()) {
@@ -915,15 +917,21 @@ void Application::notifyTxOverflow(const std::string& message) {
     setStatusMessage(message, false);
     loggingFacade_.warn("protocol", message);
     if (runtimeConfig_.protocol.tx.overflowNotify == "popup_once") {
-        scripting::DialogRequest request{};
-        request.id = static_cast<std::uint64_t>(nowMs());
-        request.kind = scripting::DialogKind::Alert;
-        request.connection = activeConnection_.value_or(transport::ConnectionContext{});
-        request.title = "发送队列已满";
-        request.message = message;
-        request.level = "warn";
-        request.dedupeKey = "protocol.tx.overflow";
-        request.createdAtMs = nowMs();
+        const auto createdAtMs = static_cast<std::uint64_t>(nowMs());
+        transport::ConnectionContext connection{};
+        if (activeConnection_.has_value()) {
+            connection = *activeConnection_;
+        }
+        const scripting::DialogRequest request{
+            .id = createdAtMs,
+            .kind = scripting::DialogKind::Alert,
+            .connection = connection,
+            .title = "发送队列已满",
+            .message = message,
+            .level = "warn",
+            .dedupeKey = "protocol.tx.overflow",
+            .createdAtMs = createdAtMs,
+        };
         enqueueDialogRequest(request);
     }
 }
