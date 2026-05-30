@@ -2316,25 +2316,28 @@ void GuiRuntime::drawTransferDock()
 
     const float availableHeight = ImGui::GetContentRegionAvail().y;
     const float splitterThickness = style.FramePadding.y * 2.0F;
-
+    const float minPayloadHeight = ImGui::GetFrameHeight();
+    const float sendBorderSlack = 2.0F;
+    // 发送区最小高度要覆盖 Child 边距、表格 CellPadding 和边框，否则窗口较小时输入框会被挤没。
     const float minSendHeight =
-        ImGui::GetFrameHeight() + style.WindowPadding.y * 2.0F;
-
-    const float minLogHeight =
-        ImGui::GetTextLineHeightWithSpacing() * 6.0F;
-
+        minPayloadHeight +
+        style.WindowPadding.y * 2.0F +
+        style.CellPadding.y * 2.0F +
+        sendBorderSlack;
     if (transferSendSectionHeight_ <= 0.0F) {
         transferSendSectionHeight_ = minSendHeight;
     }
 
+    const float maxSendHeight =
+        (std::max)(minSendHeight,
+                   availableHeight - splitterThickness);
     transferSendSectionHeight_ = (std::clamp)(
         transferSendSectionHeight_,
         minSendHeight,
-        (std::max)(minSendHeight,
-                   availableHeight - minLogHeight - splitterThickness));
+        maxSendHeight);
 
     float logHeight =
-        (std::max)(minLogHeight,
+        (std::max)(0.0F,
                    availableHeight - transferSendSectionHeight_ - splitterThickness);
 
     // =========================
@@ -2431,7 +2434,7 @@ void GuiRuntime::drawTransferDock()
     drawHorizontalSplitter(
         "##transfer_splitter",
         logHeight,
-        minLogHeight,
+        0.0F,
         minSendHeight,
         availableHeight,
         splitterThickness);
@@ -2455,15 +2458,15 @@ void GuiRuntime::drawTransferDock()
             "%s",
             sendState.payload.c_str());
 
-        const auto flags =
-            sendState.hexMode
-                ? (ImGuiInputTextFlags_CallbackEdit |
-                   ImGuiInputTextFlags_CallbackCharFilter)
-                : ImGuiInputTextFlags_None;
+        ImGuiInputTextFlags flags = ImGuiInputTextFlags_WordWrap;
+        if (sendState.hexMode) {
+            flags |= ImGuiInputTextFlags_CallbackEdit |
+                     ImGuiInputTextFlags_CallbackCharFilter;
+        }
 
         const float payloadHeight =
-            (std::max)(ImGui::GetFrameHeight(),
-                       ImGui::GetContentRegionAvail().y);
+            (std::max)(minPayloadHeight,
+                       ImGui::GetContentRegionAvail().y - style.CellPadding.y * 2.0F);
         const float frameHeight = ImGui::GetFrameHeight();
         const float hexWidth = (std::max)(ImGui::CalcTextSize("HEX").x + style.FramePadding.x * 2.0F, frameHeight * 2.4F);
         const float sendWidth = (std::max)(ImGui::CalcTextSize("发送").x + style.FramePadding.x * 2.0F, frameHeight * 2.8F);
