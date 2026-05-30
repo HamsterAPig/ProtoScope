@@ -709,7 +709,8 @@ bool Application::handleTransportEvents() {
 bool Application::flushScriptOutputs() {
     bool changed = false;
     for (auto& request : scriptHost_.drainTxRequests()) {
-        changed = enqueueTxRequest(std::move(request)) || changed;
+        enqueueTxRequest(std::move(request));
+        changed = true;
     }
     changed = processScriptRequestCompletions() || changed;
     changed = flushScriptStatusAndDialogs() || changed;
