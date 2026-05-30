@@ -95,6 +95,39 @@ void test_dock_receive_row_single_line_message_and_timestamp() {
     require(headerOnly == "WARN", "空内容行不应追加多余分隔符");
 }
 
+void test_dock_receive_rows_text_export_format() {
+    const std::vector<protoscope::dock::ReceiveRow> rows{
+        protoscope::dock::ReceiveRow{
+            .timestampMs = 0,
+            .direction = "RX",
+            .endpoint = "tcp",
+            .bytes = {0x41, 0x0A},
+            .message = {},
+        },
+        protoscope::dock::ReceiveRow{
+            .timestampMs = 1,
+            .direction = "INFO",
+            .endpoint = "host",
+            .bytes = {},
+            .message = "line1\nline2\r\n",
+        },
+        protoscope::dock::ReceiveRow{},
+    };
+
+    const auto hexText = protoscope::dock::formatReceiveRowsText(rows, false, true);
+    require(hexText == "RX tcp | 41 0A\nINFO host | line1 line2  \n\n",
+            "日志导出文本应保留行边界并压平消息换行");
+
+    const auto asciiText = protoscope::dock::formatReceiveRowsText(rows, false, false);
+    require(asciiText.find("RX tcp | A.") == 0, "ASCII 导出应复用当前 ASCII 视图格式");
+
+    const auto timestampText = protoscope::dock::formatReceiveRowsText(rows, true, true);
+    require(timestampText.find("[") == 0, "开启时间戳时导出文本应包含时间戳前缀");
+
+    const auto emptyText = protoscope::dock::formatReceiveRowsText({}, true, true);
+    require(emptyText.empty(), "空日志导出文本应为空字符串");
+}
+
 void test_dock_receive_row_visual_kind_classification() {
     using protoscope::dock::ReceiveRow;
     using protoscope::dock::ReceiveRowVisualKind;

@@ -148,6 +148,15 @@ std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamp
     return line;
 }
 
+std::string formatReceiveRowsText(std::span<const ReceiveRow> rows, bool showTimestamps, bool showHex) {
+    std::string text;
+    for (const auto& row : rows) {
+        text.append(formatReceiveRowSingleLine(row, showTimestamps, showHex));
+        text.push_back('\n');
+    }
+    return text;
+}
+
 void trimSendHistory(SendDockState& sendState, std::size_t limit) {
     if (limit == 0U) {
         sendState.history.clear();

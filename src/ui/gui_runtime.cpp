@@ -48,6 +48,7 @@ CMRC_DECLARE(ui_resources);
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -1169,6 +1170,7 @@ void GuiRuntime::renderFrame() {
     waveDockRenderer_.draw(showWaveDock_);
     drawDialogs();
     drawRawCaptureFileDialogs();
+    drawLogExportFileDialog();
     drawElfStaticAddressDialog();
 
     ImGui::Render();
@@ -1831,6 +1833,73 @@ void GuiRuntime::openRawCaptureExportDialog() {
 #endif
 }
 
+void GuiRuntime::openTransferLogExportDialog() {
+    openLogExportDialog(LogExportTarget::Transfer);
+}
+
+void GuiRuntime::openHostLogExportDialog() {
+    openLogExportDialog(LogExportTarget::Host);
+}
+
+void GuiRuntime::openScriptLogExportDialog() {
+    openLogExportDialog(LogExportTarget::Script);
+}
+
+void GuiRuntime::openLogExportDialog(LogExportTarget target) {
+    const char* title = "收发数据日志";
+    const char* defaultFileName = "transfer-log.log";
+#if defined(_WIN32)
+    const wchar_t* windowsTitle = L"导出收发数据日志";
+#endif
+    switch (target) {
+    case LogExportTarget::Host:
+        title = "系统日志";
+        defaultFileName = "host-log.log";
+#if defined(_WIN32)
+        windowsTitle = L"导出系统日志";
+#endif
+        break;
+    case LogExportTarget::Script:
+        title = "Lua 日志";
+        defaultFileName = "lua-log.log";
+#if defined(_WIN32)
+        windowsTitle = L"导出 Lua 日志";
+#endif
+        break;
+    case LogExportTarget::Transfer:
+    default:
+        break;
+    }
+
+#if defined(_WIN32)
+    (void)title;
+#endif
+    const auto defaultPath = executableDir_ / "logs" / defaultFileName;
+#if defined(_WIN32)
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       windowsTitle,
+                                       L"ProtoScope Log (*.log)\0*.log\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       true,
+                                       L"log",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        exportLogTargetToPath(target, *path);
+    }
+#else
+    logExportTarget_ = target;
+    logExportPath_ = defaultPath.generic_string();
+    logExportDialogTitle_ = title;
+    logExportError_.clear();
+    logExportDialogOpen_ = true;
+    logExportDialogOpened_ = false;
+#endif
+}
+
 void GuiRuntime::openElfStaticAddressDialog() {
 #if defined(_WIN32)
     const auto defaultPath =
@@ -1903,6 +1972,117 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path) {
     rawCaptureExportDialogOpen_ = false;
     rawCaptureExportDialogOpened_ = false;
     rawCaptureExportError_.clear();
+}
+
+std::vector<dock::ReceiveRow> GuiRuntime::logExportRows(LogExportTarget target) {
+    auto& docks = application_.docks();
+    switch (target) {
+    case LogExportTarget::Transfer: {
+        const auto& receive = docks.receiveState();
+        const auto filteredRows = filteredTransferRows(receive.rows, receive.filter);
+        std::vector<dock::ReceiveRow> rows;
+        rows.reserve(filteredRows.size());
+        for (const auto* row : filteredRows) {
+            rows.push_back(*row);
+        }
+        return rows;
+    }
+    case LogExportTarget::Host:
+        return docks.logState().rows;
+    case LogExportTarget::Script:
+        return docks.scriptState().rows;
+    }
+    return {};
+}
+
+bool GuiRuntime::exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path) {
+    auto& docks = application_.docks();
+    bool showTimestamps = true;
+    bool showHex = false;
+    std::string_view title = "收发数据日志";
+
+    switch (target) {
+    case LogExportTarget::Transfer: {
+        const auto& receive = docks.receiveState();
+        showTimestamps = receive.showTimestamps;
+        showHex = receive.showHex;
+        title = "收发数据日志";
+        break;
+    }
+    case LogExportTarget::Host: {
+        const auto& logState = docks.logState();
+        showTimestamps = logState.showTimestamps;
+        showHex = false;
+        title = "系统日志";
+        break;
+    }
+    case LogExportTarget::Script: {
+        const auto& scriptState = docks.scriptState();
+        showTimestamps = scriptState.showTimestamps;
+        showHex = false;
+        title = "Lua 日志";
+        break;
+    }
+    }
+
+    const auto rows = logExportRows(target);
+    const bool exported = exportLogRowsToPath(path, rows, showTimestamps, showHex, title);
+    if (exported) {
+        logExportPath_ = path.generic_string();
+        logExportDialogOpen_ = false;
+        logExportDialogOpened_ = false;
+    }
+    return exported;
+}
+
+bool GuiRuntime::exportLogRowsToPath(const std::filesystem::path& path,
+                                     std::span<const dock::ReceiveRow> rows,
+                                     bool showTimestamps,
+                                     bool showHex,
+                                     std::string_view title) {
+    auto fail = [&](std::string message) {
+        logExportError_ = std::string(title) + "导出失败: " + message;
+        application_.setStatusMessage(logExportError_);
+        return false;
+    };
+
+    if (path.empty()) {
+        return fail("导出路径为空");
+    }
+
+    try {
+        const auto parent = path.parent_path();
+        if (!parent.empty()) {
+            std::error_code directoryError;
+            std::filesystem::create_directories(parent, directoryError);
+            if (directoryError) {
+                return fail("创建目录失败: " + directoryError.message());
+            }
+        }
+
+        std::ofstream output(path, std::ios::binary);
+        if (!output.is_open()) {
+            return fail("无法打开文件");
+        }
+
+        output << dock::formatReceiveRowsText(rows, showTimestamps, showHex);
+        if (!output.good()) {
+            return fail("写入文件失败");
+        }
+
+        std::error_code absoluteError;
+        const auto savedPath = std::filesystem::absolute(path, absoluteError);
+        const auto displayPath = absoluteError ? path.generic_string() : savedPath.generic_string();
+        if (rows.empty()) {
+            application_.setStatusMessage("已导出空日志: " + displayPath);
+        } else {
+            application_.setStatusMessage(std::string(title) + "已导出: " + displayPath);
+        }
+        logExportError_.clear();
+        return true;
+    } catch (const std::exception& exception) {
+        return fail(exception.what());
+    }
 }
 
 void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path) {
@@ -2031,6 +2211,46 @@ void GuiRuntime::drawRawCaptureFileDialogs() {
             }
             ImGui::EndPopup();
         }
+    }
+}
+
+void GuiRuntime::drawLogExportFileDialog() {
+    if (!logExportDialogOpen_) {
+        return;
+    }
+
+    const char* popupId = "导出日志##log_export";
+    if (!logExportDialogOpened_) {
+        ImGui::OpenPopup(popupId);
+        logExportDialogOpened_ = true;
+    }
+
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+        ImGui::Text("请输入 %s 导出路径", logExportDialogTitle_.c_str());
+        char buffer[1024]{};
+        std::snprintf(buffer, sizeof(buffer), "%s", logExportPath_.c_str());
+        if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+            logExportPath_ = buffer;
+        }
+        if (!logExportError_.empty()) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", logExportError_.c_str());
+        }
+        ImGui::Spacing();
+        if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
+            if (exportLogTargetToPath(logExportTarget_, logExportPath_)) {
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+            logExportDialogOpen_ = false;
+            logExportDialogOpened_ = false;
+            logExportError_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 }
 
@@ -2520,7 +2740,7 @@ void GuiRuntime::drawTransferDock()
             true)) {
         if (ImGui::BeginTable(
                 "##transfer_log_toolbar",
-                8,
+                9,
                 ImGuiTableFlags_SizingFixedFit |
                 ImGuiTableFlags_NoSavedSettings)) {
             ImGui::TableSetupColumn(
@@ -2533,6 +2753,7 @@ void GuiRuntime::drawTransferDock()
             ImGui::TableSetupColumn("hex", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("time", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("pause", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("export", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("clear", ImGuiTableColumnFlags_WidthFixed);
 
             ImGui::TableNextRow();
@@ -2577,6 +2798,12 @@ void GuiRuntime::drawTransferDock()
                 "暂停滚动");
 
             ImGui::TableSetColumnIndex(7);
+            if (ImGui::Button("导出##transfer_log_export")) {
+                openTransferLogExportDialog();
+            }
+            drawIconTooltip("导出当前过滤后的收发记录");
+
+            ImGui::TableSetColumnIndex(8);
             if (drawIconButton(PROTOSCOPE_ICON_TRASH, "清空收发记录")) {
                 application_.docks().clearReceiveRows();
             }
@@ -2785,6 +3012,10 @@ void GuiRuntime::drawLogDock() {
     if (ImGui::Button("清空")) {
         application_.docks().clearLogRows();
     }
+    ImGui::SameLine();
+    if (ImGui::Button("导出##host_log_export")) {
+        openHostLogExportDialog();
+    }
 
     drawRowList("log_rows", logState.rows, logState.showTimestamps, false, logState.pauseScroll, "暂无宿主日志");
     ImGui::End();
@@ -2807,6 +3038,10 @@ void GuiRuntime::drawScriptDock() {
     ImGui::SameLine();
     if (ImGui::Button("清空")) {
         application_.docks().clearScriptRows();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("导出##script_log_export")) {
+        openScriptLogExportDialog();
     }
 
     drawRowList("script_rows", scriptState.rows, scriptState.showTimestamps, false, scriptState.pauseScroll, "暂无 Lua 日志或事件");

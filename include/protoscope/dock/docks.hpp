@@ -9,6 +9,7 @@
 #include <deque>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,7 @@ enum class ReceiveRowVisualKind {
 ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row);
 std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex);
 std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamps, bool showHex);
+std::string formatReceiveRowsText(std::span<const ReceiveRow> rows, bool showTimestamps, bool showHex);
 
 enum class TransferLogFilter {
     All,

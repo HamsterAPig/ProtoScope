@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <future>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -31,6 +32,12 @@ public:
     void shutdown();
 
 private:
+    enum class LogExportTarget {
+        Transfer,
+        Host,
+        Script,
+    };
+
     bool initializeWindow();
     bool initializeImGui();
     bool initializePlotContext();
@@ -75,9 +82,21 @@ private:
     void pruneCurrentLuaDockSettings();
     void openRawCaptureImportDialog();
     void openRawCaptureExportDialog();
+    void openTransferLogExportDialog();
+    void openHostLogExportDialog();
+    void openScriptLogExportDialog();
+    void openLogExportDialog(LogExportTarget target);
     void openElfStaticAddressDialog();
     void importRawCaptureFromPath(const std::filesystem::path& path);
     void exportRawCaptureToPath(const std::filesystem::path& path);
+    void drawLogExportFileDialog();
+    std::vector<dock::ReceiveRow> logExportRows(LogExportTarget target);
+    bool exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path);
+    bool exportLogRowsToPath(const std::filesystem::path& path,
+                             std::span<const dock::ReceiveRow> rows,
+                             bool showTimestamps,
+                             bool showHex,
+                             std::string_view title);
     void loadElfStaticAddressFromPath(const std::filesystem::path& path);
     void drawElfStaticAddressDialog();
     void refreshWindowTitle();
@@ -145,6 +164,12 @@ private:
     bool rawCaptureExportDialogOpened_{false};
     std::string rawCaptureExportPath_;
     std::string rawCaptureExportError_;
+    bool logExportDialogOpen_{false};
+    bool logExportDialogOpened_{false};
+    LogExportTarget logExportTarget_{LogExportTarget::Transfer};
+    std::string logExportPath_;
+    std::string logExportError_;
+    std::string logExportDialogTitle_;
     bool elfStaticAddressDialogOpen_{false};
     bool elfStaticAddressDialogOpened_{false};
     std::string elfStaticAddressPath_;

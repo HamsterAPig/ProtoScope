@@ -1531,6 +1531,7 @@ static const TestCase kAllTests[] = {
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
     {"dock_receive_row_single_line_hex_and_ascii", &test_dock_receive_row_single_line_hex_and_ascii},
     {"dock_receive_row_single_line_message_and_timestamp", &test_dock_receive_row_single_line_message_and_timestamp},
+    {"dock_receive_rows_text_export_format", &test_dock_receive_rows_text_export_format},
     {"dock_receive_row_visual_kind_classification", &test_dock_receive_row_visual_kind_classification},
     {"dock_send_history_deduplicates_and_trims", &test_dock_send_history_deduplicates_and_trims},
     {"wave_protocol_state_isolated_by_protocol_key", &test_wave_protocol_state_isolated_by_protocol_key},
