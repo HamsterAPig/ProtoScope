@@ -1,8 +1,11 @@
 #include "protoscope/scripting/script_host.hpp"
 
+#include "script_host_api_module.hpp"
+
 #include <sol/sol.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <chrono>
@@ -12,11 +15,13 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <functional>
 #include <sstream>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace protoscope::scripting {
 
@@ -53,6 +58,27 @@ namespace {
 
 constexpr const char* kDefaultDockId = "protocol";
 constexpr const char* kDefaultDockTitle = "协议动作";
+
+class FunctionScriptHostApiModule final : public IScriptHostApiModule {
+public:
+    using RegisterFn = std::function<void(sol::table&)>;
+
+    FunctionScriptHostApiModule(std::string_view moduleId, RegisterFn registerFn)
+        : moduleId_(moduleId),
+          registerFn_(std::move(registerFn)) {}
+
+    std::string_view id() const override {
+        return moduleId_;
+    }
+
+    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
+        registerFn_(proto);
+    }
+
+private:
+    std::string_view moduleId_;
+    RegisterFn registerFn_;
+};
 
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
@@ -1998,14 +2024,23 @@ std::vector<FileDialogRequest> ScriptHost::drainFileDialogRequests() {
 }
 
 void ScriptHost::registerLuaApi(sol::table& proto) {
-    registerCoreApi(proto);
-    registerTxApi(proto);
-    registerStatusApi(proto);
-    registerUiApi(proto);
-    registerFileApi(proto);
-    registerPlotApi(proto);
-    registerControlApi(proto);
-    registerCodecApi(proto);
+    ScriptHostQueues queues;
+    ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_};
+    std::array modules{
+        FunctionScriptHostApiModule{"core_api_module", [this](sol::table& table) { registerCoreApi(table); }},
+        FunctionScriptHostApiModule{"tx_api_module", [this](sol::table& table) { registerTxApi(table); }},
+        FunctionScriptHostApiModule{"status_api_module", [this](sol::table& table) { registerStatusApi(table); }},
+        FunctionScriptHostApiModule{"ui_api_module", [this](sol::table& table) { registerUiApi(table); }},
+        FunctionScriptHostApiModule{"file_api_module", [this](sol::table& table) { registerFileApi(table); }},
+        FunctionScriptHostApiModule{"plot_api_module", [this](sol::table& table) { registerPlotApi(table); }},
+        FunctionScriptHostApiModule{"control_api_module", [this](sol::table& table) { registerControlApi(table); }},
+        FunctionScriptHostApiModule{"codec_api_module", [this](sol::table& table) { registerCodecApi(table); }},
+    };
+
+    // 核心流程：统一从 API 模块列表注册 Lua 函数，保持 wire format 不变，只收束宿主内部编排边界。
+    for (auto& module : modules) {
+        module.registerApi(ctx, proto);
+    }
 }
 
 void ScriptHost::registerCoreApi(sol::table& proto) {

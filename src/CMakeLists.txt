@@ -54,7 +54,20 @@ target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
     scripting/frame_stream_parser.cpp
-    scripting/script_host.cpp
+    scripting/host/script_host_core.cpp
+    scripting/host/script_host_loader.cpp
+    scripting/host/script_host_parser.cpp
+    scripting/host/script_callback_dispatcher.cpp
+    scripting/host/script_file_system_facade.cpp
+    scripting/host/core_api_module.cpp
+    scripting/host/tx_api_module.cpp
+    scripting/host/status_api_module.cpp
+    scripting/host/ui_api_module.cpp
+    scripting/host/file_api_module.cpp
+    scripting/host/plot_api_module.cpp
+    scripting/host/control_api_module.cpp
+    scripting/host/codec_api_module.cpp
+    scripting/host/stream_schema_module.cpp
 )
 target_include_directories(protoscope_scripting
     PUBLIC
@@ -177,8 +190,34 @@ endif()
 if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
         ui/editable_combo.cpp
-        ui/gui_runtime.cpp
-        ui/wave_dock_renderer.cpp
+        ui/runtime/gui_runtime_core.cpp
+        ui/runtime/main_menu.cpp
+        ui/runtime/lua_view_menu.cpp
+        ui/runtime/help_menu.cpp
+        ui/runtime/workspace_controller.cpp
+        ui/runtime/config_controller.cpp
+        ui/runtime/platform_controller.cpp
+        ui/docks/dock_host.cpp
+        ui/docks/comm_dock.cpp
+        ui/docks/protocol_dock.cpp
+        ui/docks/transfer_dock.cpp
+        ui/docks/log_dock.cpp
+        ui/docks/script_dock.cpp
+        ui/docks/lua_dock_host.cpp
+        ui/dialogs/dialog_host.cpp
+        ui/dialogs/about_dialog.cpp
+        ui/dialogs/update_check_dialog.cpp
+        ui/dialogs/script_dialog_host.cpp
+        ui/dialogs/raw_capture_dialog.cpp
+        ui/dialogs/log_export_dialog.cpp
+        ui/dialogs/elf_static_address_dialog.cpp
+        ui/wave/wave_dock_renderer.cpp
+        ui/wave/wave_viewport_controller.cpp
+        ui/wave/wave_channel_renderer.cpp
+        ui/wave/wave_interaction_controller.cpp
+        ui/wave/wave_toolbar.cpp
+        ui/wave/wave_channel_legend.cpp
+        ui/wave/wave_measurement_overlay.cpp
     )
     target_include_directories(protoscope_ui
         PUBLIC
