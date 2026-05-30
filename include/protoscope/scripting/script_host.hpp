@@ -350,6 +350,12 @@ public:
     void setRequestAwaitingCompletion(bool active);
 
 private:
+    sol::state& luaState();
+    sol::state_view luaView();
+    const std::vector<ControlDescriptor>& controlDescriptors() const;
+    const ControlValue* findControlValue(const std::string& id) const;
+    void updateControlValue(const std::string& id, ControlValue value);
+
     void callbackOnOpen(const ScriptHostContext& ctx);
     void callbackOnClose(const ScriptHostContext& ctx);
     void callbackOnError(const ScriptHostContext& ctx, const std::string& message);

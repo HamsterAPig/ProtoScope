@@ -1,11 +1,16 @@
-#include "script_host_api_module.hpp"
+#include "protoscope/scripting/script_host.hpp"
 
 namespace protoscope::scripting {
 
-class StatusApiModule final : public IScriptHostApiModule {
-public:
-    std::string_view id() const override { return "status_api_module"; }
-    void registerApi(ScriptHostContextInternal&, sol::table&) override {}
-};
+void ScriptHost::registerStatusApi(sol::table& proto) {
+    sol::table statusApi = luaState().create_table();
+    statusApi.set_function("set", [this](const std::string& text, const sol::object& opts) {
+        protoStatusSet(text, opts);
+    });
+    statusApi.set_function("clear", [this]() {
+        protoStatusClear();
+    });
+    proto["status"] = statusApi;
+}
 
 } // namespace protoscope::scripting

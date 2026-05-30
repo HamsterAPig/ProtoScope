@@ -193,15 +193,6 @@ double finiteOrDefault(double value, double fallback) {
     return std::isfinite(value) ? value : fallback;
 }
 
-const ControlDescriptor* findControlDescriptor(const std::vector<ControlDescriptor>& controls, const std::string& id) {
-    for (const auto& control : controls) {
-        if (control.id == id) {
-            return &control;
-        }
-    }
-    return nullptr;
-}
-
 std::string luaTypeName(sol::type type) {
     switch (type) {
     case sol::type::lua_nil:
@@ -221,7 +212,7 @@ std::string luaTypeName(sol::type type) {
     }
 }
 
-std::string serializeLuaObject(const sol::object& object, int depth = 0) {
+std::string serializeLuaObject(const sol::object& object, int depth) {
     if (!object.valid() || object.get_type() == sol::type::lua_nil) {
         return "nil";
     }
@@ -1669,6 +1660,51 @@ std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object
 
 } // namespace
 
+const ControlDescriptor* findControlDescriptor(const std::vector<ControlDescriptor>& controls, const std::string& id) {
+    for (const auto& control : controls) {
+        if (control.id == id) {
+            return &control;
+        }
+    }
+    return nullptr;
+}
+
+namespace script_host_lua {
+
+std::string serializeLuaObject(const sol::object& object, int depth) {
+    return protoscope::scripting::serializeLuaObject(object, depth);
+}
+
+const ControlDescriptor* findControlDescriptor(const std::vector<ControlDescriptor>& controls, const std::string& id) {
+    return protoscope::scripting::findControlDescriptor(controls, id);
+}
+
+std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descriptor,
+                                                const sol::object& object,
+                                                std::string& error) {
+    return protoscope::scripting::controlValueFromLua(descriptor, object, error);
+}
+
+sol::object controlValueToLua(sol::state_view lua,
+                              const ControlDescriptor* descriptor,
+                              const ControlValue& value) {
+    return protoscope::scripting::controlValueToLua(lua, descriptor, value);
+}
+
+std::optional<std::vector<std::uint8_t>> bytesFromLuaObject(const sol::object& object, std::string& error) {
+    return protoscope::scripting::bytesFromLuaObject(object, error);
+}
+
+std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& error) {
+    return protoscope::scripting::parsePlotSetup(object, error);
+}
+
+std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object, std::string& error) {
+    return protoscope::scripting::parsePlotAppend(object, error);
+}
+
+} // namespace script_host_lua
+
 struct ScriptHost::Runtime {
     sol::state lua;
     std::unique_ptr<LoadedStreamSchema> stream;
@@ -2043,207 +2079,6 @@ void ScriptHost::registerLuaApi(sol::table& proto) {
     }
 }
 
-void ScriptHost::registerCoreApi(sol::table& proto) {
-    proto.set_function("log", [this](const std::string& level, const std::string& message) {
-        protoLog(level, message);
-    });
-    proto.set_function("emit", [this](const std::string& name, const sol::object& payload) {
-        protoEmit(name, serializeLuaObject(payload));
-    });
-    proto.set_function("set_timer", [this](const std::string& name, std::uint64_t delayMs) {
-        protoSetTimer(name, delayMs);
-    });
-    proto.set_function("cancel_timer", [this](const std::string& name) {
-        protoCancelTimer(name);
-    });
-}
-
-void ScriptHost::registerTxApi(sol::table& proto) {
-    proto.set_function("send", [this](const sol::object& payload, const sol::object& opts) {
-        std::string error;
-        const auto request = protoSendLike(TxRequestKind::Send, payload, opts, error);
-        if (!request.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    proto.set_function("request", [this](const sol::object& payload, const sol::object& opts) {
-        std::string error;
-        const auto request = protoSendLike(TxRequestKind::Request, payload, opts, error);
-        if (!request.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    proto.set_function("request_done", [this](const sol::object& result) {
-        std::string error;
-        if (protoRequestDone(result, error)) {
-            return std::make_tuple(sol::make_object(runtime_->lua, true),
-                                   sol::make_object(runtime_->lua, sol::lua_nil));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, false),
-                               sol::make_object(runtime_->lua, error));
-    });
-}
-
-void ScriptHost::registerStatusApi(sol::table& proto) {
-    sol::table statusApi = runtime_->lua.create_table();
-    statusApi.set_function("set", [this](const std::string& text, const sol::object& opts) {
-        protoStatusSet(text, opts);
-    });
-    statusApi.set_function("clear", [this]() {
-        protoStatusClear();
-    });
-    proto["status"] = statusApi;
-}
-
-void ScriptHost::registerUiApi(sol::table& proto) {
-    sol::table uiApi = runtime_->lua.create_table();
-    uiApi.set_function("alert", [this](const sol::object& opts) {
-        std::string error;
-        const auto dialog = protoDialog(DialogKind::Alert, opts, error);
-        if (!dialog.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, dialog->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    uiApi.set_function("confirm", [this](const sol::object& opts) {
-        std::string error;
-        const auto dialog = protoDialog(DialogKind::Confirm, opts, error);
-        if (!dialog.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, dialog->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    proto["ui"] = uiApi;
-}
-
-void ScriptHost::registerFileApi(sol::table& proto) {
-    sol::table fsApi = runtime_->lua.create_table();
-    fsApi.set_function("open_file_dialog", [this](const sol::object& opts) {
-        std::string error;
-        const auto request = protoFileDialog(FileDialogKind::OpenFile, opts, error);
-        if (!request.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    fsApi.set_function("open_dir_dialog", [this](const sol::object& opts) {
-        std::string error;
-        const auto request = protoFileDialog(FileDialogKind::OpenDir, opts, error);
-        if (!request.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    fsApi.set_function("open", [this](const std::string& path, const sol::object& opts) {
-        return protoFsOpen(path, opts);
-    });
-    fsApi.set_function("read", [this](std::uint64_t handle, const sol::object& opts) {
-        return protoFsRead(handle, opts);
-    });
-    fsApi.set_function("write", [this](std::uint64_t handle, const sol::object& payload) {
-        return protoFsWrite(handle, payload);
-    });
-    fsApi.set_function("close", [this](std::uint64_t handle) {
-        return protoFsClose(handle);
-    });
-    fsApi.set_function("stat", [this](const std::string& path) {
-        return protoFsStat(path);
-    });
-    fsApi.set_function("send_file", [this](const std::string& path, const sol::object& opts) {
-        return protoFsSendFile(path, opts);
-    });
-    proto["fs"] = fsApi;
-}
-
-void ScriptHost::registerPlotApi(sol::table& proto) {
-    sol::table plotApi = runtime_->lua.create_table();
-    plotApi.set_function("setup", [this](const sol::object& payload) {
-        std::string error;
-        const auto setup = parsePlotSetup(payload, error);
-        if (!setup.has_value()) {
-            protoLog("error", "proto.plot.setup 调用失败: " + error);
-            return;
-        }
-        protoPlotSetup(*setup);
-    });
-    plotApi.set_function("push", [this](int channelIndex, const sol::object& payload) {
-        if (channelIndex <= 0) {
-            protoLog("error", "proto.plot.push 调用失败: channelIndex 必须从 1 开始");
-            return;
-        }
-        std::string error;
-        const auto request = parsePlotAppend(payload, error);
-        if (!request.has_value()) {
-            protoLog("error", "proto.plot.push 调用失败: " + error);
-            return;
-        }
-        protoPlotPush(static_cast<std::size_t>(channelIndex - 1), *request);
-    });
-    proto["plot"] = plotApi;
-}
-
-void ScriptHost::registerControlApi(sol::table& proto) {
-    proto.set_function("get_control", [this](const std::string& id) {
-        sol::state_view view(runtime_->lua.lua_state());
-        const auto iter = controlValues_.find(id);
-        if (iter == controlValues_.end()) {
-            return sol::make_object(view, sol::lua_nil);
-        }
-        return controlValueToLua(view, findControlDescriptor(controls_, id), iter->second);
-    });
-    proto.set_function("set_control", [this](const std::string& id, const sol::object& value) {
-        const auto* descriptor = findControlDescriptor(controls_, id);
-        if (descriptor == nullptr) {
-            protoLog("warn", "proto.set_control 未找到控件: " + id);
-            return;
-        }
-        std::string error;
-        const auto converted = controlValueFromLua(*descriptor, value, error);
-        if (!converted.has_value()) {
-            protoLog("warn", "proto.set_control 调用失败: " + error);
-            return;
-        }
-        controlValues_[id] = *converted;
-    });
-}
-
-void ScriptHost::registerCodecApi(sol::table& proto) {
-    sol::table bitsApi = runtime_->lua.create_table();
-    bitsApi.set_function("count", [](std::uint32_t value) {
-        return std::popcount(value);
-    });
-    proto["bits"] = bitsApi;
-    proto.set_function("crc16_modbus", [](const sol::object& payload) -> std::uint16_t {
-        std::string error;
-        const auto bytes = bytesFromLuaObject(payload, error);
-        return bytes.has_value() ? protocol_utils::crc16Modbus(*bytes) : 0U;
-    });
-    proto.set_function("crc16_ccitt_false", [](const sol::object& payload) -> std::uint16_t {
-        std::string error;
-        const auto bytes = bytesFromLuaObject(payload, error);
-        return bytes.has_value() ? protocol_utils::crc16CcittFalse(*bytes) : 0U;
-    });
-    proto.set_function("crc32_ieee", [](const sol::object& payload) -> std::uint32_t {
-        std::string error;
-        const auto bytes = bytesFromLuaObject(payload, error);
-        return bytes.has_value() ? protocol_utils::crc32Ieee(*bytes) : 0U;
-    });
-}
-
 std::optional<std::uint64_t> ScriptHost::nextWakeupAtMs() const {
     std::optional<std::uint64_t> nextWakeup;
     for (const auto& [_, timer] : timers_) {
@@ -2308,6 +2143,27 @@ void ScriptHost::onFileDialogEvent(const transport::ConnectionContext& ctx, cons
 
 void ScriptHost::setRequestAwaitingCompletion(bool active) {
     requestAwaitingCompletion_ = active;
+}
+
+sol::state& ScriptHost::luaState() {
+    return runtime_->lua;
+}
+
+sol::state_view ScriptHost::luaView() {
+    return sol::state_view(runtime_->lua.lua_state());
+}
+
+const std::vector<ControlDescriptor>& ScriptHost::controlDescriptors() const {
+    return controls_;
+}
+
+const ControlValue* ScriptHost::findControlValue(const std::string& id) const {
+    const auto iter = controlValues_.find(id);
+    return iter == controlValues_.end() ? nullptr : &iter->second;
+}
+
+void ScriptHost::updateControlValue(const std::string& id, ControlValue value) {
+    controlValues_[id] = std::move(value);
 }
 
 void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
