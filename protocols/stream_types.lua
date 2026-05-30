@@ -8,28 +8,28 @@
 local M = {}
 
 ---@alias ProtoStreamValueType
----| '"u8"'
----| '"i8"'
----| '"u16_be"'
----| '"u16_le"'
----| '"i16_be"'
----| '"i16_le"'
----| '"u32_be"'
----| '"u32_le"'
----| '"i32_be"'
----| '"i32_le"'
----| '"f32_be"'
----| '"f32_le"'
----| '"bytes"'
+---| 'u8'
+---| 'i8'
+---| 'u16_be'
+---| 'u16_le'
+---| 'i16_be'
+---| 'i16_le'
+---| 'u32_be'
+---| 'u32_le'
+---| 'i32_be'
+---| 'i32_le'
+---| 'f32_be'
+---| 'f32_le'
+---| 'bytes'
 
----@alias ProtoStreamLengthMeans '"payload"'|'"frame"'
----@alias ProtoStreamCrcOrder '"hi_lo"'|'"lo_hi"'
----@alias ProtoStreamCrcType '"crc16_modbus"'|'"crc16_ccitt_false"'|'"crc32_ieee"'
+---@alias ProtoStreamLengthMeans 'payload'|'frame'
+---@alias ProtoStreamCrcOrder 'hi_lo'|'lo_hi'
+---@alias ProtoStreamCrcType 'crc16_modbus'|'crc16_ccitt_false'|'crc32_ieee'
 ---@alias ProtoStreamFieldCount integer|string|ProtoStreamCountFn
 
 ---@class ProtoStreamBufferDef
 ---@field capacity? integer 环形缓冲容量，默认 4096
----@field overflow? '"drop_oldest"' 超限策略，当前仅支持丢弃最旧字节
+---@field overflow? 'drop_oldest' 超限策略，当前仅支持丢弃最旧字节
 
 ---@class ProtoStreamLenDef
 ---@field offset integer 长度字段起始 offset，Lua 下标从 1 开始
