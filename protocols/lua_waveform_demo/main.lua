@@ -79,7 +79,8 @@ local function channel_enabled(channel_id)
 end
 
 local function setup_plot(reset_history)
-  local vertical_range = math.abs(read_number("amplitude", defaults.amplitude)) + math.abs(read_number("offset", defaults.offset)) + 0.5
+  local vertical_range = math.abs(read_number("amplitude", defaults.amplitude)) +
+  math.abs(read_number("offset", defaults.offset)) + 0.5
   proto.plot.setup({
     source = "lua_waveform_demo",
     reset_history = reset_history,
@@ -161,7 +162,7 @@ function ui()
   return {
     {
       id = "wave_run",
-      title = "Lua 波形演示 / 运行控制",
+      title = "Lua 波形演示",
       anchor = "left_bottom",
       tab_group = "wave_tools",
       controls = {
@@ -169,32 +170,6 @@ function ui()
         { type = "button", id = "pause", label = "暂停" },
         { type = "button", id = "resume", label = "恢复" },
         { type = "button", id = "clear_history", label = "清空历史" },
-      },
-      layout = {
-        kind = "table",
-        columns = 2,
-        borders = false,
-        resizable = true,
-        row_bg = false,
-        sizing = "stretch",
-        rows = {
-          {
-            { control = "start" },
-            { control = "pause" },
-          },
-          {
-            { control = "resume" },
-            { control = "clear_history" },
-          },
-        }
-      }
-    },
-    {
-      id = "wave_params",
-      title = "Lua 波形演示 / 参数",
-      anchor = "left_bottom",
-      tab_group = "wave_tools",
-      controls = {
         { type = "input_float", id = "frequency_hz", label = "频率(Hz)", default = defaults.frequency_hz },
         { type = "input_float", id = "amplitude", label = "幅值", default = defaults.amplitude },
         { type = "input_float", id = "offset", label = "偏置", default = defaults.offset },
@@ -202,61 +177,42 @@ function ui()
         { type = "input_float", id = "sample_rate_hz", label = "采样率(Hz)", default = defaults.sample_rate_hz },
         { type = "input_int", id = "points_per_tick", label = "每次点数", default = defaults.points_per_tick },
         { type = "input_int", id = "timer_ms", label = "刷新间隔(ms)", default = defaults.timer_ms },
-      },
-      layout = {
-        kind = "table",
-        columns = 2,
-        borders = false,
-        resizable = true,
-        row_bg = false,
-        sizing = "stretch",
-        rows = {
-          {
-            { control = "frequency_hz" },
-            { control = "amplitude" },
-          },
-          {
-            { control = "offset" },
-            { control = "phase_deg" },
-          },
-          {
-            { control = "sample_rate_hz" },
-            { control = "points_per_tick" },
-          },
-          {
-            { control = "timer_ms" },
-            { spacer = true },
-          },
-        }
-      }
-    },
-    {
-      id = "wave_channels",
-      title = "Lua 波形演示 / 通道",
-      anchor = "left_bottom",
-      tab_group = "wave_tools",
-      controls = {
         { type = "checkbox", id = "show_sine", label = "显示正弦", default = defaults.show_sine },
         { type = "checkbox", id = "show_triangle", label = "显示三角", default = defaults.show_triangle },
         { type = "checkbox", id = "show_square", label = "显示方波", default = defaults.show_square },
         { type = "checkbox", id = "show_saw", label = "显示锯齿", default = defaults.show_saw },
       },
       layout = {
-        kind = "table",
-        columns = 2,
-        borders = false,
-        resizable = true,
-        row_bg = false,
-        sizing = "stretch",
-        rows = {
+        kind = "form",
+        items = {
+          { collapse = "运行控制", default_open = true, items = { { controls = { "start", "pause", "resume", "clear_history" } } } },
           {
-            { control = "show_sine" },
-            { control = "show_triangle" },
+            collapse = "运行选项",
+            default_open = true,
+            items = {
+              { control = "frequency_hz" },
+              { control = "amplitude" },
+              { control = "offset" },
+              { control = "phase_deg" },
+              { control = "sample_rate_hz" },
+              { control = "points_per_tick" },
+              { control = "timer_ms" },
+            }
           },
           {
-            { control = "show_square" },
-            { control = "show_saw" },
-          },
+            collapse = "波形显示",
+            default_open = true,
+            items = {
+              {
+                controls = {
+                  "show_sine",
+                  "show_triangle",
+                  "show_square",
+                  "show_saw",
+                }
+              }
+            }
+          }
         }
       }
     }
