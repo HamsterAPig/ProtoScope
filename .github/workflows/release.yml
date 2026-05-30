@@ -1,0 +1,116 @@
+name: Release CI
+
+"on":
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-ci-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release-windows:
+    name: Windows x64 Release
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      EXE_PATH: build/src/ProtoScope.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Release tag must match vX.Y.Z, got '$env:RELEASE_TAG'."
+          }
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B build -G "Ninja"
+          -DCMAKE_BUILD_TYPE=Release
+          -DPROTOSCOPE_ENABLE_GUI=ON
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config Release
+
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build --output-on-failure --build-config Release
+
+      - name: Prepare assets
+        shell: pwsh
+        run: |
+          $assetDir = "release-assets"
+          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+
+          if (-not (Test-Path $env:EXE_PATH)) {
+            throw "Expected executable was not found: $env:EXE_PATH"
+          }
+
+          $exeAsset = Join-Path $assetDir "ProtoScope-windows-x64.exe"
+          $zipAsset = Join-Path $assetDir "ProtoScope-windows-x64.zip"
+          Copy-Item -Path $env:EXE_PATH -Destination $exeAsset -Force
+          Compress-Archive -Path $exeAsset -DestinationPath $zipAsset -Force
+
+          Get-FileHash -Algorithm SHA256 $exeAsset |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content -Path (Join-Path $assetDir "ProtoScope-windows-x64.exe.sha256") -Encoding ASCII
+
+          Get-FileHash -Algorithm SHA256 $zipAsset |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content -Path (Join-Path $assetDir "ProtoScope-windows-x64.zip.sha256") -Encoding ASCII
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: protoscope-windows-x64-${{ env.RELEASE_TAG }}
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: Create draft GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          ProtoScope $env:RELEASE_TAG
+
+          Assets:
+          - ProtoScope-windows-x64.exe
+          - ProtoScope-windows-x64.zip
+          - SHA256 checksums
+          "@
+
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG release-assets/* `
+              --repo $env:GITHUB_REPOSITORY `
+              --clobber
+          } else {
+            gh release create $env:RELEASE_TAG release-assets/* `
+              --repo $env:GITHUB_REPOSITORY `
+              --title "ProtoScope $env:RELEASE_TAG" `
+              --notes $notes `
+              --draft
+          }
