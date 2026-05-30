@@ -1,0 +1,65 @@
+name: "Bug 报告"
+description: "提交一个可复现的问题反馈"
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请尽量提供可复现信息，便于快速定位问题。
+  - type: textarea
+    id: symptom
+    attributes:
+      label: "问题现象"
+      description: "请描述你看到了什么异常现象。"
+      placeholder: "例如：点击某个按钮后界面无响应，或波形显示异常。"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: "复现步骤"
+      description: "请按顺序写出最小复现路径。"
+      placeholder: |
+        1. 打开应用
+        2. 进入某个页面
+        3. 执行某个操作
+        4. 观察到异常
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "期望行为"
+      description: "你希望程序正常情况下应该怎么表现。"
+      placeholder: "例如：按钮点击后应立即响应并显示结果。"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: "日志 / 截图"
+      description: "请粘贴相关日志、错误信息，或附上截图链接。"
+      placeholder: "日志、报错栈、截图说明等。"
+    validations:
+      required: false
+  - type: dropdown
+    id: environment
+    attributes:
+      label: "系统环境"
+      description: "请选择出现问题时的主要运行环境。"
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: config_impact
+    attributes:
+      label: "协议脚本 / 配置影响"
+      description: "请说明是否与 Lua 脚本、协议配置、串口参数或界面布局有关。"
+      placeholder: "例如：更换协议脚本后出现问题，或特定配置下才复现。"
+    validations:
+      required: false

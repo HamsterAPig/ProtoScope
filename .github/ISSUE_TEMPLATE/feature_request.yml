@@ -1,0 +1,52 @@
+name: "功能需求"
+description: "提出一个新功能或改进建议"
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请说明真实使用场景和希望解决的问题，避免只写抽象想法。
+  - type: textarea
+    id: use_case
+    attributes:
+      label: "使用场景"
+      description: "这个需求在什么场景下会用到？"
+      placeholder: "例如：在调试某类串口协议时，需要更直观的波形标记。"
+    validations:
+      required: true
+  - type: textarea
+    id: desired
+    attributes:
+      label: "期望能力"
+      description: "希望新增或改进成什么样。"
+      placeholder: "例如：支持导入指定格式脚本，并在界面上可配置。"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "替代方案"
+      description: "如果没有这个功能，现在是怎么绕过去的？"
+      placeholder: "例如：通过手工改脚本、导出文件再处理等。"
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: "范围边界"
+      description: "请说明这个需求希望覆盖到哪里，不希望扩展到哪里。"
+      placeholder: "例如：只影响当前协议解析，不涉及全局架构调整。"
+    validations:
+      required: false
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: "可能影响范围"
+      description: "请选择可能涉及的模块。"
+      options:
+        - label: "Lua / 脚本层"
+        - label: "协议解析"
+        - label: "UI / Dock"
+        - label: "构建 / 工程"
+        - label: "都不确定"
