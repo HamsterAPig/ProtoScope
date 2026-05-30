@@ -408,57 +408,19 @@ std::string buildRowListText(const std::vector<dock::ReceiveRow>& rows, bool sho
     return text;
 }
 
-std::string formatShortTimestampText(std::uint64_t timestampMs) {
-    const auto timePoint = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestampMs));
-    const auto secondsPoint = std::chrono::time_point_cast<std::chrono::seconds>(timePoint);
-    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint - secondsPoint).count();
-    const std::time_t timeValue = std::chrono::system_clock::to_time_t(timePoint);
-
-    std::tm localTm{};
-#if defined(_WIN32)
-    localtime_s(&localTm, &timeValue);
-#else
-    localtime_r(&timeValue, &localTm);
-#endif
-
-    char buffer[32]{};
-    std::snprintf(buffer,
-                  sizeof(buffer),
-                  "%02d:%02d:%02d.%03d",
-                  localTm.tm_hour,
-                  localTm.tm_min,
-                  localTm.tm_sec,
-                  static_cast<int>(millis));
-    return buffer;
-}
-
-std::string bytesToAsciiPreview(const std::vector<std::uint8_t>& bytes) {
+std::string buildTransferRowListText(const std::vector<const dock::ReceiveRow*>& rows, bool showTimestamps, bool showHex) {
     std::string text;
-    text.reserve(bytes.size());
-    for (const auto byte : bytes) {
-        const char ch = static_cast<char>(byte);
-        text.push_back(std::isprint(static_cast<unsigned char>(ch)) ? ch : '.');
+    text.reserve(rows.size() * 64);
+    for (const auto* row : rows) {
+        if (row == nullptr) {
+            continue;
+        }
+        if (!text.empty()) {
+            text.push_back('\n');
+        }
+        text.append(dock::formatReceiveRowSingleLine(*row, showTimestamps, showHex));
     }
     return text;
-}
-
-std::string flattenTransferText(std::string_view text) {
-    std::string flattened;
-    flattened.reserve(text.size());
-    for (const char ch : text) {
-        flattened.push_back(ch == '\r' || ch == '\n' || ch == '\t' ? ' ' : ch);
-    }
-    return flattened;
-}
-
-std::string transferRowContent(const dock::ReceiveRow& row, bool showHex) {
-    if (!row.message.empty()) {
-        return flattenTransferText(row.message);
-    }
-    if (row.bytes.empty()) {
-        return {};
-    }
-    return showHex ? protocol_utils::bytesToHex(row.bytes, true) : bytesToAsciiPreview(row.bytes);
 }
 
 bool matchesTransferFilter(const dock::ReceiveRow& row, dock::TransferLogFilter filter) {
@@ -482,6 +444,47 @@ std::vector<const dock::ReceiveRow*> filteredTransferRows(const std::vector<dock
         }
     }
     return filtered;
+}
+
+std::size_t configuredSendHistoryLimit(const config::AppConfig& config) {
+    constexpr std::size_t kMaxSendHistoryLimit = 200;
+    return (std::min)(config.gui.sendHistoryLimit, kMaxSendHistoryLimit);
+}
+
+void restoreSendHistoryFromNode(const YAML::Node& sendNode, dock::SendDockState& sendState, std::size_t limit) {
+    sendState.history.clear();
+    if (limit == 0U || !sendNode || !sendNode["history"] || !sendNode["history"].IsSequence()) {
+        return;
+    }
+
+    for (const auto& item : sendNode["history"]) {
+        const auto payload = item.as<std::string>("");
+        if (payload.empty()) {
+            continue;
+        }
+        if (std::find(sendState.history.begin(), sendState.history.end(), payload) != sendState.history.end()) {
+            continue;
+        }
+        sendState.history.push_back(payload);
+        if (sendState.history.size() >= limit) {
+            break;
+        }
+    }
+}
+
+void writeSendHistoryNode(YAML::Node& protocolNode, const dock::SendDockState& sendState, std::size_t limit) {
+    YAML::Node historyNode(YAML::NodeType::Sequence);
+    std::size_t written = 0;
+    for (const auto& payload : sendState.history) {
+        if (written >= limit) {
+            break;
+        }
+        if (!payload.empty()) {
+            historyNode.push_back(payload);
+            ++written;
+        }
+    }
+    protocolNode["send"]["history"] = historyNode;
 }
 
 void drawIconTooltip(const char* text) {
@@ -547,47 +550,33 @@ void drawTransferLogRows(const char* childId,
                          const std::string& emptyText) {
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const ImVec2 childSize(available.x, (std::max)(available.y, ImGui::GetTextLineHeightWithSpacing() * 4.0F));
-    if (ImGui::BeginChild(childId, childSize, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
-        ImGuiWindow* childWindow = ImGui::GetCurrentWindow();
-        const bool stickToBottom = childWindow->Scroll.y >= childWindow->ScrollMax.y - 4.0F;
-        if (rows.empty()) {
+    if (rows.empty()) {
+        if (ImGui::BeginChild(childId, childSize, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
             ImGui::TextDisabled("%s", emptyText.c_str());
-        } else if (ImGui::BeginTable("##transfer_log_table", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable)) {
-            ImGui::TableSetupColumn("方向", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize(" TX ").x + 18.0F);
-            ImGui::TableSetupColumn("时间", ImGuiTableColumnFlags_WidthFixed, showTimestamps ? 92.0F : 1.0F);
-            ImGui::TableSetupColumn("端点", ImGuiTableColumnFlags_WidthFixed, 130.0F);
-            ImGui::TableSetupColumn("内容", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableHeadersRow();
-
-            for (const auto* row : rows) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                const bool isTx = row->direction == "TX";
-                const ImVec4 color = isTx ? ImVec4(0.95F, 0.68F, 0.22F, 1.0F) : ImVec4(0.38F, 0.82F, 0.52F, 1.0F);
-                ImGui::TextColored(color, "%s", row->direction.empty() ? "-" : row->direction.c_str());
-
-                ImGui::TableSetColumnIndex(1);
-                if (showTimestamps) {
-                    const auto timestamp = formatShortTimestampText(row->timestampMs);
-                    ImGui::TextUnformatted(timestamp.c_str());
-                }
-
-                ImGui::TableSetColumnIndex(2);
-                ImGui::TextUnformatted(row->endpoint.c_str());
-
-                ImGui::TableSetColumnIndex(3);
-                const auto content = transferRowContent(*row, showHex);
-                ImGui::TextUnformatted(content.c_str());
-            }
-            ImGui::EndTable();
         }
+        ImGui::EndChild();
+        return;
+    }
 
-        // 核心流程：记录区只在用户停留底部时自动跟随，避免查看历史 TX/RX 时被滚动打断。
-        if (!pauseScroll && stickToBottom) {
+    const ImGuiWindow* existingWindow = findMultilineChildWindow(childId);
+    const bool stickToBottom = existingWindow == nullptr || existingWindow->Scroll.y >= existingWindow->ScrollMax.y - 4.0F;
+
+    auto text = buildTransferRowListText(rows, showTimestamps, showHex);
+    std::vector<char> buffer(text.begin(), text.end());
+    buffer.push_back('\0');
+
+    // 核心流程：收发记录用只读多行文本框展示，方便拖动水平滚动条、选中文本并复制。
+    ImGui::InputTextMultiline(childId,
+                              buffer.data(),
+                              buffer.size(),
+                              childSize,
+                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoUndoRedo);
+
+    if (!pauseScroll && stickToBottom) {
+        if (ImGuiWindow* childWindow = findMultilineChildWindow(childId)) {
             ImGui::SetScrollY(childWindow, childWindow->ScrollMax.y);
         }
     }
-    ImGui::EndChild();
 }
 
 void drawRowList(const char* childId,
@@ -2225,6 +2214,9 @@ void GuiRuntime::loadCurrentProtocolControlState() {
     try {
         const auto root = YAML::LoadFile(statePath.string());
         restoreWaveProtocolState(root, activeWorkspaceProtocolKey_, application_.docks().waveState());
+        auto& sendState = application_.docks().sendState();
+        const auto historyLimit = configuredSendHistoryLimit(application_.captureConfig());
+        restoreSendHistoryFromNode(root["protocols"][activeWorkspaceProtocolKey_]["send"], sendState, historyLimit);
         const auto protocolState = root["protocols"][activeWorkspaceProtocolKey_]["controls"];
         if (!protocolState) {
             return;
@@ -2274,6 +2266,10 @@ void GuiRuntime::saveCurrentProtocolControlState() {
 
         root["protocols"][activeWorkspaceProtocolKey_]["controls"] = controlsNode;
         storeWaveProtocolState(root, activeWorkspaceProtocolKey_, application_.docks().waveState());
+        auto protocolNode = root["protocols"][activeWorkspaceProtocolKey_];
+        writeSendHistoryNode(protocolNode,
+                             application_.docks().sendState(),
+                             configuredSendHistoryLimit(application_.captureConfig()));
         std::filesystem::create_directories(statePath.parent_path());
         std::ofstream out(statePath);
         if (!out.good()) {
@@ -2299,80 +2295,298 @@ std::filesystem::path GuiRuntime::protocolControlStatePath() const {
     return std::filesystem::path("config") / "ui" / "protocol-control-state.yaml";
 }
 
-void GuiRuntime::drawTransferDock() {
-    if (!showTransferDock_) {
+void GuiRuntime::drawTransferDock()
+{
+    if (!showTransferDock_)
+    {
         return;
     }
 
     auto& sendState = application_.docks().sendState();
-    auto& comm = application_.docks().commState();
+    const auto& comm = application_.docks().commState();
     auto& receive = application_.docks().receiveState();
-    if (!ImGui::Begin("收发数据", &showTransferDock_)) {
+
+    if (!ImGui::Begin("收发数据", &showTransferDock_))
+    {
         ImGui::End();
         return;
     }
 
+    const ImGuiStyle& style = ImGui::GetStyle();
+
     const float availableHeight = ImGui::GetContentRegionAvail().y;
-    const float splitterThickness = ImGui::GetStyle().FramePadding.y * 2.0F;
-    const float minSendHeight = ImGui::GetFrameHeightWithSpacing() * 4.0F;
-    const float minLogHeight = ImGui::GetTextLineHeightWithSpacing() * 6.0F;
+    const float splitterThickness = style.FramePadding.y * 2.0F;
+
+    const float minSendHeight =
+        ImGui::GetFrameHeight() + style.WindowPadding.y * 2.0F;
+
+    const float minLogHeight =
+        ImGui::GetTextLineHeightWithSpacing() * 6.0F;
+
+    if (transferSendSectionHeight_ <= 0.0F) {
+        transferSendSectionHeight_ = minSendHeight;
+    }
+
     transferSendSectionHeight_ = (std::clamp)(
-        transferSendSectionHeight_, minSendHeight, (std::max)(minSendHeight, availableHeight - minLogHeight - splitterThickness));
+        transferSendSectionHeight_,
+        minSendHeight,
+        (std::max)(minSendHeight,
+                   availableHeight - minLogHeight - splitterThickness));
 
-    if (ImGui::BeginChild("##transfer_send_section", ImVec2(0.0F, transferSendSectionHeight_), true)) {
-        ImGui::TextUnformatted(PROTOSCOPE_ICON_SEND " 发送区");
-        bool hexMode = sendState.hexMode;
-        if (drawIconCheckbox(PROTOSCOPE_ICON_HEX, &hexMode, "HEX 发送")) {
-            if (!application_.setSendHexMode(hexMode)) {
-                hexMode = sendState.hexMode;
+    float logHeight =
+        (std::max)(minLogHeight,
+                   availableHeight - transferSendSectionHeight_ - splitterThickness);
+
+    // =========================
+    // 上方：收发记录区
+    // =========================
+    if (ImGui::BeginChild(
+            "##transfer_log_section",
+            ImVec2(0.0F, logHeight),
+            true)) {
+        if (ImGui::BeginTable(
+                "##transfer_log_toolbar",
+                8,
+                ImGuiTableFlags_SizingFixedFit |
+                ImGuiTableFlags_NoSavedSettings)) {
+            ImGui::TableSetupColumn(
+                "title",
+                ImGuiTableColumnFlags_WidthStretch);
+
+            ImGui::TableSetupColumn("all", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("rx", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("tx", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("hex", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("time", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("pause", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("clear", ImGuiTableColumnFlags_WidthFixed);
+
+            ImGui::TableNextRow();
+
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(PROTOSCOPE_ICON_EXCHANGE " 收发记录");
+
+            ImGui::TableSetColumnIndex(1);
+            drawTransferLogFilterButton(
+                "全部",
+                dock::TransferLogFilter::All,
+                receive.filter);
+
+            ImGui::TableSetColumnIndex(2);
+            drawTransferLogFilterButton(
+                "RX",
+                dock::TransferLogFilter::Rx,
+                receive.filter);
+
+            ImGui::TableSetColumnIndex(3);
+            drawTransferLogFilterButton(
+                "TX",
+                dock::TransferLogFilter::Tx,
+                receive.filter);
+
+            ImGui::TableSetColumnIndex(4);
+            drawIconCheckbox(
+                PROTOSCOPE_ICON_HEX,
+                &receive.showHex,
+                "显示 HEX");
+
+            ImGui::TableSetColumnIndex(5);
+            drawIconCheckbox(
+                PROTOSCOPE_ICON_CLOCK,
+                &receive.showTimestamps,
+                "显示时间戳");
+
+            ImGui::TableSetColumnIndex(6);
+            drawIconCheckbox(
+                receive.pauseScroll ? PROTOSCOPE_ICON_PLAY : PROTOSCOPE_ICON_PAUSE,
+                &receive.pauseScroll,
+                "暂停滚动");
+
+            ImGui::TableSetColumnIndex(7);
+            if (drawIconButton(PROTOSCOPE_ICON_TRASH, "清空收发记录")) {
+                application_.docks().clearReceiveRows();
             }
+
+            ImGui::EndTable();
         }
 
-        char buffer[2048]{};
-        std::snprintf(buffer, sizeof(buffer), "%s", sendState.payload.c_str());
-        const auto flags = sendState.hexMode ? (ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackCharFilter) : ImGuiInputTextFlags_None;
-        if (ImGui::InputTextMultiline("原始载荷",
-                                      buffer,
-                                      sizeof(buffer),
-                                      ImVec2(-FLT_MIN, -ImGui::GetFrameHeightWithSpacing() * 1.4F),
-                                      flags,
-                                      sendState.hexMode ? hexEditorCallback : nullptr)) {
-            sendState.payload = buffer;
-        }
-        if (drawIconButton(PROTOSCOPE_ICON_SEND, "发送原始载荷")) {
-            if (!application_.sendManualPayload(sendState.payload, sendState.hexMode)) {
-                application_.setStatusMessage(comm.lastError, true);
-            }
-        }
-        ImGui::SameLine();
-        ImGui::TextDisabled("发送原始载荷");
+        const auto filteredRows =
+            filteredTransferRows(receive.rows, receive.filter);
+
+        drawTransferLogRows(
+            "transfer_rows",
+            filteredRows,
+            receive.showTimestamps,
+            receive.showHex,
+            receive.pauseScroll,
+            "暂无 TX/RX 原始数据");
     }
     ImGui::EndChild();
 
-    // 核心流程：发送区与记录区之间用 splitter 调节高度，避免两块内容互相挤占。
-    drawHorizontalSplitter("##transfer_splitter", transferSendSectionHeight_, minSendHeight, minLogHeight, availableHeight, splitterThickness);
+    // =========================
+    // splitter
+    // drawHorizontalSplitter 按 top height 工作
+    // 所以这里传 logHeight
+    // =========================
+    drawHorizontalSplitter(
+        "##transfer_splitter",
+        logHeight,
+        minLogHeight,
+        minSendHeight,
+        availableHeight,
+        splitterThickness);
 
-    if (ImGui::BeginChild("##transfer_log_section", ImVec2(0.0F, 0.0F), true)) {
-        ImGui::TextUnformatted(PROTOSCOPE_ICON_EXCHANGE " 收发记录");
-        ImGui::SameLine();
-        drawTransferLogFilterButton("全部", dock::TransferLogFilter::All, receive.filter);
-        ImGui::SameLine();
-        drawTransferLogFilterButton("RX", dock::TransferLogFilter::Rx, receive.filter);
-        ImGui::SameLine();
-        drawTransferLogFilterButton("TX", dock::TransferLogFilter::Tx, receive.filter);
-        ImGui::SameLine();
-        drawIconCheckbox(PROTOSCOPE_ICON_HEX, &receive.showHex, "显示 HEX");
-        ImGui::SameLine();
-        drawIconCheckbox(PROTOSCOPE_ICON_CLOCK, &receive.showTimestamps, "显示时间戳");
-        ImGui::SameLine();
-        drawIconCheckbox(receive.pauseScroll ? PROTOSCOPE_ICON_PLAY : PROTOSCOPE_ICON_PAUSE, &receive.pauseScroll, "暂停滚动");
-        ImGui::SameLine();
-        if (drawIconButton(PROTOSCOPE_ICON_TRASH, "清空收发记录")) {
-            application_.docks().clearReceiveRows();
+    transferSendSectionHeight_ =
+        (std::max)(minSendHeight,
+                   availableHeight - logHeight - splitterThickness);
+
+    // =========================
+    // 下方：发送区
+    // HEX | Payload | SEND
+    // =========================
+    if (ImGui::BeginChild(
+            "##transfer_send_section",
+            ImVec2(0.0F, transferSendSectionHeight_),
+            true)) {
+        char buffer[2048]{};
+        std::snprintf(
+            buffer,
+            sizeof(buffer),
+            "%s",
+            sendState.payload.c_str());
+
+        const auto flags =
+            sendState.hexMode
+                ? (ImGuiInputTextFlags_CallbackEdit |
+                   ImGuiInputTextFlags_CallbackCharFilter)
+                : ImGuiInputTextFlags_None;
+
+        const float payloadHeight =
+            (std::max)(ImGui::GetFrameHeight(),
+                       ImGui::GetContentRegionAvail().y);
+        const float frameHeight = ImGui::GetFrameHeight();
+        const float hexWidth = (std::max)(ImGui::CalcTextSize("HEX").x + style.FramePadding.x * 2.0F, frameHeight * 2.4F);
+        const float sendWidth = (std::max)(ImGui::CalcTextSize("发送").x + style.FramePadding.x * 2.0F, frameHeight * 2.8F);
+        const float minHistoryWidth = frameHeight * 4.0F;
+        sendState.historyComboWidth = (std::clamp)(sendState.historyComboWidth, minHistoryWidth, (std::max)(minHistoryWidth, ImGui::GetContentRegionAvail().x * 0.45F));
+        const auto historyLimit = configuredSendHistoryLimit(application_.captureConfig());
+        dock::trimSendHistory(sendState, historyLimit);
+
+        if (ImGui::BeginTable(
+                "##transfer_send_table",
+                4,
+                ImGuiTableFlags_SizingStretchProp |
+                ImGuiTableFlags_Resizable |
+                ImGuiTableFlags_NoSavedSettings)) {
+            ImGui::TableSetupColumn(
+                "hex",
+                ImGuiTableColumnFlags_WidthFixed,
+                hexWidth);
+
+            ImGui::TableSetupColumn(
+                "payload",
+                ImGuiTableColumnFlags_WidthStretch);
+
+            ImGui::TableSetupColumn(
+                "history",
+                ImGuiTableColumnFlags_WidthFixed,
+                sendState.historyComboWidth);
+
+            ImGui::TableSetupColumn(
+                "send",
+                ImGuiTableColumnFlags_WidthFixed,
+                sendWidth);
+
+            ImGui::TableNextRow();
+
+            ImGui::TableSetColumnIndex(0);
+            {
+                const float oldY = ImGui::GetCursorPosY();
+                ImGui::SetCursorPosY(
+                    oldY + (payloadHeight - frameHeight) * 0.5F);
+
+                if (sendState.hexMode) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                }
+                if (ImGui::Button("HEX", ImVec2(-FLT_MIN, 0.0F))) {
+                    if (!application_.setSendHexMode(!sendState.hexMode)) {
+                        application_.setStatusMessage("HEX 模式切换失败", true);
+                    }
+                }
+                if (sendState.hexMode) {
+                    ImGui::PopStyleColor(2);
+                }
+                drawIconTooltip(sendState.hexMode ? "HEX 发送已开启" : "HEX 发送已关闭");
+
+                ImGui::SetCursorPosY(oldY);
+            }
+
+            ImGui::TableSetColumnIndex(1);
+            {
+                ImGui::SetNextItemWidth(-FLT_MIN);
+
+                if (ImGui::InputTextMultiline(
+                        "##raw_payload",
+                        buffer,
+                        sizeof(buffer),
+                        ImVec2(-FLT_MIN, payloadHeight),
+                        flags,
+                        sendState.hexMode ? hexEditorCallback : nullptr)) {
+                    sendState.payload = buffer;
+                }
+            }
+
+            ImGui::TableSetColumnIndex(2);
+            {
+                const float oldY = ImGui::GetCursorPosY();
+                ImGui::SetCursorPosY(
+                    oldY + (payloadHeight - frameHeight) * 0.5F);
+
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                const std::string preview = sendState.history.empty() ? "无历史记录" : "发送历史";
+                if (ImGui::BeginCombo("##send_history", preview.c_str())) {
+                    if (sendState.history.empty()) {
+                        ImGui::TextDisabled("暂无发送历史");
+                    } else {
+                        for (const auto& item : sendState.history) {
+                            if (ImGui::Selectable(item.c_str())) {
+                                sendState.payload = item;
+                            }
+                        }
+                        ImGui::Separator();
+                        if (ImGui::Selectable("清空历史")) {
+                            sendState.history.clear();
+                            saveCurrentProtocolControlState();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                ImGui::SetCursorPosY(oldY);
+            }
+
+            ImGui::TableSetColumnIndex(3);
+            {
+                const float oldY = ImGui::GetCursorPosY();
+                ImGui::SetCursorPosY(
+                    oldY + (payloadHeight - frameHeight) * 0.5F);
+
+                if (ImGui::Button("发送", ImVec2(-FLT_MIN, 0.0F))) {
+                    if (application_.sendManualPayload(sendState.payload, sendState.hexMode)) {
+                        dock::rememberSendHistory(sendState, sendState.payload, historyLimit);
+                        saveCurrentProtocolControlState();
+                    } else {
+                        application_.setStatusMessage(comm.lastError, true);
+                    }
+                }
+                drawIconTooltip("发送原始载荷");
+
+                ImGui::SetCursorPosY(oldY);
+            }
+
+            ImGui::EndTable();
         }
-
-        const auto filteredRows = filteredTransferRows(receive.rows, receive.filter);
-        drawTransferLogRows("transfer_rows", filteredRows, receive.showTimestamps, receive.showHex, receive.pauseScroll, "暂无 TX/RX 原始数据");
     }
     ImGui::EndChild();
 

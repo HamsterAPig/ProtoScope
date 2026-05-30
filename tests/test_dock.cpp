@@ -95,6 +95,24 @@ void test_dock_receive_row_single_line_message_and_timestamp() {
     require(headerOnly == "WARN", "空内容行不应追加多余分隔符");
 }
 
+void test_dock_send_history_deduplicates_and_trims() {
+    protoscope::dock::SendDockState send;
+
+    protoscope::dock::rememberSendHistory(send, "AA 01", 3);
+    protoscope::dock::rememberSendHistory(send, "BB 02", 3);
+    protoscope::dock::rememberSendHistory(send, "CC 03", 3);
+    protoscope::dock::rememberSendHistory(send, "AA 01", 3);
+    protoscope::dock::rememberSendHistory(send, "DD 04", 3);
+
+    require(send.history.size() == 3, "发送历史应按配置条数裁剪");
+    require(send.history[0] == "DD 04", "最新发送内容应置顶");
+    require(send.history[1] == "AA 01", "重复发送内容应去重后置顶");
+    require(send.history[2] == "CC 03", "裁剪时应移除最旧历史");
+
+    protoscope::dock::rememberSendHistory(send, "EE 05", 0);
+    require(send.history.empty(), "发送历史条数为 0 时应禁用并清空历史");
+}
+
 void test_wave_protocol_state_isolated_by_protocol_key() {
     YAML::Node root;
 

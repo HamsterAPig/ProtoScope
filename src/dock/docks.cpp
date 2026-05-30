@@ -2,6 +2,7 @@
 
 #include "protoscope/protocol_utils/codec.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cctype>
 #include <cstdio>
@@ -109,6 +110,30 @@ std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamp
         line.append(content);
     }
     return line;
+}
+
+void trimSendHistory(SendDockState& sendState, std::size_t limit) {
+    if (limit == 0U) {
+        sendState.history.clear();
+        return;
+    }
+    while (sendState.history.size() > limit) {
+        sendState.history.pop_back();
+    }
+}
+
+void rememberSendHistory(SendDockState& sendState, std::string payload, std::size_t limit) {
+    if (limit == 0U || payload.empty()) {
+        trimSendHistory(sendState, limit);
+        return;
+    }
+
+    const auto duplicate = std::find(sendState.history.begin(), sendState.history.end(), payload);
+    if (duplicate != sendState.history.end()) {
+        sendState.history.erase(duplicate);
+    }
+    sendState.history.push_front(std::move(payload));
+    trimSendHistory(sendState, limit);
 }
 
 void DockStore::clearReceiveRows() {

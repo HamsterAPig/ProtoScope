@@ -66,6 +66,7 @@ struct GuiConfig {
     GuiWindowConfig window{};
     GuiWaveConfig wave{};
     bool luaDockLayoutDebug{false};
+    std::size_t sendHistoryLimit{20};
 };
 
 struct ProtocolTxConfig {

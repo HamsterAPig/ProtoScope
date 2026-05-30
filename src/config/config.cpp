@@ -221,6 +221,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.gui.wave.showAxisLabels =
                 readScalar<bool>(wave, "show_axis_labels", result.config.gui.wave.showAxisLabels);
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
+            result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
         }
 
         const auto protocol = root["protocol"];
@@ -357,6 +358,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
     root["gui"]["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
     root["gui"]["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
+    root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
     root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;

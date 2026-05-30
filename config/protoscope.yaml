@@ -27,6 +27,7 @@ gui:
     overview_max_samples: 20000
     min_visible_time_span: 0.001
     show_axis_labels: false
+  send_history_limit: 20
   lua_dock_layout_debug: false
 
 protocol:

@@ -803,6 +803,7 @@ void test_config_default_roundtrip() {
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.2");
+    require(config.gui.sendHistoryLimit == 20, "发送历史条数默认值应为 20");
     config.communication.kind = protoscope::transport::TransportKind::Serial;
     config.communication.serial.portName = "COM9";
     config.communication.serial.dataBits = 7;
@@ -824,6 +825,7 @@ void test_config_default_roundtrip() {
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
+    config.gui.sendHistoryLimit = 7;
     config.scripting.fileIo.enabled = true;
     config.scripting.fileIo.maxOpenFiles = 3;
     config.scripting.fileIo.defaultChunkBytes = 32;
@@ -858,6 +860,7 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.minVisibleTimeSpan - 0.0025) < 1e-12, "波形最小可视跨度 roundtrip 失败");
+    require(reloaded.config.gui.sendHistoryLimit == 7, "发送历史条数 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.enabled, "Lua 文件 IO 开关 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.maxOpenFiles == 3, "Lua 文件 IO 打开数上限 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.defaultChunkBytes == 32, "Lua 文件 IO 默认分块 roundtrip 失败");
@@ -1528,6 +1531,7 @@ static const TestCase kAllTests[] = {
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
     {"dock_receive_row_single_line_hex_and_ascii", &test_dock_receive_row_single_line_hex_and_ascii},
     {"dock_receive_row_single_line_message_and_timestamp", &test_dock_receive_row_single_line_message_and_timestamp},
+    {"dock_send_history_deduplicates_and_trims", &test_dock_send_history_deduplicates_and_trims},
     {"wave_protocol_state_isolated_by_protocol_key", &test_wave_protocol_state_isolated_by_protocol_key},
     {"lua_dock_layout_key_uses_protocol_and_script", &test_lua_dock_layout_key_uses_protocol_and_script},
     {"lua_dock_layout_key_falls_back_to_script_directory", &test_lua_dock_layout_key_falls_back_to_script_directory},

@@ -4,7 +4,9 @@
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -65,7 +67,12 @@ struct ScriptDockState {
 struct SendDockState {
     bool hexMode{true};
     std::string payload{"AA 01 00"};
+    std::deque<std::string> history;
+    float historyComboWidth{220.0F};
 };
+
+void trimSendHistory(SendDockState& sendState, std::size_t limit);
+void rememberSendHistory(SendDockState& sendState, std::string payload, std::size_t limit);
 
 struct LuaDockState {
     bool loaded{false};
