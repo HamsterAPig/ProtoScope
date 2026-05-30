@@ -46,6 +46,9 @@ struct WaveViewState {
     bool forceNextMainPlotLimits{false};
     bool activeChannelOffsetDrag{false};
     bool activeChannelScaleDrag{false};
+    bool zoomSelectionActive{false};
+    bool zoomSelectionDragging{false};
+    bool fitVisibleWaveformsRequested{false};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     std::size_t overviewMaxSamples{20000};
@@ -73,6 +76,10 @@ struct WaveViewState {
     double manualVerticalMax{1.0};
     double viewMinValue{-1.0};
     double viewMaxValue{1.0};
+    double zoomSelectionStartX{0.0};
+    double zoomSelectionStartY{0.0};
+    double zoomSelectionCurrentX{0.0};
+    double zoomSelectionCurrentY{0.0};
     std::string sampleFrequencyInput;
     std::string sampleFrequencyError;
     WaveTimeAxisSource timeAxisSource{WaveTimeAxisSource::SampleIndex};
@@ -119,5 +126,7 @@ struct WaveDockState {
     WaveDisplayData cachedDisplayData{};
     WaveDataBounds cachedDisplayBounds{};
 };
+
+bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex);
 
 } // namespace protoscope::plot

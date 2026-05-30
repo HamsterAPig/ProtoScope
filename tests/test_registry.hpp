@@ -111,6 +111,8 @@ void test_wave_cursor_interval_text_by_axis();
 void test_wave_cursor_interval_lock();
 void test_wave_channel_card_width_modes();
 void test_wave_vertical_auto_fit_multiplier();
+void test_wave_visible_channel_bounds_ignore_hidden_channels();
+void test_wave_offset_reset_uses_protocol_default_only();
 void test_raw_capture_file_roundtrip();
 void test_raw_capture_file_rejects_size_mismatch();
 void test_raw_capture_file_requires_protocol_fields();

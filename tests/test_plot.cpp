@@ -3,6 +3,7 @@
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plot/wave_math.hpp"
+#include "protoscope/plot/wave_state.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -771,6 +772,72 @@ void test_wave_vertical_auto_fit_multiplier() {
     const auto positiveRange = protoscope::plot::makeVerticalAutoFitRange(2.0, 3.0, 1.2);
     require(std::abs(positiveRange.minValue + 3.6) < 1e-12, "正向范围 Auto Fit 下限应围绕 0 对称");
     require(std::abs(positiveRange.maxValue - 3.6) < 1e-12, "正向范围 Auto Fit 上限应围绕 0 对称");
+}
+
+void test_wave_visible_channel_bounds_ignore_hidden_channels() {
+    protoscope::plot::WaveDisplayData data;
+    data.channels.push_back({
+        .samples = {{.time = 0.0, .value = -1.0}, {.time = 1.0, .value = 1.0}},
+        .actualValues = {},
+    });
+    data.channels.push_back({
+        .samples = {{.time = -100.0, .value = -50.0}, {.time = 100.0, .value = 50.0}},
+        .actualValues = {},
+    });
+    data.channels.push_back({
+        .samples = {{.time = 2.0, .value = -3.0}, {.time = 4.0, .value = 4.0}},
+        .actualValues = {},
+    });
+
+    const auto visibleOnly = protoscope::plot::computeDisplayBoundsForChannels(data, {0, 2}, 0.001);
+    require(visibleOnly.valid, "可见通道 bounds 应有效");
+    require(std::abs(visibleOnly.minTime - 0.0) < 1e-12, "隐藏通道不应拉低 X 下限");
+    require(std::abs(visibleOnly.maxTime - 4.0) < 1e-12, "可见通道应决定 X 上限");
+    require(std::abs(visibleOnly.minValue + 3.0) < 1e-12, "可见通道应决定 Y 下限");
+    require(std::abs(visibleOnly.maxValue - 4.0) < 1e-12, "隐藏通道不应拉高 Y 上限");
+
+    const auto empty = protoscope::plot::computeDisplayBoundsForChannels(data, {}, 0.001);
+    require(!empty.valid, "没有可见通道时 bounds 应保持无效");
+}
+
+void test_wave_offset_reset_uses_protocol_default_only() {
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.defaultChannelSpecs.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .ratio = 2.0,
+        .scale = 1.5,
+        .offset = -0.25,
+    });
+    wave.buffer.setChannelSpec(0, {
+        .label = "Renamed",
+        .unit = "V",
+        .ratio = 3.0,
+        .scale = 4.0,
+        .offset = 10.0,
+    });
+    wave.channelOverrides.resize(1);
+    wave.channelOverrides[0].labelOverridden = true;
+    wave.channelOverrides[0].ratioOverridden = true;
+    wave.channelOverrides[0].scaleOverridden = true;
+    wave.channelOverrides[0].offsetOverridden = true;
+    wave.channelOverrides[0].label = "Renamed";
+    wave.channelOverrides[0].ratio = 3.0;
+    wave.channelOverrides[0].scale = 4.0;
+    wave.channelOverrides[0].offset = 10.0;
+
+    require(protoscope::plot::resetChannelOffsetToDefault(wave, 0), "offset 复位应成功");
+    const auto spec = wave.buffer.channelSpec(0);
+    require(spec.has_value(), "复位后通道配置仍应存在");
+    require(std::abs(spec->offset + 0.25) < 1e-12, "offset 应恢复协议默认值");
+    require(std::abs(spec->scale - 4.0) < 1e-12, "offset 复位不应修改 scale");
+    require(std::abs(spec->ratio - 3.0) < 1e-12, "offset 复位不应修改 ratio");
+    require(spec->label == "Renamed", "offset 复位不应修改标签");
+    require(!wave.channelOverrides[0].offsetOverridden, "offset override 应被清除");
+    require(wave.channelOverrides[0].scaleOverridden, "scale override 应保留");
+    require(wave.channelOverrides[0].ratioOverridden, "ratio override 应保留");
+    require(wave.channelOverrides[0].labelOverridden, "label override 应保留");
 }
 
 void test_raw_capture_file_roundtrip() {

@@ -1600,6 +1600,8 @@ static const TestCase kAllTests[] = {
     {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
     {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},
     {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
+    {"wave_visible_channel_bounds_ignore_hidden_channels", &test_wave_visible_channel_bounds_ignore_hidden_channels},
+    {"wave_offset_reset_uses_protocol_default_only", &test_wave_offset_reset_uses_protocol_default_only},
     {"raw_capture_file_roundtrip", &test_raw_capture_file_roundtrip},
     {"raw_capture_file_rejects_size_mismatch", &test_raw_capture_file_rejects_size_mismatch},
     {"raw_capture_file_requires_protocol_fields", &test_raw_capture_file_requires_protocol_fields},

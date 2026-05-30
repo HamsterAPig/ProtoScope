@@ -1,10 +1,12 @@
 #include "protoscope/plot/wave_math.hpp"
+#include "protoscope/plot/wave_state.hpp"
 
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <utility>
 
 namespace protoscope::plot {
 
@@ -342,6 +344,41 @@ std::optional<CursorReadout> findNearestDisplayPointInChannels(const WaveDisplay
     return best;
 }
 
+void includeSampleInBounds(WaveDataBounds& bounds, const std::vector<WaveSample>& samples, std::size_t index) {
+    const auto& sample = samples[index];
+    if (!std::isfinite(sample.time) || !std::isfinite(sample.value)) {
+        return;
+    }
+    bounds.minTime = (std::min)(bounds.minTime, sample.time);
+    bounds.maxTime = (std::max)(bounds.maxTime, sample.time);
+    bounds.minValue = (std::min)(bounds.minValue, sample.value);
+    bounds.maxValue = (std::max)(bounds.maxValue, sample.value);
+    if (index > 0) {
+        const double step = sample.time - samples[index - 1].time;
+        if (step > kEpsilon) {
+            bounds.minStep = (std::min)(bounds.minStep, step);
+        }
+    }
+    bounds.valid = true;
+}
+
+void finalizeDisplayBounds(WaveDataBounds& bounds) {
+    if (!bounds.valid) {
+        bounds.minTime = 0.0;
+        bounds.maxTime = 1.0;
+        bounds.minValue = -1.0;
+        bounds.maxValue = 1.0;
+        return;
+    }
+    if (std::abs(bounds.maxTime - bounds.minTime) <= kEpsilon) {
+        bounds.maxTime = bounds.minTime + bounds.minStep;
+    }
+    if (std::abs(bounds.maxValue - bounds.minValue) <= kEpsilon) {
+        bounds.minValue -= 1.0;
+        bounds.maxValue += 1.0;
+    }
+}
+
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep) {
     WaveDataBounds bounds{};
     bounds.minTime = std::numeric_limits<double>::infinity();
@@ -352,38 +389,35 @@ WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallback
 
     for (const auto& channel : data.channels) {
         for (std::size_t index = 0; index < channel.samples.size(); ++index) {
-            const auto& sample = channel.samples[index];
-            if (!std::isfinite(sample.time) || !std::isfinite(sample.value)) {
-                continue;
-            }
-            bounds.minTime = (std::min)(bounds.minTime, sample.time);
-            bounds.maxTime = (std::max)(bounds.maxTime, sample.time);
-            bounds.minValue = (std::min)(bounds.minValue, sample.value);
-            bounds.maxValue = (std::max)(bounds.maxValue, sample.value);
-            if (index > 0) {
-                const double step = sample.time - channel.samples[index - 1].time;
-                if (step > kEpsilon) {
-                    bounds.minStep = (std::min)(bounds.minStep, step);
-                }
-            }
-            bounds.valid = true;
+            includeSampleInBounds(bounds, channel.samples, index);
         }
     }
 
-    if (!bounds.valid) {
-        bounds.minTime = 0.0;
-        bounds.maxTime = 1.0;
-        bounds.minValue = -1.0;
-        bounds.maxValue = 1.0;
-        return bounds;
+    finalizeDisplayBounds(bounds);
+    return bounds;
+}
+
+WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
+                                               const std::vector<std::size_t>& channelIndices,
+                                               double fallbackStep) {
+    WaveDataBounds bounds{};
+    bounds.minTime = std::numeric_limits<double>::infinity();
+    bounds.maxTime = -std::numeric_limits<double>::infinity();
+    bounds.minValue = std::numeric_limits<double>::infinity();
+    bounds.maxValue = -std::numeric_limits<double>::infinity();
+    bounds.minStep = (std::max)(fallbackStep, kEpsilon);
+
+    for (const std::size_t channelIndex : channelIndices) {
+        if (channelIndex >= data.channels.size()) {
+            continue;
+        }
+        const auto& channel = data.channels[channelIndex];
+        for (std::size_t sampleIndex = 0; sampleIndex < channel.samples.size(); ++sampleIndex) {
+            includeSampleInBounds(bounds, channel.samples, sampleIndex);
+        }
     }
-    if (std::abs(bounds.maxTime - bounds.minTime) <= kEpsilon) {
-        bounds.maxTime = bounds.minTime + bounds.minStep;
-    }
-    if (std::abs(bounds.maxValue - bounds.minValue) <= kEpsilon) {
-        bounds.minValue -= 1.0;
-        bounds.maxValue += 1.0;
-    }
+
+    finalizeDisplayBounds(bounds);
     return bounds;
 }
 
@@ -658,6 +692,35 @@ WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double
         .minValue = -halfRange,
         .maxValue = halfRange,
     };
+}
+
+bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex) {
+    if (channelIndex >= wave.defaultChannelSpecs.size()) {
+        return false;
+    }
+    const auto currentSpec = wave.buffer.channelSpec(channelIndex);
+    if (!currentSpec.has_value()) {
+        return false;
+    }
+
+    const auto& defaultSpec = wave.defaultChannelSpecs[channelIndex];
+    auto updated = *currentSpec;
+    updated.offset = defaultSpec.offset;
+
+    if (channelIndex >= wave.channelOverrides.size()) {
+        wave.channelOverrides.resize(channelIndex + 1);
+    }
+    auto& overrideState = wave.channelOverrides[channelIndex];
+    overrideState.labelOverridden = updated.label != defaultSpec.label;
+    overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > kEpsilon;
+    overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > kEpsilon;
+    overrideState.offsetOverridden = false;
+    overrideState.label = updated.label;
+    overrideState.ratio = updated.ratio;
+    overrideState.scale = updated.scale;
+    overrideState.offset = defaultSpec.offset;
+    wave.buffer.setChannelSpec(channelIndex, std::move(updated));
+    return true;
 }
 
 } // namespace protoscope::plot

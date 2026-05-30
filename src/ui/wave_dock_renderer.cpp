@@ -1,6 +1,7 @@
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
 #include "protoscope/app/application.hpp"
+#include "protoscope/ui/icons.hpp"
 
 #include <imgui.h>
 #include <implot.h>
@@ -323,6 +324,136 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDa
         view.forceNextMainPlotLimits = true;
     }
     return changed;
+}
+
+void cancelZoomSelection(plot::WaveViewState& view) {
+    view.zoomSelectionActive = false;
+    view.zoomSelectionDragging = false;
+}
+
+bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue) {
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    if (!std::isfinite(minTime) || !std::isfinite(maxTime) || maxTime - minTime < minVisibleTimeSpan) {
+        return false;
+    }
+    if (!std::isfinite(minValue) || !std::isfinite(maxValue) || maxValue <= minValue) {
+        return false;
+    }
+
+    view.viewMinTime = minTime;
+    view.viewMaxTime = maxTime;
+    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
+    view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+    view.viewMinValue = minValue;
+    view.viewMaxValue = maxValue;
+    if (view.lockVerticalRange) {
+        view.manualVerticalMin = minValue;
+        view.manualVerticalMax = maxValue;
+    }
+    view.forceNextMainPlotLimits = true;
+    view.autoFollowLatest = false;
+    return true;
+}
+
+bool applyFitVisibleWaveforms(plot::WaveViewState& view,
+                              const plot::WaveDisplayData& displayData,
+                              const std::vector<std::size_t>& visibleChannelIndices) {
+    if (!view.fitVisibleWaveformsRequested) {
+        return false;
+    }
+    view.fitVisibleWaveformsRequested = false;
+
+    // 核心流程：显示全部只根据图例当前可见通道计算显示范围，不读取或修改原始采样与游标状态。
+    const auto bounds =
+        plot::computeDisplayBoundsForChannels(displayData, visibleChannelIndices, (std::max)(view.minVisibleTimeSpan, 1e-6));
+    if (!bounds.valid) {
+        return false;
+    }
+
+    const auto yRange = plot::makeVerticalAutoFitRange(bounds.minValue, bounds.maxValue, view.verticalAutoFitMultiplier);
+    return applyFullViewport(view, bounds.minTime, bounds.maxTime, yRange.minValue, yRange.maxValue);
+}
+
+struct ZoomSelectionResult {
+    bool consumed{false};
+    bool viewportChanged{false};
+};
+
+ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view) {
+    ZoomSelectionResult result;
+    if (!view.zoomSelectionActive && !view.zoomSelectionDragging) {
+        return result;
+    }
+    result.consumed = true;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)
+        || ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+        cancelZoomSelection(view);
+        return result;
+    }
+
+    const ImVec2 mouse = ImGui::GetMousePos();
+    if (view.zoomSelectionActive && !view.zoomSelectionDragging && ImPlot::IsPlotHovered()
+        && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        view.zoomSelectionDragging = true;
+        view.zoomSelectionStartX = mouse.x;
+        view.zoomSelectionStartY = mouse.y;
+        view.zoomSelectionCurrentX = mouse.x;
+        view.zoomSelectionCurrentY = mouse.y;
+    }
+
+    if (!view.zoomSelectionDragging) {
+        return result;
+    }
+
+    view.zoomSelectionCurrentX = mouse.x;
+    view.zoomSelectionCurrentY = mouse.y;
+    const ImVec2 rectMin(static_cast<float>((std::min)(view.zoomSelectionStartX, view.zoomSelectionCurrentX)),
+                         static_cast<float>((std::min)(view.zoomSelectionStartY, view.zoomSelectionCurrentY)));
+    const ImVec2 rectMax(static_cast<float>((std::max)(view.zoomSelectionStartX, view.zoomSelectionCurrentX)),
+                         static_cast<float>((std::max)(view.zoomSelectionStartY, view.zoomSelectionCurrentY)));
+    auto* drawList = ImPlot::GetPlotDrawList();
+    drawList->AddRectFilled(rectMin, rectMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.2F, 0.55F, 1.0F, 0.16F)));
+    drawList->AddRect(rectMin, rectMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.45F, 0.75F, 1.0F, 0.95F)), 0.0F, 0, 2.0F);
+
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        return result;
+    }
+
+    const float pixelWidth = rectMax.x - rectMin.x;
+    const float pixelHeight = rectMax.y - rectMin.y;
+    if (pixelWidth >= 4.0F && pixelHeight >= 4.0F) {
+        // 核心流程：框选矩形从屏幕坐标转换成 ImPlot 坐标，只写回视口范围，保持通道参数和游标值不变。
+        const ImPlotPoint plotStart =
+            ImPlot::PixelsToPlot(ImVec2(static_cast<float>(view.zoomSelectionStartX), static_cast<float>(view.zoomSelectionStartY)));
+        const ImPlotPoint plotEnd =
+            ImPlot::PixelsToPlot(ImVec2(static_cast<float>(view.zoomSelectionCurrentX), static_cast<float>(view.zoomSelectionCurrentY)));
+        const double minTime = (std::min)(plotStart.x, plotEnd.x);
+        const double maxTime = (std::max)(plotStart.x, plotEnd.x);
+        const double minValue = (std::min)(plotStart.y, plotEnd.y);
+        const double maxValue = (std::max)(plotStart.y, plotEnd.y);
+        result.viewportChanged = applyFullViewport(view, minTime, maxTime, minValue, maxValue);
+    }
+    cancelZoomSelection(view);
+    return result;
+}
+
+bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
+                                                const plot::WaveDisplayData& displayData,
+                                                const ImPlotPoint& mousePos,
+                                                double timeSnapDistance,
+                                                double valueSnapDistance) {
+    auto& view = wave.view;
+    if (!ImPlot::IsPlotHovered() || !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        return false;
+    }
+    const auto activePoint =
+        plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, mousePos.x, timeSnapDistance);
+    if (!activePoint.has_value() || std::abs(activePoint->displayValue - mousePos.y) > valueSnapDistance) {
+        return false;
+    }
+    // 核心流程：双击只复位当前激活通道 offset override，保留 label/ratio/scale 的用户覆盖。
+    return plot::resetChannelOffsetToDefault(wave, view.measurementChannelIndex);
 }
 
 const char* axisSourceName(plot::WaveTimeAxisSource source) {
@@ -739,6 +870,19 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
 bool currentPlotItemVisible(const std::string& label) {
     const ImPlotItem* item = ImPlot::GetItem(label.c_str());
     return item != nullptr && item->Show;
+}
+
+std::vector<std::size_t> visibleChannelIndicesForFit(const plot::WaveSnapshot& snapshot) {
+    std::vector<std::size_t> indices;
+    indices.reserve(snapshot.channels.size());
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        const auto& label = snapshot.channels[channelIndex].label;
+        const ImPlotItem* item = ImPlot::GetItem(label.c_str());
+        if (item == nullptr || item->Show) {
+            indices.push_back(channelIndex);
+        }
+    }
+    return indices;
 }
 
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io) {
@@ -1170,6 +1314,18 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
                                     collapsedButtonSize)) {
             view.showHoverReadout = !view.showHoverReadout;
         }
+        if (drawToolbarToggleButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS,
+                                    view.zoomSelectionActive,
+                                    "框选主视图局部放大；框选完成后自动退出。",
+                                    collapsedButtonSize)) {
+            view.zoomSelectionActive = !view.zoomSelectionActive;
+            view.zoomSelectionDragging = false;
+        }
+        if (drawToolbarActionButton(PROTOSCOPE_ICON_EXPAND,
+                                    "适配当前可见波形到完整视图。",
+                                    collapsedButtonSize)) {
+            view.fitVisibleWaveformsRequested = true;
+        }
         if (drawToolbarActionButton("清",
                                     "清空当前波形历史缓存；不会修改协议脚本或串口连接状态。",
                                     collapsedButtonSize)) {
@@ -1215,6 +1371,22 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
                                     "显示或隐藏鼠标悬停读数。开启后鼠标靠近曲线会显示最近采样点。",
                                     ImVec2(-1.0F, 0.0F))) {
             view.showHoverReadout = !view.showHoverReadout;
+        }
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        if (drawToolbarToggleButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS " 框选放大",
+                                    view.zoomSelectionActive,
+                                    "框选主视图局部放大；框选完成后自动退出。",
+                                    ImVec2(-1.0F, 0.0F))) {
+            view.zoomSelectionActive = !view.zoomSelectionActive;
+            view.zoomSelectionDragging = false;
+        }
+        ImGui::TableSetColumnIndex(1);
+        if (drawToolbarActionButton(PROTOSCOPE_ICON_EXPAND " 显示全部",
+                                    "适配当前可见波形到完整视图。",
+                                    ImVec2(-1.0F, 0.0F))) {
+            view.fitVisibleWaveformsRequested = true;
         }
 
         ImGui::TableNextRow();
@@ -1767,28 +1939,43 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     }
     const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
 
-    bool viewportChangedThisFrame =
-        handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, mousePos);
+    const bool zoomSelectionMode = view.zoomSelectionActive || view.zoomSelectionDragging;
+    bool viewportChangedThisFrame = false;
+    if (!zoomSelectionMode) {
+        viewportChangedThisFrame =
+            handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, mousePos);
+    }
     // 悬停读数必须跟随 ImPlot 图例隐藏状态，只对真实可见波形做吸附。
     std::vector<std::size_t> visibleChannelIndices;
     renderWaveChannels(view, frame.snapshot, displayData, frame.renderBudget, limits, visibleChannelIndices);
+    const auto fitChannelIndices = visibleChannelIndicesForFit(frame.snapshot);
+    viewportChangedThisFrame = applyFitVisibleWaveforms(view, displayData, fitChannelIndices) || viewportChangedThisFrame;
+    const auto zoomSelectionResult = handleMainPlotZoomSelection(view);
+    viewportChangedThisFrame = zoomSelectionResult.viewportChanged || viewportChangedThisFrame;
     viewportChangedThisFrame = applyPendingVerticalAutoFitOverride(view, frame.displayBounds) || viewportChangedThisFrame;
-    handleHoverReadout(view, frame.snapshot, displayData, visibleChannelIndices, mousePos, timeSnapDistance, valueSnapDistance);
-    viewportChangedThisFrame = handleOscilloscopeChannelInteractions(wave,
-                                                                     displayData,
-                                                                     mousePos,
-                                                                     timeSnapDistance,
-                                                                     valueSnapDistance)
-        || viewportChangedThisFrame;
+    const bool offsetReset = !zoomSelectionResult.consumed
+        && handleActiveWaveformDoubleClickOffsetReset(wave, displayData, mousePos, timeSnapDistance, valueSnapDistance);
+    const bool blockPlotInteractions = zoomSelectionResult.consumed || offsetReset;
+    if (!blockPlotInteractions) {
+        handleHoverReadout(view, frame.snapshot, displayData, visibleChannelIndices, mousePos, timeSnapDistance, valueSnapDistance);
+        viewportChangedThisFrame = handleOscilloscopeChannelInteractions(wave,
+                                                                         displayData,
+                                                                         mousePos,
+                                                                         timeSnapDistance,
+                                                                         valueSnapDistance)
+            || viewportChangedThisFrame;
+    }
 
-    const bool anyCursorHeld = handlePlotCursors(view,
-                                                 frame.snapshot,
-                                                 displayData,
-                                                 mousePos,
-                                                 limits,
-                                                 timeSnapDistance,
-                                                 smartSnapDistance,
-                                                 result.cursorReadouts);
+    const bool anyCursorHeld = blockPlotInteractions
+        ? false
+        : handlePlotCursors(view,
+                            frame.snapshot,
+                            displayData,
+                            mousePos,
+                            limits,
+                            timeSnapDistance,
+                            smartSnapDistance,
+                            result.cursorReadouts);
     const bool userInteracting = plotInteractionActive(anyCursorHeld);
     if (!viewportChangedThisFrame) {
         const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();

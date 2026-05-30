@@ -101,6 +101,9 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
 bool scriptTimeUsable(const std::vector<WaveSample>& samples);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep);
+WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
+                                               const std::vector<std::size_t>& channelIndices,
+                                               double fallbackStep);
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,
