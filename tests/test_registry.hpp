@@ -60,6 +60,7 @@ void test_protocol_scan_and_root_roundtrip();
 void test_dock_log_and_script_split();
 void test_dock_receive_row_single_line_hex_and_ascii();
 void test_dock_receive_row_single_line_message_and_timestamp();
+void test_dock_receive_row_visual_kind_classification();
 void test_dock_send_history_deduplicates_and_trims();
 void test_wave_protocol_state_isolated_by_protocol_key();
 void test_lua_dock_layout_key_uses_protocol_and_script();

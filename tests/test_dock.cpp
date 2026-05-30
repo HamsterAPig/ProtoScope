@@ -95,6 +95,27 @@ void test_dock_receive_row_single_line_message_and_timestamp() {
     require(headerOnly == "WARN", "空内容行不应追加多余分隔符");
 }
 
+void test_dock_receive_row_visual_kind_classification() {
+    using protoscope::dock::ReceiveRow;
+    using protoscope::dock::ReceiveRowVisualKind;
+    using protoscope::dock::classifyReceiveRow;
+
+    require(classifyReceiveRow(ReceiveRow{.direction = "RX"}) == ReceiveRowVisualKind::Rx,
+            "RX 行应被分类为接收样式");
+    require(classifyReceiveRow(ReceiveRow{.direction = "TX"}) == ReceiveRowVisualKind::Tx,
+            "TX 行应被分类为发送样式");
+    require(classifyReceiveRow(ReceiveRow{.direction = "WARN"}) == ReceiveRowVisualKind::Warn,
+            "WARN 行应被分类为警告样式");
+    require(classifyReceiveRow(ReceiveRow{.direction = "ERROR"}) == ReceiveRowVisualKind::Error,
+            "ERROR 行应被分类为错误样式");
+    require(classifyReceiveRow(ReceiveRow{.direction = "EVENT"}) == ReceiveRowVisualKind::Event,
+            "Lua EVENT 行应被分类为事件样式");
+    require(classifyReceiveRow(ReceiveRow{.direction = "LOG"}) == ReceiveRowVisualKind::ScriptLog,
+            "Lua LOG 行应被分类为脚本日志样式");
+    require(classifyReceiveRow(ReceiveRow{.direction = "unknown"}) == ReceiveRowVisualKind::Other,
+            "未知方向应回退到通用样式");
+}
+
 void test_dock_send_history_deduplicates_and_trims() {
     protoscope::dock::SendDockState send;
 

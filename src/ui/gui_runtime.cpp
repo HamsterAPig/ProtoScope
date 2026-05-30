@@ -409,33 +409,6 @@ bool shouldStickMultilineChildToBottom(const ImGuiWindow* window) {
     return alreadyAtBottom || pendingScrollToBottom;
 }
 
-std::string buildRowListText(const std::vector<dock::ReceiveRow>& rows, bool showTimestamps, bool showHex) {
-    std::string text;
-    text.reserve(rows.size() * 64);
-    for (const auto& row : rows) {
-        if (!text.empty()) {
-            text.push_back('\n');
-        }
-        text.append(dock::formatReceiveRowSingleLine(row, showTimestamps, showHex));
-    }
-    return text;
-}
-
-std::string buildTransferRowListText(const std::vector<const dock::ReceiveRow*>& rows, bool showTimestamps, bool showHex) {
-    std::string text;
-    text.reserve(rows.size() * 64);
-    for (const auto* row : rows) {
-        if (row == nullptr) {
-            continue;
-        }
-        if (!text.empty()) {
-            text.push_back('\n');
-        }
-        text.append(dock::formatReceiveRowSingleLine(*row, showTimestamps, showHex));
-    }
-    return text;
-}
-
 bool matchesTransferFilter(const dock::ReceiveRow& row, dock::TransferLogFilter filter) {
     switch (filter) {
     case dock::TransferLogFilter::Rx:
@@ -457,6 +430,244 @@ std::vector<const dock::ReceiveRow*> filteredTransferRows(const std::vector<dock
         }
     }
     return filtered;
+}
+
+std::string formatShortLogTimestamp(std::uint64_t timestampMs) {
+    const auto timePoint = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestampMs));
+    const auto secondsPoint = std::chrono::time_point_cast<std::chrono::seconds>(timePoint);
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint - secondsPoint).count();
+    const std::time_t timeValue = std::chrono::system_clock::to_time_t(timePoint);
+
+    std::tm localTm{};
+#if defined(_WIN32)
+    localtime_s(&localTm, &timeValue);
+#else
+    localtime_r(&timeValue, &localTm);
+#endif
+
+    char buffer[32]{};
+    std::snprintf(buffer,
+                  sizeof(buffer),
+                  "%02d:%02d:%02d.%03d",
+                  localTm.tm_hour,
+                  localTm.tm_min,
+                  localTm.tm_sec,
+                  static_cast<int>(millis));
+    return buffer;
+}
+
+struct LogRowPalette {
+    ImVec4 accent;
+    ImVec4 badgeBackground;
+    ImVec4 badgeText;
+    ImVec4 rowBackground;
+};
+
+LogRowPalette paletteForRow(const dock::ReceiveRow& row) {
+    switch (dock::classifyReceiveRow(row)) {
+    case dock::ReceiveRowVisualKind::Rx:
+        return {ImVec4(0.22F, 0.78F, 0.62F, 1.0F),
+                ImVec4(0.08F, 0.34F, 0.28F, 1.0F),
+                ImVec4(0.70F, 1.0F, 0.88F, 1.0F),
+                ImVec4(0.05F, 0.22F, 0.17F, 0.28F)};
+    case dock::ReceiveRowVisualKind::Tx:
+        return {ImVec4(1.0F, 0.63F, 0.20F, 1.0F),
+                ImVec4(0.40F, 0.23F, 0.06F, 1.0F),
+                ImVec4(1.0F, 0.88F, 0.58F, 1.0F),
+                ImVec4(0.26F, 0.15F, 0.04F, 0.32F)};
+    case dock::ReceiveRowVisualKind::Error:
+        return {ImVec4(1.0F, 0.30F, 0.34F, 1.0F),
+                ImVec4(0.42F, 0.10F, 0.13F, 1.0F),
+                ImVec4(1.0F, 0.78F, 0.80F, 1.0F),
+                ImVec4(0.30F, 0.05F, 0.08F, 0.32F)};
+    case dock::ReceiveRowVisualKind::Warn:
+        return {ImVec4(1.0F, 0.78F, 0.24F, 1.0F),
+                ImVec4(0.43F, 0.32F, 0.08F, 1.0F),
+                ImVec4(1.0F, 0.92F, 0.62F, 1.0F),
+                ImVec4(0.28F, 0.21F, 0.05F, 0.28F)};
+    case dock::ReceiveRowVisualKind::Event:
+        return {ImVec4(0.66F, 0.48F, 1.0F, 1.0F),
+                ImVec4(0.26F, 0.18F, 0.48F, 1.0F),
+                ImVec4(0.86F, 0.78F, 1.0F, 1.0F),
+                ImVec4(0.16F, 0.10F, 0.30F, 0.30F)};
+    case dock::ReceiveRowVisualKind::ScriptLog:
+        return {ImVec4(0.36F, 0.66F, 1.0F, 1.0F),
+                ImVec4(0.10F, 0.25F, 0.50F, 1.0F),
+                ImVec4(0.75F, 0.88F, 1.0F, 1.0F),
+                ImVec4(0.06F, 0.15F, 0.30F, 0.28F)};
+    case dock::ReceiveRowVisualKind::Debug:
+        return {ImVec4(0.56F, 0.58F, 0.70F, 1.0F),
+                ImVec4(0.20F, 0.21F, 0.28F, 1.0F),
+                ImVec4(0.82F, 0.84F, 0.92F, 1.0F),
+                ImVec4(0.12F, 0.13F, 0.18F, 0.26F)};
+    case dock::ReceiveRowVisualKind::Info:
+        return {ImVec4(0.30F, 0.70F, 1.0F, 1.0F),
+                ImVec4(0.08F, 0.28F, 0.46F, 1.0F),
+                ImVec4(0.72F, 0.88F, 1.0F, 1.0F),
+                ImVec4(0.05F, 0.16F, 0.27F, 0.26F)};
+    case dock::ReceiveRowVisualKind::Other:
+    default:
+        return {ImVec4(0.54F, 0.60F, 0.68F, 1.0F),
+                ImVec4(0.20F, 0.24F, 0.30F, 1.0F),
+                ImVec4(0.86F, 0.90F, 0.96F, 1.0F),
+                ImVec4(0.13F, 0.15F, 0.18F, 0.24F)};
+    }
+}
+
+void drawFilledBadge(ImDrawList* drawList,
+                     const ImVec2& pos,
+                     const std::string& text,
+                     const LogRowPalette& palette,
+                     float minWidth) {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
+    const float badgeHeight = ImGui::GetTextLineHeight() + style.FramePadding.y;
+    const float badgeWidth = (std::max)(minWidth, textSize.x + style.FramePadding.x * 2.4F);
+    drawList->AddRectFilled(pos,
+                            ImVec2(pos.x + badgeWidth, pos.y + badgeHeight),
+                            ImGui::ColorConvertFloat4ToU32(palette.badgeBackground),
+                            badgeHeight * 0.45F);
+    drawList->AddText(ImVec2(pos.x + (badgeWidth - textSize.x) * 0.5F,
+                             pos.y + (badgeHeight - textSize.y) * 0.5F),
+                      ImGui::ColorConvertFloat4ToU32(palette.badgeText),
+                      text.c_str());
+}
+
+void drawModernLogRow(const dock::ReceiveRow& row,
+                      bool showTimestamps,
+                      bool showHex,
+                      std::size_t index,
+                      float endpointWidth) {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const auto palette = paletteForRow(row);
+    const std::string badge = row.direction.empty() ? "-" : row.direction;
+    std::string content = dock::formatReceiveRowContent(row, showHex);
+    if (content.empty()) {
+        content = "（空）";
+    }
+
+    const std::string timestamp = showTimestamps ? formatShortLogTimestamp(row.timestampMs) : std::string{};
+    const std::string copyLine = dock::formatReceiveRowSingleLine(row, showTimestamps, showHex);
+    const ImVec2 contentSize = ImGui::CalcTextSize(content.c_str());
+    const float rowHeight = ImGui::GetTextLineHeightWithSpacing() + style.FramePadding.y * 1.8F;
+    const float leftPadding = style.FramePadding.x + 6.0F;
+    const float badgeWidth = 66.0F;
+    const float gap = style.ItemSpacing.x + 8.0F;
+    const float timeWidth = showTimestamps ? ImGui::CalcTextSize("00:00:00.000").x + gap : 0.0F;
+    const float endpointColumnWidth = endpointWidth + gap;
+    const float contentX = leftPadding + badgeWidth + gap + timeWidth + endpointColumnWidth;
+    const float rowWidth = (std::max)(ImGui::GetContentRegionAvail().x,
+                                      contentX + contentSize.x + leftPadding * 2.0F);
+
+    const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+    const ImVec2 rowMax(rowMin.x + rowWidth, rowMin.y + rowHeight);
+    ImGui::PushID(static_cast<int>(index));
+    ImGui::InvisibleButton("##modern_log_row", ImVec2(rowWidth, rowHeight));
+    const bool hovered = ImGui::IsItemHovered();
+    if (ImGui::BeginPopupContextItem("##modern_log_row_menu")) {
+        if (ImGui::MenuItem("复制本行")) {
+            ImGui::SetClipboardText(copyLine.c_str());
+        }
+        if (ImGui::MenuItem("复制内容")) {
+            ImGui::SetClipboardText(content.c_str());
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
+
+    auto* drawList = ImGui::GetWindowDrawList();
+    const float rounding = style.FrameRounding + 3.0F;
+    drawList->AddRectFilled(rowMin,
+                            rowMax,
+                            ImGui::ColorConvertFloat4ToU32(palette.rowBackground),
+                            rounding);
+    if (hovered) {
+        drawList->AddRectFilled(rowMin,
+                                rowMax,
+                                ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 1.0F, 1.0F, 0.06F)),
+                                rounding);
+    }
+    drawList->AddRectFilled(rowMin,
+                            ImVec2(rowMin.x + 3.0F, rowMax.y),
+                            ImGui::ColorConvertFloat4ToU32(palette.accent),
+                            rounding,
+                            ImDrawFlags_RoundCornersLeft);
+
+    const float textY = rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5F;
+    drawFilledBadge(drawList,
+                    ImVec2(rowMin.x + leftPadding,
+                           rowMin.y + (rowHeight - ImGui::GetTextLineHeight() - style.FramePadding.y) * 0.5F),
+                    badge,
+                    palette,
+                    badgeWidth);
+
+    float cursorX = rowMin.x + leftPadding + badgeWidth + gap;
+    const ImU32 mutedText = ImGui::ColorConvertFloat4ToU32(ImVec4(0.68F, 0.72F, 0.78F, 1.0F));
+    const ImU32 endpointText = ImGui::ColorConvertFloat4ToU32(ImVec4(0.82F, 0.86F, 0.92F, 1.0F));
+    const ImU32 contentText = ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(ImGuiCol_Text));
+    if (showTimestamps) {
+        drawList->AddText(ImVec2(cursorX, textY), mutedText, timestamp.c_str());
+        cursorX += timeWidth;
+    }
+    drawList->AddText(ImVec2(cursorX, textY), endpointText, row.endpoint.empty() ? "-" : row.endpoint.c_str());
+    cursorX += endpointColumnWidth;
+
+    const ImVec2 contentMin(cursorX - style.FramePadding.x, rowMin.y + style.FramePadding.y * 0.55F);
+    const ImVec2 contentMax(rowMax.x - leftPadding, rowMax.y - style.FramePadding.y * 0.55F);
+    drawList->AddRectFilled(contentMin,
+                            contentMax,
+                            ImGui::ColorConvertFloat4ToU32(ImVec4(0.0F, 0.0F, 0.0F, 0.12F)),
+                            style.FrameRounding);
+    drawList->AddText(ImVec2(cursorX, textY), contentText, content.c_str());
+}
+
+void drawModernLogRows(const char* childId,
+                       const std::vector<const dock::ReceiveRow*>& rows,
+                       bool showTimestamps,
+                       bool showHex,
+                       bool& pauseScroll,
+                       const std::string& emptyText) {
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    const ImVec2 childSize(available.x, (std::max)(available.y, ImGui::GetTextLineHeightWithSpacing() * 4.0F));
+    const ImGuiWindow* existingWindow = findMultilineChildWindow(childId);
+    const bool stickToBottom = shouldStickMultilineChildToBottom(existingWindow);
+    const float previousScrollY = existingWindow != nullptr ? existingWindow->Scroll.y : 0.0F;
+
+    if (ImGui::BeginChild(childId, childSize, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+        ImGuiWindow* childWindow = ImGui::GetCurrentWindow();
+        if (rows.empty()) {
+            ImGui::TextDisabled("%s", emptyText.c_str());
+        } else {
+            float endpointWidth = ImGui::CalcTextSize("endpoint").x;
+            for (const auto* row : rows) {
+                if (row == nullptr) {
+                    continue;
+                }
+                endpointWidth = (std::max)(endpointWidth, ImGui::CalcTextSize(row->endpoint.empty() ? "-" : row->endpoint.c_str()).x);
+            }
+            endpointWidth = (std::clamp)(endpointWidth, 86.0F, 220.0F);
+
+            std::size_t rowIndex = 0;
+            for (const auto* row : rows) {
+                if (row == nullptr) {
+                    continue;
+                }
+                drawModernLogRow(*row, showTimestamps, showHex, rowIndex, endpointWidth);
+                ++rowIndex;
+            }
+        }
+
+        // 核心流程：保留“停在底部才跟随”的行为，避免新数据打断用户查看历史记录。
+        if (!pauseScroll && stickToBottom) {
+            const bool userScrolledUpThisFrame =
+                existingWindow != nullptr &&
+                childWindow->Scroll.y < previousScrollY - 1.0F;
+            if (!userScrolledUpThisFrame) {
+                ImGui::SetScrollY(childWindow, childWindow->ScrollMax.y);
+            }
+        }
+    }
+    ImGui::EndChild();
 }
 
 std::size_t configuredSendHistoryLimit(const config::AppConfig& config) {
@@ -561,43 +772,7 @@ void drawTransferLogRows(const char* childId,
                          bool showHex,
                          bool& pauseScroll,
                          const std::string& emptyText) {
-    const ImVec2 available = ImGui::GetContentRegionAvail();
-    const ImVec2 childSize(available.x, (std::max)(available.y, ImGui::GetTextLineHeightWithSpacing() * 4.0F));
-    if (rows.empty()) {
-        if (ImGui::BeginChild(childId, childSize, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
-            ImGui::TextDisabled("%s", emptyText.c_str());
-        }
-        ImGui::EndChild();
-        return;
-    }
-
-    const ImGuiWindow* existingWindow = findMultilineChildWindow(childId);
-    const bool stickToBottom = shouldStickMultilineChildToBottom(existingWindow);
-    const float previousScrollY = existingWindow != nullptr ? existingWindow->Scroll.y : 0.0F;
-
-    auto text = buildTransferRowListText(rows, showTimestamps, showHex);
-    std::vector<char> buffer(text.begin(), text.end());
-    buffer.push_back('\0');
-
-    // 核心流程：收发记录用只读多行文本框展示，方便拖动水平滚动条、选中文本并复制。
-    ImGui::InputTextMultiline(childId,
-                              buffer.data(),
-                              buffer.size(),
-                              childSize,
-                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoUndoRedo);
-
-    if (!pauseScroll && stickToBottom) {
-        if (ImGuiWindow* childWindow = findMultilineChildWindow(childId)) {
-            // 用户向上滚动代表显式退出跟随；内容新增导致的 ScrollMax 变大不应打断跟随。
-            const bool userScrolledUpThisFrame =
-                existingWindow != nullptr &&
-                childWindow->Scroll.y < previousScrollY - 1.0F;
-            if (userScrolledUpThisFrame) {
-                return;
-            }
-            ImGui::SetScrollY(childWindow, childWindow->ScrollMax.y);
-        }
-    }
+    drawModernLogRows(childId, rows, showTimestamps, showHex, pauseScroll, emptyText);
 }
 
 void drawRowList(const char* childId,
@@ -606,37 +781,12 @@ void drawRowList(const char* childId,
                  bool showHex,
                  bool& pauseScroll,
                  const std::string& emptyText) {
-    const ImVec2 available = ImGui::GetContentRegionAvail();
-    const ImVec2 textBoxSize(available.x, (std::max)(available.y, ImGui::GetTextLineHeightWithSpacing() * 4.0F));
-    if (rows.empty()) {
-        if (ImGui::BeginChild(childId, textBoxSize, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
-            ImGui::TextDisabled("%s", emptyText.c_str());
-        }
-        ImGui::EndChild();
-        return;
+    std::vector<const dock::ReceiveRow*> rowRefs;
+    rowRefs.reserve(rows.size());
+    for (const auto& row : rows) {
+        rowRefs.push_back(&row);
     }
-
-    constexpr auto kTextBoxLabel = "##row_list_text";
-    const ImGuiWindow* existingWindow = findMultilineChildWindow(kTextBoxLabel);
-    const bool stickToBottom = existingWindow == nullptr || existingWindow->Scroll.y >= existingWindow->ScrollMax.y - 4.0F;
-
-    auto text = buildRowListText(rows, showTimestamps, showHex);
-    std::vector<char> buffer(text.begin(), text.end());
-    buffer.push_back('\0');
-
-    // 核心流程：统一改为只读多行文本框，保持每条记录单行显示，同时支持拖选复制与横向滚动。
-    ImGui::InputTextMultiline(kTextBoxLabel,
-                              buffer.data(),
-                              buffer.size(),
-                              textBoxSize,
-                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoUndoRedo);
-
-    // 核心流程：仅在用户原本停留在底部时自动滚到底，避免查看历史记录时被打断。
-    if (!pauseScroll && stickToBottom) {
-        if (ImGuiWindow* childWindow = findMultilineChildWindow(kTextBoxLabel)) {
-            ImGui::SetScrollY(childWindow, childWindow->ScrollMax.y);
-        }
-    }
+    drawModernLogRows(childId, rowRefs, showTimestamps, showHex, pauseScroll, emptyText);
 }
 
 bool digitsOnly(const std::string& text) {

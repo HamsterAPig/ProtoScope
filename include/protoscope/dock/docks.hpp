@@ -22,6 +22,20 @@ struct ReceiveRow {
     std::string message{};
 };
 
+enum class ReceiveRowVisualKind {
+    Rx,
+    Tx,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Event,
+    ScriptLog,
+    Other,
+};
+
+ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row);
+std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex);
 std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamps, bool showHex);
 
 enum class TransferLogFilter {

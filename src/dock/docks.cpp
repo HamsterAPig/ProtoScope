@@ -74,6 +74,43 @@ std::string flattenSingleLineText(std::string_view text) {
     return flattened;
 }
 
+std::string uppercaseAscii(std::string text) {
+    for (auto& ch : text) {
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    }
+    return text;
+}
+} // namespace
+
+ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row) {
+    const auto direction = uppercaseAscii(row.direction);
+    if (direction == "RX") {
+        return ReceiveRowVisualKind::Rx;
+    }
+    if (direction == "TX") {
+        return ReceiveRowVisualKind::Tx;
+    }
+    if (direction == "DEBUG") {
+        return ReceiveRowVisualKind::Debug;
+    }
+    if (direction == "INFO") {
+        return ReceiveRowVisualKind::Info;
+    }
+    if (direction == "WARN" || direction == "WARNING") {
+        return ReceiveRowVisualKind::Warn;
+    }
+    if (direction == "ERROR") {
+        return ReceiveRowVisualKind::Error;
+    }
+    if (direction == "EVENT") {
+        return ReceiveRowVisualKind::Event;
+    }
+    if (direction == "LOG") {
+        return ReceiveRowVisualKind::ScriptLog;
+    }
+    return ReceiveRowVisualKind::Other;
+}
+
 std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex) {
     if (!row.message.empty()) {
         return flattenSingleLineText(row.message);
@@ -83,7 +120,6 @@ std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex) {
     }
     return showHex ? protocol_utils::bytesToHex(row.bytes, true) : bytesToAsciiPreview(row.bytes);
 }
-} // namespace
 
 std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamps, bool showHex) {
     std::string line;
