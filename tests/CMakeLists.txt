@@ -35,3 +35,12 @@ protoscope_enable_warnings(protoscope_tests)
 
 add_test(NAME protoscope_unit_tests COMMAND protoscope_tests)
 set_tests_properties(protoscope_unit_tests PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME protoscope_luals_api_manifest_check
+        COMMAND ${Python3_EXECUTABLE} tools/generate_luals_api.py --check
+    )
+    set_tests_properties(protoscope_luals_api_manifest_check PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+endif()

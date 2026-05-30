@@ -362,6 +362,16 @@ private:
     void callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event);
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
 
+    void registerLuaApi(sol::table& proto);
+    void registerCoreApi(sol::table& proto);
+    void registerTxApi(sol::table& proto);
+    void registerStatusApi(sol::table& proto);
+    void registerUiApi(sol::table& proto);
+    void registerFileApi(sol::table& proto);
+    void registerPlotApi(sol::table& proto);
+    void registerControlApi(sol::table& proto);
+    void registerCodecApi(sol::table& proto);
+
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
                                            const sol::object& opts,

@@ -10,6 +10,7 @@
 配套提示文件：
 
 - `protocols/protoscope_api.lua`：LuaLS 用的宿主 API 声明。
+- `protocols/protoscope_api_manifest.json`：`protoscope_api.lua` 的生成源，新增宿主 API 时先改它再生成。
 - `protocols/stream_types.lua`：`stream()` schema 的类型注解。
 - `protocols/templates/README.md`：内置协议模板列表和复制使用说明。
 
@@ -23,6 +24,8 @@
 - `proto.send(payload, opts?)`：普通异步发送。适合从机 ACK、主动上报、广播或不需要宿主排队等待的报文。
 - `proto.request(payload, opts?)`：半双工请求。宿主负责排队、串行下发、超时、取消，以及前一条完成后的自动推进。
 - `proto.request_done(result?)`：脚本在确认收到完整业务应答后调用；不需要传 `request_id`。
+
+Lua 脚本保持传输无关：无论底层是 TCP、串口还是 UDP Peer，协议脚本都只处理 bytes、`ctx` 和 `proto.send/request`。如确实需要展示当前通讯来源，可读取 `ctx.kind`，取值为 `tcp_client`、`tcp_server`、`serial` 或 `udp_peer`。
 
 最小示例：
 
@@ -256,6 +259,6 @@ proto.plot.push(1, {
 
 当你改了以下任一项时，建议同步更新文档或提示文件：
 
-- 宿主暴露的 Lua API：同步 `protocols/protoscope_api.lua`
+- 宿主暴露的 Lua API：同步 `protocols/protoscope_api_manifest.json`，再运行 `python tools/generate_luals_api.py`
 - `stream()` schema 类型：同步 `protocols/stream_types.lua`
 - 协议脚本约定、推荐模式或 demo 行为：同步 `protocols/README.md`

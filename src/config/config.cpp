@@ -126,25 +126,14 @@ double positiveOrFallback(double value, double fallback) {
 }
 
 transport::TransportKind parseTransportKind(const std::string& value) {
-    if (value == "tcp_server") {
-        return transport::TransportKind::TcpServer;
-    }
-    if (value == "serial") {
-        return transport::TransportKind::Serial;
+    if (const auto kind = transport::transportKindFromId(value)) {
+        return *kind;
     }
     return transport::TransportKind::TcpClient;
 }
 
 std::string toTransportKindText(transport::TransportKind kind) {
-    switch (kind) {
-    case transport::TransportKind::TcpClient:
-        return "tcp_client";
-    case transport::TransportKind::TcpServer:
-        return "tcp_server";
-    case transport::TransportKind::Serial:
-        return "serial";
-    }
-    return "tcp_client";
+    return std::string(transport::transportKindId(kind));
 }
 
 const std::vector<std::string> kDefaultSerialPorts = {"COM1", "COM2", "COM3", "COM4"};
@@ -315,6 +304,17 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.communication.serial.flowControl =
                 readScalar<std::string>(serial, "flow_control", result.config.communication.serial.flowControl);
         }
+
+        if (const auto udpPeer = communication["udp_peer"]) {
+            result.config.communication.udpPeer.bindAddress =
+                readScalar<std::string>(udpPeer, "bind_address", result.config.communication.udpPeer.bindAddress);
+            result.config.communication.udpPeer.bindPort =
+                readScalar<std::uint16_t>(udpPeer, "bind_port", result.config.communication.udpPeer.bindPort);
+            result.config.communication.udpPeer.remoteHost =
+                readScalar<std::string>(udpPeer, "remote_host", result.config.communication.udpPeer.remoteHost);
+            result.config.communication.udpPeer.remotePort =
+                readScalar<std::uint16_t>(udpPeer, "remote_port", result.config.communication.udpPeer.remotePort);
+        }
         if (const auto receive = root["receive"]) {
             result.config.communication.serialPortOptions = kDefaultSerialPorts;
             result.config.communication.reconnectRequired = false;
@@ -403,6 +403,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["communication"]["serial"]["parity"] = config.communication.serial.parity;
     root["communication"]["serial"]["stop_bits"] = config.communication.serial.stopBits;
     root["communication"]["serial"]["flow_control"] = config.communication.serial.flowControl;
+    root["communication"]["udp_peer"]["bind_address"] = config.communication.udpPeer.bindAddress;
+    root["communication"]["udp_peer"]["bind_port"] = config.communication.udpPeer.bindPort;
+    root["communication"]["udp_peer"]["remote_host"] = config.communication.udpPeer.remoteHost;
+    root["communication"]["udp_peer"]["remote_port"] = config.communication.udpPeer.remotePort;
 
     try {
         if (!path.parent_path().empty()) {

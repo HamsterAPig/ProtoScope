@@ -384,6 +384,37 @@ void test_application_open_transport_uses_serial_runtime_config() {
     application.shutdown();
 }
 
+void test_application_open_transport_uses_udp_peer_runtime_config() {
+    protoscope::app::Application application;
+    auto state = std::make_shared<RecordingTransport::State>();
+    application.setTransportFactoryForTest([state](protoscope::transport::TransportKind kind) {
+        require(kind == protoscope::transport::TransportKind::UdpPeer, "测试工厂应收到 UDP Peer transport kind");
+        return std::unique_ptr<protoscope::transport::ITransport>(new RecordingTransport(state));
+    });
+
+    auto& comm = application.docks().commState();
+    comm.kind = protoscope::transport::TransportKind::UdpPeer;
+    comm.udpPeer.bindAddress = "127.0.0.1";
+    comm.udpPeer.bindPort = 19001;
+    comm.udpPeer.remoteHost = "192.0.2.10";
+    comm.udpPeer.remotePort = 19002;
+
+    application.openTransport();
+
+    require(state->openCalled, "打开 UDP Peer 时应调用 transport.open");
+    require(state->lastConfig.has_value(), "应记录 UDP Peer open 的真实入参");
+    require(std::holds_alternative<protoscope::transport::UdpPeerConfig>(*state->lastConfig),
+            "UDP Peer 模式应传入 UdpPeerConfig");
+
+    const auto& udp = std::get<protoscope::transport::UdpPeerConfig>(*state->lastConfig);
+    require(udp.bindAddress == "127.0.0.1", "open 应使用当前 UDP Peer 本地地址");
+    require(udp.bindPort == 19001, "open 应使用当前 UDP Peer 本地端口");
+    require(udp.remoteHost == "192.0.2.10", "open 应使用当前 UDP Peer 远端地址");
+    require(udp.remotePort == 19002, "open 应使用当前 UDP Peer 远端端口");
+
+    application.shutdown();
+}
+
 void test_application_logging_filters_script_and_host() {
     const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-logging-test";
     std::filesystem::create_directories(tempRoot);

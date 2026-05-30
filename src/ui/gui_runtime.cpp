@@ -73,18 +73,6 @@ std::vector<std::filesystem::path> candidateChineseFonts() {
     };
 }
 
-const char* transportKindLabel(transport::TransportKind kind) {
-    switch (kind) {
-    case transport::TransportKind::TcpClient:
-        return "TCP 客户端";
-    case transport::TransportKind::TcpServer:
-        return "TCP 服务端";
-    case transport::TransportKind::Serial:
-        return "串口";
-    }
-    return "未知";
-}
-
 const char* transportStateLabel(transport::TransportState state) {
     switch (state) {
     case transport::TransportState::Closed:
@@ -1090,10 +1078,21 @@ void GuiRuntime::drawCommDock() {
         return;
     }
 
-    int kindIndex = static_cast<int>(comm.kind);
-    const char* items[] = {"TCP 客户端", "TCP 服务端", "串口"};
-    if (ImGui::Combo("模式", &kindIndex, items, IM_ARRAYSIZE(items))) {
-        comm.kind = static_cast<transport::TransportKind>(kindIndex);
+    const auto& transportItems = transport::transportDescriptors();
+    int kindIndex = 0;
+    for (std::size_t index = 0; index < transportItems.size(); ++index) {
+        if (transportItems[index].kind == comm.kind) {
+            kindIndex = static_cast<int>(index);
+            break;
+        }
+    }
+    std::vector<const char*> itemLabels;
+    itemLabels.reserve(transportItems.size());
+    for (const auto& item : transportItems) {
+        itemLabels.push_back(item.label.data());
+    }
+    if (ImGui::Combo("模式", &kindIndex, itemLabels.data(), static_cast<int>(itemLabels.size()))) {
+        comm.kind = transportItems[static_cast<std::size_t>(kindIndex)].kind;
         application_.markCommConfigEdited(true);
     }
 
@@ -1124,7 +1123,7 @@ void GuiRuntime::drawCommDock() {
         if (ImGui::Checkbox("拒绝新连接", &comm.tcpServer.rejectNewConnection)) {
             application_.markCommConfigEdited(true);
         }
-    } else {
+    } else if (comm.kind == transport::TransportKind::Serial) {
         if (!serialPortsScanned_) {
             refreshSerialPortOptions(comm);
             serialPortsScanned_ = true;
@@ -1189,10 +1188,33 @@ void GuiRuntime::drawCommDock() {
             comm.serial.flowControl = flowItems[flowIndex];
             application_.markCommConfigEdited(true);
         }
+    } else if (comm.kind == transport::TransportKind::UdpPeer) {
+        char bindAddress[256]{};
+        std::snprintf(bindAddress, sizeof(bindAddress), "%s", comm.udpPeer.bindAddress.c_str());
+        if (ImGui::InputText("本地地址", bindAddress, sizeof(bindAddress))) {
+            comm.udpPeer.bindAddress = bindAddress;
+            application_.markCommConfigEdited(true);
+        }
+        int bindPort = comm.udpPeer.bindPort;
+        if (ImGui::InputInt("本地端口", &bindPort)) {
+            comm.udpPeer.bindPort = static_cast<std::uint16_t>(std::clamp(bindPort, 0, 65535));
+            application_.markCommConfigEdited(true);
+        }
+        char remoteHost[256]{};
+        std::snprintf(remoteHost, sizeof(remoteHost), "%s", comm.udpPeer.remoteHost.c_str());
+        if (ImGui::InputText("远端地址", remoteHost, sizeof(remoteHost))) {
+            comm.udpPeer.remoteHost = remoteHost;
+            application_.markCommConfigEdited(true);
+        }
+        int remotePort = comm.udpPeer.remotePort;
+        if (ImGui::InputInt("远端端口", &remotePort)) {
+            comm.udpPeer.remotePort = static_cast<std::uint16_t>(std::clamp(remotePort, 0, 65535));
+            application_.markCommConfigEdited(true);
+        }
     }
 
     ImGui::Separator();
-    ImGui::Text("当前模式: %s", transportKindLabel(comm.kind));
+    ImGui::Text("当前模式: %s", transport::transportKindLabel(comm.kind).data());
     ImGui::Text("连接状态: %s", transportStateLabel(comm.state));
     ImGui::Text("TX=%llu RX=%llu",
                 static_cast<unsigned long long>(comm.txCount),

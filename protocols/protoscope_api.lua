@@ -4,6 +4,7 @@
 ProtoScope 脚本 API 定义文件。
 这里只提供 LuaLS / EmmyLua 需要的类型、结构和回调签名，
 不包含任何实际运行逻辑。
+本文件由 protocols/protoscope_api_manifest.json 生成，请勿手写修改。
 ]]
 
 -- 基础枚举：覆盖日志、控件、停靠、传输和弹窗状态。
@@ -14,6 +15,7 @@ ProtoScope 脚本 API 定义文件。
 ---@alias ProtoBytes integer[]
 ---@alias ProtoPayload string|ProtoBytes|ProtoBuffer
 ---@alias ProtoFormLayoutItem ProtoFormControlItem|ProtoFormControlsItem|ProtoFormGroupItem|ProtoFormCollapseItem|ProtoFormSeparatorItem|ProtoFormTextItem
+---@alias ProtoTransportKind 'tcp_client'|'tcp_server'|'serial'|'udp_peer'
 ---@alias ProtoTxKind 'send'|'request'
 ---@alias ProtoTxState 'sent'|'completed'|'timeout'|'rejected'|'dropped'|'canceled'
 ---@alias ProtoDialogKind 'alert'|'confirm'
@@ -89,7 +91,7 @@ function ProtoBuffer:bytes(max_bytes) end
 -- 连接上下文：宿主在打开、关闭、收发数据时传入的基础运行信息。
 ---@class ProtoConnectionContext
 ---@field connection_id integer
----@field kind string
+---@field kind ProtoTransportKind
 ---@field endpoint string
 ---@field timestamp_ms integer
 ---@field ready_for_io boolean

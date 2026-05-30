@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -16,6 +17,7 @@ enum class TransportKind {
     TcpClient,
     TcpServer,
     Serial,
+    UdpPeer,
 };
 
 enum class TransportState {
@@ -45,10 +47,31 @@ struct SerialConfig {
     std::string flowControl{"none"};
 };
 
+struct UdpPeerConfig {
+    std::string bindAddress{"0.0.0.0"};
+    std::uint16_t bindPort{9001};
+    std::string remoteHost{"127.0.0.1"};
+    std::uint16_t remotePort{9000};
+};
+
 std::vector<std::string> normalizeSerialPortNames(std::vector<std::string> ports);
 std::vector<std::string> listAvailableSerialPorts();
 
-using TransportConfig = std::variant<TcpClientConfig, TcpServerConfig, SerialConfig>;
+using TransportConfig = std::variant<TcpClientConfig, TcpServerConfig, SerialConfig, UdpPeerConfig>;
+
+class ITransport;
+
+struct TransportDescriptor {
+    TransportKind kind{TransportKind::TcpClient};
+    std::string_view id{"tcp_client"};
+    std::string_view label{"TCP 客户端"};
+};
+
+const std::vector<TransportDescriptor>& transportDescriptors();
+std::optional<TransportKind> transportKindFromId(std::string_view id);
+std::string_view transportKindId(TransportKind kind);
+std::string_view transportKindLabel(TransportKind kind);
+std::unique_ptr<ITransport> createTransport(TransportKind kind);
 
 struct ConnectionContext {
     TransportKind kind{TransportKind::TcpClient};
@@ -197,6 +220,23 @@ private:
     struct Runtime;
     std::unique_ptr<Runtime> runtime_;
     std::optional<ConnectionContext> context_;
+};
+
+class UdpPeerTransport final : public TransportBase {
+public:
+    UdpPeerTransport();
+    ~UdpPeerTransport() override;
+
+    bool open(const TransportConfig& config) override;
+    void close() override;
+    bool send(std::vector<std::uint8_t> bytes) override;
+    bool enqueueSend(TransportTxTask task) override;
+
+private:
+    struct Runtime;
+    std::unique_ptr<Runtime> runtime_;
+    std::optional<ConnectionContext> context_;
+    std::string remoteEndpointText_;
 };
 
 } // namespace protoscope::transport

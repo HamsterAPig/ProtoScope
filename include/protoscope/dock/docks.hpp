@@ -27,6 +27,7 @@ struct CommDockState {
     transport::TcpClientConfig tcpClient{};
     transport::TcpServerConfig tcpServer{};
     transport::SerialConfig serial{};
+    transport::UdpPeerConfig udpPeer{};
     transport::TransportState state{transport::TransportState::Closed};
     std::string lastError;
     std::uint64_t txCount{0};

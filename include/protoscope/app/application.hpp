@@ -60,6 +60,7 @@ public:
 
 private:
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
+    transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
     bool handleTransportEvents();
     bool flushScriptOutputs();

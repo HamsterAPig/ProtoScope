@@ -656,6 +656,12 @@ void test_luals_api_sync_contains_tx_and_dialog_api() {
     std::stringstream buffer;
     buffer << input.rdbuf();
     const std::string text = buffer.str();
+
+    require(text.find("本文件由 protocols/protoscope_api_manifest.json 生成") != std::string::npos,
+            "LuaLS API 应声明生成来源");
+    require(text.find("ProtoTransportKind 'tcp_client'|'tcp_server'|'serial'|'udp_peer'") != std::string::npos,
+            "LuaLS API 应声明 UDP Peer transport kind");
+    require(text.find("@field kind ProtoTransportKind") != std::string::npos, "LuaLS API 应收紧 ctx.kind 类型");
     require(text.find("function proto.request(payload, opts) end") != std::string::npos, "LuaLS API 应声明 proto.request");
     require(text.find("function proto.request_done(result) end") != std::string::npos, "LuaLS API 应声明 proto.request_done");
     require(text.find("function proto.status.set(text, opts) end") != std::string::npos, "LuaLS API 应声明 proto.status.set");
@@ -803,6 +809,10 @@ void test_config_default_roundtrip() {
     config.communication.serial.parity = "even";
     config.communication.serial.stopBits = "two";
     config.communication.serial.flowControl = "hardware";
+    config.communication.udpPeer.bindAddress = "127.0.0.1";
+    config.communication.udpPeer.bindPort = 19001;
+    config.communication.udpPeer.remoteHost = "192.0.2.10";
+    config.communication.udpPeer.remotePort = 19002;
     config.app.configHotReload.enabled = true;
     config.gui.wave.maxRenderPointsPerChannel = 64;
     config.gui.wave.maxRenderVertices = 4096;
@@ -830,6 +840,10 @@ void test_config_default_roundtrip() {
     require(reloaded.config.communication.serial.parity == "even", "串口奇偶校验 roundtrip 失败");
     require(reloaded.config.communication.serial.stopBits == "two", "串口停止位 roundtrip 失败");
     require(reloaded.config.communication.serial.flowControl == "hardware", "串口流控 roundtrip 失败");
+    require(reloaded.config.communication.udpPeer.bindAddress == "127.0.0.1", "UDP Peer 本地地址 roundtrip 失败");
+    require(reloaded.config.communication.udpPeer.bindPort == 19001, "UDP Peer 本地端口 roundtrip 失败");
+    require(reloaded.config.communication.udpPeer.remoteHost == "192.0.2.10", "UDP Peer 远端地址 roundtrip 失败");
+    require(reloaded.config.communication.udpPeer.remotePort == 19002, "UDP Peer 远端端口 roundtrip 失败");
     require(reloaded.config.app.configHotReload.enabled, "配置热重载开关 roundtrip 失败");
     require(reloaded.config.gui.wave.controlMode == protoscope::plot::WaveControlMode::LegacyGlobal,
             "波形控制模式 roundtrip 失败");
@@ -1547,6 +1561,7 @@ static const TestCase kAllTests[] = {
     {"transport_enqueue_send_async_roundtrip", &test_transport_enqueue_send_async_roundtrip},
     {"tcp_server_connection_takeover_replaces_active_client", &test_tcp_server_connection_takeover_replaces_active_client},
     {"serial_transport_error_path", &test_serial_transport_error_path},
+    {"udp_peer_transport_roundtrip", &test_udp_peer_transport_roundtrip},
     {"serial_port_name_normalization", &test_serial_port_name_normalization},
     {"script_dialog_requests_keep_connection_context", &test_script_dialog_requests_keep_connection_context},
     {"script_dialog_requests_detached_without_active_connection", &test_script_dialog_requests_detached_without_active_connection},
@@ -1555,6 +1570,7 @@ static const TestCase kAllTests[] = {
     {"application_tx_overflow_popup_keeps_dialog_payload", &test_application_tx_overflow_popup_keeps_dialog_payload},
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
     {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
+    {"application_open_transport_uses_udp_peer_runtime_config", &test_application_open_transport_uses_udp_peer_runtime_config},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},

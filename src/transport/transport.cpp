@@ -204,6 +204,57 @@ SerialTransport::~SerialTransport() {
     close();
 }
 
+const std::vector<TransportDescriptor>& transportDescriptors() {
+    static const std::vector<TransportDescriptor> descriptors{
+        {TransportKind::TcpClient, "tcp_client", "TCP 客户端"},
+        {TransportKind::TcpServer, "tcp_server", "TCP 服务端"},
+        {TransportKind::Serial, "serial", "串口"},
+        {TransportKind::UdpPeer, "udp_peer", "UDP Peer"},
+    };
+    return descriptors;
+}
+
+std::optional<TransportKind> transportKindFromId(std::string_view id) {
+    for (const auto& descriptor : transportDescriptors()) {
+        if (descriptor.id == id) {
+            return descriptor.kind;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string_view transportKindId(TransportKind kind) {
+    for (const auto& descriptor : transportDescriptors()) {
+        if (descriptor.kind == kind) {
+            return descriptor.id;
+        }
+    }
+    return "tcp_client";
+}
+
+std::string_view transportKindLabel(TransportKind kind) {
+    for (const auto& descriptor : transportDescriptors()) {
+        if (descriptor.kind == kind) {
+            return descriptor.label;
+        }
+    }
+    return "TCP 客户端";
+}
+
+std::unique_ptr<ITransport> createTransport(TransportKind kind) {
+    switch (kind) {
+    case TransportKind::TcpClient:
+        return std::make_unique<TcpClientTransport>();
+    case TransportKind::TcpServer:
+        return std::make_unique<TcpServerTransport>();
+    case TransportKind::Serial:
+        return std::make_unique<SerialTransport>();
+    case TransportKind::UdpPeer:
+        return std::make_unique<UdpPeerTransport>();
+    }
+    return nullptr;
+}
+
 ConnectionContext makeListenContext(const asio::ip::tcp::endpoint& endpoint) {
     return ConnectionContext{
         .kind = TransportKind::TcpServer,

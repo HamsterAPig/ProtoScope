@@ -275,20 +275,7 @@ void Application::openTransport() {
         return;
     }
 
-    transport::TransportConfig config;
-    switch (kind) {
-    case transport::TransportKind::TcpClient:
-        config = dockStore_.commState().tcpClient;
-        break;
-    case transport::TransportKind::TcpServer:
-        config = dockStore_.commState().tcpServer;
-        break;
-    case transport::TransportKind::Serial:
-        config = dockStore_.commState().serial;
-        break;
-    }
-
-    const bool opened = transport_->open(config);
+    const bool opened = transport_->open(currentTransportConfig(kind));
     if (!opened) {
         dockStore_.commState().lastError = "打开连接失败";
         loggingFacade_.error("transport", dockStore_.commState().lastError);
@@ -550,15 +537,22 @@ std::unique_ptr<transport::ITransport> Application::createTransport(transport::T
     if (transportFactoryForTest_) {
         return transportFactoryForTest_(kind);
     }
+    return transport::createTransport(kind);
+}
+
+transport::TransportConfig Application::currentTransportConfig(transport::TransportKind kind) const {
+    const auto& comm = dockStore_.commState();
     switch (kind) {
     case transport::TransportKind::TcpClient:
-        return std::make_unique<transport::TcpClientTransport>();
+        return comm.tcpClient;
     case transport::TransportKind::TcpServer:
-        return std::make_unique<transport::TcpServerTransport>();
+        return comm.tcpServer;
     case transport::TransportKind::Serial:
-        return std::make_unique<transport::SerialTransport>();
+        return comm.serial;
+    case transport::TransportKind::UdpPeer:
+        return comm.udpPeer;
     }
-    return nullptr;
+    return comm.tcpClient;
 }
 
 void Application::syncDockState() {

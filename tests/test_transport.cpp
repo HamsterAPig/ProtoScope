@@ -283,3 +283,108 @@ void test_serial_transport_error_path() {
     }
     require(hasError, "无效串口应产生错误事件");
 }
+
+void test_udp_peer_transport_roundtrip() {
+    using namespace protoscope::transport;
+
+    UdpPeerTransport peerA;
+    UdpPeerTransport peerB;
+
+    require(peerA.open(UdpPeerConfig{
+                .bindAddress = "127.0.0.1",
+                .bindPort = 0,
+                .remoteHost = "127.0.0.1",
+                .remotePort = 9000,
+            }),
+            "UDP Peer A 打开失败");
+    auto peerAEvents = peerA.takeEvents();
+    require(!peerAEvents.empty(), "UDP Peer A 应产生打开事件");
+
+    std::optional<std::uint16_t> peerAPort;
+    for (const auto& event : peerAEvents) {
+        if (const auto* opened = std::get_if<TransportOpenEvent>(&event)) {
+            peerAPort = parsePort(opened->context.endpoint.substr(0, opened->context.endpoint.find(" -> ")));
+            break;
+        }
+    }
+    require(peerAPort.has_value(), "未拿到 UDP Peer A 本地端口");
+
+    require(peerB.open(UdpPeerConfig{
+                .bindAddress = "127.0.0.1",
+                .bindPort = 0,
+                .remoteHost = "127.0.0.1",
+                .remotePort = *peerAPort,
+            }),
+            "UDP Peer B 打开失败");
+    auto peerBEvents = peerB.takeEvents();
+    require(!peerBEvents.empty(), "UDP Peer B 应产生打开事件");
+
+    std::optional<std::uint16_t> peerBPort;
+    for (const auto& event : peerBEvents) {
+        if (const auto* opened = std::get_if<TransportOpenEvent>(&event)) {
+            peerBPort = parsePort(opened->context.endpoint.substr(0, opened->context.endpoint.find(" -> ")));
+            break;
+        }
+    }
+    require(peerBPort.has_value(), "未拿到 UDP Peer B 本地端口");
+
+    peerA.close();
+    require(peerA.open(UdpPeerConfig{
+                .bindAddress = "127.0.0.1",
+                .bindPort = *peerAPort,
+                .remoteHost = "127.0.0.1",
+                .remotePort = *peerBPort,
+            }),
+            "UDP Peer A 使用真实远端端口重新打开失败");
+    peerA.takeEvents();
+
+    const std::vector<std::uint8_t> payloadA{'U', 'D', 'P', 'A'};
+    require(peerA.send(payloadA), "UDP Peer A 发送失败");
+    const bool peerBReceived = waitUntil([&]() {
+        for (const auto& event : peerB.takeEvents()) {
+            if (const auto* bytes = std::get_if<TransportBytesEvent>(&event)) {
+                if (bytes->bytes == payloadA && bytes->context.kind == TransportKind::UdpPeer) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+    require(peerBReceived, "UDP Peer B 未收到 A 的报文");
+
+    const std::vector<std::uint8_t> payloadB{'U', 'D', 'P', 'B'};
+    require(peerB.enqueueSend(TransportTxTask{
+                .requestId = 33,
+                .kind = TransportTxKind::Send,
+                .payload = payloadB,
+                .timeoutMs = 1000,
+                .queuedAtMs = 1,
+            }),
+            "UDP Peer B 异步发送入队失败");
+
+    bool peerAReceived = false;
+    bool txObserved = false;
+    const bool udpDone = waitUntil([&]() {
+        for (const auto& event : peerA.takeEvents()) {
+            if (const auto* bytes = std::get_if<TransportBytesEvent>(&event)) {
+                if (bytes->bytes == payloadB) {
+                    peerAReceived = true;
+                }
+            }
+        }
+        for (const auto& event : peerB.takeEvents()) {
+            if (const auto* tx = std::get_if<TransportTxEvent>(&event)) {
+                if (tx->requestId == 33 && tx->state == TransportTxState::Sent) {
+                    txObserved = true;
+                }
+            }
+        }
+        return peerAReceived && txObserved;
+    });
+    require(udpDone, "UDP Peer 异步发送未完成收发与 TX 事件");
+
+    peerA.close();
+    peerB.close();
+    require(peerA.state() == TransportState::Closed, "UDP Peer A close 后应为 Closed");
+    require(peerB.state() == TransportState::Closed, "UDP Peer B close 后应为 Closed");
+}

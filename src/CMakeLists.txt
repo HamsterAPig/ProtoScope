@@ -21,6 +21,7 @@ target_compile_features(protoscope_protocol_utils PUBLIC cxx_std_20)
 add_library(protoscope_transport STATIC
     transport/serial_ports.cpp
     transport/transport.cpp
+    transport/udp_transport.cpp
 )
 target_include_directories(protoscope_transport
     PUBLIC
