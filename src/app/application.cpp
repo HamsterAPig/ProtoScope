@@ -2,6 +2,7 @@
 
 #include "protoscope/protocol_utils/codec.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -11,6 +12,8 @@
 namespace protoscope::app {
 
 namespace {
+
+constexpr std::size_t kRawCaptureReplayChunkBytes = 1024;
 
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
@@ -464,7 +467,19 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
         replayContext.connectionId = 0;
         replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
         replayContext.readyForIo = false;
-        scriptHost_.onTransportBytes(transport::TransportBytesEvent{replayContext, capture.payload});
+        std::size_t cursor = 0;
+        while (cursor < capture.payload.size()) {
+            const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, capture.payload.size() - cursor);
+            std::vector<std::uint8_t> chunk(capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor),
+                                            capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
+            // 核心流程：导入回放按小块喂给 Lua stream parser，避免一次性写满环形缓冲区后只剩尾部数据。
+            scriptHost_.onTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
+            flushScriptOutputs();
+            flushScriptLogs();
+            flushScriptPlots();
+            flushScriptStatusAndDialogs();
+            cursor += chunkSize;
+        }
     }
 
     flushScriptOutputs();

@@ -2,6 +2,7 @@
 
 #include "protoscope/app/application.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
+#include "protoscope/protocol_utils/codec.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -138,6 +139,25 @@ struct QueuedEventTransport final : protoscope::transport::ITransport {
 private:
     std::shared_ptr<State> sharedState_;
 };
+
+std::vector<std::uint8_t> makeRawImportStreamFrame(std::uint8_t value) {
+    std::vector<std::uint8_t> frame{0xAA, 0x55, 0x01, value, 0x00, 0x00};
+    const std::vector<std::uint8_t> payload(frame.begin(), frame.end() - 2);
+    const auto crc = protoscope::protocol_utils::crc16Modbus(payload);
+    frame[4] = static_cast<std::uint8_t>(crc & 0xFFU);
+    frame[5] = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
+    return frame;
+}
+
+std::vector<std::uint8_t> makeRawImportStreamPayload(std::size_t frameCount) {
+    std::vector<std::uint8_t> payload;
+    payload.reserve(frameCount * 6U);
+    for (std::size_t index = 0; index < frameCount; ++index) {
+        const auto frame = makeRawImportStreamFrame(static_cast<std::uint8_t>(index & 0xFFU));
+        payload.insert(payload.end(), frame.begin(), frame.end());
+    }
+    return payload;
+}
 
 bool waitUntil(auto&& predicate) {
     for (int i = 0; i < 80; ++i) {
@@ -544,4 +564,32 @@ void test_application_raw_capture_import_preserves_full_history() {
     require(exported->payload == capture.payload, "再次导出应保留完整原始 payload");
     std::filesystem::remove(tempPath);
     application.shutdown();
+}
+
+void test_application_raw_capture_import_replays_stream_in_chunks() {
+    constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_chunked_stream";
+    constexpr std::size_t frameCount = 512;
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory(protocolDir, true), "分块导入 stream 协议应可加载");
+
+    const auto payload = makeRawImportStreamPayload(frameCount);
+    require(payload.size() > 2048, "测试 payload 应超过协议 stream buffer 容量");
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "raw_import_chunked_stream",
+        .protocolDir = protocolDir,
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 123,
+        .payload = payload,
+    };
+
+    std::string error;
+    require(application.importWaveRawCapture(capture, error), "导入大 payload psraw 应成功");
+    const auto importedSnapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity());
+    require(!importedSnapshot.channels.empty(), "导入后应生成波形通道");
+    require(importedSnapshot.channels.front().totalSamples == frameCount,
+            "导入回放应按分块解析全部 stream 帧，而不是只保留尾部数据");
 }
