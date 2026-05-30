@@ -48,8 +48,7 @@ private:
     void drawCommDock();
     void drawProtocolDock();
     void drawLuaDockWindows();
-    void drawSendDock();
-    void drawReceiveDock();
+    void drawTransferDock();
     void drawLogDock();
     void drawScriptDock();
     void drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls);
@@ -118,11 +117,11 @@ private:
     bool running_{false};
     bool showCommDock_{true};
     bool showProtocolDock_{true};
-    bool showSendDock_{true};
-    bool showReceiveDock_{true};
+    bool showTransferDock_{true};
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};
+    float transferSendSectionHeight_{210.0F};
     bool aboutDialogRequested_{false};
     bool updateCheckDialogRequested_{false};
     bool updateCheckInProgress_{false};

@@ -6,6 +6,7 @@
 #include "protoscope/transport/transport.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/editable_combo.hpp"
+#include "protoscope/ui/icons.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 
 #if defined(_WIN32)
@@ -70,6 +71,12 @@ std::vector<std::filesystem::path> candidateChineseFonts() {
         "C:/Windows/Fonts/simhei.ttf",
         "C:/Windows/Fonts/simsun.ttc",
         "3rdparty/imgui/misc/fonts/DroidSans.ttf",
+    };
+}
+
+std::vector<std::filesystem::path> candidateIconFonts() {
+    return {
+        "assets/fonts/fa-solid-900.ttf",
     };
 }
 
@@ -402,6 +409,188 @@ std::string buildRowListText(const std::vector<dock::ReceiveRow>& rows, bool sho
         text.append(dock::formatReceiveRowSingleLine(row, showTimestamps, showHex));
     }
     return text;
+}
+
+std::string formatShortTimestampText(std::uint64_t timestampMs) {
+    const auto timePoint = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestampMs));
+    const auto secondsPoint = std::chrono::time_point_cast<std::chrono::seconds>(timePoint);
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint - secondsPoint).count();
+    const std::time_t timeValue = std::chrono::system_clock::to_time_t(timePoint);
+
+    std::tm localTm{};
+#if defined(_WIN32)
+    localtime_s(&localTm, &timeValue);
+#else
+    localtime_r(&timeValue, &localTm);
+#endif
+
+    char buffer[32]{};
+    std::snprintf(buffer,
+                  sizeof(buffer),
+                  "%02d:%02d:%02d.%03d",
+                  localTm.tm_hour,
+                  localTm.tm_min,
+                  localTm.tm_sec,
+                  static_cast<int>(millis));
+    return buffer;
+}
+
+std::string bytesToAsciiPreview(const std::vector<std::uint8_t>& bytes) {
+    std::string text;
+    text.reserve(bytes.size());
+    for (const auto byte : bytes) {
+        const char ch = static_cast<char>(byte);
+        text.push_back(std::isprint(static_cast<unsigned char>(ch)) ? ch : '.');
+    }
+    return text;
+}
+
+std::string flattenTransferText(std::string_view text) {
+    std::string flattened;
+    flattened.reserve(text.size());
+    for (const char ch : text) {
+        flattened.push_back(ch == '\r' || ch == '\n' || ch == '\t' ? ' ' : ch);
+    }
+    return flattened;
+}
+
+std::string transferRowContent(const dock::ReceiveRow& row, bool showHex) {
+    if (!row.message.empty()) {
+        return flattenTransferText(row.message);
+    }
+    if (row.bytes.empty()) {
+        return {};
+    }
+    return showHex ? protocol_utils::bytesToHex(row.bytes, true) : bytesToAsciiPreview(row.bytes);
+}
+
+bool matchesTransferFilter(const dock::ReceiveRow& row, dock::TransferLogFilter filter) {
+    switch (filter) {
+    case dock::TransferLogFilter::Rx:
+        return row.direction == "RX";
+    case dock::TransferLogFilter::Tx:
+        return row.direction == "TX";
+    case dock::TransferLogFilter::All:
+    default:
+        return true;
+    }
+}
+
+std::vector<const dock::ReceiveRow*> filteredTransferRows(const std::vector<dock::ReceiveRow>& rows, dock::TransferLogFilter filter) {
+    std::vector<const dock::ReceiveRow*> filtered;
+    filtered.reserve(rows.size());
+    for (const auto& row : rows) {
+        if (matchesTransferFilter(row, filter)) {
+            filtered.push_back(&row);
+        }
+    }
+    return filtered;
+}
+
+void drawIconTooltip(const char* text) {
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
+        ImGui::SetTooltip("%s", text);
+    }
+}
+
+bool drawIconButton(const char* icon, const char* tooltip, const ImVec2& size = ImVec2(0.0F, 0.0F)) {
+    const bool clicked = ImGui::Button(icon, size);
+    drawIconTooltip(tooltip);
+    return clicked;
+}
+
+bool drawIconCheckbox(const char* icon, bool* value, const char* tooltip) {
+    ImGui::PushID(icon);
+    const bool changed = ImGui::Checkbox("##icon_checkbox", value);
+    ImGui::SameLine(0.0F, 0.0F);
+    ImGui::TextUnformatted(icon);
+    drawIconTooltip(tooltip);
+    ImGui::PopID();
+    return changed;
+}
+
+bool drawTransferLogFilterButton(const char* label, dock::TransferLogFilter value, dock::TransferLogFilter& filter) {
+    const bool active = filter == value;
+    if (active) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    }
+    const bool clicked = ImGui::SmallButton(label);
+    if (active) {
+        ImGui::PopStyleColor();
+    }
+    if (clicked) {
+        filter = value;
+    }
+    return clicked;
+}
+
+bool drawHorizontalSplitter(const char* id, float& topHeight, float minTopHeight, float minBottomHeight, float totalHeight, float thickness) {
+    const float safeThickness = (std::max)(thickness, 4.0F);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
+    ImGui::Button(id, ImVec2(-1.0F, safeThickness));
+    ImGui::PopStyleColor(3);
+    if (ImGui::IsItemActive()) {
+        topHeight += ImGui::GetIO().MouseDelta.y;
+        topHeight = (std::clamp)(topHeight, minTopHeight, (std::max)(minTopHeight, totalHeight - minBottomHeight - safeThickness));
+        return true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    }
+    return false;
+}
+
+void drawTransferLogRows(const char* childId,
+                         const std::vector<const dock::ReceiveRow*>& rows,
+                         bool showTimestamps,
+                         bool showHex,
+                         bool& pauseScroll,
+                         const std::string& emptyText) {
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    const ImVec2 childSize(available.x, (std::max)(available.y, ImGui::GetTextLineHeightWithSpacing() * 4.0F));
+    if (ImGui::BeginChild(childId, childSize, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+        ImGuiWindow* childWindow = ImGui::GetCurrentWindow();
+        const bool stickToBottom = childWindow->Scroll.y >= childWindow->ScrollMax.y - 4.0F;
+        if (rows.empty()) {
+            ImGui::TextDisabled("%s", emptyText.c_str());
+        } else if (ImGui::BeginTable("##transfer_log_table", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable)) {
+            ImGui::TableSetupColumn("方向", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize(" TX ").x + 18.0F);
+            ImGui::TableSetupColumn("时间", ImGuiTableColumnFlags_WidthFixed, showTimestamps ? 92.0F : 1.0F);
+            ImGui::TableSetupColumn("端点", ImGuiTableColumnFlags_WidthFixed, 130.0F);
+            ImGui::TableSetupColumn("内容", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+
+            for (const auto* row : rows) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                const bool isTx = row->direction == "TX";
+                const ImVec4 color = isTx ? ImVec4(0.95F, 0.68F, 0.22F, 1.0F) : ImVec4(0.38F, 0.82F, 0.52F, 1.0F);
+                ImGui::TextColored(color, "%s", row->direction.empty() ? "-" : row->direction.c_str());
+
+                ImGui::TableSetColumnIndex(1);
+                if (showTimestamps) {
+                    const auto timestamp = formatShortTimestampText(row->timestampMs);
+                    ImGui::TextUnformatted(timestamp.c_str());
+                }
+
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted(row->endpoint.c_str());
+
+                ImGui::TableSetColumnIndex(3);
+                const auto content = transferRowContent(*row, showHex);
+                ImGui::TextUnformatted(content.c_str());
+            }
+            ImGui::EndTable();
+        }
+
+        // 核心流程：记录区只在用户停留底部时自动跟随，避免查看历史 TX/RX 时被滚动打断。
+        if (!pauseScroll && stickToBottom) {
+            ImGui::SetScrollY(childWindow, childWindow->ScrollMax.y);
+        }
+    }
+    ImGui::EndChild();
 }
 
 void drawRowList(const char* childId,
@@ -744,6 +933,18 @@ void GuiRuntime::ensureChineseFont() {
             break;
         }
     }
+    for (const auto& candidate : candidateIconFonts()) {
+        if (!std::filesystem::exists(candidate)) {
+            continue;
+        }
+        ImFontConfig iconConfig;
+        iconConfig.MergeMode = true;
+        iconConfig.PixelSnapH = true;
+        iconConfig.GlyphMinAdvanceX = 18.0F;
+        static constexpr ImWchar kIconRanges[] = {0xf000, 0xf8ff, 0};
+        io.Fonts->AddFontFromFileTTF(candidate.string().c_str(), 16.0F, &iconConfig, kIconRanges);
+        break;
+    }
 }
 
 void GuiRuntime::renderFrame() {
@@ -782,8 +983,7 @@ void GuiRuntime::renderFrame() {
         // 核心流程：先切左栏，再从主区向上切辅助区，让 DockBuilder 自然保留唯一的 CentralNode。
         ImGui::DockBuilderDockWindow("通讯配置", left);
         ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
-        ImGui::DockBuilderDockWindow("发送", rightTop);
-        ImGui::DockBuilderDockWindow("接收数据", mainBottom);
+        ImGui::DockBuilderDockWindow("收发数据", rightTop);
         ImGui::DockBuilderDockWindow("日志", mainBottom);
         ImGui::DockBuilderDockWindow("脚本", mainBottom);
         ImGui::DockBuilderDockWindow("波形", mainBottom);
@@ -801,8 +1001,7 @@ void GuiRuntime::renderFrame() {
     drawCommDock();
     drawProtocolDock();
     drawLuaDockWindows();
-    drawSendDock();
-    drawReceiveDock();
+    drawTransferDock();
     drawLogDock();
     drawScriptDock();
     waveDockRenderer_.draw(showWaveDock_);
@@ -861,8 +1060,7 @@ void GuiRuntime::drawMainMenu() {
     if (ImGui::BeginMenu("视图")) {
         ImGui::MenuItem("通讯配置", nullptr, &showCommDock_);
         ImGui::MenuItem("协议脚本 / 动态控件", nullptr, &showProtocolDock_);
-        ImGui::MenuItem("发送", nullptr, &showSendDock_);
-        ImGui::MenuItem("接收数据", nullptr, &showReceiveDock_);
+        ImGui::MenuItem("收发数据", nullptr, &showTransferDock_);
         ImGui::MenuItem("日志", nullptr, &showLogDock_);
         ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
         ImGui::MenuItem("波形", nullptr, &showWaveDock_);
@@ -2099,72 +2297,83 @@ std::filesystem::path GuiRuntime::protocolControlStatePath() const {
     return std::filesystem::path("config") / "ui" / "protocol-control-state.yaml";
 }
 
-void GuiRuntime::drawSendDock() {
-    if (!showSendDock_) {
+void GuiRuntime::drawTransferDock() {
+    if (!showTransferDock_) {
         return;
     }
 
     auto& sendState = application_.docks().sendState();
     auto& comm = application_.docks().commState();
-    if (!ImGui::Begin("发送", &showSendDock_)) {
-        ImGui::End();
-        return;
-    }
-
-    bool hexMode = sendState.hexMode;
-    if (ImGui::Checkbox("HEX 发送", &hexMode)) {
-        if (!application_.setSendHexMode(hexMode)) {
-            hexMode = sendState.hexMode;
-        }
-    }
-
-    if (sendState.hexMode) {
-        char buffer[2048]{};
-        std::snprintf(buffer, sizeof(buffer), "%s", sendState.payload.c_str());
-        if (ImGui::InputTextMultiline("原始载荷", buffer, sizeof(buffer), ImVec2(-FLT_MIN, 120.0F),
-                                      ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackCharFilter,
-                                      hexEditorCallback)) {
-            sendState.payload = buffer;
-        }
-    } else {
-        char buffer[2048]{};
-        std::snprintf(buffer, sizeof(buffer), "%s", sendState.payload.c_str());
-        if (ImGui::InputTextMultiline("原始载荷", buffer, sizeof(buffer), ImVec2(-FLT_MIN, 120.0F))) {
-            sendState.payload = buffer;
-        }
-    }
-
-    if (ImGui::Button("发送原始载荷")) {
-        if (!application_.sendManualPayload(sendState.payload, sendState.hexMode)) {
-            application_.setStatusMessage(comm.lastError, true);
-        }
-    }
-
-    ImGui::End();
-}
-
-void GuiRuntime::drawReceiveDock() {
-    if (!showReceiveDock_) {
-        return;
-    }
-
     auto& receive = application_.docks().receiveState();
-    if (!ImGui::Begin("接收数据", &showReceiveDock_)) {
+    if (!ImGui::Begin("收发数据", &showTransferDock_)) {
         ImGui::End();
         return;
     }
 
-    ImGui::Checkbox("显示 HEX", &receive.showHex);
-    ImGui::SameLine();
-    ImGui::Checkbox("显示时间戳", &receive.showTimestamps);
-    ImGui::SameLine();
-    ImGui::Checkbox("暂停滚动", &receive.pauseScroll);
-    ImGui::SameLine();
-    if (ImGui::Button("清空")) {
-        application_.docks().clearReceiveRows();
-    }
+    const float availableHeight = ImGui::GetContentRegionAvail().y;
+    const float splitterThickness = ImGui::GetStyle().FramePadding.y * 2.0F;
+    const float minSendHeight = ImGui::GetFrameHeightWithSpacing() * 4.0F;
+    const float minLogHeight = ImGui::GetTextLineHeightWithSpacing() * 6.0F;
+    transferSendSectionHeight_ = (std::clamp)(
+        transferSendSectionHeight_, minSendHeight, (std::max)(minSendHeight, availableHeight - minLogHeight - splitterThickness));
 
-    drawRowList("receive_rows", receive.rows, receive.showTimestamps, receive.showHex, receive.pauseScroll, "暂无 TX/RX 原始数据");
+    if (ImGui::BeginChild("##transfer_send_section", ImVec2(0.0F, transferSendSectionHeight_), true)) {
+        ImGui::TextUnformatted(PROTOSCOPE_ICON_SEND " 发送区");
+        bool hexMode = sendState.hexMode;
+        if (drawIconCheckbox(PROTOSCOPE_ICON_HEX, &hexMode, "HEX 发送")) {
+            if (!application_.setSendHexMode(hexMode)) {
+                hexMode = sendState.hexMode;
+            }
+        }
+
+        char buffer[2048]{};
+        std::snprintf(buffer, sizeof(buffer), "%s", sendState.payload.c_str());
+        const auto flags = sendState.hexMode ? (ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackCharFilter) : ImGuiInputTextFlags_None;
+        if (ImGui::InputTextMultiline("原始载荷",
+                                      buffer,
+                                      sizeof(buffer),
+                                      ImVec2(-FLT_MIN, -ImGui::GetFrameHeightWithSpacing() * 1.4F),
+                                      flags,
+                                      sendState.hexMode ? hexEditorCallback : nullptr)) {
+            sendState.payload = buffer;
+        }
+        if (drawIconButton(PROTOSCOPE_ICON_SEND, "发送原始载荷")) {
+            if (!application_.sendManualPayload(sendState.payload, sendState.hexMode)) {
+                application_.setStatusMessage(comm.lastError, true);
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("发送原始载荷");
+    }
+    ImGui::EndChild();
+
+    // 核心流程：发送区与记录区之间用 splitter 调节高度，避免两块内容互相挤占。
+    drawHorizontalSplitter("##transfer_splitter", transferSendSectionHeight_, minSendHeight, minLogHeight, availableHeight, splitterThickness);
+
+    if (ImGui::BeginChild("##transfer_log_section", ImVec2(0.0F, 0.0F), true)) {
+        ImGui::TextUnformatted(PROTOSCOPE_ICON_EXCHANGE " 收发记录");
+        ImGui::SameLine();
+        drawTransferLogFilterButton("全部", dock::TransferLogFilter::All, receive.filter);
+        ImGui::SameLine();
+        drawTransferLogFilterButton("RX", dock::TransferLogFilter::Rx, receive.filter);
+        ImGui::SameLine();
+        drawTransferLogFilterButton("TX", dock::TransferLogFilter::Tx, receive.filter);
+        ImGui::SameLine();
+        drawIconCheckbox(PROTOSCOPE_ICON_HEX, &receive.showHex, "显示 HEX");
+        ImGui::SameLine();
+        drawIconCheckbox(PROTOSCOPE_ICON_CLOCK, &receive.showTimestamps, "显示时间戳");
+        ImGui::SameLine();
+        drawIconCheckbox(receive.pauseScroll ? PROTOSCOPE_ICON_PLAY : PROTOSCOPE_ICON_PAUSE, &receive.pauseScroll, "暂停滚动");
+        ImGui::SameLine();
+        if (drawIconButton(PROTOSCOPE_ICON_TRASH, "清空收发记录")) {
+            application_.docks().clearReceiveRows();
+        }
+
+        const auto filteredRows = filteredTransferRows(receive.rows, receive.filter);
+        drawTransferLogRows("transfer_rows", filteredRows, receive.showTimestamps, receive.showHex, receive.pauseScroll, "暂无 TX/RX 原始数据");
+    }
+    ImGui::EndChild();
+
     ImGui::End();
 }
 

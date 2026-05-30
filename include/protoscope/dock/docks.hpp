@@ -22,6 +22,12 @@ struct ReceiveRow {
 
 std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamps, bool showHex);
 
+enum class TransferLogFilter {
+    All,
+    Rx,
+    Tx,
+};
+
 struct CommDockState {
     transport::TransportKind kind{transport::TransportKind::TcpClient};
     transport::TcpClientConfig tcpClient{};
@@ -40,6 +46,7 @@ struct ReceiveDockState {
     bool pauseScroll{false};
     bool showHex{true};
     bool showTimestamps{true};
+    TransferLogFilter filter{TransferLogFilter::All};
     std::vector<ReceiveRow> rows;
 };
 
