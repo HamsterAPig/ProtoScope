@@ -382,13 +382,15 @@ void GuiRuntime::drawTransferDock()
             true)) {
         if (ImGui::BeginTable(
                 "##transfer_log_toolbar",
-                9,
+                11,
                 ImGuiTableFlags_SizingFixedFit |
                 ImGuiTableFlags_NoSavedSettings)) {
             ImGui::TableSetupColumn(
                 "title",
                 ImGuiTableColumnFlags_WidthStretch);
 
+            ImGui::TableSetupColumn("keyword", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("all", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("rx", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("tx", ImGuiTableColumnFlags_WidthFixed);
@@ -404,48 +406,54 @@ void GuiRuntime::drawTransferDock()
             ImGui::TextUnformatted(PROTOSCOPE_ICON_EXCHANGE " 收发记录");
 
             ImGui::TableSetColumnIndex(1);
-            drawTransferLogFilterButton(
-                "全部",
-                dock::TransferLogFilter::All,
-                receive.filter);
+            drawLogKeywordFilterInput("关键字##transfer_log_keyword", receive.filter, 150.0F);
 
             ImGui::TableSetColumnIndex(2);
-            drawTransferLogFilterButton(
-                "RX",
-                dock::TransferLogFilter::Rx,
-                receive.filter);
+            drawLogStatusFilterCombo("STATUS##transfer_log_status", receive.filter);
 
             ImGui::TableSetColumnIndex(3);
-            drawTransferLogFilterButton(
-                "TX",
-                dock::TransferLogFilter::Tx,
+            drawLogStatusFilterButton(
+                "全部",
+                dock::LogStatusFilter::All,
                 receive.filter);
 
             ImGui::TableSetColumnIndex(4);
+            drawLogStatusFilterButton(
+                "RX",
+                dock::LogStatusFilter::Rx,
+                receive.filter);
+
+            ImGui::TableSetColumnIndex(5);
+            drawLogStatusFilterButton(
+                "TX",
+                dock::LogStatusFilter::Tx,
+                receive.filter);
+
+            ImGui::TableSetColumnIndex(6);
             drawIconCheckbox(
                 PROTOSCOPE_ICON_HEX,
                 &receive.showHex,
                 "显示 HEX");
 
-            ImGui::TableSetColumnIndex(5);
+            ImGui::TableSetColumnIndex(7);
             drawIconCheckbox(
                 PROTOSCOPE_ICON_CLOCK,
                 &receive.showTimestamps,
                 "显示时间戳");
 
-            ImGui::TableSetColumnIndex(6);
+            ImGui::TableSetColumnIndex(8);
             drawIconCheckbox(
                 receive.pauseScroll ? PROTOSCOPE_ICON_PLAY : PROTOSCOPE_ICON_PAUSE,
                 &receive.pauseScroll,
                 "暂停滚动");
 
-            ImGui::TableSetColumnIndex(7);
+            ImGui::TableSetColumnIndex(9);
             if (ImGui::Button("导出##transfer_log_export")) {
                 openTransferLogExportDialog();
             }
             drawIconTooltip("导出当前过滤后的收发记录");
 
-            ImGui::TableSetColumnIndex(8);
+            ImGui::TableSetColumnIndex(10);
             if (drawIconButton(PROTOSCOPE_ICON_TRASH, "清空收发记录")) {
                 application_.docks().clearReceiveRows();
             }
@@ -454,7 +462,7 @@ void GuiRuntime::drawTransferDock()
         }
 
         const auto filteredRows =
-            filteredTransferRows(receive.rows, receive.filter);
+            dock::filteredLogRows(receive.rows, receive.filter, true);
 
         drawTransferLogRows(
             "transfer_rows",
@@ -647,6 +655,10 @@ void GuiRuntime::drawLogDock() {
         return;
     }
 
+    drawLogKeywordFilterInput("关键字##host_log_keyword", logState.filter, 190.0F);
+    ImGui::SameLine();
+    drawLogStatusFilterCombo("STATUS##host_log_status", logState.filter);
+    ImGui::SameLine();
     ImGui::Checkbox("显示时间戳", &logState.showTimestamps);
     ImGui::SameLine();
     ImGui::Checkbox("暂停滚动", &logState.pauseScroll);
@@ -659,7 +671,8 @@ void GuiRuntime::drawLogDock() {
         openHostLogExportDialog();
     }
 
-    drawRowList("log_rows", logState.rows, logState.showTimestamps, false, logState.pauseScroll, "暂无宿主日志");
+    const auto filteredRows = dock::filteredLogRows(logState.rows, logState.filter, false);
+    drawRowList("log_rows", filteredRows, logState.showTimestamps, false, logState.pauseScroll, "暂无宿主日志");
     ImGui::End();
 }
 
@@ -674,6 +687,10 @@ void GuiRuntime::drawScriptDock() {
         return;
     }
 
+    drawLogKeywordFilterInput("关键字##script_log_keyword", scriptState.filter, 190.0F);
+    ImGui::SameLine();
+    drawLogStatusFilterCombo("STATUS##script_log_status", scriptState.filter);
+    ImGui::SameLine();
     ImGui::Checkbox("显示时间戳", &scriptState.showTimestamps);
     ImGui::SameLine();
     ImGui::Checkbox("暂停滚动", &scriptState.pauseScroll);
@@ -686,7 +703,8 @@ void GuiRuntime::drawScriptDock() {
         openScriptLogExportDialog();
     }
 
-    drawRowList("script_rows", scriptState.rows, scriptState.showTimestamps, false, scriptState.pauseScroll, "暂无 Lua 日志或事件");
+    const auto filteredRows = dock::filteredLogRows(scriptState.rows, scriptState.filter, false);
+    drawRowList("script_rows", filteredRows, scriptState.showTimestamps, false, scriptState.pauseScroll, "暂无 Lua 日志或事件");
     ImGui::End();
 }
 

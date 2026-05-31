@@ -40,11 +40,26 @@ std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex);
 std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamps, bool showHex);
 std::string formatReceiveRowsText(std::span<const ReceiveRow> rows, bool showTimestamps, bool showHex);
 
-enum class TransferLogFilter {
+enum class LogStatusFilter {
     All,
     Rx,
     Tx,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Event,
+    ScriptLog,
+    Other,
 };
+
+struct LogFilterState {
+    std::string keyword;
+    LogStatusFilter status{LogStatusFilter::All};
+};
+
+bool matchesLogFilter(const ReceiveRow& row, const LogFilterState& filter, bool includeBytePreview);
+std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview);
 
 struct CommDockState {
     transport::TransportKind kind{transport::TransportKind::TcpClient};
@@ -64,19 +79,21 @@ struct ReceiveDockState {
     bool pauseScroll{false};
     bool showHex{true};
     bool showTimestamps{true};
-    TransferLogFilter filter{TransferLogFilter::All};
+    LogFilterState filter{};
     std::vector<ReceiveRow> rows;
 };
 
 struct LogDockState {
     bool pauseScroll{false};
     bool showTimestamps{true};
+    LogFilterState filter{};
     std::vector<ReceiveRow> rows;
 };
 
 struct ScriptDockState {
     bool pauseScroll{false};
     bool showTimestamps{true};
+    LogFilterState filter{};
     std::vector<ReceiveRow> rows;
 };
 

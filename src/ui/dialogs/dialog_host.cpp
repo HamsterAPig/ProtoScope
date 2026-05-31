@@ -399,7 +399,7 @@ std::vector<dock::ReceiveRow> GuiRuntime::logExportRows(LogExportTarget target) 
     switch (target) {
     case LogExportTarget::Transfer: {
         const auto& receive = docks.receiveState();
-        const auto filteredRows = filteredTransferRows(receive.rows, receive.filter);
+        const auto filteredRows = dock::filteredLogRows(receive.rows, receive.filter, true);
         std::vector<dock::ReceiveRow> rows;
         rows.reserve(filteredRows.size());
         for (const auto* row : filteredRows) {
@@ -407,10 +407,26 @@ std::vector<dock::ReceiveRow> GuiRuntime::logExportRows(LogExportTarget target) 
         }
         return rows;
     }
-    case LogExportTarget::Host:
-        return docks.logState().rows;
-    case LogExportTarget::Script:
-        return docks.scriptState().rows;
+    case LogExportTarget::Host: {
+        const auto& logState = docks.logState();
+        const auto filteredRows = dock::filteredLogRows(logState.rows, logState.filter, false);
+        std::vector<dock::ReceiveRow> rows;
+        rows.reserve(filteredRows.size());
+        for (const auto* row : filteredRows) {
+            rows.push_back(*row);
+        }
+        return rows;
+    }
+    case LogExportTarget::Script: {
+        const auto& scriptState = docks.scriptState();
+        const auto filteredRows = dock::filteredLogRows(scriptState.rows, scriptState.filter, false);
+        std::vector<dock::ReceiveRow> rows;
+        rows.reserve(filteredRows.size());
+        for (const auto* row : filteredRows) {
+            rows.push_back(*row);
+        }
+        return rows;
+    }
     }
     return {};
 }

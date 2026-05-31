@@ -410,29 +410,6 @@ bool shouldStickMultilineChildToBottom(const ImGuiWindow* window) {
     return alreadyAtBottom || pendingScrollToBottom;
 }
 
-bool matchesTransferFilter(const dock::ReceiveRow& row, dock::TransferLogFilter filter) {
-    switch (filter) {
-    case dock::TransferLogFilter::Rx:
-        return row.direction == "RX";
-    case dock::TransferLogFilter::Tx:
-        return row.direction == "TX";
-    case dock::TransferLogFilter::All:
-    default:
-        return true;
-    }
-}
-
-std::vector<const dock::ReceiveRow*> filteredTransferRows(const std::vector<dock::ReceiveRow>& rows, dock::TransferLogFilter filter) {
-    std::vector<const dock::ReceiveRow*> filtered;
-    filtered.reserve(rows.size());
-    for (const auto& row : rows) {
-        if (matchesTransferFilter(row, filter)) {
-            filtered.push_back(&row);
-        }
-    }
-    return filtered;
-}
-
 std::string formatShortLogTimestamp(std::uint64_t timestampMs) {
     const auto timePoint = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestampMs));
     const auto secondsPoint = std::chrono::time_point_cast<std::chrono::seconds>(timePoint);
@@ -734,8 +711,8 @@ bool drawIconCheckbox(const char* icon, bool* value, const char* tooltip) {
     return changed;
 }
 
-bool drawTransferLogFilterButton(const char* label, dock::TransferLogFilter value, dock::TransferLogFilter& filter) {
-    const bool active = filter == value;
+bool drawLogStatusFilterButton(const char* label, dock::LogStatusFilter value, dock::LogFilterState& filter) {
+    const bool active = filter.status == value;
     if (active) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
     }
@@ -744,9 +721,61 @@ bool drawTransferLogFilterButton(const char* label, dock::TransferLogFilter valu
         ImGui::PopStyleColor();
     }
     if (clicked) {
-        filter = value;
+        filter.status = value;
     }
     return clicked;
+}
+
+void drawLogKeywordFilterInput(const char* id, dock::LogFilterState& filter, float width) {
+    char buffer[128]{};
+    std::snprintf(buffer, sizeof(buffer), "%s", filter.keyword.c_str());
+    ImGui::SetNextItemWidth(width);
+    if (ImGui::InputText(id, buffer, sizeof(buffer))) {
+        filter.keyword = buffer;
+    }
+    drawIconTooltip("按关键字筛选 STATUS、端点、消息和收发内容");
+}
+
+void drawLogStatusFilterCombo(const char* id, dock::LogFilterState& filter) {
+    struct StatusOption {
+        dock::LogStatusFilter value;
+        const char* label;
+    };
+    constexpr StatusOption options[] = {
+        {dock::LogStatusFilter::All, "全部"},
+        {dock::LogStatusFilter::Rx, "RX"},
+        {dock::LogStatusFilter::Tx, "TX"},
+        {dock::LogStatusFilter::Debug, "DEBUG"},
+        {dock::LogStatusFilter::Info, "INFO"},
+        {dock::LogStatusFilter::Warn, "WARN"},
+        {dock::LogStatusFilter::Error, "ERROR"},
+        {dock::LogStatusFilter::Event, "EVENT"},
+        {dock::LogStatusFilter::ScriptLog, "LOG"},
+        {dock::LogStatusFilter::Other, "Other"},
+    };
+
+    const char* currentLabel = "全部";
+    for (const auto& option : options) {
+        if (option.value == filter.status) {
+            currentLabel = option.label;
+            break;
+        }
+    }
+
+    ImGui::SetNextItemWidth(96.0F);
+    if (ImGui::BeginCombo(id, currentLabel)) {
+        for (const auto& option : options) {
+            const bool selected = filter.status == option.value;
+            if (ImGui::Selectable(option.label, selected)) {
+                filter.status = option.value;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    drawIconTooltip("按日志 STATUS 筛选");
 }
 
 bool drawHorizontalSplitter(const char* id, float& topHeight, float minTopHeight, float minBottomHeight, float totalHeight, float thickness) {
@@ -777,17 +806,12 @@ void drawTransferLogRows(const char* childId,
 }
 
 void drawRowList(const char* childId,
-                 const std::vector<dock::ReceiveRow>& rows,
+                 const std::vector<const dock::ReceiveRow*>& rows,
                  bool showTimestamps,
                  bool showHex,
                  bool& pauseScroll,
                  const std::string& emptyText) {
-    std::vector<const dock::ReceiveRow*> rowRefs;
-    rowRefs.reserve(rows.size());
-    for (const auto& row : rows) {
-        rowRefs.push_back(&row);
-    }
-    drawModernLogRows(childId, rowRefs, showTimestamps, showHex, pauseScroll, emptyText);
+    drawModernLogRows(childId, rows, showTimestamps, showHex, pauseScroll, emptyText);
 }
 
 bool digitsOnly(const std::string& text) {
