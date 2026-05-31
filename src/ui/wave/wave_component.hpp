@@ -17,4 +17,12 @@ public:
     virtual void commit(WaveContext&) {}
 };
 
+class IWaveToolbarSection {
+public:
+    virtual ~IWaveToolbarSection() = default;
+
+    virtual std::string_view id() const = 0;
+    virtual void draw(app::Application& application, plot::WaveDockState& wave) = 0;
+};
+
 } // namespace protoscope::ui

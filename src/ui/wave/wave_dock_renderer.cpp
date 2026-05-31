@@ -6,6 +6,7 @@
 #include "wave_component.hpp"
 #include "wave_context.hpp"
 #include "wave_detail.hpp"
+#include "wave_fft_component.hpp"
 #include "wave_render_service.hpp"
 
 #include <imgui.h>
@@ -523,17 +524,6 @@ public:
     void draw(WaveContext& context) override {
         ImGui::BeginChild("##wave_main_panel", ImVec2(0.0F, context.layout->mainHeight), false, ImGuiWindowFlags_NoScrollbar);
         drawOscilloscopePlot(context.wave, *context.renderFrame);
-        ImGui::EndChild();
-    }
-};
-
-class WaveFftComponent final : public IWaveComponent {
-public:
-    std::string_view id() const override { return "wave_fft"; }
-
-    void draw(WaveContext& context) override {
-        ImGui::BeginChild("##wave_main_panel", ImVec2(0.0F, context.layout->mainHeight), false, ImGuiWindowFlags_NoScrollbar);
-        drawWaveFftPlot(context.wave, *context.renderFrame);
         ImGui::EndChild();
     }
 };

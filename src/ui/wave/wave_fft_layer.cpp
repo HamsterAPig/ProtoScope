@@ -1,3 +1,4 @@
+#include "wave_fft_component.hpp"
 #include "wave_render_service.hpp"
 
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace protoscope::ui {
@@ -693,7 +695,9 @@ void drawCursorOverlay(const std::array<std::optional<plot::WaveFftReadout>, 2>&
 
 } // namespace
 
-PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData& frame) {
+namespace {
+
+PlotRenderResult drawWaveFftPlotContent(plot::WaveDockState& wave, const WaveFrameData& frame) {
     PlotRenderResult result{};
     const auto* fftFrame = frame.fftFrame;
     if (fftFrame == nullptr || !fftFrame->enabled) {
@@ -780,6 +784,16 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
         drawCursorSummary(cursorReadouts);
     }
     return result;
+}
+
+} // namespace
+
+static_assert(std::is_base_of_v<IWaveComponent, WaveFftComponent>, "WaveFftComponent 必须通过波形组件基类接入");
+
+void WaveFftComponent::draw(WaveContext& context) {
+    ImGui::BeginChild("##wave_main_panel", ImVec2(0.0F, context.layout->mainHeight), false, ImGuiWindowFlags_NoScrollbar);
+    drawWaveFftPlotContent(context.wave, *context.renderFrame);
+    ImGui::EndChild();
 }
 
 } // namespace protoscope::ui

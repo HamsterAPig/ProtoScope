@@ -3,15 +3,18 @@
 #include "protoscope/ui/icons.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
+#include "wave_component.hpp"
 #include "wave_detail.hpp"
 #include "wave_render_service.hpp"
 
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <type_traits>
 
 namespace protoscope::ui {
 
@@ -69,7 +72,7 @@ void ensureFftChannelState(plot::WaveDockState& wave) {
     }
 }
 
-void drawFftToolbarSection(plot::WaveDockState& wave) {
+void drawFftToolbarSectionContent(plot::WaveDockState& wave) {
     auto& view = wave.view;
     ensureFftChannelState(wave);
 
@@ -214,6 +217,17 @@ void drawFftToolbarSection(plot::WaveDockState& wave) {
     }
 }
 
+class WaveFftToolbarSection final : public IWaveToolbarSection {
+public:
+    std::string_view id() const override { return "wave_fft_toolbar"; }
+
+    void draw(app::Application&, plot::WaveDockState& wave) override {
+        drawFftToolbarSectionContent(wave);
+    }
+};
+
+static_assert(std::is_base_of_v<IWaveToolbarSection, WaveFftToolbarSection>, "WaveFftToolbarSection 必须通过工具栏段基类接入");
+
 void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
     auto& view = wave.view;
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
@@ -341,7 +355,11 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
     }
 
     ImGui::Spacing();
-    drawFftToolbarSection(wave);
+    WaveFftToolbarSection fftToolbarSection;
+    std::array<IWaveToolbarSection*, 1> toolbarSections{&fftToolbarSection};
+    for (auto* section : toolbarSections) {
+        section->draw(application, wave);
+    }
 
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("视图", ImGuiTreeNodeFlags_DefaultOpen)) {

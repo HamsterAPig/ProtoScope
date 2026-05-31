@@ -201,7 +201,6 @@ void renderWaveChannels(plot::WaveViewState& view,
                         const ImPlotRect& limits,
                         std::vector<std::size_t>& visibleChannelIndices);
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame);
-PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData& frame);
 void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveSnapshot& snapshot,
                             const plot::WaveDisplayData& displayData,
