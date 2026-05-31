@@ -21,6 +21,59 @@ enum class FftZoomSelectionAxisMode {
     XY,
 };
 
+struct FftValueRange {
+    double min{0.0};
+    double max{1.0};
+};
+
+constexpr double kFftMinValueHeight = 1e-6;
+constexpr double kFftWheelZoomBase = 0.85;
+
+FftValueRange normalizeFftValueRange(double minValue, double maxValue, double fallbackMin, double fallbackMax) {
+    if (maxValue < minValue) {
+        std::swap(minValue, maxValue);
+    }
+    if (!std::isfinite(minValue)) {
+        minValue = fallbackMin;
+    }
+    if (!std::isfinite(maxValue)) {
+        maxValue = fallbackMax;
+    }
+    if (maxValue < minValue) {
+        std::swap(minValue, maxValue);
+    }
+    const double height = maxValue - minValue;
+    if (!std::isfinite(height) || height < kFftMinValueHeight) {
+        const double center = std::isfinite(0.5 * (minValue + maxValue)) ? 0.5 * (minValue + maxValue) : fallbackMin;
+        minValue = center - 0.5 * kFftMinValueHeight;
+        maxValue = minValue + kFftMinValueHeight;
+    }
+    return {.min = minValue, .max = maxValue};
+}
+
+FftValueRange panFftValueRangeUnbounded(const FftValueRange& current, double deltaValue) {
+    if (!std::isfinite(deltaValue)) {
+        return current;
+    }
+    // 核心流程：频域 Y 轴平移只保护数值有效性，不再按当前数据幅值/相位范围夹紧。
+    return normalizeFftValueRange(current.min + deltaValue, current.max + deltaValue, current.min, current.max);
+}
+
+FftValueRange zoomFftValueRangeUnbounded(const FftValueRange& current, double wheelDelta, double centerValue) {
+    if (std::abs(wheelDelta) <= 0.0) {
+        return current;
+    }
+    const double height = (std::max)(current.max - current.min, kFftMinValueHeight);
+    if (!std::isfinite(centerValue)) {
+        centerValue = 0.5 * (current.min + current.max);
+    }
+    const double nextHeight = (std::max)(height * std::pow(kFftWheelZoomBase, wheelDelta), kFftMinValueHeight);
+    const double ratio = (std::clamp)((centerValue - current.min) / height, 0.0, 1.0);
+    // 核心流程：滚轮缩放允许 Y 轴越过 fit 范围，双击/显示全部再回到自动 fit。
+    const double nextMin = centerValue - ratio * nextHeight;
+    return normalizeFftValueRange(nextMin, nextMin + nextHeight, current.min, current.max);
+}
+
 ImPlotPoint fftBinGetter(int index, void* userData) {
     const auto* payload = static_cast<const FftGetterPayload*>(userData);
     const auto& bin = payload->bins[index];
@@ -264,36 +317,39 @@ bool handleFftPan(plot::WaveViewState& view,
     const ImPlotPoint currentPlot = ImPlot::PixelsToPlot(mousePixel);
     const ImPlotPoint previousPlot = ImPlot::PixelsToPlot(previousPixel);
     const auto fitViewport = plot::makeFftFitViewport(frame);
+    const auto currentValueRange = normalizeFftValueRange(phasePlot ? view.fftPhaseMin : view.fftMagnitudeMin,
+                                                         phasePlot ? view.fftPhaseMax : view.fftMagnitudeMax,
+                                                         phasePlot ? fitViewport.phaseMin : fitViewport.magnitudeMin,
+                                                         phasePlot ? fitViewport.phaseMax : fitViewport.magnitudeMax);
     plot::WaveViewport viewport{
         .minTime = view.fftFrequencyMin,
         .maxTime = view.fftFrequencyMax,
-        .minValue = phasePlot ? view.fftPhaseMin : view.fftMagnitudeMin,
-        .maxValue = phasePlot ? view.fftPhaseMax : view.fftMagnitudeMax,
+        .minValue = currentValueRange.min,
+        .maxValue = currentValueRange.max,
     };
     const plot::WaveDataBounds bounds{
         .minTime = fitViewport.frequencyMin,
         .maxTime = fitViewport.frequencyMax,
-        .minValue = phasePlot ? fitViewport.phaseMin : fitViewport.magnitudeMin,
-        .maxValue = phasePlot ? fitViewport.phaseMax : fitViewport.magnitudeMax,
+        .minValue = currentValueRange.min,
+        .maxValue = currentValueRange.max,
         .minStep = minFrequencyWidth,
         .valid = true,
     };
 
     viewport.minTime += previousPlot.x - currentPlot.x;
     viewport.maxTime += previousPlot.x - currentPlot.x;
-    viewport.minValue += previousPlot.y - currentPlot.y;
-    viewport.maxValue += previousPlot.y - currentPlot.y;
     const auto normalized = plot::normalizeOverviewViewport(viewport, bounds, minFrequencyWidth);
+    const auto pannedValueRange = panFftValueRangeUnbounded(currentValueRange, previousPlot.y - currentPlot.y);
 
     // 核心流程：频域左键拖动只移动独立频域视口，不改变 FFT 输入窗口和时域主视图。
     view.fftFrequencyMin = normalized.minTime;
     view.fftFrequencyMax = normalized.maxTime;
     if (phasePlot) {
-        view.fftPhaseMin = normalized.minValue;
-        view.fftPhaseMax = normalized.maxValue;
+        view.fftPhaseMin = pannedValueRange.min;
+        view.fftPhaseMax = pannedValueRange.max;
     } else {
-        view.fftMagnitudeMin = normalized.minValue;
-        view.fftMagnitudeMax = normalized.maxValue;
+        view.fftMagnitudeMin = pannedValueRange.min;
+        view.fftMagnitudeMax = pannedValueRange.max;
     }
     return true;
 }
@@ -328,6 +384,19 @@ bool handleFftWheelZoom(plot::WaveViewState& view,
         .minStep = minFrequencyWidth,
         .valid = true,
     };
+    if (zoomMode == plot::WaveZoomMode::YOnly) {
+        const auto currentValueRange =
+            normalizeFftValueRange(current.minValue, current.maxValue, bounds.minValue, bounds.maxValue);
+        const auto zoomedValueRange = zoomFftValueRangeUnbounded(currentValueRange, io.MouseWheel, mouse.y);
+        if (phasePlot) {
+            view.fftPhaseMin = zoomedValueRange.min;
+            view.fftPhaseMax = zoomedValueRange.max;
+        } else {
+            view.fftMagnitudeMin = zoomedValueRange.min;
+            view.fftMagnitudeMax = zoomedValueRange.max;
+        }
+        return true;
+    }
     // 核心流程：FFT 频域使用独立视口，滚轮只更新频率/幅值/相位范围，绝不回写时域输入窗口。
     const auto zoomed = plot::zoomViewport(current,
                                            zoomMode,
