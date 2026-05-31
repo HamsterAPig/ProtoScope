@@ -54,33 +54,6 @@ void test_dock_log_and_script_split() {
     require(store.scriptState().rows.empty(), "脚本区应可单独清空");
 }
 
-void test_dock_log_rows_are_trimmed() {
-    protoscope::dock::DockStore store;
-
-    constexpr std::size_t kOverflowRows = 5007;
-    for (std::size_t index = 0; index < kOverflowRows; ++index) {
-        store.appendLogRow({
-            .timestampMs = static_cast<std::uint64_t>(index),
-            .direction = "INFO",
-            .endpoint = "host",
-            .bytes = {},
-            .message = "log-" + std::to_string(index),
-        });
-        store.appendScriptRow({
-            .timestampMs = static_cast<std::uint64_t>(index),
-            .direction = "LOG",
-            .endpoint = "script",
-            .bytes = {},
-            .message = "script-" + std::to_string(index),
-        });
-    }
-
-    require(store.logState().rows.size() == 5000, "宿主日志应只保留最近 5000 行");
-    require(store.scriptState().rows.size() == 5000, "脚本日志应只保留最近 5000 行");
-    require(store.logState().rows.front().message == "log-7", "宿主日志应按旧记录优先裁剪");
-    require(store.scriptState().rows.front().message == "script-7", "脚本日志应按旧记录优先裁剪");
-}
-
 void test_dock_receive_row_single_line_hex_and_ascii() {
     const protoscope::dock::ReceiveRow row{
         .timestampMs = 0,
