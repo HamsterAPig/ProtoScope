@@ -100,6 +100,8 @@ void test_plot_cursor_snap_and_delta();
 void test_plot_cursor_snap_by_time_and_measurement();
 void test_wave_cursor_smart_snap_edge();
 void test_wave_cursor_smart_snap_extreme();
+void test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms();
+void test_wave_cursor_extreme_snap_falls_back_to_window_trough();
 void test_wave_cursor_smart_snap_fallback_to_nearest();
 void test_wave_cursor_drag_time_uses_smart_snap();
 void test_plot_channel_scale_and_offset_apply_to_display_only();

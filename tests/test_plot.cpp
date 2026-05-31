@@ -307,6 +307,62 @@ void test_wave_cursor_smart_snap_extreme() {
     require(!farPeak.has_value(), "窗口外极值不应被吸附");
 }
 
+void test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms() {
+    struct Case {
+        const char* name;
+        double scale;
+        double offset;
+    };
+    const std::vector<Case> cases{
+        {"no_transform", 1.0, 0.0},
+        {"offset_only", 1.0, 2.0},
+        {"scale_only", 3.0, 0.0},
+        {"offset_and_scale", 2.0, -0.5},
+    };
+
+    for (const auto& item : cases) {
+        protoscope::plot::WaveDisplayData displayData;
+        const std::vector<double> actualValues{-1.0, 0.25, 1.0, 1.0, 0.25, -1.0};
+        auto& channel = displayData.channels.emplace_back();
+        channel.actualValues = actualValues;
+        for (std::size_t index = 0; index < actualValues.size(); ++index) {
+            const double displayValue = (actualValues[index] + item.offset) * item.scale;
+            channel.samples.push_back({
+                .time = static_cast<double>(index),
+                .value = displayValue,
+            });
+        }
+
+        const auto peak = protoscope::plot::findLocalExtremeNearTime(
+            displayData, 0, 2.9, 1.5, protoscope::plot::WaveExtremeKind::Maximum);
+        require(peak.has_value(), item.name);
+        require(peak->sampleIndex == 3, "平顶峰值应回退到搜索窗口内距离鼠标时间最近的视觉峰值样本");
+        require(std::abs(peak->value - 1.0) < 1e-9, "峰值吸附读数应保持真实测量值");
+        require(std::abs(peak->displayValue - ((1.0 + item.offset) * item.scale)) < 1e-9,
+            "峰值吸附锚点应使用 offset/scale 后的显示值");
+    }
+}
+
+void test_wave_cursor_extreme_snap_falls_back_to_window_trough() {
+    const auto displayData = makeDisplayData({
+        {.time = 0.0, .value = 2.0},
+        {.time = 1.0, .value = -3.0},
+        {.time = 2.0, .value = -3.0},
+        {.time = 3.0, .value = -1.0},
+    }, {2.0, -30.0, -30.0, -1.0});
+
+    const auto trough = protoscope::plot::findLocalExtremeNearTime(
+        displayData, 0, 1.2, 1.3, protoscope::plot::WaveExtremeKind::Minimum);
+    require(trough.has_value(), "平底谷值应能在窗口内回退吸附");
+    require(trough->sampleIndex == 1, "平底谷值应选距离鼠标时间最近的视觉谷值样本");
+    require(std::abs(trough->value + 30.0) < 1e-9, "谷值吸附读数应保持真实测量值");
+    require(std::abs(trough->displayValue + 3.0) < 1e-9, "谷值吸附锚点应使用显示值");
+
+    const auto farPeak = protoscope::plot::findLocalExtremeNearTime(
+        displayData, 0, 3.0, 0.2, protoscope::plot::WaveExtremeKind::Maximum);
+    require(!farPeak.has_value(), "搜索窗口外的平底谷值不应污染峰值吸附");
+}
+
 void test_wave_cursor_smart_snap_fallback_to_nearest() {
     const std::vector<protoscope::plot::WaveSample> flatSamples{
         {.time = 0.0, .value = 1.0},

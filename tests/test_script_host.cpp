@@ -1566,6 +1566,8 @@ static const TestCase kAllTests[] = {
     {"plot_cursor_snap_by_time_and_measurement", &test_plot_cursor_snap_by_time_and_measurement},
     {"wave_cursor_smart_snap_edge", &test_wave_cursor_smart_snap_edge},
     {"wave_cursor_smart_snap_extreme", &test_wave_cursor_smart_snap_extreme},
+    {"wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms", &test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms},
+    {"wave_cursor_extreme_snap_falls_back_to_window_trough", &test_wave_cursor_extreme_snap_falls_back_to_window_trough},
     {"wave_cursor_smart_snap_fallback_to_nearest", &test_wave_cursor_smart_snap_fallback_to_nearest},
     {"wave_cursor_drag_time_uses_smart_snap", &test_wave_cursor_drag_time_uses_smart_snap},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
