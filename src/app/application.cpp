@@ -6,15 +6,20 @@
 #include <chrono>
 #include <cmath>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <type_traits>
+#include <unordered_map>
 
 namespace protoscope::app {
 
 namespace {
 
 constexpr std::size_t kRawCaptureReplayChunkBytes = 1024;
+constexpr std::size_t kTransportEventsPerPump = 256;
+constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
+constexpr std::size_t kTransferFrameRowsPerPump = 2000;
 
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
@@ -317,6 +322,7 @@ bool Application::pumpOnce() {
     changed = flushScriptOutputs() || changed;
     changed = flushScriptLogs() || changed;
     changed = flushScriptPlots() || changed;
+    changed = flushPendingTransferFrameRows(kTransferFrameRowsPerPump) || changed;
     syncDockState();
     return changed;
 }
@@ -335,6 +341,7 @@ const dock::DockStore& Application::docks() const {
 
 void Application::openTransport() {
     cancelAllTxRequests("连接重新打开");
+    pendingTransportEvents_.clear();
     const auto kind = dockStore_.commState().kind;
     transport_ = createTransport(kind);
     if (!transport_) {
@@ -366,6 +373,7 @@ void Application::closeTransport() {
         transport_->close();
     }
     activeConnection_.reset();
+    pendingTransportEvents_.clear();
     transport_.reset();
     syncDockState();
 }
@@ -516,7 +524,7 @@ void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow) {
     if (batch.frames.empty()) {
         // RX 半包先留在 parser 缓冲中等待后续字节；TX 无匹配时按用户输入的原始 chunk 展示。
         if (sourceRow.direction == "TX" || !batch.errors.empty()) {
-            dockStore_.appendTransferFrameRows({sourceRow});
+            enqueueTransferFrameRows({sourceRow});
         }
         return;
     }
@@ -525,16 +533,18 @@ void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow) {
     for (const auto& frame : batch.frames) {
         frameRows.push_back(makeTransferFrameRow(sourceRow, frame));
     }
-    dockStore_.appendTransferFrameRows(std::move(frameRows));
+    enqueueTransferFrameRows(std::move(frameRows));
 }
 
 void Application::rebuildTransferFrameRows() {
     const auto rows = dockStore_.receiveState().rows;
     dockStore_.clearTransferFrameRows();
+    pendingTransferFrameRows_.clear();
     resetTransferFrameParser();
     for (const auto& row : rows) {
         appendTransferFrameRows(row);
     }
+    flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
 }
 
 void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config) {
@@ -544,6 +554,7 @@ void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config) 
         .hostLogRows = config.hostLimit,
         .scriptLogRows = config.scriptLimit,
     });
+    trimPendingTransferFrameRowsToLimit();
 }
 
 void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value) {
@@ -798,6 +809,9 @@ void Application::resetWaveHistory() {
 }
 
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
+    if (!pendingTransportEvents_.empty() || !pendingTransferFrameRows_.empty()) {
+        return nowMs();
+    }
     auto nextWakeup = scriptHost_.nextWakeupAtMs();
     if (activeHalfDuplexRequest_.has_value()) {
         if (!nextWakeup.has_value() || activeHalfDuplexRequest_->waitDeadlineMs < *nextWakeup) {
@@ -849,123 +863,147 @@ void Application::syncDockState() {
     lua.controlStates = scriptHost_.controlStatesSnapshot();
 
     auto& wave = dockStore_.waveState();
-    wave.channelSummaries.clear();
-    const auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
-    for (const auto& channel : snapshot.channels) {
-        wave.channelSummaries.push_back(channel.label + " samples=" + std::to_string(channel.totalSamples));
+    const auto waveRevision = wave.buffer.dataRevision();
+    if (!cachedWaveSummaryRevision_.has_value() || *cachedWaveSummaryRevision_ != waveRevision) {
+        wave.channelSummaries.clear();
+        const auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+        for (const auto& channel : snapshot.channels) {
+            wave.channelSummaries.push_back(channel.label + " samples=" + std::to_string(channel.totalSamples));
+        }
+        cachedWaveSummaryRevision_ = waveRevision;
     }
 }
 
 bool Application::handleTransportEvents() {
     if (!transport_) {
-        return false;
+        return !pendingTransportEvents_.empty();
     }
 
     bool changed = false;
     auto events = transport_->takeEvents();
-    for (const auto& event : events) {
-        std::visit(
-            [this, &changed]<typename T0>(const T0& evt) {
-                using T = std::decay_t<T0>;
-                if constexpr (std::is_same_v<T, transport::TransportOpenEvent>) {
+    pendingTransportEvents_.insert(pendingTransportEvents_.end(),
+                                   std::make_move_iterator(events.begin()),
+                                   std::make_move_iterator(events.end()));
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    std::size_t processed = 0;
+    while (!pendingTransportEvents_.empty() && processed < kTransportEventsPerPump) {
+        const auto event = std::move(pendingTransportEvents_.front());
+        pendingTransportEvents_.pop_front();
+        changed = processTransportEvent(event) || changed;
+        ++processed;
+        if (processed >= kTransportEventsPerPump) {
+            break;
+        }
+        if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) {
+            break;
+        }
+    }
+    return changed || !pendingTransportEvents_.empty();
+}
+
+bool Application::processTransportEvent(const transport::TransportEvent& event) {
+    bool changed = false;
+    std::visit(
+        [this, &changed]<typename T0>(const T0& evt) {
+            using T = std::decay_t<T0>;
+            if constexpr (std::is_same_v<T, transport::TransportOpenEvent>) {
+                if (evt.context.readyForIo) {
+                    activeConnection_ = evt.context;
+                    scriptHost_.onTransportOpen(evt);
+                }
+                loggingFacade_.host(config::LogLevel::Info,
+                                    "OPEN",
+                                    evt.context.endpoint,
+                                    stateMessage(dockStore_.commState().state),
+                                    evt.context.timestampMs);
+                changed = true;
+            } else if constexpr (std::is_same_v<T, transport::TransportCloseEvent>) {
+                if (evt.context.readyForIo) {
+                    scriptHost_.onTransportClose(evt);
+                }
+                loggingFacade_.host(config::LogLevel::Info, "CLOSE", evt.context.endpoint, evt.reason, evt.context.timestampMs);
+                if (activeConnection_.has_value() && activeConnection_->connectionId == evt.context.connectionId) {
+                    activeConnection_.reset();
+                }
+                cancelAllTxRequests(evt.reason.empty() ? "连接已关闭" : evt.reason);
+                std::string recordingError;
+                if (rawCaptureRecording_.isOpen() && !stopRawCaptureRecording(recordingError)) {
+                    loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
+                }
+                changed = true;
+            } else if constexpr (std::is_same_v<T, transport::TransportErrorEvent>) {
+                if (evt.context.readyForIo) {
+                    scriptHost_.onTransportError(evt);
+                }
+                loggingFacade_.host(config::LogLevel::Error, "ERROR", evt.context.endpoint, evt.message, evt.context.timestampMs);
+                dockStore_.commState().lastError = evt.message;
+                changed = true;
+            } else if constexpr (std::is_same_v<T, transport::TransportBytesEvent>) {
+                if (!evt.bytes.empty()) {
+                    // 核心流程：只消费当前活动连接的字节事件，旧连接的迟到回包直接忽略，
+                    // 避免双窗口接管场景下脚本状态与 UI 日志被过期连接污染。
+                    if (activeConnection_.has_value() && evt.context.readyForIo &&
+                        activeConnection_->connectionId != evt.context.connectionId) {
+                        return;
+                    }
+                    appendRawCaptureRecording(evt);
+                    appendLiveRawCapture(evt);
+                    scriptHost_.onTransportBytes(evt);
                     if (evt.context.readyForIo) {
                         activeConnection_ = evt.context;
-                        scriptHost_.onTransportOpen(evt);
                     }
-                    loggingFacade_.host(config::LogLevel::Info,
-                                        "OPEN",
-                                        evt.context.endpoint,
-                                        stateMessage(dockStore_.commState().state),
-                                        evt.context.timestampMs);
+                    appendTransferRow(dock::ReceiveRow{
+                        .timestampMs = evt.context.timestampMs,
+                        .direction = "RX",
+                        .endpoint = evt.context.endpoint,
+                        .bytes = evt.bytes,
+                        .message = {},
+                    });
                     changed = true;
-                } else if constexpr (std::is_same_v<T, transport::TransportCloseEvent>) {
-                    if (evt.context.readyForIo) {
-                        scriptHost_.onTransportClose(evt);
-                    }
-                    loggingFacade_.host(config::LogLevel::Info, "CLOSE", evt.context.endpoint, evt.reason, evt.context.timestampMs);
-                    if (activeConnection_.has_value() && activeConnection_->connectionId == evt.context.connectionId) {
-                        activeConnection_.reset();
-                    }
-                    cancelAllTxRequests(evt.reason.empty() ? "连接已关闭" : evt.reason);
-                    std::string recordingError;
-                    if (rawCaptureRecording_.isOpen() && !stopRawCaptureRecording(recordingError)) {
-                        loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
-                    }
-                    changed = true;
-                } else if constexpr (std::is_same_v<T, transport::TransportErrorEvent>) {
-                    if (evt.context.readyForIo) {
-                        scriptHost_.onTransportError(evt);
-                    }
-                    loggingFacade_.host(config::LogLevel::Error, "ERROR", evt.context.endpoint, evt.message, evt.context.timestampMs);
-                    dockStore_.commState().lastError = evt.message;
-                    changed = true;
-                } else if constexpr (std::is_same_v<T, transport::TransportBytesEvent>) {
-                    if (!evt.bytes.empty()) {
-                        // 核心流程：只消费当前活动连接的字节事件，旧连接的迟到回包直接忽略，
-                        // 避免双窗口接管场景下脚本状态与 UI 日志被过期连接污染。
-                        if (activeConnection_.has_value() && evt.context.readyForIo &&
-                            activeConnection_->connectionId != evt.context.connectionId) {
-                            return;
-                        }
-                        appendRawCaptureRecording(evt);
-                        appendLiveRawCapture(evt);
-                        scriptHost_.onTransportBytes(evt);
-                        if (evt.context.readyForIo) {
-                            activeConnection_ = evt.context;
-                        }
-                        appendTransferRow(dock::ReceiveRow{
-                            .timestampMs = evt.context.timestampMs,
-                            .direction = "RX",
-                            .endpoint = evt.context.endpoint,
-                            .bytes = evt.bytes,
-                            .message = {},
-                        });
-                        changed = true;
-                    }
-                } else if constexpr (std::is_same_v<T, transport::TransportTxEvent>) {
-                    if (!activeWrite_.has_value() || activeWrite_->request.id != evt.requestId) {
-                        return;
-                    }
-
-                    auto activeWrite = *activeWrite_;
-                    activeWrite_.reset();
-                    const auto state = toScriptTxState(evt.state);
-                    const std::optional<std::string> error = evt.error.empty() ? std::nullopt
-                                                                               : std::optional<std::string>{evt.error};
-                    if (state == scripting::TxEventState::Sent && activeWrite.request.kind == scripting::TxRequestKind::Request) {
-                        scriptHost_.onTxEvent(activeWrite.request.connection,
-                                              scripting::TxEvent{
-                                                  .id = activeWrite.request.id,
-                                                  .kind = activeWrite.request.kind,
-                                                  .state = scripting::TxEventState::Sent,
-                                                  .tag = activeWrite.request.tag,
-                                                  .bytes = evt.bytes,
-                                                  .queuedMs = activeWrite.request.createdAtMs,
-                                                  .finishedMs = evt.finishedAtMs,
-                                                  .error = error,
-                                              });
-                        appendTransferRow(dock::ReceiveRow{
-                            .timestampMs = evt.finishedAtMs,
-                            .direction = "TX",
-                            .endpoint = activeWrite.request.connection.endpoint,
-                            .bytes = activeWrite.request.payload,
-                            .message = {},
-                        });
-                        activeWrite.sentAtMs = evt.finishedAtMs;
-                        activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
-                        activeHalfDuplexRequest_ = activeWrite;
-                        scriptHost_.setRequestAwaitingCompletion(true);
-                        changed = true;
-                        return;
-                    }
-
-                    finishTxRequest(activeWrite.request, state, error, evt.finishedAtMs);
-                    changed = true;
-                    changed = driveTxScheduler() || changed;
                 }
-            },
-            event);
-    }
+            } else if constexpr (std::is_same_v<T, transport::TransportTxEvent>) {
+                if (!activeWrite_.has_value() || activeWrite_->request.id != evt.requestId) {
+                    return;
+                }
+
+                auto activeWrite = *activeWrite_;
+                activeWrite_.reset();
+                const auto state = toScriptTxState(evt.state);
+                const std::optional<std::string> error = evt.error.empty() ? std::nullopt : std::optional<std::string>{evt.error};
+                if (state == scripting::TxEventState::Sent && activeWrite.request.kind == scripting::TxRequestKind::Request) {
+                    scriptHost_.onTxEvent(activeWrite.request.connection,
+                                          scripting::TxEvent{
+                                              .id = activeWrite.request.id,
+                                              .kind = activeWrite.request.kind,
+                                              .state = scripting::TxEventState::Sent,
+                                              .tag = activeWrite.request.tag,
+                                              .bytes = evt.bytes,
+                                              .queuedMs = activeWrite.request.createdAtMs,
+                                              .finishedMs = evt.finishedAtMs,
+                                              .error = error,
+                                          });
+                    appendTransferRow(dock::ReceiveRow{
+                        .timestampMs = evt.finishedAtMs,
+                        .direction = "TX",
+                        .endpoint = activeWrite.request.connection.endpoint,
+                        .bytes = activeWrite.request.payload,
+                        .message = {},
+                    });
+                    activeWrite.sentAtMs = evt.finishedAtMs;
+                    activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
+                    activeHalfDuplexRequest_ = activeWrite;
+                    scriptHost_.setRequestAwaitingCompletion(true);
+                    changed = true;
+                    return;
+                }
+
+                finishTxRequest(activeWrite.request, state, error, evt.finishedAtMs);
+                changed = true;
+                changed = driveTxScheduler() || changed;
+            }
+        },
+        event);
     return changed;
 }
 
@@ -1222,6 +1260,48 @@ bool Application::flushScriptLogs() {
     return changed;
 }
 
+void Application::enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows) {
+    if (rows.empty()) {
+        return;
+    }
+    for (auto& row : rows) {
+        pendingTransferFrameRows_.push_back(std::move(row));
+    }
+    trimPendingTransferFrameRowsToLimit();
+}
+
+void Application::trimPendingTransferFrameRowsToLimit() {
+    const auto limit = runtimeConfig_.gui.logHistory.transferFrameLimit;
+    if (limit == 0U) {
+        pendingTransferFrameRows_.clear();
+        return;
+    }
+    const auto displayed = dockStore_.receiveState().frameRows.size();
+    if (displayed + pendingTransferFrameRows_.size() <= limit) {
+        return;
+    }
+    auto excess = displayed + pendingTransferFrameRows_.size() - limit;
+    while (excess > 0 && !pendingTransferFrameRows_.empty()) {
+        pendingTransferFrameRows_.pop_front();
+        --excess;
+    }
+}
+
+bool Application::flushPendingTransferFrameRows(std::size_t maxRows) {
+    if (pendingTransferFrameRows_.empty() || maxRows == 0) {
+        return false;
+    }
+    std::vector<dock::ReceiveRow> rows;
+    rows.reserve((std::min)(maxRows, pendingTransferFrameRows_.size()));
+    while (!pendingTransferFrameRows_.empty() && rows.size() < maxRows) {
+        rows.push_back(std::move(pendingTransferFrameRows_.front()));
+        pendingTransferFrameRows_.pop_front();
+    }
+    dockStore_.appendTransferFrameRows(std::move(rows));
+    trimPendingTransferFrameRowsToLimit();
+    return true;
+}
+
 logging::LoggingFacade& Application::logger() {
     return loggingFacade_;
 }
@@ -1345,7 +1425,29 @@ bool Application::flushScriptPlots() {
         changed = true;
     }
 
-    for (auto& [channelIndex, request] : scriptHost_.drainPlotAppends()) {
+    auto appendRequests = scriptHost_.drainPlotAppends();
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergedRequests;
+    std::unordered_map<std::string, std::size_t> mergedIndexes;
+    mergedRequests.reserve(appendRequests.size());
+    for (auto& [channelIndex, request] : appendRequests) {
+        if (request.samples.empty()) {
+            continue;
+        }
+        auto key = std::to_string(channelIndex);
+        key.push_back('\x1F');
+        key.append(request.source);
+        const auto [position, inserted] = mergedIndexes.emplace(key, mergedRequests.size());
+        if (inserted) {
+            mergedRequests.emplace_back(channelIndex, std::move(request));
+            continue;
+        }
+        auto& targetSamples = mergedRequests[position->second].second.samples;
+        targetSamples.insert(targetSamples.end(),
+                             std::make_move_iterator(request.samples.begin()),
+                             std::make_move_iterator(request.samples.end()));
+    }
+
+    for (auto& [channelIndex, request] : mergedRequests) {
         if (wave.buffer.append(channelIndex, std::move(request))) {
             changed = true;
         }

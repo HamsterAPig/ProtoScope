@@ -8,6 +8,7 @@
 #include "protoscope/ui/editable_combo.hpp"
 #include "protoscope/ui/icons.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
+#include "protoscope/ui/render_frame_scheduler.hpp"
 
 #include "protoscope/ui/ui_component.hpp"
 #include "workspace_controller.hpp"
@@ -173,12 +174,16 @@ int GuiRuntime::run() {
         changed = pollConfigFileChanges() || changed;
         changed = maybeAutoSave() || changed;
 
-        if (!changed && lastRenderAtMs_ != 0) {
+        const auto fpsLimit = application_.docks().configState().fpsLimit;
+        const auto nextRenderAtMs = nextRenderFrameAtMs(lastRenderAtMs_, fpsLimit);
+        if (!shouldRenderFrameNow(frameStartMs, lastRenderAtMs_, fpsLimit)) {
+            auto sleepTargetMs = nextRenderAtMs;
             const auto nextWakeup = application_.nextWakeupAtMs();
-            // 空闲且没有脚本定时器/半双工请求时也要限帧休眠，避免停止传输后 GUI 主循环忙转。
-            if (!nextWakeup.has_value() || *nextWakeup > frameStartMs) {
-                sleepUntilNextFrame(frameStartMs);
+            if (nextWakeup.has_value() && *nextWakeup < sleepTargetMs) {
+                sleepTargetMs = *nextWakeup;
             }
+            sleepUntil(sleepTargetMs);
+            continue;
         }
 
         workspaceController_->processPendingProtocolWorkspaceSwitch();

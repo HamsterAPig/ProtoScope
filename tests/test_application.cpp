@@ -772,9 +772,97 @@ void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw() {
     application.pumpOnce();
 
     require(application.sendManualPayload("01 02 03", true), "手动发送应成功");
+    application.pumpOnce();
     const auto& receive = application.docks().receiveState();
     require(receive.rows.size() == 1, "原始收发记录应记录 TX chunk");
     require(receive.frameRows.size() == 1, "逐帧视图应保留无法匹配 schema 的 TX 原始行");
     require(receive.frameRows.front().direction == "TX", "TX fallback 行方向应保持 TX");
     require(receive.frameRows.front().bytes == std::vector<std::uint8_t>({0x01, 0x02, 0x03}), "TX fallback 行字节应保持原样");
+}
+
+void test_application_rx_events_are_processed_with_budget() {
+    constexpr const char* protocolDir = "tests/fixtures/protocols/stream_frame_only";
+    constexpr std::size_t eventCount = 300;
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+
+    application.openTransport();
+    const protoscope::transport::ConnectionContext ctx{
+        .endpoint = "queued://wave",
+        .connectionId = 7,
+        .timestampMs = 200,
+        .readyForIo = true,
+    };
+    const auto frame = makeRawImportStreamFrame(0x21);
+    for (std::size_t index = 0; index < eventCount; ++index) {
+        transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, frame});
+    }
+
+    require(application.pumpOnce(), "第一轮 pump 应处理部分 RX 事件或保留待处理队列");
+    const auto firstFrameRows = application.docks().receiveState().frameRows.size();
+    require(firstFrameRows < eventCount, "单轮 pump 不应一次吃完超过预算的 RX 事件");
+
+    for (int attempt = 0; attempt < 10 && application.docks().receiveState().frameRows.size() < eventCount; ++attempt) {
+        application.pumpOnce();
+    }
+    require(application.docks().receiveState().frameRows.size() == eventCount, "后续 pump 应继续处理保留的 RX 事件");
+}
+
+void test_application_transfer_frame_rows_drain_after_input_stops() {
+    constexpr const char* protocolDir = "tests/fixtures/protocols/stream_frame_only";
+    constexpr std::size_t frameCount = 2500;
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+
+    application.openTransport();
+    application.pumpOnce();
+
+    for (std::size_t index = 0; index < frameCount; ++index) {
+        require(application.sendManualPayload("01 02 03", true), "手动发送应成功");
+    }
+
+    application.pumpOnce();
+    require(application.docks().receiveState().frameRows.size() == 2000,
+            "单轮 pump 应按批量上限提交逐帧日志");
+    require(application.pumpOnce(), "数据停止后 pending 逐帧日志仍应继续 drain");
+    require(application.docks().receiveState().frameRows.size() == frameCount,
+            "后续 pump 应补交剩余逐帧日志");
+}
+
+void test_application_plot_push_merges_same_channel_source() {
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory("tests/fixtures/protocols/plot_merge", true), "plot_merge 协议应可加载");
+
+    application.openTransport();
+    application.pumpOnce();
+
+    const auto snapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity());
+    require(snapshot.channels.size() == 1, "plot_merge 应生成 1 个波形通道");
+    require(snapshot.channels.front().totalSamples == 3, "同轮同源 push 合并后不应丢失较早时间样本");
+    require(snapshot.channels.front().samples[0].time == 1.0, "合并后样本应按时间排序");
+    require(snapshot.channels.front().samples[1].time == 2.0, "合并后应保留第二个同源样本");
+    require(snapshot.channels.front().samples[2].time == 3.0, "不同 source 的后续样本仍应保留");
 }

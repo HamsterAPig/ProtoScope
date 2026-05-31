@@ -161,6 +161,7 @@ private:
     bool pollConfigFileChanges();
     bool maybeAutoSave();
     void sleepUntilNextFrame(std::uint64_t frameStartMs) const;
+    void sleepUntil(std::uint64_t targetMs) const;
 
     static std::uint64_t nowMs();
     static std::string formatTimestamp(std::uint64_t timestampMs);

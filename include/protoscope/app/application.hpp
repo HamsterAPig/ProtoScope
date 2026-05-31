@@ -82,9 +82,11 @@ private:
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
     bool handleTransportEvents();
+    bool processTransportEvent(const transport::TransportEvent& event);
     bool flushScriptOutputs();
     bool flushScriptLogs();
     bool flushScriptPlots();
+    bool flushPendingTransferFrameRows(std::size_t maxRows);
     bool flushScriptStatusAndDialogs();
     bool processScriptRequestCompletions();
     bool processRequestTimeouts();
@@ -102,6 +104,8 @@ private:
     void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
     void resetTransferFrameParser();
     void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
+    void enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows);
+    void trimPendingTransferFrameRowsToLimit();
     void applyHistoryLimits(const config::GuiLogHistoryConfig& config);
     [[nodiscard]] dock::ReceiveRow makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
                                                         const scripting::StreamParsedFrame& frame) const;
@@ -127,6 +131,9 @@ private:
     std::unordered_map<std::string, std::uint64_t> dialogDedupeKeys_;
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
+    std::deque<transport::TransportEvent> pendingTransportEvents_;
+    std::deque<dock::ReceiveRow> pendingTransferFrameRows_;
+    std::optional<std::uint64_t> cachedWaveSummaryRevision_;
 };
 
 } // namespace protoscope::app

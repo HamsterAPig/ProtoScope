@@ -159,6 +159,10 @@ void test_application_raw_capture_import_preserves_full_history();
 void test_application_raw_capture_import_replays_stream_in_chunks();
 void test_application_transfer_log_frame_view_waits_for_rx_full_frame();
 void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw();
+void test_application_rx_events_are_processed_with_budget();
+void test_application_transfer_frame_rows_drain_after_input_stops();
+void test_application_plot_push_merges_same_channel_source();
+void test_runtime_scheduler_limits_busy_render_frames();
 
 const TestCase* allTests();
 int testCount();
