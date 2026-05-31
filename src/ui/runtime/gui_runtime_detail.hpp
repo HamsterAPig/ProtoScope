@@ -56,10 +56,10 @@ namespace protoscope::ui {
 namespace {
 
 
-const char* kGlslVersion = "#version 150";
-constexpr std::uint32_t kCommonBaudRates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
+[[maybe_unused]] const char* kGlslVersion = "#version 150";
+[[maybe_unused]] constexpr std::uint32_t kCommonBaudRates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
 
-std::string currentProtocolTitle(const dock::LuaDockState& lua) {
+[[maybe_unused]] std::string currentProtocolTitle(const dock::LuaDockState& lua) {
     if (!lua.protocolName.empty()) {
         return lua.protocolName;
     }
@@ -67,7 +67,7 @@ std::string currentProtocolTitle(const dock::LuaDockState& lua) {
     return filename.empty() ? std::string("unknown_protocol") : filename;
 }
 
-std::vector<std::filesystem::path> candidateChineseFonts() {
+[[maybe_unused]] std::vector<std::filesystem::path> candidateChineseFonts() {
     return {
         "C:/Windows/Fonts/msyh.ttc",
         "C:/Windows/Fonts/msyh.ttf",
@@ -77,7 +77,7 @@ std::vector<std::filesystem::path> candidateChineseFonts() {
     };
 }
 
-const char* transportStateLabel(transport::TransportState state) {
+[[maybe_unused]] const char* transportStateLabel(transport::TransportState state) {
     switch (state) {
     case transport::TransportState::Closed:
         return "已关闭";
@@ -91,7 +91,7 @@ const char* transportStateLabel(transport::TransportState state) {
     return "未知";
 }
 
-int hexInputFilter(ImGuiInputTextCallbackData* data) {
+[[maybe_unused]] int hexInputFilter(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag != ImGuiInputTextFlags_CallbackCharFilter) {
         return 0;
     }
@@ -107,13 +107,13 @@ int hexInputFilter(ImGuiInputTextCallbackData* data) {
 }
 
 #if defined(_WIN32)
-HWND nativeWindowHandle(GLFWwindow* window) {
+[[maybe_unused]] HWND nativeWindowHandle(GLFWwindow* window) {
     return window == nullptr ? nullptr : glfwGetWin32Window(window);
 }
 
-int CALLBACK browseInitialDirCallback(HWND hwnd, UINT message, LPARAM, LPARAM data);
+[[maybe_unused]] int CALLBACK browseInitialDirCallback(HWND hwnd, UINT message, LPARAM, LPARAM data);
 
-std::optional<std::filesystem::path> nativeFileDialog(GLFWwindow* window,
+[[maybe_unused]] std::optional<std::filesystem::path> nativeFileDialog(GLFWwindow* window,
                                                       const wchar_t* title,
                                                       const wchar_t* filter,
                                                       const std::filesystem::path& defaultPath,
@@ -171,7 +171,7 @@ std::optional<std::filesystem::path> nativeFileDialog(GLFWwindow* window,
     return std::nullopt;
 }
 
-std::optional<std::filesystem::path> nativeDirectoryDialog(GLFWwindow* window,
+[[maybe_unused]] std::optional<std::filesystem::path> nativeDirectoryDialog(GLFWwindow* window,
                                                            const wchar_t* title,
                                                            const std::filesystem::path& defaultPath,
                                                            std::string& error) {
@@ -209,7 +209,7 @@ std::optional<std::filesystem::path> nativeDirectoryDialog(GLFWwindow* window,
 }
 #endif
 
-int hexEditorCallback(ImGuiInputTextCallbackData* data) {
+[[maybe_unused]] int hexEditorCallback(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackCharFilter) {
         return hexInputFilter(data);
     }
@@ -231,7 +231,7 @@ int hexEditorCallback(ImGuiInputTextCallbackData* data) {
     return 0;
 }
 
-std::string visibleWindowTitle(std::string_view windowName) {
+[[maybe_unused]] std::string visibleWindowTitle(std::string_view windowName) {
     const auto stableIdPos = windowName.find("###");
     if (stableIdPos == std::string_view::npos) {
         return std::string(windowName);
@@ -239,7 +239,7 @@ std::string visibleWindowTitle(std::string_view windowName) {
     return std::string(windowName.substr(0, stableIdPos));
 }
 
-std::string stableWindowId(std::string_view windowName) {
+[[maybe_unused]] std::string stableWindowId(std::string_view windowName) {
     const auto stableIdPos = windowName.find("###");
     if (stableIdPos == std::string_view::npos) {
         return std::string(windowName);
@@ -247,7 +247,7 @@ std::string stableWindowId(std::string_view windowName) {
     return std::string(windowName.substr(stableIdPos + 3));
 }
 
-bool dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
+[[maybe_unused]] bool dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
     const auto name = std::string(windowName);
     if (targetNode == 0 || ImGui::FindWindowByName(name.c_str()) != nullptr) {
         return false;
@@ -256,7 +256,7 @@ bool dockWindowIfMissing(std::string_view windowName, ImGuiID targetNode) {
     return true;
 }
 
-std::optional<DockLayoutIniHealth> readDockLayoutIniHealth(const std::filesystem::path& path) {
+[[maybe_unused]] std::optional<DockLayoutIniHealth> readDockLayoutIniHealth(const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input) {
         return std::nullopt;
@@ -270,7 +270,7 @@ std::optional<DockLayoutIniHealth> readDockLayoutIniHealth(const std::filesystem
     return inspectDockLayoutIni(buffer.str());
 }
 
-void keepOnlyCurrentLuaDockSettings(std::string_view layoutKey) {
+[[maybe_unused]] void keepOnlyCurrentLuaDockSettings(std::string_view layoutKey) {
     auto& settings = ImGui::GetCurrentContext()->SettingsWindows;
 
     // 核心逻辑：只清理其它协议的 Lua Dock 状态，当前协议状态留给 ini 归档以避免运行时 Dock 树抖动。
@@ -299,7 +299,7 @@ void keepOnlyCurrentLuaDockSettings(std::string_view layoutKey) {
     }
 }
 
-const char* controlTypeName(scripting::ControlType type) {
+[[maybe_unused]] const char* controlTypeName(scripting::ControlType type) {
     switch (type) {
     case scripting::ControlType::Button:
         return "button";
@@ -319,13 +319,13 @@ const char* controlTypeName(scripting::ControlType type) {
     return "unknown";
 }
 
-bool isPersistedControlType(scripting::ControlType type) {
+[[maybe_unused]] bool isPersistedControlType(scripting::ControlType type) {
     return type == scripting::ControlType::Checkbox || type == scripting::ControlType::InputText ||
            type == scripting::ControlType::Combo || type == scripting::ControlType::InputInt ||
            type == scripting::ControlType::InputFloat;
 }
 
-std::optional<scripting::ControlValue> readControlValue(const YAML::Node& node, scripting::ControlType type) {
+[[maybe_unused]] std::optional<scripting::ControlValue> readControlValue(const YAML::Node& node, scripting::ControlType type) {
     try {
         switch (type) {
         case scripting::ControlType::Checkbox:
@@ -360,7 +360,7 @@ std::optional<scripting::ControlValue> readControlValue(const YAML::Node& node, 
     return std::nullopt;
 }
 
-void writeControlValue(YAML::Node node, const scripting::ControlSnapshot& control) {
+[[maybe_unused]] void writeControlValue(YAML::Node node, const scripting::ControlSnapshot& control) {
     switch (control.descriptor.type) {
     case scripting::ControlType::Checkbox:
         node = std::get<bool>(control.value);
@@ -382,7 +382,7 @@ void writeControlValue(YAML::Node node, const scripting::ControlSnapshot& contro
     }
 }
 
-std::string multilineChildWindowName(const char* label) {
+[[maybe_unused]] std::string multilineChildWindowName(const char* label) {
     ImGuiWindow* parentWindow = ImGui::GetCurrentWindow();
     const ImGuiID id = parentWindow->GetID(label);
 
@@ -391,12 +391,12 @@ std::string multilineChildWindowName(const char* label) {
     return windowName;
 }
 
-ImGuiWindow* findMultilineChildWindow(const char* label) {
+[[maybe_unused]] ImGuiWindow* findMultilineChildWindow(const char* label) {
     const auto childWindowName = multilineChildWindowName(label);
     return ImGui::FindWindowByName(childWindowName.c_str());
 }
 
-bool shouldStickMultilineChildToBottom(const ImGuiWindow* window) {
+[[maybe_unused]] bool shouldStickMultilineChildToBottom(const ImGuiWindow* window) {
     if (window == nullptr || window->ScrollMax.y <= 4.0F) {
         return true;
     }
@@ -409,7 +409,7 @@ bool shouldStickMultilineChildToBottom(const ImGuiWindow* window) {
     return alreadyAtBottom || pendingScrollToBottom;
 }
 
-std::string formatShortLogTimestamp(std::uint64_t timestampMs) {
+[[maybe_unused]] std::string formatShortLogTimestamp(std::uint64_t timestampMs) {
     const auto timePoint = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestampMs));
     const auto secondsPoint = std::chrono::time_point_cast<std::chrono::seconds>(timePoint);
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint - secondsPoint).count();
@@ -440,7 +440,7 @@ struct LogRowPalette {
     ImVec4 rowBackground;
 };
 
-LogRowPalette paletteForRow(const dock::ReceiveRow& row) {
+[[maybe_unused]] LogRowPalette paletteForRow(const dock::ReceiveRow& row) {
     switch (dock::classifyReceiveRow(row)) {
     case dock::ReceiveRowVisualKind::Rx:
         return {ImVec4(0.22F, 0.78F, 0.62F, 1.0F),
@@ -491,7 +491,7 @@ LogRowPalette paletteForRow(const dock::ReceiveRow& row) {
     }
 }
 
-void drawFilledBadge(ImDrawList* drawList,
+[[maybe_unused]] void drawFilledBadge(ImDrawList* drawList,
                      const ImVec2& pos,
                      const std::string& text,
                      const LogRowPalette& palette,
@@ -510,7 +510,7 @@ void drawFilledBadge(ImDrawList* drawList,
                       text.c_str());
 }
 
-void drawModernLogRow(const dock::ReceiveRow& row,
+[[maybe_unused]] void drawModernLogRow(const dock::ReceiveRow& row,
                       bool showTimestamps,
                       bool showHex,
                       std::size_t index,
@@ -598,7 +598,7 @@ void drawModernLogRow(const dock::ReceiveRow& row,
     drawList->AddText(ImVec2(cursorX, textY), contentText, content.c_str());
 }
 
-void drawModernLogRows(const char* childId,
+[[maybe_unused]] void drawModernLogRows(const char* childId,
                        const std::vector<const dock::ReceiveRow*>& rows,
                        bool showTimestamps,
                        bool showHex,
@@ -644,12 +644,12 @@ void drawModernLogRows(const char* childId,
     ImGui::EndChild();
 }
 
-std::size_t configuredSendHistoryLimit(const config::AppConfig& config) {
+[[maybe_unused]] std::size_t configuredSendHistoryLimit(const config::AppConfig& config) {
     constexpr std::size_t kMaxSendHistoryLimit = 200;
     return (std::min)(config.gui.sendHistoryLimit, kMaxSendHistoryLimit);
 }
 
-void restoreSendHistoryFromNode(const YAML::Node& sendNode, dock::SendDockState& sendState, std::size_t limit) {
+[[maybe_unused]] void restoreSendHistoryFromNode(const YAML::Node& sendNode, dock::SendDockState& sendState, std::size_t limit) {
     sendState.history.clear();
     if (limit == 0U || !sendNode || !sendNode["history"] || !sendNode["history"].IsSequence()) {
         return;
@@ -670,7 +670,7 @@ void restoreSendHistoryFromNode(const YAML::Node& sendNode, dock::SendDockState&
     }
 }
 
-void writeSendHistoryNode(YAML::Node& protocolNode, const dock::SendDockState& sendState, std::size_t limit) {
+[[maybe_unused]] void writeSendHistoryNode(YAML::Node& protocolNode, const dock::SendDockState& sendState, std::size_t limit) {
     YAML::Node historyNode(YAML::NodeType::Sequence);
     std::size_t written = 0;
     for (const auto& payload : sendState.history) {
@@ -685,19 +685,19 @@ void writeSendHistoryNode(YAML::Node& protocolNode, const dock::SendDockState& s
     protocolNode["send"]["history"] = historyNode;
 }
 
-void drawIconTooltip(const char* text) {
+[[maybe_unused]] void drawIconTooltip(const char* text) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
         ImGui::SetTooltip("%s", text);
     }
 }
 
-bool drawIconButton(const char* icon, const char* tooltip, const ImVec2& size = ImVec2(0.0F, 0.0F)) {
+[[maybe_unused]] bool drawIconButton(const char* icon, const char* tooltip, const ImVec2& size = ImVec2(0.0F, 0.0F)) {
     const bool clicked = ImGui::Button(icon, size);
     drawIconTooltip(tooltip);
     return clicked;
 }
 
-bool drawIconCheckbox(const char* icon, bool* value, const char* tooltip) {
+[[maybe_unused]] bool drawIconCheckbox(const char* icon, bool* value, const char* tooltip) {
     ImGui::PushID(icon);
     const bool changed = ImGui::Checkbox("##icon_checkbox", value);
     ImGui::SameLine(0.0F, 0.0F);
@@ -707,7 +707,7 @@ bool drawIconCheckbox(const char* icon, bool* value, const char* tooltip) {
     return changed;
 }
 
-bool drawLogStatusFilterButton(const char* label, dock::LogStatusFilter value, dock::LogFilterState& filter) {
+[[maybe_unused]] bool drawLogStatusFilterButton(const char* label, dock::LogStatusFilter value, dock::LogFilterState& filter) {
     const bool active = filter.status == value;
     if (active) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
@@ -722,7 +722,7 @@ bool drawLogStatusFilterButton(const char* label, dock::LogStatusFilter value, d
     return clicked;
 }
 
-void drawLogKeywordFilterInput(const char* id, dock::LogFilterState& filter, float width) {
+[[maybe_unused]] void drawLogKeywordFilterInput(const char* id, dock::LogFilterState& filter, float width) {
     char buffer[128]{};
     std::snprintf(buffer, sizeof(buffer), "%s", filter.keyword.c_str());
     ImGui::SetNextItemWidth(width);
@@ -732,7 +732,7 @@ void drawLogKeywordFilterInput(const char* id, dock::LogFilterState& filter, flo
     drawIconTooltip("按关键字筛选 STATUS、端点、消息和收发内容");
 }
 
-void drawLogStatusFilterCombo(const char* id, dock::LogFilterState& filter) {
+[[maybe_unused]] void drawLogStatusFilterCombo(const char* id, dock::LogFilterState& filter) {
     struct StatusOption {
         dock::LogStatusFilter value;
         const char* label;
@@ -774,7 +774,7 @@ void drawLogStatusFilterCombo(const char* id, dock::LogFilterState& filter) {
     drawIconTooltip("按日志 STATUS 筛选");
 }
 
-bool drawHorizontalSplitter(const char* id, float& topHeight, float minTopHeight, float minBottomHeight, float totalHeight, float thickness) {
+[[maybe_unused]] bool drawHorizontalSplitter(const char* id, float& topHeight, float minTopHeight, float minBottomHeight, float totalHeight, float thickness) {
     const float safeThickness = (std::max)(thickness, 4.0F);
     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
@@ -792,7 +792,7 @@ bool drawHorizontalSplitter(const char* id, float& topHeight, float minTopHeight
     return false;
 }
 
-void drawTransferLogRows(const char* childId,
+[[maybe_unused]] void drawTransferLogRows(const char* childId,
                          const std::vector<const dock::ReceiveRow*>& rows,
                          bool showTimestamps,
                          bool showHex,
@@ -802,7 +802,7 @@ void drawTransferLogRows(const char* childId,
     drawModernLogRows(childId, rows, showTimestamps, showHex, pauseScroll, emptyText, endpointWidth);
 }
 
-void drawRowList(const char* childId,
+[[maybe_unused]] void drawRowList(const char* childId,
                  const std::vector<const dock::ReceiveRow*>& rows,
                  bool showTimestamps,
                  bool showHex,
@@ -812,13 +812,13 @@ void drawRowList(const char* childId,
     drawModernLogRows(childId, rows, showTimestamps, showHex, pauseScroll, emptyText, endpointWidth);
 }
 
-bool digitsOnly(const std::string& text) {
+[[maybe_unused]] bool digitsOnly(const std::string& text) {
     return !text.empty() && std::all_of(text.begin(), text.end(), [](unsigned char ch) {
         return std::isdigit(ch) != 0;
     });
 }
 
-void refreshProtocolRoot(config::ConfigStore const& configStore,
+[[maybe_unused]] void refreshProtocolRoot(config::ConfigStore const& configStore,
                          dock::LuaDockState& lua,
                          std::string& protocolDirDraft,
                          std::string& protocolDirDraftModel) {
@@ -830,21 +830,21 @@ void refreshProtocolRoot(config::ConfigStore const& configStore,
     protocolDirDraftModel = lua.protocolDir;
 }
 
-std::string normalizeProtocolDraft(const config::ConfigStore& configStore,
+[[maybe_unused]] std::string normalizeProtocolDraft(const config::ConfigStore& configStore,
                                    const std::string& protocolRootDir,
                                    const std::string& protocolDir) {
     return configStore.normalizeProtocolDir(protocolRootDir, protocolDir).generic_string();
 }
 
 #if defined(_WIN32)
-int CALLBACK browseInitialDirCallback(HWND hwnd, UINT message, LPARAM, LPARAM data) {
+[[maybe_unused]] int CALLBACK browseInitialDirCallback(HWND hwnd, UINT message, LPARAM, LPARAM data) {
     if (message == BFFM_INITIALIZED && data != 0) {
         SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
     }
     return 0;
 }
 
-std::wstring utf8ToWide(const std::string& text) {
+[[maybe_unused]] std::wstring utf8ToWide(const std::string& text) {
     if (text.empty()) {
         return {};
     }
@@ -860,7 +860,7 @@ std::wstring utf8ToWide(const std::string& text) {
     return result;
 }
 
-std::wstring fileDialogFilterText(const std::vector<scripting::FileDialogFilter>& filters) {
+[[maybe_unused]] std::wstring fileDialogFilterText(const std::vector<scripting::FileDialogFilter>& filters) {
     if (filters.empty()) {
         return std::wstring(L"All Files\0*.*\0\0", 15);
     }
@@ -886,7 +886,7 @@ std::wstring fileDialogFilterText(const std::vector<scripting::FileDialogFilter>
 }
 #endif
 
-scripting::FileDialogEvent runLuaFileDialog(GLFWwindow* window, const scripting::FileDialogRequest& request) {
+[[maybe_unused]] scripting::FileDialogEvent runLuaFileDialog(GLFWwindow* window, const scripting::FileDialogRequest& request) {
     scripting::FileDialogEvent event{};
     event.id = request.id;
     event.kind = request.kind;
@@ -941,14 +941,14 @@ scripting::FileDialogEvent runLuaFileDialog(GLFWwindow* window, const scripting:
 #endif
 }
 
-void syncDraftFromModel(std::string& draft, std::string& lastModel, const std::string& model) {
+[[maybe_unused]] void syncDraftFromModel(std::string& draft, std::string& lastModel, const std::string& model) {
     if (draft.empty() || lastModel != model) {
         draft = model;
         lastModel = model;
     }
 }
 
-void refreshSerialPortOptions(dock::CommDockState& comm) {
+[[maybe_unused]] void refreshSerialPortOptions(dock::CommDockState& comm) {
     auto ports = transport::listAvailableSerialPorts();
     if (!comm.serial.portName.empty() && std::find(ports.begin(), ports.end(), comm.serial.portName) == ports.end()) {
         ports.push_back(comm.serial.portName);
