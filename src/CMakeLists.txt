@@ -41,6 +41,7 @@ target_compile_features(protoscope_transport PUBLIC cxx_std_20)
 
 add_library(protoscope_ui_layout STATIC
     ui/dock_layout.cpp
+    ui/protocol_state_file.cpp
     ui/protocol_ui_state.cpp
 )
 target_include_directories(protoscope_ui_layout
