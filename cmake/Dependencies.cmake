@@ -46,6 +46,9 @@ target_link_libraries(elf_static_view_core
         yaml-cpp::yaml-cpp
 )
 target_compile_features(elf_static_view_core PUBLIC cxx_std_20)
+if(MSVC)
+    target_compile_options(elf_static_view_core PRIVATE /utf-8)
+endif()
 if(WIN32)
     target_compile_definitions(elf_static_view_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
