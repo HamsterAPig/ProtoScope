@@ -88,6 +88,8 @@ struct ReceiveDockState {
     LogFilterState filter{};
     std::vector<ReceiveRow> rows;
     std::vector<ReceiveRow> frameRows;
+    std::uint64_t rowsVersion{0};
+    std::uint64_t frameRowsVersion{0};
 };
 
 struct LogDockState {
@@ -95,6 +97,7 @@ struct LogDockState {
     bool showTimestamps{true};
     LogFilterState filter{};
     std::vector<ReceiveRow> rows;
+    std::uint64_t rowsVersion{0};
 };
 
 struct ScriptDockState {
@@ -102,6 +105,7 @@ struct ScriptDockState {
     bool showTimestamps{true};
     LogFilterState filter{};
     std::vector<ReceiveRow> rows;
+    std::uint64_t rowsVersion{0};
 };
 
 struct SendDockState {
@@ -185,6 +189,8 @@ public:
     void appendScriptRow(ReceiveRow row);
     void clearLogRows();
     void clearScriptRows();
+    void appendTransferFrameRow(ReceiveRow row);
+    void clearTransferFrameRows();
 
 private:
     CommDockState comm_{};

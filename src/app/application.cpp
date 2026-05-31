@@ -457,19 +457,18 @@ void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow) {
     if (batch.frames.empty()) {
         // RX 半包先留在 parser 缓冲中等待后续字节；TX 无匹配时按用户输入的原始 chunk 展示。
         if (sourceRow.direction == "TX" || !batch.errors.empty()) {
-            dockStore_.receiveState().frameRows.push_back(sourceRow);
+            dockStore_.appendTransferFrameRow(sourceRow);
         }
         return;
     }
     for (const auto& frame : batch.frames) {
-        dockStore_.receiveState().frameRows.push_back(makeTransferFrameRow(sourceRow, frame));
+        dockStore_.appendTransferFrameRow(makeTransferFrameRow(sourceRow, frame));
     }
 }
 
 void Application::rebuildTransferFrameRows() {
-    auto& receive = dockStore_.receiveState();
-    const auto rows = receive.rows;
-    receive.frameRows.clear();
+    const auto rows = dockStore_.receiveState().rows;
+    dockStore_.clearTransferFrameRows();
     resetTransferFrameParser();
     for (const auto& row : rows) {
         appendTransferFrameRows(row);

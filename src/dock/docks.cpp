@@ -265,26 +265,43 @@ void rememberSendHistory(SendDockState& sendState, std::string payload, std::siz
 void DockStore::clearReceiveRows() {
     receive_.rows.clear();
     receive_.frameRows.clear();
+    ++receive_.rowsVersion;
+    ++receive_.frameRowsVersion;
 }
 
 void DockStore::appendReceiveRow(ReceiveRow row) {
     receive_.rows.push_back(std::move(row));
+    ++receive_.rowsVersion;
 }
 
 void DockStore::appendLogRow(ReceiveRow row) {
     log_.rows.push_back(std::move(row));
+    ++log_.rowsVersion;
 }
 
 void DockStore::appendScriptRow(ReceiveRow row) {
     script_.rows.push_back(std::move(row));
+    ++script_.rowsVersion;
 }
 
 void DockStore::clearLogRows() {
     log_.rows.clear();
+    ++log_.rowsVersion;
 }
 
 void DockStore::clearScriptRows() {
     script_.rows.clear();
+    ++script_.rowsVersion;
+}
+
+void DockStore::appendTransferFrameRow(ReceiveRow row) {
+    receive_.frameRows.push_back(std::move(row));
+    ++receive_.frameRowsVersion;
+}
+
+void DockStore::clearTransferFrameRows() {
+    receive_.frameRows.clear();
+    ++receive_.frameRowsVersion;
 }
 
 void DockStore::appendLuaEvent(const scripting::ScriptEvent& event) {
@@ -306,6 +323,7 @@ void DockStore::appendRawReceive(const transport::ConnectionContext& ctx, const 
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
         .message = {},
     });
+    ++receive_.rowsVersion;
 }
 
 void DockStore::appendRawSend(const transport::ConnectionContext& ctx, const std::string& text) {
@@ -316,6 +334,7 @@ void DockStore::appendRawSend(const transport::ConnectionContext& ctx, const std
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
         .message = {},
     });
+    ++receive_.rowsVersion;
 }
 
 CommDockState& DockStore::commState() {

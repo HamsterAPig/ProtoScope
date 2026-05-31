@@ -604,7 +604,8 @@ void drawModernLogRows(const char* childId,
                        bool showTimestamps,
                        bool showHex,
                        bool& pauseScroll,
-                       const std::string& emptyText) {
+                       const std::string& emptyText,
+                       float endpointWidth) {
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const ImVec2 childSize(available.x, (std::max)(available.y, ImGui::GetTextLineHeightWithSpacing() * 4.0F));
     const ImGuiWindow* existingWindow = findMultilineChildWindow(childId);
@@ -616,22 +617,18 @@ void drawModernLogRows(const char* childId,
         if (rows.empty()) {
             ImGui::TextDisabled("%s", emptyText.c_str());
         } else {
-            float endpointWidth = ImGui::CalcTextSize("endpoint").x;
-            for (const auto* row : rows) {
-                if (row == nullptr) {
-                    continue;
+            const float rowHeight = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FramePadding.y * 1.8F;
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(rows.size()), rowHeight);
+            while (clipper.Step()) {
+                for (int rowIndex = clipper.DisplayStart; rowIndex < clipper.DisplayEnd; ++rowIndex) {
+                    const auto* row = rows[static_cast<std::size_t>(rowIndex)];
+                    if (row == nullptr) {
+                        continue;
+                    }
+                    // 核心流程：日志历史可能很长，只绘制当前视口内的行，避免停流后每帧重画全部历史。
+                    drawModernLogRow(*row, showTimestamps, showHex, static_cast<std::size_t>(rowIndex), endpointWidth);
                 }
-                endpointWidth = (std::max)(endpointWidth, ImGui::CalcTextSize(row->endpoint.empty() ? "-" : row->endpoint.c_str()).x);
-            }
-            endpointWidth = (std::clamp)(endpointWidth, 86.0F, 220.0F);
-
-            std::size_t rowIndex = 0;
-            for (const auto* row : rows) {
-                if (row == nullptr) {
-                    continue;
-                }
-                drawModernLogRow(*row, showTimestamps, showHex, rowIndex, endpointWidth);
-                ++rowIndex;
             }
         }
 
@@ -801,8 +798,9 @@ void drawTransferLogRows(const char* childId,
                          bool showTimestamps,
                          bool showHex,
                          bool& pauseScroll,
-                         const std::string& emptyText) {
-    drawModernLogRows(childId, rows, showTimestamps, showHex, pauseScroll, emptyText);
+                         const std::string& emptyText,
+                         float endpointWidth) {
+    drawModernLogRows(childId, rows, showTimestamps, showHex, pauseScroll, emptyText, endpointWidth);
 }
 
 void drawRowList(const char* childId,
@@ -810,8 +808,9 @@ void drawRowList(const char* childId,
                  bool showTimestamps,
                  bool showHex,
                  bool& pauseScroll,
-                 const std::string& emptyText) {
-    drawModernLogRows(childId, rows, showTimestamps, showHex, pauseScroll, emptyText);
+                 const std::string& emptyText,
+                 float endpointWidth) {
+    drawModernLogRows(childId, rows, showTimestamps, showHex, pauseScroll, emptyText, endpointWidth);
 }
 
 bool digitsOnly(const std::string& text) {
@@ -971,6 +970,35 @@ GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore&
 
 GuiRuntime::~GuiRuntime() {
     shutdown();
+}
+
+const GuiRuntime::FilteredLogRowsCache& GuiRuntime::filteredLogRowsCached(
+    FilteredLogRowsCache& cache,
+    const std::vector<dock::ReceiveRow>& rows,
+    std::uint64_t version,
+    const dock::LogFilterState& filter,
+    bool includeBytePreview) {
+    if (cache.source != &rows ||
+        cache.version != version ||
+        cache.filter.keyword != filter.keyword ||
+        cache.filter.status != filter.status ||
+        cache.includeBytePreview != includeBytePreview) {
+        cache.source = &rows;
+        cache.version = version;
+        cache.filter = filter;
+        cache.includeBytePreview = includeBytePreview;
+        cache.rows = dock::filteredLogRows(rows, filter, includeBytePreview);
+        float endpointWidth = ImGui::CalcTextSize("endpoint").x;
+        for (const auto* row : cache.rows) {
+            if (row == nullptr) {
+                continue;
+            }
+            endpointWidth = (std::max)(endpointWidth,
+                                       ImGui::CalcTextSize(row->endpoint.empty() ? "-" : row->endpoint.c_str()).x);
+        }
+        cache.endpointWidth = (std::clamp)(endpointWidth, 86.0F, 220.0F);
+    }
+    return cache;
 }
 
 bool GuiRuntime::initialize() {

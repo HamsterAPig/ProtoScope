@@ -38,6 +38,15 @@ private:
         Script,
     };
 
+    struct FilteredLogRowsCache {
+        const std::vector<dock::ReceiveRow>* source{nullptr};
+        std::uint64_t version{0};
+        dock::LogFilterState filter{};
+        bool includeBytePreview{false};
+        float endpointWidth{120.0F};
+        std::vector<const dock::ReceiveRow*> rows;
+    };
+
     bool initializeWindow();
     bool initializeImGui();
     bool initializePlotContext();
@@ -102,6 +111,11 @@ private:
                              bool showTimestamps,
                              bool showHex,
                              std::string_view title);
+    const FilteredLogRowsCache& filteredLogRowsCached(FilteredLogRowsCache& cache,
+                                                      const std::vector<dock::ReceiveRow>& rows,
+                                                      std::uint64_t version,
+                                                      const dock::LogFilterState& filter,
+                                                      bool includeBytePreview);
     void loadElfStaticAddressFromPath(const std::filesystem::path& path);
     void drawElfStaticAddressDialog();
     void refreshWindowTitle();
@@ -145,6 +159,9 @@ private:
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};
+    FilteredLogRowsCache transferLogRowsCache_;
+    FilteredLogRowsCache hostLogRowsCache_;
+    FilteredLogRowsCache scriptLogRowsCache_;
     std::unordered_map<std::string, bool> luaDockVisibility_;
     float transferSendSectionHeight_{210.0F};
     bool aboutDialogRequested_{false};

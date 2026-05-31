@@ -475,16 +475,20 @@ void GuiRuntime::drawTransferDock()
         }
 
         const auto& visibleRows = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames ? receive.frameRows : receive.rows;
-        const auto filteredRows =
-            dock::filteredLogRows(visibleRows, receive.filter, true);
+        const auto visibleRowsVersion = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames
+                                            ? receive.frameRowsVersion
+                                            : receive.rowsVersion;
+        const auto& filteredRows =
+            filteredLogRowsCached(transferLogRowsCache_, visibleRows, visibleRowsVersion, receive.filter, true);
 
         drawTransferLogRows(
             "transfer_rows",
-            filteredRows,
+            filteredRows.rows,
             receive.showTimestamps,
             receive.showHex,
             receive.pauseScroll,
-            receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames ? "暂无已解析帧" : "暂无 TX/RX 原始数据");
+            receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames ? "暂无已解析帧" : "暂无 TX/RX 原始数据",
+            filteredRows.endpointWidth);
     }
     ImGui::EndChild();
 
@@ -685,8 +689,9 @@ void GuiRuntime::drawLogDock() {
         openHostLogExportDialog();
     }
 
-    const auto filteredRows = dock::filteredLogRows(logState.rows, logState.filter, false);
-    drawRowList("log_rows", filteredRows, logState.showTimestamps, false, logState.pauseScroll, "暂无宿主日志");
+    const auto& filteredRows =
+        filteredLogRowsCached(hostLogRowsCache_, logState.rows, logState.rowsVersion, logState.filter, false);
+    drawRowList("log_rows", filteredRows.rows, logState.showTimestamps, false, logState.pauseScroll, "暂无宿主日志", filteredRows.endpointWidth);
     ImGui::End();
 }
 
@@ -717,8 +722,9 @@ void GuiRuntime::drawScriptDock() {
         openScriptLogExportDialog();
     }
 
-    const auto filteredRows = dock::filteredLogRows(scriptState.rows, scriptState.filter, false);
-    drawRowList("script_rows", filteredRows, scriptState.showTimestamps, false, scriptState.pauseScroll, "暂无 Lua 日志或事件");
+    const auto& filteredRows =
+        filteredLogRowsCached(scriptLogRowsCache_, scriptState.rows, scriptState.rowsVersion, scriptState.filter, false);
+    drawRowList("script_rows", filteredRows.rows, scriptState.showTimestamps, false, scriptState.pauseScroll, "暂无 Lua 日志或事件", filteredRows.endpointWidth);
     ImGui::End();
 }
 
