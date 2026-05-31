@@ -12,6 +12,8 @@
 namespace protoscope::dock {
 
 namespace {
+constexpr std::size_t kMaxDockLogRows = 5000;
+
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -72,6 +74,16 @@ std::string flattenSingleLineText(std::string_view text) {
         }
     }
     return flattened;
+}
+
+void trimDockLogRows(std::vector<ReceiveRow>& rows) {
+    if (rows.size() <= kMaxDockLogRows) {
+        return;
+    }
+
+    // 核心流程：日志面板仅保留最近一段历史，避免长期高频记录把内存和过滤开销无限放大。
+    rows.erase(rows.begin(),
+               rows.begin() + static_cast<std::vector<ReceiveRow>::difference_type>(rows.size() - kMaxDockLogRows));
 }
 
 std::string uppercaseAscii(std::string text) {
@@ -276,11 +288,13 @@ void DockStore::appendReceiveRow(ReceiveRow row) {
 
 void DockStore::appendLogRow(ReceiveRow row) {
     log_.rows.push_back(std::move(row));
+    trimDockLogRows(log_.rows);
     ++log_.rowsVersion;
 }
 
 void DockStore::appendScriptRow(ReceiveRow row) {
     script_.rows.push_back(std::move(row));
+    trimDockLogRows(script_.rows);
     ++script_.rowsVersion;
 }
 
