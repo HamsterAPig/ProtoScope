@@ -3,7 +3,12 @@
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 
+#include <cstdint>
+#include <cstddef>
 #include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 #include <yaml-cpp/yaml.h>
 
 namespace {
@@ -52,6 +57,72 @@ void test_dock_log_and_script_split() {
     store.clearScriptRows();
     require(store.logState().rows.empty(), "日志区应可单独清空");
     require(store.scriptState().rows.empty(), "脚本区应可单独清空");
+}
+
+void test_dock_history_limits_trim_all_log_types() {
+    protoscope::dock::DockStore store;
+    store.setHistoryLimits({
+        .transferRawRows = 3,
+        .transferFrameRows = 4,
+        .hostLogRows = 2,
+        .scriptLogRows = 2,
+    });
+
+    for (std::size_t index = 0; index < 5; ++index) {
+        store.appendReceiveRow({
+            .timestampMs = static_cast<std::uint64_t>(index),
+            .direction = "RX",
+            .endpoint = "tcp",
+            .bytes = {},
+            .message = "raw-" + std::to_string(index),
+        });
+        store.appendLogRow({
+            .timestampMs = static_cast<std::uint64_t>(index),
+            .direction = "INFO",
+            .endpoint = "host",
+            .bytes = {},
+            .message = "host-" + std::to_string(index),
+        });
+        store.appendScriptRow({
+            .timestampMs = static_cast<std::uint64_t>(index),
+            .direction = "LOG",
+            .endpoint = "script",
+            .bytes = {},
+            .message = "script-" + std::to_string(index),
+        });
+    }
+
+    std::vector<protoscope::dock::ReceiveRow> frameRows;
+    for (std::size_t index = 0; index < 6; ++index) {
+        frameRows.push_back({
+            .timestampMs = static_cast<std::uint64_t>(index),
+            .direction = "RX",
+            .endpoint = "tcp",
+            .bytes = {},
+            .message = "frame-" + std::to_string(index),
+        });
+    }
+    store.appendTransferFrameRows(std::move(frameRows));
+
+    require(store.receiveState().rows.size() == 3, "原始收发记录应按上限裁剪");
+    require(store.receiveState().frameRows.size() == 4, "逐帧收发记录应按上限裁剪");
+    require(store.logState().rows.size() == 2, "宿主日志应按上限裁剪");
+    require(store.scriptState().rows.size() == 2, "脚本日志应按上限裁剪");
+    require(store.receiveState().rows.front().message == "raw-2", "原始收发记录应保留最近历史");
+    require(store.receiveState().frameRows.front().message == "frame-2", "逐帧收发记录应保留最近历史");
+    require(store.logState().rows.front().message == "host-3", "宿主日志应保留最近历史");
+    require(store.scriptState().rows.front().message == "script-3", "脚本日志应保留最近历史");
+
+    store.setHistoryLimits({
+        .transferRawRows = 1,
+        .transferFrameRows = 1,
+        .hostLogRows = 1,
+        .scriptLogRows = 1,
+    });
+    require(store.receiveState().rows.front().message == "raw-4", "调低原始记录上限应立即裁剪旧记录");
+    require(store.receiveState().frameRows.front().message == "frame-5", "调低逐帧记录上限应立即裁剪旧记录");
+    require(store.logState().rows.front().message == "host-4", "调低宿主日志上限应立即裁剪旧记录");
+    require(store.scriptState().rows.front().message == "script-4", "调低脚本日志上限应立即裁剪旧记录");
 }
 
 void test_dock_receive_row_single_line_hex_and_ascii() {

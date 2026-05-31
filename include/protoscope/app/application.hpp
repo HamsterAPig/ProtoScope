@@ -94,6 +94,7 @@ private:
     void appendTransferRow(dock::ReceiveRow row);
     void resetTransferFrameParser();
     void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
+    void applyHistoryLimits(const config::GuiLogHistoryConfig& config);
     [[nodiscard]] dock::ReceiveRow makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
                                                         const scripting::StreamParsedFrame& frame) const;
     [[nodiscard]] std::optional<TransferFrameParserState> makeTransferFrameParserState() const;

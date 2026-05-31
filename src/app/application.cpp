@@ -224,6 +224,7 @@ bool Application::initialize() {
 bool Application::applyConfig(const config::AppConfig& config) {
     runtimeConfig_ = config;
     scriptHost_.setFileIoConfig(config.scripting.fileIo);
+    applyHistoryLimits(config.gui.logHistory);
     configStore_.applyToDock(config, dockStore_);
     loggingFacade_.applyConfig(config.logging);
     return reloadProtocolDirectory(dockStore_.luaState().protocolDir);
@@ -457,13 +458,16 @@ void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow) {
     if (batch.frames.empty()) {
         // RX 半包先留在 parser 缓冲中等待后续字节；TX 无匹配时按用户输入的原始 chunk 展示。
         if (sourceRow.direction == "TX" || !batch.errors.empty()) {
-            dockStore_.appendTransferFrameRow(sourceRow);
+            dockStore_.appendTransferFrameRows({sourceRow});
         }
         return;
     }
+    std::vector<dock::ReceiveRow> frameRows;
+    frameRows.reserve(batch.frames.size());
     for (const auto& frame : batch.frames) {
-        dockStore_.appendTransferFrameRow(makeTransferFrameRow(sourceRow, frame));
+        frameRows.push_back(makeTransferFrameRow(sourceRow, frame));
     }
+    dockStore_.appendTransferFrameRows(std::move(frameRows));
 }
 
 void Application::rebuildTransferFrameRows() {
@@ -473,6 +477,15 @@ void Application::rebuildTransferFrameRows() {
     for (const auto& row : rows) {
         appendTransferFrameRows(row);
     }
+}
+
+void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config) {
+    dockStore_.setHistoryLimits(dock::DockHistoryLimits{
+        .transferRawRows = config.transferRawLimit,
+        .transferFrameRows = config.transferFrameLimit,
+        .hostLogRows = config.hostLimit,
+        .scriptLogRows = config.scriptLimit,
+    });
 }
 
 void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value) {

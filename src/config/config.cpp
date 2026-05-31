@@ -220,6 +220,16 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                    1.2);
             result.config.gui.wave.showAxisLabels =
                 readScalar<bool>(wave, "show_axis_labels", result.config.gui.wave.showAxisLabels);
+            if (const auto logHistory = gui["log_history"]) {
+                result.config.gui.logHistory.transferRawLimit =
+                    readScalar<std::size_t>(logHistory, "transfer_raw_limit", result.config.gui.logHistory.transferRawLimit);
+                result.config.gui.logHistory.transferFrameLimit =
+                    readScalar<std::size_t>(logHistory, "transfer_frame_limit", result.config.gui.logHistory.transferFrameLimit);
+                result.config.gui.logHistory.hostLimit =
+                    readScalar<std::size_t>(logHistory, "host_limit", result.config.gui.logHistory.hostLimit);
+                result.config.gui.logHistory.scriptLimit =
+                    readScalar<std::size_t>(logHistory, "script_limit", result.config.gui.logHistory.scriptLimit);
+            }
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
             result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
         }
@@ -358,6 +368,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
     root["gui"]["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
     root["gui"]["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
+    root["gui"]["log_history"]["transfer_raw_limit"] = config.gui.logHistory.transferRawLimit;
+    root["gui"]["log_history"]["transfer_frame_limit"] = config.gui.logHistory.transferFrameLimit;
+    root["gui"]["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
+    root["gui"]["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
     root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
     root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
 

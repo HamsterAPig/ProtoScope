@@ -23,6 +23,13 @@ struct ReceiveRow {
     std::string message{};
 };
 
+struct DockHistoryLimits {
+    std::size_t transferRawRows{10000};
+    std::size_t transferFrameRows{120000};
+    std::size_t hostLogRows{5000};
+    std::size_t scriptLogRows{5000};
+};
+
 enum class TransferLogDisplayMode {
     RawChunks,
     ParsedFrames,
@@ -189,8 +196,9 @@ public:
     void appendScriptRow(ReceiveRow row);
     void clearLogRows();
     void clearScriptRows();
-    void appendTransferFrameRow(ReceiveRow row);
+    void appendTransferFrameRows(std::vector<ReceiveRow> rows);
     void clearTransferFrameRows();
+    void setHistoryLimits(DockHistoryLimits limits);
 
 private:
     CommDockState comm_{};
@@ -201,6 +209,7 @@ private:
     LuaDockState lua_{};
     plot::WaveDockState wave_{};
     ConfigDockState config_{};
+    DockHistoryLimits historyLimits_{};
 };
 
 } // namespace protoscope::dock

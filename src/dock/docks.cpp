@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <ctime>
 #include <string_view>
+#include <utility>
 
 namespace protoscope::dock {
 
@@ -72,6 +73,17 @@ std::string flattenSingleLineText(std::string_view text) {
         }
     }
     return flattened;
+}
+
+bool trimRowsToLimit(std::vector<ReceiveRow>& rows, std::size_t limit) {
+    if (rows.size() <= limit) {
+        return false;
+    }
+
+    // 核心流程：高频传输只保留最近历史，避免 UI 筛选和绘制成本随运行时间无限增长。
+    rows.erase(rows.begin(),
+               rows.begin() + static_cast<std::vector<ReceiveRow>::difference_type>(rows.size() - limit));
+    return true;
 }
 
 std::string uppercaseAscii(std::string text) {
@@ -271,16 +283,19 @@ void DockStore::clearReceiveRows() {
 
 void DockStore::appendReceiveRow(ReceiveRow row) {
     receive_.rows.push_back(std::move(row));
+    trimRowsToLimit(receive_.rows, historyLimits_.transferRawRows);
     ++receive_.rowsVersion;
 }
 
 void DockStore::appendLogRow(ReceiveRow row) {
     log_.rows.push_back(std::move(row));
+    trimRowsToLimit(log_.rows, historyLimits_.hostLogRows);
     ++log_.rowsVersion;
 }
 
 void DockStore::appendScriptRow(ReceiveRow row) {
     script_.rows.push_back(std::move(row));
+    trimRowsToLimit(script_.rows, historyLimits_.scriptLogRows);
     ++script_.rowsVersion;
 }
 
@@ -294,14 +309,38 @@ void DockStore::clearScriptRows() {
     ++script_.rowsVersion;
 }
 
-void DockStore::appendTransferFrameRow(ReceiveRow row) {
-    receive_.frameRows.push_back(std::move(row));
+void DockStore::appendTransferFrameRows(std::vector<ReceiveRow> rows) {
+    if (rows.empty()) {
+        return;
+    }
+
+    receive_.frameRows.reserve(receive_.frameRows.size() + rows.size());
+    for (auto& row : rows) {
+        receive_.frameRows.push_back(std::move(row));
+    }
+    trimRowsToLimit(receive_.frameRows, historyLimits_.transferFrameRows);
     ++receive_.frameRowsVersion;
 }
 
 void DockStore::clearTransferFrameRows() {
     receive_.frameRows.clear();
     ++receive_.frameRowsVersion;
+}
+
+void DockStore::setHistoryLimits(DockHistoryLimits limits) {
+    historyLimits_ = limits;
+    if (trimRowsToLimit(receive_.rows, historyLimits_.transferRawRows)) {
+        ++receive_.rowsVersion;
+    }
+    if (trimRowsToLimit(receive_.frameRows, historyLimits_.transferFrameRows)) {
+        ++receive_.frameRowsVersion;
+    }
+    if (trimRowsToLimit(log_.rows, historyLimits_.hostLogRows)) {
+        ++log_.rowsVersion;
+    }
+    if (trimRowsToLimit(script_.rows, historyLimits_.scriptLogRows)) {
+        ++script_.rowsVersion;
+    }
 }
 
 void DockStore::appendLuaEvent(const scripting::ScriptEvent& event) {
@@ -323,6 +362,7 @@ void DockStore::appendRawReceive(const transport::ConnectionContext& ctx, const 
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
         .message = {},
     });
+    trimRowsToLimit(receive_.rows, historyLimits_.transferRawRows);
     ++receive_.rowsVersion;
 }
 
@@ -334,6 +374,7 @@ void DockStore::appendRawSend(const transport::ConnectionContext& ctx, const std
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
         .message = {},
     });
+    trimRowsToLimit(receive_.rows, historyLimits_.transferRawRows);
     ++receive_.rowsVersion;
 }
 

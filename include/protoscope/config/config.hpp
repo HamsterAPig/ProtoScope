@@ -62,9 +62,17 @@ struct GuiWaveConfig {
     bool showAxisLabels{false};
 };
 
+struct GuiLogHistoryConfig {
+    std::size_t transferRawLimit{10000};
+    std::size_t transferFrameLimit{120000};
+    std::size_t hostLimit{5000};
+    std::size_t scriptLimit{5000};
+};
+
 struct GuiConfig {
     GuiWindowConfig window{};
     GuiWaveConfig wave{};
+    GuiLogHistoryConfig logHistory{};
     bool luaDockLayoutDebug{false};
     std::size_t sendHistoryLimit{20};
 };
