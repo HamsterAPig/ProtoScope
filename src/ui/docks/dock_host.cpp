@@ -309,8 +309,8 @@ void GuiRuntime::drawProtocolDock() {
     ImGui::Separator();
     if (lua.docks.empty()) {
         // 核心流程：Lua 按钮可能在点击回调里同步刷新脚本控件快照。
-        // 这里先复制当前帧的控件列表，避免遍历 `lua.controlStates` 时引用失效导致闪退。
-        const auto controls = lua.controlStates;
+        // 这里直接按引用遍历当前帧控件，配合 bool 冒泡在触发更新后立刻停止本帧遍历。
+        const auto& controls = lua.controlStates;
         drawLuaDockFlow(controls);
         ImGui::End();
         return;
@@ -319,10 +319,13 @@ void GuiRuntime::drawProtocolDock() {
 
 }
 
-void GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls) {
+bool GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls) {
     for (const auto& control : controls) {
-        drawDynamicControl(control);
+        if (drawDynamicControl(control)) {
+            return true;
+        }
     }
+    return false;
 }
 
 
@@ -726,18 +729,20 @@ void GuiRuntime::drawScriptDock() {
     ImGui::End();
 }
 
-void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
+bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
     const auto& descriptor = control.descriptor;
     switch (descriptor.type) {
     case scripting::ControlType::Button:
         if (ImGui::Button(descriptor.label.c_str())) {
             application_.updateControlValue(descriptor.id, true);
+            return true;
         }
         break;
     case scripting::ControlType::Checkbox: {
         bool checked = std::get<bool>(control.value);
         if (ImGui::Checkbox(descriptor.label.c_str(), &checked)) {
             application_.updateControlValue(descriptor.id, checked);
+            return true;
         }
         break;
     }
@@ -746,6 +751,7 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
         if (ImGui::InputText(descriptor.label.c_str(), buffer, sizeof(buffer))) {
             application_.updateControlValue(descriptor.id, std::string(buffer));
+            return true;
         }
         break;
     }
@@ -757,6 +763,7 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         }
         if (!items.empty() && ImGui::Combo(descriptor.label.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
             application_.updateControlValue(descriptor.id, index);
+            return true;
         }
         break;
     }
@@ -794,6 +801,7 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
             });
             if (selected != state.options.end()) {
                 application_.updateControlValue(descriptor.id, *selected);
+                return true;
             }
         }
         break;
@@ -802,6 +810,7 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         int value = std::get<int>(control.value);
         if (ImGui::InputInt(descriptor.label.c_str(), &value)) {
             application_.updateControlValue(descriptor.id, value);
+            return true;
         }
         break;
     }
@@ -809,10 +818,12 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         float value = std::get<float>(control.value);
         if (ImGui::InputFloat(descriptor.label.c_str(), &value)) {
             application_.updateControlValue(descriptor.id, value);
+            return true;
         }
         break;
     }
     }
+    return false;
 }
 
 } // namespace protoscope::ui

@@ -95,18 +95,18 @@ private:
     void drawTransferDock();
     void drawLogDock();
     void drawScriptDock();
-    void drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls);
-    void drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
+    bool drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls);
+    bool drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
                           const scripting::TableLayoutDescriptor& layout,
                           std::string_view stableId);
-    void drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
+    bool drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
                          const scripting::FormLayoutDescriptor& layout,
                          std::string_view stableId);
-    void drawLuaDockFormItems(const std::vector<scripting::FormLayoutItemDescriptor>& items,
+    bool drawLuaDockFormItems(const std::vector<scripting::FormLayoutItemDescriptor>& items,
                               const std::unordered_map<std::string, const scripting::ControlSnapshot*>& controlsById,
                               std::string_view stableId,
                               std::size_t& widgetIndex);
-    void drawDynamicControl(const scripting::ControlSnapshot& control);
+    bool drawDynamicControl(const scripting::ControlSnapshot& control);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
     void processPendingProtocolWorkspaceSwitch();

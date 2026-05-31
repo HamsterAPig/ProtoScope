@@ -4,7 +4,7 @@
 
 namespace protoscope::ui {
 
-void GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
+bool GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
                                   const scripting::TableLayoutDescriptor& layout,
                                   std::string_view stableId) {
     std::unordered_map<std::string, const scripting::ControlSnapshot*> controlsById;
@@ -29,7 +29,7 @@ void GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
 
     const std::string tableId = "##lua_dock_table_" + std::string(stableId);
     if (!ImGui::BeginTable(tableId.c_str(), static_cast<int>(layout.columns), flags)) {
-        return;
+        return false;
     }
 
     for (std::size_t columnIndex = 0; columnIndex < layout.columns; ++columnIndex) {
@@ -38,6 +38,7 @@ void GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
 
     // 核心流程：表格布局只负责按声明式 rows/cells 摆放控件，
     // 具体控件行为仍然复用 drawDynamicControl，避免改动现有控件契约。
+    bool updated = false;
     for (const auto& row : layout.rows) {
         ImGui::TableNextRow();
         for (std::size_t columnIndex = 0; columnIndex < layout.columns; ++columnIndex) {
@@ -57,14 +58,22 @@ void GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
             }
 
             ImGui::PushID(controlIter->second->descriptor.id.c_str());
-            drawDynamicControl(*controlIter->second);
+            if (drawDynamicControl(*controlIter->second)) {
+                updated = true;
+                ImGui::PopID();
+                break;
+            }
             ImGui::PopID();
+        }
+        if (updated) {
+            break;
         }
     }
     ImGui::EndTable();
+    return updated;
 }
 
-void GuiRuntime::drawLuaDockFormItems(
+bool GuiRuntime::drawLuaDockFormItems(
     const std::vector<scripting::FormLayoutItemDescriptor>& items,
     const std::unordered_map<std::string, const scripting::ControlSnapshot*>& controlsById,
     std::string_view stableId,
@@ -74,7 +83,9 @@ void GuiRuntime::drawLuaDockFormItems(
         case scripting::FormLayoutItemKind::Control: {
             const auto controlIter = controlsById.find(item.controlId);
             if (controlIter != controlsById.end()) {
-                drawDynamicControl(*controlIter->second);
+                if (drawDynamicControl(*controlIter->second)) {
+                    return true;
+                }
             }
             break;
         }
@@ -88,7 +99,9 @@ void GuiRuntime::drawLuaDockFormItems(
                 if (!firstControl) {
                     ImGui::SameLine();
                 }
-                drawDynamicControl(*controlIter->second);
+                if (drawDynamicControl(*controlIter->second)) {
+                    return true;
+                }
                 firstControl = false;
             }
             break;
@@ -96,7 +109,9 @@ void GuiRuntime::drawLuaDockFormItems(
         case scripting::FormLayoutItemKind::Group:
             if (item.group) {
                 ImGui::SeparatorText(item.group->title.c_str());
-                drawLuaDockFormItems(item.group->items, controlsById, stableId, widgetIndex);
+                if (drawLuaDockFormItems(item.group->items, controlsById, stableId, widgetIndex)) {
+                    return true;
+                }
             }
             break;
         case scripting::FormLayoutItemKind::Collapse:
@@ -105,7 +120,9 @@ void GuiRuntime::drawLuaDockFormItems(
                 const std::string headerId = item.collapse->title + "##lua_form_collapse_" + std::string(stableId)
                     + "_" + std::to_string(widgetIndex++);
                 if (ImGui::CollapsingHeader(headerId.c_str(), flags)) {
-                    drawLuaDockFormItems(item.collapse->items, controlsById, stableId, widgetIndex);
+                    if (drawLuaDockFormItems(item.collapse->items, controlsById, stableId, widgetIndex)) {
+                        return true;
+                    }
                 }
             }
             break;
@@ -117,9 +134,10 @@ void GuiRuntime::drawLuaDockFormItems(
             break;
         }
     }
+    return false;
 }
 
-void GuiRuntime::drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
+bool GuiRuntime::drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
                                  const scripting::FormLayoutDescriptor& layout,
                                  std::string_view stableId) {
     std::unordered_map<std::string, const scripting::ControlSnapshot*> controlsById;
@@ -131,7 +149,7 @@ void GuiRuntime::drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
     // 核心流程：form 布局只负责分组、折叠和同排摆放，
     // 具体控件交互继续复用 drawDynamicControl，保证旧控件行为不变。
     std::size_t widgetIndex = 0;
-    drawLuaDockFormItems(layout.items, controlsById, stableId, widgetIndex);
+    return drawLuaDockFormItems(layout.items, controlsById, stableId, widgetIndex);
 }
 
 void GuiRuntime::drawLuaDockWindows() {
@@ -140,8 +158,8 @@ void GuiRuntime::drawLuaDockWindows() {
         return;
     }
 
-    // 这里按值复制当前帧快照，保证本帧渲染遍历期间底层容器不会被重入修改。
-    const auto dockSnapshots = lua.docks;
+    // 这里按引用遍历当前帧快照，配合 bool 冒泡在控件触发更新后立刻停止本帧遍历。
+    const auto& dockSnapshots = lua.docks;
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
     syncLuaDockVisibilityDefaults();
     for (const auto& dockSnapshot : dockSnapshots) {
@@ -158,16 +176,21 @@ void GuiRuntime::drawLuaDockWindows() {
             }
         }
         if (windowVisible) {
+            bool updated = false;
             if (dockSnapshot.descriptor.layout.has_value()) {
                 if (dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Table) {
-                    drawLuaDockTable(dockSnapshot, dockSnapshot.descriptor.layout->table, stableId);
+                    updated = drawLuaDockTable(dockSnapshot, dockSnapshot.descriptor.layout->table, stableId);
                 } else if (dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Form) {
-                    drawLuaDockForm(dockSnapshot, dockSnapshot.descriptor.layout->form, stableId);
+                    updated = drawLuaDockForm(dockSnapshot, dockSnapshot.descriptor.layout->form, stableId);
                 } else {
-                    drawLuaDockFlow(dockSnapshot.controls);
+                    updated = drawLuaDockFlow(dockSnapshot.controls);
                 }
             } else {
-                drawLuaDockFlow(dockSnapshot.controls);
+                updated = drawLuaDockFlow(dockSnapshot.controls);
+            }
+            if (updated) {
+                ImGui::End();
+                break;
             }
         }
         ImGui::End();
