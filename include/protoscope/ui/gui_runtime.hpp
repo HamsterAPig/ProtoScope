@@ -3,6 +3,8 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
+#include "protoscope/ui/ui_component.hpp"
+#include "protoscope/ui/ui_host_context.hpp"
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
@@ -10,6 +12,7 @@
 #include <deque>
 #include <filesystem>
 #include <future>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,6 +25,12 @@ struct GLFWwindow;
 
 namespace protoscope::ui {
 
+class IDialogComponent;
+class IDockComponent;
+class IMenuContributor;
+class IUiComponent;
+class WorkspaceController;
+
 class GuiRuntime {
 public:
     GuiRuntime(app::Application& application, const config::ConfigStore& configStore);
@@ -32,6 +41,14 @@ public:
     void shutdown();
 
 private:
+    friend class RuntimeMenuComponent;
+    friend class RuntimeDialogComponent;
+    friend class CommDockComponent;
+    friend class ProtocolDockComponent;
+    friend class LuaDockComponent;
+    friend class LogDockComponent;
+    friend class WorkspaceController;
+
     enum class LogExportTarget {
         Transfer,
         Host,
@@ -55,6 +72,15 @@ private:
     void shutdownWindow();
 
     void ensureChineseFont();
+    void registerUiComponents();
+    void attachUiComponents();
+    void detachUiComponents();
+    void syncRuntimeState();
+    RuntimeUiContext makeUiContext();
+    void drawRegisteredMenus();
+    void syncRegisteredDialogs();
+    void drawRegisteredDialogs();
+    void drawRegisteredDocks();
     void renderFrame();
     void drawStatusBar();
     void syncDialogQueue();
@@ -138,6 +164,12 @@ private:
     app::Application& application_;
     const config::ConfigStore& configStore_;
     GLFWwindow* window_{nullptr};
+    std::unique_ptr<WorkspaceController> workspaceController_;
+    GuiRuntimeState runtimeState_{};
+    std::vector<std::unique_ptr<IUiComponent>> uiComponents_;
+    std::vector<IMenuContributor*> menuContributors_;
+    std::vector<IDialogComponent*> dialogComponents_;
+    std::vector<IDockComponent*> dockComponents_;
     std::uint64_t lastRenderAtMs_{0};
     std::uint64_t lastAutoSaveAtMs_{0};
     config::FileSnapshot configSnapshot_{};

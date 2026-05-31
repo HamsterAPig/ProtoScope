@@ -186,9 +186,16 @@ if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
         ui/editable_combo.cpp
         ui/runtime/gui_runtime_core.cpp
+        ui/runtime/ui_components.cpp
+        ui/runtime/platform_controller.cpp
+        ui/runtime/config_controller.cpp
+        ui/runtime/workspace_controller.cpp
         ui/runtime/main_menu.cpp
         ui/runtime/lua_view_menu.cpp
         ui/runtime/help_menu.cpp
+        ui/docks/dock_host.cpp
+        ui/docks/lua_dock_host.cpp
+        ui/dialogs/dialog_host.cpp
         ui/wave/wave_dock_renderer.cpp
         ui/wave/wave_toolbar.cpp
     )

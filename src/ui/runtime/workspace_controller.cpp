@@ -1,10 +1,72 @@
-// 本文件由 gui_runtime_core.cpp 以组件实现方式包含，承接对应 Runtime 业务逻辑。
+#include "protoscope/ui/gui_runtime.hpp"
 
-#if !defined(PROTOSCOPE_GUI_RUNTIME_COMPONENT_INCLUDE)
-#error "This runtime component implementation is included by gui_runtime_core.cpp"
-#endif
+#include "../runtime/gui_runtime_detail.hpp"
+#include "workspace_controller.hpp"
 
 namespace protoscope::ui {
+
+WorkspaceController::WorkspaceController(GuiRuntime& runtime)
+    : runtime_(runtime) {}
+
+void WorkspaceController::requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload) {
+    runtime_.requestProtocolWorkspaceSwitch(std::move(protocolDir), forceReload);
+}
+
+void WorkspaceController::processPendingProtocolWorkspaceSwitch() {
+    runtime_.processPendingProtocolWorkspaceSwitch();
+}
+
+bool WorkspaceController::switchProtocolWorkspace(const std::string& protocolDir, bool forceReload) {
+    return runtime_.switchProtocolWorkspace(protocolDir, forceReload);
+}
+
+void WorkspaceController::loadCurrentProtocolWorkspace() {
+    runtime_.loadCurrentProtocolWorkspace();
+}
+
+void WorkspaceController::saveCurrentProtocolWorkspace() {
+    runtime_.saveCurrentProtocolWorkspace();
+}
+
+void WorkspaceController::resetCurrentProtocolWorkspaceLayout() {
+    runtime_.resetCurrentProtocolWorkspaceLayout();
+}
+
+void WorkspaceController::loadCurrentProtocolControlState() {
+    runtime_.loadCurrentProtocolControlState();
+}
+
+void WorkspaceController::saveCurrentProtocolControlState() {
+    runtime_.saveCurrentProtocolControlState();
+}
+
+void WorkspaceController::pruneCurrentLuaDockSettings() {
+    runtime_.pruneCurrentLuaDockSettings();
+}
+
+bool WorkspaceController::isLuaDockVisible(std::string_view stableId) const {
+    return runtime_.isLuaDockVisible(stableId);
+}
+
+bool WorkspaceController::setLuaDockVisible(std::string_view stableId, bool visible) {
+    return runtime_.setLuaDockVisible(stableId, visible);
+}
+
+void WorkspaceController::syncLuaDockVisibilityDefaults() {
+    runtime_.syncLuaDockVisibilityDefaults();
+}
+
+std::filesystem::path WorkspaceController::currentProtocolLayoutPath() const {
+    return runtime_.currentProtocolLayoutPath();
+}
+
+std::filesystem::path WorkspaceController::legacyProtocolLayoutPath() const {
+    return runtime_.legacyProtocolLayoutPath();
+}
+
+std::filesystem::path WorkspaceController::protocolControlStatePath() const {
+    return runtime_.protocolControlStatePath();
+}
 
 void GuiRuntime::requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload) {
     pendingProtocolDir_ = std::move(protocolDir);

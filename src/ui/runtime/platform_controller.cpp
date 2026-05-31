@@ -1,8 +1,10 @@
-// 本文件由 gui_runtime_core.cpp 以组件实现方式包含，承接对应 Runtime 业务逻辑。
+#include "protoscope/ui/gui_runtime.hpp"
 
-#if !defined(PROTOSCOPE_GUI_RUNTIME_COMPONENT_INCLUDE)
-#error "This runtime component implementation is included by gui_runtime_core.cpp"
-#endif
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <ctime>
+#include <thread>
 
 namespace protoscope::ui {
 
