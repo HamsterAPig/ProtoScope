@@ -4,6 +4,7 @@
 
 #include <elf_static_view/project.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -50,6 +51,7 @@ elf_static_view::ExpandedNode makeExpandedNode(std::string path,
         .depth = 0,
         .children_lazy = false,
         .children = {},
+        .export_path = {},
     };
 }
 
@@ -132,9 +134,17 @@ void test_elf_static_view_bridge_loads_variable_summary_export() {
         elf_static_view::ExportOptions options;
         options.format = elf_static_view::ExportFormat::JsonCompact;
         options.payload_kind = elf_static_view::ExportPayloadKind::VariableSummary;
+        auto lightweightExport = elf_static_view::build_lightweight_export(sampleProjectModel(), options);
+        const auto summaryVariable = std::find_if(lightweightExport.variables.begin(),
+                                                  lightweightExport.variables.end(),
+                                                  [](const elf_static_view::LightweightVariableRecord& variable) {
+                                                      return variable.path == "global.a_var_int";
+                                                  });
+        require(summaryVariable != lightweightExport.variables.end(), "轻量变量摘要应导出完整变量路径");
+        require(summaryVariable->name == "global.a_var_int", "v0.3.5 轻量变量摘要 name 应使用完整路径");
         elf_static_view::ExportDocument document{
             elf_static_view::ExportPayloadKind::VariableSummary,
-            elf_static_view::build_lightweight_export(sampleProjectModel(), options),
+            std::move(lightweightExport),
         };
 
         std::ofstream output(path, std::ios::binary);
