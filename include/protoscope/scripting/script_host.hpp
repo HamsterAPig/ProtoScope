@@ -62,6 +62,8 @@ struct ControlDescriptor {
     int comboDefaultIndex{0};
     int debounceMs{150};
     std::size_t limit{64};
+    bool debounceMsConfigured{false};
+    bool limitConfigured{false};
 };
 
 using ControlValue = std::variant<bool, int, float, std::string, ElfSymbolValue>;

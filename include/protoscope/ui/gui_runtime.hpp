@@ -233,6 +233,8 @@ private:
         std::string draft;
         std::string queriedDraft;
         std::uint64_t editedAtMs{0};
+        std::uint64_t loadedRevision{0};
+        std::size_t queriedLimit{0};
         std::vector<scripting::ElfSymbolValue> options;
     };
     std::unordered_map<std::string, ElfSymbolComboUiState> elfSymbolComboStates_;

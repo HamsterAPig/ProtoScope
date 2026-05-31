@@ -72,10 +72,16 @@ struct GuiLogHistoryConfig {
     std::size_t scriptLimit{5000};
 };
 
+struct GuiElfSymbolComboConfig {
+    std::size_t limit{10};
+    int debounceMs{300};
+};
+
 struct GuiConfig {
     GuiWindowConfig window{};
     GuiWaveConfig wave{};
     GuiLogHistoryConfig logHistory{};
+    GuiElfSymbolComboConfig elfSymbolCombo{};
     bool luaDockLayoutDebug{false};
     std::size_t sendHistoryLimit{20};
 };

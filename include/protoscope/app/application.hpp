@@ -47,6 +47,7 @@ public:
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
     void resetWaveHistory();
     bool loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error);
+    [[nodiscard]] std::uint64_t elfStaticAddressRevision() const;
     [[nodiscard]] std::vector<scripting::ElfSymbolValue> queryElfStaticAddresses(const std::string& queryText,
                                                                                  std::size_t limit) const;
     void rebuildTransferFrameRows();
@@ -105,6 +106,7 @@ private:
     logging::LoggingFacade loggingFacade_{};
     scripting::ScriptHost scriptHost_;
     plugin::ElfStaticViewBridge elfStaticView_;
+    std::uint64_t elfStaticAddressRevision_{0};
     std::unique_ptr<transport::ITransport> transport_;
     std::optional<transport::ConnectionContext> activeConnection_;
     std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> transportFactoryForTest_;

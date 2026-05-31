@@ -274,8 +274,12 @@ void test_script_elf_symbol_combo_descriptor_defaults() {
             "应解析 elf_symbol_combo 控件类型");
     require(controls[0].debounceMs == 150, "debounce_ms 默认值应为 150");
     require(controls[0].limit == 64, "limit 默认值应为 64");
+    require(!controls[0].debounceMsConfigured, "未配置 debounce_ms 时应标记为使用全局默认");
+    require(!controls[0].limitConfigured, "未配置 limit 时应标记为使用全局默认");
     require(controls[1].debounceMs == 25, "应解析自定义 debounce_ms");
     require(controls[1].limit == 3, "应解析自定义 limit");
+    require(controls[1].debounceMsConfigured, "自定义 debounce_ms 应标记为 Lua 覆盖");
+    require(controls[1].limitConfigured, "自定义 limit 应标记为 Lua 覆盖");
 }
 
 void test_script_elf_symbol_combo_invalid_config_fails() {
@@ -815,6 +819,8 @@ void test_config_default_roundtrip() {
     require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
     require(config.gui.logHistory.scriptLimit == 5000, "脚本日志默认上限应为 5000");
+    require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
+    require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
     require(config.gui.sendHistoryLimit == 20, "发送历史条数默认值应为 20");
     config.communication.kind = protoscope::transport::TransportKind::Serial;
     config.communication.serial.portName = "COM9";
@@ -844,6 +850,8 @@ void test_config_default_roundtrip() {
     config.gui.logHistory.transferFrameLimit = 22;
     config.gui.logHistory.hostLimit = 33;
     config.gui.logHistory.scriptLimit = 44;
+    config.gui.elfSymbolCombo.limit = 12;
+    config.gui.elfSymbolCombo.debounceMs = 350;
     config.gui.sendHistoryLimit = 7;
     config.scripting.fileIo.enabled = true;
     config.scripting.fileIo.maxOpenFiles = 3;
@@ -887,6 +895,8 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.logHistory.transferFrameLimit == 22, "逐帧收发历史上限 roundtrip 失败");
     require(reloaded.config.gui.logHistory.hostLimit == 33, "宿主日志历史上限 roundtrip 失败");
     require(reloaded.config.gui.logHistory.scriptLimit == 44, "脚本日志历史上限 roundtrip 失败");
+    require(reloaded.config.gui.elfSymbolCombo.limit == 12, "ELF 变量候选上限 roundtrip 失败");
+    require(reloaded.config.gui.elfSymbolCombo.debounceMs == 350, "ELF 变量候选消抖 roundtrip 失败");
     require(reloaded.config.gui.sendHistoryLimit == 7, "发送历史条数 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.enabled, "Lua 文件 IO 开关 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.maxOpenFiles == 3, "Lua 文件 IO 打开数上限 roundtrip 失败");

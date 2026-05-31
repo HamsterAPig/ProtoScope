@@ -479,8 +479,17 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
         break;
     }
     case ControlType::ElfSymbolCombo: {
-        descriptor.debounceMs = table.get_or("debounce_ms", 150);
-        const int limit = table.get_or("limit", 64);
+        const sol::object debounceObject = table["debounce_ms"];
+        if (debounceObject.valid() && debounceObject.get_type() != sol::type::lua_nil) {
+            descriptor.debounceMs = debounceObject.as<int>();
+            descriptor.debounceMsConfigured = true;
+        }
+        const sol::object limitObject = table["limit"];
+        int limit = static_cast<int>(descriptor.limit);
+        if (limitObject.valid() && limitObject.get_type() != sol::type::lua_nil) {
+            limit = limitObject.as<int>();
+            descriptor.limitConfigured = true;
+        }
         if (descriptor.debounceMs <= 0) {
             error = "elf_symbol_combo debounce_ms 必须大于 0";
             return std::nullopt;

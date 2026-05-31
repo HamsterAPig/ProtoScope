@@ -275,6 +275,19 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
             result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
         }
+        if (const auto elfSymbolCombo = gui["elf_symbol_combo"]) {
+            const int limit = readScalar<int>(elfSymbolCombo,
+                                              "limit",
+                                              static_cast<int>(result.config.gui.elfSymbolCombo.limit));
+            if (limit > 0) {
+                result.config.gui.elfSymbolCombo.limit = static_cast<std::size_t>(limit);
+            }
+            const int debounceMs =
+                readScalar<int>(elfSymbolCombo, "debounce_ms", result.config.gui.elfSymbolCombo.debounceMs);
+            if (debounceMs > 0) {
+                result.config.gui.elfSymbolCombo.debounceMs = debounceMs;
+            }
+        }
 
         const auto protocol = root["protocol"];
         result.config.protocol.rootDir = readScalar<std::string>(protocol, "root_dir", result.config.protocol.rootDir);
@@ -420,6 +433,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
     root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
     root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
+    root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;
+    root["gui"]["elf_symbol_combo"]["debounce_ms"] = config.gui.elfSymbolCombo.debounceMs;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
     root["protocol"]["selected_dir"] = config.protocol.selectedDir;

@@ -242,6 +242,7 @@ config::AppConfig Application::captureConfig() const {
     auto captured = configStore_.captureFromDock(dockStore_);
     captured.gui.window = runtimeConfig_.gui.window;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
+    captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
     captured.app.language = runtimeConfig_.app.language;
@@ -649,8 +650,13 @@ bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, st
     if (!elfStaticView_.loadFile(path, error)) {
         return false;
     }
+    ++elfStaticAddressRevision_;
     setStatusMessage("ELF/ElfStaticView 数据文件已加载: " + elfStaticView_.sourcePath());
     return true;
+}
+
+std::uint64_t Application::elfStaticAddressRevision() const {
+    return elfStaticAddressRevision_;
 }
 
 std::vector<scripting::ElfSymbolValue> Application::queryElfStaticAddresses(const std::string& queryText,
