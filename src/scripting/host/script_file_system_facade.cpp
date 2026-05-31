@@ -1,9 +1,11 @@
-// 本文件由 script_host_core.cpp 包含，承接对应 Scripting 业务组件实现。
+#include "script_file_system_facade.hpp"
+#include "script_host_internal.hpp"
 
-#if !defined(PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE)
-#error "This scripting component implementation is included by script_host_core.cpp"
-#endif
+#include <algorithm>
+#include <filesystem>
+#include <tuple>
 
+namespace protoscope::scripting {
 
 std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(const std::string& pathText, const sol::object& opts) {
     auto fail = [this](const std::string& error) {
@@ -291,3 +293,5 @@ void ScriptHost::pumpFileSendJob(std::uint64_t jobId) {
         protoFsClose(handleId);
     }
 }
+
+} // namespace protoscope::scripting

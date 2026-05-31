@@ -1,9 +1,9 @@
-// 本文件由 script_host_core.cpp 包含，承接对应 Scripting 业务组件实现。
+#include "script_host_internal.hpp"
 
-#if !defined(PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE)
-#error "This scripting component implementation is included by script_host_core.cpp"
-#endif
+#include <unordered_set>
+#include <utility>
 
+namespace protoscope::scripting {
 
 std::optional<StreamValueType> parseStreamValueType(const std::string& text) {
     if (text == "u8") return StreamValueType::U8;
@@ -120,15 +120,6 @@ sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& err
     }
     return table;
 }
-
-struct LoadedStreamSchema {
-    explicit LoadedStreamSchema(StreamBufferDefinition buffer, std::vector<StreamFrameDefinition> frames)
-        : parser(std::move(buffer), std::move(frames)) {}
-
-    FrameStreamParser parser;
-    std::unordered_map<std::string, sol::protected_function> frameCallbacks;
-    sol::protected_function onError;
-};
 
 std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua, std::string& error) {
     const sol::object streamObject = lua["stream"];
@@ -416,3 +407,5 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua,
     loaded->parser = FrameStreamParser(bufferDefinition, std::move(frames));
     return loaded;
 }
+
+} // namespace protoscope::scripting

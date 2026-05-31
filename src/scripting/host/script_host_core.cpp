@@ -1,6 +1,7 @@
 #include "protoscope/scripting/script_host.hpp"
 
 #include "script_host_api_module.hpp"
+#include "script_host_internal.hpp"
 
 #include <sol/sol.hpp>
 
@@ -15,7 +16,6 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
-#include <functional>
 #include <sstream>
 #include <string_view>
 #include <type_traits>
@@ -54,31 +54,8 @@ std::string ProtoBuffer::toHex(std::size_t maxBytes) const {
     return text;
 }
 
-namespace {
-
 constexpr const char* kDefaultDockId = "protocol";
 constexpr const char* kDefaultDockTitle = "协议动作";
-
-class FunctionScriptHostApiModule final : public IScriptHostApiModule {
-public:
-    using RegisterFn = std::function<void(sol::table&)>;
-
-    FunctionScriptHostApiModule(std::string_view moduleId, RegisterFn registerFn)
-        : moduleId_(moduleId),
-          registerFn_(std::move(registerFn)) {}
-
-    std::string_view id() const override {
-        return moduleId_;
-    }
-
-    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
-        registerFn_(proto);
-    }
-
-private:
-    std::string_view moduleId_;
-    RegisterFn registerFn_;
-};
 
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
@@ -1154,11 +1131,6 @@ std::optional<std::int64_t> luaIntegerValue(const sol::object& object) {
     return std::nullopt;
 }
 
-#define PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE
-#include "stream_schema_module.cpp"
-#undef PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE
-
-
 std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& error) {
     if (!object.is<sol::table>()) {
         error = "plot.setup 参数必须是 table";
@@ -1251,8 +1223,6 @@ std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object
     return request;
 }
 
-} // namespace
-
 const ControlDescriptor* findControlDescriptor(const std::vector<ControlDescriptor>& controls, const std::string& id) {
     for (const auto& control : controls) {
         if (control.id == id) {
@@ -1298,39 +1268,6 @@ std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object
 
 } // namespace script_host_lua
 
-struct ScriptHost::Runtime {
-    sol::state lua;
-    std::unique_ptr<LoadedStreamSchema> stream;
-};
-
-struct ScriptHost::FileHandle {
-    std::uint64_t id{0};
-    std::filesystem::path path;
-    std::fstream stream;
-    bool readable{false};
-    bool writable{false};
-    std::uint64_t bytesWritten{0};
-};
-
-struct ScriptHost::AuthorizedPath {
-    std::filesystem::path path;
-    bool recursive{false};
-    bool readable{true};
-    bool writable{true};
-};
-
-struct ScriptHost::FileSendJob {
-    std::uint64_t id{0};
-    std::uint64_t handleId{0};
-    TxRequestKind kind{TxRequestKind::Send};
-    std::string tag;
-    std::size_t chunkSize{0};
-    std::uint64_t total{0};
-    std::uint64_t nextOffset{0};
-    std::size_t inflight{0};
-    bool eof{false};
-};
-
 ScriptHost::ScriptHost()
     : runtime_(std::make_unique<Runtime>()) {}
 
@@ -1353,11 +1290,6 @@ std::vector<StreamFrameDefinition> ScriptHost::streamFrameDefinitions() const {
     }
     return runtime_->stream->parser.frameDefinitions();
 }
-
-#define PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE
-#include "script_host_loader.cpp"
-#undef PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE
-
 
 void ScriptHost::resetRuntime() {
     scriptLoaded_ = false;
@@ -1564,19 +1496,19 @@ void ScriptHost::registerLuaApi(sol::table& proto) {
     ScriptHostQueues queues;
     ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_};
     std::array modules{
-        FunctionScriptHostApiModule{"core_api_module", [this](sol::table& table) { registerCoreApi(table); }},
-        FunctionScriptHostApiModule{"tx_api_module", [this](sol::table& table) { registerTxApi(table); }},
-        FunctionScriptHostApiModule{"status_api_module", [this](sol::table& table) { registerStatusApi(table); }},
-        FunctionScriptHostApiModule{"ui_api_module", [this](sol::table& table) { registerUiApi(table); }},
-        FunctionScriptHostApiModule{"file_api_module", [this](sol::table& table) { registerFileApi(table); }},
-        FunctionScriptHostApiModule{"plot_api_module", [this](sol::table& table) { registerPlotApi(table); }},
-        FunctionScriptHostApiModule{"control_api_module", [this](sol::table& table) { registerControlApi(table); }},
-        FunctionScriptHostApiModule{"codec_api_module", [this](sol::table& table) { registerCodecApi(table); }},
+        makeCoreApiModule(*this),
+        makeTxApiModule(*this),
+        makeStatusApiModule(*this),
+        makeUiApiModule(*this),
+        makeFileApiModule(*this),
+        makePlotApiModule(*this),
+        makeControlApiModule(*this),
+        makeCodecApiModule(*this),
     };
 
-    // 核心流程：统一从 API 模块列表注册 Lua 函数，保持 wire format 不变，只收束宿主内部编排边界。
+    // 核心流程：宿主只编排模块顺序，具体 Lua wire format 由各 API 模块原样注册。
     for (auto& module : modules) {
-        module.registerApi(ctx, proto);
+        module->registerApi(ctx, proto);
     }
 }
 
@@ -1666,11 +1598,6 @@ const ControlValue* ScriptHost::findControlValue(const std::string& id) const {
 void ScriptHost::updateControlValue(const std::string& id, ControlValue value) {
     controlValues_[id] = std::move(value);
 }
-
-#define PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE
-#include "script_callback_dispatcher.cpp"
-#undef PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE
-
 
 std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
                                                    const sol::object& payload,
@@ -1871,11 +1798,6 @@ std::optional<FileDialogRequest> ScriptHost::protoFileDialog(FileDialogKind kind
     fileDialogRequests_.push_back(request);
     return request;
 }
-
-#define PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE
-#include "script_file_system_facade.cpp"
-#undef PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE
-
 
 std::uint64_t ScriptHost::nextTxRequestId() {
     return nextTxRequestId_++;

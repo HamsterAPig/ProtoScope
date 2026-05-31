@@ -1,19 +1,14 @@
-// 本文件由 wave_dock_renderer.cpp 按原顺序包含，承接对应 Wave 业务组件实现。
+#include "wave_render_service.hpp"
 
-#if !defined(PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE)
-#error "This wave component implementation is included by wave_dock_renderer.cpp"
-#endif
+#include <algorithm>
+#include <cmath>
 
+namespace protoscope::ui {
 
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io) {
     return view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap
         || (view.cursorSnapMode == plot::WaveCursorSnapMode::ModifierSnap && (io.KeyShift || io.KeyCtrl));
 }
-
-struct SmartCursorSnap {
-    plot::CursorReadout readout;
-    std::string_view label;
-};
 
 std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDisplayData& displayData,
                                                              std::size_t channelIndex,
@@ -42,9 +37,10 @@ std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDis
                 displayData, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Minimum);
             if (trough.has_value()) {
                 return SmartCursorSnap{.readout = *trough, .label = "Trough"};
-            }
         }
     }
+}
+
     // 常规智能吸附优先找最大跳变；找不到再交给调用方使用按时间最近点兜底。
     auto edge = plot::findStrongestEdgeNearTime(displayData, channelIndex, time, maxTimeDistance);
     if (edge.has_value()) {
@@ -183,3 +179,5 @@ void drawCursorIntervalHint(const plot::CursorReadout& left,
     drawList->AddText(ImVec2(textMin.x + 5.0F, textMin.y + 2.0F), lineColor, label.c_str());
     ImPlot::PopPlotClipRect();
 }
+
+} // namespace protoscope::ui

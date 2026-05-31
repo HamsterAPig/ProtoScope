@@ -1,28 +1,10 @@
-// 本文件由 wave_dock_renderer.cpp 按原顺序包含，承接对应 Wave 业务组件实现。
+#include "wave_render_service.hpp"
 
-#if !defined(PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE)
-#error "This wave component implementation is included by wave_dock_renderer.cpp"
-#endif
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
-
-struct WaveFrameData {
-    plot::WaveSnapshot snapshot;
-    const plot::WaveSnapshot* fullSnapshot{nullptr};
-    const plot::WaveDisplayData* displayData{nullptr};
-    plot::WaveDataBounds displayBounds{};
-    RenderBudget renderBudget;
-};
-
-struct PlotRenderResult {
-    bool plotRendered{false};
-    std::array<std::optional<plot::CursorReadout>, 2> cursorReadouts{};
-    std::optional<plot::MeasurementReadout> measurement;
-};
-
-void drawMeasurementOverlay(const plot::WaveViewState& view,
-                            const plot::WaveSnapshot& snapshot,
-                            const plot::WaveDisplayData& displayData,
-                            const PlotRenderResult& result);
+namespace protoscope::ui {
 
 void initializeWaveViewIfNeeded(plot::WaveViewState& view) {
     if (view.initialized) {
@@ -179,3 +161,5 @@ bool handleMainPlotZoom(plot::WaveViewState& view, const ImPlotPoint& mousePos) 
     applyViewport(view, zoomed);
     return true;
 }
+
+} // namespace protoscope::ui

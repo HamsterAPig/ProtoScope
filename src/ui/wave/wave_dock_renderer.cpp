@@ -3,7 +3,10 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/ui/icons.hpp"
 
+#include "wave_component.hpp"
+#include "wave_context.hpp"
 #include "wave_detail.hpp"
+#include "wave_render_service.hpp"
 
 #include <imgui.h>
 #include <implot.h>
@@ -21,8 +24,6 @@
 #include <vector>
 
 namespace protoscope::ui {
-
-namespace {
 
 std::string formatMetricText(double value, const char* baseUnit) {
     const char* unit = baseUnit != nullptr ? baseUnit : "";
@@ -56,11 +57,6 @@ std::string formatMetricText(double value, const char* baseUnit) {
     std::snprintf(buffer, sizeof(buffer), "%.4g %s%s", scaled, prefix, unit);
     return buffer;
 }
-
-#define PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-#include "wave_channel_renderer.cpp"
-#undef PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-
 
 bool plotInteractionActive(bool toolHeld) {
     const auto& io = ImGui::GetIO();
@@ -225,11 +221,6 @@ bool applyFitVisibleWaveforms(plot::WaveViewState& view,
     return applyFullViewport(view, bounds.minTime, bounds.maxTime, yRange.minValue, yRange.maxValue);
 }
 
-struct ZoomSelectionResult {
-    bool consumed{false};
-    bool viewportChanged{false};
-};
-
 ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view) {
     ZoomSelectionResult result;
     if (!view.zoomSelectionActive && !view.zoomSelectionDragging) {
@@ -381,46 +372,101 @@ void applyChannelTransformOverride(plot::WaveDockState& wave,
     wave.buffer.setChannelSpec(channelIndex, updated);
 }
 
-#define PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-#include "wave_channel_legend.cpp"
-#undef PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
+class WaveOverviewComponent final : public IWaveComponent {
+public:
+    std::string_view id() const override { return "wave_overview"; }
 
+    void draw(WaveContext& context) override {
+        auto& wave = context.wave;
+        auto& view = context.view;
+        const auto& layout = *context.layout;
+        const auto& config = *context.config;
+        const auto& frame = *context.renderFrame;
 
-#define PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-#include "wave_interaction_controller.cpp"
-#undef PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
+        ImGui::BeginChild("##wave_overview_panel", ImVec2(0.0F, layout.overviewHeight), true, ImGuiWindowFlags_NoScrollbar);
+        const ImVec2 overviewPanelCursor = ImGui::GetCursorPos();
+        if (!wave.overviewCollapsed) {
+            // 核心流程：先完整绘制概览，再覆盖折叠按钮，避免按钮外区域丢失概览交互。
+            drawOverviewWindow(view, config, *frame.fullSnapshot, *frame.displayData, frame.displayBounds, frame.renderBudget);
+        }
+        ImGui::SetCursorPos(overviewPanelCursor);
+        if (ImGui::Button(wave.overviewCollapsed ? "v" : "^", ImVec2(20.0F, 18.0F))) {
+            wave.overviewCollapsed = !wave.overviewCollapsed;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(wave.overviewCollapsed ? "展开概览图" : "折叠概览图");
+        }
+        ImGui::EndChild();
+        if (!wave.overviewCollapsed) {
+            drawHorizontalSplitter("##wave_overview_splitter",
+                                   wave.overviewPanelHeight,
+                                   wave.minOverviewPanelHeight,
+                                   wave.minMainPanelHeight,
+                                   layout.overviewHeight + layout.mainHeight + wave.overviewMainSplitterHeight,
+                                   wave.overviewMainSplitterHeight);
+        }
+    }
+};
 
+class WaveLegendComponent final : public IWaveComponent {
+public:
+    std::string_view id() const override { return "wave_legend"; }
 
-#define PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-#include "wave_measurement_overlay.cpp"
-#undef PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
+    void draw(WaveContext& context) override {
+        drawChannelLegendBar(context.wave, *context.renderFrame->fullSnapshot);
+    }
+};
 
+class WavePlotComponent final : public IWaveComponent {
+public:
+    std::string_view id() const override { return "wave_plot"; }
 
-#define PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-#include "wave_overview_layer.cpp"
-#undef PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
+    void draw(WaveContext& context) override {
+        ImGui::BeginChild("##wave_main_panel", ImVec2(0.0F, context.layout->mainHeight), false, ImGuiWindowFlags_NoScrollbar);
+        drawOscilloscopePlot(context.wave, *context.renderFrame);
+        ImGui::EndChild();
+    }
+};
 
+class WaveMeasurementOverlayComponent final : public IWaveComponent {
+public:
+    std::string_view id() const override { return "wave_measurement_overlay"; }
+};
 
-#define PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-#include "wave_viewport_controller.cpp"
-#undef PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
+class WaveToolbarComponent final : public IWaveComponent {
+public:
+    std::string_view id() const override { return "wave_toolbar"; }
 
+    void draw(WaveContext& context) override {
+        auto& wave = context.wave;
+        auto& view = context.view;
+        const auto& config = *context.config;
+        const auto& displayData = *context.renderFrame->displayData;
 
-#define PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-#include "wave_plot_layer.cpp"
-#undef PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-
-
-#define PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-#include "wave_measurement_overlay_layer.cpp"
-#undef PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-
-
-#define PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-#include "wave_channel_legend_bar.cpp"
-#undef PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE
-
-} // namespace
+        ImGui::SameLine();
+        drawRightPanelSplitter("##wave_tools_splitter",
+                               wave.toolsExpandedWidth,
+                               wave.minToolsExpandedWidth,
+                               (std::max)(240.0F, context.contentWidth * 0.35F),
+                               context.availableWidth,
+                               wave.contentToolsSplitterWidth);
+        ImGui::SameLine();
+        ImGui::BeginChild("##wave_tools", ImVec2(context.toolsWidth, context.availableHeight), true);
+        if (ImGui::Button(wave.toolsCollapsed ? "<" : ">")) {
+            wave.toolsCollapsed = !wave.toolsCollapsed;
+        }
+        if (!wave.toolsCollapsed) {
+            ImGui::Separator();
+            drawWaveToolbar(context.application, wave);
+            ImGui::Separator();
+            drawCursorToolbar(view, config, displayData);
+        } else {
+            drawWaveToolbar(context.application, wave);
+        }
+        drawChannelControls(wave, *context.renderFrame->fullSnapshot);
+        ImGui::EndChild();
+    }
+};
 
 WaveDockRenderer::WaveDockRenderer(app::Application& application)
     : application_(application) {}
@@ -471,61 +517,45 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
             (std::max)(0.0F, available.x - toolsWidth - wave.contentToolsSplitterWidth - spacingWidth * 2.0F);
         auto frame = prepareWaveFrame(wave, contentWidth);
         const auto& fullSnapshot = *frame.fullSnapshot;
-        const auto& displayData = *frame.displayData;
+        WaveFrameState frameState;
+        WaveContext context{application_, wave, view, fullSnapshot, ImGui::GetIO(), frameState};
+        context.config = &config;
+        context.layout = &layout;
+        context.renderFrame = &frame;
+        context.availableWidth = available.x;
+        context.availableHeight = available.y;
+        context.contentWidth = contentWidth;
+        context.toolsWidth = toolsWidth;
+
+        WaveOverviewComponent overviewComponent;
+        WaveLegendComponent legendComponent;
+        WavePlotComponent plotComponent;
+        WaveMeasurementOverlayComponent measurementOverlayComponent;
+        WaveToolbarComponent toolbarComponent;
+        std::array<IWaveComponent*, 5> components{
+            &overviewComponent,
+            &legendComponent,
+            &plotComponent,
+            &measurementOverlayComponent,
+            &toolbarComponent,
+        };
+
+        for (auto* component : components) {
+            component->prepare(context);
+        }
 
         ImGui::BeginChild("##wave_content", ImVec2(contentWidth, available.y), false, ImGuiWindowFlags_NoScrollbar);
-        ImGui::BeginChild("##wave_overview_panel", ImVec2(0.0F, layout.overviewHeight), true, ImGuiWindowFlags_NoScrollbar);
-        const ImVec2 overviewPanelCursor = ImGui::GetCursorPos();
-        if (!wave.overviewCollapsed) {
-            // 核心流程：先完整绘制概览，再把折叠按钮覆盖到左上角，避免按钮外区域失去概览交互。
-            drawOverviewWindow(view, config, fullSnapshot, displayData, frame.displayBounds, frame.renderBudget);
-        }
-        ImGui::SetCursorPos(overviewPanelCursor);
-        if (ImGui::Button(wave.overviewCollapsed ? "v" : "^", ImVec2(20.0F, 18.0F))) {
-            wave.overviewCollapsed = !wave.overviewCollapsed;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(wave.overviewCollapsed ? "展开概览图" : "折叠概览图");
-        }
-        ImGui::EndChild();
-        if (!wave.overviewCollapsed) {
-            drawHorizontalSplitter("##wave_overview_splitter",
-                                   wave.overviewPanelHeight,
-                                   wave.minOverviewPanelHeight,
-                                   wave.minMainPanelHeight,
-                                   layout.overviewHeight + layout.mainHeight + wave.overviewMainSplitterHeight,
-                                   wave.overviewMainSplitterHeight);
-        }
-
-        drawChannelLegendBar(wave, fullSnapshot);
-
-        ImGui::BeginChild("##wave_main_panel", ImVec2(0.0F, layout.mainHeight), false, ImGuiWindowFlags_NoScrollbar);
-        drawOscilloscopePlot(wave, frame);
-        ImGui::EndChild();
+        overviewComponent.draw(context);
+        legendComponent.draw(context);
+        plotComponent.draw(context);
+        measurementOverlayComponent.draw(context);
         ImGui::EndChild();
 
-        ImGui::SameLine();
-        drawRightPanelSplitter("##wave_tools_splitter",
-                               wave.toolsExpandedWidth,
-                               wave.minToolsExpandedWidth,
-                               (std::max)(240.0F, contentWidth * 0.35F),
-                               available.x,
-                               wave.contentToolsSplitterWidth);
-        ImGui::SameLine();
-        ImGui::BeginChild("##wave_tools", ImVec2(toolsWidth, available.y), true);
-        if (ImGui::Button(wave.toolsCollapsed ? "<" : ">")) {
-            wave.toolsCollapsed = !wave.toolsCollapsed;
+        toolbarComponent.draw(context);
+        for (auto* component : components) {
+            component->handleInput(context);
+            component->commit(context);
         }
-        if (!wave.toolsCollapsed) {
-            ImGui::Separator();
-            drawWaveToolbar(application_, wave);
-            ImGui::Separator();
-            drawCursorToolbar(view, config, displayData);
-        } else {
-            drawWaveToolbar(application_, wave);
-        }
-        drawChannelControls(wave, fullSnapshot);
-        ImGui::EndChild();
     }
     ImGui::End();
 }

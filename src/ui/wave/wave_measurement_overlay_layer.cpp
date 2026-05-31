@@ -1,9 +1,10 @@
-// 本文件由 wave_dock_renderer.cpp 按原顺序包含，承接对应 Wave 业务组件实现。
+#include "wave_render_service.hpp"
 
-#if !defined(PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE)
-#error "This wave component implementation is included by wave_dock_renderer.cpp"
-#endif
+#include <algorithm>
+#include <string>
+#include <vector>
 
+namespace protoscope::ui {
 
 void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveSnapshot& snapshot,
@@ -72,3 +73,5 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
         textPos.y += lineSpacing;
     }
 }
+
+} // namespace protoscope::ui

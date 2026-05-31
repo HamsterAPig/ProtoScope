@@ -1,9 +1,9 @@
-// 本文件由 wave_dock_renderer.cpp 按原顺序包含，承接对应 Wave 业务组件实现。
+#include "wave_render_service.hpp"
 
-#if !defined(PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE)
-#error "This wave component implementation is included by wave_dock_renderer.cpp"
-#endif
+#include <algorithm>
+#include <string>
 
+namespace protoscope::ui {
 
 void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
     if (snapshot.channels.empty()) {
@@ -113,3 +113,5 @@ float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot:
     }
     return measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x, view).totalHeight;
 }
+
+} // namespace protoscope::ui

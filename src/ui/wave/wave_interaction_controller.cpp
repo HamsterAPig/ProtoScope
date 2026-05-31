@@ -1,9 +1,10 @@
-// 本文件由 wave_dock_renderer.cpp 按原顺序包含，承接对应 Wave 业务组件实现。
+#include "wave_render_service.hpp"
 
-#if !defined(PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE)
-#error "This wave component implementation is included by wave_dock_renderer.cpp"
-#endif
+#include <algorithm>
+#include <cmath>
+#include <vector>
 
+namespace protoscope::ui {
 
 double scaleFromInteractionFactor(double scale, double factor) {
     if (!std::isfinite(factor) || factor <= 0.0) {
@@ -140,7 +141,7 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
                                                       double visibleMinTime,
                                                       double visibleMaxTime,
                                                       std::size_t pointLimit,
-                                                      std::size_t* sourceSampleCount = nullptr) {
+                                                      std::size_t* sourceSampleCount) {
     std::vector<plot::EnvelopePoint> envelope;
     if (sourceSampleCount != nullptr) {
         *sourceSampleCount = 0;
@@ -247,3 +248,5 @@ std::vector<std::size_t> visibleChannelIndicesForFit(const plot::WaveSnapshot& s
     }
     return indices;
 }
+
+} // namespace protoscope::ui

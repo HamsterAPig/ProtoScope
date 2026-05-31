@@ -1,16 +1,10 @@
-// 本文件由 wave_dock_renderer.cpp 按原顺序包含，承接对应 Wave 业务组件实现。
+#include "wave_render_service.hpp"
 
-#if !defined(PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE)
-#error "This wave component implementation is included by wave_dock_renderer.cpp"
-#endif
+#include <algorithm>
+#include <cmath>
+#include <string>
 
-
-struct ChannelLegendMetrics {
-    float cardWidth{180.0F};
-    float cardHeight{0.0F};
-    float stripHeight{0.0F};
-    float totalHeight{0.0F};
-};
+namespace protoscope::ui {
 
 ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth, const plot::WaveViewState& view) {
     const auto& style = ImGui::GetStyle();
@@ -106,3 +100,5 @@ double offsetParameterDeltaFromDisplayDelta(const plot::ChannelSpec& spec,
     }
     return displayDelta / spec.scale;
 }
+
+} // namespace protoscope::ui

@@ -1,9 +1,11 @@
-// 本文件由 script_host_core.cpp 包含，承接对应 Scripting 业务组件实现。
+#include "script_host_internal.hpp"
 
-#if !defined(PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE)
-#error "This scripting component implementation is included by script_host_core.cpp"
-#endif
+#include <algorithm>
+#include <filesystem>
+#include <unordered_map>
+#include <utility>
 
+namespace protoscope::scripting {
 
 bool ScriptHost::loadScriptFile(const std::string& path) {
     resetRuntime();
@@ -115,3 +117,5 @@ bool ScriptHost::loadProtocolDirectory(const std::string& directory) {
     const auto path = std::filesystem::path(directory) / "main.lua";
     return loadScriptFile(path.generic_string());
 }
+
+} // namespace protoscope::scripting

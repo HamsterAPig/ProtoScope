@@ -1,9 +1,7 @@
-// 本文件由 script_host_core.cpp 包含，承接对应 Scripting 业务组件实现。
+#include "script_callback_dispatcher.hpp"
+#include "script_host_internal.hpp"
 
-#if !defined(PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE)
-#error "This scripting component implementation is included by script_host_core.cpp"
-#endif
-
+namespace protoscope::scripting {
 
 void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
     if (!scriptLoaded_) {
@@ -180,3 +178,5 @@ void ScriptHost::callbackOnFileDialog(const ScriptHostContext& ctx, const FileDi
         protoLog("error", "on_file_dialog 执行失败: " + protectedCallError(result));
     }
 }
+
+} // namespace protoscope::scripting

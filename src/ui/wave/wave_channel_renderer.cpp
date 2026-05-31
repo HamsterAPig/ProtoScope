@@ -1,22 +1,9 @@
-// 本文件由 wave_dock_renderer.cpp 按原顺序包含，承接对应 Wave 业务组件实现。
+#include "wave_render_service.hpp"
 
-#if !defined(PROTOSCOPE_WAVE_RENDERER_COMPONENT_INCLUDE)
-#error "This wave component implementation is included by wave_dock_renderer.cpp"
-#endif
+#include <algorithm>
+#include <cmath>
 
-
-struct PlotGetterPayload {
-    const plot::EnvelopePoint* points{nullptr};
-};
-
-struct WaveSampleGetterPayload {
-    const plot::WaveSample* samples{nullptr};
-};
-
-struct RenderBudget {
-    std::size_t pointsPerChannel{1};
-    std::size_t estimatedVerticesPerPoint{4};
-};
+namespace protoscope::ui {
 
 ImPlotPoint envelopeLineMinGetter(int index, void* data) {
     const auto* payload = static_cast<const PlotGetterPayload*>(data);
@@ -160,3 +147,5 @@ void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
 
     ImPlot::PopPlotClipRect();
 }
+
+} // namespace protoscope::ui

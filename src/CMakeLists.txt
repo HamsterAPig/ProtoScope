@@ -54,7 +54,11 @@ target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
     scripting/frame_stream_parser.cpp
+    scripting/host/script_callback_dispatcher.cpp
+    scripting/host/script_file_system_facade.cpp
     scripting/host/script_host_core.cpp
+    scripting/host/script_host_loader.cpp
+    scripting/host/stream_schema_module.cpp
     scripting/host/core_api_module.cpp
     scripting/host/tx_api_module.cpp
     scripting/host/status_api_module.cpp
@@ -196,8 +200,17 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/docks/dock_host.cpp
         ui/docks/lua_dock_host.cpp
         ui/dialogs/dialog_host.cpp
+        ui/wave/wave_channel_legend.cpp
+        ui/wave/wave_channel_legend_bar.cpp
+        ui/wave/wave_channel_renderer.cpp
         ui/wave/wave_dock_renderer.cpp
+        ui/wave/wave_interaction_controller.cpp
+        ui/wave/wave_measurement_overlay.cpp
+        ui/wave/wave_measurement_overlay_layer.cpp
+        ui/wave/wave_overview_layer.cpp
+        ui/wave/wave_plot_layer.cpp
         ui/wave/wave_toolbar.cpp
+        ui/wave/wave_viewport_controller.cpp
     )
     target_include_directories(protoscope_ui
         PUBLIC
