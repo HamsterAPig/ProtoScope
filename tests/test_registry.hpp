@@ -137,6 +137,7 @@ void test_application_tx_overflow_popup_keeps_dialog_payload();
 void test_application_failed_protocol_reload_keeps_previous_runtime();
 void test_application_open_transport_uses_serial_runtime_config();
 void test_application_open_transport_uses_udp_peer_runtime_config();
+void test_application_set_log_level_updates_runtime_config();
 void test_application_logging_filters_script_and_host();
 void test_application_raw_capture_export_import_roundtrip();
 void test_application_raw_capture_import_preserves_full_history();

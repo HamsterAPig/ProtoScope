@@ -179,6 +179,14 @@ bool Application::applyConfig(const config::AppConfig& config) {
     return reloadProtocolDirectory(dockStore_.luaState().protocolDir);
 }
 
+void Application::setLogLevel(const config::LogLevel level) {
+    runtimeConfig_.logging.level = level;
+    auto logging = loggingFacade_.currentConfig();
+    logging.level = level;
+    // 核心流程：菜单切换只刷新日志门限，不走 applyConfig，避免无关协议重载。
+    loggingFacade_.applyConfig(logging);
+}
+
 config::AppConfig Application::captureConfig() const {
     auto captured = configStore_.captureFromDock(dockStore_);
     captured.gui = runtimeConfig_.gui;

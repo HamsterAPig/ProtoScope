@@ -435,6 +435,24 @@ void test_application_open_transport_uses_udp_peer_runtime_config() {
     application.shutdown();
 }
 
+void test_application_set_log_level_updates_runtime_config() {
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    application.setLogLevel(protoscope::config::LogLevel::Error);
+
+    const auto captured = application.captureConfig();
+    require(captured.logging.level == protoscope::config::LogLevel::Error, "菜单切换应更新运行时日志等级");
+
+    application.logger().warn("host", "warn should be filtered");
+    application.logger().error("host", "error should be visible");
+    const auto& logRows = application.docks().logState().rows;
+    require(!logRows.empty(), "error 日志应进入日志面板");
+    require(logRows.back().message == "error should be visible", "日志等级切换后应按新门限过滤");
+
+    application.shutdown();
+}
+
 void test_application_logging_filters_script_and_host() {
     const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-logging-test";
     std::filesystem::create_directories(tempRoot);

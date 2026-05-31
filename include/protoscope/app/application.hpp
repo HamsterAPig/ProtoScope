@@ -41,6 +41,7 @@ public:
     void markCommConfigEdited(bool reconnectRequired);
     void markProtocolEdited();
     void setStatusMessage(std::string message, bool markDirty = false);
+    void setLogLevel(config::LogLevel level);
     bool setSendHexMode(bool enabled);
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);

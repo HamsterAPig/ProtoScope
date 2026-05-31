@@ -4,6 +4,22 @@
 
 namespace protoscope::ui {
 
+namespace {
+
+struct LogLevelMenuItem {
+    const char* label;
+    config::LogLevel level;
+};
+
+constexpr LogLevelMenuItem kLogLevelMenuItems[] = {
+    {.label = "调试", .level = config::LogLevel::Debug},
+    {.label = "信息", .level = config::LogLevel::Info},
+    {.label = "警告", .level = config::LogLevel::Warn},
+    {.label = "错误", .level = config::LogLevel::Error},
+};
+
+} // namespace
+
 void GuiRuntime::drawMainMenu() {
     syncLuaDockVisibilityDefaults();
 
@@ -72,6 +88,21 @@ void GuiRuntime::drawMainMenu() {
                 false,
                 canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_))) {
             resetCurrentProtocolWorkspaceLayout();
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("设置")) {
+        if (ImGui::BeginMenu("日志等级")) {
+            const auto currentLevel = application_.logger().currentConfig().level;
+            for (const auto& item : kLogLevelMenuItems) {
+                const bool selected = currentLevel == item.level;
+                if (ImGui::MenuItem(item.label, nullptr, selected) && !selected) {
+                    application_.setLogLevel(item.level);
+                    application_.setStatusMessage(std::string("日志等级已切换为：") + item.label, true);
+                }
+            }
+            ImGui::EndMenu();
         }
         ImGui::EndMenu();
     }

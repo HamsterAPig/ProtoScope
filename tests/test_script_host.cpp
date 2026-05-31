@@ -1582,6 +1582,7 @@ static const TestCase kAllTests[] = {
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
     {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
     {"application_open_transport_uses_udp_peer_runtime_config", &test_application_open_transport_uses_udp_peer_runtime_config},
+    {"application_set_log_level_updates_runtime_config", &test_application_set_log_level_updates_runtime_config},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},
