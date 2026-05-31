@@ -8,6 +8,10 @@ target_include_directories(protoscope_plot
     PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
+target_link_libraries(protoscope_plot
+    PUBLIC
+        protoscope_pocketfft
+)
 target_compile_features(protoscope_plot PUBLIC cxx_std_20)
 
 add_library(protoscope_protocol_utils STATIC

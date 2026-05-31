@@ -28,3 +28,6 @@
 [submodule "3rdparty/ElfStaticView"]
 	path = 3rdparty/ElfStaticView
 	url = https://github.com/HamsterAPig/ElfStaticView.git
+[submodule "3rdparty/pocketfft"]
+	path = 3rdparty/pocketfft
+	url = https://github.com/mreineck/pocketfft.git

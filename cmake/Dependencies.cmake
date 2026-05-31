@@ -86,6 +86,12 @@ if(WIN32)
     )
 endif()
 
+add_library(protoscope_pocketfft INTERFACE)
+target_include_directories(protoscope_pocketfft
+    INTERFACE
+        ${PROJECT_SOURCE_DIR}/3rdparty/pocketfft
+)
+
 set(PROTOSCOPE_IMGUI_ROOT ${PROJECT_SOURCE_DIR}/3rdparty/imgui)
 set(PROTOSCOPE_IMGUI_SOURCES
     ${PROTOSCOPE_IMGUI_ROOT}/imgui.cpp
@@ -175,4 +181,5 @@ message(STATUS "  libdwarf    -> ${PROJECT_SOURCE_DIR}/3rdparty/libdwarf-code")
 message(STATUS "  asio        -> ${PROJECT_SOURCE_DIR}/3rdparty/asio")
 message(STATUS "  lua         -> ${PROJECT_SOURCE_DIR}/3rdparty/lua")
 message(STATUS "  sol2        -> ${PROJECT_SOURCE_DIR}/3rdparty/sol2")
+message(STATUS "  pocketfft   -> ${PROJECT_SOURCE_DIR}/3rdparty/pocketfft")
 message(STATUS "  implot      -> ${PROTOSCOPE_IMPLOT_ROOT}")
