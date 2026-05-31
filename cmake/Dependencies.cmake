@@ -4,13 +4,21 @@ include(FetchContent)
 
 add_subdirectory(3rdparty/spdlog)
 add_subdirectory(3rdparty/yaml-cpp)
-add_subdirectory(3rdparty/libdwarf-code EXCLUDE_FROM_ALL)
+
+if(NOT TARGET libdwarf::dwarf-static)
+    add_subdirectory(
+        ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/3rdparty/libdwarf-code
+        ${CMAKE_BINARY_DIR}/elf_static_view_libdwarf
+        EXCLUDE_FROM_ALL
+    )
+endif()
 
 # cmrc 使用本地 3rdparty 副本，避免配置阶段额外拉取。
 include(${PROJECT_SOURCE_DIR}/3rdparty/cmrc/CMakeRC.cmake)
 
 add_library(elf_static_view_core
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/address_bias.cpp
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/export_document.cpp
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/expander.cpp
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_json.cpp
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_utils.cpp
@@ -177,7 +185,6 @@ message(STATUS "ProtoScope third-party roots:")
 message(STATUS "  spdlog      -> ${PROJECT_SOURCE_DIR}/3rdparty/spdlog")
 message(STATUS "  yaml-cpp    -> ${PROJECT_SOURCE_DIR}/3rdparty/yaml-cpp")
 message(STATUS "  imgui       -> ${PROJECT_SOURCE_DIR}/3rdparty/imgui")
-message(STATUS "  libdwarf    -> ${PROJECT_SOURCE_DIR}/3rdparty/libdwarf-code")
 message(STATUS "  asio        -> ${PROJECT_SOURCE_DIR}/3rdparty/asio")
 message(STATUS "  lua         -> ${PROJECT_SOURCE_DIR}/3rdparty/lua")
 message(STATUS "  sol2        -> ${PROJECT_SOURCE_DIR}/3rdparty/sol2")
