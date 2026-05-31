@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <type_traits>
@@ -84,6 +85,55 @@ bool sameChannelIdentity(const std::vector<scripting::PlotChannelDescriptor>& se
         }
     }
     return true;
+}
+
+std::string transferFrameFieldValueText(const scripting::StreamFieldValue& value) {
+    return std::visit(
+        [](const auto& stored) -> std::string {
+            using ValueType = std::decay_t<decltype(stored)>;
+            std::ostringstream builder;
+            if constexpr (std::is_same_v<ValueType, std::vector<std::uint8_t>>) {
+                builder << protocol_utils::bytesToHex(stored, true);
+            } else if constexpr (std::is_same_v<ValueType, std::vector<std::int64_t>>
+                                 || std::is_same_v<ValueType, std::vector<double>>) {
+                builder << "[";
+                for (std::size_t index = 0; index < stored.size(); ++index) {
+                    if (index > 0) {
+                        builder << ", ";
+                    }
+                    builder << stored[index];
+                }
+                builder << "]";
+            } else if constexpr (std::is_same_v<ValueType, double>) {
+                builder << std::setprecision(6) << stored;
+            } else {
+                builder << stored;
+            }
+            return builder.str();
+        },
+        value.value);
+}
+
+std::string transferFrameMessage(const scripting::StreamParsedFrame& frame) {
+    std::ostringstream builder;
+    builder << "frame";
+    if (!frame.name.empty()) {
+        builder << " " << frame.name;
+    }
+    builder << " len=" << frame.raw.size();
+    if (!frame.fields.empty()) {
+        builder << " fields={";
+        bool first = true;
+        for (const auto& [name, value] : frame.fields) {
+            if (!first) {
+                builder << ", ";
+            }
+            first = false;
+            builder << name << "=" << transferFrameFieldValueText(value);
+        }
+        builder << "}";
+    }
+    return builder.str();
 }
 
 transport::TransportTxKind toTransportTxKind(scripting::TxRequestKind kind) {
@@ -246,6 +296,7 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
     lua.lastError.clear();
+    rebuildTransferFrameRows();
     loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
     flushScriptLogs();
     syncDockState();
@@ -340,7 +391,7 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
         return false;
     }
     if (activeConnection_.has_value()) {
-        dockStore_.appendReceiveRow(dock::ReceiveRow{
+        appendTransferRow(dock::ReceiveRow{
             .timestampMs = nowMs(),
             .direction = "TX",
             .endpoint = activeConnection_->endpoint,
@@ -351,6 +402,78 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
     dockStore_.commState().lastError.clear();
     loggingFacade_.info("transport", "手动发送成功");
     return true;
+}
+
+void Application::appendTransferRow(dock::ReceiveRow row) {
+    const auto sourceRow = row;
+    dockStore_.appendReceiveRow(std::move(row));
+    // 核心流程：原始收发记录永远先落库；逐帧视图只维护增量缓存，避免 UI 每帧重放历史解析。
+    appendTransferFrameRows(sourceRow);
+}
+
+std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState() const {
+    const auto bufferDefinition = scriptHost_.streamBufferDefinition();
+    auto frameDefinitions = scriptHost_.streamFrameDefinitions();
+    if (!bufferDefinition.has_value() || frameDefinitions.empty()) {
+        return std::nullopt;
+    }
+    auto rxFrames = frameDefinitions;
+    auto txFrames = std::move(frameDefinitions);
+    return TransferFrameParserState{
+        .rx = scripting::FrameStreamParser(*bufferDefinition, std::move(rxFrames)),
+        .tx = scripting::FrameStreamParser(*bufferDefinition, std::move(txFrames)),
+    };
+}
+
+void Application::resetTransferFrameParser() {
+    // 核心流程：收发记录视图使用独立 parser，不复用 Lua 回调 parser，避免 UI 展示影响协议运行态。
+    transferFrameParser_ = makeTransferFrameParserState();
+}
+
+dock::ReceiveRow Application::makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
+                                                   const scripting::StreamParsedFrame& frame) const {
+    return dock::ReceiveRow{
+        .timestampMs = sourceRow.timestampMs,
+        .direction = sourceRow.direction,
+        .endpoint = sourceRow.endpoint,
+        .bytes = frame.raw,
+        .message = transferFrameMessage(frame),
+    };
+}
+
+void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow) {
+    if (sourceRow.bytes.empty() || (sourceRow.direction != "RX" && sourceRow.direction != "TX")) {
+        return;
+    }
+    if (!transferFrameParser_.has_value()) {
+        resetTransferFrameParser();
+    }
+    if (!transferFrameParser_.has_value()) {
+        return;
+    }
+
+    auto& parser = sourceRow.direction == "TX" ? transferFrameParser_->tx : transferFrameParser_->rx;
+    const auto batch = parser.pushBytes(sourceRow.bytes);
+    if (batch.frames.empty()) {
+        // RX 半包先留在 parser 缓冲中等待后续字节；TX 无匹配时按用户输入的原始 chunk 展示。
+        if (sourceRow.direction == "TX" || !batch.errors.empty()) {
+            dockStore_.receiveState().frameRows.push_back(sourceRow);
+        }
+        return;
+    }
+    for (const auto& frame : batch.frames) {
+        dockStore_.receiveState().frameRows.push_back(makeTransferFrameRow(sourceRow, frame));
+    }
+}
+
+void Application::rebuildTransferFrameRows() {
+    auto& receive = dockStore_.receiveState();
+    const auto rows = receive.rows;
+    receive.frameRows.clear();
+    resetTransferFrameParser();
+    for (const auto& row : rows) {
+        appendTransferFrameRows(row);
+    }
 }
 
 void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value) {
@@ -665,7 +788,7 @@ bool Application::handleTransportEvents() {
                         if (evt.context.readyForIo) {
                             activeConnection_ = evt.context;
                         }
-                        dockStore_.appendReceiveRow(dock::ReceiveRow{
+                        appendTransferRow(dock::ReceiveRow{
                             .timestampMs = evt.context.timestampMs,
                             .direction = "RX",
                             .endpoint = evt.context.endpoint,
@@ -696,7 +819,7 @@ bool Application::handleTransportEvents() {
                                                   .finishedMs = evt.finishedAtMs,
                                                   .error = error,
                                               });
-                        dockStore_.appendReceiveRow(dock::ReceiveRow{
+                        appendTransferRow(dock::ReceiveRow{
                             .timestampMs = evt.finishedAtMs,
                             .direction = "TX",
                             .endpoint = activeWrite.request.connection.endpoint,
@@ -880,7 +1003,7 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
     }
 
     if (state == scripting::TxEventState::Sent) {
-        dockStore_.appendReceiveRow(dock::ReceiveRow{
+        appendTransferRow(dock::ReceiveRow{
             .timestampMs = finishedAtMs,
             .direction = "TX",
             .endpoint = request.connection.endpoint,

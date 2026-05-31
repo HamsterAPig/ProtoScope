@@ -1340,6 +1340,20 @@ void ScriptHost::setFileIoConfig(FileIoConfig config) {
     fileIoConfig_ = std::move(config);
 }
 
+std::optional<StreamBufferDefinition> ScriptHost::streamBufferDefinition() const {
+    if (!runtime_ || !runtime_->stream) {
+        return std::nullopt;
+    }
+    return runtime_->stream->parser.bufferDefinition();
+}
+
+std::vector<StreamFrameDefinition> ScriptHost::streamFrameDefinitions() const {
+    if (!runtime_ || !runtime_->stream) {
+        return {};
+    }
+    return runtime_->stream->parser.frameDefinitions();
+}
+
 #define PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE
 #include "script_host_loader.cpp"
 #undef PROTOSCOPE_SCRIPT_HOST_COMPONENT_INCLUDE

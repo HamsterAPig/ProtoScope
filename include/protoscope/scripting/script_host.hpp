@@ -339,6 +339,8 @@ public:
     std::vector<DialogRequest> drainDialogRequests();
     std::vector<FileDialogRequest> drainFileDialogRequests();
     std::optional<std::uint64_t> nextWakeupAtMs() const;
+    [[nodiscard]] std::optional<StreamBufferDefinition> streamBufferDefinition() const;
+    [[nodiscard]] std::vector<StreamFrameDefinition> streamFrameDefinitions() const;
 
     const std::string& scriptPath() const;
     const std::string& protocolDirectory() const;

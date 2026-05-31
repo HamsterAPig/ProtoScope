@@ -264,6 +264,7 @@ void rememberSendHistory(SendDockState& sendState, std::string payload, std::siz
 
 void DockStore::clearReceiveRows() {
     receive_.rows.clear();
+    receive_.frameRows.clear();
 }
 
 void DockStore::appendReceiveRow(ReceiveRow row) {

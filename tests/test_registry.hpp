@@ -142,6 +142,8 @@ void test_application_logging_filters_script_and_host();
 void test_application_raw_capture_export_import_roundtrip();
 void test_application_raw_capture_import_preserves_full_history();
 void test_application_raw_capture_import_replays_stream_in_chunks();
+void test_application_transfer_log_frame_view_waits_for_rx_full_frame();
+void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw();
 
 const TestCase* allTests();
 int testCount();

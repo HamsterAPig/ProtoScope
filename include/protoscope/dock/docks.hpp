@@ -23,6 +23,11 @@ struct ReceiveRow {
     std::string message{};
 };
 
+enum class TransferLogDisplayMode {
+    RawChunks,
+    ParsedFrames,
+};
+
 enum class ReceiveRowVisualKind {
     Rx,
     Tx,
@@ -79,8 +84,10 @@ struct ReceiveDockState {
     bool pauseScroll{false};
     bool showHex{true};
     bool showTimestamps{true};
+    TransferLogDisplayMode displayMode{TransferLogDisplayMode::RawChunks};
     LogFilterState filter{};
     std::vector<ReceiveRow> rows;
+    std::vector<ReceiveRow> frameRows;
 };
 
 struct LogDockState {

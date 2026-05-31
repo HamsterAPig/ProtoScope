@@ -611,3 +611,64 @@ void test_application_raw_capture_import_replays_stream_in_chunks() {
     require(importedSnapshot.channels.front().totalSamples == frameCount,
             "导入回放应按分块解析全部 stream 帧，而不是只保留尾部数据");
 }
+
+void test_application_transfer_log_frame_view_waits_for_rx_full_frame() {
+    constexpr const char* protocolDir = "tests/fixtures/protocols/stream_frame_only";
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    const auto frame = makeRawImportStreamFrame(0x34);
+    transportState->queuedRxBytes.assign(frame.begin(), frame.begin() + 3);
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+
+    application.openTransport();
+    application.pumpOnce();
+    require(application.docks().receiveState().rows.size() == 1, "原始收发记录应保留半包 chunk");
+    require(application.docks().receiveState().frameRows.empty(), "逐帧视图不应把 RX 半包显示成碎行");
+
+    const protoscope::transport::ConnectionContext ctx{
+        .endpoint = "queued://wave",
+        .connectionId = 7,
+        .timestampMs = 101,
+        .readyForIo = true,
+    };
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{
+        ctx,
+        std::vector<std::uint8_t>(frame.begin() + 3, frame.end()),
+    });
+    application.pumpOnce();
+
+    const auto& receive = application.docks().receiveState();
+    require(receive.rows.size() == 2, "原始收发记录仍应保留两个 transport chunk");
+    require(receive.frameRows.size() == 1, "逐帧视图应在完整帧到达后只显示一行");
+    require(receive.frameRows.front().bytes == frame, "逐帧行应保存完整原始帧字节");
+    require(receive.frameRows.front().message.find("stream_sample") != std::string::npos, "逐帧行应包含帧名");
+    require(receive.frameRows.front().message.find("value=52") != std::string::npos, "逐帧行应包含字段值");
+}
+
+void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw() {
+    constexpr const char* protocolDir = "tests/fixtures/protocols/stream_frame_only";
+    auto state = std::make_shared<QueuedEventTransport::State>();
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([state](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(state);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    require(application.sendManualPayload("01 02 03", true), "手动发送应成功");
+    const auto& receive = application.docks().receiveState();
+    require(receive.rows.size() == 1, "原始收发记录应记录 TX chunk");
+    require(receive.frameRows.size() == 1, "逐帧视图应保留无法匹配 schema 的 TX 原始行");
+    require(receive.frameRows.front().direction == "TX", "TX fallback 行方向应保持 TX");
+    require(receive.frameRows.front().bytes == std::vector<std::uint8_t>({0x01, 0x02, 0x03}), "TX fallback 行字节应保持原样");
+}

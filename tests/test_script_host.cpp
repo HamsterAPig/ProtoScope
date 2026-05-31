@@ -1587,6 +1587,8 @@ static const TestCase kAllTests[] = {
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},
     {"application_raw_capture_import_replays_stream_in_chunks", &test_application_raw_capture_import_replays_stream_in_chunks},
+    {"application_transfer_log_frame_view_waits_for_rx_full_frame", &test_application_transfer_log_frame_view_waits_for_rx_full_frame},
+    {"application_transfer_log_frame_view_keeps_unmatched_tx_raw", &test_application_transfer_log_frame_view_keeps_unmatched_tx_raw},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},

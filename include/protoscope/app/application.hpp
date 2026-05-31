@@ -49,6 +49,7 @@ public:
     bool loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error);
     [[nodiscard]] std::vector<scripting::ElfSymbolValue> queryElfStaticAddresses(const std::string& queryText,
                                                                                  std::size_t limit) const;
+    void rebuildTransferFrameRows();
     logging::LoggingFacade& logger();
     const logging::LoggingFacade& logger() const;
     std::vector<scripting::DialogRequest> drainDialogRequests();
@@ -60,6 +61,17 @@ public:
     void setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
 
 private:
+    struct ActiveTxRequest {
+        scripting::TxRequest request;
+        std::uint64_t sentAtMs{0};
+        std::uint64_t waitDeadlineMs{0};
+    };
+
+    struct TransferFrameParserState {
+        scripting::FrameStreamParser rx;
+        scripting::FrameStreamParser tx;
+    };
+
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
@@ -79,13 +91,12 @@ private:
     void cancelAllTxRequests(const std::string& reason);
     void notifyTxOverflow(const std::string& message);
     void enqueueDialogRequest(const scripting::DialogRequest& request);
-
-private:
-    struct ActiveTxRequest {
-        scripting::TxRequest request;
-        std::uint64_t sentAtMs{0};
-        std::uint64_t waitDeadlineMs{0};
-    };
+    void appendTransferRow(dock::ReceiveRow row);
+    void resetTransferFrameParser();
+    void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
+    [[nodiscard]] dock::ReceiveRow makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
+                                                        const scripting::StreamParsedFrame& frame) const;
+    [[nodiscard]] std::optional<TransferFrameParserState> makeTransferFrameParserState() const;
 
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
@@ -104,6 +115,7 @@ private:
     std::deque<scripting::FileDialogRequest> pendingFileDialogs_;
     std::unordered_map<std::uint64_t, scripting::FileDialogRequest> openFileDialogs_;
     std::unordered_map<std::string, std::uint64_t> dialogDedupeKeys_;
+    std::optional<TransferFrameParserState> transferFrameParser_;
 };
 
 } // namespace protoscope::app

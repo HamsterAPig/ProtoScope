@@ -382,7 +382,7 @@ void GuiRuntime::drawTransferDock()
             true)) {
         if (ImGui::BeginTable(
                 "##transfer_log_toolbar",
-                11,
+                12,
                 ImGuiTableFlags_SizingFixedFit |
                 ImGuiTableFlags_NoSavedSettings)) {
             ImGui::TableSetupColumn(
@@ -394,6 +394,7 @@ void GuiRuntime::drawTransferDock()
             ImGui::TableSetupColumn("all", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("rx", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("tx", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("mode", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("hex", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("time", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("pause", ImGuiTableColumnFlags_WidthFixed);
@@ -430,39 +431,52 @@ void GuiRuntime::drawTransferDock()
                 receive.filter);
 
             ImGui::TableSetColumnIndex(6);
+            const bool parsedFrames = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames;
+            if (ImGui::SmallButton(parsedFrames ? "逐帧" : "原始")) {
+                receive.displayMode = parsedFrames ? dock::TransferLogDisplayMode::RawChunks
+                                                   : dock::TransferLogDisplayMode::ParsedFrames;
+                if (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
+                    application_.rebuildTransferFrameRows();
+                }
+            }
+            drawIconTooltip(parsedFrames ? "按 Lua stream() schema 逐帧显示" : "按运输层原始分块显示");
+
+            ImGui::TableSetColumnIndex(7);
             drawIconCheckbox(
                 PROTOSCOPE_ICON_HEX,
                 &receive.showHex,
                 "显示 HEX");
 
-            ImGui::TableSetColumnIndex(7);
+            ImGui::TableSetColumnIndex(8);
             drawIconCheckbox(
                 PROTOSCOPE_ICON_CLOCK,
                 &receive.showTimestamps,
                 "显示时间戳");
 
-            ImGui::TableSetColumnIndex(8);
+            ImGui::TableSetColumnIndex(9);
             drawIconCheckbox(
                 receive.pauseScroll ? PROTOSCOPE_ICON_PLAY : PROTOSCOPE_ICON_PAUSE,
                 &receive.pauseScroll,
                 "暂停滚动");
 
-            ImGui::TableSetColumnIndex(9);
+            ImGui::TableSetColumnIndex(10);
             if (ImGui::Button("导出##transfer_log_export")) {
                 openTransferLogExportDialog();
             }
             drawIconTooltip("导出当前过滤后的收发记录");
 
-            ImGui::TableSetColumnIndex(10);
+            ImGui::TableSetColumnIndex(11);
             if (drawIconButton(PROTOSCOPE_ICON_TRASH, "清空收发记录")) {
                 application_.docks().clearReceiveRows();
+                application_.rebuildTransferFrameRows();
             }
 
             ImGui::EndTable();
         }
 
+        const auto& visibleRows = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames ? receive.frameRows : receive.rows;
         const auto filteredRows =
-            dock::filteredLogRows(receive.rows, receive.filter, true);
+            dock::filteredLogRows(visibleRows, receive.filter, true);
 
         drawTransferLogRows(
             "transfer_rows",
@@ -470,7 +484,7 @@ void GuiRuntime::drawTransferDock()
             receive.showTimestamps,
             receive.showHex,
             receive.pauseScroll,
-            "暂无 TX/RX 原始数据");
+            receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames ? "暂无已解析帧" : "暂无 TX/RX 原始数据");
     }
     ImGui::EndChild();
 
