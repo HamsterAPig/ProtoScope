@@ -62,6 +62,7 @@ struct GuiWaveConfig {
     double verticalAutoFitMultiplier{1.2};
     bool showAxisLabels{false};
     bool showChannelLegend{true};
+    bool showFftLegend{true};
 };
 
 struct GuiLogHistoryConfig {

@@ -810,6 +810,7 @@ void test_config_default_roundtrip() {
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.2");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
+    require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
     require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
@@ -838,6 +839,7 @@ void test_config_default_roundtrip() {
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
     config.gui.wave.showChannelLegend = false;
+    config.gui.wave.showFftLegend = false;
     config.gui.logHistory.transferRawLimit = 11;
     config.gui.logHistory.transferFrameLimit = 22;
     config.gui.logHistory.hostLimit = 33;
@@ -876,6 +878,7 @@ void test_config_default_roundtrip() {
     require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12, "CH 卡片自适应比例 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.verticalAutoFitMultiplier - 1.5) < 1e-12, "Y 轴 Auto Fit 系数 roundtrip 失败");
     require(!reloaded.config.gui.wave.showChannelLegend, "波形图例显示开关 roundtrip 失败");
+    require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");

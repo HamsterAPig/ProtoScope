@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -432,6 +433,38 @@ std::optional<plot::WaveFftReadout> nearestActiveReadout(const plot::WaveFftFram
     return std::nullopt;
 }
 
+std::optional<plot::WaveFftReadout> nearestReadoutNearPoint(const plot::WaveFftFrame& frame,
+                                                            double frequencyHz,
+                                                            double value,
+                                                            double maxFrequencyDistance,
+                                                            double maxValueDistance,
+                                                            bool phasePlot) {
+    std::optional<plot::WaveFftReadout> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (const auto& channel : frame.channels) {
+        if (!channel.enabled || !channel.valid) {
+            continue;
+        }
+        const auto candidate = plot::findNearestFftBin(frame, channel.channelIndex, frequencyHz);
+        if (!candidate.has_value()) {
+            continue;
+        }
+        const double frequencyDistance = std::abs(candidate->frequencyHz - frequencyHz);
+        const double candidateValue = phasePlot ? candidate->phaseDegrees : candidate->displayMagnitude;
+        const double valueDistance = std::abs(candidateValue - value);
+        if (frequencyDistance > maxFrequencyDistance || valueDistance > maxValueDistance) {
+            continue;
+        }
+        const double score = frequencyDistance / (std::max)(maxFrequencyDistance, 1e-12)
+            + valueDistance / (std::max)(maxValueDistance, 1e-12);
+        if (score < bestScore) {
+            best = candidate;
+            bestScore = score;
+        }
+    }
+    return best;
+}
+
 void drawCursorAnnotation(const plot::WaveFftReadout& readout, bool phasePlot) {
     const double y = phasePlot ? readout.phaseDegrees : readout.displayMagnitude;
     const ImVec4 color(1.0F, 1.0F, 0.2F, 1.0F);
@@ -476,8 +509,9 @@ bool drawFftCursors(plot::WaveViewState& view,
         }
         double dragFrequency = cursor.time;
         bool held = false;
+        bool hovered = false;
         const int dragId = static_cast<int>((phasePlot ? 3000 : 2000) + cursorIndex);
-        ImPlot::DragLineX(dragId, &dragFrequency, cursorColors[cursorIndex], 1.2F, 0, nullptr, nullptr, &held);
+        ImPlot::DragLineX(dragId, &dragFrequency, cursorColors[cursorIndex], 1.2F, 0, nullptr, &hovered, &held);
         heldAny = heldAny || held;
         const auto readout = nearestActiveReadout(frame, view, dragFrequency);
         if (readout.has_value()) {
@@ -485,7 +519,9 @@ bool drawFftCursors(plot::WaveViewState& view,
             cursor.value = phasePlot ? readout->phaseDegrees : readout->displayMagnitude;
             cursor.channelIndex = readout->channelIndex;
             cursorReadouts[cursorIndex] = readout;
-            drawCursorAnnotation(*readout, phasePlot);
+            if (held || hovered || cursor.pinned) {
+                drawCursorAnnotation(*readout, phasePlot);
+            }
         }
     }
     return heldAny;
@@ -499,16 +535,12 @@ std::optional<plot::WaveFftReadout> drawHoverReadout(plot::WaveViewState& view,
         return std::nullopt;
     }
     const auto mouse = ImPlot::GetPlotMousePos();
-    std::optional<plot::WaveFftReadout> hovered;
-    if (phasePlot) {
-        hovered = nearestActiveReadout(frame, view, mouse.x);
-    } else {
-        hovered = plot::findNearestFftBinAcrossChannels(frame,
-                                                        mouse.x,
-                                                        mouse.y,
-                                                        std::abs(limits.X.Max - limits.X.Min) / 80.0,
-                                                        std::abs(limits.Y.Max - limits.Y.Min) / 30.0);
-    }
+    const auto hovered = nearestReadoutNearPoint(frame,
+                                                 mouse.x,
+                                                 mouse.y,
+                                                 std::abs(limits.X.Max - limits.X.Min) / 80.0,
+                                                 std::abs(limits.Y.Max - limits.Y.Min) / 30.0,
+                                                 phasePlot);
     if (hovered.has_value()) {
         drawCursorAnnotation(*hovered, phasePlot);
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -688,7 +720,12 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
     const auto savedInputMap = inputMap;
     inputMap.PanMod = ImGuiMod_Ctrl;
 
-    if (ImPlot::BeginPlot("##wave_fft_magnitude", ImVec2(-1.0F, magnitudeHeight), ImPlotFlags_NoMenus)) {
+    ImPlotFlags plotFlags = ImPlotFlags_NoMenus;
+    if (!view.showFftLegend) {
+        plotFlags |= ImPlotFlags_NoLegend;
+    }
+
+    if (ImPlot::BeginPlot("##wave_fft_magnitude", ImVec2(-1.0F, magnitudeHeight), plotFlags)) {
         result.plotRendered = true;
         ImPlot::SetupAxes("频率 (Hz)", yLabel);
         ImPlot::SetupAxisLimits(ImAxis_X1, view.fftFrequencyMin, view.fftFrequencyMax, ImGuiCond_Always);
@@ -714,7 +751,7 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
         ImPlot::EndPlot();
     }
 
-    if (ImPlot::BeginPlot("##wave_fft_phase", ImVec2(-1.0F, phaseHeight), ImPlotFlags_NoMenus)) {
+    if (ImPlot::BeginPlot("##wave_fft_phase", ImVec2(-1.0F, phaseHeight), plotFlags)) {
         result.plotRendered = true;
         ImPlot::SetupAxes("频率 (Hz)", "相位 (deg)");
         ImPlot::SetupAxisLimits(ImAxis_X1, view.fftFrequencyMin, view.fftFrequencyMax, ImGuiCond_Always);

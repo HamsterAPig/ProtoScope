@@ -186,6 +186,7 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     node["show_points_when_sparse"] = view.showPointsWhenSparse;
     node["show_axis_labels"] = view.showAxisLabels;
     node["show_channel_legend"] = view.showChannelLegend;
+    node["show_fft_legend"] = view.showFftLegend;
     node["show_hover_readout"] = view.showHoverReadout;
     node["show_cursors"] = view.showCursors;
     node["show_measurement_overlay"] = view.showMeasurementOverlay;
@@ -280,6 +281,7 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
     view.showPointsWhenSparse = node["show_points_when_sparse"].as<bool>(view.showPointsWhenSparse);
     view.showAxisLabels = node["show_axis_labels"].as<bool>(view.showAxisLabels);
     view.showChannelLegend = node["show_channel_legend"].as<bool>(view.showChannelLegend);
+    view.showFftLegend = node["show_fft_legend"].as<bool>(view.showFftLegend);
     view.showHoverReadout = node["show_hover_readout"].as<bool>(view.showHoverReadout);
     view.showCursors = node["show_cursors"].as<bool>(view.showCursors);
     view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);

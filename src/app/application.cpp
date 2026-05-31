@@ -240,7 +240,10 @@ void Application::setLogLevel(const config::LogLevel level) {
 
 config::AppConfig Application::captureConfig() const {
     auto captured = configStore_.captureFromDock(dockStore_);
-    captured.gui = runtimeConfig_.gui;
+    captured.gui.window = runtimeConfig_.gui.window;
+    captured.gui.logHistory = runtimeConfig_.gui.logHistory;
+    captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
+    captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
     captured.app.language = runtimeConfig_.app.language;
     captured.scripting = runtimeConfig_.scripting;
     captured.logging = loggingFacade_.currentConfig();

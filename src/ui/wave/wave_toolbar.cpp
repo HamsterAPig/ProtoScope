@@ -156,6 +156,13 @@ void drawFftToolbarSection(plot::WaveDockState& wave) {
         wave.cachedFftKeyValid = false;
     }
 
+    if (ImGui::TreeNode("Legend")) {
+        drawToolbarCheckbox("显示频谱图例",
+                            &view.showFftLegend,
+                            "显示或隐藏 FFT 幅值/相位图例；不会持久化每条曲线的临时隐藏状态。");
+        ImGui::TreePop();
+    }
+
     if (ImGui::TreeNode("参与通道")) {
         if (ImGui::Button("启用全部通道")) {
             std::fill(wave.fftChannelEnabled.begin(), wave.fftChannelEnabled.end(), 1);

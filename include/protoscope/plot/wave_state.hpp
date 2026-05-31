@@ -38,6 +38,7 @@ struct WaveViewState {
     bool showPointsWhenSparse{true};
     bool showAxisLabels{false};
     bool showChannelLegend{true};
+    bool showFftLegend{true};
     bool showHoverReadout{true};
     bool showCursors{true};
     bool showMeasurementOverlay{true};

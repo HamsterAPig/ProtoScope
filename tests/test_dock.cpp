@@ -316,6 +316,7 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     waveA.view.fft.magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::Decibel;
     waveA.view.fft.fundamentalMode = protoscope::plot::WaveFftFundamentalMode::Manual;
     waveA.view.fft.manualFundamentalHz = 50.0;
+    waveA.view.showFftLegend = false;
     waveA.view.fftSourceWindowValid = true;
     waveA.view.fftSourceMinTime = 0.25;
     waveA.view.fftSourceMaxTime = 0.75;
@@ -366,6 +367,7 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredA.view.fft.magnitudeMode == protoscope::plot::WaveFftMagnitudeMode::Decibel, "proto_a 应恢复 FFT 幅值模式");
     require(restoredA.view.fft.fundamentalMode == protoscope::plot::WaveFftFundamentalMode::Manual, "proto_a 应恢复 FFT 基波模式");
     require(restoredA.view.fft.manualFundamentalHz == 50.0, "proto_a 应恢复手动基波频率");
+    require(!restoredA.view.showFftLegend, "proto_a 应恢复 FFT 图例显示状态");
     require(restoredA.view.fftSourceWindowValid, "proto_a 应恢复 FFT 输入窗口状态");
     require(restoredA.view.fftSourceMinTime == 0.25 && restoredA.view.fftSourceMaxTime == 0.75, "proto_a 应恢复 FFT 输入窗口");
     require(restoredA.view.fftFrequencyMin == 10.0 && restoredA.view.fftFrequencyMax == 500.0, "proto_a 应恢复 FFT 频率轴");
