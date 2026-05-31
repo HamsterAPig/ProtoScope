@@ -212,6 +212,92 @@ void ensureFftViewport(plot::WaveViewState& view, const plot::WaveFftFrame& fram
     }
 }
 
+void applyFftFitFrequency(plot::WaveViewState& view, const plot::WaveFftFrame& frame) {
+    const auto fitViewport = plot::makeFftFitViewport(frame);
+    view.fftFrequencyMin = fitViewport.frequencyMin;
+    view.fftFrequencyMax = fitViewport.frequencyMax;
+}
+
+void applyFftFitValue(plot::WaveViewState& view, const plot::WaveFftFrame& frame, bool phasePlot) {
+    const auto fitViewport = plot::makeFftFitViewport(frame);
+    if (phasePlot) {
+        view.fftPhaseMin = fitViewport.phaseMin;
+        view.fftPhaseMax = fitViewport.phaseMax;
+    } else {
+        view.fftMagnitudeMin = fitViewport.magnitudeMin;
+        view.fftMagnitudeMax = fitViewport.magnitudeMax;
+    }
+}
+
+bool handleFftAxisDoubleClick(plot::WaveViewState& view, const plot::WaveFftFrame& frame, bool phasePlot) {
+    if (!frame.valid || !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        return false;
+    }
+
+    bool changed = false;
+    if (ImPlot::IsAxisHovered(ImAxis_X1)) {
+        applyFftFitFrequency(view, frame);
+        changed = true;
+    }
+    if (ImPlot::IsAxisHovered(ImAxis_Y1)) {
+        applyFftFitValue(view, frame, phasePlot);
+        changed = true;
+    }
+    return changed;
+}
+
+bool handleFftPan(plot::WaveViewState& view,
+                  const plot::WaveFftFrame& frame,
+                  bool phasePlot,
+                  double minFrequencyWidth,
+                  bool cursorHeld) {
+    if (cursorHeld || !ImPlot::IsPlotHovered() || !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        return false;
+    }
+    const auto& io = ImGui::GetIO();
+    if (std::abs(io.MouseDelta.x) <= 0.0F && std::abs(io.MouseDelta.y) <= 0.0F) {
+        return false;
+    }
+
+    const ImVec2 mousePixel = ImGui::GetMousePos();
+    const ImVec2 previousPixel{mousePixel.x - io.MouseDelta.x, mousePixel.y - io.MouseDelta.y};
+    const ImPlotPoint currentPlot = ImPlot::PixelsToPlot(mousePixel);
+    const ImPlotPoint previousPlot = ImPlot::PixelsToPlot(previousPixel);
+    const auto fitViewport = plot::makeFftFitViewport(frame);
+    plot::WaveViewport viewport{
+        .minTime = view.fftFrequencyMin,
+        .maxTime = view.fftFrequencyMax,
+        .minValue = phasePlot ? view.fftPhaseMin : view.fftMagnitudeMin,
+        .maxValue = phasePlot ? view.fftPhaseMax : view.fftMagnitudeMax,
+    };
+    const plot::WaveDataBounds bounds{
+        .minTime = fitViewport.frequencyMin,
+        .maxTime = fitViewport.frequencyMax,
+        .minValue = phasePlot ? fitViewport.phaseMin : fitViewport.magnitudeMin,
+        .maxValue = phasePlot ? fitViewport.phaseMax : fitViewport.magnitudeMax,
+        .minStep = minFrequencyWidth,
+        .valid = true,
+    };
+
+    viewport.minTime += previousPlot.x - currentPlot.x;
+    viewport.maxTime += previousPlot.x - currentPlot.x;
+    viewport.minValue += previousPlot.y - currentPlot.y;
+    viewport.maxValue += previousPlot.y - currentPlot.y;
+    const auto normalized = plot::normalizeOverviewViewport(viewport, bounds, minFrequencyWidth);
+
+    // 核心流程：频域左键拖动只移动独立频域视口，不改变 FFT 输入窗口和时域主视图。
+    view.fftFrequencyMin = normalized.minTime;
+    view.fftFrequencyMax = normalized.maxTime;
+    if (phasePlot) {
+        view.fftPhaseMin = normalized.minValue;
+        view.fftPhaseMax = normalized.maxValue;
+    } else {
+        view.fftMagnitudeMin = normalized.minValue;
+        view.fftMagnitudeMax = normalized.maxValue;
+    }
+    return true;
+}
+
 bool handleFftWheelZoom(plot::WaveViewState& view,
                         const plot::WaveFftFrame& frame,
                         bool phasePlot,
@@ -529,6 +615,10 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
     const float phaseHeight = (std::max)(80.0F, plotAreaHeight - magnitudeHeight - plotGap);
     std::array<std::optional<plot::WaveFftReadout>, 2> cursorReadouts{};
 
+    auto& inputMap = ImPlot::GetInputMap();
+    const auto savedInputMap = inputMap;
+    inputMap.PanMod = ImGuiMod_Ctrl;
+
     if (ImPlot::BeginPlot("##wave_fft_magnitude", ImVec2(-1.0F, magnitudeHeight), ImPlotFlags_NoMenus)) {
         result.plotRendered = true;
         ImPlot::SetupAxes("频率 (Hz)", yLabel);
@@ -536,16 +626,21 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
         ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftMagnitudeMin, view.fftMagnitudeMax, ImGuiCond_Always);
         drawFftChannelLines(*fftFrame, *frame.fullSnapshot, false);
         const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
-        const bool zoomConsumed = handleFftZoomSelection(view, false, minFrequencyWidth)
-            || handleFftWheelZoom(view, *fftFrame, false, minFrequencyWidth);
+        const bool zoomSelectionConsumed = handleFftZoomSelection(view, false, minFrequencyWidth);
         const auto limits = ImPlot::GetPlotLimits();
-        if (!zoomConsumed) {
+        if (!zoomSelectionConsumed) {
             drawHoverReadout(view, *fftFrame, false, limits);
-            drawFftCursors(view, *fftFrame, false, cursorReadouts);
+            const bool cursorHeld = drawFftCursors(view, *fftFrame, false, cursorReadouts);
             if (view.showMeasurementOverlay) {
                 drawCursorOverlay(cursorReadouts);
             }
-            recordFftPlotLimits(view, false);
+            const bool axisResetConsumed = handleFftAxisDoubleClick(view, *fftFrame, false);
+            const bool panConsumed = !axisResetConsumed && handleFftPan(view, *fftFrame, false, minFrequencyWidth, cursorHeld);
+            const bool wheelConsumed =
+                !axisResetConsumed && !panConsumed && handleFftWheelZoom(view, *fftFrame, false, minFrequencyWidth);
+            if (!axisResetConsumed && !panConsumed && !wheelConsumed) {
+                recordFftPlotLimits(view, false);
+            }
         }
         ImPlot::EndPlot();
     }
@@ -557,16 +652,23 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
         ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftPhaseMin, view.fftPhaseMax, ImGuiCond_Always);
         drawFftChannelLines(*fftFrame, *frame.fullSnapshot, true);
         const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
-        const bool zoomConsumed = handleFftZoomSelection(view, true, minFrequencyWidth)
-            || handleFftWheelZoom(view, *fftFrame, true, minFrequencyWidth);
+        const bool zoomSelectionConsumed = handleFftZoomSelection(view, true, minFrequencyWidth);
         const auto limits = ImPlot::GetPlotLimits();
-        if (!zoomConsumed) {
+        if (!zoomSelectionConsumed) {
             drawHoverReadout(view, *fftFrame, true, limits);
-            drawFftCursors(view, *fftFrame, true, cursorReadouts);
-            recordFftPlotLimits(view, true);
+            const bool cursorHeld = drawFftCursors(view, *fftFrame, true, cursorReadouts);
+            const bool axisResetConsumed = handleFftAxisDoubleClick(view, *fftFrame, true);
+            const bool panConsumed = !axisResetConsumed && handleFftPan(view, *fftFrame, true, minFrequencyWidth, cursorHeld);
+            const bool wheelConsumed =
+                !axisResetConsumed && !panConsumed && handleFftWheelZoom(view, *fftFrame, true, minFrequencyWidth);
+            if (!axisResetConsumed && !panConsumed && !wheelConsumed) {
+                recordFftPlotLimits(view, true);
+            }
         }
         ImPlot::EndPlot();
     }
+
+    inputMap = savedInputMap;
 
     if (view.showCursors && !view.showMeasurementOverlay) {
         drawCursorSummary(cursorReadouts);
