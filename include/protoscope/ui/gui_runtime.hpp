@@ -124,6 +124,7 @@ private:
     void syncLuaDockVisibilityDefaults();
     void openRawCaptureImportDialog();
     void openRawCaptureExportDialog();
+    void openRawCaptureRecordingDialog();
     void openTransferLogExportDialog();
     void openHostLogExportDialog();
     void openScriptLogExportDialog();
@@ -131,6 +132,7 @@ private:
     void openElfStaticAddressDialog();
     void importRawCaptureFromPath(const std::filesystem::path& path);
     void exportRawCaptureToPath(const std::filesystem::path& path);
+    void startRawCaptureRecordingToPath(const std::filesystem::path& path);
     void drawLogExportFileDialog();
     std::vector<dock::ReceiveRow> logExportRows(LogExportTarget target);
     bool exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path);
@@ -221,6 +223,10 @@ private:
     bool rawCaptureExportDialogOpened_{false};
     std::string rawCaptureExportPath_;
     std::string rawCaptureExportError_;
+    bool rawCaptureRecordingDialogOpen_{false};
+    bool rawCaptureRecordingDialogOpened_{false};
+    std::string rawCaptureRecordingPath_;
+    std::string rawCaptureRecordingError_;
     bool logExportDialogOpen_{false};
     bool logExportDialogOpened_{false};
     LogExportTarget logExportTarget_{LogExportTarget::Transfer};

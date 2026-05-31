@@ -56,6 +56,17 @@ void GuiRuntime::drawMainMenu() {
         if (ImGui::MenuItem("导出原始波形...")) {
             openRawCaptureExportDialog();
         }
+        ImGui::Separator();
+        const bool recording = application_.isRawCaptureRecording();
+        if (ImGui::MenuItem("开始完整原始数据录制...", nullptr, false, !recording)) {
+            openRawCaptureRecordingDialog();
+        }
+        if (ImGui::MenuItem("停止完整原始数据录制", nullptr, false, recording)) {
+            std::string error;
+            if (!application_.stopRawCaptureRecording(error)) {
+                application_.setStatusMessage("完整原始数据录制停止失败: " + error, true);
+            }
+        }
         ImGui::EndMenu();
     }
 

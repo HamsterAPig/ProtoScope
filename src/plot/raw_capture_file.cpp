@@ -3,13 +3,16 @@
 #include <cctype>
 #include <charconv>
 #include <fstream>
+#include <limits>
 #include <sstream>
+#include <utility>
 
 namespace protoscope::plot {
 namespace {
 
 constexpr std::string_view kFileMagic = "ProtoScopeRawCapture";
 constexpr std::string_view kVersion = "1";
+constexpr std::size_t kStreamHeaderBytes = 4096;
 
 std::string trim(std::string_view text) {
     std::size_t begin = 0;
@@ -58,20 +61,44 @@ bool parseBool(std::string_view text, bool& value) {
     return false;
 }
 
-} // namespace
-
-std::string encodeRawCaptureHeader(const RawCaptureFileData& capture) {
+std::string encodeRawCaptureHeaderWithSize(const RawCaptureFileData& capture, std::uint64_t rawSize) {
     std::ostringstream out;
     out << kFileMagic << '\n'
         << "version: " << kVersion << '\n'
         << "protocol_name: " << capture.protocolName << '\n'
         << "protocol_dir: " << capture.protocolDir << '\n'
         << "sample_frequency_hz: " << capture.sampleFrequencyHz << '\n'
-        << "raw_size: " << capture.payload.size() << '\n'
+        << "raw_size: " << rawSize << '\n'
         << "captured_at_ms: " << capture.capturedAtMs << '\n'
         << "truncated: " << (capture.truncated ? "true" : "false") << '\n'
         << '\n';
     return out.str();
+}
+
+bool encodeFixedRawCaptureHeader(const RawCaptureFileData& capture,
+                                 std::uint64_t rawSize,
+                                 std::string& header,
+                                 std::string& error) {
+    const std::string base = encodeRawCaptureHeaderWithSize(capture, rawSize);
+    constexpr std::string_view kPaddingPrefix = "padding: ";
+    const auto minimumSize = base.size() + kPaddingPrefix.size() + 1U;
+    if (minimumSize > kStreamHeaderBytes) {
+        error = "psraw 文件头超过流式录制预留空间";
+        return false;
+    }
+
+    header = base;
+    header.pop_back();
+    header += kPaddingPrefix;
+    header.append(kStreamHeaderBytes - minimumSize, ' ');
+    header += "\n\n";
+    return true;
+}
+
+} // namespace
+
+std::string encodeRawCaptureHeader(const RawCaptureFileData& capture) {
+    return encodeRawCaptureHeaderWithSize(capture, capture.payload.size());
 }
 
 std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, std::string& error) {
@@ -205,6 +232,130 @@ std::optional<RawCaptureFileData> readRawCaptureFile(const std::filesystem::path
     }
     const std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     return decodeRawCaptureFile(contents, error);
+}
+
+RawCaptureStreamWriter::~RawCaptureStreamWriter() {
+    if (out_.is_open()) {
+        std::string error;
+        static_cast<void>(close(error));
+    }
+}
+
+bool RawCaptureStreamWriter::isOpen() const {
+    return out_.is_open();
+}
+
+const std::filesystem::path& RawCaptureStreamWriter::path() const {
+    return path_;
+}
+
+std::uint64_t RawCaptureStreamWriter::bytesWritten() const {
+    return bytesWritten_;
+}
+
+bool RawCaptureStreamWriter::open(const std::filesystem::path& path,
+                                  const RawCaptureFileData& metadata,
+                                  std::string& error) {
+    if (out_.is_open()) {
+        error = "已有完整原始数据录制正在进行";
+        return false;
+    }
+    if (metadata.protocolName.empty() || metadata.protocolDir.empty()) {
+        error = "当前协议元数据不完整，无法开始录制";
+        return false;
+    }
+
+    RawCaptureFileData cleanMetadata = metadata;
+    cleanMetadata.payload.clear();
+    cleanMetadata.truncated = false;
+
+    std::string header;
+    if (!encodeFixedRawCaptureHeader(cleanMetadata, 0, header, error)) {
+        return false;
+    }
+
+    try {
+        if (path.has_parent_path()) {
+            std::filesystem::create_directories(path.parent_path());
+        }
+        out_.open(path, std::ios::binary | std::ios::trunc);
+        if (!out_.good()) {
+            error = "无法打开 psraw 录制文件";
+            return false;
+        }
+        out_.write(header.data(), static_cast<std::streamsize>(header.size()));
+        if (!out_.good()) {
+            error = "无法写入 psraw 录制文件头";
+            out_.close();
+            return false;
+        }
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        if (out_.is_open()) {
+            out_.close();
+        }
+        return false;
+    }
+
+    path_ = path;
+    metadata_ = std::move(cleanMetadata);
+    bytesWritten_ = 0;
+    return true;
+}
+
+bool RawCaptureStreamWriter::append(std::span<const std::uint8_t> bytes, std::string& error) {
+    if (!out_.is_open()) {
+        error = "完整原始数据录制尚未开始";
+        return false;
+    }
+    if (bytes.empty()) {
+        return true;
+    }
+    if (bytes.size() > static_cast<std::size_t>((std::numeric_limits<std::uint64_t>::max)() - bytesWritten_)) {
+        error = "psraw 录制文件大小超过可记录范围";
+        return false;
+    }
+
+    out_.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!out_.good()) {
+        error = "写入 psraw 录制数据失败";
+        return false;
+    }
+    bytesWritten_ += static_cast<std::uint64_t>(bytes.size());
+    return true;
+}
+
+bool RawCaptureStreamWriter::close(std::string& error) {
+    if (!out_.is_open()) {
+        return true;
+    }
+
+    std::string header;
+    if (!encodeFixedRawCaptureHeader(metadata_, bytesWritten_, header, error)) {
+        out_.close();
+        return false;
+    }
+
+    out_.flush();
+    if (!out_.good()) {
+        error = "刷新 psraw 录制文件失败";
+        out_.close();
+        return false;
+    }
+    out_.seekp(0, std::ios::beg);
+    if (!out_.good()) {
+        error = "回写 psraw 录制文件头失败";
+        out_.close();
+        return false;
+    }
+    out_.write(header.data(), static_cast<std::streamsize>(header.size()));
+    if (!out_.good()) {
+        error = "更新 psraw 录制文件头失败";
+        out_.close();
+        return false;
+    }
+    out_.close();
+    return true;
 }
 
 } // namespace protoscope::plot

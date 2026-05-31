@@ -613,6 +613,50 @@ void test_application_live_raw_capture_trims_to_limit() {
     application.shutdown();
 }
 
+void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims() {
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    transportState->queuedRxBytes = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16};
+
+    protoscope::app::Application application;
+    protoscope::config::AppConfig config;
+    config.gui.rawCapture.liveLimitBytes = 3;
+    require(application.initialize(), "应用初始化失败");
+    require(application.applyConfig(config), "应用配置应可设置实时原始缓存上限");
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    std::string error;
+    require(application.stopRawCaptureRecording(error), "未开始录制时停止应无副作用");
+
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-full-raw-recording.psraw";
+    std::filesystem::remove(tempPath);
+    require(application.startRawCaptureRecording(tempPath, error), "完整原始数据录制应可启动");
+    require(application.isRawCaptureRecording(), "启动后应处于录制状态");
+
+    application.openTransport();
+    for (int index = 0; index < 4; ++index) {
+        application.pumpOnce();
+    }
+
+    require(application.rawCaptureRecordingBytes() == transportState->queuedRxBytes.size(), "录制字节数应等于完整 RX 字节数");
+    require(application.stopRawCaptureRecording(error), "完整原始数据录制应可停止");
+    require(!application.isRawCaptureRecording(), "停止后不应处于录制状态");
+
+    const auto& liveCapture = application.docks().waveState().rawCapture;
+    require(liveCapture.truncated, "实时缓存仍应按上限截断");
+    require(liveCapture.payload == std::vector<std::uint8_t>({0x14, 0x15, 0x16}), "实时缓存应只保留尾部字节");
+
+    const auto recorded = protoscope::plot::readRawCaptureFile(tempPath, error);
+    require(recorded.has_value(), "完整录制 psraw 应可读取");
+    require(!recorded->truncated, "完整录制文件不应标记截断");
+    require(recorded->payload == transportState->queuedRxBytes, "完整录制文件应保存全部 RX 原始字节");
+
+    std::filesystem::remove(tempPath);
+    application.shutdown();
+}
+
 void test_application_raw_capture_import_preserves_full_history() {
     constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_history_limit";
     protoscope::app::Application application;

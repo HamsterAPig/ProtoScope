@@ -41,6 +41,15 @@ void GuiRuntime::drawStatusBar() {
             ImGui::Separator();
             ImGui::SameLine();
         }
+        if (application_.isRawCaptureRecording()) {
+            const auto fileName = application_.rawCaptureRecordingPath().filename().generic_string();
+            ImGui::Text("完整录制: %s %llu bytes",
+                        fileName.empty() ? "(未命名)" : fileName.c_str(),
+                        static_cast<unsigned long long>(application_.rawCaptureRecordingBytes()));
+            ImGui::SameLine();
+            ImGui::Separator();
+            ImGui::SameLine();
+        }
         if (!config.statusMessage.empty()) {
             ImGui::TextUnformatted(config.statusMessage.c_str());
         }

@@ -251,6 +251,35 @@ void GuiRuntime::openRawCaptureExportDialog() {
 #endif
 }
 
+void GuiRuntime::openRawCaptureRecordingDialog() {
+    const auto& lua = application_.docks().luaState();
+    const std::string baseName = lua.protocolName.empty() ? std::string("raw-recording") : lua.protocolName + "-raw-recording";
+    const auto defaultPath = rawCaptureRecordingPath_.empty()
+                               ? executableDir_ / "captures" / (baseName + ".psraw")
+                               : std::filesystem::path(rawCaptureRecordingPath_);
+#if defined(_WIN32)
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"开始完整原始数据录制",
+                                       L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       true,
+                                       L"psraw",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        startRawCaptureRecordingToPath(*path);
+    }
+#else
+    rawCaptureRecordingDialogOpen_ = true;
+    rawCaptureRecordingDialogOpened_ = false;
+    rawCaptureRecordingError_.clear();
+    rawCaptureRecordingPath_ = defaultPath.generic_string();
+#endif
+}
+
 void GuiRuntime::openTransferLogExportDialog() {
     openLogExportDialog(LogExportTarget::Transfer);
 }
@@ -393,6 +422,20 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path) {
     rawCaptureExportDialogOpen_ = false;
     rawCaptureExportDialogOpened_ = false;
     rawCaptureExportError_.clear();
+}
+
+void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& path) {
+    // 核心流程：菜单只负责选择完整录制路径，录制状态和写入错误统一收口到 Application。
+    rawCaptureRecordingPath_ = path.generic_string();
+    std::string error;
+    if (!application_.startRawCaptureRecording(path, error)) {
+        rawCaptureRecordingError_ = error;
+        application_.setStatusMessage("完整原始数据录制启动失败: " + error);
+        return;
+    }
+    rawCaptureRecordingDialogOpen_ = false;
+    rawCaptureRecordingDialogOpened_ = false;
+    rawCaptureRecordingError_.clear();
 }
 
 std::vector<dock::ReceiveRow> GuiRuntime::logExportRows(LogExportTarget target) {
@@ -644,6 +687,42 @@ void GuiRuntime::drawRawCaptureFileDialogs() {
                 rawCaptureExportDialogOpen_ = false;
                 rawCaptureExportDialogOpened_ = false;
                 rawCaptureExportError_.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    if (rawCaptureRecordingDialogOpen_) {
+        const char* popupId = "开始完整原始数据录制##psraw_record";
+        if (!rawCaptureRecordingDialogOpened_) {
+            ImGui::OpenPopup(popupId);
+            rawCaptureRecordingDialogOpened_ = true;
+        }
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+            ImGui::TextUnformatted("请输入完整录制 .psraw 文件路径");
+            char buffer[1024]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", rawCaptureRecordingPath_.c_str());
+            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+                rawCaptureRecordingPath_ = buffer;
+            }
+            if (!rawCaptureRecordingError_.empty()) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureRecordingError_.c_str());
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("开始录制", ImVec2(90.0F, 0.0F))) {
+                startRawCaptureRecordingToPath(rawCaptureRecordingPath_);
+                if (!rawCaptureRecordingDialogOpen_) {
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+                rawCaptureRecordingDialogOpen_ = false;
+                rawCaptureRecordingDialogOpened_ = false;
+                rawCaptureRecordingError_.clear();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();

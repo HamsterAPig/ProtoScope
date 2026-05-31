@@ -45,6 +45,11 @@ public:
     bool setSendHexMode(bool enabled);
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
+    bool startRawCaptureRecording(const std::filesystem::path& path, std::string& error);
+    bool stopRawCaptureRecording(std::string& error);
+    [[nodiscard]] bool isRawCaptureRecording() const;
+    [[nodiscard]] const std::filesystem::path& rawCaptureRecordingPath() const;
+    [[nodiscard]] std::uint64_t rawCaptureRecordingBytes() const;
     void resetWaveHistory();
     bool loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error);
     [[nodiscard]] std::uint64_t elfStaticAddressRevision() const;
@@ -94,6 +99,7 @@ private:
     void enqueueDialogRequest(const scripting::DialogRequest& request);
     void appendTransferRow(dock::ReceiveRow row);
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
+    void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
     void resetTransferFrameParser();
     void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
     void applyHistoryLimits(const config::GuiLogHistoryConfig& config);
@@ -120,6 +126,7 @@ private:
     std::unordered_map<std::uint64_t, scripting::FileDialogRequest> openFileDialogs_;
     std::unordered_map<std::string, std::uint64_t> dialogDedupeKeys_;
     std::optional<TransferFrameParserState> transferFrameParser_;
+    plot::RawCaptureStreamWriter rawCaptureRecording_;
 };
 
 } // namespace protoscope::app

@@ -1660,6 +1660,7 @@ static const TestCase kAllTests[] = {
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
     {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
+    {"application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims", &test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},
     {"application_raw_capture_import_replays_stream_in_chunks", &test_application_raw_capture_import_replays_stream_in_chunks},
     {"application_transfer_log_frame_view_waits_for_rx_full_frame", &test_application_transfer_log_frame_view_waits_for_rx_full_frame},

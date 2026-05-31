@@ -358,6 +358,10 @@ void Application::openTransport() {
 
 void Application::closeTransport() {
     cancelAllTxRequests("连接已关闭");
+    std::string recordingError;
+    if (rawCaptureRecording_.isOpen() && !stopRawCaptureRecording(recordingError)) {
+        loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
+    }
     if (transport_) {
         transport_->close();
     }
@@ -446,6 +450,24 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
     wave.rawCapture.payload.erase(
         wave.rawCapture.payload.begin(),
         wave.rawCapture.payload.begin() + static_cast<std::vector<std::uint8_t>::difference_type>(removeCount));
+}
+
+void Application::appendRawCaptureRecording(const transport::TransportBytesEvent& event) {
+    if (!rawCaptureRecording_.isOpen() || event.bytes.empty()) {
+        return;
+    }
+
+    std::string error;
+    if (rawCaptureRecording_.append(event.bytes, error)) {
+        return;
+    }
+
+    const auto path = rawCaptureRecording_.path();
+    std::string closeError;
+    static_cast<void>(rawCaptureRecording_.close(closeError));
+    const auto message = "完整原始数据录制失败: " + error + " (" + path.generic_string() + ")";
+    setStatusMessage(message, true);
+    loggingFacade_.error("raw_capture", message);
 }
 
 std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState() const {
@@ -617,6 +639,63 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
         return false;
     }
     return plot::writeRawCaptureFile(path, capture, error);
+}
+
+bool Application::startRawCaptureRecording(const std::filesystem::path& path, std::string& error) {
+    if (rawCaptureRecording_.isOpen()) {
+        error = "已有完整原始数据录制正在进行";
+        return false;
+    }
+
+    const auto& luaState = dockStore_.luaState();
+    const auto& wave = dockStore_.waveState();
+    plot::RawCaptureFileData metadata{
+        .protocolName = luaState.protocolName,
+        .protocolDir = luaState.protocolDir,
+        .sampleFrequencyHz = wave.view.sampleFrequencyHz,
+        .capturedAtMs = nowMs(),
+        .truncated = false,
+        .payload = {},
+    };
+    if (metadata.protocolName.empty() || metadata.protocolDir.empty()) {
+        error = "当前协议元数据不完整，无法开始录制";
+        return false;
+    }
+
+    if (!rawCaptureRecording_.open(path, metadata, error)) {
+        return false;
+    }
+    setStatusMessage("完整原始数据录制已开始: " + path.generic_string());
+    loggingFacade_.info("raw_capture", "完整原始数据录制已开始: " + path.generic_string());
+    return true;
+}
+
+bool Application::stopRawCaptureRecording(std::string& error) {
+    if (!rawCaptureRecording_.isOpen()) {
+        return true;
+    }
+
+    const auto path = rawCaptureRecording_.path();
+    const auto bytesWritten = rawCaptureRecording_.bytesWritten();
+    if (!rawCaptureRecording_.close(error)) {
+        return false;
+    }
+
+    setStatusMessage("完整原始数据录制已停止: " + path.generic_string() + " (" + std::to_string(bytesWritten) + " bytes)");
+    loggingFacade_.info("raw_capture", "完整原始数据录制已停止: " + path.generic_string());
+    return true;
+}
+
+bool Application::isRawCaptureRecording() const {
+    return rawCaptureRecording_.isOpen();
+}
+
+const std::filesystem::path& Application::rawCaptureRecordingPath() const {
+    return rawCaptureRecording_.path();
+}
+
+std::uint64_t Application::rawCaptureRecordingBytes() const {
+    return rawCaptureRecording_.bytesWritten();
 }
 
 bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error) {
@@ -808,6 +887,10 @@ bool Application::handleTransportEvents() {
                         activeConnection_.reset();
                     }
                     cancelAllTxRequests(evt.reason.empty() ? "连接已关闭" : evt.reason);
+                    std::string recordingError;
+                    if (rawCaptureRecording_.isOpen() && !stopRawCaptureRecording(recordingError)) {
+                        loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
+                    }
                     changed = true;
                 } else if constexpr (std::is_same_v<T, transport::TransportErrorEvent>) {
                     if (evt.context.readyForIo) {
@@ -824,6 +907,7 @@ bool Application::handleTransportEvents() {
                             activeConnection_->connectionId != evt.context.connectionId) {
                             return;
                         }
+                        appendRawCaptureRecording(evt);
                         appendLiveRawCapture(evt);
                         scriptHost_.onTransportBytes(evt);
                         if (evt.context.readyForIo) {
