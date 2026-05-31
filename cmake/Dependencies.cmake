@@ -88,7 +88,7 @@ endif()
 
 add_library(protoscope_pocketfft INTERFACE)
 target_include_directories(protoscope_pocketfft
-    INTERFACE
+    SYSTEM INTERFACE
         ${PROJECT_SOURCE_DIR}/3rdparty/pocketfft
 )
 
