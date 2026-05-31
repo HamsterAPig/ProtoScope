@@ -258,6 +258,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                    1.2);
             result.config.gui.wave.showAxisLabels =
                 readScalar<bool>(wave, "show_axis_labels", result.config.gui.wave.showAxisLabels);
+            result.config.gui.wave.showChannelLegend =
+                readScalar<bool>(wave, "show_channel_legend", result.config.gui.wave.showChannelLegend);
             if (const auto logHistory = gui["log_history"]) {
                 result.config.gui.logHistory.transferRawLimit =
                     readScalar<std::size_t>(logHistory, "transfer_raw_limit", result.config.gui.logHistory.transferRawLimit);
@@ -408,6 +410,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
     root["gui"]["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
     root["gui"]["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
+    root["gui"]["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
     root["gui"]["log_history"]["transfer_raw_limit"] = config.gui.logHistory.transferRawLimit;
     root["gui"]["log_history"]["transfer_frame_limit"] = config.gui.logHistory.transferFrameLimit;
     root["gui"]["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
@@ -600,6 +603,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
     wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.2);
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
+    wave.showChannelLegend = config.gui.wave.showChannelLegend;
     auto viewConfig = waveState.buffer.viewConfig();
     viewConfig.displayFormula = config.gui.wave.displayFormula;
     waveState.buffer.setViewConfig(viewConfig);
@@ -630,6 +634,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;
     config.gui.wave.verticalAutoFitMultiplier = dockStore.waveState().view.verticalAutoFitMultiplier;
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
+    config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.configPath = dockStore.configState().loadedFromPath;
 
     return config;

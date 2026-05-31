@@ -37,6 +37,7 @@ struct WaveViewState {
     bool lockVerticalRange{false};
     bool showPointsWhenSparse{true};
     bool showAxisLabels{false};
+    bool showChannelLegend{true};
     bool showHoverReadout{true};
     bool showCursors{true};
     bool showMeasurementOverlay{true};

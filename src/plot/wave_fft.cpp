@@ -40,17 +40,20 @@ double windowWeight(WaveFftWindow window, std::size_t index, std::size_t count) 
     return 1.0;
 }
 
-std::size_t resolvePointCount(WaveFftPointCount pointCount, std::size_t visibleSampleCount, std::size_t autoMaxPointCount) {
+std::size_t resolvePointCount(const WaveFftConfig& config, std::size_t visibleSampleCount) {
     if (visibleSampleCount < kMinFftPointCount) {
         return 0;
     }
-    if (pointCount == WaveFftPointCount::VisibleSamples) {
+    if (config.pointCount == WaveFftPointCount::VisibleSamples) {
         return visibleSampleCount;
     }
-    if (pointCount != WaveFftPointCount::Auto) {
-        return fftPointCountValue(pointCount);
+    if (config.pointCount == WaveFftPointCount::Manual) {
+        return config.manualPointCount;
     }
-    const std::size_t maxAuto = (std::max)(kMinFftPointCount, largestPowerOfTwoAtMost(autoMaxPointCount));
+    if (config.pointCount != WaveFftPointCount::Auto) {
+        return fftPointCountValue(config.pointCount);
+    }
+    const std::size_t maxAuto = (std::max)(kMinFftPointCount, largestPowerOfTwoAtMost(config.autoMaxPointCount));
     const std::size_t usable = (std::min)(visibleSampleCount, maxAuto);
     return largestPowerOfTwoAtMost(usable);
 }
@@ -60,6 +63,14 @@ double displayMagnitude(double magnitude, WaveFftMagnitudeMode mode) {
         return 20.0 * std::log10((std::max)(magnitude, kMagnitudeFloor));
     }
     return magnitude;
+}
+
+double paddedMin(double minValue, double maxValue) {
+    return minValue - (std::max)(1e-9, (maxValue - minValue) * 0.08);
+}
+
+double paddedMax(double minValue, double maxValue) {
+    return maxValue + (std::max)(1e-9, (maxValue - minValue) * 0.08);
 }
 
 double wrapPhaseDegrees(double radians) {
@@ -113,6 +124,7 @@ bool operator==(const WaveFftConfig& lhs, const WaveFftConfig& rhs) {
         && lhs.magnitudeMode == rhs.magnitudeMode
         && lhs.fundamentalMode == rhs.fundamentalMode
         && lhs.manualFundamentalHz == rhs.manualFundamentalHz
+        && lhs.manualPointCount == rhs.manualPointCount
         && lhs.autoMaxPointCount == rhs.autoMaxPointCount;
 }
 
@@ -129,6 +141,7 @@ std::size_t fftPointCountValue(WaveFftPointCount pointCount) {
     switch (pointCount) {
     case WaveFftPointCount::VisibleSamples:
     case WaveFftPointCount::Auto:
+    case WaveFftPointCount::Manual:
         return 0;
     case WaveFftPointCount::N256:
         return 256;
@@ -154,6 +167,8 @@ const char* fftPointCountName(WaveFftPointCount pointCount) {
         return "Visible";
     case WaveFftPointCount::Auto:
         return "Auto 2^n";
+    case WaveFftPointCount::Manual:
+        return "Manual";
     case WaveFftPointCount::N256:
         return "256";
     case WaveFftPointCount::N512:
@@ -263,7 +278,7 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
         result.visibleSampleCount = values.size();
         frame.visibleSampleCount = (std::max)(frame.visibleSampleCount, result.visibleSampleCount);
 
-        const std::size_t pointCount = resolvePointCount(config.pointCount, values.size(), config.autoMaxPointCount);
+        const std::size_t pointCount = resolvePointCount(config, values.size());
         if (pointCount < kMinFftPointCount || values.size() < pointCount) {
             result.message = "当前可视区样本不足";
             frame.channels.push_back(std::move(result));
@@ -347,6 +362,20 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
         frame.maxDisplayMagnitude = frame.minDisplayMagnitude + 1.0;
     }
     return frame;
+}
+
+WaveFftViewport makeFftFitViewport(const WaveFftFrame& frame) {
+    if (!frame.valid) {
+        return {};
+    }
+    return {
+        .frequencyMin = 0.0,
+        .frequencyMax = frame.maxFrequencyHz,
+        .magnitudeMin = paddedMin(frame.minDisplayMagnitude, frame.maxDisplayMagnitude),
+        .magnitudeMax = paddedMax(frame.minDisplayMagnitude, frame.maxDisplayMagnitude),
+        .phaseMin = -180.0,
+        .phaseMax = 180.0,
+    };
 }
 
 std::optional<WaveFftReadout> findNearestFftBin(const WaveFftFrame& frame,

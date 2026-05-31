@@ -790,6 +790,92 @@ void test_wave_fft_visible_samples_supports_non_power_of_two() {
     require(frame.channels[0].bins[150].magnitude > 0.4, "150Hz 峰值应保留");
 }
 
+void test_wave_fft_manual_point_count_supports_non_power_of_two() {
+    constexpr double sampleFrequencyHz = 1500.0;
+    constexpr std::size_t sampleCount = 1000;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(sampleCount);
+    for (std::size_t index = 0; index < sampleCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 60.0 * time);
+        samples.push_back({.time = time, .value = value});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::Manual,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+        .manualPointCount = 750,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
+                                                          displayData,
+                                                          config,
+                                                          std::vector<std::uint8_t>{1},
+                                                          0.0,
+                                                          1.0,
+                                                          sampleFrequencyHz);
+    require(frame.valid, "手动非 2^n 点数 FFT 应计算成功");
+    require(frame.pointCount == 750, "Manual 应强制使用手动点数");
+    require(frame.channels[0].usedSampleCount == 750, "Manual 应只使用最近的手动 N 点");
+    require(std::abs(frame.frequencyResolutionHz - 2.0) < 1e-12, "1500Hz/750 点应得到 2Hz/bin");
+    require(frame.channels[0].bins.size() == 376, "750 点实数 FFT 应输出 376 个频点");
+    require(frame.channels[0].bins[30].magnitude > 0.9, "60Hz 峰值应保留");
+}
+
+void test_wave_fft_fit_viewport_resets_frequency_and_value_ranges() {
+    constexpr double sampleFrequencyHz = 1000.0;
+    constexpr std::size_t pointCount = 1000;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time);
+        samples.push_back({.time = time, .value = value});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::VisibleSamples,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+    };
+    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
+                                                          displayData,
+                                                          config,
+                                                          std::vector<std::uint8_t>{1},
+                                                          0.0,
+                                                          1.0,
+                                                          sampleFrequencyHz);
+    const auto viewport = protoscope::plot::makeFftFitViewport(frame);
+    require(frame.valid, "FFT 帧应计算成功");
+    require(std::abs(viewport.frequencyMin) < 1e-12, "显示全部频谱应从 0Hz 开始");
+    require(std::abs(viewport.frequencyMax - frame.maxFrequencyHz) < 1e-12, "显示全部频谱应恢复到 Nyquist");
+    require(viewport.magnitudeMin < frame.minDisplayMagnitude, "显示全部频谱应给幅值下限留 padding");
+    require(viewport.magnitudeMax > frame.maxDisplayMagnitude, "显示全部频谱应给幅值上限留 padding");
+    require(std::abs(viewport.phaseMin + 180.0) < 1e-12, "显示全部频谱应恢复相位下限");
+    require(std::abs(viewport.phaseMax - 180.0) < 1e-12, "显示全部频谱应恢复相位上限");
+}
+
 void test_wave_viewport_zoom_modes_and_clamp() {
     const protoscope::plot::WaveViewport viewport{
         .minTime = 2.0,

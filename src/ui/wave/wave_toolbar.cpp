@@ -92,13 +92,21 @@ void drawFftToolbarSection(plot::WaveDockState& wave) {
         wave.cachedFftKeyValid = false;
     }
 
-    const char* pointItems[] = {"全部可视样本", "Auto 2^n", "256", "512", "1024", "2048", "4096", "8192", "16384"};
+    const char* pointItems[] = {"全部可视样本", "Auto 2^n", "手动", "256", "512", "1024", "2048", "4096", "8192", "16384"};
     int pointIndex = static_cast<int>(view.fft.pointCount);
     if (ImGui::Combo("点数", &pointIndex, pointItems, IM_ARRAYSIZE(pointItems))) {
         view.fft.pointCount = static_cast<plot::WaveFftPointCount>(pointIndex);
         wave.cachedFftKeyValid = false;
     }
-    addItemHelp("点数 N 决定频率分辨率：Δf = Fs / N。全部可视样本允许非 2^n 点数，由 pocketfft 计算。");
+    addItemHelp("点数 N 决定频率分辨率：Δf = Fs / N。全部可视样本和手动点数允许非 2^n，由 pocketfft 计算。");
+
+    int manualPointCount = static_cast<int>(view.fft.manualPointCount);
+    if (view.fft.pointCount == plot::WaveFftPointCount::Manual
+        && ImGui::InputInt("手动点数", &manualPointCount, 128, 1024)) {
+        // 核心流程：手动 N 强制使用用户输入的点数，样本不足时由 FFT 计算层给出不足提示，不做隐式补零。
+        view.fft.manualPointCount = static_cast<std::size_t>((std::clamp)(manualPointCount, 16, 16384));
+        wave.cachedFftKeyValid = false;
+    }
 
     int autoMaxPointCount = static_cast<int>(view.fft.autoMaxPointCount);
     if (view.fft.pointCount == plot::WaveFftPointCount::Auto
@@ -335,6 +343,7 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
                             "拖动、缩放或手动浏览后自动关闭跟随，避免视口被新数据拉回末尾。");
         drawToolbarCheckbox("稀疏时显示点", &view.showPointsWhenSparse, "样本较少时显示采样点，便于观察离散数据。");
         drawToolbarCheckbox("显示坐标轴标签", &view.showAxisLabels, "显示或隐藏主波形图的时间轴/数值轴标签。");
+        drawToolbarCheckbox("显示图例", &view.showChannelLegend, "显示或隐藏顶部通道图例栏；不会持久化每个通道的临时隐藏状态。");
         if (ImGui::BeginTable("##view_controls", 2, ImGuiTableFlags_SizingStretchSame)) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);

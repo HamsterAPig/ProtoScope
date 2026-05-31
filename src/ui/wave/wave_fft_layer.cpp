@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace protoscope::ui {
 namespace {
@@ -183,25 +184,18 @@ bool handleFftZoomSelection(plot::WaveViewState& view, bool phasePlot, double mi
     return true;
 }
 
-double paddedMin(double minValue, double maxValue) {
-    return minValue - (std::max)(1e-9, (maxValue - minValue) * 0.08);
-}
-
-double paddedMax(double minValue, double maxValue) {
-    return maxValue + (std::max)(1e-9, (maxValue - minValue) * 0.08);
-}
-
 void ensureFftViewport(plot::WaveViewState& view, const plot::WaveFftFrame& frame) {
     if (!frame.valid) {
         return;
     }
     if (!view.fftViewportInitialized || view.fftFitAllRequested) {
-        view.fftFrequencyMin = 0.0;
-        view.fftFrequencyMax = frame.maxFrequencyHz;
-        view.fftMagnitudeMin = paddedMin(frame.minDisplayMagnitude, frame.maxDisplayMagnitude);
-        view.fftMagnitudeMax = paddedMax(frame.minDisplayMagnitude, frame.maxDisplayMagnitude);
-        view.fftPhaseMin = -180.0;
-        view.fftPhaseMax = 180.0;
+        const auto fitViewport = plot::makeFftFitViewport(frame);
+        view.fftFrequencyMin = fitViewport.frequencyMin;
+        view.fftFrequencyMax = fitViewport.frequencyMax;
+        view.fftMagnitudeMin = fitViewport.magnitudeMin;
+        view.fftMagnitudeMax = fitViewport.magnitudeMax;
+        view.fftPhaseMin = fitViewport.phaseMin;
+        view.fftPhaseMax = fitViewport.phaseMax;
         view.fftViewportInitialized = true;
         view.fftFitAllRequested = false;
     }
@@ -216,6 +210,57 @@ void ensureFftViewport(plot::WaveViewState& view, const plot::WaveFftFrame& fram
         view.fftPhaseMin = -180.0;
         view.fftPhaseMax = 180.0;
     }
+}
+
+bool handleFftWheelZoom(plot::WaveViewState& view,
+                        const plot::WaveFftFrame& frame,
+                        bool phasePlot,
+                        double minFrequencyWidth) {
+    const auto& io = ImGui::GetIO();
+    if (io.MouseWheel == 0.0F
+        || (!ImPlot::IsPlotHovered() && !ImPlot::IsAxisHovered(ImAxis_X1) && !ImPlot::IsAxisHovered(ImAxis_Y1))) {
+        return false;
+    }
+
+    plot::WaveZoomMode zoomMode = plot::WaveZoomMode::XOnly;
+    if (ImPlot::IsAxisHovered(ImAxis_Y1)) {
+        zoomMode = plot::WaveZoomMode::YOnly;
+    }
+    const ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+    const plot::WaveViewport current{
+        .minTime = view.fftFrequencyMin,
+        .maxTime = view.fftFrequencyMax,
+        .minValue = phasePlot ? view.fftPhaseMin : view.fftMagnitudeMin,
+        .maxValue = phasePlot ? view.fftPhaseMax : view.fftMagnitudeMax,
+    };
+    const auto fitViewport = plot::makeFftFitViewport(frame);
+    const plot::WaveDataBounds bounds{
+        .minTime = fitViewport.frequencyMin,
+        .maxTime = fitViewport.frequencyMax,
+        .minValue = phasePlot ? fitViewport.phaseMin : fitViewport.magnitudeMin,
+        .maxValue = phasePlot ? fitViewport.phaseMax : fitViewport.magnitudeMax,
+        .minStep = minFrequencyWidth,
+        .valid = true,
+    };
+    // 核心流程：FFT 频域使用独立视口，滚轮只更新频率/幅值/相位范围，绝不回写时域输入窗口。
+    const auto zoomed = plot::zoomViewport(current,
+                                           zoomMode,
+                                           io.MouseWheel,
+                                           mouse.x,
+                                           mouse.y,
+                                           bounds,
+                                           minFrequencyWidth,
+                                           true);
+    view.fftFrequencyMin = zoomed.minTime;
+    view.fftFrequencyMax = zoomed.maxTime;
+    if (phasePlot) {
+        view.fftPhaseMin = zoomed.minValue;
+        view.fftPhaseMax = zoomed.maxValue;
+    } else {
+        view.fftMagnitudeMin = zoomed.minValue;
+        view.fftMagnitudeMax = zoomed.maxValue;
+    }
+    return true;
 }
 
 std::optional<plot::WaveFftReadout> nearestActiveReadout(const plot::WaveFftFrame& frame,
@@ -402,6 +447,63 @@ void drawCursorSummary(const std::array<std::optional<plot::WaveFftReadout>, 2>&
     }
 }
 
+void drawCursorOverlay(const std::array<std::optional<plot::WaveFftReadout>, 2>& cursorReadouts) {
+    std::vector<std::string> lines;
+    if (cursorReadouts[0].has_value()) {
+        lines.push_back(readoutText("C1", cursorReadouts[0]));
+    }
+    if (cursorReadouts[1].has_value()) {
+        lines.push_back(readoutText("C2", cursorReadouts[1]));
+    }
+    if (cursorReadouts[0].has_value() && cursorReadouts[1].has_value()) {
+        const auto& left = *cursorReadouts[0];
+        const auto& right = *cursorReadouts[1];
+        const double deltaFrequency = right.frequencyHz - left.frequencyHz;
+        const double deltaMagnitude = right.displayMagnitude - left.displayMagnitude;
+        const double deltaPhase = wrapDeltaPhase(right.phaseDegrees - left.phaseDegrees);
+        char buffer[192]{};
+        if (std::abs(deltaFrequency) > 1e-12) {
+            std::snprintf(buffer,
+                          sizeof(buffer),
+                          "Δf=%.6g Hz  T=%.6g s  Δmag=%.6g  Δphase=%.3g°",
+                          deltaFrequency,
+                          1.0 / std::abs(deltaFrequency),
+                          deltaMagnitude,
+                          deltaPhase);
+        } else {
+            std::snprintf(buffer, sizeof(buffer), "Δf=0 Hz  Δmag=%.6g  Δphase=%.3g°", deltaMagnitude, deltaPhase);
+        }
+        lines.emplace_back(buffer);
+    }
+    if (lines.empty()) {
+        return;
+    }
+
+    const ImVec2 plotPos = ImPlot::GetPlotPos();
+    const ImVec2 plotSize = ImPlot::GetPlotSize();
+    const float padding = 7.0F;
+    const float lineSpacing = ImGui::GetTextLineHeightWithSpacing();
+    ImVec2 textSize(0.0F, 0.0F);
+    for (const auto& line : lines) {
+        const ImVec2 size = ImGui::CalcTextSize(line.c_str());
+        textSize.x = (std::max)(textSize.x, size.x);
+        textSize.y += lineSpacing;
+    }
+    textSize.y = (std::max)(0.0F, textSize.y - ImGui::GetStyle().ItemSpacing.y);
+
+    const ImVec2 overlayMax(plotPos.x + plotSize.x - padding, plotPos.y + padding + textSize.y + padding * 2.0F);
+    const ImVec2 overlayMin(overlayMax.x - textSize.x - padding * 2.0F, plotPos.y + padding);
+    auto* drawList = ImPlot::GetPlotDrawList();
+    drawList->AddRectFilled(overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.045F, 0.05F, 0.68F)), 5.0F);
+    drawList->AddRect(overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 1.0F, 1.0F, 0.18F)), 5.0F);
+    ImVec2 textPos(overlayMin.x + padding, overlayMin.y + padding);
+    const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.92F, 0.94F, 0.98F, 0.95F));
+    for (const auto& line : lines) {
+        drawList->AddText(textPos, textColor, line.c_str());
+        textPos.y += lineSpacing;
+    }
+}
+
 } // namespace
 
 PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData& frame) {
@@ -420,7 +522,7 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
     ensureFftViewport(view, *fftFrame);
     const char* yLabel = view.fft.magnitudeMode == plot::WaveFftMagnitudeMode::Decibel ? "幅值 (dB)" : "幅值";
     const ImVec2 available = ImGui::GetContentRegionAvail();
-    const float summaryHeight = view.showCursors ? 58.0F : 8.0F;
+    const float summaryHeight = view.showCursors && !view.showMeasurementOverlay ? 58.0F : 8.0F;
     const float plotGap = ImGui::GetStyle().ItemSpacing.y;
     const float plotAreaHeight = (std::max)(120.0F, available.y - summaryHeight - plotGap);
     const float magnitudeHeight = (std::max)(90.0F, plotAreaHeight * 0.58F);
@@ -433,11 +535,16 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
         ImPlot::SetupAxisLimits(ImAxis_X1, view.fftFrequencyMin, view.fftFrequencyMax, ImGuiCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftMagnitudeMin, view.fftMagnitudeMax, ImGuiCond_Always);
         drawFftChannelLines(*fftFrame, *frame.fullSnapshot, false);
-        const bool zoomConsumed = handleFftZoomSelection(view, false, (std::max)(fftFrame->frequencyResolutionHz, 1e-9));
+        const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
+        const bool zoomConsumed = handleFftZoomSelection(view, false, minFrequencyWidth)
+            || handleFftWheelZoom(view, *fftFrame, false, minFrequencyWidth);
         const auto limits = ImPlot::GetPlotLimits();
         if (!zoomConsumed) {
             drawHoverReadout(view, *fftFrame, false, limits);
             drawFftCursors(view, *fftFrame, false, cursorReadouts);
+            if (view.showMeasurementOverlay) {
+                drawCursorOverlay(cursorReadouts);
+            }
             recordFftPlotLimits(view, false);
         }
         ImPlot::EndPlot();
@@ -449,7 +556,9 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
         ImPlot::SetupAxisLimits(ImAxis_X1, view.fftFrequencyMin, view.fftFrequencyMax, ImGuiCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftPhaseMin, view.fftPhaseMax, ImGuiCond_Always);
         drawFftChannelLines(*fftFrame, *frame.fullSnapshot, true);
-        const bool zoomConsumed = handleFftZoomSelection(view, true, (std::max)(fftFrame->frequencyResolutionHz, 1e-9));
+        const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
+        const bool zoomConsumed = handleFftZoomSelection(view, true, minFrequencyWidth)
+            || handleFftWheelZoom(view, *fftFrame, true, minFrequencyWidth);
         const auto limits = ImPlot::GetPlotLimits();
         if (!zoomConsumed) {
             drawHoverReadout(view, *fftFrame, true, limits);
@@ -459,7 +568,7 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData&
         ImPlot::EndPlot();
     }
 
-    if (view.showCursors) {
+    if (view.showCursors && !view.showMeasurementOverlay) {
         drawCursorSummary(cursorReadouts);
     }
     return result;

@@ -453,6 +453,21 @@ void test_application_set_log_level_updates_runtime_config() {
     application.shutdown();
 }
 
+void test_application_wave_legend_visibility_config_roundtrip() {
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto config = application.captureConfig();
+    config.gui.wave.showChannelLegend = false;
+    require(application.applyConfig(config), "图例显示配置应用失败");
+
+    require(!application.docks().waveState().view.showChannelLegend, "应用配置后应隐藏图例");
+    const auto captured = application.captureConfig();
+    require(!captured.gui.wave.showChannelLegend, "captureConfig 应带出图例显示开关");
+
+    application.shutdown();
+}
+
 void test_application_logging_filters_script_and_host() {
     const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-logging-test";
     std::filesystem::create_directories(tempRoot);

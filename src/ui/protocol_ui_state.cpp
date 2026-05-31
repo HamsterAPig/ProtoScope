@@ -66,6 +66,9 @@ plot::WaveFftPointCount parseFftPointCount(const std::string& value) {
     if (value == "Auto 2^n" || value == "Auto" || value == "auto_power_of_two") {
         return plot::WaveFftPointCount::Auto;
     }
+    if (value == "Manual" || value == "manual") {
+        return plot::WaveFftPointCount::Manual;
+    }
     if (value == "256") {
         return plot::WaveFftPointCount::N256;
     }
@@ -182,6 +185,7 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     node["lock_vertical_range"] = view.lockVerticalRange;
     node["show_points_when_sparse"] = view.showPointsWhenSparse;
     node["show_axis_labels"] = view.showAxisLabels;
+    node["show_channel_legend"] = view.showChannelLegend;
     node["show_hover_readout"] = view.showHoverReadout;
     node["show_cursors"] = view.showCursors;
     node["show_measurement_overlay"] = view.showMeasurementOverlay;
@@ -201,6 +205,7 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     fftNode["magnitude_mode"] = fftMagnitudeModeStateName(view.fft.magnitudeMode);
     fftNode["fundamental_mode"] = fftFundamentalModeStateName(view.fft.fundamentalMode);
     fftNode["manual_fundamental_hz"] = view.fft.manualFundamentalHz;
+    fftNode["manual_point_count"] = view.fft.manualPointCount;
     fftNode["auto_max_point_count"] = view.fft.autoMaxPointCount;
     fftNode["source_window_valid"] = view.fftSourceWindowValid;
     fftNode["source_min_time"] = view.fftSourceMinTime;
@@ -274,6 +279,7 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
     view.lockVerticalRange = node["lock_vertical_range"].as<bool>(view.lockVerticalRange);
     view.showPointsWhenSparse = node["show_points_when_sparse"].as<bool>(view.showPointsWhenSparse);
     view.showAxisLabels = node["show_axis_labels"].as<bool>(view.showAxisLabels);
+    view.showChannelLegend = node["show_channel_legend"].as<bool>(view.showChannelLegend);
     view.showHoverReadout = node["show_hover_readout"].as<bool>(view.showHoverReadout);
     view.showCursors = node["show_cursors"].as<bool>(view.showCursors);
     view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);
@@ -296,6 +302,7 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
         view.fft.fundamentalMode =
             parseFftFundamentalMode(fftNode["fundamental_mode"].as<std::string>(fftFundamentalModeStateName(view.fft.fundamentalMode)));
         view.fft.manualFundamentalHz = fftNode["manual_fundamental_hz"].as<double>(view.fft.manualFundamentalHz);
+        view.fft.manualPointCount = fftNode["manual_point_count"].as<std::size_t>(view.fft.manualPointCount);
         view.fft.autoMaxPointCount = fftNode["auto_max_point_count"].as<std::size_t>(view.fft.autoMaxPointCount);
         view.fftSourceWindowValid = fftNode["source_window_valid"].as<bool>(view.fftSourceWindowValid);
         view.fftSourceMinTime = fftNode["source_min_time"].as<double>(view.fftSourceMinTime);

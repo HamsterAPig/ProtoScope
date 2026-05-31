@@ -509,6 +509,9 @@ public:
     std::string_view id() const override { return "wave_legend"; }
 
     void draw(WaveContext& context) override {
+        if (!context.view.showChannelLegend) {
+            return;
+        }
         drawChannelLegendBar(context.wave, *context.renderFrame->fullSnapshot);
     }
 };
@@ -598,7 +601,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
         const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
-        const float legendHeight = measureChannelLegendHeight(wave.cachedFullSnapshot, view);
+        const float legendHeight = view.showChannelLegend ? measureChannelLegendHeight(wave.cachedFullSnapshot, view) : 0.0F;
         const float overviewRequestedHeight = wave.overviewCollapsed
             ? wave.overviewCollapsedHeight
             : wave.overviewPanelHeight;

@@ -14,6 +14,7 @@ namespace protoscope::plot {
 enum class WaveFftPointCount {
     VisibleSamples,
     Auto,
+    Manual,
     N256,
     N512,
     N1024,
@@ -47,6 +48,7 @@ struct WaveFftConfig {
     WaveFftMagnitudeMode magnitudeMode{WaveFftMagnitudeMode::Linear};
     WaveFftFundamentalMode fundamentalMode{WaveFftFundamentalMode::Auto};
     double manualFundamentalHz{0.0};
+    std::size_t manualPointCount{1000};
     std::size_t autoMaxPointCount{4096};
 };
 
@@ -105,6 +107,15 @@ struct WaveFftReadout {
     double phaseDegrees{0.0};
 };
 
+struct WaveFftViewport {
+    double frequencyMin{0.0};
+    double frequencyMax{1.0};
+    double magnitudeMin{0.0};
+    double magnitudeMax{1.0};
+    double phaseMin{-180.0};
+    double phaseMax{180.0};
+};
+
 struct WaveFftCacheKey {
     std::uint64_t dataRevision{0};
     double viewMinTime{0.0};
@@ -130,6 +141,7 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
                                double viewMinTime,
                                double viewMaxTime,
                                double sampleFrequencyHz);
+WaveFftViewport makeFftFitViewport(const WaveFftFrame& frame);
 std::optional<WaveFftReadout> findNearestFftBin(const WaveFftFrame& frame,
                                                 std::size_t channelIndex,
                                                 double frequencyHz);

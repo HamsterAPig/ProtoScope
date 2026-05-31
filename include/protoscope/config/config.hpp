@@ -61,6 +61,7 @@ struct GuiWaveConfig {
     double channelCardAdaptiveRatio{0.22};
     double verticalAutoFitMultiplier{1.2};
     bool showAxisLabels{false};
+    bool showChannelLegend{true};
 };
 
 struct GuiLogHistoryConfig {

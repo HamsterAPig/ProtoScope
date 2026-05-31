@@ -805,6 +805,7 @@ void test_config_default_roundtrip() {
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.2");
+    require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
     require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
@@ -832,6 +833,7 @@ void test_config_default_roundtrip() {
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
+    config.gui.wave.showChannelLegend = false;
     config.gui.logHistory.transferRawLimit = 11;
     config.gui.logHistory.transferFrameLimit = 22;
     config.gui.logHistory.hostLimit = 33;
@@ -869,6 +871,7 @@ void test_config_default_roundtrip() {
     require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12, "CH 卡片自适应比例 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.verticalAutoFitMultiplier - 1.5) < 1e-12, "Y 轴 Auto Fit 系数 roundtrip 失败");
+    require(!reloaded.config.gui.wave.showChannelLegend, "波形图例显示开关 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
@@ -1606,6 +1609,7 @@ static const TestCase kAllTests[] = {
     {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
     {"application_open_transport_uses_udp_peer_runtime_config", &test_application_open_transport_uses_udp_peer_runtime_config},
     {"application_set_log_level_updates_runtime_config", &test_application_set_log_level_updates_runtime_config},
+    {"application_wave_legend_visibility_config_roundtrip", &test_application_wave_legend_visibility_config_roundtrip},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},
@@ -1626,6 +1630,8 @@ static const TestCase kAllTests[] = {
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
     {"wave_fft_visible_samples_supports_non_power_of_two", &test_wave_fft_visible_samples_supports_non_power_of_two},
+    {"wave_fft_manual_point_count_supports_non_power_of_two", &test_wave_fft_manual_point_count_supports_non_power_of_two},
+    {"wave_fft_fit_viewport_resets_frequency_and_value_ranges", &test_wave_fft_fit_viewport_resets_frequency_and_value_ranges},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
     {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
     {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
