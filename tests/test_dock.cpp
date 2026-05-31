@@ -316,6 +316,15 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     waveA.view.fft.magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::Decibel;
     waveA.view.fft.fundamentalMode = protoscope::plot::WaveFftFundamentalMode::Manual;
     waveA.view.fft.manualFundamentalHz = 50.0;
+    waveA.view.fftSourceWindowValid = true;
+    waveA.view.fftSourceMinTime = 0.25;
+    waveA.view.fftSourceMaxTime = 0.75;
+    waveA.view.fftFrequencyMin = 10.0;
+    waveA.view.fftFrequencyMax = 500.0;
+    waveA.view.fftMagnitudeMin = -80.0;
+    waveA.view.fftMagnitudeMax = 5.0;
+    waveA.view.fftPhaseMin = -120.0;
+    waveA.view.fftPhaseMax = 120.0;
     waveA.fftChannelEnabled = {1};
     waveA.toolsCollapsed = true;
     waveA.channelOverrides.resize(1);
@@ -357,6 +366,11 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredA.view.fft.magnitudeMode == protoscope::plot::WaveFftMagnitudeMode::Decibel, "proto_a 应恢复 FFT 幅值模式");
     require(restoredA.view.fft.fundamentalMode == protoscope::plot::WaveFftFundamentalMode::Manual, "proto_a 应恢复 FFT 基波模式");
     require(restoredA.view.fft.manualFundamentalHz == 50.0, "proto_a 应恢复手动基波频率");
+    require(restoredA.view.fftSourceWindowValid, "proto_a 应恢复 FFT 输入窗口状态");
+    require(restoredA.view.fftSourceMinTime == 0.25 && restoredA.view.fftSourceMaxTime == 0.75, "proto_a 应恢复 FFT 输入窗口");
+    require(restoredA.view.fftFrequencyMin == 10.0 && restoredA.view.fftFrequencyMax == 500.0, "proto_a 应恢复 FFT 频率轴");
+    require(restoredA.view.fftMagnitudeMin == -80.0 && restoredA.view.fftMagnitudeMax == 5.0, "proto_a 应恢复 FFT 幅值轴");
+    require(restoredA.view.fftPhaseMin == -120.0 && restoredA.view.fftPhaseMax == 120.0, "proto_a 应恢复 FFT 相位轴");
     require(restoredA.fftChannelEnabled.size() == 1 && restoredA.fftChannelEnabled[0] == 1, "proto_a 应恢复 FFT 通道选择");
     require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");

@@ -57,6 +57,13 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
     }
 
     if (view.fft.enabled) {
+        if (!view.fftSourceWindowValid) {
+            view.fftSourceMinTime = view.viewMinTime;
+            view.fftSourceMaxTime = view.viewMaxTime;
+            view.fftSourceWindowValid = true;
+            view.fftViewportInitialized = false;
+            wave.cachedFftKeyValid = false;
+        }
         if (wave.fftChannelEnabled.size() < wave.cachedFullSnapshot.channels.size()) {
             const auto oldSize = wave.fftChannelEnabled.size();
             wave.fftChannelEnabled.resize(wave.cachedFullSnapshot.channels.size(), 0);
@@ -67,26 +74,28 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
         }
         const plot::WaveFftCacheKey key{
             .dataRevision = dataRevision,
-            .viewMinTime = view.viewMinTime,
-            .viewMaxTime = view.viewMaxTime,
+            .viewMinTime = view.fftSourceMinTime,
+            .viewMaxTime = view.fftSourceMaxTime,
             .sampleFrequencyHz = view.sampleFrequencyHz,
             .config = view.fft,
             .channelEnabled = wave.fftChannelEnabled,
         };
         if (!wave.cachedFftKeyValid || !(wave.cachedFftKey == key)) {
-            // 核心流程：FFT 是当前视口的派生结果，只在源数据、视口或 FFT 配置变化时重建。
+            // 核心流程：FFT 输入窗口与频域视口分离，频域缩放不会反向改变待分析的时域样本。
             wave.cachedFftFrame = plot::buildWaveFftFrame(wave.cachedFullSnapshot,
                                                           wave.cachedDisplayData,
                                                           view.fft,
                                                           wave.fftChannelEnabled,
-                                                          view.viewMinTime,
-                                                          view.viewMaxTime,
+                                                          view.fftSourceMinTime,
+                                                          view.fftSourceMaxTime,
                                                           view.sampleFrequencyHz);
             wave.cachedFftKey = key;
             wave.cachedFftKeyValid = true;
         }
         frame.fftFrame = &wave.cachedFftFrame;
     } else {
+        view.fftSourceWindowValid = false;
+        view.fftViewportInitialized = false;
         wave.cachedFftKeyValid = false;
         wave.cachedFftFrame = {};
         frame.fftFrame = &wave.cachedFftFrame;

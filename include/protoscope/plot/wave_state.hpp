@@ -61,6 +61,9 @@ struct WaveViewState {
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
     WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
     WaveFftConfig fft{};
+    bool fftSourceWindowValid{false};
+    bool fftViewportInitialized{false};
+    bool fftFitAllRequested{false};
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
     double downsampleStartMultiplier{2.0};
@@ -75,6 +78,14 @@ struct WaveViewState {
     double centerTime{0.0};
     double viewMinTime{0.0};
     double viewMaxTime{1.0};
+    double fftSourceMinTime{0.0};
+    double fftSourceMaxTime{1.0};
+    double fftFrequencyMin{0.0};
+    double fftFrequencyMax{1.0};
+    double fftMagnitudeMin{0.0};
+    double fftMagnitudeMax{1.0};
+    double fftPhaseMin{-180.0};
+    double fftPhaseMax{180.0};
     double manualVerticalMin{-1.0};
     double manualVerticalMax{1.0};
     double viewMinValue{-1.0};

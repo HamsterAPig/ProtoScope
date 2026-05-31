@@ -739,8 +739,55 @@ void test_wave_fft_detects_50hz_and_150hz_components() {
     require(std::abs(bins[150].frequencyHz - 150.0) < 1e-12, "第 150 个频点应对应 150Hz");
     require(bins[50].magnitude > 0.9 && bins[50].magnitude < 1.1, "50Hz 主分量幅值应接近 1");
     require(bins[150].magnitude > 0.4 && bins[150].magnitude < 0.6, "150Hz 分量幅值应接近 0.5");
+    require(std::isfinite(bins[50].phaseDegrees), "50Hz 频点应保留相角");
+    const auto readout = protoscope::plot::findNearestFftBin(frame, 0, 50.2);
+    require(readout.has_value(), "FFT 游标应能吸附到最近频点");
+    require(std::abs(readout->frequencyHz - 50.0) < 1e-12, "50.2Hz 应吸附到 50Hz bin");
     require(frame.channels[0].fundamental.has_value(), "应自动检测到基波");
     require(std::abs(frame.channels[0].fundamental->frequencyHz - 50.0) < 1e-12, "自动基波应为 50Hz");
+}
+
+void test_wave_fft_visible_samples_supports_non_power_of_two() {
+    constexpr double sampleFrequencyHz = 1000.0;
+    constexpr std::size_t pointCount = 1000;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time)
+            + 0.5 * std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
+        samples.push_back({.time = time, .value = value});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::VisibleSamples,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
+                                                          displayData,
+                                                          config,
+                                                          std::vector<std::uint8_t>{1},
+                                                          0.0,
+                                                          1.0,
+                                                          sampleFrequencyHz);
+    require(frame.valid, "非 2^n 可视样本 FFT 应计算成功");
+    require(frame.pointCount == 1000, "VisibleSamples 应吃完整 1000 点");
+    require(std::abs(frame.frequencyResolutionHz - 1.0) < 1e-12, "1000Hz/1000 点应得到 1Hz/bin");
+    require(frame.channels[0].bins.size() == 501, "1000 点实数 FFT 应输出 501 个频点");
+    require(frame.channels[0].bins[50].magnitude > 0.9, "50Hz 峰值应保留");
+    require(frame.channels[0].bins[150].magnitude > 0.4, "150Hz 峰值应保留");
 }
 
 void test_wave_viewport_zoom_modes_and_clamp() {

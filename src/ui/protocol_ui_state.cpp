@@ -60,6 +60,12 @@ std::string fftPointCountStateName(plot::WaveFftPointCount value) {
 }
 
 plot::WaveFftPointCount parseFftPointCount(const std::string& value) {
+    if (value == "Visible" || value == "visible_samples") {
+        return plot::WaveFftPointCount::VisibleSamples;
+    }
+    if (value == "Auto 2^n" || value == "Auto" || value == "auto_power_of_two") {
+        return plot::WaveFftPointCount::Auto;
+    }
     if (value == "256") {
         return plot::WaveFftPointCount::N256;
     }
@@ -81,7 +87,7 @@ plot::WaveFftPointCount parseFftPointCount(const std::string& value) {
     if (value == "16384") {
         return plot::WaveFftPointCount::N16384;
     }
-    return plot::WaveFftPointCount::Auto;
+    return plot::WaveFftPointCount::VisibleSamples;
 }
 
 std::string fftWindowStateName(plot::WaveFftWindow value) {
@@ -196,6 +202,15 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     fftNode["fundamental_mode"] = fftFundamentalModeStateName(view.fft.fundamentalMode);
     fftNode["manual_fundamental_hz"] = view.fft.manualFundamentalHz;
     fftNode["auto_max_point_count"] = view.fft.autoMaxPointCount;
+    fftNode["source_window_valid"] = view.fftSourceWindowValid;
+    fftNode["source_min_time"] = view.fftSourceMinTime;
+    fftNode["source_max_time"] = view.fftSourceMaxTime;
+    fftNode["frequency_min"] = view.fftFrequencyMin;
+    fftNode["frequency_max"] = view.fftFrequencyMax;
+    fftNode["magnitude_min"] = view.fftMagnitudeMin;
+    fftNode["magnitude_max"] = view.fftMagnitudeMax;
+    fftNode["phase_min"] = view.fftPhaseMin;
+    fftNode["phase_max"] = view.fftPhaseMax;
     YAML::Node fftChannelsNode;
     for (std::size_t channelIndex = 0; channelIndex < wave.fftChannelEnabled.size(); ++channelIndex) {
         if (wave.fftChannelEnabled[channelIndex] == 0) {
@@ -282,6 +297,18 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
             parseFftFundamentalMode(fftNode["fundamental_mode"].as<std::string>(fftFundamentalModeStateName(view.fft.fundamentalMode)));
         view.fft.manualFundamentalHz = fftNode["manual_fundamental_hz"].as<double>(view.fft.manualFundamentalHz);
         view.fft.autoMaxPointCount = fftNode["auto_max_point_count"].as<std::size_t>(view.fft.autoMaxPointCount);
+        view.fftSourceWindowValid = fftNode["source_window_valid"].as<bool>(view.fftSourceWindowValid);
+        view.fftSourceMinTime = fftNode["source_min_time"].as<double>(view.fftSourceMinTime);
+        view.fftSourceMaxTime = fftNode["source_max_time"].as<double>(view.fftSourceMaxTime);
+        view.fftFrequencyMin = fftNode["frequency_min"].as<double>(view.fftFrequencyMin);
+        view.fftFrequencyMax = fftNode["frequency_max"].as<double>(view.fftFrequencyMax);
+        view.fftMagnitudeMin = fftNode["magnitude_min"].as<double>(view.fftMagnitudeMin);
+        view.fftMagnitudeMax = fftNode["magnitude_max"].as<double>(view.fftMagnitudeMax);
+        view.fftPhaseMin = fftNode["phase_min"].as<double>(view.fftPhaseMin);
+        view.fftPhaseMax = fftNode["phase_max"].as<double>(view.fftPhaseMax);
+        view.fftViewportInitialized = view.fftFrequencyMax > view.fftFrequencyMin
+            && view.fftMagnitudeMax > view.fftMagnitudeMin
+            && view.fftPhaseMax > view.fftPhaseMin;
         wave.fftChannelEnabled.clear();
         const auto channelsNode = fftNode["channel_enabled"];
         if (channelsNode && channelsNode.IsSequence()) {

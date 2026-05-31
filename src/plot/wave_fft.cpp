@@ -1,5 +1,7 @@
 #include "protoscope/plot/wave_fft.hpp"
 
+#include <pocketfft_hdronly.h>
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -38,41 +40,15 @@ double windowWeight(WaveFftWindow window, std::size_t index, std::size_t count) 
     return 1.0;
 }
 
-void fftInPlace(std::vector<std::complex<double>>& data) {
-    const std::size_t count = data.size();
-    for (std::size_t index = 1, reversed = 0; index < count; ++index) {
-        std::size_t bit = count >> 1;
-        for (; (reversed & bit) != 0; bit >>= 1) {
-            reversed ^= bit;
-        }
-        reversed ^= bit;
-        if (index < reversed) {
-            std::swap(data[index], data[reversed]);
-        }
-    }
-
-    for (std::size_t length = 2; length <= count; length <<= 1) {
-        const double angle = -2.0 * kPi / static_cast<double>(length);
-        const std::complex<double> lengthStep(std::cos(angle), std::sin(angle));
-        for (std::size_t offset = 0; offset < count; offset += length) {
-            std::complex<double> factor(1.0, 0.0);
-            for (std::size_t inner = 0; inner < length / 2; ++inner) {
-                const auto even = data[offset + inner];
-                const auto odd = factor * data[offset + inner + length / 2];
-                data[offset + inner] = even + odd;
-                data[offset + inner + length / 2] = even - odd;
-                factor *= lengthStep;
-            }
-        }
-    }
-}
-
 std::size_t resolvePointCount(WaveFftPointCount pointCount, std::size_t visibleSampleCount, std::size_t autoMaxPointCount) {
-    if (pointCount != WaveFftPointCount::Auto) {
-        return fftPointCountValue(pointCount);
-    }
     if (visibleSampleCount < kMinFftPointCount) {
         return 0;
+    }
+    if (pointCount == WaveFftPointCount::VisibleSamples) {
+        return visibleSampleCount;
+    }
+    if (pointCount != WaveFftPointCount::Auto) {
+        return fftPointCountValue(pointCount);
     }
     const std::size_t maxAuto = (std::max)(kMinFftPointCount, largestPowerOfTwoAtMost(autoMaxPointCount));
     const std::size_t usable = (std::min)(visibleSampleCount, maxAuto);
@@ -84,6 +60,17 @@ double displayMagnitude(double magnitude, WaveFftMagnitudeMode mode) {
         return 20.0 * std::log10((std::max)(magnitude, kMagnitudeFloor));
     }
     return magnitude;
+}
+
+double wrapPhaseDegrees(double radians) {
+    double degrees = radians * 180.0 / kPi;
+    while (degrees > 180.0) {
+        degrees -= 360.0;
+    }
+    while (degrees <= -180.0) {
+        degrees += 360.0;
+    }
+    return degrees;
 }
 
 std::optional<WaveFftPeak> findFundamentalPeak(const std::vector<WaveFftBin>& bins) {
@@ -102,6 +89,19 @@ std::optional<WaveFftPeak> findFundamentalPeak(const std::vector<WaveFftBin>& bi
         return std::nullopt;
     }
     return WaveFftPeak{.frequencyHz = bins[bestIndex].frequencyHz, .magnitude = bestMagnitude, .binIndex = bestIndex};
+}
+
+WaveFftReadout makeReadout(const WaveFftChannelResult& channel, std::size_t binIndex) {
+    const auto& bin = channel.bins[binIndex];
+    return WaveFftReadout{
+        .valid = true,
+        .channelIndex = channel.channelIndex,
+        .binIndex = binIndex,
+        .frequencyHz = bin.frequencyHz,
+        .magnitude = bin.magnitude,
+        .displayMagnitude = bin.displayMagnitude,
+        .phaseDegrees = bin.phaseDegrees,
+    };
 }
 
 } // namespace
@@ -127,6 +127,7 @@ bool operator==(const WaveFftCacheKey& lhs, const WaveFftCacheKey& rhs) {
 
 std::size_t fftPointCountValue(WaveFftPointCount pointCount) {
     switch (pointCount) {
+    case WaveFftPointCount::VisibleSamples:
     case WaveFftPointCount::Auto:
         return 0;
     case WaveFftPointCount::N256:
@@ -149,8 +150,10 @@ std::size_t fftPointCountValue(WaveFftPointCount pointCount) {
 
 const char* fftPointCountName(WaveFftPointCount pointCount) {
     switch (pointCount) {
+    case WaveFftPointCount::VisibleSamples:
+        return "Visible";
     case WaveFftPointCount::Auto:
-        return "Auto";
+        return "Auto 2^n";
     case WaveFftPointCount::N256:
         return "256";
     case WaveFftPointCount::N512:
@@ -166,7 +169,7 @@ const char* fftPointCountName(WaveFftPointCount pointCount) {
     case WaveFftPointCount::N16384:
         return "16384";
     }
-    return "Auto";
+    return "Visible";
 }
 
 const char* fftWindowName(WaveFftWindow window) {
@@ -268,37 +271,54 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
         }
 
         values.erase(values.begin(), values.end() - static_cast<std::ptrdiff_t>(pointCount));
-        std::vector<std::complex<double>> fftData(pointCount);
         double coherentGain = 0.0;
         for (std::size_t index = 0; index < pointCount; ++index) {
             const double weight = windowWeight(config.window, index, pointCount);
             coherentGain += weight;
-            fftData[index] = std::complex<double>(values[index] * weight, 0.0);
+            values[index] *= weight;
         }
         coherentGain /= static_cast<double>(pointCount);
         if (coherentGain <= 0.0 || !std::isfinite(coherentGain)) {
             coherentGain = 1.0;
         }
 
-        fftInPlace(fftData);
+        const std::size_t binCount = pointCount / 2 + 1;
+        std::vector<std::complex<double>> spectrum(binCount);
+        pocketfft::shape_t shape{pointCount};
+        pocketfft::stride_t inputStride{static_cast<std::ptrdiff_t>(sizeof(double))};
+        pocketfft::stride_t outputStride{static_cast<std::ptrdiff_t>(sizeof(std::complex<double>))};
+        pocketfft::r2c<double>(shape,
+                               inputStride,
+                               outputStride,
+                               0,
+                               pocketfft::FORWARD,
+                               values.data(),
+                               spectrum.data(),
+                               1.0,
+                               1);
+
         result.usedSampleCount = pointCount;
         frame.usedSampleCount = (std::max)(frame.usedSampleCount, result.usedSampleCount);
         frame.pointCount = (std::max)(frame.pointCount, pointCount);
         frame.frequencyResolutionHz = sampleFrequencyHz / static_cast<double>(pointCount);
         frame.maxFrequencyHz = sampleFrequencyHz * 0.5;
 
-        const std::size_t binCount = pointCount / 2 + 1;
         result.bins.reserve(binCount);
         for (std::size_t binIndex = 0; binIndex < binCount; ++binIndex) {
-            double magnitude = std::abs(fftData[binIndex]) / (static_cast<double>(pointCount) * coherentGain);
+            const auto complexValue = spectrum[binIndex];
+            double magnitude = std::abs(complexValue) / (static_cast<double>(pointCount) * coherentGain);
             if (binIndex > 0 && binIndex + 1 < binCount) {
                 magnitude *= 2.0;
             }
             const double shownMagnitude = displayMagnitude(magnitude, config.magnitudeMode);
+            const double phaseRadians = std::atan2(complexValue.imag(), complexValue.real());
+            const double phaseDegrees = wrapPhaseDegrees(phaseRadians);
             result.bins.push_back({
                 .frequencyHz = static_cast<double>(binIndex) * frame.frequencyResolutionHz,
                 .magnitude = magnitude,
                 .displayMagnitude = shownMagnitude,
+                .phaseRadians = phaseRadians,
+                .phaseDegrees = phaseDegrees,
             });
             if (result.bins.size() == 1 && frame.channels.empty()) {
                 frame.minDisplayMagnitude = shownMagnitude;
@@ -327,6 +347,64 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
         frame.maxDisplayMagnitude = frame.minDisplayMagnitude + 1.0;
     }
     return frame;
+}
+
+std::optional<WaveFftReadout> findNearestFftBin(const WaveFftFrame& frame,
+                                                std::size_t channelIndex,
+                                                double frequencyHz) {
+    if (channelIndex >= frame.channels.size()) {
+        return std::nullopt;
+    }
+    const auto& channel = frame.channels[channelIndex];
+    if (!channel.valid || channel.bins.empty()) {
+        return std::nullopt;
+    }
+    auto iter = std::lower_bound(channel.bins.begin(),
+                                 channel.bins.end(),
+                                 frequencyHz,
+                                 [](const WaveFftBin& bin, double value) {
+                                     return bin.frequencyHz < value;
+                                 });
+    if (iter == channel.bins.end()) {
+        return makeReadout(channel, channel.bins.size() - 1);
+    }
+    if (iter == channel.bins.begin()) {
+        return makeReadout(channel, 0);
+    }
+    const auto index = static_cast<std::size_t>(std::distance(channel.bins.begin(), iter));
+    const double leftDistance = std::abs(channel.bins[index - 1].frequencyHz - frequencyHz);
+    const double rightDistance = std::abs(channel.bins[index].frequencyHz - frequencyHz);
+    return makeReadout(channel, leftDistance <= rightDistance ? index - 1 : index);
+}
+
+std::optional<WaveFftReadout> findNearestFftBinAcrossChannels(const WaveFftFrame& frame,
+                                                              double frequencyHz,
+                                                              double displayMagnitude,
+                                                              double maxFrequencyDistance,
+                                                              double maxMagnitudeDistance) {
+    std::optional<WaveFftReadout> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (const auto& channel : frame.channels) {
+        if (!channel.enabled || !channel.valid) {
+            continue;
+        }
+        const auto candidate = findNearestFftBin(frame, channel.channelIndex, frequencyHz);
+        if (!candidate.has_value()) {
+            continue;
+        }
+        const double frequencyDistance = std::abs(candidate->frequencyHz - frequencyHz);
+        const double magnitudeDistance = std::abs(candidate->displayMagnitude - displayMagnitude);
+        if (frequencyDistance > maxFrequencyDistance || magnitudeDistance > maxMagnitudeDistance) {
+            continue;
+        }
+        const double score = frequencyDistance / (std::max)(maxFrequencyDistance, 1e-12)
+            + magnitudeDistance / (std::max)(maxMagnitudeDistance, 1e-12);
+        if (score < bestScore) {
+            best = candidate;
+            bestScore = score;
+        }
+    }
+    return best;
 }
 
 } // namespace protoscope::plot

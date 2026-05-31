@@ -80,16 +80,25 @@ void drawFftToolbarSection(plot::WaveDockState& wave) {
     bool enabled = view.fft.enabled;
     if (drawToolbarCheckbox("启用 FFT 频谱模式", &enabled, "启用后主图横坐标切换为频率 Hz，输入数据来自当前可视区。")) {
         view.fft.enabled = enabled;
+        if (enabled) {
+            view.fftSourceMinTime = view.viewMinTime;
+            view.fftSourceMaxTime = view.viewMaxTime;
+            view.fftSourceWindowValid = true;
+            view.fftViewportInitialized = false;
+        } else {
+            view.fftSourceWindowValid = false;
+            view.fftViewportInitialized = false;
+        }
         wave.cachedFftKeyValid = false;
     }
 
-    const char* pointItems[] = {"Auto", "256", "512", "1024", "2048", "4096", "8192", "16384"};
+    const char* pointItems[] = {"全部可视样本", "Auto 2^n", "256", "512", "1024", "2048", "4096", "8192", "16384"};
     int pointIndex = static_cast<int>(view.fft.pointCount);
     if (ImGui::Combo("点数", &pointIndex, pointItems, IM_ARRAYSIZE(pointItems))) {
         view.fft.pointCount = static_cast<plot::WaveFftPointCount>(pointIndex);
         wave.cachedFftKeyValid = false;
     }
-    addItemHelp("点数 N 决定频率分辨率：Δf = Fs / N。Auto 会在当前可视区内选最大可用 2 次幂。");
+    addItemHelp("点数 N 决定频率分辨率：Δf = Fs / N。全部可视样本允许非 2^n 点数，由 pocketfft 计算。");
 
     int autoMaxPointCount = static_cast<int>(view.fft.autoMaxPointCount);
     if (view.fft.pointCount == plot::WaveFftPointCount::Auto
@@ -97,6 +106,20 @@ void drawFftToolbarSection(plot::WaveDockState& wave) {
         view.fft.autoMaxPointCount = static_cast<std::size_t>((std::clamp)(autoMaxPointCount, 256, 16384));
         wave.cachedFftKeyValid = false;
     }
+
+    if (ImGui::Button("刷新输入窗口")) {
+        view.fftSourceMinTime = view.viewMinTime;
+        view.fftSourceMaxTime = view.viewMaxTime;
+        view.fftSourceWindowValid = true;
+        view.fftViewportInitialized = false;
+        wave.cachedFftKeyValid = false;
+    }
+    addItemHelp("重新使用当前时域主视图范围作为 FFT 输入；频域缩放不会改变这个输入窗口。");
+    ImGui::SameLine();
+    if (ImGui::Button("显示全部频谱")) {
+        view.fftFitAllRequested = true;
+    }
+    addItemHelp("重置频率、幅值和相位轴范围，不改变 FFT 输入窗口。");
 
     const char* windowItems[] = {"Rectangular", "Hann", "Hamming", "Blackman-Harris"};
     int windowIndex = static_cast<int>(view.fft.window);
@@ -156,8 +179,14 @@ void drawFftToolbarSection(plot::WaveDockState& wave) {
     const auto& fftFrame = wave.cachedFftFrame;
     ImGui::SeparatorText("频率换算");
     ImGui::Text("Fs: %s", formatMetricText(view.sampleFrequencyHz, "Hz").c_str());
+    if (view.fftSourceWindowValid) {
+        ImGui::Text("输入窗口: %s ~ %s",
+                    formatMetricText(view.fftSourceMinTime, "s").c_str(),
+                    formatMetricText(view.fftSourceMaxTime, "s").c_str());
+    }
     if (fftFrame.valid) {
         ImGui::Text("N: %zu", fftFrame.pointCount);
+        ImGui::Text("N类型: %s", (fftFrame.pointCount & (fftFrame.pointCount - 1U)) == 0U ? "2^n" : "任意点数");
         ImGui::Text("Δf: %s/bin", formatMetricText(fftFrame.frequencyResolutionHz, "Hz").c_str());
         ImGui::Text("显示范围: 0 ~ %s", formatMetricText(fftFrame.maxFrequencyHz, "Hz").c_str());
         ImGui::Text("当前可视区样本: %zu", fftFrame.visibleSampleCount);

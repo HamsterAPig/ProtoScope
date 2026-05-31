@@ -113,6 +113,7 @@ void test_plot_hover_readout_ignores_hidden_channels();
 void test_plot_limited_envelope_edges();
 void test_wave_frequency_parse_and_axis_mapping();
 void test_wave_fft_detects_50hz_and_150hz_components();
+void test_wave_fft_visible_samples_supports_non_power_of_two();
 void test_wave_viewport_zoom_modes_and_clamp();
 void test_wave_overview_viewport_normalize();
 void test_wave_cursor_position_in_viewport();

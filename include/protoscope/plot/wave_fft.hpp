@@ -12,6 +12,7 @@
 namespace protoscope::plot {
 
 enum class WaveFftPointCount {
+    VisibleSamples,
     Auto,
     N256,
     N512,
@@ -41,7 +42,7 @@ enum class WaveFftFundamentalMode {
 
 struct WaveFftConfig {
     bool enabled{false};
-    WaveFftPointCount pointCount{WaveFftPointCount::Auto};
+    WaveFftPointCount pointCount{WaveFftPointCount::VisibleSamples};
     WaveFftWindow window{WaveFftWindow::Hann};
     WaveFftMagnitudeMode magnitudeMode{WaveFftMagnitudeMode::Linear};
     WaveFftFundamentalMode fundamentalMode{WaveFftFundamentalMode::Auto};
@@ -53,6 +54,8 @@ struct WaveFftBin {
     double frequencyHz{0.0};
     double magnitude{0.0};
     double displayMagnitude{0.0};
+    double phaseRadians{0.0};
+    double phaseDegrees{0.0};
 };
 
 struct WaveFftPeak {
@@ -85,9 +88,21 @@ struct WaveFftFrame {
     std::size_t usedSampleCount{0};
     double minDisplayMagnitude{0.0};
     double maxDisplayMagnitude{1.0};
+    double minPhaseDegrees{-180.0};
+    double maxPhaseDegrees{180.0};
     std::optional<double> fundamentalHz;
     std::vector<WaveFftChannelResult> channels;
     std::string message;
+};
+
+struct WaveFftReadout {
+    bool valid{false};
+    std::size_t channelIndex{0};
+    std::size_t binIndex{0};
+    double frequencyHz{0.0};
+    double magnitude{0.0};
+    double displayMagnitude{0.0};
+    double phaseDegrees{0.0};
 };
 
 struct WaveFftCacheKey {
@@ -115,5 +130,13 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
                                double viewMinTime,
                                double viewMaxTime,
                                double sampleFrequencyHz);
+std::optional<WaveFftReadout> findNearestFftBin(const WaveFftFrame& frame,
+                                                std::size_t channelIndex,
+                                                double frequencyHz);
+std::optional<WaveFftReadout> findNearestFftBinAcrossChannels(const WaveFftFrame& frame,
+                                                              double frequencyHz,
+                                                              double displayMagnitude,
+                                                              double maxFrequencyDistance,
+                                                              double maxMagnitudeDistance);
 
 } // namespace protoscope::plot
