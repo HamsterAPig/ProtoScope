@@ -17,6 +17,187 @@
 默认协议模板位于 `protocols/templates`。每个协议目录只要求存在 `main.lua`，
 例如 `protocols/templates/default_protocol/main.lua`。
 
+## UI 布局
+
+脚本通过 `ui()` 声明停靠面板。宿主会在加载脚本时调用它，要求返回 `ProtoDockDescriptor[]`。
+
+最小骨架：
+
+```lua
+function ui()
+  return {
+    {
+      id = "protocol_tools",
+      title = "协议工具",
+      anchor = "left_bottom",
+      tab_group = "protocol_tools",
+      controls = {
+        { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
+        { type = "button", id = "send_once", label = "发送一次" },
+      },
+      layout = {
+        kind = "form",
+        items = {
+          { control = "device_id" },
+          { control = "send_once" },
+        },
+      },
+    },
+  }
+end
+```
+
+### `ui()` 返回值
+
+`ui()` 返回一个数组，每一项都是一个 `DockDescriptor`：
+
+- `id`：停靠面板的稳定标识，必填。
+- `title`：面板标题，必填。
+- `anchor`：默认停靠位置，可选，默认是 `left_bottom`。
+- `tab_group`：分组名，可选。相同 `tab_group` 的 dock 会落到同一个 tab 组里。
+- `controls`：控件列表，必填。
+- `layout`：布局描述，可选。省略时宿主会按 `controls` 的声明顺序逐个渲染。
+
+### `anchor` 和 `tab_group`
+
+`anchor` 支持以下值：
+
+- `left`
+- `left_bottom`
+- `right_top`
+- `right_mid`
+- `right_bottom`
+- `main_bottom`
+
+同一个 `tab_group` 的 dock 会共享同一个锚点，宿主会以该组里第一个 dock 的锚点为准，后续 dock 继承这个锚点。没有显式设置 `tab_group` 时，宿主会用 `id` 作为默认分组名。
+
+### 控件类型
+
+`controls` 里的每个控件都必须提供 `type`、`id`、`label`。`type` 目前支持：
+
+- `button`
+- `input_text`
+- `input_int`
+- `input_float`
+- `checkbox`
+- `combo`
+- `elf_symbol_combo`
+
+常用字段说明：
+
+- `default`：控件默认值，类型要和控件匹配。
+- `options`：`combo` 必填，字符串数组，至少 1 个选项。
+- `debounce_ms`：`elf_symbol_combo` 的输入消抖毫秒数，默认 `150`。
+- `limit`：`elf_symbol_combo` 的候选上限，默认 `64`。
+
+默认值规则：
+
+- `button`：不需要 `default`。
+- `input_text`：默认空字符串。
+- `input_int`：默认 `0`。
+- `input_float`：默认 `0`。
+- `checkbox`：默认 `false`。
+- `combo`：`default` 按 1 开始的索引处理，超范围会被夹到有效区间。
+- `elf_symbol_combo`：`default` 可以直接给 `ProtoElfSymbolValue`，也就是带 `label`、`value`、`type` 的表。
+
+### `layout.kind = 'table'`
+
+`table` 布局适合表格式面板，字段如下：
+
+- `columns`：列数，必须是大于等于 1 的整数。
+- `rows`：行数组，不能为空。
+- `borders`：是否显示边框，可选。
+- `resizable`：是否允许列宽拖拽，可选，默认 `true`。
+- `row_bg`：是否显示隔行底色，可选，默认 `false`。
+- `sizing`：当前仅支持 `stretch`，可选。
+
+每个单元格只能二选一：
+
+- `{ control = "xxx" }`：引用一个已声明控件。
+- `{ spacer = true }`：占位，不渲染控件。
+
+约束：
+
+- `rows` 里的每一行都不能超过 `columns`。
+- 每个控件在整个 `table` 布局里只能出现一次。
+- 所有 `controls` 里的控件都必须被引用到，否则会报错。
+
+示例：
+
+```lua
+layout = {
+  kind = "table",
+  columns = 2,
+  borders = true,
+  resizable = true,
+  row_bg = true,
+  sizing = "stretch",
+  rows = {
+    {
+      { control = "device_id" },
+      { control = "baudrate" },
+    },
+    {
+      { control = "send_once" },
+      { spacer = true },
+    },
+  },
+}
+```
+
+### `layout.kind = 'form'`
+
+`form` 布局适合按说明、分组和折叠组织控件。字段如下：
+
+- `items`：布局项数组，不能为空。
+
+每个 `item` 必须且只能声明一种类型：
+
+- `{ control = "xxx" }`：单个控件。
+- `{ controls = { "a", "b" } }`：同一行并排摆放多个控件。
+- `{ group = "标题", items = { ... } }`：分组标题。
+- `{ collapse = "标题", default_open = true, items = { ... } }`：可折叠分组。
+- `{ separator = true }`：分隔线。
+- `{ text = "说明文字" }`：说明文本。
+
+约束：
+
+- `control` 和 `controls` 引用的控件都必须在 `controls` 里预先声明。
+- 每个控件在整个 `form` 布局里只能出现一次。
+- `group` 和 `collapse` 只支持一层嵌套，不支持递归套娃。
+- `items` 不能为空。
+
+示例：
+
+```lua
+layout = {
+  kind = "form",
+  items = {
+    { text = "先配置连接参数，再点击发送。" },
+    { separator = true },
+    { group = "基础参数", items = {
+      { control = "device_id" },
+      { control = "baudrate" },
+    } },
+    { collapse = "发送动作", default_open = true, items = {
+      { controls = { "send_once", "auto_send" } },
+    } },
+  },
+}
+```
+
+### 默认布局
+
+如果 `layout` 省略，宿主会按 `controls` 的声明顺序逐个渲染控件。这个模式适合快速起步，但不适合想控制排版和分组的协议脚本。
+
+### 常见用法
+
+- 用 `form` 做参数面板，用 `text` 和 `separator` 先说明再输入。
+- 用 `table` 做密集的发送工具栏或调试面板。
+- 把同一功能区的多个 dock 放到同一个 `tab_group`，让它们共享一个停靠区域。
+- 运行控制、参数配置和状态展示可以拆成多个 dock，再用同一个 `tab_group` 合并为选项卡。
+- 需要从 ELF 里搜静态符号时，用 `elf_symbol_combo`；输入较频繁时保留默认 `debounce_ms = 150`，大工程里按需调小 `limit`。
+
 ## 发送模型
 
 发送 API 分成两类：
@@ -261,4 +442,5 @@ proto.plot.push(1, {
 
 - 宿主暴露的 Lua API：同步 `protocols/protoscope_api_manifest.json`，再运行 `python tools/generate_luals_api.py`
 - `stream()` schema 类型：同步 `protocols/stream_types.lua`
+- UI 布局类型、控件字段或 dock 约定：同步 `protocols/protoscope_api_manifest.json`、重新生成 `protocols/protoscope_api.lua`，并更新本 README 的示例。
 - 协议脚本约定、推荐模式或 demo 行为：同步 `protocols/README.md`

@@ -8,12 +8,16 @@ struct ImGuiIO;
 
 namespace protoscope::app { class Application; }
 namespace protoscope::plot {
+struct ViewConfig;
 struct WaveDockState;
+struct WaveLayoutSizes;
 struct WaveViewState;
 struct WaveSnapshot;
 }
 
 namespace protoscope::ui {
+
+struct WaveFrameData;
 
 struct WaveFrameState {
     std::vector<std::size_t> visibleChannelIndices{};
@@ -30,6 +34,13 @@ struct WaveContext {
     const plot::WaveSnapshot& snapshot;
     ImGuiIO& io;
     WaveFrameState& frame;
+    const plot::ViewConfig* config{nullptr};
+    const plot::WaveLayoutSizes* layout{nullptr};
+    WaveFrameData* renderFrame{nullptr};
+    float availableWidth{0.0F};
+    float availableHeight{0.0F};
+    float contentWidth{0.0F};
+    float toolsWidth{0.0F};
 };
 
 } // namespace protoscope::ui

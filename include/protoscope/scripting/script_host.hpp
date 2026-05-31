@@ -25,6 +25,15 @@
 
 namespace protoscope::scripting {
 
+class CodecScriptHostApiModule;
+class ControlScriptHostApiModule;
+class CoreScriptHostApiModule;
+class FileScriptHostApiModule;
+class PlotScriptHostApiModule;
+class StatusScriptHostApiModule;
+class TxScriptHostApiModule;
+class UiScriptHostApiModule;
+
 enum class ControlType {
     Button,
     InputText,
@@ -339,6 +348,8 @@ public:
     std::vector<DialogRequest> drainDialogRequests();
     std::vector<FileDialogRequest> drainFileDialogRequests();
     std::optional<std::uint64_t> nextWakeupAtMs() const;
+    [[nodiscard]] std::optional<StreamBufferDefinition> streamBufferDefinition() const;
+    [[nodiscard]] std::vector<StreamFrameDefinition> streamFrameDefinitions() const;
 
     const std::string& scriptPath() const;
     const std::string& protocolDirectory() const;
@@ -350,6 +361,12 @@ public:
     void setRequestAwaitingCompletion(bool active);
 
 private:
+    sol::state& luaState();
+    sol::state_view luaView();
+    const std::vector<ControlDescriptor>& controlDescriptors() const;
+    const ControlValue* findControlValue(const std::string& id) const;
+    void updateControlValue(const std::string& id, ControlValue value);
+
     void callbackOnOpen(const ScriptHostContext& ctx);
     void callbackOnClose(const ScriptHostContext& ctx);
     void callbackOnError(const ScriptHostContext& ctx, const std::string& message);
@@ -363,14 +380,6 @@ private:
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
 
     void registerLuaApi(sol::table& proto);
-    void registerCoreApi(sol::table& proto);
-    void registerTxApi(sol::table& proto);
-    void registerStatusApi(sol::table& proto);
-    void registerUiApi(sol::table& proto);
-    void registerFileApi(sol::table& proto);
-    void registerPlotApi(sol::table& proto);
-    void registerControlApi(sol::table& proto);
-    void registerCodecApi(sol::table& proto);
 
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
@@ -402,6 +411,15 @@ private:
 
     static std::string valueToString(const ControlValue& value);
     void setLastError(std::string message);
+
+    friend class CodecScriptHostApiModule;
+    friend class ControlScriptHostApiModule;
+    friend class CoreScriptHostApiModule;
+    friend class FileScriptHostApiModule;
+    friend class PlotScriptHostApiModule;
+    friend class StatusScriptHostApiModule;
+    friend class TxScriptHostApiModule;
+    friend class UiScriptHostApiModule;
 
     struct Runtime;
     struct FileHandle;

@@ -23,6 +23,11 @@ struct ReceiveRow {
     std::string message{};
 };
 
+enum class TransferLogDisplayMode {
+    RawChunks,
+    ParsedFrames,
+};
+
 enum class ReceiveRowVisualKind {
     Rx,
     Tx,
@@ -40,11 +45,26 @@ std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex);
 std::string formatReceiveRowSingleLine(const ReceiveRow& row, bool showTimestamps, bool showHex);
 std::string formatReceiveRowsText(std::span<const ReceiveRow> rows, bool showTimestamps, bool showHex);
 
-enum class TransferLogFilter {
+enum class LogStatusFilter {
     All,
     Rx,
     Tx,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Event,
+    ScriptLog,
+    Other,
 };
+
+struct LogFilterState {
+    std::string keyword;
+    LogStatusFilter status{LogStatusFilter::All};
+};
+
+bool matchesLogFilter(const ReceiveRow& row, const LogFilterState& filter, bool includeBytePreview);
+std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview);
 
 struct CommDockState {
     transport::TransportKind kind{transport::TransportKind::TcpClient};
@@ -64,20 +84,28 @@ struct ReceiveDockState {
     bool pauseScroll{false};
     bool showHex{true};
     bool showTimestamps{true};
-    TransferLogFilter filter{TransferLogFilter::All};
+    TransferLogDisplayMode displayMode{TransferLogDisplayMode::RawChunks};
+    LogFilterState filter{};
     std::vector<ReceiveRow> rows;
+    std::vector<ReceiveRow> frameRows;
+    std::uint64_t rowsVersion{0};
+    std::uint64_t frameRowsVersion{0};
 };
 
 struct LogDockState {
     bool pauseScroll{false};
     bool showTimestamps{true};
+    LogFilterState filter{};
     std::vector<ReceiveRow> rows;
+    std::uint64_t rowsVersion{0};
 };
 
 struct ScriptDockState {
     bool pauseScroll{false};
     bool showTimestamps{true};
+    LogFilterState filter{};
     std::vector<ReceiveRow> rows;
+    std::uint64_t rowsVersion{0};
 };
 
 struct SendDockState {
@@ -161,6 +189,8 @@ public:
     void appendScriptRow(ReceiveRow row);
     void clearLogRows();
     void clearScriptRows();
+    void appendTransferFrameRow(ReceiveRow row);
+    void clearTransferFrameRows();
 
 private:
     CommDockState comm_{};

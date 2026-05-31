@@ -3,6 +3,8 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
+#include "protoscope/ui/ui_component.hpp"
+#include "protoscope/ui/ui_host_context.hpp"
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
@@ -10,6 +12,7 @@
 #include <deque>
 #include <filesystem>
 #include <future>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,6 +25,12 @@ struct GLFWwindow;
 
 namespace protoscope::ui {
 
+class IDialogComponent;
+class IDockComponent;
+class IMenuContributor;
+class IUiComponent;
+class WorkspaceController;
+
 class GuiRuntime {
 public:
     GuiRuntime(app::Application& application, const config::ConfigStore& configStore);
@@ -32,10 +41,27 @@ public:
     void shutdown();
 
 private:
+    friend class RuntimeMenuComponent;
+    friend class RuntimeDialogComponent;
+    friend class CommDockComponent;
+    friend class ProtocolDockComponent;
+    friend class LuaDockComponent;
+    friend class LogDockComponent;
+    friend class WorkspaceController;
+
     enum class LogExportTarget {
         Transfer,
         Host,
         Script,
+    };
+
+    struct FilteredLogRowsCache {
+        const std::vector<dock::ReceiveRow>* source{nullptr};
+        std::uint64_t version{0};
+        dock::LogFilterState filter{};
+        bool includeBytePreview{false};
+        float endpointWidth{120.0F};
+        std::vector<const dock::ReceiveRow*> rows;
     };
 
     bool initializeWindow();
@@ -46,12 +72,22 @@ private:
     void shutdownWindow();
 
     void ensureChineseFont();
+    void registerUiComponents();
+    void attachUiComponents();
+    void detachUiComponents();
+    void syncRuntimeState();
+    RuntimeUiContext makeUiContext();
+    void drawRegisteredMenus();
+    void syncRegisteredDialogs();
+    void drawRegisteredDialogs();
+    void drawRegisteredDocks();
     void renderFrame();
     void drawStatusBar();
     void syncDialogQueue();
     void drawDialogs();
     void drawRawCaptureFileDialogs();
     void drawMainMenu();
+    void drawHelpMenu();
     void drawLuaViewMenu();
     void drawCommDock();
     void drawProtocolDock();
@@ -101,6 +137,11 @@ private:
                              bool showTimestamps,
                              bool showHex,
                              std::string_view title);
+    const FilteredLogRowsCache& filteredLogRowsCached(FilteredLogRowsCache& cache,
+                                                      const std::vector<dock::ReceiveRow>& rows,
+                                                      std::uint64_t version,
+                                                      const dock::LogFilterState& filter,
+                                                      bool includeBytePreview);
     void loadElfStaticAddressFromPath(const std::filesystem::path& path);
     void drawElfStaticAddressDialog();
     void refreshWindowTitle();
@@ -123,6 +164,12 @@ private:
     app::Application& application_;
     const config::ConfigStore& configStore_;
     GLFWwindow* window_{nullptr};
+    std::unique_ptr<WorkspaceController> workspaceController_;
+    GuiRuntimeState runtimeState_{};
+    std::vector<std::unique_ptr<IUiComponent>> uiComponents_;
+    std::vector<IMenuContributor*> menuContributors_;
+    std::vector<IDialogComponent*> dialogComponents_;
+    std::vector<IDockComponent*> dockComponents_;
     std::uint64_t lastRenderAtMs_{0};
     std::uint64_t lastAutoSaveAtMs_{0};
     config::FileSnapshot configSnapshot_{};
@@ -144,6 +191,9 @@ private:
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};
+    FilteredLogRowsCache transferLogRowsCache_;
+    FilteredLogRowsCache hostLogRowsCache_;
+    FilteredLogRowsCache scriptLogRowsCache_;
     std::unordered_map<std::string, bool> luaDockVisibility_;
     float transferSendSectionHeight_{210.0F};
     bool aboutDialogRequested_{false};

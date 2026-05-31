@@ -1,6 +1,6 @@
 #pragma once
 
-#include "runtime_ui_context.hpp"
+#include "protoscope/ui/ui_host_context.hpp"
 
 #include <string_view>
 

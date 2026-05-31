@@ -1,6 +1,7 @@
 #include "protoscope/scripting/script_host.hpp"
 
 #include "script_host_api_module.hpp"
+#include "script_host_internal.hpp"
 
 #include <sol/sol.hpp>
 
@@ -15,7 +16,6 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
-#include <functional>
 #include <sstream>
 #include <string_view>
 #include <type_traits>
@@ -54,31 +54,8 @@ std::string ProtoBuffer::toHex(std::size_t maxBytes) const {
     return text;
 }
 
-namespace {
-
 constexpr const char* kDefaultDockId = "protocol";
 constexpr const char* kDefaultDockTitle = "协议动作";
-
-class FunctionScriptHostApiModule final : public IScriptHostApiModule {
-public:
-    using RegisterFn = std::function<void(sol::table&)>;
-
-    FunctionScriptHostApiModule(std::string_view moduleId, RegisterFn registerFn)
-        : moduleId_(moduleId),
-          registerFn_(std::move(registerFn)) {}
-
-    std::string_view id() const override {
-        return moduleId_;
-    }
-
-    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
-        registerFn_(proto);
-    }
-
-private:
-    std::string_view moduleId_;
-    RegisterFn registerFn_;
-};
 
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
@@ -193,15 +170,6 @@ double finiteOrDefault(double value, double fallback) {
     return std::isfinite(value) ? value : fallback;
 }
 
-const ControlDescriptor* findControlDescriptor(const std::vector<ControlDescriptor>& controls, const std::string& id) {
-    for (const auto& control : controls) {
-        if (control.id == id) {
-            return &control;
-        }
-    }
-    return nullptr;
-}
-
 std::string luaTypeName(sol::type type) {
     switch (type) {
     case sol::type::lua_nil:
@@ -221,7 +189,7 @@ std::string luaTypeName(sol::type type) {
     }
 }
 
-std::string serializeLuaObject(const sol::object& object, int depth = 0) {
+std::string serializeLuaObject(const sol::object& object, int depth) {
     if (!object.valid() || object.get_type() == sol::type::lua_nil) {
         return "nil";
     }
@@ -1163,418 +1131,6 @@ std::optional<std::int64_t> luaIntegerValue(const sol::object& object) {
     return std::nullopt;
 }
 
-std::optional<StreamValueType> parseStreamValueType(const std::string& text) {
-    if (text == "u8") return StreamValueType::U8;
-    if (text == "i8") return StreamValueType::I8;
-    if (text == "u16_be") return StreamValueType::U16Be;
-    if (text == "u16_le") return StreamValueType::U16Le;
-    if (text == "i16_be") return StreamValueType::I16Be;
-    if (text == "i16_le") return StreamValueType::I16Le;
-    if (text == "u32_be") return StreamValueType::U32Be;
-    if (text == "u32_le") return StreamValueType::U32Le;
-    if (text == "i32_be") return StreamValueType::I32Be;
-    if (text == "i32_le") return StreamValueType::I32Le;
-    if (text == "f32_be") return StreamValueType::F32Be;
-    if (text == "f32_le") return StreamValueType::F32Le;
-    if (text == "bytes") return StreamValueType::Bytes;
-    return std::nullopt;
-}
-
-bool streamValueTypeCanBeLength(StreamValueType type) {
-    return type != StreamValueType::Bytes && !streamValueTypeIsFloat(type);
-}
-
-std::optional<StreamLengthMeans> parseStreamLengthMeans(const std::string& text) {
-    if (text == "payload") {
-        return StreamLengthMeans::Payload;
-    }
-    if (text == "frame") {
-        return StreamLengthMeans::Frame;
-    }
-    return std::nullopt;
-}
-
-std::optional<StreamCrcType> parseStreamCrcType(const std::string& text) {
-    if (text == "crc16_modbus") {
-        return StreamCrcType::Crc16Modbus;
-    }
-    if (text == "crc16_ccitt_false") {
-        return StreamCrcType::Crc16CcittFalse;
-    }
-    if (text == "crc32_ieee") {
-        return StreamCrcType::Crc32Ieee;
-    }
-    return std::nullopt;
-}
-
-std::optional<StreamCrcOrder> parseStreamCrcOrder(const std::string& text) {
-    if (text == "hi_lo") {
-        return StreamCrcOrder::HiLo;
-    }
-    if (text == "lo_hi") {
-        return StreamCrcOrder::LoHi;
-    }
-    return std::nullopt;
-}
-
-sol::object streamFieldValueToLua(sol::state_view lua, const StreamFieldValue& value) {
-    if (std::holds_alternative<std::int64_t>(value.value)) {
-        return sol::make_object(lua, std::get<std::int64_t>(value.value));
-    }
-    if (std::holds_alternative<double>(value.value)) {
-        return sol::make_object(lua, std::get<double>(value.value));
-    }
-    if (std::holds_alternative<std::vector<std::uint8_t>>(value.value)) {
-        return sol::make_object(lua, makeBytesTable(lua, std::get<std::vector<std::uint8_t>>(value.value)));
-    }
-    if (std::holds_alternative<std::vector<std::int64_t>>(value.value)) {
-        const auto& items = std::get<std::vector<std::int64_t>>(value.value);
-        sol::table table = lua.create_table(static_cast<int>(items.size()), 0);
-        for (std::size_t index = 0; index < items.size(); ++index) {
-            table[index + 1] = items[index];
-        }
-        return sol::make_object(lua, table);
-    }
-
-    const auto& items = std::get<std::vector<double>>(value.value);
-    sol::table table = lua.create_table(static_cast<int>(items.size()), 0);
-    for (std::size_t index = 0; index < items.size(); ++index) {
-        table[index + 1] = items[index];
-    }
-    return sol::make_object(lua, table);
-}
-
-sol::table makeStreamFieldsTable(sol::state_view lua, const StreamFieldMap& fields) {
-    sol::table table = lua.create_table();
-    for (const auto& [name, value] : fields) {
-        table[name] = streamFieldValueToLua(lua, value);
-    }
-    return table;
-}
-
-sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& frame) {
-    sol::table table = lua.create_table();
-    table["name"] = frame.name;
-    table["raw"] = makeBytesTable(lua, frame.raw);
-    table["crc_ok"] = frame.crcOk;
-    const auto fields = makeStreamFieldsTable(lua, frame.fields);
-    table["fields"] = fields;
-    for (const auto& [name, value] : frame.fields) {
-        table[name] = streamFieldValueToLua(lua, value);
-    }
-    return table;
-}
-
-sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& error) {
-    sol::table table = lua.create_table();
-    table["code"] = std::string(streamParseErrorCodeName(error.code));
-    table["message"] = error.message;
-    table["dropped_bytes"] = static_cast<std::int64_t>(error.droppedBytes);
-    if (error.frameName.has_value()) {
-        table["frame_name"] = *error.frameName;
-    }
-    if (!error.raw.empty()) {
-        table["raw"] = makeBytesTable(lua, error.raw);
-    }
-    return table;
-}
-
-struct LoadedStreamSchema {
-    explicit LoadedStreamSchema(StreamBufferDefinition buffer, std::vector<StreamFrameDefinition> frames)
-        : parser(std::move(buffer), std::move(frames)) {}
-
-    FrameStreamParser parser;
-    std::unordered_map<std::string, sol::protected_function> frameCallbacks;
-    sol::protected_function onError;
-};
-
-std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua, std::string& error) {
-    const sol::object streamObject = lua["stream"];
-    if (!streamObject.valid() || streamObject.get_type() == sol::type::lua_nil) {
-        return nullptr;
-    }
-    if (!streamObject.is<sol::protected_function>()) {
-        error = "stream 必须是 function";
-        return nullptr;
-    }
-
-    auto streamFunction = streamObject.as<sol::protected_function>();
-    auto streamResult = streamFunction();
-    if (!streamResult.valid()) {
-        error = "stream() 执行失败: " + protectedCallError(streamResult);
-        return nullptr;
-    }
-
-    const sol::object schemaObject = streamResult.get<sol::object>();
-    if (!schemaObject.valid() || schemaObject.get_type() == sol::type::lua_nil) {
-        return nullptr;
-    }
-    if (!schemaObject.is<sol::table>()) {
-        error = "stream() 必须返回 table";
-        return nullptr;
-    }
-
-    const auto schemaTable = schemaObject.as<sol::table>();
-    StreamBufferDefinition bufferDefinition;
-    if (const sol::object bufferObject = schemaTable["buffer"]; bufferObject.valid() && bufferObject.get_type() != sol::type::lua_nil) {
-        if (!bufferObject.is<sol::table>()) {
-            error = "stream.buffer 必须是 table";
-            return nullptr;
-        }
-        const auto bufferTable = bufferObject.as<sol::table>();
-        if (const auto capacity = luaIntegerValue(bufferTable["capacity"]); capacity.has_value()) {
-            if (*capacity <= 0) {
-                error = "stream.buffer.capacity 必须大于 0";
-                return nullptr;
-            }
-            bufferDefinition.capacity = static_cast<std::size_t>(*capacity);
-        }
-        if (const auto overflow = luaStringField(bufferTable, "overflow"); overflow.has_value()) {
-            if (*overflow != "drop_oldest") {
-                error = "stream.buffer.overflow 目前仅支持 drop_oldest";
-                return nullptr;
-            }
-            bufferDefinition.dropOldest = true;
-        }
-    }
-
-    const sol::object framesObject = schemaTable["frames"];
-    if (!framesObject.valid() || !framesObject.is<sol::table>()) {
-        error = "stream.frames 必须是非空数组";
-        return nullptr;
-    }
-
-    const auto framesTable = framesObject.as<sol::table>();
-    if (framesTable.size() == 0) {
-        error = "stream.frames 不能为空";
-        return nullptr;
-    }
-
-    std::vector<StreamFrameDefinition> frames;
-    frames.reserve(framesTable.size());
-    auto loaded = std::make_unique<LoadedStreamSchema>(bufferDefinition, std::vector<StreamFrameDefinition>{});
-    std::unordered_set<std::string> frameNames;
-
-    for (std::size_t index = 1; index <= framesTable.size(); ++index) {
-        const sol::object frameObject = framesTable[index];
-        if (!frameObject.valid() || !frameObject.is<sol::table>()) {
-            error = "stream.frames 元素必须是 table";
-            return nullptr;
-        }
-        const auto frameTable = frameObject.as<sol::table>();
-
-        StreamFrameDefinition frame;
-        frame.name = frameTable.get_or("name", std::string());
-        if (frame.name.empty()) {
-            error = "stream.frames[].name 不能为空";
-            return nullptr;
-        }
-        if (!frameNames.insert(frame.name).second) {
-            error = "stream.frames[].name 不能重复: " + frame.name;
-            return nullptr;
-        }
-
-        std::string bytesError;
-        const auto header = bytesFromLuaObject(frameTable["header"], bytesError);
-        if (!header.has_value() || header->empty()) {
-            error = "frame.header 必须是非空 byte[]";
-            return nullptr;
-        }
-        frame.header = *header;
-
-        const auto fixedSize = luaIntegerValue(frameTable["size"]);
-        const sol::object lenObject = frameTable["len"];
-        const bool hasLen = lenObject.valid() && lenObject.get_type() != sol::type::lua_nil;
-        if (fixedSize.has_value() == hasLen) {
-            error = "frame.size 与 frame.len 必须二选一";
-            return nullptr;
-        }
-        if (fixedSize.has_value()) {
-            if (*fixedSize <= 0) {
-                error = "frame.size 必须大于 0";
-                return nullptr;
-            }
-            frame.size = static_cast<std::size_t>(*fixedSize);
-        } else {
-            if (!lenObject.is<sol::table>()) {
-                error = "frame.len 必须是 table";
-                return nullptr;
-            }
-            const auto lenTable = lenObject.as<sol::table>();
-            StreamLengthDefinition lenDefinition;
-            const auto offset = luaIntegerValue(lenTable["offset"]);
-            if (!offset.has_value() || *offset <= 0) {
-                error = "frame.len.offset 必须是从 1 开始的正整数";
-                return nullptr;
-            }
-            lenDefinition.offset = static_cast<std::size_t>(*offset - 1);
-
-            const auto typeText = luaStringField(lenTable, "type");
-            if (!typeText.has_value()) {
-                error = "frame.len.type 不能为空";
-                return nullptr;
-            }
-            const auto valueType = parseStreamValueType(*typeText);
-            if (!valueType.has_value() || !streamValueTypeCanBeLength(*valueType)) {
-                error = "frame.len.type 必须是整数类型";
-                return nullptr;
-            }
-            lenDefinition.type = *valueType;
-
-            const auto meansText = luaStringField(lenTable, "means").value_or("payload");
-            const auto means = parseStreamLengthMeans(meansText);
-            if (!means.has_value()) {
-                error = "frame.len.means 仅支持 payload 或 frame";
-                return nullptr;
-            }
-            lenDefinition.means = *means;
-            if (const auto extra = luaIntegerValue(lenTable["extra"]); extra.has_value()) {
-                if (*extra < 0) {
-                    error = "frame.len.extra 不能为负数";
-                    return nullptr;
-                }
-                lenDefinition.extra = static_cast<std::size_t>(*extra);
-            }
-            frame.len = lenDefinition;
-        }
-
-        if (const sol::object crcObject = frameTable["crc"]; crcObject.valid() && crcObject.get_type() != sol::type::lua_nil) {
-            if (crcObject.is<bool>() && !crcObject.as<bool>()) {
-                frame.crc.type = StreamCrcType::None;
-            } else if (crcObject.is<sol::table>()) {
-                const auto crcTable = crcObject.as<sol::table>();
-                const auto crcTypeText = luaStringField(crcTable, "type");
-                if (!crcTypeText.has_value()) {
-                    error = "frame.crc.type 不能为空";
-                    return nullptr;
-                }
-                const auto crcType = parseStreamCrcType(*crcTypeText);
-                if (!crcType.has_value()) {
-                    error = "未知 frame.crc.type: " + *crcTypeText;
-                    return nullptr;
-                }
-                frame.crc.type = *crcType;
-                const auto orderText = luaStringField(crcTable, "order").value_or("lo_hi");
-                const auto order = parseStreamCrcOrder(orderText);
-                if (!order.has_value()) {
-                    error = "frame.crc.order 仅支持 lo_hi 或 hi_lo";
-                    return nullptr;
-                }
-                frame.crc.order = *order;
-            } else {
-                error = "frame.crc 必须是 table 或 false";
-                return nullptr;
-            }
-        }
-
-        if (const sol::object fieldsObject = frameTable["fields"]; fieldsObject.valid() && fieldsObject.get_type() != sol::type::lua_nil) {
-            if (!fieldsObject.is<sol::table>()) {
-                error = "frame.fields 必须是数组";
-                return nullptr;
-            }
-            const auto fieldsTable = fieldsObject.as<sol::table>();
-            frame.fields.reserve(fieldsTable.size());
-            for (std::size_t fieldIndex = 1; fieldIndex <= fieldsTable.size(); ++fieldIndex) {
-                const sol::object fieldObject = fieldsTable[fieldIndex];
-                if (!fieldObject.valid() || !fieldObject.is<sol::table>()) {
-                    error = "frame.fields 元素必须是 table";
-                    return nullptr;
-                }
-                const auto fieldTable = fieldObject.as<sol::table>();
-                StreamFieldDefinition field;
-                field.name = fieldTable.get_or("name", std::string());
-                if (field.name.empty()) {
-                    error = "field.name 不能为空";
-                    return nullptr;
-                }
-
-                const auto typeText = luaStringField(fieldTable, "type");
-                if (!typeText.has_value()) {
-                    error = "field.type 不能为空";
-                    return nullptr;
-                }
-                const auto type = parseStreamValueType(*typeText);
-                if (!type.has_value()) {
-                    error = "未知字段类型: " + *typeText;
-                    return nullptr;
-                }
-                field.type = *type;
-
-                if (const auto offset = luaIntegerValue(fieldTable["offset"]); offset.has_value()) {
-                    if (*offset <= 0) {
-                        error = "field.offset 必须是从 1 开始的正整数";
-                        return nullptr;
-                    }
-                    field.offset = static_cast<std::size_t>(*offset - 1);
-                }
-
-                const sol::object countObject = fieldTable["count"];
-                if (countObject.valid() && countObject.get_type() != sol::type::lua_nil) {
-                    if (const auto count = luaIntegerValue(countObject); count.has_value()) {
-                        if (*count < 0) {
-                            error = "field.count 不能为负数";
-                            return nullptr;
-                        }
-                        field.count.fixed = static_cast<std::size_t>(*count);
-                    } else if (countObject.is<std::string>()) {
-                        field.count.fieldName = countObject.as<std::string>();
-                    } else if (countObject.is<sol::protected_function>()) {
-                        auto countCallback = countObject.as<sol::protected_function>();
-                        field.count.callback = [countCallback](const StreamFieldMap& parsed,
-                                                              std::size_t frameLength,
-                                                              const std::vector<std::uint8_t>& frameBytes,
-                                                              const std::string& fieldName,
-                                                              std::string& callbackError) -> std::optional<std::size_t> {
-                            sol::state_view callbackLua(countCallback.lua_state());
-                            sol::table fieldInfo = callbackLua.create_table();
-                            fieldInfo["name"] = fieldName;
-                            auto result = countCallback(makeStreamFieldsTable(callbackLua, parsed),
-                                                       static_cast<std::int64_t>(frameLength),
-                                                       makeBytesTable(callbackLua, frameBytes),
-                                                       fieldInfo);
-                            if (!result.valid()) {
-                                callbackError = protectedCallError(result);
-                                return std::nullopt;
-                            }
-                            const sol::object countResult = result.get<sol::object>();
-                            const auto count = luaIntegerValue(countResult);
-                            if (!count.has_value() || *count < 0) {
-                                callbackError = "回调未返回非负整数";
-                                return std::nullopt;
-                            }
-                            return static_cast<std::size_t>(*count);
-                        };
-                    } else {
-                        error = "field.count 仅支持整数、字段名或 function";
-                        return nullptr;
-                    }
-                }
-
-                frame.fields.push_back(std::move(field));
-            }
-        }
-
-        const sol::object onFrameObject = frameTable["on_frame"];
-        if (!onFrameObject.valid() || onFrameObject.get_type() == sol::type::lua_nil || !onFrameObject.is<sol::protected_function>()) {
-            error = "frame.on_frame 必须是 function";
-            return nullptr;
-        }
-        loaded->frameCallbacks.emplace(frame.name, onFrameObject.as<sol::protected_function>());
-        frames.push_back(std::move(frame));
-    }
-
-    if (const sol::object onErrorObject = schemaTable["on_error"]; onErrorObject.valid() && onErrorObject.get_type() != sol::type::lua_nil) {
-        if (!onErrorObject.is<sol::protected_function>()) {
-            error = "stream.on_error 必须是 function";
-            return nullptr;
-        }
-        loaded->onError = onErrorObject.as<sol::protected_function>();
-    }
-
-    loaded->parser = FrameStreamParser(bufferDefinition, std::move(frames));
-    return loaded;
-}
-
 std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& error) {
     if (!object.is<sol::table>()) {
         error = "plot.setup 参数必须是 table";
@@ -1667,40 +1223,50 @@ std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object
     return request;
 }
 
-} // namespace
+const ControlDescriptor* findControlDescriptor(const std::vector<ControlDescriptor>& controls, const std::string& id) {
+    for (const auto& control : controls) {
+        if (control.id == id) {
+            return &control;
+        }
+    }
+    return nullptr;
+}
 
-struct ScriptHost::Runtime {
-    sol::state lua;
-    std::unique_ptr<LoadedStreamSchema> stream;
-};
+namespace script_host_lua {
 
-struct ScriptHost::FileHandle {
-    std::uint64_t id{0};
-    std::filesystem::path path;
-    std::fstream stream;
-    bool readable{false};
-    bool writable{false};
-    std::uint64_t bytesWritten{0};
-};
+std::string serializeLuaObject(const sol::object& object, int depth) {
+    return protoscope::scripting::serializeLuaObject(object, depth);
+}
 
-struct ScriptHost::AuthorizedPath {
-    std::filesystem::path path;
-    bool recursive{false};
-    bool readable{true};
-    bool writable{true};
-};
+const ControlDescriptor* findControlDescriptor(const std::vector<ControlDescriptor>& controls, const std::string& id) {
+    return protoscope::scripting::findControlDescriptor(controls, id);
+}
 
-struct ScriptHost::FileSendJob {
-    std::uint64_t id{0};
-    std::uint64_t handleId{0};
-    TxRequestKind kind{TxRequestKind::Send};
-    std::string tag;
-    std::size_t chunkSize{0};
-    std::uint64_t total{0};
-    std::uint64_t nextOffset{0};
-    std::size_t inflight{0};
-    bool eof{false};
-};
+std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descriptor,
+                                                const sol::object& object,
+                                                std::string& error) {
+    return protoscope::scripting::controlValueFromLua(descriptor, object, error);
+}
+
+sol::object controlValueToLua(sol::state_view lua,
+                              const ControlDescriptor* descriptor,
+                              const ControlValue& value) {
+    return protoscope::scripting::controlValueToLua(lua, descriptor, value);
+}
+
+std::optional<std::vector<std::uint8_t>> bytesFromLuaObject(const sol::object& object, std::string& error) {
+    return protoscope::scripting::bytesFromLuaObject(object, error);
+}
+
+std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& error) {
+    return protoscope::scripting::parsePlotSetup(object, error);
+}
+
+std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object, std::string& error) {
+    return protoscope::scripting::parsePlotAppend(object, error);
+}
+
+} // namespace script_host_lua
 
 ScriptHost::ScriptHost()
     : runtime_(std::make_unique<Runtime>()) {}
@@ -1711,115 +1277,18 @@ void ScriptHost::setFileIoConfig(FileIoConfig config) {
     fileIoConfig_ = std::move(config);
 }
 
-bool ScriptHost::loadScriptFile(const std::string& path) {
-    resetRuntime();
-
-    scriptPath_ = path;
-    const std::filesystem::path filePath(path);
-    protocolDirectory_ = filePath.parent_path().generic_string();
-
-    if (path.empty()) {
-        setLastError("脚本路径为空");
-        protoLog("error", lastError_);
-        return false;
+std::optional<StreamBufferDefinition> ScriptHost::streamBufferDefinition() const {
+    if (!runtime_ || !runtime_->stream) {
+        return std::nullopt;
     }
-
-    if (!std::filesystem::exists(filePath)) {
-        setLastError("未找到脚本文件: " + path);
-        protoLog("error", lastError_);
-        return false;
-    }
-
-    runtime_ = std::make_unique<Runtime>();
-    runtime_->lua.open_libraries(
-        sol::lib::base,
-        sol::lib::math,
-        sol::lib::package,
-        sol::lib::string,
-        sol::lib::table,
-        sol::lib::utf8,
-        sol::lib::os);
-
-    auto& lua = runtime_->lua;
-    lua.new_usertype<ProtoBuffer>("ProtoBuffer",
-                                  "size",
-                                  &ProtoBuffer::size,
-                                  "slice",
-                                  &ProtoBuffer::slice,
-                                  "to_hex",
-                                  &ProtoBuffer::toHex,
-                                  "bytes",
-                                  [this](const ProtoBuffer& buffer, const sol::object& maxBytes) {
-                                      std::size_t limit = buffer.bytes.size();
-                                      if (maxBytes.valid() && maxBytes.get_type() != sol::type::lua_nil && maxBytes.is<int>()) {
-                                          limit = std::min<std::size_t>(limit, static_cast<std::size_t>(std::max(0, maxBytes.as<int>())));
-                                      }
-                                      limit = std::min(limit, fileIoConfig_.maxChunkBytes);
-                                      sol::table table = runtime_->lua.create_table(static_cast<int>(limit), 0);
-                                      for (std::size_t index = 0; index < limit; ++index) {
-                                          table[index + 1] = buffer.bytes[index];
-                                      }
-                                      return table;
-                                  });
-
-    // 将协议脚本目录加入 Lua 模块搜索路径，使 main.lua 可 require 同目录模块。
-    // 额外放开父目录，方便 protocols/<demo>/main.lua 共享 protocols/*.lua 公共脚本。
-    // 使用 generic_string 格式，统一为 /，避免 Windows 反斜杠干扰 Lua package.path。
-    const auto pkgPath = lua["package"]["path"].get<std::string>();
-    const auto protocolParent = std::filesystem::path(protocolDirectory_).parent_path().generic_string();
-    lua["package"]["path"] = protocolDirectory_ + "/?.lua;"
-                           + protocolDirectory_ + "/?/init.lua;"
-                           + (protocolParent.empty() ? std::string() : protocolParent + "/?.lua;")
-                           + (protocolParent.empty() ? std::string() : protocolParent + "/?/init.lua;")
-                           + pkgPath;
-    auto proto = lua.create_named_table("proto");
-
-    // 核心流程：所有脚本侧能力统一经由模块注册器挂到 proto.*，避免加载流程继续膨胀。
-    registerLuaApi(proto);
-
-    auto scriptResult = lua.safe_script_file(path, &sol::script_pass_on_error);
-    if (!scriptResult.valid()) {
-        setLastError("执行脚本失败: " + protectedCallError(scriptResult));
-        protoLog("error", lastError_);
-        return false;
-    }
-
-    std::string streamError;
-    auto streamSchema = parseLoadedStreamSchema(lua, streamError);
-    if (!streamError.empty()) {
-        setLastError(streamError);
-        protoLog("error", lastError_);
-        return false;
-    }
-    runtime_->stream = std::move(streamSchema);
-
-    std::string parseError;
-    const auto parsedDocks = parseDockDescriptors(lua, parseError);
-    if (!parsedDocks.has_value()) {
-        setLastError(parseError);
-        protoLog("error", lastError_);
-        return false;
-    }
-
-    docks_ = *parsedDocks;
-    controls_.clear();
-    std::unordered_map<std::string, ControlValue> nextControlValues;
-    for (const auto& dock : docks_) {
-        for (const auto& control : dock.controls) {
-            controls_.push_back(control);
-            const auto existing = controlValues_.find(control.id);
-            nextControlValues[control.id] = existing == controlValues_.end() ? defaultValueFor(control) : existing->second;
-        }
-    }
-    controlValues_ = std::move(nextControlValues);
-    lastError_.clear();
-    scriptLoaded_ = true;
-    return true;
+    return runtime_->stream->parser.bufferDefinition();
 }
 
-bool ScriptHost::loadProtocolDirectory(const std::string& directory) {
-    const auto path = std::filesystem::path(directory) / "main.lua";
-    return loadScriptFile(path.generic_string());
+std::vector<StreamFrameDefinition> ScriptHost::streamFrameDefinitions() const {
+    if (!runtime_ || !runtime_->stream) {
+        return {};
+    }
+    return runtime_->stream->parser.frameDefinitions();
 }
 
 void ScriptHost::resetRuntime() {
@@ -2027,221 +1496,20 @@ void ScriptHost::registerLuaApi(sol::table& proto) {
     ScriptHostQueues queues;
     ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_};
     std::array modules{
-        FunctionScriptHostApiModule{"core_api_module", [this](sol::table& table) { registerCoreApi(table); }},
-        FunctionScriptHostApiModule{"tx_api_module", [this](sol::table& table) { registerTxApi(table); }},
-        FunctionScriptHostApiModule{"status_api_module", [this](sol::table& table) { registerStatusApi(table); }},
-        FunctionScriptHostApiModule{"ui_api_module", [this](sol::table& table) { registerUiApi(table); }},
-        FunctionScriptHostApiModule{"file_api_module", [this](sol::table& table) { registerFileApi(table); }},
-        FunctionScriptHostApiModule{"plot_api_module", [this](sol::table& table) { registerPlotApi(table); }},
-        FunctionScriptHostApiModule{"control_api_module", [this](sol::table& table) { registerControlApi(table); }},
-        FunctionScriptHostApiModule{"codec_api_module", [this](sol::table& table) { registerCodecApi(table); }},
+        makeCoreApiModule(*this),
+        makeTxApiModule(*this),
+        makeStatusApiModule(*this),
+        makeUiApiModule(*this),
+        makeFileApiModule(*this),
+        makePlotApiModule(*this),
+        makeControlApiModule(*this),
+        makeCodecApiModule(*this),
     };
 
-    // 核心流程：统一从 API 模块列表注册 Lua 函数，保持 wire format 不变，只收束宿主内部编排边界。
+    // 核心流程：宿主只编排模块顺序，具体 Lua wire format 由各 API 模块原样注册。
     for (auto& module : modules) {
-        module.registerApi(ctx, proto);
+        module->registerApi(ctx, proto);
     }
-}
-
-void ScriptHost::registerCoreApi(sol::table& proto) {
-    proto.set_function("log", [this](const std::string& level, const std::string& message) {
-        protoLog(level, message);
-    });
-    proto.set_function("emit", [this](const std::string& name, const sol::object& payload) {
-        protoEmit(name, serializeLuaObject(payload));
-    });
-    proto.set_function("set_timer", [this](const std::string& name, std::uint64_t delayMs) {
-        protoSetTimer(name, delayMs);
-    });
-    proto.set_function("cancel_timer", [this](const std::string& name) {
-        protoCancelTimer(name);
-    });
-}
-
-void ScriptHost::registerTxApi(sol::table& proto) {
-    proto.set_function("send", [this](const sol::object& payload, const sol::object& opts) {
-        std::string error;
-        const auto request = protoSendLike(TxRequestKind::Send, payload, opts, error);
-        if (!request.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    proto.set_function("request", [this](const sol::object& payload, const sol::object& opts) {
-        std::string error;
-        const auto request = protoSendLike(TxRequestKind::Request, payload, opts, error);
-        if (!request.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    proto.set_function("request_done", [this](const sol::object& result) {
-        std::string error;
-        if (protoRequestDone(result, error)) {
-            return std::make_tuple(sol::make_object(runtime_->lua, true),
-                                   sol::make_object(runtime_->lua, sol::lua_nil));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, false),
-                               sol::make_object(runtime_->lua, error));
-    });
-}
-
-void ScriptHost::registerStatusApi(sol::table& proto) {
-    sol::table statusApi = runtime_->lua.create_table();
-    statusApi.set_function("set", [this](const std::string& text, const sol::object& opts) {
-        protoStatusSet(text, opts);
-    });
-    statusApi.set_function("clear", [this]() {
-        protoStatusClear();
-    });
-    proto["status"] = statusApi;
-}
-
-void ScriptHost::registerUiApi(sol::table& proto) {
-    sol::table uiApi = runtime_->lua.create_table();
-    uiApi.set_function("alert", [this](const sol::object& opts) {
-        std::string error;
-        const auto dialog = protoDialog(DialogKind::Alert, opts, error);
-        if (!dialog.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, dialog->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    uiApi.set_function("confirm", [this](const sol::object& opts) {
-        std::string error;
-        const auto dialog = protoDialog(DialogKind::Confirm, opts, error);
-        if (!dialog.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, dialog->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    proto["ui"] = uiApi;
-}
-
-void ScriptHost::registerFileApi(sol::table& proto) {
-    sol::table fsApi = runtime_->lua.create_table();
-    fsApi.set_function("open_file_dialog", [this](const sol::object& opts) {
-        std::string error;
-        const auto request = protoFileDialog(FileDialogKind::OpenFile, opts, error);
-        if (!request.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    fsApi.set_function("open_dir_dialog", [this](const sol::object& opts) {
-        std::string error;
-        const auto request = protoFileDialog(FileDialogKind::OpenDir, opts, error);
-        if (!request.has_value()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil),
-                                   sol::make_object(runtime_->lua, error));
-        }
-        return std::make_tuple(sol::make_object(runtime_->lua, request->id),
-                               sol::make_object(runtime_->lua, sol::lua_nil));
-    });
-    fsApi.set_function("open", [this](const std::string& path, const sol::object& opts) {
-        return protoFsOpen(path, opts);
-    });
-    fsApi.set_function("read", [this](std::uint64_t handle, const sol::object& opts) {
-        return protoFsRead(handle, opts);
-    });
-    fsApi.set_function("write", [this](std::uint64_t handle, const sol::object& payload) {
-        return protoFsWrite(handle, payload);
-    });
-    fsApi.set_function("close", [this](std::uint64_t handle) {
-        return protoFsClose(handle);
-    });
-    fsApi.set_function("stat", [this](const std::string& path) {
-        return protoFsStat(path);
-    });
-    fsApi.set_function("send_file", [this](const std::string& path, const sol::object& opts) {
-        return protoFsSendFile(path, opts);
-    });
-    proto["fs"] = fsApi;
-}
-
-void ScriptHost::registerPlotApi(sol::table& proto) {
-    sol::table plotApi = runtime_->lua.create_table();
-    plotApi.set_function("setup", [this](const sol::object& payload) {
-        std::string error;
-        const auto setup = parsePlotSetup(payload, error);
-        if (!setup.has_value()) {
-            protoLog("error", "proto.plot.setup 调用失败: " + error);
-            return;
-        }
-        protoPlotSetup(*setup);
-    });
-    plotApi.set_function("push", [this](int channelIndex, const sol::object& payload) {
-        if (channelIndex <= 0) {
-            protoLog("error", "proto.plot.push 调用失败: channelIndex 必须从 1 开始");
-            return;
-        }
-        std::string error;
-        const auto request = parsePlotAppend(payload, error);
-        if (!request.has_value()) {
-            protoLog("error", "proto.plot.push 调用失败: " + error);
-            return;
-        }
-        protoPlotPush(static_cast<std::size_t>(channelIndex - 1), *request);
-    });
-    proto["plot"] = plotApi;
-}
-
-void ScriptHost::registerControlApi(sol::table& proto) {
-    proto.set_function("get_control", [this](const std::string& id) {
-        sol::state_view view(runtime_->lua.lua_state());
-        const auto iter = controlValues_.find(id);
-        if (iter == controlValues_.end()) {
-            return sol::make_object(view, sol::lua_nil);
-        }
-        return controlValueToLua(view, findControlDescriptor(controls_, id), iter->second);
-    });
-    proto.set_function("set_control", [this](const std::string& id, const sol::object& value) {
-        const auto* descriptor = findControlDescriptor(controls_, id);
-        if (descriptor == nullptr) {
-            protoLog("warn", "proto.set_control 未找到控件: " + id);
-            return;
-        }
-        std::string error;
-        const auto converted = controlValueFromLua(*descriptor, value, error);
-        if (!converted.has_value()) {
-            protoLog("warn", "proto.set_control 调用失败: " + error);
-            return;
-        }
-        controlValues_[id] = *converted;
-    });
-}
-
-void ScriptHost::registerCodecApi(sol::table& proto) {
-    sol::table bitsApi = runtime_->lua.create_table();
-    bitsApi.set_function("count", [](std::uint32_t value) {
-        return std::popcount(value);
-    });
-    proto["bits"] = bitsApi;
-    proto.set_function("crc16_modbus", [](const sol::object& payload) -> std::uint16_t {
-        std::string error;
-        const auto bytes = bytesFromLuaObject(payload, error);
-        return bytes.has_value() ? protocol_utils::crc16Modbus(*bytes) : 0U;
-    });
-    proto.set_function("crc16_ccitt_false", [](const sol::object& payload) -> std::uint16_t {
-        std::string error;
-        const auto bytes = bytesFromLuaObject(payload, error);
-        return bytes.has_value() ? protocol_utils::crc16CcittFalse(*bytes) : 0U;
-    });
-    proto.set_function("crc32_ieee", [](const sol::object& payload) -> std::uint32_t {
-        std::string error;
-        const auto bytes = bytesFromLuaObject(payload, error);
-        return bytes.has_value() ? protocol_utils::crc32Ieee(*bytes) : 0U;
-    });
 }
 
 std::optional<std::uint64_t> ScriptHost::nextWakeupAtMs() const {
@@ -2310,180 +1578,25 @@ void ScriptHost::setRequestAwaitingCompletion(bool active) {
     requestAwaitingCompletion_ = active;
 }
 
-void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
-    if (!scriptLoaded_) {
-        return;
-    }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_open"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection));
-    if (!result.valid()) {
-        protoLog("error", "on_open 执行失败: " + protectedCallError(result));
-    }
+sol::state& ScriptHost::luaState() {
+    return runtime_->lua;
 }
 
-void ScriptHost::callbackOnClose(const ScriptHostContext& ctx) {
-    if (!scriptLoaded_) {
-        return;
-    }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_close"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection));
-    if (!result.valid()) {
-        protoLog("error", "on_close 执行失败: " + protectedCallError(result));
-    }
+sol::state_view ScriptHost::luaView() {
+    return sol::state_view(runtime_->lua.lua_state());
 }
 
-void ScriptHost::callbackOnError(const ScriptHostContext& ctx, const std::string& message) {
-    if (!scriptLoaded_) {
-        return;
-    }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_error"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), message);
-    if (!result.valid()) {
-        protoLog("error", "on_error 执行失败: " + protectedCallError(result));
-    }
+const std::vector<ControlDescriptor>& ScriptHost::controlDescriptors() const {
+    return controls_;
 }
 
-void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes) {
-    if (!scriptLoaded_) {
-        return;
-    }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_bytes"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeBytesTable(view, bytes));
-    if (!result.valid()) {
-        protoLog("error", "on_bytes 执行失败: " + protectedCallError(result));
-    }
+const ControlValue* ScriptHost::findControlValue(const std::string& id) const {
+    const auto iter = controlValues_.find(id);
+    return iter == controlValues_.end() ? nullptr : &iter->second;
 }
 
-void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame) {
-    if (!scriptLoaded_ || !runtime_->stream) {
-        return;
-    }
-
-    const auto callbackIter = runtime_->stream->frameCallbacks.find(frame.name);
-    if (callbackIter == runtime_->stream->frameCallbacks.end()) {
-        return;
-    }
-
-    sol::state_view view(runtime_->lua.lua_state());
-    auto callback = callbackIter->second;
-    auto result = callback(makeContextTable(view, ctx.connection), makeStreamFrameTable(view, frame));
-    if (!result.valid()) {
-        protoLog("error", "stream.on_frame 执行失败: " + protectedCallError(result));
-    }
-}
-
-void ScriptHost::callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error) {
-    if (!scriptLoaded_ || !runtime_->stream || !runtime_->stream->onError.valid()) {
-        return;
-    }
-
-    sol::state_view view(runtime_->lua.lua_state());
-    auto callback = runtime_->stream->onError;
-    auto result = callback(makeContextTable(view, ctx.connection), makeStreamErrorTable(view, error));
-    if (!result.valid()) {
-        protoLog("error", "stream.on_error 执行失败: " + protectedCallError(result));
-    }
-}
-
-void ScriptHost::callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName) {
-    if (!scriptLoaded_) {
-        return;
-    }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_timer"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), timerName);
-    if (!result.valid()) {
-        protoLog("error", "on_timer 执行失败: " + protectedCallError(result));
-    }
-}
-
-void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value) {
-    if (!scriptLoaded_) {
-        return;
-    }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_control"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result =
-        callback(makeContextTable(view, ctx.connection), id, controlValueToLua(view, findControlDescriptor(controls_, id), value));
-    if (!result.valid()) {
-        protoLog("error", "on_control 执行失败: " + protectedCallError(result));
-    }
-}
-
-void ScriptHost::callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event) {
-    if (!scriptLoaded_) {
-        return;
-    }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_tx"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeTxEventTable(view, event));
-    if (!result.valid()) {
-        protoLog("error", "on_tx 执行失败: " + protectedCallError(result));
-    }
-}
-
-void ScriptHost::callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event) {
-    if (!scriptLoaded_) {
-        return;
-    }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_dialog"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeDialogEventTable(view, event));
-    if (!result.valid()) {
-        protoLog("error", "on_dialog 执行失败: " + protectedCallError(result));
-    }
-}
-
-void ScriptHost::callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event) {
-    if (!scriptLoaded_) {
-        return;
-    }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_file_dialog"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeFileDialogEventTable(view, event));
-    if (!result.valid()) {
-        protoLog("error", "on_file_dialog 执行失败: " + protectedCallError(result));
-    }
+void ScriptHost::updateControlValue(const std::string& id, ControlValue value) {
+    controlValues_[id] = std::move(value);
 }
 
 std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
@@ -2684,293 +1797,6 @@ std::optional<FileDialogRequest> ScriptHost::protoFileDialog(FileDialogKind kind
 
     fileDialogRequests_.push_back(request);
     return request;
-}
-
-std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(const std::string& pathText, const sol::object& opts) {
-    auto fail = [this](const std::string& error) {
-        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, error));
-    };
-    if (!fileIoConfig_.enabled) {
-        return fail("scripting.file_io 已禁用");
-    }
-    if (fileHandles_.size() >= fileIoConfig_.maxOpenFiles) {
-        return fail("打开文件数超过 max_open_files");
-    }
-
-    std::string mode = "read";
-    bool createDirs = false;
-    bool overwrite = false;
-    if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
-        if (!opts.is<sol::table>()) {
-            return fail("opts 必须是 table");
-        }
-        const auto table = opts.as<sol::table>();
-        mode = luaStringField(table, "mode").value_or(mode);
-        createDirs = luaBoolField(table, "create_dirs").value_or(false);
-        overwrite = luaBoolField(table, "overwrite").value_or(false);
-    }
-    const bool writeMode = mode == "write" || mode == "append";
-    const bool readMode = mode == "read";
-    if (!readMode && !writeMode) {
-        return fail("mode 必须是 read/write/append");
-    }
-
-    auto path = std::filesystem::path(pathText);
-    if (path.is_relative() && !protocolDirectory_.empty()) {
-        path = std::filesystem::path(protocolDirectory_) / path;
-    }
-    path = canonicalPath(path);
-
-    auto authorized = [&](bool writeAccess) {
-        if (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty()
-            && isSameOrChildPath(canonicalPath(protocolDirectory_), path, true)) {
-            return true;
-        }
-        for (const auto& root : fileIoConfig_.extraAllowedRoots) {
-            if (!root.empty() && isSameOrChildPath(canonicalPath(root), path, true)) {
-                return true;
-            }
-        }
-        for (const auto& root : dialogAuthorizedPaths_) {
-            if ((!writeAccess || root.writable) && (writeAccess || root.readable)
-                && isSameOrChildPath(root.path, path, root.recursive)) {
-                return true;
-            }
-        }
-        return false;
-    };
-    if (!authorized(writeMode)) {
-        return fail("路径未授权: " + path.generic_string());
-    }
-
-    std::error_code errorCode;
-    if (readMode) {
-        if (!std::filesystem::is_regular_file(path, errorCode)) {
-            return fail("文件不存在或不是普通文件: " + path.generic_string());
-        }
-        if (std::filesystem::file_size(path, errorCode) > fileIoConfig_.maxFileSizeBytes) {
-            return fail("文件大小超过 max_file_size_bytes");
-        }
-    } else {
-        if (createDirs) {
-            std::filesystem::create_directories(path.parent_path(), errorCode);
-            if (errorCode) {
-                return fail("创建目录失败: " + errorCode.message());
-            }
-        }
-        if (mode == "write" && std::filesystem::exists(path, errorCode) && !overwrite) {
-            return fail("文件已存在，需设置 overwrite=true");
-        }
-    }
-
-    auto handle = std::make_unique<FileHandle>();
-    handle->id = nextFileHandleId();
-    handle->path = path;
-    handle->readable = readMode;
-    handle->writable = writeMode;
-    auto openMode = std::ios::binary;
-    if (readMode) {
-        openMode |= std::ios::in;
-    } else {
-        openMode |= std::ios::out;
-        openMode |= mode == "append" ? std::ios::app : std::ios::trunc;
-    }
-    handle->stream.open(path, openMode);
-    if (!handle->stream.is_open()) {
-        return fail("打开文件失败: " + path.generic_string());
-    }
-
-    const auto id = handle->id;
-    fileHandles_[id] = std::move(handle);
-    return std::make_tuple(sol::make_object(runtime_->lua, id), sol::make_object(runtime_->lua, sol::lua_nil));
-}
-
-std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(std::uint64_t handleId, const sol::object& opts) {
-    auto fail = [this](const std::string& error) {
-        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, error));
-    };
-    const auto iter = fileHandles_.find(handleId);
-    if (iter == fileHandles_.end() || !iter->second->readable) {
-        return fail("文件句柄不可读或已关闭");
-    }
-
-    std::size_t maxBytes = fileIoConfig_.defaultChunkBytes;
-    if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
-        if (!opts.is<sol::table>()) {
-            return fail("opts 必须是 table");
-        }
-        const sol::object value = opts.as<sol::table>()["max_bytes"];
-        if (value.valid() && value.is<int>()) {
-            maxBytes = static_cast<std::size_t>(std::max(1, value.as<int>()));
-        }
-    }
-    maxBytes = std::min(positiveSizeOrDefault(maxBytes, fileIoConfig_.defaultChunkBytes), fileIoConfig_.maxChunkBytes);
-
-    ProtoBuffer buffer;
-    buffer.bytes.resize(maxBytes);
-    auto& stream = iter->second->stream;
-    stream.read(reinterpret_cast<char*>(buffer.bytes.data()), static_cast<std::streamsize>(buffer.bytes.size()));
-    const auto readCount = stream.gcount();
-    if (readCount <= 0) {
-        return fail("eof");
-    }
-    buffer.bytes.resize(static_cast<std::size_t>(readCount));
-    return std::make_tuple(sol::make_object(runtime_->lua, std::move(buffer)), sol::make_object(runtime_->lua, sol::lua_nil));
-}
-
-std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(std::uint64_t handleId, const sol::object& payload) {
-    auto fail = [this](const std::string& error) {
-        return std::make_tuple(sol::make_object(runtime_->lua, false), sol::make_object(runtime_->lua, error));
-    };
-    const auto iter = fileHandles_.find(handleId);
-    if (iter == fileHandles_.end() || !iter->second->writable) {
-        return fail("文件句柄不可写或已关闭");
-    }
-    std::string error;
-    const auto bytes = bytesFromLuaObject(payload, error);
-    if (!bytes.has_value()) {
-        return fail(error);
-    }
-    auto& handle = *iter->second;
-    if (handle.bytesWritten + bytes->size() > fileIoConfig_.maxWriteFileSizeBytes) {
-        return fail("写入大小超过 max_write_file_size_bytes");
-    }
-    handle.stream.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
-    if (!handle.stream.good()) {
-        return fail("写入文件失败");
-    }
-    handle.bytesWritten += bytes->size();
-    return std::make_tuple(sol::make_object(runtime_->lua, true), sol::make_object(runtime_->lua, sol::lua_nil));
-}
-
-std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(std::uint64_t handleId) {
-    const auto iter = fileHandles_.find(handleId);
-    if (iter == fileHandles_.end()) {
-        return std::make_tuple(sol::make_object(runtime_->lua, false), sol::make_object(runtime_->lua, "文件句柄已关闭"));
-    }
-    fileHandles_.erase(iter);
-    return std::make_tuple(sol::make_object(runtime_->lua, true), sol::make_object(runtime_->lua, sol::lua_nil));
-}
-
-std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(const std::string& pathText) {
-    auto fail = [this](const std::string& error) {
-        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, error));
-    };
-    if (!fileIoConfig_.enabled) {
-        return fail("scripting.file_io 已禁用");
-    }
-    auto path = std::filesystem::path(pathText);
-    if (path.is_relative() && !protocolDirectory_.empty()) {
-        path = std::filesystem::path(protocolDirectory_) / path;
-    }
-    path = canonicalPath(path);
-    const bool authorized = (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty()
-                             && isSameOrChildPath(canonicalPath(protocolDirectory_), path, true))
-        || std::any_of(fileIoConfig_.extraAllowedRoots.begin(),
-                       fileIoConfig_.extraAllowedRoots.end(),
-                       [&](const std::string& root) {
-                           return !root.empty() && isSameOrChildPath(canonicalPath(root), path, true);
-                       })
-        || std::any_of(dialogAuthorizedPaths_.begin(),
-                       dialogAuthorizedPaths_.end(),
-                       [&](const AuthorizedPath& root) {
-                           return root.readable && isSameOrChildPath(root.path, path, root.recursive);
-                       });
-    if (!authorized) {
-        return fail("路径未授权: " + path.generic_string());
-    }
-
-    std::error_code errorCode;
-    if (!std::filesystem::exists(path, errorCode)) {
-        return fail("路径不存在: " + path.generic_string());
-    }
-    sol::table table = runtime_->lua.create_table();
-    table["size"] = std::filesystem::is_regular_file(path, errorCode)
-        ? static_cast<std::uint64_t>(std::filesystem::file_size(path, errorCode))
-        : 0U;
-    table["mtime_ms"] = 0;
-    table["is_file"] = std::filesystem::is_regular_file(path, errorCode);
-    table["is_dir"] = std::filesystem::is_directory(path, errorCode);
-    return std::make_tuple(sol::make_object(runtime_->lua, table), sol::make_object(runtime_->lua, sol::lua_nil));
-}
-
-std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(const std::string& pathText, const sol::object& opts) {
-    std::string kind = "send";
-    std::string tag = "file";
-    std::size_t chunkSize = fileIoConfig_.sendFile.defaultChunkBytes;
-    if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
-        if (!opts.is<sol::table>()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, "opts 必须是 table"));
-        }
-        const auto table = opts.as<sol::table>();
-        kind = luaStringField(table, "kind").value_or(kind);
-        tag = luaStringField(table, "tag").value_or(tag);
-        const sol::object chunk = table["chunk_size"];
-        if (chunk.valid() && chunk.is<int>()) {
-            chunkSize = static_cast<std::size_t>(std::max(1, chunk.as<int>()));
-        }
-    }
-    chunkSize = std::min(chunkSize, fileIoConfig_.maxChunkBytes);
-    const auto [handleObject, openError] = protoFsOpen(pathText, sol::make_object(runtime_->lua, sol::lua_nil));
-    if (!handleObject.valid() || handleObject.get_type() == sol::type::lua_nil) {
-        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), openError);
-    }
-
-    const auto handleId = handleObject.as<std::uint64_t>();
-    const auto total = std::filesystem::file_size(fileHandles_[handleId]->path);
-    const auto jobId = nextFileJobId();
-    fileSendJobs_[jobId] = FileSendJob{
-        .id = jobId,
-        .handleId = handleId,
-        .kind = kind == "request" ? TxRequestKind::Request : TxRequestKind::Send,
-        .tag = tag,
-        .chunkSize = chunkSize,
-        .total = total,
-    };
-    pumpFileSendJob(jobId);
-    return std::make_tuple(sol::make_object(runtime_->lua, jobId), sol::make_object(runtime_->lua, sol::lua_nil));
-}
-
-void ScriptHost::pumpFileSendJob(std::uint64_t jobId) {
-    auto jobIter = fileSendJobs_.find(jobId);
-    if (jobIter == fileSendJobs_.end()) {
-        return;
-    }
-    auto& job = jobIter->second;
-    const std::size_t maxInflight = std::max<std::size_t>(1, fileIoConfig_.sendFile.maxInflightChunks);
-    while (!job.eof && job.inflight < maxInflight) {
-        sol::table readOpts = runtime_->lua.create_table();
-        readOpts["max_bytes"] = static_cast<int>(job.chunkSize);
-        const auto offset = job.nextOffset;
-        const auto [bufferObject, readError] = protoFsRead(job.handleId, sol::make_object(runtime_->lua, readOpts));
-        if (!bufferObject.valid() || bufferObject.get_type() == sol::type::lua_nil) {
-            job.eof = true;
-            break;
-        }
-
-        std::string error;
-        const auto nilObject = sol::make_object(runtime_->lua, sol::lua_nil);
-        const auto request = protoSendLike(job.kind, bufferObject, nilObject, error);
-        if (!request.has_value()) {
-            protoLog("error", "proto.fs.send_file 发送分块失败: " + error);
-            job.eof = true;
-            break;
-        }
-        if (!job.tag.empty()) {
-            txRequests_.back().tag = job.tag;
-        }
-        txRequests_.back().fileJobId = job.id;
-        txRequests_.back().fileOffset = offset;
-        txRequests_.back().fileTotal = job.total;
-        job.nextOffset += txRequests_.back().payload.size();
-        ++job.inflight;
-    }
-
-    if (job.eof && job.inflight == 0) {
-        const auto handleId = job.handleId;
-        fileSendJobs_.erase(jobIter);
-        protoFsClose(handleId);
-    }
 }
 
 std::uint64_t ScriptHost::nextTxRequestId() {

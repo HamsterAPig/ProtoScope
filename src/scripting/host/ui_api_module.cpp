@@ -1,11 +1,47 @@
+#include "protoscope/scripting/script_host.hpp"
+
 #include "script_host_api_module.hpp"
 
 namespace protoscope::scripting {
 
-class UiApiModule final : public IScriptHostApiModule {
+class UiScriptHostApiModule final : public IScriptHostApiModule {
 public:
+    explicit UiScriptHostApiModule(ScriptHost& host) : host_(host) {}
+
     std::string_view id() const override { return "ui_api_module"; }
-    void registerApi(ScriptHostContextInternal&, sol::table&) override {}
+
+    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
+        auto* host = &host_;
+        sol::table uiApi = host->luaState().create_table();
+        uiApi.set_function("alert", [host](const sol::object& opts) {
+            std::string error;
+            const auto dialog = host->protoDialog(DialogKind::Alert, opts, error);
+            if (!dialog.has_value()) {
+                return std::make_tuple(sol::make_object(host->luaState(), sol::lua_nil),
+                                       sol::make_object(host->luaState(), error));
+            }
+            return std::make_tuple(sol::make_object(host->luaState(), dialog->id),
+                                   sol::make_object(host->luaState(), sol::lua_nil));
+        });
+        uiApi.set_function("confirm", [host](const sol::object& opts) {
+            std::string error;
+            const auto dialog = host->protoDialog(DialogKind::Confirm, opts, error);
+            if (!dialog.has_value()) {
+                return std::make_tuple(sol::make_object(host->luaState(), sol::lua_nil),
+                                       sol::make_object(host->luaState(), error));
+            }
+            return std::make_tuple(sol::make_object(host->luaState(), dialog->id),
+                                   sol::make_object(host->luaState(), sol::lua_nil));
+        });
+        proto["ui"] = uiApi;
+    }
+
+private:
+    ScriptHost& host_;
 };
+
+std::unique_ptr<IScriptHostApiModule> makeUiApiModule(ScriptHost& host) {
+    return std::make_unique<UiScriptHostApiModule>(host);
+}
 
 } // namespace protoscope::scripting

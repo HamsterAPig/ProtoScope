@@ -167,6 +167,69 @@ void test_dock_send_history_deduplicates_and_trims() {
     require(send.history.empty(), "发送历史条数为 0 时应禁用并清空历史");
 }
 
+void test_log_filter_keeps_order_and_matches_status() {
+    std::vector<protoscope::dock::ReceiveRow> rows{
+        {.timestampMs = 1, .direction = "RX", .endpoint = "usb", .bytes = {}, .message = "rx first"},
+        {.timestampMs = 2, .direction = "TX", .endpoint = "usb", .bytes = {}, .message = "tx second"},
+        {.timestampMs = 3, .direction = "rx", .endpoint = "usb", .bytes = {}, .message = "lowercase third"},
+    };
+
+    protoscope::dock::LogFilterState filter{};
+    const auto allRows = protoscope::dock::filteredLogRows(rows, filter, true);
+    require(allRows.size() == 3, "All 过滤应保留全部收发记录");
+    require(allRows[0] == &rows[0] && allRows[1] == &rows[1] && allRows[2] == &rows[2],
+            "All 过滤应保持原始顺序");
+
+    filter.status = protoscope::dock::LogStatusFilter::Rx;
+    const auto rxRows = protoscope::dock::filteredLogRows(rows, filter, true);
+    require(rxRows.size() == 2, "Rx 过滤应保留大小写不同的 RX 记录");
+    require(rxRows[0] == &rows[0] && rxRows[1] == &rows[2], "Rx 过滤应保持匹配行顺序");
+
+    filter.status = protoscope::dock::LogStatusFilter::Tx;
+    const auto txRows = protoscope::dock::filteredLogRows(rows, filter, true);
+    require(txRows.size() == 1, "Tx 过滤应仅保留方向为 TX 的记录");
+    require(txRows[0] == &rows[1], "Tx 过滤应只返回 TX 记录");
+}
+
+void test_log_filter_keyword_matches_metadata_and_bytes() {
+    std::vector<protoscope::dock::ReceiveRow> rows{
+        {.timestampMs = 1, .direction = "INFO", .endpoint = "host", .bytes = {}, .message = "Lua runtime opened"},
+        {.timestampMs = 2, .direction = "RX", .endpoint = "uart", .bytes = {0x41, 0x42}, .message = {}},
+        {.timestampMs = 3, .direction = "WARN", .endpoint = "tcp", .bytes = {}, .message = "timeout"},
+    };
+
+    protoscope::dock::LogFilterState filter{.keyword = "runtime"};
+    const auto messageRows = protoscope::dock::filteredLogRows(rows, filter, true);
+    require(messageRows.size() == 1 && messageRows[0] == &rows[0], "关键字应匹配日志消息");
+
+    filter.keyword = "UART";
+    const auto endpointRows = protoscope::dock::filteredLogRows(rows, filter, true);
+    require(endpointRows.size() == 1 && endpointRows[0] == &rows[1], "关键字应大小写不敏感匹配端点");
+
+    filter.keyword = "41 42";
+    const auto hexRows = protoscope::dock::filteredLogRows(rows, filter, true);
+    require(hexRows.size() == 1 && hexRows[0] == &rows[1], "收发筛选应匹配 HEX 字节内容");
+
+    const auto hostRows = protoscope::dock::filteredLogRows(rows, filter, false);
+    require(hostRows.empty(), "宿主/脚本日志筛选不应匹配字节预览");
+}
+
+void test_log_filter_combines_status_and_keyword() {
+    std::vector<protoscope::dock::ReceiveRow> rows{
+        {.timestampMs = 1, .direction = "WARN", .endpoint = "host", .bytes = {}, .message = "timeout on tcp"},
+        {.timestampMs = 2, .direction = "ERROR", .endpoint = "host", .bytes = {}, .message = "timeout on lua"},
+        {.timestampMs = 3, .direction = "WARN", .endpoint = "host", .bytes = {}, .message = "reconnected"},
+    };
+
+    const protoscope::dock::LogFilterState filter{
+        .keyword = "timeout",
+        .status = protoscope::dock::LogStatusFilter::Warn,
+    };
+    const auto rowsAfterFilter = protoscope::dock::filteredLogRows(rows, filter, false);
+    require(rowsAfterFilter.size() == 1, "STATUS 与关键字应同时生效");
+    require(rowsAfterFilter[0] == &rows[0], "组合筛选应只保留同时匹配的 WARN timeout 日志");
+}
+
 void test_wave_protocol_state_isolated_by_protocol_key() {
     YAML::Node root;
 
