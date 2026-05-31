@@ -153,6 +153,7 @@ void test_application_set_log_level_updates_runtime_config();
 void test_application_wave_legend_visibility_config_roundtrip();
 void test_application_logging_filters_script_and_host();
 void test_application_raw_capture_export_import_roundtrip();
+void test_application_live_raw_capture_trims_to_limit();
 void test_application_raw_capture_import_preserves_full_history();
 void test_application_raw_capture_import_replays_stream_in_chunks();
 void test_application_transfer_log_frame_view_waits_for_rx_full_frame();

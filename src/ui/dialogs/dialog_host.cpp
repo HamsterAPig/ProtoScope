@@ -386,7 +386,10 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path) {
         application_.setStatusMessage("原始波形导出失败: " + error);
         return;
     }
-    application_.setStatusMessage("原始波形导出成功");
+    const auto& rawCapture = application_.docks().waveState().rawCapture;
+    application_.setStatusMessage(rawCapture.truncated
+                                      ? "原始波形导出成功（实时缓存已截断，仅包含最近原始字节）"
+                                      : "原始波形导出成功");
     rawCaptureExportDialogOpen_ = false;
     rawCaptureExportDialogOpened_ = false;
     rawCaptureExportError_.clear();

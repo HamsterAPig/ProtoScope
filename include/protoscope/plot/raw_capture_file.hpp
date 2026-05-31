@@ -13,6 +13,7 @@ struct RawCaptureFileData {
     std::string protocolDir;
     double sampleFrequencyHz{0.0};
     std::uint64_t capturedAtMs{0};
+    bool truncated{false};
     std::vector<std::uint8_t> payload;
 };
 

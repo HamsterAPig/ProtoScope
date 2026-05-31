@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <deque>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -44,7 +45,7 @@ void test_bounded_dock_history_limiter_trims_from_front() {
     protoscope::dock::BoundedDockHistoryLimiter concreteLimiter;
     protoscope::dock::IDockHistoryLimiter& limiter = concreteLimiter;
 
-    std::vector<protoscope::dock::ReceiveRow> rows{
+    std::deque<protoscope::dock::ReceiveRow> rows{
         {.timestampMs = 1, .direction = "RX", .endpoint = "tcp", .bytes = {}, .message = "keep-1"},
         {.timestampMs = 2, .direction = "RX", .endpoint = "tcp", .bytes = {}, .message = "keep-2"},
         {.timestampMs = 3, .direction = "RX", .endpoint = "tcp", .bytes = {}, .message = "drop-3"},

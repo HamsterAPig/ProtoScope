@@ -45,6 +45,19 @@ bool parseDouble(std::string_view text, double& value) {
     }
 }
 
+bool parseBool(std::string_view text, bool& value) {
+    const auto cleaned = trim(text);
+    if (cleaned == "true" || cleaned == "1") {
+        value = true;
+        return true;
+    }
+    if (cleaned == "false" || cleaned == "0") {
+        value = false;
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 std::string encodeRawCaptureHeader(const RawCaptureFileData& capture) {
@@ -56,6 +69,7 @@ std::string encodeRawCaptureHeader(const RawCaptureFileData& capture) {
         << "sample_frequency_hz: " << capture.sampleFrequencyHz << '\n'
         << "raw_size: " << capture.payload.size() << '\n'
         << "captured_at_ms: " << capture.capturedAtMs << '\n'
+        << "truncated: " << (capture.truncated ? "true" : "false") << '\n'
         << '\n';
     return out.str();
 }
@@ -128,6 +142,11 @@ std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, s
             rawSizeSeen = parseUnsigned(value, rawSize);
         } else if (key == "captured_at_ms") {
             capturedAtSeen = parseUnsigned(value, capture.capturedAtMs);
+        } else if (key == "truncated") {
+            if (!parseBool(value, capture.truncated)) {
+                error = "psraw 文件头 truncated 字段格式错误";
+                return std::nullopt;
+            }
         }
     }
 

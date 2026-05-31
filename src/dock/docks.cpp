@@ -182,7 +182,8 @@ bool matchesLogFilter(const ReceiveRow& row, const LogFilterState& filter, bool 
            matchesKeywordFilter(row, filter.keyword, includeBytePreview);
 }
 
-std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview) {
+template <typename Rows>
+std::vector<const ReceiveRow*> filteredLogRowsImpl(const Rows& rows, const LogFilterState& filter, bool includeBytePreview) {
     std::vector<const ReceiveRow*> filtered;
     filtered.reserve(rows.size());
     for (const auto& row : rows) {
@@ -191,6 +192,14 @@ std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& ro
         }
     }
     return filtered;
+}
+
+std::vector<const ReceiveRow*> filteredLogRows(const std::deque<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview) {
+    return filteredLogRowsImpl(rows, filter, includeBytePreview);
+}
+
+std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview) {
+    return filteredLogRowsImpl(rows, filter, includeBytePreview);
 }
 
 std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex) {
@@ -303,7 +312,6 @@ void DockStore::appendTransferFrameRows(std::vector<ReceiveRow> rows) {
         return;
     }
 
-    receive_.frameRows.reserve(receive_.frameRows.size() + rows.size());
     for (auto& row : rows) {
         receive_.frameRows.push_back(std::move(row));
     }

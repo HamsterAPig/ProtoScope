@@ -93,19 +93,45 @@ GuiRuntime::~GuiRuntime() {
 
 const GuiRuntime::FilteredLogRowsCache& GuiRuntime::filteredLogRowsCached(
     FilteredLogRowsCache& cache,
-    const std::vector<dock::ReceiveRow>& rows,
+    const std::deque<dock::ReceiveRow>& rows,
     std::uint64_t version,
     const dock::LogFilterState& filter,
     bool includeBytePreview) {
-    if (cache.source != &rows ||
-        cache.version != version ||
-        cache.filter.keyword != filter.keyword ||
-        cache.filter.status != filter.status ||
-        cache.includeBytePreview != includeBytePreview) {
+    const bool sameSourceAndFilter =
+        cache.source == &rows &&
+        cache.filter.keyword == filter.keyword &&
+        cache.filter.status == filter.status &&
+        cache.includeBytePreview == includeBytePreview;
+    const bool appendOnly =
+        sameSourceAndFilter &&
+        cache.version != version &&
+        cache.rowCount <= rows.size() &&
+        (cache.rowCount == 0U || (!rows.empty() && cache.firstRow == &rows.front()));
+
+    if (appendOnly) {
+        // 核心流程：高速收包时日志只追加未裁剪，过滤缓存增量处理新行，避免每帧全量扫描历史。
+        for (std::size_t index = cache.rowCount; index < rows.size(); ++index) {
+            const auto& row = rows[index];
+            if (!dock::matchesLogFilter(row, filter, includeBytePreview)) {
+                continue;
+            }
+            cache.rows.push_back(&row);
+            cache.endpointWidth =
+                (std::clamp)((std::max)(cache.endpointWidth,
+                                        ImGui::CalcTextSize(row.endpoint.empty() ? "-" : row.endpoint.c_str()).x),
+                             86.0F,
+                             220.0F);
+        }
+        cache.version = version;
+        cache.rowCount = rows.size();
+        cache.firstRow = rows.empty() ? nullptr : &rows.front();
+    } else if (!sameSourceAndFilter || cache.version != version) {
         cache.source = &rows;
         cache.version = version;
         cache.filter = filter;
         cache.includeBytePreview = includeBytePreview;
+        cache.rowCount = rows.size();
+        cache.firstRow = rows.empty() ? nullptr : &rows.front();
         cache.rows = dock::filteredLogRows(rows, filter, includeBytePreview);
         float endpointWidth = ImGui::CalcTextSize("endpoint").x;
         for (const auto* row : cache.rows) {

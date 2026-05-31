@@ -33,6 +33,8 @@ gui:
     transfer_frame_limit: 120000
     host_limit: 5000
     script_limit: 5000
+  raw_capture:
+    live_limit_bytes: 67108864
   elf_symbol_combo:
     limit: 10
     debounce_ms: 300

@@ -242,6 +242,7 @@ config::AppConfig Application::captureConfig() const {
     auto captured = configStore_.captureFromDock(dockStore_);
     captured.gui.window = runtimeConfig_.gui.window;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
+    captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
@@ -410,10 +411,41 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
 }
 
 void Application::appendTransferRow(dock::ReceiveRow row) {
-    const auto sourceRow = row;
+    // 核心流程：先用当前行生成逐帧增量，再把原始行移入历史，避免高速收包时额外复制整包字节。
+    appendTransferFrameRows(row);
     dockStore_.appendReceiveRow(std::move(row));
-    // 核心流程：原始收发记录永远先落库；逐帧视图只维护增量缓存，避免 UI 每帧重放历史解析。
-    appendTransferFrameRows(sourceRow);
+}
+
+void Application::appendLiveRawCapture(const transport::TransportBytesEvent& event) {
+    auto& wave = dockStore_.waveState();
+    const auto& lua = dockStore_.luaState();
+    if (!wave.rawCapture.payload.empty()
+        && (wave.rawCapture.protocolDir != lua.protocolDir || wave.rawCapture.protocolName != lua.protocolName)) {
+        wave.rawCapture = {};
+    }
+    if (wave.rawCapture.payload.empty()) {
+        wave.rawCapture.capturedAtMs = event.context.timestampMs;
+    }
+    wave.rawCapture.protocolName = lua.protocolName;
+    wave.rawCapture.protocolDir = lua.protocolDir;
+    wave.rawCapture.sampleFrequencyHz = wave.view.sampleFrequencyHz;
+    wave.rawCapture.payload.insert(wave.rawCapture.payload.end(), event.bytes.begin(), event.bytes.end());
+
+    const auto limit = runtimeConfig_.gui.rawCapture.liveLimitBytes;
+    if (wave.rawCapture.payload.size() <= limit) {
+        return;
+    }
+
+    // 核心流程：实时接收只保存最近一段原始字节，完整历史应由显式录制或外部文件承载。
+    wave.rawCapture.truncated = true;
+    if (limit == 0U) {
+        wave.rawCapture.payload.clear();
+        return;
+    }
+    const auto removeCount = wave.rawCapture.payload.size() - limit;
+    wave.rawCapture.payload.erase(
+        wave.rawCapture.payload.begin(),
+        wave.rawCapture.payload.begin() + static_cast<std::vector<std::uint8_t>::difference_type>(removeCount));
 }
 
 std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState() const {
@@ -792,19 +824,7 @@ bool Application::handleTransportEvents() {
                             activeConnection_->connectionId != evt.context.connectionId) {
                             return;
                         }
-                        auto& wave = dockStore_.waveState();
-                        const auto& lua = dockStore_.luaState();
-                        if (!wave.rawCapture.payload.empty()
-                            && (wave.rawCapture.protocolDir != lua.protocolDir || wave.rawCapture.protocolName != lua.protocolName)) {
-                            wave.rawCapture = {};
-                        }
-                        if (wave.rawCapture.payload.empty()) {
-                            wave.rawCapture.capturedAtMs = evt.context.timestampMs;
-                        }
-                        wave.rawCapture.protocolName = lua.protocolName;
-                        wave.rawCapture.protocolDir = lua.protocolDir;
-                        wave.rawCapture.sampleFrequencyHz = wave.view.sampleFrequencyHz;
-                        wave.rawCapture.payload.insert(wave.rawCapture.payload.end(), evt.bytes.begin(), evt.bytes.end());
+                        appendLiveRawCapture(evt);
                         scriptHost_.onTransportBytes(evt);
                         if (evt.context.readyForIo) {
                             activeConnection_ = evt.context;

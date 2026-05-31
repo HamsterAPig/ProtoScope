@@ -819,6 +819,7 @@ void test_config_default_roundtrip() {
     require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
     require(config.gui.logHistory.scriptLimit == 5000, "脚本日志默认上限应为 5000");
+    require(config.gui.rawCapture.liveLimitBytes == 64U * 1024U * 1024U, "实时原始缓存默认上限应为 64MiB");
     require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
     require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
     require(config.gui.sendHistoryLimit == 20, "发送历史条数默认值应为 20");
@@ -850,6 +851,7 @@ void test_config_default_roundtrip() {
     config.gui.logHistory.transferFrameLimit = 22;
     config.gui.logHistory.hostLimit = 33;
     config.gui.logHistory.scriptLimit = 44;
+    config.gui.rawCapture.liveLimitBytes = 123;
     config.gui.elfSymbolCombo.limit = 12;
     config.gui.elfSymbolCombo.debounceMs = 350;
     config.gui.sendHistoryLimit = 7;
@@ -895,6 +897,7 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.logHistory.transferFrameLimit == 22, "逐帧收发历史上限 roundtrip 失败");
     require(reloaded.config.gui.logHistory.hostLimit == 33, "宿主日志历史上限 roundtrip 失败");
     require(reloaded.config.gui.logHistory.scriptLimit == 44, "脚本日志历史上限 roundtrip 失败");
+    require(reloaded.config.gui.rawCapture.liveLimitBytes == 123, "实时原始缓存上限 roundtrip 失败");
     require(reloaded.config.gui.elfSymbolCombo.limit == 12, "ELF 变量候选上限 roundtrip 失败");
     require(reloaded.config.gui.elfSymbolCombo.debounceMs == 350, "ELF 变量候选消抖 roundtrip 失败");
     require(reloaded.config.gui.sendHistoryLimit == 7, "发送历史条数 roundtrip 失败");
@@ -1656,6 +1659,7 @@ static const TestCase kAllTests[] = {
     {"application_wave_legend_visibility_config_roundtrip", &test_application_wave_legend_visibility_config_roundtrip},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
+    {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},
     {"application_raw_capture_import_replays_stream_in_chunks", &test_application_raw_capture_import_replays_stream_in_chunks},
     {"application_transfer_log_frame_view_waits_for_rx_full_frame", &test_application_transfer_log_frame_view_waits_for_rx_full_frame},

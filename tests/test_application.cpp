@@ -575,6 +575,44 @@ void test_application_raw_capture_export_import_roundtrip() {
     application.shutdown();
 }
 
+void test_application_live_raw_capture_trims_to_limit() {
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    transportState->queuedRxBytes = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+
+    protoscope::app::Application application;
+    protoscope::config::AppConfig config;
+    config.gui.rawCapture.liveLimitBytes = 4;
+    require(application.initialize(), "应用初始化失败");
+    require(application.applyConfig(config), "应用配置应可设置实时原始缓存上限");
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    application.openTransport();
+    for (int i = 0; i < 4; ++i) {
+        application.pumpOnce();
+    }
+
+    const auto& rawCapture = application.docks().waveState().rawCapture;
+    const std::vector<std::uint8_t> expectedTail{0x04, 0x05, 0x06, 0x07};
+    require(rawCapture.truncated, "实时原始缓存超过上限后应标记截断");
+    require(rawCapture.payload == expectedTail, "实时原始缓存应只保留最新尾部字节");
+
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-live-raw-capture-limit.psraw";
+    std::filesystem::remove(tempPath);
+
+    std::string error;
+    require(application.exportWaveRawCapture(tempPath, error), "截断后的实时缓存仍应可导出");
+    const auto capture = protoscope::plot::readRawCaptureFile(tempPath, error);
+    require(capture.has_value(), "截断导出文件应可读取");
+    require(capture->truncated, "截断标记应写入 psraw 文件头");
+    require(capture->payload == expectedTail, "截断导出应只包含最近实时缓存");
+
+    std::filesystem::remove(tempPath);
+    application.shutdown();
+}
+
 void test_application_raw_capture_import_preserves_full_history() {
     constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_history_limit";
     protoscope::app::Application application;

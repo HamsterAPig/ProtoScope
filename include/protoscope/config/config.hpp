@@ -72,6 +72,10 @@ struct GuiLogHistoryConfig {
     std::size_t scriptLimit{5000};
 };
 
+struct GuiRawCaptureConfig {
+    std::size_t liveLimitBytes{64U * 1024U * 1024U};
+};
+
 struct GuiElfSymbolComboConfig {
     std::size_t limit{10};
     int debounceMs{300};
@@ -81,6 +85,7 @@ struct GuiConfig {
     GuiWindowConfig window{};
     GuiWaveConfig wave{};
     GuiLogHistoryConfig logHistory{};
+    GuiRawCaptureConfig rawCapture{};
     GuiElfSymbolComboConfig elfSymbolCombo{};
     bool luaDockLayoutDebug{false};
     std::size_t sendHistoryLimit{20};

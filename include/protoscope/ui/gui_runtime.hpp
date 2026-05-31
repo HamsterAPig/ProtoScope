@@ -56,10 +56,12 @@ private:
     };
 
     struct FilteredLogRowsCache {
-        const std::vector<dock::ReceiveRow>* source{nullptr};
+        const void* source{nullptr};
         std::uint64_t version{0};
         dock::LogFilterState filter{};
         bool includeBytePreview{false};
+        std::size_t rowCount{0};
+        const dock::ReceiveRow* firstRow{nullptr};
         float endpointWidth{120.0F};
         std::vector<const dock::ReceiveRow*> rows;
     };
@@ -138,7 +140,7 @@ private:
                              bool showHex,
                              std::string_view title);
     const FilteredLogRowsCache& filteredLogRowsCached(FilteredLogRowsCache& cache,
-                                                      const std::vector<dock::ReceiveRow>& rows,
+                                                      const std::deque<dock::ReceiveRow>& rows,
                                                       std::uint64_t version,
                                                       const dock::LogFilterState& filter,
                                                       bool includeBytePreview);

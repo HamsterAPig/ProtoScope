@@ -72,6 +72,7 @@ struct LogFilterState {
 };
 
 bool matchesLogFilter(const ReceiveRow& row, const LogFilterState& filter, bool includeBytePreview);
+std::vector<const ReceiveRow*> filteredLogRows(const std::deque<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview);
 std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview);
 
 struct CommDockState {
@@ -94,8 +95,8 @@ struct ReceiveDockState {
     bool showTimestamps{true};
     TransferLogDisplayMode displayMode{TransferLogDisplayMode::RawChunks};
     LogFilterState filter{};
-    std::vector<ReceiveRow> rows;
-    std::vector<ReceiveRow> frameRows;
+    std::deque<ReceiveRow> rows;
+    std::deque<ReceiveRow> frameRows;
     std::uint64_t rowsVersion{0};
     std::uint64_t frameRowsVersion{0};
 };
@@ -104,7 +105,7 @@ struct LogDockState {
     bool pauseScroll{false};
     bool showTimestamps{true};
     LogFilterState filter{};
-    std::vector<ReceiveRow> rows;
+    std::deque<ReceiveRow> rows;
     std::uint64_t rowsVersion{0};
 };
 
@@ -112,7 +113,7 @@ struct ScriptDockState {
     bool pauseScroll{false};
     bool showTimestamps{true};
     LogFilterState filter{};
-    std::vector<ReceiveRow> rows;
+    std::deque<ReceiveRow> rows;
     std::uint64_t rowsVersion{0};
 };
 
@@ -130,19 +131,20 @@ class IDockHistoryLimiter {
 public:
     virtual ~IDockHistoryLimiter() = default;
 
-    virtual bool trimRows(std::vector<ReceiveRow>& rows, std::size_t limit) const = 0;
+    virtual bool trimRows(std::deque<ReceiveRow>& rows, std::size_t limit) const = 0;
 };
 
 class BoundedDockHistoryLimiter final : public IDockHistoryLimiter {
 public:
-    bool trimRows(std::vector<ReceiveRow>& rows, std::size_t limit) const override {
+    bool trimRows(std::deque<ReceiveRow>& rows, std::size_t limit) const override {
         if (rows.size() <= limit) {
             return false;
         }
 
-        // 核心流程：只保留最新的历史记录，避免 Dock 列表无限膨胀。
-        rows.erase(rows.begin(),
-                   rows.begin() + static_cast<std::vector<ReceiveRow>::difference_type>(rows.size() - limit));
+        // 核心流程：只保留最新的历史记录，并从头部逐条丢弃，避免 vector 头删搬移全部历史。
+        while (rows.size() > limit) {
+            rows.pop_front();
+        }
         return true;
     }
 };

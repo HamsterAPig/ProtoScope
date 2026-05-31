@@ -93,6 +93,7 @@ private:
     void notifyTxOverflow(const std::string& message);
     void enqueueDialogRequest(const scripting::DialogRequest& request);
     void appendTransferRow(dock::ReceiveRow row);
+    void appendLiveRawCapture(const transport::TransportBytesEvent& event);
     void resetTransferFrameParser();
     void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
     void applyHistoryLimits(const config::GuiLogHistoryConfig& config);
