@@ -324,8 +324,8 @@ void GuiRuntime::openElfStaticAddressDialog() {
         elfStaticAddressPath_.empty() ? executableDir_ : std::filesystem::path(elfStaticAddressPath_);
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
-                                       L"打开 ELF/JSON",
-                                       L"ELF/JSON Files (*.elf;*.out;*.axf;*.json)\0*.elf;*.out;*.axf;*.json\0All Files (*.*)\0*.*\0",
+                                       L"打开 ELF/ElfStaticView 数据文件",
+                                       L"ELF/ElfStaticView Files (*.elf;*.out;*.axf;*.json;*.esv)\0*.elf;*.out;*.axf;*.json;*.esv\0All Files (*.*)\0*.*\0",
                                        defaultPath,
                                        false,
                                        nullptr,
@@ -525,7 +525,7 @@ void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
     std::string error;
     if (!application_.loadElfStaticAddressFile(path, error)) {
         elfStaticAddressError_ = error;
-        application_.setStatusMessage("ELF/JSON 加载失败: " + error);
+        application_.setStatusMessage("ELF/ElfStaticView 数据文件加载失败: " + error);
         return;
     }
     elfSymbolComboStates_.clear();
@@ -539,14 +539,14 @@ void GuiRuntime::drawElfStaticAddressDialog() {
         return;
     }
 
-    const char* popupId = "打开 ELF/JSON##elf_static_view";
+    const char* popupId = "打开 ELF/ElfStaticView 数据文件##elf_static_view";
     if (!elfStaticAddressDialogOpened_) {
         ImGui::OpenPopup(popupId);
         elfStaticAddressDialogOpened_ = true;
     }
     const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
-        ImGui::TextUnformatted("请输入 ELF 或 ElfStaticView JSON 文件路径");
+        ImGui::TextUnformatted("请输入 ELF 或 ElfStaticView 数据文件路径");
         char buffer[1024]{};
         std::snprintf(buffer, sizeof(buffer), "%s", elfStaticAddressPath_.c_str());
         if (ImGui::InputText("路径", buffer, sizeof(buffer))) {

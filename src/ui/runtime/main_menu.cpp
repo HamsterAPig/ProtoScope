@@ -47,7 +47,7 @@ void GuiRuntime::drawMainMenu() {
         if (ImGui::MenuItem("重新加载协议")) {
             requestProtocolWorkspaceSwitch(application_.docks().luaState().protocolDir, true);
         }
-        if (ImGui::MenuItem("打开 ELF/JSON...")) {
+        if (ImGui::MenuItem("打开 ELF/ElfStaticView 数据文件...")) {
             openElfStaticAddressDialog();
         }
         if (ImGui::MenuItem("导入原始波形...")) {

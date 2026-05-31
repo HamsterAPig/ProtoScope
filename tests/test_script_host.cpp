@@ -1682,6 +1682,8 @@ static const TestCase kAllTests[] = {
     {"raw_capture_file_rejects_size_mismatch", &test_raw_capture_file_rejects_size_mismatch},
     {"raw_capture_file_requires_protocol_fields", &test_raw_capture_file_requires_protocol_fields},
     {"elf_static_view_bridge_loads_dump_json_and_queries_symbols", &test_elf_static_view_bridge_loads_dump_json_and_queries_symbols},
+    {"elf_static_view_bridge_loads_private_binary_without_extension", &test_elf_static_view_bridge_loads_private_binary_without_extension},
+    {"elf_static_view_bridge_loads_variable_summary_export", &test_elf_static_view_bridge_loads_variable_summary_export},
     {"elf_static_view_bridge_keeps_old_model_on_load_failure", &test_elf_static_view_bridge_keeps_old_model_on_load_failure},
 };
 

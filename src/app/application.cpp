@@ -649,7 +649,7 @@ bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, st
     if (!elfStaticView_.loadFile(path, error)) {
         return false;
     }
-    setStatusMessage("ELF/JSON 已加载: " + elfStaticView_.sourcePath());
+    setStatusMessage("ELF/ElfStaticView 数据文件已加载: " + elfStaticView_.sourcePath());
     return true;
 }
 
