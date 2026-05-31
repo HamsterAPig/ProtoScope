@@ -2,6 +2,7 @@
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
+#include "protoscope/plot/wave_fft.hpp"
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_state.hpp"
 
@@ -663,6 +664,54 @@ void test_wave_frequency_parse_and_axis_mapping() {
     mapped = protoscope::plot::buildDisplayData(snapshot, 0.0);
     require(mapped.axisSource == protoscope::plot::WaveTimeAxisSource::SampleIndex, "脚本时间不可用时应退回点数轴");
     require(mapped.timeUnit == "sample", "点数轴单位应为 sample");
+}
+
+void test_wave_fft_detects_50hz_and_150hz_components() {
+    constexpr double sampleFrequencyHz = 1024.0;
+    constexpr std::size_t pointCount = 1024;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time)
+            + 0.5 * std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
+        samples.push_back({.time = time, .value = value});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::N1024,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
+                                                          displayData,
+                                                          config,
+                                                          std::vector<std::uint8_t>{1},
+                                                          0.0,
+                                                          1.0,
+                                                          sampleFrequencyHz);
+    require(frame.valid, "FFT 帧应计算成功");
+    require(std::abs(frame.frequencyResolutionHz - 1.0) < 1e-12, "1024Hz/1024 点应得到 1Hz/bin");
+    require(frame.channels.size() == 1 && frame.channels[0].valid, "CH1 应有有效频谱");
+    const auto& bins = frame.channels[0].bins;
+    require(bins.size() == 513, "实数 FFT 应输出 N/2+1 个频点");
+    require(std::abs(bins[50].frequencyHz - 50.0) < 1e-12, "第 50 个频点应对应 50Hz");
+    require(std::abs(bins[150].frequencyHz - 150.0) < 1e-12, "第 150 个频点应对应 150Hz");
+    require(bins[50].magnitude > 0.9 && bins[50].magnitude < 1.1, "50Hz 主分量幅值应接近 1");
+    require(bins[150].magnitude > 0.4 && bins[150].magnitude < 0.6, "150Hz 分量幅值应接近 0.5");
+    require(frame.channels[0].fundamental.has_value(), "应自动检测到基波");
+    require(std::abs(frame.channels[0].fundamental->frequencyHz - 50.0) < 1e-12, "自动基波应为 50Hz");
 }
 
 void test_wave_viewport_zoom_modes_and_clamp() {

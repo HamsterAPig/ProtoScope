@@ -310,6 +310,13 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     waveA.view.showHoverReadout = false;
     waveA.view.sampleFrequencyHz = 2048.0;
     waveA.view.sampleFrequencyInput = "2048";
+    waveA.view.fft.enabled = true;
+    waveA.view.fft.pointCount = protoscope::plot::WaveFftPointCount::N1024;
+    waveA.view.fft.window = protoscope::plot::WaveFftWindow::BlackmanHarris;
+    waveA.view.fft.magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::Decibel;
+    waveA.view.fft.fundamentalMode = protoscope::plot::WaveFftFundamentalMode::Manual;
+    waveA.view.fft.manualFundamentalHz = 50.0;
+    waveA.fftChannelEnabled = {1};
     waveA.toolsCollapsed = true;
     waveA.channelOverrides.resize(1);
     waveA.channelOverrides[0].labelOverridden = true;
@@ -344,6 +351,13 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredASpec->scale == 2.5, "proto_a 应恢复自己的缩放覆盖");
     require(restoredASpec->offset == -0.25, "proto_a 应恢复自己的偏移覆盖");
     require(restoredA.view.sampleFrequencyHz == 2048.0, "proto_a 应恢复自己的采样频率");
+    require(restoredA.view.fft.enabled, "proto_a 应恢复 FFT 开关");
+    require(restoredA.view.fft.pointCount == protoscope::plot::WaveFftPointCount::N1024, "proto_a 应恢复 FFT 点数");
+    require(restoredA.view.fft.window == protoscope::plot::WaveFftWindow::BlackmanHarris, "proto_a 应恢复 FFT 窗函数");
+    require(restoredA.view.fft.magnitudeMode == protoscope::plot::WaveFftMagnitudeMode::Decibel, "proto_a 应恢复 FFT 幅值模式");
+    require(restoredA.view.fft.fundamentalMode == protoscope::plot::WaveFftFundamentalMode::Manual, "proto_a 应恢复 FFT 基波模式");
+    require(restoredA.view.fft.manualFundamentalHz == 50.0, "proto_a 应恢复手动基波频率");
+    require(restoredA.fftChannelEnabled.size() == 1 && restoredA.fftChannelEnabled[0] == 1, "proto_a 应恢复 FFT 通道选择");
     require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
 
@@ -357,6 +371,7 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredBSpec->label == "总线B", "不同协议不应串用 proto_a 标签");
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
+    require(!restoredB.view.fft.enabled, "不同协议不应串用 proto_a FFT 开关");
 }
 
 void test_dock_visibility_state_isolated_by_protocol_key() {

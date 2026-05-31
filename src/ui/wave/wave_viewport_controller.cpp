@@ -32,6 +32,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
         wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
         wave.displayDataRevision = dataRevision;
         wave.displayDataSampleFrequencyHz = view.sampleFrequencyHz;
+        wave.cachedFftKeyValid = false;
     }
 
     frame.fullSnapshot = &wave.cachedFullSnapshot;
@@ -53,6 +54,42 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
             view.viewMaxTime = (std::min)(frame.displayBounds.maxTime, view.viewMinTime + view.visibleDuration);
         }
         view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+    }
+
+    if (view.fft.enabled) {
+        if (wave.fftChannelEnabled.size() < wave.cachedFullSnapshot.channels.size()) {
+            const auto oldSize = wave.fftChannelEnabled.size();
+            wave.fftChannelEnabled.resize(wave.cachedFullSnapshot.channels.size(), 0);
+            if (oldSize == 0 && !wave.fftChannelEnabled.empty()) {
+                const auto preferredChannel = (std::min)(view.measurementChannelIndex, wave.fftChannelEnabled.size() - 1);
+                wave.fftChannelEnabled[preferredChannel] = 1;
+            }
+        }
+        const plot::WaveFftCacheKey key{
+            .dataRevision = dataRevision,
+            .viewMinTime = view.viewMinTime,
+            .viewMaxTime = view.viewMaxTime,
+            .sampleFrequencyHz = view.sampleFrequencyHz,
+            .config = view.fft,
+            .channelEnabled = wave.fftChannelEnabled,
+        };
+        if (!wave.cachedFftKeyValid || !(wave.cachedFftKey == key)) {
+            // 核心流程：FFT 是当前视口的派生结果，只在源数据、视口或 FFT 配置变化时重建。
+            wave.cachedFftFrame = plot::buildWaveFftFrame(wave.cachedFullSnapshot,
+                                                          wave.cachedDisplayData,
+                                                          view.fft,
+                                                          wave.fftChannelEnabled,
+                                                          view.viewMinTime,
+                                                          view.viewMaxTime,
+                                                          view.sampleFrequencyHz);
+            wave.cachedFftKey = key;
+            wave.cachedFftKeyValid = true;
+        }
+        frame.fftFrame = &wave.cachedFftFrame;
+    } else {
+        wave.cachedFftKeyValid = false;
+        wave.cachedFftFrame = {};
+        frame.fftFrame = &wave.cachedFftFrame;
     }
 
     frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);

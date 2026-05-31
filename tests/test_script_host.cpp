@@ -1616,6 +1616,7 @@ static const TestCase kAllTests[] = {
     {"plot_hover_readout_ignores_hidden_channels", &test_plot_hover_readout_ignores_hidden_channels},
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
+    {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
     {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
     {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},

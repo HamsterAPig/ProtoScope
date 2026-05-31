@@ -55,6 +55,78 @@ plot::WaveCursorSnapScope parseSnapScope(const std::string& value) {
     return value == "active_channel" ? plot::WaveCursorSnapScope::ActiveChannel : plot::WaveCursorSnapScope::AllChannels;
 }
 
+std::string fftPointCountStateName(plot::WaveFftPointCount value) {
+    return plot::fftPointCountName(value);
+}
+
+plot::WaveFftPointCount parseFftPointCount(const std::string& value) {
+    if (value == "256") {
+        return plot::WaveFftPointCount::N256;
+    }
+    if (value == "512") {
+        return plot::WaveFftPointCount::N512;
+    }
+    if (value == "1024") {
+        return plot::WaveFftPointCount::N1024;
+    }
+    if (value == "2048") {
+        return plot::WaveFftPointCount::N2048;
+    }
+    if (value == "4096") {
+        return plot::WaveFftPointCount::N4096;
+    }
+    if (value == "8192") {
+        return plot::WaveFftPointCount::N8192;
+    }
+    if (value == "16384") {
+        return plot::WaveFftPointCount::N16384;
+    }
+    return plot::WaveFftPointCount::Auto;
+}
+
+std::string fftWindowStateName(plot::WaveFftWindow value) {
+    switch (value) {
+    case plot::WaveFftWindow::Rectangular:
+        return "rectangular";
+    case plot::WaveFftWindow::Hann:
+        return "hann";
+    case plot::WaveFftWindow::Hamming:
+        return "hamming";
+    case plot::WaveFftWindow::BlackmanHarris:
+        return "blackman_harris";
+    }
+    return "hann";
+}
+
+plot::WaveFftWindow parseFftWindow(const std::string& value) {
+    if (value == "rectangular") {
+        return plot::WaveFftWindow::Rectangular;
+    }
+    if (value == "hamming") {
+        return plot::WaveFftWindow::Hamming;
+    }
+    if (value == "blackman_harris") {
+        return plot::WaveFftWindow::BlackmanHarris;
+    }
+    return plot::WaveFftWindow::Hann;
+}
+
+std::string fftMagnitudeModeStateName(plot::WaveFftMagnitudeMode value) {
+    return value == plot::WaveFftMagnitudeMode::Decibel ? "db" : "linear";
+}
+
+plot::WaveFftMagnitudeMode parseFftMagnitudeMode(const std::string& value) {
+    return value == "db" ? plot::WaveFftMagnitudeMode::Decibel : plot::WaveFftMagnitudeMode::Linear;
+}
+
+std::string fftFundamentalModeStateName(plot::WaveFftFundamentalMode value) {
+    return value == plot::WaveFftFundamentalMode::Manual ? "manual" : "auto";
+}
+
+plot::WaveFftFundamentalMode parseFftFundamentalMode(const std::string& value) {
+    return value == "manual" ? plot::WaveFftFundamentalMode::Manual : plot::WaveFftFundamentalMode::Auto;
+}
+
 void applyChannelOverrides(plot::WaveDockState& wave) {
     const auto channelCount = wave.buffer.channelCount();
     for (std::size_t channelIndex = 0; channelIndex < channelCount; ++channelIndex) {
@@ -116,6 +188,23 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     node["cursor_snap_mode"] = snapModeName(view.cursorSnapMode);
     node["cursor_snap_scope"] = snapScopeName(view.cursorSnapScope);
     node["locked_cursor_interval"] = view.lockedCursorInterval;
+    YAML::Node fftNode;
+    fftNode["enabled"] = view.fft.enabled;
+    fftNode["point_count"] = fftPointCountStateName(view.fft.pointCount);
+    fftNode["window"] = fftWindowStateName(view.fft.window);
+    fftNode["magnitude_mode"] = fftMagnitudeModeStateName(view.fft.magnitudeMode);
+    fftNode["fundamental_mode"] = fftFundamentalModeStateName(view.fft.fundamentalMode);
+    fftNode["manual_fundamental_hz"] = view.fft.manualFundamentalHz;
+    fftNode["auto_max_point_count"] = view.fft.autoMaxPointCount;
+    YAML::Node fftChannelsNode;
+    for (std::size_t channelIndex = 0; channelIndex < wave.fftChannelEnabled.size(); ++channelIndex) {
+        if (wave.fftChannelEnabled[channelIndex] == 0) {
+            continue;
+        }
+        fftChannelsNode.push_back(channelIndex);
+    }
+    fftNode["channel_enabled"] = fftChannelsNode;
+    node["fft"] = fftNode;
     node["tools_collapsed"] = wave.toolsCollapsed;
     node["overview_collapsed"] = wave.overviewCollapsed;
     node["tools_expanded_width"] = wave.toolsExpandedWidth;
@@ -182,6 +271,30 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
     view.cursorSnapMode = parseSnapMode(node["cursor_snap_mode"].as<std::string>(snapModeName(view.cursorSnapMode)));
     view.cursorSnapScope = parseSnapScope(node["cursor_snap_scope"].as<std::string>(snapScopeName(view.cursorSnapScope)));
     view.lockedCursorInterval = node["locked_cursor_interval"].as<double>(view.lockedCursorInterval);
+    const auto fftNode = node["fft"];
+    if (fftNode && fftNode.IsMap()) {
+        view.fft.enabled = fftNode["enabled"].as<bool>(view.fft.enabled);
+        view.fft.pointCount = parseFftPointCount(fftNode["point_count"].as<std::string>(fftPointCountStateName(view.fft.pointCount)));
+        view.fft.window = parseFftWindow(fftNode["window"].as<std::string>(fftWindowStateName(view.fft.window)));
+        view.fft.magnitudeMode =
+            parseFftMagnitudeMode(fftNode["magnitude_mode"].as<std::string>(fftMagnitudeModeStateName(view.fft.magnitudeMode)));
+        view.fft.fundamentalMode =
+            parseFftFundamentalMode(fftNode["fundamental_mode"].as<std::string>(fftFundamentalModeStateName(view.fft.fundamentalMode)));
+        view.fft.manualFundamentalHz = fftNode["manual_fundamental_hz"].as<double>(view.fft.manualFundamentalHz);
+        view.fft.autoMaxPointCount = fftNode["auto_max_point_count"].as<std::size_t>(view.fft.autoMaxPointCount);
+        wave.fftChannelEnabled.clear();
+        const auto channelsNode = fftNode["channel_enabled"];
+        if (channelsNode && channelsNode.IsSequence()) {
+            for (const auto& entry : channelsNode) {
+                const auto channelIndex = entry.as<std::size_t>(0);
+                if (channelIndex >= wave.fftChannelEnabled.size()) {
+                    wave.fftChannelEnabled.resize(channelIndex + 1, 0);
+                }
+                wave.fftChannelEnabled[channelIndex] = 1;
+            }
+        }
+        wave.cachedFftKeyValid = false;
+    }
     wave.toolsCollapsed = node["tools_collapsed"].as<bool>(wave.toolsCollapsed);
     wave.overviewCollapsed = node["overview_collapsed"].as<bool>(wave.overviewCollapsed);
     wave.toolsExpandedWidth = node["tools_expanded_width"].as<float>(wave.toolsExpandedWidth);

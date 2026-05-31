@@ -524,6 +524,17 @@ public:
     }
 };
 
+class WaveFftComponent final : public IWaveComponent {
+public:
+    std::string_view id() const override { return "wave_fft"; }
+
+    void draw(WaveContext& context) override {
+        ImGui::BeginChild("##wave_main_panel", ImVec2(0.0F, context.layout->mainHeight), false, ImGuiWindowFlags_NoScrollbar);
+        drawWaveFftPlot(context.wave, *context.renderFrame);
+        ImGui::EndChild();
+    }
+};
+
 class WaveMeasurementOverlayComponent final : public IWaveComponent {
 public:
     std::string_view id() const override { return "wave_measurement_overlay"; }
@@ -626,12 +637,14 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         WaveOverviewComponent overviewComponent;
         WaveLegendComponent legendComponent;
         WavePlotComponent plotComponent;
+        WaveFftComponent fftComponent;
         WaveMeasurementOverlayComponent measurementOverlayComponent;
         WaveToolbarComponent toolbarComponent;
-        std::array<IWaveComponent*, 5> components{
+        std::array<IWaveComponent*, 6> components{
             &overviewComponent,
             &legendComponent,
             &plotComponent,
+            &fftComponent,
             &measurementOverlayComponent,
             &toolbarComponent,
         };
@@ -643,8 +656,12 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         ImGui::BeginChild("##wave_content", ImVec2(contentWidth, available.y), false, ImGuiWindowFlags_NoScrollbar);
         overviewComponent.draw(context);
         legendComponent.draw(context);
-        plotComponent.draw(context);
-        measurementOverlayComponent.draw(context);
+        if (view.fft.enabled) {
+            fftComponent.draw(context);
+        } else {
+            plotComponent.draw(context);
+            measurementOverlayComponent.draw(context);
+        }
         ImGui::EndChild();
 
         toolbarComponent.draw(context);

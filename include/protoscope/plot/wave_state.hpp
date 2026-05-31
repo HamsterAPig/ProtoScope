@@ -2,6 +2,7 @@
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
+#include "protoscope/plot/wave_fft.hpp"
 #include "protoscope/plot/wave_math.hpp"
 
 #include <array>
@@ -58,6 +59,7 @@ struct WaveViewState {
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
+    WaveFftConfig fft{};
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
     double downsampleStartMultiplier{2.0};
@@ -107,6 +109,7 @@ struct WaveDockState {
     std::vector<std::string> channelSummaries;
     std::vector<ChannelSpec> defaultChannelSpecs;
     std::vector<ChannelTransformOverride> channelOverrides;
+    std::vector<std::uint8_t> fftChannelEnabled;
     bool toolsCollapsed{false};
     bool overviewCollapsed{false};
     float toolsExpandedWidth{280.0F};
@@ -125,6 +128,9 @@ struct WaveDockState {
     WaveSnapshot cachedFullSnapshot{};
     WaveDisplayData cachedDisplayData{};
     WaveDataBounds cachedDisplayBounds{};
+    bool cachedFftKeyValid{false};
+    WaveFftCacheKey cachedFftKey{};
+    WaveFftFrame cachedFftFrame{};
 };
 
 bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex);
