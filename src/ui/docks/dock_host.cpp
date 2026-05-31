@@ -50,6 +50,15 @@ void GuiRuntime::drawStatusBar() {
             ImGui::Separator();
             ImGui::SameLine();
         }
+        if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U) {
+            ImGui::Text("待处理 RX=%zu bytes 帧=%zu 波形=%zu",
+                        comm.pendingRxBytes,
+                        comm.pendingTransferFrameRows,
+                        comm.pendingPlotAppends);
+            ImGui::SameLine();
+            ImGui::Separator();
+            ImGui::SameLine();
+        }
         if (!config.statusMessage.empty()) {
             ImGui::TextUnformatted(config.statusMessage.c_str());
         }
@@ -233,6 +242,13 @@ void GuiRuntime::drawCommDock() {
         } else {
             application_.setStatusMessage("保存配置失败: " + error, true);
         }
+    }
+
+    if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U) {
+        ImGui::Text("实时待处理: RX %zu bytes / 逐帧 %zu / 波形 %zu",
+                    comm.pendingRxBytes,
+                    comm.pendingTransferFrameRows,
+                    comm.pendingPlotAppends);
     }
 
     ImGui::End();

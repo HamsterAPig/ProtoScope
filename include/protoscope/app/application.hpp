@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace protoscope::app {
 
@@ -78,11 +79,36 @@ private:
         scripting::FrameStreamParser tx;
     };
 
+    struct PendingRxBytes {
+        transport::ConnectionContext context{};
+        std::vector<std::uint8_t> bytes{};
+        std::size_t offset{0};
+    };
+
+    struct RealtimeBacklogDiscardCounts {
+        std::size_t transportEvents{0};
+        std::size_t rxBytes{0};
+        std::size_t transferFrameRows{0};
+        std::size_t plotAppends{0};
+        std::size_t scriptLogs{0};
+        std::size_t scriptEvents{0};
+    };
+
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
     bool handleTransportEvents();
     bool processTransportEvent(const transport::TransportEvent& event);
+    bool processPendingRxBytes(std::size_t maxBytes);
+    void enqueuePendingRxBytes(transport::TransportBytesEvent event);
+    void detachPendingRealtimeBacklogFromConnection();
+    RealtimeBacklogDiscardCounts clearPendingRealtimeBacklog();
+    void logRealtimeBacklogDiscard(const RealtimeBacklogDiscardCounts& counts);
+    [[nodiscard]] bool responsiveBacklogMode() const;
+    [[nodiscard]] std::size_t rxBytesPerPump() const;
+    [[nodiscard]] std::size_t transferFrameRowsPerPump() const;
+    [[nodiscard]] std::size_t plotAppendsPerPump() const;
+    [[nodiscard]] std::size_t pendingRxByteCount() const;
     bool flushScriptOutputs();
     bool flushScriptLogs();
     bool flushScriptPlots();
@@ -132,6 +158,7 @@ private:
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
     std::deque<transport::TransportEvent> pendingTransportEvents_;
+    std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;
     std::optional<std::uint64_t> cachedWaveSummaryRevision_;
 };

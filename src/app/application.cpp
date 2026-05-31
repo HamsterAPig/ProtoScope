@@ -19,7 +19,6 @@ namespace {
 constexpr std::size_t kRawCaptureReplayChunkBytes = 1024;
 constexpr std::size_t kTransportEventsPerPump = 256;
 constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
-constexpr std::size_t kTransferFrameRowsPerPump = 2000;
 
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
@@ -248,6 +247,7 @@ config::AppConfig Application::captureConfig() const {
     captured.gui.window = runtimeConfig_.gui.window;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
+    captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
@@ -322,7 +322,7 @@ bool Application::pumpOnce() {
     changed = flushScriptOutputs() || changed;
     changed = flushScriptLogs() || changed;
     changed = flushScriptPlots() || changed;
-    changed = flushPendingTransferFrameRows(kTransferFrameRowsPerPump) || changed;
+    changed = flushPendingTransferFrameRows(transferFrameRowsPerPump()) || changed;
     syncDockState();
     return changed;
 }
@@ -342,6 +342,7 @@ const dock::DockStore& Application::docks() const {
 void Application::openTransport() {
     cancelAllTxRequests("连接重新打开");
     pendingTransportEvents_.clear();
+    pendingRxByteChunks_.clear();
     const auto kind = dockStore_.commState().kind;
     transport_ = createTransport(kind);
     if (!transport_) {
@@ -373,7 +374,12 @@ void Application::closeTransport() {
         transport_->close();
     }
     activeConnection_.reset();
-    pendingTransportEvents_.clear();
+    if (responsiveBacklogMode() && runtimeConfig_.gui.realtimeBacklog.discardBacklogOnDisconnect) {
+        const auto counts = clearPendingRealtimeBacklog();
+        logRealtimeBacklogDiscard(counts);
+    } else {
+        detachPendingRealtimeBacklogFromConnection();
+    }
     transport_.reset();
     syncDockState();
 }
@@ -809,7 +815,8 @@ void Application::resetWaveHistory() {
 }
 
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
-    if (!pendingTransportEvents_.empty() || !pendingTransferFrameRows_.empty()) {
+    if (!pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || !pendingTransferFrameRows_.empty() ||
+        scriptHost_.pendingPlotAppendCount() > 0U) {
         return nowMs();
     }
     auto nextWakeup = scriptHost_.nextWakeupAtMs();
@@ -856,6 +863,9 @@ void Application::syncDockState() {
     } else {
         comm.state = transport::TransportState::Closed;
     }
+    comm.pendingRxBytes = pendingRxByteCount();
+    comm.pendingTransferFrameRows = pendingTransferFrameRows_.size();
+    comm.pendingPlotAppends = scriptHost_.pendingPlotAppendCount();
 
     auto& lua = dockStore_.luaState();
     lua.docks = scriptHost_.dockSnapshots();
@@ -875,21 +885,46 @@ void Application::syncDockState() {
 }
 
 bool Application::handleTransportEvents() {
-    if (!transport_) {
-        return !pendingTransportEvents_.empty();
-    }
-
     bool changed = false;
-    auto events = transport_->takeEvents();
-    pendingTransportEvents_.insert(pendingTransportEvents_.end(),
-                                   std::make_move_iterator(events.begin()),
-                                   std::make_move_iterator(events.end()));
+    if (transport_) {
+        auto events = transport_->takeEvents();
+        pendingTransportEvents_.insert(pendingTransportEvents_.end(),
+                                       std::make_move_iterator(events.begin()),
+                                       std::make_move_iterator(events.end()));
+    }
 
     const auto startedAt = std::chrono::steady_clock::now();
     std::size_t processed = 0;
-    while (!pendingTransportEvents_.empty() && processed < kTransportEventsPerPump) {
-        const auto event = std::move(pendingTransportEvents_.front());
+    std::size_t processedRxBytes = 0;
+    const auto maxRxBytes = rxBytesPerPump();
+    while (processed < kTransportEventsPerPump) {
+        if (!pendingRxByteChunks_.empty()) {
+            const auto remainingRxBudget = maxRxBytes > processedRxBytes ? maxRxBytes - processedRxBytes : 0U;
+            if (remainingRxBudget == 0U) {
+                break;
+            }
+            const auto before = pendingRxByteCount();
+            changed = processPendingRxBytes(remainingRxBudget) || changed;
+            const auto after = pendingRxByteCount();
+            processedRxBytes += before >= after ? before - after : 0U;
+            ++processed;
+            if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) {
+                break;
+            }
+            continue;
+        }
+
+        if (pendingTransportEvents_.empty()) {
+            break;
+        }
+
+        auto event = std::move(pendingTransportEvents_.front());
         pendingTransportEvents_.pop_front();
+        if (auto* bytes = std::get_if<transport::TransportBytesEvent>(&event); bytes != nullptr && !bytes->bytes.empty()) {
+            enqueuePendingRxBytes(std::move(*bytes));
+            continue;
+        }
+
         changed = processTransportEvent(event) || changed;
         ++processed;
         if (processed >= kTransportEventsPerPump) {
@@ -899,7 +934,124 @@ bool Application::handleTransportEvents() {
             break;
         }
     }
-    return changed || !pendingTransportEvents_.empty();
+    return changed || !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty();
+}
+
+bool Application::processPendingRxBytes(const std::size_t maxBytes) {
+    if (pendingRxByteChunks_.empty() || maxBytes == 0U) {
+        return false;
+    }
+
+    auto& pending = pendingRxByteChunks_.front();
+    const auto remaining = pending.bytes.size() - pending.offset;
+    const auto chunkSize = (std::min)(remaining, maxBytes);
+    transport::TransportBytesEvent chunk{
+        .context = pending.context,
+        .bytes = std::vector<std::uint8_t>(pending.bytes.begin() + static_cast<std::ptrdiff_t>(pending.offset),
+                                           pending.bytes.begin() + static_cast<std::ptrdiff_t>(pending.offset + chunkSize)),
+    };
+
+    // 核心流程：大 RX 事件拆成小块喂给脚本和 UI，避免单次 pump 长时间占住主线程。
+    const bool changed = processTransportEvent(chunk);
+    pending.offset += chunkSize;
+    if (pending.offset >= pending.bytes.size()) {
+        pendingRxByteChunks_.pop_front();
+    }
+    return changed;
+}
+
+void Application::enqueuePendingRxBytes(transport::TransportBytesEvent event) {
+    pendingRxByteChunks_.push_back(PendingRxBytes{
+        .context = event.context,
+        .bytes = std::move(event.bytes),
+        .offset = 0,
+    });
+}
+
+void Application::detachPendingRealtimeBacklogFromConnection() {
+    for (auto& pending : pendingRxByteChunks_) {
+        pending.context.readyForIo = false;
+    }
+
+    std::deque<PendingRxBytes> detachedRxBytes;
+    while (!pendingTransportEvents_.empty()) {
+        auto event = std::move(pendingTransportEvents_.front());
+        pendingTransportEvents_.pop_front();
+        if (auto* bytes = std::get_if<transport::TransportBytesEvent>(&event); bytes != nullptr && !bytes->bytes.empty()) {
+            bytes->context.readyForIo = false;
+            detachedRxBytes.push_back(PendingRxBytes{
+                .context = bytes->context,
+                .bytes = std::move(bytes->bytes),
+                .offset = 0,
+            });
+        }
+    }
+    pendingRxByteChunks_.insert(pendingRxByteChunks_.end(),
+                                std::make_move_iterator(detachedRxBytes.begin()),
+                                std::make_move_iterator(detachedRxBytes.end()));
+}
+
+Application::RealtimeBacklogDiscardCounts Application::clearPendingRealtimeBacklog() {
+    RealtimeBacklogDiscardCounts counts{
+        .transportEvents = pendingTransportEvents_.size(),
+        .rxBytes = pendingRxByteCount(),
+        .transferFrameRows = pendingTransferFrameRows_.size(),
+    };
+    pendingTransportEvents_.clear();
+    pendingRxByteChunks_.clear();
+    pendingTransferFrameRows_.clear();
+
+    const auto scriptCounts = scriptHost_.clearPendingRealtimeOutputs();
+    counts.plotAppends = scriptCounts.plotAppends;
+    counts.scriptLogs = scriptCounts.logs;
+    counts.scriptEvents = scriptCounts.events;
+    return counts;
+}
+
+void Application::logRealtimeBacklogDiscard(const RealtimeBacklogDiscardCounts& counts) {
+    const auto total = counts.transportEvents + counts.rxBytes + counts.transferFrameRows + counts.plotAppends +
+                       counts.scriptLogs + counts.scriptEvents;
+    if (total == 0U) {
+        return;
+    }
+
+    std::ostringstream message;
+    message << "断开时已丢弃实时 UI backlog: transport_events=" << counts.transportEvents
+            << ", rx_bytes=" << counts.rxBytes
+            << ", transfer_frame_rows=" << counts.transferFrameRows
+            << ", plot_appends=" << counts.plotAppends
+            << ", script_logs=" << counts.scriptLogs
+            << ", script_events=" << counts.scriptEvents;
+    loggingFacade_.host(config::LogLevel::Warn, "BACKLOG_DROP", "realtime", message.str(), nowMs());
+}
+
+bool Application::responsiveBacklogMode() const {
+    return runtimeConfig_.gui.realtimeBacklog.mode != "complete";
+}
+
+std::size_t Application::rxBytesPerPump() const {
+    return (std::max<std::size_t>)(runtimeConfig_.gui.realtimeBacklog.rxChunkBytesPerPump, 1U);
+}
+
+std::size_t Application::transferFrameRowsPerPump() const {
+    return (std::max<std::size_t>)(runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump, 1U);
+}
+
+std::size_t Application::plotAppendsPerPump() const {
+    return (std::max<std::size_t>)(runtimeConfig_.gui.realtimeBacklog.plotAppendsPerPump, 1U);
+}
+
+std::size_t Application::pendingRxByteCount() const {
+    std::size_t total = 0;
+    for (const auto& pending : pendingRxByteChunks_) {
+        total += pending.bytes.size() - pending.offset;
+    }
+    for (const auto& event : pendingTransportEvents_) {
+        if (const auto* bytes = std::get_if<transport::TransportBytesEvent>(&event); bytes != nullptr) {
+            total += bytes->bytes.size();
+        }
+    }
+    return total;
 }
 
 bool Application::processTransportEvent(const transport::TransportEvent& event) {
@@ -1425,7 +1577,7 @@ bool Application::flushScriptPlots() {
         changed = true;
     }
 
-    auto appendRequests = scriptHost_.drainPlotAppends();
+    auto appendRequests = scriptHost_.drainPlotAppends(plotAppendsPerPump());
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergedRequests;
     std::unordered_map<std::string, std::size_t> mergedIndexes;
     mergedRequests.reserve(appendRequests.size());

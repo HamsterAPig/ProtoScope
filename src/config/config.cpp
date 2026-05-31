@@ -276,6 +276,26 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 result.config.gui.rawCapture.liveLimitBytes =
                     readScalar<std::size_t>(rawCapture, "live_limit_bytes", result.config.gui.rawCapture.liveLimitBytes);
             }
+            if (const auto realtimeBacklog = gui["realtime_backlog"]) {
+                result.config.gui.realtimeBacklog.mode =
+                    readScalar<std::string>(realtimeBacklog, "mode", result.config.gui.realtimeBacklog.mode);
+                result.config.gui.realtimeBacklog.rxChunkBytesPerPump =
+                    readScalar<std::size_t>(realtimeBacklog,
+                                            "rx_chunk_bytes_per_pump",
+                                            result.config.gui.realtimeBacklog.rxChunkBytesPerPump);
+                result.config.gui.realtimeBacklog.transferFrameRowsPerPump =
+                    readScalar<std::size_t>(realtimeBacklog,
+                                            "transfer_frame_rows_per_pump",
+                                            result.config.gui.realtimeBacklog.transferFrameRowsPerPump);
+                result.config.gui.realtimeBacklog.plotAppendsPerPump =
+                    readScalar<std::size_t>(realtimeBacklog,
+                                            "plot_appends_per_pump",
+                                            result.config.gui.realtimeBacklog.plotAppendsPerPump);
+                result.config.gui.realtimeBacklog.discardBacklogOnDisconnect =
+                    readScalar<bool>(realtimeBacklog,
+                                     "discard_backlog_on_disconnect",
+                                     result.config.gui.realtimeBacklog.discardBacklogOnDisconnect);
+            }
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
             result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
         }
@@ -436,6 +456,12 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
     root["gui"]["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
     root["gui"]["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
+    root["gui"]["realtime_backlog"]["mode"] = config.gui.realtimeBacklog.mode;
+    root["gui"]["realtime_backlog"]["rx_chunk_bytes_per_pump"] = config.gui.realtimeBacklog.rxChunkBytesPerPump;
+    root["gui"]["realtime_backlog"]["transfer_frame_rows_per_pump"] = config.gui.realtimeBacklog.transferFrameRowsPerPump;
+    root["gui"]["realtime_backlog"]["plot_appends_per_pump"] = config.gui.realtimeBacklog.plotAppendsPerPump;
+    root["gui"]["realtime_backlog"]["discard_backlog_on_disconnect"] =
+        config.gui.realtimeBacklog.discardBacklogOnDisconnect;
     root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
     root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
     root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;

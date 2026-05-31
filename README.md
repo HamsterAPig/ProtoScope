@@ -316,6 +316,16 @@ app:
 | wave.min_visible_time_span | double | 0.001 | 最小可见时间跨度（秒） |
 | wave.show_axis_labels | bool | false | 显示坐标轴标签 |
 
+**realtime_backlog**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| realtime_backlog.mode | string | responsive | 实时 backlog 策略：`responsive` 断开时丢弃未显示的 UI 派生 backlog，`complete` 继续小步补完 |
+| realtime_backlog.rx_chunk_bytes_per_pump | size_t | 65536 | 单轮主循环最多解析的 RX 字节数，大包会拆分到后续 pump |
+| realtime_backlog.transfer_frame_rows_per_pump | size_t | 2000 | 单轮最多提交到逐帧收发视图的行数 |
+| realtime_backlog.plot_appends_per_pump | size_t | 4096 | 单轮最多提交到波形缓冲的 `proto.plot.push` append 请求数 |
+| realtime_backlog.discard_backlog_on_disconnect | bool | true | `responsive` 模式下断开连接时是否立即丢弃未显示的实时 UI backlog |
+
 #### 波形点数配置关系
 
 波形相关配置里最容易混淆的是下面 3 个概念：

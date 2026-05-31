@@ -76,6 +76,14 @@ struct GuiRawCaptureConfig {
     std::size_t liveLimitBytes{64U * 1024U * 1024U};
 };
 
+struct GuiRealtimeBacklogConfig {
+    std::string mode{"responsive"};
+    std::size_t rxChunkBytesPerPump{64U * 1024U};
+    std::size_t transferFrameRowsPerPump{2000};
+    std::size_t plotAppendsPerPump{4096};
+    bool discardBacklogOnDisconnect{true};
+};
+
 struct GuiElfSymbolComboConfig {
     std::size_t limit{10};
     int debounceMs{300};
@@ -86,6 +94,7 @@ struct GuiConfig {
     GuiWaveConfig wave{};
     GuiLogHistoryConfig logHistory{};
     GuiRawCaptureConfig rawCapture{};
+    GuiRealtimeBacklogConfig realtimeBacklog{};
     GuiElfSymbolComboConfig elfSymbolCombo{};
     bool luaDockLayoutDebug{false};
     std::size_t sendHistoryLimit{20};

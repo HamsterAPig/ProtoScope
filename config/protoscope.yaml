@@ -35,6 +35,12 @@ gui:
     script_limit: 5000
   raw_capture:
     live_limit_bytes: 67108864
+  realtime_backlog:
+    mode: responsive
+    rx_chunk_bytes_per_pump: 65536
+    transfer_frame_rows_per_pump: 2000
+    plot_appends_per_pump: 4096
+    discard_backlog_on_disconnect: true
   elf_symbol_combo:
     limit: 10
     debounce_ms: 300

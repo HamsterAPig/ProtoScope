@@ -85,6 +85,9 @@ struct CommDockState {
     std::string lastError;
     std::uint64_t txCount{0};
     std::uint64_t rxCount{0};
+    std::size_t pendingRxBytes{0};
+    std::size_t pendingTransferFrameRows{0};
+    std::size_t pendingPlotAppends{0};
     bool reconnectRequired{false};
     std::vector<std::string> serialPortOptions;
 };

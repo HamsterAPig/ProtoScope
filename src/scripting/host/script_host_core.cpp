@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <string_view>
@@ -1475,6 +1476,63 @@ std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> ScriptHost::drainPl
     auto drained = std::move(plotAppends_);
     plotAppends_.clear();
     return drained;
+}
+
+std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> ScriptHost::drainPlotAppends(const std::size_t maxRequests) {
+    if (plotAppends_.empty() || maxRequests == 0U) {
+        return {};
+    }
+
+    auto makeKey = [](const std::pair<std::size_t, plot::WaveAppendRequest>& append) {
+        std::string key = std::to_string(append.first);
+        key.push_back('\x1F');
+        key.append(append.second.source);
+        return key;
+    };
+
+    auto count = (std::min)(maxRequests, plotAppends_.size());
+    for (;;) {
+        std::unordered_set<std::string> keys;
+        keys.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            keys.insert(makeKey(plotAppends_[index]));
+        }
+
+        auto extendedCount = count;
+        for (std::size_t index = count; index < plotAppends_.size(); ++index) {
+            if (keys.contains(makeKey(plotAppends_[index]))) {
+                extendedCount = index + 1U;
+            }
+        }
+        if (extendedCount == count) {
+            break;
+        }
+        count = extendedCount;
+    }
+
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drained;
+    drained.reserve(count);
+    auto end = plotAppends_.begin();
+    std::advance(end, static_cast<std::ptrdiff_t>(count));
+    std::move(plotAppends_.begin(), end, std::back_inserter(drained));
+    plotAppends_.erase(plotAppends_.begin(), end);
+    return drained;
+}
+
+std::size_t ScriptHost::pendingPlotAppendCount() const {
+    return plotAppends_.size();
+}
+
+RealtimeOutputDiscardCounts ScriptHost::clearPendingRealtimeOutputs() {
+    const RealtimeOutputDiscardCounts counts{
+        .events = events_.size(),
+        .logs = logs_.size(),
+        .plotAppends = plotAppends_.size(),
+    };
+    events_.clear();
+    logs_.clear();
+    plotAppends_.clear();
+    return counts;
 }
 
 std::vector<RequestDoneResult> ScriptHost::drainRequestDoneResults() {
