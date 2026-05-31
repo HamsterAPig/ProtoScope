@@ -40,6 +40,27 @@ void test_config_external_reload_state() {
     require(config.externalReloadMessage.empty(), "清理后外部重载提示应清空");
 }
 
+void test_bounded_dock_history_limiter_trims_from_front() {
+    protoscope::dock::BoundedDockHistoryLimiter concreteLimiter;
+    protoscope::dock::IDockHistoryLimiter& limiter = concreteLimiter;
+
+    std::vector<protoscope::dock::ReceiveRow> rows{
+        {.timestampMs = 1, .direction = "RX", .endpoint = "tcp", .bytes = {}, .message = "keep-1"},
+        {.timestampMs = 2, .direction = "RX", .endpoint = "tcp", .bytes = {}, .message = "keep-2"},
+        {.timestampMs = 3, .direction = "RX", .endpoint = "tcp", .bytes = {}, .message = "drop-3"},
+        {.timestampMs = 4, .direction = "RX", .endpoint = "tcp", .bytes = {}, .message = "drop-4"},
+    };
+
+    const auto trimmed = limiter.trimRows(rows, 2);
+    require(trimmed, "超过上限时 limiter 应返回已裁剪");
+    require(rows.size() == 2, "limiter 应只保留最近的两条记录");
+    require(rows[0].message == "drop-3" && rows[1].message == "drop-4", "limiter 应从前向后裁剪旧记录");
+
+    const auto cleared = limiter.trimRows(rows, 0);
+    require(cleared, "limit 为 0 时 limiter 应清空全部记录");
+    require(rows.empty(), "limit 为 0 时 limiter 应清空全部记录");
+}
+
 void test_dock_log_and_script_split() {
     protoscope::dock::DockStore store;
 

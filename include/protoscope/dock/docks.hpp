@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -125,6 +126,27 @@ struct SendDockState {
 void trimSendHistory(SendDockState& sendState, std::size_t limit);
 void rememberSendHistory(SendDockState& sendState, std::string payload, std::size_t limit);
 
+class IDockHistoryLimiter {
+public:
+    virtual ~IDockHistoryLimiter() = default;
+
+    virtual bool trimRows(std::vector<ReceiveRow>& rows, std::size_t limit) const = 0;
+};
+
+class BoundedDockHistoryLimiter final : public IDockHistoryLimiter {
+public:
+    bool trimRows(std::vector<ReceiveRow>& rows, std::size_t limit) const override {
+        if (rows.size() <= limit) {
+            return false;
+        }
+
+        // 核心流程：只保留最新的历史记录，避免 Dock 列表无限膨胀。
+        rows.erase(rows.begin(),
+                   rows.begin() + static_cast<std::vector<ReceiveRow>::difference_type>(rows.size() - limit));
+        return true;
+    }
+};
+
 struct LuaDockState {
     bool loaded{false};
     std::string scriptPath{"protocols/templates/default_protocol/main.lua"};
@@ -201,6 +223,7 @@ public:
     void setHistoryLimits(DockHistoryLimits limits);
 
 private:
+    std::unique_ptr<IDockHistoryLimiter> historyLimiter_{std::make_unique<BoundedDockHistoryLimiter>()};
     CommDockState comm_{};
     ReceiveDockState receive_{};
     LogDockState log_{};
