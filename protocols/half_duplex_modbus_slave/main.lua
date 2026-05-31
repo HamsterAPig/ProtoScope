@@ -21,6 +21,7 @@ local UPLOAD_BATCH_FRAMES = 120
 local UPLOAD_SAMPLE_RATE_HZ = UPLOAD_BATCH_FRAMES * 1000.0 / UPLOAD_TICK_MS
 local FUNDAMENTAL_HZ = 50.0
 local FUNDAMENTAL_PHASE_STEP = 2.0 * math.pi * FUNDAMENTAL_HZ / UPLOAD_SAMPLE_RATE_HZ
+local THIRD_HARMONIC_RATIO = 0.5
 local TIMER_NAME = "sn_scope_upload_tick"
 local CHANNEL_SCALE = 1000
 
@@ -157,7 +158,8 @@ local function waveform_value(selector, sample_index)
   elseif mode == 1 then
     return 0.35 + 0.65 * math.sin(phase * 0.7 + 0.4)
   elseif mode == 2 then
-    return math.sin(phase * 0.5) * math.cos(phase * 0.11 + 0.7)
+    -- CH3 默认选择该模式：50Hz 基波叠加 150Hz 三次谐波，便于 FFT 稳定观察双峰。
+    return math.sin(phase) + THIRD_HARMONIC_RATIO * math.sin(3.0 * phase)
   end
   local cycle = (phase * 0.35) % 1.0
   return 4.0 * math.abs(cycle - 0.5) - 1.0

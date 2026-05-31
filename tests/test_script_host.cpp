@@ -68,6 +68,10 @@ std::uint16_t readBe16(const std::vector<std::uint8_t>& bytes, std::size_t offse
          | static_cast<std::uint16_t>(bytes.at(offset + 1));
 }
 
+std::int16_t readBeI16(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+    return static_cast<std::int16_t>(readBe16(bytes, offset));
+}
+
 std::vector<std::uint8_t> makeStreamFixtureFrame(std::uint8_t value) {
     std::vector<std::uint8_t> frame{0xAA, 0x55, 0x01, value, 0x00, 0x00};
     const std::vector<std::uint8_t> payload(frame.begin(), frame.end() - 2);
@@ -1151,6 +1155,32 @@ void test_half_duplex_modbus_ack_and_plot_flow() {
             "四个通道都应各收到 120 个样本");
 }
 
+void test_half_duplex_modbus_ch3_uses_third_harmonic() {
+    protoscope::scripting::ScriptHost master;
+    protoscope::scripting::ScriptHost slave;
+    requireProtocolLoaded(master, "protocols/half_duplex_modbus_master");
+    requireProtocolLoaded(slave, "protocols/half_duplex_modbus_slave");
+
+    const auto ctx = sampleCtx();
+    completeHalfDuplexStartup(master, slave, ctx);
+    const auto frame = nextHalfDuplexWaveFrame(slave);
+
+    constexpr double sampleRateHz = 12000.0;
+    constexpr double fundamentalHz = 50.0;
+    constexpr double thirdHarmonicRatio = 0.5;
+    constexpr double channelScale = 1000.0;
+    constexpr double phaseStep = 2.0 * 3.14159265358979323846 * fundamentalHz / sampleRateHz;
+
+    for (std::size_t frameIndex = 0; frameIndex < 120; ++frameIndex) {
+        const double phase = static_cast<double>(frameIndex + 1) * phaseStep;
+        const auto expected = static_cast<int>(
+            std::floor((std::sin(phase) + thirdHarmonicRatio * std::sin(3.0 * phase)) * channelScale));
+        const auto actual = static_cast<int>(readBeI16(frame, frameIndex * 14 + 8));
+        const auto diff = actual >= expected ? actual - expected : expected - actual;
+        require(diff <= 1, "CH3 默认应输出 50Hz 基波叠加 150Hz 三次谐波");
+    }
+}
+
 void test_half_duplex_modbus_loss_status_keeps_valid_frame() {
     protoscope::scripting::ScriptHost master;
     requireProtocolLoaded(master, "protocols/half_duplex_modbus_master");
@@ -1545,6 +1575,7 @@ static const TestCase kAllTests[] = {
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
     {"half_duplex_modbus_request_batches", &test_half_duplex_modbus_request_batches},
     {"half_duplex_modbus_ack_and_plot_flow", &test_half_duplex_modbus_ack_and_plot_flow},
+    {"half_duplex_modbus_ch3_uses_third_harmonic", &test_half_duplex_modbus_ch3_uses_third_harmonic},
     {"half_duplex_modbus_loss_status_keeps_valid_frame", &test_half_duplex_modbus_loss_status_keeps_valid_frame},
     {"half_duplex_modbus_ack_matching_rules", &test_half_duplex_modbus_ack_matching_rules},
     {"half_duplex_modbus_sticky_frames", &test_half_duplex_modbus_sticky_frames},
