@@ -51,6 +51,7 @@ struct GuiWaveConfig {
     plot::WaveControlMode controlMode{plot::WaveControlMode::Oscilloscope};
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
     plot::WaveChannelCardWidthMode channelCardWidthMode{plot::WaveChannelCardWidthMode::Fixed};
+    plot::WaveChannelDoubleClickAction channelDoubleClickAction{plot::WaveChannelDoubleClickAction::ResetScaleOffset};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     double downsampleStartMultiplier{2.0};

@@ -723,18 +723,32 @@ WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double
     };
 }
 
-bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex) {
-    if (channelIndex >= wave.defaultChannelSpecs.size()) {
-        return false;
-    }
+bool resetChannelConfigToDefault(WaveDockState& wave,
+                                 std::size_t channelIndex,
+                                 const ChannelSpec& defaultSpec,
+                                 WaveChannelDoubleClickAction action) {
     const auto currentSpec = wave.buffer.channelSpec(channelIndex);
     if (!currentSpec.has_value()) {
         return false;
     }
 
-    const auto& defaultSpec = wave.defaultChannelSpecs[channelIndex];
     auto updated = *currentSpec;
-    updated.offset = defaultSpec.offset;
+    // 核心流程：按配置只回退指定字段，避免双击误触清掉用户想保留的通道覆盖。
+    switch (action) {
+    case WaveChannelDoubleClickAction::ResetAll:
+        updated = defaultSpec;
+        break;
+    case WaveChannelDoubleClickAction::ResetScaleOffset:
+        updated.scale = defaultSpec.scale;
+        updated.offset = defaultSpec.offset;
+        break;
+    case WaveChannelDoubleClickAction::ResetScale:
+        updated.scale = defaultSpec.scale;
+        break;
+    case WaveChannelDoubleClickAction::ResetOffset:
+        updated.offset = defaultSpec.offset;
+        break;
+    }
 
     if (channelIndex >= wave.channelOverrides.size()) {
         wave.channelOverrides.resize(channelIndex + 1);
@@ -743,13 +757,24 @@ bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex) 
     overrideState.labelOverridden = updated.label != defaultSpec.label;
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > kEpsilon;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > kEpsilon;
-    overrideState.offsetOverridden = false;
+    overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > kEpsilon;
     overrideState.label = updated.label;
     overrideState.ratio = updated.ratio;
     overrideState.scale = updated.scale;
-    overrideState.offset = defaultSpec.offset;
+    overrideState.offset = updated.offset;
     wave.buffer.setChannelSpec(channelIndex, std::move(updated));
     return true;
+}
+
+bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, WaveChannelDoubleClickAction action) {
+    if (channelIndex >= wave.defaultChannelSpecs.size()) {
+        return false;
+    }
+    return resetChannelConfigToDefault(wave, channelIndex, wave.defaultChannelSpecs[channelIndex], action);
+}
+
+bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex) {
+    return resetChannelConfigToDefault(wave, channelIndex, WaveChannelDoubleClickAction::ResetOffset);
 }
 
 } // namespace protoscope::plot

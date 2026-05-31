@@ -52,6 +52,11 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
             if (active && (scrollActiveIntoView || ImGui::IsItemClicked(ImGuiMouseButton_Left))) {
                 ImGui::SetScrollHereX(0.5F);
             }
+            // 核心流程：双击当前 CH 卡片按配置恢复默认值，不依赖激活通道。
+            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                const plot::ChannelSpec defaultSpec = channelDefaultSpec(wave, channelIndex, *spec);
+                plot::resetChannelConfigToDefault(wave, channelIndex, defaultSpec, view.channelDoubleClickAction);
+            }
 
             const bool hovered = ImGui::IsItemHovered();
             const ImVec2 cardMax(cardMin.x + cardSize.x, cardMin.y + cardSize.y);

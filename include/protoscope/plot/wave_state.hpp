@@ -59,6 +59,7 @@ struct WaveViewState {
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
+    WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
     WaveFftConfig fft{};
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
@@ -133,6 +134,11 @@ struct WaveDockState {
     WaveFftFrame cachedFftFrame{};
 };
 
+bool resetChannelConfigToDefault(WaveDockState& wave,
+                                 std::size_t channelIndex,
+                                 const ChannelSpec& defaultSpec,
+                                 WaveChannelDoubleClickAction action);
+bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, WaveChannelDoubleClickAction action);
 bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex);
 
 } // namespace protoscope::plot

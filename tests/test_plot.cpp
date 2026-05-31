@@ -32,6 +32,35 @@ protoscope::plot::WaveDisplayData makeDisplayData(std::vector<protoscope::plot::
     return displayData;
 }
 
+protoscope::plot::WaveDockState makeChannelResetWave() {
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.defaultChannelSpecs.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .ratio = 2.0,
+        .scale = 1.5,
+        .offset = -0.25,
+    });
+    wave.buffer.setChannelSpec(0, {
+        .label = "Renamed",
+        .unit = "V",
+        .ratio = 3.0,
+        .scale = 4.0,
+        .offset = 10.0,
+    });
+    wave.channelOverrides.resize(1);
+    wave.channelOverrides[0].labelOverridden = true;
+    wave.channelOverrides[0].ratioOverridden = true;
+    wave.channelOverrides[0].scaleOverridden = true;
+    wave.channelOverrides[0].offsetOverridden = true;
+    wave.channelOverrides[0].label = "Renamed";
+    wave.channelOverrides[0].ratio = 3.0;
+    wave.channelOverrides[0].scale = 4.0;
+    wave.channelOverrides[0].offset = 10.0;
+    return wave;
+}
+
 } // namespace
 
 void test_plot_history_trim_and_envelope() {
@@ -903,6 +932,59 @@ void test_wave_visible_channel_bounds_ignore_hidden_channels() {
 
     const auto empty = protoscope::plot::computeDisplayBoundsForChannels(data, {}, 0.001);
     require(!empty.valid, "没有可见通道时 bounds 应保持无效");
+}
+
+void test_wave_channel_reset_all_uses_protocol_default() {
+    auto wave = makeChannelResetWave();
+
+    require(protoscope::plot::resetChannelConfigToDefault(wave,
+                                                          0,
+                                                          protoscope::plot::WaveChannelDoubleClickAction::ResetAll),
+            "恢复全部默认应成功");
+    const auto spec = wave.buffer.channelSpec(0);
+    require(spec.has_value(), "恢复全部默认后通道配置仍应存在");
+    require(spec->label == "CH1", "恢复全部默认应恢复标签");
+    require(std::abs(spec->ratio - 2.0) < 1e-12, "恢复全部默认应恢复 ratio");
+    require(std::abs(spec->scale - 1.5) < 1e-12, "恢复全部默认应恢复 scale");
+    require(std::abs(spec->offset + 0.25) < 1e-12, "恢复全部默认应恢复 offset");
+    require(!wave.channelOverrides[0].labelOverridden, "恢复全部默认应清除 label override");
+    require(!wave.channelOverrides[0].ratioOverridden, "恢复全部默认应清除 ratio override");
+    require(!wave.channelOverrides[0].scaleOverridden, "恢复全部默认应清除 scale override");
+    require(!wave.channelOverrides[0].offsetOverridden, "恢复全部默认应清除 offset override");
+}
+
+void test_wave_channel_reset_scale_offset_preserves_label_and_ratio() {
+    auto wave = makeChannelResetWave();
+
+    require(protoscope::plot::resetChannelConfigToDefault(wave,
+                                                          0,
+                                                          protoscope::plot::WaveChannelDoubleClickAction::ResetScaleOffset),
+            "恢复 scale/offset 默认应成功");
+    const auto spec = wave.buffer.channelSpec(0);
+    require(spec.has_value(), "恢复 scale/offset 后通道配置仍应存在");
+    require(spec->label == "Renamed", "恢复 scale/offset 不应修改标签");
+    require(std::abs(spec->ratio - 3.0) < 1e-12, "恢复 scale/offset 不应修改 ratio");
+    require(std::abs(spec->scale - 1.5) < 1e-12, "恢复 scale/offset 应恢复 scale");
+    require(std::abs(spec->offset + 0.25) < 1e-12, "恢复 scale/offset 应恢复 offset");
+    require(wave.channelOverrides[0].labelOverridden, "恢复 scale/offset 应保留 label override");
+    require(wave.channelOverrides[0].ratioOverridden, "恢复 scale/offset 应保留 ratio override");
+    require(!wave.channelOverrides[0].scaleOverridden, "恢复 scale/offset 应清除 scale override");
+    require(!wave.channelOverrides[0].offsetOverridden, "恢复 scale/offset 应清除 offset override");
+}
+
+void test_wave_channel_reset_scale_preserves_offset() {
+    auto wave = makeChannelResetWave();
+
+    require(protoscope::plot::resetChannelConfigToDefault(wave,
+                                                          0,
+                                                          protoscope::plot::WaveChannelDoubleClickAction::ResetScale),
+            "恢复 scale 默认应成功");
+    const auto spec = wave.buffer.channelSpec(0);
+    require(spec.has_value(), "恢复 scale 后通道配置仍应存在");
+    require(std::abs(spec->scale - 1.5) < 1e-12, "恢复 scale 应恢复 scale");
+    require(std::abs(spec->offset - 10.0) < 1e-12, "恢复 scale 不应修改 offset");
+    require(!wave.channelOverrides[0].scaleOverridden, "恢复 scale 应清除 scale override");
+    require(wave.channelOverrides[0].offsetOverridden, "恢复 scale 应保留 offset override");
 }
 
 void test_wave_offset_reset_uses_protocol_default_only() {

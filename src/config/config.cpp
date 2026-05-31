@@ -121,6 +121,38 @@ const char* toWaveChannelCardWidthModeText(const plot::WaveChannelCardWidthMode 
     return "fixed";
 }
 
+plot::WaveChannelDoubleClickAction parseWaveChannelDoubleClickAction(
+    const std::string& value,
+    plot::WaveChannelDoubleClickAction fallback) {
+    if (value == "reset_all") {
+        return plot::WaveChannelDoubleClickAction::ResetAll;
+    }
+    if (value == "reset_scale_offset") {
+        return plot::WaveChannelDoubleClickAction::ResetScaleOffset;
+    }
+    if (value == "reset_scale") {
+        return plot::WaveChannelDoubleClickAction::ResetScale;
+    }
+    if (value == "reset_offset") {
+        return plot::WaveChannelDoubleClickAction::ResetOffset;
+    }
+    return fallback;
+}
+
+const char* toWaveChannelDoubleClickActionText(const plot::WaveChannelDoubleClickAction action) {
+    switch (action) {
+    case plot::WaveChannelDoubleClickAction::ResetAll:
+        return "reset_all";
+    case plot::WaveChannelDoubleClickAction::ResetScaleOffset:
+        return "reset_scale_offset";
+    case plot::WaveChannelDoubleClickAction::ResetScale:
+        return "reset_scale";
+    case plot::WaveChannelDoubleClickAction::ResetOffset:
+        return "reset_offset";
+    }
+    return "reset_scale_offset";
+}
+
 double positiveOrFallback(double value, double fallback) {
     return value > 0.0 ? value : fallback;
 }
@@ -200,6 +232,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                         result.config.gui.wave.displayFormula);
             result.config.gui.wave.channelCardWidthMode =
                 parseWaveChannelCardWidthMode(readScalar<std::string>(wave, "channel_card_width_mode", "fixed"));
+            result.config.gui.wave.channelDoubleClickAction =
+                parseWaveChannelDoubleClickAction(
+                    readScalar<std::string>(wave,
+                                            "channel_double_click_action",
+                                            toWaveChannelDoubleClickActionText(result.config.gui.wave.channelDoubleClickAction)),
+                    result.config.gui.wave.channelDoubleClickAction);
             result.config.gui.wave.maxRenderPointsPerChannel =
                 readScalar<std::size_t>(wave, "max_render_points_per_channel", result.config.gui.wave.maxRenderPointsPerChannel);
             result.config.gui.wave.maxRenderVertices =
@@ -359,6 +397,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["control_mode"] = toWaveControlModeText(config.gui.wave.controlMode);
     root["gui"]["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
     root["gui"]["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
+    root["gui"]["wave"]["channel_double_click_action"] =
+        toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
     root["gui"]["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
     root["gui"]["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
     root["gui"]["wave"]["vertical_auto_fit_multiplier"] = config.gui.wave.verticalAutoFitMultiplier;
@@ -550,6 +590,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.controlMode = config.gui.wave.controlMode;
     wave.displayFormula = config.gui.wave.displayFormula;
     wave.channelCardWidthMode = config.gui.wave.channelCardWidthMode;
+    wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
     wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
@@ -579,6 +620,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
     config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
+    config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;

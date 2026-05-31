@@ -311,6 +311,7 @@ app:
 | wave.max_render_points_per_channel | size_t | 1200 | 每通道目标渲染点预算，控制主波形区最多显示多少个点/包络桶 |
 | wave.max_render_vertices | size_t | 60000 | 总渲染顶点预算，多通道或开启磷光辉光时会进一步压缩每通道可显示点数 |
 | wave.downsample_start_multiplier | double | 2.0 | 降采样启动倍数；源样本数超过“渲染点预算 × 该系数”后切换到包络降采样 |
+| wave.channel_double_click_action | string | reset_scale_offset | CH 卡片双击恢复行为：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset` |
 | wave.overview_max_samples | size_t | 20000 | 总览图最多参与绘制的最近样本数，限制长历史下 overview 的开销 |
 | wave.min_visible_time_span | double | 0.001 | 最小可见时间跨度（秒） |
 | wave.show_axis_labels | bool | false | 显示坐标轴标签 |
@@ -377,6 +378,7 @@ proto.plot.setup({
 gui:
   wave:
     channel_card_width_mode: fixed
+    channel_double_click_action: reset_scale_offset
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
     vertical_auto_fit_multiplier: 1.2
@@ -427,6 +429,9 @@ gui:
 
 - `wave.channel_card_width_mode`
   - 控制顶部 CH 卡片宽度，默认 `fixed` 使用 `channel_card_fixed_width`，可改为 `adaptive` 按 `channel_card_adaptive_ratio` 随内容宽度计算。
+
+- `wave.channel_double_click_action`
+  - 控制顶部 CH 卡片双击恢复行为，默认 `reset_scale_offset` 只恢复当前通道 `scale/offset`，也可设为 `reset_all`、`reset_scale` 或 `reset_offset`。
 
 - `wave.vertical_auto_fit_multiplier`
   - 控制 Y 轴 Auto Fit 的留白系数，默认 `1.2`，例如显示值范围 `[-10, 5]` 会自动扩到 `[-12, 12]`。
