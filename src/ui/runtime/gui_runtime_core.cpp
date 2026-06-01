@@ -417,8 +417,10 @@ void GuiRuntime::drawAppHeader() {
     auto& config = application_.docks().configState();
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->Pos);
-    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, 58.0F));
+    constexpr float menuBarHeight = 22.0F;
+    constexpr float headerHeight = 58.0F;
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + menuBarHeight));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, headerHeight));
     constexpr ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0F, 10.0F));
@@ -503,10 +505,11 @@ void GuiRuntime::drawAppShell() {
     drawAppHeader();
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float menuBarHeight = 22.0F;
     const float headerHeight = 58.0F;
     const float statusHeight = 44.0F;
-    const ImVec2 dockPos(viewport->Pos.x, viewport->Pos.y + headerHeight);
-    const ImVec2 dockSize(viewport->Size.x, viewport->Size.y - headerHeight - statusHeight);
+    const ImVec2 dockPos(viewport->Pos.x, viewport->Pos.y + menuBarHeight + headerHeight);
+    const ImVec2 dockSize(viewport->Size.x, viewport->Size.y - menuBarHeight - headerHeight - statusHeight);
 
     ImGui::SetNextWindowPos(dockPos);
     ImGui::SetNextWindowSize(dockSize);

@@ -286,7 +286,8 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
 
     if (beginToolbarGroup("wave_quick_actions", "主视图控制")) {
         // 核心流程：右侧工具栏先放高频动作，细项参数继续留在下方分组，避免工具区变成长表单。
-        if (ImGui::BeginTable("##wave_toolbar_quick_actions", 2, ImGuiTableFlags_SizingStretchSame)) {
+        const bool quickActionsOpened = ImGui::BeginTable("##wave_toolbar_quick_actions", 2, ImGuiTableFlags_SizingStretchSame);
+        if (quickActionsOpened) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             if (drawToolbarToggleButton(view.autoFollowLatest ? "跟随中" : "已暂停",
@@ -346,6 +347,8 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
             if (drawToolbarActionButton("折叠工具栏", "收起为窄按钮列，保留常用操作入口。", ImVec2(-1.0F, 0.0F))) {
                 wave.toolsCollapsed = true;
             }
+        }
+        if (quickActionsOpened) {
             ImGui::EndTable();
         }
         endToolbarGroup();
