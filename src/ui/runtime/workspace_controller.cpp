@@ -5,6 +5,8 @@
 
 #include "protoscope/ui/protocol_state_file.hpp"
 
+#include <exception>
+
 namespace protoscope::ui {
 
 WorkspaceController::WorkspaceController(GuiRuntime& runtime)
@@ -82,42 +84,60 @@ void GuiRuntime::processPendingProtocolWorkspaceSwitch() {
 
     const auto protocolDir = std::move(*pendingProtocolDir_);
     pendingProtocolDir_.reset();
-    if (!switchProtocolWorkspace(protocolDir, pendingProtocolForceReload_)) {
-        application_.setStatusMessage("协议重载失败", true);
+    try {
+        if (switchProtocolWorkspace(protocolDir, pendingProtocolForceReload_)) {
+            return;
+        }
+    } catch (const std::exception& ex) {
+        application_.logger().error("protocol", std::string("协议重载异常: ") + ex.what());
+    } catch (...) {
+        application_.logger().error("protocol", "协议重载异常: 未知异常");
     }
+    // UI 帧最外层兜底：Lua 协议写错只能表现为重载失败，不能让 GUI 进程退出。
+    application_.setStatusMessage("协议重载失败", true);
 }
 
 bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool forceReload) {
-    const auto& previousLua = application_.docks().luaState();
-    const auto requestedDir = configStore_.normalizeProtocolDir(previousLua.protocolRootDir, protocolDir).generic_string();
-    const bool sameProtocol = protocolWorkspaceLoaded_
-        && previousLua.loaded
-        && previousLua.protocolDir == requestedDir
-        && activeWorkspaceProtocolKey_ == luaDockLayoutKey(requestedDir, configStore_.mainLuaPath(requestedDir).generic_string());
+    try {
+        const auto& previousLua = application_.docks().luaState();
+        const auto requestedDir = configStore_.normalizeProtocolDir(previousLua.protocolRootDir, protocolDir).generic_string();
+        const bool sameProtocol = protocolWorkspaceLoaded_
+            && previousLua.loaded
+            && previousLua.protocolDir == requestedDir
+            && activeWorkspaceProtocolKey_ == luaDockLayoutKey(requestedDir, configStore_.mainLuaPath(requestedDir).generic_string());
 
-    if (shouldResetLuaDefaultDockStateOnProtocolSwitch(sameProtocol)) {
-        saveCurrentProtocolWorkspace();
-        defaultDockedLuaStableIds_.clear();
-        defaultLuaDockNodes_.clear();
-        protocolWorkspaceLoaded_ = false;
-        workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
-        pendingLuaDefaultDockLayout_ = false;
-        pendingProtocolWorkspaceSave_ = false;
-    }
+        if (shouldResetLuaDefaultDockStateOnProtocolSwitch(sameProtocol)) {
+            saveCurrentProtocolWorkspace();
+            defaultDockedLuaStableIds_.clear();
+            defaultLuaDockNodes_.clear();
+            protocolWorkspaceLoaded_ = false;
+            workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
+            pendingLuaDefaultDockLayout_ = false;
+            pendingProtocolWorkspaceSave_ = false;
+        }
 
-    if (!application_.reloadProtocolDirectory(protocolDir, forceReload)) {
-        if (!sameProtocol) {
+        if (!application_.reloadProtocolDirectory(protocolDir, forceReload)) {
+            if (!sameProtocol) {
+                loadCurrentProtocolWorkspace();
+            }
+            return false;
+        }
+
+        if (sameProtocol) {
+            loadCurrentProtocolControlState();
+        } else {
             loadCurrentProtocolWorkspace();
         }
-        return false;
+        return true;
+    } catch (const std::exception& ex) {
+        application_.logger().error("protocol", std::string("协议工作区切换异常: ") + ex.what());
+    } catch (...) {
+        application_.logger().error("protocol", "协议工作区切换异常: 未知异常");
     }
-
-    if (sameProtocol) {
-        loadCurrentProtocolControlState();
-    } else {
-        loadCurrentProtocolWorkspace();
+    if (!application_.docks().luaState().loaded) {
+        application_.setStatusMessage("协议重载失败", true);
     }
-    return true;
+    return false;
 }
 
 void GuiRuntime::loadCurrentProtocolWorkspace() {

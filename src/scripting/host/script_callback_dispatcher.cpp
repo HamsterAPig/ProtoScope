@@ -1,69 +1,104 @@
 #include "script_callback_dispatcher.hpp"
 #include "script_host_internal.hpp"
 
+#include <exception>
+#include <optional>
+#include <string>
+
 namespace protoscope::scripting {
 
+std::optional<sol::protected_function> ScriptHost::resolveGlobalCallback(const char* name) {
+    if (!scriptLoaded_ || !runtime_) {
+        return std::nullopt;
+    }
+
+    try {
+        const sol::object callbackObject = runtime_->lua[name];
+        if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
+            return std::nullopt;
+        }
+        if (!callbackObject.is<sol::protected_function>()) {
+            protoLog("error", std::string(name) + " 必须是 function");
+            return std::nullopt;
+        }
+        return callbackObject.as<sol::protected_function>();
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string(name) + " 读取失败: " + ex.what());
+    } catch (...) {
+        protoLog("error", std::string(name) + " 读取失败: 未知异常");
+    }
+    return std::nullopt;
+}
+
 void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
-    if (!scriptLoaded_) {
+    const auto callback = resolveGlobalCallback("on_open");
+    if (!callback.has_value()) {
         return;
     }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_open"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection));
-    if (!result.valid()) {
-        protoLog("error", "on_open 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection));
+        if (!result.valid()) {
+            protoLog("error", "on_open 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_open 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_open 执行异常: 未知异常");
     }
 }
 
 void ScriptHost::callbackOnClose(const ScriptHostContext& ctx) {
-    if (!scriptLoaded_) {
+    const auto callback = resolveGlobalCallback("on_close");
+    if (!callback.has_value()) {
         return;
     }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_close"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection));
-    if (!result.valid()) {
-        protoLog("error", "on_close 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection));
+        if (!result.valid()) {
+            protoLog("error", "on_close 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_close 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_close 执行异常: 未知异常");
     }
 }
 
 void ScriptHost::callbackOnError(const ScriptHostContext& ctx, const std::string& message) {
-    if (!scriptLoaded_) {
+    const auto callback = resolveGlobalCallback("on_error");
+    if (!callback.has_value()) {
         return;
     }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_error"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), message);
-    if (!result.valid()) {
-        protoLog("error", "on_error 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), message);
+        if (!result.valid()) {
+            protoLog("error", "on_error 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_error 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_error 执行异常: 未知异常");
     }
 }
 
 void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes) {
-    if (!scriptLoaded_) {
+    const auto callback = resolveGlobalCallback("on_bytes");
+    if (!callback.has_value()) {
         return;
     }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_bytes"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeBytesTable(view, bytes));
-    if (!result.valid()) {
-        protoLog("error", "on_bytes 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), makeBytesTable(view, bytes));
+        if (!result.valid()) {
+            protoLog("error", "on_bytes 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_bytes 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_bytes 执行异常: 未知异常");
     }
 }
 
@@ -77,11 +112,17 @@ void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const Strea
         return;
     }
 
-    sol::state_view view(runtime_->lua.lua_state());
-    auto callback = callbackIter->second;
-    auto result = callback(makeContextTable(view, ctx.connection), makeStreamFrameTable(view, frame));
-    if (!result.valid()) {
-        protoLog("error", "stream.on_frame 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        auto callback = callbackIter->second;
+        auto result = callback(makeContextTable(view, ctx.connection), makeStreamFrameTable(view, frame));
+        if (!result.valid()) {
+            protoLog("error", "stream.on_frame 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("stream.on_frame 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "stream.on_frame 执行异常: 未知异常");
     }
 }
 
@@ -90,92 +131,108 @@ void ScriptHost::callbackOnStreamError(const ScriptHostContext& ctx, const Strea
         return;
     }
 
-    sol::state_view view(runtime_->lua.lua_state());
-    auto callback = runtime_->stream->onError;
-    auto result = callback(makeContextTable(view, ctx.connection), makeStreamErrorTable(view, error));
-    if (!result.valid()) {
-        protoLog("error", "stream.on_error 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        auto callback = runtime_->stream->onError;
+        auto result = callback(makeContextTable(view, ctx.connection), makeStreamErrorTable(view, error));
+        if (!result.valid()) {
+            protoLog("error", "stream.on_error 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("stream.on_error 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "stream.on_error 执行异常: 未知异常");
     }
 }
 
 void ScriptHost::callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName) {
-    if (!scriptLoaded_) {
+    const auto callback = resolveGlobalCallback("on_timer");
+    if (!callback.has_value()) {
         return;
     }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_timer"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), timerName);
-    if (!result.valid()) {
-        protoLog("error", "on_timer 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), timerName);
+        if (!result.valid()) {
+            protoLog("error", "on_timer 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_timer 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_timer 执行异常: 未知异常");
     }
 }
 
 void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value) {
-    if (!scriptLoaded_) {
+    const auto callback = resolveGlobalCallback("on_control");
+    if (!callback.has_value()) {
         return;
     }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_control"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result =
-        callback(makeContextTable(view, ctx.connection), id, controlValueToLua(view, findControlDescriptor(controls_, id), value));
-    if (!result.valid()) {
-        protoLog("error", "on_control 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result =
+            (*callback)(makeContextTable(view, ctx.connection), id, controlValueToLua(view, findControlDescriptor(controls_, id), value));
+        if (!result.valid()) {
+            protoLog("error", "on_control 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_control 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_control 执行异常: 未知异常");
     }
 }
 
 void ScriptHost::callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event) {
-    if (!scriptLoaded_) {
+    const auto callback = resolveGlobalCallback("on_tx");
+    if (!callback.has_value()) {
         return;
     }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_tx"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeTxEventTable(view, event));
-    if (!result.valid()) {
-        protoLog("error", "on_tx 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), makeTxEventTable(view, event));
+        if (!result.valid()) {
+            protoLog("error", "on_tx 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_tx 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_tx 执行异常: 未知异常");
     }
 }
 
 void ScriptHost::callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event) {
-    if (!scriptLoaded_) {
+    const auto callback = resolveGlobalCallback("on_dialog");
+    if (!callback.has_value()) {
         return;
     }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_dialog"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeDialogEventTable(view, event));
-    if (!result.valid()) {
-        protoLog("error", "on_dialog 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), makeDialogEventTable(view, event));
+        if (!result.valid()) {
+            protoLog("error", "on_dialog 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_dialog 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_dialog 执行异常: 未知异常");
     }
 }
 
 void ScriptHost::callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event) {
-    if (!scriptLoaded_) {
+    const auto callback = resolveGlobalCallback("on_file_dialog");
+    if (!callback.has_value()) {
         return;
     }
-    sol::state_view view(runtime_->lua.lua_state());
-    const sol::object callbackObject = runtime_->lua["on_file_dialog"];
-    if (!callbackObject.valid() || callbackObject.get_type() == sol::type::lua_nil) {
-        return;
-    }
-    auto callback = callbackObject.as<sol::protected_function>();
-    sol::protected_function_result result = callback(makeContextTable(view, ctx.connection), makeFileDialogEventTable(view, event));
-    if (!result.valid()) {
-        protoLog("error", "on_file_dialog 执行失败: " + protectedCallError(result));
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), makeFileDialogEventTable(view, event));
+        if (!result.valid()) {
+            protoLog("error", "on_file_dialog 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_file_dialog 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_file_dialog 执行异常: 未知异常");
     }
 }
 

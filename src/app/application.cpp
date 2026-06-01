@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <iomanip>
 #include <iterator>
 #include <limits>
@@ -259,69 +260,80 @@ config::AppConfig Application::captureConfig() const {
 
 bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool forceReload) {
     auto& lua = dockStore_.luaState();
-    const auto resolvedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, protocolDir);
-    const auto resolvedDirText = resolvedDir.generic_string();
-    const auto protocolName = configStore_.protocolName(resolvedDir);
-    const auto scriptPath = configStore_.mainLuaPath(resolvedDir).generic_string();
-    const bool unchanged = lua.loaded && lua.protocolDir == resolvedDirText && lua.scriptPath == scriptPath;
+    try {
+        const auto resolvedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, protocolDir);
+        const auto resolvedDirText = resolvedDir.generic_string();
+        const auto protocolName = configStore_.protocolName(resolvedDir);
+        const auto scriptPath = configStore_.mainLuaPath(resolvedDir).generic_string();
+        const bool unchanged = lua.loaded && lua.protocolDir == resolvedDirText && lua.scriptPath == scriptPath;
 
-    // 核心流程：配置热加载只在协议目录真正变化时重载脚本，避免窗口刷新阶段重复刷加载日志。
-    if (!forceReload && unchanged) {
+        // 核心流程：配置热加载只在协议目录真正变化时重载脚本，避免窗口刷新阶段重复刷加载日志。
+        if (!forceReload && unchanged) {
+            lua.lastError.clear();
+            lua.docks = scriptHost_.dockSnapshots();
+            lua.controls = scriptHost_.controlsSnapshot();
+            lua.controlStates = scriptHost_.controlStatesSnapshot();
+            return true;
+        }
+
+        cancelAllTxRequests("协议已重新加载");
+        // 核心流程：取消旧 request 会触发旧脚本 on_tx；重载前必须丢弃这些旧输出，
+        // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
+        scriptHost_.drainTxRequests();
+        scriptHost_.drainRequestDoneResults();
+        scriptHost_.drainStatusUpdates();
+        scriptHost_.drainDialogRequests();
+        scriptHost_.drainFileDialogRequests();
+        scriptHost_.drainEvents();
+        scriptHost_.drainLogs();
+        scriptHost_.clearPendingRealtimeOutputs();
+
+        scripting::ScriptHost probeHost;
+        probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
+        if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
+            lua.lastError = probeHost.lastError();
+            loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
+            lua.docks = scriptHost_.dockSnapshots();
+            lua.controls = scriptHost_.controlsSnapshot();
+            lua.controlStates = scriptHost_.controlStatesSnapshot();
+            return false;
+        }
+
+        // 核心流程：先用临时宿主探测目标协议能否完整加载，确认成功后再在当前宿主上重载，
+        // 避免失败场景先清空旧运行态，也避免 Lua 回调把临时宿主地址固化进运行时对象。
+        if (!scriptHost_.loadProtocolDirectory(resolvedDirText)) {
+            lua.lastError = scriptHost_.lastError();
+            loggingFacade_.error("protocol", "协议重载失败: " + lua.lastError);
+            lua.docks = scriptHost_.dockSnapshots();
+            lua.controls = scriptHost_.controlsSnapshot();
+            lua.controlStates = scriptHost_.controlStatesSnapshot();
+            return false;
+        }
+
+        lua.protocolDir = resolvedDirText;
+        lua.protocolName = protocolName;
+        lua.scriptPath = scriptPath;
+        lua.loaded = true;
+        lua.docks = scriptHost_.dockSnapshots();
+        lua.controls = scriptHost_.controlsSnapshot();
+        lua.controlStates = scriptHost_.controlStatesSnapshot();
         lua.lastError.clear();
-        lua.docks = scriptHost_.dockSnapshots();
-        lua.controls = scriptHost_.controlsSnapshot();
-        lua.controlStates = scriptHost_.controlStatesSnapshot();
+        rebuildTransferFrameRows();
+        loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
+        flushScriptLogs();
+        syncDockState();
         return true;
+    } catch (const std::exception& ex) {
+        lua.lastError = std::string("协议重载异常: ") + ex.what();
+    } catch (...) {
+        lua.lastError = "协议重载异常: 未知异常";
     }
 
-    cancelAllTxRequests("协议已重新加载");
-    // 核心流程：取消旧 request 会触发旧脚本 on_tx；重载前必须丢弃这些旧输出，
-    // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
-    scriptHost_.drainTxRequests();
-    scriptHost_.drainRequestDoneResults();
-    scriptHost_.drainStatusUpdates();
-    scriptHost_.drainDialogRequests();
-    scriptHost_.drainFileDialogRequests();
-    scriptHost_.drainEvents();
-    scriptHost_.drainLogs();
-    scriptHost_.clearPendingRealtimeOutputs();
-
-    scripting::ScriptHost probeHost;
-    probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
-    if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
-        lua.lastError = probeHost.lastError();
-        loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
-        lua.docks = scriptHost_.dockSnapshots();
-        lua.controls = scriptHost_.controlsSnapshot();
-        lua.controlStates = scriptHost_.controlStatesSnapshot();
-        return false;
-    }
-
-    // 核心流程：先用临时宿主探测目标协议能否完整加载，确认成功后再在当前宿主上重载，
-    // 避免失败场景先清空旧运行态，也避免 Lua 回调把临时宿主地址固化进运行时对象。
-    if (!scriptHost_.loadProtocolDirectory(resolvedDirText)) {
-        lua.lastError = scriptHost_.lastError();
-        loggingFacade_.error("protocol", "协议重载失败: " + lua.lastError);
-        lua.loaded = false;
-        lua.docks = scriptHost_.dockSnapshots();
-        lua.controls = scriptHost_.controlsSnapshot();
-        lua.controlStates = scriptHost_.controlStatesSnapshot();
-        return false;
-    }
-
-    lua.protocolDir = resolvedDirText;
-    lua.protocolName = protocolName;
-    lua.scriptPath = scriptPath;
-    lua.loaded = true;
+    loggingFacade_.error("protocol", lua.lastError);
     lua.docks = scriptHost_.dockSnapshots();
     lua.controls = scriptHost_.controlsSnapshot();
     lua.controlStates = scriptHost_.controlStatesSnapshot();
-    lua.lastError.clear();
-    rebuildTransferFrameRows();
-    loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
-    flushScriptLogs();
-    syncDockState();
-    return true;
+    return false;
 }
 
 bool Application::pumpOnce() {

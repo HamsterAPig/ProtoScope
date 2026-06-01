@@ -389,6 +389,7 @@ private:
     void callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event);
     void callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event);
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
+    std::optional<sol::protected_function> resolveGlobalCallback(const char* name);
 
     void registerLuaApi(sol::table& proto);
 

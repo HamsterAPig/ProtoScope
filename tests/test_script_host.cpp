@@ -857,6 +857,106 @@ void test_script_runtime_error_logged() {
     require(foundEvent, "脚本回调报错后宿主仍应继续运行");
 }
 
+void test_script_reload_invalid_types_fail_without_throw() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-invalid-lua-types");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "非法 stream 测试脚本应可写入");
+        out << "function stream()\n";
+        out << "  return \"bad stream\"\n";
+        out << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "stream() 返回非 table 应加载失败");
+    require(host.lastError().find("stream() 必须返回 table") != std::string::npos, "stream 类型错误应返回清晰错误");
+
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "非法 ui 测试脚本应可写入");
+        out << "function ui()\n";
+        out << "  return \"bad ui\"\n";
+        out << "end\n";
+    }
+
+    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "ui() 返回非 table 应加载失败");
+    require(host.lastError().find("ui() 必须返回 table") != std::string::npos, "ui 类型错误应返回清晰错误");
+}
+
+void test_script_non_function_callbacks_only_log_errors() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-non-function-callbacks");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "非 function 回调测试脚本应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"safe\", title = \"Safe\", controls = { { type = \"button\", id = \"run\", label = \"Run\" } } } }\n";
+        out << "end\n";
+        out << "on_open = {}\n";
+        out << "on_control = \"bad\"\n";
+        out << "on_tx = {}\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "非 function 回调不应阻止脚本加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    host.onControl(ctx, "run", true);
+    host.onTxEvent(ctx, protoscope::scripting::TxEvent{});
+
+    bool foundOpen = false;
+    bool foundControl = false;
+    bool foundTx = false;
+    for (const auto& log : host.drainLogs()) {
+        foundOpen = foundOpen || log.message.find("on_open 必须是 function") != std::string::npos;
+        foundControl = foundControl || log.message.find("on_control 必须是 function") != std::string::npos;
+        foundTx = foundTx || log.message.find("on_tx 必须是 function") != std::string::npos;
+    }
+    require(foundOpen, "on_open 非 function 应只写错误日志");
+    require(foundControl, "on_control 非 function 应只写错误日志");
+    require(foundTx, "on_tx 非 function 应只写错误日志");
+}
+
+void test_script_failed_reload_keeps_previous_runtime() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-script-reload-transaction");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "reload 事务测试脚本应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"safe\", title = \"Safe\", controls = { { type = \"button\", id = \"run\", label = \"Run\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  proto.emit(\"old_runtime\", id)\n";
+        out << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "初始脚本应可加载");
+    const auto beforeControls = host.controlsSnapshot();
+    require(beforeControls.size() == 1, "初始脚本应提供一个控件");
+
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "reload 失败测试脚本应可写入");
+        out << "function ui()\n";
+        out << "  return \"bad ui\"\n";
+        out << "end\n";
+    }
+
+    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "reload 加载期错误应返回失败");
+    require(host.lastError().find("ui() 必须返回 table") != std::string::npos, "reload 失败应记录新错误");
+    require(host.controlsSnapshot().size() == beforeControls.size(), "reload 失败应保留旧控件快照");
+
+    host.onControl(sampleCtx(), "run", true);
+    bool foundOldRuntime = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "old_runtime" && event.payload == "run") {
+            foundOldRuntime = true;
+        }
+    }
+    require(foundOldRuntime, "reload 失败后旧回调仍应可用");
+}
+
 void test_protocol_directory_reload() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议目录应可加载");
@@ -1693,6 +1793,9 @@ static const TestCase kAllTests[] = {
     {"script_form_layout_duplicate_control_fail", &test_script_form_layout_duplicate_control_fail},
     {"script_form_layout_missing_control_fail", &test_script_form_layout_missing_control_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
+    {"script_reload_invalid_types_fail_without_throw", &test_script_reload_invalid_types_fail_without_throw},
+    {"script_non_function_callbacks_only_log_errors", &test_script_non_function_callbacks_only_log_errors},
+    {"script_failed_reload_keeps_previous_runtime", &test_script_failed_reload_keeps_previous_runtime},
     {"gui_runtime_version_utils", &test_gui_runtime_version_utils},
     {"update_check_evaluates_newer_version", &test_update_check_evaluates_newer_version},
     {"update_check_reports_up_to_date_for_exact_tag", &test_update_check_reports_up_to_date_for_exact_tag},
