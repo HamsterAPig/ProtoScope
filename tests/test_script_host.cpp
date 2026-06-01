@@ -10,6 +10,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -81,12 +82,12 @@ std::vector<std::uint8_t> makeStreamFixtureFrame(std::uint8_t value) {
     return frame;
 }
 
-void rewriteModbusCrcHiLo(std::vector<std::uint8_t>& frame) {
+void rewriteModbusCrcLoHi(std::vector<std::uint8_t>& frame) {
     require(frame.size() >= 2, "CRC 重算时帧长度不足");
     const std::vector<std::uint8_t> payload(frame.begin(), frame.end() - 2);
     const auto crc = protoscope::protocol_utils::crc16Modbus(payload);
-    frame[frame.size() - 2] = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
-    frame[frame.size() - 1] = static_cast<std::uint8_t>(crc & 0xFFU);
+    frame[frame.size() - 2] = static_cast<std::uint8_t>(crc & 0xFFU);
+    frame[frame.size() - 1] = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
 }
 
 void appendBytes(std::vector<std::uint8_t>& target, const std::vector<std::uint8_t>& source) {
@@ -110,7 +111,7 @@ std::vector<std::uint8_t> makeSnScopeFc06Ack(std::uint16_t address, std::uint16_
         0x00,
         0x00,
     };
-    rewriteModbusCrcHiLo(frame);
+    rewriteModbusCrcLoHi(frame);
     return frame;
 }
 
@@ -125,7 +126,23 @@ std::vector<std::uint8_t> makeSnScopeFc16Ack(std::uint16_t address, std::uint16_
         0x00,
         0x00,
     };
-    rewriteModbusCrcHiLo(frame);
+    rewriteModbusCrcLoHi(frame);
+    return frame;
+}
+
+std::vector<std::uint8_t> makeSnScopeFc03Response(std::initializer_list<std::uint16_t> values) {
+    std::vector<std::uint8_t> frame{
+        0xFF,
+        0x03,
+        static_cast<std::uint8_t>(values.size() * 2U),
+    };
+    for (const auto value : values) {
+        frame.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
+        frame.push_back(static_cast<std::uint8_t>(value & 0xFFU));
+    }
+    frame.push_back(0x00);
+    frame.push_back(0x00);
+    rewriteModbusCrcLoHi(frame);
     return frame;
 }
 
@@ -150,7 +167,7 @@ std::vector<std::uint8_t> makeSnScopeUploadFrame(std::uint16_t sequence,
         0x00,
         0x00,
     };
-    rewriteModbusCrcHiLo(frame);
+    rewriteModbusCrcLoHi(frame);
     return frame;
 }
 
@@ -1325,6 +1342,7 @@ void test_half_duplex_modbus_ack_matching_rules() {
     runRequest("start_stream", makeSnScopeFc06Ack(0x8888U, 0x0001U), true, "FC06 ACK 匹配");
     runRequest("start_stream", makeSnScopeFc06Ack(0x8888U, 0x0000U), false, "期望");
     runRequest("stop_stream", makeSnScopeFc06Ack(0x8888U, 0x0000U), true, "FC06 ACK 匹配");
+    runRequest("read_gain", makeSnScopeFc03Response({1000U, 1000U, 1000U, 1000U}), true, "读取应答");
 
     protoscope::scripting::ScriptHost host;
     requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
@@ -1360,6 +1378,48 @@ void test_half_duplex_modbus_ack_matching_rules() {
         }
     }
     require(foundExpected, "FC16 ACK 不匹配时应提示收到/期望信息");
+}
+
+void test_half_duplex_modbus_crc_error_finishes_request() {
+    protoscope::scripting::ScriptHost host;
+    requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    host.drainPlotSetups();
+    host.onControl(ctx, "start_stream", true);
+
+    const auto requests = host.drainTxRequests();
+    require(requests.size() == 1, "启动按钮应生成 1 条 request");
+    const auto& request = requests.front();
+    host.onTxEvent(ctx,
+                   protoscope::scripting::TxEvent{
+                       .id = request.id,
+                       .kind = protoscope::scripting::TxRequestKind::Request,
+                       .state = protoscope::scripting::TxEventState::Sent,
+                       .tag = request.tag,
+                       .bytes = request.payload.size(),
+                       .queuedMs = nowMs(),
+                       .finishedMs = nowMs(),
+                       .error = std::nullopt,
+                   });
+    host.setRequestAwaitingCompletion(true);
+
+    auto brokenAck = makeSnScopeFc06Ack(0x8888U, 0x0001U);
+    brokenAck.back() = static_cast<std::uint8_t>(brokenAck.back() ^ 0x01U);
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, brokenAck});
+
+    const auto results = host.drainRequestDoneResults();
+    require(results.size() == 1, "活动 request 遇到 CRC 错误应产生 request_done");
+    require(!results[0].ok, "CRC 错误应结束为失败 request");
+
+    bool foundWarn = false;
+    for (const auto& update : host.drainStatusUpdates()) {
+        if (update.level == "warn" && update.text.find("CRC 校验失败") != std::string::npos) {
+            foundWarn = true;
+        }
+    }
+    require(foundWarn, "CRC 错误应以 warn 状态提示");
 }
 
 void test_half_duplex_modbus_sticky_frames() {
@@ -1424,7 +1484,7 @@ void test_half_duplex_modbus_crc_resync_keeps_following_frame() {
 
     bool foundCrcError = false;
     for (const auto& update : master.drainStatusUpdates()) {
-        if (update.text.find("CRC") != std::string::npos) {
+        if (update.level == "warn" && update.text.find("CRC") != std::string::npos) {
             foundCrcError = true;
         }
     }
@@ -1656,6 +1716,7 @@ static const TestCase kAllTests[] = {
     {"half_duplex_modbus_ch3_uses_third_harmonic", &test_half_duplex_modbus_ch3_uses_third_harmonic},
     {"half_duplex_modbus_loss_status_keeps_valid_frame", &test_half_duplex_modbus_loss_status_keeps_valid_frame},
     {"half_duplex_modbus_ack_matching_rules", &test_half_duplex_modbus_ack_matching_rules},
+    {"half_duplex_modbus_crc_error_finishes_request", &test_half_duplex_modbus_crc_error_finishes_request},
     {"half_duplex_modbus_sticky_frames", &test_half_duplex_modbus_sticky_frames},
     {"half_duplex_modbus_noise_prefix_ignored", &test_half_duplex_modbus_noise_prefix_ignored},
     {"half_duplex_modbus_crc_resync_keeps_following_frame", &test_half_duplex_modbus_crc_resync_keeps_following_frame},
@@ -1715,6 +1776,7 @@ static const TestCase kAllTests[] = {
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
     {"application_tx_overflow_popup_keeps_dialog_payload", &test_application_tx_overflow_popup_keeps_dialog_payload},
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
+    {"application_forced_reload_discards_old_tx_callback_outputs", &test_application_forced_reload_discards_old_tx_callback_outputs},
     {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
     {"application_open_transport_uses_udp_peer_runtime_config", &test_application_open_transport_uses_udp_peer_runtime_config},
     {"application_set_log_level_updates_runtime_config", &test_application_set_log_level_updates_runtime_config},

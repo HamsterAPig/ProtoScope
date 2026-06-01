@@ -275,6 +275,16 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     }
 
     cancelAllTxRequests("协议已重新加载");
+    // 核心流程：取消旧 request 会触发旧脚本 on_tx；重载前必须丢弃这些旧输出，
+    // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
+    scriptHost_.drainTxRequests();
+    scriptHost_.drainRequestDoneResults();
+    scriptHost_.drainStatusUpdates();
+    scriptHost_.drainDialogRequests();
+    scriptHost_.drainFileDialogRequests();
+    scriptHost_.drainEvents();
+    scriptHost_.drainLogs();
+    scriptHost_.clearPendingRealtimeOutputs();
 
     scripting::ScriptHost probeHost;
     probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);

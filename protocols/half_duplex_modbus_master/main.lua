@@ -50,14 +50,14 @@ local function push_i16_be(target, value)
   push_u16_be(target, raw & 0xFFFF)
 end
 
-local function rewrite_crc_hi_lo(frame)
+local function rewrite_crc_lo_hi(frame)
   local payload = {}
   for index = 1, #frame - 2 do
     payload[#payload + 1] = frame[index]
   end
   local crc = proto.crc16_modbus(payload)
-  frame[#frame - 1] = (crc >> 8) & 0xFF
-  frame[#frame] = crc & 0xFF
+  frame[#frame - 1] = crc & 0xFF
+  frame[#frame] = (crc >> 8) & 0xFF
 end
 
 local function build_fc06_request(address, value)
@@ -66,7 +66,7 @@ local function build_fc06_request(address, value)
   push_u16_be(frame, value)
   frame[#frame + 1] = 0x00
   frame[#frame + 1] = 0x00
-  rewrite_crc_hi_lo(frame)
+  rewrite_crc_lo_hi(frame)
   return frame
 end
 
@@ -80,7 +80,17 @@ local function build_fc16_request(address, values)
   end
   frame[#frame + 1] = 0x00
   frame[#frame + 1] = 0x00
-  rewrite_crc_hi_lo(frame)
+  rewrite_crc_lo_hi(frame)
+  return frame
+end
+
+local function build_fc03_request(address, count)
+  local frame = { 0xFF, FUNC_READ_HOLDING }
+  push_u16_be(frame, address)
+  push_u16_be(frame, count)
+  frame[#frame + 1] = 0x00
+  frame[#frame + 1] = 0x00
+  rewrite_crc_lo_hi(frame)
   return frame
 end
 
@@ -207,6 +217,16 @@ local function queue_fc06(address, value, tag)
   })
 end
 
+local function queue_fc03(address, count, tag)
+  local frame = build_fc03_request(address, count)
+  return enqueue_request(frame, {
+    kind = "fc03",
+    address = address,
+    register_count = count,
+    tag = tag,
+  })
+end
+
 local function auto_configure_and_start()
   local requests = {
     {
@@ -273,6 +293,10 @@ local function send_start_stop(start_value)
   queue_fc06(REG_STREAM_SWITCH, start_value, tag)
 end
 
+local function read_gain_registers()
+  queue_fc03(REG_GAIN_CH12, 4, "read_gain")
+end
+
 local function track_upload_sequence(sequence)
   local state = upload_sequence_state
   if not state then
@@ -311,9 +335,23 @@ end
 
 local function handle_fc03_response(ctx, frame)
   local fields = frame.fields or {}
-  proto.status.set(
-    string.format("读取应答: %d byte / %d regs", fields.byte_count or 0, #(fields.register_values or {})),
-    { level = "info" }
+  local values = fields.register_values or {}
+  local message = string.format("读取应答: %d byte / %d regs", fields.byte_count or 0, #values)
+  local active = current_request()
+  if not active then
+    proto.status.set(message, { level = "info" })
+    return
+  end
+
+  if active.kind == "fc03" and #values == (active.register_count or 0) then
+    finish_active_request(true, message .. "，匹配: " .. request_summary(active), "info")
+    return
+  end
+
+  finish_active_request(
+    false,
+    string.format("FC03 应答不匹配，收到 %d regs，期望 %s", #values, request_summary(active)),
+    "error"
   )
 end
 
@@ -402,7 +440,12 @@ end
 
 local function handle_stream_error(ctx, err)
   if err.code == "crc_mismatch" then
-    proto.status.set("CRC 校验失败: " .. tostring(err.message), { level = "warn" })
+    local message = "CRC 校验失败: " .. tostring(err.message)
+    if current_request() then
+      finish_active_request(false, message, "warn")
+    else
+      proto.status.set(message, { level = "warn" })
+    end
   elseif err.code == "noise_discarded" then
     proto.status.set("已丢弃噪声前缀: " .. tostring(err.message), { level = "warn" })
   elseif err.code == "invalid_length" then
@@ -424,7 +467,7 @@ function stream()
         name = "fc03_response",
         header = { 0xFF, FUNC_READ_HOLDING },
         len = { offset = 3, type = "u8", means = "payload", extra = 5 },
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "byte_count", type = "u8", offset = 3 },
           {
@@ -442,7 +485,7 @@ function stream()
         name = "fc06_ack",
         header = { 0xFF, FUNC_WRITE_SINGLE },
         size = 8,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "address", type = "u16_be", offset = 3 },
           { name = "value", type = "u16_be", offset = 5 },
@@ -453,7 +496,7 @@ function stream()
         name = "fc16_ack",
         header = { 0xFF, FUNC_WRITE_MULTI },
         size = 8,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "address", type = "u16_be", offset = 3 },
           { name = "register_count", type = "u16_be", offset = 5 },
@@ -464,7 +507,7 @@ function stream()
         name = "exception_fc03",
         header = { 0xFF, FUNC_EXCEPTION_READ },
         size = 5,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "exception_code", type = "u8", offset = 3 },
         },
@@ -474,7 +517,7 @@ function stream()
         name = "exception_fc06",
         header = { 0xFF, FUNC_EXCEPTION_WRITE_SINGLE },
         size = 5,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "exception_code", type = "u8", offset = 3 },
         },
@@ -484,7 +527,7 @@ function stream()
         name = "exception_fc16",
         header = { 0xFF, FUNC_EXCEPTION_WRITE_MULTI },
         size = 5,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "exception_code", type = "u8", offset = 3 },
         },
@@ -494,7 +537,7 @@ function stream()
         name = "upload_ch4",
         header = { 0xFF, FUNC_UPLOAD_CH4 },
         size = 14,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "sequence", type = "u16_be", offset = 3 },
           { name = "ch1", type = "i16_be", offset = 5 },
@@ -528,6 +571,7 @@ function ui()
         { type = "button", id = "auto_start", label = "自动配置并启动" },
         { type = "button", id = "start_stream", label = "仅启动" },
         { type = "button", id = "stop_stream", label = "停止" },
+        { type = "button", id = "read_gain", label = "读取系数" },
         { type = "button", id = "clear_plot", label = "清空波形" },
       },
     },
@@ -589,6 +633,8 @@ function on_control(ctx, id, value)
     send_start_stop(0x0001)
   elseif id == "stop_stream" then
     send_start_stop(0x0000)
+  elseif id == "read_gain" then
+    read_gain_registers()
   elseif id == "clear_plot" then
     upload_frame_cursor = 0
     upload_sequence_state = nil

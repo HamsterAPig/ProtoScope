@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -81,6 +82,7 @@ struct QueuedEventTransport final : protoscope::transport::ITransport {
         std::optional<protoscope::transport::TransportConfig> lastConfig;
         std::vector<std::uint8_t> queuedRxBytes;
         std::vector<protoscope::transport::TransportEvent> pendingEvents;
+        std::vector<protoscope::transport::TransportTxTask> sentTasks;
     };
 
     explicit QueuedEventTransport(std::shared_ptr<State> sharedState)
@@ -114,7 +116,15 @@ struct QueuedEventTransport final : protoscope::transport::ITransport {
     }
 
     bool enqueueSend(protoscope::transport::TransportTxTask task) override {
-        static_cast<void>(task);
+        sharedState_->pendingEvents.push_back(protoscope::transport::TransportTxEvent{
+            .requestId = task.requestId,
+            .kind = task.kind,
+            .state = protoscope::transport::TransportTxState::Sent,
+            .bytes = task.payload.size(),
+            .queuedAtMs = task.queuedAtMs,
+            .finishedAtMs = 120,
+        });
+        sharedState_->sentTasks.push_back(std::move(task));
         return sharedState_->opened;
     }
 
@@ -167,6 +177,20 @@ bool waitUntil(auto&& predicate) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     return false;
+}
+
+std::uint64_t currentTimeMs() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
+}
+
+std::filesystem::path makeUniqueTempDir(const char* prefix) {
+    const auto path = std::filesystem::temp_directory_path()
+                    / (std::string(prefix) + "-" + std::to_string(currentTimeMs()));
+    std::filesystem::create_directories(path);
+    return path;
 }
 
 std::optional<std::uint16_t> findListenPort(const protoscope::dock::LogDockState& logState) {
@@ -366,6 +390,53 @@ void test_application_failed_protocol_reload_keeps_previous_runtime() {
     require(after.scriptPath == before.scriptPath, "加载失败后不应改写当前入口脚本路径");
     require(!after.controlStates.empty(), "加载失败后应保留上一份动态控件快照");
     require(!after.lastError.empty(), "加载失败后应保留错误信息供界面展示");
+
+    application.shutdown();
+}
+
+void test_application_forced_reload_discards_old_tx_callback_outputs() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-reload-discard-old-tx");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "reload 测试协议应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"reload_test\", title = \"Reload Test\", controls = { { type = \"button\", id = \"start\", label = \"Start\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"start\" then\n";
+        out << "    proto.request({ 0x01 }, { timeout_ms = 1000, tag = \"first\" })\n";
+        out << "  end\n";
+        out << "end\n";
+        out << "function on_tx(ctx, evt)\n";
+        out << "  if evt.state == \"canceled\" then\n";
+        out << "    proto.request({ 0x02 }, { timeout_ms = 1000, tag = \"old-cancel\" })\n";
+        out << "    proto.status.set(\"old canceled leaked\", { level = \"error\" })\n";
+        out << "  end\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "reload 测试协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    application.updateControlValue("start", true);
+    require(transportState->sentTasks.size() == 1, "首次控制应发送 1 条 request");
+    application.pumpOnce();
+
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "强制重载应成功");
+    application.pumpOnce();
+
+    require(transportState->sentTasks.size() == 1, "强制重载应丢弃旧 on_tx 追加的 request");
+    require(application.docks().configState().statusMessage.find("old canceled leaked") == std::string::npos,
+            "强制重载应丢弃旧 on_tx 追加的状态");
 
     application.shutdown();
 }

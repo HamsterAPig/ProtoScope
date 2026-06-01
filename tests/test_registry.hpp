@@ -154,6 +154,7 @@ void test_application_tcp_lua_read_version_roundtrip();
 void test_application_lua_controls_without_connection();
 void test_application_tx_overflow_popup_keeps_dialog_payload();
 void test_application_failed_protocol_reload_keeps_previous_runtime();
+void test_application_forced_reload_discards_old_tx_callback_outputs();
 void test_application_open_transport_uses_serial_runtime_config();
 void test_application_open_transport_uses_udp_peer_runtime_config();
 void test_application_set_log_level_updates_runtime_config();

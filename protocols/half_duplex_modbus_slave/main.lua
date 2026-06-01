@@ -51,14 +51,14 @@ local function push_i16_be(target, value)
   push_u16_be(target, raw & 0xFFFF)
 end
 
-local function rewrite_crc_hi_lo(frame)
+local function rewrite_crc_lo_hi(frame)
   local payload = {}
   for index = 1, #frame - 2 do
     payload[#payload + 1] = frame[index]
   end
   local crc = proto.crc16_modbus(payload)
-  frame[#frame - 1] = (crc >> 8) & 0xFF
-  frame[#frame] = crc & 0xFF
+  frame[#frame - 1] = crc & 0xFF
+  frame[#frame] = (crc >> 8) & 0xFF
 end
 
 local function build_fc03_response(values)
@@ -68,7 +68,7 @@ local function build_fc03_response(values)
   end
   frame[#frame + 1] = 0x00
   frame[#frame + 1] = 0x00
-  rewrite_crc_hi_lo(frame)
+  rewrite_crc_lo_hi(frame)
   return frame
 end
 
@@ -78,7 +78,7 @@ local function build_fc06_ack(address, value)
   push_u16_be(frame, value)
   frame[#frame + 1] = 0x00
   frame[#frame + 1] = 0x00
-  rewrite_crc_hi_lo(frame)
+  rewrite_crc_lo_hi(frame)
   return frame
 end
 
@@ -88,13 +88,13 @@ local function build_fc16_ack(address, register_count)
   push_u16_be(frame, register_count)
   frame[#frame + 1] = 0x00
   frame[#frame + 1] = 0x00
-  rewrite_crc_hi_lo(frame)
+  rewrite_crc_lo_hi(frame)
   return frame
 end
 
 local function build_exception_frame(func, code)
   local frame = { 0xFF, func, code or 0x03, 0x00, 0x00 }
-  rewrite_crc_hi_lo(frame)
+  rewrite_crc_lo_hi(frame)
   return frame
 end
 
@@ -107,7 +107,7 @@ local function build_upload_frame(sequence, ch1, ch2, ch3, ch4)
   push_i16_be(frame, ch4)
   frame[#frame + 1] = 0x00
   frame[#frame + 1] = 0x00
-  rewrite_crc_hi_lo(frame)
+  rewrite_crc_lo_hi(frame)
   return frame
 end
 
@@ -256,7 +256,7 @@ function stream()
         name = "fc03_request",
         header = { 0xFF, FUNC_READ_HOLDING },
         size = 8,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "address", type = "u16_be", offset = 3 },
           { name = "count", type = "u16_be", offset = 5 },
@@ -267,7 +267,7 @@ function stream()
         name = "fc06_request",
         header = { 0xFF, FUNC_WRITE_SINGLE },
         size = 8,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "address", type = "u16_be", offset = 3 },
           { name = "value", type = "u16_be", offset = 5 },
@@ -278,7 +278,7 @@ function stream()
         name = "fc16_request",
         header = { 0xFF, FUNC_WRITE_MULTI },
         size = 13,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "address", type = "u16_be", offset = 3 },
           { name = "count", type = "u16_be", offset = 5 },
