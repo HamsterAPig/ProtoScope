@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <ctime>
 #include <string_view>
+#include <utility>
 
 namespace protoscope::dock {
 
@@ -80,7 +81,75 @@ std::string uppercaseAscii(std::string text) {
     }
     return text;
 }
+
+std::string lowercaseAscii(std::string text) {
+    for (auto& ch : text) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return text;
+}
+
+bool containsIgnoreCase(std::string_view text, std::string_view keyword) {
+    if (keyword.empty()) {
+        return true;
+    }
+
+    const auto lowerText = lowercaseAscii(std::string(text));
+    const auto lowerKeyword = lowercaseAscii(std::string(keyword));
+    return lowerText.find(lowerKeyword) != std::string::npos;
+}
+
+bool matchesStatusFilter(const ReceiveRow& row, LogStatusFilter status) {
+    if (status == LogStatusFilter::All) {
+        return true;
+    }
+
+    switch (classifyReceiveRow(row)) {
+    case ReceiveRowVisualKind::Rx:
+        return status == LogStatusFilter::Rx;
+    case ReceiveRowVisualKind::Tx:
+        return status == LogStatusFilter::Tx;
+    case ReceiveRowVisualKind::Debug:
+        return status == LogStatusFilter::Debug;
+    case ReceiveRowVisualKind::Info:
+        return status == LogStatusFilter::Info;
+    case ReceiveRowVisualKind::Warn:
+        return status == LogStatusFilter::Warn;
+    case ReceiveRowVisualKind::Error:
+        return status == LogStatusFilter::Error;
+    case ReceiveRowVisualKind::Event:
+        return status == LogStatusFilter::Event;
+    case ReceiveRowVisualKind::ScriptLog:
+        return status == LogStatusFilter::ScriptLog;
+    case ReceiveRowVisualKind::Other:
+        return status == LogStatusFilter::Other;
+    }
+    return false;
+}
+
+bool matchesKeywordFilter(const ReceiveRow& row, std::string_view keyword, bool includeBytePreview) {
+    if (keyword.empty()) {
+        return true;
+    }
+
+    // 核心筛选逻辑：先匹配日志元信息和消息；收发记录再补充 HEX/ASCII 字节内容。
+    if (containsIgnoreCase(row.direction, keyword) ||
+        containsIgnoreCase(row.endpoint, keyword) ||
+        containsIgnoreCase(row.message, keyword)) {
+        return true;
+    }
+
+    if (!includeBytePreview || row.bytes.empty()) {
+        return false;
+    }
+
+    return containsIgnoreCase(protocol_utils::bytesToHex(row.bytes, true), keyword) ||
+           containsIgnoreCase(bytesToAsciiPreview(row.bytes), keyword);
+}
 } // namespace
+
+DockStore::DockStore()
+    : historyLimiter_(std::make_unique<BoundedDockHistoryLimiter>()) {}
 
 ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row) {
     const auto direction = uppercaseAscii(row.direction);
@@ -109,6 +178,31 @@ ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row) {
         return ReceiveRowVisualKind::ScriptLog;
     }
     return ReceiveRowVisualKind::Other;
+}
+
+bool matchesLogFilter(const ReceiveRow& row, const LogFilterState& filter, bool includeBytePreview) {
+    return matchesStatusFilter(row, filter.status) &&
+           matchesKeywordFilter(row, filter.keyword, includeBytePreview);
+}
+
+template <typename Rows>
+std::vector<const ReceiveRow*> filteredLogRowsImpl(const Rows& rows, const LogFilterState& filter, bool includeBytePreview) {
+    std::vector<const ReceiveRow*> filtered;
+    filtered.reserve(rows.size());
+    for (const auto& row : rows) {
+        if (matchesLogFilter(row, filter, includeBytePreview)) {
+            filtered.push_back(&row);
+        }
+    }
+    return filtered;
+}
+
+std::vector<const ReceiveRow*> filteredLogRows(const std::deque<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview) {
+    return filteredLogRowsImpl(rows, filter, includeBytePreview);
+}
+
+std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview) {
+    return filteredLogRowsImpl(rows, filter, includeBytePreview);
 }
 
 std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex) {
@@ -183,26 +277,70 @@ void rememberSendHistory(SendDockState& sendState, std::string payload, std::siz
 
 void DockStore::clearReceiveRows() {
     receive_.rows.clear();
+    receive_.frameRows.clear();
+    ++receive_.rowsVersion;
+    ++receive_.frameRowsVersion;
 }
 
 void DockStore::appendReceiveRow(ReceiveRow row) {
     receive_.rows.push_back(std::move(row));
+    historyLimiter_->trimRows(receive_.rows, historyLimits_.transferRawRows);
+    ++receive_.rowsVersion;
 }
 
 void DockStore::appendLogRow(ReceiveRow row) {
     log_.rows.push_back(std::move(row));
+    historyLimiter_->trimRows(log_.rows, historyLimits_.hostLogRows);
+    ++log_.rowsVersion;
 }
 
 void DockStore::appendScriptRow(ReceiveRow row) {
     script_.rows.push_back(std::move(row));
+    historyLimiter_->trimRows(script_.rows, historyLimits_.scriptLogRows);
+    ++script_.rowsVersion;
 }
 
 void DockStore::clearLogRows() {
     log_.rows.clear();
+    ++log_.rowsVersion;
 }
 
 void DockStore::clearScriptRows() {
     script_.rows.clear();
+    ++script_.rowsVersion;
+}
+
+void DockStore::appendTransferFrameRows(std::vector<ReceiveRow> rows) {
+    if (rows.empty()) {
+        return;
+    }
+
+    for (auto& row : rows) {
+        receive_.frameRows.push_back(std::move(row));
+    }
+    historyLimiter_->trimRows(receive_.frameRows, historyLimits_.transferFrameRows);
+    ++receive_.frameRowsVersion;
+}
+
+void DockStore::clearTransferFrameRows() {
+    receive_.frameRows.clear();
+    ++receive_.frameRowsVersion;
+}
+
+void DockStore::setHistoryLimits(DockHistoryLimits limits) {
+    historyLimits_ = limits;
+    if (historyLimiter_->trimRows(receive_.rows, historyLimits_.transferRawRows)) {
+        ++receive_.rowsVersion;
+    }
+    if (historyLimiter_->trimRows(receive_.frameRows, historyLimits_.transferFrameRows)) {
+        ++receive_.frameRowsVersion;
+    }
+    if (historyLimiter_->trimRows(log_.rows, historyLimits_.hostLogRows)) {
+        ++log_.rowsVersion;
+    }
+    if (historyLimiter_->trimRows(script_.rows, historyLimits_.scriptLogRows)) {
+        ++script_.rowsVersion;
+    }
 }
 
 void DockStore::appendLuaEvent(const scripting::ScriptEvent& event) {
@@ -224,6 +362,8 @@ void DockStore::appendRawReceive(const transport::ConnectionContext& ctx, const 
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
         .message = {},
     });
+    historyLimiter_->trimRows(receive_.rows, historyLimits_.transferRawRows);
+    ++receive_.rowsVersion;
 }
 
 void DockStore::appendRawSend(const transport::ConnectionContext& ctx, const std::string& text) {
@@ -234,6 +374,8 @@ void DockStore::appendRawSend(const transport::ConnectionContext& ctx, const std
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
         .message = {},
     });
+    historyLimiter_->trimRows(receive_.rows, historyLimits_.transferRawRows);
+    ++receive_.rowsVersion;
 }
 
 CommDockState& DockStore::commState() {

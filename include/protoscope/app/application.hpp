@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace protoscope::app {
 
@@ -41,13 +42,21 @@ public:
     void markCommConfigEdited(bool reconnectRequired);
     void markProtocolEdited();
     void setStatusMessage(std::string message, bool markDirty = false);
+    void setLogLevel(config::LogLevel level);
     bool setSendHexMode(bool enabled);
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
+    bool startRawCaptureRecording(const std::filesystem::path& path, std::string& error);
+    bool stopRawCaptureRecording(std::string& error);
+    [[nodiscard]] bool isRawCaptureRecording() const;
+    [[nodiscard]] const std::filesystem::path& rawCaptureRecordingPath() const;
+    [[nodiscard]] std::uint64_t rawCaptureRecordingBytes() const;
     void resetWaveHistory();
     bool loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error);
+    [[nodiscard]] std::uint64_t elfStaticAddressRevision() const;
     [[nodiscard]] std::vector<scripting::ElfSymbolValue> queryElfStaticAddresses(const std::string& queryText,
                                                                                  std::size_t limit) const;
+    void rebuildTransferFrameRows();
     logging::LoggingFacade& logger();
     const logging::LoggingFacade& logger() const;
     std::vector<scripting::DialogRequest> drainDialogRequests();
@@ -59,13 +68,51 @@ public:
     void setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
 
 private:
+    struct ActiveTxRequest {
+        scripting::TxRequest request;
+        std::uint64_t sentAtMs{0};
+        std::uint64_t waitDeadlineMs{0};
+    };
+
+    struct TransferFrameParserState {
+        scripting::FrameStreamParser rx;
+        scripting::FrameStreamParser tx;
+    };
+
+    struct PendingRxBytes {
+        transport::ConnectionContext context{};
+        std::vector<std::uint8_t> bytes{};
+        std::size_t offset{0};
+    };
+
+    struct RealtimeBacklogDiscardCounts {
+        std::size_t transportEvents{0};
+        std::size_t rxBytes{0};
+        std::size_t transferFrameRows{0};
+        std::size_t plotAppends{0};
+        std::size_t scriptLogs{0};
+        std::size_t scriptEvents{0};
+    };
+
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
     bool handleTransportEvents();
+    bool processTransportEvent(const transport::TransportEvent& event);
+    bool processPendingRxBytes(std::size_t maxBytes);
+    void enqueuePendingRxBytes(transport::TransportBytesEvent event);
+    void detachPendingRealtimeBacklogFromConnection();
+    RealtimeBacklogDiscardCounts clearPendingRealtimeBacklog();
+    void logRealtimeBacklogDiscard(const RealtimeBacklogDiscardCounts& counts);
+    [[nodiscard]] bool responsiveBacklogMode() const;
+    [[nodiscard]] std::size_t rxBytesPerPump() const;
+    [[nodiscard]] std::size_t transferFrameRowsPerPump() const;
+    [[nodiscard]] std::size_t plotAppendsPerPump() const;
+    [[nodiscard]] std::size_t pendingRxByteCount() const;
     bool flushScriptOutputs();
     bool flushScriptLogs();
     bool flushScriptPlots();
+    bool flushPendingTransferFrameRows(std::size_t maxRows);
     bool flushScriptStatusAndDialogs();
     bool processScriptRequestCompletions();
     bool processRequestTimeouts();
@@ -78,13 +125,17 @@ private:
     void cancelAllTxRequests(const std::string& reason);
     void notifyTxOverflow(const std::string& message);
     void enqueueDialogRequest(const scripting::DialogRequest& request);
-
-private:
-    struct ActiveTxRequest {
-        scripting::TxRequest request;
-        std::uint64_t sentAtMs{0};
-        std::uint64_t waitDeadlineMs{0};
-    };
+    void appendTransferRow(dock::ReceiveRow row);
+    void appendLiveRawCapture(const transport::TransportBytesEvent& event);
+    void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
+    void resetTransferFrameParser();
+    void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
+    void enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows);
+    void trimPendingTransferFrameRowsToLimit();
+    void applyHistoryLimits(const config::GuiLogHistoryConfig& config);
+    [[nodiscard]] dock::ReceiveRow makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
+                                                        const scripting::StreamParsedFrame& frame) const;
+    [[nodiscard]] std::optional<TransferFrameParserState> makeTransferFrameParserState() const;
 
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
@@ -92,6 +143,7 @@ private:
     logging::LoggingFacade loggingFacade_{};
     scripting::ScriptHost scriptHost_;
     plugin::ElfStaticViewBridge elfStaticView_;
+    std::uint64_t elfStaticAddressRevision_{0};
     std::unique_ptr<transport::ITransport> transport_;
     std::optional<transport::ConnectionContext> activeConnection_;
     std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> transportFactoryForTest_;
@@ -103,6 +155,12 @@ private:
     std::deque<scripting::FileDialogRequest> pendingFileDialogs_;
     std::unordered_map<std::uint64_t, scripting::FileDialogRequest> openFileDialogs_;
     std::unordered_map<std::string, std::uint64_t> dialogDedupeKeys_;
+    std::optional<TransferFrameParserState> transferFrameParser_;
+    plot::RawCaptureStreamWriter rawCaptureRecording_;
+    std::deque<transport::TransportEvent> pendingTransportEvents_;
+    std::deque<PendingRxBytes> pendingRxByteChunks_;
+    std::deque<dock::ReceiveRow> pendingTransferFrameRows_;
+    std::optional<std::uint64_t> cachedWaveSummaryRevision_;
 };
 
 } // namespace protoscope::app

@@ -3,6 +3,8 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
+#include "protoscope/ui/ui_component.hpp"
+#include "protoscope/ui/ui_host_context.hpp"
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
@@ -10,6 +12,7 @@
 #include <deque>
 #include <filesystem>
 #include <future>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,6 +25,12 @@ struct GLFWwindow;
 
 namespace protoscope::ui {
 
+class IDialogComponent;
+class IDockComponent;
+class IMenuContributor;
+class IUiComponent;
+class WorkspaceController;
+
 class GuiRuntime {
 public:
     GuiRuntime(app::Application& application, const config::ConfigStore& configStore);
@@ -32,10 +41,29 @@ public:
     void shutdown();
 
 private:
+    friend class RuntimeMenuComponent;
+    friend class RuntimeDialogComponent;
+    friend class CommDockComponent;
+    friend class ProtocolDockComponent;
+    friend class LuaDockComponent;
+    friend class LogDockComponent;
+    friend class WorkspaceController;
+
     enum class LogExportTarget {
         Transfer,
         Host,
         Script,
+    };
+
+    struct FilteredLogRowsCache {
+        const void* source{nullptr};
+        std::uint64_t version{0};
+        dock::LogFilterState filter{};
+        bool includeBytePreview{false};
+        std::size_t rowCount{0};
+        const dock::ReceiveRow* firstRow{nullptr};
+        float endpointWidth{120.0F};
+        std::vector<const dock::ReceiveRow*> rows;
     };
 
     bool initializeWindow();
@@ -46,12 +74,22 @@ private:
     void shutdownWindow();
 
     void ensureChineseFont();
+    void registerUiComponents();
+    void attachUiComponents();
+    void detachUiComponents();
+    void syncRuntimeState();
+    RuntimeUiContext makeUiContext();
+    void drawRegisteredMenus();
+    void syncRegisteredDialogs();
+    void drawRegisteredDialogs();
+    void drawRegisteredDocks();
     void renderFrame();
     void drawStatusBar();
     void syncDialogQueue();
     void drawDialogs();
     void drawRawCaptureFileDialogs();
     void drawMainMenu();
+    void drawHelpMenu();
     void drawLuaViewMenu();
     void drawCommDock();
     void drawProtocolDock();
@@ -59,18 +97,18 @@ private:
     void drawTransferDock();
     void drawLogDock();
     void drawScriptDock();
-    void drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls);
-    void drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
+    bool drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls);
+    bool drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
                           const scripting::TableLayoutDescriptor& layout,
                           std::string_view stableId);
-    void drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
+    bool drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
                          const scripting::FormLayoutDescriptor& layout,
                          std::string_view stableId);
-    void drawLuaDockFormItems(const std::vector<scripting::FormLayoutItemDescriptor>& items,
+    bool drawLuaDockFormItems(const std::vector<scripting::FormLayoutItemDescriptor>& items,
                               const std::unordered_map<std::string, const scripting::ControlSnapshot*>& controlsById,
                               std::string_view stableId,
                               std::size_t& widgetIndex);
-    void drawDynamicControl(const scripting::ControlSnapshot& control);
+    bool drawDynamicControl(const scripting::ControlSnapshot& control);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
     void processPendingProtocolWorkspaceSwitch();
@@ -86,6 +124,7 @@ private:
     void syncLuaDockVisibilityDefaults();
     void openRawCaptureImportDialog();
     void openRawCaptureExportDialog();
+    void openRawCaptureRecordingDialog();
     void openTransferLogExportDialog();
     void openHostLogExportDialog();
     void openScriptLogExportDialog();
@@ -93,6 +132,7 @@ private:
     void openElfStaticAddressDialog();
     void importRawCaptureFromPath(const std::filesystem::path& path);
     void exportRawCaptureToPath(const std::filesystem::path& path);
+    void startRawCaptureRecordingToPath(const std::filesystem::path& path);
     void drawLogExportFileDialog();
     std::vector<dock::ReceiveRow> logExportRows(LogExportTarget target);
     bool exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path);
@@ -101,6 +141,11 @@ private:
                              bool showTimestamps,
                              bool showHex,
                              std::string_view title);
+    const FilteredLogRowsCache& filteredLogRowsCached(FilteredLogRowsCache& cache,
+                                                      const std::deque<dock::ReceiveRow>& rows,
+                                                      std::uint64_t version,
+                                                      const dock::LogFilterState& filter,
+                                                      bool includeBytePreview);
     void loadElfStaticAddressFromPath(const std::filesystem::path& path);
     void drawElfStaticAddressDialog();
     void refreshWindowTitle();
@@ -116,6 +161,7 @@ private:
     bool pollConfigFileChanges();
     bool maybeAutoSave();
     void sleepUntilNextFrame(std::uint64_t frameStartMs) const;
+    void sleepUntil(std::uint64_t targetMs) const;
 
     static std::uint64_t nowMs();
     static std::string formatTimestamp(std::uint64_t timestampMs);
@@ -123,6 +169,12 @@ private:
     app::Application& application_;
     const config::ConfigStore& configStore_;
     GLFWwindow* window_{nullptr};
+    std::unique_ptr<WorkspaceController> workspaceController_;
+    GuiRuntimeState runtimeState_{};
+    std::vector<std::unique_ptr<IUiComponent>> uiComponents_;
+    std::vector<IMenuContributor*> menuContributors_;
+    std::vector<IDialogComponent*> dialogComponents_;
+    std::vector<IDockComponent*> dockComponents_;
     std::uint64_t lastRenderAtMs_{0};
     std::uint64_t lastAutoSaveAtMs_{0};
     config::FileSnapshot configSnapshot_{};
@@ -144,6 +196,9 @@ private:
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};
+    FilteredLogRowsCache transferLogRowsCache_;
+    FilteredLogRowsCache hostLogRowsCache_;
+    FilteredLogRowsCache scriptLogRowsCache_;
     std::unordered_map<std::string, bool> luaDockVisibility_;
     float transferSendSectionHeight_{210.0F};
     bool aboutDialogRequested_{false};
@@ -169,6 +224,10 @@ private:
     bool rawCaptureExportDialogOpened_{false};
     std::string rawCaptureExportPath_;
     std::string rawCaptureExportError_;
+    bool rawCaptureRecordingDialogOpen_{false};
+    bool rawCaptureRecordingDialogOpened_{false};
+    std::string rawCaptureRecordingPath_;
+    std::string rawCaptureRecordingError_;
     bool logExportDialogOpen_{false};
     bool logExportDialogOpened_{false};
     LogExportTarget logExportTarget_{LogExportTarget::Transfer};
@@ -183,6 +242,8 @@ private:
         std::string draft;
         std::string queriedDraft;
         std::uint64_t editedAtMs{0};
+        std::uint64_t loadedRevision{0};
+        std::size_t queriedLimit{0};
         std::vector<scripting::ElfSymbolValue> options;
     };
     std::unordered_map<std::string, ElfSymbolComboUiState> elfSymbolComboStates_;

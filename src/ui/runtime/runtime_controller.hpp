@@ -6,7 +6,6 @@ namespace protoscope::ui {
 
 class IRuntimeController : public IRuntimeModule {
 public:
-    void initialize(RuntimeUiContext&) override {}
     virtual void beforeFrame(RuntimeUiContext&) {}
     virtual void afterFrame(RuntimeUiContext&) {}
 };

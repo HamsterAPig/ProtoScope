@@ -1,11 +1,21 @@
-#include "runtime_module.hpp"
+#include "protoscope/ui/gui_runtime.hpp"
+
+#include <imgui.h>
 
 namespace protoscope::ui {
 
-class HelpMenu final : public IRuntimeMenu {
-public:
-    std::string_view id() const override { return "help_menu"; }
-    void drawMenu(RuntimeUiContext&) override {}
-};
+void GuiRuntime::drawHelpMenu() {
+    if (!ImGui::BeginMenu("帮助")) {
+        return;
+    }
+
+    if (ImGui::MenuItem("检查更新")) {
+        startUpdateCheck();
+    }
+    if (ImGui::MenuItem("关于 ProtoScope")) {
+        requestAboutDialog();
+    }
+    ImGui::EndMenu();
+}
 
 } // namespace protoscope::ui

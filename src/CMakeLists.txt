@@ -1,11 +1,16 @@
 add_library(protoscope_plot STATIC
     plot/oscilloscope.cpp
     plot/raw_capture_file.cpp
+    plot/wave_fft.cpp
     plot/wave_math.cpp
 )
 target_include_directories(protoscope_plot
     PUBLIC
         ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(protoscope_plot
+    PUBLIC
+        protoscope_pocketfft
 )
 target_compile_features(protoscope_plot PUBLIC cxx_std_20)
 
@@ -36,6 +41,7 @@ target_compile_features(protoscope_transport PUBLIC cxx_std_20)
 
 add_library(protoscope_ui_layout STATIC
     ui/dock_layout.cpp
+    ui/protocol_state_file.cpp
     ui/protocol_ui_state.cpp
 )
 target_include_directories(protoscope_ui_layout
@@ -54,11 +60,11 @@ target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
     scripting/frame_stream_parser.cpp
-    scripting/host/script_host_core.cpp
-    scripting/host/script_host_loader.cpp
-    scripting/host/script_host_parser.cpp
     scripting/host/script_callback_dispatcher.cpp
     scripting/host/script_file_system_facade.cpp
+    scripting/host/script_host_core.cpp
+    scripting/host/script_host_loader.cpp
+    scripting/host/stream_schema_module.cpp
     scripting/host/core_api_module.cpp
     scripting/host/tx_api_module.cpp
     scripting/host/status_api_module.cpp
@@ -67,7 +73,6 @@ add_library(protoscope_scripting STATIC
     scripting/host/plot_api_module.cpp
     scripting/host/control_api_module.cpp
     scripting/host/codec_api_module.cpp
-    scripting/host/stream_schema_module.cpp
 )
 target_include_directories(protoscope_scripting
     PUBLIC
@@ -191,33 +196,28 @@ if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
         ui/editable_combo.cpp
         ui/runtime/gui_runtime_core.cpp
+        ui/runtime/ui_components.cpp
+        ui/runtime/platform_controller.cpp
+        ui/runtime/config_controller.cpp
+        ui/runtime/workspace_controller.cpp
         ui/runtime/main_menu.cpp
         ui/runtime/lua_view_menu.cpp
         ui/runtime/help_menu.cpp
-        ui/runtime/workspace_controller.cpp
-        ui/runtime/config_controller.cpp
-        ui/runtime/platform_controller.cpp
         ui/docks/dock_host.cpp
-        ui/docks/comm_dock.cpp
-        ui/docks/protocol_dock.cpp
-        ui/docks/transfer_dock.cpp
-        ui/docks/log_dock.cpp
-        ui/docks/script_dock.cpp
         ui/docks/lua_dock_host.cpp
         ui/dialogs/dialog_host.cpp
-        ui/dialogs/about_dialog.cpp
-        ui/dialogs/update_check_dialog.cpp
-        ui/dialogs/script_dialog_host.cpp
-        ui/dialogs/raw_capture_dialog.cpp
-        ui/dialogs/log_export_dialog.cpp
-        ui/dialogs/elf_static_address_dialog.cpp
-        ui/wave/wave_dock_renderer.cpp
-        ui/wave/wave_viewport_controller.cpp
-        ui/wave/wave_channel_renderer.cpp
-        ui/wave/wave_interaction_controller.cpp
-        ui/wave/wave_toolbar.cpp
         ui/wave/wave_channel_legend.cpp
+        ui/wave/wave_channel_legend_bar.cpp
+        ui/wave/wave_channel_renderer.cpp
+        ui/wave/wave_dock_renderer.cpp
+        ui/wave/wave_fft_layer.cpp
+        ui/wave/wave_interaction_controller.cpp
         ui/wave/wave_measurement_overlay.cpp
+        ui/wave/wave_measurement_overlay_layer.cpp
+        ui/wave/wave_overview_layer.cpp
+        ui/wave/wave_plot_layer.cpp
+        ui/wave/wave_toolbar.cpp
+        ui/wave/wave_viewport_controller.cpp
     )
     target_include_directories(protoscope_ui
         PUBLIC

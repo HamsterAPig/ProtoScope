@@ -25,6 +25,15 @@
 
 namespace protoscope::scripting {
 
+class CodecScriptHostApiModule;
+class ControlScriptHostApiModule;
+class CoreScriptHostApiModule;
+class FileScriptHostApiModule;
+class PlotScriptHostApiModule;
+class StatusScriptHostApiModule;
+class TxScriptHostApiModule;
+class UiScriptHostApiModule;
+
 enum class ControlType {
     Button,
     InputText,
@@ -53,6 +62,8 @@ struct ControlDescriptor {
     int comboDefaultIndex{0};
     int debounceMs{150};
     std::size_t limit{64};
+    bool debounceMsConfigured{false};
+    bool limitConfigured{false};
 };
 
 using ControlValue = std::variant<bool, int, float, std::string, ElfSymbolValue>;
@@ -307,6 +318,12 @@ struct DialogEvent {
     std::uint64_t timestampMs{0};
 };
 
+struct RealtimeOutputDiscardCounts {
+    std::size_t events{0};
+    std::size_t logs{0};
+    std::size_t plotAppends{0};
+};
+
 class ScriptHost {
 public:
     ScriptHost();
@@ -334,11 +351,16 @@ public:
     std::vector<TxRequest> drainTxRequests();
     std::vector<PlotSetup> drainPlotSetups();
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends();
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends(std::size_t maxRequests);
+    [[nodiscard]] std::size_t pendingPlotAppendCount() const;
+    RealtimeOutputDiscardCounts clearPendingRealtimeOutputs();
     std::vector<RequestDoneResult> drainRequestDoneResults();
     std::vector<StatusUpdate> drainStatusUpdates();
     std::vector<DialogRequest> drainDialogRequests();
     std::vector<FileDialogRequest> drainFileDialogRequests();
     std::optional<std::uint64_t> nextWakeupAtMs() const;
+    [[nodiscard]] std::optional<StreamBufferDefinition> streamBufferDefinition() const;
+    [[nodiscard]] std::vector<StreamFrameDefinition> streamFrameDefinitions() const;
 
     const std::string& scriptPath() const;
     const std::string& protocolDirectory() const;
@@ -350,6 +372,12 @@ public:
     void setRequestAwaitingCompletion(bool active);
 
 private:
+    sol::state& luaState();
+    sol::state_view luaView();
+    const std::vector<ControlDescriptor>& controlDescriptors() const;
+    const ControlValue* findControlValue(const std::string& id) const;
+    void updateControlValue(const std::string& id, ControlValue value);
+
     void callbackOnOpen(const ScriptHostContext& ctx);
     void callbackOnClose(const ScriptHostContext& ctx);
     void callbackOnError(const ScriptHostContext& ctx, const std::string& message);
@@ -363,14 +391,6 @@ private:
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
 
     void registerLuaApi(sol::table& proto);
-    void registerCoreApi(sol::table& proto);
-    void registerTxApi(sol::table& proto);
-    void registerStatusApi(sol::table& proto);
-    void registerUiApi(sol::table& proto);
-    void registerFileApi(sol::table& proto);
-    void registerPlotApi(sol::table& proto);
-    void registerControlApi(sol::table& proto);
-    void registerCodecApi(sol::table& proto);
 
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
@@ -402,6 +422,15 @@ private:
 
     static std::string valueToString(const ControlValue& value);
     void setLastError(std::string message);
+
+    friend class CodecScriptHostApiModule;
+    friend class ControlScriptHostApiModule;
+    friend class CoreScriptHostApiModule;
+    friend class FileScriptHostApiModule;
+    friend class PlotScriptHostApiModule;
+    friend class StatusScriptHostApiModule;
+    friend class TxScriptHostApiModule;
+    friend class UiScriptHostApiModule;
 
     struct Runtime;
     struct FileHandle;

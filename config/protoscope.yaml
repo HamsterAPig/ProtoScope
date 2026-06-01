@@ -18,6 +18,7 @@ gui:
     control_mode: oscilloscope
     display_formula: offset_then_scale
     channel_card_width_mode: fixed
+    channel_double_click_action: reset_scale_offset
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
     vertical_auto_fit_multiplier: 1.2
@@ -27,6 +28,22 @@ gui:
     overview_max_samples: 20000
     min_visible_time_span: 0.001
     show_axis_labels: false
+  log_history:
+    transfer_raw_limit: 10000
+    transfer_frame_limit: 120000
+    host_limit: 5000
+    script_limit: 5000
+  raw_capture:
+    live_limit_bytes: 67108864
+  realtime_backlog:
+    mode: responsive
+    rx_chunk_bytes_per_pump: 65536
+    transfer_frame_rows_per_pump: 2000
+    plot_appends_per_pump: 4096
+    discard_backlog_on_disconnect: true
+  elf_symbol_combo:
+    limit: 10
+    debounce_ms: 300
   send_history_limit: 20
   lua_dock_layout_debug: false
 

@@ -4,59 +4,24 @@ function ui()
   return {
     {
       id = "protocol",
-      title = "协议动作",
+      title = "默认协议面板",
       anchor = "left_bottom",
       tab_group = "protocol_tools",
       controls = {
         { type = "button", id = "read_version", label = "读取版本" },
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
-      },
-      layout = {
-        kind = "table",
-        columns = 2,
-        borders = false,
-        resizable = true,
-        row_bg = false,
-        sizing = "stretch",
-        rows = {
-          {
-            { control = "read_version" },
-            { control = "device_id" },
-          },
-        }
-      }
-    },
-    {
-      id = "advanced",
-      title = "高级参数",
-      anchor = "left_bottom",
-      tab_group = "protocol_tools",
-      controls = {
         { type = "checkbox", id = "hex_send", label = "HEX 发送", default = true },
         { type = "combo", id = "mode", label = "模式", options = { "轮询", "单次" }, default = 1 },
         { type = "input_int", id = "timeout_ms", label = "超时(ms)", default = 1000 },
         { type = "input_float", id = "scale", label = "缩放", default = 1.0 },
-        { type = "elf_symbol_combo", id = "target_symbol", label = "ELF 变量", debounce_ms = 150, limit = 64 },
+        { type = "elf_symbol_combo", id = "target_symbol", label = "ELF 变量" },
       },
       layout = {
         kind = "form",
         items = {
-          { text = "超时由宿主 request 队列管理；脚本只在拿到完整应答后调用 proto.request_done。" },
-          { text = "先通过“文件 -> 打开 ELF/JSON...”加载符号，再在 ELF 变量下拉中筛选静态地址。" },
-          { controls = { "hex_send", "mode" } },
-          { separator = true },
-          {
-            group = "采样参数",
-            items = {
-              { controls = { "timeout_ms", "scale" } },
-            }
-          },
-          {
-            group = "ElfStaticView 静态地址",
-            items = {
-              { control = "target_symbol" },
-            }
-          }
+          { collapse = "基础控制", default_open = true, items = {{ controls = { "read_version", "device_id" } }} },
+          { collapse = "高级控制", default_open = false, items = {{ controls = { "hex_send", "mode", "timeout_ms", "scale" } }} },
+          { collapse = "读取变量地址", default_open = true, items = {{ controls = { "target_symbol" } }} },
         }
       }
     }

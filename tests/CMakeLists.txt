@@ -6,6 +6,8 @@ add_executable(protoscope_tests
     test_dock_layout.cpp
     test_frame_stream_parser.cpp
     test_plot.cpp
+    test_protocol_state_file.cpp
+    test_runtime_scheduler.cpp
     test_elf_static_view_bridge.cpp
     test_script_host.cpp
     test_serial_ports.cpp

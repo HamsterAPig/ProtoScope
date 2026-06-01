@@ -68,6 +68,10 @@ std::uint16_t readBe16(const std::vector<std::uint8_t>& bytes, std::size_t offse
          | static_cast<std::uint16_t>(bytes.at(offset + 1));
 }
 
+std::int16_t readBeI16(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+    return static_cast<std::int16_t>(readBe16(bytes, offset));
+}
+
 std::vector<std::uint8_t> makeStreamFixtureFrame(std::uint8_t value) {
     std::vector<std::uint8_t> frame{0xAA, 0x55, 0x01, value, 0x00, 0x00};
     const std::vector<std::uint8_t> payload(frame.begin(), frame.end() - 2);
@@ -270,8 +274,12 @@ void test_script_elf_symbol_combo_descriptor_defaults() {
             "应解析 elf_symbol_combo 控件类型");
     require(controls[0].debounceMs == 150, "debounce_ms 默认值应为 150");
     require(controls[0].limit == 64, "limit 默认值应为 64");
+    require(!controls[0].debounceMsConfigured, "未配置 debounce_ms 时应标记为使用全局默认");
+    require(!controls[0].limitConfigured, "未配置 limit 时应标记为使用全局默认");
     require(controls[1].debounceMs == 25, "应解析自定义 debounce_ms");
     require(controls[1].limit == 3, "应解析自定义 limit");
+    require(controls[1].debounceMsConfigured, "自定义 debounce_ms 应标记为 Lua 覆盖");
+    require(controls[1].limitConfigured, "自定义 limit 应标记为 Lua 覆盖");
 }
 
 void test_script_elf_symbol_combo_invalid_config_fails() {
@@ -800,9 +808,20 @@ void test_config_default_roundtrip() {
             "波形显示公式默认值应为 offset_then_scale");
     require(config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "CH 卡片宽度模式默认值应为 fixed");
+    require(config.gui.wave.channelDoubleClickAction == protoscope::plot::WaveChannelDoubleClickAction::ResetScaleOffset,
+            "CH 卡片双击默认值应为 reset_scale_offset");
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.2");
+    require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
+    require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
+    require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
+    require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
+    require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
+    require(config.gui.logHistory.scriptLimit == 5000, "脚本日志默认上限应为 5000");
+    require(config.gui.rawCapture.liveLimitBytes == 64U * 1024U * 1024U, "实时原始缓存默认上限应为 64MiB");
+    require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
+    require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
     require(config.gui.sendHistoryLimit == 20, "发送历史条数默认值应为 20");
     config.communication.kind = protoscope::transport::TransportKind::Serial;
     config.communication.serial.portName = "COM9";
@@ -822,9 +841,19 @@ void test_config_default_roundtrip() {
     config.gui.wave.controlMode = protoscope::plot::WaveControlMode::LegacyGlobal;
     config.gui.wave.displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset;
     config.gui.wave.channelCardWidthMode = protoscope::plot::WaveChannelCardWidthMode::Adaptive;
+    config.gui.wave.channelDoubleClickAction = protoscope::plot::WaveChannelDoubleClickAction::ResetAll;
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
+    config.gui.wave.showChannelLegend = false;
+    config.gui.wave.showFftLegend = false;
+    config.gui.logHistory.transferRawLimit = 11;
+    config.gui.logHistory.transferFrameLimit = 22;
+    config.gui.logHistory.hostLimit = 33;
+    config.gui.logHistory.scriptLimit = 44;
+    config.gui.rawCapture.liveLimitBytes = 123;
+    config.gui.elfSymbolCombo.limit = 12;
+    config.gui.elfSymbolCombo.debounceMs = 350;
     config.gui.sendHistoryLimit = 7;
     config.scripting.fileIo.enabled = true;
     config.scripting.fileIo.maxOpenFiles = 3;
@@ -853,13 +882,24 @@ void test_config_default_roundtrip() {
             "波形显示公式 roundtrip 失败");
     require(reloaded.config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Adaptive,
             "CH 卡片宽度模式 roundtrip 失败");
+    require(reloaded.config.gui.wave.channelDoubleClickAction == protoscope::plot::WaveChannelDoubleClickAction::ResetAll,
+            "CH 卡片双击行为 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12, "CH 卡片自适应比例 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.verticalAutoFitMultiplier - 1.5) < 1e-12, "Y 轴 Auto Fit 系数 roundtrip 失败");
+    require(!reloaded.config.gui.wave.showChannelLegend, "波形图例显示开关 roundtrip 失败");
+    require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.minVisibleTimeSpan - 0.0025) < 1e-12, "波形最小可视跨度 roundtrip 失败");
+    require(reloaded.config.gui.logHistory.transferRawLimit == 11, "原始收发历史上限 roundtrip 失败");
+    require(reloaded.config.gui.logHistory.transferFrameLimit == 22, "逐帧收发历史上限 roundtrip 失败");
+    require(reloaded.config.gui.logHistory.hostLimit == 33, "宿主日志历史上限 roundtrip 失败");
+    require(reloaded.config.gui.logHistory.scriptLimit == 44, "脚本日志历史上限 roundtrip 失败");
+    require(reloaded.config.gui.rawCapture.liveLimitBytes == 123, "实时原始缓存上限 roundtrip 失败");
+    require(reloaded.config.gui.elfSymbolCombo.limit == 12, "ELF 变量候选上限 roundtrip 失败");
+    require(reloaded.config.gui.elfSymbolCombo.debounceMs == 350, "ELF 变量候选消抖 roundtrip 失败");
     require(reloaded.config.gui.sendHistoryLimit == 7, "发送历史条数 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.enabled, "Lua 文件 IO 开关 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.maxOpenFiles == 3, "Lua 文件 IO 打开数上限 roundtrip 失败");
@@ -916,6 +956,7 @@ void test_config_wave_mode_invalid_fallback() {
            "    control_mode: weird\n"
            "    display_formula: wrong\n"
            "    channel_card_width_mode: weird\n"
+           "    channel_double_click_action: weird\n"
            "    channel_card_fixed_width: 0\n"
            "    channel_card_adaptive_ratio: -0.5\n"
            "    vertical_auto_fit_multiplier: 0\n";
@@ -928,6 +969,8 @@ void test_config_wave_mode_invalid_fallback() {
             "非法 display_formula 应回退到 offset_then_scale");
     require(loaded.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "非法 channel_card_width_mode 应回退到 fixed");
+    require(loaded.gui.wave.channelDoubleClickAction == protoscope::plot::WaveChannelDoubleClickAction::ResetScaleOffset,
+            "非法 channel_double_click_action 应回退到 reset_scale_offset");
     require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
     require(std::abs(loaded.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "非正自适应比例应回退到 0.22");
     require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "非正 Auto Fit 系数应回退到 1.2");
@@ -1126,6 +1169,32 @@ void test_half_duplex_modbus_ack_and_plot_flow() {
     require(totalSamples == 480, "总样本数应为 480");
     require(perChannel[0] == 120 && perChannel[1] == 120 && perChannel[2] == 120 && perChannel[3] == 120,
             "四个通道都应各收到 120 个样本");
+}
+
+void test_half_duplex_modbus_ch3_uses_third_harmonic() {
+    protoscope::scripting::ScriptHost master;
+    protoscope::scripting::ScriptHost slave;
+    requireProtocolLoaded(master, "protocols/half_duplex_modbus_master");
+    requireProtocolLoaded(slave, "protocols/half_duplex_modbus_slave");
+
+    const auto ctx = sampleCtx();
+    completeHalfDuplexStartup(master, slave, ctx);
+    const auto frame = nextHalfDuplexWaveFrame(slave);
+
+    constexpr double sampleRateHz = 12000.0;
+    constexpr double fundamentalHz = 50.0;
+    constexpr double thirdHarmonicRatio = 0.5;
+    constexpr double channelScale = 1000.0;
+    constexpr double phaseStep = 2.0 * 3.14159265358979323846 * fundamentalHz / sampleRateHz;
+
+    for (std::size_t frameIndex = 0; frameIndex < 120; ++frameIndex) {
+        const double phase = static_cast<double>(frameIndex + 1) * phaseStep;
+        const auto expected = static_cast<int>(
+            std::floor((std::sin(phase) + thirdHarmonicRatio * std::sin(3.0 * phase)) * channelScale));
+        const auto actual = static_cast<int>(readBeI16(frame, frameIndex * 14 + 8));
+        const auto diff = actual >= expected ? actual - expected : expected - actual;
+        require(diff <= 1, "CH3 默认应输出 50Hz 基波叠加 150Hz 三次谐波");
+    }
 }
 
 void test_half_duplex_modbus_loss_status_keeps_valid_frame() {
@@ -1519,9 +1588,14 @@ static const TestCase kAllTests[] = {
     {"config_default_protocol_workspace_fills_missing_resources", &test_config_default_protocol_workspace_fills_missing_resources},
     {"script_file_io_proto_buffer_roundtrip", &test_script_file_io_proto_buffer_roundtrip},
     {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
+    {"protocol_state_file_backs_up_corrupt_yaml", &test_protocol_state_file_backs_up_corrupt_yaml},
+    {"protocol_state_file_atomic_write_replaces_valid_yaml", &test_protocol_state_file_atomic_write_replaces_valid_yaml},
+    {"protocol_state_file_preserves_other_protocol_nodes", &test_protocol_state_file_preserves_other_protocol_nodes},
+    {"protocol_state_file_replace_failure_keeps_target", &test_protocol_state_file_replace_failure_keeps_target},
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
     {"half_duplex_modbus_request_batches", &test_half_duplex_modbus_request_batches},
     {"half_duplex_modbus_ack_and_plot_flow", &test_half_duplex_modbus_ack_and_plot_flow},
+    {"half_duplex_modbus_ch3_uses_third_harmonic", &test_half_duplex_modbus_ch3_uses_third_harmonic},
     {"half_duplex_modbus_loss_status_keeps_valid_frame", &test_half_duplex_modbus_loss_status_keeps_valid_frame},
     {"half_duplex_modbus_ack_matching_rules", &test_half_duplex_modbus_ack_matching_rules},
     {"half_duplex_modbus_sticky_frames", &test_half_duplex_modbus_sticky_frames},
@@ -1529,11 +1603,15 @@ static const TestCase kAllTests[] = {
     {"half_duplex_modbus_crc_resync_keeps_following_frame", &test_half_duplex_modbus_crc_resync_keeps_following_frame},
     {"half_duplex_modbus_multi_schema_candidates", &test_half_duplex_modbus_multi_schema_candidates},
     {"dock_log_and_script_split", &test_dock_log_and_script_split},
+    {"dock_history_limits_trim_all_log_types", &test_dock_history_limits_trim_all_log_types},
     {"dock_receive_row_single_line_hex_and_ascii", &test_dock_receive_row_single_line_hex_and_ascii},
     {"dock_receive_row_single_line_message_and_timestamp", &test_dock_receive_row_single_line_message_and_timestamp},
     {"dock_receive_rows_text_export_format", &test_dock_receive_rows_text_export_format},
     {"dock_receive_row_visual_kind_classification", &test_dock_receive_row_visual_kind_classification},
     {"dock_send_history_deduplicates_and_trims", &test_dock_send_history_deduplicates_and_trims},
+    {"log_filter_keeps_order_and_matches_status", &test_log_filter_keeps_order_and_matches_status},
+    {"log_filter_keyword_matches_metadata_and_bytes", &test_log_filter_keyword_matches_metadata_and_bytes},
+    {"log_filter_combines_status_and_keyword", &test_log_filter_combines_status_and_keyword},
     {"wave_protocol_state_isolated_by_protocol_key", &test_wave_protocol_state_isolated_by_protocol_key},
     {"dock_visibility_state_isolated_by_protocol_key", &test_dock_visibility_state_isolated_by_protocol_key},
     {"dock_visibility_state_decode_missing_fields_defaults", &test_dock_visibility_state_decode_missing_fields_defaults},
@@ -1563,6 +1641,8 @@ static const TestCase kAllTests[] = {
     {"plot_cursor_snap_by_time_and_measurement", &test_plot_cursor_snap_by_time_and_measurement},
     {"wave_cursor_smart_snap_edge", &test_wave_cursor_smart_snap_edge},
     {"wave_cursor_smart_snap_extreme", &test_wave_cursor_smart_snap_extreme},
+    {"wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms", &test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms},
+    {"wave_cursor_extreme_snap_falls_back_to_window_trough", &test_wave_cursor_extreme_snap_falls_back_to_window_trough},
     {"wave_cursor_smart_snap_fallback_to_nearest", &test_wave_cursor_smart_snap_fallback_to_nearest},
     {"wave_cursor_drag_time_uses_smart_snap", &test_wave_cursor_drag_time_uses_smart_snap},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
@@ -1579,10 +1659,24 @@ static const TestCase kAllTests[] = {
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
     {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
     {"application_open_transport_uses_udp_peer_runtime_config", &test_application_open_transport_uses_udp_peer_runtime_config},
+    {"application_set_log_level_updates_runtime_config", &test_application_set_log_level_updates_runtime_config},
+    {"application_wave_legend_visibility_config_roundtrip", &test_application_wave_legend_visibility_config_roundtrip},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
+    {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
+    {"application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims", &test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},
     {"application_raw_capture_import_replays_stream_in_chunks", &test_application_raw_capture_import_replays_stream_in_chunks},
+    {"application_transfer_log_frame_view_waits_for_rx_full_frame", &test_application_transfer_log_frame_view_waits_for_rx_full_frame},
+    {"application_transfer_log_frame_view_keeps_unmatched_tx_raw", &test_application_transfer_log_frame_view_keeps_unmatched_tx_raw},
+    {"application_rx_events_are_processed_with_budget", &test_application_rx_events_are_processed_with_budget},
+    {"application_large_rx_event_drains_by_byte_budget", &test_application_large_rx_event_drains_by_byte_budget},
+    {"application_responsive_disconnect_discards_realtime_backlog", &test_application_responsive_disconnect_discards_realtime_backlog},
+    {"application_complete_disconnect_keeps_realtime_backlog", &test_application_complete_disconnect_keeps_realtime_backlog},
+    {"application_transfer_frame_rows_drain_after_input_stops", &test_application_transfer_frame_rows_drain_after_input_stops},
+    {"application_plot_push_merges_same_channel_source", &test_application_plot_push_merges_same_channel_source},
+    {"application_plot_push_drains_with_budget_and_disconnect_discards_pending", &test_application_plot_push_drains_with_budget_and_disconnect_discards_pending},
+    {"runtime_scheduler_limits_busy_render_frames", &test_runtime_scheduler_limits_busy_render_frames},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
@@ -1595,6 +1689,10 @@ static const TestCase kAllTests[] = {
     {"plot_hover_readout_ignores_hidden_channels", &test_plot_hover_readout_ignores_hidden_channels},
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
+    {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
+    {"wave_fft_visible_samples_supports_non_power_of_two", &test_wave_fft_visible_samples_supports_non_power_of_two},
+    {"wave_fft_manual_point_count_supports_non_power_of_two", &test_wave_fft_manual_point_count_supports_non_power_of_two},
+    {"wave_fft_fit_viewport_resets_frequency_and_value_ranges", &test_wave_fft_fit_viewport_resets_frequency_and_value_ranges},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
     {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
     {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
@@ -1603,11 +1701,16 @@ static const TestCase kAllTests[] = {
     {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},
     {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
     {"wave_visible_channel_bounds_ignore_hidden_channels", &test_wave_visible_channel_bounds_ignore_hidden_channels},
+    {"wave_channel_reset_all_uses_protocol_default", &test_wave_channel_reset_all_uses_protocol_default},
+    {"wave_channel_reset_scale_offset_preserves_label_and_ratio", &test_wave_channel_reset_scale_offset_preserves_label_and_ratio},
+    {"wave_channel_reset_scale_preserves_offset", &test_wave_channel_reset_scale_preserves_offset},
     {"wave_offset_reset_uses_protocol_default_only", &test_wave_offset_reset_uses_protocol_default_only},
     {"raw_capture_file_roundtrip", &test_raw_capture_file_roundtrip},
     {"raw_capture_file_rejects_size_mismatch", &test_raw_capture_file_rejects_size_mismatch},
     {"raw_capture_file_requires_protocol_fields", &test_raw_capture_file_requires_protocol_fields},
     {"elf_static_view_bridge_loads_dump_json_and_queries_symbols", &test_elf_static_view_bridge_loads_dump_json_and_queries_symbols},
+    {"elf_static_view_bridge_loads_private_binary_without_extension", &test_elf_static_view_bridge_loads_private_binary_without_extension},
+    {"elf_static_view_bridge_loads_variable_summary_export", &test_elf_static_view_bridge_loads_variable_summary_export},
     {"elf_static_view_bridge_keeps_old_model_on_load_failure", &test_elf_static_view_bridge_keeps_old_model_on_load_failure},
 };
 
