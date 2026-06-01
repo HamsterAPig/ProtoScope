@@ -276,10 +276,10 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
             return true;
         }
 
-        scripting::ScriptHost nextHost;
-        nextHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
-        if (!nextHost.loadProtocolDirectory(resolvedDirText)) {
-            lua.lastError = nextHost.lastError();
+        scripting::ScriptHost probeHost;
+        probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
+        if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
+            lua.lastError = probeHost.lastError();
             loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
             lua.docks = scriptHost_.dockSnapshots();
             lua.controls = scriptHost_.controlsSnapshot();
@@ -311,7 +311,16 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
             loggingFacade_.warn("protocol", "协议重载前清理旧脚本输出失败: 未知异常");
         }
 
-        scriptHost_ = std::move(nextHost);
+        scriptHost_.setFileIoConfig(runtimeConfig_.scripting.fileIo);
+        if (!scriptHost_.loadProtocolDirectory(resolvedDirText)) {
+            lua.lastError = scriptHost_.lastError();
+            loggingFacade_.error("protocol", "协议加载失败: " + lua.lastError);
+            lua.docks = scriptHost_.dockSnapshots();
+            lua.controls = scriptHost_.controlsSnapshot();
+            lua.controlStates = scriptHost_.controlStatesSnapshot();
+            return false;
+        }
+
         lua.protocolDir = resolvedDirText;
         lua.protocolName = protocolName;
         lua.scriptPath = scriptPath;

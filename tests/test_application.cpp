@@ -395,17 +395,47 @@ void test_application_failed_protocol_reload_keeps_previous_runtime() {
 }
 
 void test_application_same_protocol_reload_keeps_runtime_stable() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-reload-table-request");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "reload table request 测试协议应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"reload_request\", title = \"Reload Request\", controls = { { type = \"button\", id = \"send\", label = \"Send\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"send\" then\n";
+        out << "    proto.request({ 0xff, 0x03, 0x00, 0x01 }, { timeout_ms = 1000, tag = \"reload-send\" })\n";
+        out << "  end\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
     protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
     require(application.initialize(), "应用应可初始化默认 Lua 工作区");
-    require(application.reloadProtocolDirectory("protocols/lua_waveform_demo", true), "Lua 波形演示脚本应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "reload table request 协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
 
     for (int attempt = 0; attempt < 5; ++attempt) {
-        require(application.reloadProtocolDirectory("protocols/lua_waveform_demo", true), "同协议强制 reload 应持续成功");
+        require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "同协议强制 reload 应持续成功");
+        application.pumpOnce();
         const auto& lua = application.docks().luaState();
         require(lua.loaded, "同协议强制 reload 后协议仍应处于已加载状态");
         require(!lua.docks.empty(), "同协议强制 reload 后 Dock 快照应保持有效");
         require(!lua.controls.empty(), "同协议强制 reload 后控件快照应保持有效");
         require(lua.lastError.empty(), "同协议强制 reload 成功后不应残留错误");
+
+        application.updateControlValue("send", true);
+        require(transportState->sentTasks.size() == static_cast<std::size_t>(attempt + 1),
+                "同协议强制 reload 后 Lua 控件仍应能发送 table payload request");
+        const auto& sentTask = transportState->sentTasks.back();
+        const std::vector<std::uint8_t> expectedPayload{0xff, 0x03, 0x00, 0x01};
+        require(sentTask.payload == expectedPayload, "table payload 应按 number[] 转成原始字节，不应误走字符串转换");
     }
 
     application.shutdown();

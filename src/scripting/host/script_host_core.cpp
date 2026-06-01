@@ -394,7 +394,7 @@ std::optional<std::vector<std::uint8_t>> bytesFromLuaObject(const sol::object& o
         return std::vector<std::uint8_t>{};
     }
 
-    if (object.is<std::string>()) {
+    if (object.get_type() == sol::type::string) {
         const auto parsed = protocol_utils::hexToBytes(object.as<std::string>());
         if (!parsed.has_value()) {
             error = "HEX 字符串解析失败";
@@ -402,11 +402,11 @@ std::optional<std::vector<std::uint8_t>> bytesFromLuaObject(const sol::object& o
         return parsed;
     }
 
-    if (object.is<ProtoBuffer>()) {
+    if (object.get_type() == sol::type::userdata && object.is<ProtoBuffer>()) {
         return object.as<ProtoBuffer>().bytes;
     }
 
-    if (!object.is<sol::table>()) {
+    if (object.get_type() != sol::type::table) {
         error = "仅支持 hex 字符串、ProtoBuffer 或 number[]";
         return std::nullopt;
     }
