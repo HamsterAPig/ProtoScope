@@ -24,6 +24,7 @@ void test_script_on_error_log();
 void test_script_multi_dock_snapshot();
 void test_script_dock_layout_fields();
 void test_script_table_layout_snapshot();
+void test_script_duplicate_label_controls_allowed();
 void test_script_crc_bridge();
 void test_script_read_version_flow();
 void test_script_read_version_split_flow();

@@ -57,13 +57,10 @@ bool GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
                 continue;
             }
 
-            ImGui::PushID(controlIter->second->descriptor.id.c_str());
             if (drawDynamicControl(*controlIter->second)) {
                 updated = true;
-                ImGui::PopID();
                 break;
             }
-            ImGui::PopID();
         }
         if (updated) {
             break;

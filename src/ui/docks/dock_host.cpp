@@ -4,6 +4,14 @@
 
 namespace protoscope::ui {
 
+namespace {
+
+std::string luaControlImGuiLabel(const scripting::ControlDescriptor& descriptor) {
+    return descriptor.label + "##lua_control_" + descriptor.id;
+}
+
+} // namespace
+
 void GuiRuntime::drawStatusBar() {
     auto& comm = application_.docks().commState();
     auto& config = application_.docks().configState();
@@ -756,16 +764,17 @@ void GuiRuntime::drawScriptDock() {
 
 bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
     const auto& descriptor = control.descriptor;
+    const std::string imguiLabel = luaControlImGuiLabel(descriptor);
     switch (descriptor.type) {
     case scripting::ControlType::Button:
-        if (ImGui::Button(descriptor.label.c_str())) {
+        if (ImGui::Button(imguiLabel.c_str())) {
             application_.updateControlValue(descriptor.id, true);
             return true;
         }
         break;
     case scripting::ControlType::Checkbox: {
         bool checked = std::get<bool>(control.value);
-        if (ImGui::Checkbox(descriptor.label.c_str(), &checked)) {
+        if (ImGui::Checkbox(imguiLabel.c_str(), &checked)) {
             application_.updateControlValue(descriptor.id, checked);
             return true;
         }
@@ -774,7 +783,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
     case scripting::ControlType::InputText: {
         char buffer[512]{};
         std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
-        if (ImGui::InputText(descriptor.label.c_str(), buffer, sizeof(buffer))) {
+        if (ImGui::InputText(imguiLabel.c_str(), buffer, sizeof(buffer))) {
             application_.updateControlValue(descriptor.id, std::string(buffer));
             return true;
         }
@@ -786,7 +795,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         for (const auto& option : descriptor.comboOptions) {
             items.push_back(option.c_str());
         }
-        if (!items.empty() && ImGui::Combo(descriptor.label.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
+        if (!items.empty() && ImGui::Combo(imguiLabel.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
             application_.updateControlValue(descriptor.id, index);
             return true;
         }
@@ -825,7 +834,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
             labels.push_back(option.label);
         }
 
-        const auto edit = drawEditableCombo(descriptor.label.c_str(),
+        const auto edit = drawEditableCombo(imguiLabel.c_str(),
                                             state.draft,
                                             labels,
                                             EditableComboOptions{.keepPopupOpenWhileEditing = true});
@@ -846,7 +855,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
     }
     case scripting::ControlType::InputInt: {
         int value = std::get<int>(control.value);
-        if (ImGui::InputInt(descriptor.label.c_str(), &value)) {
+        if (ImGui::InputInt(imguiLabel.c_str(), &value)) {
             application_.updateControlValue(descriptor.id, value);
             return true;
         }
@@ -854,7 +863,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
     }
     case scripting::ControlType::InputFloat: {
         float value = std::get<float>(control.value);
-        if (ImGui::InputFloat(descriptor.label.c_str(), &value)) {
+        if (ImGui::InputFloat(imguiLabel.c_str(), &value)) {
             application_.updateControlValue(descriptor.id, value);
             return true;
         }

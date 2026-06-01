@@ -444,6 +444,33 @@ void test_script_form_layout_snapshot() {
     require(items[4].collapse->items[0].controls.controlIds[1] == "scale", "collapse 内第二个控件顺序错误");
 }
 
+void test_script_duplicate_label_controls_allowed() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("duplicate_label_controls").generic_string()),
+            "duplicate_label_controls 协议应可加载");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 2, "重复 label 夹具应产出 form 与 flow 两个 dock");
+
+    const auto& formDock = docks[0];
+    require(formDock.descriptor.layout.has_value(), "重复 label form 应解析 layout");
+    require(formDock.descriptor.layout->kind == protoscope::scripting::DockLayoutKind::Form,
+            "重复 label 夹具首个 dock 应为 form layout");
+    require(formDock.controls.size() == 2, "重复 label form 应保留两个控件");
+    require(formDock.controls[0].descriptor.id == "src_addr", "第一个重复 label 控件 id 不应改变");
+    require(formDock.controls[1].descriptor.id == "dst_addr", "第二个重复 label 控件 id 不应改变");
+    require(formDock.controls[0].descriptor.label == "地址", "第一个重复 label 控件 label 不应改变");
+    require(formDock.controls[1].descriptor.label == "地址", "第二个重复 label 控件 label 不应改变");
+
+    const auto& flowDock = docks[1];
+    require(!flowDock.descriptor.layout.has_value(), "重复 label flow 不应声明 layout");
+    require(flowDock.controls.size() == 2, "重复 label flow 应保留两个控件");
+    require(flowDock.controls[0].descriptor.id == "read_src", "第一个重复 label flow 控件 id 不应改变");
+    require(flowDock.controls[1].descriptor.id == "read_dst", "第二个重复 label flow 控件 id 不应改变");
+    require(flowDock.controls[0].descriptor.label == "读取", "第一个重复 label flow 控件 label 不应改变");
+    require(flowDock.controls[1].descriptor.label == "读取", "第二个重复 label flow 控件 label 不应改变");
+}
+
 void test_script_crc_bridge() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory(fixtureProtocolDir("crc_probe").generic_string()), "crc_probe 协议应可加载");
@@ -1551,6 +1578,7 @@ static const TestCase kAllTests[] = {
     {"script_dock_layout_fields", &test_script_dock_layout_fields},
     {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
     {"script_form_layout_snapshot", &test_script_form_layout_snapshot},
+    {"script_duplicate_label_controls_allowed", &test_script_duplicate_label_controls_allowed},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
     {"script_read_version_split_flow", &test_script_read_version_split_flow},
