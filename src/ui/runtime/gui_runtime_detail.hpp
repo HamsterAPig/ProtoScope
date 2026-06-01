@@ -14,9 +14,9 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #endif
 
 #include <imgui.h>
@@ -111,7 +111,191 @@ namespace {
     return window == nullptr ? nullptr : glfwGetWin32Window(window);
 }
 
-[[maybe_unused]] int CALLBACK browseInitialDirCallback(HWND hwnd, UINT message, LPARAM, LPARAM data);
+struct NativeDialogFilters {
+    std::vector<std::wstring> names;
+    std::vector<std::wstring> patterns;
+    std::vector<COMDLG_FILTERSPEC> specs;
+};
+
+class ScopedComInitializer {
+public:
+    ScopedComInitializer() : result_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)) {}
+    ~ScopedComInitializer() {
+        if (shouldUninitialize_) {
+            CoUninitialize();
+        }
+    }
+
+    bool available() const {
+        return SUCCEEDED(result_) || result_ == RPC_E_CHANGED_MODE;
+    }
+
+    HRESULT result() const {
+        return result_;
+    }
+
+private:
+    HRESULT result_{S_OK};
+    bool shouldUninitialize_{result_ == S_OK || result_ == S_FALSE};
+};
+
+[[maybe_unused]] std::string windowsDialogError(const char* message, HRESULT result) {
+    std::ostringstream stream;
+    stream << message << ": HRESULT=0x" << std::uppercase << std::hex << static_cast<DWORD>(result);
+    return stream.str();
+}
+
+[[maybe_unused]] NativeDialogFilters parseNativeDialogFilters(const wchar_t* filterText) {
+    NativeDialogFilters filters;
+    if (filterText == nullptr || *filterText == L'\0') {
+        return filters;
+    }
+
+    const wchar_t* cursor = filterText;
+    while (*cursor != L'\0') {
+        const std::wstring name(cursor);
+        cursor += name.size() + 1;
+        if (*cursor == L'\0') {
+            break;
+        }
+        const std::wstring pattern(cursor);
+        cursor += pattern.size() + 1;
+        filters.names.push_back(name);
+        filters.patterns.push_back(pattern);
+    }
+
+    filters.specs.reserve(filters.names.size());
+    for (std::size_t index = 0; index < filters.names.size(); ++index) {
+        filters.specs.push_back(COMDLG_FILTERSPEC{filters.names[index].c_str(), filters.patterns[index].c_str()});
+    }
+    return filters;
+}
+
+[[maybe_unused]] void setNativeDialogDefaultPath(IFileDialog* dialog,
+                                                 const std::filesystem::path& defaultPath,
+                                                 bool pickFolder) {
+    if (dialog == nullptr || defaultPath.empty()) {
+        return;
+    }
+
+    try {
+        std::filesystem::path folder = defaultPath;
+        if (!pickFolder) {
+            const bool isDirectory = std::filesystem::exists(defaultPath) && std::filesystem::is_directory(defaultPath);
+            const auto fileName = isDirectory ? std::filesystem::path{} : defaultPath.filename();
+            if (!fileName.empty()) {
+                const auto wideFileName = fileName.wstring();
+                dialog->SetFileName(wideFileName.c_str());
+            }
+            folder = isDirectory ? defaultPath : defaultPath.parent_path();
+        } else if (std::filesystem::exists(defaultPath) && !std::filesystem::is_directory(defaultPath)) {
+            folder = defaultPath.parent_path();
+        }
+
+        if (folder.empty()) {
+            return;
+        }
+
+        IShellItem* folderItem = nullptr;
+        const auto wideFolder = folder.wstring();
+        const HRESULT result = SHCreateItemFromParsingName(wideFolder.c_str(), nullptr, IID_PPV_ARGS(&folderItem));
+        if (SUCCEEDED(result) && folderItem != nullptr) {
+            dialog->SetFolder(folderItem);
+            folderItem->Release();
+        }
+    } catch (const std::exception&) {
+    }
+}
+
+[[maybe_unused]] std::optional<std::filesystem::path> nativeCommonItemDialog(GLFWwindow* window,
+                                                                            const wchar_t* title,
+                                                                            const wchar_t* filter,
+                                                                            const std::filesystem::path& defaultPath,
+                                                                            bool saveDialog,
+                                                                            bool pickFolder,
+                                                                            const wchar_t* defaultExtension,
+                                                                            std::string& error) {
+    // 核心流程：Windows 文件与目录选择统一走 Common Item Dialog，避免同一应用出现两套系统对话框体验。
+    const ScopedComInitializer com;
+    if (!com.available()) {
+        error = windowsDialogError("初始化 Windows 文件对话框失败", com.result());
+        return std::nullopt;
+    }
+
+    IFileDialog* dialog = nullptr;
+    HRESULT result = S_OK;
+    if (saveDialog) {
+        IFileSaveDialog* save = nullptr;
+        result = CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&save));
+        dialog = save;
+    } else {
+        IFileOpenDialog* open = nullptr;
+        result = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&open));
+        dialog = open;
+    }
+    if (FAILED(result) || dialog == nullptr) {
+        error = windowsDialogError("创建 Windows 文件对话框失败", result);
+        return std::nullopt;
+    }
+
+    dialog->SetTitle(title);
+
+    DWORD options = 0;
+    if (SUCCEEDED(dialog->GetOptions(&options))) {
+        options |= FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR;
+        if (pickFolder) {
+            options |= FOS_PICKFOLDERS | FOS_PATHMUSTEXIST;
+        } else if (saveDialog) {
+            options |= FOS_OVERWRITEPROMPT;
+        } else {
+            options |= FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST;
+        }
+        dialog->SetOptions(options);
+    }
+
+    NativeDialogFilters filters = parseNativeDialogFilters(filter);
+    if (!pickFolder && !filters.specs.empty()) {
+        dialog->SetFileTypes(static_cast<UINT>(filters.specs.size()), filters.specs.data());
+        dialog->SetFileTypeIndex(1);
+    }
+    if (defaultExtension != nullptr && *defaultExtension != L'\0') {
+        dialog->SetDefaultExtension(defaultExtension);
+    }
+    setNativeDialogDefaultPath(dialog, defaultPath, pickFolder);
+
+    result = dialog->Show(nativeWindowHandle(window));
+    if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        dialog->Release();
+        error.clear();
+        return std::nullopt;
+    }
+    if (FAILED(result)) {
+        dialog->Release();
+        error = windowsDialogError(pickFolder ? "Windows 目录对话框失败" : "Windows 文件对话框失败", result);
+        return std::nullopt;
+    }
+
+    IShellItem* selected = nullptr;
+    result = dialog->GetResult(&selected);
+    dialog->Release();
+    if (FAILED(result) || selected == nullptr) {
+        error = windowsDialogError("Windows 文件对话框返回结果失败", result);
+        return std::nullopt;
+    }
+
+    PWSTR selectedPath = nullptr;
+    result = selected->GetDisplayName(SIGDN_FILESYSPATH, &selectedPath);
+    selected->Release();
+    if (FAILED(result) || selectedPath == nullptr) {
+        error = windowsDialogError("Windows 文件对话框返回路径失败", result);
+        return std::nullopt;
+    }
+
+    const std::filesystem::path path(selectedPath);
+    CoTaskMemFree(selectedPath);
+    error.clear();
+    return path;
+}
 
 [[maybe_unused]] std::optional<std::filesystem::path> nativeFileDialog(GLFWwindow* window,
                                                       const wchar_t* title,
@@ -120,92 +304,14 @@ namespace {
                                                       bool saveDialog,
                                                       const wchar_t* defaultExtension,
                                                       std::string& error) {
-    // 核心流程：Windows 下文件选择统一走系统原生对话框，避免在 ImGui 弹窗里手输路径。
-    std::array<wchar_t, 32768> buffer{};
-    std::wstring initialDir;
-    try {
-        if (!defaultPath.empty()) {
-            const bool isDirectory = std::filesystem::exists(defaultPath) && std::filesystem::is_directory(defaultPath);
-            const auto fileName = isDirectory ? std::filesystem::path{} : defaultPath.filename();
-            if (!fileName.empty()) {
-                const auto text = fileName.wstring();
-                std::wcsncpy(buffer.data(), text.c_str(), buffer.size() - 1);
-            }
-            const auto dir = isDirectory ? defaultPath : defaultPath.parent_path();
-            if (!dir.empty()) {
-                initialDir = dir.wstring();
-            }
-        }
-    } catch (const std::exception&) {
-        initialDir.clear();
-    }
-
-    OPENFILENAMEW options{};
-    options.lStructSize = sizeof(options);
-    options.hwndOwner = nativeWindowHandle(window);
-    options.lpstrTitle = title;
-    options.lpstrFilter = filter;
-    options.lpstrFile = buffer.data();
-    options.nMaxFile = static_cast<DWORD>(buffer.size());
-    options.lpstrInitialDir = initialDir.empty() ? nullptr : initialDir.c_str();
-    options.lpstrDefExt = defaultExtension;
-    options.Flags = OFN_NOCHANGEDIR | OFN_EXPLORER | OFN_HIDEREADONLY;
-    if (saveDialog) {
-        options.Flags |= OFN_OVERWRITEPROMPT;
-    } else {
-        options.Flags |= OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-    }
-
-    const BOOL ok = saveDialog ? GetSaveFileNameW(&options) : GetOpenFileNameW(&options);
-    if (ok == TRUE) {
-        error.clear();
-        return std::filesystem::path(buffer.data());
-    }
-
-    const DWORD code = CommDlgExtendedError();
-    if (code != 0) {
-        error = "Windows 文件对话框失败: " + std::to_string(code);
-    } else {
-        error.clear();
-    }
-    return std::nullopt;
+    return nativeCommonItemDialog(window, title, filter, defaultPath, saveDialog, false, defaultExtension, error);
 }
 
 [[maybe_unused]] std::optional<std::filesystem::path> nativeDirectoryDialog(GLFWwindow* window,
-                                                           const wchar_t* title,
-                                                           const std::filesystem::path& defaultPath,
-                                                           std::string& error) {
-    // 核心流程：目录选择和文件导入导出一样走系统原生对话框，并显式指定初始目录。
-    BROWSEINFOW browseInfo{};
-    browseInfo.hwndOwner = nativeWindowHandle(window);
-    browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
-    browseInfo.lpszTitle = title;
-
-    std::wstring initialDir;
-    try {
-        initialDir = defaultPath.wstring();
-    } catch (const std::exception&) {
-        initialDir.clear();
-    }
-    browseInfo.lParam = reinterpret_cast<LPARAM>(initialDir.empty() ? nullptr : initialDir.c_str());
-    browseInfo.lpfn = browseInitialDirCallback;
-
-    PIDLIST_ABSOLUTE selected = SHBrowseForFolderW(&browseInfo);
-    if (selected == nullptr) {
-        error.clear();
-        return std::nullopt;
-    }
-
-    wchar_t path[MAX_PATH]{};
-    const bool ok = SHGetPathFromIDListW(selected, path) == TRUE;
-    CoTaskMemFree(selected);
-    if (!ok) {
-        error = "Windows 目录对话框返回路径失败";
-        return std::nullopt;
-    }
-
-    error.clear();
-    return std::filesystem::path(path);
+                                                            const wchar_t* title,
+                                                            const std::filesystem::path& defaultPath,
+                                                            std::string& error) {
+    return nativeCommonItemDialog(window, title, nullptr, defaultPath, false, true, nullptr, error);
 }
 #endif
 
@@ -837,13 +943,6 @@ struct LogRowPalette {
 }
 
 #if defined(_WIN32)
-[[maybe_unused]] int CALLBACK browseInitialDirCallback(HWND hwnd, UINT message, LPARAM, LPARAM data) {
-    if (message == BFFM_INITIALIZED && data != 0) {
-        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
-    }
-    return 0;
-}
-
 [[maybe_unused]] std::wstring utf8ToWide(const std::string& text) {
     if (text.empty()) {
         return {};
