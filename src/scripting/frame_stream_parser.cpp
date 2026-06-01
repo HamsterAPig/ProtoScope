@@ -327,27 +327,55 @@ bool ByteRingBuffer::empty() const {
 }
 
 std::size_t ByteRingBuffer::append(const std::vector<std::uint8_t>& bytes, bool dropOldest) {
-    if (storage_.empty()) {
+    const std::size_t bufferCapacity = storage_.size();
+    if (bufferCapacity == 0) {
         return bytes.size();
+    }
+    if (bytes.empty()) {
+        return 0;
+    }
+
+    if (!dropOldest) {
+        const std::size_t freeSpace = bufferCapacity - size_;
+        const std::size_t accepted = (std::min)(freeSpace, bytes.size());
+        appendContiguous(bytes.data(), accepted);
+        return bytes.size() - accepted;
     }
 
     std::size_t dropped = 0;
-    for (const auto byte : bytes) {
-        if (size_ == storage_.size()) {
-            if (!dropOldest) {
-                ++dropped;
-                continue;
-            }
-            head_ = (head_ + 1U) % storage_.size();
-            --size_;
-            ++dropped;
-        }
-
-        const auto tail = (head_ + size_) % storage_.size();
-        storage_[tail] = byte;
-        ++size_;
+    const std::uint8_t* source = bytes.data();
+    std::size_t accepted = bytes.size();
+    if (accepted >= bufferCapacity) {
+        // 核心流程：输入块大于环形容量时，只保留最新一整窗，避免逐字节覆盖带来的取模开销。
+        dropped = accepted - bufferCapacity + size_;
+        source += accepted - bufferCapacity;
+        accepted = bufferCapacity;
+        head_ = 0;
+        size_ = 0;
+    } else if (accepted > bufferCapacity - size_) {
+        dropped = accepted - (bufferCapacity - size_);
+        discardFront(dropped);
     }
+
+    appendContiguous(source, accepted);
     return dropped;
+}
+
+
+void ByteRingBuffer::appendContiguous(const std::uint8_t* bytes, std::size_t count) {
+    if (count == 0 || storage_.empty()) {
+        return;
+    }
+    const std::size_t bufferCapacity = storage_.size();
+    std::size_t tail = (head_ + size_) % bufferCapacity;
+    const std::size_t firstCount = (std::min)(count, bufferCapacity - tail);
+    std::copy_n(bytes, firstCount, storage_.begin() + static_cast<std::ptrdiff_t>(tail));
+    if (firstCount < count) {
+        std::copy_n(bytes + firstCount,
+                    count - firstCount,
+                    storage_.begin());
+    }
+    size_ = (std::min)(bufferCapacity, size_ + count);
 }
 
 void ByteRingBuffer::discardFront(std::size_t count) {

@@ -14,6 +14,9 @@ void renderWaveChannels(plot::WaveViewState& view,
     visibleChannelIndices.clear();
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
+        if (!currentPlotItemVisible(channel.label)) {
+            continue;
+        }
         const auto& channelSamples = displayData.channels[channelIndex].samples;
         std::size_t sourceSampleCount = 0;
         const auto envelope = buildDisplayEnvelope(displayData.channels[channelIndex].samples,
@@ -86,9 +89,6 @@ void renderWaveChannels(plot::WaveViewState& view,
         legendSpec.LineWeight = 1.5F;
         legendSpec.Flags = ImPlotItemFlags_NoFit;
         ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
-        if (!currentPlotItemVisible(channel.label)) {
-            continue;
-        }
         visibleChannelIndices.push_back(channelIndex);
         if (view.phosphorGlowEnabled) {
             renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);

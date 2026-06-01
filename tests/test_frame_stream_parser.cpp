@@ -196,6 +196,24 @@ void test_frame_stream_parser_reports_overflow_drop_oldest() {
     require(batch.errors.front().droppedBytes == 2, "overflow 丢弃字节数不正确");
 }
 
+
+void test_frame_stream_parser_large_chunk_keeps_latest_window() {
+    using namespace protoscope::scripting;
+
+    StreamFrameDefinition frame;
+    frame.name = "fixed";
+    frame.header = {0xFE};
+    frame.size = 4;
+    frame.crc = StreamCrcDefinition{.type = StreamCrcType::None};
+
+    FrameStreamParser parser(StreamBufferDefinition{.capacity = 8, .dropOldest = true}, {frame});
+    const auto batch = parser.pushBytes({0x20, 0x21, 0xFE, 0x01, 0x02, 0x03, 0xFE, 0x04, 0x05, 0x06});
+    require(!batch.errors.empty(), "大块超过环形容量时应报告旧数据被覆盖");
+    require(batch.errors.front().code == StreamParseErrorCode::Overflow, "大块覆盖错误码应为 overflow");
+    require(batch.frames.size() == 2, "大块覆盖后应保留最新窗口内的完整帧");
+    require(batch.frames.back().raw == std::vector<std::uint8_t>({0xFE, 0x04, 0x05, 0x06}), "保留窗口尾部应为最新帧");
+}
+
 void test_frame_stream_parser_supports_fixed_size_raw_frame() {
     using namespace protoscope::scripting;
 

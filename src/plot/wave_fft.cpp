@@ -263,13 +263,24 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
 
         const auto& displayChannel = displayData.channels[channelIndex];
         const std::size_t sampleCount = (std::min)(displayChannel.samples.size(), displayChannel.actualValues.size());
+        const auto beginIt = std::lower_bound(displayChannel.samples.begin(),
+                                              displayChannel.samples.begin() + static_cast<std::ptrdiff_t>(sampleCount),
+                                              viewMinTime,
+                                              [](const WaveSample& sample, double value) {
+                                                  return sample.time < value;
+                                              });
+        const auto endIt = std::upper_bound(beginIt,
+                                            displayChannel.samples.begin() + static_cast<std::ptrdiff_t>(sampleCount),
+                                            viewMaxTime,
+                                            [](double value, const WaveSample& sample) {
+                                                return value < sample.time;
+                                            });
+        const std::size_t beginIndex = static_cast<std::size_t>(std::distance(displayChannel.samples.begin(), beginIt));
+        const std::size_t endIndex = static_cast<std::size_t>(std::distance(displayChannel.samples.begin(), endIt));
         std::vector<double> values;
-        values.reserve(sampleCount);
-        for (std::size_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
-            const double time = displayChannel.samples[sampleIndex].time;
-            if (time < viewMinTime || time > viewMaxTime) {
-                continue;
-            }
+        values.reserve(endIndex > beginIndex ? endIndex - beginIndex : 0);
+        // 核心流程：FFT 只扫描当前时间窗口，避免大历史下每帧遍历整条通道。
+        for (std::size_t sampleIndex = beginIndex; sampleIndex < endIndex; ++sampleIndex) {
             const double value = displayChannel.actualValues[sampleIndex];
             if (std::isfinite(value)) {
                 values.push_back(value);

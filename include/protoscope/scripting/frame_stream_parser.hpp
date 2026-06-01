@@ -27,6 +27,8 @@ public:
     [[nodiscard]] std::vector<std::uint8_t> slice(std::size_t offset, std::size_t count) const;
 
 private:
+    void appendContiguous(const std::uint8_t* bytes, std::size_t count);
+
     std::vector<std::uint8_t> storage_;
     std::size_t head_{0};
     std::size_t size_{0};

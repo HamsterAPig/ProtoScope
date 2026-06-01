@@ -478,8 +478,16 @@ void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel) {
     if (channel.samples.size() <= historyLimit) {
         return;
     }
-    const std::size_t removeCount = channel.samples.size() - historyLimit;
-    channel.samples.erase(channel.samples.begin(), channel.samples.begin() + static_cast<std::ptrdiff_t>(removeCount));
+    if (historyLimit == 0) {
+        channel.samples.clear();
+        return;
+    }
+    const std::size_t keepOffset = channel.samples.size() - historyLimit;
+    // 核心流程：大历史裁剪只把保留窗口搬到前部一次，避免 vector::erase 对尾部做额外析构搬移。
+    std::move(channel.samples.begin() + static_cast<std::ptrdiff_t>(keepOffset),
+              channel.samples.end(),
+              channel.samples.begin());
+    channel.samples.resize(historyLimit);
 }
 
 std::size_t OscilloscopeBuffer::effectiveHistoryLimit() const {
