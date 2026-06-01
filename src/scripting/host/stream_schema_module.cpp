@@ -121,6 +121,212 @@ sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& err
     return table;
 }
 
+std::shared_ptr<StreamCountExpression> makeConstantCountExpression(std::int64_t value) {
+    auto expression = std::make_shared<StreamCountExpression>();
+    expression->op = StreamCountExpressionOp::Constant;
+    expression->value = value;
+    return expression;
+}
+
+std::shared_ptr<StreamCountExpression> makeFieldCountExpression(std::string fieldName) {
+    auto expression = std::make_shared<StreamCountExpression>();
+    expression->op = StreamCountExpressionOp::Field;
+    expression->fieldName = std::move(fieldName);
+    return expression;
+}
+
+std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const sol::object& object, std::string& error);
+
+std::shared_ptr<StreamCountExpression> parseStreamCountOperand(const sol::table& table, std::string& error) {
+    const sol::object exprObject = table["expr"];
+    if (exprObject.valid() && exprObject.get_type() != sol::type::lua_nil) {
+        return parseStreamCountExpressionObject(exprObject, error);
+    }
+
+    if (const auto fieldName = luaStringField(table, "field"); fieldName.has_value()) {
+        return makeFieldCountExpression(*fieldName);
+    }
+
+    const sol::object valueObject = table["left"];
+    if (valueObject.valid() && valueObject.get_type() != sol::type::lua_nil) {
+        return parseStreamCountExpressionObject(valueObject, error);
+    }
+
+    error = "count 表达式缺少 expr 或 field";
+    return nullptr;
+}
+
+std::shared_ptr<StreamCountExpression> parseStreamCountExpressionTable(const sol::table& table, std::string& error) {
+    const auto op = luaStringField(table, "op");
+    if (!op.has_value()) {
+        error = "count 表达式缺少 op";
+        return nullptr;
+    }
+
+    if (*op == "const" || *op == "value") {
+        const auto value = luaIntegerValue(table["value"]);
+        if (!value.has_value()) {
+            error = "const count 表达式需要整数 value";
+            return nullptr;
+        }
+        return makeConstantCountExpression(*value);
+    }
+
+    if (*op == "field") {
+        const auto fieldName = luaStringField(table, "name").value_or(luaStringField(table, "field").value_or(""));
+        if (fieldName.empty()) {
+            error = "field count 表达式需要 name";
+            return nullptr;
+        }
+        return makeFieldCountExpression(fieldName);
+    }
+
+    if (*op == "div" || *op == "sub" || *op == "mul") {
+        auto operand = parseStreamCountOperand(table, error);
+        if (!operand) {
+            return nullptr;
+        }
+
+        std::optional<std::int64_t> argument;
+        std::shared_ptr<StreamCountExpression> argumentExpression;
+        if (*op == "sub") {
+            argument = luaIntegerValue(table["value"]);
+            if (!argument.has_value()) {
+                argument = luaIntegerValue(table["by"]);
+            }
+        } else {
+            argument = luaIntegerValue(table["by"]);
+            const sol::object byObject = table["by"];
+            if (!argument.has_value() && byObject.valid() && byObject.get_type() != sol::type::lua_nil) {
+                argumentExpression = parseStreamCountExpressionObject(byObject, error);
+                if (!argumentExpression) {
+                    return nullptr;
+                }
+            }
+        }
+        if (!argument.has_value() && !argumentExpression) {
+            error = *op + std::string(" count 表达式缺少整数参数");
+            return nullptr;
+        }
+
+        auto expression = std::make_shared<StreamCountExpression>();
+        expression->op = *op == "div" ? StreamCountExpressionOp::Div
+            : (*op == "sub" ? StreamCountExpressionOp::Sub : StreamCountExpressionOp::Mul);
+        expression->operand = std::move(operand);
+        expression->argument = argument.value_or(0);
+        expression->argumentExpression = std::move(argumentExpression);
+        return expression;
+    }
+
+    if (*op == "bit_count") {
+        auto operand = parseStreamCountOperand(table, error);
+        if (!operand) {
+            return nullptr;
+        }
+        auto expression = std::make_shared<StreamCountExpression>();
+        expression->op = StreamCountExpressionOp::BitCount;
+        expression->operand = std::move(operand);
+        return expression;
+    }
+
+    if (*op == "remaining") {
+        auto expression = std::make_shared<StreamCountExpression>();
+        expression->op = StreamCountExpressionOp::Remaining;
+        expression->argument = luaIntegerValue(table["unit"]).value_or(0);
+        expression->excludeCrc = luaBoolField(table, "exclude_crc").value_or(true);
+        return expression;
+    }
+
+    if (*op == "if_flag") {
+        const auto fieldName = luaStringField(table, "field");
+        const auto mask = luaIntegerValue(table["mask"]);
+        if (!fieldName.has_value() || !mask.has_value()) {
+            error = "if_flag count 表达式需要 field 和 mask";
+            return nullptr;
+        }
+        const sol::object thenObject = table["then"];
+        const sol::object elseObject = table["else"];
+        auto thenExpression = parseStreamCountExpressionObject(thenObject, error);
+        if (!thenExpression) {
+            return nullptr;
+        }
+        auto elseExpression = parseStreamCountExpressionObject(elseObject, error);
+        if (!elseExpression) {
+            return nullptr;
+        }
+
+        auto expression = std::make_shared<StreamCountExpression>();
+        expression->op = StreamCountExpressionOp::IfFlag;
+        expression->fieldName = *fieldName;
+        expression->argument = *mask;
+        expression->thenExpression = std::move(thenExpression);
+        expression->elseExpression = std::move(elseExpression);
+        return expression;
+    }
+
+    if (*op == "case") {
+        const auto fieldName = luaStringField(table, "field");
+        if (!fieldName.has_value()) {
+            error = "case count 表达式需要 field";
+            return nullptr;
+        }
+        const sol::object casesObject = table["cases"];
+        if (!casesObject.valid() || !casesObject.is<sol::table>()) {
+            error = "case count 表达式需要 cases table";
+            return nullptr;
+        }
+
+        auto expression = std::make_shared<StreamCountExpression>();
+        expression->op = StreamCountExpressionOp::Case;
+        expression->fieldName = *fieldName;
+
+        const auto casesTable = casesObject.as<sol::table>();
+        for (const auto& item : casesTable) {
+            const auto key = luaIntegerValue(item.first);
+            if (!key.has_value()) {
+                error = "case.cases 的 key 必须是整数";
+                return nullptr;
+            }
+            auto caseExpression = parseStreamCountExpressionObject(item.second, error);
+            if (!caseExpression) {
+                return nullptr;
+            }
+            expression->cases.push_back(StreamCountCase{.value = *key, .expression = std::move(caseExpression)});
+        }
+
+        const sol::object defaultObject = table["default"];
+        if (defaultObject.valid() && defaultObject.get_type() != sol::type::lua_nil) {
+            expression->defaultExpression = parseStreamCountExpressionObject(defaultObject, error);
+            if (!expression->defaultExpression) {
+                return nullptr;
+            }
+        }
+        return expression;
+    }
+
+    error = "未知 count 表达式 op: " + *op;
+    return nullptr;
+}
+
+std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const sol::object& object, std::string& error) {
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        error = "count 表达式不能为空";
+        return nullptr;
+    }
+    if (const auto value = luaIntegerValue(object); value.has_value()) {
+        return makeConstantCountExpression(*value);
+    }
+    if (object.is<std::string>()) {
+        return makeFieldCountExpression(object.as<std::string>());
+    }
+    if (object.is<sol::table>()) {
+        return parseStreamCountExpressionTable(object.as<sol::table>(), error);
+    }
+
+    error = "count 表达式仅支持整数、字段名或 table";
+    return nullptr;
+}
+
 std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua, std::string& error) {
     const sol::object streamObject = lua["stream"];
     if (!streamObject.valid() || streamObject.get_type() == sol::type::lua_nil) {
@@ -352,33 +558,16 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua,
                     } else if (countObject.is<std::string>()) {
                         field.count.fieldName = countObject.as<std::string>();
                     } else if (countObject.is<sol::protected_function>()) {
-                        auto countCallback = countObject.as<sol::protected_function>();
-                        field.count.callback = [countCallback](const StreamFieldMap& parsed,
-                                                              std::size_t frameLength,
-                                                              const std::vector<std::uint8_t>& frameBytes,
-                                                              const std::string& fieldName,
-                                                              std::string& callbackError) -> std::optional<std::size_t> {
-                            sol::state_view callbackLua(countCallback.lua_state());
-                            sol::table fieldInfo = callbackLua.create_table();
-                            fieldInfo["name"] = fieldName;
-                            auto result = countCallback(makeStreamFieldsTable(callbackLua, parsed),
-                                                       static_cast<std::int64_t>(frameLength),
-                                                       makeBytesTable(callbackLua, frameBytes),
-                                                       fieldInfo);
-                            if (!result.valid()) {
-                                callbackError = protectedCallError(result);
-                                return std::nullopt;
-                            }
-                            const sol::object countResult = result.get<sol::object>();
-                            const auto count = luaIntegerValue(countResult);
-                            if (!count.has_value() || *count < 0) {
-                                callbackError = "回调未返回非负整数";
-                                return std::nullopt;
-                            }
-                            return static_cast<std::size_t>(*count);
-                        };
+                        error = "field.count 不再支持 function，请迁移为 count 表达式 table，例如 { op = \"div\", field = \"byte_count\", by = 2 }";
+                        return nullptr;
+                    } else if (countObject.is<sol::table>()) {
+                        field.count.expression = parseStreamCountExpressionObject(countObject, error);
+                        if (!field.count.expression) {
+                            error = "field.count 表达式无效: " + error;
+                            return nullptr;
+                        }
                     } else {
-                        error = "field.count 仅支持整数、字段名或 function";
+                        error = "field.count 仅支持整数、字段名或 count 表达式 table";
                         return nullptr;
                     }
                 }

@@ -313,11 +313,47 @@ return schema
 - `size`：整帧固定长度；适合 `FC06` / `FC16 ACK` 这种固定 8 字节帧。
 - `len`：变长帧定义；适合 `FC03` 这类带字节数的响应。
 - `crc`：CRC 类型与字节顺序。
-- `fields`：字段定义，`offset` 从 1 开始计数。
+- `fields`：字段定义，`offset` 从 1 开始计数；`count` 可写整数、已解析字段名或纯 C++ count 表达式 table。
 - `on_frame`：完整有效帧回调。
 - `on_error`：解析错误回调。
 
 字段类型、`crc.order`、`len.means` 的可选值请直接参考 `protocols/stream_types.lua`。
+
+动态字段数量不要再写 Lua 回调，历史重放和实时解析会共用纯 C++ parser。常见 `count` 表达式：
+
+```lua
+-- 字段引用
+count = { op = "field", name = "byte_count" }
+
+-- 字节数转寄存器数
+count = { op = "div", field = "byte_count", by = 2 }
+
+-- 长度字段减头尾
+count = { op = "sub", field = "length", value = 2 }
+
+-- 元素数转字节数
+count = { op = "mul", field = "item_count", by = 4 }
+
+-- 采样点数乘以通道掩码位数
+count = { op = "mul", field = "sample_count", by = { op = "bit_count", field = "channel_mask" } }
+
+-- 当前字段到帧尾剩余元素
+count = { op = "remaining", unit = 2, exclude_crc = true }
+
+-- 按 flag 控制可选字段
+count = { op = "if_flag", field = "flags", mask = 0x01, then = 1, else = 0 }
+
+-- 按功能码选择
+count = {
+  op = "case",
+  field = "func",
+  cases = {
+    [0x03] = { op = "div", field = "byte_count", by = 2 },
+    [0x10] = 2,
+  },
+  default = 1,
+}
+```
 
 ## `on_bytes()` 仍然可用，但只建议用于两类场景
 

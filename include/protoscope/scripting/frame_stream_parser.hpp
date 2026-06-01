@@ -2,8 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <optional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -68,17 +68,43 @@ enum class StreamCrcOrder {
 struct StreamFieldValue;
 using StreamFieldMap = std::unordered_map<std::string, StreamFieldValue>;
 
-using StreamCountCallback = std::function<std::optional<std::size_t>(
-    const StreamFieldMap& parsed,
-    std::size_t frameLength,
-    const std::vector<std::uint8_t>& frame,
-    const std::string& fieldName,
-    std::string& error)>;
+enum class StreamCountExpressionOp {
+    Constant,
+    Field,
+    Div,
+    Sub,
+    Mul,
+    Remaining,
+    IfFlag,
+    Case,
+    BitCount,
+};
+
+struct StreamCountExpression;
+
+struct StreamCountCase {
+    std::int64_t value{0};
+    std::shared_ptr<StreamCountExpression> expression;
+};
+
+struct StreamCountExpression {
+    StreamCountExpressionOp op{StreamCountExpressionOp::Constant};
+    std::int64_t value{0};
+    std::int64_t argument{0};
+    std::string fieldName;
+    bool excludeCrc{true};
+    std::shared_ptr<StreamCountExpression> operand;
+    std::shared_ptr<StreamCountExpression> argumentExpression;
+    std::shared_ptr<StreamCountExpression> thenExpression;
+    std::shared_ptr<StreamCountExpression> elseExpression;
+    std::shared_ptr<StreamCountExpression> defaultExpression;
+    std::vector<StreamCountCase> cases;
+};
 
 struct StreamFieldCount {
     std::optional<std::size_t> fixed;
     std::optional<std::string> fieldName;
-    StreamCountCallback callback;
+    std::shared_ptr<StreamCountExpression> expression;
 };
 
 struct StreamFieldValue {
@@ -190,6 +216,8 @@ private:
     std::optional<std::size_t> resolveFieldCount(const StreamFieldDefinition& field,
                                                  const StreamFieldMap& parsed,
                                                  std::size_t frameLength,
+                                                 std::size_t readableLimit,
+                                                 std::size_t fieldStart,
                                                  const std::vector<std::uint8_t>& frameBytes,
                                                  std::string& error) const;
 

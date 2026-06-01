@@ -1157,6 +1157,11 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                 const auto state = toScriptTxState(evt.state);
                 const std::optional<std::string> error = evt.error.empty() ? std::nullopt : std::optional<std::string>{evt.error};
                 if (state == scripting::TxEventState::Sent && activeWrite.request.kind == scripting::TxRequestKind::Request) {
+                    activeWrite.sentAtMs = evt.finishedAtMs;
+                    activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
+                    activeHalfDuplexRequest_ = activeWrite;
+                    scriptHost_.setRequestAwaitingCompletion(true);
+                    // 核心流程：先进入等待 ACK 状态再回调 on_tx，允许脚本在 sent 事件中立即调用 proto.request_done。
                     scriptHost_.onTxEvent(activeWrite.request.connection,
                                           scripting::TxEvent{
                                               .id = activeWrite.request.id,
@@ -1175,10 +1180,6 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                         .bytes = activeWrite.request.payload,
                         .message = {},
                     });
-                    activeWrite.sentAtMs = evt.finishedAtMs;
-                    activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
-                    activeHalfDuplexRequest_ = activeWrite;
-                    scriptHost_.setRequestAwaitingCompletion(true);
                     changed = true;
                     return;
                 }

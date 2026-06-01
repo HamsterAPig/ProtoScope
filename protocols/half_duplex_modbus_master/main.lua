@@ -474,9 +474,7 @@ function stream()
             name = "register_values",
             type = "u16_be",
             offset = 4,
-            count = function(parsed)
-              return math.floor((parsed.byte_count or 0) / 2)
-            end,
+            count = { op = "div", field = "byte_count", by = 2 },
           },
         },
         on_frame = handle_fc03_response,

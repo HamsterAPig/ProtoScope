@@ -663,6 +663,64 @@ void test_script_stream_schema_reports_overflow_and_crc_error() {
     require(foundCrc, "CRC 校验失败时应回调 stream.on_error");
 }
 
+void test_script_stream_schema_rejects_count_function() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-count-function");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "count=function 测试协议应可写入");
+        out << "function controls()\n";
+        out << "  return {}\n";
+        out << "end\n";
+        out << "function stream()\n";
+        out << "  return { frames = { { name = \"bad\", header = { 0xAA }, size = 2, fields = {\n";
+        out << "    { name = \"values\", type = \"u8\", offset = 2, count = function() return 1 end },\n";
+        out << "  }, on_frame = function() end } } }\n";
+        out << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "count=function 应加载失败");
+    require(host.lastError().find("field.count 不再支持 function") != std::string::npos, "错误应提示迁移 count 表达式");
+}
+
+void test_script_stream_schema_accepts_count_expression_table() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-count-expression");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "count 表达式测试协议应可写入");
+        out << "function controls()\n";
+        out << "  return {}\n";
+        out << "end\n";
+        out << "local function on_frame(ctx, frame)\n";
+        out << "  proto.emit(\"count_expression\", { count = #frame.fields.values, first = frame.fields.values[1] })\n";
+        out << "end\n";
+        out << "function stream()\n";
+        out << "  return { frames = { { name = \"expr\", header = { 0xAA, 0x55 }, len = { offset = 3, type = \"u8\", means = \"payload\", extra = 5 }, crc = { type = \"crc16_modbus\", order = \"lo_hi\" }, fields = {\n";
+        out << "    { name = \"byte_count\", type = \"u8\", offset = 4 },\n";
+        out << "    { name = \"values\", type = \"u16_be\", offset = 5, count = { op = \"div\", field = \"byte_count\", by = 2 } },\n";
+        out << "  }, on_frame = on_frame } } }\n";
+        out << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "count 表达式 table 应可加载");
+    auto frame = std::vector<std::uint8_t>{0xAA, 0x55, 0x05, 0x04, 0x00, 0x11, 0x00, 0x22};
+    const auto crc = protoscope::protocol_utils::crc16Modbus(frame);
+    frame.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    frame.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), frame});
+
+    bool found = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "count_expression"
+            && event.payload.find("count=2") != std::string::npos
+            && event.payload.find("first=17") != std::string::npos) {
+            found = true;
+        }
+    }
+    require(found, "count 表达式 table 应正确解析动态字段数量");
+}
+
 void test_script_timeout_flow() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
@@ -1775,12 +1833,16 @@ static const TestCase kAllTests[] = {
     {"script_stream_schema_legacy_on_bytes_still_works", &test_script_stream_schema_legacy_on_bytes_still_works},
     {"script_stream_schema_bypasses_on_bytes_and_calls_on_frame", &test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame},
     {"script_stream_schema_reports_overflow_and_crc_error", &test_script_stream_schema_reports_overflow_and_crc_error},
+    {"script_stream_schema_rejects_count_function", &test_script_stream_schema_rejects_count_function},
+    {"script_stream_schema_accepts_count_expression_table", &test_script_stream_schema_accepts_count_expression_table},
     {"script_timeout_flow", &test_script_timeout_flow},
     {"frame_stream_parser_waits_for_full_frame", &test_frame_stream_parser_waits_for_full_frame},
     {"frame_stream_parser_handles_sticky_frames_and_noise_prefix", &test_frame_stream_parser_handles_sticky_frames_and_noise_prefix},
     {"frame_stream_parser_crc_resync_keeps_following_frame", &test_frame_stream_parser_crc_resync_keeps_following_frame},
     {"frame_stream_parser_reports_overflow_drop_oldest", &test_frame_stream_parser_reports_overflow_drop_oldest},
     {"frame_stream_parser_supports_fixed_size_raw_frame", &test_frame_stream_parser_supports_fixed_size_raw_frame},
+    {"frame_stream_parser_count_expression_arithmetic", &test_frame_stream_parser_count_expression_arithmetic},
+    {"frame_stream_parser_count_expression_remaining_if_flag_and_case", &test_frame_stream_parser_count_expression_remaining_if_flag_and_case},
     {"luals_api_sync_contains_tx_and_dialog_api", &test_luals_api_sync_contains_tx_and_dialog_api},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},
@@ -1894,6 +1956,7 @@ static const TestCase kAllTests[] = {
     {"application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims", &test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},
     {"application_raw_capture_import_replays_stream_in_chunks", &test_application_raw_capture_import_replays_stream_in_chunks},
+    {"application_reload_rebuilds_frame_rows_with_count_expression", &test_application_reload_rebuilds_frame_rows_with_count_expression},
     {"application_transfer_log_frame_view_waits_for_rx_full_frame", &test_application_transfer_log_frame_view_waits_for_rx_full_frame},
     {"application_transfer_log_frame_view_keeps_unmatched_tx_raw", &test_application_transfer_log_frame_view_keeps_unmatched_tx_raw},
     {"application_rx_events_are_processed_with_budget", &test_application_rx_events_are_processed_with_budget},

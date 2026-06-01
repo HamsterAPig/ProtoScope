@@ -122,7 +122,7 @@ struct QueuedEventTransport final : protoscope::transport::ITransport {
             .state = protoscope::transport::TransportTxState::Sent,
             .bytes = task.payload.size(),
             .queuedAtMs = task.queuedAtMs,
-            .finishedAtMs = 120,
+            .finishedAtMs = task.queuedAtMs,
         });
         sharedState_->sentTasks.push_back(std::move(task));
         return sharedState_->opened;
@@ -949,6 +949,57 @@ void test_application_raw_capture_import_replays_stream_in_chunks() {
     require(!importedSnapshot.channels.empty(), "导入后应生成波形通道");
     require(importedSnapshot.channels.front().totalSamples == frameCount,
             "导入回放应按分块解析全部 stream 帧，而不是只保留尾部数据");
+}
+
+void test_application_reload_rebuilds_frame_rows_with_count_expression() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-rebuild-count-expression");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "reload count 表达式测试协议应可写入");
+        out << "function controls()\n";
+        out << "  return {}\n";
+        out << "end\n";
+        out << "local function on_frame(ctx, frame)\n";
+        out << "  proto.emit(\"side_effect\", { count = #frame.fields.values })\n";
+        out << "end\n";
+        out << "function stream()\n";
+        out << "  return { frames = { { name = \"expr_frame\", header = { 0xAA, 0x55 }, len = { offset = 3, type = \"u8\", means = \"payload\", extra = 5 }, crc = { type = \"crc16_modbus\", order = \"lo_hi\" }, fields = {\n";
+        out << "    { name = \"byte_count\", type = \"u8\", offset = 4 },\n";
+        out << "    { name = \"values\", type = \"u16_be\", offset = 5, count = { op = \"div\", field = \"byte_count\", by = 2 } },\n";
+        out << "  }, on_frame = on_frame } } }\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    auto frame = std::vector<std::uint8_t>{0xAA, 0x55, 0x05, 0x04, 0x00, 0x11, 0x00, 0x22};
+    const auto crc = protoscope::protocol_utils::crc16Modbus(frame);
+    frame.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    frame.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+    transportState->queuedRxBytes = frame;
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "count 表达式协议应可加载");
+    application.openTransport();
+    require(waitUntil([&application] {
+                application.pumpOnce();
+                return application.docks().receiveState().frameRows.size() == 1U;
+            }),
+            "实时接收应生成逐帧记录");
+    require(application.docks().receiveState().frameRows.front().message.find("expr_frame") != std::string::npos,
+            "逐帧记录应包含 count 表达式帧名");
+    require(!application.docks().scriptState().rows.empty(), "实时 on_frame 副作用应进入脚本事件");
+
+    application.docks().scriptState().rows.clear();
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "同协议 reload 应成功");
+    require(application.docks().receiveState().frameRows.size() == 1U, "reload 后应重建历史逐帧记录");
+    require(application.docks().receiveState().frameRows.front().message.find("values=[17, 34]") != std::string::npos,
+            "历史重建应完整解析 count 表达式字段");
+    require(application.docks().scriptState().rows.empty(), "历史重建不应执行 on_frame 副作用");
 }
 
 void test_application_transfer_log_frame_view_waits_for_rx_full_frame() {

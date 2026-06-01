@@ -3,7 +3,10 @@
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/frame_stream_parser.hpp"
 
+#include <memory>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -35,21 +38,7 @@ protoscope::scripting::FrameStreamParser makeDynamicParser(std::size_t capacity 
     valuesField.name = "values";
     valuesField.type = StreamValueType::U8;
     valuesField.offset = 4;
-    valuesField.count.callback = [](const StreamFieldMap& parsed,
-                                    std::size_t,
-                                    const std::vector<std::uint8_t>&,
-                                    const std::string&,
-                                    std::string&) -> std::optional<std::size_t> {
-        const auto iter = parsed.find("count");
-        if (iter == parsed.end()) {
-            return std::nullopt;
-        }
-        const auto count = iter->second.integerScalar();
-        if (!count.has_value()) {
-            return std::nullopt;
-        }
-        return static_cast<std::size_t>(*count);
-    };
+    valuesField.count.fieldName = "count";
 
     StreamFrameDefinition frame;
     frame.name = "dynamic";
@@ -67,6 +56,83 @@ protoscope::scripting::FrameStreamParser makeDynamicParser(std::size_t capacity 
     frame.fields = {countField, valuesField};
 
     return FrameStreamParser(StreamBufferDefinition{.capacity = capacity, .dropOldest = true}, {frame});
+}
+
+std::shared_ptr<protoscope::scripting::StreamCountExpression> countConst(std::int64_t value) {
+    using namespace protoscope::scripting;
+    auto expression = std::make_shared<StreamCountExpression>();
+    expression->op = StreamCountExpressionOp::Constant;
+    expression->value = value;
+    return expression;
+}
+
+std::shared_ptr<protoscope::scripting::StreamCountExpression> countField(std::string fieldName) {
+    using namespace protoscope::scripting;
+    auto expression = std::make_shared<StreamCountExpression>();
+    expression->op = StreamCountExpressionOp::Field;
+    expression->fieldName = std::move(fieldName);
+    return expression;
+}
+
+std::shared_ptr<protoscope::scripting::StreamCountExpression> countBinary(
+    protoscope::scripting::StreamCountExpressionOp op,
+    std::shared_ptr<protoscope::scripting::StreamCountExpression> operand,
+    std::int64_t argument) {
+    using namespace protoscope::scripting;
+    auto expression = std::make_shared<StreamCountExpression>();
+    expression->op = op;
+    expression->operand = std::move(operand);
+    expression->argument = argument;
+    return expression;
+}
+
+protoscope::scripting::FrameStreamParser makeExpressionParser(
+    const std::shared_ptr<protoscope::scripting::StreamCountExpression>& valuesCount,
+    const std::vector<protoscope::scripting::StreamFieldDefinition>& prefixFields = {}) {
+    using namespace protoscope::scripting;
+
+    StreamFieldDefinition byteCount;
+    byteCount.name = "byte_count";
+    byteCount.type = StreamValueType::U8;
+    byteCount.offset = 3;
+
+    StreamFieldDefinition values;
+    values.name = "values";
+    values.type = StreamValueType::U16Be;
+    values.offset = 4;
+    values.count.expression = valuesCount;
+
+    std::vector<StreamFieldDefinition> fields{byteCount};
+    fields.insert(fields.end(), prefixFields.begin(), prefixFields.end());
+    fields.push_back(std::move(values));
+
+    StreamFrameDefinition frame;
+    frame.name = "expression";
+    frame.header = {0xAA, 0x55};
+    frame.len = StreamLengthDefinition{
+        .offset = 2,
+        .type = StreamValueType::U8,
+        .means = StreamLengthMeans::Payload,
+        .extra = 5,
+    };
+    frame.crc = StreamCrcDefinition{.type = StreamCrcType::Crc16Modbus, .order = StreamCrcOrder::LoHi};
+    frame.fields = std::move(fields);
+    return FrameStreamParser(StreamBufferDefinition{.capacity = 64, .dropOldest = true}, {frame});
+}
+
+std::vector<std::int64_t> parseExpressionValues(protoscope::scripting::FrameStreamParser& parser,
+                                                const std::vector<std::uint8_t>& payload) {
+    const auto batch = parser.pushBytes(makeDynamicFrame(payload));
+    require(batch.errors.empty(), "count 表达式不应解析失败");
+    require(batch.frames.size() == 1, "count 表达式应解析出 1 帧");
+    const auto& value = batch.frames[0].fields.at("values").value;
+    if (const auto* items = std::get_if<std::vector<std::int64_t>>(&value); items != nullptr) {
+        return *items;
+    }
+    if (const auto* item = std::get_if<std::int64_t>(&value); item != nullptr) {
+        return {*item};
+    }
+    throw std::runtime_error("values 字段不是整数数组或整数标量");
 }
 
 } // namespace
@@ -145,4 +211,60 @@ void test_frame_stream_parser_supports_fixed_size_raw_frame() {
     require(batch.frames.size() == 1, "固定长度原始帧应成功切帧");
     require(batch.frames[0].raw.size() == 4, "固定长度原始帧长度不正确");
     require(batch.frames[0].fields.empty(), "无字段定义时不应生成 fields");
+}
+
+void test_frame_stream_parser_count_expression_arithmetic() {
+    using namespace protoscope::scripting;
+
+    auto divParser = makeExpressionParser(countBinary(StreamCountExpressionOp::Div, countField("byte_count"), 2));
+    auto divValues = parseExpressionValues(divParser, {0x04, 0x00, 0x11, 0x00, 0x22});
+    require(divValues.size() == 2 && divValues[1] == 0x22, "div count 表达式应按字节数转寄存器数");
+
+    auto subParser = makeExpressionParser(countBinary(StreamCountExpressionOp::Sub, countField("byte_count"), 2));
+    auto subValues = parseExpressionValues(subParser, {0x04, 0x00, 0x11, 0x00, 0x22});
+    require(subValues.size() == 2, "sub count 表达式应支持长度扣减");
+
+    auto mulParser = makeExpressionParser(countBinary(StreamCountExpressionOp::Mul, countConst(1), 2));
+    auto mulValues = parseExpressionValues(mulParser, {0x04, 0x00, 0x11, 0x00, 0x22});
+    require(mulValues.size() == 2, "mul count 表达式应支持元素数转换");
+}
+
+void test_frame_stream_parser_count_expression_remaining_if_flag_and_case() {
+    using namespace protoscope::scripting;
+
+    auto remaining = std::make_shared<StreamCountExpression>();
+    remaining->op = StreamCountExpressionOp::Remaining;
+    remaining->argument = 2;
+    remaining->excludeCrc = true;
+    auto remainingParser = makeExpressionParser(remaining);
+    auto remainingValues = parseExpressionValues(remainingParser, {0x04, 0x00, 0x11, 0x00, 0x22});
+    require(remainingValues.size() == 2, "remaining count 表达式应解析到帧尾");
+
+    StreamFieldDefinition flags;
+    flags.name = "flags";
+    flags.type = StreamValueType::U8;
+    flags.offset = 3;
+    auto ifFlag = std::make_shared<StreamCountExpression>();
+    ifFlag->op = StreamCountExpressionOp::IfFlag;
+    ifFlag->fieldName = "flags";
+    ifFlag->argument = 0x01;
+    ifFlag->thenExpression = countConst(1);
+    ifFlag->elseExpression = countConst(0);
+    auto ifParser = makeExpressionParser(ifFlag, {flags});
+    auto ifValues = parseExpressionValues(ifParser, {0x01, 0x00, 0x66});
+    require(ifValues.size() == 1 && ifValues[0] == 0x66, "if_flag count 表达式应按 flag 选择数量");
+
+    StreamFieldDefinition func;
+    func.name = "func";
+    func.type = StreamValueType::U8;
+    func.offset = 3;
+    auto caseExpression = std::make_shared<StreamCountExpression>();
+    caseExpression->op = StreamCountExpressionOp::Case;
+    caseExpression->fieldName = "func";
+    caseExpression->cases.push_back(StreamCountCase{.value = 0x03, .expression = countBinary(StreamCountExpressionOp::Div, countField("byte_count"), 2)});
+    caseExpression->cases.push_back(StreamCountCase{.value = 0x10, .expression = countConst(2)});
+    caseExpression->defaultExpression = countConst(1);
+    auto caseParser = makeExpressionParser(caseExpression, {func});
+    auto caseValues = parseExpressionValues(caseParser, {0x10, 0x00, 0x21, 0x00, 0x22});
+    require(caseValues.size() == 2 && caseValues[0] == 0x21, "case count 表达式应按功能码选择数量");
 }
