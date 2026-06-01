@@ -68,6 +68,18 @@ elf_static_view::ProjectModel sampleProjectModel() {
                                               "int",
                                               elf_static_view::Availability::StaticAddressKnown,
                                               0x20000000ULL));
+    auto objAdc = makeExpandedNode("global.objADC",
+                                   "objADC",
+                                   "AdcState",
+                                   elf_static_view::Availability::StaticAddressKnown,
+                                   0x20000100ULL);
+    objAdc.type_kind = elf_static_view::TypeKind::Struct;
+    objAdc.children.push_back(makeExpandedNode("global.objADC.member",
+                                               "member",
+                                               "uint16_t",
+                                               elf_static_view::Availability::StaticAddressKnown,
+                                               0x20000104ULL));
+    model.expanded.push_back(std::move(objAdc));
     model.expanded.push_back(makeExpandedNode("global.runtime_only",
                                               "runtime_only",
                                               "int",
@@ -97,6 +109,34 @@ void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols() {
     require(wildcardResults.size() == 1, "应兼容 Lua 下拉输入的通配符后缀");
     require(wildcardResults[0].label == "global.a_var_int", "a_var* 应命中 a_var_int");
     require(wildcardResults[0].value == "0x20000000", "a_var_int 地址应格式化为十六进制字符串");
+
+    std::filesystem::remove(path);
+}
+
+void test_elf_static_view_bridge_queries_flattened_composite_members() {
+    const auto path = makeUniqueTempFile("protoscope-elf-static-view-composite");
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << elf_static_view::render_dump_json(sampleProjectModel());
+    }
+
+    protoscope::plugin::ElfStaticViewBridge bridge;
+    std::string error;
+    require(bridge.loadFile(path, error), "桥接层应能加载含复合对象的 dump JSON");
+
+    const auto memberResults = bridge.query("member", 64);
+    require(memberResults.size() == 1, "开启展开后应能按成员名查询复合对象成员");
+    require(memberResults[0].label == "global.objADC.member", "成员查询应返回完整成员路径");
+    require(memberResults[0].value == "0x20000104", "成员地址应来自展开后的复合成员");
+    require(memberResults[0].type == "uint16_t", "成员类型应来自展开后的复合成员");
+
+    const auto objectPrefixResults = bridge.query("objADC", 64);
+    const auto memberIt = std::find_if(objectPrefixResults.begin(),
+                                       objectPrefixResults.end(),
+                                       [](const protoscope::plugin::ElfStaticAddressEntry& entry) {
+                                           return entry.label == "global.objADC.member";
+                                       });
+    require(memberIt != objectPrefixResults.end(), "按对象名前缀查询时应包含展开后的成员地址");
 
     std::filesystem::remove(path);
 }

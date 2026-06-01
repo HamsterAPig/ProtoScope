@@ -159,6 +159,7 @@ std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryT
     options.name_query_text = normalizeNameQuery(std::move(queryText));
     options.only_static_known = true;
     options.include_runtime_only = false;
+    options.flatten_composite_members = true;
     options.max_array_elements = limit;
 
     std::vector<ElfStaticAddressEntry> entries;
