@@ -742,7 +742,9 @@ struct LogRowPalette {
             const bool userScrolledUpThisFrame =
                 existingWindow != nullptr &&
                 childWindow->Scroll.y < previousScrollY - 1.0F;
-            if (!userScrolledUpThisFrame) {
+            const bool needsSnapToBottom =
+                childWindow->Scroll.y < childWindow->ScrollMax.y - 1.0F;
+            if (!userScrolledUpThisFrame && needsSnapToBottom) {
                 ImGui::SetScrollY(childWindow, childWindow->ScrollMax.y);
             }
         }

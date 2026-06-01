@@ -169,6 +169,7 @@ void test_application_open_transport_uses_serial_runtime_config();
 void test_application_open_transport_uses_udp_peer_runtime_config();
 void test_application_set_log_level_updates_runtime_config();
 void test_application_wave_legend_visibility_config_roundtrip();
+void test_application_wave_zoom_selection_auto_exit_config_roundtrip();
 void test_application_logging_filters_script_and_host();
 void test_application_raw_capture_export_import_roundtrip();
 void test_application_live_raw_capture_trims_to_limit();

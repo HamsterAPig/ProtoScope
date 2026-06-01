@@ -774,6 +774,27 @@ void test_application_wave_legend_visibility_config_roundtrip() {
     application.shutdown();
 }
 
+void test_application_wave_zoom_selection_auto_exit_config_roundtrip() {
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto config = application.captureConfig();
+    require(!config.gui.wave.zoomSelectionAutoExit, "captureConfig 默认应保持手动退出");
+
+    config.gui.wave.zoomSelectionAutoExit = true;
+    require(application.applyConfig(config), "框选放大自动退出配置应用失败");
+    require(application.docks().waveState().view.zoomSelectionAutoExit, "应用配置后应同步更新框选放大退出模式");
+
+    const auto captured = application.captureConfig();
+    require(captured.gui.wave.zoomSelectionAutoExit, "captureConfig 应带出框选放大退出模式");
+
+    application.docks().waveState().view.zoomSelectionAutoExit = false;
+    const auto capturedLive = application.captureConfig();
+    require(!capturedLive.gui.wave.zoomSelectionAutoExit, "captureConfig 不应覆盖 dock 中实时框选放大退出模式");
+
+    application.shutdown();
+}
+
 void test_application_logging_filters_script_and_host() {
     const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-logging-test";
     std::filesystem::create_directories(tempRoot);

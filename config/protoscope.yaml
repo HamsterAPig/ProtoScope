@@ -19,6 +19,7 @@ gui:
     display_formula: offset_then_scale
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
+    zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
     vertical_auto_fit_multiplier: 1.2

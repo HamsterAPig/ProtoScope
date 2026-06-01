@@ -51,6 +51,7 @@ struct WaveViewState {
     bool activeChannelScaleDrag{false};
     bool zoomSelectionActive{false};
     bool zoomSelectionDragging{false};
+    bool zoomSelectionAutoExit{false};
     bool fitVisibleWaveformsRequested{false};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};

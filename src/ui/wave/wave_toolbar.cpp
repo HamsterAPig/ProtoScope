@@ -18,6 +18,11 @@
 
 namespace protoscope::ui {
 
+const char* zoomSelectionHelpText(const plot::WaveViewState& view) {
+    return view.zoomSelectionAutoExit ? "框选主视图局部放大；框选完成后自动退出。"
+                                      : "框选主视图局部放大；框选完成后保留框选模式，需手动退出。";
+}
+
 void wave_detail::applyFrequencyInput(plot::WaveViewState& view) {
     const auto parsed = plot::parseSampleFrequencyText(view.sampleFrequencyInput);
     if (parsed.accepted) {
@@ -267,7 +272,7 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
         }
         if (drawToolbarToggleButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS,
                                     view.zoomSelectionActive,
-                                    "框选主视图局部放大；框选完成后自动退出。",
+                                    zoomSelectionHelpText(view),
                                     collapsedButtonSize)) {
             view.zoomSelectionActive = !view.zoomSelectionActive;
             view.zoomSelectionDragging = false;
@@ -328,7 +333,7 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
         ImGui::TableSetColumnIndex(0);
         if (drawToolbarToggleButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS " 框选放大",
                                     view.zoomSelectionActive,
-                                    "框选主视图局部放大；框选完成后自动退出。",
+                                    zoomSelectionHelpText(view),
                                     ImVec2(-1.0F, 0.0F))) {
             view.zoomSelectionActive = !view.zoomSelectionActive;
             view.zoomSelectionDragging = false;

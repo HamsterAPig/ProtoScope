@@ -373,7 +373,11 @@ ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view) {
             ImPlot::PixelsToPlot(ImVec2(static_cast<float>(view.zoomSelectionCurrentX), static_cast<float>(view.zoomSelectionCurrentY)));
         result.viewportChanged = applyZoomSelectionViewport(view, mode, plotStart, plotEnd);
     }
-    cancelZoomSelection(view);
+    // 核心流程：框选完成后是否退出交互模式由配置控制，便于连续框选或一次性框选两种习惯共存。
+    view.zoomSelectionDragging = false;
+    if (view.zoomSelectionAutoExit) {
+        cancelZoomSelection(view);
+    }
     return result;
 }
 
