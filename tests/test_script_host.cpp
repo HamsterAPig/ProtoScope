@@ -240,6 +240,34 @@ void test_script_controls_snapshot() {
     require(foundElfSymbolCombo, "默认协议应示范 elf_symbol_combo 控件");
 }
 
+void test_script_optional_labels_allowed_for_compact_controls() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("optional_label_controls").generic_string()),
+            "紧凑控件应允许省略 label");
+
+    const auto controls = host.controlsSnapshot();
+    require(controls.size() == 4, "无 label 紧凑控件应全部保留");
+    require(controls[0].type == protoscope::scripting::ControlType::Checkbox, "第一个控件应为 checkbox");
+    require(controls[0].id == "enabled", "checkbox id 不应改变");
+    require(controls[0].label.empty(), "checkbox 应允许空 label");
+    require(controls[1].type == protoscope::scripting::ControlType::InputText, "第二个控件应为 input_text");
+    require(controls[1].id == "name", "input_text id 不应改变");
+    require(controls[1].label.empty(), "input_text 应允许空 label");
+    require(controls[2].type == protoscope::scripting::ControlType::InputInt, "第三个控件应为 input_int");
+    require(controls[2].id == "count", "input_int id 不应改变");
+    require(controls[2].label.empty(), "input_int 应允许空 label");
+    require(controls[3].type == protoscope::scripting::ControlType::InputFloat, "第四个控件应为 input_float");
+    require(controls[3].id == "scale", "input_float id 不应改变");
+    require(controls[3].label.empty(), "input_float 应允许空 label");
+}
+
+void test_script_required_labels_still_reject_visual_controls() {
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_required_label_controls").generic_string()),
+            "按钮、下拉和 ELF 选择控件缺少 label 时应加载失败");
+    require(host.lastError().find("label") != std::string::npos, "缺少必需 label 应记录明确错误");
+}
+
 void test_default_protocol_logs_elf_symbol_info() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
@@ -1567,6 +1595,8 @@ static const TestCase kAllTests[] = {
     {"crc_known_vectors", &test_crc_known_vectors},
     {"config_external_reload_state", &test_config_external_reload_state},
     {"script_controls_snapshot", &test_script_controls_snapshot},
+    {"script_optional_labels_allowed_for_compact_controls", &test_script_optional_labels_allowed_for_compact_controls},
+    {"script_required_labels_still_reject_visual_controls", &test_script_required_labels_still_reject_visual_controls},
     {"default_protocol_logs_elf_symbol_info", &test_default_protocol_logs_elf_symbol_info},
     {"script_elf_symbol_combo_descriptor_defaults", &test_script_elf_symbol_combo_descriptor_defaults},
     {"script_elf_symbol_combo_invalid_config_fails", &test_script_elf_symbol_combo_invalid_config_fails},

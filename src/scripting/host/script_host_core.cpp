@@ -261,6 +261,11 @@ std::optional<ControlType> parseControlType(std::string_view value) {
     return std::nullopt;
 }
 
+bool controlAllowsEmptyLabel(ControlType type) {
+    return type == ControlType::Checkbox || type == ControlType::InputText || type == ControlType::InputInt
+        || type == ControlType::InputFloat;
+}
+
 bool isValidDockAnchor(std::string_view value) {
     return value == "left" || value == "left_bottom" || value == "right_top"
         || value == "right_mid" || value == "right_bottom" || value == "main_bottom";
@@ -441,8 +446,13 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     descriptor.type = *controlType;
     descriptor.id = readStringField(table, "id");
     descriptor.label = readStringField(table, "label");
-    if (descriptor.id.empty() || descriptor.label.empty()) {
-        error = "控件必须提供 id 和 label";
+    if (descriptor.id.empty()) {
+        error = "控件必须提供 id";
+        return std::nullopt;
+    }
+    if (descriptor.label.empty() && !controlAllowsEmptyLabel(descriptor.type)) {
+        // 核心流程：只有可用控件自身形态表达含义的紧凑型控件允许隐藏可见 label。
+        error = "控件必须提供 label";
         return std::nullopt;
     }
 

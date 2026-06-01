@@ -14,6 +14,8 @@ void test_hex_editor_cursor_normalize();
 void test_crc_known_vectors();
 void test_config_external_reload_state();
 void test_script_controls_snapshot();
+void test_script_optional_labels_allowed_for_compact_controls();
+void test_script_required_labels_still_reject_visual_controls();
 void test_default_protocol_logs_elf_symbol_info();
 void test_script_elf_symbol_combo_descriptor_defaults();
 void test_script_elf_symbol_combo_invalid_config_fails();
