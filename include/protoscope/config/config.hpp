@@ -98,6 +98,7 @@ struct GuiConfig {
     GuiElfSymbolComboConfig elfSymbolCombo{};
     bool luaDockLayoutDebug{false};
     std::size_t sendHistoryLimit{20};
+    bool replayRawHistoryOnSchemaSwitch{false};
 };
 
 struct ProtocolTxConfig {

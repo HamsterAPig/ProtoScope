@@ -276,6 +276,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 result.config.gui.rawCapture.liveLimitBytes =
                     readScalar<std::size_t>(rawCapture, "live_limit_bytes", result.config.gui.rawCapture.liveLimitBytes);
             }
+            if (const auto transferLog = gui["transfer_log"]) {
+                result.config.gui.replayRawHistoryOnSchemaSwitch =
+                    readScalar<bool>(transferLog,
+                                     "replay_raw_history_on_schema_switch",
+                                     result.config.gui.replayRawHistoryOnSchemaSwitch);
+            }
             if (const auto realtimeBacklog = gui["realtime_backlog"]) {
                 result.config.gui.realtimeBacklog.mode =
                     readScalar<std::string>(realtimeBacklog, "mode", result.config.gui.realtimeBacklog.mode);
@@ -456,6 +462,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
     root["gui"]["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
     root["gui"]["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
+    root["gui"]["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
     root["gui"]["realtime_backlog"]["mode"] = config.gui.realtimeBacklog.mode;
     root["gui"]["realtime_backlog"]["rx_chunk_bytes_per_pump"] = config.gui.realtimeBacklog.rxChunkBytesPerPump;
     root["gui"]["realtime_backlog"]["transfer_frame_rows_per_pump"] = config.gui.realtimeBacklog.transferFrameRowsPerPump;

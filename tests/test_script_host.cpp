@@ -1143,6 +1143,7 @@ void test_config_default_roundtrip() {
     require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
     require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
     require(config.gui.sendHistoryLimit == 20, "发送历史条数默认值应为 20");
+    require(!config.gui.replayRawHistoryOnSchemaSwitch, "raw 切到 schema 默认不应回放旧历史");
     config.communication.kind = protoscope::transport::TransportKind::Serial;
     config.communication.serial.portName = "COM9";
     config.communication.serial.dataBits = 7;
@@ -1175,6 +1176,7 @@ void test_config_default_roundtrip() {
     config.gui.elfSymbolCombo.limit = 12;
     config.gui.elfSymbolCombo.debounceMs = 350;
     config.gui.sendHistoryLimit = 7;
+    config.gui.replayRawHistoryOnSchemaSwitch = true;
     config.scripting.fileIo.enabled = true;
     config.scripting.fileIo.maxOpenFiles = 3;
     config.scripting.fileIo.defaultChunkBytes = 32;
@@ -1221,6 +1223,7 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.elfSymbolCombo.limit == 12, "ELF 变量候选上限 roundtrip 失败");
     require(reloaded.config.gui.elfSymbolCombo.debounceMs == 350, "ELF 变量候选消抖 roundtrip 失败");
     require(reloaded.config.gui.sendHistoryLimit == 7, "发送历史条数 roundtrip 失败");
+    require(reloaded.config.gui.replayRawHistoryOnSchemaSwitch, "raw 切到 schema 回放开关 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.enabled, "Lua 文件 IO 开关 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.maxOpenFiles == 3, "Lua 文件 IO 打开数上限 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.defaultChunkBytes == 32, "Lua 文件 IO 默认分块 roundtrip 失败");
@@ -2052,6 +2055,8 @@ static const TestCase kAllTests[] = {
     {"application_reload_rebuilds_frame_rows_with_count_expression", &test_application_reload_rebuilds_frame_rows_with_count_expression},
     {"application_transfer_log_frame_view_waits_for_rx_full_frame", &test_application_transfer_log_frame_view_waits_for_rx_full_frame},
     {"application_transfer_log_frame_view_keeps_unmatched_tx_raw", &test_application_transfer_log_frame_view_keeps_unmatched_tx_raw},
+    {"application_switching_to_parsed_view_defaults_to_new_stream_only", &test_application_switching_to_parsed_view_defaults_to_new_stream_only},
+    {"application_switching_to_parsed_view_can_replay_old_raw_history", &test_application_switching_to_parsed_view_can_replay_old_raw_history},
     {"application_rx_events_are_processed_with_budget", &test_application_rx_events_are_processed_with_budget},
     {"application_large_rx_event_drains_by_byte_budget", &test_application_large_rx_event_drains_by_byte_budget},
     {"application_responsive_disconnect_discards_realtime_backlog", &test_application_responsive_disconnect_discards_realtime_backlog},

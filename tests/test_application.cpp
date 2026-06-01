@@ -169,6 +169,33 @@ std::vector<std::uint8_t> makeRawImportStreamPayload(std::size_t frameCount) {
     return payload;
 }
 
+std::filesystem::path makeUniqueTempDir(const char* prefix);
+
+std::filesystem::path makeSchemaSwitchReplayProtocolDir() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-schema-switch-replay");
+    std::ofstream script(protocolDir / "main.lua");
+    script << "local function noop(...) end\n";
+    script << "function stream()\n";
+    script << "  return {\n";
+    script << "    buffer = { capacity = 64, overflow = 'drop_oldest' },\n";
+    script << "    frames = {\n";
+    script << "      {\n";
+    script << "        name = 'stream_sample',\n";
+    script << "        header = { 0xAA, 0x55 },\n";
+    script << "        len = { offset = 3, type = 'u8', means = 'payload', extra = 5 },\n";
+    script << "        crc = { type = 'crc16_modbus', order = 'lo_hi' },\n";
+    script << "        fields = {\n";
+    script << "          { name = 'value', type = 'u8', offset = 4 },\n";
+    script << "        },\n";
+    script << "        on_frame = noop,\n";
+    script << "      },\n";
+    script << "    },\n";
+    script << "    on_error = noop,\n";
+    script << "  }\n";
+    script << "end\n";
+    return protocolDir;
+}
+
 bool waitUntil(auto&& predicate) {
     for (int i = 0; i < 80; ++i) {
         if (predicate()) {
@@ -1100,6 +1127,85 @@ void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw() {
     require(receive.frameRows.size() == 1, "逐帧视图应保留无法匹配 schema 的 TX 原始行");
     require(receive.frameRows.front().direction == "TX", "TX fallback 行方向应保持 TX");
     require(receive.frameRows.front().bytes == std::vector<std::uint8_t>({0x01, 0x02, 0x03}), "TX fallback 行字节应保持原样");
+}
+
+void test_application_switching_to_parsed_view_defaults_to_new_stream_only() {
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    const auto protocolDir = makeSchemaSwitchReplayProtocolDir();
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "临时 stream 协议应可加载");
+
+    application.openTransport();
+    application.pumpOnce();
+
+    const protoscope::transport::ConnectionContext ctx{
+        .endpoint = "queued://wave",
+        .connectionId = 7,
+        .timestampMs = 200,
+        .readyForIo = true,
+    };
+    transportState->pendingEvents.push_back(
+        protoscope::transport::TransportBytesEvent{ctx, {0xAA, 0x55, 0x00, 0x20}});
+    application.pumpOnce();
+    require(hasReceiveBytes(application.docks().receiveState(), {0xAA, 0x55, 0x00, 0x20}),
+            "raw 模式下应先记录旧 chunk");
+
+    application.activateParsedTransferLogView();
+    require(application.docks().receiveState().frameRows.empty(), "默认切换到 schema 时不应回放旧 raw 历史");
+
+    transportState->pendingEvents.push_back(
+        protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamFrame(0x34)});
+    application.pumpOnce();
+
+    const auto& receive = application.docks().receiveState();
+    require(receive.frameRows.size() == 1, "切换后的新完整帧应正常进入逐帧视图");
+    require(receive.frameRows.front().bytes == makeRawImportStreamFrame(0x34), "逐帧视图应只显示切换后的新帧");
+}
+
+void test_application_switching_to_parsed_view_can_replay_old_raw_history() {
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    const auto protocolDir = makeSchemaSwitchReplayProtocolDir();
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+
+    auto config = application.captureConfig();
+    config.gui.replayRawHistoryOnSchemaSwitch = true;
+    config.protocol.selectedDir = protocolDir.generic_string();
+    require(application.applyConfig(config), "schema 切换回放配置应可应用");
+
+    application.openTransport();
+    application.pumpOnce();
+
+    const protoscope::transport::ConnectionContext ctx{
+        .endpoint = "queued://wave",
+        .connectionId = 7,
+        .timestampMs = 260,
+        .readyForIo = true,
+    };
+    transportState->pendingEvents.push_back(
+        protoscope::transport::TransportBytesEvent{ctx, {0xAA, 0x55, 0x00, 0x20}});
+    application.pumpOnce();
+
+    application.activateParsedTransferLogView();
+    require(application.docks().receiveState().frameRows.empty(), "旧 raw 历史只有半帧时不应凭空生成逐帧行");
+
+    transportState->pendingEvents.push_back(
+        protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamFrame(0x56)});
+    application.pumpOnce();
+
+    require(application.docks().receiveState().frameRows.empty(),
+            "开启旧历史回放后，旧半帧应继续占住 parser，复现 raw->schema 切换卡住场景");
 }
 
 void test_application_rx_events_are_processed_with_budget() {

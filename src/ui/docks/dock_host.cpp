@@ -470,7 +470,7 @@ void GuiRuntime::drawTransferDock()
                 receive.displayMode = parsedFrames ? dock::TransferLogDisplayMode::RawChunks
                                                    : dock::TransferLogDisplayMode::ParsedFrames;
                 if (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
-                    application_.rebuildTransferFrameRows();
+                    application_.activateParsedTransferLogView();
                 }
             }
             drawIconTooltip(parsedFrames ? "按 Lua stream() schema 逐帧显示" : "按运输层原始分块显示");

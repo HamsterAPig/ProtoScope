@@ -35,6 +35,8 @@ gui:
     script_limit: 5000
   raw_capture:
     live_limit_bytes: 67108864
+  transfer_log:
+    replay_raw_history_on_schema_switch: false
   realtime_backlog:
     mode: responsive
     rx_chunk_bytes_per_pump: 65536

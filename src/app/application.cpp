@@ -252,6 +252,7 @@ config::AppConfig Application::captureConfig() const {
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
+    captured.gui.replayRawHistoryOnSchemaSwitch = runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch;
     captured.app.language = runtimeConfig_.app.language;
     captured.scripting = runtimeConfig_.scripting;
     captured.logging = loggingFacade_.currentConfig();
@@ -536,6 +537,12 @@ void Application::resetTransferFrameParser() {
     transferFrameParser_ = makeTransferFrameParserState();
 }
 
+void Application::resetTransferFrameDisplayState() {
+    dockStore_.clearTransferFrameRows();
+    pendingTransferFrameRows_.clear();
+    resetTransferFrameParser();
+}
+
 dock::ReceiveRow Application::makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
                                                    const scripting::StreamParsedFrame& frame) const {
     return dock::ReceiveRow{
@@ -577,10 +584,21 @@ void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow) {
 
 void Application::rebuildTransferFrameRows() {
     const auto rows = dockStore_.receiveState().rows;
-    dockStore_.clearTransferFrameRows();
-    pendingTransferFrameRows_.clear();
-    resetTransferFrameParser();
+    resetTransferFrameDisplayState();
     for (const auto& row : rows) {
+        appendTransferFrameRows(row);
+    }
+    flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
+}
+
+void Application::activateParsedTransferLogView() {
+    // 核心流程：从 raw 切到 schema 时默认只看切换后的新流，
+    // 避免拿已裁剪/未对齐的 raw 历史重放后把 parser 卡在旧半帧里。
+    resetTransferFrameDisplayState();
+    if (!runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch) {
+        return;
+    }
+    for (const auto& row : dockStore_.receiveState().rows) {
         appendTransferFrameRows(row);
     }
     flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());

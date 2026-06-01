@@ -57,6 +57,7 @@ public:
     [[nodiscard]] std::vector<scripting::ElfSymbolValue> queryElfStaticAddresses(const std::string& queryText,
                                                                                  std::size_t limit) const;
     void rebuildTransferFrameRows();
+    void activateParsedTransferLogView();
     logging::LoggingFacade& logger();
     const logging::LoggingFacade& logger() const;
     std::vector<scripting::DialogRequest> drainDialogRequests();
@@ -129,6 +130,7 @@ private:
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
     void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
     void resetTransferFrameParser();
+    void resetTransferFrameDisplayState();
     void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
     void enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows);
     void trimPendingTransferFrameRowsToLimit();
