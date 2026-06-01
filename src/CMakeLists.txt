@@ -198,6 +198,7 @@ endif()
 if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
         ui/editable_combo.cpp
+        ui/ui_theme.cpp
         ui/runtime/gui_runtime_core.cpp
         ui/runtime/ui_components.cpp
         ui/runtime/platform_controller.cpp

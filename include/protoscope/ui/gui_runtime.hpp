@@ -83,8 +83,13 @@ private:
     void syncRegisteredDialogs();
     void drawRegisteredDialogs();
     void drawRegisteredDocks();
+    void drawAppShell();
+    void buildModernDefaultLayout(ImGuiID dockspaceId);
     void renderFrame();
+    void drawAppHeader();
     void drawStatusBar();
+    bool saveCurrentConfigToDisk();
+    bool stopRawCaptureRecordingWithStatus();
     void syncDialogQueue();
     void drawDialogs();
     void drawRawCaptureFileDialogs();

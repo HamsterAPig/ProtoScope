@@ -1,6 +1,7 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/plot/wave_state.hpp"
 #include "protoscope/ui/icons.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
 #include "wave_component.hpp"
@@ -42,21 +43,11 @@ void addItemHelp(const char* text) {
 }
 
 bool drawToolbarActionButton(const char* label, const char* help, const ImVec2& size) {
-    const bool clicked = ImGui::Button(label, size);
-    addItemHelp(help);
-    return clicked;
+    return drawToolbarSectionButton(label, help, false, size);
 }
 
 bool drawToolbarToggleButton(const char* label, bool active, const char* help, const ImVec2& size) {
-    if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    }
-    const bool clicked = ImGui::Button(label, size);
-    if (active) {
-        ImGui::PopStyleColor();
-    }
-    addItemHelp(help);
-    return clicked;
+    return drawToolbarSectionButton(label, help, active, size);
 }
 
 bool drawToolbarCheckbox(const char* label, bool* value, const char* help) {
@@ -293,70 +284,71 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
         return;
     }
 
-    ImGui::TextUnformatted("快捷操作");
-    ImGui::Separator();
-    // 核心流程：右侧工具栏先放高频动作，细项参数继续留在下方分组，避免工具区变成长表单。
-    if (ImGui::BeginTable("##wave_toolbar_quick_actions", 2, ImGuiTableFlags_SizingStretchSame)) {
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        if (drawToolbarToggleButton(view.autoFollowLatest ? "跟随中" : "已暂停",
+    if (beginToolbarGroup("wave_quick_actions", "主视图控制")) {
+        // 核心流程：右侧工具栏先放高频动作，细项参数继续留在下方分组，避免工具区变成长表单。
+        if (ImGui::BeginTable("##wave_toolbar_quick_actions", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            if (drawToolbarToggleButton(view.autoFollowLatest ? "跟随中" : "已暂停",
                                     view.autoFollowLatest,
                                     "切换自动跟随最新数据。关闭后当前视口会停留在手动浏览位置。",
                                     ImVec2(-1.0F, 0.0F))) {
-            view.autoFollowLatest = !view.autoFollowLatest;
-        }
-        ImGui::TableSetColumnIndex(1);
-        if (drawToolbarToggleButton(view.lockVerticalRange ? "纵轴锁定" : "纵轴自动",
+                view.autoFollowLatest = !view.autoFollowLatest;
+            }
+            ImGui::TableSetColumnIndex(1);
+            if (drawToolbarToggleButton(view.lockVerticalRange ? "纵轴锁定" : "纵轴自动",
                                     view.lockVerticalRange,
                                     "锁定或释放纵轴范围。锁定后使用手动纵轴最小/最大值。",
                                     ImVec2(-1.0F, 0.0F))) {
-            view.lockVerticalRange = !view.lockVerticalRange;
-        }
+                view.lockVerticalRange = !view.lockVerticalRange;
+            }
 
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        if (drawToolbarToggleButton(view.showCursors ? "游标开" : "游标关",
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            if (drawToolbarToggleButton(view.showCursors ? "游标开" : "游标关",
                                     view.showCursors,
                                     "显示或隐藏测量游标。游标隐藏时不会显示游标读数。",
                                     ImVec2(-1.0F, 0.0F))) {
-            view.showCursors = !view.showCursors;
-        }
-        ImGui::TableSetColumnIndex(1);
-        if (drawToolbarToggleButton(view.showHoverReadout ? "读数开" : "读数关",
+                view.showCursors = !view.showCursors;
+            }
+            ImGui::TableSetColumnIndex(1);
+            if (drawToolbarToggleButton(view.showHoverReadout ? "读数开" : "读数关",
                                     view.showHoverReadout,
                                     "显示或隐藏鼠标悬停读数。开启后鼠标靠近曲线会显示最近采样点。",
                                     ImVec2(-1.0F, 0.0F))) {
-            view.showHoverReadout = !view.showHoverReadout;
-        }
+                view.showHoverReadout = !view.showHoverReadout;
+            }
 
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        if (drawToolbarToggleButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS " 框选放大",
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            if (drawToolbarToggleButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS " 框选放大",
                                     view.zoomSelectionActive,
                                     zoomSelectionHelpText(view),
                                     ImVec2(-1.0F, 0.0F))) {
-            view.zoomSelectionActive = !view.zoomSelectionActive;
-            view.zoomSelectionDragging = false;
-        }
-        ImGui::TableSetColumnIndex(1);
-        if (drawToolbarActionButton(PROTOSCOPE_ICON_EXPAND " 显示全部",
+                view.zoomSelectionActive = !view.zoomSelectionActive;
+                view.zoomSelectionDragging = false;
+            }
+            ImGui::TableSetColumnIndex(1);
+            if (drawToolbarActionButton(PROTOSCOPE_ICON_EXPAND " 显示全部",
                                     "适配当前可见波形到完整视图。",
                                     ImVec2(-1.0F, 0.0F))) {
-            view.fitVisibleWaveformsRequested = true;
-        }
+                view.fitVisibleWaveformsRequested = true;
+            }
 
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        if (drawToolbarActionButton("清空历史",
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            if (drawToolbarActionButton("清空历史",
                                     "清空当前波形历史缓存；不会修改协议脚本或串口连接状态。",
                                     ImVec2(-1.0F, 0.0F))) {
-            application.resetWaveHistory();
+                application.resetWaveHistory();
+            }
+            ImGui::TableSetColumnIndex(1);
+            if (drawToolbarActionButton("折叠工具栏", "收起为窄按钮列，保留常用操作入口。", ImVec2(-1.0F, 0.0F))) {
+                wave.toolsCollapsed = true;
+            }
+            ImGui::EndTable();
         }
-        ImGui::TableSetColumnIndex(1);
-        if (drawToolbarActionButton("折叠工具栏", "收起为窄按钮列，保留常用操作入口。", ImVec2(-1.0F, 0.0F))) {
-            wave.toolsCollapsed = true;
-        }
-        ImGui::EndTable();
+        endToolbarGroup();
     }
 
     ImGui::Spacing();
@@ -479,8 +471,7 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
                 ImGui::SetNextItemWidth(-1.0F);
                 ImGui::InputDouble("##manual_vertical_max", &view.manualVerticalMax, 0.1, 1.0, "%.6f");
                 addItemHelp("纵轴锁定时使用的显示上限。");
-            }
-            ImGui::EndTable();
+                ImGui::EndTable();
         }
         if (!view.sampleFrequencyError.empty()) {
             ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.25F, 1.0F), "%s", view.sampleFrequencyError.c_str());
@@ -504,5 +495,6 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
     }
 }
 
+}
 
 } // namespace protoscope::ui

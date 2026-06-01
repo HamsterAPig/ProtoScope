@@ -1,4 +1,5 @@
 #include "protoscope/ui/gui_runtime.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 
 #include <imgui.h>
 
@@ -29,15 +30,7 @@ void GuiRuntime::drawMainMenu() {
 
     if (ImGui::BeginMenu("文件")) {
         if (ImGui::MenuItem("保存配置")) {
-            std::string error;
-            const auto path = std::filesystem::path(application_.docks().configState().loadedFromPath);
-            if (configStore_.save(path, application_.captureConfig(), error)) {
-                application_.docks().clearDirty("配置已保存");
-                configSnapshot_ = configStore_.snapshot(path);
-                application_.docks().configState().fileTimestampMs = configSnapshot_.timestampMs;
-            } else {
-                application_.setStatusMessage("保存配置失败: " + error, true);
-            }
+            saveCurrentConfigToDisk();
         }
         if (ImGui::MenuItem("重新加载配置")) {
             if (!reloadConfigFromDisk()) {
@@ -62,10 +55,7 @@ void GuiRuntime::drawMainMenu() {
             openRawCaptureRecordingDialog();
         }
         if (ImGui::MenuItem("停止完整原始数据录制", nullptr, false, recording)) {
-            std::string error;
-            if (!application_.stopRawCaptureRecording(error)) {
-                application_.setStatusMessage("完整原始数据录制停止失败: " + error, true);
-            }
+            stopRawCaptureRecordingWithStatus();
         }
         ImGui::EndMenu();
     }
@@ -84,6 +74,10 @@ void GuiRuntime::drawMainMenu() {
         ImGui::MenuItem("日志", nullptr, &showLogDock_);
         ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
         ImGui::MenuItem("波形", nullptr, &showWaveDock_);
+        ImGui::Separator();
+        drawHeaderBadge("布局", defaultUiStyleTokens().accent, false);
+        ImGui::SameLine();
+        ImGui::TextDisabled("中心波形 / 左配置 / 右分析 / 底部事件流");
         if (previousShowCommDock != showCommDock_
             || previousShowProtocolDock != showProtocolDock_
             || previousShowTransferDock != showTransferDock_

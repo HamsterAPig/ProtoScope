@@ -9,9 +9,11 @@
 #include "protoscope/ui/icons.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/render_frame_scheduler.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 
 #include "protoscope/ui/ui_component.hpp"
 #include "workspace_controller.hpp"
+#include "gui_runtime_detail.hpp"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -58,28 +60,7 @@ CMRC_DECLARE(ui_resources);
 namespace protoscope::ui {
 
 namespace {
-
-const char* kGlslVersion = "#version 150";
-
-std::string currentProtocolTitle(const dock::LuaDockState& lua) {
-    if (!lua.protocolName.empty()) {
-        return lua.protocolName;
-    }
-    return lua.protocolDir.empty() ? "未加载协议" : lua.protocolDir;
-}
-
-std::vector<std::filesystem::path> candidateChineseFonts() {
-    return {
-        "C:/Windows/Fonts/msyh.ttc",
-        "C:/Windows/Fonts/msyh.ttf",
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/simsun.ttc",
-        "3rdparty/imgui/misc/fonts/DroidSans.ttf",
-    };
-}
-
 } // namespace
-
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
     : application_(application),
@@ -247,7 +228,7 @@ bool GuiRuntime::initializeWindow() {
 bool GuiRuntime::initializeImGui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::StyleColorsDark();
+    applyImGuiProfessionalDarkTheme();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename = nullptr;
@@ -264,7 +245,7 @@ bool GuiRuntime::initializeImGui() {
 
 bool GuiRuntime::initializePlotContext() {
     ImPlot::CreateContext();
-    ImPlot::StyleColorsDark();
+    applyImPlotProfessionalDarkTheme();
     auto& inputMap = ImPlot::GetInputMap();
     inputMap.Pan = ImGuiMouseButton_Left;
     inputMap.Select = ImGuiMouseButton_Right;
@@ -407,6 +388,153 @@ void GuiRuntime::drawRegisteredDocks() {
     }
 }
 
+bool GuiRuntime::saveCurrentConfigToDisk() {
+    std::string error;
+    const auto path = std::filesystem::path(application_.docks().configState().loadedFromPath);
+    if (!configStore_.save(path, application_.captureConfig(), error)) {
+        application_.setStatusMessage("保存配置失败: " + error, true);
+        return false;
+    }
+    application_.docks().clearDirty("配置已保存");
+    configSnapshot_ = configStore_.snapshot(path);
+    application_.docks().configState().fileTimestampMs = configSnapshot_.timestampMs;
+    return true;
+}
+
+bool GuiRuntime::stopRawCaptureRecordingWithStatus() {
+    std::string error;
+    if (!application_.stopRawCaptureRecording(error)) {
+        application_.setStatusMessage("完整原始数据录制停止失败: " + error, true);
+        return false;
+    }
+    return true;
+}
+
+void GuiRuntime::drawAppHeader() {
+    const auto& tokens = defaultUiStyleTokens();
+    auto& lua = application_.docks().luaState();
+    auto& comm = application_.docks().commState();
+    auto& config = application_.docks().configState();
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, 58.0F));
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0F, 10.0F));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07F, 0.09F, 0.13F, 0.98F));
+    ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
+    if (ImGui::Begin("现代应用栏", nullptr, flags)) {
+        ImGui::TextUnformatted("ProtoScope");
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", build::kVersion);
+        ImGui::SameLine();
+        drawHeaderBadge(currentProtocolTitle(lua).c_str(), tokens.accent, false);
+        ImGui::SameLine();
+        drawHeaderBadge(transportStateLabel(comm.state), comm.state == transport::TransportState::Open ? tokens.success : tokens.warning, false);
+        if (config.dirty) {
+            ImGui::SameLine();
+            drawHeaderBadge("配置未保存", tokens.warning, false);
+        }
+        if (application_.isRawCaptureRecording()) {
+            ImGui::SameLine();
+            drawHeaderBadge("完整录制中", tokens.danger, true);
+        }
+
+        const float rightStart = (std::max)(240.0F, ImGui::GetWindowWidth() - 390.0F);
+        ImGui::SameLine(rightStart);
+        if (drawGhostIconButton("保存配置", "将当前通讯、协议和布局状态落盘")) {
+            saveCurrentConfigToDisk();
+        }
+        ImGui::SameLine();
+        if (drawGhostIconButton("重载协议", "重新加载当前协议目录和 Lua 控件")) {
+            requestProtocolWorkspaceSwitch(lua.protocolDir, true);
+        }
+        ImGui::SameLine();
+        if (application_.isRawCaptureRecording()) {
+            if (drawDangerIconButton("停止录制", "停止完整原始数据录制")) {
+                stopRawCaptureRecordingWithStatus();
+            }
+        } else if (drawToolbarSectionButton("开始录制", "打开文件对话框并开始完整原始数据录制", false, ImVec2(0.0F, 0.0F))) {
+            openRawCaptureRecordingDialog();
+        }
+        ImGui::SameLine();
+        if (drawGhostIconButton("导入波形", "从原始波形文件恢复完整历史数据")) {
+            openRawCaptureImportDialog();
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
+}
+
+void GuiRuntime::buildModernDefaultLayout(ImGuiID dockspaceId) {
+    ImGui::DockBuilderRemoveNode(dockspaceId);
+    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
+
+    ImGuiID shellBottom = dockspaceId;
+    ImGuiID bottomDrawer = ImGui::DockBuilderSplitNode(shellBottom, ImGuiDir_Down, 0.23F, nullptr, &shellBottom);
+    ImGuiID leftPane = ImGui::DockBuilderSplitNode(shellBottom, ImGuiDir_Left, 0.22F, nullptr, &shellBottom);
+    ImGuiID rightPane = ImGui::DockBuilderSplitNode(shellBottom, ImGuiDir_Right, 0.24F, nullptr, &shellBottom);
+    ImGuiID leftBottom = ImGui::DockBuilderSplitNode(leftPane, ImGuiDir_Down, 0.45F, nullptr, &leftPane);
+    ImGuiID rightBottom = ImGui::DockBuilderSplitNode(rightPane, ImGuiDir_Down, 0.52F, nullptr, &rightPane);
+
+    defaultLuaDockNodes_.clear();
+    defaultLuaDockNodes_[LuaDockAnchor::Left] = leftPane;
+    defaultLuaDockNodes_[LuaDockAnchor::LeftBottom] = leftBottom;
+    defaultLuaDockNodes_[LuaDockAnchor::RightTop] = rightPane;
+    defaultLuaDockNodes_[LuaDockAnchor::RightMid] = rightBottom;
+    defaultLuaDockNodes_[LuaDockAnchor::RightBottom] = bottomDrawer;
+    defaultLuaDockNodes_[LuaDockAnchor::MainBottom] = bottomDrawer;
+
+    // 核心流程：先锁定中央波形工作区，再把配置、分析和事件流分到四周，保证默认视角始终以波形为中心。
+    ImGui::DockBuilderDockWindow("通讯配置", leftPane);
+    ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
+    ImGui::DockBuilderDockWindow("波形", shellBottom);
+    ImGui::DockBuilderDockWindow("收发数据", rightPane);
+    ImGui::DockBuilderDockWindow("脚本", rightBottom);
+    ImGui::DockBuilderDockWindow("日志", bottomDrawer);
+    ImGui::DockBuilderDockWindow("脚本", bottomDrawer);
+    ImGui::DockBuilderFinish(dockspaceId);
+}
+
+void GuiRuntime::drawAppShell() {
+    drawAppHeader();
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float headerHeight = 58.0F;
+    const float statusHeight = 44.0F;
+    const ImVec2 dockPos(viewport->Pos.x, viewport->Pos.y + headerHeight);
+    const ImVec2 dockSize(viewport->Size.x, viewport->Size.y - headerHeight - statusHeight);
+
+    ImGui::SetNextWindowPos(dockPos);
+    ImGui::SetNextWindowSize(dockSize);
+    constexpr ImGuiWindowFlags shellFlags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, defaultUiStyleTokens().appBackground);
+    if (ImGui::Begin("应用工作区", nullptr, shellFlags)) {
+        ImGuiDockNodeFlags dockFlags = ImGuiDockNodeFlags_PassthruCentralNode;
+        ImGuiID dockspaceId = ImGui::DockSpace(ImGui::GetID("ProtoScope.AppDockSpace"), ImVec2(0.0F, 0.0F), dockFlags);
+        if (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild) {
+            buildModernDefaultLayout(dockspaceId);
+            pendingLuaDefaultDockLayout_ = true;
+            if (shouldRunLuaDefaultDockLayout(workspaceLayoutMode_, pendingLuaDefaultDockLayout_)) {
+                // 核心流程：Lua 动态 Dock 只在默认布局事务中回填一次，避免用户手工拖拽后被强制改回。
+                updateLuaDockDefaultLayout();
+                pendingLuaDefaultDockLayout_ = false;
+            }
+            workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+}
+
 void GuiRuntime::renderFrame() {
     refreshWindowTitle();
 
@@ -414,47 +542,9 @@ void GuiRuntime::renderFrame() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    drawRegisteredMenus();
     syncRegisteredDialogs();
-
-    ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
-
-    if (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild) {
-        ImGui::DockBuilderRemoveNode(dockspaceId);
-        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-        ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
-
-        ImGuiID mainArea = dockspaceId;
-        ImGuiID left = ImGui::DockBuilderSplitNode(mainArea, ImGuiDir_Left, 0.25f, nullptr, &mainArea);
-        ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.48F, nullptr, &left);
-        ImGuiID rightTop = ImGui::DockBuilderSplitNode(mainArea, ImGuiDir_Up, 0.25f, nullptr, &mainArea);
-        ImGuiID rightMid = ImGui::DockBuilderSplitNode(mainArea, ImGuiDir_Up, 0.36F, nullptr, &mainArea);
-        const ImGuiID mainBottom = mainArea;
-
-        defaultLuaDockNodes_.clear();
-        defaultLuaDockNodes_[LuaDockAnchor::Left] = left;
-        defaultLuaDockNodes_[LuaDockAnchor::LeftBottom] = leftBottom;
-        defaultLuaDockNodes_[LuaDockAnchor::RightTop] = rightTop;
-        defaultLuaDockNodes_[LuaDockAnchor::RightMid] = rightMid;
-        defaultLuaDockNodes_[LuaDockAnchor::RightBottom] = mainBottom;
-        defaultLuaDockNodes_[LuaDockAnchor::MainBottom] = mainBottom;
-
-        // 核心流程：先切左栏，再从主区向上切辅助区，让 DockBuilder 自然保留唯一的 CentralNode。
-        ImGui::DockBuilderDockWindow("通讯配置", left);
-        ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
-        ImGui::DockBuilderDockWindow("收发数据", rightTop);
-        ImGui::DockBuilderDockWindow("日志", mainBottom);
-        ImGui::DockBuilderDockWindow("脚本", mainBottom);
-        ImGui::DockBuilderDockWindow("波形", mainBottom);
-        ImGui::DockBuilderFinish(dockspaceId);
-        pendingLuaDefaultDockLayout_ = true;
-        if (shouldRunLuaDefaultDockLayout(workspaceLayoutMode_, pendingLuaDefaultDockLayout_)) {
-            // 核心流程：Lua 动态 Dock 的默认停靠只属于默认布局事务，避免用户拖拽后被下一帧拉回。
-            updateLuaDockDefaultLayout();
-            pendingLuaDefaultDockLayout_ = false;
-        }
-        workspaceLayoutMode_ = WorkspaceLayoutMode::Ready;
-    }
+    drawRegisteredMenus();
+    drawAppShell();
 
     const bool previousShowCommDock = showCommDock_;
     const bool previousShowProtocolDock = showProtocolDock_;
@@ -482,7 +572,8 @@ void GuiRuntime::renderFrame() {
     int displayH = 0;
     glfwGetFramebufferSize(window_, &displayW, &displayH);
     glViewport(0, 0, displayW, displayH);
-    glClearColor(0.10F, 0.11F, 0.12F, 1.00F);
+    const auto& tokens = defaultUiStyleTokens();
+    glClearColor(tokens.appBackground.x, tokens.appBackground.y, tokens.appBackground.z, 1.00F);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }

@@ -1,4 +1,5 @@
 #include "protoscope/ui/gui_runtime.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 
 #include "../runtime/gui_runtime_detail.hpp"
 
@@ -13,67 +14,62 @@ std::string luaControlImGuiLabel(const scripting::ControlDescriptor& descriptor)
 } // namespace
 
 void GuiRuntime::drawStatusBar() {
+    const auto& tokens = defaultUiStyleTokens();
     auto& comm = application_.docks().commState();
     auto& config = application_.docks().configState();
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - 28.0F));
-    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, 28.0F));
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - 44.0F));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, 44.0F));
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0F, 8.0F));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07F, 0.09F, 0.13F, 0.98F));
+    ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     if (ImGui::Begin("状态栏", nullptr, flags)) {
-        ImGui::Text("状态: %s", transportStateLabel(comm.state));
-        ImGui::SameLine();
-        ImGui::Separator();
-        ImGui::SameLine();
+        drawHeaderBadge(transportStateLabel(comm.state), comm.state == transport::TransportState::Open ? tokens.success : tokens.warning, false);
         if (config.dirty) {
-            ImGui::TextUnformatted("未保存");
             ImGui::SameLine();
-            ImGui::Separator();
-            ImGui::SameLine();
+            drawHeaderBadge("配置未保存", tokens.warning, false);
         }
         if (config.pendingExternalReload) {
-            ImGui::TextUnformatted(config.externalReloadMessage.empty() ? "检测到外部配置更新" : config.externalReloadMessage.c_str());
             ImGui::SameLine();
-            if (ImGui::SmallButton("重载配置")) {
+            drawHeaderBadge(config.externalReloadMessage.empty() ? "检测到外部更新" : config.externalReloadMessage.c_str(), tokens.warning, false);
+            ImGui::SameLine();
+            if (drawGhostIconButton("重载配置", "从磁盘重载当前配置")) {
                 if (!reloadConfigFromDisk()) {
                     application_.setStatusMessage("从磁盘重载配置失败", true);
                 }
             }
-            ImGui::SameLine();
-            ImGui::Separator();
-            ImGui::SameLine();
         }
         if (comm.reconnectRequired) {
-            ImGui::TextUnformatted("通讯参数变更待重连");
             ImGui::SameLine();
-            ImGui::Separator();
-            ImGui::SameLine();
+            drawHeaderBadge("通讯参数变更待重连", tokens.warning, false);
         }
         if (application_.isRawCaptureRecording()) {
             const auto fileName = application_.rawCaptureRecordingPath().filename().generic_string();
-            ImGui::Text("完整录制: %s %llu bytes",
-                        fileName.empty() ? "(未命名)" : fileName.c_str(),
-                        static_cast<unsigned long long>(application_.rawCaptureRecordingBytes()));
+            const std::string recordingText = "录制 " + (fileName.empty() ? std::string("(未命名)") : fileName)
+                + " " + std::to_string(static_cast<unsigned long long>(application_.rawCaptureRecordingBytes())) + " bytes";
             ImGui::SameLine();
-            ImGui::Separator();
-            ImGui::SameLine();
+            drawHeaderBadge(recordingText.c_str(), tokens.danger, true);
         }
         if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U) {
-            ImGui::Text("待处理 RX=%zu bytes 帧=%zu 波形=%zu",
-                        comm.pendingRxBytes,
-                        comm.pendingTransferFrameRows,
-                        comm.pendingPlotAppends);
+            const std::string pendingText =
+                "待处理 RX " + std::to_string(comm.pendingRxBytes)
+                + " / 帧 " + std::to_string(comm.pendingTransferFrameRows)
+                + " / 绘图 " + std::to_string(comm.pendingPlotAppends);
             ImGui::SameLine();
-            ImGui::Separator();
-            ImGui::SameLine();
+            drawHeaderBadge(pendingText.c_str(), tokens.accent, false);
         }
         if (!config.statusMessage.empty()) {
-            ImGui::TextUnformatted(config.statusMessage.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", config.statusMessage.c_str());
         }
     }
     ImGui::End();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
 }
-
 void GuiRuntime::drawCommDock() {
     if (!showCommDock_) {
         return;
@@ -707,21 +703,24 @@ void GuiRuntime::drawLogDock() {
         return;
     }
 
-    drawLogKeywordFilterInput("关键字##host_log_keyword", logState.filter, 190.0F);
-    ImGui::SameLine();
-    drawLogStatusFilterCombo("STATUS##host_log_status", logState.filter);
-    ImGui::SameLine();
-    ImGui::Checkbox("显示时间戳", &logState.showTimestamps);
-    ImGui::SameLine();
-    ImGui::Checkbox("暂停滚动", &logState.pauseScroll);
-    ImGui::SameLine();
-    if (ImGui::Button("清空")) {
-        application_.docks().clearLogRows();
+    if (beginToolbarGroup("host_log_toolbar", "宿主事件流")) {
+        drawLogKeywordFilterInput("关键字##host_log_keyword", logState.filter, 190.0F);
+        ImGui::SameLine();
+        drawLogStatusFilterCombo("STATUS##host_log_status", logState.filter);
+        ImGui::SameLine();
+        ImGui::Checkbox("显示时间戳", &logState.showTimestamps);
+        ImGui::SameLine();
+        ImGui::Checkbox("暂停滚动", &logState.pauseScroll);
+        ImGui::SameLine();
+        if (drawDangerIconButton(PROTOSCOPE_ICON_TRASH " 清空", "清空当前宿主日志")) {
+            application_.docks().clearLogRows();
+        }
+        ImGui::SameLine();
+        if (drawGhostIconButton("导出", "导出当前筛选后的宿主日志")) {
+            openHostLogExportDialog();
+        }
     }
-    ImGui::SameLine();
-    if (ImGui::Button("导出##host_log_export")) {
-        openHostLogExportDialog();
-    }
+    endToolbarGroup();
 
     const auto& filteredRows =
         filteredLogRowsCached(hostLogRowsCache_, logState.rows, logState.rowsVersion, logState.filter, false);
@@ -740,28 +739,30 @@ void GuiRuntime::drawScriptDock() {
         return;
     }
 
-    drawLogKeywordFilterInput("关键字##script_log_keyword", scriptState.filter, 190.0F);
-    ImGui::SameLine();
-    drawLogStatusFilterCombo("STATUS##script_log_status", scriptState.filter);
-    ImGui::SameLine();
-    ImGui::Checkbox("显示时间戳", &scriptState.showTimestamps);
-    ImGui::SameLine();
-    ImGui::Checkbox("暂停滚动", &scriptState.pauseScroll);
-    ImGui::SameLine();
-    if (ImGui::Button("清空")) {
-        application_.docks().clearScriptRows();
+    if (beginToolbarGroup("script_log_toolbar", "Lua 事件流")) {
+        drawLogKeywordFilterInput("关键字##script_log_keyword", scriptState.filter, 190.0F);
+        ImGui::SameLine();
+        drawLogStatusFilterCombo("STATUS##script_log_status", scriptState.filter);
+        ImGui::SameLine();
+        ImGui::Checkbox("显示时间戳", &scriptState.showTimestamps);
+        ImGui::SameLine();
+        ImGui::Checkbox("暂停滚动", &scriptState.pauseScroll);
+        ImGui::SameLine();
+        if (drawDangerIconButton(PROTOSCOPE_ICON_TRASH " 清空", "清空当前 Lua 日志与事件")) {
+            application_.docks().clearScriptRows();
+        }
+        ImGui::SameLine();
+        if (drawGhostIconButton("导出", "导出当前筛选后的 Lua 日志")) {
+            openScriptLogExportDialog();
+        }
     }
-    ImGui::SameLine();
-    if (ImGui::Button("导出##script_log_export")) {
-        openScriptLogExportDialog();
-    }
+    endToolbarGroup();
 
     const auto& filteredRows =
         filteredLogRowsCached(scriptLogRowsCache_, scriptState.rows, scriptState.rowsVersion, scriptState.filter, false);
     drawRowList("script_rows", filteredRows.rows, scriptState.showTimestamps, false, scriptState.pauseScroll, "暂无 Lua 日志或事件", filteredRows.endpointWidth);
     ImGui::End();
 }
-
 bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
     const auto& descriptor = control.descriptor;
     const std::string imguiLabel = luaControlImGuiLabel(descriptor);
