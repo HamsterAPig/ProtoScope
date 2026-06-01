@@ -251,6 +251,35 @@ void GuiRuntime::openRawCaptureExportDialog() {
 #endif
 }
 
+void GuiRuntime::openRawCaptureRecordingDialog() {
+    const auto& lua = application_.docks().luaState();
+    const std::string baseName = lua.protocolName.empty() ? std::string("raw-recording") : lua.protocolName + "-raw-recording";
+    const auto defaultPath = rawCaptureRecordingPath_.empty()
+                               ? executableDir_ / "captures" / (baseName + ".psraw")
+                               : std::filesystem::path(rawCaptureRecordingPath_);
+#if defined(_WIN32)
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"开始完整原始数据录制",
+                                       L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       true,
+                                       L"psraw",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        startRawCaptureRecordingToPath(*path);
+    }
+#else
+    rawCaptureRecordingDialogOpen_ = true;
+    rawCaptureRecordingDialogOpened_ = false;
+    rawCaptureRecordingError_.clear();
+    rawCaptureRecordingPath_ = defaultPath.generic_string();
+#endif
+}
+
 void GuiRuntime::openTransferLogExportDialog() {
     openLogExportDialog(LogExportTarget::Transfer);
 }
@@ -324,8 +353,8 @@ void GuiRuntime::openElfStaticAddressDialog() {
         elfStaticAddressPath_.empty() ? executableDir_ : std::filesystem::path(elfStaticAddressPath_);
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
-                                       L"打开 ELF/JSON",
-                                       L"ELF/JSON Files (*.elf;*.out;*.axf;*.json)\0*.elf;*.out;*.axf;*.json\0All Files (*.*)\0*.*\0",
+                                       L"打开 ELF/ElfStaticView 数据文件",
+                                       L"ELF/ElfStaticView Files (*.elf;*.out;*.axf;*.json;*.esv)\0*.elf;*.out;*.axf;*.json;*.esv\0All Files (*.*)\0*.*\0",
                                        defaultPath,
                                        false,
                                        nullptr,
@@ -386,10 +415,27 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path) {
         application_.setStatusMessage("原始波形导出失败: " + error);
         return;
     }
-    application_.setStatusMessage("原始波形导出成功");
+    const auto& rawCapture = application_.docks().waveState().rawCapture;
+    application_.setStatusMessage(rawCapture.truncated
+                                      ? "原始波形导出成功（实时缓存已截断，仅包含最近原始字节）"
+                                      : "原始波形导出成功");
     rawCaptureExportDialogOpen_ = false;
     rawCaptureExportDialogOpened_ = false;
     rawCaptureExportError_.clear();
+}
+
+void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& path) {
+    // 核心流程：菜单只负责选择完整录制路径，录制状态和写入错误统一收口到 Application。
+    rawCaptureRecordingPath_ = path.generic_string();
+    std::string error;
+    if (!application_.startRawCaptureRecording(path, error)) {
+        rawCaptureRecordingError_ = error;
+        application_.setStatusMessage("完整原始数据录制启动失败: " + error);
+        return;
+    }
+    rawCaptureRecordingDialogOpen_ = false;
+    rawCaptureRecordingDialogOpened_ = false;
+    rawCaptureRecordingError_.clear();
 }
 
 std::vector<dock::ReceiveRow> GuiRuntime::logExportRows(LogExportTarget target) {
@@ -525,7 +571,7 @@ void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
     std::string error;
     if (!application_.loadElfStaticAddressFile(path, error)) {
         elfStaticAddressError_ = error;
-        application_.setStatusMessage("ELF/JSON 加载失败: " + error);
+        application_.setStatusMessage("ELF/ElfStaticView 数据文件加载失败: " + error);
         return;
     }
     elfSymbolComboStates_.clear();
@@ -539,14 +585,14 @@ void GuiRuntime::drawElfStaticAddressDialog() {
         return;
     }
 
-    const char* popupId = "打开 ELF/JSON##elf_static_view";
+    const char* popupId = "打开 ELF/ElfStaticView 数据文件##elf_static_view";
     if (!elfStaticAddressDialogOpened_) {
         ImGui::OpenPopup(popupId);
         elfStaticAddressDialogOpened_ = true;
     }
     const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
-        ImGui::TextUnformatted("请输入 ELF 或 ElfStaticView JSON 文件路径");
+        ImGui::TextUnformatted("请输入 ELF 或 ElfStaticView 数据文件路径");
         char buffer[1024]{};
         std::snprintf(buffer, sizeof(buffer), "%s", elfStaticAddressPath_.c_str());
         if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
@@ -641,6 +687,42 @@ void GuiRuntime::drawRawCaptureFileDialogs() {
                 rawCaptureExportDialogOpen_ = false;
                 rawCaptureExportDialogOpened_ = false;
                 rawCaptureExportError_.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    if (rawCaptureRecordingDialogOpen_) {
+        const char* popupId = "开始完整原始数据录制##psraw_record";
+        if (!rawCaptureRecordingDialogOpened_) {
+            ImGui::OpenPopup(popupId);
+            rawCaptureRecordingDialogOpened_ = true;
+        }
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+            ImGui::TextUnformatted("请输入完整录制 .psraw 文件路径");
+            char buffer[1024]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", rawCaptureRecordingPath_.c_str());
+            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+                rawCaptureRecordingPath_ = buffer;
+            }
+            if (!rawCaptureRecordingError_.empty()) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureRecordingError_.c_str());
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("开始录制", ImVec2(90.0F, 0.0F))) {
+                startRawCaptureRecordingToPath(rawCaptureRecordingPath_);
+                if (!rawCaptureRecordingDialogOpen_) {
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+                rawCaptureRecordingDialogOpen_ = false;
+                rawCaptureRecordingDialogOpened_ = false;
+                rawCaptureRecordingError_.clear();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();

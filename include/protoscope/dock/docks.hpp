@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -21,6 +22,13 @@ struct ReceiveRow {
     std::string endpoint{};
     std::vector<std::uint8_t> bytes{};
     std::string message{};
+};
+
+struct DockHistoryLimits {
+    std::size_t transferRawRows{10000};
+    std::size_t transferFrameRows{120000};
+    std::size_t hostLogRows{5000};
+    std::size_t scriptLogRows{5000};
 };
 
 enum class TransferLogDisplayMode {
@@ -64,6 +72,7 @@ struct LogFilterState {
 };
 
 bool matchesLogFilter(const ReceiveRow& row, const LogFilterState& filter, bool includeBytePreview);
+std::vector<const ReceiveRow*> filteredLogRows(const std::deque<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview);
 std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview);
 
 struct CommDockState {
@@ -76,6 +85,9 @@ struct CommDockState {
     std::string lastError;
     std::uint64_t txCount{0};
     std::uint64_t rxCount{0};
+    std::size_t pendingRxBytes{0};
+    std::size_t pendingTransferFrameRows{0};
+    std::size_t pendingPlotAppends{0};
     bool reconnectRequired{false};
     std::vector<std::string> serialPortOptions;
 };
@@ -86,8 +98,8 @@ struct ReceiveDockState {
     bool showTimestamps{true};
     TransferLogDisplayMode displayMode{TransferLogDisplayMode::RawChunks};
     LogFilterState filter{};
-    std::vector<ReceiveRow> rows;
-    std::vector<ReceiveRow> frameRows;
+    std::deque<ReceiveRow> rows;
+    std::deque<ReceiveRow> frameRows;
     std::uint64_t rowsVersion{0};
     std::uint64_t frameRowsVersion{0};
 };
@@ -96,7 +108,7 @@ struct LogDockState {
     bool pauseScroll{false};
     bool showTimestamps{true};
     LogFilterState filter{};
-    std::vector<ReceiveRow> rows;
+    std::deque<ReceiveRow> rows;
     std::uint64_t rowsVersion{0};
 };
 
@@ -104,7 +116,7 @@ struct ScriptDockState {
     bool pauseScroll{false};
     bool showTimestamps{true};
     LogFilterState filter{};
-    std::vector<ReceiveRow> rows;
+    std::deque<ReceiveRow> rows;
     std::uint64_t rowsVersion{0};
 };
 
@@ -117,6 +129,28 @@ struct SendDockState {
 
 void trimSendHistory(SendDockState& sendState, std::size_t limit);
 void rememberSendHistory(SendDockState& sendState, std::string payload, std::size_t limit);
+
+class IDockHistoryLimiter {
+public:
+    virtual ~IDockHistoryLimiter() = default;
+
+    virtual bool trimRows(std::deque<ReceiveRow>& rows, std::size_t limit) const = 0;
+};
+
+class BoundedDockHistoryLimiter final : public IDockHistoryLimiter {
+public:
+    bool trimRows(std::deque<ReceiveRow>& rows, std::size_t limit) const override {
+        if (rows.size() <= limit) {
+            return false;
+        }
+
+        // 核心流程：只保留最新的历史记录，并从头部逐条丢弃，避免 vector 头删搬移全部历史。
+        while (rows.size() > limit) {
+            rows.pop_front();
+        }
+        return true;
+    }
+};
 
 struct LuaDockState {
     bool loaded{false};
@@ -155,6 +189,8 @@ struct ConfigDockState {
 
 class DockStore {
 public:
+    DockStore();
+
     void clearReceiveRows();
     void appendReceiveRow(ReceiveRow row);
     void appendLuaEvent(const scripting::ScriptEvent& event);
@@ -189,8 +225,9 @@ public:
     void appendScriptRow(ReceiveRow row);
     void clearLogRows();
     void clearScriptRows();
-    void appendTransferFrameRow(ReceiveRow row);
+    void appendTransferFrameRows(std::vector<ReceiveRow> rows);
     void clearTransferFrameRows();
+    void setHistoryLimits(DockHistoryLimits limits);
 
 private:
     CommDockState comm_{};
@@ -201,6 +238,8 @@ private:
     LuaDockState lua_{};
     plot::WaveDockState wave_{};
     ConfigDockState config_{};
+    DockHistoryLimits historyLimits_{};
+    std::unique_ptr<IDockHistoryLimiter> historyLimiter_;
 };
 
 } // namespace protoscope::dock

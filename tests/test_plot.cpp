@@ -2,6 +2,7 @@
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
+#include "protoscope/plot/wave_fft.hpp"
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_state.hpp"
 
@@ -29,6 +30,35 @@ protoscope::plot::WaveDisplayData makeDisplayData(std::vector<protoscope::plot::
         .actualValues = std::move(actualValues),
     });
     return displayData;
+}
+
+protoscope::plot::WaveDockState makeChannelResetWave() {
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.defaultChannelSpecs.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .ratio = 2.0,
+        .scale = 1.5,
+        .offset = -0.25,
+    });
+    wave.buffer.setChannelSpec(0, {
+        .label = "Renamed",
+        .unit = "V",
+        .ratio = 3.0,
+        .scale = 4.0,
+        .offset = 10.0,
+    });
+    wave.channelOverrides.resize(1);
+    wave.channelOverrides[0].labelOverridden = true;
+    wave.channelOverrides[0].ratioOverridden = true;
+    wave.channelOverrides[0].scaleOverridden = true;
+    wave.channelOverrides[0].offsetOverridden = true;
+    wave.channelOverrides[0].label = "Renamed";
+    wave.channelOverrides[0].ratio = 3.0;
+    wave.channelOverrides[0].scale = 4.0;
+    wave.channelOverrides[0].offset = 10.0;
+    return wave;
 }
 
 } // namespace
@@ -305,6 +335,62 @@ void test_wave_cursor_smart_snap_extreme() {
     const auto farPeak = protoscope::plot::findLocalExtremeNearTime(
         displayData, 0, 4.5, 0.2, protoscope::plot::WaveExtremeKind::Maximum);
     require(!farPeak.has_value(), "窗口外极值不应被吸附");
+}
+
+void test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms() {
+    struct Case {
+        const char* name;
+        double scale;
+        double offset;
+    };
+    const std::vector<Case> cases{
+        {"no_transform", 1.0, 0.0},
+        {"offset_only", 1.0, 2.0},
+        {"scale_only", 3.0, 0.0},
+        {"offset_and_scale", 2.0, -0.5},
+    };
+
+    for (const auto& item : cases) {
+        protoscope::plot::WaveDisplayData displayData;
+        const std::vector<double> actualValues{-1.0, 0.25, 1.0, 1.0, 0.25, -1.0};
+        auto& channel = displayData.channels.emplace_back();
+        channel.actualValues = actualValues;
+        for (std::size_t index = 0; index < actualValues.size(); ++index) {
+            const double displayValue = (actualValues[index] + item.offset) * item.scale;
+            channel.samples.push_back({
+                .time = static_cast<double>(index),
+                .value = displayValue,
+            });
+        }
+
+        const auto peak = protoscope::plot::findLocalExtremeNearTime(
+            displayData, 0, 2.9, 1.5, protoscope::plot::WaveExtremeKind::Maximum);
+        require(peak.has_value(), item.name);
+        require(peak->sampleIndex == 3, "平顶峰值应回退到搜索窗口内距离鼠标时间最近的视觉峰值样本");
+        require(std::abs(peak->value - 1.0) < 1e-9, "峰值吸附读数应保持真实测量值");
+        require(std::abs(peak->displayValue - ((1.0 + item.offset) * item.scale)) < 1e-9,
+            "峰值吸附锚点应使用 offset/scale 后的显示值");
+    }
+}
+
+void test_wave_cursor_extreme_snap_falls_back_to_window_trough() {
+    const auto displayData = makeDisplayData({
+        {.time = 0.0, .value = 2.0},
+        {.time = 1.0, .value = -3.0},
+        {.time = 2.0, .value = -3.0},
+        {.time = 3.0, .value = -1.0},
+    }, {2.0, -30.0, -30.0, -1.0});
+
+    const auto trough = protoscope::plot::findLocalExtremeNearTime(
+        displayData, 0, 1.2, 1.3, protoscope::plot::WaveExtremeKind::Minimum);
+    require(trough.has_value(), "平底谷值应能在窗口内回退吸附");
+    require(trough->sampleIndex == 1, "平底谷值应选距离鼠标时间最近的视觉谷值样本");
+    require(std::abs(trough->value + 30.0) < 1e-9, "谷值吸附读数应保持真实测量值");
+    require(std::abs(trough->displayValue + 3.0) < 1e-9, "谷值吸附锚点应使用显示值");
+
+    const auto farPeak = protoscope::plot::findLocalExtremeNearTime(
+        displayData, 0, 3.0, 0.2, protoscope::plot::WaveExtremeKind::Maximum);
+    require(!farPeak.has_value(), "搜索窗口外的平底谷值不应污染峰值吸附");
 }
 
 void test_wave_cursor_smart_snap_fallback_to_nearest() {
@@ -609,6 +695,187 @@ void test_wave_frequency_parse_and_axis_mapping() {
     require(mapped.timeUnit == "sample", "点数轴单位应为 sample");
 }
 
+void test_wave_fft_detects_50hz_and_150hz_components() {
+    constexpr double sampleFrequencyHz = 1024.0;
+    constexpr std::size_t pointCount = 1024;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time)
+            + 0.5 * std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
+        samples.push_back({.time = time, .value = value});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::N1024,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
+                                                          displayData,
+                                                          config,
+                                                          std::vector<std::uint8_t>{1},
+                                                          0.0,
+                                                          1.0,
+                                                          sampleFrequencyHz);
+    require(frame.valid, "FFT 帧应计算成功");
+    require(std::abs(frame.frequencyResolutionHz - 1.0) < 1e-12, "1024Hz/1024 点应得到 1Hz/bin");
+    require(frame.channels.size() == 1 && frame.channels[0].valid, "CH1 应有有效频谱");
+    const auto& bins = frame.channels[0].bins;
+    require(bins.size() == 513, "实数 FFT 应输出 N/2+1 个频点");
+    require(std::abs(bins[50].frequencyHz - 50.0) < 1e-12, "第 50 个频点应对应 50Hz");
+    require(std::abs(bins[150].frequencyHz - 150.0) < 1e-12, "第 150 个频点应对应 150Hz");
+    require(bins[50].magnitude > 0.9 && bins[50].magnitude < 1.1, "50Hz 主分量幅值应接近 1");
+    require(bins[150].magnitude > 0.4 && bins[150].magnitude < 0.6, "150Hz 分量幅值应接近 0.5");
+    require(std::isfinite(bins[50].phaseDegrees), "50Hz 频点应保留相角");
+    const auto readout = protoscope::plot::findNearestFftBin(frame, 0, 50.2);
+    require(readout.has_value(), "FFT 游标应能吸附到最近频点");
+    require(std::abs(readout->frequencyHz - 50.0) < 1e-12, "50.2Hz 应吸附到 50Hz bin");
+    require(frame.channels[0].fundamental.has_value(), "应自动检测到基波");
+    require(std::abs(frame.channels[0].fundamental->frequencyHz - 50.0) < 1e-12, "自动基波应为 50Hz");
+}
+
+void test_wave_fft_visible_samples_supports_non_power_of_two() {
+    constexpr double sampleFrequencyHz = 1000.0;
+    constexpr std::size_t pointCount = 1000;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time)
+            + 0.5 * std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
+        samples.push_back({.time = time, .value = value});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::VisibleSamples,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
+                                                          displayData,
+                                                          config,
+                                                          std::vector<std::uint8_t>{1},
+                                                          0.0,
+                                                          1.0,
+                                                          sampleFrequencyHz);
+    require(frame.valid, "非 2^n 可视样本 FFT 应计算成功");
+    require(frame.pointCount == 1000, "VisibleSamples 应吃完整 1000 点");
+    require(std::abs(frame.frequencyResolutionHz - 1.0) < 1e-12, "1000Hz/1000 点应得到 1Hz/bin");
+    require(frame.channels[0].bins.size() == 501, "1000 点实数 FFT 应输出 501 个频点");
+    require(frame.channels[0].bins[50].magnitude > 0.9, "50Hz 峰值应保留");
+    require(frame.channels[0].bins[150].magnitude > 0.4, "150Hz 峰值应保留");
+}
+
+void test_wave_fft_manual_point_count_supports_non_power_of_two() {
+    constexpr double sampleFrequencyHz = 1500.0;
+    constexpr std::size_t sampleCount = 1000;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(sampleCount);
+    for (std::size_t index = 0; index < sampleCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 60.0 * time);
+        samples.push_back({.time = time, .value = value});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::Manual,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+        .manualPointCount = 750,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
+                                                          displayData,
+                                                          config,
+                                                          std::vector<std::uint8_t>{1},
+                                                          0.0,
+                                                          1.0,
+                                                          sampleFrequencyHz);
+    require(frame.valid, "手动非 2^n 点数 FFT 应计算成功");
+    require(frame.pointCount == 750, "Manual 应强制使用手动点数");
+    require(frame.channels[0].usedSampleCount == 750, "Manual 应只使用最近的手动 N 点");
+    require(std::abs(frame.frequencyResolutionHz - 2.0) < 1e-12, "1500Hz/750 点应得到 2Hz/bin");
+    require(frame.channels[0].bins.size() == 376, "750 点实数 FFT 应输出 376 个频点");
+    require(frame.channels[0].bins[30].magnitude > 0.9, "60Hz 峰值应保留");
+}
+
+void test_wave_fft_fit_viewport_resets_frequency_and_value_ranges() {
+    constexpr double sampleFrequencyHz = 1000.0;
+    constexpr std::size_t pointCount = 1000;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time);
+        samples.push_back({.time = time, .value = value});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::VisibleSamples,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+    };
+    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
+                                                          displayData,
+                                                          config,
+                                                          std::vector<std::uint8_t>{1},
+                                                          0.0,
+                                                          1.0,
+                                                          sampleFrequencyHz);
+    const auto viewport = protoscope::plot::makeFftFitViewport(frame);
+    require(frame.valid, "FFT 帧应计算成功");
+    require(std::abs(viewport.frequencyMin) < 1e-12, "显示全部频谱应从 0Hz 开始");
+    require(std::abs(viewport.frequencyMax - frame.maxFrequencyHz) < 1e-12, "显示全部频谱应恢复到 Nyquist");
+    require(viewport.magnitudeMin < frame.minDisplayMagnitude, "显示全部频谱应给幅值下限留 padding");
+    require(viewport.magnitudeMax > frame.maxDisplayMagnitude, "显示全部频谱应给幅值上限留 padding");
+    require(std::abs(viewport.phaseMin + 180.0) < 1e-12, "显示全部频谱应恢复相位下限");
+    require(std::abs(viewport.phaseMax - 180.0) < 1e-12, "显示全部频谱应恢复相位上限");
+}
+
 void test_wave_viewport_zoom_modes_and_clamp() {
     const protoscope::plot::WaveViewport viewport{
         .minTime = 2.0,
@@ -798,6 +1065,59 @@ void test_wave_visible_channel_bounds_ignore_hidden_channels() {
 
     const auto empty = protoscope::plot::computeDisplayBoundsForChannels(data, {}, 0.001);
     require(!empty.valid, "没有可见通道时 bounds 应保持无效");
+}
+
+void test_wave_channel_reset_all_uses_protocol_default() {
+    auto wave = makeChannelResetWave();
+
+    require(protoscope::plot::resetChannelConfigToDefault(wave,
+                                                          0,
+                                                          protoscope::plot::WaveChannelDoubleClickAction::ResetAll),
+            "恢复全部默认应成功");
+    const auto spec = wave.buffer.channelSpec(0);
+    require(spec.has_value(), "恢复全部默认后通道配置仍应存在");
+    require(spec->label == "CH1", "恢复全部默认应恢复标签");
+    require(std::abs(spec->ratio - 2.0) < 1e-12, "恢复全部默认应恢复 ratio");
+    require(std::abs(spec->scale - 1.5) < 1e-12, "恢复全部默认应恢复 scale");
+    require(std::abs(spec->offset + 0.25) < 1e-12, "恢复全部默认应恢复 offset");
+    require(!wave.channelOverrides[0].labelOverridden, "恢复全部默认应清除 label override");
+    require(!wave.channelOverrides[0].ratioOverridden, "恢复全部默认应清除 ratio override");
+    require(!wave.channelOverrides[0].scaleOverridden, "恢复全部默认应清除 scale override");
+    require(!wave.channelOverrides[0].offsetOverridden, "恢复全部默认应清除 offset override");
+}
+
+void test_wave_channel_reset_scale_offset_preserves_label_and_ratio() {
+    auto wave = makeChannelResetWave();
+
+    require(protoscope::plot::resetChannelConfigToDefault(wave,
+                                                          0,
+                                                          protoscope::plot::WaveChannelDoubleClickAction::ResetScaleOffset),
+            "恢复 scale/offset 默认应成功");
+    const auto spec = wave.buffer.channelSpec(0);
+    require(spec.has_value(), "恢复 scale/offset 后通道配置仍应存在");
+    require(spec->label == "Renamed", "恢复 scale/offset 不应修改标签");
+    require(std::abs(spec->ratio - 3.0) < 1e-12, "恢复 scale/offset 不应修改 ratio");
+    require(std::abs(spec->scale - 1.5) < 1e-12, "恢复 scale/offset 应恢复 scale");
+    require(std::abs(spec->offset + 0.25) < 1e-12, "恢复 scale/offset 应恢复 offset");
+    require(wave.channelOverrides[0].labelOverridden, "恢复 scale/offset 应保留 label override");
+    require(wave.channelOverrides[0].ratioOverridden, "恢复 scale/offset 应保留 ratio override");
+    require(!wave.channelOverrides[0].scaleOverridden, "恢复 scale/offset 应清除 scale override");
+    require(!wave.channelOverrides[0].offsetOverridden, "恢复 scale/offset 应清除 offset override");
+}
+
+void test_wave_channel_reset_scale_preserves_offset() {
+    auto wave = makeChannelResetWave();
+
+    require(protoscope::plot::resetChannelConfigToDefault(wave,
+                                                          0,
+                                                          protoscope::plot::WaveChannelDoubleClickAction::ResetScale),
+            "恢复 scale 默认应成功");
+    const auto spec = wave.buffer.channelSpec(0);
+    require(spec.has_value(), "恢复 scale 后通道配置仍应存在");
+    require(std::abs(spec->scale - 1.5) < 1e-12, "恢复 scale 应恢复 scale");
+    require(std::abs(spec->offset - 10.0) < 1e-12, "恢复 scale 不应修改 offset");
+    require(!wave.channelOverrides[0].scaleOverridden, "恢复 scale 应清除 scale override");
+    require(wave.channelOverrides[0].offsetOverridden, "恢复 scale 应保留 offset override");
 }
 
 void test_wave_offset_reset_uses_protocol_default_only() {

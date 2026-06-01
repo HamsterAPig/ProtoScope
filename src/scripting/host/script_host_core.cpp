@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <string_view>
@@ -56,6 +57,15 @@ std::string ProtoBuffer::toHex(std::size_t maxBytes) const {
 
 constexpr const char* kDefaultDockId = "protocol";
 constexpr const char* kDefaultDockTitle = "协议动作";
+
+std::string readStringField(const sol::table& table, const char* key, std::string fallback = {}) {
+    // 避免 sol2 字符串字段读取在 GCC 15 内联后触发数组边界误报。
+    const sol::object value = table[key];
+    if (!value.valid() || value.get_type() == sol::type::lua_nil || !value.is<std::string>()) {
+        return fallback;
+    }
+    return value.as<std::string>();
+}
 
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
@@ -326,9 +336,9 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
 
         const auto table = object.as<sol::table>();
         ElfSymbolValue symbol;
-        symbol.label = table.get_or("label", std::string());
-        symbol.value = table.get_or("value", std::string());
-        symbol.type = table.get_or("type", std::string());
+        symbol.label = readStringField(table, "label");
+        symbol.value = readStringField(table, "value");
+        symbol.type = readStringField(table, "type");
         if (symbol.label.empty() || symbol.value.empty() || symbol.type.empty()) {
             error = "elf_symbol_combo 控件值必须包含 label、value、type";
             return std::nullopt;
@@ -420,7 +430,7 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     }
 
     const auto table = object.as<sol::table>();
-    const std::string typeText = table.get_or("type", std::string());
+    const std::string typeText = readStringField(table, "type");
     const auto controlType = parseControlType(typeText);
     if (!controlType.has_value()) {
         error = "未知控件类型: " + typeText;
@@ -429,8 +439,8 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
 
     ControlDescriptor descriptor;
     descriptor.type = *controlType;
-    descriptor.id = table.get_or("id", std::string());
-    descriptor.label = table.get_or("label", std::string());
+    descriptor.id = readStringField(table, "id");
+    descriptor.label = readStringField(table, "label");
     if (descriptor.id.empty() || descriptor.label.empty()) {
         error = "控件必须提供 id 和 label";
         return std::nullopt;
@@ -440,7 +450,7 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     case ControlType::Button:
         break;
     case ControlType::InputText:
-        descriptor.textDefault = table.get_or("default", std::string());
+        descriptor.textDefault = readStringField(table, "default");
         break;
     case ControlType::InputInt:
         descriptor.intDefault = table.get_or("default", 0);
@@ -479,8 +489,17 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
         break;
     }
     case ControlType::ElfSymbolCombo: {
-        descriptor.debounceMs = table.get_or("debounce_ms", 150);
-        const int limit = table.get_or("limit", 64);
+        const sol::object debounceObject = table["debounce_ms"];
+        if (debounceObject.valid() && debounceObject.get_type() != sol::type::lua_nil) {
+            descriptor.debounceMs = debounceObject.as<int>();
+            descriptor.debounceMsConfigured = true;
+        }
+        const sol::object limitObject = table["limit"];
+        int limit = static_cast<int>(descriptor.limit);
+        if (limitObject.valid() && limitObject.get_type() != sol::type::lua_nil) {
+            limit = limitObject.as<int>();
+            descriptor.limitConfigured = true;
+        }
         if (descriptor.debounceMs <= 0) {
             error = "elf_symbol_combo debounce_ms 必须大于 0";
             return std::nullopt;
@@ -789,7 +808,7 @@ std::optional<DockLayoutDescriptor> parseDockLayout(const DockDescriptor& dock,
     layout.table.borders = layoutTable.get_or("borders", false);
     layout.table.resizable = layoutTable.get_or("resizable", true);
     layout.table.rowBg = layoutTable.get_or("row_bg", false);
-    layout.table.sizing = layoutTable.get_or("sizing", std::string("stretch"));
+    layout.table.sizing = readStringField(layoutTable, "sizing", "stretch");
     if (layout.table.sizing != "stretch") {
         error = "dock '" + dock.id + "' 的 layout.sizing 仅支持 'stretch'";
         return std::nullopt;
@@ -921,10 +940,10 @@ std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view 
 
             const auto dockEntry = dockObject.as<sol::table>();
             DockDescriptor dock;
-            dock.id = dockEntry.get_or("id", std::string());
-            dock.title = dockEntry.get_or("title", std::string());
-            dock.anchor = dockEntry.get_or("anchor", std::string("left_bottom"));
-            dock.tabGroup = dockEntry.get_or("tab_group", std::string());
+            dock.id = readStringField(dockEntry, "id");
+            dock.title = readStringField(dockEntry, "title");
+            dock.anchor = readStringField(dockEntry, "anchor", "left_bottom");
+            dock.tabGroup = readStringField(dockEntry, "tab_group");
             if (dock.id.empty() || dock.title.empty()) {
                 error = "dock 必须提供 id 和 title";
                 return std::nullopt;
@@ -1466,6 +1485,63 @@ std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> ScriptHost::drainPl
     auto drained = std::move(plotAppends_);
     plotAppends_.clear();
     return drained;
+}
+
+std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> ScriptHost::drainPlotAppends(const std::size_t maxRequests) {
+    if (plotAppends_.empty() || maxRequests == 0U) {
+        return {};
+    }
+
+    auto makeKey = [](const std::pair<std::size_t, plot::WaveAppendRequest>& append) {
+        std::string key = std::to_string(append.first);
+        key.push_back('\x1F');
+        key.append(append.second.source);
+        return key;
+    };
+
+    auto count = (std::min)(maxRequests, plotAppends_.size());
+    for (;;) {
+        std::unordered_set<std::string> keys;
+        keys.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            keys.insert(makeKey(plotAppends_[index]));
+        }
+
+        auto extendedCount = count;
+        for (std::size_t index = count; index < plotAppends_.size(); ++index) {
+            if (keys.contains(makeKey(plotAppends_[index]))) {
+                extendedCount = index + 1U;
+            }
+        }
+        if (extendedCount == count) {
+            break;
+        }
+        count = extendedCount;
+    }
+
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drained;
+    drained.reserve(count);
+    auto end = plotAppends_.begin();
+    std::advance(end, static_cast<std::ptrdiff_t>(count));
+    std::move(plotAppends_.begin(), end, std::back_inserter(drained));
+    plotAppends_.erase(plotAppends_.begin(), end);
+    return drained;
+}
+
+std::size_t ScriptHost::pendingPlotAppendCount() const {
+    return plotAppends_.size();
+}
+
+RealtimeOutputDiscardCounts ScriptHost::clearPendingRealtimeOutputs() {
+    const RealtimeOutputDiscardCounts counts{
+        .events = events_.size(),
+        .logs = logs_.size(),
+        .plotAppends = plotAppends_.size(),
+    };
+    events_.clear();
+    logs_.clear();
+    plotAppends_.clear();
+    return counts;
 }
 
 std::vector<RequestDoneResult> ScriptHost::drainRequestDoneResults() {

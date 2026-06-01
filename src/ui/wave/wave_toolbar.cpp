@@ -3,12 +3,18 @@
 #include "protoscope/ui/icons.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
+#include "wave_component.hpp"
 #include "wave_detail.hpp"
+#include "wave_render_service.hpp"
 
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstring>
+#include <string>
+#include <type_traits>
 
 namespace protoscope::ui {
 
@@ -53,6 +59,174 @@ bool drawToolbarCheckbox(const char* label, bool* value, const char* help) {
     addItemHelp(help);
     return changed;
 }
+
+void ensureFftChannelState(plot::WaveDockState& wave) {
+    const auto channelCount = wave.buffer.channelCount();
+    if (wave.fftChannelEnabled.size() != channelCount) {
+        const auto oldSize = wave.fftChannelEnabled.size();
+        wave.fftChannelEnabled.resize(channelCount, 0);
+        if (oldSize == 0 && channelCount > 0) {
+            const auto preferredChannel = (std::min)(wave.view.measurementChannelIndex, channelCount - 1);
+            wave.fftChannelEnabled[preferredChannel] = 1;
+        }
+    }
+}
+
+void drawFftToolbarSectionContent(plot::WaveDockState& wave) {
+    auto& view = wave.view;
+    ensureFftChannelState(wave);
+
+    if (!ImGui::CollapsingHeader("FFT")) {
+        return;
+    }
+
+    bool enabled = view.fft.enabled;
+    if (drawToolbarCheckbox("启用 FFT 频谱模式", &enabled, "启用后主图横坐标切换为频率 Hz，输入数据来自当前可视区。")) {
+        view.fft.enabled = enabled;
+        if (enabled) {
+            view.fftSourceMinTime = view.viewMinTime;
+            view.fftSourceMaxTime = view.viewMaxTime;
+            view.fftSourceWindowValid = true;
+            view.fftViewportInitialized = false;
+        } else {
+            view.fftSourceWindowValid = false;
+            view.fftViewportInitialized = false;
+        }
+        wave.cachedFftKeyValid = false;
+    }
+
+    const char* pointItems[] = {"全部可视样本", "Auto 2^n", "手动", "256", "512", "1024", "2048", "4096", "8192", "16384"};
+    int pointIndex = static_cast<int>(view.fft.pointCount);
+    if (ImGui::Combo("点数", &pointIndex, pointItems, IM_ARRAYSIZE(pointItems))) {
+        view.fft.pointCount = static_cast<plot::WaveFftPointCount>(pointIndex);
+        wave.cachedFftKeyValid = false;
+    }
+    addItemHelp("点数 N 决定频率分辨率：Δf = Fs / N。全部可视样本和手动点数允许非 2^n，由 pocketfft 计算。");
+
+    int manualPointCount = static_cast<int>(view.fft.manualPointCount);
+    if (view.fft.pointCount == plot::WaveFftPointCount::Manual
+        && ImGui::InputInt("手动点数", &manualPointCount, 128, 1024)) {
+        // 核心流程：手动 N 强制使用用户输入的点数，样本不足时由 FFT 计算层给出不足提示，不做隐式补零。
+        view.fft.manualPointCount = static_cast<std::size_t>((std::clamp)(manualPointCount, 16, 16384));
+        wave.cachedFftKeyValid = false;
+    }
+
+    int autoMaxPointCount = static_cast<int>(view.fft.autoMaxPointCount);
+    if (view.fft.pointCount == plot::WaveFftPointCount::Auto
+        && ImGui::InputInt("Auto 上限", &autoMaxPointCount, 256, 1024)) {
+        view.fft.autoMaxPointCount = static_cast<std::size_t>((std::clamp)(autoMaxPointCount, 256, 16384));
+        wave.cachedFftKeyValid = false;
+    }
+
+    if (ImGui::Button("刷新输入窗口")) {
+        view.fftSourceMinTime = view.viewMinTime;
+        view.fftSourceMaxTime = view.viewMaxTime;
+        view.fftSourceWindowValid = true;
+        view.fftViewportInitialized = false;
+        wave.cachedFftKeyValid = false;
+    }
+    addItemHelp("重新使用当前时域主视图范围作为 FFT 输入；频域缩放不会改变这个输入窗口。");
+    ImGui::SameLine();
+    if (ImGui::Button("显示全部频谱")) {
+        view.fftFitAllRequested = true;
+    }
+    addItemHelp("重置频率、幅值和相位轴范围，不改变 FFT 输入窗口。");
+
+    const char* windowItems[] = {"Rectangular", "Hann", "Hamming", "Blackman-Harris"};
+    int windowIndex = static_cast<int>(view.fft.window);
+    if (ImGui::Combo("窗函数", &windowIndex, windowItems, IM_ARRAYSIZE(windowItems))) {
+        view.fft.window = static_cast<plot::WaveFftWindow>(windowIndex);
+        wave.cachedFftKeyValid = false;
+    }
+    addItemHelp("默认 Hann，适合常规频谱观察；Rectangular 适合整周期采样，Blackman-Harris 旁瓣更低。");
+
+    const char* magnitudeItems[] = {"幅值", "dB"};
+    int magnitudeIndex = static_cast<int>(view.fft.magnitudeMode);
+    if (ImGui::Combo("幅值模式", &magnitudeIndex, magnitudeItems, IM_ARRAYSIZE(magnitudeItems))) {
+        view.fft.magnitudeMode = static_cast<plot::WaveFftMagnitudeMode>(magnitudeIndex);
+        wave.cachedFftKeyValid = false;
+    }
+
+    const char* fundamentalItems[] = {"自动峰值", "手动输入"};
+    int fundamentalIndex = static_cast<int>(view.fft.fundamentalMode);
+    if (ImGui::Combo("基波", &fundamentalIndex, fundamentalItems, IM_ARRAYSIZE(fundamentalItems))) {
+        view.fft.fundamentalMode = static_cast<plot::WaveFftFundamentalMode>(fundamentalIndex);
+        wave.cachedFftKeyValid = false;
+    }
+    if (view.fft.fundamentalMode == plot::WaveFftFundamentalMode::Manual
+        && ImGui::InputDouble("手动基波 Hz", &view.fft.manualFundamentalHz, 1.0, 10.0, "%.6g")) {
+        view.fft.manualFundamentalHz = (std::max)(0.0, view.fft.manualFundamentalHz);
+        wave.cachedFftKeyValid = false;
+    }
+
+    if (ImGui::TreeNode("Legend")) {
+        drawToolbarCheckbox("显示频谱图例",
+                            &view.showFftLegend,
+                            "显示或隐藏 FFT 幅值/相位图例；不会持久化每条曲线的临时隐藏状态。");
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode("参与通道")) {
+        if (ImGui::Button("启用全部通道")) {
+            std::fill(wave.fftChannelEnabled.begin(), wave.fftChannelEnabled.end(), 1);
+            wave.cachedFftKeyValid = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("仅当前测量通道")) {
+            std::fill(wave.fftChannelEnabled.begin(), wave.fftChannelEnabled.end(), 0);
+            if (!wave.fftChannelEnabled.empty()) {
+                const auto channelIndex = (std::min)(view.measurementChannelIndex, wave.fftChannelEnabled.size() - 1);
+                wave.fftChannelEnabled[channelIndex] = 1;
+            }
+            wave.cachedFftKeyValid = false;
+        }
+        for (std::size_t channelIndex = 0; channelIndex < wave.fftChannelEnabled.size(); ++channelIndex) {
+            bool channelEnabled = wave.fftChannelEnabled[channelIndex] != 0;
+            std::string label = "CH" + std::to_string(channelIndex + 1);
+            if (const auto spec = wave.buffer.channelSpec(channelIndex); spec.has_value() && !spec->label.empty()) {
+                label = spec->label;
+            }
+            if (ImGui::Checkbox(label.c_str(), &channelEnabled)) {
+                wave.fftChannelEnabled[channelIndex] = channelEnabled ? 1 : 0;
+                wave.cachedFftKeyValid = false;
+            }
+        }
+        ImGui::TreePop();
+    }
+
+    const auto& fftFrame = wave.cachedFftFrame;
+    ImGui::SeparatorText("频率换算");
+    ImGui::Text("Fs: %s", formatMetricText(view.sampleFrequencyHz, "Hz").c_str());
+    if (view.fftSourceWindowValid) {
+        ImGui::Text("输入窗口: %s ~ %s",
+                    formatMetricText(view.fftSourceMinTime, "s").c_str(),
+                    formatMetricText(view.fftSourceMaxTime, "s").c_str());
+    }
+    if (fftFrame.valid) {
+        ImGui::Text("N: %zu", fftFrame.pointCount);
+        ImGui::Text("N类型: %s", (fftFrame.pointCount & (fftFrame.pointCount - 1U)) == 0U ? "2^n" : "任意点数");
+        ImGui::Text("Δf: %s/bin", formatMetricText(fftFrame.frequencyResolutionHz, "Hz").c_str());
+        ImGui::Text("显示范围: 0 ~ %s", formatMetricText(fftFrame.maxFrequencyHz, "Hz").c_str());
+        ImGui::Text("当前可视区样本: %zu", fftFrame.visibleSampleCount);
+        ImGui::Text("实际使用样本: %zu", fftFrame.usedSampleCount);
+        if (fftFrame.fundamentalHz.has_value()) {
+            ImGui::Text("基波: %s", formatMetricText(*fftFrame.fundamentalHz, "Hz").c_str());
+        }
+    } else {
+        ImGui::TextUnformatted(fftFrame.message.empty() ? "启用后显示 N、Δf 和频率范围。" : fftFrame.message.c_str());
+    }
+}
+
+class WaveFftToolbarSection final : public IWaveToolbarSection {
+public:
+    std::string_view id() const override { return "wave_fft_toolbar"; }
+
+    void draw(app::Application&, plot::WaveDockState& wave) override {
+        drawFftToolbarSectionContent(wave);
+    }
+};
+
+static_assert(std::is_base_of_v<IWaveToolbarSection, WaveFftToolbarSection>, "WaveFftToolbarSection 必须通过工具栏段基类接入");
 
 void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
     auto& view = wave.view;
@@ -181,12 +355,20 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
     }
 
     ImGui::Spacing();
+    WaveFftToolbarSection fftToolbarSection;
+    std::array<IWaveToolbarSection*, 1> toolbarSections{&fftToolbarSection};
+    for (auto* section : toolbarSections) {
+        section->draw(application, wave);
+    }
+
+    ImGui::Spacing();
     if (ImGui::CollapsingHeader("视图", ImGuiTreeNodeFlags_DefaultOpen)) {
         drawToolbarCheckbox("交互后暂停跟随",
                             &view.pauseAutoFollowOnInteraction,
                             "拖动、缩放或手动浏览后自动关闭跟随，避免视口被新数据拉回末尾。");
         drawToolbarCheckbox("稀疏时显示点", &view.showPointsWhenSparse, "样本较少时显示采样点，便于观察离散数据。");
         drawToolbarCheckbox("显示坐标轴标签", &view.showAxisLabels, "显示或隐藏主波形图的时间轴/数值轴标签。");
+        drawToolbarCheckbox("显示图例", &view.showChannelLegend, "显示或隐藏顶部通道图例栏；不会持久化每个通道的临时隐藏状态。");
         if (ImGui::BeginTable("##view_controls", 2, ImGuiTableFlags_SizingStretchSame)) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);

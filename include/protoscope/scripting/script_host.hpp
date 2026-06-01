@@ -62,6 +62,8 @@ struct ControlDescriptor {
     int comboDefaultIndex{0};
     int debounceMs{150};
     std::size_t limit{64};
+    bool debounceMsConfigured{false};
+    bool limitConfigured{false};
 };
 
 using ControlValue = std::variant<bool, int, float, std::string, ElfSymbolValue>;
@@ -316,6 +318,12 @@ struct DialogEvent {
     std::uint64_t timestampMs{0};
 };
 
+struct RealtimeOutputDiscardCounts {
+    std::size_t events{0};
+    std::size_t logs{0};
+    std::size_t plotAppends{0};
+};
+
 class ScriptHost {
 public:
     ScriptHost();
@@ -343,6 +351,9 @@ public:
     std::vector<TxRequest> drainTxRequests();
     std::vector<PlotSetup> drainPlotSetups();
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends();
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends(std::size_t maxRequests);
+    [[nodiscard]] std::size_t pendingPlotAppendCount() const;
+    RealtimeOutputDiscardCounts clearPendingRealtimeOutputs();
     std::vector<RequestDoneResult> drainRequestDoneResults();
     std::vector<StatusUpdate> drainStatusUpdates();
     std::vector<DialogRequest> drainDialogRequests();

@@ -27,6 +27,13 @@ enum class WaveChannelCardWidthMode {
     Adaptive,
 };
 
+enum class WaveChannelDoubleClickAction {
+    ResetAll,
+    ResetScaleOffset,
+    ResetScale,
+    ResetOffset,
+};
+
 enum class WaveExtremeKind {
     Maximum,
     Minimum,

@@ -6,6 +6,7 @@
 #include "wave_component.hpp"
 #include "wave_context.hpp"
 #include "wave_detail.hpp"
+#include "wave_fft_component.hpp"
 #include "wave_render_service.hpp"
 
 #include <imgui.h>
@@ -178,6 +179,97 @@ void cancelZoomSelection(plot::WaveViewState& view) {
     view.zoomSelectionDragging = false;
 }
 
+bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue);
+
+enum class ZoomSelectionAxisMode {
+    XOnly,
+    YOnly,
+    XY,
+};
+
+ZoomSelectionAxisMode resolveZoomSelectionAxisMode(float pixelWidth, float pixelHeight) {
+    constexpr float kDirectionalBias = 2.0F;
+    if (pixelWidth >= pixelHeight * kDirectionalBias) {
+        return ZoomSelectionAxisMode::XOnly;
+    }
+    if (pixelHeight >= pixelWidth * kDirectionalBias) {
+        return ZoomSelectionAxisMode::YOnly;
+    }
+    return ZoomSelectionAxisMode::XY;
+}
+
+void drawZoomSelectionPreview(ImDrawList& drawList,
+                              ZoomSelectionAxisMode mode,
+                              const ImVec2& rectMin,
+                              const ImVec2& rectMax,
+                              const ImVec2& selectionStart,
+                              const ImVec2& selectionCurrent) {
+    const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.2F, 0.55F, 1.0F, 0.16F));
+    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.45F, 0.75F, 1.0F, 0.95F));
+    switch (mode) {
+    case ZoomSelectionAxisMode::XOnly: {
+        const float lineY = 0.5F * (selectionStart.y + selectionCurrent.y);
+        // 核心流程：水平拖动只展示一条水平线，明确这次框选只会缩放 X 轴范围。
+        drawList.AddLine(ImVec2(rectMin.x, lineY), ImVec2(rectMax.x, lineY), lineColor, 2.0F);
+        break;
+    }
+    case ZoomSelectionAxisMode::YOnly: {
+        const float lineX = 0.5F * (selectionStart.x + selectionCurrent.x);
+        // 核心流程：垂直拖动只展示一条竖直线，未选中的 X 轴视口不会被改写。
+        drawList.AddLine(ImVec2(lineX, rectMin.y), ImVec2(lineX, rectMax.y), lineColor, 2.0F);
+        break;
+    }
+    case ZoomSelectionAxisMode::XY:
+        drawList.AddRectFilled(rectMin, rectMax, fillColor);
+        drawList.AddRect(rectMin, rectMax, lineColor, 0.0F, 0, 2.0F);
+        break;
+    }
+}
+
+bool applyZoomSelectionViewport(plot::WaveViewState& view,
+                                ZoomSelectionAxisMode mode,
+                                const ImPlotPoint& plotStart,
+                                const ImPlotPoint& plotEnd) {
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    const double minTime = (std::min)(plotStart.x, plotEnd.x);
+    const double maxTime = (std::max)(plotStart.x, plotEnd.x);
+    const double minValue = (std::min)(plotStart.y, plotEnd.y);
+    const double maxValue = (std::max)(plotStart.y, plotEnd.y);
+
+    switch (mode) {
+    case ZoomSelectionAxisMode::XOnly:
+        if (!std::isfinite(minTime) || !std::isfinite(maxTime) || maxTime - minTime < minVisibleTimeSpan) {
+            return false;
+        }
+        // 核心流程：水平框选只写回时间轴视口，垂直轴保持当前范围不变，避免轻微竖向抖动影响缩放结果。
+        view.viewMinTime = minTime;
+        view.viewMaxTime = maxTime;
+        view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
+        view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+        view.autoFollowLatest = false;
+        view.forceNextMainPlotLimits = true;
+        return true;
+    case ZoomSelectionAxisMode::YOnly:
+        if (!std::isfinite(minValue) || !std::isfinite(maxValue) || maxValue <= minValue) {
+            return false;
+        }
+        // 核心流程：垂直框选只写回电压/幅值轴视口，时间轴保持当前范围不变。
+        view.viewMinValue = minValue;
+        view.viewMaxValue = maxValue;
+        if (view.lockVerticalRange) {
+            view.manualVerticalMin = minValue;
+            view.manualVerticalMax = maxValue;
+        }
+        view.autoFollowLatest = false;
+        view.forceNextMainPlotLimits = true;
+        return true;
+    case ZoomSelectionAxisMode::XY:
+        // 核心流程：斜向框选保留原有 XY 矩形缩放语义，两个轴一起回写到视口。
+        return applyFullViewport(view, minTime, maxTime, minValue, maxValue);
+    }
+    return false;
+}
+
 bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue) {
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     if (!std::isfinite(minTime) || !std::isfinite(maxTime) || maxTime - minTime < minVisibleTimeSpan) {
@@ -254,27 +346,32 @@ ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view) {
                          static_cast<float>((std::min)(view.zoomSelectionStartY, view.zoomSelectionCurrentY)));
     const ImVec2 rectMax(static_cast<float>((std::max)(view.zoomSelectionStartX, view.zoomSelectionCurrentX)),
                          static_cast<float>((std::max)(view.zoomSelectionStartY, view.zoomSelectionCurrentY)));
+    const float pixelWidth = rectMax.x - rectMin.x;
+    const float pixelHeight = rectMax.y - rectMin.y;
+    const ZoomSelectionAxisMode mode = resolveZoomSelectionAxisMode(pixelWidth, pixelHeight);
     auto* drawList = ImPlot::GetPlotDrawList();
-    drawList->AddRectFilled(rectMin, rectMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.2F, 0.55F, 1.0F, 0.16F)));
-    drawList->AddRect(rectMin, rectMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.45F, 0.75F, 1.0F, 0.95F)), 0.0F, 0, 2.0F);
+    drawZoomSelectionPreview(*drawList,
+                             mode,
+                             rectMin,
+                             rectMax,
+                             ImVec2(static_cast<float>(view.zoomSelectionStartX), static_cast<float>(view.zoomSelectionStartY)),
+                             ImVec2(static_cast<float>(view.zoomSelectionCurrentX), static_cast<float>(view.zoomSelectionCurrentY)));
 
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         return result;
     }
 
-    const float pixelWidth = rectMax.x - rectMin.x;
-    const float pixelHeight = rectMax.y - rectMin.y;
-    if (pixelWidth >= 4.0F && pixelHeight >= 4.0F) {
-        // 核心流程：框选矩形从屏幕坐标转换成 ImPlot 坐标，只写回视口范围，保持通道参数和游标值不变。
+    constexpr float kSelectionThreshold = 4.0F;
+    const bool validSelection =
+        (mode == ZoomSelectionAxisMode::XOnly && pixelWidth >= kSelectionThreshold)
+        || (mode == ZoomSelectionAxisMode::YOnly && pixelHeight >= kSelectionThreshold)
+        || (mode == ZoomSelectionAxisMode::XY && pixelWidth >= kSelectionThreshold && pixelHeight >= kSelectionThreshold);
+    if (validSelection) {
         const ImPlotPoint plotStart =
             ImPlot::PixelsToPlot(ImVec2(static_cast<float>(view.zoomSelectionStartX), static_cast<float>(view.zoomSelectionStartY)));
         const ImPlotPoint plotEnd =
             ImPlot::PixelsToPlot(ImVec2(static_cast<float>(view.zoomSelectionCurrentX), static_cast<float>(view.zoomSelectionCurrentY)));
-        const double minTime = (std::min)(plotStart.x, plotEnd.x);
-        const double maxTime = (std::max)(plotStart.x, plotEnd.x);
-        const double minValue = (std::min)(plotStart.y, plotEnd.y);
-        const double maxValue = (std::max)(plotStart.y, plotEnd.y);
-        result.viewportChanged = applyFullViewport(view, minTime, maxTime, minValue, maxValue);
+        result.viewportChanged = applyZoomSelectionViewport(view, mode, plotStart, plotEnd);
     }
     cancelZoomSelection(view);
     return result;
@@ -413,6 +510,9 @@ public:
     std::string_view id() const override { return "wave_legend"; }
 
     void draw(WaveContext& context) override {
+        if (!context.view.showChannelLegend) {
+            return;
+        }
         drawChannelLegendBar(context.wave, *context.renderFrame->fullSnapshot);
     }
 };
@@ -491,7 +591,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
         const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
-        const float legendHeight = measureChannelLegendHeight(wave.cachedFullSnapshot, view);
+        const float legendHeight = view.showChannelLegend ? measureChannelLegendHeight(wave.cachedFullSnapshot, view) : 0.0F;
         const float overviewRequestedHeight = wave.overviewCollapsed
             ? wave.overviewCollapsedHeight
             : wave.overviewPanelHeight;
@@ -530,12 +630,14 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         WaveOverviewComponent overviewComponent;
         WaveLegendComponent legendComponent;
         WavePlotComponent plotComponent;
+        WaveFftComponent fftComponent;
         WaveMeasurementOverlayComponent measurementOverlayComponent;
         WaveToolbarComponent toolbarComponent;
-        std::array<IWaveComponent*, 5> components{
+        std::array<IWaveComponent*, 6> components{
             &overviewComponent,
             &legendComponent,
             &plotComponent,
+            &fftComponent,
             &measurementOverlayComponent,
             &toolbarComponent,
         };
@@ -547,8 +649,12 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         ImGui::BeginChild("##wave_content", ImVec2(contentWidth, available.y), false, ImGuiWindowFlags_NoScrollbar);
         overviewComponent.draw(context);
         legendComponent.draw(context);
-        plotComponent.draw(context);
-        measurementOverlayComponent.draw(context);
+        if (view.fft.enabled) {
+            fftComponent.draw(context);
+        } else {
+            plotComponent.draw(context);
+            measurementOverlayComponent.draw(context);
+        }
         ImGui::EndChild();
 
         toolbarComponent.draw(context);

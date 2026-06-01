@@ -56,10 +56,12 @@ private:
     };
 
     struct FilteredLogRowsCache {
-        const std::vector<dock::ReceiveRow>* source{nullptr};
+        const void* source{nullptr};
         std::uint64_t version{0};
         dock::LogFilterState filter{};
         bool includeBytePreview{false};
+        std::size_t rowCount{0};
+        const dock::ReceiveRow* firstRow{nullptr};
         float endpointWidth{120.0F};
         std::vector<const dock::ReceiveRow*> rows;
     };
@@ -95,18 +97,18 @@ private:
     void drawTransferDock();
     void drawLogDock();
     void drawScriptDock();
-    void drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls);
-    void drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
+    bool drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls);
+    bool drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
                           const scripting::TableLayoutDescriptor& layout,
                           std::string_view stableId);
-    void drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
+    bool drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
                          const scripting::FormLayoutDescriptor& layout,
                          std::string_view stableId);
-    void drawLuaDockFormItems(const std::vector<scripting::FormLayoutItemDescriptor>& items,
+    bool drawLuaDockFormItems(const std::vector<scripting::FormLayoutItemDescriptor>& items,
                               const std::unordered_map<std::string, const scripting::ControlSnapshot*>& controlsById,
                               std::string_view stableId,
                               std::size_t& widgetIndex);
-    void drawDynamicControl(const scripting::ControlSnapshot& control);
+    bool drawDynamicControl(const scripting::ControlSnapshot& control);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
     void processPendingProtocolWorkspaceSwitch();
@@ -122,6 +124,7 @@ private:
     void syncLuaDockVisibilityDefaults();
     void openRawCaptureImportDialog();
     void openRawCaptureExportDialog();
+    void openRawCaptureRecordingDialog();
     void openTransferLogExportDialog();
     void openHostLogExportDialog();
     void openScriptLogExportDialog();
@@ -129,6 +132,7 @@ private:
     void openElfStaticAddressDialog();
     void importRawCaptureFromPath(const std::filesystem::path& path);
     void exportRawCaptureToPath(const std::filesystem::path& path);
+    void startRawCaptureRecordingToPath(const std::filesystem::path& path);
     void drawLogExportFileDialog();
     std::vector<dock::ReceiveRow> logExportRows(LogExportTarget target);
     bool exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path);
@@ -138,7 +142,7 @@ private:
                              bool showHex,
                              std::string_view title);
     const FilteredLogRowsCache& filteredLogRowsCached(FilteredLogRowsCache& cache,
-                                                      const std::vector<dock::ReceiveRow>& rows,
+                                                      const std::deque<dock::ReceiveRow>& rows,
                                                       std::uint64_t version,
                                                       const dock::LogFilterState& filter,
                                                       bool includeBytePreview);
@@ -157,6 +161,7 @@ private:
     bool pollConfigFileChanges();
     bool maybeAutoSave();
     void sleepUntilNextFrame(std::uint64_t frameStartMs) const;
+    void sleepUntil(std::uint64_t targetMs) const;
 
     static std::uint64_t nowMs();
     static std::string formatTimestamp(std::uint64_t timestampMs);
@@ -219,6 +224,10 @@ private:
     bool rawCaptureExportDialogOpened_{false};
     std::string rawCaptureExportPath_;
     std::string rawCaptureExportError_;
+    bool rawCaptureRecordingDialogOpen_{false};
+    bool rawCaptureRecordingDialogOpened_{false};
+    std::string rawCaptureRecordingPath_;
+    std::string rawCaptureRecordingError_;
     bool logExportDialogOpen_{false};
     bool logExportDialogOpened_{false};
     LogExportTarget logExportTarget_{LogExportTarget::Transfer};
@@ -233,6 +242,8 @@ private:
         std::string draft;
         std::string queriedDraft;
         std::uint64_t editedAtMs{0};
+        std::uint64_t loadedRevision{0};
+        std::size_t queriedLimit{0};
         std::vector<scripting::ElfSymbolValue> options;
     };
     std::unordered_map<std::string, ElfSymbolComboUiState> elfSymbolComboStates_;

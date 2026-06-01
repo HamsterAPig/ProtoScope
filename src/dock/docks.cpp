@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <ctime>
 #include <string_view>
+#include <utility>
 
 namespace protoscope::dock {
 
@@ -147,6 +148,9 @@ bool matchesKeywordFilter(const ReceiveRow& row, std::string_view keyword, bool 
 }
 } // namespace
 
+DockStore::DockStore()
+    : historyLimiter_(std::make_unique<BoundedDockHistoryLimiter>()) {}
+
 ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row) {
     const auto direction = uppercaseAscii(row.direction);
     if (direction == "RX") {
@@ -181,7 +185,8 @@ bool matchesLogFilter(const ReceiveRow& row, const LogFilterState& filter, bool 
            matchesKeywordFilter(row, filter.keyword, includeBytePreview);
 }
 
-std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview) {
+template <typename Rows>
+std::vector<const ReceiveRow*> filteredLogRowsImpl(const Rows& rows, const LogFilterState& filter, bool includeBytePreview) {
     std::vector<const ReceiveRow*> filtered;
     filtered.reserve(rows.size());
     for (const auto& row : rows) {
@@ -190,6 +195,14 @@ std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& ro
         }
     }
     return filtered;
+}
+
+std::vector<const ReceiveRow*> filteredLogRows(const std::deque<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview) {
+    return filteredLogRowsImpl(rows, filter, includeBytePreview);
+}
+
+std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview) {
+    return filteredLogRowsImpl(rows, filter, includeBytePreview);
 }
 
 std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex) {
@@ -271,16 +284,19 @@ void DockStore::clearReceiveRows() {
 
 void DockStore::appendReceiveRow(ReceiveRow row) {
     receive_.rows.push_back(std::move(row));
+    historyLimiter_->trimRows(receive_.rows, historyLimits_.transferRawRows);
     ++receive_.rowsVersion;
 }
 
 void DockStore::appendLogRow(ReceiveRow row) {
     log_.rows.push_back(std::move(row));
+    historyLimiter_->trimRows(log_.rows, historyLimits_.hostLogRows);
     ++log_.rowsVersion;
 }
 
 void DockStore::appendScriptRow(ReceiveRow row) {
     script_.rows.push_back(std::move(row));
+    historyLimiter_->trimRows(script_.rows, historyLimits_.scriptLogRows);
     ++script_.rowsVersion;
 }
 
@@ -294,14 +310,37 @@ void DockStore::clearScriptRows() {
     ++script_.rowsVersion;
 }
 
-void DockStore::appendTransferFrameRow(ReceiveRow row) {
-    receive_.frameRows.push_back(std::move(row));
+void DockStore::appendTransferFrameRows(std::vector<ReceiveRow> rows) {
+    if (rows.empty()) {
+        return;
+    }
+
+    for (auto& row : rows) {
+        receive_.frameRows.push_back(std::move(row));
+    }
+    historyLimiter_->trimRows(receive_.frameRows, historyLimits_.transferFrameRows);
     ++receive_.frameRowsVersion;
 }
 
 void DockStore::clearTransferFrameRows() {
     receive_.frameRows.clear();
     ++receive_.frameRowsVersion;
+}
+
+void DockStore::setHistoryLimits(DockHistoryLimits limits) {
+    historyLimits_ = limits;
+    if (historyLimiter_->trimRows(receive_.rows, historyLimits_.transferRawRows)) {
+        ++receive_.rowsVersion;
+    }
+    if (historyLimiter_->trimRows(receive_.frameRows, historyLimits_.transferFrameRows)) {
+        ++receive_.frameRowsVersion;
+    }
+    if (historyLimiter_->trimRows(log_.rows, historyLimits_.hostLogRows)) {
+        ++log_.rowsVersion;
+    }
+    if (historyLimiter_->trimRows(script_.rows, historyLimits_.scriptLogRows)) {
+        ++script_.rowsVersion;
+    }
 }
 
 void DockStore::appendLuaEvent(const scripting::ScriptEvent& event) {
@@ -323,6 +362,7 @@ void DockStore::appendRawReceive(const transport::ConnectionContext& ctx, const 
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
         .message = {},
     });
+    historyLimiter_->trimRows(receive_.rows, historyLimits_.transferRawRows);
     ++receive_.rowsVersion;
 }
 
@@ -334,6 +374,7 @@ void DockStore::appendRawSend(const transport::ConnectionContext& ctx, const std
         .bytes = std::vector<std::uint8_t>(text.begin(), text.end()),
         .message = {},
     });
+    historyLimiter_->trimRows(receive_.rows, historyLimits_.transferRawRows);
     ++receive_.rowsVersion;
 }
 

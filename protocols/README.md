@@ -87,8 +87,8 @@ end
 
 - `default`：控件默认值，类型要和控件匹配。
 - `options`：`combo` 必填，字符串数组，至少 1 个选项。
-- `debounce_ms`：`elf_symbol_combo` 的输入消抖毫秒数，默认 `150`。
-- `limit`：`elf_symbol_combo` 的候选上限，默认 `64`。
+- `debounce_ms`：`elf_symbol_combo` 的输入消抖毫秒数，未设置时使用 `gui.elf_symbol_combo.debounce_ms`，默认 `300`。
+- `limit`：`elf_symbol_combo` 的候选上限，未设置时使用 `gui.elf_symbol_combo.limit`，默认 `10`。
 
 默认值规则：
 
@@ -196,7 +196,7 @@ layout = {
 - 用 `table` 做密集的发送工具栏或调试面板。
 - 把同一功能区的多个 dock 放到同一个 `tab_group`，让它们共享一个停靠区域。
 - 运行控制、参数配置和状态展示可以拆成多个 dock，再用同一个 `tab_group` 合并为选项卡。
-- 需要从 ELF 里搜静态符号时，用 `elf_symbol_combo`；输入较频繁时保留默认 `debounce_ms = 150`，大工程里按需调小 `limit`。
+- 需要从 ELF 里搜静态符号时，用 `elf_symbol_combo`；默认按全局配置消抖与限制候选数，大工程里可在 Lua 控件上按需覆盖。
 
 ## 发送模型
 

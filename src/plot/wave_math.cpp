@@ -34,6 +34,22 @@ double resolveActualValue(const WaveDisplayChannel& channel, std::size_t sampleI
     return fallbackValue;
 }
 
+CursorReadout makeCursorReadout(const WaveDisplayChannel& channel, std::size_t channelIndex, std::size_t sampleIndex) {
+    const auto& sample = channel.samples[sampleIndex];
+    return CursorReadout{
+        .valid = true,
+        .channelIndex = channelIndex,
+        .sampleIndex = sampleIndex,
+        .time = sample.time,
+        .value = resolveActualValue(channel, sampleIndex, sample.value),
+        .displayValue = sample.value,
+    };
+}
+
+bool extremeValueBetter(WaveExtremeKind kind, double candidateValue, double bestValue) {
+    return kind == WaveExtremeKind::Maximum ? candidateValue > bestValue : candidateValue < bestValue;
+}
+
 void clampTimeRange(double& minTime, double& maxTime, const WaveDataBounds& bounds) {
     if (!bounds.valid) {
         return;
@@ -588,45 +604,58 @@ std::optional<CursorReadout> findLocalExtremeNearTime(const WaveDisplayData& dis
     }
     const auto& channel = displayData.channels[channelIndex];
     const auto& samples = channel.samples;
-    if (samples.size() < 3 || !std::isfinite(centerTime) || !std::isfinite(maxTimeDistance) || maxTimeDistance <= 0.0) {
+    if (samples.empty() || !std::isfinite(centerTime) || !std::isfinite(maxTimeDistance) || maxTimeDistance <= 0.0) {
         return std::nullopt;
     }
 
-    std::optional<CursorReadout> best;
-    double bestDistance = std::numeric_limits<double>::infinity();
-    for (std::size_t index = 1; index + 1 < samples.size(); ++index) {
-        const auto& previous = samples[index - 1];
+    std::optional<CursorReadout> bestLocalExtreme;
+    std::optional<CursorReadout> bestWindowExtreme;
+    double bestLocalDistance = std::numeric_limits<double>::infinity();
+    double bestWindowDistance = std::numeric_limits<double>::infinity();
+    double windowMinValue = std::numeric_limits<double>::infinity();
+    double windowMaxValue = -std::numeric_limits<double>::infinity();
+    auto acceptCandidate = [&](std::optional<CursorReadout>& best, double& bestDistance, std::size_t index) {
         const auto& current = samples[index];
-        const auto& next = samples[index + 1];
-        if (!std::isfinite(previous.value) || !std::isfinite(current.time) || !std::isfinite(current.value)
-            || !std::isfinite(next.value)) {
+        const double distance = std::abs(current.time - centerTime);
+        if (!best.has_value() || extremeValueBetter(kind, current.value, best->displayValue)
+            || (std::abs(current.value - best->displayValue) <= kEpsilon && distance < bestDistance)) {
+            bestDistance = distance;
+            best = makeCursorReadout(channel, channelIndex, index);
+        }
+    };
+
+    for (std::size_t index = 0; index < samples.size(); ++index) {
+        const auto& current = samples[index];
+        if (!std::isfinite(current.time) || !std::isfinite(current.value)) {
             continue;
         }
         const double distance = std::abs(current.time - centerTime);
         if (distance > maxTimeDistance) {
             continue;
         }
-        // 极值吸附只接受局部峰/谷，防止普通斜坡点在顶部/底部区域误触发。
-        const bool isMaximum = current.value > previous.value && current.value > next.value;
-        const bool isMinimum = current.value < previous.value && current.value < next.value;
-        if ((kind == WaveExtremeKind::Maximum && !isMaximum) || (kind == WaveExtremeKind::Minimum && !isMinimum)) {
+        windowMinValue = (std::min)(windowMinValue, current.value);
+        windowMaxValue = (std::max)(windowMaxValue, current.value);
+        // 核心流程：先记录窗口内显示值最强的样本，正弦峰值被采样成平顶或平台时仍能稳定吸附到视觉峰/谷。
+        acceptCandidate(bestWindowExtreme, bestWindowDistance, index);
+        if (index == 0 || index + 1 >= samples.size()) {
             continue;
         }
-        const bool betterValue = !best.has_value()
-            || (kind == WaveExtremeKind::Maximum ? current.value > best->displayValue : current.value < best->displayValue);
-        if (betterValue || (best.has_value() && std::abs(current.value - best->displayValue) <= kEpsilon && distance < bestDistance)) {
-            bestDistance = distance;
-            best = CursorReadout{
-                .valid = true,
-                .channelIndex = channelIndex,
-                .sampleIndex = index,
-                .time = current.time,
-                .value = resolveActualValue(channel, index, current.value),
-                .displayValue = current.value,
-            };
+        const auto& previous = samples[index - 1];
+        const auto& next = samples[index + 1];
+        if (!std::isfinite(previous.value) || !std::isfinite(next.value)) {
+            continue;
+        }
+        // 严格局部峰/谷仍优先，避免单调斜坡在搜索窗口里过早抢占真正的离散极值。
+        const bool isMaximum = current.value > previous.value && current.value > next.value;
+        const bool isMinimum = current.value < previous.value && current.value < next.value;
+        if ((kind == WaveExtremeKind::Maximum && isMaximum) || (kind == WaveExtremeKind::Minimum && isMinimum)) {
+            acceptCandidate(bestLocalExtreme, bestLocalDistance, index);
         }
     }
-    return best;
+    if (bestLocalExtreme.has_value()) {
+        return bestLocalExtreme;
+    }
+    return windowMaxValue - windowMinValue > kEpsilon ? bestWindowExtreme : std::nullopt;
 }
 
 double applyCursorDragSnap(double dragTime, const std::optional<CursorReadout>& smartSnap) {
@@ -694,18 +723,32 @@ WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double
     };
 }
 
-bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex) {
-    if (channelIndex >= wave.defaultChannelSpecs.size()) {
-        return false;
-    }
+bool resetChannelConfigToDefault(WaveDockState& wave,
+                                 std::size_t channelIndex,
+                                 const ChannelSpec& defaultSpec,
+                                 WaveChannelDoubleClickAction action) {
     const auto currentSpec = wave.buffer.channelSpec(channelIndex);
     if (!currentSpec.has_value()) {
         return false;
     }
 
-    const auto& defaultSpec = wave.defaultChannelSpecs[channelIndex];
     auto updated = *currentSpec;
-    updated.offset = defaultSpec.offset;
+    // 核心流程：按配置只回退指定字段，避免双击误触清掉用户想保留的通道覆盖。
+    switch (action) {
+    case WaveChannelDoubleClickAction::ResetAll:
+        updated = defaultSpec;
+        break;
+    case WaveChannelDoubleClickAction::ResetScaleOffset:
+        updated.scale = defaultSpec.scale;
+        updated.offset = defaultSpec.offset;
+        break;
+    case WaveChannelDoubleClickAction::ResetScale:
+        updated.scale = defaultSpec.scale;
+        break;
+    case WaveChannelDoubleClickAction::ResetOffset:
+        updated.offset = defaultSpec.offset;
+        break;
+    }
 
     if (channelIndex >= wave.channelOverrides.size()) {
         wave.channelOverrides.resize(channelIndex + 1);
@@ -714,13 +757,24 @@ bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex) 
     overrideState.labelOverridden = updated.label != defaultSpec.label;
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > kEpsilon;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > kEpsilon;
-    overrideState.offsetOverridden = false;
+    overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > kEpsilon;
     overrideState.label = updated.label;
     overrideState.ratio = updated.ratio;
     overrideState.scale = updated.scale;
-    overrideState.offset = defaultSpec.offset;
+    overrideState.offset = updated.offset;
     wave.buffer.setChannelSpec(channelIndex, std::move(updated));
     return true;
+}
+
+bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, WaveChannelDoubleClickAction action) {
+    if (channelIndex >= wave.defaultChannelSpecs.size()) {
+        return false;
+    }
+    return resetChannelConfigToDefault(wave, channelIndex, wave.defaultChannelSpecs[channelIndex], action);
+}
+
+bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex) {
+    return resetChannelConfigToDefault(wave, channelIndex, WaveChannelDoubleClickAction::ResetOffset);
 }
 
 } // namespace protoscope::plot

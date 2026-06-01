@@ -41,6 +41,24 @@ void GuiRuntime::drawStatusBar() {
             ImGui::Separator();
             ImGui::SameLine();
         }
+        if (application_.isRawCaptureRecording()) {
+            const auto fileName = application_.rawCaptureRecordingPath().filename().generic_string();
+            ImGui::Text("完整录制: %s %llu bytes",
+                        fileName.empty() ? "(未命名)" : fileName.c_str(),
+                        static_cast<unsigned long long>(application_.rawCaptureRecordingBytes()));
+            ImGui::SameLine();
+            ImGui::Separator();
+            ImGui::SameLine();
+        }
+        if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U) {
+            ImGui::Text("待处理 RX=%zu bytes 帧=%zu 波形=%zu",
+                        comm.pendingRxBytes,
+                        comm.pendingTransferFrameRows,
+                        comm.pendingPlotAppends);
+            ImGui::SameLine();
+            ImGui::Separator();
+            ImGui::SameLine();
+        }
         if (!config.statusMessage.empty()) {
             ImGui::TextUnformatted(config.statusMessage.c_str());
         }
@@ -226,6 +244,13 @@ void GuiRuntime::drawCommDock() {
         }
     }
 
+    if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U) {
+        ImGui::Text("实时待处理: RX %zu bytes / 逐帧 %zu / 波形 %zu",
+                    comm.pendingRxBytes,
+                    comm.pendingTransferFrameRows,
+                    comm.pendingPlotAppends);
+    }
+
     ImGui::End();
 }
 
@@ -309,8 +334,8 @@ void GuiRuntime::drawProtocolDock() {
     ImGui::Separator();
     if (lua.docks.empty()) {
         // 核心流程：Lua 按钮可能在点击回调里同步刷新脚本控件快照。
-        // 这里先复制当前帧的控件列表，避免遍历 `lua.controlStates` 时引用失效导致闪退。
-        const auto controls = lua.controlStates;
+        // 这里直接按引用遍历当前帧控件，配合 bool 冒泡在触发更新后立刻停止本帧遍历。
+        const auto& controls = lua.controlStates;
         drawLuaDockFlow(controls);
         ImGui::End();
         return;
@@ -319,10 +344,13 @@ void GuiRuntime::drawProtocolDock() {
 
 }
 
-void GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls) {
+bool GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls) {
     for (const auto& control : controls) {
-        drawDynamicControl(control);
+        if (drawDynamicControl(control)) {
+            return true;
+        }
     }
+    return false;
 }
 
 
@@ -726,18 +754,20 @@ void GuiRuntime::drawScriptDock() {
     ImGui::End();
 }
 
-void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
+bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
     const auto& descriptor = control.descriptor;
     switch (descriptor.type) {
     case scripting::ControlType::Button:
         if (ImGui::Button(descriptor.label.c_str())) {
             application_.updateControlValue(descriptor.id, true);
+            return true;
         }
         break;
     case scripting::ControlType::Checkbox: {
         bool checked = std::get<bool>(control.value);
         if (ImGui::Checkbox(descriptor.label.c_str(), &checked)) {
             application_.updateControlValue(descriptor.id, checked);
+            return true;
         }
         break;
     }
@@ -746,6 +776,7 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
         if (ImGui::InputText(descriptor.label.c_str(), buffer, sizeof(buffer))) {
             application_.updateControlValue(descriptor.id, std::string(buffer));
+            return true;
         }
         break;
     }
@@ -757,6 +788,7 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         }
         if (!items.empty() && ImGui::Combo(descriptor.label.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
             application_.updateControlValue(descriptor.id, index);
+            return true;
         }
         break;
     }
@@ -767,14 +799,24 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
             state.draft = current.label;
         }
 
+        const auto comboConfig = application_.captureConfig().gui.elfSymbolCombo;
+        const std::size_t effectiveLimit = descriptor.limitConfigured ? descriptor.limit : comboConfig.limit;
+        const int effectiveDebounceMs = descriptor.debounceMsConfigured ? descriptor.debounceMs : comboConfig.debounceMs;
+        const auto loadedRevision = application_.elfStaticAddressRevision();
         const auto currentMs = nowMs();
         if (state.editedAtMs == 0) {
             state.editedAtMs = currentMs;
         }
-        if (state.queriedDraft != state.draft
-            && currentMs >= state.editedAtMs + static_cast<std::uint64_t>(descriptor.debounceMs)) {
-            state.options = application_.queryElfStaticAddresses(state.draft, descriptor.limit);
+        const bool elfReloaded = state.loadedRevision != loadedRevision;
+        const bool queryLimitChanged = state.queriedLimit != effectiveLimit;
+        const bool debounceElapsed =
+            currentMs >= state.editedAtMs + static_cast<std::uint64_t>(effectiveDebounceMs);
+        if (elfReloaded || queryLimitChanged || (state.queriedDraft != state.draft && debounceElapsed)) {
+            // 核心流程：ELF 成功加载后用空查询预热候选；输入变化后按配置消抖实时刷新候选列表。
+            state.options = application_.queryElfStaticAddresses(state.draft, effectiveLimit);
             state.queriedDraft = state.draft;
+            state.queriedLimit = effectiveLimit;
+            state.loadedRevision = loadedRevision;
         }
 
         std::vector<std::string> labels;
@@ -783,7 +825,10 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
             labels.push_back(option.label);
         }
 
-        const auto edit = drawEditableCombo(descriptor.label.c_str(), state.draft, labels);
+        const auto edit = drawEditableCombo(descriptor.label.c_str(),
+                                            state.draft,
+                                            labels,
+                                            EditableComboOptions{.keepPopupOpenWhileEditing = true});
         if (edit.edited) {
             state.draft = edit.value;
             state.editedAtMs = currentMs;
@@ -794,6 +839,7 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
             });
             if (selected != state.options.end()) {
                 application_.updateControlValue(descriptor.id, *selected);
+                return true;
             }
         }
         break;
@@ -802,6 +848,7 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         int value = std::get<int>(control.value);
         if (ImGui::InputInt(descriptor.label.c_str(), &value)) {
             application_.updateControlValue(descriptor.id, value);
+            return true;
         }
         break;
     }
@@ -809,10 +856,12 @@ void GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
         float value = std::get<float>(control.value);
         if (ImGui::InputFloat(descriptor.label.c_str(), &value)) {
             application_.updateControlValue(descriptor.id, value);
+            return true;
         }
         break;
     }
     }
+    return false;
 }
 
 } // namespace protoscope::ui

@@ -14,7 +14,7 @@ function ui()
         { type = "combo", id = "mode", label = "模式", options = { "轮询", "单次" }, default = 1 },
         { type = "input_int", id = "timeout_ms", label = "超时(ms)", default = 1000 },
         { type = "input_float", id = "scale", label = "缩放", default = 1.0 },
-        { type = "elf_symbol_combo", id = "target_symbol", label = "ELF 变量", debounce_ms = 150, limit = 64 },
+        { type = "elf_symbol_combo", id = "target_symbol", label = "ELF 变量" },
       },
       layout = {
         kind = "form",

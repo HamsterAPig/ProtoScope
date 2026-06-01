@@ -2,19 +2,21 @@
 
 #include <elf_static_view/project.hpp>
 
-#include <algorithm>
-#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
+#include <utility>
 
 namespace protoscope::plugin {
 
 namespace {
 
-std::string readTextFile(const std::filesystem::path& path) {
+constexpr std::string_view kElfStaticViewPrivateMagic = "ESVEXP01";
+
+std::string readFileBytes(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
         throw std::runtime_error("打开文件失败: " + path.string());
@@ -25,12 +27,34 @@ std::string readTextFile(const std::filesystem::path& path) {
     return buffer.str();
 }
 
-std::string lowerExtension(const std::filesystem::path& path) {
-    std::string extension = path.extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return extension;
+std::string readFilePrefix(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error("打开文件失败: " + path.string());
+    }
+
+    std::string prefix(64, '\0');
+    input.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
+    prefix.resize(static_cast<std::size_t>(input.gcount()));
+    return prefix;
+}
+
+bool isWhitespace(char value) {
+    return value == ' ' || value == '\t' || value == '\r' || value == '\n'
+        || value == '\f' || value == '\v';
+}
+
+bool looksLikeElfStaticViewData(std::string_view prefix) {
+    if (prefix.starts_with(kElfStaticViewPrivateMagic)) {
+        return true;
+    }
+    for (char value : prefix) {
+        if (isWhitespace(value)) {
+            continue;
+        }
+        return value == '{' || value == '[';
+    }
+    return false;
 }
 
 std::string formatAddress(std::uint64_t value) {
@@ -48,15 +72,18 @@ std::string normalizeNameQuery(std::string queryText) {
     return queryText;
 }
 
-std::optional<elf_static_view::ProjectModel> parseJsonModel(const std::string& text, std::string& error) {
+std::optional<elf_static_view::ProjectModel> parseDataModel(const std::string& bytes,
+                                                            const std::filesystem::path& path,
+                                                            std::string& error) {
     try {
-        return elf_static_view::parse_snapshot_json(text).model;
-    } catch (const std::exception& snapshotError) {
+        auto importedData = elf_static_view::import_project_data_bytes(bytes, path.string());
+        return std::move(importedData.snapshot.model);
+    } catch (const std::exception& importError) {
         try {
-            return elf_static_view::parse_dump_json(text);
+            return elf_static_view::parse_dump_json(bytes);
         } catch (const std::exception& dumpError) {
-            error = std::string("解析 snapshot JSON 失败: ") + snapshotError.what()
-                  + "；解析 dump JSON 失败: " + dumpError.what();
+            error = std::string("导入 ElfStaticView 数据失败: ") + importError.what()
+                  + "；解析旧版 dump JSON 失败: " + dumpError.what();
             return std::nullopt;
         }
     }
@@ -85,21 +112,29 @@ bool ElfStaticViewBridge::loadFile(const std::filesystem::path& path, std::strin
             return false;
         }
 
+        const std::string prefix = readFilePrefix(path);
         std::optional<elf_static_view::ProjectModel> loadedModel;
-        if (lowerExtension(path) == ".json") {
-            const std::string text = readTextFile(path);
-            loadedModel = parseJsonModel(text, error);
-            if (!loadedModel.has_value()) {
-                return false;
-            }
+        std::string dataError;
+        if (looksLikeElfStaticViewData(prefix)) {
+            const std::string bytes = readFileBytes(path);
+            loadedModel = parseDataModel(bytes, path, dataError);
         } else {
+            dataError = "文件内容不像 ElfStaticView 导出数据";
+        }
+
+        if (!loadedModel.has_value()) {
             elf_static_view::ProjectLoader loader;
             elf_static_view::ScanOptions options;
             options.include_runtime_only = false;
             options.load_policy.exclude_runtime_only_variables = true;
             options.load_policy.static_storage_only = true;
             options.load_policy.lazy_expand_children = true;
-            loadedModel = loader.scan(path.string(), options);
+            try {
+                loadedModel = loader.scan(path.string(), options);
+            } catch (const std::exception& scanError) {
+                error = dataError + "；ELF 扫描失败: " + scanError.what();
+                return false;
+            }
         }
 
         // 核心流程：只有新模型完整加载成功后才替换旧 session，失败时保留旧查询上下文。

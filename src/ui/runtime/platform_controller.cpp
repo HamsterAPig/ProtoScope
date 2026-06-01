@@ -1,4 +1,5 @@
 #include "protoscope/ui/gui_runtime.hpp"
+#include "protoscope/ui/render_frame_scheduler.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -9,11 +10,13 @@
 namespace protoscope::ui {
 
 void GuiRuntime::sleepUntilNextFrame(std::uint64_t frameStartMs) const {
-    const auto fpsLimit = (std::max)(std::uint32_t{1}, application_.docks().configState().fpsLimit);
-    const auto minFrameMs = 1000ULL / fpsLimit;
-    const auto elapsed = nowMs() - frameStartMs;
-    if (elapsed < minFrameMs) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(minFrameMs - elapsed));
+    sleepUntil(frameStartMs + renderFrameIntervalMs(application_.docks().configState().fpsLimit));
+}
+
+void GuiRuntime::sleepUntil(std::uint64_t targetMs) const {
+    const auto currentMs = nowMs();
+    if (currentMs < targetMs) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(targetMs - currentMs));
     }
 }
 

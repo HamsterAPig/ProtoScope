@@ -51,6 +51,7 @@ struct GuiWaveConfig {
     plot::WaveControlMode controlMode{plot::WaveControlMode::Oscilloscope};
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
     plot::WaveChannelCardWidthMode channelCardWidthMode{plot::WaveChannelCardWidthMode::Fixed};
+    plot::WaveChannelDoubleClickAction channelDoubleClickAction{plot::WaveChannelDoubleClickAction::ResetScaleOffset};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     double downsampleStartMultiplier{2.0};
@@ -60,11 +61,41 @@ struct GuiWaveConfig {
     double channelCardAdaptiveRatio{0.22};
     double verticalAutoFitMultiplier{1.2};
     bool showAxisLabels{false};
+    bool showChannelLegend{true};
+    bool showFftLegend{true};
+};
+
+struct GuiLogHistoryConfig {
+    std::size_t transferRawLimit{10000};
+    std::size_t transferFrameLimit{120000};
+    std::size_t hostLimit{5000};
+    std::size_t scriptLimit{5000};
+};
+
+struct GuiRawCaptureConfig {
+    std::size_t liveLimitBytes{64U * 1024U * 1024U};
+};
+
+struct GuiRealtimeBacklogConfig {
+    std::string mode{"responsive"};
+    std::size_t rxChunkBytesPerPump{64U * 1024U};
+    std::size_t transferFrameRowsPerPump{2000};
+    std::size_t plotAppendsPerPump{4096};
+    bool discardBacklogOnDisconnect{true};
+};
+
+struct GuiElfSymbolComboConfig {
+    std::size_t limit{10};
+    int debounceMs{300};
 };
 
 struct GuiConfig {
     GuiWindowConfig window{};
     GuiWaveConfig wave{};
+    GuiLogHistoryConfig logHistory{};
+    GuiRawCaptureConfig rawCapture{};
+    GuiRealtimeBacklogConfig realtimeBacklog{};
+    GuiElfSymbolComboConfig elfSymbolCombo{};
     bool luaDockLayoutDebug{false};
     std::size_t sendHistoryLimit{20};
 };

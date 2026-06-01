@@ -134,6 +134,14 @@ EditableComboResult drawEditableCombo(const char* label,
                                       std::string& draft,
                                       const std::vector<std::string>& options,
                                       const std::function<bool(const std::string&)>& validator) {
+    return drawEditableCombo(label, draft, options, EditableComboOptions{}, validator);
+}
+
+EditableComboResult drawEditableCombo(const char* label,
+                                      std::string& draft,
+                                      const std::vector<std::string>& options,
+                                      const EditableComboOptions& comboOptions,
+                                      const std::function<bool(const std::string&)>& validator) {
     EditableComboResult result;
     result.value = draft;
 
@@ -162,6 +170,11 @@ EditableComboResult drawEditableCombo(const char* label,
             result.edited = true;
             result.value = draft;
         }
+        const bool inputActive = ImGui::IsItemActive();
+
+        const ImGuiID id = ImGui::GetCurrentWindow()->GetID(label);
+        const ImGuiID popupId = ImHashStr("##ComboPopup", 0, id);
+        const ImRect inputBb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
 
         if (ImGui::IsItemDeactivated()) {
             // 双击第二次抬起会落在输入框刚创建的第一帧，这一帧只吞掉失焦事件，不立刻退出编辑态。
@@ -169,6 +182,35 @@ EditableComboResult drawEditableCombo(const char* label,
                 storage->SetBool(suppressFirstDeactivateKey, false);
             } else {
                 storage->SetBool(editingKey, false);
+            }
+        }
+
+        if (comboOptions.keepPopupOpenWhileEditing && storage->GetBool(editingKey, false)) {
+            // 核心流程：编辑态实时筛选时持续保持候选弹层打开，后端刷新 options 后下一帧直接呈现。
+            // 仅在未打开时触发 OpenPopup，避免无意义地重复打断当前焦点状态。
+            if (!ImGui::IsPopupOpen(popupId, ImGuiPopupFlags_None)) {
+                ImGui::OpenPopupEx(popupId, ImGuiPopupFlags_None);
+            }
+            if (ImGui::BeginComboPopup(popupId, inputBb, ImGuiComboFlags_None)) {
+                for (const std::string& option : options) {
+                    const bool selected = draft == option;
+                    if (ImGui::Selectable(option.c_str(), selected)) {
+                        draft = option;
+                        result.selectedFromList = true;
+                        result.edited = true;
+                        result.value = draft;
+                        storage->SetBool(editingKey, false);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (storage->GetBool(editingKey, false)
+                && !inputActive
+                && !ImGui::IsAnyItemActive()
+                && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                // 核心流程：弹层保持展开时，若输入框意外失去激活且用户当前未在操作其他项，则下一帧自动回焦到输入框。
+                storage->SetBool(focusKey, true);
             }
         }
     } else {

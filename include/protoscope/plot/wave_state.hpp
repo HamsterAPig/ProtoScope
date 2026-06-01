@@ -2,6 +2,7 @@
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
+#include "protoscope/plot/wave_fft.hpp"
 #include "protoscope/plot/wave_math.hpp"
 
 #include <array>
@@ -36,6 +37,8 @@ struct WaveViewState {
     bool lockVerticalRange{false};
     bool showPointsWhenSparse{true};
     bool showAxisLabels{false};
+    bool showChannelLegend{true};
+    bool showFftLegend{true};
     bool showHoverReadout{true};
     bool showCursors{true};
     bool showMeasurementOverlay{true};
@@ -58,6 +61,11 @@ struct WaveViewState {
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
+    WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
+    WaveFftConfig fft{};
+    bool fftSourceWindowValid{false};
+    bool fftViewportInitialized{false};
+    bool fftFitAllRequested{false};
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
     double downsampleStartMultiplier{2.0};
@@ -72,6 +80,14 @@ struct WaveViewState {
     double centerTime{0.0};
     double viewMinTime{0.0};
     double viewMaxTime{1.0};
+    double fftSourceMinTime{0.0};
+    double fftSourceMaxTime{1.0};
+    double fftFrequencyMin{0.0};
+    double fftFrequencyMax{1.0};
+    double fftMagnitudeMin{0.0};
+    double fftMagnitudeMax{1.0};
+    double fftPhaseMin{-180.0};
+    double fftPhaseMax{180.0};
     double manualVerticalMin{-1.0};
     double manualVerticalMax{1.0};
     double viewMinValue{-1.0};
@@ -107,6 +123,7 @@ struct WaveDockState {
     std::vector<std::string> channelSummaries;
     std::vector<ChannelSpec> defaultChannelSpecs;
     std::vector<ChannelTransformOverride> channelOverrides;
+    std::vector<std::uint8_t> fftChannelEnabled;
     bool toolsCollapsed{false};
     bool overviewCollapsed{false};
     float toolsExpandedWidth{280.0F};
@@ -125,8 +142,16 @@ struct WaveDockState {
     WaveSnapshot cachedFullSnapshot{};
     WaveDisplayData cachedDisplayData{};
     WaveDataBounds cachedDisplayBounds{};
+    bool cachedFftKeyValid{false};
+    WaveFftCacheKey cachedFftKey{};
+    WaveFftFrame cachedFftFrame{};
 };
 
+bool resetChannelConfigToDefault(WaveDockState& wave,
+                                 std::size_t channelIndex,
+                                 const ChannelSpec& defaultSpec,
+                                 WaveChannelDoubleClickAction action);
+bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, WaveChannelDoubleClickAction action);
 bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex);
 
 } // namespace protoscope::plot

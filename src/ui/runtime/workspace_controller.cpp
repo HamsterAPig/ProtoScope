@@ -3,6 +3,8 @@
 #include "../runtime/gui_runtime_detail.hpp"
 #include "workspace_controller.hpp"
 
+#include "protoscope/ui/protocol_state_file.hpp"
+
 namespace protoscope::ui {
 
 WorkspaceController::WorkspaceController(GuiRuntime& runtime)
@@ -248,8 +250,33 @@ void GuiRuntime::loadCurrentProtocolControlState() {
     }
 
     try {
-        const auto root = YAML::LoadFile(statePath.string());
-        const auto protocolNode = root["protocols"][activeWorkspaceProtocolKey_];
+        const ProtocolStateFileOptions options;
+        std::string lockError;
+        auto stateLock = ProtocolStateFileLock::acquire(statePath, options.lockWaitTimeout, lockError);
+        if (!stateLock) {
+            syncLuaDockVisibilityDefaults();
+            application_.setStatusMessage(std::string("加载协议控件状态失败: ") + lockError, true);
+            return;
+        }
+
+        const auto loadResult = loadProtocolStateRootForUpdate(statePath);
+        if (!loadResult.ok) {
+            syncLuaDockVisibilityDefaults();
+            application_.setStatusMessage(std::string("加载协议控件状态失败: ") + loadResult.error, true);
+            return;
+        }
+        const auto& root = loadResult.root;
+        const auto protocolsNode = root["protocols"];
+        if (!protocolsNode || !protocolsNode.IsMap()) {
+            syncLuaDockVisibilityDefaults();
+            if (loadResult.recovery.recoveredCorruptFile) {
+                application_.setStatusMessage(
+                    "检测到损坏的协议控件状态，已备份为: " + loadResult.recovery.backupPath.filename().string(),
+                    true);
+            }
+            return;
+        }
+        const auto protocolNode = protocolsNode[activeWorkspaceProtocolKey_];
         // 核心流程：Dock 可见性按协议工作区存储，旧文件缺字段时自动回退默认可见。
         ProtocolDockVisibilityState visibilityState;
         restoreDockVisibilityState(root, activeWorkspaceProtocolKey_, visibilityState);
@@ -268,6 +295,11 @@ void GuiRuntime::loadCurrentProtocolControlState() {
         const auto protocolState = protocolNode["controls"];
         if (!protocolState) {
             syncLuaDockVisibilityDefaults();
+            if (loadResult.recovery.recoveredCorruptFile) {
+                application_.setStatusMessage(
+                    "检测到损坏的协议控件状态，已备份为: " + loadResult.recovery.backupPath.filename().string(),
+                    true);
+            }
             return;
         }
 
@@ -294,11 +326,24 @@ void GuiRuntime::loadCurrentProtocolControlState() {
 }
 
 void GuiRuntime::saveCurrentProtocolControlState() {
-    YAML::Node root;
     const auto statePath = protocolControlStatePath();
     try {
-        if (std::filesystem::exists(statePath)) {
-            root = YAML::LoadFile(statePath.string());
+        const ProtocolStateFileOptions options;
+        std::string lockError;
+        auto stateLock = ProtocolStateFileLock::acquire(statePath, options.lockWaitTimeout, lockError);
+        if (!stateLock) {
+            application_.setStatusMessage(std::string("保存协议控件状态失败: ") + lockError, true);
+            return;
+        }
+
+        auto loadResult = loadProtocolStateRootForUpdate(statePath);
+        if (!loadResult.ok) {
+            application_.setStatusMessage(std::string("保存协议控件状态失败: ") + loadResult.error, true);
+            return;
+        }
+        auto root = loadResult.root;
+        if (!root["protocols"] || !root["protocols"].IsMap()) {
+            root["protocols"] = YAML::Node(YAML::NodeType::Map);
         }
 
         auto protocolNode = root["protocols"][activeWorkspaceProtocolKey_];
@@ -333,13 +378,16 @@ void GuiRuntime::saveCurrentProtocolControlState() {
         writeSendHistoryNode(protocolNode,
                              application_.docks().sendState(),
                              configuredSendHistoryLimit(application_.captureConfig()));
-        std::filesystem::create_directories(statePath.parent_path());
-        std::ofstream out(statePath);
-        if (!out.good()) {
-            application_.setStatusMessage("保存协议控件状态失败: 无法写入文件", true);
+        std::string writeError;
+        if (!writeProtocolStateRootAtomically(statePath, root, writeError)) {
+            application_.setStatusMessage(std::string("保存协议控件状态失败: ") + writeError, true);
             return;
         }
-        out << root;
+        if (loadResult.recovery.recoveredCorruptFile) {
+            application_.setStatusMessage(
+                "检测到损坏的协议控件状态，已备份并重建: " + loadResult.recovery.backupPath.filename().string(),
+                true);
+        }
     } catch (const std::exception& ex) {
         application_.setStatusMessage(std::string("保存协议控件状态失败: ") + ex.what(), true);
     }

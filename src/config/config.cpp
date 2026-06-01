@@ -121,6 +121,38 @@ const char* toWaveChannelCardWidthModeText(const plot::WaveChannelCardWidthMode 
     return "fixed";
 }
 
+plot::WaveChannelDoubleClickAction parseWaveChannelDoubleClickAction(
+    const std::string& value,
+    plot::WaveChannelDoubleClickAction fallback) {
+    if (value == "reset_all") {
+        return plot::WaveChannelDoubleClickAction::ResetAll;
+    }
+    if (value == "reset_scale_offset") {
+        return plot::WaveChannelDoubleClickAction::ResetScaleOffset;
+    }
+    if (value == "reset_scale") {
+        return plot::WaveChannelDoubleClickAction::ResetScale;
+    }
+    if (value == "reset_offset") {
+        return plot::WaveChannelDoubleClickAction::ResetOffset;
+    }
+    return fallback;
+}
+
+const char* toWaveChannelDoubleClickActionText(const plot::WaveChannelDoubleClickAction action) {
+    switch (action) {
+    case plot::WaveChannelDoubleClickAction::ResetAll:
+        return "reset_all";
+    case plot::WaveChannelDoubleClickAction::ResetScaleOffset:
+        return "reset_scale_offset";
+    case plot::WaveChannelDoubleClickAction::ResetScale:
+        return "reset_scale";
+    case plot::WaveChannelDoubleClickAction::ResetOffset:
+        return "reset_offset";
+    }
+    return "reset_scale_offset";
+}
+
 double positiveOrFallback(double value, double fallback) {
     return value > 0.0 ? value : fallback;
 }
@@ -200,6 +232,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                         result.config.gui.wave.displayFormula);
             result.config.gui.wave.channelCardWidthMode =
                 parseWaveChannelCardWidthMode(readScalar<std::string>(wave, "channel_card_width_mode", "fixed"));
+            result.config.gui.wave.channelDoubleClickAction =
+                parseWaveChannelDoubleClickAction(
+                    readScalar<std::string>(wave,
+                                            "channel_double_click_action",
+                                            toWaveChannelDoubleClickActionText(result.config.gui.wave.channelDoubleClickAction)),
+                    result.config.gui.wave.channelDoubleClickAction);
             result.config.gui.wave.maxRenderPointsPerChannel =
                 readScalar<std::size_t>(wave, "max_render_points_per_channel", result.config.gui.wave.maxRenderPointsPerChannel);
             result.config.gui.wave.maxRenderVertices =
@@ -220,8 +258,59 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                    1.2);
             result.config.gui.wave.showAxisLabels =
                 readScalar<bool>(wave, "show_axis_labels", result.config.gui.wave.showAxisLabels);
+            result.config.gui.wave.showChannelLegend =
+                readScalar<bool>(wave, "show_channel_legend", result.config.gui.wave.showChannelLegend);
+            result.config.gui.wave.showFftLegend =
+                readScalar<bool>(wave, "show_fft_legend", result.config.gui.wave.showFftLegend);
+            if (const auto logHistory = gui["log_history"]) {
+                result.config.gui.logHistory.transferRawLimit =
+                    readScalar<std::size_t>(logHistory, "transfer_raw_limit", result.config.gui.logHistory.transferRawLimit);
+                result.config.gui.logHistory.transferFrameLimit =
+                    readScalar<std::size_t>(logHistory, "transfer_frame_limit", result.config.gui.logHistory.transferFrameLimit);
+                result.config.gui.logHistory.hostLimit =
+                    readScalar<std::size_t>(logHistory, "host_limit", result.config.gui.logHistory.hostLimit);
+                result.config.gui.logHistory.scriptLimit =
+                    readScalar<std::size_t>(logHistory, "script_limit", result.config.gui.logHistory.scriptLimit);
+            }
+            if (const auto rawCapture = gui["raw_capture"]) {
+                result.config.gui.rawCapture.liveLimitBytes =
+                    readScalar<std::size_t>(rawCapture, "live_limit_bytes", result.config.gui.rawCapture.liveLimitBytes);
+            }
+            if (const auto realtimeBacklog = gui["realtime_backlog"]) {
+                result.config.gui.realtimeBacklog.mode =
+                    readScalar<std::string>(realtimeBacklog, "mode", result.config.gui.realtimeBacklog.mode);
+                result.config.gui.realtimeBacklog.rxChunkBytesPerPump =
+                    readScalar<std::size_t>(realtimeBacklog,
+                                            "rx_chunk_bytes_per_pump",
+                                            result.config.gui.realtimeBacklog.rxChunkBytesPerPump);
+                result.config.gui.realtimeBacklog.transferFrameRowsPerPump =
+                    readScalar<std::size_t>(realtimeBacklog,
+                                            "transfer_frame_rows_per_pump",
+                                            result.config.gui.realtimeBacklog.transferFrameRowsPerPump);
+                result.config.gui.realtimeBacklog.plotAppendsPerPump =
+                    readScalar<std::size_t>(realtimeBacklog,
+                                            "plot_appends_per_pump",
+                                            result.config.gui.realtimeBacklog.plotAppendsPerPump);
+                result.config.gui.realtimeBacklog.discardBacklogOnDisconnect =
+                    readScalar<bool>(realtimeBacklog,
+                                     "discard_backlog_on_disconnect",
+                                     result.config.gui.realtimeBacklog.discardBacklogOnDisconnect);
+            }
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
             result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
+        }
+        if (const auto elfSymbolCombo = gui["elf_symbol_combo"]) {
+            const int limit = readScalar<int>(elfSymbolCombo,
+                                              "limit",
+                                              static_cast<int>(result.config.gui.elfSymbolCombo.limit));
+            if (limit > 0) {
+                result.config.gui.elfSymbolCombo.limit = static_cast<std::size_t>(limit);
+            }
+            const int debounceMs =
+                readScalar<int>(elfSymbolCombo, "debounce_ms", result.config.gui.elfSymbolCombo.debounceMs);
+            if (debounceMs > 0) {
+                result.config.gui.elfSymbolCombo.debounceMs = debounceMs;
+            }
         }
 
         const auto protocol = root["protocol"];
@@ -349,6 +438,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["control_mode"] = toWaveControlModeText(config.gui.wave.controlMode);
     root["gui"]["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
     root["gui"]["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
+    root["gui"]["wave"]["channel_double_click_action"] =
+        toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
     root["gui"]["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
     root["gui"]["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
     root["gui"]["wave"]["vertical_auto_fit_multiplier"] = config.gui.wave.verticalAutoFitMultiplier;
@@ -358,8 +449,23 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
     root["gui"]["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
     root["gui"]["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
+    root["gui"]["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
+    root["gui"]["wave"]["show_fft_legend"] = config.gui.wave.showFftLegend;
+    root["gui"]["log_history"]["transfer_raw_limit"] = config.gui.logHistory.transferRawLimit;
+    root["gui"]["log_history"]["transfer_frame_limit"] = config.gui.logHistory.transferFrameLimit;
+    root["gui"]["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
+    root["gui"]["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
+    root["gui"]["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
+    root["gui"]["realtime_backlog"]["mode"] = config.gui.realtimeBacklog.mode;
+    root["gui"]["realtime_backlog"]["rx_chunk_bytes_per_pump"] = config.gui.realtimeBacklog.rxChunkBytesPerPump;
+    root["gui"]["realtime_backlog"]["transfer_frame_rows_per_pump"] = config.gui.realtimeBacklog.transferFrameRowsPerPump;
+    root["gui"]["realtime_backlog"]["plot_appends_per_pump"] = config.gui.realtimeBacklog.plotAppendsPerPump;
+    root["gui"]["realtime_backlog"]["discard_backlog_on_disconnect"] =
+        config.gui.realtimeBacklog.discardBacklogOnDisconnect;
     root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
     root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
+    root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;
+    root["gui"]["elf_symbol_combo"]["debounce_ms"] = config.gui.elfSymbolCombo.debounceMs;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
     root["protocol"]["selected_dir"] = config.protocol.selectedDir;
@@ -536,6 +642,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.controlMode = config.gui.wave.controlMode;
     wave.displayFormula = config.gui.wave.displayFormula;
     wave.channelCardWidthMode = config.gui.wave.channelCardWidthMode;
+    wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
     wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
@@ -545,6 +652,8 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
     wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.2);
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
+    wave.showChannelLegend = config.gui.wave.showChannelLegend;
+    wave.showFftLegend = config.gui.wave.showFftLegend;
     auto viewConfig = waveState.buffer.viewConfig();
     viewConfig.displayFormula = config.gui.wave.displayFormula;
     waveState.buffer.setViewConfig(viewConfig);
@@ -565,6 +674,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
     config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
+    config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;
@@ -574,6 +684,8 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;
     config.gui.wave.verticalAutoFitMultiplier = dockStore.waveState().view.verticalAutoFitMultiplier;
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
+    config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
+    config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;
     config.configPath = dockStore.configState().loadedFromPath;
 
     return config;

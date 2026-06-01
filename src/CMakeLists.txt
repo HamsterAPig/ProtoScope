@@ -1,11 +1,16 @@
 add_library(protoscope_plot STATIC
     plot/oscilloscope.cpp
     plot/raw_capture_file.cpp
+    plot/wave_fft.cpp
     plot/wave_math.cpp
 )
 target_include_directories(protoscope_plot
     PUBLIC
         ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(protoscope_plot
+    PUBLIC
+        protoscope_pocketfft
 )
 target_compile_features(protoscope_plot PUBLIC cxx_std_20)
 
@@ -36,6 +41,7 @@ target_compile_features(protoscope_transport PUBLIC cxx_std_20)
 
 add_library(protoscope_ui_layout STATIC
     ui/dock_layout.cpp
+    ui/protocol_state_file.cpp
     ui/protocol_ui_state.cpp
 )
 target_include_directories(protoscope_ui_layout
@@ -204,6 +210,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/wave/wave_channel_legend_bar.cpp
         ui/wave/wave_channel_renderer.cpp
         ui/wave/wave_dock_renderer.cpp
+        ui/wave/wave_fft_layer.cpp
         ui/wave/wave_interaction_controller.cpp
         ui/wave/wave_measurement_overlay.cpp
         ui/wave/wave_measurement_overlay_layer.cpp

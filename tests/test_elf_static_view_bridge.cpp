@@ -4,11 +4,13 @@
 
 #include <elf_static_view/project.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -25,8 +27,8 @@ std::uint64_t nowMs() {
             .count());
 }
 
-std::filesystem::path makeUniqueTempFile(const char* name) {
-    return std::filesystem::temp_directory_path() / (std::string(name) + "-" + std::to_string(nowMs()) + ".json");
+std::filesystem::path makeUniqueTempFile(const char* name, const std::string& extension = ".json") {
+    return std::filesystem::temp_directory_path() / (std::string(name) + "-" + std::to_string(nowMs()) + extension);
 }
 
 elf_static_view::ExpandedNode makeExpandedNode(std::string path,
@@ -49,6 +51,7 @@ elf_static_view::ExpandedNode makeExpandedNode(std::string path,
         .depth = 0,
         .children_lazy = false,
         .children = {},
+        .export_path = {},
     };
 }
 
@@ -98,18 +101,88 @@ void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols() {
     std::filesystem::remove(path);
 }
 
+void test_elf_static_view_bridge_loads_private_binary_without_extension() {
+    const auto path = makeUniqueTempFile("protoscope-elf-static-view-private", "");
+    {
+        elf_static_view::ProjectSnapshot snapshot;
+        snapshot.source_file = "sample.elf";
+        snapshot.model = sampleProjectModel();
+        elf_static_view::ExportDocument document{
+            elf_static_view::ExportPayloadKind::FullSnapshot,
+            std::move(snapshot),
+        };
+        elf_static_view::ExportOptions options;
+        options.format = elf_static_view::ExportFormat::BinaryPrivate;
+
+        std::ofstream output(path, std::ios::binary);
+        output << elf_static_view::render_export_document(document, options);
+    }
+
+    protoscope::plugin::ElfStaticViewBridge bridge;
+    std::string error;
+    require(bridge.loadFile(path, error), "桥接层应按内容加载无后缀私有二进制导出");
+    const auto results = bridge.query("counter", 64);
+    require(results.size() == 1, "私有二进制导出应能查询静态地址");
+    require(results[0].value == "0x20000010", "私有二进制导出的地址应保持一致");
+
+    std::filesystem::remove(path);
+}
+
+void test_elf_static_view_bridge_loads_variable_summary_export() {
+    const auto path = makeUniqueTempFile("protoscope-elf-static-view-summary", ".esv");
+    {
+        elf_static_view::ExportOptions options;
+        options.format = elf_static_view::ExportFormat::JsonCompact;
+        options.payload_kind = elf_static_view::ExportPayloadKind::VariableSummary;
+        auto lightweightExport = elf_static_view::build_lightweight_export(sampleProjectModel(), options);
+        const auto summaryVariable = std::find_if(lightweightExport.variables.begin(),
+                                                  lightweightExport.variables.end(),
+                                                  [](const elf_static_view::LightweightVariableRecord& variable) {
+                                                      return variable.path == "global.a_var_int";
+                                                  });
+        require(summaryVariable != lightweightExport.variables.end(), "轻量变量摘要应导出完整变量路径");
+        require(summaryVariable->name == "global.a_var_int", "v0.3.5 轻量变量摘要 name 应使用完整路径");
+        elf_static_view::ExportDocument document{
+            elf_static_view::ExportPayloadKind::VariableSummary,
+            std::move(lightweightExport),
+        };
+
+        std::ofstream output(path, std::ios::binary);
+        output << elf_static_view::render_export_document(document, options);
+    }
+
+    protoscope::plugin::ElfStaticViewBridge bridge;
+    std::string error;
+    require(bridge.loadFile(path, error), "桥接层应加载 ElfStaticView 轻量变量摘要导出");
+    const auto results = bridge.query("a_var", 64);
+    require(results.size() == 1, "轻量变量摘要应能进入静态地址查询");
+    require(results[0].label == "global.a_var_int", "轻量变量摘要应保留变量路径");
+    require(results[0].value == "0x20000000", "轻量变量摘要应保留静态地址");
+
+    std::filesystem::remove(path);
+}
+
 void test_elf_static_view_bridge_keeps_old_model_on_load_failure() {
     const auto path = makeUniqueTempFile("protoscope-elf-static-view-keep-old");
+    const auto invalidPath = makeUniqueTempFile("protoscope-elf-static-view-invalid", ".txt");
     {
         std::ofstream output(path, std::ios::binary);
         output << elf_static_view::render_dump_json(sampleProjectModel());
+    }
+    {
+        std::ofstream output(invalidPath, std::ios::binary);
+        output << "not an elf or export";
     }
 
     protoscope::plugin::ElfStaticViewBridge bridge;
     std::string error;
     require(bridge.loadFile(path, error), "桥接层应先加载有效 JSON");
     require(!bridge.loadFile(path.parent_path() / "missing.json", error), "加载缺失文件应失败");
+    require(!bridge.loadFile(invalidPath, error), "加载无效内容应失败");
+    require(error.find("ElfStaticView") != std::string::npos, "错误信息应包含数据导入上下文");
+    require(error.find("ELF 扫描失败") != std::string::npos, "错误信息应包含 ELF 扫描上下文");
     require(!bridge.query("counter", 64).empty(), "加载失败后应保留旧模型");
 
     std::filesystem::remove(path);
+    std::filesystem::remove(invalidPath);
 }
