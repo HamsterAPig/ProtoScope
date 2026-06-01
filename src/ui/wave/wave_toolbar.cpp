@@ -284,7 +284,8 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
         return;
     }
 
-    if (beginToolbarGroup("wave_quick_actions", "主视图控制")) {
+    const bool quickGroupOpen = beginToolbarGroup("wave_quick_actions", "主视图控制");
+    if (quickGroupOpen) {
         // 核心流程：右侧工具栏先放高频动作，细项参数继续留在下方分组，避免工具区变成长表单。
         const bool quickActionsOpened = ImGui::BeginTable("##wave_toolbar_quick_actions", 2, ImGuiTableFlags_SizingStretchSame);
         if (quickActionsOpened) {
@@ -351,8 +352,8 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
         if (quickActionsOpened) {
             ImGui::EndTable();
         }
-        endToolbarGroup();
     }
+    endToolbarGroup();
 
     ImGui::Spacing();
     WaveFftToolbarSection fftToolbarSection;

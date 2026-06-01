@@ -32,6 +32,7 @@ const UiStyleTokens& defaultUiStyleTokens();
 void applyImGuiProfessionalDarkTheme();
 void applyImPlotProfessionalDarkTheme();
 
+// beginToolbarGroup() 内部会压入 ImGui 栈；无论返回值是否为 true，后续都必须调用 endToolbarGroup()。
 bool beginToolbarGroup(const char* id, const char* title, float minHeight = 0.0F);
 void endToolbarGroup();
 bool drawToolbarSectionButton(const char* label, const char* tooltip, bool active = false, const ImVec2& size = ImVec2(0.0F, 0.0F));
