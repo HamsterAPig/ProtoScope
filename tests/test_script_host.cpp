@@ -5,6 +5,7 @@
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -663,6 +664,91 @@ void test_script_stream_schema_reports_overflow_and_crc_error() {
     require(foundCrc, "CRC 校验失败时应回调 stream.on_error");
 }
 
+void test_script_stream_schema_reload_uses_current_callbacks() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-stream-reload-callbacks");
+    const auto writeProtocol = [&](const std::string& version) {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "stream reload 测试协议应可写入");
+        out << "local version = \"" << version << "\"\n";
+        out << "function controls() return {} end\n";
+        out << "local function on_stream_frame(ctx, frame)\n";
+        out << "  proto.emit(\"stream_frame_\" .. version, tostring(frame.fields.value))\n";
+        out << "end\n";
+        out << "local function on_stream_error(ctx, err)\n";
+        out << "  proto.emit(\"stream_error_\" .. version, err.code)\n";
+        out << "end\n";
+        out << "function stream()\n";
+        out << "  return {\n";
+        out << "    buffer = { capacity = 8, overflow = \"drop_oldest\" },\n";
+        out << "    frames = { {\n";
+        out << "      name = \"stream_sample\",\n";
+        out << "      header = { 0xAA, 0x55 },\n";
+        out << "      len = { offset = 3, type = \"u8\", means = \"payload\", extra = 5 },\n";
+        out << "      crc = { type = \"crc16_modbus\", order = \"lo_hi\" },\n";
+        out << "      fields = { { name = \"value\", type = \"u8\", offset = 4 } },\n";
+        out << "      on_frame = on_stream_frame,\n";
+        out << "    } },\n";
+        out << "    on_error = on_stream_error,\n";
+        out << "  }\n";
+        out << "end\n";
+        out << "function on_bytes(ctx, bytes)\n";
+        out << "  proto.emit(\"legacy_bytes\", tostring(#bytes))\n";
+        out << "end\n";
+    };
+    const auto writeBrokenProtocol = [&]() {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "stream reload 失败协议应可写入");
+        out << "function controls() return {} end\n";
+        out << "function stream()\n";
+        out << "  return {\n";
+    };
+    const auto hasEvent = [](const std::vector<protoscope::scripting::ScriptEvent>& events, const std::string& name) {
+        return std::any_of(events.begin(), events.end(), [&](const auto& event) {
+            return event.name == name;
+        });
+    };
+
+    protoscope::scripting::ScriptHost host;
+    const auto ctx = sampleCtx();
+
+    writeProtocol("A");
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "版本 A stream 协议应可加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeStreamFixtureFrame(0x11)});
+    auto events = host.drainEvents();
+    require(hasEvent(events, "stream_frame_A"), "版本 A 应触发 A 的 on_frame");
+    require(!hasEvent(events, "stream_frame_B"), "版本 A 不应触发 B 的 on_frame");
+
+    writeProtocol("B");
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "版本 B stream 协议应可加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeStreamFixtureFrame(0x22)});
+    events = host.drainEvents();
+    require(!hasEvent(events, "stream_frame_A"), "成功 reload 后不应继续触发 A 的 on_frame");
+    require(hasEvent(events, "stream_frame_B"), "成功 reload 后应触发 B 的 on_frame");
+
+    writeBrokenProtocol();
+    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "损坏 stream 协议应加载失败");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeStreamFixtureFrame(0x33)});
+    events = host.drainEvents();
+    require(!hasEvent(events, "stream_frame_A"), "失败 reload 后不应回退到 A");
+    require(hasEvent(events, "stream_frame_B"), "失败 reload 后应保留 B 的 on_frame");
+
+    writeProtocol("C");
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "版本 C stream 协议应可加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeStreamFixtureFrame(0x44)});
+    events = host.drainEvents();
+    require(!hasEvent(events, "stream_frame_B"), "再次成功 reload 后不应继续触发 B 的 on_frame");
+    require(hasEvent(events, "stream_frame_C"), "再次成功 reload 后应触发 C 的 on_frame");
+
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18}});
+    auto broken = makeStreamFixtureFrame(0x55);
+    broken[4] = static_cast<std::uint8_t>(broken[4] ^ 0x01U);
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, broken});
+    events = host.drainEvents();
+    require(!hasEvent(events, "stream_error_A"), "错误回调不应命中 A runtime");
+    require(!hasEvent(events, "stream_error_B"), "错误回调不应命中 B runtime");
+    require(hasEvent(events, "stream_error_C"), "错误回调应只命中当前 C runtime");
+}
+
 void test_script_stream_schema_rejects_count_function() {
     const auto protocolDir = makeUniqueTempDir("protoscope-count-function");
     {
@@ -680,7 +766,10 @@ void test_script_stream_schema_rejects_count_function() {
 
     protoscope::scripting::ScriptHost host;
     require(!host.loadProtocolDirectory(protocolDir.generic_string()), "count=function 应加载失败");
-    require(host.lastError().find("field.count 不再支持 function") != std::string::npos, "错误应提示迁移 count 表达式");
+    require(host.lastError().find("stream.frames[1].fields[1].count") != std::string::npos, "错误应包含精确 schema 路径");
+    require(host.lastError().find("不再支持 function") != std::string::npos, "错误应明确旧 function 写法已废弃");
+    require(host.lastError().find("count = { op = \"div\", field = \"byte_count\", by = 2 }") != std::string::npos,
+            "错误应给出 count 表达式迁移示例");
 }
 
 void test_script_stream_schema_accepts_count_expression_table() {
@@ -1014,6 +1103,7 @@ void test_script_failed_reload_keeps_previous_runtime() {
     }
     require(foundOldRuntime, "reload 失败后旧回调仍应可用");
 }
+
 
 void test_protocol_directory_reload() {
     protoscope::scripting::ScriptHost host;
@@ -1833,6 +1923,7 @@ static const TestCase kAllTests[] = {
     {"script_stream_schema_legacy_on_bytes_still_works", &test_script_stream_schema_legacy_on_bytes_still_works},
     {"script_stream_schema_bypasses_on_bytes_and_calls_on_frame", &test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame},
     {"script_stream_schema_reports_overflow_and_crc_error", &test_script_stream_schema_reports_overflow_and_crc_error},
+    {"script_stream_schema_reload_uses_current_callbacks", &test_script_stream_schema_reload_uses_current_callbacks},
     {"script_stream_schema_rejects_count_function", &test_script_stream_schema_rejects_count_function},
     {"script_stream_schema_accepts_count_expression_table", &test_script_stream_schema_accepts_count_expression_table},
     {"script_timeout_flow", &test_script_timeout_flow},
@@ -1942,6 +2033,8 @@ static const TestCase kAllTests[] = {
     {"application_tx_overflow_popup_keeps_dialog_payload", &test_application_tx_overflow_popup_keeps_dialog_payload},
     {"application_failed_protocol_reload_keeps_previous_runtime", &test_application_failed_protocol_reload_keeps_previous_runtime},
     {"application_same_protocol_reload_keeps_runtime_stable", &test_application_same_protocol_reload_keeps_runtime_stable},
+    {"application_same_protocol_reload_without_force_preserves_runtime_state",
+     &test_application_same_protocol_reload_without_force_preserves_runtime_state},
     {"application_failed_reload_keeps_old_callbacks_alive", &test_application_failed_reload_keeps_old_callbacks_alive},
     {"application_forced_reload_discards_old_tx_callback_outputs", &test_application_forced_reload_discards_old_tx_callback_outputs},
     {"application_request_done_success_does_not_set_comm_error", &test_application_request_done_success_does_not_set_comm_error},

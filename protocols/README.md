@@ -319,7 +319,7 @@ return schema
 
 字段类型、`crc.order`、`len.means` 的可选值请直接参考 `protocols/stream_types.lua`。
 
-动态字段数量不要再写 Lua 回调，历史重放和实时解析会共用纯 C++ parser。常见 `count` 表达式：
+动态字段数量不要再写 Lua 回调；旧 `field.count = function(...) end` 属于历史残留，现已在加载期直接报错拦截。历史重放和实时解析会共用纯 C++ parser。常见 `count` 表达式：
 
 ```lua
 -- 字段引用

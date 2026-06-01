@@ -21,13 +21,14 @@ struct LoadedStreamSchema {
         : parser(std::move(buffer), std::move(frames)) {}
 
     FrameStreamParser parser;
-    std::unordered_map<std::string, sol::protected_function> frameCallbacks;
-    sol::protected_function onError;
+    std::unordered_map<std::string, std::string> frameCallbackKeys;
+    std::optional<std::string> onErrorCallbackKey;
 };
 
 struct ScriptHost::Runtime {
     sol::state lua;
     std::unique_ptr<LoadedStreamSchema> stream;
+    std::unordered_map<std::string, sol::protected_function> streamCallbacks;
 };
 
 struct ScriptHost::FileHandle {
@@ -63,7 +64,10 @@ const ControlDescriptor* findControlDescriptor(const std::vector<ControlDescript
 sol::object controlValueToLua(sol::state_view lua, const ControlDescriptor* descriptor, const ControlValue& value);
 std::optional<std::vector<std::uint8_t>> bytesFromLuaObject(const sol::object& object, std::string& error);
 std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view lua, std::string& error);
-std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua, std::string& error);
+std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
+    sol::state_view lua,
+    std::unordered_map<std::string, sol::protected_function>& callbacks,
+    std::string& error);
 
 sol::table makeContextTable(sol::state_view lua, const transport::ConnectionContext& connection);
 sol::table makeBytesTable(sol::state_view lua, const std::vector<std::uint8_t>& bytes);

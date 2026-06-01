@@ -38,8 +38,6 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         std::string scriptPath;
         std::string protocolDirectory;
         std::string lastError;
-        std::vector<DockDescriptor> docks;
-        std::vector<ControlDescriptor> controls;
         std::unordered_map<std::string, ControlValue> controlValues;
         std::vector<ScriptEvent> events;
         std::vector<ScriptLog> logs;
@@ -55,17 +53,14 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         std::unordered_map<std::uint64_t, FileSendJob> fileSendJobs;
         std::vector<AuthorizedPath> dialogAuthorizedPaths;
         std::optional<transport::ConnectionContext> activeConnection;
-        std::unique_ptr<Runtime> runtime;
         bool requestAwaitingCompletion{false};
     };
 
     LoadSnapshot snapshot{
         .scriptLoaded = scriptLoaded_,
-        .scriptPath = std::move(scriptPath_),
-        .protocolDirectory = std::move(protocolDirectory_),
-        .lastError = std::move(lastError_),
-        .docks = std::move(docks_),
-        .controls = std::move(controls_),
+        .scriptPath = scriptPath_,
+        .protocolDirectory = protocolDirectory_,
+        .lastError = lastError_,
         .controlValues = std::move(controlValues_),
         .events = std::move(events_),
         .logs = std::move(logs_),
@@ -81,7 +76,6 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         .fileSendJobs = std::move(fileSendJobs_),
         .dialogAuthorizedPaths = std::move(dialogAuthorizedPaths_),
         .activeConnection = std::move(activeConnection_),
-        .runtime = std::move(runtime_),
         .requestAwaitingCompletion = requestAwaitingCompletion_,
     };
 
@@ -89,8 +83,6 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         scriptLoaded_ = snapshot.scriptLoaded;
         scriptPath_ = std::move(snapshot.scriptPath);
         protocolDirectory_ = std::move(snapshot.protocolDirectory);
-        docks_ = std::move(snapshot.docks);
-        controls_ = std::move(snapshot.controls);
         controlValues_ = std::move(snapshot.controlValues);
         events_ = std::move(snapshot.events);
         logs_ = std::move(snapshot.logs);
@@ -106,23 +98,17 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         fileSendJobs_ = std::move(snapshot.fileSendJobs);
         dialogAuthorizedPaths_ = std::move(snapshot.dialogAuthorizedPaths);
         activeConnection_ = std::move(snapshot.activeConnection);
-        runtime_ = std::move(snapshot.runtime);
         requestAwaitingCompletion_ = snapshot.requestAwaitingCompletion;
-        if (!runtime_) {
-            runtime_ = std::make_unique<Runtime>();
-        }
         setLastError(std::move(message));
         protoLog("error", lastError_);
         return false;
     };
 
+    const auto nextProtocolDirectory = filePath.parent_path().generic_string();
     scriptLoaded_ = false;
     scriptPath_ = path;
-    protocolDirectory_ = filePath.parent_path().generic_string();
+    protocolDirectory_ = nextProtocolDirectory;
     lastError_.clear();
-    docks_.clear();
-    controls_.clear();
-    controlValues_.clear();
     events_.clear();
     logs_.clear();
     txRequests_.clear();
@@ -138,10 +124,11 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
     dialogAuthorizedPaths_.clear();
     activeConnection_.reset();
     requestAwaitingCompletion_ = false;
-    runtime_ = std::make_unique<Runtime>();
+
+    auto nextRuntime = std::make_unique<Runtime>();
 
     try {
-        runtime_->lua.open_libraries(
+        nextRuntime->lua.open_libraries(
             sol::lib::base,
             sol::lib::math,
             sol::lib::package,
@@ -150,7 +137,7 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
             sol::lib::utf8,
             sol::lib::os);
 
-        auto& lua = runtime_->lua;
+        auto& lua = nextRuntime->lua;
         lua.new_usertype<ProtoBuffer>("ProtoBuffer",
                                       "size",
                                       &ProtoBuffer::size,
@@ -159,13 +146,13 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
                                       "to_hex",
                                       &ProtoBuffer::toHex,
                                       "bytes",
-                                      [this](const ProtoBuffer& buffer, const sol::object& maxBytes) {
+                                      [this, bufferLua = sol::state_view(lua)](const ProtoBuffer& buffer, const sol::object& maxBytes) mutable {
                                           std::size_t limit = buffer.bytes.size();
                                           if (maxBytes.valid() && maxBytes.get_type() != sol::type::lua_nil && maxBytes.is<int>()) {
                                               limit = std::min<std::size_t>(limit, static_cast<std::size_t>(std::max(0, maxBytes.as<int>())));
                                           }
                                           limit = std::min(limit, fileIoConfig_.maxChunkBytes);
-                                          sol::table table = runtime_->lua.create_table(static_cast<int>(limit), 0);
+                                          sol::table table = bufferLua.create_table(static_cast<int>(limit), 0);
                                           for (std::size_t index = 0; index < limit; ++index) {
                                               table[index + 1] = buffer.bytes[index];
                                           }
@@ -176,16 +163,16 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         // 额外放开父目录，方便 protocols/<demo>/main.lua 共享 protocols/*.lua 公共脚本。
         // 使用 generic_string 格式，统一为 /，避免 Windows 反斜杠干扰 Lua package.path。
         const auto pkgPath = lua["package"]["path"].get<std::string>();
-        const auto protocolParent = std::filesystem::path(protocolDirectory_).parent_path().generic_string();
-        lua["package"]["path"] = protocolDirectory_ + "/?.lua;"
-                               + protocolDirectory_ + "/?/init.lua;"
+        const auto protocolParent = std::filesystem::path(nextProtocolDirectory).parent_path().generic_string();
+        lua["package"]["path"] = nextProtocolDirectory + "/?.lua;"
+                               + nextProtocolDirectory + "/?/init.lua;"
                                + (protocolParent.empty() ? std::string() : protocolParent + "/?.lua;")
                                + (protocolParent.empty() ? std::string() : protocolParent + "/?/init.lua;")
                                + pkgPath;
         auto proto = lua.create_named_table("proto");
 
         // 核心流程：所有脚本侧能力统一经由模块注册器挂到 proto.*，避免加载流程继续膨胀。
-        registerLuaApi(proto);
+        registerLuaApi(lua, proto);
 
         auto scriptResult = lua.safe_script_file(path, &sol::script_pass_on_error);
         if (!scriptResult.valid()) {
@@ -193,11 +180,10 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
         }
 
         std::string streamError;
-        auto streamSchema = parseLoadedStreamSchema(lua, streamError);
+        auto streamSchema = parseLoadedStreamSchema(lua, nextRuntime->streamCallbacks, streamError);
         if (!streamError.empty()) {
             return restoreFailure(streamError);
         }
-        runtime_->stream = std::move(streamSchema);
 
         std::string parseError;
         const auto parsedDocks = parseDockDescriptors(lua, parseError);
@@ -205,17 +191,23 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
             return restoreFailure(parseError);
         }
 
-        docks_ = *parsedDocks;
-        controls_.clear();
+        std::vector<ControlDescriptor> nextControls;
         std::unordered_map<std::string, ControlValue> nextControlValues;
-        for (const auto& dock : docks_) {
+        for (const auto& dock : *parsedDocks) {
             for (const auto& control : dock.controls) {
-                controls_.push_back(control);
-                const auto existing = controlValues_.find(control.id);
-                nextControlValues[control.id] = existing == controlValues_.end() ? defaultValueFor(control) : existing->second;
+                nextControls.push_back(control);
+                const auto existing = snapshot.controlValues.find(control.id);
+                nextControlValues[control.id] = existing == snapshot.controlValues.end() ? defaultValueFor(control) : existing->second;
             }
         }
+
+        nextRuntime->stream = std::move(streamSchema);
+        runtime_ = std::move(nextRuntime);
+        docks_ = *parsedDocks;
+        controls_ = std::move(nextControls);
         controlValues_ = std::move(nextControlValues);
+        scriptPath_ = path;
+        protocolDirectory_ = nextProtocolDirectory;
         lastError_.clear();
         scriptLoaded_ = true;
         return true;

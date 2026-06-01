@@ -11,10 +11,11 @@ public:
 
     std::string_view id() const override { return "control_api_module"; }
 
-    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
         auto* host = &host_;
-        proto.set_function("get_control", [host](const std::string& id) {
-            sol::state_view view = host->luaView();
+        sol::state_view lua = ctx.lua;
+        proto.set_function("get_control", [host, lua](const std::string& id) {
+            sol::state_view view = lua;
             const auto* value = host->findControlValue(id);
             if (value == nullptr) {
                 return sol::make_object(view, sol::lua_nil);

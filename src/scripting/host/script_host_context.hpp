@@ -6,6 +6,8 @@
 
 #include <optional>
 
+#include <sol/sol.hpp>
+
 namespace protoscope::scripting {
 
 struct ScriptHostQueues {
@@ -17,6 +19,7 @@ struct ScriptHostContextInternal {
     ScriptHostQueues& queues;
     FileIoConfig& fileIoConfig;
     std::optional<transport::ConnectionContext>& activeConnection;
+    sol::state_view lua;
 };
 
 } // namespace protoscope::scripting

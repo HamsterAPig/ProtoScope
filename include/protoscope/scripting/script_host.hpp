@@ -396,7 +396,7 @@ private:
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
     std::optional<sol::protected_function> resolveGlobalCallback(const char* name);
 
-    void registerLuaApi(sol::table& proto);
+    void registerLuaApi(sol::state_view lua, sol::table& proto);
 
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
@@ -413,12 +413,12 @@ private:
     void protoStatusClear();
     std::optional<DialogRequest> protoDialog(DialogKind kind, const sol::object& opts, std::string& error);
     std::optional<FileDialogRequest> protoFileDialog(FileDialogKind kind, const sol::object& opts, std::string& error);
-    std::tuple<sol::object, sol::object> protoFsOpen(const std::string& path, const sol::object& opts);
-    std::tuple<sol::object, sol::object> protoFsRead(std::uint64_t handle, const sol::object& opts);
-    std::tuple<sol::object, sol::object> protoFsWrite(std::uint64_t handle, const sol::object& payload);
-    std::tuple<sol::object, sol::object> protoFsClose(std::uint64_t handle);
-    std::tuple<sol::object, sol::object> protoFsStat(const std::string& path);
-    std::tuple<sol::object, sol::object> protoFsSendFile(const std::string& path, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsOpen(sol::state_view lua, const std::string& path, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsRead(sol::state_view lua, std::uint64_t handle, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsWrite(sol::state_view lua, std::uint64_t handle, const sol::object& payload);
+    std::tuple<sol::object, sol::object> protoFsClose(sol::state_view lua, std::uint64_t handle);
+    std::tuple<sol::object, sol::object> protoFsStat(sol::state_view lua, const std::string& path);
+    std::tuple<sol::object, sol::object> protoFsSendFile(sol::state_view lua, const std::string& path, const sol::object& opts);
     std::uint64_t nextTxRequestId();
     std::uint64_t nextDialogId();
     std::uint64_t nextFileDialogId();

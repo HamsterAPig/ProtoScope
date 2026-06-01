@@ -10,36 +10,31 @@ public:
 
     std::string_view id() const override { return "tx_api_module"; }
 
-    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
         auto* host = &host_;
-        proto.set_function("send", [host](const sol::object& payload, const sol::object& opts) {
+        sol::state_view lua = ctx.lua;
+        proto.set_function("send", [host, lua](const sol::object& payload, const sol::object& opts) {
             std::string error;
             const auto request = host->protoSendLike(TxRequestKind::Send, payload, opts, error);
             if (!request.has_value()) {
-                return std::make_tuple(sol::make_object(host->luaState(), sol::lua_nil),
-                                       sol::make_object(host->luaState(), error));
+                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
             }
-            return std::make_tuple(sol::make_object(host->luaState(), request->id),
-                                   sol::make_object(host->luaState(), sol::lua_nil));
+            return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
         });
-        proto.set_function("request", [host](const sol::object& payload, const sol::object& opts) {
+        proto.set_function("request", [host, lua](const sol::object& payload, const sol::object& opts) {
             std::string error;
             const auto request = host->protoSendLike(TxRequestKind::Request, payload, opts, error);
             if (!request.has_value()) {
-                return std::make_tuple(sol::make_object(host->luaState(), sol::lua_nil),
-                                       sol::make_object(host->luaState(), error));
+                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
             }
-            return std::make_tuple(sol::make_object(host->luaState(), request->id),
-                                   sol::make_object(host->luaState(), sol::lua_nil));
+            return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
         });
-        proto.set_function("request_done", [host](const sol::object& result) {
+        proto.set_function("request_done", [host, lua](const sol::object& result) {
             std::string error;
             if (host->protoRequestDone(result, error)) {
-                return std::make_tuple(sol::make_object(host->luaState(), true),
-                                       sol::make_object(host->luaState(), sol::lua_nil));
+                return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
             }
-            return std::make_tuple(sol::make_object(host->luaState(), false),
-                                   sol::make_object(host->luaState(), error));
+            return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, error));
         });
     }
 

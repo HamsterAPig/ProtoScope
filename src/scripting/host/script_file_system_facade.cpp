@@ -7,9 +7,9 @@
 
 namespace protoscope::scripting {
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(const std::string& pathText, const sol::object& opts) {
-    auto fail = [this](const std::string& error) {
-        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, error));
+std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua, const std::string& pathText, const sol::object& opts) {
+    auto fail = [lua](const std::string& error) {
+        return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
     };
     if (!fileIoConfig_.enabled) {
         return fail("scripting.file_io 已禁用");
@@ -103,12 +103,12 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(const std::string& 
 
     const auto id = handle->id;
     fileHandles_[id] = std::move(handle);
-    return std::make_tuple(sol::make_object(runtime_->lua, id), sol::make_object(runtime_->lua, sol::lua_nil));
+    return std::make_tuple(sol::make_object(lua, id), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(std::uint64_t handleId, const sol::object& opts) {
-    auto fail = [this](const std::string& error) {
-        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, error));
+std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(sol::state_view lua, std::uint64_t handleId, const sol::object& opts) {
+    auto fail = [lua](const std::string& error) {
+        return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
     };
     const auto iter = fileHandles_.find(handleId);
     if (iter == fileHandles_.end() || !iter->second->readable) {
@@ -136,12 +136,12 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(std::uint64_t handl
         return fail("eof");
     }
     buffer.bytes.resize(static_cast<std::size_t>(readCount));
-    return std::make_tuple(sol::make_object(runtime_->lua, std::move(buffer)), sol::make_object(runtime_->lua, sol::lua_nil));
+    return std::make_tuple(sol::make_object(lua, std::move(buffer)), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(std::uint64_t handleId, const sol::object& payload) {
-    auto fail = [this](const std::string& error) {
-        return std::make_tuple(sol::make_object(runtime_->lua, false), sol::make_object(runtime_->lua, error));
+std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(sol::state_view lua, std::uint64_t handleId, const sol::object& payload) {
+    auto fail = [lua](const std::string& error) {
+        return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, error));
     };
     const auto iter = fileHandles_.find(handleId);
     if (iter == fileHandles_.end() || !iter->second->writable) {
@@ -161,21 +161,21 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(std::uint64_t hand
         return fail("写入文件失败");
     }
     handle.bytesWritten += bytes->size();
-    return std::make_tuple(sol::make_object(runtime_->lua, true), sol::make_object(runtime_->lua, sol::lua_nil));
+    return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(std::uint64_t handleId) {
+std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(sol::state_view lua, std::uint64_t handleId) {
     const auto iter = fileHandles_.find(handleId);
     if (iter == fileHandles_.end()) {
-        return std::make_tuple(sol::make_object(runtime_->lua, false), sol::make_object(runtime_->lua, "文件句柄已关闭"));
+        return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, "文件句柄已关闭"));
     }
     fileHandles_.erase(iter);
-    return std::make_tuple(sol::make_object(runtime_->lua, true), sol::make_object(runtime_->lua, sol::lua_nil));
+    return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(const std::string& pathText) {
-    auto fail = [this](const std::string& error) {
-        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, error));
+std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua, const std::string& pathText) {
+    auto fail = [lua](const std::string& error) {
+        return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
     };
     if (!fileIoConfig_.enabled) {
         return fail("scripting.file_io 已禁用");
@@ -205,23 +205,23 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(const std::string& 
     if (!std::filesystem::exists(path, errorCode)) {
         return fail("路径不存在: " + path.generic_string());
     }
-    sol::table table = runtime_->lua.create_table();
+    sol::table table = lua.create_table();
     table["size"] = std::filesystem::is_regular_file(path, errorCode)
         ? static_cast<std::uint64_t>(std::filesystem::file_size(path, errorCode))
         : 0U;
     table["mtime_ms"] = 0;
     table["is_file"] = std::filesystem::is_regular_file(path, errorCode);
     table["is_dir"] = std::filesystem::is_directory(path, errorCode);
-    return std::make_tuple(sol::make_object(runtime_->lua, table), sol::make_object(runtime_->lua, sol::lua_nil));
+    return std::make_tuple(sol::make_object(lua, table), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(const std::string& pathText, const sol::object& opts) {
+std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view lua, const std::string& pathText, const sol::object& opts) {
     std::string kind = "send";
     std::string tag = "file";
     std::size_t chunkSize = fileIoConfig_.sendFile.defaultChunkBytes;
     if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
         if (!opts.is<sol::table>()) {
-            return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), sol::make_object(runtime_->lua, "opts 必须是 table"));
+            return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, "opts 必须是 table"));
         }
         const auto table = opts.as<sol::table>();
         kind = luaStringField(table, "kind").value_or(kind);
@@ -232,9 +232,9 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(const std::stri
         }
     }
     chunkSize = std::min(chunkSize, fileIoConfig_.maxChunkBytes);
-    const auto [handleObject, openError] = protoFsOpen(pathText, sol::make_object(runtime_->lua, sol::lua_nil));
+    const auto [handleObject, openError] = protoFsOpen(lua, pathText, sol::make_object(lua, sol::lua_nil));
     if (!handleObject.valid() || handleObject.get_type() == sol::type::lua_nil) {
-        return std::make_tuple(sol::make_object(runtime_->lua, sol::lua_nil), openError);
+        return std::make_tuple(sol::make_object(lua, sol::lua_nil), openError);
     }
 
     const auto handleId = handleObject.as<std::uint64_t>();
@@ -249,7 +249,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(const std::stri
         .total = total,
     };
     pumpFileSendJob(jobId);
-    return std::make_tuple(sol::make_object(runtime_->lua, jobId), sol::make_object(runtime_->lua, sol::lua_nil));
+    return std::make_tuple(sol::make_object(lua, jobId), sol::make_object(lua, sol::lua_nil));
 }
 
 void ScriptHost::pumpFileSendJob(std::uint64_t jobId) {
@@ -263,7 +263,7 @@ void ScriptHost::pumpFileSendJob(std::uint64_t jobId) {
         sol::table readOpts = runtime_->lua.create_table();
         readOpts["max_bytes"] = static_cast<int>(job.chunkSize);
         const auto offset = job.nextOffset;
-        const auto [bufferObject, readError] = protoFsRead(job.handleId, sol::make_object(runtime_->lua, readOpts));
+        const auto [bufferObject, readError] = protoFsRead(luaView(), job.handleId, sol::make_object(runtime_->lua, readOpts));
         if (!bufferObject.valid() || bufferObject.get_type() == sol::type::lua_nil) {
             job.eof = true;
             break;
@@ -290,7 +290,7 @@ void ScriptHost::pumpFileSendJob(std::uint64_t jobId) {
     if (job.eof && job.inflight == 0) {
         const auto handleId = job.handleId;
         fileSendJobs_.erase(jobIter);
-        protoFsClose(handleId);
+        protoFsClose(luaView(), handleId);
     }
 }
 

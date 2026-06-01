@@ -103,12 +103,17 @@ void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector
 }
 
 void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame) {
-    if (!scriptLoaded_ || !runtime_->stream) {
+    if (!scriptLoaded_ || !runtime_ || !runtime_->stream) {
         return;
     }
 
-    const auto callbackIter = runtime_->stream->frameCallbacks.find(frame.name);
-    if (callbackIter == runtime_->stream->frameCallbacks.end()) {
+    const auto callbackKeyIter = runtime_->stream->frameCallbackKeys.find(frame.name);
+    if (callbackKeyIter == runtime_->stream->frameCallbackKeys.end()) {
+        return;
+    }
+    const auto callbackIter = runtime_->streamCallbacks.find(callbackKeyIter->second);
+    if (callbackIter == runtime_->streamCallbacks.end()) {
+        protoLog("error", "stream.on_frame 回调未找到: " + callbackKeyIter->second);
         return;
     }
 
@@ -127,13 +132,18 @@ void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const Strea
 }
 
 void ScriptHost::callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error) {
-    if (!scriptLoaded_ || !runtime_->stream || !runtime_->stream->onError.valid()) {
+    if (!scriptLoaded_ || !runtime_ || !runtime_->stream || !runtime_->stream->onErrorCallbackKey.has_value()) {
+        return;
+    }
+    const auto callbackIter = runtime_->streamCallbacks.find(*runtime_->stream->onErrorCallbackKey);
+    if (callbackIter == runtime_->streamCallbacks.end()) {
+        protoLog("error", "stream.on_error 回调未找到: " + *runtime_->stream->onErrorCallbackKey);
         return;
     }
 
     try {
         sol::state_view view(runtime_->lua.lua_state());
-        auto callback = runtime_->stream->onError;
+        auto callback = callbackIter->second;
         auto result = callback(makeContextTable(view, ctx.connection), makeStreamErrorTable(view, error));
         if (!result.valid()) {
             protoLog("error", "stream.on_error 执行失败: " + protectedCallError(result));

@@ -10,9 +10,9 @@ public:
 
     std::string_view id() const override { return "status_api_module"; }
 
-    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
         auto* host = &host_;
-        sol::table statusApi = host->luaState().create_table();
+        sol::table statusApi = ctx.lua.create_table();
         statusApi.set_function("set", [host](const std::string& text, const sol::object& opts) {
             host->protoStatusSet(text, opts);
         });

@@ -11,8 +11,8 @@ public:
 
     std::string_view id() const override { return "codec_api_module"; }
 
-    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
-        sol::table bitsApi = host_.luaState().create_table();
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
+        sol::table bitsApi = ctx.lua.create_table();
         bitsApi.set_function("count", [](std::uint32_t value) {
             return std::popcount(value);
         });

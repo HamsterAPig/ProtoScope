@@ -5,6 +5,14 @@
 
 namespace protoscope::scripting {
 
+std::string streamFieldCountPath(const std::size_t frameIndex, const std::size_t fieldIndex) {
+    return "stream.frames[" + std::to_string(frameIndex + 1) + "].fields[" + std::to_string(fieldIndex + 1) + "].count";
+}
+
+std::string frameOnFrameCallbackKey(const std::string& frameName) {
+    return "stream.frame." + frameName + ".on_frame";
+}
+
 std::optional<StreamValueType> parseStreamValueType(const std::string& text) {
     if (text == "u8") return StreamValueType::U8;
     if (text == "i8") return StreamValueType::I8;
@@ -327,7 +335,10 @@ std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const so
     return nullptr;
 }
 
-std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua, std::string& error) {
+std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
+    sol::state_view lua,
+    std::unordered_map<std::string, sol::protected_function>& callbacks,
+    std::string& error) {
     const sol::object streamObject = lua["stream"];
     if (!streamObject.valid() || streamObject.get_type() == sol::type::lua_nil) {
         return nullptr;
@@ -549,25 +560,28 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua,
 
                 const sol::object countObject = fieldTable["count"];
                 if (countObject.valid() && countObject.get_type() != sol::type::lua_nil) {
+                    const auto countPath = streamFieldCountPath(index - 1, fieldIndex - 1);
                     if (const auto count = luaIntegerValue(countObject); count.has_value()) {
                         if (*count < 0) {
-                            error = "field.count 不能为负数";
+                            error = countPath + " 不能为负数";
                             return nullptr;
                         }
                         field.count.fixed = static_cast<std::size_t>(*count);
                     } else if (countObject.is<std::string>()) {
                         field.count.fieldName = countObject.as<std::string>();
                     } else if (countObject.is<sol::protected_function>()) {
-                        error = "field.count 不再支持 function，请迁移为 count 表达式 table，例如 { op = \"div\", field = \"byte_count\", by = 2 }";
+                        error = countPath
+                              + " 检测到 function；该写法已废弃，不再支持 function。"
+                                " 请迁移为 count 表达式 table，例如 count = { op = \"div\", field = \"byte_count\", by = 2 }";
                         return nullptr;
                     } else if (countObject.is<sol::table>()) {
                         field.count.expression = parseStreamCountExpressionObject(countObject, error);
                         if (!field.count.expression) {
-                            error = "field.count 表达式无效: " + error;
+                            error = countPath + " 表达式无效: " + error;
                             return nullptr;
                         }
                     } else {
-                        error = "field.count 仅支持整数、字段名或 count 表达式 table";
+                        error = countPath + " 仅支持整数、字段名或 count 表达式 table";
                         return nullptr;
                     }
                 }
@@ -581,7 +595,9 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua,
             error = "frame.on_frame 必须是 function";
             return nullptr;
         }
-        loaded->frameCallbacks.emplace(frame.name, onFrameObject.as<sol::protected_function>());
+        const auto callbackKey = frameOnFrameCallbackKey(frame.name);
+        callbacks.insert_or_assign(callbackKey, onFrameObject.as<sol::protected_function>());
+        loaded->frameCallbackKeys.insert_or_assign(frame.name, callbackKey);
         frames.push_back(std::move(frame));
     }
 
@@ -590,7 +606,9 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(sol::state_view lua,
             error = "stream.on_error 必须是 function";
             return nullptr;
         }
-        loaded->onError = onErrorObject.as<sol::protected_function>();
+        const std::string onErrorCallbackKey = "stream.on_error";
+        callbacks.insert_or_assign(onErrorCallbackKey, onErrorObject.as<sol::protected_function>());
+        loaded->onErrorCallbackKey = onErrorCallbackKey;
     }
 
     loaded->parser = FrameStreamParser(bufferDefinition, std::move(frames));

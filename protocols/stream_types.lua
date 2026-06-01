@@ -60,7 +60,7 @@ local M = {}
 ---@field name string 字段名
 ---@field type ProtoStreamValueType 字段类型
 ---@field offset? integer 字段起始 offset，Lua 下标从 1 开始；不写时按前一字段顺延
----@field count? ProtoStreamFieldCount 字段数量，可写整数、已解析字段名或纯 C++ count 表达式 table；不再支持 function
+---@field count? ProtoStreamFieldCount 字段数量，可写整数、已解析字段名或纯 C++ count 表达式 table；旧 `function(...)` 写法已彻底废弃且不再兼容
 
 ---@class ProtoStreamFrameDef
 ---@field name string 帧名称，必须唯一

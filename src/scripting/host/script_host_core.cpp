@@ -1582,9 +1582,9 @@ std::vector<FileDialogRequest> ScriptHost::drainFileDialogRequests() {
     return drained;
 }
 
-void ScriptHost::registerLuaApi(sol::table& proto) {
+void ScriptHost::registerLuaApi(sol::state_view lua, sol::table& proto) {
     ScriptHostQueues queues;
-    ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_};
+    ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_, lua};
     std::array modules{
         makeCoreApiModule(*this),
         makeTxApiModule(*this),

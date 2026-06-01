@@ -11,9 +11,9 @@ public:
 
     std::string_view id() const override { return "plot_api_module"; }
 
-    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
         auto* host = &host_;
-        sol::table plotApi = host->luaState().create_table();
+        sol::table plotApi = ctx.lua.create_table();
         plotApi.set_function("setup", [host](const sol::object& payload) {
             std::string error;
             const auto setup = script_host_lua::parsePlotSetup(payload, error);

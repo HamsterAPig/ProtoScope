@@ -441,6 +441,43 @@ void test_application_same_protocol_reload_keeps_runtime_stable() {
     application.shutdown();
 }
 
+void test_application_same_protocol_reload_without_force_preserves_runtime_state() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-reload-no-force-state");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "非强制 reload 测试协议应可写入");
+        out << "local counter = 0\n";
+        out << "function ui()\n";
+        out << "  return { { id = \"counter\", title = \"Counter\", controls = { { type = \"button\", id = \"tick\", label = \"Tick\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"tick\" then\n";
+        out << "    counter = counter + 1\n";
+        out << "    proto.status.set(\"count:\" .. counter)\n";
+        out << "  end\n";
+        out << "end\n";
+    }
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "非强制 reload 测试协议应可加载");
+
+    application.updateControlValue("tick", true);
+    require(application.docks().configState().statusMessage == "count:1", "首次触发应把计数写入状态栏");
+
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), false), "同协议非强制 reload 应成功");
+    const auto& lua = application.docks().luaState();
+    require(lua.loaded, "同协议非强制 reload 后协议仍应处于已加载状态");
+    require(lua.protocolDir == protocolDir.generic_string(), "同协议非强制 reload 后协议目录应保持不变");
+    require(lua.lastError.empty(), "同协议非强制 reload 成功后不应残留错误");
+
+    application.updateControlValue("tick", true);
+    require(application.docks().configState().statusMessage == "count:2",
+            "同协议非强制 reload 不应重置 Lua 本地状态");
+
+    application.shutdown();
+}
+
 void test_application_failed_reload_keeps_old_callbacks_alive() {
     const auto validProtocolDir = makeUniqueTempDir("protoscope-reload-valid");
     {
@@ -1001,6 +1038,7 @@ void test_application_reload_rebuilds_frame_rows_with_count_expression() {
             "历史重建应完整解析 count 表达式字段");
     require(application.docks().scriptState().rows.empty(), "历史重建不应执行 on_frame 副作用");
 }
+
 
 void test_application_transfer_log_frame_view_waits_for_rx_full_frame() {
     constexpr const char* protocolDir = "tests/fixtures/protocols/stream_frame_only";
