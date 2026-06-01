@@ -148,6 +148,9 @@ bool matchesKeywordFilter(const ReceiveRow& row, std::string_view keyword, bool 
 }
 } // namespace
 
+DockStore::DockStore()
+    : historyLimiter_(std::make_unique<BoundedDockHistoryLimiter>()) {}
+
 ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row) {
     const auto direction = uppercaseAscii(row.direction);
     if (direction == "RX") {

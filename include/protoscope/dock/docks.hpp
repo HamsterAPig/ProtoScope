@@ -189,6 +189,8 @@ struct ConfigDockState {
 
 class DockStore {
 public:
+    DockStore();
+
     void clearReceiveRows();
     void appendReceiveRow(ReceiveRow row);
     void appendLuaEvent(const scripting::ScriptEvent& event);
@@ -228,7 +230,6 @@ public:
     void setHistoryLimits(DockHistoryLimits limits);
 
 private:
-    std::unique_ptr<IDockHistoryLimiter> historyLimiter_{std::make_unique<BoundedDockHistoryLimiter>()};
     CommDockState comm_{};
     ReceiveDockState receive_{};
     LogDockState log_{};
@@ -238,6 +239,7 @@ private:
     plot::WaveDockState wave_{};
     ConfigDockState config_{};
     DockHistoryLimits historyLimits_{};
+    std::unique_ptr<IDockHistoryLimiter> historyLimiter_;
 };
 
 } // namespace protoscope::dock

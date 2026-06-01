@@ -58,6 +58,15 @@ std::string ProtoBuffer::toHex(std::size_t maxBytes) const {
 constexpr const char* kDefaultDockId = "protocol";
 constexpr const char* kDefaultDockTitle = "协议动作";
 
+std::string readStringField(const sol::table& table, const char* key, std::string fallback = {}) {
+    // 避免 sol2 字符串字段读取在 GCC 15 内联后触发数组边界误报。
+    const sol::object value = table[key];
+    if (!value.valid() || value.get_type() == sol::type::lua_nil || !value.is<std::string>()) {
+        return fallback;
+    }
+    return value.as<std::string>();
+}
+
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -327,9 +336,9 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
 
         const auto table = object.as<sol::table>();
         ElfSymbolValue symbol;
-        symbol.label = table.get_or("label", std::string());
-        symbol.value = table.get_or("value", std::string());
-        symbol.type = table.get_or("type", std::string());
+        symbol.label = readStringField(table, "label");
+        symbol.value = readStringField(table, "value");
+        symbol.type = readStringField(table, "type");
         if (symbol.label.empty() || symbol.value.empty() || symbol.type.empty()) {
             error = "elf_symbol_combo 控件值必须包含 label、value、type";
             return std::nullopt;
@@ -421,7 +430,7 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     }
 
     const auto table = object.as<sol::table>();
-    const std::string typeText = table.get_or("type", std::string());
+    const std::string typeText = readStringField(table, "type");
     const auto controlType = parseControlType(typeText);
     if (!controlType.has_value()) {
         error = "未知控件类型: " + typeText;
@@ -430,8 +439,8 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
 
     ControlDescriptor descriptor;
     descriptor.type = *controlType;
-    descriptor.id = table.get_or("id", std::string());
-    descriptor.label = table.get_or("label", std::string());
+    descriptor.id = readStringField(table, "id");
+    descriptor.label = readStringField(table, "label");
     if (descriptor.id.empty() || descriptor.label.empty()) {
         error = "控件必须提供 id 和 label";
         return std::nullopt;
@@ -441,7 +450,7 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     case ControlType::Button:
         break;
     case ControlType::InputText:
-        descriptor.textDefault = table.get_or("default", std::string());
+        descriptor.textDefault = readStringField(table, "default");
         break;
     case ControlType::InputInt:
         descriptor.intDefault = table.get_or("default", 0);
@@ -799,7 +808,7 @@ std::optional<DockLayoutDescriptor> parseDockLayout(const DockDescriptor& dock,
     layout.table.borders = layoutTable.get_or("borders", false);
     layout.table.resizable = layoutTable.get_or("resizable", true);
     layout.table.rowBg = layoutTable.get_or("row_bg", false);
-    layout.table.sizing = layoutTable.get_or("sizing", std::string("stretch"));
+    layout.table.sizing = readStringField(layoutTable, "sizing", "stretch");
     if (layout.table.sizing != "stretch") {
         error = "dock '" + dock.id + "' 的 layout.sizing 仅支持 'stretch'";
         return std::nullopt;
@@ -931,10 +940,10 @@ std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view 
 
             const auto dockEntry = dockObject.as<sol::table>();
             DockDescriptor dock;
-            dock.id = dockEntry.get_or("id", std::string());
-            dock.title = dockEntry.get_or("title", std::string());
-            dock.anchor = dockEntry.get_or("anchor", std::string("left_bottom"));
-            dock.tabGroup = dockEntry.get_or("tab_group", std::string());
+            dock.id = readStringField(dockEntry, "id");
+            dock.title = readStringField(dockEntry, "title");
+            dock.anchor = readStringField(dockEntry, "anchor", "left_bottom");
+            dock.tabGroup = readStringField(dockEntry, "tab_group");
             if (dock.id.empty() || dock.title.empty()) {
                 error = "dock 必须提供 id 和 title";
                 return std::nullopt;
