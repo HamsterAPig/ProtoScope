@@ -394,6 +394,65 @@ void test_application_failed_protocol_reload_keeps_previous_runtime() {
     application.shutdown();
 }
 
+void test_application_same_protocol_reload_keeps_runtime_stable() {
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory("protocols/lua_waveform_demo", true), "Lua 波形演示脚本应可加载");
+
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        require(application.reloadProtocolDirectory("protocols/lua_waveform_demo", true), "同协议强制 reload 应持续成功");
+        const auto& lua = application.docks().luaState();
+        require(lua.loaded, "同协议强制 reload 后协议仍应处于已加载状态");
+        require(!lua.docks.empty(), "同协议强制 reload 后 Dock 快照应保持有效");
+        require(!lua.controls.empty(), "同协议强制 reload 后控件快照应保持有效");
+        require(lua.lastError.empty(), "同协议强制 reload 成功后不应残留错误");
+    }
+
+    application.shutdown();
+}
+
+void test_application_failed_reload_keeps_old_callbacks_alive() {
+    const auto validProtocolDir = makeUniqueTempDir("protoscope-reload-valid");
+    {
+        std::ofstream out(validProtocolDir / "main.lua");
+        require(out.good(), "有效 reload 隔离协议应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"stable\", title = \"Stable\", controls = { { type = \"button\", id = \"ping\", label = \"Ping\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"ping\" then proto.status.set(\"old callback alive\") end\n";
+        out << "end\n";
+    }
+
+    const auto invalidProtocolDir = makeUniqueTempDir("protoscope-reload-invalid");
+    {
+        std::ofstream out(invalidProtocolDir / "main.lua");
+        require(out.good(), "非法 reload 隔离协议应可写入");
+        out << "function ui()\n";
+        out << "  error(\"ui boom\")\n";
+        out << "end\n";
+        out << "function stream()\n";
+        out << "  return \"bad stream\"\n";
+        out << "end\n";
+    }
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(validProtocolDir.generic_string(), true), "有效协议应可加载");
+
+    const auto before = application.docks().luaState();
+    require(!application.reloadProtocolDirectory(invalidProtocolDir.generic_string(), true), "非法协议 reload 应失败");
+    const auto& after = application.docks().luaState();
+    require(after.protocolDir == before.protocolDir, "失败 reload 后旧协议目录应保留");
+    require(after.docks.size() == before.docks.size(), "失败 reload 后旧 Dock 快照应保留");
+
+    application.updateControlValue("ping", true);
+    require(application.docks().configState().statusMessage == "old callback alive",
+            "失败 reload 后旧协议控件回调仍应可用");
+
+    application.shutdown();
+}
+
 void test_application_forced_reload_discards_old_tx_callback_outputs() {
     const auto protocolDir = makeUniqueTempDir("protoscope-reload-discard-old-tx");
     {
@@ -438,6 +497,79 @@ void test_application_forced_reload_discards_old_tx_callback_outputs() {
     require(application.docks().configState().statusMessage.find("old canceled leaked") == std::string::npos,
             "强制重载应丢弃旧 on_tx 追加的状态");
 
+    application.shutdown();
+}
+
+void test_application_request_done_success_does_not_set_comm_error() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-request-done-success");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "request_done 成功测试协议应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"request_done_success\", title = \"Request Done\", controls = { { type = \"button\", id = \"read\", label = \"Read\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"read\" then proto.request({ 0x01 }, { timeout_ms = 1000, tag = \"read\" }) end\n";
+        out << "end\n";
+        out << "function on_tx(ctx, evt)\n";
+        out << "  if evt.state == \"sent\" then proto.request_done({ ok = true, message = \"读取应答成功\" }) end\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "request_done 成功测试协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    application.docks().commState().lastError = "读取应答成功";
+    application.updateControlValue("read", true);
+    application.pumpOnce();
+
+    require(application.docks().commState().lastError.empty(),
+            "request_done ok=true 的成功消息不应显示到通讯配置错误");
+    application.shutdown();
+}
+
+void test_application_request_done_failure_sets_comm_error() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-request-done-failure");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "request_done 失败测试协议应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"request_done_failure\", title = \"Request Done\", controls = { { type = \"button\", id = \"read\", label = \"Read\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"read\" then proto.request({ 0x01 }, { timeout_ms = 1000, tag = \"read\" }) end\n";
+        out << "end\n";
+        out << "function on_tx(ctx, evt)\n";
+        out << "  if evt.state == \"sent\" then proto.request_done({ ok = false, message = \"读取应答失败\" }) end\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "request_done 失败测试协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    application.updateControlValue("read", true);
+    application.pumpOnce();
+
+    require(application.docks().commState().lastError == "读取应答失败",
+            "request_done ok=false 的失败消息应显示到通讯配置错误");
     application.shutdown();
 }
 

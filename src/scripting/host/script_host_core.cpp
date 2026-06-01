@@ -94,6 +94,8 @@ std::string txEventStateName(TxEventState state) {
         return "sent";
     case TxEventState::Completed:
         return "completed";
+    case TxEventState::Failed:
+        return "failed";
     case TxEventState::Timeout:
         return "timeout";
     case TxEventState::Rejected:
@@ -1301,6 +1303,8 @@ ScriptHost::ScriptHost()
     : runtime_(std::make_unique<Runtime>()) {}
 
 ScriptHost::~ScriptHost() = default;
+ScriptHost::ScriptHost(ScriptHost&&) noexcept = default;
+ScriptHost& ScriptHost::operator=(ScriptHost&&) noexcept = default;
 
 void ScriptHost::setFileIoConfig(FileIoConfig config) {
     fileIoConfig_ = std::move(config);

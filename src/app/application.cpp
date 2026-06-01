@@ -276,22 +276,10 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
             return true;
         }
 
-        cancelAllTxRequests("协议已重新加载");
-        // 核心流程：取消旧 request 会触发旧脚本 on_tx；重载前必须丢弃这些旧输出，
-        // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
-        scriptHost_.drainTxRequests();
-        scriptHost_.drainRequestDoneResults();
-        scriptHost_.drainStatusUpdates();
-        scriptHost_.drainDialogRequests();
-        scriptHost_.drainFileDialogRequests();
-        scriptHost_.drainEvents();
-        scriptHost_.drainLogs();
-        scriptHost_.clearPendingRealtimeOutputs();
-
-        scripting::ScriptHost probeHost;
-        probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
-        if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
-            lua.lastError = probeHost.lastError();
+        scripting::ScriptHost nextHost;
+        nextHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
+        if (!nextHost.loadProtocolDirectory(resolvedDirText)) {
+            lua.lastError = nextHost.lastError();
             loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
             lua.docks = scriptHost_.dockSnapshots();
             lua.controls = scriptHost_.controlsSnapshot();
@@ -299,17 +287,31 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
             return false;
         }
 
-        // 核心流程：先用临时宿主探测目标协议能否完整加载，确认成功后再在当前宿主上重载，
-        // 避免失败场景先清空旧运行态，也避免 Lua 回调把临时宿主地址固化进运行时对象。
-        if (!scriptHost_.loadProtocolDirectory(resolvedDirText)) {
-            lua.lastError = scriptHost_.lastError();
-            loggingFacade_.error("protocol", "协议重载失败: " + lua.lastError);
-            lua.docks = scriptHost_.dockSnapshots();
-            lua.controls = scriptHost_.controlsSnapshot();
-            lua.controlStates = scriptHost_.controlStatesSnapshot();
-            return false;
+        try {
+            cancelAllTxRequests("协议已重新加载");
+        } catch (const std::exception& ex) {
+            loggingFacade_.warn("protocol", std::string("协议重载前取消旧请求失败: ") + ex.what());
+        } catch (...) {
+            loggingFacade_.warn("protocol", "协议重载前取消旧请求失败: 未知异常");
+        }
+        try {
+            // 核心流程：取消旧 request 可能触发旧脚本 on_tx；替换宿主前丢弃旧输出，
+            // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
+            scriptHost_.drainTxRequests();
+            scriptHost_.drainRequestDoneResults();
+            scriptHost_.drainStatusUpdates();
+            scriptHost_.drainDialogRequests();
+            scriptHost_.drainFileDialogRequests();
+            scriptHost_.drainEvents();
+            scriptHost_.drainLogs();
+            scriptHost_.clearPendingRealtimeOutputs();
+        } catch (const std::exception& ex) {
+            loggingFacade_.warn("protocol", std::string("协议重载前清理旧脚本输出失败: ") + ex.what());
+        } catch (...) {
+            loggingFacade_.warn("protocol", "协议重载前清理旧脚本输出失败: 未知异常");
         }
 
+        scriptHost_ = std::move(nextHost);
         lua.protocolDir = resolvedDirText;
         lua.protocolName = protocolName;
         lua.scriptPath = scriptPath;
@@ -1233,9 +1235,12 @@ bool Application::processScriptRequestCompletions() {
         const auto activeRequest = activeHalfDuplexRequest_->request;
         activeHalfDuplexRequest_.reset();
         scriptHost_.setRequestAwaitingCompletion(false);
+        if (result.ok && !result.message.empty() && dockStore_.commState().lastError == result.message) {
+            dockStore_.commState().lastError.clear();
+        }
         finishTxRequest(activeRequest,
-                        scripting::TxEventState::Completed,
-                        result.message.empty() ? std::nullopt : std::optional<std::string>{result.message},
+                        result.ok ? scripting::TxEventState::Completed : scripting::TxEventState::Failed,
+                        (!result.ok && !result.message.empty()) ? std::optional<std::string>{result.message} : std::nullopt,
                         result.timestampMs);
         completionConsumed = true;
         changed = true;

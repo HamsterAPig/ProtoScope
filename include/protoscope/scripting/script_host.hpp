@@ -226,6 +226,7 @@ struct TxRequest {
 enum class TxEventState {
     Sent,
     Completed,
+    Failed,
     Timeout,
     Rejected,
     Dropped,
@@ -328,6 +329,10 @@ class ScriptHost {
 public:
     ScriptHost();
     ~ScriptHost();
+    ScriptHost(ScriptHost&&) noexcept;
+    ScriptHost& operator=(ScriptHost&&) noexcept;
+    ScriptHost(const ScriptHost&) = delete;
+    ScriptHost& operator=(const ScriptHost&) = delete;
 
     bool loadScriptFile(const std::string& path);
     bool loadProtocolDirectory(const std::string& directory);
