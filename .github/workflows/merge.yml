@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build-and-test:
     name: Windows x64 Release
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 45
 
     steps:
@@ -26,12 +26,47 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Configure
         shell: pwsh
-        run: >
-          cmake -S . -B build -G "Ninja"
-          -DCMAKE_BUILD_TYPE=Release
-          -DPROTOSCOPE_ENABLE_GUI=ON
+        run: |
+          cmake -S . -B build -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DPROTOSCOPE_ENABLE_GUI=ON `
+            -DCMAKE_C_COMPILER=cl `
+            -DCMAKE_CXX_COMPILER=cl
+
+      - name: Verify MSVC toolchain
+        shell: pwsh
+        run: |
+          $cache = Get-Content build/CMakeCache.txt
+          $cache | Select-String "^CMAKE_C_COMPILER:|^CMAKE_CXX_COMPILER:|^CMAKE_MAKE_PROGRAM:"
+
+          $cCompilerMatch = $cache | Select-String "^CMAKE_C_COMPILER:(?:FILEPATH|UNINITIALIZED)=(.+)$" | Select-Object -First 1
+          $cxxCompilerMatch = $cache | Select-String "^CMAKE_CXX_COMPILER:(?:FILEPATH|UNINITIALIZED)=(.+)$" | Select-Object -First 1
+
+          if (-not $cCompilerMatch) {
+            throw "CMAKE_C_COMPILER was not found in CMakeCache.txt."
+          }
+
+          if (-not $cxxCompilerMatch) {
+            throw "CMAKE_CXX_COMPILER was not found in CMakeCache.txt."
+          }
+
+          $cCompiler = $cCompilerMatch.Matches[0].Groups[1].Value
+          $cxxCompiler = $cxxCompilerMatch.Matches[0].Groups[1].Value
+
+          if ((Split-Path $cCompiler -Leaf) -notin @("cl", "cl.exe")) {
+            throw "Expected MSVC cl.exe for C compiler, got '$cCompiler'."
+          }
+
+          if ((Split-Path $cxxCompiler -Leaf) -notin @("cl", "cl.exe")) {
+            throw "Expected MSVC cl.exe for CXX compiler, got '$cxxCompiler'."
+          }
 
       - name: Build
         shell: pwsh
