@@ -286,3 +286,62 @@ void test_frame_stream_parser_count_expression_remaining_if_flag_and_case() {
     auto caseValues = parseExpressionValues(caseParser, {0x10, 0x00, 0x21, 0x00, 0x22});
     require(caseValues.size() == 2 && caseValues[0] == 0x21, "case count 表达式应按功能码选择数量");
 }
+
+
+void test_frame_stream_parser_multi_schema_large_chunk_throughput() {
+    using namespace protoscope::scripting;
+
+    StreamFrameDefinition fixed;
+    fixed.name = "fixed";
+    fixed.header = {0xAB};
+    fixed.size = 4;
+
+    StreamFrameDefinition dynamic = makeDynamicParser().frameDefinitions().front();
+    FrameStreamParser parser(StreamBufferDefinition{.capacity = 512, .dropOldest = true}, {fixed, dynamic});
+
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(256);
+    for (int index = 0; index < 16; ++index) {
+        bytes.push_back(0x00);
+        bytes.push_back(0xAB);
+        bytes.push_back(static_cast<std::uint8_t>(index));
+        bytes.push_back(static_cast<std::uint8_t>(index + 1));
+        bytes.push_back(static_cast<std::uint8_t>(index + 2));
+        auto frame = makeDynamicFrame({static_cast<std::uint8_t>(index), static_cast<std::uint8_t>(index + 1)});
+        bytes.insert(bytes.end(), frame.begin(), frame.end());
+    }
+
+    const auto batch = parser.pushBytes(bytes);
+    require(batch.frames.size() == 32, "多 schema 大块输入应完整解析全部帧");
+    require(!batch.errors.empty(), "带噪声前缀的大块输入应报告噪声丢弃");
+}
+
+void test_frame_stream_parser_crc_frame_across_chunks() {
+    auto parser = makeDynamicParser(64);
+    const auto frame = makeDynamicFrame({0x10, 0x11, 0x12, 0x13});
+
+    const auto first = parser.pushBytes({frame.begin(), frame.begin() + 3});
+    require(first.frames.empty(), "CRC 帧半包首段不应提前出帧");
+
+    const auto second = parser.pushBytes({frame.begin() + 3, frame.end()});
+    require(second.errors.empty(), "CRC 帧续包完成后不应报错");
+    require(second.frames.size() == 1, "CRC 帧跨 chunk 应在续包后成功解析");
+    require(second.frames[0].raw == frame, "CRC 帧跨 chunk 后 raw 应保持一致");
+}
+
+void test_frame_stream_parser_overflow_keeps_latest_crc_window() {
+    auto parser = makeDynamicParser(18);
+    const auto oldFrame = makeDynamicFrame({0x01, 0x02, 0x03});
+    const auto newFrame = makeDynamicFrame({0x09, 0x0A, 0x0B});
+
+    std::vector<std::uint8_t> bytes = oldFrame;
+    bytes.push_back(0x7F);
+    bytes.insert(bytes.end(), newFrame.begin(), newFrame.end());
+
+    const auto batch = parser.pushBytes(bytes);
+    require(!batch.errors.empty(), "overflow 场景应报告旧窗口被覆盖");
+    require(batch.errors.front().code == protoscope::scripting::StreamParseErrorCode::Overflow,
+            "overflow 场景首个错误应为 overflow");
+    require(batch.frames.size() == 1, "overflow 后应仅保留最新完整 CRC 帧");
+    require(batch.frames[0].raw == newFrame, "overflow 后应保留最新 CRC 帧");
+}

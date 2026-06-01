@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <memory>
 #include <string>
@@ -14,6 +15,12 @@ namespace protoscope::scripting {
 
 class ByteRingBuffer {
 public:
+    struct LinearReadView {
+        const std::uint8_t* data{nullptr};
+        std::size_t size{0};
+        bool copied{false};
+    };
+
     explicit ByteRingBuffer(std::size_t capacity = 0);
 
     void reset();
@@ -25,6 +32,9 @@ public:
     void discardFront(std::size_t count);
     [[nodiscard]] std::uint8_t at(std::size_t index) const;
     [[nodiscard]] std::vector<std::uint8_t> slice(std::size_t offset, std::size_t count) const;
+    [[nodiscard]] LinearReadView linearRead(std::size_t offset,
+                                            std::size_t count,
+                                            std::vector<std::uint8_t>& scratch) const;
 
 private:
     void appendContiguous(const std::uint8_t* bytes, std::size_t count);
@@ -194,6 +204,14 @@ public:
     StreamParseBatch pushBytes(const std::vector<std::uint8_t>& bytes);
 
 private:
+    struct CompiledFrame {
+        std::size_t index{0};
+        std::size_t minFrameLength{0};
+        std::size_t fixedFieldBytes{0};
+        std::uint8_t firstHeaderByte{0};
+        bool hasHeader{false};
+    };
+
     struct CandidateMatch {
         std::size_t start{0};
         std::vector<std::size_t> indexes;
@@ -214,7 +232,8 @@ private:
 
     [[nodiscard]] std::size_t maxHeaderLength() const;
     [[nodiscard]] std::optional<CandidateMatch> findCandidate() const;
-    AnalyzeResult analyzeFrame(const StreamFrameDefinition& frame) const;
+    AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
+                               const ByteRingBuffer::LinearReadView& window) const;
     std::optional<std::size_t> resolveFieldCount(const StreamFieldDefinition& field,
                                                  const StreamFieldMap& parsed,
                                                  std::size_t frameLength,
@@ -222,11 +241,17 @@ private:
                                                  std::size_t fieldStart,
                                                  const std::vector<std::uint8_t>& frameBytes,
                                                  std::string& error) const;
+    [[nodiscard]] ByteRingBuffer::LinearReadView ensureLinearWindow(std::size_t count) const;
+    void buildCompiledFrames();
 
 private:
     StreamBufferDefinition bufferDefinition_;
     std::vector<StreamFrameDefinition> frames_;
     ByteRingBuffer buffer_;
+    std::vector<CompiledFrame> compiledFrames_;
+    std::array<std::vector<std::size_t>, 256> headerFirstByteIndex_{};
+    std::size_t maxHeaderLength_{0};
+    mutable std::vector<std::uint8_t> linearScratch_;
 };
 
 std::string_view streamParseErrorCodeName(StreamParseErrorCode code);
