@@ -120,6 +120,7 @@ struct QueuedEventTransport final : protoscope::transport::ITransport {
             .requestId = task.requestId,
             .kind = task.kind,
             .state = protoscope::transport::TransportTxState::Sent,
+            .error = {},
             .bytes = task.payload.size(),
             .queuedAtMs = task.queuedAtMs,
             .finishedAtMs = task.queuedAtMs,
