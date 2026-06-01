@@ -14,9 +14,6 @@ void renderWaveChannels(plot::WaveViewState& view,
     visibleChannelIndices.clear();
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
-        if (!currentPlotItemVisible(channel.label)) {
-            continue;
-        }
         const auto& channelSamples = displayData.channels[channelIndex].samples;
         std::size_t sourceSampleCount = 0;
         const auto envelope = buildDisplayEnvelope(displayData.channels[channelIndex].samples,
