@@ -13,6 +13,9 @@ target_link_libraries(protoscope_plot
         protoscope_pocketfft
 )
 target_compile_features(protoscope_plot PUBLIC cxx_std_20)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(protoscope_plot PRIVATE -Wno-maybe-uninitialized)
+endif()
 
 add_library(protoscope_protocol_utils STATIC
     protocol_utils/codec.cpp
