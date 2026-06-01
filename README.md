@@ -2,15 +2,17 @@
 
 ProtoScope 当前已具备第一版 `TCP + Lua` 联调主链路，核心目标是把“连接设备 -> 执行协议脚本 -> 观察收发与事件”这条路径跑通。
 
+面向使用者的完整说明见 [ProtoScope 用户手册](docs/user-manual.md)。
+
 ## 当前能力
 
-- `通讯配置`：`TCP Client / TCP Server / Serial`
+- `通讯配置`：`TCP Client / TCP Server / Serial / UDP Peer`
 - `配置文件管理`：支持保存、显式重载，以及可选的“外部配置变更提醒”
 - `发送编辑器`：HEX 模式自动归一化为大写双字节分组，并在奇数个 nibble 时禁止发送
 - `Lua 声明式控件`：通过 `controls()` 把脚本控件挂进 Dock
 - `Lua 协议回调`：脚本可响应打开、关闭、收包、控件交互和定时器事件
 - `接收展示`：统一展示系统日志、TX/RX、Lua 事件
-- `波形 Dock`：当前仍为占位，保留后续 ImPlot 接口边界
+- `波形 Dock`：支持 Lua 推送多通道波形、总览、测量、FFT，以及原始波形导入、导出和录制
 
 ## 已接入依赖
 
