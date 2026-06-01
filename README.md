@@ -3,6 +3,7 @@
 ProtoScope 当前已具备第一版 `TCP + Lua` 联调主链路，核心目标是把“连接设备 -> 执行协议脚本 -> 观察收发与事件”这条路径跑通。
 
 面向使用者的完整说明见 [ProtoScope 用户手册](docs/user-manual.md)。
+面向维护者的模块说明见 [src/include 模块设计导览](docs/module-design.md)。
 
 ## 当前能力
 
