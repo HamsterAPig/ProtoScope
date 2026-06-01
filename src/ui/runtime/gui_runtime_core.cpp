@@ -453,6 +453,47 @@ void GuiRuntime::drawAppHeader() {
             requestProtocolWorkspaceSwitch(lua.protocolDir, true);
         }
         ImGui::SameLine();
+        if (ImGui::Button("视图")) {
+            ImGui::OpenPopup("##app_header_view_menu");
+        }
+        if (ImGui::BeginPopup("##app_header_view_menu")) {
+            const bool previousShowCommDock = showCommDock_;
+            const bool previousShowProtocolDock = showProtocolDock_;
+            const bool previousShowTransferDock = showTransferDock_;
+            const bool previousShowLogDock = showLogDock_;
+            const bool previousShowScriptDock = showScriptDock_;
+            const bool previousShowWaveDock = showWaveDock_;
+            ImGui::MenuItem("通讯配置", nullptr, &showCommDock_);
+            ImGui::MenuItem("协议脚本 / 动态控件", nullptr, &showProtocolDock_);
+            ImGui::MenuItem("收发数据", nullptr, &showTransferDock_);
+            ImGui::MenuItem("日志", nullptr, &showLogDock_);
+            ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
+            ImGui::MenuItem("波形", nullptr, &showWaveDock_);
+            if (previousShowCommDock != showCommDock_
+                || previousShowProtocolDock != showProtocolDock_
+                || previousShowTransferDock != showTransferDock_
+                || previousShowLogDock != showLogDock_
+                || previousShowScriptDock != showScriptDock_
+                || previousShowWaveDock != showWaveDock_) {
+                pendingProtocolWorkspaceSave_ = true;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "重置当前协议 Dock 布局",
+                    nullptr,
+                    false,
+                    canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_))) {
+                resetCurrentProtocolWorkspaceLayout();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine();
+        if (drawGhostIconButton("重置布局", "重置当前协议 Dock 布局并恢复现代默认布局")) {
+            if (canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_)) {
+                resetCurrentProtocolWorkspaceLayout();
+            }
+        }
+        ImGui::SameLine();
         if (application_.isRawCaptureRecording()) {
             if (drawDangerIconButton("停止录制", "停止完整原始数据录制")) {
                 stopRawCaptureRecordingWithStatus();
