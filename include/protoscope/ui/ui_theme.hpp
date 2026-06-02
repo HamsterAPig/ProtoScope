@@ -34,7 +34,7 @@ void applyImPlotProfessionalDarkTheme();
 
 // beginToolbarGroup() 内部会压入 ImGui 栈；无论返回值是否为 true，后续都必须调用 endToolbarGroup()。
 // 传入的 minHeight 为 0 时，ImGui::BeginChild() 会让子窗口占满当前剩余可用高度，而不是按内容自适应。
-// title 为空时仅绘制容器背景和边框，不绘制内部标题与分割线。
+// title 为空时仅绘制容器背景和边框，不绘制内部标题与分割线，并使用更紧凑的子窗口纵向留白。
 bool beginToolbarGroup(const char* id, const char* title, float minHeight = 0.0F);
 void endToolbarGroup();
 bool drawToolbarSectionButton(const char* label, const char* tooltip, bool active = false, const ImVec2& size = ImVec2(0.0F, 0.0F));

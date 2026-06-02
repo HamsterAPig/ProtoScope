@@ -117,12 +117,14 @@ void applyImPlotProfessionalDarkTheme() {
 }
 bool beginToolbarGroup(const char* id, const char* title, float minHeight) {
     const auto& tokens = defaultUiStyleTokens();
+    const bool hasTitle = title != nullptr && title[0] != '\0';
     ImGui::PushID(id);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(tokens.windowPaddingX, hasTitle ? tokens.windowPaddingY : tokens.framePaddingY));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, tokens.panelBackgroundAlt);
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     // 这里沿用 ImGui::BeginChild() 的原生语义：高度为 0 时占满剩余空间，调用方需要显式传入紧凑高度。
     const bool opened = ImGui::BeginChild("##group", ImVec2(0.0F, minHeight), true);
-    if (opened && title != nullptr && title[0] != '\0') {
+    if (opened && hasTitle) {
         ImGui::PushStyleColor(ImGuiCol_Text, tokens.textMuted);
         ImGui::TextUnformatted(title);
         ImGui::PopStyleColor();
@@ -133,6 +135,7 @@ bool beginToolbarGroup(const char* id, const char* title, float minHeight) {
 
 void endToolbarGroup() {
     ImGui::EndChild();
+    ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
     ImGui::PopID();
 }

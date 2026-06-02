@@ -15,7 +15,7 @@ float compactLogToolbarHeight() {
     const ImGuiStyle& style = ImGui::GetStyle();
     const float controlHeight = ImGui::GetFrameHeight();
     const float extraPadding = style.WindowPadding.y * 0.5F;
-    return controlHeight + extraPadding;
+    return controlHeight + extraPadding + 16.0f;
 }
 
 } // namespace
