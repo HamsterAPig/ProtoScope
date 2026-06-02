@@ -296,6 +296,16 @@ struct FileDialogEvent {
     std::uint64_t timestampMs{0};
 };
 
+struct DialogWindowOptions {
+    std::optional<double> width{};
+    std::optional<double> height{};
+    std::optional<double> x{};
+    std::optional<double> y{};
+    bool resizable{true};
+    bool movable{true};
+    bool autoResize{false};
+};
+
 struct DialogRequest {
     std::uint64_t id{0};
     DialogKind kind{DialogKind::Alert};
@@ -304,6 +314,7 @@ struct DialogRequest {
     std::string message{};
     std::string level{"info"};
     std::string dedupeKey{};
+    DialogWindowOptions window{};
     std::uint64_t createdAtMs{0};
 };
 

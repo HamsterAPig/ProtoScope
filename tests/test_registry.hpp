@@ -163,6 +163,8 @@ void test_udp_peer_transport_roundtrip();
 void test_serial_port_name_normalization();
 void test_script_dialog_requests_keep_connection_context();
 void test_script_dialog_requests_detached_without_active_connection();
+void test_script_dialog_requests_parse_window_options();
+void test_script_dialog_requests_reject_invalid_window_options();
 void test_application_tcp_lua_read_version_roundtrip();
 void test_application_lua_controls_without_connection();
 void test_application_tx_overflow_popup_keeps_dialog_payload();

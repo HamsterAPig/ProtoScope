@@ -1149,6 +1149,54 @@ std::optional<bool> luaBoolField(const sol::table& table, const char* key) {
     return object.as<bool>();
 }
 
+std::optional<DialogWindowOptions> luaDialogWindowOptions(const sol::table& table, std::string& error) {
+    const sol::object windowObject = table["window"];
+    if (!windowObject.valid() || windowObject.get_type() == sol::type::lua_nil) {
+        return DialogWindowOptions{};
+    }
+    if (!windowObject.is<sol::table>()) {
+        error = "window 必须是 table";
+        return std::nullopt;
+    }
+
+    const sol::table windowTable = windowObject.as<sol::table>();
+    DialogWindowOptions options{};
+    options.width = luaNumberField(windowTable, "width");
+    options.height = luaNumberField(windowTable, "height");
+    options.x = luaNumberField(windowTable, "x");
+    options.y = luaNumberField(windowTable, "y");
+    options.resizable = luaBoolField(windowTable, "resizable").value_or(true);
+    options.movable = luaBoolField(windowTable, "movable").value_or(true);
+    options.autoResize = luaBoolField(windowTable, "auto_resize").value_or(false);
+
+    auto invalidPositiveNumber = [&](const std::optional<double>& value, const char* field) -> bool {
+        if (!value.has_value()) {
+            return false;
+        }
+        if (!std::isfinite(*value) || *value <= 0.0) {
+            error = std::string("window.") + field + " 必须是正数";
+            return true;
+        }
+        return false;
+    };
+    auto invalidFiniteNumber = [&](const std::optional<double>& value, const char* field) -> bool {
+        if (!value.has_value()) {
+            return false;
+        }
+        if (!std::isfinite(*value)) {
+            error = std::string("window.") + field + " 必须是有限数值";
+            return true;
+        }
+        return false;
+    };
+
+    if (invalidPositiveNumber(options.width, "width") || invalidPositiveNumber(options.height, "height") ||
+        invalidFiniteNumber(options.x, "x") || invalidFiniteNumber(options.y, "y")) {
+        return std::nullopt;
+    }
+    return options;
+}
+
 std::optional<std::int64_t> luaIntegerValue(const sol::object& object) {
     if (!object.valid() || object.get_type() == sol::type::lua_nil) {
         return std::nullopt;
@@ -1793,6 +1841,11 @@ std::optional<DialogRequest> ScriptHost::protoDialog(DialogKind kind, const sol:
         connection.timestampMs = createdAtMs;
         connection.readyForIo = false;
     }
+    const auto window = luaDialogWindowOptions(table, error);
+    if (!window.has_value()) {
+        protoLog("error", std::string(kind == DialogKind::Alert ? "proto.ui.alert" : "proto.ui.confirm") + " 调用失败: " + error);
+        return std::nullopt;
+    }
     const DialogRequest request{
         .id = nextDialogId(),
         .kind = kind,
@@ -1801,6 +1854,7 @@ std::optional<DialogRequest> ScriptHost::protoDialog(DialogKind kind, const sol:
         .message = luaStringField(table, "message").value_or(""),
         .level = luaStringField(table, "level").value_or("info"),
         .dedupeKey = luaStringField(table, "dedupe_key").value_or(""),
+        .window = *window,
         .createdAtMs = createdAtMs,
     };
     if (request.title.empty() || request.message.empty()) {

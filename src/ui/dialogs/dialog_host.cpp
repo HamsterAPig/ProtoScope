@@ -4,6 +4,67 @@
 
 namespace protoscope::ui {
 
+namespace {
+
+bool dialogUsesCustomWindowOptions(const scripting::DialogRequest& dialog) {
+    return dialog.window.width.has_value() || dialog.window.height.has_value() || dialog.window.x.has_value()
+           || dialog.window.y.has_value() || !dialog.window.resizable || !dialog.window.movable || dialog.window.autoResize;
+}
+
+ImVec2 dialogViewportFallbackSize() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if (viewport == nullptr || viewport->Size.x <= 0.0F || viewport->Size.y <= 0.0F) {
+        return ImVec2(1280.0F, 720.0F);
+    }
+    return viewport->Size;
+}
+
+ImVec2 dialogDefaultSize(const scripting::DialogRequest& dialog) {
+    const ImVec2 viewportSize = dialogViewportFallbackSize();
+    const float minWidth = 420.0F;
+    const float minHeight = 200.0F;
+    const float width = dialog.window.width.has_value()
+                            ? static_cast<float>(*dialog.window.width)
+                            : std::max(minWidth, viewportSize.x * 0.40F);
+    const float height = dialog.window.height.has_value()
+                             ? static_cast<float>(*dialog.window.height)
+                             : std::max(minHeight, viewportSize.y * 0.25F);
+    return ImVec2(width, height);
+}
+
+void applyDialogWindowOptions(const scripting::DialogRequest& dialog) {
+    const ImVec2 initialSize = dialogDefaultSize(dialog);
+    if (!dialog.window.autoResize) {
+        ImGui::SetNextWindowSize(initialSize, ImGuiCond_Appearing);
+    }
+    if (dialog.window.x.has_value() || dialog.window.y.has_value()) {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImVec2 viewportPos = viewport != nullptr ? viewport->Pos : ImVec2(0.0F, 0.0F);
+        const ImVec2 viewportSize = viewport != nullptr ? viewport->Size : dialogViewportFallbackSize();
+        const float defaultX = viewportPos.x + std::max(0.0F, (viewportSize.x - initialSize.x) * 0.5F);
+        const float defaultY = viewportPos.y + std::max(0.0F, (viewportSize.y - initialSize.y) * 0.3F);
+        const float x = dialog.window.x.has_value() ? viewportPos.x + static_cast<float>(*dialog.window.x) : defaultX;
+        const float y = dialog.window.y.has_value() ? viewportPos.y + static_cast<float>(*dialog.window.y) : defaultY;
+        ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Appearing);
+    }
+}
+
+ImGuiWindowFlags dialogWindowFlags(const scripting::DialogRequest& dialog) {
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings;
+    if (dialog.window.autoResize) {
+        flags |= ImGuiWindowFlags_AlwaysAutoResize;
+    }
+    if (!dialog.window.resizable) {
+        flags |= ImGuiWindowFlags_NoResize;
+    }
+    if (!dialog.window.movable) {
+        flags |= ImGuiWindowFlags_NoMove;
+    }
+    return flags;
+}
+
+} // namespace
+
 void GuiRuntime::requestAboutDialog() {
     aboutDialogRequested_ = true;
 }
@@ -149,13 +210,17 @@ void GuiRuntime::drawDialogs() {
         activeDialogOpened_ = true;
     }
 
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings;
+    if (dialogUsesCustomWindowOptions(dialog)) {
+        applyDialogWindowOptions(dialog);
+        flags |= dialogWindowFlags(dialog);
+    } else {
+        flags |= ImGuiWindowFlags_AlwaysAutoResize;
+    }
     if (!ImGui::BeginPopupModal(popupId.c_str(), nullptr, flags)) {
         return;
     }
 
-    ImGui::TextUnformatted(dialog.title.c_str());
-    ImGui::Separator();
     ImGui::TextWrapped("%s", dialog.message.c_str());
     ImGui::Spacing();
 

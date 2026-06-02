@@ -375,9 +375,20 @@ count = {
 
 - `proto.status.set(text, { level = "info"|"warn"|"error" })`
 - `proto.status.clear()`
-- `proto.ui.alert({ title = "...", message = "...", level = "warn" })`
+- `proto.ui.alert({ title = "...", message = "...", level = "warn", window = { width = 520, height = 260, x = 120, y = 80, resizable = true, movable = true, auto_resize = false } })`
 - `proto.plot.setup({ source = "...", reset_history = true, channels = { ... } })`
 - `proto.plot.push(channel_index, { source = "...", samples = { { t = 0.0, y = 1.23 } } })`
+
+脚本弹窗的 `window` 子表只影响 `proto.ui.alert/confirm` 这类 ImGui 自绘模态窗口：
+
+- `width` / `height`：首次出现时的初始宽高
+- `x` / `y`：相对主视口左上角的初始位置，仅首次出现生效
+- `resizable` / `movable`：是否允许用户拖动缩放或移动
+- `auto_resize`：是否使用 ImGui 自动尺寸
+
+如果不传 `window`，ProtoScope 会继续沿用原有自动尺寸弹窗行为；标题只保留在窗口标题栏，不会在正文重复显示。
+
+`proto.fs.*` 仍使用系统原生文件对话框，不支持用同一套 `window` 参数控制宽高、位置或拖动开关。
 
 最小波形示例：
 

@@ -856,6 +856,9 @@ void test_script_dialog_requests_keep_connection_context() {
     require(dialog.message == ctx.endpoint, "alert message 不应改变");
     require(dialog.level == "warn", "alert level 不应改变");
     require(dialog.dedupeKey == "dialog-open", "alert dedupe_key 不应改变");
+    require(dialog.window.resizable, "默认弹窗应允许缩放");
+    require(dialog.window.movable, "默认弹窗应允许移动");
+    require(!dialog.window.autoResize, "默认弹窗不应强制自动尺寸");
 }
 
 void test_script_dialog_requests_detached_without_active_connection() {
@@ -877,6 +880,33 @@ void test_script_dialog_requests_detached_without_active_connection() {
     require(dialog.dedupeKey == "dialog-detached", "confirm dedupe_key 不应改变");
 }
 
+void test_script_dialog_requests_parse_window_options() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("dialog_window_options").generic_string()), "dialog_window_options 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+
+    const auto dialogs = host.drainDialogRequests();
+    require(dialogs.size() == 1, "on_open 应生成一条带窗口选项的 alert 请求");
+    const auto& dialog = dialogs.front();
+    require(dialog.window.width.has_value() && *dialog.window.width == 520.0, "window.width 应按 Lua 配置解析");
+    require(dialog.window.height.has_value() && *dialog.window.height == 260.0, "window.height 应按 Lua 配置解析");
+    require(dialog.window.x.has_value() && *dialog.window.x == 120.0, "window.x 应按 Lua 配置解析");
+    require(dialog.window.y.has_value() && *dialog.window.y == 80.0, "window.y 应按 Lua 配置解析");
+    require(!dialog.window.resizable, "window.resizable 应按 Lua 配置解析");
+    require(!dialog.window.movable, "window.movable 应按 Lua 配置解析");
+    require(!dialog.window.autoResize, "window.auto_resize 应按 Lua 配置解析");
+}
+
+void test_script_dialog_requests_reject_invalid_window_options() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("invalid_dialog_window").generic_string()), "invalid_dialog_window 协议应可加载");
+
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+    require(host.drainDialogRequests().empty(), "非法 window 配置不应生成弹窗请求");
+}
+
 void test_luals_api_sync_contains_tx_and_dialog_api() {
     std::ifstream input("protocols/protoscope_api.lua");
     require(input.good(), "应能读取 protoscope_api.lua");
@@ -894,6 +924,8 @@ void test_luals_api_sync_contains_tx_and_dialog_api() {
     require(text.find("function proto.status.set(text, opts) end") != std::string::npos, "LuaLS API 应声明 proto.status.set");
     require(text.find("function proto.plot.push(channel_index, payload) end") != std::string::npos, "LuaLS API 应声明 proto.plot.push");
     require(text.find("function proto.ui.alert(opts) end") != std::string::npos, "LuaLS API 应声明 proto.ui.alert");
+    require(text.find("@class ProtoDialogWindowOptions") != std::string::npos, "LuaLS API 应声明 ProtoDialogWindowOptions");
+    require(text.find("@field window? ProtoDialogWindowOptions") != std::string::npos, "LuaLS API 应声明弹窗 window 配置");
     require(text.find("function proto.fs.open(path, opts) end") != std::string::npos, "LuaLS API 应声明 proto.fs.open");
     require(text.find("function proto.fs.read(handle, opts) end") != std::string::npos, "LuaLS API 应声明 proto.fs.read");
     require(text.find("@class ProtoBuffer") != std::string::npos, "LuaLS API 应声明 ProtoBuffer");
@@ -2043,6 +2075,8 @@ static const TestCase kAllTests[] = {
     {"serial_port_name_normalization", &test_serial_port_name_normalization},
     {"script_dialog_requests_keep_connection_context", &test_script_dialog_requests_keep_connection_context},
     {"script_dialog_requests_detached_without_active_connection", &test_script_dialog_requests_detached_without_active_connection},
+    {"script_dialog_requests_parse_window_options", &test_script_dialog_requests_parse_window_options},
+    {"script_dialog_requests_reject_invalid_window_options", &test_script_dialog_requests_reject_invalid_window_options},
     {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
     {"application_tx_overflow_popup_keeps_dialog_payload", &test_application_tx_overflow_popup_keeps_dialog_payload},

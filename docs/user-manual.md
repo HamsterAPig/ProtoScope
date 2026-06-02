@@ -210,8 +210,8 @@ ProtoScope 使用 YAML 配置保存窗口、通讯、协议、日志、波形和
 - `proto.emit(name, payload)`：输出脚本事件。
 - `proto.set_timer(name, interval_ms)` / `proto.cancel_timer(name)`：管理定时器。
 - `proto.status.set(text, opts?)` / `proto.status.clear()`：更新状态提示。
-- `proto.ui.alert(opts)` / `proto.ui.confirm(opts)`：弹出脚本对话框。
-- `proto.fs.*`：打开文件对话框、读写文件、查询文件状态和分块发送文件。
+- `proto.ui.alert(opts)` / `proto.ui.confirm(opts)`：弹出脚本对话框，支持可选 `window` 子表配置初始宽高、位置、是否可拖动和是否自动尺寸。
+- `proto.fs.*`：打开文件对话框、读写文件、查询文件状态和分块发送文件；文件对话框仍使用系统原生窗口，不支持 Lua 控制宽高、位置或拖动能力。
 - `proto.plot.setup(config)` / `proto.plot.push(channel, data)`：声明并推送波形。
 - `proto.crc16_modbus()`、`proto.crc16_ccitt_false()`、`proto.crc32_ieee()`：常用校验计算。
 
