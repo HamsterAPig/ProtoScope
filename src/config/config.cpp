@@ -379,6 +379,18 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         }
 
         const auto scripting = root["scripting"];
+        if (const auto worker = scripting["worker"]) {
+            result.config.scripting.workerEnabled =
+                readScalar<bool>(worker, "enabled", result.config.scripting.workerEnabled);
+            result.config.scripting.workerRxQueueLimitBytes =
+                readScalar<std::size_t>(worker,
+                                        "rx_queue_limit_bytes",
+                                        result.config.scripting.workerRxQueueLimitBytes);
+            result.config.scripting.workerOutputQueueLimit =
+                readScalar<std::size_t>(worker, "output_queue_limit", result.config.scripting.workerOutputQueueLimit);
+            result.config.scripting.workerBatchBytes =
+                readScalar<std::size_t>(worker, "batch_bytes", result.config.scripting.workerBatchBytes);
+        }
         if (const auto fileIo = scripting["file_io"]) {
             auto& config = result.config.scripting.fileIo;
             config.enabled = readScalar<bool>(fileIo, "enabled", config.enabled);
@@ -530,6 +542,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["receive"]["stream_buffer"]["near_overflow_threshold"] = config.receive.streamBuffer.nearOverflowThreshold;
     root["receive"]["stream_buffer"]["popup_enabled"] = config.receive.streamBuffer.popupEnabled;
 
+    root["scripting"]["worker"]["enabled"] = config.scripting.workerEnabled;
+    root["scripting"]["worker"]["rx_queue_limit_bytes"] = config.scripting.workerRxQueueLimitBytes;
+    root["scripting"]["worker"]["output_queue_limit"] = config.scripting.workerOutputQueueLimit;
+    root["scripting"]["worker"]["batch_bytes"] = config.scripting.workerBatchBytes;
     root["scripting"]["file_io"]["enabled"] = config.scripting.fileIo.enabled;
     root["scripting"]["file_io"]["allow_protocol_dir"] = config.scripting.fileIo.allowProtocolDir;
     root["scripting"]["file_io"]["allow_dialog_paths"] = config.scripting.fileIo.allowDialogPaths;

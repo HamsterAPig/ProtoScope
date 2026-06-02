@@ -234,7 +234,13 @@ bool Application::initialize() {
 bool Application::applyConfig(const config::AppConfig& config) {
     runtimeConfig_ = config;
     resetStreamBufferAlertState();
-    scriptHost_.setFileIoConfig(config.scripting.fileIo);
+    scriptWorker_.configure(scripting::ScriptRuntimeWorkerConfig{
+        .enabled = config.scripting.workerEnabled,
+        .rxQueueLimitBytes = config.scripting.workerRxQueueLimitBytes,
+        .outputQueueLimit = config.scripting.workerOutputQueueLimit,
+        .batchBytes = config.scripting.workerBatchBytes,
+    });
+    scriptWorker_.setFileIoConfig(config.scripting.fileIo);
     applyHistoryLimits(config.gui.logHistory);
     configStore_.applyToDock(config, dockStore_);
     loggingFacade_.applyConfig(config.logging);
@@ -283,9 +289,10 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         // 核心流程：配置热加载只在协议目录真正变化时重载脚本，避免窗口刷新阶段重复刷加载日志。
         if (!forceReload && unchanged) {
             lua.lastError.clear();
-            lua.docks = scriptHost_.dockSnapshots();
-            lua.controls = scriptHost_.controlsSnapshot();
-            lua.controlStates = scriptHost_.controlStatesSnapshot();
+            const auto snapshot = scriptWorker_.snapshot();
+            lua.docks = snapshot.docks;
+            lua.controls = snapshot.controls;
+            lua.controlStates = snapshot.controlStates;
             return true;
         }
 
@@ -294,9 +301,10 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
             lua.lastError = probeHost.lastError();
             loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
-            lua.docks = scriptHost_.dockSnapshots();
-            lua.controls = scriptHost_.controlsSnapshot();
-            lua.controlStates = scriptHost_.controlStatesSnapshot();
+            const auto snapshot = scriptWorker_.snapshot();
+            lua.docks = snapshot.docks;
+            lua.controls = snapshot.controls;
+            lua.controlStates = snapshot.controlStates;
             return false;
         }
 
@@ -310,27 +318,21 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         try {
             // 核心流程：取消旧 request 可能触发旧脚本 on_tx；替换宿主前丢弃旧输出，
             // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
-            scriptHost_.drainTxRequests();
-            scriptHost_.drainRequestDoneResults();
-            scriptHost_.drainStatusUpdates();
-            scriptHost_.drainDialogRequests();
-            scriptHost_.drainFileDialogRequests();
-            scriptHost_.drainEvents();
-            scriptHost_.drainLogs();
-            scriptHost_.clearPendingRealtimeOutputs();
+            static_cast<void>(scriptWorker_.drainOutputs());
         } catch (const std::exception& ex) {
             loggingFacade_.warn("protocol", std::string("协议重载前清理旧脚本输出失败: ") + ex.what());
         } catch (...) {
             loggingFacade_.warn("protocol", "协议重载前清理旧脚本输出失败: 未知异常");
         }
 
-        scriptHost_.setFileIoConfig(runtimeConfig_.scripting.fileIo);
-        if (!scriptHost_.loadProtocolDirectory(resolvedDirText)) {
-            lua.lastError = scriptHost_.lastError();
+        scriptWorker_.setFileIoConfig(runtimeConfig_.scripting.fileIo);
+        const auto loadResult = scriptWorker_.loadProtocolDirectory(resolvedDirText);
+        if (!loadResult.ok) {
+            lua.lastError = loadResult.lastError;
             loggingFacade_.error("protocol", "协议加载失败: " + lua.lastError);
-            lua.docks = scriptHost_.dockSnapshots();
-            lua.controls = scriptHost_.controlsSnapshot();
-            lua.controlStates = scriptHost_.controlStatesSnapshot();
+            lua.docks = loadResult.snapshot.docks;
+            lua.controls = loadResult.snapshot.controls;
+            lua.controlStates = loadResult.snapshot.controlStates;
             return false;
         }
 
@@ -338,13 +340,13 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         lua.protocolName = protocolName;
         lua.scriptPath = scriptPath;
         lua.loaded = true;
-        lua.docks = scriptHost_.dockSnapshots();
-        lua.controls = scriptHost_.controlsSnapshot();
-        lua.controlStates = scriptHost_.controlStatesSnapshot();
+        lua.docks = loadResult.snapshot.docks;
+        lua.controls = loadResult.snapshot.controls;
+        lua.controlStates = loadResult.snapshot.controlStates;
         lua.lastError.clear();
         rebuildTransferFrameRows();
         loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
-        flushScriptLogs();
+        flushScriptOutputs();
         syncDockState();
         return true;
     } catch (const std::exception& ex) {
@@ -354,20 +356,24 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     }
 
     loggingFacade_.error("protocol", lua.lastError);
-    lua.docks = scriptHost_.dockSnapshots();
-    lua.controls = scriptHost_.controlsSnapshot();
-    lua.controlStates = scriptHost_.controlStatesSnapshot();
+    const auto snapshot = scriptWorker_.snapshot();
+    lua.docks = snapshot.docks;
+    lua.controls = snapshot.controls;
+    lua.controlStates = snapshot.controlStates;
     return false;
 }
 
 bool Application::pumpOnce() {
     bool changed = false;
+    const bool hadPendingScriptPlotAppends = !pendingScriptPlotAppends_.empty();
     changed = handleTransportEvents() || changed;
-    scriptHost_.tick(nowMs());
+    scriptWorker_.postTick(nowMs());
+    changed = flushScriptOutputs() || changed;
     changed = processRequestTimeouts() || changed;
     changed = flushScriptOutputs() || changed;
-    changed = flushScriptLogs() || changed;
-    changed = flushScriptPlots() || changed;
+    if (hadPendingScriptPlotAppends && !pendingScriptPlotAppends_.empty()) {
+        changed = applyScriptOutputBatch(scripting::ScriptRuntimeOutputBatch{}) || changed;
+    }
     changed = flushPendingTransferFrameRows(transferFrameRowsPerPump()) || changed;
     syncDockState();
     return changed;
@@ -375,6 +381,7 @@ bool Application::pumpOnce() {
 
 void Application::shutdown() {
     closeTransport();
+    scriptWorker_.stop();
 }
 
 dock::DockStore& Application::docks() {
@@ -555,8 +562,9 @@ void Application::appendRawCaptureRecording(const transport::TransportBytesEvent
 }
 
 std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState() const {
-    const auto bufferDefinition = scriptHost_.streamBufferDefinition();
-    auto frameDefinitions = scriptHost_.streamFrameDefinitions();
+    const auto snapshot = scriptWorker_.snapshot();
+    const auto bufferDefinition = snapshot.streamBuffer;
+    auto frameDefinitions = snapshot.streamFrames;
     if (!bufferDefinition.has_value() || frameDefinitions.empty()) {
         return std::nullopt;
     }
@@ -663,25 +671,24 @@ void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config) 
 }
 
 void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value) {
+    transport::ConnectionContext context;
     if (activeConnection_.has_value()) {
-        scriptHost_.onControl(*activeConnection_, id, value);
+        context = *activeConnection_;
     } else {
         // 核心流程：动态控件也可能只驱动 Lua 本地演示逻辑，未连接时仍允许回调脚本。
-        transport::ConnectionContext detachedContext;
-        detachedContext.endpoint = "detached";
-        detachedContext.connectionId = 0;
-        detachedContext.timestampMs = nowMs();
-        detachedContext.readyForIo = false;
-        scriptHost_.onControl(detachedContext, id, value);
+        context.endpoint = "detached";
+        context.connectionId = 0;
+        context.timestampMs = nowMs();
+        context.readyForIo = false;
     }
+    scriptWorker_.postControl(context, id, value);
+    scriptWorker_.waitIdle();
     flushScriptOutputs();
-    flushScriptLogs();
-    flushScriptPlots();
     syncDockState();
 }
 
 bool Application::restoreControlValue(const std::string& id, const scripting::ControlValue& value) {
-    if (!scriptHost_.setControlValue(id, value)) {
+    if (!scriptWorker_.setControlValue(id, value)) {
         return false;
     }
     syncDockState();
@@ -857,54 +864,51 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
         for (const auto& recordedEvent : capture.events) {
             replayContext.timestampMs = recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
             if (recordedEvent.type == plot::RawCaptureEventType::ProfileSet) {
-                sol::state tempLua;
-                tempLua.open_libraries(sol::lib::base, sol::lib::table);
-                auto table = tempLua.create_table();
-                table["frame"] = recordedEvent.profile.frameName;
-                table["length"] = static_cast<long long>(recordedEvent.profile.length);
-                if (!recordedEvent.profile.channelMap.empty()) {
-                    auto mapTable = tempLua.create_table();
-                    for (std::size_t index = 0; index < recordedEvent.profile.channelMap.size(); ++index) {
-                        mapTable[index + 1] = static_cast<long long>(recordedEvent.profile.channelMap[index] + 1);
-                    }
-                    table["channel_map"] = mapTable;
-                }
                 std::string profileError;
-                if (!scriptHost_.setStreamRuntimeProfile(sol::make_object(tempLua, table), profileError)) {
+                if (!scriptWorker_.applyStreamRuntimeProfileEvent(scripting::StreamRuntimeProfileEvent{
+                        .cleared = false,
+                        .frameName = recordedEvent.profile.frameName,
+                        .length = recordedEvent.profile.length,
+                        .channelMap = recordedEvent.profile.channelMap,
+                    },
+                    profileError)) {
                     suppressRawCaptureProfileEvents_ = false;
                     error = "导入 profile_set 失败: " + profileError;
                     wave.buffer.setHistoryTrimSuspended(false);
                     return false;
                 }
+                scriptWorker_.waitIdle();
+                flushScriptOutputs();
             } else if (recordedEvent.type == plot::RawCaptureEventType::ProfileClear) {
-                sol::state tempLua;
-                tempLua.open_libraries(sol::lib::base);
                 std::string clearError;
-                sol::object frameObject = recordedEvent.profile.frameName.empty()
-                    ? sol::make_object(tempLua, sol::lua_nil)
-                    : sol::make_object(tempLua, recordedEvent.profile.frameName);
-                if (!scriptHost_.clearStreamRuntimeProfile(frameObject, clearError)) {
+                if (!scriptWorker_.applyStreamRuntimeProfileEvent(scripting::StreamRuntimeProfileEvent{
+                        .cleared = true,
+                        .frameName = recordedEvent.profile.frameName,
+                        .length = 0,
+                        .channelMap = {},
+                    },
+                    clearError)) {
                     suppressRawCaptureProfileEvents_ = false;
                     error = "导入 profile_clear 失败: " + clearError;
                     wave.buffer.setHistoryTrimSuspended(false);
                     return false;
                 }
+                scriptWorker_.waitIdle();
+                flushScriptOutputs();
             } else if (!recordedEvent.bytes.empty()) {
                 std::size_t cursor = 0;
                 while (cursor < recordedEvent.bytes.size()) {
                     const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, recordedEvent.bytes.size() - cursor);
                     std::vector<std::uint8_t> chunk(recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
                                                     recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
-                    scriptHost_.onTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
+                    scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
+                    scriptWorker_.waitIdle();
                     flushScriptOutputs();
-                    flushScriptLogs();
-                    flushScriptPlots();
-                    flushScriptStatusAndDialogs();
                     cursor += chunkSize;
                 }
             }
         }
-        flushScriptStatusAndDialogs();
+        flushScriptOutputs();
         suppressRawCaptureProfileEvents_ = false;
     } else if (!capture.payload.empty()) {
         transport::ConnectionContext replayContext;
@@ -917,19 +921,14 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
             const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, capture.payload.size() - cursor);
             std::vector<std::uint8_t> chunk(capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor),
                                             capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
-            scriptHost_.onTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
+            scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
+            scriptWorker_.waitIdle();
             flushScriptOutputs();
-            flushScriptLogs();
-            flushScriptPlots();
-            flushScriptStatusAndDialogs();
             cursor += chunkSize;
         }
     }
 
     flushScriptOutputs();
-    flushScriptLogs();
-    flushScriptPlots();
-    flushScriptStatusAndDialogs();
     const auto importedSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(),
                                                        std::numeric_limits<double>::infinity());
     std::size_t importedHistoryLimit = 0;
@@ -984,11 +983,12 @@ void Application::resetWaveHistory() {
 }
 
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
+    const auto scriptSnapshot = scriptWorker_.snapshot();
     if (!pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || !pendingTransferFrameRows_.empty() ||
-        scriptHost_.pendingPlotAppendCount() > 0U) {
+        scriptSnapshot.pendingPlotAppends > 0U || scriptSnapshot.pendingWorkerRxBytes > 0U) {
         return nowMs();
     }
-    auto nextWakeup = scriptHost_.nextWakeupAtMs();
+    auto nextWakeup = scriptSnapshot.nextWakeupAtMs;
     if (activeHalfDuplexRequest_.has_value()) {
         if (!nextWakeup.has_value() || activeHalfDuplexRequest_->waitDeadlineMs < *nextWakeup) {
             nextWakeup = activeHalfDuplexRequest_->waitDeadlineMs;
@@ -1032,14 +1032,15 @@ void Application::syncDockState() {
     } else {
         comm.state = transport::TransportState::Closed;
     }
-    comm.pendingRxBytes = pendingRxByteCount();
+    const auto scriptSnapshot = scriptWorker_.snapshot();
+    comm.pendingRxBytes = pendingRxByteCount() + scriptSnapshot.pendingWorkerRxBytes;
     comm.pendingTransferFrameRows = pendingTransferFrameRows_.size();
-    comm.pendingPlotAppends = scriptHost_.pendingPlotAppendCount();
+    comm.pendingPlotAppends = scriptSnapshot.pendingPlotAppends + pendingScriptPlotAppends_.size();
 
     auto& lua = dockStore_.luaState();
-    lua.docks = scriptHost_.dockSnapshots();
-    lua.controls = scriptHost_.controlsSnapshot();
-    lua.controlStates = scriptHost_.controlStatesSnapshot();
+    lua.docks = scriptSnapshot.docks;
+    lua.controls = scriptSnapshot.controls;
+    lua.controlStates = scriptSnapshot.controlStates;
 
     auto& wave = dockStore_.waveState();
     const auto waveRevision = wave.buffer.dataRevision();
@@ -1098,10 +1099,6 @@ bool Application::handleTransportEvents() {
 
         auto event = std::move(pendingTransportEvents_.front());
         pendingTransportEvents_.pop_front();
-        if (auto* bytes = std::get_if<transport::TransportBytesEvent>(&event); bytes != nullptr && !bytes->bytes.empty()) {
-            enqueuePendingRxBytes(std::move(*bytes));
-            continue;
-        }
 
         changed = processTransportEvent(event) || changed;
         ++processed;
@@ -1180,8 +1177,10 @@ Application::RealtimeBacklogDiscardCounts Application::clearPendingRealtimeBackl
     pendingTransportEvents_.clear();
     pendingRxByteChunks_.clear();
     pendingTransferFrameRows_.clear();
+    counts.plotAppends += pendingScriptPlotAppends_.size();
+    pendingScriptPlotAppends_.clear();
 
-    const auto scriptCounts = scriptHost_.clearPendingRealtimeOutputs();
+    const auto scriptCounts = scriptWorker_.clearPendingRealtimeOutputs();
     counts.plotAppends = scriptCounts.plotAppends;
     counts.scriptLogs = scriptCounts.logs;
     counts.scriptEvents = scriptCounts.events;
@@ -1242,7 +1241,8 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
             if constexpr (std::is_same_v<T, transport::TransportOpenEvent>) {
                 if (evt.context.readyForIo) {
                     activeConnection_ = evt.context;
-                    scriptHost_.onTransportOpen(evt);
+                    scriptWorker_.postTransportOpen(evt);
+                    scriptWorker_.waitIdle();
                 }
                 loggingFacade_.host(config::LogLevel::Info,
                                     "OPEN",
@@ -1252,7 +1252,8 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                 changed = true;
             } else if constexpr (std::is_same_v<T, transport::TransportCloseEvent>) {
                 if (evt.context.readyForIo) {
-                    scriptHost_.onTransportClose(evt);
+                    scriptWorker_.postTransportClose(evt);
+                    scriptWorker_.waitIdle();
                 }
                 loggingFacade_.host(config::LogLevel::Info, "CLOSE", evt.context.endpoint, evt.reason, evt.context.timestampMs);
                 resetStreamBufferAlertState(evt.context.connectionId);
@@ -1267,7 +1268,8 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                 changed = true;
             } else if constexpr (std::is_same_v<T, transport::TransportErrorEvent>) {
                 if (evt.context.readyForIo) {
-                    scriptHost_.onTransportError(evt);
+                    scriptWorker_.postTransportError(evt);
+                    scriptWorker_.waitIdle();
                 }
                 loggingFacade_.host(config::LogLevel::Error, "ERROR", evt.context.endpoint, evt.message, evt.context.timestampMs);
                 dockStore_.commState().lastError = evt.message;
@@ -1282,15 +1284,7 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                     }
                     appendRawCaptureRecording(evt);
                     appendLiveRawCapture(evt);
-                    scriptHost_.onTransportBytes(evt);
-                    const auto& stats = scriptHost_.lastTransportStats();
-                    auto& comm = dockStore_.commState();
-                    comm.lastPumpRxBytes += stats.bytes;
-                    comm.lastPumpStreamFrames += stats.streamFrames;
-                    comm.lastPumpStreamErrors += stats.streamErrors;
-                    comm.lastPumpParserMs += stats.parserMs;
-                    comm.lastPumpCallbackMs += stats.callbackMs;
-                    comm.lastPumpScriptMs += stats.totalMs;
+                    scriptWorker_.postTransportBytes(evt);
                     if (evt.context.readyForIo) {
                         activeConnection_ = evt.context;
                     }
@@ -1316,19 +1310,20 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                     activeWrite.sentAtMs = evt.finishedAtMs;
                     activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
                     activeHalfDuplexRequest_ = activeWrite;
-                    scriptHost_.setRequestAwaitingCompletion(true);
+                    scriptWorker_.postRequestAwaitingCompletion(true);
                     // 核心流程：先进入等待 ACK 状态再回调 on_tx，允许脚本在 sent 事件中立即调用 proto.request_done。
-                    scriptHost_.onTxEvent(activeWrite.request.connection,
-                                          scripting::TxEvent{
-                                              .id = activeWrite.request.id,
-                                              .kind = activeWrite.request.kind,
-                                              .state = scripting::TxEventState::Sent,
-                                              .tag = activeWrite.request.tag,
-                                              .bytes = evt.bytes,
-                                              .queuedMs = activeWrite.request.createdAtMs,
-                                              .finishedMs = evt.finishedAtMs,
-                                              .error = error,
-                                          });
+                    scriptWorker_.postTxEvent(activeWrite.request.connection,
+                                              scripting::TxEvent{
+                                                  .id = activeWrite.request.id,
+                                                  .kind = activeWrite.request.kind,
+                                                  .state = scripting::TxEventState::Sent,
+                                                  .tag = activeWrite.request.tag,
+                                                  .bytes = evt.bytes,
+                                                  .queuedMs = activeWrite.request.createdAtMs,
+                                                  .finishedMs = evt.finishedAtMs,
+                                                  .error = error,
+                                              });
+                    scriptWorker_.waitIdle();
                     appendTransferRow(dock::ReceiveRow{
                         .timestampMs = evt.finishedAtMs,
                         .direction = "TX",
@@ -1349,26 +1344,52 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
     return changed;
 }
 
-bool Application::flushScriptOutputs() {
+bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch) {
     bool changed = false;
-    for (auto& request : scriptHost_.drainTxRequests()) {
+    if (batch.transportStats.has_value()) {
+        const auto& stats = *batch.transportStats;
+        auto& comm = dockStore_.commState();
+        comm.lastPumpRxBytes += stats.bytes;
+        comm.lastPumpStreamFrames += stats.streamFrames;
+        comm.lastPumpStreamErrors += stats.streamErrors;
+        comm.lastPumpParserMs += stats.parserMs;
+        comm.lastPumpCallbackMs += stats.callbackMs;
+        comm.lastPumpScriptMs += stats.totalMs;
+        changed = true;
+    }
+
+    for (auto request : batch.txRequests) {
         enqueueTxRequest(std::move(request));
         changed = true;
     }
-    changed = processScriptRequestCompletions() || changed;
-    changed = flushScriptStatusAndDialogs() || changed;
-    changed = driveTxScheduler() || changed;
 
-    for (const auto& event : scriptHost_.drainEvents()) {
-        dockStore_.appendLuaEvent(event);
+    bool completionConsumed = false;
+    for (const auto& result : batch.requestDoneResults) {
+        if (completionConsumed) {
+            loggingFacade_.warn("protocol", "同一轮收到多次 request_done，后续结果已忽略");
+            changed = true;
+            continue;
+        }
+        if (!activeHalfDuplexRequest_.has_value()) {
+            loggingFacade_.warn("protocol", "收到 request_done，但当前没有活动 request");
+            changed = true;
+            continue;
+        }
+        const auto activeRequest = activeHalfDuplexRequest_->request;
+        activeHalfDuplexRequest_.reset();
+        scriptWorker_.postRequestAwaitingCompletion(false);
+        if (result.ok && !result.message.empty() && dockStore_.commState().lastError == result.message) {
+            dockStore_.commState().lastError.clear();
+        }
+        finishTxRequest(activeRequest,
+                        result.ok ? scripting::TxEventState::Completed : scripting::TxEventState::Failed,
+                        (!result.ok && !result.message.empty()) ? std::optional<std::string>{result.message} : std::nullopt,
+                        result.timestampMs);
+        completionConsumed = true;
         changed = true;
     }
-    return changed;
-}
 
-bool Application::flushScriptStatusAndDialogs() {
-    bool changed = false;
-    for (const auto& profileEvent : scriptHost_.drainStreamRuntimeProfileEvents()) {
+    for (const auto& profileEvent : batch.streamRuntimeProfiles) {
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         const plot::RawCaptureEvent event{
             .type = profileEvent.cleared ? plot::RawCaptureEventType::ProfileClear : plot::RawCaptureEventType::ProfileSet,
@@ -1391,51 +1412,180 @@ bool Application::flushScriptStatusAndDialogs() {
         }
         changed = true;
     }
-    for (const auto& update : scriptHost_.drainStatusUpdates()) {
+
+    for (const auto& update : batch.statusUpdates) {
         setStatusMessage(update.clear ? std::string{} : update.text, false);
         changed = true;
     }
-    for (const auto& request : scriptHost_.drainDialogRequests()) {
+    for (const auto& request : batch.dialogRequests) {
         enqueueDialogRequest(request);
         changed = true;
     }
-    for (const auto& request : scriptHost_.drainFileDialogRequests()) {
+    for (const auto& request : batch.fileDialogRequests) {
         pendingFileDialogs_.push_back(request);
         openFileDialogs_[request.id] = request;
         changed = true;
     }
+
+    for (const auto& event : batch.events) {
+        dockStore_.appendLuaEvent(event);
+        changed = true;
+    }
+    for (const auto& log : batch.logs) {
+        loggingFacade_.script(log.level, log.message, log.timestampMs);
+        changed = true;
+    }
+
+    auto& wave = dockStore_.waveState();
+    for (const auto& setup : batch.plotSetups) {
+        const auto previousConfig = wave.buffer.viewConfig();
+        const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
+                                   previousConfig.timeUnit != setup.view.timeUnit ||
+                                   !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
+                                   !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax) ||
+                                   previousConfig.verticalUnit != setup.view.verticalUnit ||
+                                   previousConfig.historyLimit != setup.view.historyLimit;
+        const bool channelsChanged = !sameChannelSpecs(setup.channels, wave.buffer);
+        const bool channelIdentityChanged = !sameChannelIdentity(setup.channels, wave.buffer);
+
+        if (setup.resetHistory) {
+            wave.buffer.clear();
+        }
+        auto viewConfig = setup.view;
+        viewConfig.displayFormula = wave.view.displayFormula;
+        wave.buffer.setViewConfig(viewConfig);
+        wave.buffer.configureChannels(setup.channels.size());
+        wave.defaultChannelSpecs.clear();
+        wave.defaultChannelSpecs.reserve(setup.channels.size());
+        const bool shouldResetOverrides = setup.resetHistory || channelIdentityChanged;
+        if (shouldResetOverrides) {
+            wave.channelOverrides.clear();
+        }
+        wave.channelOverrides.resize(setup.channels.size());
+        for (std::size_t index = 0; index < setup.channels.size(); ++index) {
+            const auto defaultSpec = plot::ChannelSpec{
+                .label = setup.channels[index].label,
+                .unit = setup.channels[index].unit,
+                .ratio = setup.channels[index].ratio,
+                .scale = setup.channels[index].scale,
+                .offset = setup.channels[index].offset,
+                .color = setup.channels[index].color,
+            };
+            auto effectiveSpec = defaultSpec;
+            if (!shouldResetOverrides && index < wave.channelOverrides.size()) {
+                const auto& overrideState = wave.channelOverrides[index];
+                if (overrideState.labelOverridden) {
+                    effectiveSpec.label = overrideState.label;
+                }
+                if (overrideState.ratioOverridden) {
+                    effectiveSpec.ratio = overrideState.ratio;
+                }
+                if (overrideState.scaleOverridden) {
+                    effectiveSpec.scale = overrideState.scale;
+                }
+                if (overrideState.offsetOverridden) {
+                    effectiveSpec.offset = overrideState.offset;
+                }
+            }
+            wave.defaultChannelSpecs.push_back(defaultSpec);
+            wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
+        }
+        const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
+        const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
+        if (shouldResetView) {
+            wave.view.visibleDuration = (std::max)(wave.view.minVisibleTimeSpan,
+                                                   (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
+            wave.view.manualVerticalMin = setup.view.verticalMin;
+            wave.view.manualVerticalMax = setup.view.verticalMax;
+            wave.view.viewMinValue = setup.view.verticalMin;
+            wave.view.viewMaxValue = setup.view.verticalMax;
+            wave.view.initialized = false;
+            wave.statusMessage = "Lua 已更新波形通道配置";
+        }
+        changed = true;
+    }
+
+    for (auto append : batch.plotAppends) {
+        pendingScriptPlotAppends_.push_back(std::move(append));
+    }
+
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> appendRequests;
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> deferred;
+    std::unordered_map<std::string, std::size_t> selectedIndexes;
+    const auto maxPlotAppends = plotAppendsPerPump();
+    while (!pendingScriptPlotAppends_.empty()) {
+        auto append = std::move(pendingScriptPlotAppends_.front());
+        pendingScriptPlotAppends_.pop_front();
+        auto& [channelIndex, request] = append;
+        auto key = std::to_string(channelIndex);
+        key.push_back('\x1F');
+        key.append(request.source);
+        if (!selectedIndexes.contains(key) && selectedIndexes.size() >= maxPlotAppends) {
+            deferred.emplace_back(channelIndex, std::move(request));
+            continue;
+        }
+        const auto [position, inserted] = selectedIndexes.emplace(key, appendRequests.size());
+        if (inserted) {
+            appendRequests.emplace_back(channelIndex, std::move(request));
+            continue;
+        }
+        auto& targetSamples = appendRequests[position->second].second.samples;
+        targetSamples.insert(targetSamples.end(),
+                             std::make_move_iterator(request.samples.begin()),
+                             std::make_move_iterator(request.samples.end()));
+    }
+
+    for (auto& append : deferred) {
+        pendingScriptPlotAppends_.push_back(std::move(append));
+    }
+
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergedRequests;
+    std::unordered_map<std::string, std::size_t> mergedIndexes;
+    mergedRequests.reserve(appendRequests.size());
+    for (auto append : appendRequests) {
+        auto& [channelIndex, request] = append;
+        if (request.samples.empty()) {
+            continue;
+        }
+        auto key = std::to_string(channelIndex);
+        key.push_back('\x1F');
+        key.append(request.source);
+        const auto [position, inserted] = mergedIndexes.emplace(key, mergedRequests.size());
+        if (inserted) {
+            mergedRequests.emplace_back(channelIndex, std::move(request));
+            continue;
+        }
+        auto& targetSamples = mergedRequests[position->second].second.samples;
+        targetSamples.insert(targetSamples.end(),
+                             std::make_move_iterator(request.samples.begin()),
+                             std::make_move_iterator(request.samples.end()));
+    }
+
+    for (auto& [channelIndex, request] : mergedRequests) {
+        if (wave.buffer.append(channelIndex, std::move(request))) {
+            changed = true;
+        }
+    }
+
+    changed = driveTxScheduler() || changed;
     return changed;
 }
 
-bool Application::processScriptRequestCompletions() {
+bool Application::flushScriptOutputs() {
     bool changed = false;
-    bool completionConsumed = false;
-    for (const auto& result : scriptHost_.drainRequestDoneResults()) {
-        if (completionConsumed) {
-            loggingFacade_.warn("protocol", "同一轮收到多次 request_done，后续结果已忽略");
-            changed = true;
-            continue;
-        }
-        if (!activeHalfDuplexRequest_.has_value()) {
-            loggingFacade_.warn("protocol", "收到 request_done，但当前没有活动 request");
-            changed = true;
-            continue;
-        }
-        const auto activeRequest = activeHalfDuplexRequest_->request;
-        activeHalfDuplexRequest_.reset();
-        scriptHost_.setRequestAwaitingCompletion(false);
-        if (result.ok && !result.message.empty() && dockStore_.commState().lastError == result.message) {
-            dockStore_.commState().lastError.clear();
-        }
-        finishTxRequest(activeRequest,
-                        result.ok ? scripting::TxEventState::Completed : scripting::TxEventState::Failed,
-                        (!result.ok && !result.message.empty()) ? std::optional<std::string>{result.message} : std::nullopt,
-                        result.timestampMs);
-        completionConsumed = true;
-        changed = true;
-        changed = driveTxScheduler() || changed;
+    auto batches = scriptWorker_.drainOutputs();
+    for (const auto& batch : batches) {
+        changed = applyScriptOutputBatch(batch) || changed;
     }
     return changed;
+}
+
+bool Application::flushScriptStatusAndDialogs() {
+    return false;
+}
+
+bool Application::processScriptRequestCompletions() {
+    return false;
 }
 
 bool Application::processRequestTimeouts() {
@@ -1449,7 +1599,7 @@ bool Application::processRequestTimeouts() {
 
     const auto request = activeHalfDuplexRequest_->request;
     activeHalfDuplexRequest_.reset();
-    scriptHost_.setRequestAwaitingCompletion(false);
+    scriptWorker_.postRequestAwaitingCompletion(false);
     finishTxRequest(request, scripting::TxEventState::Timeout, std::string("等待 request_done 超时"), currentMs);
     driveTxScheduler();
     return true;
@@ -1530,7 +1680,7 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
                                   std::uint64_t finishedAtMs) {
     if (state == scripting::TxEventState::Canceled && activeHalfDuplexRequest_.has_value()
         && activeHalfDuplexRequest_->request.id == request.id) {
-        scriptHost_.setRequestAwaitingCompletion(false);
+        scriptWorker_.postRequestAwaitingCompletion(false);
     }
 
     if (state == scripting::TxEventState::Sent) {
@@ -1547,23 +1697,25 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
         loggingFacade_.warn("protocol", *error);
     }
 
-    scriptHost_.onTxEvent(request.connection,
-                          scripting::TxEvent{
-                              .id = request.id,
-                              .kind = request.kind,
-                              .state = state,
-                              .tag = request.tag,
-                              .bytes = request.payload.size(),
-                              .queuedMs = request.createdAtMs,
-                              .finishedMs = finishedAtMs,
-                              .fileJobId = request.fileJobId,
-                              .offset = request.fileOffset,
-                              .total = request.fileTotal,
-                              .progress = request.fileTotal == 0
-                                  ? 0.0
-                                  : static_cast<double>(request.fileOffset + request.payload.size()) / static_cast<double>(request.fileTotal),
-                              .error = std::move(error),
-                          });
+    scriptWorker_.postTxEvent(request.connection,
+                              scripting::TxEvent{
+                                  .id = request.id,
+                                  .kind = request.kind,
+                                  .state = state,
+                                  .tag = request.tag,
+                                  .bytes = request.payload.size(),
+                                  .queuedMs = request.createdAtMs,
+                                  .finishedMs = finishedAtMs,
+                                  .fileJobId = request.fileJobId,
+                                  .offset = request.fileOffset,
+                                  .total = request.fileTotal,
+                                  .progress = request.fileTotal == 0
+                                      ? 0.0
+                                      : static_cast<double>(request.fileOffset + request.payload.size()) /
+                                            static_cast<double>(request.fileTotal),
+                                  .error = std::move(error),
+                              });
+    scriptWorker_.waitIdle();
 }
 
 void Application::cancelAllTxRequests(const std::string& reason) {
@@ -1573,7 +1725,7 @@ void Application::cancelAllTxRequests(const std::string& reason) {
         activeWrite_.reset();
     }
     if (activeHalfDuplexRequest_.has_value()) {
-        scriptHost_.setRequestAwaitingCompletion(false);
+        scriptWorker_.postRequestAwaitingCompletion(false);
         finishTxRequest(activeHalfDuplexRequest_->request, scripting::TxEventState::Canceled, reason, finishedAtMs);
         activeHalfDuplexRequest_.reset();
     }
@@ -1679,13 +1831,7 @@ void Application::enqueueDialogRequest(const scripting::DialogRequest& request) 
 }
 
 bool Application::flushScriptLogs() {
-    bool changed = false;
-    auto scriptLogs = scriptHost_.drainLogs();
-    for (const auto& log : scriptLogs) {
-        loggingFacade_.script(log.level, log.message, log.timestampMs);
-        changed = true;
-    }
-    return changed;
+    return false;
 }
 
 void Application::enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows) {
@@ -1765,7 +1911,7 @@ void Application::respondDialog(const scripting::DialogEvent& event) {
         dialogDedupeKeys_.erase(request.dedupeKey);
     }
     openDialogs_.erase(iter);
-    scriptHost_.onDialogEvent(request.connection, event);
+    scriptWorker_.postDialogEvent(request.connection, event);
 }
 
 std::vector<scripting::FileDialogRequest> Application::drainFileDialogRequests() {
@@ -1785,110 +1931,11 @@ void Application::respondFileDialog(const scripting::FileDialogEvent& event) {
     }
     const auto request = iter->second;
     openFileDialogs_.erase(iter);
-    scriptHost_.onFileDialogEvent(request.connection, event);
+    scriptWorker_.postFileDialogEvent(request.connection, event);
 }
 
 bool Application::flushScriptPlots() {
-    bool changed = false;
-    auto& wave = dockStore_.waveState();
-
-    for (const auto& setup : scriptHost_.drainPlotSetups()) {
-        const auto previousConfig = wave.buffer.viewConfig();
-        const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
-                                   previousConfig.timeUnit != setup.view.timeUnit ||
-                                   !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
-                                   !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax) ||
-                                   previousConfig.verticalUnit != setup.view.verticalUnit ||
-                                   previousConfig.historyLimit != setup.view.historyLimit;
-        const bool channelsChanged = !sameChannelSpecs(setup.channels, wave.buffer);
-        const bool channelIdentityChanged = !sameChannelIdentity(setup.channels, wave.buffer);
-
-        if (setup.resetHistory) {
-            wave.buffer.clear();
-        }
-        auto viewConfig = setup.view;
-        viewConfig.displayFormula = wave.view.displayFormula;
-        wave.buffer.setViewConfig(viewConfig);
-        wave.buffer.configureChannels(setup.channels.size());
-        wave.defaultChannelSpecs.clear();
-        wave.defaultChannelSpecs.reserve(setup.channels.size());
-        const bool shouldResetOverrides = setup.resetHistory || channelIdentityChanged;
-        if (shouldResetOverrides) {
-            wave.channelOverrides.clear();
-        }
-        wave.channelOverrides.resize(setup.channels.size());
-        for (std::size_t index = 0; index < setup.channels.size(); ++index) {
-            const auto defaultSpec = plot::ChannelSpec{
-                .label = setup.channels[index].label,
-                .unit = setup.channels[index].unit,
-                .ratio = setup.channels[index].ratio,
-                .scale = setup.channels[index].scale,
-                .offset = setup.channels[index].offset,
-                .color = setup.channels[index].color,
-            };
-            auto effectiveSpec = defaultSpec;
-            if (!shouldResetOverrides && index < wave.channelOverrides.size()) {
-                const auto& overrideState = wave.channelOverrides[index];
-                if (overrideState.labelOverridden) {
-                    effectiveSpec.label = overrideState.label;
-                }
-                if (overrideState.ratioOverridden) {
-                    effectiveSpec.ratio = overrideState.ratio;
-                }
-                if (overrideState.scaleOverridden) {
-                    effectiveSpec.scale = overrideState.scale;
-                }
-                if (overrideState.offsetOverridden) {
-                    effectiveSpec.offset = overrideState.offset;
-                }
-            }
-            wave.defaultChannelSpecs.push_back(defaultSpec);
-            wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
-        }
-        const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
-        const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
-        if (shouldResetView) {
-            wave.view.visibleDuration = (std::max)(wave.view.minVisibleTimeSpan,
-                                                   (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
-            wave.view.manualVerticalMin = setup.view.verticalMin;
-            wave.view.manualVerticalMax = setup.view.verticalMax;
-            wave.view.viewMinValue = setup.view.verticalMin;
-            wave.view.viewMaxValue = setup.view.verticalMax;
-            wave.view.initialized = false;
-            wave.statusMessage = "Lua 已更新波形通道配置";
-        }
-        changed = true;
-    }
-
-    auto appendRequests = scriptHost_.drainPlotAppends(plotAppendsPerPump());
-    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergedRequests;
-    std::unordered_map<std::string, std::size_t> mergedIndexes;
-    mergedRequests.reserve(appendRequests.size());
-    for (auto& [channelIndex, request] : appendRequests) {
-        if (request.samples.empty()) {
-            continue;
-        }
-        auto key = std::to_string(channelIndex);
-        key.push_back('\x1F');
-        key.append(request.source);
-        const auto [position, inserted] = mergedIndexes.emplace(key, mergedRequests.size());
-        if (inserted) {
-            mergedRequests.emplace_back(channelIndex, std::move(request));
-            continue;
-        }
-        auto& targetSamples = mergedRequests[position->second].second.samples;
-        targetSamples.insert(targetSamples.end(),
-                             std::make_move_iterator(request.samples.begin()),
-                             std::make_move_iterator(request.samples.end()));
-    }
-
-    for (auto& [channelIndex, request] : mergedRequests) {
-        if (wave.buffer.append(channelIndex, std::move(request))) {
-            changed = true;
-        }
-    }
-
-    return changed;
+    return false;
 }
 
 } // namespace protoscope::app

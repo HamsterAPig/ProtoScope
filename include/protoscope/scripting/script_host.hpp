@@ -373,6 +373,7 @@ public:
     void onTransportBytes(const transport::TransportBytesEvent& event);
     bool setStreamRuntimeProfile(const sol::object& profile, std::string& error);
     bool clearStreamRuntimeProfile(const sol::object& frameName, std::string& error);
+    bool applyStreamRuntimeProfileEvent(const StreamRuntimeProfileEvent& event, std::string& error);
     void clearAllStreamRuntimeProfiles();
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
     bool setControlValue(const std::string& id, const ControlValue& value);

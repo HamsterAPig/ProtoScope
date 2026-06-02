@@ -194,6 +194,7 @@ void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_t
 void test_application_raw_capture_import_preserves_full_history();
 void test_application_raw_capture_import_replays_runtime_profile_events();
 void test_application_raw_capture_import_replays_stream_in_chunks();
+void test_application_raw_capture_import_updates_last_pump_diagnostics();
 void test_application_reload_rebuilds_frame_rows_with_count_expression();
 void test_application_transfer_log_frame_view_waits_for_rx_full_frame();
 void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw();
@@ -207,6 +208,8 @@ void test_application_transfer_frame_rows_drain_after_input_stops();
 void test_application_plot_push_merges_same_channel_source();
 void test_application_plot_push_drains_with_budget_and_disconnect_discards_pending();
 void test_runtime_scheduler_limits_busy_render_frames();
+void test_script_runtime_worker_disabled_mode_waits_for_rx_idle();
+void test_script_runtime_worker_rx_limit_drops_oldest_bytes_only();
 
 const TestCase* allTests();
 int testCount();

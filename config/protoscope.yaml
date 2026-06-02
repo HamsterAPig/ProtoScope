@@ -68,6 +68,11 @@ receive:
     popup_enabled: true
 
 scripting:
+  worker:
+    enabled: true
+    rx_queue_limit_bytes: 67108864
+    output_queue_limit: 65536
+    batch_bytes: 262144
   file_io:
     enabled: true
     allow_protocol_dir: true

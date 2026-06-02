@@ -5,7 +5,7 @@
 #include "protoscope/logging/logging.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plugin/elf_static_view_bridge.hpp"
-#include "protoscope/scripting/script_host.hpp"
+#include "protoscope/scripting/script_runtime_worker.hpp"
 #include "protoscope/transport/transport.hpp"
 
 #include <cstdint>
@@ -105,6 +105,7 @@ private:
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
+    bool applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch);
     bool handleTransportEvents();
     bool processTransportEvent(const transport::TransportEvent& event);
     bool processPendingRxBytes(std::size_t maxBytes);
@@ -155,7 +156,7 @@ private:
     config::ConfigStore configStore_{};
     config::AppConfig runtimeConfig_{};
     logging::LoggingFacade loggingFacade_{};
-    scripting::ScriptHost scriptHost_;
+    scripting::ScriptRuntimeWorker scriptWorker_;
     plugin::ElfStaticViewBridge elfStaticView_;
     std::uint64_t elfStaticAddressRevision_{0};
     std::unique_ptr<transport::ITransport> transport_;
@@ -168,6 +169,7 @@ private:
     std::unordered_map<std::uint64_t, scripting::DialogRequest> openDialogs_;
     std::deque<scripting::FileDialogRequest> pendingFileDialogs_;
     std::unordered_map<std::uint64_t, scripting::FileDialogRequest> openFileDialogs_;
+    std::deque<std::pair<std::size_t, plot::WaveAppendRequest>> pendingScriptPlotAppends_;
     std::unordered_map<std::string, std::uint64_t> dialogDedupeKeys_;
     StreamBufferAlertState streamBufferAlertState_{};
     std::optional<TransferFrameParserState> transferFrameParser_;

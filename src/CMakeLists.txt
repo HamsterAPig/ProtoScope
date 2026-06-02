@@ -63,6 +63,7 @@ target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
     scripting/frame_stream_parser.cpp
+    scripting/script_runtime_worker.cpp
     scripting/host/script_callback_dispatcher.cpp
     scripting/host/script_file_system_facade.cpp
     scripting/host/script_host_core.cpp
@@ -87,7 +88,11 @@ target_link_libraries(protoscope_scripting
         protoscope_transport
         protoscope_lua
         protoscope_sol2
+        Threads::Threads
 )
+if(MINGW)
+    target_link_libraries(protoscope_scripting PUBLIC winpthread)
+endif()
 target_compile_features(protoscope_scripting PUBLIC cxx_std_20)
 target_compile_definitions(protoscope_scripting PRIVATE SOL_ALL_SAFETIES_ON=1)
 

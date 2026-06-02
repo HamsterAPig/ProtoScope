@@ -870,6 +870,12 @@ void test_application_raw_capture_export_import_roundtrip() {
     wave.view.sampleFrequencyInput = "2048";
     require(wave.rawCapture.payload == transportState->queuedRxBytes, "实时 RX 后应缓存原始字节");
 
+    require(waitUntil([&application] {
+        application.pumpOnce();
+        const auto snapshot = application.docks().waveState().buffer.snapshot(-std::numeric_limits<double>::infinity(),
+                                                                              std::numeric_limits<double>::infinity());
+        return !snapshot.channels.empty() && snapshot.channels.front().totalSamples > 0;
+    }), "实时 RX 后应异步生成波形样本");
     const auto liveSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     require(!liveSnapshot.channels.empty(), "实时 RX 后应生成波形通道");
     require(liveSnapshot.channels.front().totalSamples > 0, "实时 RX 后应生成波形样本");
@@ -1103,6 +1109,47 @@ void test_application_raw_capture_import_replays_stream_in_chunks() {
             "导入回放应按分块解析全部 stream 帧，而不是只保留尾部数据");
 }
 
+void test_application_raw_capture_import_updates_last_pump_diagnostics() {
+    constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_chunked_stream";
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+
+    application.openTransport();
+    application.pumpOnce();
+
+    const auto frame = makeRawImportStreamFrame(0x34);
+    const protoscope::transport::ConnectionContext ctx{
+        .endpoint = "queued://wave",
+        .connectionId = 7,
+        .timestampMs = 300,
+        .readyForIo = true,
+    };
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, frame});
+
+    require(application.pumpOnce(), "处理 stream 帧应成功推进一次 pump");
+    require(waitUntil([&application, expectedBytes = frame.size()] {
+        application.pumpOnce();
+        const auto& comm = application.docks().commState();
+        return comm.lastPumpRxBytes == expectedBytes && comm.lastPumpStreamFrames == 1U;
+    }), "worker 应异步回写 stream 解析统计");
+
+    const auto& comm = application.docks().commState();
+    require(comm.lastPumpRxBytes == frame.size(), "上轮 RX 字节统计应等于本次输入大小");
+    require(comm.lastPumpStreamFrames == 1U, "stream 解析统计应记录 1 帧");
+    require(comm.lastPumpStreamErrors == 0U, "stream 解析统计不应产生错误");
+    require(comm.lastPumpTransportMs >= 0.0, "pump 耗时统计应已写回");
+    require(comm.lastPumpParserMs >= 0.0, "parser 耗时统计应已写回");
+    require(comm.lastPumpCallbackMs >= 0.0, "Lua 回调耗时统计应已写回");
+    require(comm.lastPumpScriptMs >= 0.0, "脚本总耗时统计应已写回");
+}
+
 void test_application_reload_rebuilds_frame_rows_with_count_expression() {
     const auto protocolDir = makeUniqueTempDir("protoscope-rebuild-count-expression");
     {
@@ -1144,7 +1191,11 @@ void test_application_reload_rebuilds_frame_rows_with_count_expression() {
             "实时接收应生成逐帧记录");
     require(application.docks().receiveState().frameRows.front().message.find("expr_frame") != std::string::npos,
             "逐帧记录应包含 count 表达式帧名");
-    require(!application.docks().scriptState().rows.empty(), "实时 on_frame 副作用应进入脚本事件");
+    require(waitUntil([&application] {
+                application.pumpOnce();
+                return !application.docks().scriptState().rows.empty();
+            }),
+            "实时 on_frame 副作用应进入脚本事件");
 
     application.docks().scriptState().rows.clear();
     require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "同协议 reload 应成功");
@@ -1170,7 +1221,11 @@ void test_application_transfer_log_frame_view_waits_for_rx_full_frame() {
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
 
     application.openTransport();
-    application.pumpOnce();
+    require(waitUntil([&application] {
+                application.pumpOnce();
+                return application.docks().receiveState().rows.size() == 1;
+            }),
+            "原始收发记录应保留半包 chunk");
     require(application.docks().receiveState().rows.size() == 1, "原始收发记录应保留半包 chunk");
     require(application.docks().receiveState().frameRows.empty(), "逐帧视图不应把 RX 半包显示成碎行");
 
@@ -1361,15 +1416,13 @@ void test_application_large_rx_event_drains_by_byte_budget() {
     };
     transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamPayload(frameCount)});
 
-    require(application.pumpOnce(), "第一轮 pump 应处理大 RX 的首个字节预算块");
-    require(application.docks().receiveState().frameRows.size() < frameCount, "单个大 RX 事件不应在一轮 pump 内全部解析");
-    require(application.docks().commState().pendingRxBytes > 0U, "剩余 RX 字节应保留到后续 pump");
+    require(application.pumpOnce(), "第一轮 pump 应快速转交大 RX 到脚本 worker");
 
     for (int attempt = 0; attempt < 10 && application.docks().receiveState().frameRows.size() < frameCount; ++attempt) {
         application.pumpOnce();
     }
-    require(application.docks().receiveState().frameRows.size() == frameCount, "后续 pump 应继续 drain 大 RX 事件");
-    require(application.docks().commState().pendingRxBytes == 0U, "大 RX drain 完成后不应残留 pending 字节");
+    require(application.docks().receiveState().frameRows.size() == frameCount, "worker 应异步 drain 大 RX 事件");
+    require(application.docks().commState().pendingRxBytes == 0U, "worker drain 完成后不应残留 pending 字节");
 }
 
 void test_application_responsive_disconnect_discards_realtime_backlog() {
@@ -1405,7 +1458,6 @@ void test_application_responsive_disconnect_discards_realtime_backlog() {
     transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamPayload(frameCount)});
     application.pumpOnce();
 
-    require(application.docks().commState().pendingRxBytes > 0U, "断开前应存在 pending RX 字节");
     require(application.docks().commState().pendingTransferFrameRows > 0U, "断开前应存在 pending 逐帧行");
 
     application.closeTransport();
@@ -1446,12 +1498,11 @@ void test_application_complete_disconnect_keeps_realtime_backlog() {
     transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamPayload(frameCount)});
     application.pumpOnce();
 
-    require(application.docks().commState().pendingRxBytes > 0U, "complete 断开前应存在 pending RX 字节");
     require(application.docks().commState().pendingTransferFrameRows > 0U, "complete 断开前应存在 pending 逐帧行");
 
     application.closeTransport();
     require(application.docks().commState().state == protoscope::transport::TransportState::Closed, "complete 断开后通讯状态也应立即关闭");
-    require(application.docks().commState().pendingRxBytes > 0U, "complete 断开后应保留 pending RX 字节");
+    require(application.docks().commState().pendingRxBytes == 0U, "complete 模式不应保留已转交 worker 的 RX 字节");
     require(application.docks().commState().pendingTransferFrameRows > 0U, "complete 断开后应保留 pending 逐帧行");
 
     for (int attempt = 0; attempt < 20 && application.docks().receiveState().frameRows.size() < frameCount; ++attempt) {

@@ -825,11 +825,11 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
     parsedFields.reserve(frame.fields.size());
     std::size_t cursor = 0;
     const auto readableLimit = frameLength - crcWidth;
+    const auto frameBytesVector = copyBytes(frameBytes, frameLength);
     for (const auto& field : frame.fields) {
         const auto width = streamValueWidth(field.type);
         const auto start = field.offset.value_or(cursor);
         std::string countError;
-        const auto frameBytesVector = copyBytes(frameBytes, frameLength);
         const auto count = resolveFieldCount(field, parsedFields, frameLength, readableLimit, start, frameBytesVector, countError);
         if (!count.has_value()) {
             result.action = AnalyzeResult::Action::RecoverableError;

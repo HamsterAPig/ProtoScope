@@ -129,6 +129,10 @@ struct ReceiveConfig {
 
 struct ScriptingConfig {
     scripting::FileIoConfig fileIo{};
+    bool workerEnabled{true};
+    std::size_t workerRxQueueLimitBytes{64U * 1024U * 1024U};
+    std::size_t workerOutputQueueLimit{65536U};
+    std::size_t workerBatchBytes{256U * 1024U};
 };
 
 struct AppConfig {

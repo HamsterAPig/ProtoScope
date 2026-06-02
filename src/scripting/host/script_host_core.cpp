@@ -1467,6 +1467,43 @@ bool ScriptHost::clearStreamRuntimeProfile(const sol::object& frameNameObject, s
     return true;
 }
 
+bool ScriptHost::applyStreamRuntimeProfileEvent(const StreamRuntimeProfileEvent& event, std::string& error) {
+    if (!runtime_ || !runtime_->stream) {
+        error = "当前协议未启用 stream()";
+        return false;
+    }
+    if (event.cleared) {
+        const std::optional<std::string> frameName = event.frameName.empty()
+            ? std::nullopt
+            : std::optional<std::string>{event.frameName};
+        if (!runtime_->stream->parser.clearRuntimeProfile(frameName, error)) {
+            return false;
+        }
+        if (frameName.has_value()) {
+            runtime_->streamRuntimeProfiles.erase(*frameName);
+        } else {
+            runtime_->streamRuntimeProfiles.clear();
+        }
+        streamRuntimeProfileEvents_.push_back(event);
+        return true;
+    }
+    if (event.frameName.empty() || event.length == 0U) {
+        error = "stream profile.frame 和 length 不能为空";
+        return false;
+    }
+
+    StreamRuntimeProfile profile{
+        .length = event.length,
+        .channelMap = event.channelMap,
+    };
+    if (!runtime_->stream->parser.setRuntimeProfile(event.frameName, profile, error)) {
+        return false;
+    }
+    runtime_->streamRuntimeProfiles.insert_or_assign(event.frameName, std::move(profile));
+    streamRuntimeProfileEvents_.push_back(event);
+    return true;
+}
+
 void ScriptHost::clearAllStreamRuntimeProfiles() {
     if (!runtime_ || !runtime_->stream) {
         return;
