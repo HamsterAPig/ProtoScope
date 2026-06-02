@@ -89,10 +89,46 @@ bool drawAdaptiveToolbarButton(const char* fullLabel,
     return clicked;
 }
 
-void toggleMeasurementButton(bool& enabled, const char* label, const char* shortLabel, const char* help) {
-    if (drawAdaptiveToolbarButton(label, shortLabel, help, enabled, true)) {
+int measurementGridColumnCount() {
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    return availableWidth >= 260.0F ? 3 : 2;
+}
+
+void setMeasurementPreset(plot::WaveMeasurementSelection& selection,
+                          bool basic,
+                          bool stats,
+                          bool dispersion,
+                          bool timing,
+                          bool error);
+
+void drawMeasurementPresetButton(const char* id,
+                                 const char* label,
+                                 const char* shortLabel,
+                                 const char* help,
+                                 plot::WaveMeasurementSelection& selection,
+                                 bool basic,
+                                 bool stats,
+                                 bool dispersion,
+                                 bool timing,
+                                 bool error) {
+    ImGui::PushID(id);
+    if (drawAdaptiveToolbarButton(label, shortLabel, help, false)) {
+        setMeasurementPreset(selection, basic, stats, dispersion, timing, error);
+    }
+    ImGui::PopID();
+}
+
+void toggleMeasurementButton(bool& enabled, const char* id, const char* label, const char* shortLabel, const char* help) {
+    ImGui::PushID(id);
+    if (drawAdaptiveToolbarButton(label, shortLabel, help, enabled)) {
         enabled = !enabled;
     }
+    ImGui::PopID();
+}
+
+void drawMeasurementToggleCell(bool& enabled, const char* id, const char* label, const char* shortLabel, const char* help) {
+    ImGui::TableNextColumn();
+    toggleMeasurementButton(enabled, id, label, shortLabel, help);
 }
 
 void setMeasurementPreset(plot::WaveMeasurementSelection& selection,
@@ -146,73 +182,94 @@ void setMeasurementPreset(plot::WaveMeasurementSelection& selection,
 }
 
 void drawMeasurementGroup(plot::WaveMeasurementSelection& selection) {
-    if (drawAdaptiveToolbarButton("基础", "基", "启用游标、差值、频率、周期、样本数和窗口跨度。", false, true)) {
-        setMeasurementPreset(selection, true, false, false, false, false);
+    const int columnCount = measurementGridColumnCount();
+    if (ImGui::BeginTable("measurement_presets", columnCount, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextColumn();
+        drawMeasurementPresetButton("preset_basic", "基础", "基", "启用游标、差值、频率、周期、样本数和窗口跨度。", selection, true, false, false, false, false);
+        ImGui::TableNextColumn();
+        drawMeasurementPresetButton("preset_stats", "统计", "统", "启用 min/max/Vpp/mean/rms/median/p95/p99。", selection, false, true, false, false, false);
+        ImGui::TableNextColumn();
+        drawMeasurementPresetButton("preset_dispersion", "离散", "离", "启用方差、标准差、CV、MAD、IQR 等离散度指标。", selection, false, false, true, false, false);
+        ImGui::TableNextColumn();
+        drawMeasurementPresetButton("preset_timing", "时序", "时", "启用高低电平宽度、占空比、边沿和上升/下降时间。", selection, false, false, false, true, false);
+        ImGui::TableNextColumn();
+        drawMeasurementPresetButton("preset_error", "误差", "误", "启用与参考通道或标定值相关的误差指标。", selection, false, false, false, false, true);
+        ImGui::TableNextColumn();
+        drawMeasurementPresetButton("preset_all", "全部", "全", "启用当前第一版所有双游标测量项。", selection, true, true, true, true, true);
+        ImGui::TableNextColumn();
+        ImGui::PushID("preset_compact");
+        if (drawAdaptiveToolbarButton("精简", "简", "恢复默认精简测量：基础、常用统计和标准差。", false)) {
+            selection = {};
+        }
+        ImGui::PopID();
+        ImGui::EndTable();
     }
-    if (drawAdaptiveToolbarButton("统计", "统", "启用 min/max/Vpp/mean/rms/median/p95/p99。", false, true)) {
-        setMeasurementPreset(selection, false, true, false, false, false);
-    }
-    if (drawAdaptiveToolbarButton("离散", "离", "启用方差、标准差、CV、MAD、IQR 等离散度指标。", false, true)) {
-        setMeasurementPreset(selection, false, false, true, false, false);
-    }
-    if (drawAdaptiveToolbarButton("时序", "时", "启用高低电平宽度、占空比、边沿和上升/下降时间。", false, true)) {
-        setMeasurementPreset(selection, false, false, false, true, false);
-    }
-    if (drawAdaptiveToolbarButton("误差", "误", "启用与参考通道或标定值相关的误差指标。", false, true)) {
-        setMeasurementPreset(selection, false, false, false, false, true);
-    }
-    if (drawAdaptiveToolbarButton("全部", "全", "启用当前第一版所有双游标测量项。", false, true)) {
-        setMeasurementPreset(selection, true, true, true, true, true);
-    }
-    if (drawAdaptiveToolbarButton("精简", "简", "恢复默认精简测量：基础、常用统计和标准差。", false)) {
-        selection = {};
-    }
+    ImGui::Spacing();
     ImGui::SeparatorText("基础");
-    toggleMeasurementButton(selection.cursorA, "Cursor A", "A", "显示 A 游标读数。");
-    toggleMeasurementButton(selection.cursorB, "Cursor B", "B", "显示 B 游标读数。");
-    toggleMeasurementButton(selection.deltaTime, "Δt", "dt", "显示双游标时间差或样本差。");
-    toggleMeasurementButton(selection.deltaValue, "Δy", "dy", "显示双游标纵向差值。");
-    toggleMeasurementButton(selection.frequency, "frequency", "f", "显示双游标间隔对应频率。");
-    toggleMeasurementButton(selection.period, "period", "T", "显示双游标间隔周期。");
-    toggleMeasurementButton(selection.sampleCount, "sampleCount", "N", "显示测量窗口样本数量。");
-    toggleMeasurementButton(selection.span, "span", "宽", "显示测量窗口首末样本时间跨度。");
+    if (ImGui::BeginTable("measurement_basic_items", columnCount, ImGuiTableFlags_SizingStretchSame)) {
+        drawMeasurementToggleCell(selection.cursorA, "cursor_a", "Cursor A", "A", "显示 A 游标读数。");
+        drawMeasurementToggleCell(selection.cursorB, "cursor_b", "Cursor B", "B", "显示 B 游标读数。");
+        drawMeasurementToggleCell(selection.deltaTime, "delta_time", "Δt", "dt", "显示双游标时间差或样本差。");
+        drawMeasurementToggleCell(selection.deltaValue, "delta_value", "Δy", "dy", "显示双游标纵向差值。");
+        drawMeasurementToggleCell(selection.frequency, "frequency", "frequency", "f", "显示双游标间隔对应频率。");
+        drawMeasurementToggleCell(selection.period, "period", "period", "T", "显示双游标间隔周期。");
+        drawMeasurementToggleCell(selection.sampleCount, "sample_count", "sampleCount", "N", "显示测量窗口样本数量。");
+        drawMeasurementToggleCell(selection.span, "span", "span", "宽", "显示测量窗口首末样本时间跨度。");
+        ImGui::EndTable();
+    }
 
+    ImGui::Spacing();
     ImGui::SeparatorText("统计");
-    toggleMeasurementButton(selection.min, "min", "min", "显示窗口最小值。");
-    toggleMeasurementButton(selection.max, "max", "max", "显示窗口最大值。");
-    toggleMeasurementButton(selection.peakToPeak, "Vpp", "Vpp", "显示峰峰值。");
-    toggleMeasurementButton(selection.mean, "mean", "均", "显示均值。");
-    toggleMeasurementButton(selection.rms, "rms", "rms", "显示有效值。");
-    toggleMeasurementButton(selection.median, "median", "中", "显示中位数。");
-    toggleMeasurementButton(selection.p95, "p95", "95", "显示 P95。");
-    toggleMeasurementButton(selection.p99, "p99", "99", "显示 P99。");
+    if (ImGui::BeginTable("measurement_stats_items", columnCount, ImGuiTableFlags_SizingStretchSame)) {
+        drawMeasurementToggleCell(selection.min, "min", "min", "min", "显示窗口最小值。");
+        drawMeasurementToggleCell(selection.max, "max", "max", "max", "显示窗口最大值。");
+        drawMeasurementToggleCell(selection.peakToPeak, "peak_to_peak", "Vpp", "Vpp", "显示峰峰值。");
+        drawMeasurementToggleCell(selection.mean, "mean", "mean", "均", "显示均值。");
+        drawMeasurementToggleCell(selection.rms, "rms", "rms", "rms", "显示有效值。");
+        drawMeasurementToggleCell(selection.median, "median", "median", "中", "显示中位数。");
+        drawMeasurementToggleCell(selection.p95, "p95", "p95", "95", "显示 P95。");
+        drawMeasurementToggleCell(selection.p99, "p99", "p99", "99", "显示 P99。");
+        ImGui::EndTable();
+    }
 
+    ImGui::Spacing();
     ImGui::SeparatorText("离散度");
-    toggleMeasurementButton(selection.variance, "variance", "方", "显示总体方差。");
-    toggleMeasurementButton(selection.stddev, "stddev", "标", "显示标准差。");
-    toggleMeasurementButton(selection.cv, "cv", "CV", "显示变异系数，mean 为 0 时为 N/A。");
-    toggleMeasurementButton(selection.mad, "mad", "MAD", "显示平均绝对偏差。");
-    toggleMeasurementButton(selection.medianAbsDev, "medianAbsDev", "中偏", "显示中位数绝对偏差。");
-    toggleMeasurementButton(selection.iqr, "iqr", "IQR", "显示四分位距。");
-    toggleMeasurementButton(selection.p95Spread, "p95Spread", "95宽", "显示 P95-P5。");
+    if (ImGui::BeginTable("measurement_dispersion_items", columnCount, ImGuiTableFlags_SizingStretchSame)) {
+        drawMeasurementToggleCell(selection.variance, "variance", "variance", "方", "显示总体方差。");
+        drawMeasurementToggleCell(selection.stddev, "stddev", "stddev", "标", "显示标准差。");
+        drawMeasurementToggleCell(selection.cv, "cv", "cv", "CV", "显示变异系数，mean 为 0 时为 N/A。");
+        drawMeasurementToggleCell(selection.mad, "mad", "mad", "MAD", "显示平均绝对偏差。");
+        drawMeasurementToggleCell(selection.medianAbsDev, "median_abs_dev", "medianAbsDev", "中偏", "显示中位数绝对偏差。");
+        drawMeasurementToggleCell(selection.iqr, "iqr", "iqr", "IQR", "显示四分位距。");
+        drawMeasurementToggleCell(selection.p95Spread, "p95_spread", "p95Spread", "95宽", "显示 P95-P5。");
+        ImGui::EndTable();
+    }
 
+    ImGui::Spacing();
     ImGui::SeparatorText("时序");
-    toggleMeasurementButton(selection.highWidth, "highWidth", "高宽", "显示阈值以上累计宽度。");
-    toggleMeasurementButton(selection.lowWidth, "lowWidth", "低宽", "显示阈值以下累计宽度。");
-    toggleMeasurementButton(selection.dutyCycle, "dutyCycle", "占空", "显示高电平占空比。");
-    toggleMeasurementButton(selection.riseTime, "riseTime", "上升", "显示首次 10%-90% 上升时间。");
-    toggleMeasurementButton(selection.fallTime, "fallTime", "下降", "显示首次 90%-10% 下降时间。");
-    toggleMeasurementButton(selection.edgeCount, "edgeCount", "边沿", "显示阈值穿越次数。");
+    if (ImGui::BeginTable("measurement_timing_items", columnCount, ImGuiTableFlags_SizingStretchSame)) {
+        drawMeasurementToggleCell(selection.highWidth, "high_width", "highWidth", "高宽", "显示阈值以上累计宽度。");
+        drawMeasurementToggleCell(selection.lowWidth, "low_width", "lowWidth", "低宽", "显示阈值以下累计宽度。");
+        drawMeasurementToggleCell(selection.dutyCycle, "duty_cycle", "dutyCycle", "占空", "显示高电平占空比。");
+        drawMeasurementToggleCell(selection.riseTime, "rise_time", "riseTime", "上升", "显示首次 10%-90% 上升时间。");
+        drawMeasurementToggleCell(selection.fallTime, "fall_time", "fallTime", "下降", "显示首次 90%-10% 下降时间。");
+        drawMeasurementToggleCell(selection.edgeCount, "edge_count", "edgeCount", "边沿", "显示阈值穿越次数。");
+        ImGui::EndTable();
+    }
 
+    ImGui::Spacing();
     ImGui::SeparatorText("误差");
-    toggleMeasurementButton(selection.absoluteError, "absoluteError", "绝误", "显示最后一个样本相对参考的误差。");
-    toggleMeasurementButton(selection.relativeErrorPercent, "relativeErrorPercent", "相误", "显示最后一个样本相对误差百分比。");
-    toggleMeasurementButton(selection.meanError, "meanError", "均误", "显示平均误差。");
-    toggleMeasurementButton(selection.mse, "MSE", "MSE", "显示均方误差。");
-    toggleMeasurementButton(selection.rmse, "RMSE", "RMSE", "显示均方根误差。");
-    toggleMeasurementButton(selection.mae, "MAE", "MAE", "显示平均绝对误差。");
-    toggleMeasurementButton(selection.maxAbsError, "maxAbsError", "最大误", "显示最大绝对误差。");
-    toggleMeasurementButton(selection.bias, "bias", "偏置", "显示偏置。");
+    if (ImGui::BeginTable("measurement_error_items", columnCount, ImGuiTableFlags_SizingStretchSame)) {
+        drawMeasurementToggleCell(selection.absoluteError, "absolute_error", "absoluteError", "绝误", "显示最后一个样本相对参考的误差。");
+        drawMeasurementToggleCell(selection.relativeErrorPercent, "relative_error_percent", "relativeErrorPercent", "相误", "显示最后一个样本相对误差百分比。");
+        drawMeasurementToggleCell(selection.meanError, "mean_error", "meanError", "均误", "显示平均误差。");
+        drawMeasurementToggleCell(selection.mse, "mse", "MSE", "MSE", "显示均方误差。");
+        drawMeasurementToggleCell(selection.rmse, "rmse", "RMSE", "RMSE", "显示均方根误差。");
+        drawMeasurementToggleCell(selection.mae, "mae", "MAE", "MAE", "显示平均绝对误差。");
+        drawMeasurementToggleCell(selection.maxAbsError, "max_abs_error", "maxAbsError", "最大误", "显示最大绝对误差。");
+        drawMeasurementToggleCell(selection.bias, "bias", "bias", "偏置", "显示偏置。");
+        ImGui::EndTable();
+    }
 }
 
 void ensureFftChannelState(plot::WaveDockState& wave) {
@@ -609,25 +666,27 @@ void drawWaveToolbar(app::Application& application,
         }
     }
 
-    if (ImGui::CollapsingHeader("测量", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("测量##measurement_section")) {
         drawMeasurementGroup(view.measurement);
         ImGui::SeparatorText("误差参考");
         const bool channelReference = view.referenceMode == plot::WaveMeasurementReferenceMode::Channel;
+        ImGui::PushID("measurement_reference_mode");
         if (drawAdaptiveToolbarButton("参考通道", "通道", "误差测量使用同时间点参考通道。", channelReference, true)) {
             view.referenceMode = plot::WaveMeasurementReferenceMode::Channel;
         }
         if (drawAdaptiveToolbarButton("标定值", "标定", "误差测量使用手动标定值。", !channelReference)) {
             view.referenceMode = plot::WaveMeasurementReferenceMode::ManualValue;
         }
+        ImGui::PopID();
         if (view.referenceMode == plot::WaveMeasurementReferenceMode::Channel) {
             int referenceIndex = static_cast<int>(view.referenceChannelIndex);
-            if (ImGui::InputInt("参考通道", &referenceIndex, 1, 1)) {
+            if (ImGui::InputInt("参考通道##reference_channel_input", &referenceIndex, 1, 1)) {
                 view.referenceChannelIndex = static_cast<std::size_t>((std::max)(0, referenceIndex));
             }
             addItemHelp("通道序号从 0 开始；无效或时间点不匹配时误差项显示 N/A。");
         } else {
             ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputDouble("标定值", &view.manualReferenceValue, 0.1, 1.0, "%.6g");
+            ImGui::InputDouble("标定值##manual_reference_value_input", &view.manualReferenceValue, 0.1, 1.0, "%.6g");
             addItemHelp("误差项会用测量窗口内每个样本减去该固定标定值。");
         }
     }
