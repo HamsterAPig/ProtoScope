@@ -307,7 +307,8 @@ void test_frame_stream_parser_multi_schema_large_chunk_throughput() {
         bytes.push_back(static_cast<std::uint8_t>(index));
         bytes.push_back(static_cast<std::uint8_t>(index + 1));
         bytes.push_back(static_cast<std::uint8_t>(index + 2));
-        auto frame = makeDynamicFrame({static_cast<std::uint8_t>(index), static_cast<std::uint8_t>(index + 1)});
+        auto frame = makeDynamicFrame(
+            {0x02, static_cast<std::uint8_t>(index), static_cast<std::uint8_t>(index + 1)});
         bytes.insert(bytes.end(), frame.begin(), frame.end());
     }
 
@@ -318,7 +319,7 @@ void test_frame_stream_parser_multi_schema_large_chunk_throughput() {
 
 void test_frame_stream_parser_crc_frame_across_chunks() {
     auto parser = makeDynamicParser(64);
-    const auto frame = makeDynamicFrame({0x10, 0x11, 0x12, 0x13});
+    const auto frame = makeDynamicFrame({0x04, 0x10, 0x11, 0x12, 0x13});
 
     const auto first = parser.pushBytes({frame.begin(), frame.begin() + 3});
     require(first.frames.empty(), "CRC 帧半包首段不应提前出帧");
@@ -330,9 +331,9 @@ void test_frame_stream_parser_crc_frame_across_chunks() {
 }
 
 void test_frame_stream_parser_overflow_keeps_latest_crc_window() {
-    auto parser = makeDynamicParser(18);
-    const auto oldFrame = makeDynamicFrame({0x01, 0x02, 0x03});
-    const auto newFrame = makeDynamicFrame({0x09, 0x0A, 0x0B});
+    auto parser = makeDynamicParser(16);
+    const auto oldFrame = makeDynamicFrame({0x02, 0x01, 0x02});
+    const auto newFrame = makeDynamicFrame({0x02, 0x09, 0x0A});
 
     std::vector<std::uint8_t> bytes = oldFrame;
     bytes.push_back(0x7F);
