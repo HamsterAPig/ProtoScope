@@ -198,6 +198,18 @@ void test_lua_dock_layout_requests_group_tabs() {
     require(requests[2].tabGroup == "single", "缺省 tab_group 应按自身 id 独立停靠");
 }
 
+void test_lua_dock_layout_requests_default_anchor_falls_back_left_bottom() {
+    std::vector<protoscope::scripting::DockSnapshot> docks{
+        makeDock("default", "默认面板", "", ""),
+        makeDock("explicit", "显式右侧", "right_top", ""),
+    };
+
+    const auto requests = protoscope::ui::buildLuaDockLayoutRequests(docks, "demo");
+    require(requests.size() == 2, "缺省与显式 anchor 都应生成默认布局请求");
+    require(requests[0].anchor == "left_bottom", "未显式声明 anchor 时应回退到 left_bottom");
+    require(requests[1].anchor == "right_top", "显式 anchor 仍应覆盖默认停靠点");
+}
+
 void test_dock_layout_ini_requires_exactly_one_central_node() {
     const char* noCentralNodeIni = R"ini(
 [Docking][Data]

@@ -97,6 +97,7 @@ struct GuiConfig {
     GuiRawCaptureConfig rawCapture{};
     GuiRealtimeBacklogConfig realtimeBacklog{};
     GuiElfSymbolComboConfig elfSymbolCombo{};
+    bool showAppHeader{false};
     bool luaDockLayoutDebug{false};
     std::size_t sendHistoryLimit{20};
     bool replayRawHistoryOnSchemaSwitch{false};

@@ -86,7 +86,7 @@ private:
     void drawAppShell();
     void buildModernDefaultLayout(ImGuiID dockspaceId);
     void renderFrame();
-    void drawAppHeader();
+    void drawAppHeader(float menuBarHeight);
     void drawStatusBar();
     bool saveCurrentConfigToDisk();
     bool stopRawCaptureRecordingWithStatus();

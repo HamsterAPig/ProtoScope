@@ -304,6 +304,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                      "discard_backlog_on_disconnect",
                                      result.config.gui.realtimeBacklog.discardBacklogOnDisconnect);
             }
+            result.config.gui.showAppHeader = readScalar<bool>(gui, "show_app_header", result.config.gui.showAppHeader);
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
             result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
         }
@@ -472,6 +473,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["realtime_backlog"]["plot_appends_per_pump"] = config.gui.realtimeBacklog.plotAppendsPerPump;
     root["gui"]["realtime_backlog"]["discard_backlog_on_disconnect"] =
         config.gui.realtimeBacklog.discardBacklogOnDisconnect;
+    root["gui"]["show_app_header"] = config.gui.showAppHeader;
     root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
     root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
     root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;

@@ -250,6 +250,7 @@ config::AppConfig Application::captureConfig() const {
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
+    captured.gui.showAppHeader = runtimeConfig_.gui.showAppHeader;
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
     captured.gui.replayRawHistoryOnSchemaSwitch = runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch;
@@ -257,6 +258,10 @@ config::AppConfig Application::captureConfig() const {
     captured.scripting = runtimeConfig_.scripting;
     captured.logging = loggingFacade_.currentConfig();
     return captured;
+}
+
+const config::AppConfig& Application::runtimeConfig() const {
+    return runtimeConfig_;
 }
 
 bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool forceReload) {

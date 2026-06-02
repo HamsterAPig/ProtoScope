@@ -97,6 +97,7 @@ void test_lua_dock_layout_meta_read_failure_falls_back_to_legacy();
 void test_lua_dock_layout_dock_id_sharing_does_not_mark_modern_legacy();
 void test_lua_dock_window_name_keeps_stable_id();
 void test_lua_dock_layout_requests_group_tabs();
+void test_lua_dock_layout_requests_default_anchor_falls_back_left_bottom();
 void test_dock_layout_ini_requires_exactly_one_central_node();
 void test_dock_layout_ini_rebuilds_legacy_left_central_node();
 void test_lua_dock_layout_requests_preserve_supported_anchors();

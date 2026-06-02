@@ -1143,6 +1143,7 @@ void test_config_default_roundtrip() {
     require(config.gui.rawCapture.liveLimitBytes == 64U * 1024U * 1024U, "实时原始缓存默认上限应为 64MiB");
     require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
     require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
+    require(!config.gui.showAppHeader, "现代应用栏默认应关闭");
     require(config.gui.sendHistoryLimit == 20, "发送历史条数默认值应为 20");
     require(!config.gui.replayRawHistoryOnSchemaSwitch, "raw 切到 schema 默认不应回放旧历史");
     config.communication.kind = protoscope::transport::TransportKind::Serial;
@@ -1177,6 +1178,7 @@ void test_config_default_roundtrip() {
     config.gui.rawCapture.liveLimitBytes = 123;
     config.gui.elfSymbolCombo.limit = 12;
     config.gui.elfSymbolCombo.debounceMs = 350;
+    config.gui.showAppHeader = true;
     config.gui.sendHistoryLimit = 7;
     config.gui.replayRawHistoryOnSchemaSwitch = true;
     config.scripting.fileIo.enabled = true;
@@ -1225,6 +1227,7 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.rawCapture.liveLimitBytes == 123, "实时原始缓存上限 roundtrip 失败");
     require(reloaded.config.gui.elfSymbolCombo.limit == 12, "ELF 变量候选上限 roundtrip 失败");
     require(reloaded.config.gui.elfSymbolCombo.debounceMs == 350, "ELF 变量候选消抖 roundtrip 失败");
+    require(reloaded.config.gui.showAppHeader, "现代应用栏开关 roundtrip 失败");
     require(reloaded.config.gui.sendHistoryLimit == 7, "发送历史条数 roundtrip 失败");
     require(reloaded.config.gui.replayRawHistoryOnSchemaSwitch, "raw 切到 schema 回放开关 roundtrip 失败");
     require(reloaded.config.scripting.fileIo.enabled, "Lua 文件 IO 开关 roundtrip 失败");
@@ -2011,6 +2014,8 @@ static const TestCase kAllTests[] = {
     {"lua_dock_layout_dock_id_sharing_does_not_mark_modern_legacy", &test_lua_dock_layout_dock_id_sharing_does_not_mark_modern_legacy},
     {"lua_dock_window_name_keeps_stable_id", &test_lua_dock_window_name_keeps_stable_id},
     {"lua_dock_layout_requests_group_tabs", &test_lua_dock_layout_requests_group_tabs},
+    {"lua_dock_layout_requests_default_anchor_falls_back_left_bottom",
+     &test_lua_dock_layout_requests_default_anchor_falls_back_left_bottom},
     {"dock_layout_ini_requires_exactly_one_central_node", &test_dock_layout_ini_requires_exactly_one_central_node},
     {"dock_layout_ini_rebuilds_legacy_left_central_node", &test_dock_layout_ini_rebuilds_legacy_left_central_node},
     {"lua_dock_layout_requests_preserve_supported_anchors", &test_lua_dock_layout_requests_preserve_supported_anchors},

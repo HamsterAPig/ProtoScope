@@ -40,6 +40,12 @@ void GuiRuntime::drawMainMenu() {
         if (ImGui::MenuItem("重新加载协议")) {
             requestProtocolWorkspaceSwitch(application_.docks().luaState().protocolDir, true);
         }
+        if (ImGui::MenuItem("重置当前协议 Dock 布局",
+                            nullptr,
+                            false,
+                            canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_))) {
+            resetCurrentProtocolWorkspaceLayout();
+        }
         if (ImGui::MenuItem("打开 ELF/ElfStaticView 数据文件...")) {
             openElfStaticAddressDialog();
         }

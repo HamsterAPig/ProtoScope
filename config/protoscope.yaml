@@ -9,6 +9,7 @@ app:
     enabled: false
 
 gui:
+  show_app_header: false
   window:
     title: ProtoScope
     width: 1600

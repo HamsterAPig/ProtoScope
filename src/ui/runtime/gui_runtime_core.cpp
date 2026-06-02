@@ -60,6 +60,8 @@ CMRC_DECLARE(ui_resources);
 namespace protoscope::ui {
 
 namespace {
+constexpr float kAppHeaderHeight = 58.0F;
+constexpr float kStatusBarHeight = 44.0F;
 } // namespace
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
@@ -410,17 +412,15 @@ bool GuiRuntime::stopRawCaptureRecordingWithStatus() {
     return true;
 }
 
-void GuiRuntime::drawAppHeader() {
+void GuiRuntime::drawAppHeader(const float menuBarHeight) {
     const auto& tokens = defaultUiStyleTokens();
     auto& lua = application_.docks().luaState();
     auto& comm = application_.docks().commState();
     auto& config = application_.docks().configState();
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    constexpr float menuBarHeight = 22.0F;
-    constexpr float headerHeight = 58.0F;
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + menuBarHeight));
-    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, headerHeight));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, kAppHeaderHeight));
     constexpr ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0F, 10.0F));
@@ -516,41 +516,39 @@ void GuiRuntime::buildModernDefaultLayout(ImGuiID dockspaceId) {
     ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
 
-    ImGuiID shellBottom = dockspaceId;
-    ImGuiID bottomDrawer = ImGui::DockBuilderSplitNode(shellBottom, ImGuiDir_Down, 0.23F, nullptr, &shellBottom);
-    ImGuiID leftPane = ImGui::DockBuilderSplitNode(shellBottom, ImGuiDir_Left, 0.22F, nullptr, &shellBottom);
-    ImGuiID rightPane = ImGui::DockBuilderSplitNode(shellBottom, ImGuiDir_Right, 0.24F, nullptr, &shellBottom);
-    ImGuiID leftBottom = ImGui::DockBuilderSplitNode(leftPane, ImGuiDir_Down, 0.45F, nullptr, &leftPane);
-    ImGuiID rightBottom = ImGui::DockBuilderSplitNode(rightPane, ImGuiDir_Down, 0.52F, nullptr, &rightPane);
+    ImGuiID rightPane = dockspaceId;
+    ImGuiID leftPane = ImGui::DockBuilderSplitNode(rightPane, ImGuiDir_Left, 0.20F, nullptr, &rightPane);
+    ImGuiID leftBottom = ImGui::DockBuilderSplitNode(leftPane, ImGuiDir_Down, 0.50F, nullptr, &leftPane);
 
     defaultLuaDockNodes_.clear();
     defaultLuaDockNodes_[LuaDockAnchor::Left] = leftPane;
     defaultLuaDockNodes_[LuaDockAnchor::LeftBottom] = leftBottom;
     defaultLuaDockNodes_[LuaDockAnchor::RightTop] = rightPane;
-    defaultLuaDockNodes_[LuaDockAnchor::RightMid] = rightBottom;
-    defaultLuaDockNodes_[LuaDockAnchor::RightBottom] = bottomDrawer;
-    defaultLuaDockNodes_[LuaDockAnchor::MainBottom] = bottomDrawer;
+    defaultLuaDockNodes_[LuaDockAnchor::RightMid] = rightPane;
+    defaultLuaDockNodes_[LuaDockAnchor::RightBottom] = rightPane;
+    defaultLuaDockNodes_[LuaDockAnchor::MainBottom] = rightPane;
 
-    // 核心流程：先锁定中央波形工作区，再把配置、分析和事件流分到四周，保证默认视角始终以波形为中心。
+    // 核心流程：当前协议缺少布局文件时，左栏只保留配置与协议控件，右栏所有内置 Dock 合并成可拖拽 Tab 工作区。
     ImGui::DockBuilderDockWindow("通讯配置", leftPane);
     ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
-    ImGui::DockBuilderDockWindow("波形", shellBottom);
+    ImGui::DockBuilderDockWindow("波形", rightPane);
     ImGui::DockBuilderDockWindow("收发数据", rightPane);
-    ImGui::DockBuilderDockWindow("脚本", rightBottom);
-    ImGui::DockBuilderDockWindow("日志", bottomDrawer);
-    ImGui::DockBuilderDockWindow("脚本", bottomDrawer);
+    ImGui::DockBuilderDockWindow("脚本", rightPane);
+    ImGui::DockBuilderDockWindow("日志", rightPane);
     ImGui::DockBuilderFinish(dockspaceId);
 }
 
 void GuiRuntime::drawAppShell() {
-    drawAppHeader();
+    const float menuBarHeight = ImGui::GetFrameHeight();
+    const bool showAppHeader = application_.runtimeConfig().gui.showAppHeader;
+    const float headerHeight = showAppHeader ? kAppHeaderHeight : 0.0F;
+    if (showAppHeader) {
+        drawAppHeader(menuBarHeight);
+    }
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float menuBarHeight = 22.0F;
-    const float headerHeight = 58.0F;
-    const float statusHeight = 44.0F;
     const ImVec2 dockPos(viewport->Pos.x, viewport->Pos.y + menuBarHeight + headerHeight);
-    const ImVec2 dockSize(viewport->Size.x, viewport->Size.y - menuBarHeight - headerHeight - statusHeight);
+    const ImVec2 dockSize(viewport->Size.x, viewport->Size.y - menuBarHeight - headerHeight - kStatusBarHeight);
 
     ImGui::SetNextWindowPos(dockPos);
     ImGui::SetNextWindowSize(dockSize);
