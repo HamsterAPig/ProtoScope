@@ -32,6 +32,32 @@ bool GuiRuntime::pollConfigFileChanges() {
     return false;
 }
 
+bool GuiRuntime::pollElfStaticAddressFileChanges() {
+    std::error_code error;
+    auto result = pollElfStaticAddressFileWatchState(elfStaticAddressWatch_, nowMs(), error);
+    if (!result.statusMessage.empty()) {
+        application_.setStatusMessage(result.statusMessage, error || result.shouldReload);
+    }
+    if (!result.shouldReload) {
+        return result.changed;
+    }
+
+    std::string loadError;
+    if (!application_.loadElfStaticAddressFile(elfStaticAddressWatch_.path, loadError)) {
+        elfStaticAddressError_ = loadError;
+        elfStaticAddressWatch_.pendingReload = true;
+        elfStaticAddressWatch_.pendingReloadSinceMs = nowMs();
+        elfStaticAddressWatch_.pendingStatusMessage = "ELF 数据文件重建后自动重载失败，继续使用旧模型";
+        application_.setStatusMessage(elfStaticAddressWatch_.pendingStatusMessage + ": " + loadError, true);
+        return true;
+    }
+    if (result.clearComboCache) {
+        elfSymbolComboStates_.clear();
+    }
+    elfStaticAddressError_.clear();
+    return true;
+}
+
 bool GuiRuntime::maybeAutoSave() {
     auto& configState = application_.docks().configState();
     if (!configState.autoSaveEnabled || !configState.dirty) {

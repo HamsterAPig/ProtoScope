@@ -154,6 +154,7 @@ void test_elf_static_view_bridge_queries_flattened_composite_members();
 void test_elf_static_view_bridge_loads_private_binary_without_extension();
 void test_elf_static_view_bridge_loads_variable_summary_export();
 void test_elf_static_view_bridge_keeps_old_model_on_load_failure();
+void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_reload();
 void test_tcp_transport_roundtrip();
 void test_transport_enqueue_send_async_roundtrip();
 void test_tcp_server_connection_takeover_replaces_active_client();

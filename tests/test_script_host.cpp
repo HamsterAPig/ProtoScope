@@ -2116,6 +2116,7 @@ static const TestCase kAllTests[] = {
     {"elf_static_view_bridge_loads_private_binary_without_extension", &test_elf_static_view_bridge_loads_private_binary_without_extension},
     {"elf_static_view_bridge_loads_variable_summary_export", &test_elf_static_view_bridge_loads_variable_summary_export},
     {"elf_static_view_bridge_keeps_old_model_on_load_failure", &test_elf_static_view_bridge_keeps_old_model_on_load_failure},
+    {"elf_static_address_file_watch_detects_changes_and_delete_recreate_reload", &test_elf_static_address_file_watch_detects_changes_and_delete_recreate_reload},
 };
 
 } // namespace

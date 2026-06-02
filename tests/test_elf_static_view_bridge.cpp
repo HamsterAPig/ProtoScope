@@ -1,6 +1,7 @@
 #include "test_registry.hpp"
 
 #include "protoscope/plugin/elf_static_view_bridge.hpp"
+#include "protoscope/ui/elf_static_address_file_watch.hpp"
 
 #include <elf_static_view/project.hpp>
 
@@ -77,9 +78,30 @@ elf_static_view::ProjectModel sampleProjectModel() {
     objAdc.children.push_back(makeExpandedNode("global.objADC.member",
                                                "member",
                                                "uint16_t",
-                                               elf_static_view::Availability::StaticAddressKnown,
+                                               elf_static_view::Availability::StaticLayoutKnown,
                                                0x20000104ULL));
     model.expanded.push_back(std::move(objAdc));
+    auto structArray = makeExpandedNode("global.h_var_struct_arr",
+                                        "h_var_struct_arr",
+                                        "Person[12]",
+                                        elf_static_view::Availability::StaticAddressKnown,
+                                        0x20001000ULL);
+    structArray.type_kind = elf_static_view::TypeKind::Array;
+    for (int index = 0; index < 12; ++index) {
+        auto element = makeExpandedNode("global.h_var_struct_arr[" + std::to_string(index) + "]",
+                                        "h_var_struct_arr[" + std::to_string(index) + "]",
+                                        "Person",
+                                        elf_static_view::Availability::StaticLayoutKnown,
+                                        0x20001000ULL + static_cast<std::uint64_t>(index) * 8ULL);
+        element.type_kind = elf_static_view::TypeKind::Struct;
+        element.children.push_back(makeExpandedNode("global.h_var_struct_arr[" + std::to_string(index) + "].age",
+                                                    "age",
+                                                    "uint16_t",
+                                                    elf_static_view::Availability::StaticLayoutKnown,
+                                                    0x20001000ULL + static_cast<std::uint64_t>(index) * 8ULL + 2ULL));
+        structArray.children.push_back(std::move(element));
+    }
+    model.expanded.push_back(std::move(structArray));
     model.expanded.push_back(makeExpandedNode("global.runtime_only",
                                               "runtime_only",
                                               "int",
@@ -130,6 +152,15 @@ void test_elf_static_view_bridge_queries_flattened_composite_members() {
     require(memberResults[0].value == "0x20000104", "成员地址应来自展开后的复合成员");
     require(memberResults[0].type == "uint16_t", "成员类型应来自展开后的复合成员");
 
+    const auto arrayResults = bridge.query("h_var_struct_arr", 128);
+    const auto ageIt = std::find_if(arrayResults.begin(),
+                                    arrayResults.end(),
+                                    [](const protoscope::plugin::ElfStaticAddressEntry& entry) {
+                                        return entry.label == "global.h_var_struct_arr[0].age";
+                                    });
+    require(ageIt != arrayResults.end(), "按父数组名查询时应包含 struct 数组展开成员");
+    require(ageIt->value == "0x20001002", "struct 数组成员地址应来自静态布局地址");
+
     const auto objectPrefixResults = bridge.query("objADC", 64);
     const auto memberIt = std::find_if(objectPrefixResults.begin(),
                                        objectPrefixResults.end(),
@@ -137,6 +168,61 @@ void test_elf_static_view_bridge_queries_flattened_composite_members() {
                                            return entry.label == "global.objADC.member";
                                        });
     require(memberIt != objectPrefixResults.end(), "按对象名前缀查询时应包含展开后的成员地址");
+
+    std::filesystem::remove(path);
+}
+
+void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_reload() {
+    using protoscope::ui::ElfStaticAddressFileWatchState;
+    using protoscope::ui::pollElfStaticAddressFileWatchState;
+
+    const auto path = makeUniqueTempFile("protoscope-elf-watch");
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << "v1";
+    }
+
+    ElfStaticAddressFileWatchState state;
+    state.path = path;
+    state.watching = true;
+    state.lastExists = true;
+    state.lastWriteTimeNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::filesystem::last_write_time(path).time_since_epoch()).count());
+    state.fileSize = std::filesystem::file_size(path);
+
+    std::error_code error;
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << "v2-changed";
+    }
+    auto changed = pollElfStaticAddressFileWatchState(state, nowMs() + 1000, error);
+    require(!error, "文件变更轮询不应报错");
+    require(changed.changed, "修改时间或大小变化后应报告变更");
+    require(changed.statusMessage.find("检测到 ELF 数据文件变更") != std::string::npos, "普通修改应提示手动重载");
+    require(!changed.shouldReload, "普通修改不应立即自动重载");
+
+    std::filesystem::remove(path);
+    auto deleted = pollElfStaticAddressFileWatchState(state, nowMs() + 2000, error);
+    require(!error, "删除后轮询不应报错");
+    require(deleted.changed, "删除后应报告变更");
+    require(deleted.statusMessage.find("ELF 数据文件已删除") != std::string::npos, "删除后应提示继续使用旧模型");
+    require(state.pendingReload, "删除后应进入待自动重载状态");
+
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << "v3-recreated";
+    }
+    auto recreated = pollElfStaticAddressFileWatchState(state, nowMs() + 3000, error);
+    require(!error, "重建后轮询不应报错");
+    require(recreated.changed, "重建后应报告变更");
+    require(recreated.statusMessage.find("等待写入稳定后自动重载") != std::string::npos, "重建后应进入稳定等待");
+    require(!recreated.shouldReload, "重建后仍不应立即自动重载");
+
+    auto stable = pollElfStaticAddressFileWatchState(state, nowMs() + 4500, error);
+    require(!error, "稳定轮询不应报错");
+    require(stable.changed, "稳定后应报告自动重载事件");
+    require(stable.shouldReload, "重建稳定后应触发自动重载");
+    require(stable.clearComboCache, "自动重载后应要求清空符号下拉缓存");
 
     std::filesystem::remove(path);
 }

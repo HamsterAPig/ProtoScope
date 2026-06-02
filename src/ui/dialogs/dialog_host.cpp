@@ -574,6 +574,26 @@ void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
         application_.setStatusMessage("ELF/ElfStaticView 数据文件加载失败: " + error);
         return;
     }
+    std::error_code watchError;
+    const bool exists = std::filesystem::exists(path, watchError);
+    elfStaticAddressWatch_.path = path;
+    elfStaticAddressWatch_.watching = true;
+    elfStaticAddressWatch_.lastExists = exists && !watchError;
+    elfStaticAddressWatch_.lastPollAtMs = 0;
+    elfStaticAddressWatch_.pendingReload = false;
+    elfStaticAddressWatch_.pendingReloadSinceMs = 0;
+    elfStaticAddressWatch_.pendingStatusMessage.clear();
+    if (elfStaticAddressWatch_.lastExists) {
+        const auto lastWriteTime = std::filesystem::last_write_time(path, watchError);
+        if (!watchError) {
+            elfStaticAddressWatch_.lastWriteTimeNs = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(lastWriteTime.time_since_epoch()).count());
+        }
+        const auto fileSize = std::filesystem::file_size(path, watchError);
+        if (!watchError) {
+            elfStaticAddressWatch_.fileSize = fileSize;
+        }
+    }
     elfSymbolComboStates_.clear();
     elfStaticAddressDialogOpen_ = false;
     elfStaticAddressDialogOpened_ = false;

@@ -157,7 +157,8 @@ std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryT
     // 核心流程：Lua 下拉输入习惯用 `a_var*` 这类通配符，ElfStaticView 当前按普通子串 token 查询，
     // 因此在宿主桥接层把通配符转为空白，让 `a_var*` 能命中 `a_var_int`。
     options.name_query_text = normalizeNameQuery(std::move(queryText));
-    options.only_static_known = true;
+    // 核心流程：结构体/数组成员常只有静态布局地址，桥接层需要保留这类可计算地址候选。
+    options.only_static_known = false;
     options.include_runtime_only = false;
     options.flatten_composite_members = true;
     options.max_array_elements = limit;

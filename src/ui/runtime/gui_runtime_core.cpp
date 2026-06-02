@@ -155,6 +155,7 @@ int GuiRuntime::run() {
 
         bool changed = application_.pumpOnce();
         changed = pollConfigFileChanges() || changed;
+        changed = pollElfStaticAddressFileChanges() || changed;
         changed = maybeAutoSave() || changed;
 
         const auto fpsLimit = application_.docks().configState().fpsLimit;
