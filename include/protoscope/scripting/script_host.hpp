@@ -343,6 +343,16 @@ struct RealtimeOutputDiscardCounts {
     std::size_t plotAppends{0};
 };
 
+struct ScriptHostTransportStats {
+    std::size_t bytes{0};
+    std::size_t streamFrames{0};
+    std::size_t streamErrors{0};
+    double parserMs{0.0};
+    double callbackMs{0.0};
+    double totalMs{0.0};
+    bool streamMode{false};
+};
+
 class ScriptHost {
 public:
     ScriptHost();
@@ -388,6 +398,7 @@ public:
     std::optional<std::uint64_t> nextWakeupAtMs() const;
     [[nodiscard]] std::optional<StreamBufferDefinition> streamBufferDefinition() const;
     [[nodiscard]] std::vector<StreamFrameDefinition> streamFrameDefinitions() const;
+    [[nodiscard]] const ScriptHostTransportStats& lastTransportStats() const;
 
     const std::string& scriptPath() const;
     const std::string& protocolDirectory() const;
@@ -502,6 +513,7 @@ private:
     std::uint64_t nextFileHandleId_{1};
     std::uint64_t nextFileJobId_{1};
     bool requestAwaitingCompletion_{false};
+    ScriptHostTransportStats lastTransportStats_{};
 };
 
 } // namespace protoscope::scripting

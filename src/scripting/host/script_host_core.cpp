@@ -74,6 +74,11 @@ std::uint64_t nowMs() {
             .count());
 }
 
+double elapsedMilliseconds(std::chrono::steady_clock::time_point start,
+                           std::chrono::steady_clock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
 std::string kindName(transport::TransportKind kind) {
     return std::string(transport::transportKindId(kind));
 }
@@ -1519,20 +1524,38 @@ void ScriptHost::onTransportError(const transport::TransportErrorEvent& event) {
 }
 
 void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
+    const auto startedAt = std::chrono::steady_clock::now();
+    lastTransportStats_ = ScriptHostTransportStats{
+        .bytes = event.bytes.size(),
+        .streamMode = runtime_ && runtime_->stream,
+    };
     if (event.context.readyForIo) {
         activeConnection_ = event.context;
     }
     if (runtime_->stream) {
+        const auto parserStartedAt = std::chrono::steady_clock::now();
         const auto batch = runtime_->stream->parser.pushBytes(event.bytes);
+        const auto parserFinishedAt = std::chrono::steady_clock::now();
+        lastTransportStats_.streamFrames = batch.frames.size();
+        lastTransportStats_.streamErrors = batch.errors.size();
+        lastTransportStats_.parserMs = elapsedMilliseconds(parserStartedAt, parserFinishedAt);
+        const auto callbackStartedAt = parserFinishedAt;
         for (const auto& error : batch.errors) {
             callbackOnStreamError(ScriptHostContext{event.context}, error);
         }
         for (const auto& frame : batch.frames) {
             callbackOnStreamFrame(ScriptHostContext{event.context}, frame);
         }
+        const auto finishedAt = std::chrono::steady_clock::now();
+        lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
+        lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);
         return;
     }
+    const auto callbackStartedAt = std::chrono::steady_clock::now();
     callbackOnBytes(ScriptHostContext{event.context}, event.bytes);
+    const auto finishedAt = std::chrono::steady_clock::now();
+    lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
+    lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);
 }
 
 void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value) {
@@ -1631,6 +1654,10 @@ std::vector<ScriptLog> ScriptHost::drainLogs() {
     auto drained = std::move(logs_);
     logs_.clear();
     return drained;
+}
+
+const ScriptHostTransportStats& ScriptHost::lastTransportStats() const {
+    return lastTransportStats_;
 }
 
 std::vector<TxRequest> ScriptHost::drainTxRequests() {

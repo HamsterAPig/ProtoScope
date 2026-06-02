@@ -3,6 +3,8 @@
 
 #include "../runtime/gui_runtime_detail.hpp"
 
+#include <cstdio>
+
 namespace protoscope::ui {
 
 namespace {
@@ -50,6 +52,12 @@ bool drawTransferToolbarDangerButton(const char* label, const char* tooltip, flo
     ImGui::PopStyleColor(4);
     drawIconTooltip(tooltip);
     return clicked;
+}
+
+std::string formatMilliseconds(double value) {
+    char buffer[32]{};
+    std::snprintf(buffer, sizeof(buffer), "%.2f", value);
+    return buffer;
 }
 
 } // namespace
@@ -294,6 +302,18 @@ void GuiRuntime::drawCommDock() {
                     comm.pendingRxBytes,
                     comm.pendingTransferFrameRows,
                     comm.pendingPlotAppends);
+    }
+    if (comm.lastPumpEvents > 0U || comm.lastPumpRxBytes > 0U || comm.lastPumpScriptMs > 0.0) {
+        ImGui::Text("上轮处理: 事件 %zu / RX %zu bytes / 帧 %zu / 错误 %zu",
+                    comm.lastPumpEvents,
+                    comm.lastPumpRxBytes,
+                    comm.lastPumpStreamFrames,
+                    comm.lastPumpStreamErrors);
+        ImGui::Text("上轮耗时: pump %sms / parser %sms / Lua回调 %sms / 脚本总计 %sms",
+                    formatMilliseconds(comm.lastPumpTransportMs).c_str(),
+                    formatMilliseconds(comm.lastPumpParserMs).c_str(),
+                    formatMilliseconds(comm.lastPumpCallbackMs).c_str(),
+                    formatMilliseconds(comm.lastPumpScriptMs).c_str());
     }
 
     ImGui::End();

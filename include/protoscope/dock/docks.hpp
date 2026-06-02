@@ -88,6 +88,14 @@ struct CommDockState {
     std::size_t pendingRxBytes{0};
     std::size_t pendingTransferFrameRows{0};
     std::size_t pendingPlotAppends{0};
+    std::size_t lastPumpEvents{0};
+    std::size_t lastPumpRxBytes{0};
+    std::size_t lastPumpStreamFrames{0};
+    std::size_t lastPumpStreamErrors{0};
+    double lastPumpTransportMs{0.0};
+    double lastPumpParserMs{0.0};
+    double lastPumpCallbackMs{0.0};
+    double lastPumpScriptMs{0.0};
     bool reconnectRequired{false};
     std::vector<std::string> serialPortOptions;
 };

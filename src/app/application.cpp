@@ -28,6 +28,11 @@ std::uint64_t nowMs() {
             .count());
 }
 
+double elapsedMilliseconds(std::chrono::steady_clock::time_point start,
+                           std::chrono::steady_clock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
 const char* stateMessage(transport::TransportState state) {
     switch (state) {
     case transport::TransportState::Closed:
@@ -1031,6 +1036,15 @@ void Application::syncDockState() {
 
 bool Application::handleTransportEvents() {
     bool changed = false;
+    auto& comm = dockStore_.commState();
+    comm.lastPumpEvents = 0;
+    comm.lastPumpRxBytes = 0;
+    comm.lastPumpStreamFrames = 0;
+    comm.lastPumpStreamErrors = 0;
+    comm.lastPumpTransportMs = 0.0;
+    comm.lastPumpParserMs = 0.0;
+    comm.lastPumpCallbackMs = 0.0;
+    comm.lastPumpScriptMs = 0.0;
     if (transport_) {
         auto events = transport_->takeEvents();
         pendingTransportEvents_.insert(pendingTransportEvents_.end(),
@@ -1079,6 +1093,8 @@ bool Application::handleTransportEvents() {
             break;
         }
     }
+    comm.lastPumpEvents = processed;
+    comm.lastPumpTransportMs = elapsedMilliseconds(startedAt, std::chrono::steady_clock::now());
     return changed || !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty();
 }
 
@@ -1247,6 +1263,14 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                     appendRawCaptureRecording(evt);
                     appendLiveRawCapture(evt);
                     scriptHost_.onTransportBytes(evt);
+                    const auto& stats = scriptHost_.lastTransportStats();
+                    auto& comm = dockStore_.commState();
+                    comm.lastPumpRxBytes += stats.bytes;
+                    comm.lastPumpStreamFrames += stats.streamFrames;
+                    comm.lastPumpStreamErrors += stats.streamErrors;
+                    comm.lastPumpParserMs += stats.parserMs;
+                    comm.lastPumpCallbackMs += stats.callbackMs;
+                    comm.lastPumpScriptMs += stats.totalMs;
                     if (evt.context.readyForIo) {
                         activeConnection_ = evt.context;
                     }
