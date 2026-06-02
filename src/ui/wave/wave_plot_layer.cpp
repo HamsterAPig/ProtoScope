@@ -5,12 +5,13 @@
 
 namespace protoscope::ui {
 
-void renderWaveChannels(plot::WaveViewState& view,
+void renderWaveChannels(plot::WaveDockState& wave,
                         const plot::WaveSnapshot& snapshot,
                         const plot::WaveDisplayData& displayData,
                         const RenderBudget& renderBudget,
                         const ImPlotRect& limits,
                         std::vector<std::size_t>& visibleChannelIndices) {
+    auto& view = wave.view;
     visibleChannelIndices.clear();
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
@@ -59,6 +60,7 @@ void renderWaveChannels(plot::WaveViewState& view,
             ImPlotSpec spec{};
             spec.LineColor = color;
             spec.LineWeight = 1.5F;
+            applySavedLegendVisibility(wave, channel.label);
             ImPlot::PlotLineG(channel.label.c_str(), &waveSampleGetter, &payload, static_cast<int>(rawVisibleCount), spec);
             if (!currentPlotItemVisible(channel.label)) {
                 continue;
@@ -85,8 +87,15 @@ void renderWaveChannels(plot::WaveViewState& view,
         legendSpec.LineColor = color;
         legendSpec.LineWeight = 1.5F;
         legendSpec.Flags = ImPlotItemFlags_NoFit;
+        applySavedLegendVisibility(wave, channel.label);
         ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
-        visibleChannelIndices.push_back(channelIndex);
+        const bool legendVisible = currentPlotItemVisible(channel.label);
+        if (legendVisible) {
+            visibleChannelIndices.push_back(channelIndex);
+        }
+        if (!legendVisible && excludesLegendHiddenChannels(view)) {
+            continue;
+        }
         if (view.phosphorGlowEnabled) {
             renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);
         } else {
@@ -233,6 +242,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
 
     result.plotRendered = true;
     const auto& displayData = *frame.displayData;
+    const auto derivedChannelIndices = channelIndicesForDerivedViews(wave, frame.snapshot);
+    const auto derivedBounds = boundsForDerivedViews(wave, displayData, derivedChannelIndices);
     applyMainPlotAxesAndLimits(view, frame.snapshot, displayData);
 
     const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
@@ -240,8 +251,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
     const double timeSnapDistance = visibleTimeWidth / 80.0;
     double smartSnapDistance = (std::max)(timeSnapDistance, visibleTimeWidth * 0.02);
-    if (frame.displayBounds.valid) {
-        smartSnapDistance = (std::max)(smartSnapDistance, frame.displayBounds.minStep * 2.0);
+        if (derivedBounds.valid) {
+            smartSnapDistance = (std::max)(smartSnapDistance, derivedBounds.minStep * 2.0);
     }
     const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
 
@@ -249,16 +260,17 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     bool viewportChangedThisFrame = false;
     if (!zoomSelectionMode) {
         viewportChangedThisFrame =
-            handleMainPlotAxisDoubleClick(view, frame.displayBounds) || handleMainPlotZoom(view, mousePos);
+            handleMainPlotAxisDoubleClick(view, derivedBounds) || handleMainPlotZoom(view, mousePos);
     }
     // 悬停读数必须跟随 ImPlot 图例隐藏状态，只对真实可见波形做吸附。
     std::vector<std::size_t> visibleChannelIndices;
-    renderWaveChannels(view, frame.snapshot, displayData, frame.renderBudget, limits, visibleChannelIndices);
-    const auto fitChannelIndices = visibleChannelIndicesForFit(frame.snapshot);
+    renderWaveChannels(wave, frame.snapshot, displayData, frame.renderBudget, limits, visibleChannelIndices);
+    syncLegendVisibilityState(wave, frame.snapshot);
+    const auto fitChannelIndices = excludesLegendHiddenChannels(view) ? channelIndicesForDerivedViews(wave, frame.snapshot) : visibleChannelIndicesForFit(frame.snapshot);
     viewportChangedThisFrame = applyFitVisibleWaveforms(view, displayData, fitChannelIndices) || viewportChangedThisFrame;
     const auto zoomSelectionResult = handleMainPlotZoomSelection(view);
     viewportChangedThisFrame = zoomSelectionResult.viewportChanged || viewportChangedThisFrame;
-    viewportChangedThisFrame = applyPendingVerticalAutoFitOverride(view, frame.displayBounds) || viewportChangedThisFrame;
+    viewportChangedThisFrame = applyPendingVerticalAutoFitOverride(view, derivedBounds) || viewportChangedThisFrame;
     const bool offsetReset = !zoomSelectionResult.consumed
         && handleActiveWaveformDoubleClickOffsetReset(wave, displayData, mousePos, timeSnapDistance, valueSnapDistance);
     const bool blockPlotInteractions = zoomSelectionResult.consumed || offsetReset;

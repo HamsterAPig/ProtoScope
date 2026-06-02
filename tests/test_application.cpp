@@ -758,19 +758,27 @@ void test_application_wave_legend_visibility_config_roundtrip() {
     auto config = application.captureConfig();
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
+    config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     require(application.applyConfig(config), "图例显示配置应用失败");
 
     require(!application.docks().waveState().view.showChannelLegend, "应用配置后应隐藏图例");
     require(!application.docks().waveState().view.showFftLegend, "应用配置后应隐藏 FFT 图例");
+    require(application.docks().waveState().view.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
+            "应用配置后应切换隐藏 CH 策略");
     const auto captured = application.captureConfig();
     require(!captured.gui.wave.showChannelLegend, "captureConfig 应带出图例显示开关");
     require(!captured.gui.wave.showFftLegend, "captureConfig 应带出 FFT 图例显示开关");
+    require(captured.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
+            "captureConfig 应带出隐藏 CH 策略");
 
     application.docks().waveState().view.showChannelLegend = true;
     application.docks().waveState().view.showFftLegend = true;
+    application.docks().waveState().view.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
     const auto capturedLive = application.captureConfig();
     require(capturedLive.gui.wave.showChannelLegend, "captureConfig 不应覆盖 dock 中实时波形图例状态");
     require(capturedLive.gui.wave.showFftLegend, "captureConfig 不应覆盖 dock 中实时 FFT 图例状态");
+    require(capturedLive.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::IncludeInDerivedViews,
+            "captureConfig 不应覆盖 dock 中实时隐藏 CH 策略");
 
     application.shutdown();
 }

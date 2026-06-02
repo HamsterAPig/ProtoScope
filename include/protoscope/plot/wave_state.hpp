@@ -63,6 +63,7 @@ struct WaveViewState {
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
     WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
+    WaveHiddenChannelPolicy hiddenChannelPolicy{WaveHiddenChannelPolicy::IncludeInDerivedViews};
     WaveFftConfig fft{};
     bool fftSourceWindowValid{false};
     bool fftViewportInitialized{false};
@@ -124,9 +125,11 @@ struct WaveDockState {
     std::vector<std::string> channelSummaries;
     std::vector<ChannelSpec> defaultChannelSpecs;
     std::vector<ChannelTransformOverride> channelOverrides;
+    std::vector<std::string> hiddenChannelLabels;
     std::vector<std::uint8_t> fftChannelEnabled;
     bool toolsCollapsed{false};
     bool overviewCollapsed{false};
+    bool legendVisibilityRestorePending{false};
     float toolsExpandedWidth{280.0F};
     float toolsCollapsedWidth{34.0F};
     float overviewPanelHeight{120.0F};

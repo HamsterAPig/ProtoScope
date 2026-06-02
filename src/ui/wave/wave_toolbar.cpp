@@ -432,9 +432,19 @@ void drawWaveToolbar(app::Application& application,
         if (drawAdaptiveToolbarButton("显示坐标轴标签", "轴", "显示或隐藏主波形图的时间轴/数值轴标签。", view.showAxisLabels, true)) {
             view.showAxisLabels = !view.showAxisLabels;
         }
-        if (drawAdaptiveToolbarButton("显示图例", "例", "显示或隐藏顶部通道图例栏；不会持久化每个通道的临时隐藏状态。", view.showChannelLegend)) {
+        if (drawAdaptiveToolbarButton("显示图例", "例", "显示或隐藏顶部通道图例栏；每个通道的 Legend 勾选状态会按协议保存。", view.showChannelLegend)) {
             view.showChannelLegend = !view.showChannelLegend;
         }
+        ImGui::TextUnformatted("隐藏 CH 策略");
+        const char* hiddenPolicyItems[] = {"保持参与概览/缩放", "仅可见 CH 参与"};
+        int hiddenPolicyIndex = view.hiddenChannelPolicy == plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews ? 1 : 0;
+        ImGui::SetNextItemWidth(-1.0F);
+        if (ImGui::Combo("##hidden_channel_policy", &hiddenPolicyIndex, hiddenPolicyItems, IM_ARRAYSIZE(hiddenPolicyItems))) {
+            view.hiddenChannelPolicy = hiddenPolicyIndex == 1
+                ? plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews
+                : plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
+        }
+        addItemHelp("控制通过主图 Legend->Show 隐藏的通道是否继续参与降采样绘制、概览图和 Y 轴自动范围。");
         ImGui::TextUnformatted("可视时长");
         ImGui::SetNextItemWidth(-1.0F);
         ImGui::InputDouble("##visible_duration", &view.visibleDuration, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");

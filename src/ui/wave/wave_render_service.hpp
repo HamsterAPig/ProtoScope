@@ -148,6 +148,15 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            double timeSnapDistance,
                                            double valueSnapDistance);
 bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::WaveDataBounds& bounds);
+bool excludesLegendHiddenChannels(const plot::WaveViewState& view);
+bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::string& label);
+std::vector<std::size_t> channelIndicesForDerivedViews(const plot::WaveDockState& wave,
+                                                       const plot::WaveSnapshot& snapshot);
+plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
+                                           const plot::WaveDisplayData& displayData,
+                                           const std::vector<std::size_t>& channelIndices);
+void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::string& label);
+void syncLegendVisibilityState(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 void clampActiveChannel(plot::WaveViewState& view, std::size_t channelCount);
 bool currentPlotItemVisible(const std::string& label);
 const char* snapScopeName(plot::WaveCursorSnapScope scope);
@@ -182,6 +191,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
                         const plot::WaveSnapshot& fullSnapshot,
                         const plot::WaveDisplayData& displayData,
                         const plot::WaveDataBounds& displayBounds,
+                        const std::vector<std::size_t>& channelIndices,
                         const RenderBudget& renderBudget);
 
 void initializeWaveViewIfNeeded(plot::WaveViewState& view);
@@ -202,7 +212,7 @@ void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
                                 const plot::WaveSnapshot& snapshot,
                                 const plot::WaveDisplayData& displayData);
 
-void renderWaveChannels(plot::WaveViewState& view,
+void renderWaveChannels(plot::WaveDockState& wave,
                         const plot::WaveSnapshot& snapshot,
                         const plot::WaveDisplayData& displayData,
                         const RenderBudget& renderBudget,

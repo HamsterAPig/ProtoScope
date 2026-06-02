@@ -153,6 +153,27 @@ const char* toWaveChannelDoubleClickActionText(const plot::WaveChannelDoubleClic
     return "reset_scale_offset";
 }
 
+plot::WaveHiddenChannelPolicy parseWaveHiddenChannelPolicy(const std::string& value,
+                                                           plot::WaveHiddenChannelPolicy fallback) {
+    if (value == "include_hidden") {
+        return plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
+    }
+    if (value == "visible_only") {
+        return plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
+    }
+    return fallback;
+}
+
+const char* toWaveHiddenChannelPolicyText(const plot::WaveHiddenChannelPolicy policy) {
+    switch (policy) {
+    case plot::WaveHiddenChannelPolicy::IncludeInDerivedViews:
+        return "include_hidden";
+    case plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews:
+        return "visible_only";
+    }
+    return "include_hidden";
+}
+
 double positiveOrFallback(double value, double fallback) {
     return value > 0.0 ? value : fallback;
 }
@@ -238,6 +259,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                             "channel_double_click_action",
                                             toWaveChannelDoubleClickActionText(result.config.gui.wave.channelDoubleClickAction)),
                     result.config.gui.wave.channelDoubleClickAction);
+            result.config.gui.wave.hiddenChannelPolicy =
+                parseWaveHiddenChannelPolicy(
+                    readScalar<std::string>(wave,
+                                            "hidden_channel_policy",
+                                            toWaveHiddenChannelPolicyText(result.config.gui.wave.hiddenChannelPolicy)),
+                    result.config.gui.wave.hiddenChannelPolicy);
             result.config.gui.wave.zoomSelectionAutoExit =
                 readScalar<bool>(wave, "zoom_selection_auto_exit", result.config.gui.wave.zoomSelectionAutoExit);
             result.config.gui.wave.maxRenderPointsPerChannel =
@@ -462,6 +489,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
     root["gui"]["wave"]["channel_double_click_action"] =
         toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
+    root["gui"]["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
     root["gui"]["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
     root["gui"]["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
     root["gui"]["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
@@ -679,6 +707,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.channelCardFixedWidth = positiveOrFallback(config.gui.wave.channelCardFixedWidth, 128.0);
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
     wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.2);
+    wave.hiddenChannelPolicy = config.gui.wave.hiddenChannelPolicy;
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;
@@ -712,6 +741,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.wave.channelCardFixedWidth = dockStore.waveState().view.channelCardFixedWidth;
     config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;
     config.gui.wave.verticalAutoFitMultiplier = dockStore.waveState().view.verticalAutoFitMultiplier;
+    config.gui.wave.hiddenChannelPolicy = dockStore.waveState().view.hiddenChannelPolicy;
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
     config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;

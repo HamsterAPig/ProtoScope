@@ -34,6 +34,11 @@ enum class WaveChannelDoubleClickAction {
     ResetOffset,
 };
 
+enum class WaveHiddenChannelPolicy {
+    IncludeInDerivedViews,
+    ExcludeFromDerivedViews,
+};
+
 enum class WaveExtremeKind {
     Maximum,
     Minimum,

@@ -11,6 +11,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
                         const plot::WaveSnapshot& fullSnapshot,
                         const plot::WaveDisplayData& displayData,
                         const plot::WaveDataBounds& displayBounds,
+                        const std::vector<std::size_t>& channelIndices,
                         const RenderBudget& renderBudget) {
     if (fullSnapshot.channels.empty()) {
         return;
@@ -21,7 +22,11 @@ void drawOverviewWindow(plot::WaveViewState& view,
     double overviewMinValue = displayBounds.valid ? displayBounds.minValue : std::numeric_limits<double>::infinity();
     double overviewMaxValue = displayBounds.valid ? displayBounds.maxValue : -std::numeric_limits<double>::infinity();
     if (!displayBounds.valid) {
-        for (const auto& channel : fullSnapshot.channels) {
+        for (const std::size_t channelIndex : channelIndices) {
+            if (channelIndex >= fullSnapshot.channels.size()) {
+                continue;
+            }
+            const auto& channel = fullSnapshot.channels[channelIndex];
             if (channel.totalSamples == 0 || channel.samples == nullptr) {
                 continue;
             }
@@ -61,7 +66,10 @@ void drawOverviewWindow(plot::WaveViewState& view,
         const std::size_t overviewPointLimit = view.overviewMaxSamples > 0
             ? (std::min)({pixelWidth, renderBudget.pointsPerChannel, view.overviewMaxSamples})
             : (std::min)(pixelWidth, renderBudget.pointsPerChannel);
-        for (std::size_t channelIndex = 0; channelIndex < fullSnapshot.channels.size(); ++channelIndex) {
+        for (const std::size_t channelIndex : channelIndices) {
+            if (channelIndex >= fullSnapshot.channels.size() || channelIndex >= displayData.channels.size()) {
+                continue;
+            }
             auto overview =
                 buildDisplayEnvelope(displayData.channels[channelIndex].samples, overviewMinTime, overviewMaxTime, overviewPointLimit);
             if (overview.empty()) {

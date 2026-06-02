@@ -349,6 +349,7 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     waveA.view.fftPhaseMin = -120.0;
     waveA.view.fftPhaseMax = 120.0;
     waveA.fftChannelEnabled = {1};
+    waveA.hiddenChannelLabels = {"CH1"};
     waveA.toolsCollapsed = true;
     waveA.channelOverrides.resize(1);
     waveA.channelOverrides[0].labelOverridden = true;
@@ -396,6 +397,8 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredA.view.fftMagnitudeMin == -80.0 && restoredA.view.fftMagnitudeMax == 5.0, "proto_a 应恢复 FFT 幅值轴");
     require(restoredA.view.fftPhaseMin == -120.0 && restoredA.view.fftPhaseMax == 120.0, "proto_a 应恢复 FFT 相位轴");
     require(restoredA.fftChannelEnabled.size() == 1 && restoredA.fftChannelEnabled[0] == 1, "proto_a 应恢复 FFT 通道选择");
+    require(restoredA.hiddenChannelLabels.size() == 1 && restoredA.hiddenChannelLabels[0] == "CH1",
+            "proto_a 应恢复自己的主图 Legend 隐藏通道");
     require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
 
@@ -406,6 +409,7 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
 
     const auto restoredBSpec = restoredB.buffer.channelSpec(0);
     require(restoredBSpec.has_value(), "proto_b 恢复后应保留通道配置");
+    require(restoredB.hiddenChannelLabels.empty(), "不同协议不应串用 proto_a 的主图 Legend 隐藏通道");
     require(restoredBSpec->label == "总线B", "不同协议不应串用 proto_a 标签");
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");

@@ -2,6 +2,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
+
 namespace protoscope::ui {
 namespace {
 
@@ -231,6 +233,13 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     node["tools_expanded_width"] = wave.toolsExpandedWidth;
     node["overview_panel_height"] = wave.overviewPanelHeight;
     node["overview_collapsed_height"] = wave.overviewCollapsedHeight;
+    YAML::Node hiddenChannelsNode;
+    for (const auto& label : wave.hiddenChannelLabels) {
+        if (!label.empty()) {
+            hiddenChannelsNode.push_back(label);
+        }
+    }
+    node["hidden_channel_labels"] = hiddenChannelsNode;
 
     YAML::Node cursorsNode;
     for (const auto& cursor : view.cursors) {
@@ -271,6 +280,8 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
 
 void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) {
     if (!node) {
+        wave.hiddenChannelLabels.clear();
+        wave.legendVisibilityRestorePending = true;
         return;
     }
 
@@ -336,6 +347,19 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
     wave.toolsExpandedWidth = node["tools_expanded_width"].as<float>(wave.toolsExpandedWidth);
     wave.overviewPanelHeight = node["overview_panel_height"].as<float>(wave.overviewPanelHeight);
     wave.overviewCollapsedHeight = node["overview_collapsed_height"].as<float>(wave.overviewCollapsedHeight);
+    wave.hiddenChannelLabels.clear();
+    const auto hiddenChannelsNode = node["hidden_channel_labels"];
+    if (hiddenChannelsNode && hiddenChannelsNode.IsSequence()) {
+        for (const auto& entry : hiddenChannelsNode) {
+            const auto label = entry.as<std::string>("");
+            if (label.empty()
+                || std::find(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label) != wave.hiddenChannelLabels.end()) {
+                continue;
+            }
+            wave.hiddenChannelLabels.push_back(label);
+        }
+    }
+    wave.legendVisibilityRestorePending = true;
 
     const auto cursorsNode = node["cursors"];
     for (std::size_t index = 0; index < view.cursors.size(); ++index) {

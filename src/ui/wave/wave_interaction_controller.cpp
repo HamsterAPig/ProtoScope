@@ -137,6 +137,57 @@ bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::
     return true;
 }
 
+bool excludesLegendHiddenChannels(const plot::WaveViewState& view) {
+    return view.hiddenChannelPolicy == plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
+}
+
+bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::string& label) {
+    return std::find(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label) != wave.hiddenChannelLabels.end();
+}
+
+std::vector<std::size_t> channelIndicesForDerivedViews(const plot::WaveDockState& wave,
+                                                       const plot::WaveSnapshot& snapshot) {
+    std::vector<std::size_t> indices;
+    indices.reserve(snapshot.channels.size());
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        const auto& label = snapshot.channels[channelIndex].label;
+        if (excludesLegendHiddenChannels(wave.view) && channelHiddenByLegendState(wave, label)) {
+            continue;
+        }
+        indices.push_back(channelIndex);
+    }
+    return indices;
+}
+
+plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
+                                           const plot::WaveDisplayData& displayData,
+                                           const std::vector<std::size_t>& channelIndices) {
+    if (excludesLegendHiddenChannels(wave.view)) {
+        return plot::computeDisplayBoundsForChannels(displayData, channelIndices, (std::max)(wave.view.minVisibleTimeSpan, 1e-6));
+    }
+    return wave.cachedDisplayBounds;
+}
+
+void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::string& label) {
+    const bool hidden = channelHiddenByLegendState(wave, label);
+    if (hidden || wave.legendVisibilityRestorePending) {
+        ImPlot::HideNextItem(hidden, wave.legendVisibilityRestorePending ? ImPlotCond_Always : ImPlotCond_Once);
+    }
+}
+
+void syncLegendVisibilityState(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
+    std::vector<std::string> hiddenLabels;
+    hiddenLabels.reserve(snapshot.channels.size());
+    for (const auto& channel : snapshot.channels) {
+        const ImPlotItem* item = ImPlot::GetItem(channel.label.c_str());
+        if (item != nullptr && !item->Show) {
+            hiddenLabels.push_back(channel.label);
+        }
+    }
+    wave.hiddenChannelLabels = std::move(hiddenLabels);
+    wave.legendVisibilityRestorePending = false;
+}
+
 std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::WaveSample>& samples,
                                                       double visibleMinTime,
                                                       double visibleMaxTime,
