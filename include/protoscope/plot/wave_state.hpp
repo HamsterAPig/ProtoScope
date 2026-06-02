@@ -63,7 +63,7 @@ struct WaveViewState {
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
     WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
-    WaveHiddenChannelPolicy hiddenChannelPolicy{WaveHiddenChannelPolicy::IncludeInDerivedViews};
+    WaveHiddenChannelPolicy hiddenChannelPolicy{WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     WaveFftConfig fft{};
     bool fftSourceWindowValid{false};
     bool fftViewportInitialized{false};

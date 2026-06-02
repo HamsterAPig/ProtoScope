@@ -1210,6 +1210,8 @@ void test_config_default_roundtrip() {
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.2");
     require(!config.gui.wave.zoomSelectionAutoExit, "框选放大默认不应自动退出");
+    require(config.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
+            "隐藏 CH 策略默认应只让可见通道参与派生视图");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
@@ -2190,6 +2192,7 @@ static const TestCase kAllTests[] = {
     {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},
     {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
     {"wave_visible_channel_bounds_ignore_hidden_channels", &test_wave_visible_channel_bounds_ignore_hidden_channels},
+    {"wave_hidden_channel_policy_defaults_to_visible_only", &test_wave_hidden_channel_policy_defaults_to_visible_only},
     {"wave_channel_reset_all_uses_protocol_default", &test_wave_channel_reset_all_uses_protocol_default},
     {"wave_channel_reset_scale_offset_preserves_label_and_ratio", &test_wave_channel_reset_scale_offset_preserves_label_and_ratio},
     {"wave_channel_reset_scale_preserves_offset", &test_wave_channel_reset_scale_preserves_offset},

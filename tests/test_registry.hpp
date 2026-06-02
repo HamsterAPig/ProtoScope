@@ -146,6 +146,7 @@ void test_wave_cursor_interval_lock();
 void test_wave_channel_card_width_modes();
 void test_wave_vertical_auto_fit_multiplier();
 void test_wave_visible_channel_bounds_ignore_hidden_channels();
+void test_wave_hidden_channel_policy_defaults_to_visible_only();
 void test_wave_channel_reset_all_uses_protocol_default();
 void test_wave_channel_reset_scale_offset_preserves_label_and_ratio();
 void test_wave_channel_reset_scale_preserves_offset();

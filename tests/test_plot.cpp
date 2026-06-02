@@ -1,5 +1,6 @@
 #include "test_registry.hpp"
 
+#include "protoscope/config/config.hpp"
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plot/wave_fft.hpp"
@@ -1083,6 +1084,16 @@ void test_wave_visible_channel_bounds_ignore_hidden_channels() {
 
     const auto empty = protoscope::plot::computeDisplayBoundsForChannels(data, {}, 0.001);
     require(!empty.valid, "没有可见通道时 bounds 应保持无效");
+}
+
+void test_wave_hidden_channel_policy_defaults_to_visible_only() {
+    protoscope::config::GuiWaveConfig config;
+    protoscope::plot::WaveViewState view;
+
+    require(config.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
+            "配置默认隐藏 CH 策略应只让可见通道参与派生视图");
+    require(view.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
+            "运行态默认隐藏 CH 策略应只让可见通道参与派生视图");
 }
 
 void test_wave_channel_reset_all_uses_protocol_default() {

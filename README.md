@@ -315,6 +315,7 @@ app:
 | wave.max_render_vertices | size_t | 60000 | 总渲染顶点预算，多通道或开启磷光辉光时会进一步压缩每通道可显示点数 |
 | wave.downsample_start_multiplier | double | 2.0 | 降采样启动倍数；源样本数超过“渲染点预算 × 该系数”后切换到包络降采样 |
 | wave.channel_double_click_action | string | reset_scale_offset | CH 卡片双击恢复行为：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset` |
+| wave.hidden_channel_policy | string | visible_only | 主图 Legend 隐藏通道策略：`visible_only` 表示隐藏通道不参与主图包络、概览图和 Y 轴自动缩放；`include_hidden` 表示仍参与 |
 | wave.overview_max_samples | size_t | 20000 | 总览图最多参与绘制的最近样本数，限制长历史下 overview 的开销 |
 | wave.min_visible_time_span | double | 0.001 | 最小可见时间跨度（秒） |
 | wave.show_axis_labels | bool | false | 显示坐标轴标签 |
@@ -392,6 +393,7 @@ gui:
   wave:
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
+    hidden_channel_policy: visible_only
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
     vertical_auto_fit_multiplier: 1.2
@@ -445,6 +447,11 @@ gui:
 
 - `wave.channel_double_click_action`
   - 控制顶部 CH 卡片双击恢复行为，默认 `reset_scale_offset` 只恢复当前通道 `scale/offset`，也可设为 `reset_all`、`reset_scale` 或 `reset_offset`。
+
+- `wave.hidden_channel_policy`
+  - 控制通过主图右键 `Legend -> Show` 取消勾选的通道是否继续参与派生视图，默认 `visible_only`。
+  - `visible_only`：隐藏通道不参与高密度主图包络绘制、概览图绘制、Y 轴双击/Auto Fit 范围计算。
+  - `include_hidden`：隐藏通道仍参与概览和缩放，适合只想临时隐藏线条但保留全量范围参考的场景。
 
 - `wave.vertical_auto_fit_multiplier`
   - 控制 Y 轴 Auto Fit 的留白系数，默认 `1.2`，例如显示值范围 `[-10, 5]` 会自动扩到 `[-12, 12]`。
