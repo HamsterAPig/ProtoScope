@@ -17,7 +17,6 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #endif
