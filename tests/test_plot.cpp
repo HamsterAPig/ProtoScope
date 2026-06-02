@@ -9,6 +9,8 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -1287,4 +1289,59 @@ void test_raw_capture_file_requires_protocol_fields() {
     std::string error;
     const auto parsed = protoscope::plot::decodeRawCaptureFile(broken, error);
     require(!parsed.has_value(), "缺少 protocol 字段时应拒绝解析");
+}
+
+void test_raw_capture_file_rejects_trailing_bytes() {
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-trailing-bytes.psraw";
+    std::filesystem::remove(tempPath);
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "default_protocol",
+        .protocolDir = "protocols/templates/default_protocol",
+        .sampleFrequencyHz = 4096.0,
+        .capturedAtMs = 123,
+        .payload = {0x01, 0x02},
+        .events = {},
+    };
+
+    std::string error;
+    require(protoscope::plot::writeRawCaptureFile(tempPath, capture, error), "psraw 写入应成功");
+    std::ifstream in(tempPath, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    auto dirty = bytes;
+    dirty.append("junk");
+    const auto parsed = protoscope::plot::decodeRawCaptureFile(dirty, error);
+    require(!parsed.has_value(), "payload 后存在尾随脏字节时应拒绝解析");
+    std::filesystem::remove(tempPath);
+}
+
+void test_raw_capture_file_rejects_profile_set_without_length() {
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-profile-missing-length.psraw";
+    std::filesystem::remove(tempPath);
+    protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "runtime_profile_stream",
+        .protocolDir = "tests/fixtures/protocols/runtime_profile_stream",
+        .sampleFrequencyHz = 4096.0,
+        .capturedAtMs = 123,
+        .payload = {},
+        .events = {},
+    };
+    capture.events.push_back(protoscope::plot::RawCaptureEvent{
+        .type = protoscope::plot::RawCaptureEventType::ProfileSet,
+        .timestampMs = 123,
+        .bytes = {},
+        .profile = {.frameName = "dynamic_profile", .length = 8, .channelMap = {1, 0}},
+    });
+
+    std::string error;
+    require(protoscope::plot::writeRawCaptureFile(tempPath, capture, error), "profile_set psraw 写入应成功");
+    std::ifstream in(tempPath, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    const auto pos = bytes.find("length: 8\n");
+    require(pos != std::string::npos, "测试文件应包含 profile_set length 字段");
+    bytes.replace(pos, std::string("length: 8\n").size(), "leng_x: 8\n");
+    const auto parsed = protoscope::plot::decodeRawCaptureFile(bytes, error);
+    require(!parsed.has_value(), "profile_set 缺少 length 时应拒绝解析");
+    std::filesystem::remove(tempPath);
 }

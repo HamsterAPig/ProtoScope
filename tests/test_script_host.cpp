@@ -684,6 +684,7 @@ void test_script_stream_runtime_profile_set_and_clear() {
     const auto profileEvents = host.drainStreamRuntimeProfileEvents();
     require(profileEvents.size() == 1 && !profileEvents.front().cleared, "set_profile 应产生 profile_set 事件");
 
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
     std::vector<std::uint8_t> raw{0xFF, 0x26, 0x00, 0x11, 0x00, 0x22};
     const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
     raw.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
@@ -2032,6 +2033,7 @@ static const TestCase kAllTests[] = {
     {"frame_stream_parser_overflow_keeps_latest_crc_window", &test_frame_stream_parser_overflow_keeps_latest_crc_window},
     {"frame_stream_parser_runtime_profile_length_and_channel_map", &test_frame_stream_parser_runtime_profile_length_and_channel_map},
     {"frame_stream_parser_runtime_profile_errors", &test_frame_stream_parser_runtime_profile_errors},
+    {"frame_stream_parser_rejects_unsafe_count_bounds", &test_frame_stream_parser_rejects_unsafe_count_bounds},
     {"luals_api_sync_contains_tx_and_dialog_api", &test_luals_api_sync_contains_tx_and_dialog_api},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},
@@ -2152,6 +2154,7 @@ static const TestCase kAllTests[] = {
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
     {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
+    {"application_live_raw_capture_trim_keeps_runtime_profile_event", &test_application_live_raw_capture_trim_keeps_runtime_profile_event},
     {"application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims", &test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},
     {"application_raw_capture_import_replays_runtime_profile_events", &test_application_raw_capture_import_replays_runtime_profile_events},
@@ -2206,6 +2209,8 @@ static const TestCase kAllTests[] = {
     {"raw_capture_file_requires_protocol_fields", &test_raw_capture_file_requires_protocol_fields},
     {"application_raw_capture_import_updates_last_pump_diagnostics",
      &test_application_raw_capture_import_updates_last_pump_diagnostics},
+    {"raw_capture_file_rejects_trailing_bytes", &test_raw_capture_file_rejects_trailing_bytes},
+    {"raw_capture_file_rejects_profile_set_without_length", &test_raw_capture_file_rejects_profile_set_without_length},
     {"elf_static_view_bridge_loads_dump_json_and_queries_symbols", &test_elf_static_view_bridge_loads_dump_json_and_queries_symbols},
     {"elf_static_view_bridge_queries_flattened_composite_members", &test_elf_static_view_bridge_queries_flattened_composite_members},
     {"elf_static_view_bridge_loads_private_binary_without_extension", &test_elf_static_view_bridge_loads_private_binary_without_extension},

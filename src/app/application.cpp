@@ -97,6 +97,72 @@ bool sameChannelIdentity(const std::vector<scripting::PlotChannelDescriptor>& se
     return true;
 }
 
+std::uint64_t rawCaptureEventRxBytes(const std::vector<plot::RawCaptureEvent>& events) {
+    std::uint64_t total = 0;
+    for (const auto& event : events) {
+        if (event.type == plot::RawCaptureEventType::RxBytes) {
+            total += static_cast<std::uint64_t>(event.bytes.size());
+        }
+    }
+    return total;
+}
+
+void applyActiveRawProfileEvent(std::vector<plot::RawCaptureEvent>& activeProfiles,
+                                const plot::RawCaptureEvent& event) {
+    if (event.type == plot::RawCaptureEventType::ProfileClear && event.profile.frameName.empty()) {
+        activeProfiles.clear();
+        return;
+    }
+
+    const auto sameFrame = [&event](const plot::RawCaptureEvent& item) {
+        return item.profile.frameName == event.profile.frameName;
+    };
+    activeProfiles.erase(std::remove_if(activeProfiles.begin(), activeProfiles.end(), sameFrame),
+                         activeProfiles.end());
+    if (event.type == plot::RawCaptureEventType::ProfileSet) {
+        activeProfiles.push_back(event);
+    }
+}
+
+std::vector<plot::RawCaptureEvent> trimRawCaptureEventsToPayloadWindow(
+    const std::vector<plot::RawCaptureEvent>& events,
+    std::uint64_t keepStart) {
+    std::vector<plot::RawCaptureEvent> activeProfiles;
+    std::vector<plot::RawCaptureEvent> keptEvents;
+    std::uint64_t rxCursor = 0;
+
+    for (const auto& event : events) {
+        if (event.type != plot::RawCaptureEventType::RxBytes) {
+            if (rxCursor < keepStart) {
+                applyActiveRawProfileEvent(activeProfiles, event);
+            } else {
+                keptEvents.push_back(event);
+            }
+            continue;
+        }
+
+        const auto eventStart = rxCursor;
+        const auto eventSize = static_cast<std::uint64_t>(event.bytes.size());
+        const auto eventEnd = eventStart + eventSize;
+        rxCursor = eventEnd;
+        if (eventEnd <= keepStart || event.bytes.empty()) {
+            continue;
+        }
+
+        plot::RawCaptureEvent kept = event;
+        if (eventStart < keepStart) {
+            const auto trimPrefix = static_cast<std::size_t>(keepStart - eventStart);
+            kept.bytes.assign(event.bytes.begin() + static_cast<std::ptrdiff_t>(trimPrefix), event.bytes.end());
+        }
+        keptEvents.push_back(std::move(kept));
+    }
+
+    activeProfiles.insert(activeProfiles.end(),
+                          std::make_move_iterator(keptEvents.begin()),
+                          std::make_move_iterator(keptEvents.end()));
+    return activeProfiles;
+}
+
 std::string transferFrameFieldValueText(const scripting::StreamFieldValue& value) {
     return std::visit(
         [](const auto& stored) -> std::string {
@@ -519,6 +585,10 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
 
     // 核心流程：实时接收只保存最近一段原始字节，完整历史应由显式录制或外部文件承载。
     wave.rawCapture.truncated = true;
+    const auto keepStart = rawCaptureEventRxBytes(wave.rawCapture.events) > limit
+        ? rawCaptureEventRxBytes(wave.rawCapture.events) - limit
+        : 0U;
+    wave.rawCapture.events = trimRawCaptureEventsToPayloadWindow(wave.rawCapture.events, keepStart);
     if (limit == 0U) {
         wave.rawCapture.payload.clear();
         return;
@@ -761,16 +831,21 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
         error = "当前协议元数据不完整，无法导出";
         return false;
     }
-    // 核心流程：导出按当前 rawCapture 可见状态重建事件流；
-    // 实时缓存若已截断，不再把内存里更早的完整历史事件一并带出。
-    capture.events.clear();
-    if (!capture.payload.empty()) {
+    // 核心流程：普通导出只保存当前可见 raw，但必须保留这段 raw 回放所依赖的 runtime profile 事件。
+    const auto eventRxBytes = rawCaptureEventRxBytes(capture.events);
+    if (!capture.events.empty() && eventRxBytes >= capture.payload.size()) {
+        const auto keepStart = eventRxBytes - static_cast<std::uint64_t>(capture.payload.size());
+        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, keepStart);
+    } else if (!capture.payload.empty()) {
+        capture.events.clear();
         capture.events.push_back(plot::RawCaptureEvent{
             .type = plot::RawCaptureEventType::RxBytes,
             .timestampMs = capture.capturedAtMs,
             .bytes = capture.payload,
             .profile = {},
         });
+    } else {
+        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, eventRxBytes);
     }
     return plot::writeRawCaptureFile(path, capture, error);
 }

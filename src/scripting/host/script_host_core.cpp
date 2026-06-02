@@ -1544,9 +1544,8 @@ void ScriptHost::resetRuntime() {
 void ScriptHost::onTransportOpen(const transport::TransportOpenEvent& event) {
     activeConnection_ = event.context;
     if (runtime_->stream) {
+        // runtime_profile 是脚本显式设置的解析契约，应持续生效直到 clear_profile()。
         runtime_->stream->parser.reset();
-        runtime_->stream->parser.clearRuntimeProfiles();
-        runtime_->streamRuntimeProfiles.clear();
     }
     callbackOnOpen(ScriptHostContext{event.context});
 }
@@ -1558,8 +1557,6 @@ void ScriptHost::onTransportClose(const transport::TransportCloseEvent& event) {
     }
     if (runtime_->stream) {
         runtime_->stream->parser.reset();
-        runtime_->stream->parser.clearRuntimeProfiles();
-        runtime_->streamRuntimeProfiles.clear();
     }
 }
 

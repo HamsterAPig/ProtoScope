@@ -37,6 +37,48 @@ std::uint32_t readCrcValue(const std::uint8_t* frameBytes,
     return value;
 }
 
+bool checkedAddSize(std::size_t left, std::size_t right, std::size_t& out) {
+    if (left > (std::numeric_limits<std::size_t>::max)() - right) {
+        return false;
+    }
+    out = left + right;
+    return true;
+}
+
+bool checkedMultiplySize(std::size_t left, std::size_t right, std::size_t& out) {
+    if (left != 0 && right > (std::numeric_limits<std::size_t>::max)() / left) {
+        return false;
+    }
+    out = left * right;
+    return true;
+}
+
+bool checkedSubtractInt64(std::int64_t left, std::int64_t right, std::int64_t& out) {
+    const auto minValue = (std::numeric_limits<std::int64_t>::min)();
+    const auto maxValue = (std::numeric_limits<std::int64_t>::max)();
+    if ((right > 0 && left < minValue + right) || (right < 0 && left > maxValue + right)) {
+        return false;
+    }
+    out = left - right;
+    return true;
+}
+
+bool checkedMultiplyInt64(std::int64_t left, std::int64_t right, std::int64_t& out) {
+    const auto minValue = (std::numeric_limits<std::int64_t>::min)();
+    const auto maxValue = (std::numeric_limits<std::int64_t>::max)();
+    if (left > 0) {
+        if ((right > 0 && left > maxValue / right) || (right < 0 && right < minValue / left)) {
+            return false;
+        }
+    } else if (left < 0) {
+        if ((right > 0 && left < minValue / right) || (right < 0 && left < maxValue / right)) {
+            return false;
+        }
+    }
+    out = left * right;
+    return true;
+}
+
 std::optional<std::int64_t> streamCountFieldValue(const StreamFieldMap& parsed,
                                                   const std::string& fieldName,
                                                   std::string& error) {
@@ -114,7 +156,12 @@ std::optional<std::int64_t> evaluateStreamCountExpression(const StreamCountExpre
         if (!value.has_value()) {
             return std::nullopt;
         }
-        return *value - expression.argument;
+        std::int64_t result = 0;
+        if (!checkedSubtractInt64(*value, expression.argument, result)) {
+            error = "sub count 表达式溢出";
+            return std::nullopt;
+        }
+        return result;
     }
     case StreamCountExpressionOp::Mul: {
         if (!expression.operand) {
@@ -142,9 +189,19 @@ std::optional<std::int64_t> evaluateStreamCountExpression(const StreamCountExpre
             if (!argument.has_value()) {
                 return std::nullopt;
             }
-            return *value * *argument;
+            std::int64_t result = 0;
+            if (!checkedMultiplyInt64(*value, *argument, result)) {
+                error = "mul count 表达式溢出";
+                return std::nullopt;
+            }
+            return result;
         }
-        return *value * expression.argument;
+        std::int64_t result = 0;
+        if (!checkedMultiplyInt64(*value, expression.argument, result)) {
+            error = "mul count 表达式溢出";
+            return std::nullopt;
+        }
+        return result;
     }
     case StreamCountExpressionOp::Remaining: {
         const auto limit = expression.excludeCrc ? readableLimit : frameLength;
@@ -516,6 +573,10 @@ bool FrameStreamParser::setRuntimeProfile(const std::string& frameName,
         error = "runtime profile length 必须大于 0";
         return false;
     }
+    if (bufferDefinition_.capacity > 0 && profile.length > bufferDefinition_.capacity) {
+        error = "runtime profile length 超出 stream buffer 容量";
+        return false;
+    }
     if (!profile.channelMap.empty()) {
         std::vector<bool> used(profile.channelMap.size(), false);
         for (const auto target : profile.channelMap) {
@@ -719,7 +780,19 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
         frameLength = *frame.size;
     } else if (frame.len.has_value()) {
         const auto width = streamValueWidth(frame.len->type);
-        if (frame.len->offset + width > window.size) {
+        std::size_t lengthFieldEnd = 0;
+        if (!checkedAddSize(frame.len->offset, width, lengthFieldEnd)) {
+            result.action = AnalyzeResult::Action::RecoverableError;
+            result.error = StreamParseError{
+                .code = StreamParseErrorCode::InvalidLength,
+                .message = "长度字段 offset 溢出",
+                .frameName = frame.name,
+                .droppedBytes = 0,
+                .raw = {},
+            };
+            return result;
+        }
+        if (lengthFieldEnd > window.size) {
             return result;
         }
         const auto lengthBytes = copyBytes(frameBytes + frame.len->offset, width);
@@ -737,7 +810,17 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
         }
 
         if (frame.len->means == StreamLengthMeans::Payload) {
-            frameLength = static_cast<std::size_t>(*parsedLength) + frame.len->extra;
+            if (!checkedAddSize(static_cast<std::size_t>(*parsedLength), frame.len->extra, frameLength)) {
+                result.action = AnalyzeResult::Action::RecoverableError;
+                result.error = StreamParseError{
+                    .code = StreamParseErrorCode::InvalidLength,
+                    .message = "长度字段加成后溢出",
+                    .frameName = frame.name,
+                    .droppedBytes = 0,
+                    .raw = {},
+                };
+                return result;
+            }
         } else {
             frameLength = static_cast<std::size_t>(*parsedLength);
         }
@@ -843,7 +926,11 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
             return result;
         }
 
-        if (start > readableLimit || (*count > 0 && start + (*count * width) > readableLimit)) {
+        std::size_t fieldBytes = 0;
+        std::size_t fieldEnd = start;
+        const bool fieldSizeOk = checkedMultiplySize(*count, width, fieldBytes)
+            && checkedAddSize(start, fieldBytes, fieldEnd);
+        if (!fieldSizeOk || start > readableLimit || fieldEnd > readableLimit) {
             result.action = AnalyzeResult::Action::RecoverableError;
             result.error = StreamParseError{
                 .code = StreamParseErrorCode::FieldDecodeFailed,
@@ -881,7 +968,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
             }
         }
 
-        cursor = std::max(cursor, start + (*count * width));
+        cursor = std::max(cursor, fieldEnd);
     }
 
     result.action = AnalyzeResult::Action::Parsed;
@@ -961,18 +1048,31 @@ void FrameStreamParser::buildCompiledFrames() {
         if (frame.size.has_value()) {
             compiled.minFrameLength = *frame.size;
         } else if (frame.len.has_value()) {
-            compiled.minFrameLength = std::max(compiled.minFrameLength,
-                                               frame.len->offset + streamValueWidth(frame.len->type));
+            std::size_t lengthFieldEnd = 0;
+            if (checkedAddSize(frame.len->offset, streamValueWidth(frame.len->type), lengthFieldEnd)) {
+                compiled.minFrameLength = std::max(compiled.minFrameLength, lengthFieldEnd);
+            } else {
+                compiled.minFrameLength = (std::numeric_limits<std::size_t>::max)();
+            }
         }
 
         for (const auto& field : frame.fields) {
             if (field.count.fixed.has_value()) {
-                compiled.fixedFieldBytes += (*field.count.fixed) * streamValueWidth(field.type);
+                std::size_t fieldBytes = 0;
+                if (!checkedMultiplySize(*field.count.fixed, streamValueWidth(field.type), fieldBytes)
+                    || !checkedAddSize(compiled.fixedFieldBytes, fieldBytes, compiled.fixedFieldBytes)) {
+                    compiled.fixedFieldBytes = (std::numeric_limits<std::size_t>::max)();
+                    break;
+                }
             }
         }
 
-        compiled.minFrameLength = std::max(compiled.minFrameLength,
-                                           frame.header.size() + compiled.fixedFieldBytes);
+        std::size_t fixedMinimum = 0;
+        if (checkedAddSize(frame.header.size(), compiled.fixedFieldBytes, fixedMinimum)) {
+            compiled.minFrameLength = std::max(compiled.minFrameLength, fixedMinimum);
+        } else {
+            compiled.minFrameLength = (std::numeric_limits<std::size_t>::max)();
+        }
         maxHeaderLength_ = std::max(maxHeaderLength_, frame.header.size());
         compiledFrames_.push_back(compiled);
         if (compiled.hasHeader) {

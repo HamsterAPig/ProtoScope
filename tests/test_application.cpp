@@ -954,6 +954,90 @@ void test_application_live_raw_capture_trims_to_limit() {
     application.shutdown();
 }
 
+void test_application_live_raw_capture_trim_keeps_runtime_profile_event() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-live-runtime-profile");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "runtime profile 裁剪测试协议应可写入");
+        out << "function on_open(ctx)\n";
+        out << "  proto.stream.set_profile({ frame = 'dynamic_profile', length = 8, channel_map = { 2, 1 } })\n";
+        out << "end\n";
+        out << "local function on_frame(ctx, frame)\n";
+        out << "  proto.emit('runtime_profile_frame', frame.name)\n";
+        out << "end\n";
+        out << "function stream()\n";
+        out << "  return { buffer = { capacity = 64, overflow = 'drop_oldest' }, frames = { {\n";
+        out << "    name = 'dynamic_profile', header = { 0xFF, 0x26 }, runtime_profile = true,\n";
+        out << "    crc = { type = 'crc16_modbus', order = 'hi_lo' },\n";
+        out << "    fields = { { name = 'values', type = 'i16_be', offset = 3, count = { op = 'remaining', unit = 2 } } },\n";
+        out << "    on_frame = on_frame,\n";
+        out << "  } } }\n";
+        out << "end\n";
+    }
+
+    const auto makeRuntimeFrame = [](std::uint8_t high, std::uint8_t low) {
+        std::vector<std::uint8_t> raw{0xFF, 0x26, 0x00, high, 0x00, low};
+        const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
+        raw.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+        raw.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+        return raw;
+    };
+    const auto firstFrame = makeRuntimeFrame(0x11, 0x22);
+    const auto secondFrame = makeRuntimeFrame(0x33, 0x44);
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    protoscope::config::AppConfig config;
+    config.gui.rawCapture.liveLimitBytes = secondFrame.size();
+    require(application.initialize(), "应用初始化失败");
+    require(application.applyConfig(config), "应用配置应可设置实时原始缓存上限");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "runtime profile 裁剪协议应可加载");
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    application.openTransport();
+    application.pumpOnce();
+    const protoscope::transport::ConnectionContext context{
+        .endpoint = "queued://wave",
+        .connectionId = 7,
+        .timestampMs = 101,
+        .readyForIo = true,
+    };
+    std::vector<std::uint8_t> allBytes = firstFrame;
+    allBytes.insert(allBytes.end(), secondFrame.begin(), secondFrame.end());
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, allBytes});
+    for (int i = 0; i < 4; ++i) {
+        application.pumpOnce();
+    }
+
+    const auto& rawCapture = application.docks().waveState().rawCapture;
+    require(rawCapture.truncated, "实时 raw 超限后应被裁剪");
+    require(rawCapture.payload == secondFrame, "实时 raw 裁剪后应保留完整最新帧");
+    require(rawCapture.events.size() <= 2, "裁剪后事件流不应继续保留旧 RX 事件");
+    require(!rawCapture.events.empty() && rawCapture.events.front().type == protoscope::plot::RawCaptureEventType::ProfileSet,
+            "裁剪窗口前的活动 profile 应被补到事件流开头");
+
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-live-runtime-profile-trim.psraw";
+    std::filesystem::remove(tempPath);
+    std::string error;
+    require(application.exportWaveRawCapture(tempPath, error), "裁剪后的 runtime profile raw 应可导出");
+    const auto exported = protoscope::plot::readRawCaptureFile(tempPath, error);
+    if (!exported.has_value()) {
+        throw std::runtime_error("裁剪导出的 runtime profile psraw 应可读取: " + error);
+    }
+    require(exported->payload == secondFrame, "导出文件应只包含当前可见 raw");
+    require(!exported->events.empty() && exported->events.front().type == protoscope::plot::RawCaptureEventType::ProfileSet,
+            "普通导出应保留当前 raw 依赖的 profile_set");
+
+    protoscope::app::Application importedApplication;
+    require(importedApplication.initialize(), "导入验证应用初始化失败");
+    require(importedApplication.reloadProtocolDirectory(protocolDir.generic_string(), true), "导入验证协议应可加载");
+    require(importedApplication.importWaveRawCapture(*exported, error), "导出的 runtime profile raw 应可重新导入");
+    std::filesystem::remove(tempPath);
+}
+
 void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims() {
     auto transportState = std::make_shared<QueuedEventTransport::State>();
     transportState->queuedRxBytes = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16};

@@ -88,6 +88,9 @@ bool parseChannelMap(std::string_view text, std::vector<std::size_t>& outMap) {
         if (!parseUnsigned(cleaned.substr(begin, end - begin), value)) {
             return false;
         }
+        if (value > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+            return false;
+        }
         outMap.push_back(static_cast<std::size_t>(value));
         begin = end + 1;
     }
@@ -237,6 +240,7 @@ bool decodeEventStream(std::string_view bytes, std::vector<RawCaptureEvent>& eve
         cursor = lineEnd + 1;
         std::uint64_t rxSize = 0;
         bool sizeSeen = false;
+        bool lengthSeen = false;
         while (cursor < bytes.size()) {
             lineEnd = bytes.find('\n', cursor);
             if (lineEnd == std::string::npos) {
@@ -273,7 +277,12 @@ bool decodeEventStream(std::string_view bytes, std::vector<RawCaptureEvent>& eve
                     error = "psraw profile_set length 格式错误";
                     return false;
                 }
+                if (lengthValue > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+                    error = "psraw profile_set length 过大";
+                    return false;
+                }
                 event.profile.length = static_cast<std::size_t>(lengthValue);
+                lengthSeen = true;
             } else if (key == "channel_map") {
                 if (!parseChannelMap(value, event.profile.channelMap)) {
                     error = "psraw profile_set channel_map 格式错误";
@@ -296,6 +305,9 @@ bool decodeEventStream(std::string_view bytes, std::vector<RawCaptureEvent>& eve
             cursor += static_cast<std::size_t>(rxSize);
         } else if (event.profile.frameName.empty()) {
             error = "psraw profile 事件缺少 frame";
+            return false;
+        } else if (event.type == RawCaptureEventType::ProfileSet && !lengthSeen) {
+            error = "psraw profile_set 事件缺少 length";
             return false;
         }
         events.push_back(std::move(event));
@@ -394,8 +406,17 @@ std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, s
         error = "psraw 文件头缺少必要字段";
         return std::nullopt;
     }
-    if (headerSize + payloadSize > bytes.size()) {
+    if (payloadSize > (std::numeric_limits<std::uint64_t>::max)() - static_cast<std::uint64_t>(headerSize)) {
+        error = "psraw payload 长度溢出";
+        return std::nullopt;
+    }
+    const auto expectedFileSize = static_cast<std::uint64_t>(headerSize) + payloadSize;
+    if (expectedFileSize > static_cast<std::uint64_t>(bytes.size())) {
         error = "psraw payload 长度超出文件大小";
+        return std::nullopt;
+    }
+    if (expectedFileSize != static_cast<std::uint64_t>(bytes.size())) {
+        error = "psraw payload 后存在尾随脏字节";
         return std::nullopt;
     }
 

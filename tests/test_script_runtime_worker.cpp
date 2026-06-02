@@ -84,7 +84,7 @@ function on_bytes(ctx, bytes)
   calls = calls + 1
   if calls == 1 and bytes[1] == 1 then
     local started = os.clock()
-    while os.clock() - started < 0.15 do
+    while os.clock() - started < 1.0 do
     end
   end
   proto.emit("worker_bytes", {
@@ -131,13 +131,16 @@ void test_script_runtime_worker_rx_limit_drops_oldest_bytes_only() {
     (void)worker.drainOutputs();
 
     worker.postTransportBytes(bytesEvent({0x01}, 1));
-    for (int i = 0; i < 80; ++i) {
+    bool firstEventInWorker = false;
+    for (int i = 0; i < 200; ++i) {
         const auto snapshot = worker.snapshot();
         if (snapshot.pendingWorkerRxBytes == 0U && snapshot.inputQueueSize == 0U) {
+            firstEventInWorker = true;
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    require(firstEventInWorker, "限流测试应先等待首个 RX 进入 worker 执行中");
 
     worker.postTransportBytes(bytesEvent({0xA1, 0x00, 0x00}, 2));
     worker.postTransportBytes(bytesEvent({0xB2, 0x00, 0x00}, 3));

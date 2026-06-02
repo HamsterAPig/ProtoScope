@@ -4,6 +4,7 @@
 #include "protoscope/scripting/frame_stream_parser.hpp"
 
 #include <memory>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -435,4 +436,57 @@ void test_frame_stream_parser_runtime_profile_errors() {
             "重复 channel_map 应被拒绝");
     require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 2}}, error),
             "越界 channel_map 应被拒绝");
+}
+
+void test_frame_stream_parser_rejects_unsafe_count_bounds() {
+    using namespace protoscope::scripting;
+
+    StreamFrameDefinition fixedFrame;
+    fixedFrame.name = "fixed_overflow";
+    fixedFrame.header = {0xAA, 0x55};
+    fixedFrame.size = 4;
+    StreamFieldDefinition fixedField;
+    fixedField.name = "values";
+    fixedField.type = StreamValueType::U16Be;
+    fixedField.offset = 2;
+    fixedField.count.fixed = (std::numeric_limits<std::size_t>::max)();
+    fixedFrame.fields = {fixedField};
+    FrameStreamParser fixedParser(StreamBufferDefinition{.capacity = 64, .dropOldest = true}, {fixedFrame});
+    const auto fixedBatch = fixedParser.pushBytes({0xAA, 0x55, 0x00, 0x01});
+    require(!fixedBatch.errors.empty(), "超大固定 count 应安全报错");
+    require(fixedBatch.errors.front().code == StreamParseErrorCode::FieldDecodeFailed,
+            "超大固定 count 应归类为字段越界");
+
+    StreamFrameDefinition expressionFrame;
+    expressionFrame.name = "expr_overflow";
+    expressionFrame.header = {0xAA, 0x66};
+    expressionFrame.size = 4;
+    StreamFieldDefinition expressionField;
+    expressionField.name = "values";
+    expressionField.type = StreamValueType::U8;
+    expressionField.offset = 2;
+    expressionField.count.expression = countBinary(StreamCountExpressionOp::Mul,
+                                                   countConst((std::numeric_limits<std::int64_t>::max)()),
+                                                   2);
+    expressionFrame.fields = {expressionField};
+    FrameStreamParser expressionParser(StreamBufferDefinition{.capacity = 64, .dropOldest = true}, {expressionFrame});
+    const auto expressionBatch = expressionParser.pushBytes({0xAA, 0x66, 0x00, 0x01});
+    require(!expressionBatch.errors.empty(), "count 表达式乘法溢出应安全报错");
+    require(expressionBatch.errors.front().code == StreamParseErrorCode::CountResolveFailed,
+            "count 表达式乘法溢出应归类为 count 解析失败");
+
+    StreamFrameDefinition lengthFrame;
+    lengthFrame.name = "length_offset_overflow";
+    lengthFrame.header = {0xAA, 0x77};
+    lengthFrame.len = StreamLengthDefinition{
+        .offset = (std::numeric_limits<std::size_t>::max)(),
+        .type = StreamValueType::U16Be,
+        .means = StreamLengthMeans::Frame,
+        .extra = 0,
+    };
+    FrameStreamParser lengthParser(StreamBufferDefinition{.capacity = 64, .dropOldest = true}, {lengthFrame});
+    const auto lengthBatch = lengthParser.pushBytes({0xAA, 0x77});
+    require(!lengthBatch.errors.empty(), "长度字段 offset 溢出应安全报错");
+    require(lengthBatch.errors.front().code == StreamParseErrorCode::InvalidLength,
+            "长度字段 offset 溢出应归类为 invalid_length");
 }
