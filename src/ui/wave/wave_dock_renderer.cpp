@@ -561,11 +561,11 @@ public:
         }
         if (!wave.toolsCollapsed) {
             ImGui::Separator();
-            drawWaveToolbar(context.application, wave);
+            drawWaveToolbar(context.application, wave, config, displayData);
             ImGui::Separator();
             drawCursorToolbar(view, config, displayData);
         } else {
-            drawWaveToolbar(context.application, wave);
+            drawWaveToolbar(context.application, wave, config, displayData);
         }
         drawChannelControls(wave, *context.renderFrame->fullSnapshot);
         ImGui::EndChild();

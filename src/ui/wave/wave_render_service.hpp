@@ -189,6 +189,14 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth);
 void drawCursorToolbar(plot::WaveViewState& view,
                        const plot::ViewConfig& config,
                        const plot::WaveDisplayData& displayData);
+void placeCursorInViewport(plot::WaveViewState& view,
+                           const plot::ViewConfig& config,
+                           const plot::WaveDisplayData& displayData,
+                           std::size_t cursorIndex,
+                           double ratio);
+void placeCursorPairInViewport(plot::WaveViewState& view,
+                               const plot::ViewConfig& config,
+                               const plot::WaveDisplayData& displayData);
 bool handleMainPlotZoom(plot::WaveViewState& view, const ImPlotPoint& mousePos);
 void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
                                 const plot::WaveSnapshot& snapshot,

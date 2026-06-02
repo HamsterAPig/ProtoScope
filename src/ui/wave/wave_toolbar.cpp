@@ -271,7 +271,10 @@ public:
 
 static_assert(std::is_base_of_v<IWaveToolbarSection, WaveFftToolbarSection>, "WaveFftToolbarSection 必须通过工具栏段基类接入");
 
-void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
+void drawWaveToolbar(app::Application& application,
+                     plot::WaveDockState& wave,
+                     const plot::ViewConfig& config,
+                     const plot::WaveDisplayData& displayData) {
     auto& view = wave.view;
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     if (view.visibleDuration <= 0.0) {
@@ -353,6 +356,27 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
                                   view.showCursors,
                                   true)) {
         view.showCursors = !view.showCursors;
+    }
+    if (drawAdaptiveToolbarButton("C1 到视窗",
+                                  "C1",
+                                  "仅移动 C1 游标到当前主视窗，不改变当前视窗范围。",
+                                  false,
+                                  true)) {
+        placeCursorInViewport(view, config, displayData, 0, 0.5);
+    }
+    if (drawAdaptiveToolbarButton("C2 到视窗",
+                                  "C2",
+                                  "仅移动 C2 游标到当前主视窗，不改变当前视窗范围。",
+                                  false,
+                                  true)) {
+        placeCursorInViewport(view, config, displayData, 1, 0.5);
+    }
+    if (drawAdaptiveToolbarButton("C1+C2 到视窗",
+                                  "C1+C2",
+                                  "仅移动双游标到当前主视窗，不改变当前视窗范围。",
+                                  false,
+                                  true)) {
+        placeCursorPairInViewport(view, config, displayData);
     }
     if (drawAdaptiveToolbarButton(view.showHoverReadout ? "显示悬停读数" : "隐藏悬停读数",
                                   "读",

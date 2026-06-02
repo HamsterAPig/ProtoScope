@@ -18,6 +18,40 @@ float compactLogToolbarHeight() {
     return controlHeight + extraPadding + 16.0f;
 }
 
+float transferLogToolbarButtonHeight() {
+    return ImGui::GetFrameHeight();
+}
+
+bool drawTransferToolbarButton(const char* label,
+                               const char* tooltip,
+                               bool active,
+                               float width = 0.0F) {
+    return drawToolbarSectionButton(label, tooltip, active, ImVec2(width, transferLogToolbarButtonHeight()));
+}
+
+bool drawTransferToolbarToggleButton(const char* label,
+                                     bool& value,
+                                     const char* tooltip,
+                                     float width = 0.0F) {
+    if (!drawTransferToolbarButton(label, tooltip, value, width)) {
+        return false;
+    }
+    value = !value;
+    return true;
+}
+
+bool drawTransferToolbarDangerButton(const char* label, const char* tooltip, float width = 0.0F) {
+    const auto& tokens = defaultUiStyleTokens();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.18F));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.32F));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.48F));
+    ImGui::PushStyleColor(ImGuiCol_Text, tokens.danger);
+    const bool clicked = ImGui::Button(label, ImVec2(width, transferLogToolbarButtonHeight()));
+    ImGui::PopStyleColor(4);
+    drawIconTooltip(tooltip);
+    return clicked;
+}
+
 } // namespace
 
 void GuiRuntime::drawStatusBar() {
@@ -450,60 +484,50 @@ void GuiRuntime::drawTransferDock()
             drawLogStatusFilterCombo("STATUS##transfer_log_status", receive.filter);
 
             ImGui::TableSetColumnIndex(3);
-            drawLogStatusFilterButton(
-                "全部",
-                dock::LogStatusFilter::All,
-                receive.filter);
+            if (drawTransferToolbarButton("全部", "显示全部收发记录", receive.filter.status == dock::LogStatusFilter::All)) {
+                receive.filter.status = dock::LogStatusFilter::All;
+            }
 
             ImGui::TableSetColumnIndex(4);
-            drawLogStatusFilterButton(
-                "RX",
-                dock::LogStatusFilter::Rx,
-                receive.filter);
+            if (drawTransferToolbarButton("RX", "仅显示 RX 收发记录", receive.filter.status == dock::LogStatusFilter::Rx)) {
+                receive.filter.status = dock::LogStatusFilter::Rx;
+            }
 
             ImGui::TableSetColumnIndex(5);
-            drawLogStatusFilterButton(
-                "TX",
-                dock::LogStatusFilter::Tx,
-                receive.filter);
+            if (drawTransferToolbarButton("TX", "仅显示 TX 收发记录", receive.filter.status == dock::LogStatusFilter::Tx)) {
+                receive.filter.status = dock::LogStatusFilter::Tx;
+            }
 
             ImGui::TableSetColumnIndex(6);
             const bool parsedFrames = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames;
-            if (ImGui::SmallButton(parsedFrames ? "逐帧" : "原始")) {
+            if (drawTransferToolbarButton(parsedFrames ? "逐帧" : "原始",
+                                          parsedFrames ? "按 Lua stream() schema 逐帧显示" : "按运输层原始分块显示",
+                                          parsedFrames)) {
                 receive.displayMode = parsedFrames ? dock::TransferLogDisplayMode::RawChunks
                                                    : dock::TransferLogDisplayMode::ParsedFrames;
                 if (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
                     application_.activateParsedTransferLogView();
                 }
             }
-            drawIconTooltip(parsedFrames ? "按 Lua stream() schema 逐帧显示" : "按运输层原始分块显示");
 
             ImGui::TableSetColumnIndex(7);
-            drawIconCheckbox(
-                PROTOSCOPE_ICON_HEX,
-                &receive.showHex,
-                "显示 HEX");
+            drawTransferToolbarToggleButton("HEX", receive.showHex, "显示 HEX");
 
             ImGui::TableSetColumnIndex(8);
-            drawIconCheckbox(
-                PROTOSCOPE_ICON_CLOCK,
-                &receive.showTimestamps,
-                "显示时间戳");
+            drawTransferToolbarToggleButton("时间", receive.showTimestamps, "显示时间戳");
 
             ImGui::TableSetColumnIndex(9);
-            drawIconCheckbox(
-                receive.pauseScroll ? PROTOSCOPE_ICON_PLAY : PROTOSCOPE_ICON_PAUSE,
-                &receive.pauseScroll,
-                "暂停滚动");
+            drawTransferToolbarToggleButton(receive.pauseScroll ? "继续" : "暂停",
+                                            receive.pauseScroll,
+                                            receive.pauseScroll ? "继续自动滚动" : "暂停自动滚动");
 
             ImGui::TableSetColumnIndex(10);
-            if (ImGui::Button("导出##transfer_log_export")) {
+            if (drawTransferToolbarButton("导出", "导出当前过滤后的收发记录")) {
                 openTransferLogExportDialog();
             }
-            drawIconTooltip("导出当前过滤后的收发记录");
 
             ImGui::TableSetColumnIndex(11);
-            if (drawIconButton(PROTOSCOPE_ICON_TRASH, "清空收发记录")) {
+            if (drawTransferToolbarDangerButton(PROTOSCOPE_ICON_TRASH " 清空", "清空收发记录")) {
                 application_.docks().clearReceiveRows();
                 application_.rebuildTransferFrameRows();
             }

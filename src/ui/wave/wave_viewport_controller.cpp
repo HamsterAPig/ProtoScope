@@ -112,34 +112,38 @@ void drawCursorToolbar(plot::WaveViewState& view,
     if (!view.showCursors || displayData.channels.empty()) {
         return;
     }
+}
+
+void placeCursorInViewport(plot::WaveViewState& view,
+                           const plot::ViewConfig& config,
+                           const plot::WaveDisplayData& displayData,
+                           std::size_t cursorIndex,
+                           double ratio) {
+    if (displayData.channels.empty()) {
+        return;
+    }
     clampActiveChannel(view, displayData.channels.size());
     const double cursorSnapDistance = (std::max)(view.viewMaxTime - view.viewMinTime, config.timeScale) / 80.0;
-    auto placeCursorInViewport = [&](std::size_t cursorIndex, double ratio) {
-        auto& cursor = view.cursors[cursorIndex];
-        cursor.enabled = true;
-        cursor.time = plot::cursorTimeInViewport(currentViewport(view), ratio);
-        cursor.channelIndex = view.measurementChannelIndex;
-        const auto best = findNearestDisplayByScope(displayData, view, cursor.time, cursorSnapDistance);
-        if (best.has_value()) {
-            cursor.time = best->time;
-            cursor.value = best->value;
-            cursor.channelIndex = best->channelIndex;
-        }
-    };
-    if (ImGui::Button("C1 到视窗")) {
-        // 快捷定位只移动游标本身，不改变当前视窗，便于快速重取测量区间。
-        placeCursorInViewport(0, 0.5);
+    auto& cursor = view.cursors[cursorIndex];
+    cursor.enabled = true;
+    cursor.time = plot::cursorTimeInViewport(currentViewport(view), ratio);
+    cursor.channelIndex = view.measurementChannelIndex;
+    const auto best = findNearestDisplayByScope(displayData, view, cursor.time, cursorSnapDistance);
+    if (!best.has_value()) {
+        return;
     }
-    ImGui::SameLine();
-    if (ImGui::Button("C2 到视窗")) {
-        placeCursorInViewport(1, 0.5);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("C1+C2 到视窗")) {
-        placeCursorInViewport(0, 0.4);
-        placeCursorInViewport(1, 0.6);
-        view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
-    }
+    cursor.time = best->time;
+    cursor.value = best->value;
+    cursor.channelIndex = best->channelIndex;
+}
+
+void placeCursorPairInViewport(plot::WaveViewState& view,
+                               const plot::ViewConfig& config,
+                               const plot::WaveDisplayData& displayData) {
+    // 核心流程：双游标快捷定位只移动游标，不改变当前视窗，便于快速重取测量区间。
+    placeCursorInViewport(view, config, displayData, 0, 0.4);
+    placeCursorInViewport(view, config, displayData, 1, 0.6);
+    view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
 }
 
 void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
