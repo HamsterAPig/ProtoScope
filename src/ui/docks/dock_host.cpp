@@ -522,7 +522,7 @@ void GuiRuntime::drawTransferDock()
                                             receive.pauseScroll ? "继续自动滚动" : "暂停自动滚动");
 
             ImGui::TableSetColumnIndex(10);
-            if (drawTransferToolbarButton("导出", "导出当前过滤后的收发记录")) {
+            if (drawTransferToolbarButton("导出", "导出当前过滤后的收发记录", false)) {
                 openTransferLogExportDialog();
             }
 
