@@ -4,6 +4,27 @@
 
 namespace protoscope::ui {
 
+namespace {
+
+class ScopedImGuiTable final {
+public:
+    ScopedImGuiTable(const char* tableId, int columnCount, ImGuiTableFlags flags)
+        : opened_(ImGui::BeginTable(tableId, columnCount, flags)) {}
+
+    ~ScopedImGuiTable() {
+        if (opened_) {
+            ImGui::EndTable();
+        }
+    }
+
+    [[nodiscard]] bool opened() const { return opened_; }
+
+private:
+    bool opened_{false};
+};
+
+} // namespace
+
 bool GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
                                   const scripting::TableLayoutDescriptor& layout,
                                   std::string_view stableId) {
@@ -28,7 +49,8 @@ bool GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
     }
 
     const std::string tableId = "##lua_dock_table_" + std::string(stableId);
-    if (!ImGui::BeginTable(tableId.c_str(), static_cast<int>(layout.columns), flags)) {
+    ScopedImGuiTable tableGuard(tableId.c_str(), static_cast<int>(layout.columns), flags);
+    if (!tableGuard.opened()) {
         return false;
     }
 
@@ -66,7 +88,6 @@ bool GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
             break;
         }
     }
-    ImGui::EndTable();
     return updated;
 }
 

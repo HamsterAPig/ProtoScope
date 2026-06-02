@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <type_traits>
@@ -50,10 +51,42 @@ bool drawToolbarToggleButton(const char* label, bool active, const char* help, c
     return drawToolbarSectionButton(label, help, active, size);
 }
 
-bool drawToolbarCheckbox(const char* label, bool* value, const char* help) {
-    const bool changed = ImGui::Checkbox(label, value);
-    addItemHelp(help);
-    return changed;
+float calcToolbarButtonWidth(const char* label) {
+    const auto textSize = ImGui::CalcTextSize(label);
+    const auto& style = ImGui::GetStyle();
+    return textSize.x + style.FramePadding.x * 2.0F;
+}
+
+std::string buildToolbarButtonHelp(const char* label, const char* help) {
+    if (help == nullptr || help[0] == '\0') {
+        return std::string(label);
+    }
+    return std::string(label) + "： " + help;
+}
+
+bool drawAdaptiveToolbarButton(const char* fullLabel,
+                               const char* shortLabel,
+                               const char* help,
+                               bool active,
+                               bool placeNextOnSameLine = false) {
+    const float fullWidth = calcToolbarButtonWidth(fullLabel);
+    const float shortWidth = calcToolbarButtonWidth(shortLabel);
+
+    float availableWidth = ImGui::GetContentRegionAvail().x;
+    if (shortWidth > availableWidth && ImGui::GetCursorPosX() > 0.0F) {
+        ImGui::NewLine();
+        availableWidth = ImGui::GetContentRegionAvail().x;
+    }
+
+    const bool useFullLabel = fullWidth <= availableWidth || shortWidth > availableWidth;
+    const char* visibleLabel = useFullLabel ? fullLabel : shortLabel;
+    const float buttonWidth = useFullLabel ? fullWidth : shortWidth;
+    const std::string tooltip = buildToolbarButtonHelp(fullLabel, help);
+    const bool clicked = drawToolbarSectionButton(visibleLabel, tooltip.c_str(), active, ImVec2(buttonWidth, 0.0F));
+    if (placeNextOnSameLine) {
+        ImGui::SameLine();
+    }
+    return clicked;
 }
 
 void ensureFftChannelState(plot::WaveDockState& wave) {
@@ -77,7 +110,11 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave) {
     }
 
     bool enabled = view.fft.enabled;
-    if (drawToolbarCheckbox("启用 FFT 频谱模式", &enabled, "启用后主图横坐标切换为频率 Hz，输入数据来自当前可视区。")) {
+    if (drawAdaptiveToolbarButton("启用 FFT 频谱模式",
+                                  "FFT",
+                                  "启用后主图横坐标切换为频率 Hz，输入数据来自当前可视区。",
+                                  enabled)) {
+        enabled = !enabled;
         view.fft.enabled = enabled;
         if (enabled) {
             view.fftSourceMinTime = view.viewMinTime;
@@ -156,9 +193,12 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave) {
     }
 
     if (ImGui::TreeNode("Legend")) {
-        drawToolbarCheckbox("显示频谱图例",
-                            &view.showFftLegend,
-                            "显示或隐藏 FFT 幅值/相位图例；不会持久化每条曲线的临时隐藏状态。");
+        if (drawAdaptiveToolbarButton("显示频谱图例",
+                                      "例",
+                                      "显示或隐藏 FFT 幅值/相位图例；不会持久化每条曲线的临时隐藏状态。",
+                                      view.showFftLegend)) {
+            view.showFftLegend = !view.showFftLegend;
+        }
         ImGui::TreePop();
     }
 
@@ -177,16 +217,23 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave) {
             wave.cachedFftKeyValid = false;
         }
         for (std::size_t channelIndex = 0; channelIndex < wave.fftChannelEnabled.size(); ++channelIndex) {
-            bool channelEnabled = wave.fftChannelEnabled[channelIndex] != 0;
+            const bool channelEnabled = wave.fftChannelEnabled[channelIndex] != 0;
             std::string label = "CH" + std::to_string(channelIndex + 1);
             if (const auto spec = wave.buffer.channelSpec(channelIndex); spec.has_value() && !spec->label.empty()) {
                 label = spec->label;
             }
-            if (ImGui::Checkbox(label.c_str(), &channelEnabled)) {
-                wave.fftChannelEnabled[channelIndex] = channelEnabled ? 1 : 0;
+            char shortLabelBuffer[16]{};
+            std::snprintf(shortLabelBuffer, sizeof(shortLabelBuffer), "C%zu", channelIndex + 1);
+            if (drawAdaptiveToolbarButton(label.c_str(),
+                                          shortLabelBuffer,
+                                          "切换该通道是否参与 FFT 计算。",
+                                          channelEnabled,
+                                          channelIndex + 1 < wave.fftChannelEnabled.size())) {
+                wave.fftChannelEnabled[channelIndex] = channelEnabled ? 0 : 1;
                 wave.cachedFftKeyValid = false;
             }
         }
+        ImGui::NewLine();
         ImGui::TreePop();
     }
 
@@ -284,76 +331,64 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
         return;
     }
 
-    const bool quickGroupOpen = beginToolbarGroup("wave_quick_actions", "主视图控制");
-    if (quickGroupOpen) {
-        // 核心流程：右侧工具栏先放高频动作，细项参数继续留在下方分组，避免工具区变成长表单。
-        const bool quickActionsOpened = ImGui::BeginTable("##wave_toolbar_quick_actions", 2, ImGuiTableFlags_SizingStretchSame);
-        if (quickActionsOpened) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            if (drawToolbarToggleButton(view.autoFollowLatest ? "跟随中" : "已暂停",
-                                    view.autoFollowLatest,
-                                    "切换自动跟随最新数据。关闭后当前视口会停留在手动浏览位置。",
-                                    ImVec2(-1.0F, 0.0F))) {
-                view.autoFollowLatest = !view.autoFollowLatest;
-            }
-            ImGui::TableSetColumnIndex(1);
-            if (drawToolbarToggleButton(view.lockVerticalRange ? "纵轴锁定" : "纵轴自动",
-                                    view.lockVerticalRange,
-                                    "锁定或释放纵轴范围。锁定后使用手动纵轴最小/最大值。",
-                                    ImVec2(-1.0F, 0.0F))) {
-                view.lockVerticalRange = !view.lockVerticalRange;
-            }
-
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            if (drawToolbarToggleButton(view.showCursors ? "游标开" : "游标关",
-                                    view.showCursors,
-                                    "显示或隐藏测量游标。游标隐藏时不会显示游标读数。",
-                                    ImVec2(-1.0F, 0.0F))) {
-                view.showCursors = !view.showCursors;
-            }
-            ImGui::TableSetColumnIndex(1);
-            if (drawToolbarToggleButton(view.showHoverReadout ? "读数开" : "读数关",
-                                    view.showHoverReadout,
-                                    "显示或隐藏鼠标悬停读数。开启后鼠标靠近曲线会显示最近采样点。",
-                                    ImVec2(-1.0F, 0.0F))) {
-                view.showHoverReadout = !view.showHoverReadout;
-            }
-
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            if (drawToolbarToggleButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS " 框选放大",
-                                    view.zoomSelectionActive,
-                                    zoomSelectionHelpText(view),
-                                    ImVec2(-1.0F, 0.0F))) {
-                view.zoomSelectionActive = !view.zoomSelectionActive;
-                view.zoomSelectionDragging = false;
-            }
-            ImGui::TableSetColumnIndex(1);
-            if (drawToolbarActionButton(PROTOSCOPE_ICON_EXPAND " 显示全部",
-                                    "适配当前可见波形到完整视图。",
-                                    ImVec2(-1.0F, 0.0F))) {
-                view.fitVisibleWaveformsRequested = true;
-            }
-
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            if (drawToolbarActionButton("清空历史",
-                                    "清空当前波形历史缓存；不会修改协议脚本或串口连接状态。",
-                                    ImVec2(-1.0F, 0.0F))) {
-                application.resetWaveHistory();
-            }
-            ImGui::TableSetColumnIndex(1);
-            if (drawToolbarActionButton("折叠工具栏", "收起为窄按钮列，保留常用操作入口。", ImVec2(-1.0F, 0.0F))) {
-                wave.toolsCollapsed = true;
-            }
-        }
-        if (quickActionsOpened) {
-            ImGui::EndTable();
-        }
+    ImGui::SeparatorText("主视图控制");
+    // 核心流程：快捷操作改为自适应流式按钮，避免 Child/Table 吃满纵向空间并引入额外作用域配对风险。
+    if (drawAdaptiveToolbarButton(view.autoFollowLatest ? "跟随最新数据" : "暂停跟随",
+                                  "跟/停",
+                                  "切换自动跟随最新数据。关闭后当前视口会停留在手动浏览位置。",
+                                  view.autoFollowLatest,
+                                  true)) {
+        view.autoFollowLatest = !view.autoFollowLatest;
     }
-    endToolbarGroup();
+    if (drawAdaptiveToolbarButton(view.lockVerticalRange ? "纵轴锁定" : "纵轴自动",
+                                  "纵/自",
+                                  "锁定或释放纵轴范围。锁定后使用手动纵轴最小/最大值。",
+                                  view.lockVerticalRange,
+                                  true)) {
+        view.lockVerticalRange = !view.lockVerticalRange;
+    }
+    if (drawAdaptiveToolbarButton(view.showCursors ? "显示游标" : "隐藏游标",
+                                  "游",
+                                  "显示或隐藏测量游标。游标隐藏时不会显示游标读数。",
+                                  view.showCursors,
+                                  true)) {
+        view.showCursors = !view.showCursors;
+    }
+    if (drawAdaptiveToolbarButton(view.showHoverReadout ? "显示悬停读数" : "隐藏悬停读数",
+                                  "读",
+                                  "显示或隐藏鼠标悬停读数。开启后鼠标靠近曲线会显示最近采样点。",
+                                  view.showHoverReadout,
+                                  true)) {
+        view.showHoverReadout = !view.showHoverReadout;
+    }
+    if (drawAdaptiveToolbarButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS " 框选放大",
+                                  "框",
+                                  zoomSelectionHelpText(view),
+                                  view.zoomSelectionActive,
+                                  true)) {
+        view.zoomSelectionActive = !view.zoomSelectionActive;
+        view.zoomSelectionDragging = false;
+    }
+    if (drawAdaptiveToolbarButton(PROTOSCOPE_ICON_EXPAND " 显示全部",
+                                  "全",
+                                  "适配当前可见波形到完整视图。",
+                                  false,
+                                  true)) {
+        view.fitVisibleWaveformsRequested = true;
+    }
+    if (drawAdaptiveToolbarButton("清空历史",
+                                  "清",
+                                  "清空当前波形历史缓存；不会修改协议脚本或串口连接状态。",
+                                  false,
+                                  true)) {
+        application.resetWaveHistory();
+    }
+    if (drawAdaptiveToolbarButton("折叠工具栏",
+                                  "收",
+                                  "收起为窄按钮列，保留常用操作入口。",
+                                  false)) {
+        wave.toolsCollapsed = true;
+    }
 
     ImGui::Spacing();
     WaveFftToolbarSection fftToolbarSection;
@@ -364,37 +399,36 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
 
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("视图", ImGuiTreeNodeFlags_DefaultOpen)) {
-        drawToolbarCheckbox("交互后暂停跟随",
-                            &view.pauseAutoFollowOnInteraction,
-                            "拖动、缩放或手动浏览后自动关闭跟随，避免视口被新数据拉回末尾。");
-        drawToolbarCheckbox("稀疏时显示点", &view.showPointsWhenSparse, "样本较少时显示采样点，便于观察离散数据。");
-        drawToolbarCheckbox("显示坐标轴标签", &view.showAxisLabels, "显示或隐藏主波形图的时间轴/数值轴标签。");
-        drawToolbarCheckbox("显示图例", &view.showChannelLegend, "显示或隐藏顶部通道图例栏；不会持久化每个通道的临时隐藏状态。");
-        if (ImGui::BeginTable("##view_controls", 2, ImGuiTableFlags_SizingStretchSame)) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("可视时长");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputDouble("##visible_duration", &view.visibleDuration, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
-            addItemHelp("当前主视图横向可见时间范围，单位与波形时间轴一致。");
-            view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
-
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("最小可视跨度");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputDouble("##min_visible_span", &view.minVisibleTimeSpan, 0.001, 0.01, "%.6f");
-            addItemHelp("限制横向缩放的最小时长，防止缩放到过小范围。");
-            view.minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
-            view.visibleDuration = (std::max)(view.visibleDuration, view.minVisibleTimeSpan);
-            ImGui::EndTable();
+        if (drawAdaptiveToolbarButton("交互后暂停跟随", "停", "拖动、缩放或手动浏览后自动关闭跟随，避免视口被新数据拉回末尾。", view.pauseAutoFollowOnInteraction, true)) {
+            view.pauseAutoFollowOnInteraction = !view.pauseAutoFollowOnInteraction;
         }
+        if (drawAdaptiveToolbarButton("稀疏时显示点", "点", "样本较少时显示采样点，便于观察离散数据。", view.showPointsWhenSparse, true)) {
+            view.showPointsWhenSparse = !view.showPointsWhenSparse;
+        }
+        if (drawAdaptiveToolbarButton("显示坐标轴标签", "轴", "显示或隐藏主波形图的时间轴/数值轴标签。", view.showAxisLabels, true)) {
+            view.showAxisLabels = !view.showAxisLabels;
+        }
+        if (drawAdaptiveToolbarButton("显示图例", "例", "显示或隐藏顶部通道图例栏；不会持久化每个通道的临时隐藏状态。", view.showChannelLegend)) {
+            view.showChannelLegend = !view.showChannelLegend;
+        }
+        ImGui::TextUnformatted("可视时长");
+        ImGui::SetNextItemWidth(-1.0F);
+        ImGui::InputDouble("##visible_duration", &view.visibleDuration, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
+        addItemHelp("当前主视图横向可见时间范围，单位与波形时间轴一致。");
+        view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
+
+        ImGui::TextUnformatted("最小可视跨度");
+        ImGui::SetNextItemWidth(-1.0F);
+        ImGui::InputDouble("##min_visible_span", &view.minVisibleTimeSpan, 0.001, 0.01, "%.6f");
+        addItemHelp("限制横向缩放的最小时长，防止缩放到过小范围。");
+        view.minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+        view.visibleDuration = (std::max)(view.visibleDuration, view.minVisibleTimeSpan);
     }
 
     if (ImGui::CollapsingHeader("游标", ImGuiTreeNodeFlags_DefaultOpen)) {
-        drawToolbarCheckbox("测量浮层", &view.showMeasurementOverlay, "显示游标间隔、测量通道和读数摘要。");
+        if (drawAdaptiveToolbarButton("测量浮层", "测", "显示游标间隔、测量通道和读数摘要。", view.showMeasurementOverlay, true)) {
+            view.showMeasurementOverlay = !view.showMeasurementOverlay;
+        }
         const bool smartSnapMode = view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap;
         if (drawToolbarActionButton(smartSnapMode ? "智能吸附" : "按键吸附",
                                     "切换游标吸附触发方式：智能吸附会自动贴近边沿/极值，按键吸附需按住 Shift 或 Ctrl。")) {
@@ -406,76 +440,70 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
             view.cursorSnapScope = scopeIndex == 0 ? plot::WaveCursorSnapScope::AllChannels : plot::WaveCursorSnapScope::ActiveChannel;
         }
         addItemHelp("选择游标吸附时搜索采样点的通道范围。");
-        if (drawToolbarCheckbox(view.cursorIntervalLocked ? "锁定游标间隔" : "解锁游标间隔",
-                                &view.cursorIntervalLocked,
-                                "锁定后拖动单个游标会保持两个游标之间的时间间隔。")) {
+        if (drawAdaptiveToolbarButton(view.cursorIntervalLocked ? "锁定游标间隔" : "解锁游标间隔",
+                                      view.cursorIntervalLocked ? "锁" : "解",
+                                      "锁定后拖动单个游标会保持两个游标之间的时间间隔。",
+                                      view.cursorIntervalLocked)) {
+            view.cursorIntervalLocked = !view.cursorIntervalLocked;
             view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
         }
     }
 
     if (ImGui::CollapsingHeader("渲染", ImGuiTreeNodeFlags_DefaultOpen)) {
-        drawToolbarCheckbox("磷光辉光", &view.phosphorGlowEnabled, "开启后使用类似示波器余辉的曲线显示效果。");
+        if (drawAdaptiveToolbarButton("磷光辉光", "辉", "开启后使用类似示波器余辉的曲线显示效果。", view.phosphorGlowEnabled)) {
+            view.phosphorGlowEnabled = !view.phosphorGlowEnabled;
+        }
         ImGui::Text("渲染点: %zu / 源样本: %zu", view.lastRenderPointCount, view.lastRenderSourceSampleCount);
         addItemHelp("本帧实际参与绘制的点数与原始显示样本数，用于判断降采样是否生效。");
         char frequencyBuffer[64]{};
         std::strncpy(frequencyBuffer, view.sampleFrequencyInput.c_str(), sizeof(frequencyBuffer) - 1);
-        if (ImGui::BeginTable("##render_controls", 2, ImGuiTableFlags_SizingStretchSame)) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("发送频率 Hz");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-1.0F);
-            if (ImGui::InputText("##sample_frequency", frequencyBuffer, sizeof(frequencyBuffer))) {
-                view.sampleFrequencyInput = frequencyBuffer;
-                wave_detail::applyFrequencyInput(view);
-            }
-            addItemHelp("用于把样本序号换算成时间轴的采样频率。");
 
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("余辉时间窗");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputDouble("##persistence_window", &view.persistenceWindow, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
-            addItemHelp("余辉模式保留历史亮度的时间窗口。");
-            view.persistenceWindow = (std::max)(view.persistenceWindow, minVisibleTimeSpan);
+        ImGui::TextUnformatted("发送频率 Hz");
+        ImGui::SetNextItemWidth(-1.0F);
+        if (ImGui::InputText("##sample_frequency", frequencyBuffer, sizeof(frequencyBuffer))) {
+            view.sampleFrequencyInput = frequencyBuffer;
+            wave_detail::applyFrequencyInput(view);
+        }
+        addItemHelp("用于把样本序号换算成时间轴的采样频率。");
 
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("降采样启动倍数");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-1.0F);
-            ImGui::InputDouble("##downsample_multiplier", &view.downsampleStartMultiplier, 0.1, 0.5, "%.2f");
-            addItemHelp("可见点数超过渲染预算一定倍数后开始降采样，数值越大越晚触发。");
-            view.downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
+        ImGui::TextUnformatted("余辉时间窗");
+        ImGui::SetNextItemWidth(-1.0F);
+        ImGui::InputDouble("##persistence_window", &view.persistenceWindow, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
+        addItemHelp("余辉模式保留历史亮度的时间窗口。");
+        view.persistenceWindow = (std::max)(view.persistenceWindow, minVisibleTimeSpan);
 
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("辉光强度");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-1.0F);
-            const double glowMin = 0.2;
-            const double glowMax = 2.5;
-            ImGui::SliderScalar("##glow_intensity", ImGuiDataType_Double, &view.glowIntensity, &glowMin, &glowMax, "%.2f");
-            addItemHelp("调整磷光辉光的亮度强度，仅影响显示效果。");
+        ImGui::TextUnformatted("降采样启动倍数");
+        ImGui::SetNextItemWidth(-1.0F);
+        ImGui::InputDouble("##downsample_multiplier", &view.downsampleStartMultiplier, 0.1, 0.5, "%.2f");
+        addItemHelp("可见点数超过渲染预算一定倍数后开始降采样，数值越大越晚触发。");
+        view.downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
 
-            if (view.lockVerticalRange) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted("纵轴最小");
-                ImGui::TableSetColumnIndex(1);
-                ImGui::SetNextItemWidth(-1.0F);
+        ImGui::TextUnformatted("辉光强度");
+        ImGui::SetNextItemWidth(-1.0F);
+        const double glowMin = 0.2;
+        const double glowMax = 2.5;
+        ImGui::SliderScalar("##glow_intensity", ImGuiDataType_Double, &view.glowIntensity, &glowMin, &glowMax, "%.2f");
+        addItemHelp("调整磷光辉光的亮度强度，仅影响显示效果。");
+
+        if (view.lockVerticalRange) {
+            ImGui::TextUnformatted("纵轴范围");
+            const float verticalInputsWidth = ImGui::GetContentRegionAvail().x;
+            if (verticalInputsWidth >= 240.0F) {
+                ImGui::SetNextItemWidth((verticalInputsWidth - ImGui::GetStyle().ItemSpacing.x) * 0.5F);
                 ImGui::InputDouble("##manual_vertical_min", &view.manualVerticalMin, 0.1, 1.0, "%.6f");
                 addItemHelp("纵轴锁定时使用的显示下限。");
-
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted("纵轴最大");
-                ImGui::TableSetColumnIndex(1);
+                ImGui::SameLine();
                 ImGui::SetNextItemWidth(-1.0F);
                 ImGui::InputDouble("##manual_vertical_max", &view.manualVerticalMax, 0.1, 1.0, "%.6f");
                 addItemHelp("纵轴锁定时使用的显示上限。");
-                ImGui::EndTable();
+            } else {
+                ImGui::SetNextItemWidth(-1.0F);
+                ImGui::InputDouble("##manual_vertical_min", &view.manualVerticalMin, 0.1, 1.0, "%.6f");
+                addItemHelp("纵轴锁定时使用的显示下限。");
+                ImGui::SetNextItemWidth(-1.0F);
+                ImGui::InputDouble("##manual_vertical_max", &view.manualVerticalMax, 0.1, 1.0, "%.6f");
+                addItemHelp("纵轴锁定时使用的显示上限。");
+            }
         }
         if (!view.sampleFrequencyError.empty()) {
             ImGui::TextColored(ImVec4(1.0F, 0.35F, 0.25F, 1.0F), "%s", view.sampleFrequencyError.c_str());
@@ -484,21 +512,13 @@ void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave) {
 
     if (ImGui::CollapsingHeader("概览设置", ImGuiTreeNodeFlags_DefaultOpen)) {
         int maxSamplesInput = static_cast<int>((std::min)(view.overviewMaxSamples, static_cast<std::size_t>(1000000)));
-        if (ImGui::BeginTable("##overview_controls", 2, ImGuiTableFlags_SizingStretchSame)) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("概览最大样本/通道");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-1.0F);
-            if (ImGui::InputInt("##overview_max_samples", &maxSamplesInput, 1000, 10000)) {
-                view.overviewMaxSamples = static_cast<std::size_t>((std::max)(0, maxSamplesInput));
-            }
-            addItemHelp("限制概览图每个通道保留的最大样本数，避免概览绘制过重。");
-            ImGui::EndTable();
+        ImGui::TextUnformatted("概览最大样本/通道");
+        ImGui::SetNextItemWidth(-1.0F);
+        if (ImGui::InputInt("##overview_max_samples", &maxSamplesInput, 1000, 10000)) {
+            view.overviewMaxSamples = static_cast<std::size_t>((std::max)(0, maxSamplesInput));
         }
+        addItemHelp("限制概览图每个通道保留的最大样本数，避免概览绘制过重。");
     }
-}
-
 }
 
 } // namespace protoscope::ui
