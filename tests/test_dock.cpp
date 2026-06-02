@@ -351,6 +351,7 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     waveA.fftChannelEnabled = {1};
     waveA.hiddenChannelLabels = {"CH1"};
     waveA.toolsCollapsed = true;
+    waveA.legendCollapsed = true;
     waveA.channelOverrides.resize(1);
     waveA.channelOverrides[0].labelOverridden = true;
     waveA.channelOverrides[0].label = "总线A";
@@ -400,6 +401,7 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredA.hiddenChannelLabels.size() == 1 && restoredA.hiddenChannelLabels[0] == "CH1",
             "proto_a 应恢复自己的主图 Legend 隐藏通道");
     require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
+    require(restoredA.legendCollapsed, "proto_a 应恢复自己的图例折叠状态");
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
 
     protoscope::plot::WaveDockState restoredB;
@@ -410,6 +412,7 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     const auto restoredBSpec = restoredB.buffer.channelSpec(0);
     require(restoredBSpec.has_value(), "proto_b 恢复后应保留通道配置");
     require(restoredB.hiddenChannelLabels.empty(), "不同协议不应串用 proto_a 的主图 Legend 隐藏通道");
+    require(!restoredB.legendCollapsed, "不同协议默认不应继承 proto_a 的图例折叠状态");
     require(restoredBSpec->label == "总线B", "不同协议不应串用 proto_a 标签");
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");

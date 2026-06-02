@@ -136,7 +136,7 @@ ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth, const plo
 double offsetParameterDeltaFromDisplayDelta(const plot::ChannelSpec& spec,
                                             plot::WaveDisplayFormula formula,
                                             double displayDelta);
-float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveViewState& view);
+float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveDockState& wave);
 void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 

@@ -129,6 +129,7 @@ struct WaveDockState {
     std::vector<std::uint8_t> fftChannelEnabled;
     bool toolsCollapsed{false};
     bool overviewCollapsed{false};
+    bool legendCollapsed{false};
     bool legendVisibilityRestorePending{false};
     float toolsExpandedWidth{280.0F};
     float toolsCollapsedWidth{34.0F};

@@ -230,6 +230,7 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     node["fft"] = fftNode;
     node["tools_collapsed"] = wave.toolsCollapsed;
     node["overview_collapsed"] = wave.overviewCollapsed;
+    node["legend_collapsed"] = wave.legendCollapsed;
     node["tools_expanded_width"] = wave.toolsExpandedWidth;
     node["overview_panel_height"] = wave.overviewPanelHeight;
     node["overview_collapsed_height"] = wave.overviewCollapsedHeight;
@@ -344,6 +345,7 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
     }
     wave.toolsCollapsed = node["tools_collapsed"].as<bool>(wave.toolsCollapsed);
     wave.overviewCollapsed = node["overview_collapsed"].as<bool>(wave.overviewCollapsed);
+    wave.legendCollapsed = node["legend_collapsed"].as<bool>(wave.legendCollapsed);
     wave.toolsExpandedWidth = node["tools_expanded_width"].as<float>(wave.toolsExpandedWidth);
     wave.overviewPanelHeight = node["overview_panel_height"].as<float>(wave.overviewPanelHeight);
     wave.overviewCollapsedHeight = node["overview_collapsed_height"].as<float>(wave.overviewCollapsedHeight);

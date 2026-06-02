@@ -603,7 +603,7 @@ void WaveDockRenderer::draw(bool& showWaveDock) {
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
         const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
-        const float legendHeight = view.showChannelLegend ? measureChannelLegendHeight(wave.cachedFullSnapshot, view) : 0.0F;
+        const float legendHeight = view.showChannelLegend ? measureChannelLegendHeight(wave.cachedFullSnapshot, wave) : 0.0F;
         const float overviewRequestedHeight = wave.overviewCollapsed
             ? wave.overviewCollapsedHeight
             : wave.overviewPanelHeight;

@@ -14,13 +14,24 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
     const ChannelLegendMetrics metrics = measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x, view);
     const bool scrollActiveIntoView = wave.lastLegendMeasurementChannelIndex != view.measurementChannelIndex;
 
+    ImGui::AlignTextToFramePadding();
     ImGui::Text("图例 / 吸附范围：%s", snapScopeName(view.cursorSnapScope));
+    ImGui::SameLine();
+    const float buttonWidth = ImGui::CalcTextSize(wave.legendCollapsed ? "v" : "^").x
+        + ImGui::GetStyle().FramePadding.x * 2.0F;
+    ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - buttonWidth));
+    if (ImGui::SmallButton(wave.legendCollapsed ? "v##wave_channel_legend_collapse" : "^##wave_channel_legend_collapse")) {
+        wave.legendCollapsed = !wave.legendCollapsed;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", wave.legendCollapsed ? "展开图例" : "折叠图例");
+    }
     ImGui::Separator();
 
-    if (ImGui::BeginChild("##wave_channel_legend_strip",
-                          ImVec2(0.0F, metrics.stripHeight),
-                          ImGuiChildFlags_Borders,
-                          ImGuiWindowFlags_HorizontalScrollbar)) {
+    if (!wave.legendCollapsed && ImGui::BeginChild("##wave_channel_legend_strip",
+                                                   ImVec2(0.0F, metrics.stripHeight),
+                                                   ImGuiChildFlags_Borders,
+                                                   ImGuiWindowFlags_HorizontalScrollbar)) {
         const auto& style = ImGui::GetStyle();
         const float spacing = style.ItemSpacing.x;
         const float innerPaddingX = 10.0F;
@@ -103,7 +114,9 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
             ImGui::SetScrollX(targetScroll);
         }
     }
-    ImGui::EndChild();
+    if (!wave.legendCollapsed) {
+        ImGui::EndChild();
+    }
     wave.lastLegendMeasurementChannelIndex = view.measurementChannelIndex;
 }
 
@@ -112,11 +125,15 @@ void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& sn
     static_cast<void>(snapshot);
 }
 
-float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveViewState& view) {
+float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveDockState& wave) {
     if (snapshot.channels.empty()) {
         return 0.0F;
     }
-    return measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x, view).totalHeight;
+    const auto metrics = measureChannelLegendMetrics(ImGui::GetContentRegionAvail().x, wave.view);
+    if (wave.legendCollapsed) {
+        return metrics.totalHeight - metrics.stripHeight;
+    }
+    return metrics.totalHeight;
 }
 
 } // namespace protoscope::ui
