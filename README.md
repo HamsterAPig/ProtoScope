@@ -298,6 +298,12 @@ app:
 
 ### scripting —— Lua 宿主与文件 IO
 
+**pipeline**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| pipeline.worker_threads | size_t? | 缺省自动 | 后处理线程池线程数；缺省为 `max(1, hardware_concurrency - 1)`，显式配置会裁剪到机器上限 |
+
 **worker**：
 
 | 键 | 类型 | 默认值 | 说明 |

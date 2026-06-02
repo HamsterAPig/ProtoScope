@@ -23,6 +23,7 @@ struct LoadedStreamSchema {
     FrameStreamParser parser;
     std::optional<StreamParseBatch> lastBatch;
     std::unordered_map<std::string, std::string> frameCallbackKeys;
+    std::optional<std::string> onBatchCallbackKey;
     std::optional<std::string> onErrorCallbackKey;
 };
 
@@ -77,6 +78,7 @@ sol::table makeTxEventTable(sol::state_view lua, const TxEvent& event);
 sol::table makeDialogEventTable(sol::state_view lua, const DialogEvent& event);
 sol::table makeFileDialogEventTable(sol::state_view lua, const FileDialogEvent& event);
 sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& frame);
+sol::table makeStreamFrameArrayTable(sol::state_view lua, const std::vector<StreamParsedFrame>& frames);
 sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& error);
 
 std::string protectedCallError(sol::protected_function_result& result);

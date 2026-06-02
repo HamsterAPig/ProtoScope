@@ -102,6 +102,31 @@ void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector
     }
 }
 
+bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::vector<StreamParsedFrame>& frames) {
+    if (!scriptLoaded_ || !runtime_ || !runtime_->stream || !runtime_->stream->onBatchCallbackKey.has_value()) {
+        return false;
+    }
+    const auto callbackIter = runtime_->streamCallbacks.find(*runtime_->stream->onBatchCallbackKey);
+    if (callbackIter == runtime_->streamCallbacks.end()) {
+        protoLog("error", "stream.on_batch 回调未找到: " + *runtime_->stream->onBatchCallbackKey);
+        return true;
+    }
+
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        auto callback = callbackIter->second;
+        auto result = callback(makeContextTable(view, ctx.connection), makeStreamFrameArrayTable(view, frames));
+        if (!result.valid()) {
+            protoLog("error", "stream.on_batch 执行失败: " + protectedCallError(result));
+        }
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("stream.on_batch 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "stream.on_batch 执行异常: 未知异常");
+    }
+    return true;
+}
+
 void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame) {
     if (!scriptLoaded_ || !runtime_ || !runtime_->stream) {
         return;

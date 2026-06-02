@@ -114,7 +114,8 @@ using WorkerCommand = std::variant<ConfigureCommand,
 ScriptRuntimeSnapshot makeSnapshot(const ScriptHost& host,
                                    std::size_t pendingRxBytes,
                                    std::size_t inputQueueSize,
-                                   std::size_t outputQueueSize) {
+                                   std::size_t outputQueueSize,
+                                   std::size_t postprocessWorkerThreads) {
     return ScriptRuntimeSnapshot{
         .controls = host.controlsSnapshot(),
         .controlStates = host.controlStatesSnapshot(),
@@ -129,6 +130,7 @@ ScriptRuntimeSnapshot makeSnapshot(const ScriptHost& host,
         .pendingWorkerRxBytes = pendingRxBytes,
         .inputQueueSize = inputQueueSize,
         .outputQueueSize = outputQueueSize,
+        .postprocessWorkerThreads = postprocessWorkerThreads,
         .lastTransportStats = host.lastTransportStats(),
     };
 }
@@ -334,7 +336,7 @@ struct ScriptRuntimeWorker::Impl {
 
     void publishSnapshot(const ScriptHost& host) {
         std::lock_guard lock(mutex);
-        snapshot = makeSnapshot(host, pendingRxBytes, commands.size(), outputs.size());
+        snapshot = makeSnapshot(host, pendingRxBytes, commands.size(), outputs.size(), config.postprocessWorkerThreads);
     }
 
     void subtractPendingRxBytes(std::size_t bytes) {
@@ -455,7 +457,8 @@ struct ScriptRuntimeWorker::Impl {
                         ScriptRuntimeSnapshot resultSnapshot;
                         {
                             std::lock_guard lock(mutex);
-                            resultSnapshot = makeSnapshot(host, pendingRxBytes, commands.size(), outputs.size());
+                            resultSnapshot =
+                                makeSnapshot(host, pendingRxBytes, commands.size(), outputs.size(), config.postprocessWorkerThreads);
                         }
                         item.result->set_value(ScriptRuntimeLoadResult{
                             .ok = ok,

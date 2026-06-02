@@ -32,6 +32,8 @@ void test_script_read_version_flow();
 void test_script_read_version_split_flow();
 void test_script_stream_schema_legacy_on_bytes_still_works();
 void test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame();
+void test_script_stream_schema_prefers_on_batch_over_on_frame();
+void test_script_stream_schema_allows_on_batch_without_on_frame();
 void test_script_stream_schema_reports_overflow_and_crc_error();
 void test_script_stream_runtime_profile_set_and_clear();
 void test_script_stream_schema_reload_uses_current_callbacks();
@@ -214,6 +216,7 @@ void test_application_plot_push_drains_with_budget_and_disconnect_discards_pendi
 void test_runtime_scheduler_limits_busy_render_frames();
 void test_script_runtime_worker_disabled_mode_waits_for_rx_idle();
 void test_script_runtime_worker_rx_limit_drops_oldest_bytes_only();
+void test_pipeline_worker_threads_resolve_from_hardware_limit();
 
 const TestCase* allTests();
 int testCount();

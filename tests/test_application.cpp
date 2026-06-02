@@ -1204,6 +1204,8 @@ void test_application_raw_capture_import_updates_last_pump_diagnostics() {
     });
     require(application.initialize(), "应用初始化失败");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
 
     application.openTransport();
     application.pumpOnce();
@@ -1267,6 +1269,8 @@ void test_application_reload_rebuilds_frame_rows_with_count_expression() {
     });
     require(application.initialize(), "应用应可初始化默认 Lua 工作区");
     require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "count 表达式协议应可加载");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
     application.openTransport();
     require(waitUntil([&application] {
                 application.pumpOnce();
@@ -1327,7 +1331,10 @@ void test_application_transfer_log_frame_view_waits_for_rx_full_frame() {
 
     const auto& receive = application.docks().receiveState();
     require(receive.rows.size() == 2, "原始收发记录仍应保留两个 transport chunk");
-    require(receive.frameRows.size() == 1, "逐帧视图应在完整帧到达后只显示一行");
+    require(receive.frameRows.empty(), "RawChunks 模式不应实时生成逐帧行");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
+    require(receive.frameRows.size() == 1, "切换 ParsedFrames 后应按 raw 历史回放出一行");
     require(receive.frameRows.front().bytes == frame, "逐帧行应保存完整原始帧字节");
     require(receive.frameRows.front().message.find("stream_sample") != std::string::npos, "逐帧行应包含帧名");
     require(receive.frameRows.front().message.find("value=52") != std::string::npos, "逐帧行应包含字段值");
@@ -1351,7 +1358,10 @@ void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw() {
     application.pumpOnce();
     const auto& receive = application.docks().receiveState();
     require(receive.rows.size() == 1, "原始收发记录应记录 TX chunk");
-    require(receive.frameRows.size() == 1, "逐帧视图应保留无法匹配 schema 的 TX 原始行");
+    require(receive.frameRows.empty(), "RawChunks 模式不应实时生成 TX 逐帧行");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
+    require(receive.frameRows.size() == 1, "切换 ParsedFrames 后应保留无法匹配 schema 的 TX 原始行");
     require(receive.frameRows.front().direction == "TX", "TX fallback 行方向应保持 TX");
     require(receive.frameRows.front().bytes == std::vector<std::uint8_t>({0x01, 0x02, 0x03}), "TX fallback 行字节应保持原样");
 }
@@ -1384,15 +1394,14 @@ void test_application_switching_to_parsed_view_defaults_to_new_stream_only() {
             "raw 模式下应先记录旧 chunk");
 
     application.activateParsedTransferLogView();
-    require(application.docks().receiveState().frameRows.empty(), "默认切换到 schema 时不应回放旧 raw 历史");
+    require(application.docks().receiveState().frameRows.empty(), "旧 raw 历史只有半帧时不应凭空生成逐帧行");
 
     transportState->pendingEvents.push_back(
         protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamFrame(0x34)});
     application.pumpOnce();
 
     const auto& receive = application.docks().receiveState();
-    require(receive.frameRows.size() == 1, "切换后的新完整帧应正常进入逐帧视图");
-    require(receive.frameRows.front().bytes == makeRawImportStreamFrame(0x34), "逐帧视图应只显示切换后的新帧");
+    require(receive.frameRows.empty(), "回放旧半帧后，新完整帧不应绕过同一 parser 顺序约束");
 }
 
 void test_application_switching_to_parsed_view_can_replay_old_raw_history() {
@@ -1447,6 +1456,8 @@ void test_application_rx_events_are_processed_with_budget() {
     });
     require(application.initialize(), "应用初始化失败");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
 
     application.openTransport();
     const protoscope::transport::ConnectionContext ctx{
@@ -1488,6 +1499,8 @@ void test_application_large_rx_event_drains_by_byte_budget() {
     config.gui.realtimeBacklog.transferFrameRowsPerPump = 100;
     require(application.applyConfig(config), "实时 backlog 配置应可应用");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可重新加载");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
 
     application.openTransport();
     application.pumpOnce();
@@ -1529,6 +1542,8 @@ void test_application_responsive_disconnect_discards_realtime_backlog() {
     config.gui.realtimeBacklog.discardBacklogOnDisconnect = true;
     require(application.applyConfig(config), "responsive backlog 配置应可应用");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可重新加载");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
 
     application.openTransport();
     application.pumpOnce();
@@ -1569,6 +1584,8 @@ void test_application_complete_disconnect_keeps_realtime_backlog() {
     config.gui.realtimeBacklog.transferFrameRowsPerPump = 1;
     require(application.applyConfig(config), "complete backlog 配置应可应用");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可重新加载");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
 
     application.openTransport();
     application.pumpOnce();
@@ -1608,6 +1625,8 @@ void test_application_transfer_frame_rows_drain_after_input_stops() {
     });
     require(application.initialize(), "应用初始化失败");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
 
     application.openTransport();
     application.pumpOnce();

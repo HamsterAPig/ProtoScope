@@ -292,6 +292,7 @@ local schema = {
       on_frame = handle_fc06_ack,
     },
   },
+  on_batch = handle_stream_batch,
   on_error = handle_stream_error,
 }
 
@@ -306,7 +307,7 @@ return schema
 - CRC 校验。
 - 固定长度或变长长度解析。
 - `runtime_profile = true` 时，从 `proto.stream.set_profile()` 读取运行时整帧长度与通道映射。
-- 字段解码后再回调 `on_frame`。
+- 字段解码后回调脚本；定义 `on_batch(ctx, frames)` 时批量调用，否则逐帧调用 `on_frame`。
 
 `stream()` 里的常用字段：
 
@@ -315,7 +316,8 @@ return schema
 - `len`：变长帧定义；适合 `FC03` 这类带字节数的响应。
 - `crc`：CRC 类型与字节顺序。
 - `fields`：字段定义，`offset` 从 1 开始计数；`count` 可写整数、已解析字段名或纯 C++ count 表达式 table。
-- `on_frame`：完整有效帧回调。
+- `on_frame`：完整有效帧回调；未定义 `on_batch` 时必填。
+- `on_batch`：完整有效帧批量回调，`frames` 中每项保持旧 `on_frame` 的 frame 结构；若同时定义 `on_batch` 与 `on_frame`，宿主只调用 `on_batch`。
 - `on_error`：解析错误回调。
 
 补充约定：

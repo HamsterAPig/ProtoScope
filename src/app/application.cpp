@@ -1,6 +1,7 @@
 #include "protoscope/app/application.hpp"
 
 #include "protoscope/protocol_utils/codec.hpp"
+#include "protoscope/scripting/pipeline_threading.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -10,6 +11,7 @@
 #include <iterator>
 #include <limits>
 #include <sstream>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 
@@ -300,8 +302,12 @@ bool Application::initialize() {
 bool Application::applyConfig(const config::AppConfig& config) {
     runtimeConfig_ = config;
     resetStreamBufferAlertState();
+    const auto postprocessWorkerThreads = scripting::resolvePipelineWorkerThreads(
+        config.scripting.pipeline.workerThreads,
+        std::thread::hardware_concurrency());
     scriptWorker_.configure(scripting::ScriptRuntimeWorkerConfig{
         .enabled = config.scripting.workerEnabled,
+        .postprocessWorkerThreads = postprocessWorkerThreads,
         .rxQueueLimitBytes = config.scripting.workerRxQueueLimitBytes,
         .outputQueueLimit = config.scripting.workerOutputQueueLimit,
         .batchBytes = config.scripting.workerBatchBytes,
@@ -410,7 +416,11 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         lua.controls = loadResult.snapshot.controls;
         lua.controlStates = loadResult.snapshot.controlStates;
         lua.lastError.clear();
-        rebuildTransferFrameRows();
+        if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
+            rebuildTransferFrameRows();
+        } else {
+            resetTransferFrameDisplayState();
+        }
         loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
         flushScriptOutputs();
         syncDockState();
@@ -553,8 +563,10 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
 }
 
 void Application::appendTransferRow(dock::ReceiveRow row) {
-    // 核心流程：先用当前行生成逐帧增量，再把原始行移入历史，避免高速收包时额外复制整包字节。
-    appendTransferFrameRows(row);
+    // 核心流程：RawChunks 模式只维护原始历史；逐帧解析延迟到 ParsedFrames 视图，避免高速 RX 时主线程逐帧膨胀。
+    if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
+        appendTransferFrameRows(row);
+    }
     dockStore_.appendReceiveRow(std::move(row));
 }
 
@@ -718,12 +730,8 @@ void Application::rebuildTransferFrameRows() {
 }
 
 void Application::activateParsedTransferLogView() {
-    // 核心流程：从 raw 切到 schema 时默认只看切换后的新流，
-    // 避免拿已裁剪/未对齐的 raw 历史重放后把 parser 卡在旧半帧里。
+    // 核心流程：RawChunks 不实时生成逐帧行；用户切到 ParsedFrames 时再按原始历史完整回放。
     resetTransferFrameDisplayState();
-    if (!runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch) {
-        return;
-    }
     for (const auto& row : dockStore_.receiveState().rows) {
         appendTransferFrameRows(row);
     }
@@ -1111,6 +1119,12 @@ void Application::syncDockState() {
     comm.pendingRxBytes = pendingRxByteCount() + scriptSnapshot.pendingWorkerRxBytes;
     comm.pendingTransferFrameRows = pendingTransferFrameRows_.size();
     comm.pendingPlotAppends = scriptSnapshot.pendingPlotAppends + pendingScriptPlotAppends_.size();
+    comm.rxInputQueueBytes = pendingRxByteCount();
+    comm.parserPendingBytes = scriptSnapshot.pendingWorkerRxBytes;
+    comm.postprocessPendingBatches = 0U;
+    comm.luaPendingItems = scriptSnapshot.inputQueueSize;
+    comm.uiPendingItems = scriptSnapshot.outputQueueSize + pendingTransferFrameRows_.size() + pendingScriptPlotAppends_.size();
+    comm.postprocessWorkerThreads = scriptSnapshot.postprocessWorkerThreads;
 
     auto& lua = dockStore_.luaState();
     lua.docks = scriptSnapshot.docks;

@@ -422,6 +422,7 @@ private:
     void callbackOnClose(const ScriptHostContext& ctx);
     void callbackOnError(const ScriptHostContext& ctx, const std::string& message);
     void callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes);
+    bool callbackOnStreamBatch(const ScriptHostContext& ctx, const std::vector<StreamParsedFrame>& frames);
     void callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame);
     void callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error);
     void callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName);

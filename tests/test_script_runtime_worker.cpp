@@ -1,5 +1,6 @@
 #include "test_registry.hpp"
 
+#include "protoscope/scripting/pipeline_threading.hpp"
 #include "protoscope/scripting/script_runtime_worker.hpp"
 #include "protoscope/transport/transport.hpp"
 
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -153,4 +155,14 @@ void test_script_runtime_worker_rx_limit_drops_oldest_bytes_only() {
     require(!hasEvent(outputs, "worker_bytes", "first=161"), "限流应丢弃最旧的待解析 RX 字节命令");
     require(hasEvent(outputs, "worker_bytes", "first=178"), "限流后应保留较新的待解析 RX 字节命令");
     require(hasEvent(outputs, "worker_bytes", "first=195"), "限流后应保留最新的待解析 RX 字节命令");
+}
+
+void test_pipeline_worker_threads_resolve_from_hardware_limit() {
+    using protoscope::scripting::resolvePipelineWorkerThreads;
+
+    require(resolvePipelineWorkerThreads(std::nullopt, 8U) == 7U, "缺省线程数应使用硬件并发减一");
+    require(resolvePipelineWorkerThreads(3U, 8U) == 3U, "显式线程数小于机器上限时应原样使用");
+    require(resolvePipelineWorkerThreads(32U, 8U) == 7U, "显式线程数超过机器上限时应裁剪");
+    require(resolvePipelineWorkerThreads(std::nullopt, 0U) == 1U, "硬件并发返回 0 时应按 1 处理");
+    require(resolvePipelineWorkerThreads(0U, 8U) == 1U, "显式 0 应按最小 1 个后处理线程处理");
 }

@@ -320,17 +320,24 @@ local function track_upload_sequence(sequence)
   }
 end
 
-local function push_upload_sample(channel_index, value)
-  local sample_time = upload_frame_cursor * UPLOAD_SAMPLE_DT
-  proto.plot.push(channel_index, {
-    source = "sn_scope_upload",
-    samples = {
-      {
-        t = sample_time,
-        y = (tonumber(value) or 0) * CHANNEL_SCALE,
-      },
-    },
-  })
+local function append_upload_sample(samples_by_channel, channel_index, sample_time, value)
+  local samples = samples_by_channel[channel_index]
+  samples[#samples + 1] = {
+    t = sample_time,
+    y = (tonumber(value) or 0) * CHANNEL_SCALE,
+  }
+end
+
+local function flush_upload_samples(samples_by_channel)
+  for channel_index = 1, CHANNEL_COUNT do
+    local samples = samples_by_channel[channel_index]
+    if #samples > 0 then
+      proto.plot.push(channel_index, {
+        source = "sn_scope_upload",
+        samples = samples,
+      })
+    end
+  end
 end
 
 local function handle_fc03_response(ctx, frame)
@@ -424,18 +431,25 @@ local function handle_exception(ctx, frame)
   end
 end
 
-local function handle_upload_frame(ctx, frame)
+local function append_upload_frame_samples(ctx, frame, samples_by_channel)
   local fields = frame.fields or {}
   local sequence_state = track_upload_sequence(fields.sequence or 0)
   if sequence_state.lost > 0 then
     proto.status.set(string.format("丢帧: %d", sequence_state.lost_total), { level = "warn" })
   end
 
-  push_upload_sample(1, fields.ch1 or 0)
-  push_upload_sample(2, fields.ch2 or 0)
-  push_upload_sample(3, fields.ch3 or 0)
-  push_upload_sample(4, fields.ch4 or 0)
+  local sample_time = upload_frame_cursor * UPLOAD_SAMPLE_DT
+  append_upload_sample(samples_by_channel, 1, sample_time, fields.ch1 or 0)
+  append_upload_sample(samples_by_channel, 2, sample_time, fields.ch2 or 0)
+  append_upload_sample(samples_by_channel, 3, sample_time, fields.ch3 or 0)
+  append_upload_sample(samples_by_channel, 4, sample_time, fields.ch4 or 0)
   upload_frame_cursor = upload_frame_cursor + 1
+end
+
+local function handle_upload_frame(ctx, frame)
+  local samples_by_channel = { {}, {}, {}, {} }
+  append_upload_frame_samples(ctx, frame, samples_by_channel)
+  flush_upload_samples(samples_by_channel)
 end
 
 local function handle_stream_error(ctx, err)
@@ -453,6 +467,25 @@ local function handle_stream_error(ctx, err)
   else
     proto.status.set("解析失败: " .. tostring(err.message), { level = "error" })
   end
+end
+
+local function handle_stream_batch(ctx, frames)
+  local samples_by_channel = { {}, {}, {}, {} }
+  for _, frame in ipairs(frames or {}) do
+    local name = frame.name
+    if name == "upload_ch4" then
+      append_upload_frame_samples(ctx, frame, samples_by_channel)
+    elseif name == "fc03_response" then
+      handle_fc03_response(ctx, frame)
+    elseif name == "fc06_ack" then
+      handle_fc06_ack(ctx, frame)
+    elseif name == "fc16_ack" then
+      handle_fc16_ack(ctx, frame)
+    elseif name == "exception_fc03" or name == "exception_fc06" or name == "exception_fc16" then
+      handle_exception(ctx, frame)
+    end
+  end
+  flush_upload_samples(samples_by_channel)
 end
 
 function stream()
@@ -546,6 +579,7 @@ function stream()
         on_frame = handle_upload_frame,
       },
     },
+    on_batch = handle_stream_batch,
     on_error = handle_stream_error,
   }
   return schema

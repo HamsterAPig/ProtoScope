@@ -127,8 +127,13 @@ struct ReceiveConfig {
     ReceiveStreamBufferConfig streamBuffer{};
 };
 
+struct ScriptingPipelineConfig {
+    std::optional<std::size_t> workerThreads{};
+};
+
 struct ScriptingConfig {
     scripting::FileIoConfig fileIo{};
+    ScriptingPipelineConfig pipeline{};
     bool workerEnabled{true};
     std::size_t workerRxQueueLimitBytes{64U * 1024U * 1024U};
     std::size_t workerOutputQueueLimit{65536U};

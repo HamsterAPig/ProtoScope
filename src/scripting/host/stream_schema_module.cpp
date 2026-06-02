@@ -122,6 +122,14 @@ sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& fr
     return table;
 }
 
+sol::table makeStreamFrameArrayTable(sol::state_view lua, const std::vector<StreamParsedFrame>& frames) {
+    sol::table table = lua.create_table(static_cast<int>(frames.size()), 0);
+    for (std::size_t index = 0; index < frames.size(); ++index) {
+        table[index + 1] = makeStreamFrameTable(lua, frames[index]);
+    }
+    return table;
+}
+
 sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& error) {
     sol::table table = lua.create_table();
     table["code"] = std::string(streamParseErrorCodeName(error.code));
@@ -410,6 +418,15 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
     std::vector<StreamFrameDefinition> frames;
     frames.reserve(framesTable.size());
     auto loaded = std::make_unique<LoadedStreamSchema>(bufferDefinition, std::vector<StreamFrameDefinition>{});
+    if (const sol::object onBatchObject = schemaTable["on_batch"]; onBatchObject.valid() && onBatchObject.get_type() != sol::type::lua_nil) {
+        if (!onBatchObject.is<sol::protected_function>()) {
+            error = "stream.on_batch 必须是 function";
+            return nullptr;
+        }
+        const std::string onBatchCallbackKey = "stream.on_batch";
+        callbacks.insert_or_assign(onBatchCallbackKey, onBatchObject.as<sol::protected_function>());
+        loaded->onBatchCallbackKey = onBatchCallbackKey;
+    }
     std::unordered_set<std::string> frameNames;
 
     for (std::size_t index = 1; index <= framesTable.size(); ++index) {
@@ -600,14 +617,19 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
             }
         }
 
-        const sol::object onFrameObject = frameTable["on_frame"];
-        if (!onFrameObject.valid() || onFrameObject.get_type() == sol::type::lua_nil || !onFrameObject.is<sol::protected_function>()) {
-            error = "frame.on_frame 必须是 function";
+        if (const sol::object onFrameObject = frameTable["on_frame"];
+            onFrameObject.valid() && onFrameObject.get_type() != sol::type::lua_nil) {
+            if (!onFrameObject.is<sol::protected_function>()) {
+                error = "frame.on_frame 必须是 function";
+                return nullptr;
+            }
+            const auto callbackKey = frameOnFrameCallbackKey(frame.name);
+            callbacks.insert_or_assign(callbackKey, onFrameObject.as<sol::protected_function>());
+            loaded->frameCallbackKeys.insert_or_assign(frame.name, callbackKey);
+        } else if (!loaded->onBatchCallbackKey.has_value()) {
+            error = "frame.on_frame 必须是 function，除非 stream.on_batch 已定义";
             return nullptr;
         }
-        const auto callbackKey = frameOnFrameCallbackKey(frame.name);
-        callbacks.insert_or_assign(callbackKey, onFrameObject.as<sol::protected_function>());
-        loaded->frameCallbackKeys.insert_or_assign(frame.name, callbackKey);
         frames.push_back(std::move(frame));
     }
 

@@ -88,6 +88,12 @@ struct CommDockState {
     std::size_t pendingRxBytes{0};
     std::size_t pendingTransferFrameRows{0};
     std::size_t pendingPlotAppends{0};
+    std::size_t rxInputQueueBytes{0};
+    std::size_t parserPendingBytes{0};
+    std::size_t postprocessPendingBatches{0};
+    std::size_t luaPendingItems{0};
+    std::size_t uiPendingItems{0};
+    std::size_t postprocessWorkerThreads{1};
     std::size_t lastPumpEvents{0};
     std::size_t lastPumpRxBytes{0};
     std::size_t lastPumpStreamFrames{0};

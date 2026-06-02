@@ -379,6 +379,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         }
 
         const auto scripting = root["scripting"];
+        if (const auto pipeline = scripting["pipeline"]) {
+            if (pipeline["worker_threads"]) {
+                result.config.scripting.pipeline.workerThreads =
+                    readScalar<std::size_t>(pipeline, "worker_threads", 1U);
+            }
+        }
         if (const auto worker = scripting["worker"]) {
             result.config.scripting.workerEnabled =
                 readScalar<bool>(worker, "enabled", result.config.scripting.workerEnabled);
@@ -542,6 +548,9 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["receive"]["stream_buffer"]["near_overflow_threshold"] = config.receive.streamBuffer.nearOverflowThreshold;
     root["receive"]["stream_buffer"]["popup_enabled"] = config.receive.streamBuffer.popupEnabled;
 
+    if (config.scripting.pipeline.workerThreads.has_value()) {
+        root["scripting"]["pipeline"]["worker_threads"] = *config.scripting.pipeline.workerThreads;
+    }
     root["scripting"]["worker"]["enabled"] = config.scripting.workerEnabled;
     root["scripting"]["worker"]["rx_queue_limit_bytes"] = config.scripting.workerRxQueueLimitBytes;
     root["scripting"]["worker"]["output_queue_limit"] = config.scripting.workerOutputQueueLimit;

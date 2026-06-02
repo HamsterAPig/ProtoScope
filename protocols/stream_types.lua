@@ -73,11 +73,12 @@ local M = {}
 ---@field runtime_profile? boolean 声明该帧长度与通道映射由 `proto.stream.set_profile()` 在运行时提供
 ---@field crc? ProtoStreamCrcDef|false CRC 配置；省略或 `false` 表示不校验
 ---@field fields? ProtoStreamFieldDef[] 字段定义
----@field on_frame fun(ctx: ProtoConnectionContext, frame: ProtoStreamFrame) 完整有效帧回调
+---@field on_frame? fun(ctx: ProtoConnectionContext, frame: ProtoStreamFrame) 完整有效帧回调；未定义 `on_batch` 时必填
 
 ---@class ProtoStreamSchema
 ---@field buffer? ProtoStreamBufferDef
 ---@field frames ProtoStreamFrameDef[]
+---@field on_batch? fun(ctx: ProtoConnectionContext, frames: ProtoStreamFrame[]) 完整有效帧批量回调；定义后优先于各 frame 的 `on_frame`
 ---@field on_error? fun(ctx: ProtoConnectionContext, err: ProtoStreamError)
 
 --- Lua stream schema 的 `buffer.capacity` 仍由协议脚本决定。

@@ -1585,8 +1585,11 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
         for (const auto& error : batch.errors) {
             callbackOnStreamError(ScriptHostContext{event.context}, error);
         }
-        for (const auto& frame : batch.frames) {
-            callbackOnStreamFrame(ScriptHostContext{event.context}, frame);
+        // 核心流程：同一 parser 链顺序产出完整帧；若脚本支持 on_batch，则只批量调用一次，避免重复 on_frame。
+        if (!batch.frames.empty() && !callbackOnStreamBatch(ScriptHostContext{event.context}, batch.frames)) {
+            for (const auto& frame : batch.frames) {
+                callbackOnStreamFrame(ScriptHostContext{event.context}, frame);
+            }
         }
         const auto finishedAt = std::chrono::steady_clock::now();
         lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);

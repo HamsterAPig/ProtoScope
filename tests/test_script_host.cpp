@@ -636,6 +636,53 @@ void test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame() {
     require(!foundLegacy, "启用 stream() 后不应继续把每批 bytes 传给 on_bytes");
 }
 
+void test_script_stream_schema_prefers_on_batch_over_on_frame() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("stream_batch_only").generic_string()), "stream_batch_only 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    auto payload = makeStreamFixtureFrame(0x11);
+    appendBytes(payload, makeStreamFixtureFrame(0x22));
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, payload});
+
+    bool foundBatch = false;
+    bool foundFrame = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "stream_batch"
+            && event.payload.find("count=2") != std::string::npos
+            && event.payload.find("first=17") != std::string::npos
+            && event.payload.find("second=34") != std::string::npos) {
+            foundBatch = true;
+        }
+        if (event.name == "stream_frame") {
+            foundFrame = true;
+        }
+    }
+    require(foundBatch, "定义 stream.on_batch 后应批量回调完整帧");
+    require(!foundFrame, "stream.on_batch 已定义时不应重复调用 frame.on_frame");
+}
+
+void test_script_stream_schema_allows_on_batch_without_on_frame() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("stream_batch_without_on_frame").generic_string()),
+            "stream_batch_without_on_frame 协议应可加载");
+
+    const auto ctx = sampleCtx();
+    auto payload = makeStreamFixtureFrame(0x01);
+    appendBytes(payload, makeStreamFixtureFrame(0x02));
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, payload});
+
+    bool foundBatch = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "stream_batch_only"
+            && event.payload.find("count=2") != std::string::npos
+            && event.payload.find("total=3") != std::string::npos) {
+            foundBatch = true;
+        }
+    }
+    require(foundBatch, "仅定义 stream.on_batch 时也应处理完整帧批量");
+}
+
 void test_script_stream_schema_reports_overflow_and_crc_error() {
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory(fixtureProtocolDir("stream_frame_only").generic_string()), "stream_frame_only 协议应可加载");
@@ -1568,11 +1615,10 @@ void test_half_duplex_modbus_ack_and_plot_flow() {
     master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, part2});
 
     const auto appends = master.drainPlotAppends();
-    require(appends.size() == 480, "120 帧 x 4 通道后应推送 480 组单点波形");
+    require(appends.size() == 4, "120 帧上传批应按 4 个通道聚合推送");
     std::array<std::size_t, 4> perChannel{};
     std::size_t totalSamples = 0;
     for (const auto& append : appends) {
-        require(append.second.samples.size() == 1, "SN Scope 上传帧应按单点推送");
         require(append.first < perChannel.size(), "通道编号应落在 0~3");
         perChannel[append.first] += append.second.samples.size();
         totalSamples += append.second.samples.size();
@@ -1779,7 +1825,12 @@ void test_half_duplex_modbus_sticky_frames() {
 
     master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, combined});
     const auto appends = master.drainPlotAppends();
-    require(appends.size() == 960, "两批粘包输入后应推送 960 组单点波形");
+    require(appends.size() == 4, "两批粘包输入后应按通道聚合推送");
+    std::size_t totalSamples = 0;
+    for (const auto& append : appends) {
+        totalSamples += append.second.samples.size();
+    }
+    require(totalSamples == 960, "两批粘包输入后样本总数应保持 960");
 }
 
 void test_half_duplex_modbus_noise_prefix_ignored() {
@@ -1797,7 +1848,7 @@ void test_half_duplex_modbus_noise_prefix_ignored() {
 
     master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, noisy});
     const auto appends = master.drainPlotAppends();
-    require(appends.size() == 480, "噪声前缀后仍应解析出完整上传批");
+    require(appends.size() == 4, "噪声前缀后仍应按通道聚合完整上传批");
 }
 
 void test_half_duplex_modbus_crc_resync_keeps_following_frame() {
@@ -2013,6 +2064,8 @@ static const TestCase kAllTests[] = {
     {"script_read_version_split_flow", &test_script_read_version_split_flow},
     {"script_stream_schema_legacy_on_bytes_still_works", &test_script_stream_schema_legacy_on_bytes_still_works},
     {"script_stream_schema_bypasses_on_bytes_and_calls_on_frame", &test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame},
+    {"script_stream_schema_prefers_on_batch_over_on_frame", &test_script_stream_schema_prefers_on_batch_over_on_frame},
+    {"script_stream_schema_allows_on_batch_without_on_frame", &test_script_stream_schema_allows_on_batch_without_on_frame},
     {"script_stream_schema_reports_overflow_and_crc_error", &test_script_stream_schema_reports_overflow_and_crc_error},
     {"script_stream_runtime_profile_set_and_clear", &test_script_stream_runtime_profile_set_and_clear},
     {"script_stream_schema_reload_uses_current_callbacks", &test_script_stream_schema_reload_uses_current_callbacks},
@@ -2174,6 +2227,7 @@ static const TestCase kAllTests[] = {
     {"runtime_scheduler_limits_busy_render_frames", &test_runtime_scheduler_limits_busy_render_frames},
     {"script_runtime_worker_disabled_mode_waits_for_rx_idle", &test_script_runtime_worker_disabled_mode_waits_for_rx_idle},
     {"script_runtime_worker_rx_limit_drops_oldest_bytes_only", &test_script_runtime_worker_rx_limit_drops_oldest_bytes_only},
+    {"pipeline_worker_threads_resolve_from_hardware_limit", &test_pipeline_worker_threads_resolve_from_hardware_limit},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_history_limit_zero_clamps_to_latest_sample", &test_plot_history_limit_zero_clamps_to_latest_sample},
     {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},

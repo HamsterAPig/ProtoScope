@@ -102,11 +102,14 @@ void GuiRuntime::drawStatusBar() {
             ImGui::SameLine();
             drawHeaderBadge(recordingText.c_str(), tokens.danger, true);
         }
-        if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U) {
+        if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U ||
+            comm.luaPendingItems > 0U || comm.uiPendingItems > 0U) {
             const std::string pendingText =
-                "待处理 RX " + std::to_string(comm.pendingRxBytes)
-                + " / 帧 " + std::to_string(comm.pendingTransferFrameRows)
-                + " / 绘图 " + std::to_string(comm.pendingPlotAppends);
+                "待处理 rx_input " + std::to_string(comm.rxInputQueueBytes)
+                + " / parser " + std::to_string(comm.parserPendingBytes)
+                + " / post " + std::to_string(comm.postprocessPendingBatches)
+                + " / lua " + std::to_string(comm.luaPendingItems)
+                + " / ui " + std::to_string(comm.uiPendingItems);
             ImGui::SameLine();
             drawHeaderBadge(pendingText.c_str(), tokens.accent, false);
         }
@@ -297,11 +300,19 @@ void GuiRuntime::drawCommDock() {
         }
     }
 
-    if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U) {
+    if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U ||
+        comm.luaPendingItems > 0U || comm.uiPendingItems > 0U) {
         ImGui::Text("实时待处理: RX %zu bytes / 逐帧 %zu / 波形 %zu",
                     comm.pendingRxBytes,
                     comm.pendingTransferFrameRows,
                     comm.pendingPlotAppends);
+        ImGui::Text("拆分队列: rx_input %zu / parser %zu / postprocess %zu / lua %zu / ui %zu / 后处理线程 %zu",
+                    comm.rxInputQueueBytes,
+                    comm.parserPendingBytes,
+                    comm.postprocessPendingBatches,
+                    comm.luaPendingItems,
+                    comm.uiPendingItems,
+                    comm.postprocessWorkerThreads);
     }
     if (comm.lastPumpEvents > 0U || comm.lastPumpRxBytes > 0U || comm.lastPumpScriptMs > 0.0) {
         ImGui::Text("上轮处理: 事件 %zu / RX %zu bytes / 帧 %zu / 错误 %zu",

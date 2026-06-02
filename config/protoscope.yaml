@@ -68,6 +68,8 @@ receive:
     popup_enabled: true
 
 scripting:
+  pipeline:
+    # worker_threads: 4
   worker:
     enabled: true
     rx_queue_limit_bytes: 67108864

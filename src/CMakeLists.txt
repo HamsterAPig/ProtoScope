@@ -63,6 +63,7 @@ target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
     scripting/frame_stream_parser.cpp
+    scripting/pipeline_threading.cpp
     scripting/script_runtime_worker.cpp
     scripting/host/script_callback_dispatcher.cpp
     scripting/host/script_file_system_facade.cpp
