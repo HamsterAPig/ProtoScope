@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <utility>
 
 namespace protoscope::plot {
@@ -30,7 +31,155 @@ double sanitizeOffset(double offset) {
     return std::isfinite(offset) ? offset : 0.0;
 }
 
+double nearestRankPercentile(const std::vector<double>& sortedValues, double percentile) {
+    if (sortedValues.empty()) {
+        return 0.0;
+    }
+    const double rawRank = (std::ceil)(percentile * static_cast<double>(sortedValues.size()));
+    const auto rank = static_cast<std::size_t>(rawRank <= 1.0 ? 0.0 : rawRank - 1.0);
+    return sortedValues[(std::min)(rank, sortedValues.size() - 1)];
+}
+
+std::optional<double> firstCrossingDuration(const std::vector<double>& times,
+                                            const std::vector<double>& values,
+                                            double startLevel,
+                                            double endLevel,
+                                            bool rising) {
+    std::optional<double> startTime;
+    for (std::size_t index = 1; index < values.size(); ++index) {
+        const double previous = values[index - 1];
+        const double current = values[index];
+        const double previousTime = times[index - 1];
+        const double currentTime = times[index];
+        const double width = currentTime - previousTime;
+        if (width < 0.0 || std::abs(current - previous) <= kEpsilon) {
+            continue;
+        }
+        const auto crosses = [&](double level) {
+            return rising ? previous < level && current >= level : previous > level && current <= level;
+        };
+        const auto crossingTime = [&](double level) {
+            return previousTime + (level - previous) * width / (current - previous);
+        };
+        if (!startTime.has_value() && crosses(startLevel)) {
+            startTime = crossingTime(startLevel);
+        }
+        if (startTime.has_value() && crosses(endLevel)) {
+            return crossingTime(endLevel) - *startTime;
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace
+
+MeasurementReadout makeMeasurementReadout(std::size_t channelIndex,
+                                          const std::vector<double>& times,
+                                          const std::vector<double>& values,
+                                          const std::vector<double>* referenceValues) {
+    MeasurementReadout result{};
+    if (values.empty() || times.size() < values.size()) {
+        return result;
+    }
+
+    result.valid = true;
+    result.channelIndex = channelIndex;
+    result.sampleCount = values.size();
+    result.minValue = *std::min_element(values.begin(), values.end());
+    result.maxValue = *std::max_element(values.begin(), values.end());
+    result.peakToPeak = result.maxValue - result.minValue;
+    result.duration = times[values.size() - 1] - times.front();
+
+    const double count = static_cast<double>(values.size());
+    const double sum = std::accumulate(values.begin(), values.end(), 0.0);
+    const double squareSum = std::accumulate(values.begin(), values.end(), 0.0, [](double total, double value) {
+        return total + value * value;
+    });
+    result.meanValue = sum / count;
+    result.rmsValue = std::sqrt(squareSum / count);
+
+    std::vector<double> sorted = values;
+    std::sort(sorted.begin(), sorted.end());
+    result.medianValue = nearestRankPercentile(sorted, 0.50);
+    result.p95Value = nearestRankPercentile(sorted, 0.95);
+    result.p99Value = nearestRankPercentile(sorted, 0.99);
+    result.iqr = nearestRankPercentile(sorted, 0.75) - nearestRankPercentile(sorted, 0.25);
+    result.p95Spread = nearestRankPercentile(sorted, 0.95) - nearestRankPercentile(sorted, 0.05);
+
+    double varianceSum = 0.0;
+    double absDeviationSum = 0.0;
+    std::vector<double> medianDeviations;
+    medianDeviations.reserve(values.size());
+    for (const double value : values) {
+        const double deviation = value - result.meanValue;
+        varianceSum += deviation * deviation;
+        absDeviationSum += std::abs(deviation);
+        medianDeviations.push_back(std::abs(value - result.medianValue));
+    }
+    result.variance = varianceSum / count;
+    result.stddev = std::sqrt(result.variance);
+    if (std::abs(result.meanValue) > kEpsilon) {
+        result.cv = result.stddev / std::abs(result.meanValue);
+    }
+    result.mad = absDeviationSum / count;
+    std::sort(medianDeviations.begin(), medianDeviations.end());
+    result.medianAbsDev = nearestRankPercentile(medianDeviations, 0.50);
+
+    if (values.size() >= 2 && result.peakToPeak > kEpsilon) {
+        const double threshold = (result.minValue + result.maxValue) * 0.5;
+        const double riseStart = result.minValue + result.peakToPeak * 0.1;
+        const double riseEnd = result.minValue + result.peakToPeak * 0.9;
+        const double fallStart = riseEnd;
+        const double fallEnd = riseStart;
+        result.riseTime = firstCrossingDuration(times, values, riseStart, riseEnd, true);
+        result.fallTime = firstCrossingDuration(times, values, fallStart, fallEnd, false);
+        for (std::size_t index = 1; index < values.size(); ++index) {
+            const double previous = values[index - 1];
+            const double current = values[index];
+            const double width = times[index] - times[index - 1];
+            if ((previous < threshold && current >= threshold) || (previous > threshold && current <= threshold)) {
+                ++result.edgeCount;
+            }
+            if (width <= 0.0) {
+                continue;
+            }
+            if (previous >= threshold && current >= threshold) {
+                result.highWidth += width;
+            } else if (previous < threshold && current < threshold) {
+                result.lowWidth += width;
+            }
+        }
+        if (result.duration > kEpsilon) {
+            result.dutyCycle = result.highWidth / result.duration * 100.0;
+        }
+    }
+
+    if (referenceValues != nullptr && referenceValues->size() == values.size()) {
+        double errorSum = 0.0;
+        double errorSquareSum = 0.0;
+        double absErrorSum = 0.0;
+        double maxAbsError = 0.0;
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            const double error = values[index] - (*referenceValues)[index];
+            const double absError = std::abs(error);
+            errorSum += error;
+            errorSquareSum += error * error;
+            absErrorSum += absError;
+            maxAbsError = (std::max)(maxAbsError, absError);
+        }
+        result.absoluteError = values.back() - referenceValues->back();
+        if (std::abs(referenceValues->back()) > kEpsilon) {
+            result.relativeErrorPercent = *result.absoluteError / std::abs(referenceValues->back()) * 100.0;
+        }
+        result.meanError = errorSum / count;
+        result.mse = errorSquareSum / count;
+        result.rmse = std::sqrt(*result.mse);
+        result.mae = absErrorSum / count;
+        result.maxAbsError = maxAbsError;
+        result.bias = *result.meanError;
+    }
+    return result;
+}
 
 double applyChannelActualValue(double rawValue, const ChannelSpec& spec) {
     return rawValue * sanitizeRatio(spec.ratio);
@@ -418,27 +567,15 @@ MeasurementReadout OscilloscopeBuffer::measureWindow(std::size_t channelIndex,
         return result;
     }
 
-    result.valid = true;
-    result.channelIndex = channelIndex;
-    result.sampleCount = end - begin;
-    result.minValue = std::numeric_limits<double>::infinity();
-    result.maxValue = -std::numeric_limits<double>::infinity();
-
-    double sum = 0.0;
-    double squareSum = 0.0;
+    std::vector<double> times;
+    std::vector<double> values;
+    times.reserve(end - begin);
+    values.reserve(end - begin);
     for (std::size_t index = begin; index < end; ++index) {
-        const double value = applyChannelActualValue(samples[index].value, spec);
-        result.minValue = (std::min)(result.minValue, value);
-        result.maxValue = (std::max)(result.maxValue, value);
-        sum += value;
-        squareSum += value * value;
+        times.push_back(samples[index].time);
+        values.push_back(applyChannelActualValue(samples[index].value, spec));
     }
-
-    result.duration = samples[end - 1].time - samples[begin].time;
-    result.peakToPeak = result.maxValue - result.minValue;
-    result.meanValue = sum / static_cast<double>(result.sampleCount);
-    result.rmsValue = std::sqrt(squareSum / static_cast<double>(result.sampleCount));
-    return result;
+    return makeMeasurementReadout(channelIndex, times, values);
 }
 
 DeltaReadout OscilloscopeBuffer::makeDelta(const CursorReadout& left, const CursorReadout& right) {

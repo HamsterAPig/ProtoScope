@@ -307,6 +307,48 @@ void test_plot_cursor_snap_by_time_and_measurement() {
     require(std::abs(measurement.peakToPeak - 2.0) < 1e-9, "峰峰值错误");
 }
 
+void test_plot_measurement_dispersion_metrics() {
+    const std::vector<double> times{0.0, 1.0, 2.0, 3.0};
+    const std::vector<double> values{1.0, 2.0, 3.0, 4.0};
+    const auto measurement = protoscope::plot::makeMeasurementReadout(0, times, values);
+
+    require(measurement.valid, "离散度测量应有效");
+    require(std::abs(measurement.meanValue - 2.5) < 1e-9, "均值错误");
+    require(std::abs(measurement.variance - 1.25) < 1e-9, "总体方差错误");
+    require(std::abs(measurement.stddev - std::sqrt(1.25)) < 1e-9, "标准差错误");
+    require(measurement.cv.has_value() && std::abs(*measurement.cv - std::sqrt(1.25) / 2.5) < 1e-9, "CV 错误");
+    require(std::abs(measurement.mad - 1.0) < 1e-9, "平均绝对偏差错误");
+    require(std::abs(measurement.medianValue - 2.0) < 1e-9, "最近秩中位数错误");
+    require(std::abs(measurement.medianAbsDev - 1.0) < 1e-9, "中位数绝对偏差错误");
+    require(std::abs(measurement.iqr - 2.0) < 1e-9, "四分位距错误");
+    require(std::abs(measurement.p95Spread - 3.0) < 1e-9, "P95-P5 错误");
+    require(std::abs(measurement.p95Value - 4.0) < 1e-9, "P95 最近秩错误");
+    require(std::abs(measurement.p99Value - 4.0) < 1e-9, "P99 最近秩错误");
+
+    const std::vector<double> zeroValue{0.0};
+    const std::vector<double> zeroTime{0.0};
+    const auto single = protoscope::plot::makeMeasurementReadout(0, zeroTime, zeroValue);
+    require(single.valid, "单样本测量应有效");
+    require(single.variance == 0.0 && single.stddev == 0.0, "单样本方差和标准差应为 0");
+    require(!single.cv.has_value(), "mean 为 0 时 CV 应无效");
+}
+
+void test_plot_measurement_error_metrics() {
+    const std::vector<double> times{0.0, 1.0, 2.0, 3.0};
+    const std::vector<double> values{1.0, 2.0, 3.0, 4.0};
+    const std::vector<double> reference{0.0, 2.0, 4.0, 4.0};
+    const auto measurement = protoscope::plot::makeMeasurementReadout(0, times, values, &reference);
+
+    require(measurement.absoluteError.has_value() && std::abs(*measurement.absoluteError) < 1e-9, "绝对误差错误");
+    require(measurement.relativeErrorPercent.has_value() && std::abs(*measurement.relativeErrorPercent) < 1e-9, "相对误差错误");
+    require(measurement.meanError.has_value() && std::abs(*measurement.meanError) < 1e-9, "平均误差错误");
+    require(measurement.mse.has_value() && std::abs(*measurement.mse - 0.5) < 1e-9, "MSE 错误");
+    require(measurement.rmse.has_value() && std::abs(*measurement.rmse - std::sqrt(0.5)) < 1e-9, "RMSE 错误");
+    require(measurement.mae.has_value() && std::abs(*measurement.mae - 0.5) < 1e-9, "MAE 错误");
+    require(measurement.maxAbsError.has_value() && std::abs(*measurement.maxAbsError - 1.0) < 1e-9, "最大绝对误差错误");
+    require(measurement.bias.has_value() && std::abs(*measurement.bias) < 1e-9, "bias 应等于平均误差");
+}
+
 void test_wave_cursor_smart_snap_edge() {
     const auto displayData = makeDisplayData({
         {.time = 0.0, .value = 0.0},

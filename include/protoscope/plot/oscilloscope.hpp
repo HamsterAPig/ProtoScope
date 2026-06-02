@@ -86,8 +86,37 @@ struct MeasurementReadout {
     double peakToPeak{0.0};
     double meanValue{0.0};
     double rmsValue{0.0};
+    double medianValue{0.0};
+    double p95Value{0.0};
+    double p99Value{0.0};
+    double variance{0.0};
+    double stddev{0.0};
+    std::optional<double> cv{};
+    double mad{0.0};
+    double medianAbsDev{0.0};
+    double iqr{0.0};
+    double p95Spread{0.0};
+    double highWidth{0.0};
+    double lowWidth{0.0};
+    std::optional<double> dutyCycle{};
+    std::optional<double> riseTime{};
+    std::optional<double> fallTime{};
+    std::size_t edgeCount{0};
+    std::optional<double> absoluteError{};
+    std::optional<double> relativeErrorPercent{};
+    std::optional<double> meanError{};
+    std::optional<double> mse{};
+    std::optional<double> rmse{};
+    std::optional<double> mae{};
+    std::optional<double> maxAbsError{};
+    std::optional<double> bias{};
     double duration{0.0};
 };
+
+MeasurementReadout makeMeasurementReadout(std::size_t channelIndex,
+                                          const std::vector<double>& times,
+                                          const std::vector<double>& values,
+                                          const std::vector<double>* referenceValues = nullptr);
 
 struct ChannelView {
     std::string label{};

@@ -313,8 +313,19 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     }
 
     if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {
+        const auto referenceChannelIndex =
+            view.referenceMode == plot::WaveMeasurementReferenceMode::Channel ? std::optional<std::size_t>(view.referenceChannelIndex)
+                                                                              : std::nullopt;
+        const auto manualReferenceValue =
+            view.referenceMode == plot::WaveMeasurementReferenceMode::ManualValue ? std::optional<double>(view.manualReferenceValue)
+                                                                                  : std::nullopt;
         result.measurement =
-            measureDisplayWindow(displayData, view.measurementChannelIndex, result.cursorReadouts[0]->time, result.cursorReadouts[1]->time);
+            measureDisplayWindow(displayData,
+                view.measurementChannelIndex,
+                result.cursorReadouts[0]->time,
+                result.cursorReadouts[1]->time,
+                referenceChannelIndex,
+                manualReferenceValue);
     }
     drawMeasurementOverlay(view, frame.snapshot, displayData, result);
 

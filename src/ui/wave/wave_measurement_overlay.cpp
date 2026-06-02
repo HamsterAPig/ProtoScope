@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace protoscope::ui {
 
@@ -78,9 +79,11 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
 }
 
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
-                                              std::size_t channelIndex,
-                                              double beginTime,
-                                              double endTime) {
+                                               std::size_t channelIndex,
+                                               double beginTime,
+                                               double endTime,
+                                               std::optional<std::size_t> referenceChannelIndex,
+                                               std::optional<double> manualReferenceValue) {
     plot::MeasurementReadout result{};
     if (channelIndex >= displayData.channels.size()) {
         return result;
@@ -99,28 +102,39 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
         return result;
     }
 
-    result.valid = true;
-    result.channelIndex = channelIndex;
-    result.sampleCount = static_cast<std::size_t>(std::distance(begin, end));
-    result.minValue = std::numeric_limits<double>::infinity();
-    result.maxValue = -std::numeric_limits<double>::infinity();
-    double sum = 0.0;
-    double squareSum = 0.0;
     const auto beginIndex = static_cast<std::size_t>(std::distance(samples.begin(), begin));
     const auto endIndex = static_cast<std::size_t>(std::distance(samples.begin(), end));
     const auto& actualValues = displayData.channels[channelIndex].actualValues;
+    std::vector<double> times;
+    std::vector<double> values;
+    std::vector<double> referenceValues;
+    times.reserve(endIndex - beginIndex);
+    values.reserve(endIndex - beginIndex);
+    referenceValues.reserve(endIndex - beginIndex);
     for (std::size_t sampleIndex = beginIndex; sampleIndex < endIndex; ++sampleIndex) {
-        const double value = sampleIndex < actualValues.size() ? actualValues[sampleIndex] : samples[sampleIndex].value;
-        result.minValue = (std::min)(result.minValue, value);
-        result.maxValue = (std::max)(result.maxValue, value);
-        sum += value;
-        squareSum += value * value;
+        times.push_back(samples[sampleIndex].time);
+        values.push_back(sampleIndex < actualValues.size() ? actualValues[sampleIndex] : samples[sampleIndex].value);
     }
-    result.duration = std::prev(end)->time - begin->time;
-    result.peakToPeak = result.maxValue - result.minValue;
-    result.meanValue = sum / static_cast<double>(result.sampleCount);
-    result.rmsValue = std::sqrt(squareSum / static_cast<double>(result.sampleCount));
-    return result;
+
+    if (manualReferenceValue.has_value()) {
+        referenceValues.assign(values.size(), *manualReferenceValue);
+    } else if (referenceChannelIndex.has_value() && *referenceChannelIndex < displayData.channels.size()) {
+        const auto& referenceChannel = displayData.channels[*referenceChannelIndex];
+        const auto& referenceSamples = referenceChannel.samples;
+        const auto& referenceActualValues = referenceChannel.actualValues;
+        for (const double time : times) {
+            const auto match = std::lower_bound(referenceSamples.begin(), referenceSamples.end(), time, [](const plot::WaveSample& sample, double value) {
+                return sample.time < value;
+            });
+            if (match == referenceSamples.end() || std::abs(match->time - time) > 1e-9) {
+                referenceValues.clear();
+                break;
+            }
+            const auto referenceIndex = static_cast<std::size_t>(std::distance(referenceSamples.begin(), match));
+            referenceValues.push_back(referenceIndex < referenceActualValues.size() ? referenceActualValues[referenceIndex] : match->value);
+        }
+    }
+    return plot::makeMeasurementReadout(channelIndex, times, values, referenceValues.size() == values.size() ? &referenceValues : nullptr);
 }
 
 void drawCursorAnnotation(std::size_t cursorIndex,

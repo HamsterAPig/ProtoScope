@@ -57,6 +57,14 @@ plot::WaveCursorSnapScope parseSnapScope(const std::string& value) {
     return value == "active_channel" ? plot::WaveCursorSnapScope::ActiveChannel : plot::WaveCursorSnapScope::AllChannels;
 }
 
+std::string measurementReferenceModeName(plot::WaveMeasurementReferenceMode mode) {
+    return mode == plot::WaveMeasurementReferenceMode::ManualValue ? "manual_value" : "channel";
+}
+
+plot::WaveMeasurementReferenceMode parseMeasurementReferenceMode(const std::string& value) {
+    return value == "manual_value" ? plot::WaveMeasurementReferenceMode::ManualValue : plot::WaveMeasurementReferenceMode::Channel;
+}
+
 std::string fftPointCountStateName(plot::WaveFftPointCount value) {
     return plot::fftPointCountName(value);
 }
@@ -138,6 +146,91 @@ plot::WaveFftFundamentalMode parseFftFundamentalMode(const std::string& value) {
     return value == "manual" ? plot::WaveFftFundamentalMode::Manual : plot::WaveFftFundamentalMode::Auto;
 }
 
+YAML::Node encodeMeasurementSelection(const plot::WaveMeasurementSelection& selection) {
+    YAML::Node node;
+    node["cursor_a"] = selection.cursorA;
+    node["cursor_b"] = selection.cursorB;
+    node["delta_time"] = selection.deltaTime;
+    node["delta_value"] = selection.deltaValue;
+    node["frequency"] = selection.frequency;
+    node["period"] = selection.period;
+    node["sample_count"] = selection.sampleCount;
+    node["span"] = selection.span;
+    node["min"] = selection.min;
+    node["max"] = selection.max;
+    node["peak_to_peak"] = selection.peakToPeak;
+    node["mean"] = selection.mean;
+    node["rms"] = selection.rms;
+    node["median"] = selection.median;
+    node["p95"] = selection.p95;
+    node["p99"] = selection.p99;
+    node["variance"] = selection.variance;
+    node["stddev"] = selection.stddev;
+    node["cv"] = selection.cv;
+    node["mad"] = selection.mad;
+    node["median_abs_dev"] = selection.medianAbsDev;
+    node["iqr"] = selection.iqr;
+    node["p95_spread"] = selection.p95Spread;
+    node["high_width"] = selection.highWidth;
+    node["low_width"] = selection.lowWidth;
+    node["duty_cycle"] = selection.dutyCycle;
+    node["rise_time"] = selection.riseTime;
+    node["fall_time"] = selection.fallTime;
+    node["edge_count"] = selection.edgeCount;
+    node["absolute_error"] = selection.absoluteError;
+    node["relative_error_percent"] = selection.relativeErrorPercent;
+    node["mean_error"] = selection.meanError;
+    node["mse"] = selection.mse;
+    node["rmse"] = selection.rmse;
+    node["mae"] = selection.mae;
+    node["max_abs_error"] = selection.maxAbsError;
+    node["bias"] = selection.bias;
+    return node;
+}
+
+void decodeMeasurementSelection(const YAML::Node& node, plot::WaveMeasurementSelection& selection) {
+    if (!node || !node.IsMap()) {
+        return;
+    }
+    selection.cursorA = node["cursor_a"].as<bool>(selection.cursorA);
+    selection.cursorB = node["cursor_b"].as<bool>(selection.cursorB);
+    selection.deltaTime = node["delta_time"].as<bool>(selection.deltaTime);
+    selection.deltaValue = node["delta_value"].as<bool>(selection.deltaValue);
+    selection.frequency = node["frequency"].as<bool>(selection.frequency);
+    selection.period = node["period"].as<bool>(selection.period);
+    selection.sampleCount = node["sample_count"].as<bool>(selection.sampleCount);
+    selection.span = node["span"].as<bool>(selection.span);
+    selection.min = node["min"].as<bool>(selection.min);
+    selection.max = node["max"].as<bool>(selection.max);
+    selection.peakToPeak = node["peak_to_peak"].as<bool>(selection.peakToPeak);
+    selection.mean = node["mean"].as<bool>(selection.mean);
+    selection.rms = node["rms"].as<bool>(selection.rms);
+    selection.median = node["median"].as<bool>(selection.median);
+    selection.p95 = node["p95"].as<bool>(selection.p95);
+    selection.p99 = node["p99"].as<bool>(selection.p99);
+    selection.variance = node["variance"].as<bool>(selection.variance);
+    selection.stddev = node["stddev"].as<bool>(selection.stddev);
+    selection.cv = node["cv"].as<bool>(selection.cv);
+    selection.mad = node["mad"].as<bool>(selection.mad);
+    selection.medianAbsDev = node["median_abs_dev"].as<bool>(selection.medianAbsDev);
+    selection.iqr = node["iqr"].as<bool>(selection.iqr);
+    selection.p95Spread = node["p95_spread"].as<bool>(selection.p95Spread);
+    selection.highWidth = node["high_width"].as<bool>(selection.highWidth);
+    selection.lowWidth = node["low_width"].as<bool>(selection.lowWidth);
+    selection.dutyCycle = node["duty_cycle"].as<bool>(selection.dutyCycle);
+    selection.riseTime = node["rise_time"].as<bool>(selection.riseTime);
+    selection.fallTime = node["fall_time"].as<bool>(selection.fallTime);
+    selection.edgeCount = node["edge_count"].as<bool>(selection.edgeCount);
+    selection.absoluteError = node["absolute_error"].as<bool>(selection.absoluteError);
+    selection.relativeErrorPercent = node["relative_error_percent"].as<bool>(selection.relativeErrorPercent);
+    selection.meanError = node["mean_error"].as<bool>(selection.meanError);
+    selection.mse = node["mse"].as<bool>(selection.mse);
+    selection.rmse = node["rmse"].as<bool>(selection.rmse);
+    selection.mae = node["mae"].as<bool>(selection.mae);
+    selection.maxAbsError = node["max_abs_error"].as<bool>(selection.maxAbsError);
+    selection.bias = node["bias"].as<bool>(selection.bias);
+}
+
 void applyChannelOverrides(plot::WaveDockState& wave) {
     const auto channelCount = wave.buffer.channelCount();
     for (std::size_t channelIndex = 0; channelIndex < channelCount; ++channelIndex) {
@@ -201,6 +294,10 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     node["cursor_snap_mode"] = snapModeName(view.cursorSnapMode);
     node["cursor_snap_scope"] = snapScopeName(view.cursorSnapScope);
     node["locked_cursor_interval"] = view.lockedCursorInterval;
+    node["measurement"] = encodeMeasurementSelection(view.measurement);
+    node["measurement_reference_mode"] = measurementReferenceModeName(view.referenceMode);
+    node["reference_channel_index"] = view.referenceChannelIndex;
+    node["manual_reference_value"] = view.manualReferenceValue;
     YAML::Node fftNode;
     fftNode["enabled"] = view.fft.enabled;
     fftNode["point_count"] = fftPointCountStateName(view.fft.pointCount);
@@ -306,6 +403,11 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
     view.cursorSnapMode = parseSnapMode(node["cursor_snap_mode"].as<std::string>(snapModeName(view.cursorSnapMode)));
     view.cursorSnapScope = parseSnapScope(node["cursor_snap_scope"].as<std::string>(snapScopeName(view.cursorSnapScope)));
     view.lockedCursorInterval = node["locked_cursor_interval"].as<double>(view.lockedCursorInterval);
+    decodeMeasurementSelection(node["measurement"], view.measurement);
+    view.referenceMode =
+        parseMeasurementReferenceMode(node["measurement_reference_mode"].as<std::string>(measurementReferenceModeName(view.referenceMode)));
+    view.referenceChannelIndex = node["reference_channel_index"].as<std::size_t>(view.referenceChannelIndex);
+    view.manualReferenceValue = node["manual_reference_value"].as<double>(view.manualReferenceValue);
     const auto fftNode = node["fft"];
     if (fftNode && fftNode.IsMap()) {
         view.fft.enabled = fftNode["enabled"].as<bool>(view.fft.enabled);

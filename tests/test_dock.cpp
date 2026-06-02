@@ -348,6 +348,13 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     waveA.view.fftMagnitudeMax = 5.0;
     waveA.view.fftPhaseMin = -120.0;
     waveA.view.fftPhaseMax = 120.0;
+    waveA.view.measurement.variance = true;
+    waveA.view.measurement.cv = true;
+    waveA.view.measurement.stddev = false;
+    waveA.view.measurement.rmse = true;
+    waveA.view.referenceMode = protoscope::plot::WaveMeasurementReferenceMode::ManualValue;
+    waveA.view.referenceChannelIndex = 2;
+    waveA.view.manualReferenceValue = 1.25;
     waveA.fftChannelEnabled = {1};
     waveA.hiddenChannelLabels = {"CH1"};
     waveA.toolsCollapsed = true;
@@ -397,6 +404,13 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredA.view.fftFrequencyMin == 10.0 && restoredA.view.fftFrequencyMax == 500.0, "proto_a 应恢复 FFT 频率轴");
     require(restoredA.view.fftMagnitudeMin == -80.0 && restoredA.view.fftMagnitudeMax == 5.0, "proto_a 应恢复 FFT 幅值轴");
     require(restoredA.view.fftPhaseMin == -120.0 && restoredA.view.fftPhaseMax == 120.0, "proto_a 应恢复 FFT 相位轴");
+    require(restoredA.view.measurement.variance && restoredA.view.measurement.cv && !restoredA.view.measurement.stddev,
+            "proto_a 应恢复测量项选择");
+    require(restoredA.view.measurement.rmse, "proto_a 应恢复误差测量项选择");
+    require(restoredA.view.referenceMode == protoscope::plot::WaveMeasurementReferenceMode::ManualValue,
+            "proto_a 应恢复测量参考模式");
+    require(restoredA.view.referenceChannelIndex == 2, "proto_a 应恢复参考通道");
+    require(restoredA.view.manualReferenceValue == 1.25, "proto_a 应恢复手动标定值");
     require(restoredA.fftChannelEnabled.size() == 1 && restoredA.fftChannelEnabled[0] == 1, "proto_a 应恢复 FFT 通道选择");
     require(restoredA.hiddenChannelLabels.size() == 1 && restoredA.hiddenChannelLabels[0] == "CH1",
             "proto_a 应恢复自己的主图 Legend 隐藏通道");
@@ -417,6 +431,7 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
     require(!restoredB.view.fft.enabled, "不同协议不应串用 proto_a FFT 开关");
+    require(restoredB.view.measurement.stddev && !restoredB.view.measurement.variance, "老状态或其他协议应保留默认测量项");
 }
 
 void test_dock_visibility_state_isolated_by_protocol_key() {

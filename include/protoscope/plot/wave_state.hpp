@@ -23,12 +23,57 @@ enum class WaveCursorSnapScope {
     ActiveChannel,
 };
 
+enum class WaveMeasurementReferenceMode {
+    Channel,
+    ManualValue,
+};
+
 struct WaveCursorState {
     bool enabled{true};
     bool pinned{false};
     std::size_t channelIndex{0};
     double time{0.0};
     double value{0.0};
+};
+
+struct WaveMeasurementSelection {
+    bool cursorA{true};
+    bool cursorB{true};
+    bool deltaTime{true};
+    bool deltaValue{true};
+    bool frequency{true};
+    bool period{true};
+    bool sampleCount{true};
+    bool span{true};
+    bool min{true};
+    bool max{true};
+    bool peakToPeak{true};
+    bool mean{true};
+    bool rms{true};
+    bool median{false};
+    bool p95{false};
+    bool p99{false};
+    bool variance{false};
+    bool stddev{true};
+    bool cv{false};
+    bool mad{false};
+    bool medianAbsDev{false};
+    bool iqr{false};
+    bool p95Spread{false};
+    bool highWidth{false};
+    bool lowWidth{false};
+    bool dutyCycle{false};
+    bool riseTime{false};
+    bool fallTime{false};
+    bool edgeCount{false};
+    bool absoluteError{false};
+    bool relativeErrorPercent{false};
+    bool meanError{false};
+    bool mse{false};
+    bool rmse{false};
+    bool mae{false};
+    bool maxAbsError{false};
+    bool bias{false};
 };
 
 struct WaveViewState {
@@ -59,6 +104,9 @@ struct WaveViewState {
     std::size_t lastRenderPointCount{0};
     std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};
+    std::size_t referenceChannelIndex{0};
+    WaveMeasurementReferenceMode referenceMode{WaveMeasurementReferenceMode::Channel};
+    WaveMeasurementSelection measurement{};
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
@@ -77,6 +125,7 @@ struct WaveViewState {
     double persistenceWindow{0.25};
     double glowIntensity{1.0};
     double sampleFrequencyHz{0.0};
+    double manualReferenceValue{0.0};
     double lockedCursorInterval{0.0};
     double overviewDragLastTime{0.0};
     double centerTime{0.0};

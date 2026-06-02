@@ -2114,6 +2114,8 @@ static const TestCase kAllTests[] = {
     {"lua_default_dock_layout_runs_only_during_default_build", &test_lua_default_dock_layout_runs_only_during_default_build},
     {"protocol_workspace_layout_reset_requires_loaded_protocol", &test_protocol_workspace_layout_reset_requires_loaded_protocol},
     {"plot_cursor_snap_by_time_and_measurement", &test_plot_cursor_snap_by_time_and_measurement},
+    {"plot_measurement_dispersion_metrics", &test_plot_measurement_dispersion_metrics},
+    {"plot_measurement_error_metrics", &test_plot_measurement_error_metrics},
     {"wave_cursor_smart_snap_edge", &test_wave_cursor_smart_snap_edge},
     {"wave_cursor_smart_snap_extreme", &test_wave_cursor_smart_snap_extreme},
     {"wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms", &test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms},

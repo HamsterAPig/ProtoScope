@@ -121,6 +121,8 @@ void test_plot_limited_envelope_preserves_spikes();
 void test_plot_low_density_envelope_keeps_single_value_line();
 void test_plot_cursor_snap_and_delta();
 void test_plot_cursor_snap_by_time_and_measurement();
+void test_plot_measurement_dispersion_metrics();
+void test_plot_measurement_error_metrics();
 void test_wave_cursor_smart_snap_edge();
 void test_wave_cursor_smart_snap_extreme();
 void test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms();

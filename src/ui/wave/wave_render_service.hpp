@@ -175,7 +175,9 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
                                               std::size_t channelIndex,
                                               double beginTime,
-                                              double endTime);
+                                              double endTime,
+                                              std::optional<std::size_t> referenceChannelIndex = std::nullopt,
+                                              std::optional<double> manualReferenceValue = std::nullopt);
 void drawCursorIntervalHint(const plot::CursorReadout& left,
                             const plot::CursorReadout& right,
                             const plot::CursorIntervalText& intervalText,
