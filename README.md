@@ -296,6 +296,35 @@ app:
 | auto_save.interval_ms | uint64 | 5000 | 自动保存间隔（毫秒） |
 | config_hot_reload.enabled | bool | false | 外部配置变更检测开关 |
 
+### scripting —— Lua 宿主与文件 IO
+
+**worker**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| worker.enabled | bool | true | 是否启用脚本工作线程 |
+| worker.rx_queue_limit_bytes | size_t | 67108864 | 脚本工作线程 RX 队列上限（字节） |
+| worker.output_queue_limit | size_t | 65536 | 脚本输出队列上限 |
+| worker.batch_bytes | size_t | 262144 | 每轮从 worker 批量提交到宿主的字节预算 |
+
+**file_io**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| file_io.enabled | bool | true | 是否启用脚本文件 IO 能力 |
+| file_io.allow_protocol_dir | bool | true | 是否允许访问协议目录 |
+| file_io.allow_dialog_paths | bool | true | 是否允许访问文件对话框路径 |
+| file_io.extra_allowed_roots | list<string> | [] | 额外允许访问的根目录 |
+| file_io.max_open_files | size_t | 8 | 同时打开文件数量上限 |
+| file_io.default_chunk_bytes | size_t | 65536 | 默认文件分块大小 |
+| file_io.max_chunk_bytes | size_t | 1048576 | 文件分块大小上限 |
+| file_io.max_file_size_bytes | uint64 | 1073741824 | 可读文件大小上限 |
+| file_io.max_write_file_size_bytes | uint64 | 1073741824 | 可写文件大小上限 |
+| file_io.dialog.enabled | bool | true | 是否启用文件对话框能力 |
+| file_io.dialog.remember_last_dir | bool | true | 是否记住上次目录 |
+| file_io.send_file.default_chunk_bytes | size_t | 65536 | `proto.fs.send_file()` 默认分块大小 |
+| file_io.send_file.max_inflight_chunks | size_t | 2 | `proto.fs.send_file()` 最大在途分块数 |
+
 ### gui —— 界面与波形
 
 **window**：
