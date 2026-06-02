@@ -33,6 +33,7 @@ void applyImGuiProfessionalDarkTheme();
 void applyImPlotProfessionalDarkTheme();
 
 // beginToolbarGroup() 内部会压入 ImGui 栈；无论返回值是否为 true，后续都必须调用 endToolbarGroup()。
+// 传入的 minHeight 为 0 时，ImGui::BeginChild() 会让子窗口占满当前剩余可用高度，而不是按内容自适应。
 bool beginToolbarGroup(const char* id, const char* title, float minHeight = 0.0F);
 void endToolbarGroup();
 bool drawToolbarSectionButton(const char* label, const char* tooltip, bool active = false, const ImVec2& size = ImVec2(0.0F, 0.0F));

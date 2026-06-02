@@ -120,6 +120,7 @@ bool beginToolbarGroup(const char* id, const char* title, float minHeight) {
     ImGui::PushID(id);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, tokens.panelBackgroundAlt);
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
+    // 这里沿用 ImGui::BeginChild() 的原生语义：高度为 0 时占满剩余空间，调用方需要显式传入紧凑高度。
     const bool opened = ImGui::BeginChild("##group", ImVec2(0.0F, minHeight), true);
     if (opened && title != nullptr && title[0] != '\0') {
         ImGui::PushStyleColor(ImGuiCol_Text, tokens.textMuted);

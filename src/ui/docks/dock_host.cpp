@@ -11,6 +11,15 @@ std::string luaControlImGuiLabel(const scripting::ControlDescriptor& descriptor)
     return descriptor.label + "##lua_control_" + descriptor.id;
 }
 
+float compactLogToolbarHeight() {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float titleHeight = ImGui::GetTextLineHeight();
+    const float separatorSpacing = style.ItemSpacing.y * 2.0F;
+    const float controlHeight = ImGui::GetFrameHeight();
+    const float extraPadding = style.WindowPadding.y * 0.5F;
+    return titleHeight + separatorSpacing + controlHeight + extraPadding;
+}
+
 } // namespace
 
 void GuiRuntime::drawStatusBar() {
@@ -703,7 +712,8 @@ void GuiRuntime::drawLogDock() {
         return;
     }
 
-    if (beginToolbarGroup("host_log_toolbar", "宿主事件流")) {
+    const float toolbarHeight = compactLogToolbarHeight();
+    if (beginToolbarGroup("host_log_toolbar", "宿主事件流", toolbarHeight)) {
         drawLogKeywordFilterInput("关键字##host_log_keyword", logState.filter, 190.0F);
         ImGui::SameLine();
         drawLogStatusFilterCombo("STATUS##host_log_status", logState.filter);
@@ -739,7 +749,8 @@ void GuiRuntime::drawScriptDock() {
         return;
     }
 
-    if (beginToolbarGroup("script_log_toolbar", "Lua 事件流")) {
+    const float toolbarHeight = compactLogToolbarHeight();
+    if (beginToolbarGroup("script_log_toolbar", "Lua 事件流", toolbarHeight)) {
         drawLogKeywordFilterInput("关键字##script_log_keyword", scriptState.filter, 190.0F);
         ImGui::SameLine();
         drawLogStatusFilterCombo("STATUS##script_log_status", scriptState.filter);
