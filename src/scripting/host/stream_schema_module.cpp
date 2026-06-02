@@ -107,6 +107,13 @@ sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& fr
     table["name"] = frame.name;
     table["raw"] = makeBytesTable(lua, frame.raw);
     table["crc_ok"] = frame.crcOk;
+    if (!frame.channelMap.empty()) {
+        sol::table channelMap = lua.create_table(static_cast<int>(frame.channelMap.size()), 0);
+        for (std::size_t index = 0; index < frame.channelMap.size(); ++index) {
+            channelMap[index + 1] = static_cast<std::int64_t>(frame.channelMap[index] + 1);
+        }
+        table["channel_map"] = channelMap;
+    }
     const auto fields = makeStreamFieldsTable(lua, frame.fields);
     table["fields"] = fields;
     for (const auto& [name, value] : frame.fields) {
@@ -435,17 +442,20 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
         const auto fixedSize = luaIntegerValue(frameTable["size"]);
         const sol::object lenObject = frameTable["len"];
         const bool hasLen = lenObject.valid() && lenObject.get_type() != sol::type::lua_nil;
-        if (fixedSize.has_value() == hasLen) {
-            error = "frame.size 与 frame.len 必须二选一";
+        const bool runtimeProfile = luaBoolField(frameTable, "runtime_profile").value_or(false);
+        const int modeCount = static_cast<int>(fixedSize.has_value()) + static_cast<int>(hasLen) + static_cast<int>(runtimeProfile);
+        if (modeCount != 1) {
+            error = "frame.size、frame.len 与 frame.runtime_profile 必须三选一";
             return nullptr;
         }
+        frame.runtimeProfile = runtimeProfile;
         if (fixedSize.has_value()) {
             if (*fixedSize <= 0) {
                 error = "frame.size 必须大于 0";
                 return nullptr;
             }
             frame.size = static_cast<std::size_t>(*fixedSize);
-        } else {
+        } else if (hasLen) {
             if (!lenObject.is<sol::table>()) {
                 error = "frame.len 必须是 table";
                 return nullptr;

@@ -29,6 +29,7 @@ struct ScriptHost::Runtime {
     sol::state lua;
     std::unique_ptr<LoadedStreamSchema> stream;
     std::unordered_map<std::string, sol::protected_function> streamCallbacks;
+    std::unordered_map<std::string, StreamRuntimeProfile> streamRuntimeProfiles;
 };
 
 struct ScriptHost::FileHandle {

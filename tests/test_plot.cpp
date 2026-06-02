@@ -1188,12 +1188,15 @@ void test_raw_capture_file_roundtrip() {
         .sampleFrequencyHz = 4096.0,
         .capturedAtMs = 123456789,
         .payload = {0x01, 0x02, 0x7F, 0x00, 0x41},
+        .events = {},
     };
 
     std::string error;
     require(protoscope::plot::writeRawCaptureFile(tempPath, capture, error), "psraw 写入应成功");
     const auto loaded = protoscope::plot::readRawCaptureFile(tempPath, error);
-    require(loaded.has_value(), "psraw 读回应成功");
+    if (!loaded.has_value()) {
+        throw std::runtime_error("psraw 读回应成功: " + error);
+    }
     require(loaded->protocolName == capture.protocolName, "psraw 应保留协议名");
     require(loaded->protocolDir == capture.protocolDir, "psraw 应保留协议目录");
     require(loaded->sampleFrequencyHz == capture.sampleFrequencyHz, "psraw 应保留采样频率");
@@ -1205,12 +1208,13 @@ void test_raw_capture_file_roundtrip() {
 
 void test_raw_capture_file_rejects_size_mismatch() {
     const std::string broken = "ProtoScopeRawCapture\n"
-                               "version: 1\n"
+                               "version: 2\n"
                                "protocol_name: default_protocol\n"
                                "protocol_dir: protocols/templates/default_protocol\n"
                                "sample_frequency_hz: 1024\n"
-                               "raw_size: 5\n"
+                               "payload_size: 5\n"
                                "captured_at_ms: 1\n"
+                               "event_stream: true\n"
                                "\n"
                                "abc";
     std::string error;
@@ -1220,10 +1224,11 @@ void test_raw_capture_file_rejects_size_mismatch() {
 
 void test_raw_capture_file_requires_protocol_fields() {
     const std::string broken = "ProtoScopeRawCapture\n"
-                               "version: 1\n"
+                               "version: 2\n"
                                "sample_frequency_hz: 1024\n"
-                               "raw_size: 3\n"
+                               "payload_size: 3\n"
                                "captured_at_ms: 1\n"
+                               "event_stream: true\n"
                                "\n"
                                "abc";
     std::string error;

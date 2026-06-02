@@ -486,7 +486,12 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
     wave.rawCapture.protocolName = lua.protocolName;
     wave.rawCapture.protocolDir = lua.protocolDir;
     wave.rawCapture.sampleFrequencyHz = wave.view.sampleFrequencyHz;
-    wave.rawCapture.payload.insert(wave.rawCapture.payload.end(), event.bytes.begin(), event.bytes.end());
+    appendRawCaptureEvent(plot::RawCaptureEvent{
+        .type = plot::RawCaptureEventType::RxBytes,
+        .timestampMs = event.context.timestampMs,
+        .bytes = event.bytes,
+        .profile = {},
+    });
 
     const auto limit = runtimeConfig_.gui.rawCapture.liveLimitBytes;
     if (wave.rawCapture.payload.size() <= limit) {
@@ -505,13 +510,27 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
         wave.rawCapture.payload.begin() + static_cast<std::vector<std::uint8_t>::difference_type>(removeCount));
 }
 
+void Application::appendRawCaptureEvent(const plot::RawCaptureEvent& event) {
+    auto& rawCapture = dockStore_.waveState().rawCapture;
+    rawCapture.events.push_back(event);
+    if (event.type == plot::RawCaptureEventType::RxBytes) {
+        rawCapture.payload.insert(rawCapture.payload.end(), event.bytes.begin(), event.bytes.end());
+    }
+}
+
 void Application::appendRawCaptureRecording(const transport::TransportBytesEvent& event) {
     if (!rawCaptureRecording_.isOpen() || event.bytes.empty()) {
         return;
     }
 
     std::string error;
-    if (rawCaptureRecording_.append(event.bytes, error)) {
+    if (rawCaptureRecording_.appendEvent(plot::RawCaptureEvent{
+            .type = plot::RawCaptureEventType::RxBytes,
+            .timestampMs = event.context.timestampMs,
+            .bytes = event.bytes,
+            .profile = {},
+        },
+        error)) {
         return;
     }
 
@@ -711,6 +730,17 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
         error = "当前协议元数据不完整，无法导出";
         return false;
     }
+    // 核心流程：导出按当前 rawCapture 可见状态重建事件流；
+    // 实时缓存若已截断，不再把内存里更早的完整历史事件一并带出。
+    capture.events.clear();
+    if (!capture.payload.empty()) {
+        capture.events.push_back(plot::RawCaptureEvent{
+            .type = plot::RawCaptureEventType::RxBytes,
+            .timestampMs = capture.capturedAtMs,
+            .bytes = capture.payload,
+            .profile = {},
+        });
+    }
     return plot::writeRawCaptureFile(path, capture, error);
 }
 
@@ -729,6 +759,7 @@ bool Application::startRawCaptureRecording(const std::filesystem::path& path, st
         .capturedAtMs = nowMs(),
         .truncated = false,
         .payload = {},
+        .events = {},
     };
     if (metadata.protocolName.empty() || metadata.protocolDir.empty()) {
         error = "当前协议元数据不完整，无法开始录制";
@@ -792,7 +823,66 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     wave.view.sampleFrequencyError.clear();
     wave.buffer.setHistoryTrimSuspended(true);
 
-    if (!capture.payload.empty()) {
+    if (!capture.events.empty()) {
+        transport::ConnectionContext replayContext;
+        replayContext.endpoint = "psraw-import";
+        replayContext.connectionId = 0;
+        replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
+        replayContext.readyForIo = false;
+        suppressRawCaptureProfileEvents_ = true;
+        for (const auto& recordedEvent : capture.events) {
+            replayContext.timestampMs = recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
+            if (recordedEvent.type == plot::RawCaptureEventType::ProfileSet) {
+                sol::state tempLua;
+                tempLua.open_libraries(sol::lib::base, sol::lib::table);
+                auto table = tempLua.create_table();
+                table["frame"] = recordedEvent.profile.frameName;
+                table["length"] = static_cast<long long>(recordedEvent.profile.length);
+                if (!recordedEvent.profile.channelMap.empty()) {
+                    auto mapTable = tempLua.create_table();
+                    for (std::size_t index = 0; index < recordedEvent.profile.channelMap.size(); ++index) {
+                        mapTable[index + 1] = static_cast<long long>(recordedEvent.profile.channelMap[index] + 1);
+                    }
+                    table["channel_map"] = mapTable;
+                }
+                std::string profileError;
+                if (!scriptHost_.setStreamRuntimeProfile(sol::make_object(tempLua, table), profileError)) {
+                    suppressRawCaptureProfileEvents_ = false;
+                    error = "导入 profile_set 失败: " + profileError;
+                    wave.buffer.setHistoryTrimSuspended(false);
+                    return false;
+                }
+            } else if (recordedEvent.type == plot::RawCaptureEventType::ProfileClear) {
+                sol::state tempLua;
+                tempLua.open_libraries(sol::lib::base);
+                std::string clearError;
+                sol::object frameObject = recordedEvent.profile.frameName.empty()
+                    ? sol::make_object(tempLua, sol::lua_nil)
+                    : sol::make_object(tempLua, recordedEvent.profile.frameName);
+                if (!scriptHost_.clearStreamRuntimeProfile(frameObject, clearError)) {
+                    suppressRawCaptureProfileEvents_ = false;
+                    error = "导入 profile_clear 失败: " + clearError;
+                    wave.buffer.setHistoryTrimSuspended(false);
+                    return false;
+                }
+            } else if (!recordedEvent.bytes.empty()) {
+                std::size_t cursor = 0;
+                while (cursor < recordedEvent.bytes.size()) {
+                    const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, recordedEvent.bytes.size() - cursor);
+                    std::vector<std::uint8_t> chunk(recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+                                                    recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
+                    scriptHost_.onTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
+                    flushScriptOutputs();
+                    flushScriptLogs();
+                    flushScriptPlots();
+                    flushScriptStatusAndDialogs();
+                    cursor += chunkSize;
+                }
+            }
+        }
+        flushScriptStatusAndDialogs();
+        suppressRawCaptureProfileEvents_ = false;
+    } else if (!capture.payload.empty()) {
         transport::ConnectionContext replayContext;
         replayContext.endpoint = "psraw-import";
         replayContext.connectionId = 0;
@@ -803,7 +893,6 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
             const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, capture.payload.size() - cursor);
             std::vector<std::uint8_t> chunk(capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor),
                                             capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
-            // 核心流程：导入回放按小块喂给 Lua stream parser，避免一次性写满环形缓冲区后只剩尾部数据。
             scriptHost_.onTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
             flushScriptOutputs();
             flushScriptLogs();
@@ -1235,6 +1324,29 @@ bool Application::flushScriptOutputs() {
 
 bool Application::flushScriptStatusAndDialogs() {
     bool changed = false;
+    for (const auto& profileEvent : scriptHost_.drainStreamRuntimeProfileEvents()) {
+        const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
+        const plot::RawCaptureEvent event{
+            .type = profileEvent.cleared ? plot::RawCaptureEventType::ProfileClear : plot::RawCaptureEventType::ProfileSet,
+            .timestampMs = timestampMs,
+            .bytes = {},
+            .profile = plot::RawCaptureProfileEventData{
+                .frameName = profileEvent.frameName,
+                .length = profileEvent.length,
+                .channelMap = profileEvent.channelMap,
+            },
+        };
+        if (!suppressRawCaptureProfileEvents_) {
+            appendRawCaptureEvent(event);
+        }
+        if (rawCaptureRecording_.isOpen()) {
+            std::string error;
+            if (!rawCaptureRecording_.appendEvent(event, error)) {
+                loggingFacade_.error("raw_capture", "录制 stream profile 事件失败: " + error);
+            }
+        }
+        changed = true;
+    }
     for (const auto& update : scriptHost_.drainStatusUpdates()) {
         setStatusMessage(update.clear ? std::string{} : update.text, false);
         changed = true;

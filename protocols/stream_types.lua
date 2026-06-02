@@ -65,8 +65,9 @@ local M = {}
 ---@class ProtoStreamFrameDef
 ---@field name string 帧名称，必须唯一
 ---@field header ProtoBytes 用于同步的固定帧头字节序列
----@field size? integer 固定整帧长度；与 `len` 二选一
----@field len? ProtoStreamLenDef 变长帧定义；与 `size` 二选一
+---@field size? integer 固定整帧长度；与 `len` / `runtime_profile` 三选一
+---@field len? ProtoStreamLenDef 变长帧定义；与 `size` / `runtime_profile` 三选一
+---@field runtime_profile? boolean 声明该帧长度与通道映射由 `proto.stream.set_profile()` 在运行时提供
 ---@field crc? ProtoStreamCrcDef|false CRC 配置；省略或 `false` 表示不校验
 ---@field fields? ProtoStreamFieldDef[] 字段定义
 ---@field on_frame fun(ctx: ProtoConnectionContext, frame: ProtoStreamFrame) 完整有效帧回调
@@ -81,6 +82,12 @@ local M = {}
 ---@field raw ProtoBytes 原始完整帧
 ---@field fields table<string, any> 已解码字段表
 ---@field crc_ok boolean CRC 是否通过；未启用 CRC 时也为 true
+---@field channel_map? integer[] 当前帧生效的业务通道映射，Lua 侧使用 1-based 编号
+
+---@class ProtoStreamRuntimeProfile
+---@field frame string 目标 frame 名称
+---@field length integer 完整帧长度
+---@field channel_map? integer[] 业务通道映射，Lua 侧使用 1-based 编号
 
 ---@class ProtoStreamError
 ---@field code 'overflow'|'noise_discarded'|'invalid_length'|'crc_mismatch'|'field_decode_failed'|'count_resolve_failed'

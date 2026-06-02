@@ -494,6 +494,59 @@ const std::vector<StreamFrameDefinition>& FrameStreamParser::frameDefinitions() 
     return frames_;
 }
 
+void FrameStreamParser::clearRuntimeProfiles() {
+    runtimeProfiles_.clear();
+}
+
+bool FrameStreamParser::setRuntimeProfile(const std::string& frameName,
+                                          StreamRuntimeProfile profile,
+                                          std::string& error) {
+    const auto frameIter = std::find_if(frames_.begin(), frames_.end(), [&frameName](const StreamFrameDefinition& frame) {
+        return frame.name == frameName;
+    });
+    if (frameIter == frames_.end()) {
+        error = "未找到 stream frame: " + frameName;
+        return false;
+    }
+    if (!frameIter->runtimeProfile) {
+        error = "frame 未声明 runtime_profile: " + frameName;
+        return false;
+    }
+    if (profile.length == 0) {
+        error = "runtime profile length 必须大于 0";
+        return false;
+    }
+    if (!profile.channelMap.empty()) {
+        std::vector<bool> used(profile.channelMap.size(), false);
+        for (const auto target : profile.channelMap) {
+            if (target >= profile.channelMap.size()) {
+                error = "runtime profile channel_map 存在越界目标";
+                return false;
+            }
+            if (used[target]) {
+                error = "runtime profile channel_map 存在重复目标";
+                return false;
+            }
+            used[target] = true;
+        }
+    }
+    runtimeProfiles_.insert_or_assign(frameName, std::move(profile));
+    return true;
+}
+
+bool FrameStreamParser::clearRuntimeProfile(const std::optional<std::string>& frameName, std::string& error) {
+    if (!frameName.has_value()) {
+        runtimeProfiles_.clear();
+        return true;
+    }
+    const auto erased = runtimeProfiles_.erase(*frameName);
+    if (erased == 0U) {
+        error = "runtime profile 不存在: " + *frameName;
+        return false;
+    }
+    return true;
+}
+
 StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes) {
     StreamParseBatch batch;
 
@@ -634,7 +687,21 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
     }
 
     std::size_t frameLength = 0;
-    if (frame.size.has_value()) {
+    if (frame.runtimeProfile) {
+        const auto profileIter = runtimeProfiles_.find(frame.name);
+        if (profileIter == runtimeProfiles_.end()) {
+            result.action = AnalyzeResult::Action::RecoverableError;
+            result.error = StreamParseError{
+                .code = StreamParseErrorCode::InvalidLength,
+                .message = "runtime_profile 帧缺少运行时长度",
+                .frameName = frame.name,
+                .droppedBytes = 0,
+                .raw = {},
+            };
+            return result;
+        }
+        frameLength = profileIter->second.length;
+    } else if (frame.size.has_value()) {
         frameLength = *frame.size;
     } else if (frame.len.has_value()) {
         const auto width = streamValueWidth(frame.len->type);
@@ -810,8 +877,52 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
         .raw = copyBytes(frameBytes, frameLength),
         .fields = std::move(parsedFields),
         .crcOk = true,
+        .channelMap = {},
     };
+    std::string mapError;
+    if (!applyRuntimeChannelMap(frame, *result.frame, mapError)) {
+        result.action = AnalyzeResult::Action::RecoverableError;
+        result.error = StreamParseError{
+            .code = StreamParseErrorCode::FieldDecodeFailed,
+            .message = mapError,
+            .frameName = frame.name,
+            .droppedBytes = 0,
+            .raw = copyBytes(frameBytes, frameLength),
+        };
+        result.frame.reset();
+        return result;
+    }
     return result;
+}
+
+bool FrameStreamParser::applyRuntimeChannelMap(const StreamFrameDefinition& definition,
+                                               StreamParsedFrame& frame,
+                                               std::string& error) const {
+    if (!definition.runtimeProfile) {
+        return true;
+    }
+    const auto profileIter = runtimeProfiles_.find(definition.name);
+    if (profileIter == runtimeProfiles_.end()) {
+        error = "runtime_profile 帧缺少 channel_map";
+        return false;
+    }
+    frame.channelMap = profileIter->second.channelMap;
+    if (frame.channelMap.empty()) {
+        return true;
+    }
+    std::vector<bool> used(frame.channelMap.size(), false);
+    for (const auto target : frame.channelMap) {
+        if (target >= frame.channelMap.size()) {
+            error = "runtime profile channel_map 超出通道范围";
+            return false;
+        }
+        if (used[target]) {
+            error = "runtime profile channel_map 存在重复目标";
+            return false;
+        }
+        used[target] = true;
+    }
+    return true;
 }
 
 ByteRingBuffer::LinearReadView FrameStreamParser::ensureLinearWindow(std::size_t count) const {

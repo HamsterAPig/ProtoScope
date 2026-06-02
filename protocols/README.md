@@ -305,6 +305,7 @@ return schema
 - 噪声前缀丢弃。
 - CRC 校验。
 - 固定长度或变长长度解析。
+- `runtime_profile = true` 时，从 `proto.stream.set_profile()` 读取运行时整帧长度与通道映射。
 - 字段解码后再回调 `on_frame`。
 
 `stream()` 里的常用字段：
@@ -316,6 +317,41 @@ return schema
 - `fields`：字段定义，`offset` 从 1 开始计数；`count` 可写整数、已解析字段名或纯 C++ count 表达式 table。
 - `on_frame`：完整有效帧回调。
 - `on_error`：解析错误回调。
+
+### 运行时长度 / 通道映射
+
+当某个帧的真实长度、业务通道顺序需要在运行时由脚本先探测、再持续生效时，可以这样声明：
+
+```lua
+{
+  name = "upload_dynamic",
+  header = { 0xFF, 0x26 },
+  runtime_profile = true,
+  crc = { type = "crc16_modbus", order = "hi_lo" },
+  fields = {
+    { name = "sequence", type = "u16_be", offset = 3 },
+    { name = "values", type = "i16_be", offset = 5, count = { op = "remaining", unit = 2 } },
+  },
+  on_frame = handle_upload_frame,
+}
+```
+
+然后在 Lua 里设置：
+
+```lua
+local ok, err = proto.stream.set_profile({
+  frame = "upload_dynamic",
+  length = 14,
+  channel_map = { 2, 3, 1, 4 },
+})
+```
+
+约定：
+
+- `length` 是完整帧长度。
+- `channel_map` 用 Lua 侧 1-based 通道号声明；宿主内部会转换为 0-based。
+- profile 一旦设置会持续生效，直到 `proto.stream.clear_profile("upload_dynamic")` 或 `proto.stream.clear_profile()`。
+- `runtime_profile = true` 的帧如果回放时缺少对应 profile 事件，宿主会给出明确错误，而不是静默套旧长度。
 
 字段类型、`crc.order`、`len.means` 的可选值请直接参考 `protocols/stream_types.lua`。
 

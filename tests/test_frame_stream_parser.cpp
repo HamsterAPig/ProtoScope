@@ -346,3 +346,63 @@ void test_frame_stream_parser_overflow_keeps_latest_crc_window() {
     require(batch.frames.size() == 1, "overflow 后应仅保留最新完整 CRC 帧");
     require(batch.frames[0].raw == newFrame, "overflow 后应保留最新 CRC 帧");
 }
+
+void test_frame_stream_parser_runtime_profile_length_and_channel_map() {
+    using namespace protoscope::scripting;
+
+    StreamFieldDefinition valuesField;
+    valuesField.name = "values";
+    valuesField.type = StreamValueType::I16Be;
+    valuesField.offset = 3;
+    auto remaining = std::make_shared<StreamCountExpression>();
+    remaining->op = StreamCountExpressionOp::Remaining;
+    remaining->argument = 2;
+    remaining->excludeCrc = true;
+    valuesField.count.expression = remaining;
+
+    StreamFrameDefinition frame;
+    frame.name = "dynamic_profile";
+    frame.header = {0xFF, 0x26};
+    frame.runtimeProfile = true;
+    frame.crc = StreamCrcDefinition{.type = StreamCrcType::Crc16Modbus, .order = StreamCrcOrder::HiLo};
+    frame.fields = {valuesField};
+
+    FrameStreamParser parser(StreamBufferDefinition{.capacity = 64, .dropOldest = true}, {frame});
+    std::string error;
+    require(parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 8, .channelMap = {1, 0}}, error),
+            "runtime profile 应可设置");
+
+    std::vector<std::uint8_t> raw{0xFF, 0x26, 0x00, 0x11, 0x00, 0x22};
+    const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
+    raw.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+    raw.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+
+    const auto batch = parser.pushBytes(raw);
+    require(batch.errors.empty(), "runtime profile 正常场景不应报错");
+    require(batch.frames.size() == 1, "runtime profile 应解析出 1 帧");
+    require(batch.frames.front().channelMap.size() == 2, "channel_map 应透传到解析结果");
+    require(batch.frames.front().channelMap[0] == 1 && batch.frames.front().channelMap[1] == 0,
+            "channel_map 应保持 C++ 内部 0-based 映射");
+}
+
+void test_frame_stream_parser_runtime_profile_errors() {
+    using namespace protoscope::scripting;
+
+    StreamFrameDefinition frame;
+    frame.name = "dynamic_profile";
+    frame.header = {0xFF, 0x26};
+    frame.runtimeProfile = true;
+    FrameStreamParser parser(StreamBufferDefinition{.capacity = 8, .dropOldest = true}, {frame});
+
+    const auto missing = parser.pushBytes({0xFF, 0x26, 0x00});
+    require(!missing.errors.empty(), "未设置 runtime profile 时应报错");
+    require(missing.errors.front().code == StreamParseErrorCode::InvalidLength, "缺少 profile 应报 invalid_length");
+
+    std::string error;
+    require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 0, .channelMap = {}}, error),
+            "长度为 0 应被拒绝");
+    require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 0}}, error),
+            "重复 channel_map 应被拒绝");
+    require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 2}}, error),
+            "越界 channel_map 应被拒绝");
+}

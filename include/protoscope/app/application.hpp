@@ -130,6 +130,7 @@ private:
     void appendTransferRow(dock::ReceiveRow row);
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
     void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
+    void appendRawCaptureEvent(const plot::RawCaptureEvent& event);
     void resetTransferFrameParser();
     void resetTransferFrameDisplayState();
     void appendTransferFrameRows(const dock::ReceiveRow& sourceRow);
@@ -164,6 +165,7 @@ private:
     std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;
     std::optional<std::uint64_t> cachedWaveSummaryRevision_;
+    bool suppressRawCaptureProfileEvents_{false};
 };
 
 } // namespace protoscope::app

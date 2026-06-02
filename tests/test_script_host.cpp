@@ -664,6 +664,50 @@ void test_script_stream_schema_reports_overflow_and_crc_error() {
     require(foundCrc, "CRC 校验失败时应回调 stream.on_error");
 }
 
+void test_script_stream_runtime_profile_set_and_clear() {
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("runtime_profile_stream").generic_string()),
+            "runtime_profile_stream 协议应可加载");
+
+    sol::state lua;
+    lua.open_libraries(sol::lib::base, sol::lib::table);
+    auto setTable = lua.create_table();
+    setTable["frame"] = "dynamic_profile";
+    setTable["length"] = 8;
+    auto map = lua.create_table();
+    map[1] = 2;
+    map[2] = 1;
+    setTable["channel_map"] = map;
+
+    std::string error;
+    require(host.setStreamRuntimeProfile(sol::make_object(lua, setTable), error), "set_profile 应成功");
+    const auto profileEvents = host.drainStreamRuntimeProfileEvents();
+    require(profileEvents.size() == 1 && !profileEvents.front().cleared, "set_profile 应产生 profile_set 事件");
+
+    std::vector<std::uint8_t> raw{0xFF, 0x26, 0x00, 0x11, 0x00, 0x22};
+    const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
+    raw.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+    raw.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), raw});
+
+    bool foundFrame = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "runtime_profile_frame") {
+            foundFrame = true;
+        }
+    }
+    require(foundFrame, "set_profile 后应持续按 runtime profile 解析");
+
+    require(host.clearStreamRuntimeProfile(sol::make_object(lua, std::string("dynamic_profile")), error),
+            "clear_profile(frame) 应成功");
+    const auto clearOneEvents = host.drainStreamRuntimeProfileEvents();
+    require(clearOneEvents.size() == 1 && clearOneEvents.front().cleared, "clear_profile(frame) 应产生 clear 事件");
+
+    require(host.clearStreamRuntimeProfile(sol::make_object(lua, sol::lua_nil), error), "clear_profile() 应成功");
+    const auto clearAllEvents = host.drainStreamRuntimeProfileEvents();
+    require(clearAllEvents.size() == 1 && clearAllEvents.front().cleared, "clear_profile() 应产生 clear-all 事件");
+}
+
 void test_script_stream_schema_reload_uses_current_callbacks() {
     const auto protocolDir = makeUniqueTempDir("protoscope-stream-reload-callbacks");
     const auto writeProtocol = [&](const std::string& version) {
@@ -1964,6 +2008,7 @@ static const TestCase kAllTests[] = {
     {"script_stream_schema_legacy_on_bytes_still_works", &test_script_stream_schema_legacy_on_bytes_still_works},
     {"script_stream_schema_bypasses_on_bytes_and_calls_on_frame", &test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame},
     {"script_stream_schema_reports_overflow_and_crc_error", &test_script_stream_schema_reports_overflow_and_crc_error},
+    {"script_stream_runtime_profile_set_and_clear", &test_script_stream_runtime_profile_set_and_clear},
     {"script_stream_schema_reload_uses_current_callbacks", &test_script_stream_schema_reload_uses_current_callbacks},
     {"script_stream_schema_rejects_count_function", &test_script_stream_schema_rejects_count_function},
     {"script_stream_schema_accepts_count_expression_table", &test_script_stream_schema_accepts_count_expression_table},
@@ -1979,6 +2024,8 @@ static const TestCase kAllTests[] = {
     {"frame_stream_parser_multi_schema_large_chunk_throughput", &test_frame_stream_parser_multi_schema_large_chunk_throughput},
     {"frame_stream_parser_crc_frame_across_chunks", &test_frame_stream_parser_crc_frame_across_chunks},
     {"frame_stream_parser_overflow_keeps_latest_crc_window", &test_frame_stream_parser_overflow_keeps_latest_crc_window},
+    {"frame_stream_parser_runtime_profile_length_and_channel_map", &test_frame_stream_parser_runtime_profile_length_and_channel_map},
+    {"frame_stream_parser_runtime_profile_errors", &test_frame_stream_parser_runtime_profile_errors},
     {"luals_api_sync_contains_tx_and_dialog_api", &test_luals_api_sync_contains_tx_and_dialog_api},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},
@@ -2099,6 +2146,7 @@ static const TestCase kAllTests[] = {
     {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
     {"application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims", &test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims},
     {"application_raw_capture_import_preserves_full_history", &test_application_raw_capture_import_preserves_full_history},
+    {"application_raw_capture_import_replays_runtime_profile_events", &test_application_raw_capture_import_replays_runtime_profile_events},
     {"application_raw_capture_import_replays_stream_in_chunks", &test_application_raw_capture_import_replays_stream_in_chunks},
     {"application_reload_rebuilds_frame_rows_with_count_expression", &test_application_reload_rebuilds_frame_rows_with_count_expression},
     {"application_transfer_log_frame_view_waits_for_rx_full_frame", &test_application_transfer_log_frame_view_waits_for_rx_full_frame},

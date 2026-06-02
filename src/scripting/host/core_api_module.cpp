@@ -11,8 +11,9 @@ public:
 
     std::string_view id() const override { return "core_api_module"; }
 
-    void registerApi(ScriptHostContextInternal&, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
         auto* host = &host_;
+        sol::state_view lua = ctx.lua;
         proto.set_function("log", [host](const std::string& level, const std::string& message) {
             host->protoLog(level, message);
         });
@@ -25,6 +26,22 @@ public:
         proto.set_function("cancel_timer", [host](const std::string& name) {
             host->protoCancelTimer(name);
         });
+        auto streamApi = lua.create_table();
+        streamApi.set_function("set_profile", [host, lua](const sol::object& profile) {
+            std::string error;
+            if (host->setStreamRuntimeProfile(profile, error)) {
+                return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
+            }
+            return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, error));
+        });
+        streamApi.set_function("clear_profile", [host, lua](const sol::object& frameName) {
+            std::string error;
+            if (host->clearStreamRuntimeProfile(frameName, error)) {
+                return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
+            }
+            return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, error));
+        });
+        proto["stream"] = streamApi;
     }
 
 private:

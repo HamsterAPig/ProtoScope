@@ -10,6 +10,25 @@
 
 namespace protoscope::plot {
 
+enum class RawCaptureEventType {
+    RxBytes,
+    ProfileSet,
+    ProfileClear,
+};
+
+struct RawCaptureProfileEventData {
+    std::string frameName;
+    std::size_t length{0};
+    std::vector<std::size_t> channelMap;
+};
+
+struct RawCaptureEvent {
+    RawCaptureEventType type{RawCaptureEventType::RxBytes};
+    std::uint64_t timestampMs{0};
+    std::vector<std::uint8_t> bytes;
+    RawCaptureProfileEventData profile;
+};
+
 struct RawCaptureFileData {
     std::string protocolName;
     std::string protocolDir;
@@ -17,6 +36,7 @@ struct RawCaptureFileData {
     std::uint64_t capturedAtMs{0};
     bool truncated{false};
     std::vector<std::uint8_t> payload;
+    std::vector<RawCaptureEvent> events;
 };
 
 std::string encodeRawCaptureHeader(const RawCaptureFileData& capture);
@@ -39,6 +59,7 @@ public:
 
     bool open(const std::filesystem::path& path, const RawCaptureFileData& metadata, std::string& error);
     bool append(std::span<const std::uint8_t> bytes, std::string& error);
+    bool appendEvent(const RawCaptureEvent& event, std::string& error);
     bool close(std::string& error);
 
 private:
@@ -46,6 +67,7 @@ private:
     std::filesystem::path path_;
     RawCaptureFileData metadata_{};
     std::uint64_t bytesWritten_{0};
+    std::uint64_t rxBytesWritten_{0};
 };
 
 } // namespace protoscope::plot

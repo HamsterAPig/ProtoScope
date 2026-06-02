@@ -1372,6 +1372,104 @@ std::vector<StreamFrameDefinition> ScriptHost::streamFrameDefinitions() const {
     return runtime_->stream->parser.frameDefinitions();
 }
 
+bool ScriptHost::setStreamRuntimeProfile(const sol::object& profileObject, std::string& error) {
+    if (!runtime_ || !runtime_->stream) {
+        error = "当前协议未启用 stream()";
+        return false;
+    }
+    if (!profileObject.valid() || !profileObject.is<sol::table>()) {
+        error = "stream profile 必须是 table";
+        return false;
+    }
+    const auto table = profileObject.as<sol::table>();
+    const auto frameName = luaStringField(table, "frame");
+    const auto lengthValue = luaIntegerValue(table["length"]);
+    if (!frameName.has_value() || frameName->empty()) {
+        error = "stream profile.frame 不能为空";
+        return false;
+    }
+    if (!lengthValue.has_value() || *lengthValue <= 0) {
+        error = "stream profile.length 必须是正整数";
+        return false;
+    }
+
+    StreamRuntimeProfile profile;
+    profile.length = static_cast<std::size_t>(*lengthValue);
+    const sol::object channelMapObject = table["channel_map"];
+    if (channelMapObject.valid() && channelMapObject.get_type() != sol::type::lua_nil) {
+        if (!channelMapObject.is<sol::table>()) {
+            error = "stream profile.channel_map 必须是数组";
+            return false;
+        }
+        const auto channelMapTable = channelMapObject.as<sol::table>();
+        profile.channelMap.reserve(channelMapTable.size());
+        for (std::size_t index = 1; index <= channelMapTable.size(); ++index) {
+            const auto value = luaIntegerValue(channelMapTable[index]);
+            if (!value.has_value() || *value <= 0) {
+                error = "stream profile.channel_map 必须是从 1 开始的正整数数组";
+                return false;
+            }
+            profile.channelMap.push_back(static_cast<std::size_t>(*value - 1));
+        }
+    }
+
+    if (!runtime_->stream->parser.setRuntimeProfile(*frameName, profile, error)) {
+        return false;
+    }
+    runtime_->streamRuntimeProfiles.insert_or_assign(*frameName, std::move(profile));
+    streamRuntimeProfileEvents_.push_back(StreamRuntimeProfileEvent{
+        .cleared = false,
+        .frameName = *frameName,
+        .length = runtime_->streamRuntimeProfiles[*frameName].length,
+        .channelMap = runtime_->streamRuntimeProfiles[*frameName].channelMap,
+    });
+    return true;
+}
+
+bool ScriptHost::clearStreamRuntimeProfile(const sol::object& frameNameObject, std::string& error) {
+    if (!runtime_ || !runtime_->stream) {
+        error = "当前协议未启用 stream()";
+        return false;
+    }
+    std::optional<std::string> frameName;
+    if (frameNameObject.valid() && frameNameObject.get_type() != sol::type::lua_nil) {
+        if (!frameNameObject.is<std::string>()) {
+            error = "stream.clear_profile(frame) 仅接受字符串或 nil";
+            return false;
+        }
+        frameName = frameNameObject.as<std::string>();
+    }
+    if (!runtime_->stream->parser.clearRuntimeProfile(frameName, error)) {
+        return false;
+    }
+    if (frameName.has_value()) {
+        runtime_->streamRuntimeProfiles.erase(*frameName);
+        streamRuntimeProfileEvents_.push_back(StreamRuntimeProfileEvent{
+            .cleared = true,
+            .frameName = *frameName,
+            .length = 0,
+            .channelMap = {},
+        });
+    } else {
+        runtime_->streamRuntimeProfiles.clear();
+        streamRuntimeProfileEvents_.push_back(StreamRuntimeProfileEvent{
+            .cleared = true,
+            .frameName = {},
+            .length = 0,
+            .channelMap = {},
+        });
+    }
+    return true;
+}
+
+void ScriptHost::clearAllStreamRuntimeProfiles() {
+    if (!runtime_ || !runtime_->stream) {
+        return;
+    }
+    runtime_->stream->parser.clearRuntimeProfiles();
+    runtime_->streamRuntimeProfiles.clear();
+}
+
 void ScriptHost::resetRuntime() {
     scriptLoaded_ = false;
     lastError_.clear();
@@ -1398,6 +1496,8 @@ void ScriptHost::onTransportOpen(const transport::TransportOpenEvent& event) {
     activeConnection_ = event.context;
     if (runtime_->stream) {
         runtime_->stream->parser.reset();
+        runtime_->stream->parser.clearRuntimeProfiles();
+        runtime_->streamRuntimeProfiles.clear();
     }
     callbackOnOpen(ScriptHostContext{event.context});
 }
@@ -1409,6 +1509,8 @@ void ScriptHost::onTransportClose(const transport::TransportCloseEvent& event) {
     }
     if (runtime_->stream) {
         runtime_->stream->parser.reset();
+        runtime_->stream->parser.clearRuntimeProfiles();
+        runtime_->streamRuntimeProfiles.clear();
     }
 }
 
@@ -1615,6 +1717,12 @@ std::vector<RequestDoneResult> ScriptHost::drainRequestDoneResults() {
 std::vector<StatusUpdate> ScriptHost::drainStatusUpdates() {
     auto drained = std::move(statusUpdates_);
     statusUpdates_.clear();
+    return drained;
+}
+
+std::vector<StreamRuntimeProfileEvent> ScriptHost::drainStreamRuntimeProfileEvents() {
+    auto drained = std::move(streamRuntimeProfileEvents_);
+    streamRuntimeProfileEvents_.clear();
     return drained;
 }
 

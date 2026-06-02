@@ -261,6 +261,13 @@ struct StatusUpdate {
     std::uint64_t timestampMs{0};
 };
 
+struct StreamRuntimeProfileEvent {
+    bool cleared{false};
+    std::string frameName;
+    std::size_t length{0};
+    std::vector<std::size_t> channelMap;
+};
+
 enum class DialogKind {
     Alert,
     Confirm,
@@ -354,6 +361,9 @@ public:
     void onTransportClose(const transport::TransportCloseEvent& event);
     void onTransportError(const transport::TransportErrorEvent& event);
     void onTransportBytes(const transport::TransportBytesEvent& event);
+    bool setStreamRuntimeProfile(const sol::object& profile, std::string& error);
+    bool clearStreamRuntimeProfile(const sol::object& frameName, std::string& error);
+    void clearAllStreamRuntimeProfiles();
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
     bool setControlValue(const std::string& id, const ControlValue& value);
     void tick(std::uint64_t currentMs);
@@ -372,6 +382,7 @@ public:
     RealtimeOutputDiscardCounts clearPendingRealtimeOutputs();
     std::vector<RequestDoneResult> drainRequestDoneResults();
     std::vector<StatusUpdate> drainStatusUpdates();
+    std::vector<StreamRuntimeProfileEvent> drainStreamRuntimeProfileEvents();
     std::vector<DialogRequest> drainDialogRequests();
     std::vector<FileDialogRequest> drainFileDialogRequests();
     std::optional<std::uint64_t> nextWakeupAtMs() const;
@@ -475,6 +486,7 @@ private:
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends_;
     std::vector<RequestDoneResult> requestDoneResults_;
     std::vector<StatusUpdate> statusUpdates_;
+    std::vector<StreamRuntimeProfileEvent> streamRuntimeProfileEvents_;
     std::vector<DialogRequest> dialogRequests_;
     std::vector<FileDialogRequest> fileDialogRequests_;
     std::unordered_map<std::string, TimerState> timers_;

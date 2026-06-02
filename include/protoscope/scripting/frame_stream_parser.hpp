@@ -158,6 +158,7 @@ struct StreamFrameDefinition {
     std::optional<StreamLengthDefinition> len;
     StreamCrcDefinition crc;
     std::vector<StreamFieldDefinition> fields;
+    bool runtimeProfile{false};
 };
 
 struct StreamBufferDefinition {
@@ -170,6 +171,12 @@ struct StreamParsedFrame {
     std::vector<std::uint8_t> raw;
     StreamFieldMap fields;
     bool crcOk{true};
+    std::vector<std::size_t> channelMap;
+};
+
+struct StreamRuntimeProfile {
+    std::size_t length{0};
+    std::vector<std::size_t> channelMap;
 };
 
 enum class StreamParseErrorCode {
@@ -201,6 +208,9 @@ public:
     void reset();
     [[nodiscard]] const StreamBufferDefinition& bufferDefinition() const;
     [[nodiscard]] const std::vector<StreamFrameDefinition>& frameDefinitions() const;
+    void clearRuntimeProfiles();
+    bool setRuntimeProfile(const std::string& frameName, StreamRuntimeProfile profile, std::string& error);
+    bool clearRuntimeProfile(const std::optional<std::string>& frameName, std::string& error);
     StreamParseBatch pushBytes(const std::vector<std::uint8_t>& bytes);
 
 private:
@@ -234,6 +244,9 @@ private:
     [[nodiscard]] std::optional<CandidateMatch> findCandidate() const;
     AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
                                const ByteRingBuffer::LinearReadView& window) const;
+    [[nodiscard]] bool applyRuntimeChannelMap(const StreamFrameDefinition& definition,
+                                              StreamParsedFrame& frame,
+                                              std::string& error) const;
     std::optional<std::size_t> resolveFieldCount(const StreamFieldDefinition& field,
                                                  const StreamFieldMap& parsed,
                                                  std::size_t frameLength,
@@ -252,6 +265,7 @@ private:
     std::array<std::vector<std::size_t>, 256> headerFirstByteIndex_{};
     std::size_t maxHeaderLength_{0};
     mutable std::vector<std::uint8_t> linearScratch_;
+    std::unordered_map<std::string, StreamRuntimeProfile> runtimeProfiles_;
 };
 
 std::string_view streamParseErrorCodeName(StreamParseErrorCode code);

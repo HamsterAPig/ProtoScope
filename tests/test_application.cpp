@@ -872,7 +872,9 @@ void test_application_raw_capture_export_import_roundtrip() {
     std::string error;
     require(application.exportWaveRawCapture(tempPath, error), "应用导出 psraw 应成功");
     const auto capture = protoscope::plot::readRawCaptureFile(tempPath, error);
-    require(capture.has_value(), "导出后的 psraw 应可重新读取");
+    if (!capture.has_value()) {
+        throw std::runtime_error("导出后的 psraw 应可重新读取: " + error);
+    }
     require(capture->payload == transportState->queuedRxBytes, "导出文件应保留实时 RX 原始字节");
 
     application.resetWaveHistory();
@@ -924,9 +926,15 @@ void test_application_live_raw_capture_trims_to_limit() {
     std::string error;
     require(application.exportWaveRawCapture(tempPath, error), "截断后的实时缓存仍应可导出");
     const auto capture = protoscope::plot::readRawCaptureFile(tempPath, error);
-    require(capture.has_value(), "截断导出文件应可读取");
+    if (!capture.has_value()) {
+        throw std::runtime_error("截断导出文件应可读取: " + error);
+    }
     require(capture->truncated, "截断标记应写入 psraw 文件头");
-    require(capture->payload == expectedTail, "截断导出应只包含最近实时缓存");
+    if (capture->payload != expectedTail) {
+        throw std::runtime_error("截断导出应只包含最近实时缓存: actual="
+                                 + std::to_string(capture->payload.size()) + " expected="
+                                 + std::to_string(expectedTail.size()));
+    }
 
     std::filesystem::remove(tempPath);
     application.shutdown();
@@ -968,7 +976,9 @@ void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_t
     require(liveCapture.payload == std::vector<std::uint8_t>({0x14, 0x15, 0x16}), "实时缓存应只保留尾部字节");
 
     const auto recorded = protoscope::plot::readRawCaptureFile(tempPath, error);
-    require(recorded.has_value(), "完整录制 psraw 应可读取");
+    if (!recorded.has_value()) {
+        throw std::runtime_error("完整录制 psraw 应可读取: " + error);
+    }
     require(!recorded->truncated, "完整录制文件不应标记截断");
     require(recorded->payload == transportState->queuedRxBytes, "完整录制文件应保存全部 RX 原始字节");
 
@@ -988,6 +998,7 @@ void test_application_raw_capture_import_preserves_full_history() {
         .sampleFrequencyHz = 1000.0,
         .capturedAtMs = 123,
         .payload = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19},
+        .events = {},
     };
 
     std::string error;
@@ -1003,9 +1014,55 @@ void test_application_raw_capture_import_preserves_full_history() {
     std::filesystem::remove(tempPath);
     require(application.exportWaveRawCapture(tempPath, error), "完整历史导入后应仍可导出 psraw");
     const auto exported = protoscope::plot::readRawCaptureFile(tempPath, error);
-    require(exported.has_value(), "导出的 psraw 应可重新读取");
+    if (!exported.has_value()) {
+        throw std::runtime_error("导出的 psraw 应可重新读取: " + error);
+    }
     require(exported->payload == capture.payload, "再次导出应保留完整原始 payload");
     std::filesystem::remove(tempPath);
+    application.shutdown();
+}
+
+void test_application_raw_capture_import_replays_runtime_profile_events() {
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory("tests/fixtures/protocols/runtime_profile_stream", true),
+            "runtime_profile_stream 协议应可加载");
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.protocolName = "runtime_profile_stream";
+    capture.protocolDir = "tests/fixtures/protocols/runtime_profile_stream";
+    capture.sampleFrequencyHz = 2048.0;
+    capture.capturedAtMs = 100;
+    capture.events.push_back(protoscope::plot::RawCaptureEvent{
+        .type = protoscope::plot::RawCaptureEventType::ProfileSet,
+        .timestampMs = 100,
+        .bytes = {},
+        .profile = {.frameName = "dynamic_profile", .length = 8, .channelMap = {1, 0}},
+    });
+    std::vector<std::uint8_t> raw{0xFF, 0x26, 0x00, 0x11, 0x00, 0x22};
+    const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
+    raw.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    raw.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+    capture.events.push_back(protoscope::plot::RawCaptureEvent{
+        .type = protoscope::plot::RawCaptureEventType::RxBytes,
+        .timestampMs = 101,
+        .bytes = raw,
+        .profile = {},
+    });
+    capture.events.push_back(protoscope::plot::RawCaptureEvent{
+        .type = protoscope::plot::RawCaptureEventType::ProfileClear,
+        .timestampMs = 102,
+        .bytes = {},
+        .profile = {.frameName = "dynamic_profile", .length = 0, .channelMap = {}},
+    });
+    capture.payload = raw;
+
+    std::string error;
+    require(application.importWaveRawCapture(capture, error), "事件流 psraw 导入应成功");
+    if (application.docks().waveState().rawCapture.events.size() != 3) {
+        throw std::runtime_error("导入后应保留事件流: actual="
+                                 + std::to_string(application.docks().waveState().rawCapture.events.size()));
+    }
     application.shutdown();
 }
 
@@ -1025,6 +1082,7 @@ void test_application_raw_capture_import_replays_stream_in_chunks() {
         .sampleFrequencyHz = 1000.0,
         .capturedAtMs = 123,
         .payload = payload,
+        .events = {},
     };
 
     std::string error;
