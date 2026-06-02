@@ -2017,6 +2017,7 @@ static const TestCase kAllTests[] = {
     {"frame_stream_parser_handles_sticky_frames_and_noise_prefix", &test_frame_stream_parser_handles_sticky_frames_and_noise_prefix},
     {"frame_stream_parser_crc_resync_keeps_following_frame", &test_frame_stream_parser_crc_resync_keeps_following_frame},
     {"frame_stream_parser_reports_overflow_drop_oldest", &test_frame_stream_parser_reports_overflow_drop_oldest},
+    {"frame_stream_parser_near_overflow_threshold", &test_frame_stream_parser_near_overflow_threshold},
     {"frame_stream_parser_large_chunk_keeps_latest_window", &test_frame_stream_parser_large_chunk_keeps_latest_window},
     {"frame_stream_parser_supports_fixed_size_raw_frame", &test_frame_stream_parser_supports_fixed_size_raw_frame},
     {"frame_stream_parser_count_expression_arithmetic", &test_frame_stream_parser_count_expression_arithmetic},

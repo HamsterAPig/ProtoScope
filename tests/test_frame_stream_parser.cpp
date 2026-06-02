@@ -196,6 +196,36 @@ void test_frame_stream_parser_reports_overflow_drop_oldest() {
     require(batch.errors.front().droppedBytes == 2, "overflow 丢弃字节数不正确");
 }
 
+void test_frame_stream_parser_near_overflow_threshold() {
+    using namespace protoscope::scripting;
+
+    FrameStreamParser parser(StreamBufferDefinition{
+                                 .capacity = 10,
+                                 .dropOldest = true,
+                                 .nearOverflowThresholdRatio = 0.8,
+                                 .nearOverflowNotify = true,
+                             },
+                             {});
+
+    const auto below = parser.pushBytes({0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07});
+    require(!below.nearOverflow, "79% 以下不应触发 near-overflow");
+    require(below.bufferSize < below.bufferCapacity, "79% 用例缓冲区占用应小于容量");
+    require(below.bufferCapacity == 10, "79% 用例缓冲区容量应正确");
+
+    parser.reset();
+    const auto equal = parser.pushBytes({0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08});
+    require(equal.nearOverflow, "80% 时应触发 near-overflow");
+    require(!equal.overflowed, "80% near-overflow 用例不应被标记为 overflow");
+
+    parser.reset();
+    const auto overflow = parser.pushBytes({0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B});
+    require(overflow.overflowed, "实际溢出时应标记 overflowed");
+    require(!overflow.nearOverflow, "实际溢出时不应重复标记 near-overflow");
+    require(overflow.droppedBytes == 1, "实际溢出 droppedBytes 应正确");
+    require(!overflow.errors.empty() && overflow.errors.front().code == StreamParseErrorCode::Overflow,
+            "实际溢出仍应保留原有 overflow 错误");
+}
+
 
 void test_frame_stream_parser_large_chunk_keeps_latest_window() {
     using namespace protoscope::scripting;

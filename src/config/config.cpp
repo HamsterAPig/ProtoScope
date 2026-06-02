@@ -338,6 +338,19 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::string>(tx, "overflow_notify", result.config.protocol.tx.overflowNotify);
         }
 
+        if (const auto receive = root["receive"]) {
+            if (const auto streamBuffer = receive["stream_buffer"]) {
+                result.config.receive.streamBuffer.nearOverflowThreshold =
+                    readScalar<double>(streamBuffer,
+                                       "near_overflow_threshold",
+                                       result.config.receive.streamBuffer.nearOverflowThreshold);
+                result.config.receive.streamBuffer.popupEnabled =
+                    readScalar<bool>(streamBuffer,
+                                     "popup_enabled",
+                                     result.config.receive.streamBuffer.popupEnabled);
+            }
+        }
+
         const auto scripting = root["scripting"];
         if (const auto fileIo = scripting["file_io"]) {
             auto& config = result.config.scripting.fileIo;
@@ -486,6 +499,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["protocol"]["tx"]["max_pending"] = config.protocol.tx.maxPending;
     root["protocol"]["tx"]["overflow_policy"] = config.protocol.tx.overflowPolicy;
     root["protocol"]["tx"]["overflow_notify"] = config.protocol.tx.overflowNotify;
+    root["receive"]["stream_buffer"]["near_overflow_threshold"] = config.receive.streamBuffer.nearOverflowThreshold;
+    root["receive"]["stream_buffer"]["popup_enabled"] = config.receive.streamBuffer.popupEnabled;
 
     root["scripting"]["file_io"]["enabled"] = config.scripting.fileIo.enabled;
     root["scripting"]["file_io"]["allow_protocol_dir"] = config.scripting.fileIo.allowProtocolDir;

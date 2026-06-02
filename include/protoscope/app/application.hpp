@@ -87,6 +87,12 @@ private:
         std::size_t offset{0};
     };
 
+    struct StreamBufferAlertState {
+        std::uint64_t connectionId{0};
+        bool popupMuted{false};
+        bool popupOpen{false};
+    };
+
     struct RealtimeBacklogDiscardCounts {
         std::size_t transportEvents{0};
         std::size_t rxBytes{0};
@@ -126,6 +132,10 @@ private:
                          std::uint64_t finishedAtMs);
     void cancelAllTxRequests(const std::string& reason);
     void notifyTxOverflow(const std::string& message);
+    void handleStreamBufferAlert(const transport::ConnectionContext& context,
+                                 const scripting::StreamParseBatch& batch,
+                                 const scripting::StreamBufferDefinition& bufferDefinition);
+    void resetStreamBufferAlertState(std::uint64_t connectionId = 0);
     void enqueueDialogRequest(const scripting::DialogRequest& request);
     void appendTransferRow(dock::ReceiveRow row);
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
@@ -159,6 +169,7 @@ private:
     std::deque<scripting::FileDialogRequest> pendingFileDialogs_;
     std::unordered_map<std::uint64_t, scripting::FileDialogRequest> openFileDialogs_;
     std::unordered_map<std::string, std::uint64_t> dialogDedupeKeys_;
+    StreamBufferAlertState streamBufferAlertState_{};
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
     std::deque<transport::TransportEvent> pendingTransportEvents_;

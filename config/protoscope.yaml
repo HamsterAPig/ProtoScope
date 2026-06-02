@@ -61,6 +61,11 @@ protocol:
     overflow_policy: reject_new
     overflow_notify: popup_once
 
+receive:
+  stream_buffer:
+    near_overflow_threshold: 0.8
+    popup_enabled: true
+
 scripting:
   file_io:
     enabled: true

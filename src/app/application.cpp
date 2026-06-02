@@ -233,6 +233,7 @@ bool Application::initialize() {
 
 bool Application::applyConfig(const config::AppConfig& config) {
     runtimeConfig_ = config;
+    resetStreamBufferAlertState();
     scriptHost_.setFileIoConfig(config.scripting.fileIo);
     applyHistoryLimits(config.gui.logHistory);
     configStore_.applyToDock(config, dockStore_);
@@ -260,6 +261,7 @@ config::AppConfig Application::captureConfig() const {
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
     captured.gui.replayRawHistoryOnSchemaSwitch = runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch;
     captured.app.language = runtimeConfig_.app.language;
+    captured.receive = runtimeConfig_.receive;
     captured.scripting = runtimeConfig_.scripting;
     captured.logging = loggingFacade_.currentConfig();
     return captured;
@@ -410,6 +412,11 @@ void Application::openTransport() {
 
 void Application::closeTransport() {
     cancelAllTxRequests("连接已关闭");
+    if (activeConnection_.has_value()) {
+        resetStreamBufferAlertState(activeConnection_->connectionId);
+    } else {
+        resetStreamBufferAlertState();
+    }
     std::string recordingError;
     if (rawCaptureRecording_.isOpen() && !stopRawCaptureRecording(recordingError)) {
         loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
@@ -596,6 +603,18 @@ void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow) {
 
     auto& parser = sourceRow.direction == "TX" ? transferFrameParser_->tx : transferFrameParser_->rx;
     const auto batch = parser.pushBytes(sourceRow.bytes);
+    if (sourceRow.direction == "RX") {
+        transport::ConnectionContext context;
+        if (activeConnection_.has_value() && activeConnection_->endpoint == sourceRow.endpoint) {
+            context = *activeConnection_;
+        } else {
+            context.endpoint = sourceRow.endpoint;
+            context.connectionId = 0;
+            context.timestampMs = sourceRow.timestampMs;
+            context.readyForIo = false;
+        }
+        handleStreamBufferAlert(context, batch, parser.bufferDefinition());
+    }
     if (batch.frames.empty()) {
         // RX 半包先留在 parser 缓冲中等待后续字节；TX 无匹配时按用户输入的原始 chunk 展示。
         if (sourceRow.direction == "TX" || !batch.errors.empty()) {
@@ -1236,6 +1255,7 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                     scriptHost_.onTransportClose(evt);
                 }
                 loggingFacade_.host(config::LogLevel::Info, "CLOSE", evt.context.endpoint, evt.reason, evt.context.timestampMs);
+                resetStreamBufferAlertState(evt.context.connectionId);
                 if (activeConnection_.has_value() && activeConnection_->connectionId == evt.context.connectionId) {
                     activeConnection_.reset();
                 }
@@ -1587,6 +1607,66 @@ void Application::notifyTxOverflow(const std::string& message) {
     }
 }
 
+void Application::handleStreamBufferAlert(const transport::ConnectionContext& context,
+                                          const scripting::StreamParseBatch& batch,
+                                          const scripting::StreamBufferDefinition& bufferDefinition) {
+    if (batch.bufferCapacity == 0 || batch.overflowed) {
+        return;
+    }
+
+    const double thresholdRatio = runtimeConfig_.receive.streamBuffer.nearOverflowThreshold > 0.0
+        ? runtimeConfig_.receive.streamBuffer.nearOverflowThreshold
+        : bufferDefinition.nearOverflowThresholdRatio;
+    const bool nearOverflow = static_cast<double>(batch.bufferSize) / static_cast<double>(batch.bufferCapacity) >= thresholdRatio;
+    if (!nearOverflow) {
+        return;
+    }
+
+    if (streamBufferAlertState_.connectionId != context.connectionId) {
+        streamBufferAlertState_.connectionId = context.connectionId;
+        streamBufferAlertState_.popupMuted = false;
+        streamBufferAlertState_.popupOpen = false;
+    }
+
+    std::ostringstream status;
+    status << "协议解析缓冲区占用过高: " << batch.bufferSize << "/" << batch.bufferCapacity << " bytes";
+    setStatusMessage(status.str(), true);
+
+    std::ostringstream logMessage;
+    logMessage << status.str()
+               << ", threshold=" << static_cast<int>(thresholdRatio * 100.0)
+               << "%, endpoint=" << context.endpoint;
+    loggingFacade_.warn("stream_buffer", logMessage.str());
+
+    if (!bufferDefinition.popupEnabled || !runtimeConfig_.receive.streamBuffer.popupEnabled ||
+        streamBufferAlertState_.popupMuted || streamBufferAlertState_.popupOpen) {
+        return;
+    }
+
+    const auto createdAtMs = static_cast<std::uint64_t>(nowMs());
+    const std::string thresholdText = std::to_string(static_cast<int>(thresholdRatio * 100.0));
+    const scripting::DialogRequest request{
+        .id = createdAtMs,
+        .kind = scripting::DialogKind::Alert,
+        .connection = context,
+        .title = "协议解析缓冲区占用过高",
+        .message = "当前连接 " + context.endpoint + " 的协议解析缓冲区已达到 " + std::to_string(batch.bufferSize) + "/" +
+            std::to_string(batch.bufferCapacity) + " bytes，告警阈值 " + thresholdText + "%。",
+        .level = "warn",
+        .dedupeKey = "receive.stream_buffer.near_overflow",
+        .createdAtMs = createdAtMs,
+    };
+    enqueueDialogRequest(request);
+    streamBufferAlertState_.popupOpen = true;
+}
+
+void Application::resetStreamBufferAlertState(const std::uint64_t connectionId) {
+    if (connectionId != 0 && streamBufferAlertState_.connectionId != connectionId) {
+        return;
+    }
+    streamBufferAlertState_ = StreamBufferAlertState{};
+}
+
 void Application::enqueueDialogRequest(const scripting::DialogRequest& request) {
     if (!request.dedupeKey.empty() && dialogDedupeKeys_.contains(request.dedupeKey)) {
         return;
@@ -1674,6 +1754,13 @@ void Application::respondDialog(const scripting::DialogEvent& event) {
         return;
     }
     const auto request = iter->second;
+    if (request.dedupeKey == "receive.stream_buffer.near_overflow") {
+        streamBufferAlertState_.popupOpen = false;
+        if (event.state == "mute_until_disconnect") {
+            streamBufferAlertState_.popupMuted = true;
+            streamBufferAlertState_.connectionId = request.connection.connectionId;
+        }
+    }
     if (!request.dedupeKey.empty()) {
         dialogDedupeKeys_.erase(request.dedupeKey);
     }

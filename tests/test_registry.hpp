@@ -42,6 +42,7 @@ void test_frame_stream_parser_waits_for_full_frame();
 void test_frame_stream_parser_handles_sticky_frames_and_noise_prefix();
 void test_frame_stream_parser_crc_resync_keeps_following_frame();
 void test_frame_stream_parser_reports_overflow_drop_oldest();
+void test_frame_stream_parser_near_overflow_threshold();
 void test_frame_stream_parser_large_chunk_keeps_latest_window();
 void test_frame_stream_parser_supports_fixed_size_raw_frame();
 void test_frame_stream_parser_count_expression_arithmetic();

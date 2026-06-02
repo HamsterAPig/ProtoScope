@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
@@ -399,6 +399,7 @@ public:
     [[nodiscard]] std::optional<StreamBufferDefinition> streamBufferDefinition() const;
     [[nodiscard]] std::vector<StreamFrameDefinition> streamFrameDefinitions() const;
     [[nodiscard]] const ScriptHostTransportStats& lastTransportStats() const;
+    [[nodiscard]] std::optional<StreamParseBatch> lastStreamParseBatch() const;
 
     const std::string& scriptPath() const;
     const std::string& protocolDirectory() const;

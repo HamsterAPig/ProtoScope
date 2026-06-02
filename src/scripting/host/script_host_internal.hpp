@@ -21,6 +21,7 @@ struct LoadedStreamSchema {
         : parser(std::move(buffer), std::move(frames)) {}
 
     FrameStreamParser parser;
+    std::optional<StreamParseBatch> lastBatch;
     std::unordered_map<std::string, std::string> frameCallbackKeys;
     std::optional<std::string> onErrorCallbackKey;
 };

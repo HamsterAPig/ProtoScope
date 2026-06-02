@@ -549,8 +549,16 @@ bool FrameStreamParser::clearRuntimeProfile(const std::optional<std::string>& fr
 
 StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes) {
     StreamParseBatch batch;
+    batch.bufferCapacity = buffer_.capacity();
+    if (bytes.empty()) {
+        batch.bufferSize = buffer_.size();
+        return batch;
+    }
 
     const auto dropped = buffer_.append(bytes, bufferDefinition_.dropOldest);
+    batch.bufferSize = buffer_.size();
+    batch.droppedBytes = dropped;
+    batch.overflowed = dropped > 0;
     if (dropped > 0) {
         batch.errors.push_back(StreamParseError{
             .code = StreamParseErrorCode::Overflow,
@@ -559,6 +567,11 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
             .droppedBytes = dropped,
             .raw = {},
         });
+    }
+
+    if (bufferDefinition_.nearOverflowNotify && batch.bufferCapacity > 0 && !batch.overflowed) {
+        const auto ratio = static_cast<double>(batch.bufferSize) / static_cast<double>(batch.bufferCapacity);
+        batch.nearOverflow = ratio >= bufferDefinition_.nearOverflowThresholdRatio;
     }
 
     if (frames_.empty()) {
@@ -637,6 +650,7 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
         buffer_.discardFront(1);
     }
 
+    batch.bufferSize = buffer_.size();
     return batch;
 }
 

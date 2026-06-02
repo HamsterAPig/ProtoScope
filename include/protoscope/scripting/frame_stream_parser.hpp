@@ -164,6 +164,9 @@ struct StreamFrameDefinition {
 struct StreamBufferDefinition {
     std::size_t capacity{4096};
     bool dropOldest{true};
+    double nearOverflowThresholdRatio{0.8};
+    bool nearOverflowNotify{true};
+    bool popupEnabled{true};
 };
 
 struct StreamParsedFrame {
@@ -199,6 +202,11 @@ struct StreamParseError {
 struct StreamParseBatch {
     std::vector<StreamParsedFrame> frames;
     std::vector<StreamParseError> errors;
+    std::size_t bufferSize{0};
+    std::size_t bufferCapacity{0};
+    bool nearOverflow{false};
+    bool overflowed{false};
+    std::size_t droppedBytes{0};
 };
 
 class FrameStreamParser {

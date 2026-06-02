@@ -1,4 +1,4 @@
-# ProtoScope Lua 协议脚本指南
+﻿# ProtoScope Lua 协议脚本指南
 
 `protocols` 是 ProtoScope 的 Lua 协议资源根目录。宿主会自动注入全局 `proto`，协议脚本主要负责 4 件事：
 
@@ -317,6 +317,11 @@ return schema
 - `fields`：字段定义，`offset` 从 1 开始计数；`count` 可写整数、已解析字段名或纯 C++ count 表达式 table。
 - `on_frame`：完整有效帧回调。
 - `on_error`：解析错误回调。
+
+补充约定：
+
+- Lua `buffer.capacity` 仍是实际环形缓冲容量来源。
+- 宿主 YAML `receive.stream_buffer.near_overflow_threshold` 与 `receive.stream_buffer.popup_enabled` 只控制“接近溢出”告警阈值和弹窗，不会改写协议 schema 的缓冲容量。
 
 ### 运行时长度 / 通道映射
 

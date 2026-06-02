@@ -1,4 +1,4 @@
-#include "protoscope/scripting/script_host.hpp"
+﻿#include "protoscope/scripting/script_host.hpp"
 
 #include "script_host_api_module.hpp"
 #include "script_host_internal.hpp"
@@ -1475,6 +1475,13 @@ void ScriptHost::clearAllStreamRuntimeProfiles() {
     runtime_->streamRuntimeProfiles.clear();
 }
 
+std::optional<StreamParseBatch> ScriptHost::lastStreamParseBatch() const {
+    if (!runtime_ || !runtime_->stream) {
+        return std::nullopt;
+    }
+    return runtime_->stream->lastBatch;
+}
+
 void ScriptHost::resetRuntime() {
     scriptLoaded_ = false;
     lastError_.clear();
@@ -1535,6 +1542,7 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
     if (runtime_->stream) {
         const auto parserStartedAt = std::chrono::steady_clock::now();
         const auto batch = runtime_->stream->parser.pushBytes(event.bytes);
+        runtime_->stream->lastBatch = batch;
         const auto parserFinishedAt = std::chrono::steady_clock::now();
         lastTransportStats_.streamFrames = batch.frames.size();
         lastTransportStats_.streamErrors = batch.errors.size();

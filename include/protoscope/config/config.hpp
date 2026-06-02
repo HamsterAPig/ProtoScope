@@ -117,6 +117,15 @@ struct ProtocolConfig {
     ProtocolTxConfig tx{};
 };
 
+struct ReceiveStreamBufferConfig {
+    double nearOverflowThreshold{0.8};
+    bool popupEnabled{true};
+};
+
+struct ReceiveConfig {
+    ReceiveStreamBufferConfig streamBuffer{};
+};
+
 struct ScriptingConfig {
     scripting::FileIoConfig fileIo{};
 };
@@ -125,6 +134,7 @@ struct AppConfig {
     AppRuntimeConfig app{};
     GuiConfig gui{};
     ProtocolConfig protocol{};
+    ReceiveConfig receive{};
     ScriptingConfig scripting{};
     AppLoggingConfig logging{};
     dock::CommDockState communication{};
