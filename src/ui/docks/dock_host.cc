@@ -465,13 +465,15 @@ void GuiRuntime::drawTransferDock()
         style.WindowPadding.y * 2.0F +
         style.CellPadding.y * 2.0F +
         sendBorderSlack;
+    // 扣除 ItemSpacing 间隙，避免 3 个部件（日志区、分割条、发送区）总高度超出可用区域导致纵向滚动条
+    const float childSpacing = style.ItemSpacing.y * 2.0F;
     if (transferSendSectionHeight_ <= 0.0F) {
         transferSendSectionHeight_ = minSendHeight;
     }
 
     const float maxSendHeight =
         (std::max)(minSendHeight,
-                   availableHeight - splitterThickness);
+                   availableHeight - splitterThickness - childSpacing);
     transferSendSectionHeight_ = (std::clamp)(
         transferSendSectionHeight_,
         minSendHeight,
@@ -479,7 +481,7 @@ void GuiRuntime::drawTransferDock()
 
     float logHeight =
         (std::max)(0.0F,
-                   availableHeight - transferSendSectionHeight_ - splitterThickness);
+                   availableHeight - transferSendSectionHeight_ - splitterThickness - childSpacing);
 
     // =========================
     // 上方：收发记录区
@@ -605,7 +607,7 @@ void GuiRuntime::drawTransferDock()
 
     transferSendSectionHeight_ =
         (std::max)(minSendHeight,
-                   availableHeight - logHeight - splitterThickness);
+                   availableHeight - logHeight - splitterThickness - childSpacing);
 
     // =========================
     // 下方：发送区
