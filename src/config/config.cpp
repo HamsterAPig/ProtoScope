@@ -398,6 +398,14 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::size_t>(worker,
                                         "rx_queue_limit_bytes",
                                         result.config.scripting.workerRxQueueLimitBytes);
+            result.config.scripting.workerMemoryBudgetBytes =
+                readScalar<std::size_t>(worker,
+                                        "memory_budget_bytes",
+                                        result.config.scripting.workerMemoryBudgetBytes);
+            result.config.scripting.workerMemoryBudgetAvailableRatio =
+                readScalar<double>(worker,
+                                   "memory_budget_available_ratio",
+                                   result.config.scripting.workerMemoryBudgetAvailableRatio);
             result.config.scripting.workerOutputQueueLimit =
                 readScalar<std::size_t>(worker, "output_queue_limit", result.config.scripting.workerOutputQueueLimit);
             result.config.scripting.workerBatchBytes =
@@ -574,6 +582,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     }
     root["scripting"]["worker"]["enabled"] = config.scripting.workerEnabled;
     root["scripting"]["worker"]["rx_queue_limit_bytes"] = config.scripting.workerRxQueueLimitBytes;
+    root["scripting"]["worker"]["memory_budget_bytes"] = config.scripting.workerMemoryBudgetBytes;
+    root["scripting"]["worker"]["memory_budget_available_ratio"] = config.scripting.workerMemoryBudgetAvailableRatio;
     root["scripting"]["worker"]["output_queue_limit"] = config.scripting.workerOutputQueueLimit;
     root["scripting"]["worker"]["batch_bytes"] = config.scripting.workerBatchBytes;
     root["scripting"]["worker"]["backpressure_enabled"] = config.scripting.workerBackpressureEnabled;

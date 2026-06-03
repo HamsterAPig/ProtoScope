@@ -119,12 +119,12 @@ void test_script_runtime_worker_disabled_mode_waits_for_rx_idle() {
     require(hasEvent(outputs, "worker_bytes", "first=66"), "禁用异步 worker 时应立即产出脚本事件");
 }
 
-void test_script_runtime_worker_rx_limit_drops_oldest_bytes_only() {
+void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes() {
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
         .enabled = true,
         .rxQueueLimitBytes = 6U,
-        .outputQueueLimit = 128U,
+        .outputQueueLimit = 1U,
         .batchBytes = 1U,
         .backpressureEnabled = false,
     });
@@ -151,11 +151,11 @@ void test_script_runtime_worker_rx_limit_drops_oldest_bytes_only() {
     worker.waitIdle();
     const auto outputs = worker.drainOutputs();
 
-    require(hasLog(outputs, "RX 队列超过限制"), "RX 队列超限时应通过脚本日志告警");
+    require(hasLog(outputs, "输出队列超过告警阈值"), "输出队列超限时应通过脚本日志告警但不丢弃");
     require(hasEvent(outputs, "worker_bytes", "first=1"), "阻塞中的首个 RX 事件不应被限流清理");
-    require(!hasEvent(outputs, "worker_bytes", "first=161"), "限流应丢弃最旧的待解析 RX 字节命令");
-    require(hasEvent(outputs, "worker_bytes", "first=178"), "限流后应保留较新的待解析 RX 字节命令");
-    require(hasEvent(outputs, "worker_bytes", "first=195"), "限流后应保留最新的待解析 RX 字节命令");
+    require(hasEvent(outputs, "worker_bytes", "first=161"), "RX 队列超过阈值后仍应保留最旧待解析字节");
+    require(hasEvent(outputs, "worker_bytes", "first=178"), "RX 队列超过阈值后仍应保留较新的待解析字节");
+    require(hasEvent(outputs, "worker_bytes", "first=195"), "RX 队列超过阈值后仍应保留最新待解析字节");
 }
 
 void test_pipeline_worker_threads_resolve_from_hardware_limit() {

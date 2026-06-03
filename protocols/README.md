@@ -277,7 +277,7 @@ end
 local schema = {
   buffer = {
     capacity = 4096,
-    overflow = "drop_oldest",
+    max_capacity = 268435456,
   },
   frames = {
     {
@@ -322,7 +322,8 @@ return schema
 
 补充约定：
 
-- Lua `buffer.capacity` 仍是实际环形缓冲容量来源。
+- Lua `buffer.capacity` 是初始环形缓冲容量；默认不丢弃，容量不足时会在 `buffer.max_capacity`（默认 256MiB）内自动扩容。
+- 只有显式写 `overflow = "drop_oldest"` 时，parser 才会在容量超限时丢弃最旧字节。
 - 宿主 YAML `receive.stream_buffer.near_overflow_threshold` 与 `receive.stream_buffer.popup_enabled` 只控制“接近溢出”告警阈值和弹窗，不会改写协议 schema 的缓冲容量。
 
 ### 运行时长度 / 通道映射

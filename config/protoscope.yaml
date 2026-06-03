@@ -45,7 +45,7 @@ gui:
     rx_chunk_bytes_per_pump: 65536
     transfer_frame_rows_per_pump: 2000
     plot_appends_per_pump: 4096
-    discard_backlog_on_disconnect: true
+    discard_backlog_on_disconnect: false
   elf_symbol_combo:
     limit: 10
     debounce_ms: 300
@@ -73,6 +73,8 @@ scripting:
   worker:
     enabled: true
     rx_queue_limit_bytes: 67108864
+    memory_budget_bytes: 268435456
+    memory_budget_available_ratio: 0.0
     output_queue_limit: 65536
     batch_bytes: 262144
   file_io:

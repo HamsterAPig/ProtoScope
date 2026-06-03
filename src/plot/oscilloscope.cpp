@@ -239,9 +239,6 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
 
 void OscilloscopeBuffer::setViewConfig(const ViewConfig& config) {
     config_ = config;
-    if (config_.historyLimit == 0) {
-        config_.historyLimit = 1;
-    }
     if (std::abs(config_.timeScale) <= kEpsilon) {
         config_.timeScale = 1.0;
     }
@@ -624,9 +621,14 @@ void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel) {
         return;
     }
     const std::size_t historyLimit = effectiveHistoryLimit();
-    const std::size_t effectiveLimit = maxTotalSamples_ > 0
+    const bool hasHistoryLimit = historyLimit > 0;
+    const bool hasMaxTotalSamples = maxTotalSamples_ > 0;
+    if (!hasHistoryLimit && !hasMaxTotalSamples) {
+        return;
+    }
+    const std::size_t effectiveLimit = hasHistoryLimit && hasMaxTotalSamples
         ? (std::min)(historyLimit, maxTotalSamples_)
-        : historyLimit;
+        : (hasHistoryLimit ? historyLimit : maxTotalSamples_);
     if (channel.samples.size() <= effectiveLimit) {
         return;
     }
@@ -644,6 +646,9 @@ void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel) {
 
 std::size_t OscilloscopeBuffer::effectiveHistoryLimit() const {
     // 核心流程：导入回放后的完整历史是用户显式载入的数据，不能被较小的 Lua history_limit 立即裁掉。
+    if (config_.historyLimit == 0U) {
+        return preservedHistoryLimit_;
+    }
     return (std::max)(config_.historyLimit, preservedHistoryLimit_);
 }
 WaveStats OscilloscopeBuffer::makeStats(const std::vector<WaveSample>& samples,

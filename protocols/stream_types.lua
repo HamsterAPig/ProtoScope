@@ -43,8 +43,9 @@ local M = {}
 ---@field default? ProtoStreamFieldCount `case` 未匹配时的默认数量
 
 ---@class ProtoStreamBufferDef
----@field capacity? integer 环形缓冲容量，默认 4096
----@field overflow? 'drop_oldest' 超限策略，当前仅支持丢弃最旧字节
+---@field capacity? integer 初始环形缓冲容量，默认 4096；无损模式下会在宿主预算内自动扩容
+---@field max_capacity? integer 无损模式自动扩容上限，默认 256MiB
+---@field overflow? 'drop_oldest' 显式丢弃最旧字节；省略时默认不丢弃，容量不足会先扩容并报告预算耗尽
 ---@field near_overflow_threshold_ratio? number 接近溢出告警阈值比例，默认 0.8
 ---@field near_overflow_notify? boolean 是否启用接近溢出告警
 ---@field popup_enabled? boolean 是否允许宿主弹出接近溢出提示
@@ -81,7 +82,7 @@ local M = {}
 ---@field on_batch? fun(ctx: ProtoConnectionContext, frames: ProtoStreamFrame[]) 完整有效帧批量回调；定义后优先于各 frame 的 `on_frame`
 ---@field on_error? fun(ctx: ProtoConnectionContext, err: ProtoStreamError)
 
---- Lua stream schema 的 `buffer.capacity` 仍由协议脚本决定。
+--- Lua stream schema 的 `buffer.capacity` 是初始容量，`buffer.max_capacity` 控制无损扩容上限。
 --- 宿主 YAML `receive.stream_buffer.*` 只控制接近溢出告警阈值和弹窗，不改变 schema 容量。
 
 ---@class ProtoStreamFrame

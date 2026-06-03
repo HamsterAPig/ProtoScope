@@ -316,6 +316,8 @@ bool Application::applyConfig(const config::AppConfig& config) {
         .enabled = config.scripting.workerEnabled,
         .postprocessWorkerThreads = postprocessWorkerThreads,
         .rxQueueLimitBytes = config.scripting.workerRxQueueLimitBytes,
+        .memoryBudgetBytes = config.scripting.workerMemoryBudgetBytes,
+        .memoryBudgetAvailableRatio = config.scripting.workerMemoryBudgetAvailableRatio,
         .outputQueueLimit = config.scripting.workerOutputQueueLimit,
         .batchBytes = config.scripting.workerBatchBytes,
         .backpressureEnabled = config.scripting.workerBackpressureEnabled,

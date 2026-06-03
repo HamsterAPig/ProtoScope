@@ -493,7 +493,6 @@ function stream()
   local schema = {
     buffer = {
       capacity = 4096,
-      overflow = "drop_oldest",
     },
     frames = {
       {

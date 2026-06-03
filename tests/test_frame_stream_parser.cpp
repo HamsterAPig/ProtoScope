@@ -197,6 +197,23 @@ void test_frame_stream_parser_reports_overflow_drop_oldest() {
     require(batch.errors.front().droppedBytes == 2, "overflow 丢弃字节数不正确");
 }
 
+void test_frame_stream_parser_default_grows_without_drop_oldest() {
+    using namespace protoscope::scripting;
+
+    FrameStreamParser parser(StreamBufferDefinition{
+                                 .capacity = 4,
+                                 .maxCapacity = 16,
+                                 .dropOldest = false,
+                             },
+                             {});
+    const auto batch = parser.pushBytes({0x01, 0x02, 0x03, 0x04, 0x05, 0x06});
+
+    require(!batch.overflowed, "默认无损模式在预算内扩容时不应 overflow");
+    require(batch.droppedBytes == 0, "默认无损模式在预算内不应丢字节");
+    require(batch.bufferCapacity >= 6, "默认无损模式应按输入扩容到可容纳大小");
+    require(batch.bufferSize == 6, "默认无损模式应保留完整输入");
+}
+
 void test_frame_stream_parser_near_overflow_threshold() {
     using namespace protoscope::scripting;
 

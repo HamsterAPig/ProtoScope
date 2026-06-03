@@ -409,6 +409,18 @@ void ByteRingBuffer::reset() {
     size_ = 0;
 }
 
+void ByteRingBuffer::ensureCapacity(std::size_t capacity) {
+    if (capacity <= storage_.size()) {
+        return;
+    }
+    std::vector<std::uint8_t> next(capacity, 0);
+    for (std::size_t index = 0; index < size_; ++index) {
+        next[index] = at(index);
+    }
+    storage_ = std::move(next);
+    head_ = 0;
+}
+
 std::size_t ByteRingBuffer::capacity() const {
     return storage_.size();
 }
@@ -610,14 +622,26 @@ bool FrameStreamParser::clearRuntimeProfile(const std::optional<std::string>& fr
 
 StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes) {
     StreamParseBatch batch;
-    batch.bufferCapacity = buffer_.capacity();
     if (bytes.empty()) {
         batch.bufferSize = buffer_.size();
+        batch.bufferCapacity = buffer_.capacity();
         return batch;
+    }
+
+    if (!bufferDefinition_.dropOldest) {
+        const auto availableCapacity = (std::numeric_limits<std::size_t>::max)() - buffer_.size();
+        const auto requiredCapacity = bytes.size() > availableCapacity
+            ? (std::numeric_limits<std::size_t>::max)()
+            : buffer_.size() + bytes.size();
+        if (requiredCapacity > buffer_.capacity() && bufferDefinition_.maxCapacity > buffer_.capacity()) {
+            // 核心流程：默认无损模式下先按宿主预算扩容，避免小 Lua schema 容量直接触发丢帧。
+            buffer_.ensureCapacity((std::min)(requiredCapacity, bufferDefinition_.maxCapacity));
+        }
     }
 
     const auto dropped = buffer_.append(bytes, bufferDefinition_.dropOldest);
     batch.bufferSize = buffer_.size();
+    batch.bufferCapacity = buffer_.capacity();
     batch.droppedBytes = dropped;
     batch.overflowed = dropped > 0;
     if (dropped > 0) {

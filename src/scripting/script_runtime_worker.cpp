@@ -7,14 +7,25 @@
 #include <deque>
 #include <iostream>
 #include <future>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <utility>
 #include <variant>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace protoscope::scripting {
 
 namespace {
+
+constexpr std::size_t kMiB = 1024U * 1024U;
+constexpr std::size_t kDefaultWorkerMemoryBudgetBytes = 256U * kMiB;
 
 struct ConfigureCommand {
     ScriptRuntimeWorkerConfig config;
@@ -159,6 +170,55 @@ ScriptRuntimeOutputBatch drainHostOutputs(ScriptHost& host, bool includeTranspor
     return batch;
 }
 
+std::size_t availableSystemMemoryBytes() {
+#ifdef _WIN32
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status) != 0) {
+        const auto clamped = (std::min<unsigned long long>)(
+            status.ullAvailPhys,
+            static_cast<unsigned long long>((std::numeric_limits<std::size_t>::max)()));
+        return static_cast<std::size_t>(clamped);
+    }
+#endif
+    return 0U;
+}
+
+std::size_t resolveMemoryBudgetBytes(const ScriptRuntimeWorkerConfig& config) {
+    if (config.memoryBudgetBytes > 0U) {
+        return config.memoryBudgetBytes;
+    }
+    if (config.memoryBudgetAvailableRatio > 0.0) {
+        const auto availableBytes = availableSystemMemoryBytes();
+        if (availableBytes > 0U) {
+            return static_cast<std::size_t>(static_cast<double>(availableBytes) *
+                                            config.memoryBudgetAvailableRatio);
+        }
+    }
+    return kDefaultWorkerMemoryBudgetBytes;
+}
+
+std::size_t rxQueueBudgetBytes(const ScriptRuntimeWorkerConfig& config) {
+    const auto memoryBudgetBytes = resolveMemoryBudgetBytes(config);
+    if (config.rxQueueLimitBytes == 0U) {
+        return memoryBudgetBytes;
+    }
+    if (memoryBudgetBytes == 0U) {
+        return config.rxQueueLimitBytes;
+    }
+    return (std::min)(config.rxQueueLimitBytes, memoryBudgetBytes);
+}
+
+std::size_t watermarkBytes(std::size_t budgetBytes, double ratio) {
+    if (budgetBytes == 0U || ratio <= 0.0) {
+        return 0U;
+    }
+    if (ratio >= 1.0) {
+        return budgetBytes;
+    }
+    return static_cast<std::size_t>(static_cast<double>(budgetBytes) * ratio);
+}
+
 } // namespace
 
 struct ScriptRuntimeWorker::Impl {
@@ -175,9 +235,12 @@ struct ScriptRuntimeWorker::Impl {
     ScriptRuntimeWorkerConfig config{};
     ScriptRuntimeSnapshot snapshot{};
     std::size_t pendingRxBytes{0};
+    bool rxBackpressureWarningActive{false};
+    bool outputQueueWarningActive{false};
     bool stopping{false};
     std::atomic_bool failed{false};
     std::thread thread;
+    std::condition_variable rxBackpressureChanged;
 
     Impl() {
         thread = std::thread([this]() {
@@ -208,6 +271,7 @@ struct ScriptRuntimeWorker::Impl {
         }
         if (shouldNotify) {
             signalCommandAvailable();
+            rxBackpressureChanged.notify_all();
         }
         if (thread.joinable()) {
             thread.join();
@@ -236,7 +300,6 @@ struct ScriptRuntimeWorker::Impl {
             if (stopping) {
                 return;
             }
-            dropQueuedRxUntilWithinLimitLocked(event.bytes.size());
             pendingRxBytes += event.bytes.size();
             syncMode = !config.enabled;
             if (!commands.empty()) {
@@ -259,12 +322,7 @@ struct ScriptRuntimeWorker::Impl {
         if (syncMode) {
             waitIdle();
         } else if (config.backpressureEnabled) {
-            // 背压检查：队列超过高水位时阻塞主线程，直到降到低水位
-            const auto highWaterBytes = static_cast<std::size_t>(
-                static_cast<double>(config.rxQueueLimitBytes) * config.backpressureHighWatermark);
-            if (pendingRxBytes > highWaterBytes) {
-                waitIdle();
-            }
+            waitUntilRxQueueBelowLowWatermark();
         }
     }
 
@@ -331,6 +389,7 @@ struct ScriptRuntimeWorker::Impl {
         }
         auto batch = std::move(outputs.front());
         outputs.pop_front();
+        outputQueueWarningActive = config.outputQueueLimit > 0U && outputs.size() > config.outputQueueLimit;
         snapshot.outputQueueSize = outputs.size();
         return batch;
     }
@@ -346,9 +405,7 @@ struct ScriptRuntimeWorker::Impl {
         }
         std::lock_guard lock(mutex);
         outputs.push_back(std::move(batch));
-        while (outputs.size() > config.outputQueueLimit && !outputs.empty()) {
-            outputs.pop_front();
-        }
+        pushOutputQueueWarningIfNeededLocked();
         snapshot.outputQueueSize = outputs.size();
     }
 
@@ -359,7 +416,11 @@ struct ScriptRuntimeWorker::Impl {
 
     void subtractPendingRxBytes(std::size_t bytes) {
         std::lock_guard lock(mutex);
+        const auto before = pendingRxBytes;
         pendingRxBytes -= (std::min)(pendingRxBytes, bytes);
+        if (pendingRxBytes < before) {
+            rxBackpressureChanged.notify_all();
+        }
     }
 
     void clearQueuedRxLocked() {
@@ -376,40 +437,53 @@ struct ScriptRuntimeWorker::Impl {
         commands = std::move(kept);
     }
 
-    void pushRxLimitWarningLocked(std::size_t droppedBytes) {
+    void pushRxBackpressureWarningLocked(std::size_t pendingBytes, std::size_t highWaterBytes) {
         ScriptRuntimeOutputBatch batch;
         batch.logs.push_back(ScriptLog{
             .level = "warn",
-            .message = "脚本 worker RX 队列超过限制，已丢弃最旧待解析字节: " + std::to_string(droppedBytes) + " 字节",
+            .message = "脚本 worker RX 队列达到高水位，已暂停投递等待后台解析: pending=" +
+                       std::to_string(pendingBytes) + " 字节, high_water=" + std::to_string(highWaterBytes) + " 字节",
             .timestampMs = 0,
         });
         outputs.push_back(std::move(batch));
-        while (outputs.size() > config.outputQueueLimit && !outputs.empty()) {
-            outputs.pop_front();
-        }
+        pushOutputQueueWarningIfNeededLocked();
         snapshot.outputQueueSize = outputs.size();
     }
 
-    void dropQueuedRxUntilWithinLimitLocked(std::size_t incomingBytes) {
-        if (config.rxQueueLimitBytes == 0U) {
+    void pushOutputQueueWarningIfNeededLocked() {
+        if (config.outputQueueLimit == 0U || outputs.size() <= config.outputQueueLimit || outputQueueWarningActive) {
             return;
         }
-        bool warned = false;
-        while (pendingRxBytes + incomingBytes > config.rxQueueLimitBytes) {
-            auto oldestBytes = std::find_if(commands.begin(), commands.end(), [](const WorkerCommand& command) {
-                return std::holds_alternative<BytesCommand>(command);
-            });
-            if (oldestBytes == commands.end()) {
-                break;
-            }
-            const auto droppedBytes = std::get<BytesCommand>(*oldestBytes).event.bytes.size();
-            pendingRxBytes -= (std::min)(pendingRxBytes, droppedBytes);
-            commands.erase(oldestBytes);
-            // 核心流程：限流只淘汰已排队的 RX 字节，不触碰配置、重载、控制和关闭等命令。
-            if (!warned) {
-                pushRxLimitWarningLocked(droppedBytes);
-                warned = true;
-            }
+        outputQueueWarningActive = true;
+        ScriptRuntimeOutputBatch batch;
+        batch.logs.push_back(ScriptLog{
+            .level = "warn",
+            .message = "脚本 worker 输出队列超过告警阈值，UI 将继续分帧 drain: " +
+                       std::to_string(outputs.size()) + "/" + std::to_string(config.outputQueueLimit),
+            .timestampMs = 0,
+        });
+        outputs.push_back(std::move(batch));
+    }
+
+    void waitUntilRxQueueBelowLowWatermark() {
+        std::unique_lock lock(mutex);
+        const auto budgetBytes = rxQueueBudgetBytes(config);
+        const auto highWaterBytes = watermarkBytes(budgetBytes, config.backpressureHighWatermark);
+        if (budgetBytes == 0U || highWaterBytes == 0U || pendingRxBytes <= highWaterBytes) {
+            return;
+        }
+        if (!rxBackpressureWarningActive) {
+            rxBackpressureWarningActive = true;
+            // 核心流程：预算耗尽时暂停投递并显式告警，不再静默丢弃已排队 RX。
+            pushRxBackpressureWarningLocked(pendingRxBytes, highWaterBytes);
+        }
+        const auto lowWaterBytes = (std::min)(highWaterBytes,
+                                             watermarkBytes(budgetBytes, config.backpressureLowWatermark));
+        rxBackpressureChanged.wait(lock, [this, lowWaterBytes]() {
+            return stopping || pendingRxBytes <= lowWaterBytes;
+        });
+        if (pendingRxBytes <= lowWaterBytes) {
+            rxBackpressureWarningActive = false;
         }
     }
 

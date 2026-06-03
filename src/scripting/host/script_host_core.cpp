@@ -1265,8 +1265,8 @@ std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& 
     setup.view.verticalMin = luaNumberField(table, "vertical_min").value_or(-1.0);
     setup.view.verticalMax = luaNumberField(table, "vertical_max").value_or(1.0);
     setup.view.verticalUnit = luaStringField(table, "vertical_unit").value_or("V");
-    const double historyLimit = luaNumberField(table, "history_limit").value_or(200000.0);
-    setup.view.historyLimit = historyLimit <= 1.0 ? 1U : static_cast<std::size_t>(historyLimit);
+    const double historyLimit = luaNumberField(table, "history_limit").value_or(0.0);
+    setup.view.historyLimit = historyLimit <= 0.0 ? 0U : static_cast<std::size_t>(historyLimit);
     return setup;
 }
 

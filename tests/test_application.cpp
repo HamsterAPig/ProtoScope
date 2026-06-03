@@ -1667,7 +1667,7 @@ void test_application_plot_push_merges_same_channel_source() {
     require(snapshot.channels.front().samples[2].time == 3.0, "不同 source 的后续样本仍应保留");
 }
 
-void test_application_plot_push_drains_with_budget_and_disconnect_discards_pending() {
+void test_application_plot_push_drains_with_budget_and_disconnect_keeps_pending() {
     auto transportState = std::make_shared<QueuedEventTransport::State>();
 
     protoscope::app::Application application;
@@ -1694,9 +1694,9 @@ void test_application_plot_push_drains_with_budget_and_disconnect_discards_pendi
     require(application.docks().commState().pendingPlotAppends == 1U, "剩余不同源 plot append 应保留到后续 pump");
 
     application.closeTransport();
-    require(application.docks().commState().pendingPlotAppends == 0U, "responsive 断开应清空未提交 plot append");
+    require(application.docks().commState().pendingPlotAppends == 1U, "responsive 默认断开应保留未提交 plot append");
     snapshot = application.docks().waveState().buffer.snapshot(
         -std::numeric_limits<double>::infinity(),
         std::numeric_limits<double>::infinity());
-    require(snapshot.channels.front().totalSamples == 2, "断开丢弃只影响未提交 backlog，不应破坏已入 buffer 样本");
+    require(snapshot.channels.front().totalSamples == 2, "断开保留 backlog 不应立即提交到 buffer");
 }

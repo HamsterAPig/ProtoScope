@@ -102,7 +102,7 @@ void test_plot_history_trim_and_envelope() {
 }
 
 
-void test_plot_history_limit_zero_clamps_to_latest_sample() {
+void test_plot_history_limit_zero_keeps_all_samples() {
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.setViewConfig(protoscope::plot::ViewConfig{.historyLimit = 0});
     buffer.configureChannels(1);
@@ -112,11 +112,11 @@ void test_plot_history_limit_zero_clamps_to_latest_sample() {
     }), "追加采样应触发裁剪流程");
 
     const auto snapshot = buffer.snapshot(0.0, 1.0);
-    require(snapshot.channels.size() == 1, "裁剪后通道仍应存在");
-    require(snapshot.channels.front().totalSamples == 1, "history_limit 为 0 时应归一到保留最新 1 点");
-    require(snapshot.channels.front().samples != nullptr, "保留最新点时应暴露样本指针");
-    require(snapshot.channels.front().samples[0].time == 1.0 && snapshot.channels.front().samples[0].value == 2.0,
-            "保留点应为最新样本");
+    require(snapshot.channels.size() == 1, "通道仍应存在");
+    require(snapshot.channels.front().totalSamples == 2, "history_limit 为 0 时应保留完整历史");
+    require(snapshot.channels.front().samples != nullptr, "完整历史应暴露样本指针");
+    require(snapshot.channels.front().samples[0].time == 0.0 && snapshot.channels.front().samples[1].time == 1.0,
+            "保留点应覆盖完整输入顺序");
 }
 
 void test_plot_limited_envelope_preserves_spikes() {

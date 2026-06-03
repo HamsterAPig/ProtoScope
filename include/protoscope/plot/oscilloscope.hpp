@@ -49,7 +49,7 @@ struct ViewConfig {
     double verticalMin{-1.0};
     double verticalMax{1.0};
     std::string verticalUnit{"V"};
-    std::size_t historyLimit{200000};
+    std::size_t historyLimit{0};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
 };
 
@@ -212,7 +212,7 @@ private:
     std::vector<ChannelBuffer> channels_;
     std::uint64_t dataRevision_{0};
     std::size_t preservedHistoryLimit_{0};
-    std::size_t maxTotalSamples_{200000};
+    std::size_t maxTotalSamples_{0};
     bool historyTrimSuspended_{false};
 };
 

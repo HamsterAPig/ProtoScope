@@ -393,6 +393,14 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
                 return nullptr;
             }
             bufferDefinition.capacity = static_cast<std::size_t>(*capacity);
+            bufferDefinition.maxCapacity = (std::max)(bufferDefinition.maxCapacity, bufferDefinition.capacity);
+        }
+        if (const auto maxCapacity = luaIntegerValue(bufferTable["max_capacity"]); maxCapacity.has_value()) {
+            if (*maxCapacity <= 0) {
+                error = "stream.buffer.max_capacity 必须大于 0";
+                return nullptr;
+            }
+            bufferDefinition.maxCapacity = (std::max)(static_cast<std::size_t>(*maxCapacity), bufferDefinition.capacity);
         }
         if (const auto overflow = luaStringField(bufferTable, "overflow"); overflow.has_value()) {
             if (*overflow != "drop_oldest") {

@@ -143,7 +143,7 @@
         "---@field source? string",
         "---@field channels ProtoPlotChannel[]",
         "---@field reset_history? boolean",
-        "---@field view? { time_scale?: number, time_unit?: string, vertical_min?: number, vertical_max?: number, vertical_unit?: string, history_limit?: integer }",
+        "---@field view? { time_scale?: number, time_unit?: string, vertical_min?: number, vertical_max?: number, vertical_unit?: string, history_limit?: integer } @history_limit 省略或 0 表示不裁剪历史。",
         "",
         "-- 单个波形采样点：t 是横轴时间，y 是纵轴数值。",
         "---@class ProtoPlotSample",

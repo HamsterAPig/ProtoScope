@@ -15,6 +15,8 @@ struct ScriptRuntimeWorkerConfig {
     bool enabled{true};
     std::size_t postprocessWorkerThreads{1U};
     std::size_t rxQueueLimitBytes{64U * 1024U * 1024U};
+    std::size_t memoryBudgetBytes{256U * 1024U * 1024U};
+    double memoryBudgetAvailableRatio{0.0};
     std::size_t outputQueueLimit{65536U};
     std::size_t batchBytes{256U * 1024U};
     bool backpressureEnabled{true};

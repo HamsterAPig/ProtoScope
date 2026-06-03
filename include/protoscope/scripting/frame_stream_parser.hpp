@@ -24,6 +24,7 @@ public:
     explicit ByteRingBuffer(std::size_t capacity = 0);
 
     void reset();
+    void ensureCapacity(std::size_t capacity);
     [[nodiscard]] std::size_t capacity() const;
     [[nodiscard]] std::size_t size() const;
     [[nodiscard]] bool empty() const;
@@ -163,7 +164,8 @@ struct StreamFrameDefinition {
 
 struct StreamBufferDefinition {
     std::size_t capacity{4096};
-    bool dropOldest{true};
+    std::size_t maxCapacity{256U * 1024U * 1024U};
+    bool dropOldest{false};
     double nearOverflowThresholdRatio{0.8};
     bool nearOverflowNotify{true};
     bool popupEnabled{true};
