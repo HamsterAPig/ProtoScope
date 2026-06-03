@@ -758,6 +758,38 @@ void test_wave_frequency_parse_and_axis_mapping() {
     require(mapped.timeUnit == "sample", "点数轴单位应为 sample");
 }
 
+void test_wave_display_data_uses_visible_window_only() {
+    using protoscope::plot::WaveSample;
+    std::vector<WaveSample> samples;
+    for (int index = 0; index < 100; ++index) {
+        samples.push_back({.time = static_cast<double>(index) * 0.5, .value = static_cast<double>(index)});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .scale = 1.0,
+        .offset = 0.0,
+        .totalSamples = samples.size(),
+        .visibleBegin = 40,
+        .visibleEnd = 45,
+        .samples = samples.data(),
+    });
+
+    const auto mapped = protoscope::plot::buildDisplayData(snapshot, 0.0);
+    require(mapped.axisSource == protoscope::plot::WaveTimeAxisSource::ScriptTime, "可视窗口脚本时间应保持有效");
+    require(mapped.channels.size() == 1, "显示数据应保留通道");
+    require(mapped.channels[0].samples.size() == 5, "显示数据只应包含可视窗口采样");
+    require(mapped.channels[0].actualValues.size() == 5, "实际值只应包含可视窗口采样");
+    require(std::abs(mapped.channels[0].samples.front().time - 20.0) < 1e-12, "显示数据应从窗口起点开始");
+    require(std::abs(mapped.channels[0].samples.back().value - 44.0) < 1e-12, "显示数据应止于窗口终点前");
+
+    const auto frequencyMapped = protoscope::plot::buildDisplayData(snapshot, 10.0);
+    require(std::abs(frequencyMapped.channels[0].samples.front().time - 4.0) < 1e-12,
+            "频率时间轴应保留全局样本序号");
+}
+
 void test_wave_fft_detects_50hz_and_150hz_components() {
     constexpr double sampleFrequencyHz = 1024.0;
     constexpr std::size_t pointCount = 1024;

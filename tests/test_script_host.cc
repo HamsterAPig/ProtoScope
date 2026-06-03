@@ -1670,7 +1670,9 @@ void test_half_duplex_modbus_request_batches() {
 
     const auto ctx = sampleCtx();
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
-    host.drainPlotSetups();
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "半双工主站打开连接后应配置波形");
+    require(setups[0].view.historyLimit == 30000U, "高速上传波形应限制实时显示历史");
     host.onControl(ctx, "auto_start", true);
 
     const auto requests = host.drainTxRequests();
@@ -1728,6 +1730,12 @@ void test_half_duplex_modbus_ack_and_plot_flow() {
     require(totalSamples == 480, "总样本数应为 480");
     require(perChannel[0] == 120 && perChannel[1] == 120 && perChannel[2] == 120 && perChannel[3] == 120,
             "四个通道都应各收到 120 个样本");
+    for (const auto& append : appends) {
+        require(append.second.source == "sn_scope_upload", "上传波形应保留 source");
+        require(std::abs(append.second.samples[0].time - 0.0) < 1e-12, "首批上传波形应从 0 秒开始");
+        require(std::abs(append.second.samples[1].time - append.second.samples[0].time - (0.01 / 120.0)) < 1e-12,
+                "compact 上传波形展开后应保持固定 dt");
+    }
 }
 
 void test_half_duplex_modbus_ch3_uses_third_harmonic() {
@@ -2346,6 +2354,7 @@ static const TestCase kAllTests[] = {
     {"plot_hover_readout_ignores_hidden_channels", &test_plot_hover_readout_ignores_hidden_channels},
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
+    {"wave_display_data_uses_visible_window_only", &test_wave_display_data_uses_visible_window_only},
     {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
     {"wave_fft_visible_samples_supports_non_power_of_two", &test_wave_fft_visible_samples_supports_non_power_of_two},
     {"wave_fft_manual_point_count_supports_non_power_of_two", &test_wave_fft_manual_point_count_supports_non_power_of_two},

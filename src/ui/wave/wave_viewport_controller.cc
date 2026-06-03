@@ -26,16 +26,26 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
     WaveFrameData frame;
     const auto dataRevision = wave.buffer.dataRevision();
     if (wave.displayDataRevision != dataRevision || wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) {
-        // 核心流程：全量显示数据只在采样数据或时间轴配置变化时重建，避免拖动视图时每帧复制全历史样本。
+        // 核心流程：全量快照只保留通道元数据和原始样本指针，显示缓存按当前窗口单独构建，避免高速采样时反复复制全历史。
         wave.cachedFullSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
-        wave.cachedDisplayData = plot::buildDisplayData(wave.cachedFullSnapshot, view.sampleFrequencyHz);
-        wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
         wave.displayDataRevision = dataRevision;
         wave.displayDataSampleFrequencyHz = view.sampleFrequencyHz;
         wave.cachedFftKeyValid = false;
     }
 
     frame.fullSnapshot = &wave.cachedFullSnapshot;
+    view.lastRenderPointCount = 0;
+    view.lastRenderSourceSampleCount = 0;
+    view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
+    if (const auto latestTime = wave.buffer.latestTime(); latestTime.has_value() && view.autoFollowLatest) {
+        view.viewMaxTime = *latestTime;
+        view.viewMinTime = view.viewMaxTime - view.visibleDuration;
+        view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+    }
+
+    frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
+    wave.cachedDisplayData = plot::buildDisplayData(frame.snapshot, view.sampleFrequencyHz);
+    wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
     frame.displayData = &wave.cachedDisplayData;
     frame.displayBounds = wave.cachedDisplayBounds;
     view.timeAxisSource = frame.displayData->axisSource;
@@ -43,18 +53,6 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
                                           frame.displayData->channels.size(),
                                           static_cast<std::size_t>((std::max)(availableWidth, 64.0F)),
                                           view.phosphorGlowEnabled);
-    view.lastRenderPointCount = 0;
-    view.lastRenderSourceSampleCount = 0;
-    view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
-    if (frame.displayBounds.valid && view.autoFollowLatest) {
-        view.viewMaxTime = frame.displayBounds.maxTime;
-        view.viewMinTime = view.viewMaxTime - view.visibleDuration;
-        if (view.viewMinTime < frame.displayBounds.minTime) {
-            view.viewMinTime = frame.displayBounds.minTime;
-            view.viewMaxTime = (std::min)(frame.displayBounds.maxTime, view.viewMinTime + view.visibleDuration);
-        }
-        view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
-    }
 
     if (view.fft.enabled) {
         if (!view.fftSourceWindowValid) {
@@ -101,7 +99,6 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
         frame.fftFrame = &wave.cachedFftFrame;
     }
 
-    frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
     return frame;
 }
 

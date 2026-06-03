@@ -139,6 +139,7 @@ local function setup_plot(reset_history)
       { label = "CH3", unit = "V", scale = 1.0, color = "#FFB74D" },
       { label = "CH4", unit = "V", scale = 1.0, color = "#E57373" },
     },
+    history_limit = 30000,
   })
 end
 
@@ -321,23 +322,34 @@ local function track_upload_sequence(sequence)
 end
 
 local function append_upload_sample(samples_by_channel, channel_index, sample_time, value)
-  local samples = samples_by_channel[channel_index]
-  samples[#samples + 1] = {
-    t = sample_time,
-    y = (tonumber(value) or 0) * CHANNEL_SCALE,
-  }
+  local series = samples_by_channel[channel_index]
+  if not series.t0 then
+    series.t0 = sample_time
+  end
+  local values = series.values
+  values[#values + 1] = (tonumber(value) or 0) * CHANNEL_SCALE
 end
 
 local function flush_upload_samples(samples_by_channel)
   for channel_index = 1, CHANNEL_COUNT do
-    local samples = samples_by_channel[channel_index]
-    if #samples > 0 then
+    local series = samples_by_channel[channel_index]
+    if #series.values > 0 then
       proto.plot.push(channel_index, {
         source = "sn_scope_upload",
-        samples = samples,
+        t0 = series.t0 or 0,
+        dt = UPLOAD_SAMPLE_DT,
+        values = series.values,
       })
     end
   end
+end
+
+local function new_upload_series_by_channel()
+  local result = {}
+  for channel_index = 1, CHANNEL_COUNT do
+    result[channel_index] = { values = {} }
+  end
+  return result
 end
 
 local function handle_fc03_response(ctx, frame)
@@ -447,7 +459,7 @@ local function append_upload_frame_samples(ctx, frame, samples_by_channel)
 end
 
 local function handle_upload_frame(ctx, frame)
-  local samples_by_channel = { {}, {}, {}, {} }
+  local samples_by_channel = new_upload_series_by_channel()
   append_upload_frame_samples(ctx, frame, samples_by_channel)
   flush_upload_samples(samples_by_channel)
 end
@@ -470,7 +482,7 @@ local function handle_stream_error(ctx, err)
 end
 
 local function handle_stream_batch(ctx, frames)
-  local samples_by_channel = { {}, {}, {}, {} }
+  local samples_by_channel = new_upload_series_by_channel()
   for _, frame in ipairs(frames or {}) do
     local name = frame.name
     if name == "upload_ch4" then
@@ -494,6 +506,7 @@ function stream()
     buffer = {
       capacity = 4096,
     },
+    raw_output = "omit",
     frames = {
       {
         name = "fc03_response",

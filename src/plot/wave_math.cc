@@ -179,17 +179,44 @@ bool scriptTimeUsable(const std::vector<WaveSample>& samples) {
     return true;
 }
 
+std::pair<std::size_t, std::size_t> displaySampleRange(const ChannelView& channel) {
+    if (channel.samples == nullptr || channel.totalSamples == 0) {
+        return {0, 0};
+    }
+    const std::size_t begin = (std::min)(channel.visibleBegin, channel.totalSamples);
+    std::size_t end = (std::min)(channel.visibleEnd, channel.totalSamples);
+    if (end < begin) {
+        end = begin;
+    }
+    return {begin, end};
+}
+
+bool scriptTimeUsable(const ChannelView& channel, std::size_t begin, std::size_t end) {
+    if (channel.samples == nullptr || begin >= end) {
+        return false;
+    }
+    double previous = channel.samples[begin].time;
+    if (!std::isfinite(previous)) {
+        return false;
+    }
+    for (std::size_t index = begin + 1; index < end; ++index) {
+        const double current = channel.samples[index].time;
+        if (!std::isfinite(current) || current <= previous) {
+            return false;
+        }
+        previous = current;
+    }
+    return true;
+}
+
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz) {
     WaveDisplayData data{};
     data.channels.resize(snapshot.channels.size());
 
     bool hasScriptTime = false;
     for (const auto& channel : snapshot.channels) {
-        if (channel.samples == nullptr || channel.totalSamples == 0) {
-            continue;
-        }
-        const std::vector<WaveSample> samples(channel.samples, channel.samples + channel.totalSamples);
-        if (scriptTimeUsable(samples)) {
+        const auto [begin, end] = displaySampleRange(channel);
+        if (scriptTimeUsable(channel, begin, end)) {
             hasScriptTime = true;
             break;
         }
@@ -210,12 +237,14 @@ WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFreq
         const auto& channel = snapshot.channels[channelIndex];
         auto& displayChannel = data.channels[channelIndex];
         auto& display = displayChannel.samples;
-        if (channel.samples == nullptr || channel.totalSamples == 0) {
+        const auto [begin, end] = displaySampleRange(channel);
+        if (begin >= end) {
             continue;
         }
-        display.reserve(channel.totalSamples);
-        displayChannel.actualValues.reserve(channel.totalSamples);
-        for (std::size_t sampleIndex = 0; sampleIndex < channel.totalSamples; ++sampleIndex) {
+        const std::size_t visibleSamples = end - begin;
+        display.reserve(visibleSamples);
+        displayChannel.actualValues.reserve(visibleSamples);
+        for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
             const auto& source = channel.samples[sampleIndex];
             double time = static_cast<double>(sampleIndex);
             if (data.axisSource == WaveTimeAxisSource::SampleFrequency) {
