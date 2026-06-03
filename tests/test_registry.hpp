@@ -56,6 +56,7 @@ void test_frame_stream_parser_overflow_keeps_latest_crc_window();
 void test_frame_stream_parser_runtime_profile_length_and_channel_map();
 void test_frame_stream_parser_runtime_profile_errors();
 void test_frame_stream_parser_rejects_unsafe_count_bounds();
+void test_frame_stream_parser_runtime_profile_truncated_fields();
 void test_luals_api_sync_contains_tx_and_dialog_api();
 void test_script_missing_callbacks_allowed();
 void test_script_invalid_controls_fail();

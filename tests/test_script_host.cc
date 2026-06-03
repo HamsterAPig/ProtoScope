@@ -2279,6 +2279,7 @@ static const TestCase kAllTests[] = {
     {"frame_stream_parser_runtime_profile_length_and_channel_map", &test_frame_stream_parser_runtime_profile_length_and_channel_map},
     {"frame_stream_parser_runtime_profile_errors", &test_frame_stream_parser_runtime_profile_errors},
     {"frame_stream_parser_rejects_unsafe_count_bounds", &test_frame_stream_parser_rejects_unsafe_count_bounds},
+    {"frame_stream_parser_runtime_profile_truncated_fields", &test_frame_stream_parser_runtime_profile_truncated_fields},
     {"luals_api_sync_contains_tx_and_dialog_api", &test_luals_api_sync_contains_tx_and_dialog_api},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},

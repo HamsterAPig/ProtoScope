@@ -502,8 +502,80 @@ void test_frame_stream_parser_rejects_unsafe_count_bounds() {
         .extra = 0,
     };
     FrameStreamParser lengthParser(StreamBufferDefinition{.capacity = 64, .dropOldest = true}, {lengthFrame});
-    const auto lengthBatch = lengthParser.pushBytes({0xAA, 0x77});
-    require(!lengthBatch.errors.empty(), "长度字段 offset 溢出应安全报错");
-    require(lengthBatch.errors.front().code == StreamParseErrorCode::InvalidLength,
-            "长度字段 offset 溢出应归类为 invalid_length");
+   const auto lengthBatch = lengthParser.pushBytes({0xAA, 0x77});
+   require(!lengthBatch.errors.empty(), "长度字段 offset 溢出应安全报错");
+   require(lengthBatch.errors.front().code == StreamParseErrorCode::InvalidLength,
+           "长度字段 offset 溢出应归类为 invalid_length");
+}
+
+void test_frame_stream_parser_runtime_profile_truncated_fields() {
+    using namespace protoscope::scripting;
+
+    // 构造 runtime_profile 帧，schema 声明 4 个固定 offset 字段
+    StreamFrameDefinition frame;
+    frame.name = "truncated";
+    frame.header = {0xFF, 0x26};
+    frame.runtimeProfile = true;
+    frame.crc = StreamCrcDefinition{.type = StreamCrcType::Crc16Modbus, .order = StreamCrcOrder::LoHi};
+   StreamFieldDefinition seqField;
+   seqField.name = "sequence";
+   seqField.type = StreamValueType::U16Be;
+    seqField.offset = 2;
+   StreamFieldDefinition ch1Field;
+   ch1Field.name = "ch1";
+   ch1Field.type = StreamValueType::I16Be;
+    ch1Field.offset = 4;
+   StreamFieldDefinition ch2Field;
+   ch2Field.name = "ch2";
+   ch2Field.type = StreamValueType::I16Be;
+    ch2Field.offset = 6;
+   StreamFieldDefinition ch3Field;
+   ch3Field.name = "ch3";
+   ch3Field.type = StreamValueType::I16Be;
+    ch3Field.offset = 8;
+   StreamFieldDefinition ch4Field;
+   ch4Field.name = "ch4";
+   ch4Field.type = StreamValueType::I16Be;
+    ch4Field.offset = 10;
+    frame.fields = {seqField, ch1Field, ch2Field, ch3Field, ch4Field};
+
+    FrameStreamParser parser(StreamBufferDefinition{.capacity = 128, .dropOldest = true}, {frame});
+
+    // 设置运行时 profile：帧长仅覆盖前 2 个通道（sequence + ch1 + ch2 + crc = 10 字节）
+    std::string error;
+    require(parser.setRuntimeProfile("truncated", StreamRuntimeProfile{.length = 10, .channelMap = {}}, error),
+            "runtime profile 应可设置");
+
+    // 构造合法帧数据：10 字节 (2 header + 2 seq + 2 ch1 + 2 ch2 + 2 crc)
+    std::vector<std::uint8_t> raw{0xFF, 0x26, 0x00, 0x01, 0x00, 0x11, 0x00, 0x22};
+    const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
+    raw.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
+    raw.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+
+    const auto batch = parser.pushBytes(raw);
+    require(batch.errors.empty(), "runtime profile 截断字段不应报错");
+    require(batch.frames.size() == 1, "runtime profile 应解析出 1 帧");
+
+    const auto& parsedFrame = batch.frames.front();
+    const auto& fields = parsedFrame.fields;
+
+    // 前 2 个字段应正确解码
+    auto seqIter = fields.find("sequence");
+    require(seqIter != fields.end(), "sequence 字段应存在");
+    require(seqIter->second.integerScalar().value_or(-1) == 1, "sequence 值应为 1");
+
+    auto ch1Iter = fields.find("ch1");
+    require(ch1Iter != fields.end(), "ch1 字段应存在");
+    require(ch1Iter->second.integerScalar().value_or(-1) == 0x0011, "ch1 值应为 0x0011");
+
+    auto ch2Iter = fields.find("ch2");
+    require(ch2Iter != fields.end(), "ch2 字段应存在");
+    require(ch2Iter->second.integerScalar().value_or(-1) == 0x0022, "ch2 值应为 0x0022");
+
+    // 后 2 个字段超出帧边界，应不存在（被静默跳过）
+    require(fields.find("ch3") == fields.end(), "ch3 超出帧边界应不存在");
+    require(fields.find("ch4") == fields.end(), "ch4 超出帧边界应不存在");
+
+    // buffer 中不应该有残留被误当作 noise
+    require(batch.bufferSize == 0, "buffer 应完全消费无残留");
 }

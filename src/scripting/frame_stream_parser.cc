@@ -954,7 +954,24 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
         std::size_t fieldEnd = start;
         const bool fieldSizeOk = checkedMultiplySize(*count, width, fieldBytes)
             && checkedAddSize(start, fieldBytes, fieldEnd);
-        if (!fieldSizeOk || start > readableLimit || fieldEnd > readableLimit) {
+        if (!fieldSizeOk) {
+            result.action = AnalyzeResult::Action::RecoverableError;
+            result.error = StreamParseError{
+                .code = StreamParseErrorCode::FieldDecodeFailed,
+                .message = "字段大小溢出",
+                .frameName = frame.name,
+                .droppedBytes = 0,
+                .raw = copyBytes(frameBytes, frameLength),
+            };
+            return result;
+        }
+        if (start > readableLimit || fieldEnd > readableLimit) {
+            // 运行时 profile 帧：超出帧边界的字段静默跳过，
+            // 对应字段在 Lua 侧为 nil，由脚本侧兜底处理。
+            if (frame.runtimeProfile) {
+                continue;
+            }
+            // 静态帧：越界是硬错误
             result.action = AnalyzeResult::Action::RecoverableError;
             result.error = StreamParseError{
                 .code = StreamParseErrorCode::FieldDecodeFailed,
