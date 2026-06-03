@@ -891,6 +891,78 @@ void test_wave_display_data_uses_visible_window_only() {
             "频率时间轴应保留全局样本序号");
 }
 
+void test_wave_edge_render_data_keeps_adjacent_guard_points() {
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .source = "edge",
+        .samples = {
+            {.time = 0.0, .value = 0.0},
+            {.time = 10.0, .value = 1.0},
+            {.time = 20.0, .value = 0.0},
+        },
+    });
+
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.viewMinTime = 9.0;
+    wave.view.viewMaxTime = 11.0;
+    wave.view.visibleDuration = 2.0;
+    wave.view.centerTime = 10.0;
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+
+    require(frame.displayData != nullptr, "主视图交互数据源不能为空");
+    require(frame.renderDisplayData != nullptr, "主视图渲染数据源不能为空");
+    require(frame.displayData->channels.front().samples.size() == 1, "交互数据仍应只保留视口内样本");
+    require(frame.renderDisplayData->channels.front().samples.size() == 3, "渲染数据应保留完整历史样本");
+
+    std::size_t sourceSampleCount = 0;
+    const auto envelope = protoscope::ui::buildDisplayEnvelope(frame.renderDisplayData->channels.front().samples,
+                                                               wave.view.viewMinTime,
+                                                               wave.view.viewMaxTime,
+                                                               32,
+                                                               &sourceSampleCount);
+    require(sourceSampleCount == 1, "包络统计仍应只统计视口内样本");
+    require(envelope.size() == 3, "包络应纳入左右相邻保护点以桥接视口边缘线段");
+    require(std::abs(envelope.front().time - 0.0) < 1e-12, "左侧保护点应来自视口外邻接样本");
+    require(std::abs(envelope.back().time - 20.0) < 1e-12, "右侧保护点应来自视口外邻接样本");
+}
+
+void test_wave_edge_render_data_keeps_sample_frequency_axis() {
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .source = "edge",
+        .samples = {
+            {.time = 100.0, .value = 0.0},
+            {.time = 101.0, .value = 1.0},
+            {.time = 102.0, .value = 0.0},
+        },
+    });
+
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.sampleFrequencyHz = 10.0;
+    wave.view.viewMinTime = 0.09;
+    wave.view.viewMaxTime = 0.11;
+    wave.view.visibleDuration = 0.02;
+    wave.view.centerTime = 0.1;
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+
+    require(frame.displayData != nullptr, "采样频率模式交互数据源不能为空");
+    require(frame.renderDisplayData != nullptr, "采样频率模式渲染数据源不能为空");
+    require(frame.displayData->channels.front().samples.size() == 1, "采样频率交互数据应只保留视口内样本");
+    require(std::abs(frame.displayData->channels.front().samples.front().time - 0.1) < 1e-12,
+            "采样频率交互时间应按全局样本序号换算");
+    require(frame.renderDisplayData->channels.front().samples.size() == 3, "采样频率渲染数据应保留完整历史");
+    require(std::abs(frame.renderDisplayData->channels.front().samples.front().time - 0.0) < 1e-12,
+            "完整渲染数据起点应按全局样本序号换算");
+    require(std::abs(frame.renderDisplayData->channels.front().samples.back().time - 0.2) < 1e-12,
+            "完整渲染数据终点应按全局样本序号换算");
+}
+
 void test_wave_overview_bounds_use_full_history_window() {
     std::vector<protoscope::plot::WaveSample> samples;
     samples.reserve(20);

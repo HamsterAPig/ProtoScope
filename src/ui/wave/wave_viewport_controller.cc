@@ -97,6 +97,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
     wave.cachedDisplayData = plot::buildDisplayData(frame.snapshot, view.sampleFrequencyHz);
     wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
     frame.displayData = &wave.cachedDisplayData;
+    frame.renderDisplayData = &wave.cachedOverviewDisplayData;
     frame.overviewDisplayData = &wave.cachedOverviewDisplayData;
     frame.displayBounds = wave.cachedDisplayBounds;
     view.timeAxisSource = frame.displayData->axisSource;

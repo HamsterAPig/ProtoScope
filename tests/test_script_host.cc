@@ -2507,6 +2507,8 @@ static const TestCase kAllTests[] = {
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_display_data_uses_visible_window_only", &test_wave_display_data_uses_visible_window_only},
+    {"wave_edge_render_data_keeps_adjacent_guard_points", &test_wave_edge_render_data_keeps_adjacent_guard_points},
+    {"wave_edge_render_data_keeps_sample_frequency_axis", &test_wave_edge_render_data_keeps_sample_frequency_axis},
     {"wave_overview_bounds_use_full_history_window", &test_wave_overview_bounds_use_full_history_window},
     {"wave_x_axis_double_click_bounds_selects_full_history", &test_wave_x_axis_double_click_bounds_selects_full_history},
     {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},

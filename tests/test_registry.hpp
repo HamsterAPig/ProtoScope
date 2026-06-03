@@ -152,6 +152,8 @@ void test_plot_hover_readout_ignores_hidden_channels();
 void test_plot_limited_envelope_edges();
 void test_wave_frequency_parse_and_axis_mapping();
 void test_wave_display_data_uses_visible_window_only();
+void test_wave_edge_render_data_keeps_adjacent_guard_points();
+void test_wave_edge_render_data_keeps_sample_frequency_axis();
 void test_wave_overview_bounds_use_full_history_window();
 void test_wave_x_axis_double_click_bounds_selects_full_history();
 void test_wave_fft_detects_50hz_and_150hz_components();

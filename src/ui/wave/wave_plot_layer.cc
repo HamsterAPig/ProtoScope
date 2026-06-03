@@ -242,6 +242,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
 
     result.plotRendered = true;
     const auto& displayData = *frame.displayData;
+    const auto& renderDisplayData = frame.renderDisplayData != nullptr ? *frame.renderDisplayData : displayData;
     const auto derivedChannelIndices = channelIndicesForDerivedViews(wave, frame.snapshot);
     const auto derivedBounds = boundsForDerivedViews(wave, displayData, derivedChannelIndices);
     auto fullHistoryBounds = derivedBounds;
@@ -272,7 +273,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     }
     // 悬停读数必须跟随 ImPlot 图例隐藏状态，只对真实可见波形做吸附。
     std::vector<std::size_t> visibleChannelIndices;
-    renderWaveChannels(wave, frame.snapshot, displayData, frame.renderBudget, limits, visibleChannelIndices);
+    renderWaveChannels(wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices);
     syncLegendVisibilityState(wave, frame.snapshot);
     const auto fitChannelIndices = excludesLegendHiddenChannels(view) ? channelIndicesForDerivedViews(wave, frame.snapshot) : visibleChannelIndicesForFit(frame.snapshot);
     viewportChangedThisFrame = applyFitVisibleWaveforms(view, displayData, fitChannelIndices) || viewportChangedThisFrame;
