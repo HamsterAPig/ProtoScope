@@ -171,6 +171,8 @@ struct ScriptingConfig {
     double workerBackpressureHighWatermark{0.5};
     double workerBackpressureLowWatermark{0.3};
     double workerOutputFlushBudgetMs{4.0};
+    /// 超时前是否使用无帧预算限制的 drain（默认关闭）；开启时采用 flushScriptOutputsUnbounded()
+    bool drainRequestOutputsUnbounded{false};
 };
 
 struct AppConfig {

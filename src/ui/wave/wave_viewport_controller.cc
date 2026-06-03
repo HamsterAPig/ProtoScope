@@ -195,6 +195,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
 void drawCursorToolbar(plot::WaveViewState& view,
                        const plot::ViewConfig& config,
                        const plot::WaveDisplayData& displayData) {
+    (void)config;
     ImGui::Text("时间轴: %s (%s)", axisSourceName(view.timeAxisSource), displayData.timeUnit.c_str());
     if (!view.showCursors || displayData.channels.empty()) {
         return;

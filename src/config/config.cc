@@ -602,9 +602,13 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                    "backpressure_rx_queue_low_watermark",
                                    result.config.scripting.workerBackpressureLowWatermark);
             readPerformanceDouble(worker,
-                                  "output_flush_budget_ms",
-                                  result.config.scripting.workerOutputFlushBudgetMs,
-                                  result.config.performance.explicitOverrides.workerOutputFlushBudgetMs);
+                                 "output_flush_budget_ms",
+                                 result.config.scripting.workerOutputFlushBudgetMs,
+                                 result.config.performance.explicitOverrides.workerOutputFlushBudgetMs);
+            result.config.scripting.drainRequestOutputsUnbounded =
+                readScalar<bool>(worker,
+                                 "drain_request_outputs_unbounded",
+                                 result.config.scripting.drainRequestOutputsUnbounded);
         }
         if (const auto fileIo = childNode(scripting, "file_io")) {
             auto& config = result.config.scripting.fileIo;
