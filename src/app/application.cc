@@ -327,6 +327,7 @@ bool Application::applyConfig(const config::AppConfig& config) {
     scriptWorker_.setFileIoConfig(config.scripting.fileIo);
     applyHistoryLimits(config.gui.logHistory);
     dockStore_.waveState().buffer.setMaxTotalSamples(config.gui.wave.maxTotalSamples);
+    dockStore_.waveState().buffer.setResetHistoryOnTimeReset(config.gui.wave.resetHistoryOnTimeReset);
     configStore_.applyToDock(config, dockStore_);
     loggingFacade_.applyConfig(config.logging);
     return reloadProtocolDirectory(dockStore_.luaState().protocolDir);
@@ -348,6 +349,7 @@ config::AppConfig Application::captureConfig() const {
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
+    captured.gui.wave.resetHistoryOnTimeReset = runtimeConfig_.gui.wave.resetHistoryOnTimeReset;
     captured.gui.showAppHeader = runtimeConfig_.gui.showAppHeader;
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
@@ -943,6 +945,10 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
 
     // 核心流程：导入回放必须先清空旧波形与旧原始缓冲，再走一次 on_bytes -> flushScriptPlots，
     // 避免导入样本与现场采集样本混在同一份波形/原始容器里。
+    scriptWorker_.waitIdle();
+    static_cast<void>(scriptWorker_.drainOutputs());
+    const auto discarded = clearPendingRealtimeBacklog();
+    logRealtimeBacklogDiscard(discarded);
     resetWaveHistory();
     auto& wave = dockStore_.waveState();
     wave.rawCapture = capture;
@@ -1312,7 +1318,7 @@ Application::RealtimeBacklogDiscardCounts Application::clearPendingRealtimeBackl
     pendingScriptPlotAppends_.clear();
 
     const auto scriptCounts = scriptWorker_.clearPendingRealtimeOutputs();
-    counts.plotAppends = scriptCounts.plotAppends;
+    counts.plotAppends += scriptCounts.plotAppends;
     counts.scriptLogs = scriptCounts.logs;
     counts.scriptEvents = scriptCounts.events;
     return counts;

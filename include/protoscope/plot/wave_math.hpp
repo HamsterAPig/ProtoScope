@@ -112,6 +112,7 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
                                 float fixedContentHeight);
 bool scriptTimeUsable(const std::vector<WaveSample>& samples);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
+void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, double maxTime, double sampleFrequencyHz);
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep);
 WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
                                                const std::vector<std::size_t>& channelIndices,

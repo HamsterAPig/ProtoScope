@@ -31,6 +31,17 @@ double sanitizeOffset(double offset) {
     return std::isfinite(offset) ? offset : 0.0;
 }
 
+double estimateTimeStep(const std::vector<WaveSample>& samples) {
+    for (std::size_t index = 1; index < samples.size(); ++index) {
+        const double previous = samples[index - 1].time;
+        const double current = samples[index].time;
+        if (std::isfinite(previous) && std::isfinite(current) && current > previous) {
+            return current - previous;
+        }
+    }
+    return kEpsilon;
+}
+
 double nearestRankPercentile(const std::vector<double>& sortedValues, double percentile) {
     if (sortedValues.empty()) {
         return 0.0;
@@ -261,6 +272,10 @@ void OscilloscopeBuffer::setMaxTotalSamples(std::size_t maxTotalSamples) {
     }
 }
 
+void OscilloscopeBuffer::setResetHistoryOnTimeReset(bool enabled) {
+    resetHistoryOnTimeReset_ = enabled;
+}
+
 void OscilloscopeBuffer::preserveHistoryLimitAtLeast(std::size_t sampleCount) {
     preservedHistoryLimit_ = (std::max)(preservedHistoryLimit_, sampleCount);
 }
@@ -306,8 +321,9 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
         configureChannels(channelIndex + 1);
     }
     auto& channel = channels_[channelIndex];
-    if (!request.source.empty()) {
-        source_ = std::move(request.source);
+    const std::string requestSource = request.source;
+    if (!requestSource.empty()) {
+        source_ = requestSource;
     }
 
     // 核心流程：实时链路通常按时间递增推送大批量采样，已递增时跳过排序以降低 append 成本。
@@ -320,6 +336,35 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
         std::sort(request.samples.begin(), request.samples.end(), [](const WaveSample& left, const WaveSample& right) {
             return left.time < right.time;
         });
+    }
+
+    if (!channel.samples.empty()) {
+        const double lastTime = channel.samples.back().time;
+        const double firstTime = request.samples.front().time;
+        if (firstTime <= lastTime && firstTime <= kEpsilon) {
+            if (resetHistoryOnTimeReset_) {
+                // 核心流程：脚本二次运行常从 t=0 重新输出，默认把它视为新一轮采集，避免旧历史挡住新样本。
+                for (auto& existingChannel : channels_) {
+                    existingChannel.samples.clear();
+                }
+                preservedHistoryLimit_ = 0;
+                if (channelIndex >= channels_.size()) {
+                    configureChannels(channelIndex + 1);
+                }
+                auto& resetChannel = channels_[channelIndex];
+                if (!requestSource.empty()) {
+                    source_ = requestSource;
+                }
+                resetChannel.samples.insert(resetChannel.samples.end(), request.samples.begin(), request.samples.end());
+                trimHistory(resetChannel);
+                ++dataRevision_;
+                return true;
+            }
+            const double offset = lastTime + estimateTimeStep(request.samples) - firstTime;
+            for (auto& sample : request.samples) {
+                sample.time += offset;
+            }
+        }
     }
 
     if (!channel.samples.empty()) {

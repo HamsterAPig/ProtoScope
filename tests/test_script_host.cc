@@ -1327,6 +1327,7 @@ void test_config_default_roundtrip() {
     require(config.gui.rawCapture.liveLimitBytes == 64U * 1024U * 1024U, "实时原始缓存默认上限应为 64MiB");
     require(config.gui.rawCapture.recordingQueueLimitBytes == 256U * 1024U * 1024U,
             "完整原始录制队列默认硬上限应为 256MiB");
+    require(config.gui.wave.resetHistoryOnTimeReset, "波形时间回绕默认应从零开始新历史");
     require(config.gui.realtimeBacklog.rawFirstBacklogWarnBytes == 32U * 1024U * 1024U,
             "raw-first backlog 默认告警阈值应为 32MiB");
     require(config.gui.realtimeBacklog.derivedBacklogDegradeEnabled,
@@ -1370,6 +1371,7 @@ void test_config_default_roundtrip() {
     config.gui.logHistory.scriptLimit = 44;
     config.gui.rawCapture.liveLimitBytes = 123;
     config.gui.rawCapture.recordingQueueLimitBytes = 456;
+    config.gui.wave.resetHistoryOnTimeReset = false;
     config.gui.realtimeBacklog.rawFirstBacklogWarnBytes = 789;
     config.gui.realtimeBacklog.derivedBacklogDegradeEnabled = false;
     config.receive.transportReadBufferBytes = 321;
@@ -1425,6 +1427,7 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.logHistory.scriptLimit == 44, "脚本日志历史上限 roundtrip 失败");
     require(reloaded.config.gui.rawCapture.liveLimitBytes == 123, "实时原始缓存上限 roundtrip 失败");
     require(reloaded.config.gui.rawCapture.recordingQueueLimitBytes == 456, "完整原始录制队列上限 roundtrip 失败");
+    require(!reloaded.config.gui.wave.resetHistoryOnTimeReset, "波形时间回绕策略 roundtrip 失败");
     require(reloaded.config.gui.realtimeBacklog.rawFirstBacklogWarnBytes == 789, "raw-first backlog 告警阈值 roundtrip 失败");
     require(!reloaded.config.gui.realtimeBacklog.derivedBacklogDegradeEnabled, "派生 UI 降级开关 roundtrip 失败");
     require(reloaded.config.receive.transportReadBufferBytes == 321, "transport 读缓冲大小 roundtrip 失败");
@@ -2428,6 +2431,9 @@ static const TestCase kAllTests[] = {
     {"pipeline_worker_threads_resolve_from_hardware_limit", &test_pipeline_worker_threads_resolve_from_hardware_limit},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_history_limit_zero_keeps_all_samples", &test_plot_history_limit_zero_keeps_all_samples},
+    {"plot_time_reset_clears_history_by_default", &test_plot_time_reset_clears_history_by_default},
+    {"plot_time_reset_can_continue_history", &test_plot_time_reset_can_continue_history},
+    {"wave_sample_frequency_visible_range_filters_by_sample_index", &test_wave_sample_frequency_visible_range_filters_by_sample_index},
     {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
     {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},

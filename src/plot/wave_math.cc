@@ -270,6 +270,23 @@ WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFreq
     return data;
 }
 
+void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, double maxTime, double sampleFrequencyHz) {
+    if (sampleFrequencyHz <= 0.0 || !std::isfinite(sampleFrequencyHz)) {
+        return;
+    }
+    if (maxTime < minTime) {
+        std::swap(minTime, maxTime);
+    }
+    const double clampedMinTime = (std::max)(0.0, minTime);
+    const double clampedMaxTime = (std::max)(clampedMinTime, maxTime);
+    const auto beginIndex = static_cast<std::size_t>((std::ceil)(clampedMinTime * sampleFrequencyHz));
+    const auto endIndex = static_cast<std::size_t>((std::floor)(clampedMaxTime * sampleFrequencyHz)) + 1U;
+    for (auto& channel : snapshot.channels) {
+        channel.visibleBegin = (std::min)(beginIndex, channel.totalSamples);
+        channel.visibleEnd = (std::min)(endIndex, channel.totalSamples);
+    }
+}
+
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,

@@ -35,6 +35,7 @@ gui:
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
     min_visible_time_span: 0.001
+    reset_history_on_time_reset: true
     show_axis_labels: false
   log_history:
     transfer_raw_limit: 10000

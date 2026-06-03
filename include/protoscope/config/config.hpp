@@ -81,6 +81,7 @@ struct GuiWaveConfig {
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
     double verticalAutoFitMultiplier{1.2};
+    bool resetHistoryOnTimeReset{true};
     bool showAxisLabels{false};
     bool showChannelLegend{true};
     bool showFftLegend{true};

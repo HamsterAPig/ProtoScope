@@ -3,8 +3,46 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace protoscope::ui {
+
+namespace {
+
+bool hasSampleFrequencyTimebase(const plot::WaveViewState& view) {
+    return view.sampleFrequencyHz > 0.0 && std::isfinite(view.sampleFrequencyHz);
+}
+
+std::optional<double> latestDisplayTime(const plot::WaveSnapshot& snapshot, double sampleFrequencyHz) {
+    if (sampleFrequencyHz <= 0.0 || !std::isfinite(sampleFrequencyHz)) {
+        return std::nullopt;
+    }
+    std::optional<std::size_t> latestSampleIndex;
+    for (const auto& channel : snapshot.channels) {
+        if (channel.totalSamples == 0) {
+            continue;
+        }
+        const auto candidate = channel.totalSamples - 1;
+        if (!latestSampleIndex.has_value() || candidate > *latestSampleIndex) {
+            latestSampleIndex = candidate;
+        }
+    }
+    if (!latestSampleIndex.has_value()) {
+        return std::nullopt;
+    }
+    return static_cast<double>(*latestSampleIndex) / sampleFrequencyHz;
+}
+
+void clampViewportLowerBoundToZero(plot::WaveViewState& view) {
+    if (view.viewMinTime >= 0.0) {
+        return;
+    }
+    view.viewMinTime = 0.0;
+    view.viewMaxTime = (std::max)(view.viewMaxTime, view.viewMinTime + view.visibleDuration);
+    view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+}
+
+} // namespace
 
 void initializeWaveViewIfNeeded(plot::WaveViewState& view) {
     if (view.initialized) {
@@ -16,6 +54,7 @@ void initializeWaveViewIfNeeded(plot::WaveViewState& view) {
     view.viewMaxTime = view.centerTime + halfDuration;
     view.viewMinValue = view.manualVerticalMin;
     view.viewMaxValue = view.manualVerticalMax;
+    clampViewportLowerBoundToZero(view);
     view.initialized = true;
 }
 
@@ -37,13 +76,22 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
     view.lastRenderPointCount = 0;
     view.lastRenderSourceSampleCount = 0;
     view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
-    if (const auto latestTime = wave.buffer.latestTime(); latestTime.has_value() && view.autoFollowLatest) {
+    const auto latestTime = hasSampleFrequencyTimebase(view)
+        ? latestDisplayTime(wave.cachedFullSnapshot, view.sampleFrequencyHz)
+        : wave.buffer.latestTime();
+    if (latestTime.has_value() && view.autoFollowLatest) {
         view.viewMaxTime = *latestTime;
         view.viewMinTime = view.viewMaxTime - view.visibleDuration;
+        clampViewportLowerBoundToZero(view);
         view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
     }
 
-    frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
+    if (hasSampleFrequencyTimebase(view)) {
+        frame.snapshot = wave.cachedFullSnapshot;
+        plot::applySampleFrequencyVisibleRange(frame.snapshot, view.viewMinTime, view.viewMaxTime, view.sampleFrequencyHz);
+    } else {
+        frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
+    }
     wave.cachedDisplayData = plot::buildDisplayData(frame.snapshot, view.sampleFrequencyHz);
     wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
     frame.displayData = &wave.cachedDisplayData;

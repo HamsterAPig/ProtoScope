@@ -158,6 +158,7 @@ public:
     void setViewConfig(const ViewConfig& config);
     void setHistoryTrimSuspended(bool suspended);
     void setMaxTotalSamples(std::size_t maxTotalSamples);
+    void setResetHistoryOnTimeReset(bool enabled);
     void preserveHistoryLimitAtLeast(std::size_t sampleCount);
 
     std::size_t channelCount() const;
@@ -213,6 +214,7 @@ private:
     std::uint64_t dataRevision_{0};
     std::size_t preservedHistoryLimit_{0};
     std::size_t maxTotalSamples_{0};
+    bool resetHistoryOnTimeReset_{true};
     bool historyTrimSuspended_{false};
 };
 

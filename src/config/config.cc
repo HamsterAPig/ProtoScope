@@ -390,6 +390,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.gui.wave.verticalAutoFitMultiplier =
                 positiveOrFallback(readScalar<double>(wave, "vertical_auto_fit_multiplier", result.config.gui.wave.verticalAutoFitMultiplier),
                                    1.2);
+            result.config.gui.wave.resetHistoryOnTimeReset =
+                readScalar<bool>(wave, "reset_history_on_time_reset", result.config.gui.wave.resetHistoryOnTimeReset);
             result.config.gui.wave.showAxisLabels =
                 readScalar<bool>(wave, "show_axis_labels", result.config.gui.wave.showAxisLabels);
             result.config.gui.wave.showChannelLegend =
@@ -677,6 +679,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
     root["gui"]["wave"]["max_total_samples"] = config.gui.wave.maxTotalSamples;
     root["gui"]["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
+    root["gui"]["wave"]["reset_history_on_time_reset"] = config.gui.wave.resetHistoryOnTimeReset;
     root["gui"]["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
     root["gui"]["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
     root["gui"]["wave"]["show_fft_legend"] = config.gui.wave.showFftLegend;

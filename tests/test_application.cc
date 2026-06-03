@@ -906,6 +906,14 @@ void test_application_raw_capture_export_import_roundtrip() {
     require(application.docks().waveState().view.sampleFrequencyHz == 2048.0, "导入 psraw 后应恢复文件中的采样频率");
     require(application.docks().waveState().rawCapture.payload == transportState->queuedRxBytes, "导入 psraw 后应回填原始缓冲");
 
+    require(application.importWaveRawCapture(*capture, error), "同一 psraw 第二次导入仍应成功");
+    const auto secondImportedSnapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity());
+    require(!secondImportedSnapshot.channels.empty(), "第二次导入 psraw 后应恢复波形通道");
+    require(secondImportedSnapshot.channels.front().totalSamples == importedSnapshot.channels.front().totalSamples,
+            "第二次导入应清空旧波形后完整回放，不应被第一次导入的样本挡住");
+
     std::filesystem::remove(tempPath);
     application.shutdown();
 }

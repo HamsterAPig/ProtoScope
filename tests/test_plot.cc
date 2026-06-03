@@ -119,6 +119,71 @@ void test_plot_history_limit_zero_keeps_all_samples() {
             "保留点应覆盖完整输入顺序");
 }
 
+void test_plot_time_reset_clears_history_by_default() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V"});
+    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .source = "run-1",
+        .samples = {{.time = 0.0, .value = 1.0}, {.time = 1.0, .value = 2.0}},
+    }), "第一轮样本应追加成功");
+    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .source = "run-2",
+        .samples = {{.time = 0.0, .value = 10.0}, {.time = 1.0, .value = 20.0}},
+    }), "第二轮从 t=0 开始应清空旧历史后追加成功");
+
+    const auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(snapshot.channels.size() == 1, "应保留新一轮通道");
+    require(snapshot.channels.front().totalSamples == 2, "默认策略下第二轮不应被旧历史挡住");
+    require(snapshot.channels.front().samples != nullptr, "应能读取新一轮样本");
+    require(std::abs(snapshot.channels.front().samples[0].value - 10.0) < 1e-12, "第一轮旧样本应被清掉");
+    require(snapshot.source == "run-2", "清空后应保留第二轮 source");
+    require(snapshot.channels.front().label == "CH1", "重开采集不应丢通道配置");
+}
+
+void test_plot_time_reset_can_continue_history() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.setResetHistoryOnTimeReset(false);
+    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .samples = {{.time = 0.0, .value = 1.0}, {.time = 1.0, .value = 2.0}},
+    }), "第一轮样本应追加成功");
+    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .samples = {{.time = 0.0, .value = 10.0}, {.time = 1.0, .value = 20.0}},
+    }), "继续累加策略下第二轮样本应追加成功");
+
+    const auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(snapshot.channels.size() == 1, "应保留通道");
+    require(snapshot.channels.front().totalSamples == 4, "继续累加策略应保留两轮历史");
+    require(snapshot.channels.front().samples != nullptr, "应能读取累加后的样本");
+    require(std::abs(snapshot.channels.front().samples[2].time - 2.0) < 1e-12, "第二轮时间应接到第一轮之后");
+    require(std::abs(snapshot.channels.front().samples[3].time - 3.0) < 1e-12, "第二轮末尾应连续显示");
+}
+
+void test_wave_sample_frequency_visible_range_filters_by_sample_index() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .samples = {
+            {.time = 100.0, .value = 0.0},
+            {.time = 101.0, .value = 1.0},
+            {.time = 102.0, .value = 2.0},
+            {.time = 103.0, .value = 3.0},
+            {.time = 104.0, .value = 4.0},
+            {.time = 105.0, .value = 5.0},
+        },
+    }), "非零脚本时间样本应追加成功");
+
+    auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    protoscope::plot::applySampleFrequencyVisibleRange(snapshot, 0.2, 0.4, 10.0);
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, 10.0);
+    require(displayData.axisSource == protoscope::plot::WaveTimeAxisSource::SampleFrequency, "应使用采样频率时间轴");
+    require(displayData.channels.size() == 1, "应保留通道显示数据");
+    require(displayData.channels.front().samples.size() == 3, "Fs 视口应按样本序号筛选 0.2s 到 0.4s");
+    require(std::abs(displayData.channels.front().samples.front().time - 0.2) < 1e-12,
+            "Fs 显示窗口起点应使用 sampleIndex/Fs");
+    require(std::abs(displayData.channels.front().samples.back().time - 0.4) < 1e-12,
+            "Fs 显示窗口终点应使用 sampleIndex/Fs");
+}
+
 void test_plot_limited_envelope_preserves_spikes() {
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.setViewConfig(protoscope::plot::ViewConfig{
