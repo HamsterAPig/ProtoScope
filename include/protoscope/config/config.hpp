@@ -20,6 +20,24 @@ struct AppConfigHotReloadConfig {
     bool enabled{false};
 };
 
+struct PerformanceExplicitOverrides {
+    bool receiveTransportReadBufferBytes{false};
+    bool workerRxQueueLimitBytes{false};
+    bool workerMemoryBudgetBytes{false};
+    bool workerOutputQueueLimit{false};
+    bool workerBatchBytes{false};
+    bool workerOutputFlushBudgetMs{false};
+    bool realtimeBacklogRxChunkBytesPerPump{false};
+    bool realtimeBacklogTransferFrameRowsPerPump{false};
+    bool realtimeBacklogPlotAppendsPerPump{false};
+    bool realtimeBacklogRawFirstBacklogWarnBytes{false};
+};
+
+struct PerformanceConfig {
+    double scale{1.0};
+    PerformanceExplicitOverrides explicitOverrides{};
+};
+
 enum class LogLevel {
     Debug,
     Info,
@@ -153,6 +171,7 @@ struct ScriptingConfig {
 };
 
 struct AppConfig {
+    PerformanceConfig performance{};
     AppRuntimeConfig app{};
     GuiConfig gui{};
     ProtocolConfig protocol{};

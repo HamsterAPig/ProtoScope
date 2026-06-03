@@ -285,6 +285,29 @@ app:
 
 配置文件路径：config/protoscope.yaml，YAML 格式。以下列出所有可配置项及其含义。
 
+### performance —— 公共性能系数
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| scale | double | 1.0 | 公共吞吐预算系数；`0.5` 更保守，`1.0` 使用默认预算，`2.0` 允许更高吞吐；`<= 0` 会按 `1.0` 回退 |
+
+`performance.scale` 只影响没有在 YAML 中显式写出的实时吞吐预算项。整数预算按“默认值 × scale”四舍五入，非零默认值至少保留 `1`；如果单项显式写 `0`，仍保留该单项自己的特殊含义。
+
+受公共系数控制的缺省项：
+
+- `receive.transport_read_buffer_bytes`
+- `scripting.worker.rx_queue_limit_bytes`
+- `scripting.worker.memory_budget_bytes`
+- `scripting.worker.output_queue_limit`
+- `scripting.worker.batch_bytes`
+- `scripting.worker.output_flush_budget_ms`
+- `gui.realtime_backlog.rx_chunk_bytes_per_pump`
+- `gui.realtime_backlog.transfer_frame_rows_per_pump`
+- `gui.realtime_backlog.plot_appends_per_pump`
+- `gui.realtime_backlog.raw_first_backlog_warn_bytes`
+
+不受公共系数控制、只做单项调优的典型项包括：`app.fps_limit`、`gui.wave.*` 渲染/降采样项、日志历史保留、文件 IO 分块、`gui.realtime_backlog.pump_min_interval_ms`、布尔开关和策略字符串。
+
 ### app —— 应用运行时
 
 | 键 | 类型 | 默认值 | 说明 |
@@ -295,6 +318,14 @@ app:
 | auto_save.enabled | bool | false | 配置自动保存开关 |
 | auto_save.interval_ms | uint64 | 5000 | 自动保存间隔（毫秒） |
 | config_hot_reload.enabled | bool | false | 外部配置变更检测开关 |
+
+### receive —— 接收链路
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| transport_read_buffer_bytes | size_t | 65536 | 底层 transport 单次读缓冲字节数；缺省受 `performance.scale` 控制，显式写出后覆盖公共系数 |
+| stream_buffer.near_overflow_threshold | double | 0.8 | 流缓冲接近溢出的提示阈值 |
+| stream_buffer.popup_enabled | bool | true | 流缓冲告警弹窗开关 |
 
 ### scripting —— Lua 宿主与文件 IO
 
@@ -309,9 +340,17 @@ app:
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | worker.enabled | bool | true | 是否启用脚本工作线程 |
-| worker.rx_queue_limit_bytes | size_t | 67108864 | 脚本工作线程 RX 队列上限（字节） |
-| worker.output_queue_limit | size_t | 65536 | 脚本输出队列上限 |
-| worker.batch_bytes | size_t | 262144 | 每轮从 worker 批量提交到宿主的字节预算 |
+| worker.rx_queue_limit_bytes | size_t | 67108864 | 脚本工作线程 RX 队列上限（字节）；缺省受 `performance.scale` 控制 |
+| worker.memory_budget_bytes | size_t | 268435456 | worker 运行期内存预算；缺省受 `performance.scale` 控制 |
+| worker.memory_budget_available_ratio | double | 0.0 | 基于可用内存的动态预算比例；`0.0` 表示不用动态比例 |
+| worker.output_queue_limit | size_t | 65536 | 脚本输出队列上限；缺省受 `performance.scale` 控制 |
+| worker.batch_bytes | size_t | 262144 | worker 合并相邻 RX 事件的字节上限，也决定每次输出给宿主/UI 的 batch 粗细；缺省受 `performance.scale` 控制 |
+| worker.output_flush_budget_ms | double | 4.0 | 主线程每轮从 worker 输出队列取结果的时间预算；缺省受 `performance.scale` 控制 |
+| worker.backpressure_enabled | bool | true | RX 队列背压开关 |
+| worker.backpressure_rx_queue_high_watermark | double | 0.5 | RX 队列高水位比例 |
+| worker.backpressure_rx_queue_low_watermark | double | 0.3 | RX 队列低水位比例 |
+
+想调“worker 给 UI 的块粗细”时，优先调 `scripting.worker.batch_bytes`；想调“UI 每帧追赶速度”时，再调 `gui.realtime_backlog.*_per_pump` 和 `scripting.worker.output_flush_budget_ms`。
 
 **file_io**：
 
@@ -360,10 +399,13 @@ app:
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | realtime_backlog.mode | string | responsive | 实时 backlog 策略：`responsive` 断开时丢弃未显示的 UI 派生 backlog，`complete` 继续小步补完 |
-| realtime_backlog.rx_chunk_bytes_per_pump | size_t | 65536 | 单轮主循环最多解析的 RX 字节数，大包会拆分到后续 pump |
-| realtime_backlog.transfer_frame_rows_per_pump | size_t | 2000 | 单轮最多提交到逐帧收发视图的行数 |
-| realtime_backlog.plot_appends_per_pump | size_t | 4096 | 单轮最多提交到波形缓冲的 `proto.plot.push` append 请求数 |
-| realtime_backlog.discard_backlog_on_disconnect | bool | true | `responsive` 模式下断开连接时是否立即丢弃未显示的实时 UI backlog |
+| realtime_backlog.rx_chunk_bytes_per_pump | size_t | 65536 | 单轮主循环最多解析的 RX 字节数，大包会拆分到后续 pump；缺省受 `performance.scale` 控制 |
+| realtime_backlog.transfer_frame_rows_per_pump | size_t | 2000 | 单轮最多提交到逐帧收发视图的行数；缺省受 `performance.scale` 控制 |
+| realtime_backlog.plot_appends_per_pump | size_t | 4096 | 单轮最多提交到波形缓冲的 `proto.plot.push` append 请求数；缺省受 `performance.scale` 控制 |
+| realtime_backlog.raw_first_backlog_warn_bytes | size_t | 33554432 | raw-first backlog 告警阈值；缺省受 `performance.scale` 控制 |
+| realtime_backlog.derived_backlog_degrade_enabled | bool | true | 派生 UI backlog 过大时是否允许降级 |
+| realtime_backlog.discard_backlog_on_disconnect | bool | false | `responsive` 模式下断开连接时是否立即丢弃未显示的实时 UI backlog |
+| realtime_backlog.pump_min_interval_ms | double | 2.0 | 实时 backlog pump 的最小间隔，不受 `performance.scale` 控制 |
 
 #### 波形点数配置关系
 

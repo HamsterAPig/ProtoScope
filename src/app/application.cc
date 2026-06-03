@@ -342,6 +342,7 @@ void Application::setLogLevel(const config::LogLevel level) {
 
 config::AppConfig Application::captureConfig() const {
     auto captured = configStore_.captureFromDock(dockStore_);
+    captured.performance = runtimeConfig_.performance;
     captured.gui.window = runtimeConfig_.gui.window;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;

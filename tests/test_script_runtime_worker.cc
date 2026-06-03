@@ -63,6 +63,22 @@ bool hasEvent(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>
     return false;
 }
 
+bool hasEventWithTokens(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& batches,
+                        const std::string& eventName,
+                        const std::string& firstToken,
+                        const std::string& secondToken) {
+    for (const auto& batch : batches) {
+        for (const auto& event : batch.events) {
+            if (event.name == eventName
+                && event.payload.find(firstToken) != std::string::npos
+                && event.payload.find(secondToken) != std::string::npos) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool hasLog(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& batches, const std::string& token) {
     for (const auto& batch : batches) {
         for (const auto& log : batch.logs) {
@@ -93,6 +109,26 @@ function on_bytes(ctx, bytes)
     first = bytes[1],
     size = #bytes,
   })
+end
+)lua";
+}
+
+std::string workerBatchProbeScript() {
+    return R"lua(
+function controls()
+  return {}
+end
+
+local calls = 0
+
+function on_bytes(ctx, bytes)
+  calls = calls + 1
+  if calls == 1 and bytes[1] == 1 then
+    local started = os.clock()
+    while os.clock() - started < 1.0 do
+    end
+  end
+  proto.emit("worker_bytes", "first=" .. tostring(bytes[1]) .. ",size=" .. tostring(#bytes))
 end
 )lua";
 }
@@ -156,6 +192,35 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes() {
     require(hasEvent(outputs, "worker_bytes", "first=161"), "RX 队列超过阈值后仍应保留最旧待解析字节");
     require(hasEvent(outputs, "worker_bytes", "first=178"), "RX 队列超过阈值后仍应保留较新的待解析字节");
     require(hasEvent(outputs, "worker_bytes", "first=195"), "RX 队列超过阈值后仍应保留最新待解析字节");
+}
+
+void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events() {
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
+        .enabled = true,
+        .rxQueueLimitBytes = 64U * 1024U,
+        .outputQueueLimit = 128U,
+        .batchBytes = 3U,
+        .backpressureEnabled = false,
+    });
+    const auto protocolDir = makeWorkerProtocolDir("batch-bytes", workerBatchProbeScript());
+    const auto loaded = worker.loadProtocolDirectory(protocolDir.generic_string());
+    require(loaded.ok, "worker 分块测试协议应可加载");
+    (void)worker.drainOutputs();
+
+    // 核心流程：首个 RX 事件刚好填满 batch，后续相邻事件必须另起一批并继续按 batch_bytes 合并。
+    worker.postTransportBytes(bytesEvent({0x01, 0x02, 0x03}, 1));
+    worker.postTransportBytes(bytesEvent({0x10}, 2));
+    worker.postTransportBytes(bytesEvent({0x11}, 3));
+    worker.postTransportBytes(bytesEvent({0x12}, 4));
+    worker.postTransportBytes(bytesEvent({0x13}, 5));
+    worker.waitIdle();
+    const auto outputs = worker.drainOutputs();
+
+    require(hasEventWithTokens(outputs, "worker_bytes", "first=16", "size=3"),
+            "相邻 RX 事件应合并到不超过 batch_bytes 的块");
+    require(hasEventWithTokens(outputs, "worker_bytes", "first=19", "size=1"),
+            "超过 batch_bytes 的后续 RX 应保留为新块");
 }
 
 void test_pipeline_worker_threads_resolve_from_hardware_limit() {

@@ -72,6 +72,8 @@ void test_update_check_reports_development_build();
 void test_update_check_rejects_response_without_semantic_tags();
 void test_protocol_directory_reload();
 void test_config_default_roundtrip();
+void test_config_performance_scale_applies_default_budgets();
+void test_config_performance_save_keeps_scaled_defaults_compact();
 void test_config_wave_mode_invalid_fallback();
 void test_config_logging_roundtrip();
 void test_config_default_protocol_workspace_initializes_half_duplex_demos();
@@ -220,6 +222,7 @@ void test_application_plot_push_drains_with_budget_and_disconnect_keeps_pending(
 void test_runtime_scheduler_limits_busy_render_frames();
 void test_script_runtime_worker_disabled_mode_waits_for_rx_idle();
 void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes();
+void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events();
 void test_pipeline_worker_threads_resolve_from_hardware_limit();
 
 const TestCase* allTests();

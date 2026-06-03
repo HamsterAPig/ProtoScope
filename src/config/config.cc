@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <system_error>
 
 namespace protoscope::config {
@@ -30,6 +32,101 @@ std::vector<std::string> readStringList(const YAML::Node& node, const char* key,
         values.push_back(item.as<std::string>());
     }
     return values;
+}
+
+bool hasScalar(const YAML::Node& node, const char* key) { return node && node[key]; }
+
+YAML::Node childNode(const YAML::Node& node, const char* key) {
+    if (!node) {
+        return {};
+    }
+    return node[key];
+}
+
+double normalizePerformanceScale(const double scale) { return scale > 0.0 ? scale : 1.0; }
+
+std::size_t scaleIntegerBudget(const std::size_t fallback, const double scale) {
+    if (fallback == 0U) {
+        return 0U;
+    }
+    const auto scaled = std::round(static_cast<double>(fallback) * normalizePerformanceScale(scale));
+    if (scaled < 1.0) {
+        return 1U;
+    }
+    const auto maxValue = static_cast<double>((std::numeric_limits<std::size_t>::max)());
+    if (scaled > maxValue) {
+        return (std::numeric_limits<std::size_t>::max)();
+    }
+    return static_cast<std::size_t>(scaled);
+}
+
+double scaleDoubleBudget(const double fallback, const double scale) {
+    if (fallback == 0.0) {
+        return 0.0;
+    }
+    return fallback * normalizePerformanceScale(scale);
+}
+
+void applyPerformanceScale(AppConfig& config) {
+    const auto scale = normalizePerformanceScale(config.performance.scale);
+    config.performance.scale = scale;
+
+    // 核心流程：公共性能系数只缩放缺省预算；YAML 显式单项会在后续读取中覆盖这些值。
+    config.receive.transportReadBufferBytes = scaleIntegerBudget(config.receive.transportReadBufferBytes, scale);
+    config.scripting.workerRxQueueLimitBytes = scaleIntegerBudget(config.scripting.workerRxQueueLimitBytes, scale);
+    config.scripting.workerMemoryBudgetBytes = scaleIntegerBudget(config.scripting.workerMemoryBudgetBytes, scale);
+    config.scripting.workerOutputQueueLimit = scaleIntegerBudget(config.scripting.workerOutputQueueLimit, scale);
+    config.scripting.workerBatchBytes = scaleIntegerBudget(config.scripting.workerBatchBytes, scale);
+    config.scripting.workerOutputFlushBudgetMs = scaleDoubleBudget(config.scripting.workerOutputFlushBudgetMs, scale);
+    config.gui.realtimeBacklog.rxChunkBytesPerPump =
+        scaleIntegerBudget(config.gui.realtimeBacklog.rxChunkBytesPerPump, scale);
+    config.gui.realtimeBacklog.transferFrameRowsPerPump =
+        scaleIntegerBudget(config.gui.realtimeBacklog.transferFrameRowsPerPump, scale);
+    config.gui.realtimeBacklog.plotAppendsPerPump =
+        scaleIntegerBudget(config.gui.realtimeBacklog.plotAppendsPerPump, scale);
+    config.gui.realtimeBacklog.rawFirstBacklogWarnBytes =
+        scaleIntegerBudget(config.gui.realtimeBacklog.rawFirstBacklogWarnBytes, scale);
+}
+
+void readPerformanceSize(const YAML::Node& node,
+                         const char* key,
+                         std::size_t& value,
+                         bool& explicitOverride) {
+    if (!hasScalar(node, key)) {
+        return;
+    }
+    value = node[key].as<std::size_t>();
+    explicitOverride = true;
+}
+
+void readPerformanceDouble(const YAML::Node& node,
+                           const char* key,
+                           double& value,
+                           bool& explicitOverride) {
+    if (!hasScalar(node, key)) {
+        return;
+    }
+    value = node[key].as<double>();
+    explicitOverride = true;
+}
+
+bool performanceValueChanged(const std::size_t value, const std::size_t scaledDefault) {
+    return value != scaledDefault;
+}
+
+bool performanceValueChanged(const double value, const double scaledDefault) {
+    return std::abs(value - scaledDefault) > 1e-12;
+}
+
+template <typename T>
+void writePerformanceScalar(YAML::Node node,
+                            const char* key,
+                            const T value,
+                            const T scaledDefault,
+                            const bool explicitOverride) {
+    if (explicitOverride || performanceValueChanged(value, scaledDefault)) {
+        node[key] = value;
+    }
 }
 
 std::string normalizeTextPath(std::filesystem::path path) {
@@ -220,27 +317,33 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         const YAML::Node root = YAML::LoadFile(result.resolvedPath.string());
         result.loadedFromDisk = true;
 
+        if (const auto performance = root["performance"]) {
+            result.config.performance.scale =
+                normalizePerformanceScale(readScalar<double>(performance, "scale", result.config.performance.scale));
+        }
+        applyPerformanceScale(result.config);
+
         const auto app = root["app"];
         result.config.app.language = readScalar<std::string>(app, "language", result.config.app.language);
         result.config.app.fpsLimit = readScalar<std::uint32_t>(app, "fps_limit", result.config.app.fpsLimit);
         result.config.app.idleRender = readScalar<std::string>(app, "idle_render", result.config.app.idleRender);
-        if (const auto autoSave = app["auto_save"]) {
+        if (const auto autoSave = childNode(app, "auto_save")) {
             result.config.app.autoSave.enabled = readScalar<bool>(autoSave, "enabled", result.config.app.autoSave.enabled);
             result.config.app.autoSave.intervalMs = readScalar<std::uint64_t>(autoSave, "interval_ms", result.config.app.autoSave.intervalMs);
         }
-        if (const auto configHotReload = app["config_hot_reload"]) {
+        if (const auto configHotReload = childNode(app, "config_hot_reload")) {
             result.config.app.configHotReload.enabled =
                 readScalar<bool>(configHotReload, "enabled", result.config.app.configHotReload.enabled);
         }
 
         const auto gui = root["gui"];
-        if (const auto window = gui["window"]) {
+        if (const auto window = childNode(gui, "window")) {
             result.config.gui.window.title = readScalar<std::string>(window, "title", result.config.gui.window.title);
             result.config.gui.window.width = readScalar<int>(window, "width", result.config.gui.window.width);
             result.config.gui.window.height = readScalar<int>(window, "height", result.config.gui.window.height);
             result.config.gui.window.maximized = readScalar<bool>(window, "maximized", result.config.gui.window.maximized);
         }
-        if (const auto wave = gui["wave"]) {
+        if (const auto wave = childNode(gui, "wave")) {
             result.config.gui.wave.controlMode =
                 parseWaveControlMode(readScalar<std::string>(wave,
                                                              "control_mode",
@@ -293,7 +396,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<bool>(wave, "show_channel_legend", result.config.gui.wave.showChannelLegend);
             result.config.gui.wave.showFftLegend =
                 readScalar<bool>(wave, "show_fft_legend", result.config.gui.wave.showFftLegend);
-            if (const auto logHistory = gui["log_history"]) {
+            if (const auto logHistory = childNode(gui, "log_history")) {
                 result.config.gui.logHistory.transferRawLimit =
                     readScalar<std::size_t>(logHistory, "transfer_raw_limit", result.config.gui.logHistory.transferRawLimit);
                 result.config.gui.logHistory.transferFrameLimit =
@@ -303,7 +406,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 result.config.gui.logHistory.scriptLimit =
                     readScalar<std::size_t>(logHistory, "script_limit", result.config.gui.logHistory.scriptLimit);
             }
-            if (const auto rawCapture = gui["raw_capture"]) {
+            if (const auto rawCapture = childNode(gui, "raw_capture")) {
                 result.config.gui.rawCapture.liveLimitBytes =
                     readScalar<std::size_t>(rawCapture, "live_limit_bytes", result.config.gui.rawCapture.liveLimitBytes);
                 result.config.gui.rawCapture.recordingQueueLimitBytes =
@@ -311,31 +414,33 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                             "recording_queue_limit_bytes",
                                             result.config.gui.rawCapture.recordingQueueLimitBytes);
             }
-            if (const auto transferLog = gui["transfer_log"]) {
+            if (const auto transferLog = childNode(gui, "transfer_log")) {
                 result.config.gui.replayRawHistoryOnSchemaSwitch =
                     readScalar<bool>(transferLog,
                                      "replay_raw_history_on_schema_switch",
                                      result.config.gui.replayRawHistoryOnSchemaSwitch);
             }
-            if (const auto realtimeBacklog = gui["realtime_backlog"]) {
+            if (const auto realtimeBacklog = childNode(gui, "realtime_backlog")) {
                 result.config.gui.realtimeBacklog.mode =
                     readScalar<std::string>(realtimeBacklog, "mode", result.config.gui.realtimeBacklog.mode);
-                result.config.gui.realtimeBacklog.rxChunkBytesPerPump =
-                    readScalar<std::size_t>(realtimeBacklog,
-                                            "rx_chunk_bytes_per_pump",
-                                            result.config.gui.realtimeBacklog.rxChunkBytesPerPump);
-                result.config.gui.realtimeBacklog.transferFrameRowsPerPump =
-                    readScalar<std::size_t>(realtimeBacklog,
-                                            "transfer_frame_rows_per_pump",
-                                            result.config.gui.realtimeBacklog.transferFrameRowsPerPump);
-                result.config.gui.realtimeBacklog.plotAppendsPerPump =
-                    readScalar<std::size_t>(realtimeBacklog,
-                                            "plot_appends_per_pump",
-                                            result.config.gui.realtimeBacklog.plotAppendsPerPump);
-                result.config.gui.realtimeBacklog.rawFirstBacklogWarnBytes =
-                    readScalar<std::size_t>(realtimeBacklog,
-                                            "raw_first_backlog_warn_bytes",
-                                            result.config.gui.realtimeBacklog.rawFirstBacklogWarnBytes);
+                readPerformanceSize(realtimeBacklog,
+                                    "rx_chunk_bytes_per_pump",
+                                    result.config.gui.realtimeBacklog.rxChunkBytesPerPump,
+                                    result.config.performance.explicitOverrides.realtimeBacklogRxChunkBytesPerPump);
+                readPerformanceSize(
+                    realtimeBacklog,
+                    "transfer_frame_rows_per_pump",
+                    result.config.gui.realtimeBacklog.transferFrameRowsPerPump,
+                    result.config.performance.explicitOverrides.realtimeBacklogTransferFrameRowsPerPump);
+                readPerformanceSize(realtimeBacklog,
+                                    "plot_appends_per_pump",
+                                    result.config.gui.realtimeBacklog.plotAppendsPerPump,
+                                    result.config.performance.explicitOverrides.realtimeBacklogPlotAppendsPerPump);
+                readPerformanceSize(
+                    realtimeBacklog,
+                    "raw_first_backlog_warn_bytes",
+                    result.config.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
+                    result.config.performance.explicitOverrides.realtimeBacklogRawFirstBacklogWarnBytes);
                 result.config.gui.realtimeBacklog.derivedBacklogDegradeEnabled =
                     readScalar<bool>(realtimeBacklog,
                                      "derived_backlog_degrade_enabled",
@@ -343,17 +448,17 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 result.config.gui.realtimeBacklog.discardBacklogOnDisconnect =
                     readScalar<bool>(realtimeBacklog,
                                      "discard_backlog_on_disconnect",
-                result.config.gui.realtimeBacklog.discardBacklogOnDisconnect);
-            result.config.gui.realtimeBacklog.pumpMinIntervalMs =
-                readScalar<double>(realtimeBacklog,
-                                   "pump_min_interval_ms",
-                                   result.config.gui.realtimeBacklog.pumpMinIntervalMs);
+                                     result.config.gui.realtimeBacklog.discardBacklogOnDisconnect);
+                result.config.gui.realtimeBacklog.pumpMinIntervalMs =
+                    readScalar<double>(realtimeBacklog,
+                                       "pump_min_interval_ms",
+                                       result.config.gui.realtimeBacklog.pumpMinIntervalMs);
             }
             result.config.gui.showAppHeader = readScalar<bool>(gui, "show_app_header", result.config.gui.showAppHeader);
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
             result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
         }
-        if (const auto elfSymbolCombo = gui["elf_symbol_combo"]) {
+        if (const auto elfSymbolCombo = childNode(gui, "elf_symbol_combo")) {
             const int limit = readScalar<int>(elfSymbolCombo,
                                               "limit",
                                               static_cast<int>(result.config.gui.elfSymbolCombo.limit));
@@ -370,7 +475,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         const auto protocol = root["protocol"];
         result.config.protocol.rootDir = readScalar<std::string>(protocol, "root_dir", result.config.protocol.rootDir);
         result.config.protocol.selectedDir = readScalar<std::string>(protocol, "selected_dir", result.config.protocol.selectedDir);
-        if (const auto tx = protocol["tx"]) {
+        if (const auto tx = childNode(protocol, "tx")) {
             result.config.protocol.tx.sendTimeoutMs =
                 readScalar<std::uint64_t>(tx, "send_timeout_ms", result.config.protocol.tx.sendTimeoutMs);
             result.config.protocol.tx.requestTimeoutMs =
@@ -384,11 +489,11 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         }
 
         if (const auto receive = root["receive"]) {
-            result.config.receive.transportReadBufferBytes =
-                readScalar<std::size_t>(receive,
-                                        "transport_read_buffer_bytes",
-                                        result.config.receive.transportReadBufferBytes);
-            if (const auto streamBuffer = receive["stream_buffer"]) {
+            readPerformanceSize(receive,
+                                "transport_read_buffer_bytes",
+                                result.config.receive.transportReadBufferBytes,
+                                result.config.performance.explicitOverrides.receiveTransportReadBufferBytes);
+            if (const auto streamBuffer = childNode(receive, "stream_buffer")) {
                 result.config.receive.streamBuffer.nearOverflowThreshold =
                     readScalar<double>(streamBuffer,
                                        "near_overflow_threshold",
@@ -401,31 +506,35 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         }
 
         const auto scripting = root["scripting"];
-        if (const auto pipeline = scripting["pipeline"]) {
+        if (const auto pipeline = childNode(scripting, "pipeline")) {
             if (pipeline["worker_threads"]) {
                 result.config.scripting.pipeline.workerThreads =
                     readScalar<std::size_t>(pipeline, "worker_threads", 1U);
             }
         }
-        if (const auto worker = scripting["worker"]) {
+        if (const auto worker = childNode(scripting, "worker")) {
             result.config.scripting.workerEnabled =
                 readScalar<bool>(worker, "enabled", result.config.scripting.workerEnabled);
-            result.config.scripting.workerRxQueueLimitBytes =
-                readScalar<std::size_t>(worker,
-                                        "rx_queue_limit_bytes",
-                                        result.config.scripting.workerRxQueueLimitBytes);
-            result.config.scripting.workerMemoryBudgetBytes =
-                readScalar<std::size_t>(worker,
-                                        "memory_budget_bytes",
-                                        result.config.scripting.workerMemoryBudgetBytes);
+            readPerformanceSize(worker,
+                                "rx_queue_limit_bytes",
+                                result.config.scripting.workerRxQueueLimitBytes,
+                                result.config.performance.explicitOverrides.workerRxQueueLimitBytes);
+            readPerformanceSize(worker,
+                                "memory_budget_bytes",
+                                result.config.scripting.workerMemoryBudgetBytes,
+                                result.config.performance.explicitOverrides.workerMemoryBudgetBytes);
             result.config.scripting.workerMemoryBudgetAvailableRatio =
                 readScalar<double>(worker,
                                    "memory_budget_available_ratio",
                                    result.config.scripting.workerMemoryBudgetAvailableRatio);
-            result.config.scripting.workerOutputQueueLimit =
-                readScalar<std::size_t>(worker, "output_queue_limit", result.config.scripting.workerOutputQueueLimit);
-            result.config.scripting.workerBatchBytes =
-                readScalar<std::size_t>(worker, "batch_bytes", result.config.scripting.workerBatchBytes);
+            readPerformanceSize(worker,
+                                "output_queue_limit",
+                                result.config.scripting.workerOutputQueueLimit,
+                                result.config.performance.explicitOverrides.workerOutputQueueLimit);
+            readPerformanceSize(worker,
+                                "batch_bytes",
+                                result.config.scripting.workerBatchBytes,
+                                result.config.performance.explicitOverrides.workerBatchBytes);
             result.config.scripting.workerBackpressureEnabled =
                 readScalar<bool>(worker, "backpressure_enabled", result.config.scripting.workerBackpressureEnabled);
             result.config.scripting.workerBackpressureHighWatermark =
@@ -436,10 +545,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<double>(worker,
                                    "backpressure_rx_queue_low_watermark",
                                    result.config.scripting.workerBackpressureLowWatermark);
-            result.config.scripting.workerOutputFlushBudgetMs =
-                readScalar<double>(worker, "output_flush_budget_ms", result.config.scripting.workerOutputFlushBudgetMs);
+            readPerformanceDouble(worker,
+                                  "output_flush_budget_ms",
+                                  result.config.scripting.workerOutputFlushBudgetMs,
+                                  result.config.performance.explicitOverrides.workerOutputFlushBudgetMs);
         }
-        if (const auto fileIo = scripting["file_io"]) {
+        if (const auto fileIo = childNode(scripting, "file_io")) {
             auto& config = result.config.scripting.fileIo;
             config.enabled = readScalar<bool>(fileIo, "enabled", config.enabled);
             config.allowProtocolDir = readScalar<bool>(fileIo, "allow_protocol_dir", config.allowProtocolDir);
@@ -451,11 +562,11 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             config.maxFileSizeBytes = readScalar<std::uint64_t>(fileIo, "max_file_size_bytes", config.maxFileSizeBytes);
             config.maxWriteFileSizeBytes =
                 readScalar<std::uint64_t>(fileIo, "max_write_file_size_bytes", config.maxWriteFileSizeBytes);
-            if (const auto dialog = fileIo["dialog"]) {
+            if (const auto dialog = childNode(fileIo, "dialog")) {
                 config.dialog.enabled = readScalar<bool>(dialog, "enabled", config.dialog.enabled);
                 config.dialog.rememberLastDir = readScalar<bool>(dialog, "remember_last_dir", config.dialog.rememberLastDir);
             }
-            if (const auto sendFile = fileIo["send_file"]) {
+            if (const auto sendFile = childNode(fileIo, "send_file")) {
                 config.sendFile.defaultChunkBytes =
                     readScalar<std::size_t>(sendFile, "default_chunk_bytes", config.sendFile.defaultChunkBytes);
                 config.sendFile.maxInflightChunks =
@@ -473,14 +584,14 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         result.config.communication.kind =
             parseTransportKind(readScalar<std::string>(communication, "kind", toTransportKindText(result.config.communication.kind)));
 
-        if (const auto tcpClient = communication["tcp_client"]) {
+        if (const auto tcpClient = childNode(communication, "tcp_client")) {
             result.config.communication.tcpClient.host =
                 readScalar<std::string>(tcpClient, "host", result.config.communication.tcpClient.host);
             result.config.communication.tcpClient.port =
                 readScalar<std::uint16_t>(tcpClient, "port", result.config.communication.tcpClient.port);
         }
 
-        if (const auto tcpServer = communication["tcp_server"]) {
+        if (const auto tcpServer = childNode(communication, "tcp_server")) {
             result.config.communication.tcpServer.bindAddress =
                 readScalar<std::string>(tcpServer, "bind_address", result.config.communication.tcpServer.bindAddress);
             result.config.communication.tcpServer.port =
@@ -489,7 +600,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<bool>(tcpServer, "reject_new_connection", result.config.communication.tcpServer.rejectNewConnection);
         }
 
-        if (const auto serial = communication["serial"]) {
+        if (const auto serial = childNode(communication, "serial")) {
             result.config.communication.serial.portName =
                 readScalar<std::string>(serial, "port_name", result.config.communication.serial.portName);
             result.config.communication.serial.baudRate =
@@ -504,7 +615,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::string>(serial, "flow_control", result.config.communication.serial.flowControl);
         }
 
-        if (const auto udpPeer = communication["udp_peer"]) {
+        if (const auto udpPeer = childNode(communication, "udp_peer")) {
             result.config.communication.udpPeer.bindAddress =
                 readScalar<std::string>(udpPeer, "bind_address", result.config.communication.udpPeer.bindAddress);
             result.config.communication.udpPeer.bindPort =
@@ -532,7 +643,13 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
 
 bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const {
     YAML::Node root;
+    auto scaledDefaults = withDefaults();
+    scaledDefaults.performance.scale = normalizePerformanceScale(config.performance.scale);
+    applyPerformanceScale(scaledDefaults);
 
+    const auto& explicitOverrides = config.performance.explicitOverrides;
+
+    root["performance"]["scale"] = scaledDefaults.performance.scale;
     root["app"]["language"] = config.app.language;
     root["app"]["fps_limit"] = config.app.fpsLimit;
     root["app"]["idle_render"] = config.app.idleRender;
@@ -571,11 +688,26 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
     root["gui"]["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
     root["gui"]["realtime_backlog"]["mode"] = config.gui.realtimeBacklog.mode;
-    root["gui"]["realtime_backlog"]["rx_chunk_bytes_per_pump"] = config.gui.realtimeBacklog.rxChunkBytesPerPump;
-    root["gui"]["realtime_backlog"]["transfer_frame_rows_per_pump"] = config.gui.realtimeBacklog.transferFrameRowsPerPump;
-    root["gui"]["realtime_backlog"]["plot_appends_per_pump"] = config.gui.realtimeBacklog.plotAppendsPerPump;
-    root["gui"]["realtime_backlog"]["raw_first_backlog_warn_bytes"] =
-        config.gui.realtimeBacklog.rawFirstBacklogWarnBytes;
+    writePerformanceScalar(root["gui"]["realtime_backlog"],
+                           "rx_chunk_bytes_per_pump",
+                           config.gui.realtimeBacklog.rxChunkBytesPerPump,
+                           scaledDefaults.gui.realtimeBacklog.rxChunkBytesPerPump,
+                           explicitOverrides.realtimeBacklogRxChunkBytesPerPump);
+    writePerformanceScalar(root["gui"]["realtime_backlog"],
+                           "transfer_frame_rows_per_pump",
+                           config.gui.realtimeBacklog.transferFrameRowsPerPump,
+                           scaledDefaults.gui.realtimeBacklog.transferFrameRowsPerPump,
+                           explicitOverrides.realtimeBacklogTransferFrameRowsPerPump);
+    writePerformanceScalar(root["gui"]["realtime_backlog"],
+                           "plot_appends_per_pump",
+                           config.gui.realtimeBacklog.plotAppendsPerPump,
+                           scaledDefaults.gui.realtimeBacklog.plotAppendsPerPump,
+                           explicitOverrides.realtimeBacklogPlotAppendsPerPump);
+    writePerformanceScalar(root["gui"]["realtime_backlog"],
+                           "raw_first_backlog_warn_bytes",
+                           config.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
+                           scaledDefaults.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
+                           explicitOverrides.realtimeBacklogRawFirstBacklogWarnBytes);
     root["gui"]["realtime_backlog"]["derived_backlog_degrade_enabled"] =
         config.gui.realtimeBacklog.derivedBacklogDegradeEnabled;
     root["gui"]["realtime_backlog"]["discard_backlog_on_disconnect"] =
@@ -597,21 +729,45 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["protocol"]["tx"]["overflow_notify"] = config.protocol.tx.overflowNotify;
     root["receive"]["stream_buffer"]["near_overflow_threshold"] = config.receive.streamBuffer.nearOverflowThreshold;
     root["receive"]["stream_buffer"]["popup_enabled"] = config.receive.streamBuffer.popupEnabled;
-    root["receive"]["transport_read_buffer_bytes"] = config.receive.transportReadBufferBytes;
+    writePerformanceScalar(root["receive"],
+                           "transport_read_buffer_bytes",
+                           config.receive.transportReadBufferBytes,
+                           scaledDefaults.receive.transportReadBufferBytes,
+                           explicitOverrides.receiveTransportReadBufferBytes);
 
     if (config.scripting.pipeline.workerThreads.has_value()) {
         root["scripting"]["pipeline"]["worker_threads"] = *config.scripting.pipeline.workerThreads;
     }
     root["scripting"]["worker"]["enabled"] = config.scripting.workerEnabled;
-    root["scripting"]["worker"]["rx_queue_limit_bytes"] = config.scripting.workerRxQueueLimitBytes;
-    root["scripting"]["worker"]["memory_budget_bytes"] = config.scripting.workerMemoryBudgetBytes;
+    writePerformanceScalar(root["scripting"]["worker"],
+                           "rx_queue_limit_bytes",
+                           config.scripting.workerRxQueueLimitBytes,
+                           scaledDefaults.scripting.workerRxQueueLimitBytes,
+                           explicitOverrides.workerRxQueueLimitBytes);
+    writePerformanceScalar(root["scripting"]["worker"],
+                           "memory_budget_bytes",
+                           config.scripting.workerMemoryBudgetBytes,
+                           scaledDefaults.scripting.workerMemoryBudgetBytes,
+                           explicitOverrides.workerMemoryBudgetBytes);
     root["scripting"]["worker"]["memory_budget_available_ratio"] = config.scripting.workerMemoryBudgetAvailableRatio;
-    root["scripting"]["worker"]["output_queue_limit"] = config.scripting.workerOutputQueueLimit;
-    root["scripting"]["worker"]["batch_bytes"] = config.scripting.workerBatchBytes;
+    writePerformanceScalar(root["scripting"]["worker"],
+                           "output_queue_limit",
+                           config.scripting.workerOutputQueueLimit,
+                           scaledDefaults.scripting.workerOutputQueueLimit,
+                           explicitOverrides.workerOutputQueueLimit);
+    writePerformanceScalar(root["scripting"]["worker"],
+                           "batch_bytes",
+                           config.scripting.workerBatchBytes,
+                           scaledDefaults.scripting.workerBatchBytes,
+                           explicitOverrides.workerBatchBytes);
     root["scripting"]["worker"]["backpressure_enabled"] = config.scripting.workerBackpressureEnabled;
     root["scripting"]["worker"]["backpressure_rx_queue_high_watermark"] = config.scripting.workerBackpressureHighWatermark;
     root["scripting"]["worker"]["backpressure_rx_queue_low_watermark"] = config.scripting.workerBackpressureLowWatermark;
-    root["scripting"]["worker"]["output_flush_budget_ms"] = config.scripting.workerOutputFlushBudgetMs;
+    writePerformanceScalar(root["scripting"]["worker"],
+                           "output_flush_budget_ms",
+                           config.scripting.workerOutputFlushBudgetMs,
+                           scaledDefaults.scripting.workerOutputFlushBudgetMs,
+                           explicitOverrides.workerOutputFlushBudgetMs);
     root["scripting"]["file_io"]["enabled"] = config.scripting.fileIo.enabled;
     root["scripting"]["file_io"]["allow_protocol_dir"] = config.scripting.fileIo.allowProtocolDir;
     root["scripting"]["file_io"]["allow_dialog_paths"] = config.scripting.fileIo.allowDialogPaths;

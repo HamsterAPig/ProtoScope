@@ -25,6 +25,13 @@ void require(bool condition, const char* message) {
     }
 }
 
+std::string readTextFile(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1472,6 +1479,79 @@ void test_script_file_io_proto_buffer_roundtrip() {
     require(text == "abc", "ProtoBuffer 写入文件后内容应一致");
 }
 
+void test_config_performance_scale_applies_default_budgets() {
+    protoscope::config::ConfigStore store;
+    const auto tempRoot = makeUniqueTempDir("protoscope-config-performance-scale");
+    const auto tempPath = tempRoot / "protoscope.yaml";
+    {
+        std::ofstream out(tempPath);
+        out << R"yaml(
+performance:
+  scale: 2.0
+scripting:
+  worker:
+    batch_bytes: 123
+)yaml";
+    }
+
+    const auto loaded = store.load(tempPath).config;
+
+    require(std::abs(loaded.performance.scale - 2.0) < 1e-12, "performance.scale 应读取为 2.0");
+    require(loaded.receive.transportReadBufferBytes == 128U * 1024U, "transport 读缓冲缺省值应按 scale 放大");
+    require(loaded.scripting.workerRxQueueLimitBytes == 128U * 1024U * 1024U, "worker RX 队列缺省值应按 scale 放大");
+    require(loaded.scripting.workerMemoryBudgetBytes == 512U * 1024U * 1024U, "worker 内存预算缺省值应按 scale 放大");
+    require(loaded.scripting.workerOutputQueueLimit == 131072U, "worker 输出队列缺省值应按 scale 放大");
+    require(loaded.scripting.workerBatchBytes == 123U, "显式 batch_bytes 不应被 performance.scale 覆盖");
+    require(std::abs(loaded.scripting.workerOutputFlushBudgetMs - 8.0) < 1e-12,
+            "worker 输出刷新时间预算缺省值应按 scale 放大");
+    require(loaded.gui.realtimeBacklog.rxChunkBytesPerPump == 128U * 1024U,
+            "实时 backlog RX pump 字节预算缺省值应按 scale 放大");
+    require(loaded.gui.realtimeBacklog.transferFrameRowsPerPump == 4000U,
+            "实时 backlog 行预算缺省值应按 scale 放大");
+    require(loaded.gui.realtimeBacklog.plotAppendsPerPump == 8192U,
+            "实时 backlog plot append 预算缺省值应按 scale 放大");
+    require(loaded.gui.realtimeBacklog.rawFirstBacklogWarnBytes == 64U * 1024U * 1024U,
+            "raw-first backlog 告警阈值缺省值应按 scale 放大");
+}
+
+void test_config_performance_save_keeps_scaled_defaults_compact() {
+    protoscope::config::ConfigStore store;
+    std::string error;
+    const auto tempRoot = makeUniqueTempDir("protoscope-config-performance-save");
+    const auto scaledPath = tempRoot / "scaled.yaml";
+    {
+        std::ofstream out(scaledPath);
+        out << "performance:\n  scale: 2.0\n";
+    }
+
+    auto scaledConfig = store.load(scaledPath).config;
+    require(store.save(scaledPath, scaledConfig, error), "缩放配置写回失败");
+    const auto scaledYaml = readTextFile(scaledPath);
+
+    require(scaledYaml.find("performance:") != std::string::npos, "写回配置应保留 performance 分组");
+    require(scaledYaml.find("scale:") != std::string::npos, "写回配置应保留 performance.scale");
+    require(scaledYaml.find("transport_read_buffer_bytes") == std::string::npos,
+            "未显式覆盖的 transport 读缓冲不应固化到 YAML");
+    require(scaledYaml.find("rx_queue_limit_bytes") == std::string::npos,
+            "未显式覆盖的 worker RX 队列不应固化到 YAML");
+    require(scaledYaml.find("batch_bytes") == std::string::npos,
+            "未显式覆盖的 worker batch 不应固化到 YAML");
+    require(scaledYaml.find("rx_chunk_bytes_per_pump") == std::string::npos,
+            "未显式覆盖的实时 backlog 预算不应固化到 YAML");
+
+    const auto explicitPath = tempRoot / "explicit.yaml";
+    {
+        std::ofstream out(explicitPath);
+        out << "performance:\n  scale: 2.0\nscripting:\n  worker:\n    batch_bytes: 123\n";
+    }
+    auto explicitConfig = store.load(explicitPath).config;
+    require(store.save(explicitPath, explicitConfig, error), "显式覆盖配置写回失败");
+    const auto explicitYaml = readTextFile(explicitPath);
+
+    require(explicitYaml.find("batch_bytes: 123") != std::string::npos,
+            "显式 batch_bytes 应写回并继续覆盖 performance.scale");
+}
+
 void test_config_wave_mode_invalid_fallback() {
     protoscope::config::ConfigStore store;
     const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-config-wave-invalid.yaml";
@@ -2221,6 +2301,8 @@ static const TestCase kAllTests[] = {
     {"update_check_rejects_response_without_semantic_tags", &test_update_check_rejects_response_without_semantic_tags},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
+    {"config_performance_scale_applies_default_budgets", &test_config_performance_scale_applies_default_budgets},
+    {"config_performance_save_keeps_scaled_defaults_compact", &test_config_performance_save_keeps_scaled_defaults_compact},
     {"config_wave_mode_invalid_fallback", &test_config_wave_mode_invalid_fallback},
     {"config_logging_roundtrip", &test_config_logging_roundtrip},
     {"config_default_protocol_workspace_initializes_half_duplex_demos", &test_config_default_protocol_workspace_initializes_half_duplex_demos},
@@ -2340,6 +2422,8 @@ static const TestCase kAllTests[] = {
     {"runtime_scheduler_limits_busy_render_frames", &test_runtime_scheduler_limits_busy_render_frames},
     {"script_runtime_worker_disabled_mode_waits_for_rx_idle", &test_script_runtime_worker_disabled_mode_waits_for_rx_idle},
     {"script_runtime_worker_rx_limit_keeps_all_queued_bytes", &test_script_runtime_worker_rx_limit_keeps_all_queued_bytes},
+    {"script_runtime_worker_batch_bytes_merges_adjacent_rx_events",
+     &test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events},
     {"pipeline_worker_threads_resolve_from_hardware_limit", &test_pipeline_worker_threads_resolve_from_hardware_limit},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_history_limit_zero_keeps_all_samples", &test_plot_history_limit_zero_keeps_all_samples},

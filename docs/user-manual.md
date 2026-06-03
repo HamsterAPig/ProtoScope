@@ -163,6 +163,32 @@ ProtoScope 使用 YAML 配置保存窗口、通讯、协议、日志、波形和
 
 如果配置文件在外部被修改，并且启用了外部配置变更提醒，状态栏会提示用户重新加载。
 
+#### 性能配置总览
+
+`performance.scale` 是公共吞吐预算系数，默认 `1.0`。推荐只使用 `0.5`、`1.0`、`2.0` 这类简单值：值越大，接收、脚本 worker 和实时 UI backlog 的缺省预算越大；值越小，处理更保守。`performance.scale <= 0` 会按 `1.0` 回退。
+
+公共系数只作用于没有在 YAML 中显式写出的预算项。写出单项后，单项优先级更高，例如：
+
+```yaml
+performance:
+  scale: 2.0
+scripting:
+  worker:
+    batch_bytes: 131072
+```
+
+上例中，未写出的 RX 队列、内存预算和实时 backlog 预算会按 `2.0` 放大；`batch_bytes` 固定为 `131072`，不再被公共系数覆盖。整数预算使用“默认值 × scale”四舍五入，非零默认值至少保留 `1`；显式写 `0` 时仍保留该单项自己的特殊含义。
+
+受公共系数影响的缺省项包括：`receive.transport_read_buffer_bytes`、`scripting.worker.rx_queue_limit_bytes`、`scripting.worker.memory_budget_bytes`、`scripting.worker.output_queue_limit`、`scripting.worker.batch_bytes`、`scripting.worker.output_flush_budget_ms`、`gui.realtime_backlog.rx_chunk_bytes_per_pump`、`gui.realtime_backlog.transfer_frame_rows_per_pump`、`gui.realtime_backlog.plot_appends_per_pump`、`gui.realtime_backlog.raw_first_backlog_warn_bytes`。
+
+不受公共系数影响的项仍按单项调优，包括 `app.fps_limit`、`gui.wave.*` 渲染和降采样项、日志历史保留、文件 IO 分块、`gui.realtime_backlog.pump_min_interval_ms`、布尔开关和策略字符串。
+
+#### 分块发送与 UI 追赶
+
+`scripting.worker.batch_bytes` 是 worker 分块主控项。它会限制相邻 RX 字节事件合并后的最大字节数，并间接决定 worker 每次输出给宿主/UI 的 batch 粗细。
+
+如果要调“worker 给 UI 的块粗细”，优先调 `scripting.worker.batch_bytes`；如果要调“UI 每帧追赶速度”，再调 `gui.realtime_backlog.rx_chunk_bytes_per_pump`、`gui.realtime_backlog.transfer_frame_rows_per_pump`、`gui.realtime_backlog.plot_appends_per_pump` 和 `scripting.worker.output_flush_budget_ms`。
+
 ## 内置协议模板
 
 内置模板位于 `protocols/templates`：
