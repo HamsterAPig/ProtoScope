@@ -145,24 +145,32 @@ bool isFitDoubleClicked() {
     return ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) || fitButtonDoubleClicked;
 }
 
-bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDataBounds& bounds) {
-    if (!bounds.valid || !isFitDoubleClicked()) {
+bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
+                                   const plot::WaveDataBounds& visibleWindowBounds,
+                                   const plot::WaveDataBounds& fullHistoryBounds) {
+    if (!isFitDoubleClicked()) {
         return false;
     }
 
     bool changed = false;
     if (ImPlot::IsAxisHovered(ImAxis_X1)) {
+        const auto& xBounds =
+            plot::selectXAxisDoubleClickBounds(view.xAxisDoubleClickAction, visibleWindowBounds, fullHistoryBounds);
+        if (!xBounds.valid) {
+            return false;
+        }
         // 核心流程：横轴双击要同步应用层视口；否则 autoFollow/Once 条件会在下一帧把 ImPlot autofit 覆盖回旧范围。
-        view.viewMinTime = bounds.minTime;
-        view.viewMaxTime = bounds.maxTime;
+        view.viewMinTime = xBounds.minTime;
+        view.viewMaxTime = xBounds.maxTime;
         view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, (std::max)(view.minVisibleTimeSpan, 1e-6));
         view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
         view.autoFollowLatest = false;
         changed = true;
     }
-    if (ImPlot::IsAxisHovered(ImAxis_Y1) && !view.lockVerticalRange) {
+    if (ImPlot::IsAxisHovered(ImAxis_Y1) && !view.lockVerticalRange && visibleWindowBounds.valid) {
         // 核心流程：Y 轴双击 auto fit 在所有控制模式下都统一走倍率逻辑，避免默认 oscilloscope 模式退回 ImPlot 的 1x 紧贴范围。
-        const auto range = plot::makeVerticalAutoFitRange(bounds.minValue, bounds.maxValue, view.verticalAutoFitMultiplier);
+        const auto range =
+            plot::makeVerticalAutoFitRange(visibleWindowBounds.minValue, visibleWindowBounds.maxValue, view.verticalAutoFitMultiplier);
         view.viewMinValue = range.minValue;
         view.viewMaxValue = range.maxValue;
         changed = true;

@@ -250,6 +250,27 @@ const char* toWaveChannelDoubleClickActionText(const plot::WaveChannelDoubleClic
     return "reset_scale_offset";
 }
 
+plot::WaveXAxisDoubleClickAction parseWaveXAxisDoubleClickAction(const std::string& value,
+                                                                 plot::WaveXAxisDoubleClickAction fallback) {
+    if (value == "fit_full_history") {
+        return plot::WaveXAxisDoubleClickAction::FitFullHistory;
+    }
+    if (value == "fit_visible_window") {
+        return plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
+    }
+    return fallback;
+}
+
+const char* toWaveXAxisDoubleClickActionText(const plot::WaveXAxisDoubleClickAction action) {
+    switch (action) {
+    case plot::WaveXAxisDoubleClickAction::FitFullHistory:
+        return "fit_full_history";
+    case plot::WaveXAxisDoubleClickAction::FitVisibleWindow:
+        return "fit_visible_window";
+    }
+    return "fit_full_history";
+}
+
 plot::WaveHiddenChannelPolicy parseWaveHiddenChannelPolicy(const std::string& value,
                                                            plot::WaveHiddenChannelPolicy fallback) {
     if (value == "include_hidden") {
@@ -362,6 +383,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                             "channel_double_click_action",
                                             toWaveChannelDoubleClickActionText(result.config.gui.wave.channelDoubleClickAction)),
                     result.config.gui.wave.channelDoubleClickAction);
+            result.config.gui.wave.xAxisDoubleClickAction =
+                parseWaveXAxisDoubleClickAction(
+                    readScalar<std::string>(wave,
+                                            "x_axis_double_click_action",
+                                            toWaveXAxisDoubleClickActionText(result.config.gui.wave.xAxisDoubleClickAction)),
+                    result.config.gui.wave.xAxisDoubleClickAction);
             result.config.gui.wave.hiddenChannelPolicy =
                 parseWaveHiddenChannelPolicy(
                     readScalar<std::string>(wave,
@@ -668,6 +695,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
     root["gui"]["wave"]["channel_double_click_action"] =
         toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
+    root["gui"]["wave"]["x_axis_double_click_action"] =
+        toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction);
     root["gui"]["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
     root["gui"]["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
     root["gui"]["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
@@ -939,6 +968,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.displayFormula = config.gui.wave.displayFormula;
     wave.channelCardWidthMode = config.gui.wave.channelCardWidthMode;
     wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
+    wave.xAxisDoubleClickAction = config.gui.wave.xAxisDoubleClickAction;
     wave.zoomSelectionAutoExit = config.gui.wave.zoomSelectionAutoExit;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
@@ -973,6 +1003,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
+    config.gui.wave.xAxisDoubleClickAction = dockStore.waveState().view.xAxisDoubleClickAction;
     config.gui.wave.zoomSelectionAutoExit = dockStore.waveState().view.zoomSelectionAutoExit;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;

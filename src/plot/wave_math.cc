@@ -483,6 +483,16 @@ WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
     return bounds;
 }
 
+const WaveDataBounds& selectXAxisDoubleClickBounds(const WaveXAxisDoubleClickAction action,
+                                                   const WaveDataBounds& visibleWindowBounds,
+                                                   const WaveDataBounds& fullHistoryBounds) {
+    // 核心流程：X 轴双击默认回到当前内存保留的全历史；全历史无效时保留旧的当前窗口 fallback。
+    if (action == WaveXAxisDoubleClickAction::FitFullHistory && fullHistoryBounds.valid) {
+        return fullHistoryBounds;
+    }
+    return visibleWindowBounds;
+}
+
 WaveViewport normalizeOverviewViewport(const WaveViewport& viewport,
                                        const WaveDataBounds& bounds,
                                        double minTimeWidth) {

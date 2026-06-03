@@ -34,6 +34,11 @@ enum class WaveChannelDoubleClickAction {
     ResetOffset,
 };
 
+enum class WaveXAxisDoubleClickAction {
+    FitFullHistory,
+    FitVisibleWindow,
+};
+
 enum class WaveHiddenChannelPolicy {
     IncludeInDerivedViews,
     ExcludeFromDerivedViews,
@@ -117,6 +122,9 @@ WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallback
 WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
                                                const std::vector<std::size_t>& channelIndices,
                                                double fallbackStep);
+const WaveDataBounds& selectXAxisDoubleClickBounds(WaveXAxisDoubleClickAction action,
+                                                   const WaveDataBounds& visibleWindowBounds,
+                                                   const WaveDataBounds& fullHistoryBounds);
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,

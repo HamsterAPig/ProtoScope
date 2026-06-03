@@ -78,7 +78,9 @@ bool drawHorizontalSplitter(const char* id,
                             float thickness);
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits);
 bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits);
-bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDataBounds& bounds);
+bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
+                                   const plot::WaveDataBounds& visibleWindowBounds,
+                                   const plot::WaveDataBounds& fullHistoryBounds);
 bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveDisplayData& displayData,

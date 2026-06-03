@@ -244,6 +244,14 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     const auto& displayData = *frame.displayData;
     const auto derivedChannelIndices = channelIndicesForDerivedViews(wave, frame.snapshot);
     const auto derivedBounds = boundsForDerivedViews(wave, displayData, derivedChannelIndices);
+    auto fullHistoryBounds = derivedBounds;
+    if (frame.fullSnapshot != nullptr && frame.overviewDisplayData != nullptr) {
+        const auto fullHistoryChannelIndices = channelIndicesForDerivedViews(wave, *frame.fullSnapshot);
+        // 核心流程：X 轴双击默认查看当前内存保留的完整历史，复用概览缓存避免额外复制全量样本。
+        fullHistoryBounds = plot::computeDisplayBoundsForChannels(*frame.overviewDisplayData,
+                                                                  fullHistoryChannelIndices,
+                                                                  (std::max)(view.minVisibleTimeSpan, 1e-6));
+    }
     applyMainPlotAxesAndLimits(view, frame.snapshot, displayData);
 
     const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
@@ -251,8 +259,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
     const double timeSnapDistance = visibleTimeWidth / 80.0;
     double smartSnapDistance = (std::max)(timeSnapDistance, visibleTimeWidth * 0.02);
-        if (derivedBounds.valid) {
-            smartSnapDistance = (std::max)(smartSnapDistance, derivedBounds.minStep * 2.0);
+    if (derivedBounds.valid) {
+        smartSnapDistance = (std::max)(smartSnapDistance, derivedBounds.minStep * 2.0);
     }
     const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
 
@@ -260,7 +268,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     bool viewportChangedThisFrame = false;
     if (!zoomSelectionMode) {
         viewportChangedThisFrame =
-            handleMainPlotAxisDoubleClick(view, derivedBounds) || handleMainPlotZoom(view, mousePos);
+            handleMainPlotAxisDoubleClick(view, derivedBounds, fullHistoryBounds) || handleMainPlotZoom(view, mousePos);
     }
     // 悬停读数必须跟随 ImPlot 图例隐藏状态，只对真实可见波形做吸附。
     std::vector<std::size_t> visibleChannelIndices;

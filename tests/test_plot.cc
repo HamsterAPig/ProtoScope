@@ -921,6 +921,43 @@ void test_wave_overview_bounds_use_full_history_window() {
     require(includeHiddenBounds.maxValue > visibleOnlyBounds.maxValue, "包含隐藏通道时应能看到隐藏通道上限");
 }
 
+void test_wave_x_axis_double_click_bounds_selects_full_history() {
+    const protoscope::plot::WaveDataBounds visibleWindow{
+        .minTime = 5.0,
+        .maxTime = 6.0,
+        .minValue = -1.0,
+        .maxValue = 1.0,
+        .minStep = 0.1,
+        .valid = true,
+    };
+    const protoscope::plot::WaveDataBounds fullHistory{
+        .minTime = 1.0,
+        .maxTime = 10.0,
+        .minValue = -2.0,
+        .maxValue = 2.0,
+        .minStep = 0.1,
+        .valid = true,
+    };
+    const protoscope::plot::WaveDataBounds invalidFullHistory{
+        .valid = false,
+    };
+
+    const auto& defaultBounds = protoscope::plot::selectXAxisDoubleClickBounds(
+        protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory, visibleWindow, fullHistory);
+    require(std::abs(defaultBounds.minTime - 1.0) < 1e-12, "默认 X 轴双击应选择全历史起点");
+    require(std::abs(defaultBounds.maxTime - 10.0) < 1e-12, "默认 X 轴双击应选择全历史终点");
+
+    const auto& visibleBounds = protoscope::plot::selectXAxisDoubleClickBounds(
+        protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow, visibleWindow, fullHistory);
+    require(std::abs(visibleBounds.minTime - 5.0) < 1e-12, "旧行为应保留当前窗口起点");
+    require(std::abs(visibleBounds.maxTime - 6.0) < 1e-12, "旧行为应保留当前窗口终点");
+
+    const auto& fallbackBounds = protoscope::plot::selectXAxisDoubleClickBounds(
+        protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory, visibleWindow, invalidFullHistory);
+    require(std::abs(fallbackBounds.minTime - 5.0) < 1e-12, "全历史无效时应回退当前窗口起点");
+    require(std::abs(fallbackBounds.maxTime - 6.0) < 1e-12, "全历史无效时应回退当前窗口终点");
+}
+
 void test_wave_fft_detects_50hz_and_150hz_components() {
     constexpr double sampleFrequencyHz = 1024.0;
     constexpr std::size_t pointCount = 1024;

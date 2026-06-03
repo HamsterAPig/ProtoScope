@@ -1312,6 +1312,8 @@ void test_config_default_roundtrip() {
             "CH 卡片宽度模式默认值应为 fixed");
     require(config.gui.wave.channelDoubleClickAction == protoscope::plot::WaveChannelDoubleClickAction::ResetScaleOffset,
             "CH 卡片双击默认值应为 reset_scale_offset");
+    require(config.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
+            "X 轴双击默认值应为 fit_full_history");
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.2");
@@ -1358,6 +1360,7 @@ void test_config_default_roundtrip() {
     config.gui.wave.displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset;
     config.gui.wave.channelCardWidthMode = protoscope::plot::WaveChannelCardWidthMode::Adaptive;
     config.gui.wave.channelDoubleClickAction = protoscope::plot::WaveChannelDoubleClickAction::ResetAll;
+    config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
@@ -1409,6 +1412,8 @@ void test_config_default_roundtrip() {
             "CH 卡片宽度模式 roundtrip 失败");
     require(reloaded.config.gui.wave.channelDoubleClickAction == protoscope::plot::WaveChannelDoubleClickAction::ResetAll,
             "CH 卡片双击行为 roundtrip 失败");
+    require(reloaded.config.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow,
+            "X 轴双击行为 roundtrip 失败");
     require(reloaded.config.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "隐藏 CH 策略 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
@@ -1565,6 +1570,7 @@ void test_config_wave_mode_invalid_fallback() {
            "    display_formula: wrong\n"
            "    channel_card_width_mode: weird\n"
            "    channel_double_click_action: weird\n"
+           "    x_axis_double_click_action: weird\n"
            "    channel_card_fixed_width: 0\n"
            "    channel_card_adaptive_ratio: -0.5\n"
            "    vertical_auto_fit_multiplier: 0\n";
@@ -1579,6 +1585,8 @@ void test_config_wave_mode_invalid_fallback() {
             "非法 channel_card_width_mode 应回退到 fixed");
     require(loaded.gui.wave.channelDoubleClickAction == protoscope::plot::WaveChannelDoubleClickAction::ResetScaleOffset,
             "非法 channel_double_click_action 应回退到 reset_scale_offset");
+    require(loaded.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
+            "非法 x_axis_double_click_action 应回退到 fit_full_history");
     require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
     require(std::abs(loaded.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "非正自适应比例应回退到 0.22");
     require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "非正 Auto Fit 系数应回退到 1.2");
@@ -2451,6 +2459,7 @@ static const TestCase kAllTests[] = {
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_display_data_uses_visible_window_only", &test_wave_display_data_uses_visible_window_only},
     {"wave_overview_bounds_use_full_history_window", &test_wave_overview_bounds_use_full_history_window},
+    {"wave_x_axis_double_click_bounds_selects_full_history", &test_wave_x_axis_double_click_bounds_selects_full_history},
     {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
     {"wave_fft_visible_samples_supports_non_power_of_two", &test_wave_fft_visible_samples_supports_non_power_of_two},
     {"wave_fft_manual_point_count_supports_non_power_of_two", &test_wave_fft_manual_point_count_supports_non_power_of_two},

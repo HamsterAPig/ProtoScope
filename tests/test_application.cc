@@ -808,17 +808,27 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip() {
 
     auto config = application.captureConfig();
     require(!config.gui.wave.zoomSelectionAutoExit, "captureConfig 默认应保持手动退出");
+    require(config.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
+            "captureConfig 默认应保持 X 轴双击全历史缩放");
 
     config.gui.wave.zoomSelectionAutoExit = true;
+    config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
     require(application.applyConfig(config), "框选放大自动退出配置应用失败");
     require(application.docks().waveState().view.zoomSelectionAutoExit, "应用配置后应同步更新框选放大退出模式");
+    require(application.docks().waveState().view.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow,
+            "应用配置后应同步 X 轴双击行为");
 
     const auto captured = application.captureConfig();
     require(captured.gui.wave.zoomSelectionAutoExit, "captureConfig 应带出框选放大退出模式");
+    require(captured.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow,
+            "captureConfig 应带出 X 轴双击行为");
 
     application.docks().waveState().view.zoomSelectionAutoExit = false;
+    application.docks().waveState().view.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory;
     const auto capturedLive = application.captureConfig();
     require(!capturedLive.gui.wave.zoomSelectionAutoExit, "captureConfig 不应覆盖 dock 中实时框选放大退出模式");
+    require(capturedLive.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
+            "captureConfig 不应覆盖 dock 中实时 X 轴双击行为");
 
     application.shutdown();
 }
