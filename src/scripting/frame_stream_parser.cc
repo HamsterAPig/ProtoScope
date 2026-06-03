@@ -590,12 +590,11 @@ bool FrameStreamParser::setRuntimeProfile(const std::string& frameName,
         return false;
     }
     if (!profile.channelMap.empty()) {
-        std::vector<bool> used(profile.channelMap.size(), false);
+        // 以实际出现的最大物理通道号确定去重数组大小，
+        // 避免误判如 {1, 2}（物理通道 2/3）为越界。
+        const auto maxTarget = *std::max_element(profile.channelMap.begin(), profile.channelMap.end());
+        std::vector<bool> used(maxTarget + 1, false);
         for (const auto target : profile.channelMap) {
-            if (target >= profile.channelMap.size()) {
-                error = "runtime profile channel_map 存在越界目标";
-                return false;
-            }
             if (used[target]) {
                 error = "runtime profile channel_map 存在重复目标";
                 return false;
@@ -1052,12 +1051,9 @@ bool FrameStreamParser::applyRuntimeChannelMap(const StreamFrameDefinition& defi
     if (frame.channelMap.empty()) {
         return true;
     }
-    std::vector<bool> used(frame.channelMap.size(), false);
+    const auto maxTarget = *std::max_element(frame.channelMap.begin(), frame.channelMap.end());
+    std::vector<bool> used(maxTarget + 1, false);
     for (const auto target : frame.channelMap) {
-        if (target >= frame.channelMap.size()) {
-            error = "runtime profile channel_map 超出通道范围";
-            return false;
-        }
         if (used[target]) {
             error = "runtime profile channel_map 存在重复目标";
             return false;

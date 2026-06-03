@@ -451,8 +451,8 @@ void test_frame_stream_parser_runtime_profile_errors() {
             "长度为 0 应被拒绝");
     require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 0}}, error),
             "重复 channel_map 应被拒绝");
-    require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 2}}, error),
-            "越界 channel_map 应被拒绝");
+    require(parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 2}}, error),
+            "非连续 channel_map (如 {0,2}) 应被接受");
 }
 
 void test_frame_stream_parser_rejects_unsafe_count_bounds() {
