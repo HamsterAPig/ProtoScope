@@ -287,11 +287,10 @@ std::optional<std::int64_t> evaluateStreamCountExpression(const StreamCountExpre
     return std::nullopt;
 }
 
-std::optional<std::int64_t> decodeInteger(const std::vector<std::uint8_t>& bytes,
+std::optional<std::int64_t> decodeInteger(const std::uint8_t* raw,
+                                          std::size_t size,
                                           std::size_t offset,
                                           StreamValueType type) {
-    const auto* raw = bytes.data();
-    const auto size = bytes.size();
     const auto require = [size, offset](std::size_t width) -> bool {
         return offset + width <= size;
     };
@@ -373,13 +372,13 @@ std::optional<std::int64_t> decodeInteger(const std::vector<std::uint8_t>& bytes
     return std::nullopt;
 }
 
-std::optional<double> decodeFloat(const std::vector<std::uint8_t>& bytes,
+std::optional<double> decodeFloat(const std::uint8_t* rawBytes,
+                                  std::size_t size,
                                   std::size_t offset,
                                   StreamValueType type) {
-    if (offset + 4 > bytes.size()) {
+    if (offset + 4 > size) {
         return std::nullopt;
     }
-    const auto* rawBytes = bytes.data();
     std::uint32_t raw = 0;
     switch (type) {
     case StreamValueType::F32Be:
@@ -695,13 +694,9 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
         bool needMore = false;
         bool parsed = false;
         std::optional<StreamParseError> firstError;
-        std::vector<std::size_t> indexes = candidate->indexes;
-        std::stable_sort(indexes.begin(), indexes.end(), [this](std::size_t left, std::size_t right) {
-            return compiledFrames_[left].minFrameLength > compiledFrames_[right].minFrameLength;
-        });
         const auto window = ensureLinearWindow(buffer_.size());
 
-        for (const auto index : indexes) {
+        for (const auto index : *candidate->indexes) {
             const auto result = analyzeFrame(compiledFrames_[index], window);
             if (result.action == AnalyzeResult::Action::Parsed && result.frame.has_value()) {
                 buffer_.discardFront(result.frameLength);
@@ -743,11 +738,14 @@ std::size_t FrameStreamParser::maxHeaderLength() const {
 }
 
 std::optional<FrameStreamParser::CandidateMatch> FrameStreamParser::findCandidate() const {
-    for (std::size_t start = 0; start < buffer_.size(); ++start) {
-        CandidateMatch match;
-        match.start = start;
-        const auto first = buffer_.at(start);
-        const auto& candidateIndexes = headerFirstByteIndex_[first];
+    const auto window = ensureLinearWindow(buffer_.size());
+    for (std::size_t start = 0; start < window.size; ++start) {
+        const auto first = window.data[start];
+        const auto& candidateIndexes = sortedHeaderFirstByteIndex_[first];
+        if (candidateIndexes.empty()) {
+            continue;
+        }
+        matchedCandidateIndexes_.clear();
         for (const auto index : candidateIndexes) {
             const auto& header = frames_[index].header;
             if (header.empty() || start + header.size() > buffer_.size()) {
@@ -756,19 +754,18 @@ std::optional<FrameStreamParser::CandidateMatch> FrameStreamParser::findCandidat
 
             bool matched = true;
             for (std::size_t headerIndex = 1; headerIndex < header.size(); ++headerIndex) {
-                if (buffer_.at(start + headerIndex) != header[headerIndex]) {
+                if (window.data[start + headerIndex] != header[headerIndex]) {
                     matched = false;
                     break;
                 }
             }
 
             if (matched) {
-                match.indexes.push_back(index);
+                matchedCandidateIndexes_.push_back(index);
             }
         }
-
-        if (!match.indexes.empty()) {
-            return match;
+        if (!matchedCandidateIndexes_.empty()) {
+            return CandidateMatch{.start = start, .indexes = &matchedCandidateIndexes_};
         }
     }
 
@@ -818,8 +815,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
         if (lengthFieldEnd > window.size) {
             return result;
         }
-        const auto lengthBytes = copyBytes(frameBytes + frame.len->offset, width);
-        const auto parsedLength = decodeInteger(lengthBytes, 0, frame.len->type);
+        const auto parsedLength = decodeInteger(frameBytes, window.size, frame.len->offset, frame.len->type);
         if (!parsedLength.has_value() || *parsedLength < 0) {
             result.action = AnalyzeResult::Action::RecoverableError;
             result.error = StreamParseError{
@@ -897,17 +893,16 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
     }
 
     if (crcWidth > 0) {
-        const auto crcData = copyBytes(frameBytes, frameLength - crcWidth);
         std::uint32_t expected = 0;
         switch (frame.crc.type) {
         case StreamCrcType::Crc16Modbus:
-            expected = protocol_utils::crc16Modbus(crcData);
+            expected = protocol_utils::crc16Modbus(frameBytes, frameLength - crcWidth);
             break;
         case StreamCrcType::Crc16CcittFalse:
-            expected = protocol_utils::crc16CcittFalse(crcData);
+            expected = protocol_utils::crc16CcittFalse(frameBytes, frameLength - crcWidth);
             break;
         case StreamCrcType::Crc32Ieee:
-            expected = protocol_utils::crc32Ieee(crcData);
+            expected = protocol_utils::crc32Ieee(frameBytes, frameLength - crcWidth);
             break;
         case StreamCrcType::None:
             break;
@@ -931,12 +926,11 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
     parsedFields.reserve(frame.fields.size());
     std::size_t cursor = 0;
     const auto readableLimit = frameLength - crcWidth;
-    const auto frameBytesVector = copyBytes(frameBytes, frameLength);
     for (const auto& field : frame.fields) {
         const auto width = streamValueWidth(field.type);
         const auto start = field.offset.value_or(cursor);
         std::string countError;
-        const auto count = resolveFieldCount(field, parsedFields, frameLength, readableLimit, start, frameBytesVector, countError);
+        const auto count = resolveFieldCount(field, parsedFields, frameLength, readableLimit, start, countError);
         if (!count.has_value()) {
             result.action = AnalyzeResult::Action::RecoverableError;
             result.error = StreamParseError{
@@ -986,23 +980,23 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
             parsedFields[field.name] = StreamFieldValue{copyBytes(frameBytes + start, *count)};
         } else if (streamValueTypeIsFloat(field.type)) {
             if (*count == 1) {
-                parsedFields[field.name] = StreamFieldValue{decodeFloat(frameBytesVector, start, field.type).value_or(0.0)};
+                parsedFields[field.name] = StreamFieldValue{decodeFloat(frameBytes, frameLength, start, field.type).value_or(0.0)};
             } else {
                 std::vector<double> values;
                 values.reserve(*count);
                 for (std::size_t index = 0; index < *count; ++index) {
-                    values.push_back(decodeFloat(frameBytesVector, start + index * width, field.type).value_or(0.0));
+                    values.push_back(decodeFloat(frameBytes, frameLength, start + index * width, field.type).value_or(0.0));
                 }
                 parsedFields[field.name] = StreamFieldValue{std::move(values)};
             }
         } else {
             if (*count == 1) {
-                parsedFields[field.name] = StreamFieldValue{decodeInteger(frameBytesVector, start, field.type).value_or(0)};
+                parsedFields[field.name] = StreamFieldValue{decodeInteger(frameBytes, frameLength, start, field.type).value_or(0)};
             } else {
                 std::vector<std::int64_t> values;
                 values.reserve(*count);
                 for (std::size_t index = 0; index < *count; ++index) {
-                    values.push_back(decodeInteger(frameBytesVector, start + index * width, field.type).value_or(0));
+                    values.push_back(decodeInteger(frameBytes, frameLength, start + index * width, field.type).value_or(0));
                 }
                 parsedFields[field.name] = StreamFieldValue{std::move(values)};
             }
@@ -1074,6 +1068,9 @@ void FrameStreamParser::buildCompiledFrames() {
     for (auto& bucket : headerFirstByteIndex_) {
         bucket.clear();
     }
+    for (auto& bucket : sortedHeaderFirstByteIndex_) {
+        bucket.clear();
+    }
 
     for (std::size_t index = 0; index < frames_.size(); ++index) {
         const auto& frame = frames_[index];
@@ -1114,7 +1111,14 @@ void FrameStreamParser::buildCompiledFrames() {
         compiledFrames_.push_back(compiled);
         if (compiled.hasHeader) {
             headerFirstByteIndex_[compiled.firstHeaderByte].push_back(index);
+            sortedHeaderFirstByteIndex_[compiled.firstHeaderByte].push_back(index);
         }
+    }
+
+    for (auto& bucket : sortedHeaderFirstByteIndex_) {
+        std::stable_sort(bucket.begin(), bucket.end(), [this](std::size_t left, std::size_t right) {
+            return compiledFrames_[left].minFrameLength > compiledFrames_[right].minFrameLength;
+        });
     }
 }
 
@@ -1123,9 +1127,7 @@ std::optional<std::size_t> FrameStreamParser::resolveFieldCount(const StreamFiel
                                                                 std::size_t frameLength,
                                                                 std::size_t readableLimit,
                                                                 std::size_t fieldStart,
-                                                                const std::vector<std::uint8_t>& frameBytes,
                                                                 std::string& error) const {
-    (void)frameBytes;
     if (field.count.fixed.has_value()) {
         return field.count.fixed;
     }

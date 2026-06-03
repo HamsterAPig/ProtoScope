@@ -22,7 +22,10 @@ HexEditorNormalization normalizeHexEditorInput(std::string_view text, std::size_
 std::size_t countHexDigits(std::string_view text);
 
 std::uint16_t crc16Modbus(const std::vector<std::uint8_t>& bytes);
+std::uint16_t crc16Modbus(const std::uint8_t* bytes, std::size_t count);
 std::uint16_t crc16CcittFalse(const std::vector<std::uint8_t>& bytes);
+std::uint16_t crc16CcittFalse(const std::uint8_t* bytes, std::size_t count);
 std::uint32_t crc32Ieee(const std::vector<std::uint8_t>& bytes);
+std::uint32_t crc32Ieee(const std::uint8_t* bytes, std::size_t count);
 
 } // namespace protoscope::protocol_utils

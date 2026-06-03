@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <optional>
 
@@ -31,6 +32,36 @@ std::optional<double> latestDisplayTime(const plot::WaveSnapshot& snapshot, doub
         return std::nullopt;
     }
     return static_cast<double>(*latestSampleIndex) / sampleFrequencyHz;
+}
+
+void hashCombine(std::size_t& seed, std::size_t value) {
+    seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
+}
+
+plot::WaveDockState::DisplayDataCacheKey makeDisplayDataCacheKey(const plot::WaveSnapshot& snapshot,
+                                                                  const plot::WaveViewState& view,
+                                                                  std::uint64_t dataRevision) {
+    std::size_t rangeHash = 0;
+    for (const auto& channel : snapshot.channels) {
+        hashCombine(rangeHash, channel.visibleBegin);
+        hashCombine(rangeHash, channel.visibleEnd);
+        hashCombine(rangeHash, channel.totalSamples);
+        hashCombine(rangeHash, std::hash<std::string>{}(channel.label));
+        hashCombine(rangeHash, std::hash<std::string>{}(channel.unit));
+        hashCombine(rangeHash, std::hash<double>{}(channel.ratio));
+        hashCombine(rangeHash, std::hash<double>{}(channel.scale));
+        hashCombine(rangeHash, std::hash<double>{}(channel.offset));
+    }
+    hashCombine(rangeHash, std::hash<std::string>{}(snapshot.config.timeUnit));
+    return {
+        .dataRevision = dataRevision,
+        .sampleFrequencyHz = view.sampleFrequencyHz,
+        .viewMinTime = view.viewMinTime,
+        .viewMaxTime = view.viewMaxTime,
+        .channelCount = snapshot.channels.size(),
+        .displayFormula = snapshot.config.displayFormula,
+        .rangeHash = rangeHash,
+    };
 }
 
 void clampViewportLowerBoundToZero(plot::WaveViewState& view) {
@@ -71,6 +102,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
         wave.cachedOverviewDisplayData = plot::buildDisplayData(wave.cachedFullSnapshot, view.sampleFrequencyHz);
         wave.displayDataRevision = dataRevision;
         wave.displayDataSampleFrequencyHz = view.sampleFrequencyHz;
+        wave.cachedDisplayKeyValid = false;
         wave.cachedFftKeyValid = false;
     }
 
@@ -94,8 +126,14 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
     } else {
         frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
     }
-    wave.cachedDisplayData = plot::buildDisplayData(frame.snapshot, view.sampleFrequencyHz);
-    wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
+    const auto displayKey = makeDisplayDataCacheKey(frame.snapshot, view, dataRevision);
+    if (!wave.cachedDisplayKeyValid || !(wave.cachedDisplayKey == displayKey)) {
+        // 核心流程：主显示窗口完全未变时复用上一帧显示数据和边界，避免 UI 空转重复构建。
+        plot::buildDisplayDataInto(frame.snapshot, view.sampleFrequencyHz, wave.cachedDisplayData);
+        wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
+        wave.cachedDisplayKey = displayKey;
+        wave.cachedDisplayKeyValid = true;
+    }
     frame.displayData = &wave.cachedDisplayData;
     frame.renderDisplayData = &wave.cachedOverviewDisplayData;
     frame.overviewDisplayData = &wave.cachedOverviewDisplayData;

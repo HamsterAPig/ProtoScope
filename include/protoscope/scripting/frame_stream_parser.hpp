@@ -234,7 +234,7 @@ private:
 
     struct CandidateMatch {
         std::size_t start{0};
-        std::vector<std::size_t> indexes;
+        const std::vector<std::size_t>* indexes{nullptr};
     };
 
     struct AnalyzeResult {
@@ -262,7 +262,6 @@ private:
                                                  std::size_t frameLength,
                                                  std::size_t readableLimit,
                                                  std::size_t fieldStart,
-                                                 const std::vector<std::uint8_t>& frameBytes,
                                                  std::string& error) const;
     [[nodiscard]] ByteRingBuffer::LinearReadView ensureLinearWindow(std::size_t count) const;
     void buildCompiledFrames();
@@ -273,8 +272,10 @@ private:
     ByteRingBuffer buffer_;
     std::vector<CompiledFrame> compiledFrames_;
     std::array<std::vector<std::size_t>, 256> headerFirstByteIndex_{};
+    std::array<std::vector<std::size_t>, 256> sortedHeaderFirstByteIndex_{};
     std::size_t maxHeaderLength_{0};
     mutable std::vector<std::uint8_t> linearScratch_;
+    mutable std::vector<std::size_t> matchedCandidateIndexes_;
     std::unordered_map<std::string, StreamRuntimeProfile> runtimeProfiles_;
 };
 

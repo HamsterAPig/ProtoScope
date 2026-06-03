@@ -635,6 +635,8 @@ void test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame() {
         if (event.name == "stream_frame"
             && event.payload.find("stream_sample") != std::string::npos
             && event.payload.find("value=35") != std::string::npos
+            && event.payload.find("top_value=35") != std::string::npos
+            && event.payload.find("field_values_match=true") != std::string::npos
             && event.payload.find("crc_ok=true") != std::string::npos) {
             foundFrame = true;
         }
@@ -2324,6 +2326,7 @@ static const TestCase kAllTests[] = {
     {"frame_stream_parser_near_overflow_threshold", &test_frame_stream_parser_near_overflow_threshold},
     {"frame_stream_parser_large_chunk_keeps_latest_window", &test_frame_stream_parser_large_chunk_keeps_latest_window},
     {"frame_stream_parser_supports_fixed_size_raw_frame", &test_frame_stream_parser_supports_fixed_size_raw_frame},
+    {"frame_stream_parser_prefers_longer_same_header_candidate", &test_frame_stream_parser_prefers_longer_same_header_candidate},
     {"frame_stream_parser_count_expression_arithmetic", &test_frame_stream_parser_count_expression_arithmetic},
     {"frame_stream_parser_count_expression_remaining_if_flag_and_case", &test_frame_stream_parser_count_expression_remaining_if_flag_and_case},
     {"frame_stream_parser_multi_schema_large_chunk_throughput", &test_frame_stream_parser_multi_schema_large_chunk_throughput},
@@ -2500,6 +2503,8 @@ static const TestCase kAllTests[] = {
     {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
+    {"plot_build_display_data_into_reuses_storage_and_matches_output",
+     &test_plot_build_display_data_into_reuses_storage_and_matches_output},
     {"plot_channel_ratio_and_formula_modes", &test_plot_channel_ratio_and_formula_modes},
     {"plot_channel_transform_updates_are_isolated", &test_plot_channel_transform_updates_are_isolated},
     {"plot_cursor_snap_scope_selection", &test_plot_cursor_snap_scope_selection},

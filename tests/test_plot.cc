@@ -659,6 +659,40 @@ void test_plot_channel_scale_and_offset_apply_to_display_only() {
     require(std::abs(zeroMeasurement.rmsValue - std::sqrt(206.0 / 3.0)) < 1e-9, "scale=0 时 RMS 仍应按真实值计算");
 }
 
+void test_plot_build_display_data_into_reuses_storage_and_matches_output() {
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .ratio = 2.0, .scale = 3.0, .offset = -1.0});
+    buffer.append(0, protoscope::plot::WaveAppendRequest{
+        .source = "test",
+        .samples = {
+            {.time = 0.0, .value = 1.0},
+            {.time = 0.5, .value = 2.0},
+            {.time = 1.0, .value = 3.0},
+        },
+    });
+
+    const auto snapshot = buffer.snapshot(0.0, 1.0);
+    const auto expected = protoscope::plot::buildDisplayData(snapshot, 10.0);
+    protoscope::plot::WaveDisplayData reused;
+    protoscope::plot::buildDisplayDataInto(snapshot, 10.0, reused);
+    require(reused.axisSource == protoscope::plot::WaveTimeAxisSource::SampleFrequency, "采样频率轴应保持一致");
+    require(reused.channels.size() == expected.channels.size(), "复用构建应保留通道数量");
+    require(reused.channels[0].samples.size() == expected.channels[0].samples.size(), "复用构建应保留样本数量");
+    require(std::abs(reused.channels[0].samples[1].time - expected.channels[0].samples[1].time) < 1e-12,
+            "复用构建的采样频率时间应一致");
+    require(std::abs(reused.channels[0].samples[1].value - expected.channels[0].samples[1].value) < 1e-12,
+            "复用构建的显示值应一致");
+    require(std::abs(reused.channels[0].actualValues[1] - expected.channels[0].actualValues[1]) < 1e-12,
+            "复用构建的真实值应一致");
+
+    const auto capacityBefore = reused.channels[0].samples.capacity();
+    protoscope::plot::buildDisplayDataInto(snapshot, 0.0, reused);
+    require(reused.channels[0].samples.capacity() >= capacityBefore, "复用构建不应缩掉已分配样本容量");
+    require(reused.axisSource == protoscope::plot::WaveTimeAxisSource::ScriptTime, "无采样频率时应继续使用脚本时间轴");
+    require(std::abs(reused.channels[0].samples[2].time - 1.0) < 1e-12, "脚本时间轴应保留原始时间");
+}
+
 void test_plot_channel_ratio_and_formula_modes() {
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.setViewConfig({

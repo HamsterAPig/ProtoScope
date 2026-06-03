@@ -209,16 +209,21 @@ bool scriptTimeUsable(const ChannelView& channel, std::size_t begin, std::size_t
     return true;
 }
 
-WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz) {
-    WaveDisplayData data{};
+void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data) {
     data.channels.resize(snapshot.channels.size());
+    for (auto& channel : data.channels) {
+        channel.samples.clear();
+        channel.actualValues.clear();
+    }
 
     bool hasScriptTime = false;
-    for (const auto& channel : snapshot.channels) {
-        const auto [begin, end] = displaySampleRange(channel);
-        if (scriptTimeUsable(channel, begin, end)) {
-            hasScriptTime = true;
-            break;
+    if (sampleFrequencyHz <= 0.0 || !std::isfinite(sampleFrequencyHz)) {
+        for (const auto& channel : snapshot.channels) {
+            const auto [begin, end] = displaySampleRange(channel);
+            if (scriptTimeUsable(channel, begin, end)) {
+                hasScriptTime = true;
+                break;
+            }
         }
     }
 
@@ -242,8 +247,12 @@ WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFreq
             continue;
         }
         const std::size_t visibleSamples = end - begin;
-        display.reserve(visibleSamples);
-        displayChannel.actualValues.reserve(visibleSamples);
+        display.resize(visibleSamples);
+        displayChannel.actualValues.resize(visibleSamples);
+        const double ratio = channel.ratio;
+        const double scale = channel.scale;
+        const double offset = channel.offset;
+        const bool offsetThenScale = snapshot.config.displayFormula == WaveDisplayFormula::OffsetThenScale;
         for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
             const auto& source = channel.samples[sampleIndex];
             double time = static_cast<double>(sampleIndex);
@@ -252,21 +261,21 @@ WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFreq
             } else if (data.axisSource == WaveTimeAxisSource::ScriptTime) {
                 time = source.time;
             }
-            const ChannelSpec spec{
-                .label = channel.label,
-                .unit = channel.unit,
-                .ratio = channel.ratio,
-                .scale = channel.scale,
-                .offset = channel.offset,
-                .color = channel.color,
-            };
-            display.push_back({
+            const double actualValue = source.value * ratio;
+            const double displayValue = offsetThenScale ? (actualValue + offset) * scale : actualValue * scale + offset;
+            const auto outputIndex = sampleIndex - begin;
+            display[outputIndex] = {
                 .time = time,
-                .value = applyChannelDisplayTransform(source.value, spec, snapshot.config.displayFormula),
-            });
-            displayChannel.actualValues.push_back(applyChannelActualValue(source.value, spec));
+                .value = displayValue,
+            };
+            displayChannel.actualValues[outputIndex] = actualValue;
         }
     }
+}
+
+WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz) {
+    WaveDisplayData data{};
+    buildDisplayDataInto(snapshot, sampleFrequencyHz, data);
     return data;
 }
 

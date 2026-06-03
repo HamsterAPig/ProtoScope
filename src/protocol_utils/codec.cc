@@ -135,8 +135,13 @@ HexEditorNormalization normalizeHexEditorInput(std::string_view text, std::size_
 }
 
 std::uint16_t crc16Modbus(const std::vector<std::uint8_t>& bytes) {
+    return crc16Modbus(bytes.data(), bytes.size());
+}
+
+std::uint16_t crc16Modbus(const std::uint8_t* bytes, std::size_t count) {
     std::uint16_t crc = 0xFFFF;
-    for (const auto value : bytes) {
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto value = bytes[index];
         crc ^= static_cast<std::uint16_t>(value);
         for (int i = 0; i < 8; ++i) {
             const bool lsb = (crc & 0x0001U) != 0;
@@ -150,8 +155,13 @@ std::uint16_t crc16Modbus(const std::vector<std::uint8_t>& bytes) {
 }
 
 std::uint16_t crc16CcittFalse(const std::vector<std::uint8_t>& bytes) {
+    return crc16CcittFalse(bytes.data(), bytes.size());
+}
+
+std::uint16_t crc16CcittFalse(const std::uint8_t* bytes, std::size_t count) {
     std::uint16_t crc = 0xFFFF;
-    for (const auto value : bytes) {
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto value = bytes[index];
         crc ^= static_cast<std::uint16_t>(value << 8U);
         for (int i = 0; i < 8; ++i) {
             const bool msb = (crc & 0x8000U) != 0;
@@ -165,8 +175,13 @@ std::uint16_t crc16CcittFalse(const std::vector<std::uint8_t>& bytes) {
 }
 
 std::uint32_t crc32Ieee(const std::vector<std::uint8_t>& bytes) {
+    return crc32Ieee(bytes.data(), bytes.size());
+}
+
+std::uint32_t crc32Ieee(const std::uint8_t* bytes, std::size_t count) {
     std::uint32_t crc = 0xFFFFFFFFU;
-    for (const auto value : bytes) {
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto value = bytes[index];
         crc ^= static_cast<std::uint32_t>(value);
         for (int i = 0; i < 8; ++i) {
             const bool lsb = (crc & 1U) != 0;

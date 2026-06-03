@@ -95,7 +95,7 @@ sol::object streamFieldValueToLua(sol::state_view lua, const StreamFieldValue& v
 }
 
 sol::table makeStreamFieldsTable(sol::state_view lua, const StreamFieldMap& fields) {
-    sol::table table = lua.create_table();
+    sol::table table = lua.create_table(0, static_cast<int>(fields.size()));
     for (const auto& [name, value] : fields) {
         table[name] = streamFieldValueToLua(lua, value);
     }
@@ -103,7 +103,7 @@ sol::table makeStreamFieldsTable(sol::state_view lua, const StreamFieldMap& fiel
 }
 
 sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& frame, bool includeRaw) {
-    sol::table table = lua.create_table();
+    sol::table table = lua.create_table(0, static_cast<int>(frame.fields.size() + 4));
     table["name"] = frame.name;
     if (includeRaw) {
         table["raw"] = makeBytesTable(lua, frame.raw);
@@ -116,10 +116,12 @@ sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& fr
         }
         table["channel_map"] = channelMap;
     }
-    const auto fields = makeStreamFieldsTable(lua, frame.fields);
+    sol::table fields = lua.create_table(0, static_cast<int>(frame.fields.size()));
     table["fields"] = fields;
     for (const auto& [name, value] : frame.fields) {
-        table[name] = streamFieldValueToLua(lua, value);
+        const auto luaValue = streamFieldValueToLua(lua, value);
+        fields[name] = luaValue;
+        table[name] = luaValue;
     }
     return table;
 }

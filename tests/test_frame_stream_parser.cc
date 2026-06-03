@@ -279,6 +279,35 @@ void test_frame_stream_parser_supports_fixed_size_raw_frame() {
     require(batch.frames[0].fields.empty(), "无字段定义时不应生成 fields");
 }
 
+void test_frame_stream_parser_prefers_longer_same_header_candidate() {
+    using namespace protoscope::scripting;
+
+    StreamFrameDefinition shortFrame;
+    shortFrame.name = "short";
+    shortFrame.header = {0xAB};
+    shortFrame.size = 2;
+    shortFrame.crc = StreamCrcDefinition{.type = StreamCrcType::None};
+
+    StreamFieldDefinition valueField;
+    valueField.name = "value";
+    valueField.type = StreamValueType::U8;
+    valueField.offset = 2;
+
+    StreamFrameDefinition longFrame;
+    longFrame.name = "long";
+    longFrame.header = {0xAB};
+    longFrame.size = 3;
+    longFrame.crc = StreamCrcDefinition{.type = StreamCrcType::None};
+    longFrame.fields = {valueField};
+
+    FrameStreamParser parser(StreamBufferDefinition{.capacity = 16, .dropOldest = true}, {shortFrame, longFrame});
+    const auto batch = parser.pushBytes({0xAB, 0x01, 0x7F});
+    require(batch.frames.size() == 1, "同帧头候选应优先解析更长帧");
+    require(batch.frames[0].name == "long", "同帧头候选应命中 long schema");
+    const auto value = batch.frames[0].fields.at("value").integerScalar();
+    require(value.has_value() && *value == 0x7F, "long schema 字段应从完整帧中解析");
+}
+
 void test_frame_stream_parser_count_expression_arithmetic() {
     using namespace protoscope::scripting;
 
