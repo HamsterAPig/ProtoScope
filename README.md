@@ -390,7 +390,7 @@ app:
 | wave.downsample_start_multiplier | double | 2.0 | 降采样启动倍数；源样本数超过“渲染点预算 × 该系数”后切换到包络降采样 |
 | wave.channel_double_click_action | string | reset_scale_offset | CH 卡片双击恢复行为：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset` |
 | wave.hidden_channel_policy | string | visible_only | 主图 Legend 隐藏通道策略：`visible_only` 表示隐藏通道不参与主图包络、概览图和 Y 轴自动缩放；`include_hidden` 表示仍参与 |
-| wave.overview_max_samples | size_t | 20000 | 总览图最多参与绘制的最近样本数，限制长历史下 overview 的开销 |
+| wave.overview_max_samples | size_t | 20000 | 总览图包络绘制预算；限制每通道概览绘制点数，不裁剪概览横轴的历史范围 |
 | wave.min_visible_time_span | double | 0.001 | 最小可见时间跨度（秒） |
 | wave.show_axis_labels | bool | false | 显示坐标轴标签 |
 
@@ -413,7 +413,7 @@ app:
 
 1. **历史采样点数**
    - 指每个通道最多在内存里保留多少原始样本。
-   - 这个值**不是** `gui.wave.*` 里的 YAML 配置项，而是协议脚本里 `proto.plot.setup()` 的 `view.history_limit`。
+   - 这个值**不是** `gui.wave.*` 里的 YAML 配置项，而是协议脚本里 `proto.plot.setup()` 的顶层 `history_limit`。
    - 超过上限后，最旧的样本会被裁掉。
 
 2. **当前视口源样本数**
@@ -429,14 +429,14 @@ app:
 可以把链路理解为：
 
 ```text
-proto.plot.setup().view.history_limit
+proto.plot.setup().history_limit
     -> 决定每通道最多保留多少原始样本
     -> 当前视口内会取出一部分样本，形成“源样本”
     -> 如果源样本过多，按 gui.wave.* 的预算做降采样
     -> 得到最终“渲染点”
 ```
 
-#### 历史采样点数：`view.history_limit`
+#### 历史采样点数：`history_limit`
 
 如果你想控制“每个通道最多累计多少采样点”，要在协议脚本里配置：
 
@@ -446,14 +446,12 @@ proto.plot.setup({
   channels = {
     { label = "CH1", unit = "V" },
   },
-  view = {
-    time_scale = 0.2,
-    time_unit = "s",
-    vertical_min = -1.5,
-    vertical_max = 1.5,
-    vertical_unit = "V",
-    history_limit = 12000,
-  }
+  time_scale = 0.2,
+  time_unit = "s",
+  vertical_min = -1.5,
+  vertical_max = 1.5,
+  vertical_unit = "V",
+  history_limit = 12000,
 })
 ```
 
@@ -516,8 +514,8 @@ gui:
   - 调小这个值：更早触发降采样，性能更稳，但显示会更“概览化”。
 
 - `wave.overview_max_samples`
-  - 只影响底部总览图 overview，不影响主波形区的历史保留上限。
-  - 当历史很长时，overview 只取最近的这部分样本参与绘制，避免总览图拖慢界面。
+  - 只影响底部总览图 overview 的包络绘制预算，不影响主波形区的历史保留上限。
+  - 概览横轴仍覆盖 Lua 当前保留的完整历史；当历史很长时，它会按这个预算降采样绘制，避免总览图拖慢界面。
 
 - `wave.channel_card_width_mode`
   - 控制顶部 CH 卡片宽度，默认 `fixed` 使用 `channel_card_fixed_width`，可改为 `adaptive` 按 `channel_card_adaptive_ratio` 随内容宽度计算。
@@ -536,7 +534,7 @@ gui:
 #### 怎么判断该调哪个参数
 
 - 想保留更长历史，或者“旧波形太快被顶掉”
-  - 调大 Lua 里的 `view.history_limit`
+  - 调大 Lua 里的顶层 `history_limit`
 
 - 想让主波形区显示更多细节、少一点包络感
   - 先调大 `wave.max_render_points_per_channel`
@@ -571,9 +569,7 @@ proto.plot.setup({
   channels = {
     { label = "CH1", unit = "V" },
   },
-  view = {
-    history_limit = 20000,
-  }
+  history_limit = 20000,
 })
 ```
 
@@ -596,9 +592,7 @@ proto.plot.setup({
     { label = "CH1", unit = "V" },
     { label = "CH2", unit = "V" },
   },
-  view = {
-    history_limit = 6000,
-  }
+  history_limit = 6000,
 })
 ```
 

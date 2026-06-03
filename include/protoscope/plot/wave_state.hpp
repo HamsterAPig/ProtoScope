@@ -195,6 +195,7 @@ struct WaveDockState {
     std::size_t lastLegendMeasurementChannelIndex{static_cast<std::size_t>(-1)};
     WaveSnapshot cachedFullSnapshot{};
     WaveDisplayData cachedDisplayData{};
+    WaveDisplayData cachedOverviewDisplayData{};
     WaveDataBounds cachedDisplayBounds{};
     bool cachedFftKeyValid{false};
     WaveFftCacheKey cachedFftKey{};

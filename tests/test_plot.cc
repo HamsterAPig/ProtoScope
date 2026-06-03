@@ -856,6 +856,71 @@ void test_wave_display_data_uses_visible_window_only() {
             "频率时间轴应保留全局样本序号");
 }
 
+void test_wave_overview_bounds_use_full_history_window() {
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(20);
+    for (std::size_t index = 0; index < 20; ++index) {
+        samples.push_back({.time = static_cast<double>(index), .value = static_cast<double>(index)});
+    }
+    const std::vector<protoscope::plot::WaveSample> hiddenSamples{
+        {.time = -100.0, .value = -50.0},
+        {.time = 100.0, .value = 50.0},
+    };
+
+    protoscope::plot::WaveSnapshot fullSnapshot{};
+    fullSnapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    fullSnapshot.channels.push_back({
+        .label = "Hidden",
+        .unit = "V",
+        .totalSamples = hiddenSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = hiddenSamples.size(),
+        .samples = hiddenSamples.data(),
+    });
+
+    auto mainSnapshot = fullSnapshot;
+    mainSnapshot.channels[0].visibleBegin = 15;
+    mainSnapshot.channels[0].visibleEnd = samples.size();
+    mainSnapshot.channels[1].visibleBegin = 0;
+    mainSnapshot.channels[1].visibleEnd = 0;
+
+    const auto mainDisplay = protoscope::plot::buildDisplayData(mainSnapshot, 0.0);
+    const auto overviewDisplay = protoscope::plot::buildDisplayData(fullSnapshot, 0.0);
+    const auto mainBounds = protoscope::plot::computeDisplayBoundsForChannels(mainDisplay, {0}, 0.001);
+    const auto overviewBounds = protoscope::plot::computeDisplayBoundsForChannels(overviewDisplay, {0}, 0.001);
+    require(mainBounds.valid && overviewBounds.valid, "主视图和概览 bounds 都应有效");
+    require(std::abs(mainBounds.minTime - 15.0) < 1e-12, "主视图 bounds 应只覆盖当前窗口起点");
+    require(std::abs(mainBounds.maxTime - 19.0) < 1e-12, "主视图 bounds 应只覆盖当前窗口终点");
+    require(std::abs(overviewBounds.minTime - 0.0) < 1e-12, "概览 bounds 应覆盖完整历史起点");
+    require(std::abs(overviewBounds.maxTime - 19.0) < 1e-12, "概览 bounds 应覆盖完整历史终点");
+
+    auto frequencyMainSnapshot = fullSnapshot;
+    protoscope::plot::applySampleFrequencyVisibleRange(frequencyMainSnapshot, 1.5, 1.9, 10.0);
+    const auto frequencyMainDisplay = protoscope::plot::buildDisplayData(frequencyMainSnapshot, 10.0);
+    const auto frequencyOverviewDisplay = protoscope::plot::buildDisplayData(fullSnapshot, 10.0);
+    const auto frequencyMainBounds = protoscope::plot::computeDisplayBoundsForChannels(frequencyMainDisplay, {0}, 0.001);
+    const auto frequencyOverviewBounds =
+        protoscope::plot::computeDisplayBoundsForChannels(frequencyOverviewDisplay, {0}, 0.001);
+    require(std::abs(frequencyMainBounds.minTime - 1.5) < 1e-12, "Fs 主视图应按当前窗口换算起点");
+    require(std::abs(frequencyMainBounds.maxTime - 1.9) < 1e-12, "Fs 主视图应按当前窗口换算终点");
+    require(std::abs(frequencyOverviewBounds.minTime - 0.0) < 1e-12, "Fs 概览应按全样本序号换算起点");
+    require(std::abs(frequencyOverviewBounds.maxTime - 1.9) < 1e-12, "Fs 概览应按全样本序号换算终点");
+
+    const auto visibleOnlyBounds = protoscope::plot::computeDisplayBoundsForChannels(overviewDisplay, {0}, 0.001);
+    const auto includeHiddenBounds = protoscope::plot::computeDisplayBounds(overviewDisplay, 0.001);
+    require(std::abs(visibleOnlyBounds.minValue - 0.0) < 1e-12, "隐藏通道不应参与概览 Y 下限");
+    require(std::abs(visibleOnlyBounds.maxValue - 19.0) < 1e-12, "隐藏通道不应参与概览 Y 上限");
+    require(includeHiddenBounds.minValue < visibleOnlyBounds.minValue, "包含隐藏通道时应能看到隐藏通道下限");
+    require(includeHiddenBounds.maxValue > visibleOnlyBounds.maxValue, "包含隐藏通道时应能看到隐藏通道上限");
+}
+
 void test_wave_fft_detects_50hz_and_150hz_components() {
     constexpr double sampleFrequencyHz = 1024.0;
     constexpr std::size_t pointCount = 1024;

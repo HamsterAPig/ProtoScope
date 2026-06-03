@@ -39,14 +39,12 @@ proto.plot.setup({
     { label = "CH1", unit = "V", color = "#47C971" },
     { label = "CH2", unit = "V", color = "#5B8FF9" },
   },
-  view = {
-    time_scale = 0.2,
-    time_unit = "s",
-    vertical_min = -1.5,
-    vertical_max = 1.5,
-    vertical_unit = "V",
-    history_limit = 2000,
-  }
+  time_scale = 0.2,
+  time_unit = "s",
+  vertical_min = -1.5,
+  vertical_max = 1.5,
+  vertical_unit = "V",
+  history_limit = 2000,
 })
 
 local function clear_rx_buffer()

@@ -25,6 +25,7 @@ struct WaveFrameData {
     plot::WaveSnapshot snapshot;
     const plot::WaveSnapshot* fullSnapshot{nullptr};
     const plot::WaveDisplayData* displayData{nullptr};
+    const plot::WaveDisplayData* overviewDisplayData{nullptr};
     const plot::WaveFftFrame* fftFrame{nullptr};
     plot::WaveDataBounds displayBounds{};
     RenderBudget renderBudget;

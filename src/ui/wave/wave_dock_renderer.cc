@@ -487,14 +487,17 @@ public:
         ImGui::BeginChild("##wave_overview_panel", ImVec2(0.0F, layout.overviewHeight), true, ImGuiWindowFlags_NoScrollbar);
         const ImVec2 overviewPanelCursor = ImGui::GetCursorPos();
         if (!wave.overviewCollapsed) {
-            // 核心流程：先完整绘制概览，再覆盖折叠按钮，避免按钮外区域丢失概览交互。
+            // 核心流程：概览图必须基于完整历史数据，而不是主图当前视口，否则它会退化成“缩小版主图”。
             const auto derivedChannelIndices = channelIndicesForDerivedViews(wave, *frame.fullSnapshot);
-            const auto derivedBounds = boundsForDerivedViews(wave, *frame.displayData, derivedChannelIndices);
+            const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+            const auto overviewBounds = excludesLegendHiddenChannels(view)
+                ? plot::computeDisplayBoundsForChannels(*frame.overviewDisplayData, derivedChannelIndices, minVisibleTimeSpan)
+                : plot::computeDisplayBounds(*frame.overviewDisplayData, minVisibleTimeSpan);
             drawOverviewWindow(view,
                                config,
                                *frame.fullSnapshot,
-                               *frame.displayData,
-                               derivedBounds,
+                               *frame.overviewDisplayData,
+                               overviewBounds,
                                derivedChannelIndices,
                                frame.renderBudget);
         }

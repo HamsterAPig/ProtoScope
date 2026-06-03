@@ -67,6 +67,8 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
     if (wave.displayDataRevision != dataRevision || wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) {
         // 核心流程：全量快照只保留通道元数据和原始样本指针，显示缓存按当前窗口单独构建，避免高速采样时反复复制全历史。
         wave.cachedFullSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+        // 核心流程：概览横轴代表 Lua 当前保留的完整历史，overview_max_samples 只在绘制包络时限制预算。
+        wave.cachedOverviewDisplayData = plot::buildDisplayData(wave.cachedFullSnapshot, view.sampleFrequencyHz);
         wave.displayDataRevision = dataRevision;
         wave.displayDataSampleFrequencyHz = view.sampleFrequencyHz;
         wave.cachedFftKeyValid = false;
@@ -95,6 +97,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth) 
     wave.cachedDisplayData = plot::buildDisplayData(frame.snapshot, view.sampleFrequencyHz);
     wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
     frame.displayData = &wave.cachedDisplayData;
+    frame.overviewDisplayData = &wave.cachedOverviewDisplayData;
     frame.displayBounds = wave.cachedDisplayBounds;
     view.timeAxisSource = frame.displayData->axisSource;
     frame.renderBudget = makeRenderBudget(view,
