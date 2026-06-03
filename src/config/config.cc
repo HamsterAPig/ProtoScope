@@ -306,6 +306,10 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             if (const auto rawCapture = gui["raw_capture"]) {
                 result.config.gui.rawCapture.liveLimitBytes =
                     readScalar<std::size_t>(rawCapture, "live_limit_bytes", result.config.gui.rawCapture.liveLimitBytes);
+                result.config.gui.rawCapture.recordingQueueLimitBytes =
+                    readScalar<std::size_t>(rawCapture,
+                                            "recording_queue_limit_bytes",
+                                            result.config.gui.rawCapture.recordingQueueLimitBytes);
             }
             if (const auto transferLog = gui["transfer_log"]) {
                 result.config.gui.replayRawHistoryOnSchemaSwitch =
@@ -328,6 +332,14 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                     readScalar<std::size_t>(realtimeBacklog,
                                             "plot_appends_per_pump",
                                             result.config.gui.realtimeBacklog.plotAppendsPerPump);
+                result.config.gui.realtimeBacklog.rawFirstBacklogWarnBytes =
+                    readScalar<std::size_t>(realtimeBacklog,
+                                            "raw_first_backlog_warn_bytes",
+                                            result.config.gui.realtimeBacklog.rawFirstBacklogWarnBytes);
+                result.config.gui.realtimeBacklog.derivedBacklogDegradeEnabled =
+                    readScalar<bool>(realtimeBacklog,
+                                     "derived_backlog_degrade_enabled",
+                                     result.config.gui.realtimeBacklog.derivedBacklogDegradeEnabled);
                 result.config.gui.realtimeBacklog.discardBacklogOnDisconnect =
                     readScalar<bool>(realtimeBacklog,
                                      "discard_backlog_on_disconnect",
@@ -372,6 +384,10 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         }
 
         if (const auto receive = root["receive"]) {
+            result.config.receive.transportReadBufferBytes =
+                readScalar<std::size_t>(receive,
+                                        "transport_read_buffer_bytes",
+                                        result.config.receive.transportReadBufferBytes);
             if (const auto streamBuffer = receive["stream_buffer"]) {
                 result.config.receive.streamBuffer.nearOverflowThreshold =
                     readScalar<double>(streamBuffer,
@@ -552,11 +568,16 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
     root["gui"]["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
     root["gui"]["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
+    root["gui"]["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
     root["gui"]["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
     root["gui"]["realtime_backlog"]["mode"] = config.gui.realtimeBacklog.mode;
     root["gui"]["realtime_backlog"]["rx_chunk_bytes_per_pump"] = config.gui.realtimeBacklog.rxChunkBytesPerPump;
     root["gui"]["realtime_backlog"]["transfer_frame_rows_per_pump"] = config.gui.realtimeBacklog.transferFrameRowsPerPump;
     root["gui"]["realtime_backlog"]["plot_appends_per_pump"] = config.gui.realtimeBacklog.plotAppendsPerPump;
+    root["gui"]["realtime_backlog"]["raw_first_backlog_warn_bytes"] =
+        config.gui.realtimeBacklog.rawFirstBacklogWarnBytes;
+    root["gui"]["realtime_backlog"]["derived_backlog_degrade_enabled"] =
+        config.gui.realtimeBacklog.derivedBacklogDegradeEnabled;
     root["gui"]["realtime_backlog"]["discard_backlog_on_disconnect"] =
         config.gui.realtimeBacklog.discardBacklogOnDisconnect;
     root["gui"]["realtime_backlog"]["pump_min_interval_ms"] =
@@ -576,6 +597,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["protocol"]["tx"]["overflow_notify"] = config.protocol.tx.overflowNotify;
     root["receive"]["stream_buffer"]["near_overflow_threshold"] = config.receive.streamBuffer.nearOverflowThreshold;
     root["receive"]["stream_buffer"]["popup_enabled"] = config.receive.streamBuffer.popupEnabled;
+    root["receive"]["transport_read_buffer_bytes"] = config.receive.transportReadBufferBytes;
 
     if (config.scripting.pipeline.workerThreads.has_value()) {
         root["scripting"]["pipeline"]["worker_threads"] = *config.scripting.pipeline.workerThreads;

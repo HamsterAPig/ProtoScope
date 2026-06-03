@@ -102,10 +102,12 @@ sol::table makeStreamFieldsTable(sol::state_view lua, const StreamFieldMap& fiel
     return table;
 }
 
-sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& frame) {
+sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& frame, bool includeRaw) {
     sol::table table = lua.create_table();
     table["name"] = frame.name;
-    table["raw"] = makeBytesTable(lua, frame.raw);
+    if (includeRaw) {
+        table["raw"] = makeBytesTable(lua, frame.raw);
+    }
     table["crc_ok"] = frame.crcOk;
     if (!frame.channelMap.empty()) {
         sol::table channelMap = lua.create_table(static_cast<int>(frame.channelMap.size()), 0);
@@ -122,10 +124,12 @@ sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& fr
     return table;
 }
 
-sol::table makeStreamFrameArrayTable(sol::state_view lua, const std::vector<StreamParsedFrame>& frames) {
+sol::table makeStreamFrameArrayTable(sol::state_view lua,
+                                     const std::vector<StreamParsedFrame>& frames,
+                                     bool includeRaw) {
     sol::table table = lua.create_table(static_cast<int>(frames.size()), 0);
     for (std::size_t index = 0; index < frames.size(); ++index) {
-        table[index + 1] = makeStreamFrameTable(lua, frames[index]);
+        table[index + 1] = makeStreamFrameTable(lua, frames[index], includeRaw);
     }
     return table;
 }
@@ -426,6 +430,14 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
     std::vector<StreamFrameDefinition> frames;
     frames.reserve(framesTable.size());
     auto loaded = std::make_unique<LoadedStreamSchema>(bufferDefinition, std::vector<StreamFrameDefinition>{});
+    if (const auto rawOutput = luaStringField(schemaTable, "raw_output"); rawOutput.has_value()) {
+        if (*rawOutput == "omit") {
+            loaded->includeRawFrames = false;
+        } else if (*rawOutput != "full") {
+            error = "stream.raw_output 必须是 'full' 或 'omit'";
+            return nullptr;
+        }
+    }
     if (const sol::object onBatchObject = schemaTable["on_batch"]; onBatchObject.valid() && onBatchObject.get_type() != sol::type::lua_nil) {
         if (!onBatchObject.is<sol::protected_function>()) {
             error = "stream.on_batch 必须是 function";

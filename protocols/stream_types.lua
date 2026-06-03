@@ -25,6 +25,7 @@ local M = {}
 ---@alias ProtoStreamLengthMeans 'payload'|'frame'
 ---@alias ProtoStreamCrcOrder 'hi_lo'|'lo_hi'
 ---@alias ProtoStreamCrcType 'crc16_modbus'|'crc16_ccitt_false'|'crc32_ieee'
+---@alias ProtoStreamRawOutputMode 'full'|'omit' @full 兼容旧脚本；omit 可减少 frame.raw 展开成本。
 ---@alias ProtoStreamFieldCount integer|string|ProtoStreamCountExpression
 
 ---@class ProtoStreamCountExpression
@@ -79,6 +80,7 @@ local M = {}
 ---@class ProtoStreamSchema
 ---@field buffer? ProtoStreamBufferDef
 ---@field frames ProtoStreamFrameDef[]
+---@field raw_output? ProtoStreamRawOutputMode 是否向 Lua frame 暴露 raw；默认 full 兼容旧脚本。
 ---@field on_batch? fun(ctx: ProtoConnectionContext, frames: ProtoStreamFrame[]) 完整有效帧批量回调；定义后优先于各 frame 的 `on_frame`
 ---@field on_error? fun(ctx: ProtoConnectionContext, err: ProtoStreamError)
 

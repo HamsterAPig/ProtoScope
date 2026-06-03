@@ -310,9 +310,17 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
         source_ = std::move(request.source);
     }
 
-    std::sort(request.samples.begin(), request.samples.end(), [](const WaveSample& left, const WaveSample& right) {
-        return left.time < right.time;
-    });
+    // 核心流程：实时链路通常按时间递增推送大批量采样，已递增时跳过排序以降低 append 成本。
+    const bool monotonic = std::is_sorted(request.samples.begin(),
+                                          request.samples.end(),
+                                          [](const WaveSample& left, const WaveSample& right) {
+                                              return left.time < right.time;
+                                          });
+    if (!monotonic) {
+        std::sort(request.samples.begin(), request.samples.end(), [](const WaveSample& left, const WaveSample& right) {
+            return left.time < right.time;
+        });
+    }
 
     if (!channel.samples.empty()) {
         const double lastTime = channel.samples.back().time;

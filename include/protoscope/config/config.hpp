@@ -77,6 +77,7 @@ struct GuiLogHistoryConfig {
 
 struct GuiRawCaptureConfig {
     std::size_t liveLimitBytes{64U * 1024U * 1024U};
+    std::size_t recordingQueueLimitBytes{256U * 1024U * 1024U};
 };
 
 struct GuiRealtimeBacklogConfig {
@@ -84,6 +85,8 @@ struct GuiRealtimeBacklogConfig {
     std::size_t rxChunkBytesPerPump{64U * 1024U};
     std::size_t transferFrameRowsPerPump{2000};
     std::size_t plotAppendsPerPump{4096};
+    std::size_t rawFirstBacklogWarnBytes{32U * 1024U * 1024U};
+    bool derivedBacklogDegradeEnabled{true};
     bool discardBacklogOnDisconnect{false};
     double pumpMinIntervalMs{2.0};
 };
@@ -127,6 +130,7 @@ struct ReceiveStreamBufferConfig {
 
 struct ReceiveConfig {
     ReceiveStreamBufferConfig streamBuffer{};
+    std::size_t transportReadBufferBytes{64U * 1024U};
 };
 
 struct ScriptingPipelineConfig {

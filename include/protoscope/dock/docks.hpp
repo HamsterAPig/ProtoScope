@@ -94,6 +94,7 @@ struct CommDockState {
     std::size_t luaPendingItems{0};
     std::size_t uiPendingItems{0};
     std::size_t postprocessWorkerThreads{1};
+    std::string backlogWarning;
     std::size_t lastPumpEvents{0};
     std::size_t lastPumpRxBytes{0};
     std::size_t lastPumpStreamFrames{0};

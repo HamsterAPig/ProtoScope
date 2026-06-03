@@ -1,6 +1,5 @@
 #include "protoscope/transport/transport.hpp"
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -9,6 +8,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <asio/error.hpp>
 #include <asio/connect.hpp>
@@ -106,7 +106,7 @@ struct TcpClientTransport::Runtime {
     asio::ip::tcp::resolver resolver{ioContext};
     asio::ip::tcp::socket socket{ioContext};
     std::thread ioThread;
-    std::array<std::uint8_t, 4096> readBuffer{};
+    std::vector<std::uint8_t> readBuffer{};
     std::mutex socketMutex;
     std::atomic<bool> stopping{false};
 };
@@ -119,7 +119,7 @@ struct TcpServerTransport::Runtime {
     asio::ip::tcp::acceptor acceptor{ioContext};
     asio::ip::tcp::socket clientSocket{ioContext};
     std::thread ioThread;
-    std::array<std::uint8_t, 4096> readBuffer{};
+    std::vector<std::uint8_t> readBuffer{};
     std::mutex socketMutex;
     std::atomic<bool> stopping{false};
     std::atomic<std::uint64_t> clientGeneration{0};
@@ -132,7 +132,7 @@ struct SerialTransport::Runtime {
     std::optional<WorkGuard> workGuard{asio::make_work_guard(ioContext)};
     asio::serial_port serialPort{ioContext};
     std::thread ioThread;
-    std::array<std::uint8_t, 4096> readBuffer{};
+    std::vector<std::uint8_t> readBuffer{};
     std::mutex portMutex;
     std::atomic<bool> stopping{false};
 };
@@ -285,6 +285,7 @@ bool TcpClientTransport::open(const TransportConfig& config) {
     }
 
     const auto& tcp = std::get<TcpClientConfig>(config);
+    runtime_->readBuffer.resize(tcp.readBufferBytes == 0U ? 1U : tcp.readBufferBytes);
     const auto fallbackEndpoint = endpointText(tcp.host, tcp.port);
     setState(TransportState::Opening);
 
@@ -452,6 +453,7 @@ bool TcpServerTransport::open(const TransportConfig& config) {
     }
 
     const auto& tcp = std::get<TcpServerConfig>(config);
+    runtime_->readBuffer.resize(tcp.readBufferBytes == 0U ? 1U : tcp.readBufferBytes);
     rejectNewConnection_ = tcp.rejectNewConnection;
     setState(TransportState::Opening);
 
@@ -659,6 +661,7 @@ bool SerialTransport::open(const TransportConfig& config) {
     }
 
     const auto& serial = std::get<SerialConfig>(config);
+    runtime_->readBuffer.resize(serial.readBufferBytes == 0U ? 1U : serial.readBufferBytes);
     setState(TransportState::Opening);
 
     try {

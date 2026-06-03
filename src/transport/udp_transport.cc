@@ -1,6 +1,5 @@
 #include "protoscope/transport/transport.hpp"
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -9,6 +8,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <asio/error.hpp>
 #include <asio/executor_work_guard.hpp>
@@ -59,7 +59,7 @@ struct UdpPeerTransport::Runtime {
     asio::ip::udp::endpoint remoteEndpoint;
     asio::ip::udp::endpoint senderEndpoint;
     std::thread ioThread;
-    std::array<std::uint8_t, 4096> readBuffer{};
+    std::vector<std::uint8_t> readBuffer{};
     std::mutex socketMutex;
     std::atomic<bool> stopping{false};
 };
@@ -81,6 +81,7 @@ bool UdpPeerTransport::open(const TransportConfig& config) {
     }
 
     const auto& udp = std::get<UdpPeerConfig>(config);
+    runtime_->readBuffer.resize(udp.readBufferBytes == 0U ? 1U : udp.readBufferBytes);
     const auto fallbackEndpoint = endpointText(udp.remoteHost, udp.remotePort);
     setState(TransportState::Opening);
 

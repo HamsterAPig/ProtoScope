@@ -1108,15 +1108,33 @@ transport::TransportConfig Application::currentTransportConfig(transport::Transp
     const auto& comm = dockStore_.commState();
     switch (kind) {
     case transport::TransportKind::TcpClient:
-        return comm.tcpClient;
+        return [&] {
+            auto config = comm.tcpClient;
+            config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
+            return config;
+        }();
     case transport::TransportKind::TcpServer:
-        return comm.tcpServer;
+        return [&] {
+            auto config = comm.tcpServer;
+            config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
+            return config;
+        }();
     case transport::TransportKind::Serial:
-        return comm.serial;
+        return [&] {
+            auto config = comm.serial;
+            config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
+            return config;
+        }();
     case transport::TransportKind::UdpPeer:
-        return comm.udpPeer;
+        return [&] {
+            auto config = comm.udpPeer;
+            config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
+            return config;
+        }();
     }
-    return comm.tcpClient;
+    auto config = comm.tcpClient;
+    config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
+    return config;
 }
 
 void Application::syncDockState() {
@@ -1138,6 +1156,15 @@ void Application::syncDockState() {
     comm.luaPendingItems = scriptSnapshot.inputQueueSize;
     comm.uiPendingItems = scriptSnapshot.outputQueueSize + pendingTransferFrameRows_.size() + pendingScriptPlotAppends_.size();
     comm.postprocessWorkerThreads = scriptSnapshot.postprocessWorkerThreads;
+    comm.backlogWarning.clear();
+    const auto rawFirstWarnBytes = runtimeConfig_.gui.realtimeBacklog.rawFirstBacklogWarnBytes;
+    if (rawFirstWarnBytes > 0U && comm.pendingRxBytes >= rawFirstWarnBytes) {
+        comm.backlogWarning = "raw-first backlog 已超过告警阈值；原始数据继续保留，派生 UI 可能延后或降级";
+    } else if (runtimeConfig_.gui.realtimeBacklog.derivedBacklogDegradeEnabled
+               && (comm.pendingTransferFrameRows > runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump
+                   || comm.pendingPlotAppends > runtimeConfig_.gui.realtimeBacklog.plotAppendsPerPump)) {
+        comm.backlogWarning = "派生 UI backlog 已超过单轮预算；transfer rows / plot append 将分批追赶";
+    }
     comm.lastErrorSummary = scriptSnapshot.lastTransportStats.lastErrorSummary;
 
     auto& lua = dockStore_.luaState();

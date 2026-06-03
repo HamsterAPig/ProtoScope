@@ -329,6 +329,9 @@ void GuiRuntime::drawCommDock() {
     if (!comm.lastErrorSummary.empty()) {
         ImGui::TextColored(ImVec4(1.0F, 0.5F, 0.0F, 1.0F), "解析错误: %s", comm.lastErrorSummary.c_str());
     }
+    if (!comm.backlogWarning.empty()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.0F, 1.0F), "%s", comm.backlogWarning.c_str());
+    }
 
     ImGui::End();
 }

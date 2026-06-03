@@ -756,6 +756,57 @@ void test_script_stream_runtime_profile_set_and_clear() {
     require(clearAllEvents.size() == 1 && clearAllEvents.front().cleared, "clear_profile() 应产生 clear-all 事件");
 }
 
+void test_script_stream_raw_output_omit_skips_frame_raw() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-stream-raw-omit");
+    {
+        std::ofstream script(protocolDir / "main.lua");
+        script << R"lua(
+local function on_stream_frame(ctx, frame)
+    proto.emit("stream_raw_mode", {
+        raw_present = frame.raw ~= nil,
+        value = frame.fields.value,
+    })
+end
+
+function stream()
+    return {
+        raw_output = "omit",
+        buffer = {
+            capacity = 16,
+            overflow = "drop_oldest",
+        },
+        frames = {
+            {
+                name = "stream_sample",
+                header = { 0xAA, 0x55 },
+                len = { offset = 3, type = "u8", means = "payload", extra = 5 },
+                crc = { type = "crc16_modbus", order = "lo_hi" },
+                fields = {
+                    { name = "value", type = "u8", offset = 4 },
+                },
+                on_frame = on_stream_frame,
+            },
+        },
+    }
+end
+)lua";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "raw_output omit 协议应可加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), makeStreamFixtureFrame(0x34)});
+
+    bool found = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "stream_raw_mode") {
+            found = true;
+            require(event.payload.find("raw_present=false") != std::string::npos, "raw_output=omit 不应生成 frame.raw");
+            require(event.payload.find("value=52") != std::string::npos, "raw_output=omit 不应影响字段解析");
+        }
+    }
+    require(found, "raw_output=omit 应触发 stream frame 回调");
+}
+
 void test_script_stream_schema_reload_uses_current_callbacks() {
     const auto protocolDir = makeUniqueTempDir("protoscope-stream-reload-callbacks");
     const auto writeProtocol = [&](const std::string& version) {
@@ -1267,6 +1318,14 @@ void test_config_default_roundtrip() {
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
     require(config.gui.logHistory.scriptLimit == 5000, "脚本日志默认上限应为 5000");
     require(config.gui.rawCapture.liveLimitBytes == 64U * 1024U * 1024U, "实时原始缓存默认上限应为 64MiB");
+    require(config.gui.rawCapture.recordingQueueLimitBytes == 256U * 1024U * 1024U,
+            "完整原始录制队列默认硬上限应为 256MiB");
+    require(config.gui.realtimeBacklog.rawFirstBacklogWarnBytes == 32U * 1024U * 1024U,
+            "raw-first backlog 默认告警阈值应为 32MiB");
+    require(config.gui.realtimeBacklog.derivedBacklogDegradeEnabled,
+            "派生 UI backlog 默认应允许降级");
+    require(config.receive.transportReadBufferBytes == 64U * 1024U,
+            "transport 读缓冲默认应为 64KiB");
     require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
     require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
     require(!config.gui.showAppHeader, "现代应用栏默认应关闭");
@@ -1303,6 +1362,10 @@ void test_config_default_roundtrip() {
     config.gui.logHistory.hostLimit = 33;
     config.gui.logHistory.scriptLimit = 44;
     config.gui.rawCapture.liveLimitBytes = 123;
+    config.gui.rawCapture.recordingQueueLimitBytes = 456;
+    config.gui.realtimeBacklog.rawFirstBacklogWarnBytes = 789;
+    config.gui.realtimeBacklog.derivedBacklogDegradeEnabled = false;
+    config.receive.transportReadBufferBytes = 321;
     config.gui.elfSymbolCombo.limit = 12;
     config.gui.elfSymbolCombo.debounceMs = 350;
     config.gui.showAppHeader = true;
@@ -1354,6 +1417,10 @@ void test_config_default_roundtrip() {
     require(reloaded.config.gui.logHistory.hostLimit == 33, "宿主日志历史上限 roundtrip 失败");
     require(reloaded.config.gui.logHistory.scriptLimit == 44, "脚本日志历史上限 roundtrip 失败");
     require(reloaded.config.gui.rawCapture.liveLimitBytes == 123, "实时原始缓存上限 roundtrip 失败");
+    require(reloaded.config.gui.rawCapture.recordingQueueLimitBytes == 456, "完整原始录制队列上限 roundtrip 失败");
+    require(reloaded.config.gui.realtimeBacklog.rawFirstBacklogWarnBytes == 789, "raw-first backlog 告警阈值 roundtrip 失败");
+    require(!reloaded.config.gui.realtimeBacklog.derivedBacklogDegradeEnabled, "派生 UI 降级开关 roundtrip 失败");
+    require(reloaded.config.receive.transportReadBufferBytes == 321, "transport 读缓冲大小 roundtrip 失败");
     require(reloaded.config.gui.elfSymbolCombo.limit == 12, "ELF 变量候选上限 roundtrip 失败");
     require(reloaded.config.gui.elfSymbolCombo.debounceMs == 350, "ELF 变量候选消抖 roundtrip 失败");
     require(reloaded.config.gui.showAppHeader, "现代应用栏开关 roundtrip 失败");
@@ -1560,6 +1627,41 @@ void test_script_plot_api_snapshot() {
     require(std::abs(setups[0].channels[1].offset - 1.0) < 1e-12, "CH2 offset 解析错误");
     require(appends.size() == 2, "打开连接后应推送 2 组通道数据");
     require(appends[0].second.samples.size() == 3, "通道采样点数量不正确");
+}
+
+void test_script_plot_push_accepts_compact_series() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-compact-plot");
+    {
+        std::ofstream script(protocolDir / "main.lua");
+        script << R"lua(
+function on_open(ctx)
+    proto.plot.setup({
+        channels = {
+            { label = "CH1", unit = "V" }
+        }
+    })
+    proto.plot.push(1, {
+        source = "compact",
+        t0 = 0.25,
+        dt = 0.5,
+        values = { 1.0, 2.0, 3.0 }
+    })
+end
+)lua";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "compact plot 协议应可加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{.context = sampleCtx()});
+
+    const auto appends = host.drainPlotAppends();
+    require(appends.size() == 1, "compact plot 应生成 1 组追加请求");
+    require(appends[0].first == 0, "Lua 1-based 通道应转换为 C++ 0-based");
+    require(appends[0].second.source == "compact", "compact plot 应保留 source");
+    require(appends[0].second.samples.size() == 3, "compact plot 应展开 3 个采样");
+    require(std::abs(appends[0].second.samples[0].time - 0.25) < 1e-12, "compact plot 起始时间错误");
+    require(std::abs(appends[0].second.samples[1].time - 0.75) < 1e-12, "compact plot dt 展开错误");
+    require(std::abs(appends[0].second.samples[2].value - 3.0) < 1e-12, "compact plot 数值展开错误");
 }
 
 void test_half_duplex_modbus_request_batches() {
@@ -2068,6 +2170,7 @@ static const TestCase kAllTests[] = {
     {"script_stream_schema_allows_on_batch_without_on_frame", &test_script_stream_schema_allows_on_batch_without_on_frame},
     {"script_stream_schema_reports_overflow_and_crc_error", &test_script_stream_schema_reports_overflow_and_crc_error},
     {"script_stream_runtime_profile_set_and_clear", &test_script_stream_runtime_profile_set_and_clear},
+    {"script_stream_raw_output_omit_skips_frame_raw", &test_script_stream_raw_output_omit_skips_frame_raw},
     {"script_stream_schema_reload_uses_current_callbacks", &test_script_stream_schema_reload_uses_current_callbacks},
     {"script_stream_schema_rejects_count_function", &test_script_stream_schema_rejects_count_function},
     {"script_stream_schema_accepts_count_expression_table", &test_script_stream_schema_accepts_count_expression_table},
@@ -2121,6 +2224,7 @@ static const TestCase kAllTests[] = {
     {"protocol_state_file_preserves_other_protocol_nodes", &test_protocol_state_file_preserves_other_protocol_nodes},
     {"protocol_state_file_replace_failure_keeps_target", &test_protocol_state_file_replace_failure_keeps_target},
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
+    {"script_plot_push_accepts_compact_series", &test_script_plot_push_accepts_compact_series},
     {"half_duplex_modbus_request_batches", &test_half_duplex_modbus_request_batches},
     {"half_duplex_modbus_ack_and_plot_flow", &test_half_duplex_modbus_ack_and_plot_flow},
     {"half_duplex_modbus_ch3_uses_third_harmonic", &test_half_duplex_modbus_ch3_uses_third_harmonic},

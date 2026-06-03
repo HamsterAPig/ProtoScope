@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -30,12 +31,14 @@ enum class TransportState {
 struct TcpClientConfig {
     std::string host{"127.0.0.1"};
     std::uint16_t port{9000};
+    std::size_t readBufferBytes{64U * 1024U};
 };
 
 struct TcpServerConfig {
     std::string bindAddress{"0.0.0.0"};
     std::uint16_t port{9000};
     bool rejectNewConnection{true};
+    std::size_t readBufferBytes{64U * 1024U};
 };
 
 struct SerialConfig {
@@ -45,6 +48,7 @@ struct SerialConfig {
     std::string parity{"none"};
     std::string stopBits{"one"};
     std::string flowControl{"none"};
+    std::size_t readBufferBytes{64U * 1024U};
 };
 
 struct UdpPeerConfig {
@@ -52,6 +56,7 @@ struct UdpPeerConfig {
     std::uint16_t bindPort{9001};
     std::string remoteHost{"127.0.0.1"};
     std::uint16_t remotePort{9000};
+    std::size_t readBufferBytes{64U * 1024U};
 };
 
 std::vector<std::string> normalizeSerialPortNames(std::vector<std::string> ports);
