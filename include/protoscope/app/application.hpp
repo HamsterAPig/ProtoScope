@@ -121,6 +121,7 @@ private:
     [[nodiscard]] bool hasPendingRequestDrainWork() const;
     bool drainRequestTimeoutBacklog();
     bool flushScriptOutputs();
+    bool flushScriptOutputsUnbounded();
     bool flushScriptLogs();
     bool flushScriptPlots();
     bool flushPendingTransferFrameRows(std::size_t maxRows);

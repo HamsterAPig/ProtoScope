@@ -1567,7 +1567,7 @@ bool Application::drainRequestTimeoutBacklog() {
     // 停止边界的 ACK 可能已经在 transport 或 worker 队列里，只是尚未产出 request_done。
     bool changed = handleTransportEvents();
     scriptWorker_.waitIdle();
-    changed = flushScriptOutputs() || changed;
+    changed = flushScriptOutputsUnbounded() || changed;
     return true;
 }
 
@@ -1871,6 +1871,16 @@ bool Application::flushScriptOutputs() {
     return changed;
 }
 
+bool Application::flushScriptOutputsUnbounded() {
+    bool changed = false;
+    auto batch = scriptWorker_.drainOneOutput();
+    while (batch.has_value()) {
+        changed = applyScriptOutputBatch(*batch) || changed;
+        batch = scriptWorker_.drainOneOutput();
+    }
+    return changed;
+}
+
 bool Application::flushScriptStatusAndDialogs() {
     return false;
 }
@@ -1893,7 +1903,9 @@ bool Application::processRequestTimeouts() {
     }
 
     scriptWorker_.waitIdle();
-    flushScriptOutputs();
+    // 核心流程：request 已到超时边界时不能再受 UI 帧预算限制；
+    // 已经到达的 ACK/request_done 必须先完整落到主线程，再决定是否真正超时。
+    flushScriptOutputsUnbounded();
     if (!activeHalfDuplexRequest_.has_value()) {
         return true;
     }

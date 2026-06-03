@@ -25,6 +25,8 @@ void require(bool condition, const char* message) {
     }
 }
 
+std::uint64_t currentTimeMs();
+
 struct RecordingTransport final : protoscope::transport::ITransport {
     struct State {
         bool openCalled{false};
@@ -124,7 +126,7 @@ struct QueuedEventTransport final : protoscope::transport::ITransport {
             .error = {},
             .bytes = task.payload.size(),
             .queuedAtMs = task.queuedAtMs,
-            .finishedAtMs = task.queuedAtMs,
+            .finishedAtMs = currentTimeMs(),
         });
         sharedState_->sentTasks.push_back(std::move(task));
         return sharedState_->opened;
@@ -683,10 +685,6 @@ void test_application_request_timeout_drains_pending_rx_before_timeout() {
     application.pumpOnce();
 
     application.updateControlValue("read", true);
-    application.pumpOnce();
-    application.pumpOnce();
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
     const protoscope::transport::ConnectionContext context{
         .endpoint = "queued://wave",
         .connectionId = 7,
@@ -698,6 +696,7 @@ void test_application_request_timeout_drains_pending_rx_before_timeout() {
     }
     transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, {0xAA, 0x55}});
 
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
     application.pumpOnce();
 
     require(application.docks().commState().lastError.empty(),
