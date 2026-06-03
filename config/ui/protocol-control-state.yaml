@@ -33,6 +33,7 @@ protocols:
       time_axis_source: sample_index
       cursor_snap_mode: smart
       cursor_snap_scope: all_channels
+      cursor_extreme_snap_policy: nearest_waveform
       locked_cursor_interval: 0
       tools_collapsed: false
       overview_collapsed: false

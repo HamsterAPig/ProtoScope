@@ -292,6 +292,27 @@ const char* toWaveHiddenChannelPolicyText(const plot::WaveHiddenChannelPolicy po
     return "include_hidden";
 }
 
+plot::WaveCursorExtremeSnapPolicy parseWaveCursorExtremeSnapPolicy(const std::string& value,
+                                                                   plot::WaveCursorExtremeSnapPolicy fallback) {
+    if (value == "viewport_zone") {
+        return plot::WaveCursorExtremeSnapPolicy::ViewportZone;
+    }
+    if (value == "nearest_waveform") {
+        return plot::WaveCursorExtremeSnapPolicy::NearestWaveform;
+    }
+    return fallback;
+}
+
+const char* toWaveCursorExtremeSnapPolicyText(const plot::WaveCursorExtremeSnapPolicy policy) {
+    switch (policy) {
+    case plot::WaveCursorExtremeSnapPolicy::NearestWaveform:
+        return "nearest_waveform";
+    case plot::WaveCursorExtremeSnapPolicy::ViewportZone:
+        return "viewport_zone";
+    }
+    return "nearest_waveform";
+}
+
 double positiveOrFallback(double value, double fallback) {
     return value > 0.0 ? value : fallback;
 }
@@ -395,6 +416,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                             "hidden_channel_policy",
                                             toWaveHiddenChannelPolicyText(result.config.gui.wave.hiddenChannelPolicy)),
                     result.config.gui.wave.hiddenChannelPolicy);
+            result.config.gui.wave.cursorExtremeSnapPolicy =
+                parseWaveCursorExtremeSnapPolicy(
+                    readScalar<std::string>(wave,
+                                            "cursor_extreme_snap_policy",
+                                            toWaveCursorExtremeSnapPolicyText(result.config.gui.wave.cursorExtremeSnapPolicy)),
+                    result.config.gui.wave.cursorExtremeSnapPolicy);
             result.config.gui.wave.zoomSelectionAutoExit =
                 readScalar<bool>(wave, "zoom_selection_auto_exit", result.config.gui.wave.zoomSelectionAutoExit);
             result.config.gui.wave.maxRenderPointsPerChannel =
@@ -698,6 +725,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["x_axis_double_click_action"] =
         toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction);
     root["gui"]["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
+    root["gui"]["wave"]["cursor_extreme_snap_policy"] =
+        toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
     root["gui"]["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
     root["gui"]["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
     root["gui"]["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
@@ -979,6 +1008,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
     wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.2);
     wave.hiddenChannelPolicy = config.gui.wave.hiddenChannelPolicy;
+    wave.cursorExtremeSnapPolicy = config.gui.wave.cursorExtremeSnapPolicy;
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;
@@ -1014,6 +1044,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;
     config.gui.wave.verticalAutoFitMultiplier = dockStore.waveState().view.verticalAutoFitMultiplier;
     config.gui.wave.hiddenChannelPolicy = dockStore.waveState().view.hiddenChannelPolicy;
+    config.gui.wave.cursorExtremeSnapPolicy = dockStore.waveState().view.cursorExtremeSnapPolicy;
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
     config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;

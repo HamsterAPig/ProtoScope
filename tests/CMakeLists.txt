@@ -31,6 +31,7 @@ target_link_libraries(protoscope_tests
         protoscope_plot
         protoscope_scripting
         protoscope_transport
+        protoscope_ui
         protoscope_update_check
 )
 target_compile_features(protoscope_tests PRIVATE cxx_std_20)

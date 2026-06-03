@@ -23,6 +23,11 @@ enum class WaveCursorSnapScope {
     ActiveChannel,
 };
 
+enum class WaveCursorExtremeSnapPolicy {
+    NearestWaveform,
+    ViewportZone,
+};
+
 enum class WaveMeasurementReferenceMode {
     Channel,
     ManualValue,
@@ -153,6 +158,7 @@ struct WaveViewState {
     WaveTimeAxisSource timeAxisSource{WaveTimeAxisSource::SampleIndex};
     WaveCursorSnapMode cursorSnapMode{WaveCursorSnapMode::SmartSnap};
     WaveCursorSnapScope cursorSnapScope{WaveCursorSnapScope::AllChannels};
+    WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{WaveCursorExtremeSnapPolicy::NearestWaveform};
     std::array<WaveCursorState, 2> cursors{};
 };
 

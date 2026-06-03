@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace protoscope::ui {
@@ -11,12 +12,58 @@ bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io) {
         || (view.cursorSnapMode == plot::WaveCursorSnapMode::ModifierSnap && (io.KeyShift || io.KeyCtrl));
 }
 
+double normalizedSnapScore(const plot::CursorReadout& readout,
+                           double time,
+                           double mouseValue,
+                           double maxTimeDistance,
+                           double maxValueDistance) {
+    const double timeScore = maxTimeDistance > 0.0 ? std::abs(readout.time - time) / maxTimeDistance : 0.0;
+    const double valueScore = maxValueDistance > 0.0 ? std::abs(readout.displayValue - mouseValue) / maxValueDistance : 0.0;
+    return timeScore * timeScore + valueScore * valueScore;
+}
+
+std::optional<SmartCursorSnap> findNearestWaveformExtreme(const plot::WaveDisplayData& displayData,
+                                                          std::size_t channelIndex,
+                                                          double time,
+                                                          double mouseValue,
+                                                          double valueHeight,
+                                                          double maxTimeDistance) {
+    if (!std::isfinite(mouseValue) || valueHeight <= 0.0) {
+        return std::nullopt;
+    }
+
+    constexpr double kExtremeSnapValueRatio = 0.08;
+    const double maxValueDistance = valueHeight * kExtremeSnapValueRatio;
+    std::optional<SmartCursorSnap> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    const auto considerExtreme = [&](plot::WaveExtremeKind kind, std::string_view label) {
+        const auto candidate = plot::findLocalExtremeNearTime(displayData, channelIndex, time, maxTimeDistance, kind);
+        if (!candidate.has_value() || !std::isfinite(candidate->displayValue)) {
+            return;
+        }
+        const double valueDistance = std::abs(candidate->displayValue - mouseValue);
+        if (valueDistance > maxValueDistance) {
+            return;
+        }
+        // 核心流程：默认策略按鼠标到峰/谷显示点的二维距离评分，避免远离波形时被极值抢吸附。
+        const double score = normalizedSnapScore(*candidate, time, mouseValue, maxTimeDistance, maxValueDistance);
+        if (!best.has_value() || score < bestScore) {
+            bestScore = score;
+            best = SmartCursorSnap{.readout = *candidate, .label = label};
+        }
+    };
+    considerExtreme(plot::WaveExtremeKind::Maximum, "Peak");
+    considerExtreme(plot::WaveExtremeKind::Minimum, "Trough");
+    return best;
+}
+
 std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDisplayData& displayData,
                                                              std::size_t channelIndex,
                                                              double time,
                                                              double mouseValue,
                                                              const ImPlotRect& limits,
-                                                             double maxTimeDistance) {
+                                                             double maxTimeDistance,
+                                                             plot::WaveCursorExtremeSnapPolicy extremeSnapPolicy) {
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
     }
@@ -25,15 +72,19 @@ std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDis
     const double valueHeight = maxValue - minValue;
     constexpr double kExtremeSnapZoneRatio = 0.15;
     if (std::isfinite(mouseValue) && valueHeight > 0.0) {
-        // 鼠标靠近绘图区顶部/底部时，极值优先于边沿，方便直接锁峰值或谷值。
-        if (mouseValue >= maxValue - valueHeight * kExtremeSnapZoneRatio) {
+        if (extremeSnapPolicy == plot::WaveCursorExtremeSnapPolicy::NearestWaveform) {
+            if (auto nearestExtreme = findNearestWaveformExtreme(
+                    displayData, channelIndex, time, mouseValue, valueHeight, maxTimeDistance)) {
+                return nearestExtreme;
+            }
+        } else if (mouseValue >= maxValue - valueHeight * kExtremeSnapZoneRatio) {
+            // 兼容旧策略：鼠标靠近绘图区顶部/底部时，极值优先于边沿。
             auto peak = plot::findLocalExtremeNearTime(
                 displayData, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Maximum);
             if (peak.has_value()) {
                 return SmartCursorSnap{.readout = *peak, .label = "Peak"};
             }
-        }
-        if (mouseValue <= minValue + valueHeight * kExtremeSnapZoneRatio) {
+        } else if (mouseValue <= minValue + valueHeight * kExtremeSnapZoneRatio) {
             auto trough = plot::findLocalExtremeNearTime(
                 displayData, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Minimum);
             if (trough.has_value()) {
@@ -57,13 +108,15 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
                                                           const ImPlotRect& limits,
                                                           double maxTimeDistance) {
     if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
-        return findSmartCursorSnapForChannel(displayData, view.measurementChannelIndex, time, mouseValue, limits, maxTimeDistance);
+        return findSmartCursorSnapForChannel(
+            displayData, view.measurementChannelIndex, time, mouseValue, limits, maxTimeDistance, view.cursorExtremeSnapPolicy);
     }
 
     std::optional<SmartCursorSnap> best;
     double bestScore = std::numeric_limits<double>::infinity();
     for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
-        const auto candidate = findSmartCursorSnapForChannel(displayData, channelIndex, time, mouseValue, limits, maxTimeDistance);
+        const auto candidate = findSmartCursorSnapForChannel(
+            displayData, channelIndex, time, mouseValue, limits, maxTimeDistance, view.cursorExtremeSnapPolicy);
         if (!candidate.has_value()) {
             continue;
         }

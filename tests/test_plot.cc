@@ -6,6 +6,7 @@
 #include "protoscope/plot/wave_fft.hpp"
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_state.hpp"
+#include "../src/ui/wave/wave_render_service.hpp"
 
 #include <cmath>
 #include <array>
@@ -464,6 +465,40 @@ void test_wave_cursor_smart_snap_extreme() {
     const auto farPeak = protoscope::plot::findLocalExtremeNearTime(
         displayData, 0, 4.5, 0.2, protoscope::plot::WaveExtremeKind::Maximum);
     require(!farPeak.has_value(), "窗口外极值不应被吸附");
+}
+
+void test_wave_cursor_nearest_waveform_extreme_policy_snaps_to_local_trough() {
+    const auto displayData = makeDisplayData({
+        {.time = 0.0, .value = 80.0},
+        {.time = 1.0, .value = 70.0},
+        {.time = 2.0, .value = 80.0},
+    }, {80.0, 70.0, 80.0});
+    protoscope::plot::WaveViewState view;
+    view.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform;
+    const ImPlotRect limits(0.0, 2.0, 0.0, 100.0);
+
+    const auto snap = protoscope::ui::findSmartCursorSnapByScope(displayData, view, 1.0, 70.5, limits, 0.4);
+    require(snap.has_value(), "默认极值策略应在鼠标靠近波形谷值时吸附");
+    require(snap->label == "Trough", "默认极值策略应返回局部谷值");
+    require(snap->readout.sampleIndex == 1, "默认极值策略应命中靠近鼠标的谷值样本");
+}
+
+void test_wave_cursor_viewport_zone_extreme_policy_keeps_bottom_zone_behavior() {
+    const auto displayData = makeDisplayData({
+        {.time = 0.0, .value = 80.0},
+        {.time = 1.0, .value = 70.0},
+        {.time = 2.0, .value = 80.0},
+    }, {80.0, 70.0, 80.0});
+    protoscope::plot::WaveViewState view;
+    view.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
+    const ImPlotRect limits(0.0, 2.0, 0.0, 100.0);
+
+    const auto awayFromBottom = protoscope::ui::findSmartCursorSnapByScope(displayData, view, 1.0, 70.5, limits, 0.4);
+    require(!awayFromBottom.has_value(), "旧极值策略不应在主图底部区域外触发谷值吸附");
+
+    const auto bottomZone = protoscope::ui::findSmartCursorSnapByScope(displayData, view, 1.0, 10.0, limits, 0.4);
+    require(bottomZone.has_value(), "旧极值策略应保留底部区域触发谷值吸附");
+    require(bottomZone->label == "Trough", "旧极值策略底部区域应返回谷值");
 }
 
 void test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms() {

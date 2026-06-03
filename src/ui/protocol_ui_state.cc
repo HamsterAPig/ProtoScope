@@ -57,6 +57,21 @@ plot::WaveCursorSnapScope parseSnapScope(const std::string& value) {
     return value == "active_channel" ? plot::WaveCursorSnapScope::ActiveChannel : plot::WaveCursorSnapScope::AllChannels;
 }
 
+std::string extremeSnapPolicyName(plot::WaveCursorExtremeSnapPolicy policy) {
+    switch (policy) {
+    case plot::WaveCursorExtremeSnapPolicy::NearestWaveform:
+        return "nearest_waveform";
+    case plot::WaveCursorExtremeSnapPolicy::ViewportZone:
+        return "viewport_zone";
+    }
+    return "nearest_waveform";
+}
+
+plot::WaveCursorExtremeSnapPolicy parseExtremeSnapPolicy(const std::string& value) {
+    return value == "viewport_zone" ? plot::WaveCursorExtremeSnapPolicy::ViewportZone
+                                    : plot::WaveCursorExtremeSnapPolicy::NearestWaveform;
+}
+
 std::string measurementReferenceModeName(plot::WaveMeasurementReferenceMode mode) {
     return mode == plot::WaveMeasurementReferenceMode::ManualValue ? "manual_value" : "channel";
 }
@@ -293,6 +308,7 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave) {
     node["time_axis_source"] = axisSourceName(view.timeAxisSource);
     node["cursor_snap_mode"] = snapModeName(view.cursorSnapMode);
     node["cursor_snap_scope"] = snapScopeName(view.cursorSnapScope);
+    node["cursor_extreme_snap_policy"] = extremeSnapPolicyName(view.cursorExtremeSnapPolicy);
     node["locked_cursor_interval"] = view.lockedCursorInterval;
     node["measurement"] = encodeMeasurementSelection(view.measurement);
     node["measurement_reference_mode"] = measurementReferenceModeName(view.referenceMode);
@@ -402,6 +418,8 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave) 
     view.timeAxisSource = parseAxisSource(node["time_axis_source"].as<std::string>(axisSourceName(view.timeAxisSource)));
     view.cursorSnapMode = parseSnapMode(node["cursor_snap_mode"].as<std::string>(snapModeName(view.cursorSnapMode)));
     view.cursorSnapScope = parseSnapScope(node["cursor_snap_scope"].as<std::string>(snapScopeName(view.cursorSnapScope)));
+    view.cursorExtremeSnapPolicy = parseExtremeSnapPolicy(
+        node["cursor_extreme_snap_policy"].as<std::string>(extremeSnapPolicyName(view.cursorExtremeSnapPolicy)));
     view.lockedCursorInterval = node["locked_cursor_interval"].as<double>(view.lockedCursorInterval);
     decodeMeasurementSelection(node["measurement"], view.measurement);
     view.referenceMode =

@@ -1320,6 +1320,8 @@ void test_config_default_roundtrip() {
     require(!config.gui.wave.zoomSelectionAutoExit, "框选放大默认不应自动退出");
     require(config.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "隐藏 CH 策略默认应只让可见通道参与派生视图");
+    require(config.gui.wave.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform,
+            "游标极值吸附策略默认应为 nearest_waveform");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
@@ -1362,6 +1364,7 @@ void test_config_default_roundtrip() {
     config.gui.wave.channelDoubleClickAction = protoscope::plot::WaveChannelDoubleClickAction::ResetAll;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
+    config.gui.wave.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
@@ -1416,6 +1419,8 @@ void test_config_default_roundtrip() {
             "X 轴双击行为 roundtrip 失败");
     require(reloaded.config.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "隐藏 CH 策略 roundtrip 失败");
+    require(reloaded.config.gui.wave.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone,
+            "游标极值吸附策略 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12, "CH 卡片自适应比例 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.verticalAutoFitMultiplier - 1.5) < 1e-12, "Y 轴 Auto Fit 系数 roundtrip 失败");
@@ -2348,6 +2353,7 @@ static const TestCase kAllTests[] = {
     {"log_filter_keyword_matches_metadata_and_bytes", &test_log_filter_keyword_matches_metadata_and_bytes},
     {"log_filter_combines_status_and_keyword", &test_log_filter_combines_status_and_keyword},
     {"wave_protocol_state_isolated_by_protocol_key", &test_wave_protocol_state_isolated_by_protocol_key},
+    {"wave_protocol_state_cursor_extreme_snap_policy", &test_wave_protocol_state_cursor_extreme_snap_policy},
     {"dock_visibility_state_isolated_by_protocol_key", &test_dock_visibility_state_isolated_by_protocol_key},
     {"dock_visibility_state_decode_missing_fields_defaults", &test_dock_visibility_state_decode_missing_fields_defaults},
     {"lua_dock_layout_key_uses_protocol_and_script", &test_lua_dock_layout_key_uses_protocol_and_script},
@@ -2380,6 +2386,10 @@ static const TestCase kAllTests[] = {
     {"plot_measurement_error_metrics", &test_plot_measurement_error_metrics},
     {"wave_cursor_smart_snap_edge", &test_wave_cursor_smart_snap_edge},
     {"wave_cursor_smart_snap_extreme", &test_wave_cursor_smart_snap_extreme},
+    {"wave_cursor_nearest_waveform_extreme_policy_snaps_to_local_trough",
+     &test_wave_cursor_nearest_waveform_extreme_policy_snaps_to_local_trough},
+    {"wave_cursor_viewport_zone_extreme_policy_keeps_bottom_zone_behavior",
+     &test_wave_cursor_viewport_zone_extreme_policy_keeps_bottom_zone_behavior},
     {"wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms", &test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms},
     {"wave_cursor_extreme_snap_falls_back_to_window_trough", &test_wave_cursor_extreme_snap_falls_back_to_window_trough},
     {"wave_cursor_smart_snap_fallback_to_nearest", &test_wave_cursor_smart_snap_fallback_to_nearest},
