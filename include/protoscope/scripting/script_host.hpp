@@ -351,6 +351,7 @@ struct ScriptHostTransportStats {
     double callbackMs{0.0};
     double totalMs{0.0};
     bool streamMode{false};
+    std::string lastErrorSummary;
 };
 
 class ScriptHost {

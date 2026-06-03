@@ -152,6 +152,15 @@ int GuiRuntime::run() {
         const auto frameStartMs = nowMs();
         glfwPollEvents();
 
+        // pump 最小间隔：防止 FPS 放开时 CPU 空转，避免数据投喂过快
+        const auto pumpMinIntervalMs = application_.runtimeConfig().gui.realtimeBacklog.pumpMinIntervalMs;
+        if (pumpMinIntervalMs > 0.0 && lastPumpMs_ > 0) {
+            const auto elapsed = frameStartMs > lastPumpMs_ ? frameStartMs - lastPumpMs_ : 0;
+            if (elapsed < static_cast<std::uint64_t>(pumpMinIntervalMs)) {
+                sleepUntil(lastPumpMs_ + static_cast<std::uint64_t>(pumpMinIntervalMs));
+            }
+        }
+        lastPumpMs_ = frameStartMs;
         bool changed = application_.pumpOnce();
         changed = pollConfigFileChanges() || changed;
         changed = pollElfStaticAddressFileChanges() || changed;

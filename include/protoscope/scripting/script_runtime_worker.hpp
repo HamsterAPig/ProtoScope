@@ -17,6 +17,9 @@ struct ScriptRuntimeWorkerConfig {
     std::size_t rxQueueLimitBytes{64U * 1024U * 1024U};
     std::size_t outputQueueLimit{65536U};
     std::size_t batchBytes{256U * 1024U};
+    bool backpressureEnabled{true};
+    double backpressureHighWatermark{0.5};
+    double backpressureLowWatermark{0.3};
 };
 
 struct ScriptRuntimeSnapshot {
@@ -85,6 +88,7 @@ public:
 
     void waitIdle();
     [[nodiscard]] std::vector<ScriptRuntimeOutputBatch> drainOutputs();
+    [[nodiscard]] std::optional<ScriptRuntimeOutputBatch> drainOneOutput();
     [[nodiscard]] ScriptRuntimeSnapshot snapshot() const;
     void stop();
 

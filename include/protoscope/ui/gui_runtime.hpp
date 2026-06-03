@@ -184,6 +184,7 @@ private:
     std::vector<IDialogComponent*> dialogComponents_;
     std::vector<IDockComponent*> dockComponents_;
     std::uint64_t lastRenderAtMs_{0};
+    std::uint64_t lastPumpMs_{0};
     std::uint64_t lastAutoSaveAtMs_{0};
     config::FileSnapshot configSnapshot_{};
     std::string lastWindowTitle_;

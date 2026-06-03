@@ -59,6 +59,7 @@ struct GuiWaveConfig {
     double downsampleStartMultiplier{2.0};
     std::size_t overviewMaxSamples{20000};
     double minVisibleTimeSpan{0.001};
+    std::size_t maxTotalSamples{200000};
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
     double verticalAutoFitMultiplier{1.2};
@@ -84,6 +85,7 @@ struct GuiRealtimeBacklogConfig {
     std::size_t transferFrameRowsPerPump{2000};
     std::size_t plotAppendsPerPump{4096};
     bool discardBacklogOnDisconnect{true};
+    double pumpMinIntervalMs{2.0};
 };
 
 struct GuiElfSymbolComboConfig {
@@ -138,6 +140,10 @@ struct ScriptingConfig {
     std::size_t workerRxQueueLimitBytes{64U * 1024U * 1024U};
     std::size_t workerOutputQueueLimit{65536U};
     std::size_t workerBatchBytes{256U * 1024U};
+    bool workerBackpressureEnabled{true};
+    double workerBackpressureHighWatermark{0.5};
+    double workerBackpressureLowWatermark{0.3};
+    double workerOutputFlushBudgetMs{4.0};
 };
 
 struct AppConfig {

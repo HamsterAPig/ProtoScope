@@ -126,6 +126,7 @@ void test_script_runtime_worker_rx_limit_drops_oldest_bytes_only() {
         .rxQueueLimitBytes = 6U,
         .outputQueueLimit = 128U,
         .batchBytes = 1U,
+        .backpressureEnabled = false,
     });
     const auto protocolDir = makeWorkerProtocolDir("rx-limit", workerProbeScript());
     const auto loaded = worker.loadProtocolDirectory(protocolDir.generic_string());

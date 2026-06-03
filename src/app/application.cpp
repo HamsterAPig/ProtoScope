@@ -30,6 +30,13 @@ std::uint64_t nowMs() {
             .count());
 }
 
+std::uint64_t nowUs() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
 double elapsedMilliseconds(std::chrono::steady_clock::time_point start,
                            std::chrono::steady_clock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
@@ -311,9 +318,13 @@ bool Application::applyConfig(const config::AppConfig& config) {
         .rxQueueLimitBytes = config.scripting.workerRxQueueLimitBytes,
         .outputQueueLimit = config.scripting.workerOutputQueueLimit,
         .batchBytes = config.scripting.workerBatchBytes,
+        .backpressureEnabled = config.scripting.workerBackpressureEnabled,
+        .backpressureHighWatermark = config.scripting.workerBackpressureHighWatermark,
+        .backpressureLowWatermark = config.scripting.workerBackpressureLowWatermark,
     });
     scriptWorker_.setFileIoConfig(config.scripting.fileIo);
     applyHistoryLimits(config.gui.logHistory);
+    dockStore_.waveState().buffer.setMaxTotalSamples(config.gui.wave.maxTotalSamples);
     configStore_.applyToDock(config, dockStore_);
     loggingFacade_.applyConfig(config.logging);
     return reloadProtocolDirectory(dockStore_.luaState().protocolDir);
@@ -1125,6 +1136,7 @@ void Application::syncDockState() {
     comm.luaPendingItems = scriptSnapshot.inputQueueSize;
     comm.uiPendingItems = scriptSnapshot.outputQueueSize + pendingTransferFrameRows_.size() + pendingScriptPlotAppends_.size();
     comm.postprocessWorkerThreads = scriptSnapshot.postprocessWorkerThreads;
+    comm.lastErrorSummary = scriptSnapshot.lastTransportStats.lastErrorSummary;
 
     auto& lua = dockStore_.luaState();
     lua.docks = scriptSnapshot.docks;
@@ -1662,9 +1674,21 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
 
 bool Application::flushScriptOutputs() {
     bool changed = false;
-    auto batches = scriptWorker_.drainOutputs();
-    for (const auto& batch : batches) {
-        changed = applyScriptOutputBatch(batch) || changed;
+    const auto flushBudgetMs = runtimeConfig_.scripting.workerOutputFlushBudgetMs;
+    std::uint64_t flushStartedAt = 0;
+    if (flushBudgetMs > 0.0) {
+        flushStartedAt = nowUs();
+    }
+    // 核心流程：逐批 drain，每次处理后检查时间预算，超时则停止
+    // 剩余批次留在 worker 输出队列中，下次 pump 继续处理
+    auto batch = scriptWorker_.drainOneOutput();
+    while (batch.has_value()) {
+        changed = applyScriptOutputBatch(*batch) || changed;
+        if (flushBudgetMs > 0.0 &&
+            (nowUs() - flushStartedAt) >= static_cast<std::uint64_t>(flushBudgetMs * 1000.0)) {
+            break;
+        }
+        batch = scriptWorker_.drainOneOutput();
     }
     return changed;
 }

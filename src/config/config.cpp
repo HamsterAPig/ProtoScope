@@ -275,6 +275,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<double>(wave, "downsample_start_multiplier", result.config.gui.wave.downsampleStartMultiplier);
             result.config.gui.wave.overviewMaxSamples =
                 readScalar<std::size_t>(wave, "overview_max_samples", result.config.gui.wave.overviewMaxSamples);
+            result.config.gui.wave.maxTotalSamples =
+                readScalar<std::size_t>(wave, "max_total_samples", result.config.gui.wave.maxTotalSamples);
             result.config.gui.wave.minVisibleTimeSpan =
                 readScalar<double>(wave, "min_visible_time_span", result.config.gui.wave.minVisibleTimeSpan);
             result.config.gui.wave.channelCardFixedWidth =
@@ -329,7 +331,11 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 result.config.gui.realtimeBacklog.discardBacklogOnDisconnect =
                     readScalar<bool>(realtimeBacklog,
                                      "discard_backlog_on_disconnect",
-                                     result.config.gui.realtimeBacklog.discardBacklogOnDisconnect);
+                result.config.gui.realtimeBacklog.discardBacklogOnDisconnect);
+            result.config.gui.realtimeBacklog.pumpMinIntervalMs =
+                readScalar<double>(realtimeBacklog,
+                                   "pump_min_interval_ms",
+                                   result.config.gui.realtimeBacklog.pumpMinIntervalMs);
             }
             result.config.gui.showAppHeader = readScalar<bool>(gui, "show_app_header", result.config.gui.showAppHeader);
             result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
@@ -396,6 +402,18 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::size_t>(worker, "output_queue_limit", result.config.scripting.workerOutputQueueLimit);
             result.config.scripting.workerBatchBytes =
                 readScalar<std::size_t>(worker, "batch_bytes", result.config.scripting.workerBatchBytes);
+            result.config.scripting.workerBackpressureEnabled =
+                readScalar<bool>(worker, "backpressure_enabled", result.config.scripting.workerBackpressureEnabled);
+            result.config.scripting.workerBackpressureHighWatermark =
+                readScalar<double>(worker,
+                                   "backpressure_rx_queue_high_watermark",
+                                   result.config.scripting.workerBackpressureHighWatermark);
+            result.config.scripting.workerBackpressureLowWatermark =
+                readScalar<double>(worker,
+                                   "backpressure_rx_queue_low_watermark",
+                                   result.config.scripting.workerBackpressureLowWatermark);
+            result.config.scripting.workerOutputFlushBudgetMs =
+                readScalar<double>(worker, "output_flush_budget_ms", result.config.scripting.workerOutputFlushBudgetMs);
         }
         if (const auto fileIo = scripting["file_io"]) {
             auto& config = result.config.scripting.fileIo;
@@ -516,6 +534,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
     root["gui"]["wave"]["downsample_start_multiplier"] = config.gui.wave.downsampleStartMultiplier;
     root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
+    root["gui"]["wave"]["max_total_samples"] = config.gui.wave.maxTotalSamples;
     root["gui"]["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
     root["gui"]["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
     root["gui"]["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
@@ -532,6 +551,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["realtime_backlog"]["plot_appends_per_pump"] = config.gui.realtimeBacklog.plotAppendsPerPump;
     root["gui"]["realtime_backlog"]["discard_backlog_on_disconnect"] =
         config.gui.realtimeBacklog.discardBacklogOnDisconnect;
+    root["gui"]["realtime_backlog"]["pump_min_interval_ms"] =
+        config.gui.realtimeBacklog.pumpMinIntervalMs;
     root["gui"]["show_app_header"] = config.gui.showAppHeader;
     root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
     root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
@@ -555,6 +576,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["scripting"]["worker"]["rx_queue_limit_bytes"] = config.scripting.workerRxQueueLimitBytes;
     root["scripting"]["worker"]["output_queue_limit"] = config.scripting.workerOutputQueueLimit;
     root["scripting"]["worker"]["batch_bytes"] = config.scripting.workerBatchBytes;
+    root["scripting"]["worker"]["backpressure_enabled"] = config.scripting.workerBackpressureEnabled;
+    root["scripting"]["worker"]["backpressure_rx_queue_high_watermark"] = config.scripting.workerBackpressureHighWatermark;
+    root["scripting"]["worker"]["backpressure_rx_queue_low_watermark"] = config.scripting.workerBackpressureLowWatermark;
+    root["scripting"]["worker"]["output_flush_budget_ms"] = config.scripting.workerOutputFlushBudgetMs;
     root["scripting"]["file_io"]["enabled"] = config.scripting.fileIo.enabled;
     root["scripting"]["file_io"]["allow_protocol_dir"] = config.scripting.fileIo.allowProtocolDir;
     root["scripting"]["file_io"]["allow_dialog_paths"] = config.scripting.fileIo.allowDialogPaths;

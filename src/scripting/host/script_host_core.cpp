@@ -1569,6 +1569,7 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
     lastTransportStats_ = ScriptHostTransportStats{
         .bytes = event.bytes.size(),
         .streamMode = runtime_ && runtime_->stream,
+        .lastErrorSummary{},
     };
     if (event.context.readyForIo) {
         activeConnection_ = event.context;
@@ -1584,6 +1585,34 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
         const auto callbackStartedAt = parserFinishedAt;
         for (const auto& error : batch.errors) {
             callbackOnStreamError(ScriptHostContext{event.context}, error);
+        }
+        // 错误汇总：按 code 分组计数，生成诊断日志
+        if (!batch.errors.empty()) {
+            std::unordered_map<StreamParseErrorCode, std::size_t> errorCounts;
+            std::string crcFrameNames;
+            for (const auto& error : batch.errors) {
+                errorCounts[error.code]++;
+                if (error.code == StreamParseErrorCode::CrcMismatch && error.frameName.has_value()) {
+                    if (!crcFrameNames.empty()) {
+                        crcFrameNames += ", ";
+                    }
+                    crcFrameNames += *error.frameName;
+                }
+            }
+            std::string summary;
+            for (const auto& [code, count] : errorCounts) {
+                if (!summary.empty()) {
+                    summary += ", ";
+                }
+                summary += std::string(streamParseErrorCodeName(code)) + " \xc3\x97 " + std::to_string(count);
+            }
+            protoLog("warn", "stream parse errors: " + summary);
+            if (!crcFrameNames.empty()) {
+                protoLog("warn", "  crc_mismatch frames: " + crcFrameNames);
+            }
+            lastTransportStats_.lastErrorSummary = std::move(summary);
+        } else {
+            lastTransportStats_.lastErrorSummary.clear();
         }
         // 核心流程：同一 parser 链顺序产出完整帧；若脚本支持 on_batch，则只批量调用一次，避免重复 on_frame。
         if (!batch.frames.empty() && !callbackOnStreamBatch(ScriptHostContext{event.context}, batch.frames)) {

@@ -104,6 +104,7 @@ struct CommDockState {
     double lastPumpScriptMs{0.0};
     bool reconnectRequired{false};
     std::vector<std::string> serialPortOptions;
+    std::string lastErrorSummary;
 };
 
 struct ReceiveDockState {

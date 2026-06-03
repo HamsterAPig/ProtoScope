@@ -157,6 +157,7 @@ public:
     void setChannelSpec(std::size_t channelIndex, ChannelSpec spec);
     void setViewConfig(const ViewConfig& config);
     void setHistoryTrimSuspended(bool suspended);
+    void setMaxTotalSamples(std::size_t maxTotalSamples);
     void preserveHistoryLimitAtLeast(std::size_t sampleCount);
 
     std::size_t channelCount() const;
@@ -211,6 +212,7 @@ private:
     std::vector<ChannelBuffer> channels_;
     std::uint64_t dataRevision_{0};
     std::size_t preservedHistoryLimit_{0};
+    std::size_t maxTotalSamples_{200000};
     bool historyTrimSuspended_{false};
 };
 

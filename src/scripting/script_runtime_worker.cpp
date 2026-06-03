@@ -258,6 +258,13 @@ struct ScriptRuntimeWorker::Impl {
         signalCommandAvailable();
         if (syncMode) {
             waitIdle();
+        } else if (config.backpressureEnabled) {
+            // 背压检查：队列超过高水位时阻塞主线程，直到降到低水位
+            const auto highWaterBytes = static_cast<std::size_t>(
+                static_cast<double>(config.rxQueueLimitBytes) * config.backpressureHighWatermark);
+            if (pendingRxBytes > highWaterBytes) {
+                waitIdle();
+            }
         }
     }
 
@@ -315,6 +322,17 @@ struct ScriptRuntimeWorker::Impl {
         }
         snapshot.outputQueueSize = outputs.size();
         return drained;
+    }
+
+    std::optional<ScriptRuntimeOutputBatch> drainOneOutput() {
+        std::lock_guard lock(mutex);
+        if (outputs.empty()) {
+            return std::nullopt;
+        }
+        auto batch = std::move(outputs.front());
+        outputs.pop_front();
+        snapshot.outputQueueSize = outputs.size();
+        return batch;
     }
 
     ScriptRuntimeSnapshot currentSnapshot() const {
@@ -617,6 +635,10 @@ void ScriptRuntimeWorker::waitIdle() {
 
 std::vector<ScriptRuntimeOutputBatch> ScriptRuntimeWorker::drainOutputs() {
     return impl_->drainOutputs();
+}
+
+std::optional<ScriptRuntimeOutputBatch> ScriptRuntimeWorker::drainOneOutput() {
+    return impl_->drainOneOutput();
 }
 
 ScriptRuntimeSnapshot ScriptRuntimeWorker::snapshot() const {

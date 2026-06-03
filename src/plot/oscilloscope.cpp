@@ -252,6 +252,18 @@ void OscilloscopeBuffer::setHistoryTrimSuspended(bool suspended) {
     historyTrimSuspended_ = suspended;
 }
 
+void OscilloscopeBuffer::setMaxTotalSamples(std::size_t maxTotalSamples) {
+    maxTotalSamples_ = maxTotalSamples;
+    // 核心流程：若上限减小，立即对所有通道执行裁剪
+    if (maxTotalSamples > 0) {
+        for (auto& channel : channels_) {
+            if (channel.samples.size() > maxTotalSamples) {
+                trimHistory(channel);
+            }
+        }
+    }
+}
+
 void OscilloscopeBuffer::preserveHistoryLimitAtLeast(std::size_t sampleCount) {
     preservedHistoryLimit_ = (std::max)(preservedHistoryLimit_, sampleCount);
 }
@@ -612,26 +624,28 @@ void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel) {
         return;
     }
     const std::size_t historyLimit = effectiveHistoryLimit();
-    if (channel.samples.size() <= historyLimit) {
+    const std::size_t effectiveLimit = maxTotalSamples_ > 0
+        ? (std::min)(historyLimit, maxTotalSamples_)
+        : historyLimit;
+    if (channel.samples.size() <= effectiveLimit) {
         return;
     }
-    if (historyLimit == 0) {
+    if (effectiveLimit == 0) {
         channel.samples.clear();
         return;
     }
-    const std::size_t keepOffset = channel.samples.size() - historyLimit;
+    const std::size_t keepOffset = channel.samples.size() - effectiveLimit;
     // 核心流程：大历史裁剪只把保留窗口搬到前部一次，避免 vector::erase 对尾部做额外析构搬移。
     std::move(channel.samples.begin() + static_cast<std::ptrdiff_t>(keepOffset),
               channel.samples.end(),
               channel.samples.begin());
-    channel.samples.resize(historyLimit);
+    channel.samples.resize(effectiveLimit);
 }
 
 std::size_t OscilloscopeBuffer::effectiveHistoryLimit() const {
     // 核心流程：导入回放后的完整历史是用户显式载入的数据，不能被较小的 Lua history_limit 立即裁掉。
     return (std::max)(config_.historyLimit, preservedHistoryLimit_);
 }
-
 WaveStats OscilloscopeBuffer::makeStats(const std::vector<WaveSample>& samples,
                                         std::size_t begin,
                                         std::size_t end,
