@@ -8,6 +8,7 @@
 #include "protoscope/plot/wave_state.hpp"
 
 #include <cmath>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -1358,6 +1359,148 @@ void test_raw_capture_file_roundtrip() {
     std::filesystem::remove(tempPath);
 }
 
+void test_raw_capture_file_plot_setup_roundtrip() {
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-plot-setup-roundtrip.psraw";
+    std::filesystem::remove(tempPath);
+
+    protoscope::plot::RawCaptureEvent setupEvent;
+    setupEvent.type = protoscope::plot::RawCaptureEventType::PlotSetup;
+    setupEvent.timestampMs = 1234;
+    setupEvent.plotSetup.source = "温度曲线";
+    setupEvent.plotSetup.resetHistory = true;
+    setupEvent.plotSetup.channels = {
+        {.label = "温度A", .unit = "℃", .ratio = 0.5, .scale = 2.0, .offset = -1.0, .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F}},
+        {.label = "压力B", .unit = "kPa", .ratio = 1.5, .scale = 3.0, .offset = 4.0},
+    };
+    setupEvent.plotSetup.view.timeScale = 0.25;
+    setupEvent.plotSetup.view.timeUnit = "ms";
+    setupEvent.plotSetup.view.verticalMin = -10.0;
+    setupEvent.plotSetup.view.verticalMax = 80.0;
+    setupEvent.plotSetup.view.verticalUnit = "℃";
+    setupEvent.plotSetup.view.historyLimit = 4096;
+
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "plot_setup_protocol",
+        .protocolDir = "tests/fixtures/protocols/plot_setup_protocol",
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 100,
+        .payload = {0x01, 0x02},
+        .events = {setupEvent,
+                   {.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                    .timestampMs = 1235,
+                    .bytes = {0x01, 0x02},
+                    .profile = {},
+                    .plotSetup = {}}},
+    };
+
+    std::string error;
+    require(protoscope::plot::writeRawCaptureFile(tempPath, capture, error), "plot_setup psraw 写入应成功");
+    std::ifstream in(tempPath, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    require(bytes.find("version: 3\n") != std::string::npos, "新 psraw 应写出 v3");
+    require(bytes.find("event: plot_setup\n") != std::string::npos, "psraw 应包含 plot_setup 事件");
+
+    const auto loaded = protoscope::plot::readRawCaptureFile(tempPath, error);
+    if (!loaded.has_value()) {
+        throw std::runtime_error("plot_setup psraw 读回应成功: " + error);
+    }
+    require(loaded->events.size() == 2, "plot_setup roundtrip 应保留事件数量");
+    const auto& loadedSetup = loaded->events.front().plotSetup;
+    require(loaded->events.front().type == protoscope::plot::RawCaptureEventType::PlotSetup, "首个事件应为 plot_setup");
+    require(loadedSetup.source == setupEvent.plotSetup.source, "plot_setup 应保留 source");
+    require(loadedSetup.resetHistory, "plot_setup 应保留 reset_history");
+    require(loadedSetup.channels.size() == 2, "plot_setup 应保留通道数量");
+    require(loadedSetup.channels[0].label == "温度A", "plot_setup 应保留 UTF-8 label");
+    require(loadedSetup.channels[0].unit == "℃", "plot_setup 应保留 UTF-8 unit");
+    require(std::abs(loadedSetup.channels[0].ratio - 0.5) < 1e-12, "plot_setup 应保留 ratio");
+    require(std::abs(loadedSetup.channels[0].scale - 2.0) < 1e-12, "plot_setup 应保留 scale");
+    require(std::abs(loadedSetup.channels[0].offset + 1.0) < 1e-12, "plot_setup 应保留 offset");
+    require(loadedSetup.channels[0].color.has_value(), "plot_setup 应保留颜色");
+    require(std::abs((*loadedSetup.channels[0].color)[1] - 0.25F) < 1e-6F, "plot_setup 应保留 RGBA 分量");
+    require(std::abs(loadedSetup.view.timeScale - 0.25) < 1e-12, "plot_setup 应保留 time_scale");
+    require(loadedSetup.view.timeUnit == "ms", "plot_setup 应保留 time_unit");
+    require(std::abs(loadedSetup.view.verticalMin + 10.0) < 1e-12, "plot_setup 应保留 vertical_min");
+    require(std::abs(loadedSetup.view.verticalMax - 80.0) < 1e-12, "plot_setup 应保留 vertical_max");
+    require(loadedSetup.view.verticalUnit == "℃", "plot_setup 应保留 vertical_unit");
+    require(loadedSetup.view.historyLimit == 4096U, "plot_setup 应保留 history_limit");
+
+    std::filesystem::remove(tempPath);
+}
+
+void test_raw_capture_file_plot_setup_rejects_bad_fields() {
+    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-plot-setup-bad-fields.psraw";
+    std::filesystem::remove(tempPath);
+
+    protoscope::plot::RawCaptureEvent setupEvent;
+    setupEvent.type = protoscope::plot::RawCaptureEventType::PlotSetup;
+    setupEvent.plotSetup.channels = {{.label = "CH1", .unit = "V"}};
+    setupEvent.plotSetup.view.historyLimit = 8;
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "plot_setup_protocol",
+        .protocolDir = "tests/fixtures/protocols/plot_setup_protocol",
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 100,
+        .payload = {},
+        .events = {setupEvent},
+    };
+
+    std::string error;
+    require(protoscope::plot::writeRawCaptureFile(tempPath, capture, error), "plot_setup psraw 写入应成功");
+    std::ifstream in(tempPath, std::ios::binary);
+    const std::string validBytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+
+    auto broken = validBytes;
+    const auto channelCountPos = broken.find("channel_count: 1\n");
+    require(channelCountPos != std::string::npos, "测试文件应包含 channel_count");
+    broken.replace(channelCountPos, std::string("channel_count: 1\n").size(), "channel_xount: 1\n");
+    require(!protoscope::plot::decodeRawCaptureFile(broken, error).has_value(), "缺少 channel_count 应拒绝解析");
+
+    broken = validBytes;
+    const auto labelPos = broken.find("channel.0.label: ");
+    require(labelPos != std::string::npos, "测试文件应包含 channel label");
+    const auto labelEnd = broken.find('\n', labelPos);
+    broken.replace(labelPos, labelEnd - labelPos, "channel.0.label: z");
+    require(!protoscope::plot::decodeRawCaptureFile(broken, error).has_value(), "坏 hex label 应拒绝解析");
+
+    broken = validBytes;
+    const auto ratioPos = broken.find("channel.0.ratio: ");
+    require(ratioPos != std::string::npos, "测试文件应包含 channel ratio");
+    const auto ratioEnd = broken.find('\n', ratioPos);
+    broken.replace(ratioPos, ratioEnd - ratioPos, "channel.0.ratio: nope");
+    require(!protoscope::plot::decodeRawCaptureFile(broken, error).has_value(), "坏数值 ratio 应拒绝解析");
+
+    std::filesystem::remove(tempPath);
+}
+
+void test_raw_capture_file_v2_event_stream_still_reads() {
+    const std::string eventBytes = "event: rx_bytes\n"
+                                   "timestamp_ms: 2\n"
+                                   "size: 3\n"
+                                   "\n"
+                                   "abc";
+    std::string header = std::string("ProtoScopeRawCapture\n"
+                                     "version: 2\n"
+                                     "protocol_name: default_protocol\n"
+                                     "protocol_dir: protocols/templates/default_protocol\n"
+                                     "sample_frequency_hz: 1024\n"
+                                     "captured_at_ms: 1\n"
+                                     "truncated: false\n"
+                                     "payload_size: ")
+                       + std::to_string(eventBytes.size())
+                       + "\n"
+                         "event_stream: true\n"
+                         "\n";
+    header.resize(4096, '\0');
+    std::string error;
+    const auto parsed = protoscope::plot::decodeRawCaptureFile(header + eventBytes, error);
+    if (!parsed.has_value()) {
+        throw std::runtime_error("v2 psraw 事件流仍应可读: " + error);
+    }
+    require(parsed->payload == std::vector<std::uint8_t>({'a', 'b', 'c'}), "v2 psraw 应保留 rx bytes");
+}
+
 void test_raw_capture_file_rejects_size_mismatch() {
     const std::string broken = "ProtoScopeRawCapture\n"
                                "version: 2\n"
@@ -1428,6 +1571,7 @@ void test_raw_capture_file_rejects_profile_set_without_length() {
         .timestampMs = 123,
         .bytes = {},
         .profile = {.frameName = "dynamic_profile", .length = 8, .channelMap = {1, 0}},
+        .plotSetup = {},
     });
 
     std::string error;

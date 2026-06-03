@@ -5,6 +5,7 @@
 #include "protoscope/protocol_utils/codec.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -219,6 +220,24 @@ std::filesystem::path makeUniqueTempDir(const char* prefix) {
                     / (std::string(prefix) + "-" + std::to_string(currentTimeMs()));
     std::filesystem::create_directories(path);
     return path;
+}
+
+protoscope::plot::RawCaptureEvent makePlotSetupEvent(bool resetHistory = true) {
+    protoscope::plot::RawCaptureEvent event;
+    event.type = protoscope::plot::RawCaptureEventType::PlotSetup;
+    event.timestampMs = 100;
+    event.plotSetup.source = "raw_snapshot";
+    event.plotSetup.resetHistory = resetHistory;
+    event.plotSetup.channels = {
+        {.label = "温度A", .unit = "℃", .ratio = 0.5, .scale = 2.0, .offset = -1.0, .color = std::array<float, 4>{26.0F / 255.0F, 51.0F / 255.0F, 76.0F / 255.0F, 1.0F}},
+    };
+    event.plotSetup.view.timeScale = 0.5;
+    event.plotSetup.view.timeUnit = "ms";
+    event.plotSetup.view.verticalMin = -20.0;
+    event.plotSetup.view.verticalMax = 100.0;
+    event.plotSetup.view.verticalUnit = "℃";
+    event.plotSetup.view.historyLimit = 128;
+    return event;
 }
 
 std::optional<std::uint16_t> findListenPort(const protoscope::dock::LogDockState& logState) {
@@ -1023,7 +1042,10 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event() {
     const auto& rawCapture = application.docks().waveState().rawCapture;
     require(rawCapture.truncated, "实时 raw 超限后应被裁剪");
     require(rawCapture.payload == secondFrame, "实时 raw 裁剪后应保留完整最新帧");
-    require(rawCapture.events.size() <= 2, "裁剪后事件流不应继续保留旧 RX 事件");
+    const auto rxEventCount = static_cast<std::size_t>(std::count_if(rawCapture.events.begin(), rawCapture.events.end(), [](const auto& event) {
+        return event.type == protoscope::plot::RawCaptureEventType::RxBytes;
+    }));
+    require(rxEventCount <= 1, "裁剪后事件流不应继续保留旧 RX 事件");
     require(!rawCapture.events.empty() && rawCapture.events.front().type == protoscope::plot::RawCaptureEventType::ProfileSet,
             "裁剪窗口前的活动 profile 应被补到事件流开头");
 
@@ -1144,6 +1166,7 @@ void test_application_raw_capture_import_replays_runtime_profile_events() {
         .timestampMs = 100,
         .bytes = {},
         .profile = {.frameName = "dynamic_profile", .length = 8, .channelMap = {1, 0}},
+        .plotSetup = {},
     });
     std::vector<std::uint8_t> raw{0xFF, 0x26, 0x00, 0x11, 0x00, 0x22};
     const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
@@ -1154,12 +1177,14 @@ void test_application_raw_capture_import_replays_runtime_profile_events() {
         .timestampMs = 101,
         .bytes = raw,
         .profile = {},
+        .plotSetup = {},
     });
     capture.events.push_back(protoscope::plot::RawCaptureEvent{
         .type = protoscope::plot::RawCaptureEventType::ProfileClear,
         .timestampMs = 102,
         .bytes = {},
         .profile = {.frameName = "dynamic_profile", .length = 0, .channelMap = {}},
+        .plotSetup = {},
     });
     capture.payload = raw;
 
@@ -1169,6 +1194,111 @@ void test_application_raw_capture_import_replays_runtime_profile_events() {
         throw std::runtime_error("导入后应保留事件流: actual="
                                  + std::to_string(application.docks().waveState().rawCapture.events.size()));
     }
+    application.shutdown();
+}
+
+void test_application_raw_capture_import_replays_plot_setup_snapshot() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-raw-plot-setup-import");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "plot_setup 导入测试协议应可写入");
+        out << "function on_bytes(ctx, bytes)\n";
+        out << "  local samples = {}\n";
+        out << "  for i = 1, #bytes do\n";
+        out << "    samples[#samples + 1] = { t = (i - 1) * 0.001, y = bytes[i] }\n";
+        out << "  end\n";
+        out << "  proto.plot.push(1, { samples = samples })\n";
+        out << "end\n";
+    }
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.protocolName = "raw_plot_setup_import";
+    capture.protocolDir = protocolDir.generic_string();
+    capture.sampleFrequencyHz = 1000.0;
+    capture.capturedAtMs = 100;
+    capture.events.push_back(makePlotSetupEvent(true));
+    capture.events.push_back(protoscope::plot::RawCaptureEvent{
+        .type = protoscope::plot::RawCaptureEventType::RxBytes,
+        .timestampMs = 101,
+        .bytes = {1, 2, 3},
+        .profile = {},
+        .plotSetup = {},
+    });
+    capture.payload = {1, 2, 3};
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "plot_setup 导入协议应可加载");
+    std::string error;
+    require(application.importWaveRawCapture(capture, error), "带 plot_setup 的 psraw 导入应成功");
+
+    const auto spec = application.docks().waveState().buffer.channelSpec(0);
+    require(spec.has_value(), "导入 plot_setup 后应恢复通道配置");
+    require(spec->label == "温度A", "导入 plot_setup 后应恢复通道 label");
+    require(spec->unit == "℃", "导入 plot_setup 后应恢复通道 unit");
+    require(std::abs(spec->ratio - 0.5) < 1e-12, "导入 plot_setup 后应恢复 ratio");
+    require(std::abs(spec->scale - 2.0) < 1e-12, "导入 plot_setup 后应恢复 scale");
+    require(std::abs(spec->offset + 1.0) < 1e-12, "导入 plot_setup 后应恢复 offset");
+    require(spec->color.has_value(), "导入 plot_setup 后应恢复颜色");
+    const auto viewConfig = application.docks().waveState().buffer.viewConfig();
+    require(viewConfig.historyLimit == 128U, "导入 plot_setup 后应恢复 history_limit");
+    require(viewConfig.timeUnit == "ms", "导入 plot_setup 后应恢复 time_unit");
+    const auto snapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity());
+    require(!snapshot.channels.empty(), "导入 plot_setup 后应有波形通道");
+    require(snapshot.channels.front().totalSamples == 3U, "导入 plot_setup 后应回放 raw 样本");
+    application.shutdown();
+}
+
+void test_application_raw_capture_import_skips_duplicate_plot_setup_reset() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-raw-plot-setup-duplicate");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "重复 plot_setup 测试协议应可写入");
+        out << "local function setup()\n";
+        out << "  proto.plot.setup({\n";
+        out << "    source = 'raw_snapshot', reset_history = true,\n";
+        out << "    time_scale = 0.5, time_unit = 'ms', vertical_min = -20, vertical_max = 100, vertical_unit = '℃', history_limit = 128,\n";
+        out << "    channels = { { label = '温度A', unit = '℃', ratio = 0.5, scale = 2.0, offset = -1.0, color = '#1a334cff' } }\n";
+        out << "  })\n";
+        out << "end\n";
+        out << "function on_bytes(ctx, bytes)\n";
+        out << "  setup()\n";
+        out << "  local samples = {}\n";
+        out << "  for i = 1, #bytes do\n";
+        out << "    samples[#samples + 1] = { t = (i - 1) * 0.001, y = bytes[i] }\n";
+        out << "  end\n";
+        out << "  proto.plot.push(1, { samples = samples })\n";
+        out << "end\n";
+    }
+
+    protoscope::plot::RawCaptureFileData capture;
+    capture.protocolName = "raw_plot_setup_duplicate";
+    capture.protocolDir = protocolDir.generic_string();
+    capture.sampleFrequencyHz = 1000.0;
+    capture.capturedAtMs = 100;
+    capture.events.push_back(protoscope::plot::RawCaptureEvent{
+        .type = protoscope::plot::RawCaptureEventType::RxBytes,
+        .timestampMs = 101,
+        .bytes = {1, 2, 3, 4},
+        .profile = {},
+        .plotSetup = {},
+    });
+    capture.events.push_back(makePlotSetupEvent(true));
+    capture.payload = {1, 2, 3, 4};
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "重复 plot_setup 导入协议应可加载");
+    std::string error;
+    require(application.importWaveRawCapture(capture, error), "重复 plot_setup psraw 导入应成功");
+
+    const auto snapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity());
+    require(!snapshot.channels.empty(), "重复 plot_setup 导入后应有波形通道");
+    require(snapshot.channels.front().totalSamples == 4U, "重复 plot_setup 不应因 reset_history 二次清空样本");
     application.shutdown();
 }
 

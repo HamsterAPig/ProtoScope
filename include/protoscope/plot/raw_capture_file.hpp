@@ -8,12 +8,15 @@
 #include <string>
 #include <vector>
 
+#include "protoscope/plot/oscilloscope.hpp"
+
 namespace protoscope::plot {
 
 enum class RawCaptureEventType {
     RxBytes,
     ProfileSet,
     ProfileClear,
+    PlotSetup,
 };
 
 struct RawCaptureProfileEventData {
@@ -22,11 +25,19 @@ struct RawCaptureProfileEventData {
     std::vector<std::size_t> channelMap;
 };
 
+struct RawCapturePlotSetupEventData {
+    std::string source;
+    std::vector<ChannelSpec> channels;
+    ViewConfig view{};
+    bool resetHistory{false};
+};
+
 struct RawCaptureEvent {
     RawCaptureEventType type{RawCaptureEventType::RxBytes};
     std::uint64_t timestampMs{0};
     std::vector<std::uint8_t> bytes;
     RawCaptureProfileEventData profile;
+    RawCapturePlotSetupEventData plotSetup;
 };
 
 struct RawCaptureFileData {

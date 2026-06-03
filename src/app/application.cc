@@ -71,8 +71,7 @@ bool sameColor(const std::optional<std::array<float, 4>>& left, const std::optio
     return true;
 }
 
-bool sameChannelSpecs(const std::vector<scripting::PlotChannelDescriptor>& setupChannels,
-                      const plot::OscilloscopeBuffer& buffer) {
+bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer) {
     if (setupChannels.size() != buffer.channelCount()) {
         return false;
     }
@@ -81,15 +80,31 @@ bool sameChannelSpecs(const std::vector<scripting::PlotChannelDescriptor>& setup
         if (!current.has_value()) {
             return false;
         }
-        if (const auto& setup = setupChannels[i]; current->label != setup.label || current->unit != setup.unit || !sameColor(current->color, setup.color)) {
+        const auto& setup = setupChannels[i];
+        if (current->label != setup.label || current->unit != setup.unit || !sameColor(current->color, setup.color)) {
             return false;
         }
     }
     return true;
 }
 
-bool sameChannelIdentity(const std::vector<scripting::PlotChannelDescriptor>& setupChannels,
-                         const plot::OscilloscopeBuffer& buffer) {
+bool sameFullChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer) {
+    if (!sameChannelSpecs(setupChannels, buffer)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < setupChannels.size(); ++index) {
+        const auto current = buffer.channelSpec(index);
+        const auto& setup = setupChannels[index];
+        if (!current.has_value() || std::abs(current->ratio - setup.ratio) > 1e-12
+            || std::abs(current->scale - setup.scale) > 1e-12
+            || std::abs(current->offset - setup.offset) > 1e-12) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sameChannelIdentity(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer) {
     if (setupChannels.size() != buffer.channelCount()) {
         return false;
     }
@@ -133,17 +148,70 @@ void applyActiveRawProfileEvent(std::vector<plot::RawCaptureEvent>& activeProfil
     }
 }
 
+plot::RawCapturePlotSetupEventData toRawPlotSetup(const scripting::PlotSetup& setup) {
+    plot::RawCapturePlotSetupEventData rawSetup;
+    rawSetup.source = setup.source;
+    rawSetup.view = setup.view;
+    rawSetup.resetHistory = setup.resetHistory;
+    rawSetup.channels.reserve(setup.channels.size());
+    for (const auto& channel : setup.channels) {
+        rawSetup.channels.push_back(plot::ChannelSpec{
+            .label = channel.label,
+            .unit = channel.unit,
+            .ratio = channel.ratio,
+            .scale = channel.scale,
+            .offset = channel.offset,
+            .color = channel.color,
+        });
+    }
+    return rawSetup;
+}
+
+bool nearlyEqual(double left, double right);
+bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config);
+
+bool sameAppliedPlotSetup(const plot::WaveDockState& wave, const plot::RawCapturePlotSetupEventData& setup) {
+    const auto currentConfig = wave.buffer.viewConfig();
+    return sameFullChannelSpecs(setup.channels, wave.buffer)
+        && nearlyEqual(currentConfig.timeScale, setup.view.timeScale)
+        && currentConfig.timeUnit == setup.view.timeUnit
+        && nearlyEqual(currentConfig.verticalMin, setup.view.verticalMin)
+        && nearlyEqual(currentConfig.verticalMax, setup.view.verticalMax)
+        && currentConfig.verticalUnit == setup.view.verticalUnit
+        && currentConfig.historyLimit == setup.view.historyLimit
+        && sameWaveViewState(wave.view, setup.view);
+}
+
+std::optional<plot::RawCapturePlotSetupEventData> currentPlotSetupSnapshot(const plot::WaveDockState& wave,
+                                                                           std::string source) {
+    if (wave.defaultChannelSpecs.empty()) {
+        return std::nullopt;
+    }
+    plot::RawCapturePlotSetupEventData setup;
+    setup.source = std::move(source);
+    setup.channels = wave.defaultChannelSpecs;
+    setup.view = wave.buffer.viewConfig();
+    setup.resetHistory = false;
+    return setup;
+}
+
 std::vector<plot::RawCaptureEvent> trimRawCaptureEventsToPayloadWindow(
     const std::vector<plot::RawCaptureEvent>& events,
     std::uint64_t keepStart) {
     std::vector<plot::RawCaptureEvent> activeProfiles;
+    std::optional<plot::RawCaptureEvent> activePlotSetup;
     std::vector<plot::RawCaptureEvent> keptEvents;
     std::uint64_t rxCursor = 0;
 
     for (const auto& event : events) {
         if (event.type != plot::RawCaptureEventType::RxBytes) {
             if (rxCursor < keepStart) {
-                applyActiveRawProfileEvent(activeProfiles, event);
+                if (event.type == plot::RawCaptureEventType::ProfileSet
+                    || event.type == plot::RawCaptureEventType::ProfileClear) {
+                    applyActiveRawProfileEvent(activeProfiles, event);
+                } else if (event.type == plot::RawCaptureEventType::PlotSetup) {
+                    activePlotSetup = event;
+                }
             } else {
                 keptEvents.push_back(event);
             }
@@ -166,10 +234,18 @@ std::vector<plot::RawCaptureEvent> trimRawCaptureEventsToPayloadWindow(
         keptEvents.push_back(std::move(kept));
     }
 
-    activeProfiles.insert(activeProfiles.end(),
-                          std::make_move_iterator(keptEvents.begin()),
-                          std::make_move_iterator(keptEvents.end()));
-    return activeProfiles;
+    std::vector<plot::RawCaptureEvent> activeEvents;
+    activeEvents.reserve(activeProfiles.size() + keptEvents.size() + (activePlotSetup.has_value() ? 1U : 0U));
+    activeEvents.insert(activeEvents.end(),
+                        std::make_move_iterator(activeProfiles.begin()),
+                        std::make_move_iterator(activeProfiles.end()));
+    if (activePlotSetup.has_value()) {
+        activeEvents.push_back(std::move(*activePlotSetup));
+    }
+    activeEvents.insert(activeEvents.end(),
+                        std::make_move_iterator(keptEvents.begin()),
+                        std::make_move_iterator(keptEvents.end()));
+    return activeEvents;
 }
 
 std::string transferFrameFieldValueText(const scripting::StreamFieldValue& value) {
@@ -604,6 +680,7 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
         .timestampMs = event.context.timestampMs,
         .bytes = event.bytes,
         .profile = {},
+        .plotSetup = {},
     });
 
     const auto limit = runtimeConfig_.gui.rawCapture.liveLimitBytes;
@@ -635,6 +712,88 @@ void Application::appendRawCaptureEvent(const plot::RawCaptureEvent& event) {
     }
 }
 
+bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup) {
+    auto& wave = dockStore_.waveState();
+    const auto previousConfig = wave.buffer.viewConfig();
+    const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
+                               previousConfig.timeUnit != setup.view.timeUnit ||
+                               !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
+                               !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax) ||
+                               previousConfig.verticalUnit != setup.view.verticalUnit ||
+                               previousConfig.historyLimit != setup.view.historyLimit;
+    const bool channelsChanged = !sameChannelSpecs(setup.channels, wave.buffer);
+    const bool channelIdentityChanged = !sameChannelIdentity(setup.channels, wave.buffer);
+
+    // 核心流程：Lua 和 psraw 回放共用同一套配置应用逻辑，确保通道默认值、覆盖状态和视图重置一致。
+    if (setup.resetHistory) {
+        wave.buffer.clear();
+    }
+    auto viewConfig = setup.view;
+    viewConfig.displayFormula = wave.view.displayFormula;
+    wave.buffer.setViewConfig(viewConfig);
+    wave.buffer.configureChannels(setup.channels.size());
+    wave.defaultChannelSpecs.clear();
+    wave.defaultChannelSpecs.reserve(setup.channels.size());
+    const bool shouldResetOverrides = setup.resetHistory || channelIdentityChanged;
+    if (shouldResetOverrides) {
+        wave.channelOverrides.clear();
+    }
+    wave.channelOverrides.resize(setup.channels.size());
+    for (std::size_t index = 0; index < setup.channels.size(); ++index) {
+        const auto defaultSpec = setup.channels[index];
+        auto effectiveSpec = defaultSpec;
+        if (!shouldResetOverrides && index < wave.channelOverrides.size()) {
+            const auto& overrideState = wave.channelOverrides[index];
+            if (overrideState.labelOverridden) {
+                effectiveSpec.label = overrideState.label;
+            }
+            if (overrideState.ratioOverridden) {
+                effectiveSpec.ratio = overrideState.ratio;
+            }
+            if (overrideState.scaleOverridden) {
+                effectiveSpec.scale = overrideState.scale;
+            }
+            if (overrideState.offsetOverridden) {
+                effectiveSpec.offset = overrideState.offset;
+            }
+        }
+        wave.defaultChannelSpecs.push_back(defaultSpec);
+        wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
+    }
+    const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
+    const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
+    if (shouldResetView) {
+        wave.view.visibleDuration = (std::max)(wave.view.minVisibleTimeSpan,
+                                               (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
+        wave.view.manualVerticalMin = setup.view.verticalMin;
+        wave.view.manualVerticalMax = setup.view.verticalMax;
+        wave.view.viewMinValue = setup.view.verticalMin;
+        wave.view.viewMaxValue = setup.view.verticalMax;
+        wave.view.initialized = false;
+        wave.statusMessage = "Lua 已更新波形通道配置";
+    }
+    return true;
+}
+
+void Application::recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventData& setup, std::uint64_t timestampMs) {
+    const plot::RawCaptureEvent event{
+        .type = plot::RawCaptureEventType::PlotSetup,
+        .timestampMs = timestampMs,
+        .bytes = {},
+        .profile = {},
+        .plotSetup = setup,
+    };
+    if (!suppressRawCapturePlotSetupEvents_) {
+        appendRawCaptureEvent(event);
+    }
+    if (rawCaptureRecording_.isOpen()) {
+        std::string error;
+        if (!rawCaptureRecording_.appendEvent(event, error)) {
+            loggingFacade_.error("raw_capture", "录制 plot.setup 事件失败: " + error);
+        }
+    }
+}
+
 void Application::appendRawCaptureRecording(const transport::TransportBytesEvent& event) {
     if (!rawCaptureRecording_.isOpen() || event.bytes.empty()) {
         return;
@@ -646,6 +805,7 @@ void Application::appendRawCaptureRecording(const transport::TransportBytesEvent
             .timestampMs = event.context.timestampMs,
             .bytes = event.bytes,
             .profile = {},
+            .plotSetup = {},
         },
         error)) {
         return;
@@ -867,6 +1027,7 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
             .timestampMs = capture.capturedAtMs,
             .bytes = capture.payload,
             .profile = {},
+            .plotSetup = {},
         });
     } else {
         capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, eventRxBytes);
@@ -898,6 +1059,20 @@ bool Application::startRawCaptureRecording(const std::filesystem::path& path, st
 
     if (!rawCaptureRecording_.open(path, metadata, error)) {
         return false;
+    }
+    if (const auto setup = currentPlotSetupSnapshot(wave, "recording_start"); setup.has_value()) {
+        const plot::RawCaptureEvent event{
+            .type = plot::RawCaptureEventType::PlotSetup,
+            .timestampMs = metadata.capturedAtMs,
+            .bytes = {},
+            .profile = {},
+            .plotSetup = *setup,
+        };
+        if (!rawCaptureRecording_.appendEvent(event, error)) {
+            std::string closeError;
+            static_cast<void>(rawCaptureRecording_.close(closeError));
+            return false;
+        }
     }
     setStatusMessage("完整原始数据录制已开始: " + path.generic_string());
     loggingFacade_.info("raw_capture", "完整原始数据录制已开始: " + path.generic_string());
@@ -964,6 +1139,7 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
         replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
         replayContext.readyForIo = false;
         suppressRawCaptureProfileEvents_ = true;
+        suppressRawCapturePlotSetupEvents_ = true;
         for (const auto& recordedEvent : capture.events) {
             replayContext.timestampMs = recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
             if (recordedEvent.type == plot::RawCaptureEventType::ProfileSet) {
@@ -976,6 +1152,7 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
                     },
                     profileError)) {
                     suppressRawCaptureProfileEvents_ = false;
+                    suppressRawCapturePlotSetupEvents_ = false;
                     error = "导入 profile_set 失败: " + profileError;
                     wave.buffer.setHistoryTrimSuspended(false);
                     return false;
@@ -992,12 +1169,18 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
                     },
                     clearError)) {
                     suppressRawCaptureProfileEvents_ = false;
+                    suppressRawCapturePlotSetupEvents_ = false;
                     error = "导入 profile_clear 失败: " + clearError;
                     wave.buffer.setHistoryTrimSuspended(false);
                     return false;
                 }
                 scriptWorker_.waitIdle();
                 flushScriptOutputs();
+            } else if (recordedEvent.type == plot::RawCaptureEventType::PlotSetup) {
+                // 核心流程：raw 回放可能先由 Lua on_open/on_bytes 产生同一 setup；完全一致时跳过，避免 reset_history 二次清空样本。
+                if (!sameAppliedPlotSetup(wave, recordedEvent.plotSetup)) {
+                    applyPlotSetup(recordedEvent.plotSetup);
+                }
             } else if (!recordedEvent.bytes.empty()) {
                 std::size_t cursor = 0;
                 while (cursor < recordedEvent.bytes.size()) {
@@ -1013,6 +1196,7 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
         }
         flushScriptOutputs();
         suppressRawCaptureProfileEvents_ = false;
+        suppressRawCapturePlotSetupEvents_ = false;
     } else if (!capture.payload.empty()) {
         transport::ConnectionContext replayContext;
         replayContext.endpoint = "psraw-import";
@@ -1537,6 +1721,7 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
                 .length = profileEvent.length,
                 .channelMap = profileEvent.channelMap,
             },
+            .plotSetup = {},
         };
         if (!suppressRawCaptureProfileEvents_) {
             appendRawCaptureEvent(event);
@@ -1575,70 +1760,10 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
 
     auto& wave = dockStore_.waveState();
     for (const auto& setup : batch.plotSetups) {
-        const auto previousConfig = wave.buffer.viewConfig();
-        const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
-                                   previousConfig.timeUnit != setup.view.timeUnit ||
-                                   !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
-                                   !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax) ||
-                                   previousConfig.verticalUnit != setup.view.verticalUnit ||
-                                   previousConfig.historyLimit != setup.view.historyLimit;
-        const bool channelsChanged = !sameChannelSpecs(setup.channels, wave.buffer);
-        const bool channelIdentityChanged = !sameChannelIdentity(setup.channels, wave.buffer);
-
-        if (setup.resetHistory) {
-            wave.buffer.clear();
-        }
-        auto viewConfig = setup.view;
-        viewConfig.displayFormula = wave.view.displayFormula;
-        wave.buffer.setViewConfig(viewConfig);
-        wave.buffer.configureChannels(setup.channels.size());
-        wave.defaultChannelSpecs.clear();
-        wave.defaultChannelSpecs.reserve(setup.channels.size());
-        const bool shouldResetOverrides = setup.resetHistory || channelIdentityChanged;
-        if (shouldResetOverrides) {
-            wave.channelOverrides.clear();
-        }
-        wave.channelOverrides.resize(setup.channels.size());
-        for (std::size_t index = 0; index < setup.channels.size(); ++index) {
-            const auto defaultSpec = plot::ChannelSpec{
-                .label = setup.channels[index].label,
-                .unit = setup.channels[index].unit,
-                .ratio = setup.channels[index].ratio,
-                .scale = setup.channels[index].scale,
-                .offset = setup.channels[index].offset,
-                .color = setup.channels[index].color,
-            };
-            auto effectiveSpec = defaultSpec;
-            if (!shouldResetOverrides && index < wave.channelOverrides.size()) {
-                const auto& overrideState = wave.channelOverrides[index];
-                if (overrideState.labelOverridden) {
-                    effectiveSpec.label = overrideState.label;
-                }
-                if (overrideState.ratioOverridden) {
-                    effectiveSpec.ratio = overrideState.ratio;
-                }
-                if (overrideState.scaleOverridden) {
-                    effectiveSpec.scale = overrideState.scale;
-                }
-                if (overrideState.offsetOverridden) {
-                    effectiveSpec.offset = overrideState.offset;
-                }
-            }
-            wave.defaultChannelSpecs.push_back(defaultSpec);
-            wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
-        }
-        const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
-        const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
-        if (shouldResetView) {
-            wave.view.visibleDuration = (std::max)(wave.view.minVisibleTimeSpan,
-                                                   (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
-            wave.view.manualVerticalMin = setup.view.verticalMin;
-            wave.view.manualVerticalMax = setup.view.verticalMax;
-            wave.view.viewMinValue = setup.view.verticalMin;
-            wave.view.viewMaxValue = setup.view.verticalMax;
-            wave.view.initialized = false;
-            wave.statusMessage = "Lua 已更新波形通道配置";
-        }
+        auto rawSetup = toRawPlotSetup(setup);
+        applyPlotSetup(rawSetup);
+        const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
+        recordPlotSetupSnapshot(rawSetup, timestampMs);
         changed = true;
     }
 

@@ -2,7 +2,9 @@
 
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -11,7 +13,8 @@ namespace protoscope::plot {
 namespace {
 
 constexpr std::string_view kFileMagic = "ProtoScopeRawCapture";
-constexpr std::string_view kVersionEvents = "2";
+constexpr std::string_view kVersionEvents = "3";
+constexpr std::string_view kVersionLegacyEvents = "2";
 constexpr std::size_t kStreamHeaderBytes = 4096;
 
 std::string trim(std::string_view text) {
@@ -61,6 +64,51 @@ bool parseBool(std::string_view text, bool& value) {
     return false;
 }
 
+char hexDigit(std::uint8_t value) {
+    return static_cast<char>(value < 10 ? ('0' + value) : ('a' + (value - 10)));
+}
+
+std::string encodeStringHex(std::string_view text) {
+    std::string encoded;
+    encoded.reserve(text.size() * 2);
+    for (const unsigned char ch : text) {
+        encoded.push_back(hexDigit(static_cast<std::uint8_t>((ch >> 4U) & 0x0FU)));
+        encoded.push_back(hexDigit(static_cast<std::uint8_t>(ch & 0x0FU)));
+    }
+    return encoded;
+}
+
+int decodeHexNibble(char ch) {
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return 10 + (ch - 'a');
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return 10 + (ch - 'A');
+    }
+    return -1;
+}
+
+bool decodeStringHex(std::string_view text, std::string& value) {
+    const auto cleaned = trim(text);
+    if (cleaned.size() % 2 != 0) {
+        return false;
+    }
+    value.clear();
+    value.reserve(cleaned.size() / 2);
+    for (std::size_t index = 0; index < cleaned.size(); index += 2) {
+        const int high = decodeHexNibble(cleaned[index]);
+        const int low = decodeHexNibble(cleaned[index + 1]);
+        if (high < 0 || low < 0) {
+            return false;
+        }
+        value.push_back(static_cast<char>((high << 4) | low));
+    }
+    return true;
+}
+
 std::string serializeChannelMap(const std::vector<std::size_t>& channelMap) {
     std::ostringstream out;
     for (std::size_t index = 0; index < channelMap.size(); ++index) {
@@ -97,6 +145,71 @@ bool parseChannelMap(std::string_view text, std::vector<std::size_t>& outMap) {
     return true;
 }
 
+std::string serializeColor(const std::optional<std::array<float, 4>>& color) {
+    if (!color.has_value()) {
+        return "none";
+    }
+    std::ostringstream out;
+    out << std::setprecision(9)
+        << (*color)[0] << ','
+        << (*color)[1] << ','
+        << (*color)[2] << ','
+        << (*color)[3];
+    return out.str();
+}
+
+bool parseColor(std::string_view text, std::optional<std::array<float, 4>>& color) {
+    const auto cleaned = trim(text);
+    if (cleaned == "none" || cleaned.empty()) {
+        color = std::nullopt;
+        return true;
+    }
+    std::array<float, 4> parsed{};
+    std::size_t begin = 0;
+    for (std::size_t index = 0; index < parsed.size(); ++index) {
+        std::size_t end = cleaned.find(',', begin);
+        if (index + 1 == parsed.size()) {
+            end = cleaned.size();
+        } else if (end == std::string::npos) {
+            return false;
+        }
+        double value = 0.0;
+        if (!parseDouble(cleaned.substr(begin, end - begin), value) || !std::isfinite(value)) {
+            return false;
+        }
+        parsed[index] = static_cast<float>(value);
+        begin = end + 1;
+    }
+    color = parsed;
+    return true;
+}
+
+std::string encodePlotSetupRecord(const RawCaptureEvent& event) {
+    std::ostringstream out;
+    out << "event: plot_setup\n"
+        << "timestamp_ms: " << event.timestampMs << '\n'
+        << "source: " << encodeStringHex(event.plotSetup.source) << '\n'
+        << "reset_history: " << (event.plotSetup.resetHistory ? "true" : "false") << '\n'
+        << "channel_count: " << event.plotSetup.channels.size() << '\n';
+    for (std::size_t index = 0; index < event.plotSetup.channels.size(); ++index) {
+        const auto& channel = event.plotSetup.channels[index];
+        out << "channel." << index << ".label: " << encodeStringHex(channel.label) << '\n'
+            << "channel." << index << ".unit: " << encodeStringHex(channel.unit) << '\n'
+            << "channel." << index << ".ratio: " << std::setprecision(17) << channel.ratio << '\n'
+            << "channel." << index << ".scale: " << std::setprecision(17) << channel.scale << '\n'
+            << "channel." << index << ".offset: " << std::setprecision(17) << channel.offset << '\n'
+            << "channel." << index << ".color: " << serializeColor(channel.color) << '\n';
+    }
+    out << "view.time_scale: " << std::setprecision(17) << event.plotSetup.view.timeScale << '\n'
+        << "view.time_unit: " << encodeStringHex(event.plotSetup.view.timeUnit) << '\n'
+        << "view.vertical_min: " << std::setprecision(17) << event.plotSetup.view.verticalMin << '\n'
+        << "view.vertical_max: " << std::setprecision(17) << event.plotSetup.view.verticalMax << '\n'
+        << "view.vertical_unit: " << encodeStringHex(event.plotSetup.view.verticalUnit) << '\n'
+        << "view.history_limit: " << event.plotSetup.view.historyLimit << '\n'
+        << '\n';
+    return out.str();
+}
+
 std::uint64_t totalEventBytes(const RawCaptureFileData& capture) {
     std::uint64_t total = 0;
     for (const auto& event : capture.events) {
@@ -131,6 +244,10 @@ std::uint64_t totalEventBytes(const RawCaptureFileData& capture) {
             total += static_cast<std::uint64_t>(line.str().size());
             break;
         }
+        case RawCaptureEventType::PlotSetup: {
+            total += static_cast<std::uint64_t>(encodePlotSetupRecord(event).size());
+            break;
+        }
         }
     }
     return total;
@@ -148,6 +265,7 @@ std::vector<RawCaptureEvent> normalizedEvents(const RawCaptureFileData& capture)
         .timestampMs = capture.capturedAtMs,
         .bytes = capture.payload,
         .profile = {},
+        .plotSetup = {},
     }};
 }
 
@@ -206,6 +324,9 @@ std::string encodeEventRecord(const RawCaptureEvent& event) {
             << "frame: " << event.profile.frameName << '\n'
             << '\n';
         break;
+    case RawCaptureEventType::PlotSetup:
+        out << encodePlotSetupRecord(event);
+        break;
     }
     return out.str();
 }
@@ -223,7 +344,8 @@ bool decodeEventStream(std::string_view bytes, std::vector<RawCaptureEvent>& eve
             cursor = lineEnd + 1;
             continue;
         }
-        if (firstLine != "event: rx_bytes" && firstLine != "event: profile_set" && firstLine != "event: profile_clear") {
+        if (firstLine != "event: rx_bytes" && firstLine != "event: profile_set"
+            && firstLine != "event: profile_clear" && firstLine != "event: plot_setup") {
             error = "psraw 事件记录缺少 event 类型";
             return false;
         }
@@ -233,14 +355,18 @@ bool decodeEventStream(std::string_view bytes, std::vector<RawCaptureEvent>& eve
             event.type = RawCaptureEventType::RxBytes;
         } else if (firstLine == "event: profile_set") {
             event.type = RawCaptureEventType::ProfileSet;
-        } else {
+        } else if (firstLine == "event: profile_clear") {
             event.type = RawCaptureEventType::ProfileClear;
+        } else {
+            event.type = RawCaptureEventType::PlotSetup;
         }
 
         cursor = lineEnd + 1;
         std::uint64_t rxSize = 0;
         bool sizeSeen = false;
         bool lengthSeen = false;
+        bool plotChannelCountSeen = false;
+        std::uint64_t plotChannelCount = 0;
         while (cursor < bytes.size()) {
             lineEnd = bytes.find('\n', cursor);
             if (lineEnd == std::string::npos) {
@@ -288,6 +414,113 @@ bool decodeEventStream(std::string_view bytes, std::vector<RawCaptureEvent>& eve
                     error = "psraw profile_set channel_map 格式错误";
                     return false;
                 }
+            } else if (event.type == RawCaptureEventType::PlotSetup && key == "source") {
+                if (!decodeStringHex(value, event.plotSetup.source)) {
+                    error = "psraw plot_setup source hex 格式错误";
+                    return false;
+                }
+            } else if (event.type == RawCaptureEventType::PlotSetup && key == "reset_history") {
+                if (!parseBool(value, event.plotSetup.resetHistory)) {
+                    error = "psraw plot_setup reset_history 格式错误";
+                    return false;
+                }
+            } else if (event.type == RawCaptureEventType::PlotSetup && key == "channel_count") {
+                if (!parseUnsigned(value, plotChannelCount) || plotChannelCount == 0) {
+                    error = "psraw plot_setup channel_count 格式错误";
+                    return false;
+                }
+                if (plotChannelCount > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+                    error = "psraw plot_setup channel_count 过大";
+                    return false;
+                }
+                event.plotSetup.channels.resize(static_cast<std::size_t>(plotChannelCount));
+                plotChannelCountSeen = true;
+            } else if (event.type == RawCaptureEventType::PlotSetup && key.rfind("channel.", 0) == 0) {
+                if (!plotChannelCountSeen) {
+                    error = "psraw plot_setup channel 字段早于 channel_count";
+                    return false;
+                }
+                const auto indexPrefixSize = std::string("channel.").size();
+                const auto indexEnd = key.find('.', indexPrefixSize);
+                if (indexEnd == std::string::npos) {
+                    error = "psraw plot_setup channel 字段格式错误";
+                    return false;
+                }
+                std::uint64_t channelIndexValue = 0;
+                if (!parseUnsigned(key.substr(indexPrefixSize, indexEnd - indexPrefixSize), channelIndexValue)
+                    || channelIndexValue >= plotChannelCount) {
+                    error = "psraw plot_setup channel 索引格式错误";
+                    return false;
+                }
+                auto& channel = event.plotSetup.channels[static_cast<std::size_t>(channelIndexValue)];
+                const auto field = key.substr(indexEnd + 1);
+                if (field == "label") {
+                    if (!decodeStringHex(value, channel.label)) {
+                        error = "psraw plot_setup channel label hex 格式错误";
+                        return false;
+                    }
+                } else if (field == "unit") {
+                    if (!decodeStringHex(value, channel.unit)) {
+                        error = "psraw plot_setup channel unit hex 格式错误";
+                        return false;
+                    }
+                } else if (field == "ratio") {
+                    if (!parseDouble(value, channel.ratio) || !std::isfinite(channel.ratio)) {
+                        error = "psraw plot_setup channel ratio 格式错误";
+                        return false;
+                    }
+                } else if (field == "scale") {
+                    if (!parseDouble(value, channel.scale) || !std::isfinite(channel.scale)) {
+                        error = "psraw plot_setup channel scale 格式错误";
+                        return false;
+                    }
+                } else if (field == "offset") {
+                    if (!parseDouble(value, channel.offset) || !std::isfinite(channel.offset)) {
+                        error = "psraw plot_setup channel offset 格式错误";
+                        return false;
+                    }
+                } else if (field == "color") {
+                    if (!parseColor(value, channel.color)) {
+                        error = "psraw plot_setup channel color 格式错误";
+                        return false;
+                    }
+                }
+            } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.time_scale") {
+                if (!parseDouble(value, event.plotSetup.view.timeScale)
+                    || !std::isfinite(event.plotSetup.view.timeScale)) {
+                    error = "psraw plot_setup view.time_scale 格式错误";
+                    return false;
+                }
+            } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.time_unit") {
+                if (!decodeStringHex(value, event.plotSetup.view.timeUnit)) {
+                    error = "psraw plot_setup view.time_unit hex 格式错误";
+                    return false;
+                }
+            } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.vertical_min") {
+                if (!parseDouble(value, event.plotSetup.view.verticalMin)
+                    || !std::isfinite(event.plotSetup.view.verticalMin)) {
+                    error = "psraw plot_setup view.vertical_min 格式错误";
+                    return false;
+                }
+            } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.vertical_max") {
+                if (!parseDouble(value, event.plotSetup.view.verticalMax)
+                    || !std::isfinite(event.plotSetup.view.verticalMax)) {
+                    error = "psraw plot_setup view.vertical_max 格式错误";
+                    return false;
+                }
+            } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.vertical_unit") {
+                if (!decodeStringHex(value, event.plotSetup.view.verticalUnit)) {
+                    error = "psraw plot_setup view.vertical_unit hex 格式错误";
+                    return false;
+                }
+            } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.history_limit") {
+                std::uint64_t historyLimit = 0;
+                if (!parseUnsigned(value, historyLimit)
+                    || historyLimit > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+                    error = "psraw plot_setup view.history_limit 格式错误";
+                    return false;
+                }
+                event.plotSetup.view.historyLimit = static_cast<std::size_t>(historyLimit);
             }
         }
 
@@ -303,6 +536,11 @@ bool decodeEventStream(std::string_view bytes, std::vector<RawCaptureEvent>& eve
             event.bytes.assign(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
                                bytes.begin() + static_cast<std::ptrdiff_t>(cursor + rxSize));
             cursor += static_cast<std::size_t>(rxSize);
+        } else if (event.type == RawCaptureEventType::PlotSetup) {
+            if (!plotChannelCountSeen) {
+                error = "psraw plot_setup 事件缺少 channel_count";
+                return false;
+            }
         } else if (event.profile.frameName.empty()) {
             error = "psraw profile 事件缺少 frame";
             return false;
@@ -369,7 +607,7 @@ std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, s
         const auto key = trim(line.substr(0, separator));
         const auto value = trim(line.substr(separator + 1));
         if (key == "version") {
-            versionSeen = (value == kVersionEvents);
+            versionSeen = (value == kVersionEvents || value == kVersionLegacyEvents);
         } else if (key == "protocol_name") {
             protocolNameSeen = true;
             capture.protocolName = value;
