@@ -27,6 +27,8 @@ local pending_requests = {}
 local active_request_id = nil
 local upload_frame_cursor = 0
 local upload_sequence_state = nil
+local stopping_stream = false
+local last_noise_discarded_message = nil
 
 local function append_bytes(target, source)
   for index = 1, #source do
@@ -178,6 +180,9 @@ local function finish_active_request(ok, message, level)
     message = message,
   })
   if meta then
+    if meta.tag == "stop_stream" then
+      stopping_stream = false
+    end
     clear_request_state(meta.id)
   end
   proto.status.set(message, { level = level or (ok and "info" or "error") })
@@ -291,7 +296,14 @@ end
 
 local function send_start_stop(start_value)
   local tag = start_value == 0 and "stop_stream" or "start_stream"
-  queue_fc06(REG_STREAM_SWITCH, start_value, tag)
+  if tag == "stop_stream" then
+    stopping_stream = true
+  else
+    stopping_stream = false
+  end
+  if not queue_fc06(REG_STREAM_SWITCH, start_value, tag) and tag == "stop_stream" then
+    stopping_stream = false
+  end
 end
 
 local function read_gain_registers()
@@ -473,10 +485,16 @@ local function handle_stream_error(ctx, err)
       proto.status.set(message, { level = "warn" })
     end
   elseif err.code == "noise_discarded" then
-    proto.status.set("已丢弃噪声前缀: " .. tostring(err.message), { level = "warn" })
+    local message = "已丢弃噪声前缀: " .. tostring(err.message)
+    if message ~= last_noise_discarded_message then
+      proto.status.set(message, { level = "warn" })
+      last_noise_discarded_message = message
+    end
   elseif err.code == "invalid_length" then
+    last_noise_discarded_message = nil
     proto.status.set("长度非法: " .. tostring(err.message), { level = "error" })
   else
+    last_noise_discarded_message = nil
     proto.status.set("解析失败: " .. tostring(err.message), { level = "error" })
   end
 end
@@ -486,6 +504,7 @@ local function handle_stream_batch(ctx, frames)
   for _, frame in ipairs(frames or {}) do
     local name = frame.name
     if name == "upload_ch4" then
+      -- 停止阶段仍允许尾包推送波形，等待随后到达的 FC06 ACK 完成 request。
       append_upload_frame_samples(ctx, frame, samples_by_channel)
     elseif name == "fc03_response" then
       handle_fc03_response(ctx, frame)
@@ -498,6 +517,9 @@ local function handle_stream_batch(ctx, frames)
     end
   end
   flush_upload_samples(samples_by_channel)
+  if #(frames or {}) > 0 then
+    last_noise_discarded_message = nil
+  end
 end
 
 function stream()
@@ -627,11 +649,15 @@ function on_open(ctx)
   active_request_id = nil
   upload_frame_cursor = 0
   upload_sequence_state = nil
+  stopping_stream = false
+  last_noise_discarded_message = nil
   proto.status.clear()
   setup_plot(true)
 end
 
 function on_close(ctx)
+  stopping_stream = false
+  last_noise_discarded_message = nil
   proto.status.clear()
 end
 
@@ -660,10 +686,16 @@ function on_tx(ctx, evt)
     end
   elseif evt.state == "timeout" then
     local label = meta and request_summary(meta) or tostring(evt.tag)
+    if meta and meta.tag == "stop_stream" then
+      stopping_stream = false
+    end
     clear_request_state(evt.id)
     proto.status.set("请求超时: " .. label, { level = "warn" })
   elseif evt.state == "rejected" or evt.state == "dropped" or evt.state == "canceled" then
     local label = meta and request_summary(meta) or tostring(evt.tag)
+    if meta and meta.tag == "stop_stream" then
+      stopping_stream = false
+    end
     clear_request_state(evt.id)
     proto.status.set("请求失败: " .. label .. " / " .. tostring(evt.error or evt.state), { level = "error" })
   end

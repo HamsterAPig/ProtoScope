@@ -651,6 +651,60 @@ void test_application_request_done_success_does_not_set_comm_error() {
     application.shutdown();
 }
 
+void test_application_request_timeout_drains_pending_rx_before_timeout() {
+    const auto protocolDir = makeUniqueTempDir("protoscope-request-timeout-drain");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "request timeout drain 测试协议应可写入");
+        out << "local seen = {}\n";
+        out << "function ui()\n";
+        out << "  return { { id = \"request_timeout_drain\", title = \"Request Drain\", controls = { { type = \"button\", id = \"read\", label = \"Read\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"read\" then proto.request({ 0x01 }, { timeout_ms = 20, tag = \"read\" }) end\n";
+        out << "end\n";
+        out << "function on_bytes(ctx, bytes)\n";
+        out << "  for i = 1, #bytes do seen[#seen + 1] = bytes[i] end\n";
+        out << "  if #seen >= 2 then proto.request_done({ ok = true, message = \"ACK 已处理\" }) end\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+            "request timeout drain 测试协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    application.updateControlValue("read", true);
+    application.pumpOnce();
+    application.pumpOnce();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    const protoscope::transport::ConnectionContext context{
+        .endpoint = "queued://wave",
+        .connectionId = 7,
+        .timestampMs = 300,
+        .readyForIo = true,
+    };
+    for (std::size_t index = 0; index < 256; ++index) {
+        transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, {}});
+    }
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{context, {0xAA, 0x55}});
+
+    application.pumpOnce();
+
+    require(application.docks().commState().lastError.empty(),
+            "已排队 ACK 应先 drain 并完成 request，不应误报等待 request_done 超时");
+    application.shutdown();
+}
+
 void test_application_request_done_failure_sets_comm_error() {
     const auto protocolDir = makeUniqueTempDir("protoscope-request-done-failure");
     {

@@ -1971,6 +1971,43 @@ void test_half_duplex_modbus_ack_matching_rules() {
     require(foundExpected, "FC16 ACK 不匹配时应提示收到/期望信息");
 }
 
+void test_half_duplex_modbus_stop_drains_late_upload_before_ack() {
+    protoscope::scripting::ScriptHost host;
+    requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    host.drainPlotSetups();
+
+    host.onControl(ctx, "stop_stream", true);
+    const auto requests = host.drainTxRequests();
+    require(requests.size() == 1, "停止按钮应生成 1 条 stop_stream request");
+    const auto& request = requests.front();
+
+    host.onTxEvent(ctx,
+                   protoscope::scripting::TxEvent{
+                       .id = request.id,
+                       .kind = protoscope::scripting::TxRequestKind::Request,
+                       .state = protoscope::scripting::TxEventState::Sent,
+                       .tag = request.tag,
+                       .bytes = request.payload.size(),
+                       .queuedMs = nowMs(),
+                       .finishedMs = nowMs(),
+                       .error = std::nullopt,
+                   });
+    host.setRequestAwaitingCompletion(true);
+
+    auto tailUploadAndAck = makeSnScopeUploadFrame(1, 100, 200, 300, 400);
+    appendBytes(tailUploadAndAck, makeSnScopeFc06Ack(0x8888U, 0x0000U));
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, tailUploadAndAck});
+
+    const auto appends = host.drainPlotAppends();
+    require(appends.size() == 4, "停止阶段迟到上传帧仍应推送 4 路波形");
+    const auto results = host.drainRequestDoneResults();
+    require(results.size() == 1, "停止 ACK 应完成 stop_stream request");
+    require(results[0].ok, "停止 ACK 匹配结果应为成功");
+}
+
 void test_half_duplex_modbus_crc_error_finishes_request() {
     protoscope::scripting::ScriptHost host;
     requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
@@ -2337,6 +2374,7 @@ static const TestCase kAllTests[] = {
     {"half_duplex_modbus_ch3_uses_third_harmonic", &test_half_duplex_modbus_ch3_uses_third_harmonic},
     {"half_duplex_modbus_loss_status_keeps_valid_frame", &test_half_duplex_modbus_loss_status_keeps_valid_frame},
     {"half_duplex_modbus_ack_matching_rules", &test_half_duplex_modbus_ack_matching_rules},
+    {"half_duplex_modbus_stop_drains_late_upload_before_ack", &test_half_duplex_modbus_stop_drains_late_upload_before_ack},
     {"half_duplex_modbus_crc_error_finishes_request", &test_half_duplex_modbus_crc_error_finishes_request},
     {"half_duplex_modbus_sticky_frames", &test_half_duplex_modbus_sticky_frames},
     {"half_duplex_modbus_noise_prefix_ignored", &test_half_duplex_modbus_noise_prefix_ignored},
@@ -2414,6 +2452,7 @@ static const TestCase kAllTests[] = {
     {"application_failed_reload_keeps_old_callbacks_alive", &test_application_failed_reload_keeps_old_callbacks_alive},
     {"application_forced_reload_discards_old_tx_callback_outputs", &test_application_forced_reload_discards_old_tx_callback_outputs},
     {"application_request_done_success_does_not_set_comm_error", &test_application_request_done_success_does_not_set_comm_error},
+    {"application_request_timeout_drains_pending_rx_before_timeout", &test_application_request_timeout_drains_pending_rx_before_timeout},
     {"application_request_done_failure_sets_comm_error", &test_application_request_done_failure_sets_comm_error},
     {"application_open_transport_uses_serial_runtime_config", &test_application_open_transport_uses_serial_runtime_config},
     {"application_open_transport_uses_udp_peer_runtime_config", &test_application_open_transport_uses_udp_peer_runtime_config},

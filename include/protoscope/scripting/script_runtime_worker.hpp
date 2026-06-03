@@ -89,6 +89,7 @@ public:
     void postRequestAwaitingCompletion(bool active);
 
     void waitIdle();
+    [[nodiscard]] std::size_t pendingRxBytes() const;
     [[nodiscard]] std::vector<ScriptRuntimeOutputBatch> drainOutputs();
     [[nodiscard]] std::optional<ScriptRuntimeOutputBatch> drainOneOutput();
     [[nodiscard]] ScriptRuntimeSnapshot snapshot() const;

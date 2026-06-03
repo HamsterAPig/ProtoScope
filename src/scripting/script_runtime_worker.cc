@@ -370,6 +370,11 @@ struct ScriptRuntimeWorker::Impl {
         }
     }
 
+    std::size_t pendingRxBytesCount() const {
+        std::lock_guard lock(mutex);
+        return pendingRxBytes;
+    }
+
     std::vector<ScriptRuntimeOutputBatch> drainOutputs() {
         std::vector<ScriptRuntimeOutputBatch> drained;
         std::lock_guard lock(mutex);
@@ -705,6 +710,10 @@ void ScriptRuntimeWorker::postRequestAwaitingCompletion(bool active) {
 
 void ScriptRuntimeWorker::waitIdle() {
     impl_->waitIdle();
+}
+
+std::size_t ScriptRuntimeWorker::pendingRxBytes() const {
+    return impl_->pendingRxBytesCount();
 }
 
 std::vector<ScriptRuntimeOutputBatch> ScriptRuntimeWorker::drainOutputs() {

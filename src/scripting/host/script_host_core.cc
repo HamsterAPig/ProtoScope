@@ -1611,6 +1611,7 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
         if (!batch.errors.empty()) {
             std::unordered_map<StreamParseErrorCode, std::size_t> errorCounts;
             std::string crcFrameNames;
+            std::size_t overflowDroppedBytes = 0;
             for (const auto& error : batch.errors) {
                 errorCounts[error.code]++;
                 if (error.code == StreamParseErrorCode::CrcMismatch && error.frameName.has_value()) {
@@ -1619,6 +1620,9 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
                     }
                     crcFrameNames += *error.frameName;
                 }
+                if (error.code == StreamParseErrorCode::Overflow) {
+                    overflowDroppedBytes += error.droppedBytes;
+                }
             }
             std::string summary;
             for (const auto& [code, count] : errorCounts) {
@@ -1626,6 +1630,10 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event) {
                     summary += ", ";
                 }
                 summary += std::string(streamParseErrorCodeName(code)) + " \xc3\x97 " + std::to_string(count);
+                if (code == StreamParseErrorCode::Overflow) {
+                    summary += " (dropped=" + std::to_string(overflowDroppedBytes) +
+                               " bytes, capacity=" + std::to_string(batch.bufferCapacity) + " bytes)";
+                }
             }
             protoLog("warn", "stream parse errors: " + summary);
             if (!crcFrameNames.empty()) {

@@ -118,6 +118,8 @@ private:
     [[nodiscard]] std::size_t transferFrameRowsPerPump() const;
     [[nodiscard]] std::size_t plotAppendsPerPump() const;
     [[nodiscard]] std::size_t pendingRxByteCount() const;
+    [[nodiscard]] bool hasPendingRequestDrainWork() const;
+    bool drainRequestTimeoutBacklog();
     bool flushScriptOutputs();
     bool flushScriptLogs();
     bool flushScriptPlots();

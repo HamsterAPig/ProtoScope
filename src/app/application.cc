@@ -1554,6 +1554,23 @@ std::size_t Application::pendingRxByteCount() const {
     return total;
 }
 
+bool Application::hasPendingRequestDrainWork() const {
+    return !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || scriptWorker_.pendingRxBytes() > 0U;
+}
+
+bool Application::drainRequestTimeoutBacklog() {
+    if (!hasPendingRequestDrainWork()) {
+        return false;
+    }
+
+    // 核心流程：request 已过脚本超时时间时，先把本地已到达的 RX/backlog 交给 parser。
+    // 停止边界的 ACK 可能已经在 transport 或 worker 队列里，只是尚未产出 request_done。
+    bool changed = handleTransportEvents();
+    scriptWorker_.waitIdle();
+    changed = flushScriptOutputs() || changed;
+    return true;
+}
+
 bool Application::processTransportEvent(const transport::TransportEvent& event) {
     bool changed = false;
     std::visit(
@@ -1869,6 +1886,16 @@ bool Application::processRequestTimeouts() {
     const auto currentMs = nowMs();
     if (currentMs < activeHalfDuplexRequest_->waitDeadlineMs) {
         return false;
+    }
+
+    if (drainRequestTimeoutBacklog()) {
+        return true;
+    }
+
+    scriptWorker_.waitIdle();
+    flushScriptOutputs();
+    if (!activeHalfDuplexRequest_.has_value()) {
+        return true;
     }
 
     const auto request = activeHalfDuplexRequest_->request;
