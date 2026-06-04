@@ -196,8 +196,9 @@ struct ConfigDockState {
     std::uint64_t fileTimestampMs{0};
     std::string loadedFromPath{"config/protoscope.yaml"};
     std::string statusMessage;
-    bool luaDockLayoutDebug{false};
-    bool pendingExternalReload{false};
+     bool luaDockLayoutDebug{false};
+     bool luaDockRenderCopyMode{true};
+     bool pendingExternalReload{false};
     std::uint64_t pendingExternalReloadTimestampMs{0};
     std::string externalReloadMessage;
     ConfigConflictState conflict{};

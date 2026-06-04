@@ -511,8 +511,9 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                        result.config.gui.realtimeBacklog.pumpMinIntervalMs);
             }
             result.config.gui.showAppHeader = readScalar<bool>(gui, "show_app_header", result.config.gui.showAppHeader);
-            result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
-            result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
+           result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
+            result.config.gui.luaDockRenderCopyMode = readScalar<bool>(gui, "lua_dock_render_copy_mode", result.config.gui.luaDockRenderCopyMode);
+           result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
         }
         if (const auto elfSymbolCombo = childNode(gui, "elf_symbol_combo")) {
             const int limit = readScalar<int>(elfSymbolCombo,
@@ -781,8 +782,9 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
         config.gui.realtimeBacklog.pumpMinIntervalMs;
     root["gui"]["show_app_header"] = config.gui.showAppHeader;
     root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
-    root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
-    root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;
+   root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
+    root["gui"]["lua_dock_render_copy_mode"] = config.gui.luaDockRenderCopyMode;
+   root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;
     root["gui"]["elf_symbol_combo"]["debounce_ms"] = config.gui.elfSymbolCombo.debounceMs;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
@@ -992,8 +994,9 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     configState.configHotReloadEnabled = config.app.configHotReload.enabled;
     configState.fpsLimit = config.app.fpsLimit;
     configState.idleRender = config.app.idleRender;
-    configState.luaDockLayoutDebug = config.gui.luaDockLayoutDebug;
-    configState.loadedFromPath = config.configPath.empty() ? normalizeTextPath(defaultConfigPath_) : config.configPath;
+   configState.luaDockLayoutDebug = config.gui.luaDockLayoutDebug;
+    configState.luaDockRenderCopyMode = config.gui.luaDockRenderCopyMode;
+   configState.loadedFromPath = config.configPath.empty() ? normalizeTextPath(defaultConfigPath_) : config.configPath;
 
     auto& waveState = dockStore.waveState();
     auto& wave = waveState.view;
@@ -1032,8 +1035,9 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.app.configHotReload.enabled = dockStore.configState().configHotReloadEnabled;
     config.app.fpsLimit = dockStore.configState().fpsLimit;
     config.app.idleRender = dockStore.configState().idleRender;
-    config.gui.luaDockLayoutDebug = dockStore.configState().luaDockLayoutDebug;
-    config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
+   config.gui.luaDockLayoutDebug = dockStore.configState().luaDockLayoutDebug;
+    config.gui.luaDockRenderCopyMode = dockStore.configState().luaDockRenderCopyMode;
+   config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
     config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;

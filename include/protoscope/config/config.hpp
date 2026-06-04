@@ -125,8 +125,9 @@ struct GuiConfig {
     GuiRealtimeBacklogConfig realtimeBacklog{};
     GuiElfSymbolComboConfig elfSymbolCombo{};
     bool showAppHeader{false};
-    bool luaDockLayoutDebug{false};
-    std::size_t sendHistoryLimit{20};
+     bool luaDockLayoutDebug{false};
+     bool luaDockRenderCopyMode{true};
+     std::size_t sendHistoryLimit{20};
     bool replayRawHistoryOnSchemaSwitch{false};
 };
 

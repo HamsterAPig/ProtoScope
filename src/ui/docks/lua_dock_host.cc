@@ -176,42 +176,77 @@ void GuiRuntime::drawLuaDockWindows() {
         return;
     }
 
-    // 这里按引用遍历当前帧快照，配合 bool 冒泡在控件触发更新后立刻停止本帧遍历。
-    const auto& dockSnapshots = lua.docks;
+    // 拷贝模式（默认）：深拷贝快照，避免回调中 Lua 修改 dock 列表导致迭代器失效闪烁
+    const bool copyMode = application_.docks().configState().luaDockRenderCopyMode;
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
     syncLuaDockVisibilityDefaults();
-    for (const auto& dockSnapshot : dockSnapshots) {
-        const auto stableId = luaDockStableId(dockSnapshot.descriptor, layoutKey);
-        if (!isLuaDockVisible(stableId)) {
-            continue;
-        }
-        const auto windowName = luaDockWindowName(dockSnapshot.descriptor, layoutKey);
-        bool windowOpen = true;
-        const bool windowVisible = ImGui::Begin(windowName.c_str(), &windowOpen);
-        if (!windowOpen) {
-            if (setLuaDockVisible(stableId, false)) {
-                pendingProtocolWorkspaceSave_ = true;
+    if (copyMode) {
+        // 拷贝模式：深拷贝快照，每帧独立遍历，忽略渲染函数返回值
+        const auto dockSnapshots = lua.docks;
+        for (const auto& dockSnapshot : dockSnapshots) {
+            const auto stableId = luaDockStableId(dockSnapshot.descriptor, layoutKey);
+            if (!isLuaDockVisible(stableId)) {
+                continue;
             }
+            const auto windowName = luaDockWindowName(dockSnapshot.descriptor, layoutKey);
+            bool windowOpen = true;
+            const bool windowVisible = ImGui::Begin(windowName.c_str(), &windowOpen);
+            if (!windowOpen) {
+                if (setLuaDockVisible(stableId, false)) {
+                    pendingProtocolWorkspaceSave_ = true;
+                }
+            }
+            if (windowVisible) {
+                if (dockSnapshot.descriptor.layout.has_value()) {
+                    if (dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Table) {
+                        drawLuaDockTable(dockSnapshot, dockSnapshot.descriptor.layout->table, stableId);
+                    } else if (dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Form) {
+                        drawLuaDockForm(dockSnapshot, dockSnapshot.descriptor.layout->form, stableId);
+                    } else {
+                        drawLuaDockFlow(dockSnapshot.controls);
+                    }
+                } else {
+                    drawLuaDockFlow(dockSnapshot.controls);
+                }
+            }
+            ImGui::End();
         }
-        if (windowVisible) {
-            bool updated = false;
-            if (dockSnapshot.descriptor.layout.has_value()) {
-                if (dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Table) {
-                    updated = drawLuaDockTable(dockSnapshot, dockSnapshot.descriptor.layout->table, stableId);
-                } else if (dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Form) {
-                    updated = drawLuaDockForm(dockSnapshot, dockSnapshot.descriptor.layout->form, stableId);
+    } else {
+        // 引用模式（旧行为）：按引用遍历，配合 bool 冒泡在控件触发更新后立刻停止本帧遍历
+        const auto& dockSnapshots = lua.docks;
+        for (const auto& dockSnapshot : dockSnapshots) {
+            const auto stableId = luaDockStableId(dockSnapshot.descriptor, layoutKey);
+            if (!isLuaDockVisible(stableId)) {
+                continue;
+            }
+            const auto windowName = luaDockWindowName(dockSnapshot.descriptor, layoutKey);
+            bool windowOpen = true;
+            const bool windowVisible = ImGui::Begin(windowName.c_str(), &windowOpen);
+            if (!windowOpen) {
+                if (setLuaDockVisible(stableId, false)) {
+                    pendingProtocolWorkspaceSave_ = true;
+                }
+            }
+            if (windowVisible) {
+                bool updated = false;
+                if (dockSnapshot.descriptor.layout.has_value()) {
+                    if (dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Table) {
+                        updated = drawLuaDockTable(dockSnapshot, dockSnapshot.descriptor.layout->table, stableId);
+                    } else if (dockSnapshot.descriptor.layout->kind == scripting::DockLayoutKind::Form) {
+                        updated = drawLuaDockForm(dockSnapshot, dockSnapshot.descriptor.layout->form, stableId);
+                    } else {
+                        updated = drawLuaDockFlow(dockSnapshot.controls);
+                    }
                 } else {
                     updated = drawLuaDockFlow(dockSnapshot.controls);
                 }
-            } else {
-                updated = drawLuaDockFlow(dockSnapshot.controls);
+                if (updated) {
+                    ImGui::End();
+                    break;
+                }
             }
-            if (updated) {
-                ImGui::End();
-                break;
-            }
+            ImGui::End();
         }
-        ImGui::End();
     }
 }
 

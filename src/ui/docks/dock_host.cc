@@ -415,12 +415,18 @@ void GuiRuntime::drawProtocolDock() {
 
     ImGui::Separator();
     if (lua.docks.empty()) {
-        // 核心流程：Lua 按钮可能在点击回调里同步刷新脚本控件快照。
-        // 这里直接按引用遍历当前帧控件，配合 bool 冒泡在触发更新后立刻停止本帧遍历。
-        const auto& controls = lua.controlStates;
-        drawLuaDockFlow(controls);
-        ImGui::End();
-        return;
+        const bool copyMode = application_.docks().configState().luaDockRenderCopyMode;
+        if (copyMode) {
+            // 拷贝模式：深拷贝控件列表，避免回调修改导致迭代器失效
+            const auto controls = lua.controlStates;
+            drawLuaDockFlow(controls);
+        } else {
+            // 引用模式：直接按引用遍历当前帧控件
+            const auto& controls = lua.controlStates;
+           drawLuaDockFlow(controls);
+       }
+       ImGui::End();
+       return;
     }
     ImGui::End();
 
