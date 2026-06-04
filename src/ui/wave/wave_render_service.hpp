@@ -25,6 +25,8 @@ struct WaveFrameData {
     plot::WaveSnapshot snapshot;
     const plot::WaveSnapshot* fullSnapshot{nullptr};
     const plot::WaveDisplayData* displayData{nullptr};
+    const plot::WaveDisplayData* renderDisplayData{nullptr};
+    const plot::WaveDisplayData* overviewDisplayData{nullptr};
     const plot::WaveFftFrame* fftFrame{nullptr};
     plot::WaveDataBounds displayBounds{};
     RenderBudget renderBudget;
@@ -77,7 +79,9 @@ bool drawHorizontalSplitter(const char* id,
                             float thickness);
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits);
 bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits);
-bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view, const plot::WaveDataBounds& bounds);
+bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
+                                   const plot::WaveDataBounds& visibleWindowBounds,
+                                   const plot::WaveDataBounds& fullHistoryBounds);
 bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveDisplayData& displayData,
@@ -136,7 +140,7 @@ ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth, const plo
 double offsetParameterDeltaFromDisplayDelta(const plot::ChannelSpec& spec,
                                             plot::WaveDisplayFormula formula,
                                             double displayDelta);
-float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveViewState& view);
+float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveDockState& wave);
 void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 
@@ -148,6 +152,15 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            double timeSnapDistance,
                                            double valueSnapDistance);
 bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::WaveDataBounds& bounds);
+bool excludesLegendHiddenChannels(const plot::WaveViewState& view);
+bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::string& label);
+std::vector<std::size_t> channelIndicesForDerivedViews(const plot::WaveDockState& wave,
+                                                       const plot::WaveSnapshot& snapshot);
+plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
+                                           const plot::WaveDisplayData& displayData,
+                                           const std::vector<std::size_t>& channelIndices);
+void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::string& label);
+void syncLegendVisibilityState(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 void clampActiveChannel(plot::WaveViewState& view, std::size_t channelCount);
 bool currentPlotItemVisible(const std::string& label);
 const char* snapScopeName(plot::WaveCursorSnapScope scope);
@@ -166,7 +179,9 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
                                               std::size_t channelIndex,
                                               double beginTime,
-                                              double endTime);
+                                              double endTime,
+                                              std::optional<std::size_t> referenceChannelIndex = std::nullopt,
+                                              std::optional<double> manualReferenceValue = std::nullopt);
 void drawCursorIntervalHint(const plot::CursorReadout& left,
                             const plot::CursorReadout& right,
                             const plot::CursorIntervalText& intervalText,
@@ -182,6 +197,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
                         const plot::WaveSnapshot& fullSnapshot,
                         const plot::WaveDisplayData& displayData,
                         const plot::WaveDataBounds& displayBounds,
+                        const std::vector<std::size_t>& channelIndices,
                         const RenderBudget& renderBudget);
 
 void initializeWaveViewIfNeeded(plot::WaveViewState& view);
@@ -189,12 +205,20 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth);
 void drawCursorToolbar(plot::WaveViewState& view,
                        const plot::ViewConfig& config,
                        const plot::WaveDisplayData& displayData);
+void placeCursorInViewport(plot::WaveViewState& view,
+                           const plot::ViewConfig& config,
+                           const plot::WaveDisplayData& displayData,
+                           std::size_t cursorIndex,
+                           double ratio);
+void placeCursorPairInViewport(plot::WaveViewState& view,
+                               const plot::ViewConfig& config,
+                               const plot::WaveDisplayData& displayData);
 bool handleMainPlotZoom(plot::WaveViewState& view, const ImPlotPoint& mousePos);
 void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
                                 const plot::WaveSnapshot& snapshot,
                                 const plot::WaveDisplayData& displayData);
 
-void renderWaveChannels(plot::WaveViewState& view,
+void renderWaveChannels(plot::WaveDockState& wave,
                         const plot::WaveSnapshot& snapshot,
                         const plot::WaveDisplayData& displayData,
                         const RenderBudget& renderBudget,

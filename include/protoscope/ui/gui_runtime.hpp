@@ -2,6 +2,7 @@
 
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
+#include "protoscope/ui/elf_static_address_file_watch.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/ui_component.hpp"
 #include "protoscope/ui/ui_host_context.hpp"
@@ -9,6 +10,7 @@
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
 #include <cstdint>
+#include <chrono>
 #include <deque>
 #include <filesystem>
 #include <future>
@@ -83,8 +85,13 @@ private:
     void syncRegisteredDialogs();
     void drawRegisteredDialogs();
     void drawRegisteredDocks();
+    void drawAppShell();
+    void buildModernDefaultLayout(ImGuiID dockspaceId);
     void renderFrame();
+    void drawAppHeader(float menuBarHeight);
     void drawStatusBar();
+    bool saveCurrentConfigToDisk();
+    bool stopRawCaptureRecordingWithStatus();
     void syncDialogQueue();
     void drawDialogs();
     void drawRawCaptureFileDialogs();
@@ -159,6 +166,7 @@ private:
 
     bool reloadConfigFromDisk();
     bool pollConfigFileChanges();
+    bool pollElfStaticAddressFileChanges();
     bool maybeAutoSave();
     void sleepUntilNextFrame(std::uint64_t frameStartMs) const;
     void sleepUntil(std::uint64_t targetMs) const;
@@ -176,6 +184,7 @@ private:
     std::vector<IDialogComponent*> dialogComponents_;
     std::vector<IDockComponent*> dockComponents_;
     std::uint64_t lastRenderAtMs_{0};
+    std::uint64_t lastPumpMs_{0};
     std::uint64_t lastAutoSaveAtMs_{0};
     config::FileSnapshot configSnapshot_{};
     std::string lastWindowTitle_;
@@ -238,6 +247,7 @@ private:
     bool elfStaticAddressDialogOpened_{false};
     std::string elfStaticAddressPath_;
     std::string elfStaticAddressError_;
+    ElfStaticAddressFileWatchState elfStaticAddressWatch_;
     struct ElfSymbolComboUiState {
         std::string draft;
         std::string queriedDraft;

@@ -1,19 +1,20 @@
 add_executable(protoscope_tests
-    test_main.cpp
-    test_application.cpp
-    test_codec.cpp
-    test_dock.cpp
-    test_dock_layout.cpp
-    test_frame_stream_parser.cpp
-    test_plot.cpp
-    test_protocol_state_file.cpp
-    test_runtime_scheduler.cpp
-    test_elf_static_view_bridge.cpp
-    test_script_host.cpp
-    test_serial_ports.cpp
-    test_version_utils.cpp
-    test_update_check.cpp
-    test_transport.cpp
+    test_main.cc
+    test_application.cc
+    test_codec.cc
+    test_dock.cc
+    test_dock_layout.cc
+    test_frame_stream_parser.cc
+    test_plot.cc
+    test_protocol_state_file.cc
+    test_runtime_scheduler.cc
+    test_script_runtime_worker.cc
+    test_elf_static_view_bridge.cc
+    test_script_host.cc
+    test_serial_ports.cc
+    test_version_utils.cc
+    test_update_check.cc
+    test_transport.cc
 )
 target_include_directories(protoscope_tests
     PRIVATE
@@ -30,6 +31,7 @@ target_link_libraries(protoscope_tests
         protoscope_plot
         protoscope_scripting
         protoscope_transport
+        protoscope_ui
         protoscope_update_check
 )
 target_compile_features(protoscope_tests PRIVATE cxx_std_20)

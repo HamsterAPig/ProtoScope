@@ -34,6 +34,16 @@ enum class WaveChannelDoubleClickAction {
     ResetOffset,
 };
 
+enum class WaveXAxisDoubleClickAction {
+    FitFullHistory,
+    FitVisibleWindow,
+};
+
+enum class WaveHiddenChannelPolicy {
+    IncludeInDerivedViews,
+    ExcludeFromDerivedViews,
+};
+
 enum class WaveExtremeKind {
     Maximum,
     Minimum,
@@ -106,11 +116,16 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
                                 float maxToolsWidth,
                                 float fixedContentHeight);
 bool scriptTimeUsable(const std::vector<WaveSample>& samples);
+void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
+void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, double maxTime, double sampleFrequencyHz);
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep);
 WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
                                                const std::vector<std::size_t>& channelIndices,
                                                double fallbackStep);
+const WaveDataBounds& selectXAxisDoubleClickBounds(WaveXAxisDoubleClickAction action,
+                                                   const WaveDataBounds& visibleWindowBounds,
+                                                   const WaveDataBounds& fullHistoryBounds);
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,

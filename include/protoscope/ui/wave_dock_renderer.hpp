@@ -8,6 +8,8 @@ namespace protoscope::app {
 class Application;
 }
 namespace protoscope::plot {
+struct ViewConfig;
+struct WaveDisplayData;
 struct WaveDockState;
 }
 
@@ -19,8 +21,10 @@ bool drawToolbarToggleButton(const char* label,
                              bool active,
                              const char* help,
                              const ImVec2& size = ImVec2(0.0F, 0.0F));
-bool drawToolbarCheckbox(const char* label, bool* value, const char* help);
-void drawWaveToolbar(app::Application& application, plot::WaveDockState& wave);
+void drawWaveToolbar(app::Application& application,
+                     plot::WaveDockState& wave,
+                     const plot::ViewConfig& config,
+                     const plot::WaveDisplayData& displayData);
 
 class WaveDockRenderer {
 public:

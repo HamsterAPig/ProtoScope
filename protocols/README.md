@@ -1,4 +1,4 @@
-# ProtoScope Lua 协议脚本指南
+﻿# ProtoScope Lua 协议脚本指南
 
 `protocols` 是 ProtoScope 的 Lua 协议资源根目录。宿主会自动注入全局 `proto`，协议脚本主要负责 4 件事：
 
@@ -277,7 +277,7 @@ end
 local schema = {
   buffer = {
     capacity = 4096,
-    overflow = "drop_oldest",
+    max_capacity = 268435456,
   },
   frames = {
     {
@@ -292,6 +292,7 @@ local schema = {
       on_frame = handle_fc06_ack,
     },
   },
+  on_batch = handle_stream_batch,
   on_error = handle_stream_error,
 }
 
@@ -305,7 +306,8 @@ return schema
 - 噪声前缀丢弃。
 - CRC 校验。
 - 固定长度或变长长度解析。
-- 字段解码后再回调 `on_frame`。
+- `runtime_profile = true` 时，从 `proto.stream.set_profile()` 读取运行时整帧长度与通道映射。
+- 字段解码后回调脚本；定义 `on_batch(ctx, frames)` 时批量调用，否则逐帧调用 `on_frame`。
 
 `stream()` 里的常用字段：
 
@@ -313,11 +315,113 @@ return schema
 - `size`：整帧固定长度；适合 `FC06` / `FC16 ACK` 这种固定 8 字节帧。
 - `len`：变长帧定义；适合 `FC03` 这类带字节数的响应。
 - `crc`：CRC 类型与字节顺序。
-- `fields`：字段定义，`offset` 从 1 开始计数。
-- `on_frame`：完整有效帧回调。
+- `fields`：字段定义，`offset` 从 1 开始计数；`count` 可写整数、已解析字段名或纯 C++ count 表达式 table。
+- `on_frame`：完整有效帧回调；未定义 `on_batch` 时必填。
+- `on_batch`：完整有效帧批量回调，`frames` 中每项保持旧 `on_frame` 的 frame 结构；若同时定义 `on_batch` 与 `on_frame`，宿主只调用 `on_batch`。
 - `on_error`：解析错误回调。
 
+补充约定：
+
+- Lua `buffer.capacity` 是初始环形缓冲容量；默认不丢弃，容量不足时会在 `buffer.max_capacity`（默认 256MiB）内自动扩容。
+- 只有显式写 `overflow = "drop_oldest"` 时，parser 才会在容量超限时丢弃最旧字节。
+- 宿主 YAML `receive.stream_buffer.near_overflow_threshold` 与 `receive.stream_buffer.popup_enabled` 只控制“接近溢出”告警阈值和弹窗，不会改写协议 schema 的缓冲容量。
+
+### 运行时长度 / 通道映射
+
+当某个帧的真实长度、业务通道顺序需要在运行时由脚本先探测、再持续生效时，可以这样声明：
+
+```lua
+{
+  name = "upload_dynamic",
+  header = { 0xFF, 0x26 },
+  runtime_profile = true,
+  crc = { type = "crc16_modbus", order = "hi_lo" },
+  fields = {
+    { name = "sequence", type = "u16_be", offset = 3 },
+    { name = "values", type = "i16_be", offset = 5, count = { op = "remaining", unit = 2 } },
+  },
+  on_frame = handle_upload_frame,
+}
+```
+
+然后在 Lua 里设置：
+
+```lua
+local ok, err = proto.stream.set_profile({
+  frame = "upload_dynamic",
+  length = 14,
+  channel_map = { 2, 3, 1, 4 },
+})
+```
+
+更完整的写法通常是在协议加载后、目标帧到达前完成 profile 设置。例如设备握手已经返回帧长度和通道顺序时：
+
+```lua
+local function apply_upload_profile(frame_length, channel_order)
+  local ok, err = proto.stream.set_profile({
+    frame = "upload_dynamic",
+    -- 完整帧长度：帧头、字段、CRC 都计算在内。
+    length = frame_length,
+    -- Lua 侧使用 1-based 通道号；宿主内部会转换为 0-based。
+    channel_map = channel_order,
+  })
+  if not ok then
+    proto.status.set("运行时 profile 设置失败: " .. tostring(err), { level = "error" })
+  end
+end
+
+function on_open(ctx)
+  -- 示例：传输打开后、真实业务数据到达前，先按设备协商结果设置 profile。
+  apply_upload_profile(14, { 2, 3, 1, 4 })
+end
+```
+
+约定：
+
+- `length` 是完整帧长度。
+- `channel_map` 用 Lua 侧 1-based 通道号声明；宿主内部会转换为 0-based。
+- profile 一旦设置会持续生效，直到 `proto.stream.clear_profile("upload_dynamic")` 或 `proto.stream.clear_profile()`。
+- `runtime_profile = true` 的帧如果回放时缺少对应 profile 事件，宿主会给出明确错误，而不是静默套旧长度。
+- “导出当前可见 raw”只保存当前波形窗口可见的原始字节，并会补齐这段字节回放所依赖的活动 `profile_set` / `profile_clear` 和最后一次 `plot_setup` 快照。
+- “开始完整原始数据录制”保存完整事件流、完整 RX 历史和录制开始时的波形配置快照；需要完整复现长时间采集时，应优先使用完整录制，而不是普通导出。
+
 字段类型、`crc.order`、`len.means` 的可选值请直接参考 `protocols/stream_types.lua`。
+
+动态字段数量不要再写 Lua 回调；旧 `field.count = function(...) end` 属于历史残留，现已在加载期直接报错拦截。历史重放和实时解析会共用纯 C++ parser。常见 `count` 表达式：
+
+```lua
+-- 字段引用
+count = { op = "field", name = "byte_count" }
+
+-- 字节数转寄存器数
+count = { op = "div", field = "byte_count", by = 2 }
+
+-- 长度字段减头尾
+count = { op = "sub", field = "length", value = 2 }
+
+-- 元素数转字节数
+count = { op = "mul", field = "item_count", by = 4 }
+
+-- 采样点数乘以通道掩码位数
+count = { op = "mul", field = "sample_count", by = { op = "bit_count", field = "channel_mask" } }
+
+-- 当前字段到帧尾剩余元素
+count = { op = "remaining", unit = 2, exclude_crc = true }
+
+-- 按 flag 控制可选字段
+count = { op = "if_flag", field = "flags", mask = 0x01, then = 1, else = 0 }
+
+-- 按功能码选择
+count = {
+  op = "case",
+  field = "func",
+  cases = {
+    [0x03] = { op = "div", field = "byte_count", by = 2 },
+    [0x10] = 2,
+  },
+  default = 1,
+}
+```
 
 ## `on_bytes()` 仍然可用，但只建议用于两类场景
 
@@ -339,9 +443,20 @@ return schema
 
 - `proto.status.set(text, { level = "info"|"warn"|"error" })`
 - `proto.status.clear()`
-- `proto.ui.alert({ title = "...", message = "...", level = "warn" })`
+- `proto.ui.alert({ title = "...", message = "...", level = "warn", window = { width = 520, height = 260, x = 120, y = 80, resizable = true, movable = true, auto_resize = false } })`
 - `proto.plot.setup({ source = "...", reset_history = true, channels = { ... } })`
 - `proto.plot.push(channel_index, { source = "...", samples = { { t = 0.0, y = 1.23 } } })`
+
+脚本弹窗的 `window` 子表只影响 `proto.ui.alert/confirm` 这类 ImGui 自绘模态窗口：
+
+- `width` / `height`：首次出现时的初始宽高
+- `x` / `y`：相对主视口左上角的初始位置，仅首次出现生效
+- `resizable` / `movable`：是否允许用户拖动缩放或移动
+- `auto_resize`：是否使用 ImGui 自动尺寸
+
+如果不传 `window`，ProtoScope 会继续沿用原有自动尺寸弹窗行为；标题只保留在窗口标题栏，不会在正文重复显示。
+
+`proto.fs.*` 仍使用系统原生文件对话框，不支持用同一套 `window` 参数控制宽高、位置或拖动开关。
 
 最小波形示例：
 

@@ -1,8 +1,8 @@
 add_library(protoscope_plot STATIC
-    plot/oscilloscope.cpp
-    plot/raw_capture_file.cpp
-    plot/wave_fft.cpp
-    plot/wave_math.cpp
+    plot/oscilloscope.cc
+    plot/raw_capture_file.cc
+    plot/wave_fft.cc
+    plot/wave_math.cc
 )
 target_include_directories(protoscope_plot
     PUBLIC
@@ -13,9 +13,12 @@ target_link_libraries(protoscope_plot
         protoscope_pocketfft
 )
 target_compile_features(protoscope_plot PUBLIC cxx_std_20)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(protoscope_plot PRIVATE -Wno-maybe-uninitialized)
+endif()
 
 add_library(protoscope_protocol_utils STATIC
-    protocol_utils/codec.cpp
+    protocol_utils/codec.cc
 )
 target_include_directories(protoscope_protocol_utils
     PUBLIC
@@ -24,9 +27,9 @@ target_include_directories(protoscope_protocol_utils
 target_compile_features(protoscope_protocol_utils PUBLIC cxx_std_20)
 
 add_library(protoscope_transport STATIC
-    transport/serial_ports.cpp
-    transport/transport.cpp
-    transport/udp_transport.cpp
+    transport/serial_ports.cc
+    transport/transport.cc
+    transport/udp_transport.cc
 )
 target_include_directories(protoscope_transport
     PUBLIC
@@ -40,9 +43,9 @@ target_link_libraries(protoscope_transport
 target_compile_features(protoscope_transport PUBLIC cxx_std_20)
 
 add_library(protoscope_ui_layout STATIC
-    ui/dock_layout.cpp
-    ui/protocol_state_file.cpp
-    ui/protocol_ui_state.cpp
+    ui/dock_layout.cc
+    ui/protocol_state_file.cc
+    ui/protocol_ui_state.cc
 )
 target_include_directories(protoscope_ui_layout
     PUBLIC
@@ -59,20 +62,22 @@ target_link_libraries(protoscope_ui_layout
 target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
-    scripting/frame_stream_parser.cpp
-    scripting/host/script_callback_dispatcher.cpp
-    scripting/host/script_file_system_facade.cpp
-    scripting/host/script_host_core.cpp
-    scripting/host/script_host_loader.cpp
-    scripting/host/stream_schema_module.cpp
-    scripting/host/core_api_module.cpp
-    scripting/host/tx_api_module.cpp
-    scripting/host/status_api_module.cpp
-    scripting/host/ui_api_module.cpp
-    scripting/host/file_api_module.cpp
-    scripting/host/plot_api_module.cpp
-    scripting/host/control_api_module.cpp
-    scripting/host/codec_api_module.cpp
+    scripting/frame_stream_parser.cc
+    scripting/pipeline_threading.cc
+    scripting/script_runtime_worker.cc
+    scripting/host/script_callback_dispatcher.cc
+    scripting/host/script_file_system_facade.cc
+    scripting/host/script_host_core.cc
+    scripting/host/script_host_loader.cc
+    scripting/host/stream_schema_module.cc
+    scripting/host/core_api_module.cc
+    scripting/host/tx_api_module.cc
+    scripting/host/status_api_module.cc
+    scripting/host/ui_api_module.cc
+    scripting/host/file_api_module.cc
+    scripting/host/plot_api_module.cc
+    scripting/host/control_api_module.cc
+    scripting/host/codec_api_module.cc
 )
 target_include_directories(protoscope_scripting
     PUBLIC
@@ -84,12 +89,16 @@ target_link_libraries(protoscope_scripting
         protoscope_transport
         protoscope_lua
         protoscope_sol2
+        Threads::Threads
 )
+if(MINGW)
+    target_link_libraries(protoscope_scripting PUBLIC winpthread)
+endif()
 target_compile_features(protoscope_scripting PUBLIC cxx_std_20)
 target_compile_definitions(protoscope_scripting PRIVATE SOL_ALL_SAFETIES_ON=1)
 
 add_library(protoscope_elf_static_view STATIC
-    plugin/elf_static_view_bridge.cpp
+    plugin/elf_static_view_bridge.cc
 )
 target_include_directories(protoscope_elf_static_view
     PUBLIC
@@ -108,7 +117,7 @@ target_link_libraries(protoscope_ui_layout
 )
 
 add_library(protoscope_dock STATIC
-    dock/docks.cpp
+    dock/docks.cc
 )
 target_include_directories(protoscope_dock
     PUBLIC
@@ -124,8 +133,8 @@ target_link_libraries(protoscope_dock
 target_compile_features(protoscope_dock PUBLIC cxx_std_20)
 
 add_library(protoscope_config STATIC
-    config/config.cpp
-    config/embedded_protocols.cpp
+    config/config.cc
+    config/embedded_protocols.cc
 )
 target_include_directories(protoscope_config
     PUBLIC
@@ -143,7 +152,7 @@ target_link_libraries(protoscope_config
 target_compile_features(protoscope_config PUBLIC cxx_std_20)
 
 add_library(protoscope_logging STATIC
-    logging/logging.cpp
+    logging/logging.cc
 )
 target_include_directories(protoscope_logging
     PUBLIC
@@ -158,7 +167,7 @@ target_link_libraries(protoscope_logging
 target_compile_features(protoscope_logging PUBLIC cxx_std_20)
 
 add_library(protoscope_app STATIC
-    app/application.cpp
+    app/application.cc
 )
 target_include_directories(protoscope_app
     PUBLIC
@@ -179,7 +188,7 @@ target_link_libraries(protoscope_app
 target_compile_features(protoscope_app PUBLIC cxx_std_20)
 
 add_library(protoscope_update_check STATIC
-    ui/update_check.cpp
+    ui/update_check.cc
 )
 target_include_directories(protoscope_update_check
     PUBLIC
@@ -194,30 +203,31 @@ endif()
 
 if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
-        ui/editable_combo.cpp
-        ui/runtime/gui_runtime_core.cpp
-        ui/runtime/ui_components.cpp
-        ui/runtime/platform_controller.cpp
-        ui/runtime/config_controller.cpp
-        ui/runtime/workspace_controller.cpp
-        ui/runtime/main_menu.cpp
-        ui/runtime/lua_view_menu.cpp
-        ui/runtime/help_menu.cpp
-        ui/docks/dock_host.cpp
-        ui/docks/lua_dock_host.cpp
-        ui/dialogs/dialog_host.cpp
-        ui/wave/wave_channel_legend.cpp
-        ui/wave/wave_channel_legend_bar.cpp
-        ui/wave/wave_channel_renderer.cpp
-        ui/wave/wave_dock_renderer.cpp
-        ui/wave/wave_fft_layer.cpp
-        ui/wave/wave_interaction_controller.cpp
-        ui/wave/wave_measurement_overlay.cpp
-        ui/wave/wave_measurement_overlay_layer.cpp
-        ui/wave/wave_overview_layer.cpp
-        ui/wave/wave_plot_layer.cpp
-        ui/wave/wave_toolbar.cpp
-        ui/wave/wave_viewport_controller.cpp
+        ui/editable_combo.cc
+        ui/ui_theme.cc
+        ui/runtime/gui_runtime_core.cc
+        ui/runtime/ui_components.cc
+        ui/runtime/platform_controller.cc
+        ui/runtime/config_controller.cc
+        ui/runtime/workspace_controller.cc
+        ui/runtime/main_menu.cc
+        ui/runtime/lua_view_menu.cc
+        ui/runtime/help_menu.cc
+        ui/docks/dock_host.cc
+        ui/docks/lua_dock_host.cc
+        ui/dialogs/dialog_host.cc
+        ui/wave/wave_channel_legend.cc
+        ui/wave/wave_channel_legend_bar.cc
+        ui/wave/wave_channel_renderer.cc
+        ui/wave/wave_dock_renderer.cc
+        ui/wave/wave_fft_layer.cc
+        ui/wave/wave_interaction_controller.cc
+        ui/wave/wave_measurement_overlay.cc
+        ui/wave/wave_measurement_overlay_layer.cc
+        ui/wave/wave_overview_layer.cc
+        ui/wave/wave_plot_layer.cc
+        ui/wave/wave_toolbar.cc
+        ui/wave/wave_viewport_controller.cc
     )
     target_include_directories(protoscope_ui
         PUBLIC
@@ -244,9 +254,9 @@ if(PROTOSCOPE_ENABLE_GUI)
 endif()
 
 if(WIN32)
-    add_executable(ProtoScope WIN32 main.cpp)
+    add_executable(ProtoScope WIN32 main.cc)
 else()
-    add_executable(ProtoScope main.cpp)
+    add_executable(ProtoScope main.cc)
 endif()
 
 target_link_libraries(ProtoScope

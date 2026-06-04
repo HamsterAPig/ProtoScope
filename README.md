@@ -2,15 +2,18 @@
 
 ProtoScope 当前已具备第一版 `TCP + Lua` 联调主链路，核心目标是把“连接设备 -> 执行协议脚本 -> 观察收发与事件”这条路径跑通。
 
+面向使用者的完整说明见 [ProtoScope 用户手册](docs/user-manual.md)。
+面向维护者的模块说明见 [src/include 模块设计导览](docs/module-design.md)。
+
 ## 当前能力
 
-- `通讯配置`：`TCP Client / TCP Server / Serial`
+- `通讯配置`：`TCP Client / TCP Server / Serial / UDP Peer`
 - `配置文件管理`：支持保存、显式重载，以及可选的“外部配置变更提醒”
 - `发送编辑器`：HEX 模式自动归一化为大写双字节分组，并在奇数个 nibble 时禁止发送
 - `Lua 声明式控件`：通过 `controls()` 把脚本控件挂进 Dock
 - `Lua 协议回调`：脚本可响应打开、关闭、收包、控件交互和定时器事件
 - `接收展示`：统一展示系统日志、TX/RX、Lua 事件
-- `波形 Dock`：当前仍为占位，保留后续 ImPlot 接口边界
+- `波形 Dock`：支持 Lua 推送多通道波形、总览、测量、FFT，以及原始波形导入、导出和录制
 
 ## 已接入依赖
 
@@ -282,6 +285,29 @@ app:
 
 配置文件路径：config/protoscope.yaml，YAML 格式。以下列出所有可配置项及其含义。
 
+### performance —— 公共性能系数
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| scale | double | 1.0 | 公共吞吐预算系数；`0.5` 更保守，`1.0` 使用默认预算，`2.0` 允许更高吞吐；`<= 0` 会按 `1.0` 回退 |
+
+`performance.scale` 只影响没有在 YAML 中显式写出的实时吞吐预算项。整数预算按“默认值 × scale”四舍五入，非零默认值至少保留 `1`；如果单项显式写 `0`，仍保留该单项自己的特殊含义。
+
+受公共系数控制的缺省项：
+
+- `receive.transport_read_buffer_bytes`
+- `scripting.worker.rx_queue_limit_bytes`
+- `scripting.worker.memory_budget_bytes`
+- `scripting.worker.output_queue_limit`
+- `scripting.worker.batch_bytes`
+- `scripting.worker.output_flush_budget_ms`
+- `gui.realtime_backlog.rx_chunk_bytes_per_pump`
+- `gui.realtime_backlog.transfer_frame_rows_per_pump`
+- `gui.realtime_backlog.plot_appends_per_pump`
+- `gui.realtime_backlog.raw_first_backlog_warn_bytes`
+
+不受公共系数控制、只做单项调优的典型项包括：`app.fps_limit`、`gui.wave.*` 渲染/降采样项、日志历史保留、文件 IO 分块、`gui.realtime_backlog.pump_min_interval_ms`、布尔开关和策略字符串。
+
 ### app —— 应用运行时
 
 | 键 | 类型 | 默认值 | 说明 |
@@ -292,6 +318,57 @@ app:
 | auto_save.enabled | bool | false | 配置自动保存开关 |
 | auto_save.interval_ms | uint64 | 5000 | 自动保存间隔（毫秒） |
 | config_hot_reload.enabled | bool | false | 外部配置变更检测开关 |
+
+### receive —— 接收链路
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| transport_read_buffer_bytes | size_t | 65536 | 底层 transport 单次读缓冲字节数；缺省受 `performance.scale` 控制，显式写出后覆盖公共系数 |
+| stream_buffer.near_overflow_threshold | double | 0.8 | 流缓冲接近溢出的提示阈值 |
+| stream_buffer.popup_enabled | bool | true | 流缓冲告警弹窗开关 |
+
+### scripting —— Lua 宿主与文件 IO
+
+**pipeline**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| pipeline.worker_threads | size_t? | 缺省自动 | 后处理线程池线程数；缺省为 `max(1, hardware_concurrency - 1)`，显式配置会裁剪到机器上限 |
+
+**worker**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| worker.enabled | bool | true | 是否启用脚本工作线程 |
+| worker.rx_queue_limit_bytes | size_t | 67108864 | 脚本工作线程 RX 队列上限（字节）；缺省受 `performance.scale` 控制 |
+| worker.memory_budget_bytes | size_t | 268435456 | worker 运行期内存预算；缺省受 `performance.scale` 控制 |
+| worker.memory_budget_available_ratio | double | 0.0 | 基于可用内存的动态预算比例；`0.0` 表示不用动态比例 |
+| worker.output_queue_limit | size_t | 65536 | 脚本输出队列上限；缺省受 `performance.scale` 控制 |
+| worker.batch_bytes | size_t | 262144 | worker 合并相邻 RX 事件的字节上限，也决定每次输出给宿主/UI 的 batch 粗细；缺省受 `performance.scale` 控制 |
+| worker.output_flush_budget_ms | double | 4.0 | 主线程每轮从 worker 输出队列取结果的时间预算；缺省受 `performance.scale` 控制 |
+| worker.backpressure_enabled | bool | true | RX 队列背压开关 |
+| worker.backpressure_rx_queue_high_watermark | double | 0.5 | RX 队列高水位比例 |
+| worker.backpressure_rx_queue_low_watermark | double | 0.3 | RX 队列低水位比例 |
+
+想调“worker 给 UI 的块粗细”时，优先调 `scripting.worker.batch_bytes`；想调“UI 每帧追赶速度”时，再调 `gui.realtime_backlog.*_per_pump` 和 `scripting.worker.output_flush_budget_ms`。
+
+**file_io**：
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| file_io.enabled | bool | true | 是否启用脚本文件 IO 能力 |
+| file_io.allow_protocol_dir | bool | true | 是否允许访问协议目录 |
+| file_io.allow_dialog_paths | bool | true | 是否允许访问文件对话框路径 |
+| file_io.extra_allowed_roots | list<string> | [] | 额外允许访问的根目录 |
+| file_io.max_open_files | size_t | 8 | 同时打开文件数量上限 |
+| file_io.default_chunk_bytes | size_t | 65536 | 默认文件分块大小 |
+| file_io.max_chunk_bytes | size_t | 1048576 | 文件分块大小上限 |
+| file_io.max_file_size_bytes | uint64 | 1073741824 | 可读文件大小上限 |
+| file_io.max_write_file_size_bytes | uint64 | 1073741824 | 可写文件大小上限 |
+| file_io.dialog.enabled | bool | true | 是否启用文件对话框能力 |
+| file_io.dialog.remember_last_dir | bool | true | 是否记住上次目录 |
+| file_io.send_file.default_chunk_bytes | size_t | 65536 | `proto.fs.send_file()` 默认分块大小 |
+| file_io.send_file.max_inflight_chunks | size_t | 2 | `proto.fs.send_file()` 最大在途分块数 |
 
 ### gui —— 界面与波形
 
@@ -312,7 +389,9 @@ app:
 | wave.max_render_vertices | size_t | 60000 | 总渲染顶点预算，多通道或开启磷光辉光时会进一步压缩每通道可显示点数 |
 | wave.downsample_start_multiplier | double | 2.0 | 降采样启动倍数；源样本数超过“渲染点预算 × 该系数”后切换到包络降采样 |
 | wave.channel_double_click_action | string | reset_scale_offset | CH 卡片双击恢复行为：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset` |
-| wave.overview_max_samples | size_t | 20000 | 总览图最多参与绘制的最近样本数，限制长历史下 overview 的开销 |
+| wave.x_axis_double_click_action | string | fit_full_history | 主图 X 轴双击行为：`fit_full_history` 缩放到当前保留的完整历史，`fit_visible_window` 保留旧的当前窗口 fit 行为 |
+| wave.hidden_channel_policy | string | visible_only | 主图 Legend 隐藏通道策略：`visible_only` 表示隐藏通道不参与主图包络、概览图和 Y 轴自动缩放；`include_hidden` 表示仍参与 |
+| wave.overview_max_samples | size_t | 20000 | 总览图包络绘制预算；限制每通道概览绘制点数，不裁剪概览横轴的历史范围 |
 | wave.min_visible_time_span | double | 0.001 | 最小可见时间跨度（秒） |
 | wave.show_axis_labels | bool | false | 显示坐标轴标签 |
 
@@ -321,10 +400,13 @@ app:
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | realtime_backlog.mode | string | responsive | 实时 backlog 策略：`responsive` 断开时丢弃未显示的 UI 派生 backlog，`complete` 继续小步补完 |
-| realtime_backlog.rx_chunk_bytes_per_pump | size_t | 65536 | 单轮主循环最多解析的 RX 字节数，大包会拆分到后续 pump |
-| realtime_backlog.transfer_frame_rows_per_pump | size_t | 2000 | 单轮最多提交到逐帧收发视图的行数 |
-| realtime_backlog.plot_appends_per_pump | size_t | 4096 | 单轮最多提交到波形缓冲的 `proto.plot.push` append 请求数 |
-| realtime_backlog.discard_backlog_on_disconnect | bool | true | `responsive` 模式下断开连接时是否立即丢弃未显示的实时 UI backlog |
+| realtime_backlog.rx_chunk_bytes_per_pump | size_t | 65536 | 单轮主循环最多解析的 RX 字节数，大包会拆分到后续 pump；缺省受 `performance.scale` 控制 |
+| realtime_backlog.transfer_frame_rows_per_pump | size_t | 2000 | 单轮最多提交到逐帧收发视图的行数；缺省受 `performance.scale` 控制 |
+| realtime_backlog.plot_appends_per_pump | size_t | 4096 | 单轮最多提交到波形缓冲的 `proto.plot.push` append 请求数；缺省受 `performance.scale` 控制 |
+| realtime_backlog.raw_first_backlog_warn_bytes | size_t | 33554432 | raw-first backlog 告警阈值；缺省受 `performance.scale` 控制 |
+| realtime_backlog.derived_backlog_degrade_enabled | bool | true | 派生 UI backlog 过大时是否允许降级 |
+| realtime_backlog.discard_backlog_on_disconnect | bool | false | `responsive` 模式下断开连接时是否立即丢弃未显示的实时 UI backlog |
+| realtime_backlog.pump_min_interval_ms | double | 2.0 | 实时 backlog pump 的最小间隔，不受 `performance.scale` 控制 |
 
 #### 波形点数配置关系
 
@@ -332,7 +414,7 @@ app:
 
 1. **历史采样点数**
    - 指每个通道最多在内存里保留多少原始样本。
-   - 这个值**不是** `gui.wave.*` 里的 YAML 配置项，而是协议脚本里 `proto.plot.setup()` 的 `view.history_limit`。
+   - 这个值**不是** `gui.wave.*` 里的 YAML 配置项，而是协议脚本里 `proto.plot.setup()` 的顶层 `history_limit`。
    - 超过上限后，最旧的样本会被裁掉。
 
 2. **当前视口源样本数**
@@ -348,14 +430,14 @@ app:
 可以把链路理解为：
 
 ```text
-proto.plot.setup().view.history_limit
+proto.plot.setup().history_limit
     -> 决定每通道最多保留多少原始样本
     -> 当前视口内会取出一部分样本，形成“源样本”
     -> 如果源样本过多，按 gui.wave.* 的预算做降采样
     -> 得到最终“渲染点”
 ```
 
-#### 历史采样点数：`view.history_limit`
+#### 历史采样点数：`history_limit`
 
 如果你想控制“每个通道最多累计多少采样点”，要在协议脚本里配置：
 
@@ -365,14 +447,12 @@ proto.plot.setup({
   channels = {
     { label = "CH1", unit = "V" },
   },
-  view = {
-    time_scale = 0.2,
-    time_unit = "s",
-    vertical_min = -1.5,
-    vertical_max = 1.5,
-    vertical_unit = "V",
-    history_limit = 12000,
-  }
+  time_scale = 0.2,
+  time_unit = "s",
+  vertical_min = -1.5,
+  vertical_max = 1.5,
+  vertical_unit = "V",
+  history_limit = 12000,
 })
 ```
 
@@ -389,6 +469,8 @@ gui:
   wave:
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
+    x_axis_double_click_action: fit_full_history
+    hidden_channel_policy: visible_only
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
     vertical_auto_fit_multiplier: 1.2
@@ -434,8 +516,8 @@ gui:
   - 调小这个值：更早触发降采样，性能更稳，但显示会更“概览化”。
 
 - `wave.overview_max_samples`
-  - 只影响底部总览图 overview，不影响主波形区的历史保留上限。
-  - 当历史很长时，overview 只取最近的这部分样本参与绘制，避免总览图拖慢界面。
+  - 只影响底部总览图 overview 的包络绘制预算，不影响主波形区的历史保留上限。
+  - 概览横轴仍覆盖 Lua 当前保留的完整历史；当历史很长时，它会按这个预算降采样绘制，避免总览图拖慢界面。
 
 - `wave.channel_card_width_mode`
   - 控制顶部 CH 卡片宽度，默认 `fixed` 使用 `channel_card_fixed_width`，可改为 `adaptive` 按 `channel_card_adaptive_ratio` 随内容宽度计算。
@@ -443,13 +525,18 @@ gui:
 - `wave.channel_double_click_action`
   - 控制顶部 CH 卡片双击恢复行为，默认 `reset_scale_offset` 只恢复当前通道 `scale/offset`，也可设为 `reset_all`、`reset_scale` 或 `reset_offset`。
 
+- `wave.hidden_channel_policy`
+  - 控制通过主图右键 `Legend -> Show` 取消勾选的通道是否继续参与派生视图，默认 `visible_only`。
+  - `visible_only`：隐藏通道不参与高密度主图包络绘制、概览图绘制、Y 轴双击/Auto Fit 范围计算。
+  - `include_hidden`：隐藏通道仍参与概览和缩放，适合只想临时隐藏线条但保留全量范围参考的场景。
+
 - `wave.vertical_auto_fit_multiplier`
   - 控制 Y 轴 Auto Fit 的留白系数，默认 `1.2`，例如显示值范围 `[-10, 5]` 会自动扩到 `[-12, 12]`。
 
 #### 怎么判断该调哪个参数
 
 - 想保留更长历史，或者“旧波形太快被顶掉”
-  - 调大 Lua 里的 `view.history_limit`
+  - 调大 Lua 里的顶层 `history_limit`
 
 - 想让主波形区显示更多细节、少一点包络感
   - 先调大 `wave.max_render_points_per_channel`
@@ -484,9 +571,7 @@ proto.plot.setup({
   channels = {
     { label = "CH1", unit = "V" },
   },
-  view = {
-    history_limit = 20000,
-  }
+  history_limit = 20000,
 })
 ```
 
@@ -509,9 +594,7 @@ proto.plot.setup({
     { label = "CH1", unit = "V" },
     { label = "CH2", unit = "V" },
   },
-  view = {
-    history_limit = 6000,
-  }
+  history_limit = 6000,
 })
 ```
 

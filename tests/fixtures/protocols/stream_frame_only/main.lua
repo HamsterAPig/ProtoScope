@@ -6,6 +6,8 @@ local function on_stream_frame(ctx, frame)
   proto.emit("stream_frame", {
     name = frame.name,
     value = frame.fields.value,
+    top_value = frame.value,
+    field_values_match = frame.value == frame.fields.value,
     raw_size = #frame.raw,
     crc_ok = frame.crc_ok,
     connection_id = ctx.connection_id,

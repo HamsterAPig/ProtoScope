@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
@@ -226,6 +226,7 @@ struct TxRequest {
 enum class TxEventState {
     Sent,
     Completed,
+    Failed,
     Timeout,
     Rejected,
     Dropped,
@@ -258,6 +259,13 @@ struct StatusUpdate {
     std::string level{"info"};
     bool clear{false};
     std::uint64_t timestampMs{0};
+};
+
+struct StreamRuntimeProfileEvent {
+    bool cleared{false};
+    std::string frameName;
+    std::size_t length{0};
+    std::vector<std::size_t> channelMap;
 };
 
 enum class DialogKind {
@@ -295,6 +303,16 @@ struct FileDialogEvent {
     std::uint64_t timestampMs{0};
 };
 
+struct DialogWindowOptions {
+    std::optional<double> width{};
+    std::optional<double> height{};
+    std::optional<double> x{};
+    std::optional<double> y{};
+    bool resizable{true};
+    bool movable{true};
+    bool autoResize{false};
+};
+
 struct DialogRequest {
     std::uint64_t id{0};
     DialogKind kind{DialogKind::Alert};
@@ -303,6 +321,7 @@ struct DialogRequest {
     std::string message{};
     std::string level{"info"};
     std::string dedupeKey{};
+    DialogWindowOptions window{};
     std::uint64_t createdAtMs{0};
 };
 
@@ -324,10 +343,25 @@ struct RealtimeOutputDiscardCounts {
     std::size_t plotAppends{0};
 };
 
+struct ScriptHostTransportStats {
+    std::size_t bytes{0};
+    std::size_t streamFrames{0};
+    std::size_t streamErrors{0};
+    double parserMs{0.0};
+    double callbackMs{0.0};
+    double totalMs{0.0};
+    bool streamMode{false};
+    std::string lastErrorSummary;
+};
+
 class ScriptHost {
 public:
     ScriptHost();
     ~ScriptHost();
+    ScriptHost(ScriptHost&&) noexcept;
+    ScriptHost& operator=(ScriptHost&&) noexcept;
+    ScriptHost(const ScriptHost&) = delete;
+    ScriptHost& operator=(const ScriptHost&) = delete;
 
     bool loadScriptFile(const std::string& path);
     bool loadProtocolDirectory(const std::string& directory);
@@ -338,6 +372,10 @@ public:
     void onTransportClose(const transport::TransportCloseEvent& event);
     void onTransportError(const transport::TransportErrorEvent& event);
     void onTransportBytes(const transport::TransportBytesEvent& event);
+    bool setStreamRuntimeProfile(const sol::object& profile, std::string& error);
+    bool clearStreamRuntimeProfile(const sol::object& frameName, std::string& error);
+    bool applyStreamRuntimeProfileEvent(const StreamRuntimeProfileEvent& event, std::string& error);
+    void clearAllStreamRuntimeProfiles();
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
     bool setControlValue(const std::string& id, const ControlValue& value);
     void tick(std::uint64_t currentMs);
@@ -356,11 +394,14 @@ public:
     RealtimeOutputDiscardCounts clearPendingRealtimeOutputs();
     std::vector<RequestDoneResult> drainRequestDoneResults();
     std::vector<StatusUpdate> drainStatusUpdates();
+    std::vector<StreamRuntimeProfileEvent> drainStreamRuntimeProfileEvents();
     std::vector<DialogRequest> drainDialogRequests();
     std::vector<FileDialogRequest> drainFileDialogRequests();
     std::optional<std::uint64_t> nextWakeupAtMs() const;
     [[nodiscard]] std::optional<StreamBufferDefinition> streamBufferDefinition() const;
     [[nodiscard]] std::vector<StreamFrameDefinition> streamFrameDefinitions() const;
+    [[nodiscard]] const ScriptHostTransportStats& lastTransportStats() const;
+    [[nodiscard]] std::optional<StreamParseBatch> lastStreamParseBatch() const;
 
     const std::string& scriptPath() const;
     const std::string& protocolDirectory() const;
@@ -382,6 +423,7 @@ private:
     void callbackOnClose(const ScriptHostContext& ctx);
     void callbackOnError(const ScriptHostContext& ctx, const std::string& message);
     void callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes);
+    bool callbackOnStreamBatch(const ScriptHostContext& ctx, const std::vector<StreamParsedFrame>& frames);
     void callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame);
     void callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error);
     void callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName);
@@ -389,8 +431,9 @@ private:
     void callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event);
     void callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event);
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
+    std::optional<sol::protected_function> resolveGlobalCallback(const char* name);
 
-    void registerLuaApi(sol::table& proto);
+    void registerLuaApi(sol::state_view lua, sol::table& proto);
 
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
@@ -407,12 +450,12 @@ private:
     void protoStatusClear();
     std::optional<DialogRequest> protoDialog(DialogKind kind, const sol::object& opts, std::string& error);
     std::optional<FileDialogRequest> protoFileDialog(FileDialogKind kind, const sol::object& opts, std::string& error);
-    std::tuple<sol::object, sol::object> protoFsOpen(const std::string& path, const sol::object& opts);
-    std::tuple<sol::object, sol::object> protoFsRead(std::uint64_t handle, const sol::object& opts);
-    std::tuple<sol::object, sol::object> protoFsWrite(std::uint64_t handle, const sol::object& payload);
-    std::tuple<sol::object, sol::object> protoFsClose(std::uint64_t handle);
-    std::tuple<sol::object, sol::object> protoFsStat(const std::string& path);
-    std::tuple<sol::object, sol::object> protoFsSendFile(const std::string& path, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsOpen(sol::state_view lua, const std::string& path, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsRead(sol::state_view lua, std::uint64_t handle, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsWrite(sol::state_view lua, std::uint64_t handle, const sol::object& payload);
+    std::tuple<sol::object, sol::object> protoFsClose(sol::state_view lua, std::uint64_t handle);
+    std::tuple<sol::object, sol::object> protoFsStat(sol::state_view lua, const std::string& path);
+    std::tuple<sol::object, sol::object> protoFsSendFile(sol::state_view lua, const std::string& path, const sol::object& opts);
     std::uint64_t nextTxRequestId();
     std::uint64_t nextDialogId();
     std::uint64_t nextFileDialogId();
@@ -458,6 +501,7 @@ private:
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends_;
     std::vector<RequestDoneResult> requestDoneResults_;
     std::vector<StatusUpdate> statusUpdates_;
+    std::vector<StreamRuntimeProfileEvent> streamRuntimeProfileEvents_;
     std::vector<DialogRequest> dialogRequests_;
     std::vector<FileDialogRequest> fileDialogRequests_;
     std::unordered_map<std::string, TimerState> timers_;
@@ -473,6 +517,7 @@ private:
     std::uint64_t nextFileHandleId_{1};
     std::uint64_t nextFileJobId_{1};
     bool requestAwaitingCompletion_{false};
+    ScriptHostTransportStats lastTransportStats_{};
 };
 
 } // namespace protoscope::scripting

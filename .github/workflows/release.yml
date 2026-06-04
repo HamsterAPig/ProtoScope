@@ -21,7 +21,7 @@ concurrency:
 jobs:
   release-windows:
     name: Windows x64 Release
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 60
 
     env:
@@ -43,16 +43,74 @@ jobs:
             throw "Release tag must match vX.Y.Z, got '$env:RELEASE_TAG'."
           }
 
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Configure
         shell: pwsh
-        run: >
-          cmake -S . -B build -G "Ninja"
-          -DCMAKE_BUILD_TYPE=Release
-          -DPROTOSCOPE_ENABLE_GUI=ON
+        run: |
+          cmake -S . -B build -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DPROTOSCOPE_ENABLE_GUI=ON `
+            -DCMAKE_C_COMPILER=cl `
+            -DCMAKE_CXX_COMPILER=cl
+
+      - name: Verify MSVC toolchain
+        shell: pwsh
+        run: |
+          $cache = Get-Content build/CMakeCache.txt
+          $cache | Select-String "^CMAKE_C_COMPILER:|^CMAKE_CXX_COMPILER:|^CMAKE_MAKE_PROGRAM:"
+
+          $cCompilerMatch = $cache | Select-String "^CMAKE_C_COMPILER:(?:FILEPATH|UNINITIALIZED|STRING)=(.+)$" | Select-Object -First 1
+          $cxxCompilerMatch = $cache | Select-String "^CMAKE_CXX_COMPILER:(?:FILEPATH|UNINITIALIZED|STRING)=(.+)$" | Select-Object -First 1
+
+          if (-not $cCompilerMatch) {
+            throw "CMAKE_C_COMPILER was not found in CMakeCache.txt."
+          }
+
+          if (-not $cxxCompilerMatch) {
+            throw "CMAKE_CXX_COMPILER was not found in CMakeCache.txt."
+          }
+
+          $cCompiler = $cCompilerMatch.Matches[0].Groups[1].Value
+          $cxxCompiler = $cxxCompilerMatch.Matches[0].Groups[1].Value
+
+          if ((Split-Path $cCompiler -Leaf) -notin @("cl", "cl.exe")) {
+            throw "Expected MSVC cl.exe for C compiler, got '$cCompiler'."
+          }
+
+          if ((Split-Path $cxxCompiler -Leaf) -notin @("cl", "cl.exe")) {
+            throw "Expected MSVC cl.exe for CXX compiler, got '$cxxCompiler'."
+          }
 
       - name: Build
         shell: pwsh
         run: cmake --build build --config Release
+
+      - name: Verify runtime dependencies
+        shell: pwsh
+        run: |
+          if (-not (Test-Path $env:EXE_PATH)) {
+            throw "Expected executable was not found: $env:EXE_PATH"
+          }
+
+          $dependents = & dumpbin.exe /DEPENDENTS $env:EXE_PATH
+          $dependents
+
+          $forbiddenRuntimeDlls = @(
+            "libwinpthread-1.dll",
+            "libgcc_s_seh-1.dll",
+            "libstdc++-6.dll",
+            "msys-2.0.dll"
+          )
+
+          foreach ($dll in $forbiddenRuntimeDlls) {
+            if ($dependents -match [regex]::Escape($dll)) {
+              throw "Forbidden MinGW/MSYS runtime dependency detected: $dll"
+            }
+          }
 
       - name: Test
         shell: pwsh

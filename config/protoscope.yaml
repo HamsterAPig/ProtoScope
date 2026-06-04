@@ -1,3 +1,8 @@
+performance:
+  # 公共性能系数：1.0 使用默认吞吐预算；0.5 更保守；2.0 允许更高吞吐。
+  # 显式写出的受控单项优先级高于公共系数。
+  scale: 1.0
+
 app:
   language: zh-CN
   fps_limit: 60
@@ -9,6 +14,7 @@ app:
     enabled: false
 
 gui:
+  show_app_header: false
   window:
     title: ProtoScope
     width: 1600
@@ -19,6 +25,10 @@ gui:
     display_formula: offset_then_scale
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
+    x_axis_double_click_action: fit_full_history
+    hidden_channel_policy: visible_only
+    cursor_extreme_snap_policy: nearest_waveform
+    zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
     vertical_auto_fit_multiplier: 1.2
@@ -27,6 +37,7 @@ gui:
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
     min_visible_time_span: 0.001
+    reset_history_on_time_reset: true
     show_axis_labels: false
   log_history:
     transfer_raw_limit: 10000
@@ -35,12 +46,16 @@ gui:
     script_limit: 5000
   raw_capture:
     live_limit_bytes: 67108864
+  transfer_log:
+    replay_raw_history_on_schema_switch: false
   realtime_backlog:
     mode: responsive
-    rx_chunk_bytes_per_pump: 65536
-    transfer_frame_rows_per_pump: 2000
-    plot_appends_per_pump: 4096
-    discard_backlog_on_disconnect: true
+    # 以下预算缺省受 performance.scale 控制；写出后即覆盖公共系数。
+    # rx_chunk_bytes_per_pump: 65536
+    # transfer_frame_rows_per_pump: 2000
+    # plot_appends_per_pump: 4096
+    # raw_first_backlog_warn_bytes: 33554432
+    discard_backlog_on_disconnect: false
   elf_symbol_combo:
     limit: 10
     debounce_ms: 300
@@ -57,7 +72,31 @@ protocol:
     overflow_policy: reject_new
     overflow_notify: popup_once
 
+receive:
+  # 缺省受 performance.scale 控制；写出后即覆盖公共系数。
+  # transport_read_buffer_bytes: 65536
+  stream_buffer:
+    near_overflow_threshold: 0.8
+    popup_enabled: true
+
 scripting:
+  pipeline:
+    # worker_threads: 4
+  worker:
+    enabled: true
+    # 以下预算缺省受 performance.scale 控制；写出后即覆盖公共系数。
+    # rx_queue_limit_bytes: 67108864
+    # memory_budget_bytes: 268435456
+    # output_queue_limit: 65536
+    # batch_bytes: 262144
+    # output_flush_budget_ms: 4.0
+    memory_budget_available_ratio: 0.0
+    backpressure_enabled: true
+    backpressure_rx_queue_high_watermark: 0.5
+   backpressure_rx_queue_low_watermark: 0.3
+    # drain_request_outputs_unbounded: false
+    #   true:  超时前使用无帧预算限制的 drain（flushScriptOutputsUnbounded）
+    #   false: 使用受帧预算限制的 drain（flushScriptOutputs，默认值）
   file_io:
     enabled: true
     allow_protocol_dir: true

@@ -23,12 +23,62 @@ enum class WaveCursorSnapScope {
     ActiveChannel,
 };
 
+enum class WaveCursorExtremeSnapPolicy {
+    NearestWaveform,
+    ViewportZone,
+};
+
+enum class WaveMeasurementReferenceMode {
+    Channel,
+    ManualValue,
+};
+
 struct WaveCursorState {
     bool enabled{true};
     bool pinned{false};
     std::size_t channelIndex{0};
     double time{0.0};
     double value{0.0};
+};
+
+struct WaveMeasurementSelection {
+    bool cursorA{true};
+    bool cursorB{true};
+    bool deltaTime{true};
+    bool deltaValue{true};
+    bool frequency{true};
+    bool period{true};
+    bool sampleCount{true};
+    bool span{true};
+    bool min{true};
+    bool max{true};
+    bool peakToPeak{true};
+    bool mean{true};
+    bool rms{true};
+    bool median{false};
+    bool p95{false};
+    bool p99{false};
+    bool variance{false};
+    bool stddev{true};
+    bool cv{false};
+    bool mad{false};
+    bool medianAbsDev{false};
+    bool iqr{false};
+    bool p95Spread{false};
+    bool highWidth{false};
+    bool lowWidth{false};
+    bool dutyCycle{false};
+    bool riseTime{false};
+    bool fallTime{false};
+    bool edgeCount{false};
+    bool absoluteError{false};
+    bool relativeErrorPercent{false};
+    bool meanError{false};
+    bool mse{false};
+    bool rmse{false};
+    bool mae{false};
+    bool maxAbsError{false};
+    bool bias{false};
 };
 
 struct WaveViewState {
@@ -51,6 +101,7 @@ struct WaveViewState {
     bool activeChannelScaleDrag{false};
     bool zoomSelectionActive{false};
     bool zoomSelectionDragging{false};
+    bool zoomSelectionAutoExit{false};
     bool fitVisibleWaveformsRequested{false};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
@@ -58,10 +109,15 @@ struct WaveViewState {
     std::size_t lastRenderPointCount{0};
     std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};
+    std::size_t referenceChannelIndex{0};
+    WaveMeasurementReferenceMode referenceMode{WaveMeasurementReferenceMode::Channel};
+    WaveMeasurementSelection measurement{};
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
     WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
+    WaveXAxisDoubleClickAction xAxisDoubleClickAction{WaveXAxisDoubleClickAction::FitFullHistory};
+    WaveHiddenChannelPolicy hiddenChannelPolicy{WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     WaveFftConfig fft{};
     bool fftSourceWindowValid{false};
     bool fftViewportInitialized{false};
@@ -75,6 +131,7 @@ struct WaveViewState {
     double persistenceWindow{0.25};
     double glowIntensity{1.0};
     double sampleFrequencyHz{0.0};
+    double manualReferenceValue{0.0};
     double lockedCursorInterval{0.0};
     double overviewDragLastTime{0.0};
     double centerTime{0.0};
@@ -101,6 +158,7 @@ struct WaveViewState {
     WaveTimeAxisSource timeAxisSource{WaveTimeAxisSource::SampleIndex};
     WaveCursorSnapMode cursorSnapMode{WaveCursorSnapMode::SmartSnap};
     WaveCursorSnapScope cursorSnapScope{WaveCursorSnapScope::AllChannels};
+    WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{WaveCursorExtremeSnapPolicy::NearestWaveform};
     std::array<WaveCursorState, 2> cursors{};
 };
 
@@ -123,9 +181,12 @@ struct WaveDockState {
     std::vector<std::string> channelSummaries;
     std::vector<ChannelSpec> defaultChannelSpecs;
     std::vector<ChannelTransformOverride> channelOverrides;
+    std::vector<std::string> hiddenChannelLabels;
     std::vector<std::uint8_t> fftChannelEnabled;
     bool toolsCollapsed{false};
     bool overviewCollapsed{false};
+    bool legendCollapsed{false};
+    bool legendVisibilityRestorePending{false};
     float toolsExpandedWidth{280.0F};
     float toolsCollapsedWidth{34.0F};
     float overviewPanelHeight{120.0F};
@@ -139,8 +200,30 @@ struct WaveDockState {
     std::uint64_t displayDataRevision{0};
     double displayDataSampleFrequencyHz{0.0};
     std::size_t lastLegendMeasurementChannelIndex{static_cast<std::size_t>(-1)};
+    struct DisplayDataCacheKey {
+        std::uint64_t dataRevision{0};
+        double sampleFrequencyHz{0.0};
+        double viewMinTime{0.0};
+        double viewMaxTime{0.0};
+        std::size_t channelCount{0};
+        WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
+        std::size_t rangeHash{0};
+
+        bool operator==(const DisplayDataCacheKey& other) const {
+            return dataRevision == other.dataRevision
+                && sampleFrequencyHz == other.sampleFrequencyHz
+                && viewMinTime == other.viewMinTime
+                && viewMaxTime == other.viewMaxTime
+                && channelCount == other.channelCount
+                && displayFormula == other.displayFormula
+                && rangeHash == other.rangeHash;
+        }
+    };
+    bool cachedDisplayKeyValid{false};
+    DisplayDataCacheKey cachedDisplayKey{};
     WaveSnapshot cachedFullSnapshot{};
     WaveDisplayData cachedDisplayData{};
+    WaveDisplayData cachedOverviewDisplayData{};
     WaveDataBounds cachedDisplayBounds{};
     bool cachedFftKeyValid{false};
     WaveFftCacheKey cachedFftKey{};

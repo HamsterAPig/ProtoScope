@@ -27,6 +27,8 @@ local pending_requests = {}
 local active_request_id = nil
 local upload_frame_cursor = 0
 local upload_sequence_state = nil
+local stopping_stream = false
+local last_noise_discarded_message = nil
 
 local function append_bytes(target, source)
   for index = 1, #source do
@@ -50,14 +52,14 @@ local function push_i16_be(target, value)
   push_u16_be(target, raw & 0xFFFF)
 end
 
-local function rewrite_crc_hi_lo(frame)
+local function rewrite_crc_lo_hi(frame)
   local payload = {}
   for index = 1, #frame - 2 do
     payload[#payload + 1] = frame[index]
   end
   local crc = proto.crc16_modbus(payload)
-  frame[#frame - 1] = (crc >> 8) & 0xFF
-  frame[#frame] = crc & 0xFF
+  frame[#frame - 1] = crc & 0xFF
+  frame[#frame] = (crc >> 8) & 0xFF
 end
 
 local function build_fc06_request(address, value)
@@ -66,7 +68,7 @@ local function build_fc06_request(address, value)
   push_u16_be(frame, value)
   frame[#frame + 1] = 0x00
   frame[#frame + 1] = 0x00
-  rewrite_crc_hi_lo(frame)
+  rewrite_crc_lo_hi(frame)
   return frame
 end
 
@@ -80,7 +82,17 @@ local function build_fc16_request(address, values)
   end
   frame[#frame + 1] = 0x00
   frame[#frame + 1] = 0x00
-  rewrite_crc_hi_lo(frame)
+  rewrite_crc_lo_hi(frame)
+  return frame
+end
+
+local function build_fc03_request(address, count)
+  local frame = { 0xFF, FUNC_READ_HOLDING }
+  push_u16_be(frame, address)
+  push_u16_be(frame, count)
+  frame[#frame + 1] = 0x00
+  frame[#frame + 1] = 0x00
+  rewrite_crc_lo_hi(frame)
   return frame
 end
 
@@ -129,6 +141,7 @@ local function setup_plot(reset_history)
       { label = "CH3", unit = "V", scale = 1.0, color = "#FFB74D" },
       { label = "CH4", unit = "V", scale = 1.0, color = "#E57373" },
     },
+    history_limit = 30000,
   })
 end
 
@@ -167,6 +180,9 @@ local function finish_active_request(ok, message, level)
     message = message,
   })
   if meta then
+    if meta.tag == "stop_stream" then
+      stopping_stream = false
+    end
     clear_request_state(meta.id)
   end
   proto.status.set(message, { level = level or (ok and "info" or "error") })
@@ -203,6 +219,16 @@ local function queue_fc06(address, value, tag)
     kind = "fc06",
     address = address,
     value = value,
+    tag = tag,
+  })
+end
+
+local function queue_fc03(address, count, tag)
+  local frame = build_fc03_request(address, count)
+  return enqueue_request(frame, {
+    kind = "fc03",
+    address = address,
+    register_count = count,
     tag = tag,
   })
 end
@@ -270,7 +296,18 @@ end
 
 local function send_start_stop(start_value)
   local tag = start_value == 0 and "stop_stream" or "start_stream"
-  queue_fc06(REG_STREAM_SWITCH, start_value, tag)
+  if tag == "stop_stream" then
+    stopping_stream = true
+  else
+    stopping_stream = false
+  end
+  if not queue_fc06(REG_STREAM_SWITCH, start_value, tag) and tag == "stop_stream" then
+    stopping_stream = false
+  end
+end
+
+local function read_gain_registers()
+  queue_fc03(REG_GAIN_CH12, 4, "read_gain")
 end
 
 local function track_upload_sequence(sequence)
@@ -296,24 +333,56 @@ local function track_upload_sequence(sequence)
   }
 end
 
-local function push_upload_sample(channel_index, value)
-  local sample_time = upload_frame_cursor * UPLOAD_SAMPLE_DT
-  proto.plot.push(channel_index, {
-    source = "sn_scope_upload",
-    samples = {
-      {
-        t = sample_time,
-        y = (tonumber(value) or 0) * CHANNEL_SCALE,
-      },
-    },
-  })
+local function append_upload_sample(samples_by_channel, channel_index, sample_time, value)
+  local series = samples_by_channel[channel_index]
+  if not series.t0 then
+    series.t0 = sample_time
+  end
+  local values = series.values
+  values[#values + 1] = (tonumber(value) or 0) * CHANNEL_SCALE
+end
+
+local function flush_upload_samples(samples_by_channel)
+  for channel_index = 1, CHANNEL_COUNT do
+    local series = samples_by_channel[channel_index]
+    if #series.values > 0 then
+      proto.plot.push(channel_index, {
+        source = "sn_scope_upload",
+        t0 = series.t0 or 0,
+        dt = UPLOAD_SAMPLE_DT,
+        values = series.values,
+      })
+    end
+  end
+end
+
+local function new_upload_series_by_channel()
+  local result = {}
+  for channel_index = 1, CHANNEL_COUNT do
+    result[channel_index] = { values = {} }
+  end
+  return result
 end
 
 local function handle_fc03_response(ctx, frame)
   local fields = frame.fields or {}
-  proto.status.set(
-    string.format("读取应答: %d byte / %d regs", fields.byte_count or 0, #(fields.register_values or {})),
-    { level = "info" }
+  local values = fields.register_values or {}
+  local message = string.format("读取应答: %d byte / %d regs", fields.byte_count or 0, #values)
+  local active = current_request()
+  if not active then
+    proto.status.set(message, { level = "info" })
+    return
+  end
+
+  if active.kind == "fc03" and #values == (active.register_count or 0) then
+    finish_active_request(true, message .. "，匹配: " .. request_summary(active), "info")
+    return
+  end
+
+  finish_active_request(
+    false,
+    string.format("FC03 应答不匹配，收到 %d regs，期望 %s", #values, request_summary(active)),
+    "error"
   )
 end
 
@@ -386,29 +455,70 @@ local function handle_exception(ctx, frame)
   end
 end
 
-local function handle_upload_frame(ctx, frame)
+local function append_upload_frame_samples(ctx, frame, samples_by_channel)
   local fields = frame.fields or {}
   local sequence_state = track_upload_sequence(fields.sequence or 0)
   if sequence_state.lost > 0 then
     proto.status.set(string.format("丢帧: %d", sequence_state.lost_total), { level = "warn" })
   end
 
-  push_upload_sample(1, fields.ch1 or 0)
-  push_upload_sample(2, fields.ch2 or 0)
-  push_upload_sample(3, fields.ch3 or 0)
-  push_upload_sample(4, fields.ch4 or 0)
+  local sample_time = upload_frame_cursor * UPLOAD_SAMPLE_DT
+  append_upload_sample(samples_by_channel, 1, sample_time, fields.ch1 or 0)
+  append_upload_sample(samples_by_channel, 2, sample_time, fields.ch2 or 0)
+  append_upload_sample(samples_by_channel, 3, sample_time, fields.ch3 or 0)
+  append_upload_sample(samples_by_channel, 4, sample_time, fields.ch4 or 0)
   upload_frame_cursor = upload_frame_cursor + 1
+end
+
+local function handle_upload_frame(ctx, frame)
+  local samples_by_channel = new_upload_series_by_channel()
+  append_upload_frame_samples(ctx, frame, samples_by_channel)
+  flush_upload_samples(samples_by_channel)
 end
 
 local function handle_stream_error(ctx, err)
   if err.code == "crc_mismatch" then
-    proto.status.set("CRC 校验失败: " .. tostring(err.message), { level = "warn" })
+    local message = "CRC 校验失败: " .. tostring(err.message)
+    if current_request() then
+      finish_active_request(false, message, "warn")
+    else
+      proto.status.set(message, { level = "warn" })
+    end
   elseif err.code == "noise_discarded" then
-    proto.status.set("已丢弃噪声前缀: " .. tostring(err.message), { level = "warn" })
+    local message = "已丢弃噪声前缀: " .. tostring(err.message)
+    if message ~= last_noise_discarded_message then
+      proto.status.set(message, { level = "warn" })
+      last_noise_discarded_message = message
+    end
   elseif err.code == "invalid_length" then
+    last_noise_discarded_message = nil
     proto.status.set("长度非法: " .. tostring(err.message), { level = "error" })
   else
+    last_noise_discarded_message = nil
     proto.status.set("解析失败: " .. tostring(err.message), { level = "error" })
+  end
+end
+
+local function handle_stream_batch(ctx, frames)
+  local samples_by_channel = new_upload_series_by_channel()
+  for _, frame in ipairs(frames or {}) do
+    local name = frame.name
+    if name == "upload_ch4" then
+      -- 停止阶段仍允许尾包推送波形，等待随后到达的 FC06 ACK 完成 request。
+      append_upload_frame_samples(ctx, frame, samples_by_channel)
+    elseif name == "fc03_response" then
+      handle_fc03_response(ctx, frame)
+    elseif name == "fc06_ack" then
+      handle_fc06_ack(ctx, frame)
+    elseif name == "fc16_ack" then
+      handle_fc16_ack(ctx, frame)
+    elseif name == "exception_fc03" or name == "exception_fc06" or name == "exception_fc16" then
+      handle_exception(ctx, frame)
+    end
+  end
+  flush_upload_samples(samples_by_channel)
+  if #(frames or {}) > 0 then
+    last_noise_discarded_message = nil
   end
 end
 
@@ -417,23 +527,21 @@ function stream()
   local schema = {
     buffer = {
       capacity = 4096,
-      overflow = "drop_oldest",
     },
+    raw_output = "omit",
     frames = {
       {
         name = "fc03_response",
         header = { 0xFF, FUNC_READ_HOLDING },
         len = { offset = 3, type = "u8", means = "payload", extra = 5 },
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "byte_count", type = "u8", offset = 3 },
           {
             name = "register_values",
             type = "u16_be",
             offset = 4,
-            count = function(parsed)
-              return math.floor((parsed.byte_count or 0) / 2)
-            end,
+            count = { op = "div", field = "byte_count", by = 2 },
           },
         },
         on_frame = handle_fc03_response,
@@ -442,7 +550,7 @@ function stream()
         name = "fc06_ack",
         header = { 0xFF, FUNC_WRITE_SINGLE },
         size = 8,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "address", type = "u16_be", offset = 3 },
           { name = "value", type = "u16_be", offset = 5 },
@@ -453,7 +561,7 @@ function stream()
         name = "fc16_ack",
         header = { 0xFF, FUNC_WRITE_MULTI },
         size = 8,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "address", type = "u16_be", offset = 3 },
           { name = "register_count", type = "u16_be", offset = 5 },
@@ -464,7 +572,7 @@ function stream()
         name = "exception_fc03",
         header = { 0xFF, FUNC_EXCEPTION_READ },
         size = 5,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "exception_code", type = "u8", offset = 3 },
         },
@@ -474,7 +582,7 @@ function stream()
         name = "exception_fc06",
         header = { 0xFF, FUNC_EXCEPTION_WRITE_SINGLE },
         size = 5,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "exception_code", type = "u8", offset = 3 },
         },
@@ -484,7 +592,7 @@ function stream()
         name = "exception_fc16",
         header = { 0xFF, FUNC_EXCEPTION_WRITE_MULTI },
         size = 5,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "exception_code", type = "u8", offset = 3 },
         },
@@ -494,7 +602,7 @@ function stream()
         name = "upload_ch4",
         header = { 0xFF, FUNC_UPLOAD_CH4 },
         size = 14,
-        crc = { type = "crc16_modbus", order = "hi_lo" },
+        crc = { type = "crc16_modbus", order = "lo_hi" },
         fields = {
           { name = "sequence", type = "u16_be", offset = 3 },
           { name = "ch1", type = "i16_be", offset = 5 },
@@ -505,6 +613,7 @@ function stream()
         on_frame = handle_upload_frame,
       },
     },
+    on_batch = handle_stream_batch,
     on_error = handle_stream_error,
   }
   return schema
@@ -528,6 +637,7 @@ function ui()
         { type = "button", id = "auto_start", label = "自动配置并启动" },
         { type = "button", id = "start_stream", label = "仅启动" },
         { type = "button", id = "stop_stream", label = "停止" },
+        { type = "button", id = "read_gain", label = "读取系数" },
         { type = "button", id = "clear_plot", label = "清空波形" },
       },
     },
@@ -539,11 +649,15 @@ function on_open(ctx)
   active_request_id = nil
   upload_frame_cursor = 0
   upload_sequence_state = nil
+  stopping_stream = false
+  last_noise_discarded_message = nil
   proto.status.clear()
   setup_plot(true)
 end
 
 function on_close(ctx)
+  stopping_stream = false
+  last_noise_discarded_message = nil
   proto.status.clear()
 end
 
@@ -572,10 +686,16 @@ function on_tx(ctx, evt)
     end
   elseif evt.state == "timeout" then
     local label = meta and request_summary(meta) or tostring(evt.tag)
+    if meta and meta.tag == "stop_stream" then
+      stopping_stream = false
+    end
     clear_request_state(evt.id)
     proto.status.set("请求超时: " .. label, { level = "warn" })
   elseif evt.state == "rejected" or evt.state == "dropped" or evt.state == "canceled" then
     local label = meta and request_summary(meta) or tostring(evt.tag)
+    if meta and meta.tag == "stop_stream" then
+      stopping_stream = false
+    end
     clear_request_state(evt.id)
     proto.status.set("请求失败: " .. label .. " / " .. tostring(evt.error or evt.state), { level = "error" })
   end
@@ -589,6 +709,8 @@ function on_control(ctx, id, value)
     send_start_stop(0x0001)
   elseif id == "stop_stream" then
     send_start_stop(0x0000)
+  elseif id == "read_gain" then
+    read_gain_registers()
   elseif id == "clear_plot" then
     upload_frame_cursor = 0
     upload_sequence_state = nil

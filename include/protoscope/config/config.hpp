@@ -20,6 +20,24 @@ struct AppConfigHotReloadConfig {
     bool enabled{false};
 };
 
+struct PerformanceExplicitOverrides {
+    bool receiveTransportReadBufferBytes{false};
+    bool workerRxQueueLimitBytes{false};
+    bool workerMemoryBudgetBytes{false};
+    bool workerOutputQueueLimit{false};
+    bool workerBatchBytes{false};
+    bool workerOutputFlushBudgetMs{false};
+    bool realtimeBacklogRxChunkBytesPerPump{false};
+    bool realtimeBacklogTransferFrameRowsPerPump{false};
+    bool realtimeBacklogPlotAppendsPerPump{false};
+    bool realtimeBacklogRawFirstBacklogWarnBytes{false};
+};
+
+struct PerformanceConfig {
+    double scale{1.0};
+    PerformanceExplicitOverrides explicitOverrides{};
+};
+
 enum class LogLevel {
     Debug,
     Info,
@@ -52,14 +70,20 @@ struct GuiWaveConfig {
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
     plot::WaveChannelCardWidthMode channelCardWidthMode{plot::WaveChannelCardWidthMode::Fixed};
     plot::WaveChannelDoubleClickAction channelDoubleClickAction{plot::WaveChannelDoubleClickAction::ResetScaleOffset};
+    plot::WaveXAxisDoubleClickAction xAxisDoubleClickAction{plot::WaveXAxisDoubleClickAction::FitFullHistory};
+    plot::WaveHiddenChannelPolicy hiddenChannelPolicy{plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
+    plot::WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{plot::WaveCursorExtremeSnapPolicy::NearestWaveform};
+    bool zoomSelectionAutoExit{false};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     double downsampleStartMultiplier{2.0};
     std::size_t overviewMaxSamples{20000};
     double minVisibleTimeSpan{0.001};
+    std::size_t maxTotalSamples{0};
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
     double verticalAutoFitMultiplier{1.2};
+    bool resetHistoryOnTimeReset{true};
     bool showAxisLabels{false};
     bool showChannelLegend{true};
     bool showFftLegend{true};
@@ -74,6 +98,7 @@ struct GuiLogHistoryConfig {
 
 struct GuiRawCaptureConfig {
     std::size_t liveLimitBytes{64U * 1024U * 1024U};
+    std::size_t recordingQueueLimitBytes{256U * 1024U * 1024U};
 };
 
 struct GuiRealtimeBacklogConfig {
@@ -81,7 +106,10 @@ struct GuiRealtimeBacklogConfig {
     std::size_t rxChunkBytesPerPump{64U * 1024U};
     std::size_t transferFrameRowsPerPump{2000};
     std::size_t plotAppendsPerPump{4096};
-    bool discardBacklogOnDisconnect{true};
+    std::size_t rawFirstBacklogWarnBytes{32U * 1024U * 1024U};
+    bool derivedBacklogDegradeEnabled{true};
+    bool discardBacklogOnDisconnect{false};
+    double pumpMinIntervalMs{2.0};
 };
 
 struct GuiElfSymbolComboConfig {
@@ -96,8 +124,10 @@ struct GuiConfig {
     GuiRawCaptureConfig rawCapture{};
     GuiRealtimeBacklogConfig realtimeBacklog{};
     GuiElfSymbolComboConfig elfSymbolCombo{};
+    bool showAppHeader{false};
     bool luaDockLayoutDebug{false};
     std::size_t sendHistoryLimit{20};
+    bool replayRawHistoryOnSchemaSwitch{false};
 };
 
 struct ProtocolTxConfig {
@@ -114,14 +144,43 @@ struct ProtocolConfig {
     ProtocolTxConfig tx{};
 };
 
+struct ReceiveStreamBufferConfig {
+    double nearOverflowThreshold{0.8};
+    bool popupEnabled{true};
+};
+
+struct ReceiveConfig {
+    ReceiveStreamBufferConfig streamBuffer{};
+    std::size_t transportReadBufferBytes{64U * 1024U};
+};
+
+struct ScriptingPipelineConfig {
+    std::optional<std::size_t> workerThreads{};
+};
+
 struct ScriptingConfig {
     scripting::FileIoConfig fileIo{};
+    ScriptingPipelineConfig pipeline{};
+    bool workerEnabled{true};
+    std::size_t workerRxQueueLimitBytes{64U * 1024U * 1024U};
+    std::size_t workerMemoryBudgetBytes{256U * 1024U * 1024U};
+    double workerMemoryBudgetAvailableRatio{0.0};
+    std::size_t workerOutputQueueLimit{65536U};
+    std::size_t workerBatchBytes{256U * 1024U};
+    bool workerBackpressureEnabled{true};
+    double workerBackpressureHighWatermark{0.5};
+    double workerBackpressureLowWatermark{0.3};
+    double workerOutputFlushBudgetMs{4.0};
+    /// 超时前是否使用无帧预算限制的 drain（默认关闭）；开启时采用 flushScriptOutputsUnbounded()
+    bool drainRequestOutputsUnbounded{false};
 };
 
 struct AppConfig {
+    PerformanceConfig performance{};
     AppRuntimeConfig app{};
     GuiConfig gui{};
     ProtocolConfig protocol{};
+    ReceiveConfig receive{};
     ScriptingConfig scripting{};
     AppLoggingConfig logging{};
     dock::CommDockState communication{};

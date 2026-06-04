@@ -135,7 +135,12 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field source? string
 ---@field channels ProtoPlotChannel[]
 ---@field reset_history? boolean
----@field view? { time_scale?: number, time_unit?: string, vertical_min?: number, vertical_max?: number, vertical_unit?: string, history_limit?: integer }
+---@field time_scale? number
+---@field time_unit? string
+---@field vertical_min? number
+---@field vertical_max? number
+---@field vertical_unit? string
+---@field history_limit? integer @省略或 0 表示不裁剪历史。
 
 -- 单个波形采样点：t 是横轴时间，y 是纵轴数值。
 ---@class ProtoPlotSample
@@ -145,7 +150,10 @@ function ProtoBuffer:bytes(max_bytes) end
 -- 波形追加请求：向已有通道持续推送采样点。
 ---@class ProtoPlotAppendRequest
 ---@field source? string
----@field samples ProtoPlotSample[]
+---@field samples? ProtoPlotSample[]
+---@field t0? number @compact series 起始时间；与 dt/values 一起使用。
+---@field dt? number @compact series 相邻采样时间间隔；与 t0/values 一起使用。
+---@field values? number[] @compact series 数值序列，可减少 Lua 小表创建。
 
 -- 发送类操作的附加参数：常用于超时和业务标签标记。
 ---@class ProtoSendOptions
@@ -181,12 +189,23 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@class ProtoStatusOptions
 ---@field level? ProtoLogLevel
 
--- 弹窗参数：用于 alert / confirm 的标题、内容和去重键。
+-- 弹窗窗口配置：控制脚本弹窗的初始尺寸、位置和交互能力。
+---@class ProtoDialogWindowOptions
+---@field width? number
+---@field height? number
+---@field x? number
+---@field y? number
+---@field resizable? boolean
+---@field movable? boolean
+---@field auto_resize? boolean
+
+-- 弹窗参数：用于 alert / confirm 的标题、内容、去重键和窗口配置。
 ---@class ProtoDialogOptions
 ---@field title string
 ---@field message string
 ---@field level? ProtoLogLevel
 ---@field dedupe_key? string
+---@field window? ProtoDialogWindowOptions
 
 -- 弹窗事件：回传弹窗的最终状态与确认结果。
 ---@class ProtoDialogEvent
@@ -242,12 +261,18 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field error? string
 ---@field timestamp_ms integer
 
+---@class ProtoStreamRuntimeProfile
+---@field frame string
+---@field length integer
+---@field channel_map? integer[]
+
 proto = proto or {}
 proto.plot = proto.plot or {}
 proto.status = proto.status or {}
 proto.ui = proto.ui or {}
 proto.fs = proto.fs or {}
 proto.bits = proto.bits or {}
+proto.stream = proto.stream or {}
 
 -- 记录脚本日志，便于调试协议、状态流转和异常定位。
 ---@param level ProtoLogLevel
@@ -288,6 +313,18 @@ function proto.bits.count(value) end
 ---@param name string
 ---@param delay_ms integer
 function proto.set_timer(name, delay_ms) end
+
+-- 为声明了 runtime_profile 的 frame 设置运行时整帧长度与通道映射。
+---@param profile ProtoStreamRuntimeProfile
+---@return boolean ok
+---@return string|nil error
+function proto.stream.set_profile(profile) end
+
+-- 清除一个 frame 或全部 frame 的运行时 profile。
+---@param frame_name? string
+---@return boolean ok
+---@return string|nil error
+function proto.stream.clear_profile(frame_name) end
 
 -- 取消指定定时器，避免超时回调在脚本不需要时继续触发。
 ---@param name string
