@@ -419,7 +419,7 @@ void GuiRuntime::drawProtocolDock() {
         if (copyMode) {
             // 拷贝模式：深拷贝控件列表，避免回调修改导致迭代器失效
             const auto controls = lua.controlStates;
-            drawLuaDockFlow(controls);
+            drawLuaDockFlow(controls, false);
         } else {
             // 引用模式：直接按引用遍历当前帧控件
             const auto& controls = lua.controlStates;
@@ -432,10 +432,10 @@ void GuiRuntime::drawProtocolDock() {
 
 }
 
-bool GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls) {
+bool GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls, bool earlyExit) {
     for (const auto& control : controls) {
         if (drawDynamicControl(control)) {
-            return true;
+            if (earlyExit) return true;
         }
     }
     return false;
