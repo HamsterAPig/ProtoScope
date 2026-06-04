@@ -9,6 +9,7 @@ namespace protoscope::ui {
 class WaveFftComponent final : public IWaveComponent {
 public:
     std::string_view id() const override { return "wave_fft"; }
+
     void draw(WaveContext& context) override;
 };
 

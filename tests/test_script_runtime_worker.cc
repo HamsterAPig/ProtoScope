@@ -1,8 +1,8 @@
-#include "test_registry.hpp"
-
 #include "protoscope/scripting/pipeline_threading.hpp"
 #include "protoscope/scripting/script_runtime_worker.hpp"
 #include "protoscope/transport/transport.hpp"
+
+#include "test_registry.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -17,13 +17,15 @@
 
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const char* message)
+{
     if (!condition) {
         throw std::runtime_error(message);
     }
 }
 
-std::filesystem::path makeWorkerProtocolDir(const char* name, const std::string& script) {
+std::filesystem::path makeWorkerProtocolDir(const char* name, const std::string& script)
+{
     const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto dir = std::filesystem::temp_directory_path() /
                      (std::string("protoscope-worker-") + name + "-" + std::to_string(ticks));
@@ -33,7 +35,8 @@ std::filesystem::path makeWorkerProtocolDir(const char* name, const std::string&
     return dir;
 }
 
-protoscope::transport::ConnectionContext workerContext(std::uint64_t timestampMs = 1) {
+protoscope::transport::ConnectionContext workerContext(std::uint64_t timestampMs = 1)
+{
     return protoscope::transport::ConnectionContext{
         .kind = protoscope::transport::TransportKind::TcpClient,
         .endpoint = "worker-test",
@@ -43,7 +46,8 @@ protoscope::transport::ConnectionContext workerContext(std::uint64_t timestampMs
     };
 }
 
-protoscope::transport::TransportBytesEvent bytesEvent(std::vector<std::uint8_t> bytes, std::uint64_t timestampMs = 1) {
+protoscope::transport::TransportBytesEvent bytesEvent(std::vector<std::uint8_t> bytes, std::uint64_t timestampMs = 1)
+{
     return protoscope::transport::TransportBytesEvent{
         .context = workerContext(timestampMs),
         .bytes = std::move(bytes),
@@ -52,7 +56,8 @@ protoscope::transport::TransportBytesEvent bytesEvent(std::vector<std::uint8_t> 
 
 bool hasEvent(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& batches,
               const std::string& eventName,
-              const std::string& token) {
+              const std::string& token)
+{
     for (const auto& batch : batches) {
         for (const auto& event : batch.events) {
             if (event.name == eventName && event.payload.find(token) != std::string::npos) {
@@ -66,12 +71,12 @@ bool hasEvent(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>
 bool hasEventWithTokens(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& batches,
                         const std::string& eventName,
                         const std::string& firstToken,
-                        const std::string& secondToken) {
+                        const std::string& secondToken)
+{
     for (const auto& batch : batches) {
         for (const auto& event : batch.events) {
-            if (event.name == eventName
-                && event.payload.find(firstToken) != std::string::npos
-                && event.payload.find(secondToken) != std::string::npos) {
+            if (event.name == eventName && event.payload.find(firstToken) != std::string::npos &&
+                event.payload.find(secondToken) != std::string::npos) {
                 return true;
             }
         }
@@ -79,7 +84,8 @@ bool hasEventWithTokens(const std::vector<protoscope::scripting::ScriptRuntimeOu
     return false;
 }
 
-bool hasLog(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& batches, const std::string& token) {
+bool hasLog(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& batches, const std::string& token)
+{
     for (const auto& batch : batches) {
         for (const auto& log : batch.logs) {
             if (log.message.find(token) != std::string::npos) {
@@ -90,7 +96,8 @@ bool hasLog(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& 
     return false;
 }
 
-std::string workerProbeScript() {
+std::string workerProbeScript()
+{
     return R"lua(
 function controls()
   return {}
@@ -113,7 +120,8 @@ end
 )lua";
 }
 
-std::string workerBatchProbeScript() {
+std::string workerBatchProbeScript()
+{
     return R"lua(
 function controls()
   return {}
@@ -135,7 +143,8 @@ end
 
 } // namespace
 
-void test_script_runtime_worker_disabled_mode_waits_for_rx_idle() {
+void test_script_runtime_worker_disabled_mode_waits_for_rx_idle()
+{
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
         .enabled = false,
@@ -146,7 +155,7 @@ void test_script_runtime_worker_disabled_mode_waits_for_rx_idle() {
     const auto protocolDir = makeWorkerProtocolDir("sync", workerProbeScript());
     const auto loaded = worker.loadProtocolDirectory(protocolDir.generic_string());
     require(loaded.ok, "worker 同步模式测试协议应可加载");
-    (void)worker.drainOutputs();
+    (void) worker.drainOutputs();
 
     worker.postTransportBytes(bytesEvent({0x42, 0x43, 0x44}));
     const auto outputs = worker.drainOutputs();
@@ -155,7 +164,8 @@ void test_script_runtime_worker_disabled_mode_waits_for_rx_idle() {
     require(hasEvent(outputs, "worker_bytes", "first=66"), "禁用异步 worker 时应立即产出脚本事件");
 }
 
-void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes() {
+void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
+{
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
         .enabled = true,
@@ -167,7 +177,7 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes() {
     const auto protocolDir = makeWorkerProtocolDir("rx-limit", workerProbeScript());
     const auto loaded = worker.loadProtocolDirectory(protocolDir.generic_string());
     require(loaded.ok, "worker 限流测试协议应可加载");
-    (void)worker.drainOutputs();
+    (void) worker.drainOutputs();
 
     worker.postTransportBytes(bytesEvent({0x01}, 1));
     bool firstEventInWorker = false;
@@ -194,7 +204,8 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes() {
     require(hasEvent(outputs, "worker_bytes", "first=195"), "RX 队列超过阈值后仍应保留最新待解析字节");
 }
 
-void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events() {
+void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events()
+{
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
         .enabled = true,
@@ -206,7 +217,7 @@ void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events() {
     const auto protocolDir = makeWorkerProtocolDir("batch-bytes", workerBatchProbeScript());
     const auto loaded = worker.loadProtocolDirectory(protocolDir.generic_string());
     require(loaded.ok, "worker 分块测试协议应可加载");
-    (void)worker.drainOutputs();
+    (void) worker.drainOutputs();
 
     // 核心流程：首个 RX 事件刚好填满 batch，后续相邻事件必须另起一批并继续按 batch_bytes 合并。
     worker.postTransportBytes(bytesEvent({0x01, 0x02, 0x03}, 1));
@@ -223,7 +234,8 @@ void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events() {
             "超过 batch_bytes 的后续 RX 应保留为新块");
 }
 
-void test_pipeline_worker_threads_resolve_from_hardware_limit() {
+void test_pipeline_worker_threads_resolve_from_hardware_limit()
+{
     using protoscope::scripting::resolvePipelineWorkerThreads;
 
     require(resolvePipelineWorkerThreads(std::nullopt, 8U) == 7U, "缺省线程数应使用硬件并发减一");

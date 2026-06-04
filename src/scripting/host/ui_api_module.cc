@@ -10,7 +10,8 @@ public:
 
     std::string_view id() const override { return "ui_api_module"; }
 
-    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
+    {
         auto* host = &host_;
         sol::state_view lua = ctx.lua;
         sol::table uiApi = lua.create_table();
@@ -37,7 +38,8 @@ private:
     ScriptHost& host_;
 };
 
-std::unique_ptr<IScriptHostApiModule> makeUiApiModule(ScriptHost& host) {
+std::unique_ptr<IScriptHostApiModule> makeUiApiModule(ScriptHost& host)
+{
     return std::make_unique<UiScriptHostApiModule>(host);
 }
 

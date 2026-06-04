@@ -1,4 +1,5 @@
 #include "script_file_system_facade.hpp"
+
 #include "script_host_internal.hpp"
 
 #include <algorithm>
@@ -7,7 +8,10 @@
 
 namespace protoscope::scripting {
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua, const std::string& pathText, const sol::object& opts) {
+std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua,
+                                                             const std::string& pathText,
+                                                             const sol::object& opts)
+{
     auto fail = [lua](const std::string& error) {
         return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
     };
@@ -43,8 +47,8 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua
     path = canonicalPath(path);
 
     auto authorized = [&](bool writeAccess) {
-        if (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty()
-            && isSameOrChildPath(canonicalPath(protocolDirectory_), path, true)) {
+        if (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty() &&
+            isSameOrChildPath(canonicalPath(protocolDirectory_), path, true)) {
             return true;
         }
         for (const auto& root : fileIoConfig_.extraAllowedRoots) {
@@ -53,8 +57,8 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua
             }
         }
         for (const auto& root : dialogAuthorizedPaths_) {
-            if ((!writeAccess || root.writable) && (writeAccess || root.readable)
-                && isSameOrChildPath(root.path, path, root.recursive)) {
+            if ((!writeAccess || root.writable) && (writeAccess || root.readable) &&
+                isSameOrChildPath(root.path, path, root.recursive)) {
                 return true;
             }
         }
@@ -106,7 +110,10 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua
     return std::make_tuple(sol::make_object(lua, id), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(sol::state_view lua, std::uint64_t handleId, const sol::object& opts) {
+std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(sol::state_view lua,
+                                                             std::uint64_t handleId,
+                                                             const sol::object& opts)
+{
     auto fail = [lua](const std::string& error) {
         return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
     };
@@ -139,7 +146,10 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(sol::state_view lua
     return std::make_tuple(sol::make_object(lua, std::move(buffer)), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(sol::state_view lua, std::uint64_t handleId, const sol::object& payload) {
+std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(sol::state_view lua,
+                                                              std::uint64_t handleId,
+                                                              const sol::object& payload)
+{
     auto fail = [lua](const std::string& error) {
         return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, error));
     };
@@ -164,7 +174,8 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(sol::state_view lu
     return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(sol::state_view lua, std::uint64_t handleId) {
+std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(sol::state_view lua, std::uint64_t handleId)
+{
     const auto iter = fileHandles_.find(handleId);
     if (iter == fileHandles_.end()) {
         return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, "文件句柄已关闭"));
@@ -173,7 +184,8 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(sol::state_view lu
     return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua, const std::string& pathText) {
+std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua, const std::string& pathText)
+{
     auto fail = [lua](const std::string& error) {
         return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
     };
@@ -185,18 +197,17 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua
         path = std::filesystem::path(protocolDirectory_) / path;
     }
     path = canonicalPath(path);
-    const bool authorized = (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty()
-                             && isSameOrChildPath(canonicalPath(protocolDirectory_), path, true))
-        || std::any_of(fileIoConfig_.extraAllowedRoots.begin(),
-                       fileIoConfig_.extraAllowedRoots.end(),
-                       [&](const std::string& root) {
-                           return !root.empty() && isSameOrChildPath(canonicalPath(root), path, true);
-                       })
-        || std::any_of(dialogAuthorizedPaths_.begin(),
-                       dialogAuthorizedPaths_.end(),
-                       [&](const AuthorizedPath& root) {
-                           return root.readable && isSameOrChildPath(root.path, path, root.recursive);
-                       });
+    const bool authorized =
+        (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty() &&
+         isSameOrChildPath(canonicalPath(protocolDirectory_), path, true)) ||
+        std::any_of(fileIoConfig_.extraAllowedRoots.begin(),
+                    fileIoConfig_.extraAllowedRoots.end(),
+                    [&](const std::string& root) {
+                        return !root.empty() && isSameOrChildPath(canonicalPath(root), path, true);
+                    }) ||
+        std::any_of(dialogAuthorizedPaths_.begin(), dialogAuthorizedPaths_.end(), [&](const AuthorizedPath& root) {
+            return root.readable && isSameOrChildPath(root.path, path, root.recursive);
+        });
     if (!authorized) {
         return fail("路径未授权: " + path.generic_string());
     }
@@ -207,15 +218,18 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua
     }
     sol::table table = lua.create_table();
     table["size"] = std::filesystem::is_regular_file(path, errorCode)
-        ? static_cast<std::uint64_t>(std::filesystem::file_size(path, errorCode))
-        : 0U;
+                        ? static_cast<std::uint64_t>(std::filesystem::file_size(path, errorCode))
+                        : 0U;
     table["mtime_ms"] = 0;
     table["is_file"] = std::filesystem::is_regular_file(path, errorCode);
     table["is_dir"] = std::filesystem::is_directory(path, errorCode);
     return std::make_tuple(sol::make_object(lua, table), sol::make_object(lua, sol::lua_nil));
 }
 
-std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view lua, const std::string& pathText, const sol::object& opts) {
+std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view lua,
+                                                                 const std::string& pathText,
+                                                                 const sol::object& opts)
+{
     std::string kind = "send";
     std::string tag = "file";
     std::size_t chunkSize = fileIoConfig_.sendFile.defaultChunkBytes;
@@ -252,7 +266,8 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view
     return std::make_tuple(sol::make_object(lua, jobId), sol::make_object(lua, sol::lua_nil));
 }
 
-void ScriptHost::pumpFileSendJob(std::uint64_t jobId) {
+void ScriptHost::pumpFileSendJob(std::uint64_t jobId)
+{
     auto jobIter = fileSendJobs_.find(jobId);
     if (jobIter == fileSendJobs_.end()) {
         return;
@@ -263,7 +278,8 @@ void ScriptHost::pumpFileSendJob(std::uint64_t jobId) {
         sol::table readOpts = runtime_->lua.create_table();
         readOpts["max_bytes"] = static_cast<int>(job.chunkSize);
         const auto offset = job.nextOffset;
-        const auto [bufferObject, readError] = protoFsRead(luaView(), job.handleId, sol::make_object(runtime_->lua, readOpts));
+        const auto [bufferObject, readError] =
+            protoFsRead(luaView(), job.handleId, sol::make_object(runtime_->lua, readOpts));
         if (!bufferObject.valid() || bufferObject.get_type() == sol::type::lua_nil) {
             job.eof = true;
             break;

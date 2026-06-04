@@ -2,15 +2,15 @@
 
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
-#include "protoscope/ui/elf_static_address_file_watch.hpp"
 #include "protoscope/ui/dock_layout.hpp"
+#include "protoscope/ui/elf_static_address_file_watch.hpp"
 #include "protoscope/ui/ui_component.hpp"
 #include "protoscope/ui/ui_host_context.hpp"
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <future>
@@ -251,6 +251,7 @@ private:
     std::string elfStaticAddressPath_;
     std::string elfStaticAddressError_;
     ElfStaticAddressFileWatchState elfStaticAddressWatch_;
+
     struct ElfSymbolComboUiState {
         std::string draft;
         std::string queriedDraft;
@@ -259,6 +260,7 @@ private:
         std::size_t queriedLimit{0};
         std::vector<scripting::ElfSymbolValue> options;
     };
+
     std::unordered_map<std::string, ElfSymbolComboUiState> elfSymbolComboStates_;
     WaveDockRenderer waveDockRenderer_;
 };

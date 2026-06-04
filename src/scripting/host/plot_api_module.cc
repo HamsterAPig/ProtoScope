@@ -11,7 +11,8 @@ public:
 
     std::string_view id() const override { return "plot_api_module"; }
 
-    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
+    {
         auto* host = &host_;
         sol::table plotApi = ctx.lua.create_table();
         plotApi.set_function("setup", [host](const sol::object& payload) {
@@ -43,7 +44,8 @@ private:
     ScriptHost& host_;
 };
 
-std::unique_ptr<IScriptHostApiModule> makePlotApiModule(ScriptHost& host) {
+std::unique_ptr<IScriptHostApiModule> makePlotApiModule(ScriptHost& host)
+{
     return std::make_unique<PlotScriptHostApiModule>(host);
 }
 

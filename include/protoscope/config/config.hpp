@@ -3,8 +3,8 @@
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -125,9 +125,9 @@ struct GuiConfig {
     GuiRealtimeBacklogConfig realtimeBacklog{};
     GuiElfSymbolComboConfig elfSymbolCombo{};
     bool showAppHeader{false};
-     bool luaDockLayoutDebug{false};
-     bool luaDockRenderCopyMode{true};
-     std::size_t sendHistoryLimit{20};
+    bool luaDockLayoutDebug{false};
+    bool luaDockRenderCopyMode{true};
+    std::size_t sendHistoryLimit{20};
     bool replayRawHistoryOnSchemaSwitch{false};
 };
 
@@ -209,7 +209,8 @@ public:
     bool save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const;
 
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& dir) const;
-    std::filesystem::path normalizeProtocolDir(const std::filesystem::path& rootDir, const std::filesystem::path& dir) const;
+    std::filesystem::path normalizeProtocolDir(const std::filesystem::path& rootDir,
+                                               const std::filesystem::path& dir) const;
     std::filesystem::path mainLuaPath(const std::filesystem::path& protocolDir) const;
     std::string protocolName(const std::filesystem::path& protocolDir) const;
     bool protocolEntryExists(const std::filesystem::path& protocolDir) const;

@@ -9,9 +9,7 @@ public:
 
     std::string_view id() const override { return "runtime.menu"; }
 
-    void drawMainMenuItems(RuntimeUiContext&) override {
-        runtime_.drawMainMenu();
-    }
+    void drawMainMenuItems(RuntimeUiContext&) override { runtime_.drawMainMenu(); }
 
 private:
     GuiRuntime& runtime_;
@@ -23,11 +21,10 @@ public:
 
     std::string_view id() const override { return "runtime.dialogs"; }
 
-    void syncRequests(RuntimeUiContext&) override {
-        runtime_.syncDialogQueue();
-    }
+    void syncRequests(RuntimeUiContext&) override { runtime_.syncDialogQueue(); }
 
-    void drawDialogs(RuntimeUiContext&) override {
+    void drawDialogs(RuntimeUiContext&) override
+    {
         runtime_.drawAboutDialog();
         runtime_.drawUpdateCheckDialog();
         runtime_.drawDialogs();
@@ -45,10 +42,13 @@ public:
     explicit CommDockComponent(GuiRuntime& runtime) : runtime_(runtime) {}
 
     std::string_view id() const override { return "dock.comm"; }
+
     std::string_view title() const override { return "通信"; }
+
     bool defaultVisible() const override { return true; }
 
-    void drawDock(RuntimeUiContext&) override {
+    void drawDock(RuntimeUiContext&) override
+    {
         runtime_.drawCommDock();
         runtime_.drawTransferDock();
     }
@@ -62,12 +62,12 @@ public:
     explicit ProtocolDockComponent(GuiRuntime& runtime) : runtime_(runtime) {}
 
     std::string_view id() const override { return "dock.protocol"; }
+
     std::string_view title() const override { return "协议"; }
+
     bool defaultVisible() const override { return true; }
 
-    void drawDock(RuntimeUiContext&) override {
-        runtime_.drawProtocolDock();
-    }
+    void drawDock(RuntimeUiContext&) override { runtime_.drawProtocolDock(); }
 
 private:
     GuiRuntime& runtime_;
@@ -78,12 +78,12 @@ public:
     explicit LuaDockComponent(GuiRuntime& runtime) : runtime_(runtime) {}
 
     std::string_view id() const override { return "dock.lua"; }
+
     std::string_view title() const override { return "Lua 控件"; }
+
     bool defaultVisible() const override { return true; }
 
-    void drawDock(RuntimeUiContext&) override {
-        runtime_.drawLuaDockWindows();
-    }
+    void drawDock(RuntimeUiContext&) override { runtime_.drawLuaDockWindows(); }
 
 private:
     GuiRuntime& runtime_;
@@ -94,10 +94,13 @@ public:
     explicit LogDockComponent(GuiRuntime& runtime) : runtime_(runtime) {}
 
     std::string_view id() const override { return "dock.logs"; }
+
     std::string_view title() const override { return "日志"; }
+
     bool defaultVisible() const override { return true; }
 
-    void drawDock(RuntimeUiContext&) override {
+    void drawDock(RuntimeUiContext&) override
+    {
         runtime_.drawLogDock();
         runtime_.drawScriptDock();
     }
@@ -106,7 +109,8 @@ private:
     GuiRuntime& runtime_;
 };
 
-UiComponentRegistry::ComponentList UiComponentRegistry::createRuntimeComponents(GuiRuntime& runtime) {
+UiComponentRegistry::ComponentList UiComponentRegistry::createRuntimeComponents(GuiRuntime& runtime)
+{
     ComponentList components;
     components.emplace_back(std::make_unique<RuntimeMenuComponent>(runtime));
     components.emplace_back(std::make_unique<RuntimeDialogComponent>(runtime));

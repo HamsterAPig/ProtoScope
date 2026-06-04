@@ -1,7 +1,7 @@
+#include "../runtime/gui_runtime_detail.hpp"
+
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/ui_theme.hpp"
-
-#include "../runtime/gui_runtime_detail.hpp"
 
 #include <cstdio>
 
@@ -9,60 +9,62 @@ namespace protoscope::ui {
 
 namespace {
 
-std::string luaControlImGuiLabel(const scripting::ControlDescriptor& descriptor) {
-    return descriptor.label + "##lua_control_" + descriptor.id;
-}
-
-float compactLogToolbarHeight() {
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const float controlHeight = ImGui::GetFrameHeight();
-    const float extraPadding = style.WindowPadding.y * 0.5F;
-    return controlHeight + extraPadding + 16.0f;
-}
-
-float transferLogToolbarButtonHeight() {
-    return ImGui::GetFrameHeight();
-}
-
-bool drawTransferToolbarButton(const char* label,
-                               const char* tooltip,
-                               bool active,
-                               float width = 0.0F) {
-    return drawToolbarSectionButton(label, tooltip, active, ImVec2(width, transferLogToolbarButtonHeight()));
-}
-
-bool drawTransferToolbarToggleButton(const char* label,
-                                     bool& value,
-                                     const char* tooltip,
-                                     float width = 0.0F) {
-    if (!drawTransferToolbarButton(label, tooltip, value, width)) {
-        return false;
+    std::string luaControlImGuiLabel(const scripting::ControlDescriptor& descriptor)
+    {
+        return descriptor.label + "##lua_control_" + descriptor.id;
     }
-    value = !value;
-    return true;
-}
 
-bool drawTransferToolbarDangerButton(const char* label, const char* tooltip, float width = 0.0F) {
-    const auto& tokens = defaultUiStyleTokens();
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.18F));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.32F));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.48F));
-    ImGui::PushStyleColor(ImGuiCol_Text, tokens.danger);
-    const bool clicked = ImGui::Button(label, ImVec2(width, transferLogToolbarButtonHeight()));
-    ImGui::PopStyleColor(4);
-    drawIconTooltip(tooltip);
-    return clicked;
-}
+    float compactLogToolbarHeight()
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float controlHeight = ImGui::GetFrameHeight();
+        const float extraPadding = style.WindowPadding.y * 0.5F;
+        return controlHeight + extraPadding + 16.0f;
+    }
 
-std::string formatMilliseconds(double value) {
-    char buffer[32]{};
-    std::snprintf(buffer, sizeof(buffer), "%.2f", value);
-    return buffer;
-}
+    float transferLogToolbarButtonHeight()
+    {
+        return ImGui::GetFrameHeight();
+    }
+
+    bool drawTransferToolbarButton(const char* label, const char* tooltip, bool active, float width = 0.0F)
+    {
+        return drawToolbarSectionButton(label, tooltip, active, ImVec2(width, transferLogToolbarButtonHeight()));
+    }
+
+    bool drawTransferToolbarToggleButton(const char* label, bool& value, const char* tooltip, float width = 0.0F)
+    {
+        if (!drawTransferToolbarButton(label, tooltip, value, width)) {
+            return false;
+        }
+        value = !value;
+        return true;
+    }
+
+    bool drawTransferToolbarDangerButton(const char* label, const char* tooltip, float width = 0.0F)
+    {
+        const auto& tokens = defaultUiStyleTokens();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.18F));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.32F));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.48F));
+        ImGui::PushStyleColor(ImGuiCol_Text, tokens.danger);
+        const bool clicked = ImGui::Button(label, ImVec2(width, transferLogToolbarButtonHeight()));
+        ImGui::PopStyleColor(4);
+        drawIconTooltip(tooltip);
+        return clicked;
+    }
+
+    std::string formatMilliseconds(double value)
+    {
+        char buffer[32]{};
+        std::snprintf(buffer, sizeof(buffer), "%.2f", value);
+        return buffer;
+    }
 
 } // namespace
 
-void GuiRuntime::drawStatusBar() {
+void GuiRuntime::drawStatusBar()
+{
     const auto& tokens = defaultUiStyleTokens();
     auto& comm = application_.docks().commState();
     auto& config = application_.docks().configState();
@@ -70,20 +72,25 @@ void GuiRuntime::drawStatusBar() {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - 44.0F));
     ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, 44.0F));
-    constexpr ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0F, 8.0F));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07F, 0.09F, 0.13F, 0.98F));
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     if (ImGui::Begin("状态栏", nullptr, flags)) {
-        drawHeaderBadge(transportStateLabel(comm.state), comm.state == transport::TransportState::Open ? tokens.success : tokens.warning, false);
+        drawHeaderBadge(transportStateLabel(comm.state),
+                        comm.state == transport::TransportState::Open ? tokens.success : tokens.warning,
+                        false);
         if (config.dirty) {
             ImGui::SameLine();
             drawHeaderBadge("配置未保存", tokens.warning, false);
         }
         if (config.pendingExternalReload) {
             ImGui::SameLine();
-            drawHeaderBadge(config.externalReloadMessage.empty() ? "检测到外部更新" : config.externalReloadMessage.c_str(), tokens.warning, false);
+            drawHeaderBadge(
+                config.externalReloadMessage.empty() ? "检测到外部更新" : config.externalReloadMessage.c_str(),
+                tokens.warning,
+                false);
             ImGui::SameLine();
             if (drawGhostIconButton("重载配置", "从磁盘重载当前配置")) {
                 if (!reloadConfigFromDisk()) {
@@ -97,19 +104,18 @@ void GuiRuntime::drawStatusBar() {
         }
         if (application_.isRawCaptureRecording()) {
             const auto fileName = application_.rawCaptureRecordingPath().filename().generic_string();
-            const std::string recordingText = "录制 " + (fileName.empty() ? std::string("(未命名)") : fileName)
-                + " " + std::to_string(static_cast<unsigned long long>(application_.rawCaptureRecordingBytes())) + " bytes";
+            const std::string recordingText =
+                "录制 " + (fileName.empty() ? std::string("(未命名)") : fileName) + " " +
+                std::to_string(static_cast<unsigned long long>(application_.rawCaptureRecordingBytes())) + " bytes";
             ImGui::SameLine();
             drawHeaderBadge(recordingText.c_str(), tokens.danger, true);
         }
         if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U ||
             comm.luaPendingItems > 0U || comm.uiPendingItems > 0U) {
             const std::string pendingText =
-                "待处理 rx_input " + std::to_string(comm.rxInputQueueBytes)
-                + " / parser " + std::to_string(comm.parserPendingBytes)
-                + " / post " + std::to_string(comm.postprocessPendingBatches)
-                + " / lua " + std::to_string(comm.luaPendingItems)
-                + " / ui " + std::to_string(comm.uiPendingItems);
+                "待处理 rx_input " + std::to_string(comm.rxInputQueueBytes) + " / parser " +
+                std::to_string(comm.parserPendingBytes) + " / post " + std::to_string(comm.postprocessPendingBatches) +
+                " / lua " + std::to_string(comm.luaPendingItems) + " / ui " + std::to_string(comm.uiPendingItems);
             ImGui::SameLine();
             drawHeaderBadge(pendingText.c_str(), tokens.accent, false);
         }
@@ -122,7 +128,9 @@ void GuiRuntime::drawStatusBar() {
     ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 }
-void GuiRuntime::drawCommDock() {
+
+void GuiRuntime::drawCommDock()
+{
     if (!showCommDock_) {
         return;
     }
@@ -190,7 +198,8 @@ void GuiRuntime::drawCommDock() {
         }
 
         syncDraftFromModel(serialPortDraft_, serialPortDraftModel_, comm.serial.portName);
-        if (const auto portEdit = drawEditableCombo("端口", serialPortDraft_, comm.serialPortOptions); portEdit.edited && portEdit.value != comm.serial.portName) {
+        if (const auto portEdit = drawEditableCombo("端口", serialPortDraft_, comm.serialPortOptions);
+            portEdit.edited && portEdit.value != comm.serial.portName) {
             comm.serial.portName = portEdit.value;
             serialPortDraftModel_ = comm.serial.portName;
             application_.markCommConfigEdited(true);
@@ -203,7 +212,8 @@ void GuiRuntime::drawCommDock() {
 
         const std::string currentBaudText = std::to_string(comm.serial.baudRate);
         syncDraftFromModel(commonBaudRateDraft_, commonBaudRateDraftModel_, currentBaudText);
-        if (const auto baudEdit = drawEditableCombo("波特率", commonBaudRateDraft_, baudRateOptions, digitsOnly); baudEdit.edited) {
+        if (const auto baudEdit = drawEditableCombo("波特率", commonBaudRateDraft_, baudRateOptions, digitsOnly);
+            baudEdit.edited) {
             if (!baudEdit.valid) {
                 application_.setStatusMessage("波特率仅接受纯数字");
             } else {
@@ -336,7 +346,8 @@ void GuiRuntime::drawCommDock() {
     ImGui::End();
 }
 
-void GuiRuntime::drawProtocolDock() {
+void GuiRuntime::drawProtocolDock()
+{
     if (!showProtocolDock_) {
         return;
     }
@@ -366,7 +377,8 @@ void GuiRuntime::drawProtocolDock() {
 #if defined(_WIN32)
     if (ImGui::Button("浏览...")) {
         std::string dialogError;
-        const auto selectedDir = nativeDirectoryDialog(window_, L"选择协议根目录", std::filesystem::path(lua.protocolRootDir), dialogError);
+        const auto selectedDir =
+            nativeDirectoryDialog(window_, L"选择协议根目录", std::filesystem::path(lua.protocolRootDir), dialogError);
         if (!dialogError.empty()) {
             application_.setStatusMessage(dialogError);
         }
@@ -388,7 +400,8 @@ void GuiRuntime::drawProtocolDock() {
     ImGui::PopID();
 
     syncDraftFromModel(protocolDirDraft_, protocolDirDraftModel_, lua.protocolDir);
-    if (const auto protocolDirEdit = drawEditableCombo("协议目录", protocolDirDraft_, lua.protocolDirOptions); protocolDirEdit.edited) {
+    if (const auto protocolDirEdit = drawEditableCombo("协议目录", protocolDirDraft_, lua.protocolDirOptions);
+        protocolDirEdit.edited) {
         protocolDirDraft_ = normalizeProtocolDraft(configStore_, lua.protocolRootDir, protocolDirEdit.value);
     }
 
@@ -423,29 +436,28 @@ void GuiRuntime::drawProtocolDock() {
         } else {
             // 引用模式：直接按引用遍历当前帧控件
             const auto& controls = lua.controlStates;
-           drawLuaDockFlow(controls);
-       }
-       ImGui::End();
-       return;
+            drawLuaDockFlow(controls);
+        }
+        ImGui::End();
+        return;
     }
     ImGui::End();
-
 }
 
-bool GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls, bool earlyExit) {
+bool GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls, bool earlyExit)
+{
     for (const auto& control : controls) {
         if (drawDynamicControl(control)) {
-            if (earlyExit) return true;
+            if (earlyExit)
+                return true;
         }
     }
     return false;
 }
 
-
 void GuiRuntime::drawTransferDock()
 {
-    if (!showTransferDock_)
-    {
+    if (!showTransferDock_) {
         return;
     }
 
@@ -453,8 +465,7 @@ void GuiRuntime::drawTransferDock()
     const auto& comm = application_.docks().commState();
     auto& receive = application_.docks().receiveState();
 
-    if (!ImGui::Begin("收发数据", &showTransferDock_))
-    {
+    if (!ImGui::Begin("收发数据", &showTransferDock_)) {
         ImGui::End();
         return;
     }
@@ -467,43 +478,25 @@ void GuiRuntime::drawTransferDock()
     const float sendBorderSlack = 2.0F;
     // 发送区最小高度要覆盖 Child 边距、表格 CellPadding 和边框，否则窗口较小时输入框会被挤没。
     const float minSendHeight =
-        minPayloadHeight +
-        style.WindowPadding.y * 2.0F +
-        style.CellPadding.y * 2.0F +
-        sendBorderSlack;
+        minPayloadHeight + style.WindowPadding.y * 2.0F + style.CellPadding.y * 2.0F + sendBorderSlack;
     // 扣除 ItemSpacing 间隙，避免 3 个部件（日志区、分割条、发送区）总高度超出可用区域导致纵向滚动条
     const float childSpacing = style.ItemSpacing.y * 2.0F;
     if (transferSendSectionHeight_ <= 0.0F) {
         transferSendSectionHeight_ = minSendHeight;
     }
 
-    const float maxSendHeight =
-        (std::max)(minSendHeight,
-                   availableHeight - splitterThickness - childSpacing);
-    transferSendSectionHeight_ = (std::clamp)(
-        transferSendSectionHeight_,
-        minSendHeight,
-        maxSendHeight);
+    const float maxSendHeight = (std::max)(minSendHeight, availableHeight - splitterThickness - childSpacing);
+    transferSendSectionHeight_ = (std::clamp)(transferSendSectionHeight_, minSendHeight, maxSendHeight);
 
-    float logHeight =
-        (std::max)(0.0F,
-                   availableHeight - transferSendSectionHeight_ - splitterThickness - childSpacing);
+    float logHeight = (std::max)(0.0F, availableHeight - transferSendSectionHeight_ - splitterThickness - childSpacing);
 
     // =========================
     // 上方：收发记录区
     // =========================
-    if (ImGui::BeginChild(
-            "##transfer_log_section",
-            ImVec2(0.0F, logHeight),
-            true)) {
+    if (ImGui::BeginChild("##transfer_log_section", ImVec2(0.0F, logHeight), true)) {
         if (ImGui::BeginTable(
-                "##transfer_log_toolbar",
-                12,
-                ImGuiTableFlags_SizingFixedFit |
-                ImGuiTableFlags_NoSavedSettings)) {
-            ImGui::TableSetupColumn(
-                "title",
-                ImGuiTableColumnFlags_WidthStretch);
+                "##transfer_log_toolbar", 12, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings)) {
+            ImGui::TableSetupColumn("title", ImGuiTableColumnFlags_WidthStretch);
 
             ImGui::TableSetupColumn("keyword", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthFixed);
@@ -529,17 +522,20 @@ void GuiRuntime::drawTransferDock()
             drawLogStatusFilterCombo("STATUS##transfer_log_status", receive.filter);
 
             ImGui::TableSetColumnIndex(3);
-            if (drawTransferToolbarButton("全部", "显示全部收发记录", receive.filter.status == dock::LogStatusFilter::All)) {
+            if (drawTransferToolbarButton(
+                    "全部", "显示全部收发记录", receive.filter.status == dock::LogStatusFilter::All)) {
                 receive.filter.status = dock::LogStatusFilter::All;
             }
 
             ImGui::TableSetColumnIndex(4);
-            if (drawTransferToolbarButton("RX", "仅显示 RX 收发记录", receive.filter.status == dock::LogStatusFilter::Rx)) {
+            if (drawTransferToolbarButton(
+                    "RX", "仅显示 RX 收发记录", receive.filter.status == dock::LogStatusFilter::Rx)) {
                 receive.filter.status = dock::LogStatusFilter::Rx;
             }
 
             ImGui::TableSetColumnIndex(5);
-            if (drawTransferToolbarButton("TX", "仅显示 TX 收发记录", receive.filter.status == dock::LogStatusFilter::Tx)) {
+            if (drawTransferToolbarButton(
+                    "TX", "仅显示 TX 收发记录", receive.filter.status == dock::LogStatusFilter::Tx)) {
                 receive.filter.status = dock::LogStatusFilter::Tx;
             }
 
@@ -548,8 +544,8 @@ void GuiRuntime::drawTransferDock()
             if (drawTransferToolbarButton(parsedFrames ? "逐帧" : "原始",
                                           parsedFrames ? "按 Lua stream() schema 逐帧显示" : "按运输层原始分块显示",
                                           parsedFrames)) {
-                receive.displayMode = parsedFrames ? dock::TransferLogDisplayMode::RawChunks
-                                                   : dock::TransferLogDisplayMode::ParsedFrames;
+                receive.displayMode =
+                    parsedFrames ? dock::TransferLogDisplayMode::RawChunks : dock::TransferLogDisplayMode::ParsedFrames;
                 if (receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
                     application_.activateParsedTransferLogView();
                 }
@@ -580,7 +576,8 @@ void GuiRuntime::drawTransferDock()
             ImGui::EndTable();
         }
 
-        const auto& visibleRows = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames ? receive.frameRows : receive.rows;
+        const auto& visibleRows =
+            receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames ? receive.frameRows : receive.rows;
         const auto visibleRowsVersion = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames
                                             ? receive.frameRowsVersion
                                             : receive.rowsVersion;
@@ -603,82 +600,57 @@ void GuiRuntime::drawTransferDock()
     // drawHorizontalSplitter 按 top height 工作
     // 所以这里传 logHeight
     // =========================
-    drawHorizontalSplitter(
-        "##transfer_splitter",
-        logHeight,
-        0.0F,
-        minSendHeight,
-        availableHeight,
-        splitterThickness);
+    drawHorizontalSplitter("##transfer_splitter", logHeight, 0.0F, minSendHeight, availableHeight, splitterThickness);
 
     transferSendSectionHeight_ =
-        (std::max)(minSendHeight,
-                   availableHeight - logHeight - splitterThickness - childSpacing);
+        (std::max)(minSendHeight, availableHeight - logHeight - splitterThickness - childSpacing);
 
     // =========================
     // 下方：发送区
     // HEX | Payload | SEND
     // =========================
-    if (ImGui::BeginChild(
-            "##transfer_send_section",
-            ImVec2(0.0F, transferSendSectionHeight_),
-            true)) {
+    if (ImGui::BeginChild("##transfer_send_section", ImVec2(0.0F, transferSendSectionHeight_), true)) {
         char buffer[2048]{};
-        std::snprintf(
-            buffer,
-            sizeof(buffer),
-            "%s",
-            sendState.payload.c_str());
+        std::snprintf(buffer, sizeof(buffer), "%s", sendState.payload.c_str());
 
         ImGuiInputTextFlags flags = ImGuiInputTextFlags_WordWrap;
         if (sendState.hexMode) {
-            flags |= ImGuiInputTextFlags_CallbackEdit |
-                     ImGuiInputTextFlags_CallbackCharFilter;
+            flags |= ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackCharFilter;
         }
 
         const float payloadHeight =
-            (std::max)(minPayloadHeight,
-                       ImGui::GetContentRegionAvail().y - style.CellPadding.y * 2.0F);
+            (std::max)(minPayloadHeight, ImGui::GetContentRegionAvail().y - style.CellPadding.y * 2.0F);
         const float frameHeight = ImGui::GetFrameHeight();
-        const float hexWidth = (std::max)(ImGui::CalcTextSize("HEX").x + style.FramePadding.x * 2.0F, frameHeight * 2.4F);
-        const float sendWidth = (std::max)(ImGui::CalcTextSize("发送").x + style.FramePadding.x * 2.0F, frameHeight * 2.8F);
+        const float hexWidth =
+            (std::max)(ImGui::CalcTextSize("HEX").x + style.FramePadding.x * 2.0F, frameHeight * 2.4F);
+        const float sendWidth =
+            (std::max)(ImGui::CalcTextSize("发送").x + style.FramePadding.x * 2.0F, frameHeight * 2.8F);
         const float minHistoryWidth = frameHeight * 4.0F;
-        sendState.historyComboWidth = (std::clamp)(sendState.historyComboWidth, minHistoryWidth, (std::max)(minHistoryWidth, ImGui::GetContentRegionAvail().x * 0.45F));
+        sendState.historyComboWidth =
+            (std::clamp)(sendState.historyComboWidth,
+                         minHistoryWidth,
+                         (std::max)(minHistoryWidth, ImGui::GetContentRegionAvail().x * 0.45F));
         const auto historyLimit = configuredSendHistoryLimit(application_.captureConfig());
         dock::trimSendHistory(sendState, historyLimit);
 
         if (ImGui::BeginTable(
                 "##transfer_send_table",
                 4,
-                ImGuiTableFlags_SizingStretchProp |
-                ImGuiTableFlags_Resizable |
-                ImGuiTableFlags_NoSavedSettings)) {
-            ImGui::TableSetupColumn(
-                "hex",
-                ImGuiTableColumnFlags_WidthFixed,
-                hexWidth);
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable | ImGuiTableFlags_NoSavedSettings)) {
+            ImGui::TableSetupColumn("hex", ImGuiTableColumnFlags_WidthFixed, hexWidth);
 
-            ImGui::TableSetupColumn(
-                "payload",
-                ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("payload", ImGuiTableColumnFlags_WidthStretch);
 
-            ImGui::TableSetupColumn(
-                "history",
-                ImGuiTableColumnFlags_WidthFixed,
-                sendState.historyComboWidth);
+            ImGui::TableSetupColumn("history", ImGuiTableColumnFlags_WidthFixed, sendState.historyComboWidth);
 
-            ImGui::TableSetupColumn(
-                "send",
-                ImGuiTableColumnFlags_WidthFixed,
-                sendWidth);
+            ImGui::TableSetupColumn("send", ImGuiTableColumnFlags_WidthFixed, sendWidth);
 
             ImGui::TableNextRow();
 
             ImGui::TableSetColumnIndex(0);
             {
                 const float oldY = ImGui::GetCursorPosY();
-                ImGui::SetCursorPosY(
-                    oldY + (payloadHeight - frameHeight) * 0.5F);
+                ImGui::SetCursorPosY(oldY + (payloadHeight - frameHeight) * 0.5F);
 
                 if (sendState.hexMode) {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
@@ -701,13 +673,12 @@ void GuiRuntime::drawTransferDock()
             {
                 ImGui::SetNextItemWidth(-FLT_MIN);
 
-                if (ImGui::InputTextMultiline(
-                        "##raw_payload",
-                        buffer,
-                        sizeof(buffer),
-                        ImVec2(-FLT_MIN, payloadHeight),
-                        flags,
-                        sendState.hexMode ? hexEditorCallback : nullptr)) {
+                if (ImGui::InputTextMultiline("##raw_payload",
+                                              buffer,
+                                              sizeof(buffer),
+                                              ImVec2(-FLT_MIN, payloadHeight),
+                                              flags,
+                                              sendState.hexMode ? hexEditorCallback : nullptr)) {
                     sendState.payload = buffer;
                 }
             }
@@ -715,8 +686,7 @@ void GuiRuntime::drawTransferDock()
             ImGui::TableSetColumnIndex(2);
             {
                 const float oldY = ImGui::GetCursorPosY();
-                ImGui::SetCursorPosY(
-                    oldY + (payloadHeight - frameHeight) * 0.5F);
+                ImGui::SetCursorPosY(oldY + (payloadHeight - frameHeight) * 0.5F);
 
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 const std::string preview = sendState.history.empty() ? "无历史记录" : "发送历史";
@@ -744,8 +714,7 @@ void GuiRuntime::drawTransferDock()
             ImGui::TableSetColumnIndex(3);
             {
                 const float oldY = ImGui::GetCursorPosY();
-                ImGui::SetCursorPosY(
-                    oldY + (payloadHeight - frameHeight) * 0.5F);
+                ImGui::SetCursorPosY(oldY + (payloadHeight - frameHeight) * 0.5F);
 
                 if (ImGui::Button("发送", ImVec2(-FLT_MIN, 0.0F))) {
                     if (application_.sendManualPayload(sendState.payload, sendState.hexMode)) {
@@ -768,7 +737,8 @@ void GuiRuntime::drawTransferDock()
     ImGui::End();
 }
 
-void GuiRuntime::drawLogDock() {
+void GuiRuntime::drawLogDock()
+{
     if (!showLogDock_) {
         return;
     }
@@ -801,11 +771,18 @@ void GuiRuntime::drawLogDock() {
 
     const auto& filteredRows =
         filteredLogRowsCached(hostLogRowsCache_, logState.rows, logState.rowsVersion, logState.filter, false);
-    drawRowList("log_rows", filteredRows.rows, logState.showTimestamps, false, logState.pauseScroll, "暂无宿主日志", filteredRows.endpointWidth);
+    drawRowList("log_rows",
+                filteredRows.rows,
+                logState.showTimestamps,
+                false,
+                logState.pauseScroll,
+                "暂无宿主日志",
+                filteredRows.endpointWidth);
     ImGui::End();
 }
 
-void GuiRuntime::drawScriptDock() {
+void GuiRuntime::drawScriptDock()
+{
     if (!showScriptDock_) {
         return;
     }
@@ -836,118 +813,126 @@ void GuiRuntime::drawScriptDock() {
     }
     endToolbarGroup();
 
-    const auto& filteredRows =
-        filteredLogRowsCached(scriptLogRowsCache_, scriptState.rows, scriptState.rowsVersion, scriptState.filter, false);
-    drawRowList("script_rows", filteredRows.rows, scriptState.showTimestamps, false, scriptState.pauseScroll, "暂无 Lua 日志或事件", filteredRows.endpointWidth);
+    const auto& filteredRows = filteredLogRowsCached(
+        scriptLogRowsCache_, scriptState.rows, scriptState.rowsVersion, scriptState.filter, false);
+    drawRowList("script_rows",
+                filteredRows.rows,
+                scriptState.showTimestamps,
+                false,
+                scriptState.pauseScroll,
+                "暂无 Lua 日志或事件",
+                filteredRows.endpointWidth);
     ImGui::End();
 }
-bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control) {
+
+bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
+{
     const auto& descriptor = control.descriptor;
     const std::string imguiLabel = luaControlImGuiLabel(descriptor);
     switch (descriptor.type) {
-    case scripting::ControlType::Button:
-        if (ImGui::Button(imguiLabel.c_str())) {
-            application_.updateControlValue(descriptor.id, true);
-            return true;
-        }
-        break;
-    case scripting::ControlType::Checkbox: {
-        bool checked = std::get<bool>(control.value);
-        if (ImGui::Checkbox(imguiLabel.c_str(), &checked)) {
-            application_.updateControlValue(descriptor.id, checked);
-            return true;
-        }
-        break;
-    }
-    case scripting::ControlType::InputText: {
-        char buffer[512]{};
-        std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
-        if (ImGui::InputText(imguiLabel.c_str(), buffer, sizeof(buffer))) {
-            application_.updateControlValue(descriptor.id, std::string(buffer));
-            return true;
-        }
-        break;
-    }
-    case scripting::ControlType::Combo: {
-        int index = std::get<int>(control.value);
-        std::vector<const char*> items;
-        for (const auto& option : descriptor.comboOptions) {
-            items.push_back(option.c_str());
-        }
-        if (!items.empty() && ImGui::Combo(imguiLabel.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
-            application_.updateControlValue(descriptor.id, index);
-            return true;
-        }
-        break;
-    }
-    case scripting::ControlType::ElfSymbolCombo: {
-        auto& state = elfSymbolComboStates_[descriptor.id];
-        const auto& current = std::get<scripting::ElfSymbolValue>(control.value);
-        if (state.draft.empty() && !current.label.empty()) {
-            state.draft = current.label;
-        }
-
-        const auto comboConfig = application_.captureConfig().gui.elfSymbolCombo;
-        const std::size_t effectiveLimit = descriptor.limitConfigured ? descriptor.limit : comboConfig.limit;
-        const int effectiveDebounceMs = descriptor.debounceMsConfigured ? descriptor.debounceMs : comboConfig.debounceMs;
-        const auto loadedRevision = application_.elfStaticAddressRevision();
-        const auto currentMs = nowMs();
-        if (state.editedAtMs == 0) {
-            state.editedAtMs = currentMs;
-        }
-        const bool elfReloaded = state.loadedRevision != loadedRevision;
-        const bool queryLimitChanged = state.queriedLimit != effectiveLimit;
-        const bool debounceElapsed =
-            currentMs >= state.editedAtMs + static_cast<std::uint64_t>(effectiveDebounceMs);
-        if (elfReloaded || queryLimitChanged || (state.queriedDraft != state.draft && debounceElapsed)) {
-            // 核心流程：ELF 成功加载后用空查询预热候选；输入变化后按配置消抖实时刷新候选列表。
-            state.options = application_.queryElfStaticAddresses(state.draft, effectiveLimit);
-            state.queriedDraft = state.draft;
-            state.queriedLimit = effectiveLimit;
-            state.loadedRevision = loadedRevision;
-        }
-
-        std::vector<std::string> labels;
-        labels.reserve(state.options.size());
-        for (const auto& option : state.options) {
-            labels.push_back(option.label);
-        }
-
-        const auto edit = drawEditableCombo(imguiLabel.c_str(),
-                                            state.draft,
-                                            labels,
-                                            EditableComboOptions{.keepPopupOpenWhileEditing = true});
-        if (edit.edited) {
-            state.draft = edit.value;
-            state.editedAtMs = currentMs;
-        }
-        if (edit.selectedFromList) {
-            const auto selected = std::find_if(state.options.begin(), state.options.end(), [&](const auto& option) {
-                return option.label == edit.value;
-            });
-            if (selected != state.options.end()) {
-                application_.updateControlValue(descriptor.id, *selected);
+        case scripting::ControlType::Button:
+            if (ImGui::Button(imguiLabel.c_str())) {
+                application_.updateControlValue(descriptor.id, true);
                 return true;
             }
+            break;
+        case scripting::ControlType::Checkbox: {
+            bool checked = std::get<bool>(control.value);
+            if (ImGui::Checkbox(imguiLabel.c_str(), &checked)) {
+                application_.updateControlValue(descriptor.id, checked);
+                return true;
+            }
+            break;
         }
-        break;
-    }
-    case scripting::ControlType::InputInt: {
-        int value = std::get<int>(control.value);
-        if (ImGui::InputInt(imguiLabel.c_str(), &value)) {
-            application_.updateControlValue(descriptor.id, value);
-            return true;
+        case scripting::ControlType::InputText: {
+            char buffer[512]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
+            if (ImGui::InputText(imguiLabel.c_str(), buffer, sizeof(buffer))) {
+                application_.updateControlValue(descriptor.id, std::string(buffer));
+                return true;
+            }
+            break;
         }
-        break;
-    }
-    case scripting::ControlType::InputFloat: {
-        float value = std::get<float>(control.value);
-        if (ImGui::InputFloat(imguiLabel.c_str(), &value)) {
-            application_.updateControlValue(descriptor.id, value);
-            return true;
+        case scripting::ControlType::Combo: {
+            int index = std::get<int>(control.value);
+            std::vector<const char*> items;
+            for (const auto& option : descriptor.comboOptions) {
+                items.push_back(option.c_str());
+            }
+            if (!items.empty() &&
+                ImGui::Combo(imguiLabel.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
+                application_.updateControlValue(descriptor.id, index);
+                return true;
+            }
+            break;
         }
-        break;
-    }
+        case scripting::ControlType::ElfSymbolCombo: {
+            auto& state = elfSymbolComboStates_[descriptor.id];
+            const auto& current = std::get<scripting::ElfSymbolValue>(control.value);
+            if (state.draft.empty() && !current.label.empty()) {
+                state.draft = current.label;
+            }
+
+            const auto comboConfig = application_.captureConfig().gui.elfSymbolCombo;
+            const std::size_t effectiveLimit = descriptor.limitConfigured ? descriptor.limit : comboConfig.limit;
+            const int effectiveDebounceMs =
+                descriptor.debounceMsConfigured ? descriptor.debounceMs : comboConfig.debounceMs;
+            const auto loadedRevision = application_.elfStaticAddressRevision();
+            const auto currentMs = nowMs();
+            if (state.editedAtMs == 0) {
+                state.editedAtMs = currentMs;
+            }
+            const bool elfReloaded = state.loadedRevision != loadedRevision;
+            const bool queryLimitChanged = state.queriedLimit != effectiveLimit;
+            const bool debounceElapsed =
+                currentMs >= state.editedAtMs + static_cast<std::uint64_t>(effectiveDebounceMs);
+            if (elfReloaded || queryLimitChanged || (state.queriedDraft != state.draft && debounceElapsed)) {
+                // 核心流程：ELF 成功加载后用空查询预热候选；输入变化后按配置消抖实时刷新候选列表。
+                state.options = application_.queryElfStaticAddresses(state.draft, effectiveLimit);
+                state.queriedDraft = state.draft;
+                state.queriedLimit = effectiveLimit;
+                state.loadedRevision = loadedRevision;
+            }
+
+            std::vector<std::string> labels;
+            labels.reserve(state.options.size());
+            for (const auto& option : state.options) {
+                labels.push_back(option.label);
+            }
+
+            const auto edit = drawEditableCombo(
+                imguiLabel.c_str(), state.draft, labels, EditableComboOptions{.keepPopupOpenWhileEditing = true});
+            if (edit.edited) {
+                state.draft = edit.value;
+                state.editedAtMs = currentMs;
+            }
+            if (edit.selectedFromList) {
+                const auto selected = std::find_if(state.options.begin(), state.options.end(), [&](const auto& option) {
+                    return option.label == edit.value;
+                });
+                if (selected != state.options.end()) {
+                    application_.updateControlValue(descriptor.id, *selected);
+                    return true;
+                }
+            }
+            break;
+        }
+        case scripting::ControlType::InputInt: {
+            int value = std::get<int>(control.value);
+            if (ImGui::InputInt(imguiLabel.c_str(), &value)) {
+                application_.updateControlValue(descriptor.id, value);
+                return true;
+            }
+            break;
+        }
+        case scripting::ControlType::InputFloat: {
+            float value = std::get<float>(control.value);
+            if (ImGui::InputFloat(imguiLabel.c_str(), &value)) {
+                application_.updateControlValue(descriptor.id, value);
+                return true;
+            }
+            break;
+        }
     }
     return false;
 }

@@ -6,14 +6,17 @@
 
 struct ImGuiIO;
 
-namespace protoscope::app { class Application; }
+namespace protoscope::app {
+class Application;
+}
+
 namespace protoscope::plot {
 struct ViewConfig;
 struct WaveDockState;
 struct WaveLayoutSizes;
 struct WaveViewState;
 struct WaveSnapshot;
-}
+} // namespace protoscope::plot
 
 namespace protoscope::ui {
 

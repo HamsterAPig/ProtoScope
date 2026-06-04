@@ -11,7 +11,8 @@ public:
 
     std::string_view id() const override { return "control_api_module"; }
 
-    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
+    {
         auto* host = &host_;
         sol::state_view lua = ctx.lua;
         proto.set_function("get_control", [host, lua](const std::string& id) {
@@ -43,7 +44,8 @@ private:
     ScriptHost& host_;
 };
 
-std::unique_ptr<IScriptHostApiModule> makeControlApiModule(ScriptHost& host) {
+std::unique_ptr<IScriptHostApiModule> makeControlApiModule(ScriptHost& host)
+{
     return std::make_unique<ControlScriptHostApiModule>(host);
 }
 

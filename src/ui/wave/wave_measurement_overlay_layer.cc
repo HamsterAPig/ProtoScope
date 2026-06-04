@@ -9,23 +9,26 @@
 namespace protoscope::ui {
 namespace {
 
-void appendOptionalMetric(std::vector<std::string>& lines,
-                          const char* label,
-                          const std::optional<double>& value,
-                          const char* unit = nullptr) {
-    lines.push_back(std::string(label) + "=" + (value.has_value() ? formatMetricText(*value, unit) : "N/A"));
-}
+    void appendOptionalMetric(std::vector<std::string>& lines,
+                              const char* label,
+                              const std::optional<double>& value,
+                              const char* unit = nullptr)
+    {
+        lines.push_back(std::string(label) + "=" + (value.has_value() ? formatMetricText(*value, unit) : "N/A"));
+    }
 
-void appendMetric(std::vector<std::string>& lines, const char* label, double value, const char* unit = nullptr) {
-    lines.push_back(std::string(label) + "=" + formatMetricText(value, unit));
-}
+    void appendMetric(std::vector<std::string>& lines, const char* label, double value, const char* unit = nullptr)
+    {
+        lines.push_back(std::string(label) + "=" + formatMetricText(value, unit));
+    }
 
 } // namespace
 
 void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveSnapshot& snapshot,
                             const plot::WaveDisplayData& displayData,
-                            const PlotRenderResult& result) {
+                            const PlotRenderResult& result)
+{
     if (!view.showMeasurementOverlay) {
         return;
     }
@@ -33,13 +36,15 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     const auto& selection = view.measurement;
     if (view.showCursors && selection.cursorA && result.cursorReadouts[0].has_value()) {
         const auto& c0 = *result.cursorReadouts[0];
-        lines.push_back("Cursor A: " + snapshot.channels[c0.channelIndex].label + "  t="
-            + formatMetricText(c0.time, displayData.timeUnit.c_str()) + "  y=" + formatMetricText(c0.value, nullptr));
+        lines.push_back("Cursor A: " + snapshot.channels[c0.channelIndex].label +
+                        "  t=" + formatMetricText(c0.time, displayData.timeUnit.c_str()) +
+                        "  y=" + formatMetricText(c0.value, nullptr));
     }
     if (view.showCursors && selection.cursorB && result.cursorReadouts[1].has_value()) {
         const auto& c1 = *result.cursorReadouts[1];
-        lines.push_back("Cursor B: " + snapshot.channels[c1.channelIndex].label + "  t="
-            + formatMetricText(c1.time, displayData.timeUnit.c_str()) + "  y=" + formatMetricText(c1.value, nullptr));
+        lines.push_back("Cursor B: " + snapshot.channels[c1.channelIndex].label +
+                        "  t=" + formatMetricText(c1.time, displayData.timeUnit.c_str()) +
+                        "  y=" + formatMetricText(c1.value, nullptr));
     }
     if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {
         const auto delta = plot::OscilloscopeBuffer::makeDelta(*result.cursorReadouts[0], *result.cursorReadouts[1]);
@@ -49,7 +54,8 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
             std::string line;
             if (selection.deltaTime) {
                 line += (intervalText.showFrequency ? "Δt=" : "Δsample=");
-                line += formatMetricText(intervalText.showFrequency ? delta.deltaTime : intervalText.delta,
+                line += formatMetricText(
+                    intervalText.showFrequency ? delta.deltaTime : intervalText.delta,
                     intervalText.showFrequency ? displayData.timeUnit.c_str() : intervalText.deltaUnit.c_str());
             }
             if (selection.deltaValue) {
@@ -195,7 +201,8 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     const ImVec2 overlayMax(plotPos.x + plotSize.x - padding, plotPos.y + padding + textSize.y + padding * 2.0F);
     const ImVec2 overlayMin(overlayMax.x - textSize.x - padding * 2.0F, plotPos.y + padding);
     auto* drawList = ImPlot::GetPlotDrawList();
-    drawList->AddRectFilled(overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.045F, 0.05F, 0.68F)), 5.0F);
+    drawList->AddRectFilled(
+        overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.045F, 0.05F, 0.68F)), 5.0F);
     drawList->AddRect(overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 1.0F, 1.0F, 0.18F)), 5.0F);
     ImVec2 textPos(overlayMin.x + padding, overlayMin.y + padding);
     const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.92F, 0.94F, 0.98F, 0.95F));

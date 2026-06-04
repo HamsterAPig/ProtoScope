@@ -5,7 +5,8 @@
 #include <iostream>
 #include <string_view>
 
-int main() {
+int main()
+{
     int failed = 0;
     const auto* tests = allTests();
     const int total = testCount();

@@ -11,8 +11,11 @@ public:
     virtual ~IRuntimeModule() = default;
 
     virtual std::string_view id() const = 0;
+
     virtual void initialize(RuntimeUiContext&) {}
+
     virtual void sync(RuntimeUiContext&) {}
+
     virtual void shutdown(RuntimeUiContext&) {}
 };
 

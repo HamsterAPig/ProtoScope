@@ -4,7 +4,8 @@
 
 namespace protoscope::ui {
 
-void GuiRuntime::drawHelpMenu() {
+void GuiRuntime::drawHelpMenu()
+{
     if (!ImGui::BeginMenu("帮助")) {
         return;
     }

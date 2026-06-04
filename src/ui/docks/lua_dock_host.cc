@@ -1,34 +1,38 @@
-#include "protoscope/ui/gui_runtime.hpp"
-
 #include "../runtime/gui_runtime_detail.hpp"
+
+#include "protoscope/ui/gui_runtime.hpp"
 
 namespace protoscope::ui {
 
 namespace {
 
-class ScopedImGuiTable final {
-public:
-    ScopedImGuiTable(const char* tableId, int columnCount, ImGuiTableFlags flags)
-        : opened_(ImGui::BeginTable(tableId, columnCount, flags)) {}
-
-    ~ScopedImGuiTable() {
-        if (opened_) {
-            ImGui::EndTable();
+    class ScopedImGuiTable final {
+    public:
+        ScopedImGuiTable(const char* tableId, int columnCount, ImGuiTableFlags flags)
+            : opened_(ImGui::BeginTable(tableId, columnCount, flags))
+        {
         }
-    }
 
-    [[nodiscard]] bool opened() const { return opened_; }
+        ~ScopedImGuiTable()
+        {
+            if (opened_) {
+                ImGui::EndTable();
+            }
+        }
 
-private:
-    bool opened_{false};
-};
+        [[nodiscard]] bool opened() const { return opened_; }
+
+    private:
+        bool opened_{false};
+    };
 
 } // namespace
 
 bool GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
                                   const scripting::TableLayoutDescriptor& layout,
                                   std::string_view stableId,
-                                  bool earlyExit) {
+                                  bool earlyExit)
+{
     std::unordered_map<std::string, const scripting::ControlSnapshot*> controlsById;
     controlsById.reserve(dockSnapshot.controls.size());
     for (const auto& control : dockSnapshot.controls) {
@@ -82,7 +86,8 @@ bool GuiRuntime::drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
 
             if (drawDynamicControl(*controlIter->second)) {
                 updated = true;
-                if (earlyExit) break;
+                if (earlyExit)
+                    break;
             }
         }
         if (earlyExit && updated) {
@@ -97,61 +102,68 @@ bool GuiRuntime::drawLuaDockFormItems(
     const std::unordered_map<std::string, const scripting::ControlSnapshot*>& controlsById,
     std::string_view stableId,
     std::size_t& widgetIndex,
-    bool earlyExit) {
+    bool earlyExit)
+{
     for (const auto& item : items) {
         switch (item.kind) {
-        case scripting::FormLayoutItemKind::Control: {
-            const auto controlIter = controlsById.find(item.controlId);
-            if (controlIter != controlsById.end()) {
-                if (drawDynamicControl(*controlIter->second)) {
-                    if (earlyExit) return true;
-                }
-            }
-            break;
-        }
-        case scripting::FormLayoutItemKind::Controls: {
-            bool firstControl = true;
-            for (const auto& controlId : item.controls.controlIds) {
-                const auto controlIter = controlsById.find(controlId);
-                if (controlIter == controlsById.end()) {
-                    continue;
-                }
-                if (!firstControl) {
-                    ImGui::SameLine();
-                }
-                if (drawDynamicControl(*controlIter->second)) {
-                    if (earlyExit) return true;
-                }
-                firstControl = false;
-            }
-            break;
-        }
-        case scripting::FormLayoutItemKind::Group:
-            if (item.group) {
-                ImGui::SeparatorText(item.group->title.c_str());
-                if (drawLuaDockFormItems(item.group->items, controlsById, stableId, widgetIndex, earlyExit)) {
-                    if (earlyExit) return true;
-                }
-            }
-            break;
-        case scripting::FormLayoutItemKind::Collapse:
-            if (item.collapse) {
-                ImGuiTreeNodeFlags flags = item.collapse->defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
-                const std::string headerId = item.collapse->title + "##lua_form_collapse_" + std::string(stableId)
-                    + "_" + std::to_string(widgetIndex++);
-                if (ImGui::CollapsingHeader(headerId.c_str(), flags)) {
-                    if (drawLuaDockFormItems(item.collapse->items, controlsById, stableId, widgetIndex, earlyExit)) {
-                        if (earlyExit) return true;
+            case scripting::FormLayoutItemKind::Control: {
+                const auto controlIter = controlsById.find(item.controlId);
+                if (controlIter != controlsById.end()) {
+                    if (drawDynamicControl(*controlIter->second)) {
+                        if (earlyExit)
+                            return true;
                     }
                 }
+                break;
             }
-            break;
-        case scripting::FormLayoutItemKind::Separator:
-            ImGui::Separator();
-            break;
-        case scripting::FormLayoutItemKind::Text:
-            ImGui::TextWrapped("%s", item.text.text.c_str());
-            break;
+            case scripting::FormLayoutItemKind::Controls: {
+                bool firstControl = true;
+                for (const auto& controlId : item.controls.controlIds) {
+                    const auto controlIter = controlsById.find(controlId);
+                    if (controlIter == controlsById.end()) {
+                        continue;
+                    }
+                    if (!firstControl) {
+                        ImGui::SameLine();
+                    }
+                    if (drawDynamicControl(*controlIter->second)) {
+                        if (earlyExit)
+                            return true;
+                    }
+                    firstControl = false;
+                }
+                break;
+            }
+            case scripting::FormLayoutItemKind::Group:
+                if (item.group) {
+                    ImGui::SeparatorText(item.group->title.c_str());
+                    if (drawLuaDockFormItems(item.group->items, controlsById, stableId, widgetIndex, earlyExit)) {
+                        if (earlyExit)
+                            return true;
+                    }
+                }
+                break;
+            case scripting::FormLayoutItemKind::Collapse:
+                if (item.collapse) {
+                    ImGuiTreeNodeFlags flags =
+                        item.collapse->defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+                    const std::string headerId = item.collapse->title + "##lua_form_collapse_" + std::string(stableId) +
+                                                 "_" + std::to_string(widgetIndex++);
+                    if (ImGui::CollapsingHeader(headerId.c_str(), flags)) {
+                        if (drawLuaDockFormItems(
+                                item.collapse->items, controlsById, stableId, widgetIndex, earlyExit)) {
+                            if (earlyExit)
+                                return true;
+                        }
+                    }
+                }
+                break;
+            case scripting::FormLayoutItemKind::Separator:
+                ImGui::Separator();
+                break;
+            case scripting::FormLayoutItemKind::Text:
+                ImGui::TextWrapped("%s", item.text.text.c_str());
+                break;
         }
     }
     return false;
@@ -160,7 +172,8 @@ bool GuiRuntime::drawLuaDockFormItems(
 bool GuiRuntime::drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
                                  const scripting::FormLayoutDescriptor& layout,
                                  std::string_view stableId,
-                                 bool earlyExit) {
+                                 bool earlyExit)
+{
     std::unordered_map<std::string, const scripting::ControlSnapshot*> controlsById;
     controlsById.reserve(dockSnapshot.controls.size());
     for (const auto& control : dockSnapshot.controls) {
@@ -173,7 +186,8 @@ bool GuiRuntime::drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
     return drawLuaDockFormItems(layout.items, controlsById, stableId, widgetIndex, earlyExit);
 }
 
-void GuiRuntime::drawLuaDockWindows() {
+void GuiRuntime::drawLuaDockWindows()
+{
     auto& lua = application_.docks().luaState();
     if (lua.docks.empty()) {
         return;
@@ -253,7 +267,8 @@ void GuiRuntime::drawLuaDockWindows() {
     }
 }
 
-void GuiRuntime::updateLuaDockDefaultLayout() {
+void GuiRuntime::updateLuaDockDefaultLayout()
+{
     if (defaultLuaDockNodes_.empty()) {
         return;
     }
@@ -283,18 +298,24 @@ void GuiRuntime::updateLuaDockDefaultLayout() {
         }
 
         if (targetNode == 0) {
-            application_.setStatusMessage("Lua Dock 默认停靠节点不存在: " + visibleWindowTitle(request.windowName), true);
+            application_.setStatusMessage("Lua Dock 默认停靠节点不存在: " + visibleWindowTitle(request.windowName),
+                                          true);
             continue;
         }
 
         // 核心流程：只给首次出现、ini 尚未创建过的 Lua Dock 提供默认停靠，不覆盖用户拖拽后的布局。
         const bool debugLayout = application_.docks().configState().luaDockLayoutDebug;
         if (debugLayout) {
-            application_.setStatusMessage("LuaDockLayout: stableId=" + stableWindowId(request.windowName) + " anchor=" + request.anchor + " tabGroup=" + request.tabGroup + " targetNode=" + std::to_string(targetNode));
+            application_.setStatusMessage("LuaDockLayout: stableId=" + stableWindowId(request.windowName) +
+                                          " anchor=" + request.anchor + " tabGroup=" + request.tabGroup +
+                                          " targetNode=" + std::to_string(targetNode));
         }
         const bool docked = dockWindowIfMissing(request.windowName, targetNode);
         if (debugLayout) {
-            application_.setStatusMessage("LuaDockLayout: stableId=" + stableWindowId(request.windowName) + " docked=" + (docked ? "true" : "false") + " schemaRebuild=" + (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild ? "true" : "false"));
+            application_.setStatusMessage(
+                "LuaDockLayout: stableId=" + stableWindowId(request.windowName) +
+                " docked=" + (docked ? "true" : "false") + " schemaRebuild=" +
+                (workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild ? "true" : "false"));
         }
         defaultDockedLuaStableIds_.insert(stableWindowId(request.windowName));
     }

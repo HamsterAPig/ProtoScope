@@ -23,10 +23,6 @@ bool ensureProtocolWorkspace(const std::filesystem::path& rootDir, std::string& 
 // 这个用于兼容原来的 ConfigStore::ensureDefaultProtocolScript(protocolDir, error)。
 bool ensureDefaultProtocolScript(const std::filesystem::path& protocolDir, std::string& error);
 
-bool extractResourceToFile(
-    const char* resourcePath,
-    const std::filesystem::path& outputPath,
-    std::string& error
-);
+bool extractResourceToFile(const char* resourcePath, const std::filesystem::path& outputPath, std::string& error);
 
 } // namespace protoscope::config::embedded

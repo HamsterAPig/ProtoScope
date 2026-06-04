@@ -4,7 +4,8 @@
 
 namespace protoscope::ui {
 
-bool GuiRuntime::reloadConfigFromDisk() {
+bool GuiRuntime::reloadConfigFromDisk()
+{
     saveCurrentProtocolWorkspace();
     const auto loaded = configStore_.load(configStore_.defaultConfigPath());
     if (!application_.applyConfig(loaded.config)) {
@@ -19,7 +20,8 @@ bool GuiRuntime::reloadConfigFromDisk() {
     return true;
 }
 
-bool GuiRuntime::pollConfigFileChanges() {
+bool GuiRuntime::pollConfigFileChanges()
+{
     auto& configState = application_.docks().configState();
     if (!configState.configHotReloadEnabled) {
         return false;
@@ -32,7 +34,8 @@ bool GuiRuntime::pollConfigFileChanges() {
     return false;
 }
 
-bool GuiRuntime::pollElfStaticAddressFileChanges() {
+bool GuiRuntime::pollElfStaticAddressFileChanges()
+{
     std::error_code error;
     auto result = pollElfStaticAddressFileWatchState(elfStaticAddressWatch_, nowMs(), error);
     if (!result.statusMessage.empty()) {
@@ -58,7 +61,8 @@ bool GuiRuntime::pollElfStaticAddressFileChanges() {
     return true;
 }
 
-bool GuiRuntime::maybeAutoSave() {
+bool GuiRuntime::maybeAutoSave()
+{
     auto& configState = application_.docks().configState();
     if (!configState.autoSaveEnabled || !configState.dirty) {
         return false;

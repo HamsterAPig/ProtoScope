@@ -10,84 +10,92 @@ namespace protoscope::plot {
 
 namespace {
 
-constexpr double kEpsilon = 1e-12;
+    constexpr double kEpsilon = 1e-12;
 
-double safeFrequency(double deltaTime) {
-    if (std::abs(deltaTime) <= kEpsilon) {
-        return 0.0;
-    }
-    return 1.0 / std::abs(deltaTime);
-}
-
-double sanitizeScale(double scale) {
-    return std::isfinite(scale) ? scale : 1.0;
-}
-
-double sanitizeRatio(double ratio) {
-    return std::isfinite(ratio) ? ratio : 1.0;
-}
-
-double sanitizeOffset(double offset) {
-    return std::isfinite(offset) ? offset : 0.0;
-}
-
-double estimateTimeStep(const std::vector<WaveSample>& samples) {
-    for (std::size_t index = 1; index < samples.size(); ++index) {
-        const double previous = samples[index - 1].time;
-        const double current = samples[index].time;
-        if (std::isfinite(previous) && std::isfinite(current) && current > previous) {
-            return current - previous;
+    double safeFrequency(double deltaTime)
+    {
+        if (std::abs(deltaTime) <= kEpsilon) {
+            return 0.0;
         }
+        return 1.0 / std::abs(deltaTime);
     }
-    return kEpsilon;
-}
 
-double nearestRankPercentile(const std::vector<double>& sortedValues, double percentile) {
-    if (sortedValues.empty()) {
-        return 0.0;
+    double sanitizeScale(double scale)
+    {
+        return std::isfinite(scale) ? scale : 1.0;
     }
-    const double rawRank = (std::ceil)(percentile * static_cast<double>(sortedValues.size()));
-    const auto rank = static_cast<std::size_t>(rawRank <= 1.0 ? 0.0 : rawRank - 1.0);
-    return sortedValues[(std::min)(rank, sortedValues.size() - 1)];
-}
 
-std::optional<double> firstCrossingDuration(const std::vector<double>& times,
-                                            const std::vector<double>& values,
-                                            double startLevel,
-                                            double endLevel,
-                                            bool rising) {
-    std::optional<double> startTime;
-    for (std::size_t index = 1; index < values.size(); ++index) {
-        const double previous = values[index - 1];
-        const double current = values[index];
-        const double previousTime = times[index - 1];
-        const double currentTime = times[index];
-        const double width = currentTime - previousTime;
-        if (width < 0.0 || std::abs(current - previous) <= kEpsilon) {
-            continue;
-        }
-        const auto crosses = [&](double level) {
-            return rising ? previous < level && current >= level : previous > level && current <= level;
-        };
-        const auto crossingTime = [&](double level) {
-            return previousTime + (level - previous) * width / (current - previous);
-        };
-        if (!startTime.has_value() && crosses(startLevel)) {
-            startTime = crossingTime(startLevel);
-        }
-        if (startTime.has_value() && crosses(endLevel)) {
-            return crossingTime(endLevel) - *startTime;
-        }
+    double sanitizeRatio(double ratio)
+    {
+        return std::isfinite(ratio) ? ratio : 1.0;
     }
-    return std::nullopt;
-}
+
+    double sanitizeOffset(double offset)
+    {
+        return std::isfinite(offset) ? offset : 0.0;
+    }
+
+    double estimateTimeStep(const std::vector<WaveSample>& samples)
+    {
+        for (std::size_t index = 1; index < samples.size(); ++index) {
+            const double previous = samples[index - 1].time;
+            const double current = samples[index].time;
+            if (std::isfinite(previous) && std::isfinite(current) && current > previous) {
+                return current - previous;
+            }
+        }
+        return kEpsilon;
+    }
+
+    double nearestRankPercentile(const std::vector<double>& sortedValues, double percentile)
+    {
+        if (sortedValues.empty()) {
+            return 0.0;
+        }
+        const double rawRank = (std::ceil)(percentile * static_cast<double>(sortedValues.size()));
+        const auto rank = static_cast<std::size_t>(rawRank <= 1.0 ? 0.0 : rawRank - 1.0);
+        return sortedValues[(std::min)(rank, sortedValues.size() - 1)];
+    }
+
+    std::optional<double> firstCrossingDuration(const std::vector<double>& times,
+                                                const std::vector<double>& values,
+                                                double startLevel,
+                                                double endLevel,
+                                                bool rising)
+    {
+        std::optional<double> startTime;
+        for (std::size_t index = 1; index < values.size(); ++index) {
+            const double previous = values[index - 1];
+            const double current = values[index];
+            const double previousTime = times[index - 1];
+            const double currentTime = times[index];
+            const double width = currentTime - previousTime;
+            if (width < 0.0 || std::abs(current - previous) <= kEpsilon) {
+                continue;
+            }
+            const auto crosses = [&](double level) {
+                return rising ? previous < level && current >= level : previous > level && current <= level;
+            };
+            const auto crossingTime = [&](double level) {
+                return previousTime + (level - previous) * width / (current - previous);
+            };
+            if (!startTime.has_value() && crosses(startLevel)) {
+                startTime = crossingTime(startLevel);
+            }
+            if (startTime.has_value() && crosses(endLevel)) {
+                return crossingTime(endLevel) - *startTime;
+            }
+        }
+        return std::nullopt;
+    }
 
 } // namespace
 
 MeasurementReadout makeMeasurementReadout(std::size_t channelIndex,
                                           const std::vector<double>& times,
                                           const std::vector<double>& values,
-                                          const std::vector<double>* referenceValues) {
+                                          const std::vector<double>* referenceValues)
+{
     MeasurementReadout result{};
     if (values.empty() || times.size() < values.size()) {
         return result;
@@ -103,9 +111,8 @@ MeasurementReadout makeMeasurementReadout(std::size_t channelIndex,
 
     const double count = static_cast<double>(values.size());
     const double sum = std::accumulate(values.begin(), values.end(), 0.0);
-    const double squareSum = std::accumulate(values.begin(), values.end(), 0.0, [](double total, double value) {
-        return total + value * value;
-    });
+    const double squareSum = std::accumulate(
+        values.begin(), values.end(), 0.0, [](double total, double value) { return total + value * value; });
     result.meanValue = sum / count;
     result.rmsValue = std::sqrt(squareSum / count);
 
@@ -192,11 +199,13 @@ MeasurementReadout makeMeasurementReadout(std::size_t channelIndex,
     return result;
 }
 
-double applyChannelActualValue(double rawValue, const ChannelSpec& spec) {
+double applyChannelActualValue(double rawValue, const ChannelSpec& spec)
+{
     return rawValue * sanitizeRatio(spec.ratio);
 }
 
-double applyChannelDisplayTransform(double rawValue, const ChannelSpec& spec, WaveDisplayFormula formula) {
+double applyChannelDisplayTransform(double rawValue, const ChannelSpec& spec, WaveDisplayFormula formula)
+{
     const double actualValue = applyChannelActualValue(rawValue, spec);
     const double scale = sanitizeScale(spec.scale);
     const double offset = sanitizeOffset(spec.offset);
@@ -206,7 +215,8 @@ double applyChannelDisplayTransform(double rawValue, const ChannelSpec& spec, Wa
     return (actualValue + offset) * scale;
 }
 
-void OscilloscopeBuffer::clear() {
+void OscilloscopeBuffer::clear()
+{
     source_.clear();
     channels_.clear();
     config_ = ViewConfig{};
@@ -214,7 +224,8 @@ void OscilloscopeBuffer::clear() {
     ++dataRevision_;
 }
 
-void OscilloscopeBuffer::configureChannels(std::size_t channelCount) {
+void OscilloscopeBuffer::configureChannels(std::size_t channelCount)
+{
     const auto previousCount = channels_.size();
     channels_.resize(channelCount);
     for (std::size_t index = 0; index < channels_.size(); ++index) {
@@ -227,7 +238,8 @@ void OscilloscopeBuffer::configureChannels(std::size_t channelCount) {
     }
 }
 
-void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec spec) {
+void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec spec)
+{
     if (channelIndex >= channels_.size()) {
         configureChannels(channelIndex + 1);
     }
@@ -238,17 +250,15 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
     spec.scale = sanitizeScale(spec.scale);
     spec.offset = sanitizeOffset(spec.offset);
     auto& channelSpec = channels_[channelIndex].spec;
-    if (channelSpec.label != spec.label
-        || channelSpec.unit != spec.unit
-        || channelSpec.ratio != spec.ratio
-        || channelSpec.scale != spec.scale
-        || channelSpec.offset != spec.offset) {
+    if (channelSpec.label != spec.label || channelSpec.unit != spec.unit || channelSpec.ratio != spec.ratio ||
+        channelSpec.scale != spec.scale || channelSpec.offset != spec.offset) {
         channelSpec = std::move(spec);
         ++dataRevision_;
     }
 }
 
-void OscilloscopeBuffer::setViewConfig(const ViewConfig& config) {
+void OscilloscopeBuffer::setViewConfig(const ViewConfig& config)
+{
     config_ = config;
     if (std::abs(config_.timeScale) <= kEpsilon) {
         config_.timeScale = 1.0;
@@ -256,11 +266,13 @@ void OscilloscopeBuffer::setViewConfig(const ViewConfig& config) {
     ++dataRevision_;
 }
 
-void OscilloscopeBuffer::setHistoryTrimSuspended(bool suspended) {
+void OscilloscopeBuffer::setHistoryTrimSuspended(bool suspended)
+{
     historyTrimSuspended_ = suspended;
 }
 
-void OscilloscopeBuffer::setMaxTotalSamples(std::size_t maxTotalSamples) {
+void OscilloscopeBuffer::setMaxTotalSamples(std::size_t maxTotalSamples)
+{
     maxTotalSamples_ = maxTotalSamples;
     // 核心流程：若上限减小，立即对所有通道执行裁剪
     if (maxTotalSamples > 0) {
@@ -272,34 +284,41 @@ void OscilloscopeBuffer::setMaxTotalSamples(std::size_t maxTotalSamples) {
     }
 }
 
-void OscilloscopeBuffer::setResetHistoryOnTimeReset(bool enabled) {
+void OscilloscopeBuffer::setResetHistoryOnTimeReset(bool enabled)
+{
     resetHistoryOnTimeReset_ = enabled;
 }
 
-void OscilloscopeBuffer::preserveHistoryLimitAtLeast(std::size_t sampleCount) {
+void OscilloscopeBuffer::preserveHistoryLimitAtLeast(std::size_t sampleCount)
+{
     preservedHistoryLimit_ = (std::max)(preservedHistoryLimit_, sampleCount);
 }
 
-std::size_t OscilloscopeBuffer::channelCount() const {
+std::size_t OscilloscopeBuffer::channelCount() const
+{
     return channels_.size();
 }
 
-std::optional<ChannelSpec> OscilloscopeBuffer::channelSpec(std::size_t channelIndex) const {
+std::optional<ChannelSpec> OscilloscopeBuffer::channelSpec(std::size_t channelIndex) const
+{
     if (channelIndex >= channels_.size()) {
         return std::nullopt;
     }
     return channels_[channelIndex].spec;
 }
 
-const ViewConfig& OscilloscopeBuffer::viewConfig() const {
+const ViewConfig& OscilloscopeBuffer::viewConfig() const
+{
     return config_;
 }
 
-std::uint64_t OscilloscopeBuffer::dataRevision() const {
+std::uint64_t OscilloscopeBuffer::dataRevision() const
+{
     return dataRevision_;
 }
 
-std::optional<double> OscilloscopeBuffer::latestTime() const {
+std::optional<double> OscilloscopeBuffer::latestTime() const
+{
     std::optional<double> latest;
     for (const auto& channel : channels_) {
         if (channel.samples.empty()) {
@@ -313,7 +332,8 @@ std::optional<double> OscilloscopeBuffer::latestTime() const {
     return latest;
 }
 
-bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest request) {
+bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest request)
+{
     if (request.samples.empty()) {
         return false;
     }
@@ -327,11 +347,10 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
     }
 
     // 核心流程：实时链路通常按时间递增推送大批量采样，已递增时跳过排序以降低 append 成本。
-    const bool monotonic = std::is_sorted(request.samples.begin(),
-                                          request.samples.end(),
-                                          [](const WaveSample& left, const WaveSample& right) {
-                                              return left.time < right.time;
-                                          });
+    const bool monotonic = std::is_sorted(
+        request.samples.begin(), request.samples.end(), [](const WaveSample& left, const WaveSample& right) {
+            return left.time < right.time;
+        });
     if (!monotonic) {
         std::sort(request.samples.begin(), request.samples.end(), [](const WaveSample& left, const WaveSample& right) {
             return left.time < right.time;
@@ -369,11 +388,10 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
 
     if (!channel.samples.empty()) {
         const double lastTime = channel.samples.back().time;
-        request.samples.erase(
-            std::remove_if(request.samples.begin(), request.samples.end(), [lastTime](const WaveSample& sample) {
-                return sample.time <= lastTime;
-            }),
-            request.samples.end());
+        request.samples.erase(std::remove_if(request.samples.begin(),
+                                             request.samples.end(),
+                                             [lastTime](const WaveSample& sample) { return sample.time <= lastTime; }),
+                              request.samples.end());
     }
 
     if (request.samples.empty()) {
@@ -386,7 +404,8 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
     return true;
 }
 
-WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleMaxTime) const {
+WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleMaxTime) const
+{
     WaveSnapshot snapshot{};
     snapshot.source = source_;
     snapshot.config = config_;
@@ -416,7 +435,8 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
 EnvelopeView OscilloscopeBuffer::buildEnvelope(std::size_t channelIndex,
                                                double visibleMinTime,
                                                double visibleMaxTime,
-                                               std::size_t pixelWidth) const {
+                                               std::size_t pixelWidth) const
+{
     return buildLimitedEnvelope(channelIndex, visibleMinTime, visibleMaxTime, pixelWidth, 0);
 }
 
@@ -424,7 +444,8 @@ EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
                                                       double visibleMinTime,
                                                       double visibleMaxTime,
                                                       std::size_t pixelWidth,
-                                                      std::size_t maxSamples) const {
+                                                      std::size_t maxSamples) const
+{
     EnvelopeView view{};
     if (channelIndex >= channels_.size() || pixelWidth == 0) {
         return view;
@@ -456,7 +477,8 @@ EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
     if (sampledCount <= pixelWidth * 2) {
         view.points.reserve(sampledCount);
         for (std::size_t index = begin; index < end; ++index) {
-            const double displayValue = applyChannelDisplayTransform(samples[index].value, spec, config_.displayFormula);
+            const double displayValue =
+                applyChannelDisplayTransform(samples[index].value, spec, config_.displayFormula);
             view.points.push_back(EnvelopePoint{
                 .time = samples[index].time,
                 .minValue = displayValue,
@@ -473,8 +495,10 @@ EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
 
     std::size_t cursor = begin;
     for (std::size_t bucketIndex = 0; bucketIndex < bucketCount && cursor < end; ++bucketIndex) {
-        const double bucketStart = visibleMinTime + span * static_cast<double>(bucketIndex) / static_cast<double>(bucketCount);
-        const double bucketEnd = visibleMinTime + span * static_cast<double>(bucketIndex + 1) / static_cast<double>(bucketCount);
+        const double bucketStart =
+            visibleMinTime + span * static_cast<double>(bucketIndex) / static_cast<double>(bucketCount);
+        const double bucketEnd =
+            visibleMinTime + span * static_cast<double>(bucketIndex + 1) / static_cast<double>(bucketCount);
 
         double minValue = std::numeric_limits<double>::infinity();
         double maxValue = -std::numeric_limits<double>::infinity();
@@ -511,7 +535,8 @@ EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
 
     if (view.points.empty()) {
         for (std::size_t index = begin; index < end; ++index) {
-            const double displayValue = applyChannelDisplayTransform(samples[index].value, spec, config_.displayFormula);
+            const double displayValue =
+                applyChannelDisplayTransform(samples[index].value, spec, config_.displayFormula);
             view.points.push_back(EnvelopePoint{
                 .time = samples[index].time,
                 .minValue = displayValue,
@@ -524,11 +549,9 @@ EnvelopeView OscilloscopeBuffer::buildLimitedEnvelope(std::size_t channelIndex,
     return view;
 }
 
-std::optional<CursorReadout> OscilloscopeBuffer::findNearest(std::size_t channelIndex,
-                                                             double time,
-                                                             double value,
-                                                             double maxTimeDistance,
-                                                             double maxValueDistance) const {
+std::optional<CursorReadout> OscilloscopeBuffer::findNearest(
+    std::size_t channelIndex, double time, double value, double maxTimeDistance, double maxValueDistance) const
+{
     if (channelIndex >= channels_.size()) {
         return std::nullopt;
     }
@@ -571,7 +594,8 @@ std::optional<CursorReadout> OscilloscopeBuffer::findNearest(std::size_t channel
 
 std::optional<CursorReadout> OscilloscopeBuffer::findNearestByTime(std::size_t channelIndex,
                                                                    double time,
-                                                                   double maxTimeDistance) const {
+                                                                   double maxTimeDistance) const
+{
     if (channelIndex >= channels_.size()) {
         return std::nullopt;
     }
@@ -606,9 +630,8 @@ std::optional<CursorReadout> OscilloscopeBuffer::findNearestByTime(std::size_t c
     return best;
 }
 
-MeasurementReadout OscilloscopeBuffer::measureWindow(std::size_t channelIndex,
-                                                     double beginTime,
-                                                     double endTime) const {
+MeasurementReadout OscilloscopeBuffer::measureWindow(std::size_t channelIndex, double beginTime, double endTime) const
+{
     MeasurementReadout result{};
     if (channelIndex >= channels_.size()) {
         return result;
@@ -640,7 +663,8 @@ MeasurementReadout OscilloscopeBuffer::measureWindow(std::size_t channelIndex,
     return makeMeasurementReadout(channelIndex, times, values);
 }
 
-DeltaReadout OscilloscopeBuffer::makeDelta(const CursorReadout& left, const CursorReadout& right) {
+DeltaReadout OscilloscopeBuffer::makeDelta(const CursorReadout& left, const CursorReadout& right)
+{
     if (!left.valid || !right.valid) {
         return DeltaReadout{};
     }
@@ -653,7 +677,8 @@ DeltaReadout OscilloscopeBuffer::makeDelta(const CursorReadout& left, const Curs
     };
 }
 
-std::size_t OscilloscopeBuffer::lowerBoundByTime(const std::vector<WaveSample>& samples, double time) const {
+std::size_t OscilloscopeBuffer::lowerBoundByTime(const std::vector<WaveSample>& samples, double time) const
+{
     return static_cast<std::size_t>(std::distance(
         samples.begin(),
         std::lower_bound(samples.begin(), samples.end(), time, [](const WaveSample& sample, double pivot) {
@@ -661,7 +686,8 @@ std::size_t OscilloscopeBuffer::lowerBoundByTime(const std::vector<WaveSample>& 
         })));
 }
 
-std::size_t OscilloscopeBuffer::upperBoundByTime(const std::vector<WaveSample>& samples, double time) const {
+std::size_t OscilloscopeBuffer::upperBoundByTime(const std::vector<WaveSample>& samples, double time) const
+{
     return static_cast<std::size_t>(std::distance(
         samples.begin(),
         std::upper_bound(samples.begin(), samples.end(), time, [](double pivot, const WaveSample& sample) {
@@ -669,7 +695,8 @@ std::size_t OscilloscopeBuffer::upperBoundByTime(const std::vector<WaveSample>& 
         })));
 }
 
-void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel) {
+void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel)
+{
     if (historyTrimSuspended_) {
         return;
     }
@@ -680,8 +707,8 @@ void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel) {
         return;
     }
     const std::size_t effectiveLimit = hasHistoryLimit && hasMaxTotalSamples
-        ? (std::min)(historyLimit, maxTotalSamples_)
-        : (hasHistoryLimit ? historyLimit : maxTotalSamples_);
+                                           ? (std::min)(historyLimit, maxTotalSamples_)
+                                           : (hasHistoryLimit ? historyLimit : maxTotalSamples_);
     if (channel.samples.size() <= effectiveLimit) {
         return;
     }
@@ -697,17 +724,20 @@ void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel) {
     channel.samples.resize(effectiveLimit);
 }
 
-std::size_t OscilloscopeBuffer::effectiveHistoryLimit() const {
+std::size_t OscilloscopeBuffer::effectiveHistoryLimit() const
+{
     // 核心流程：导入回放后的完整历史是用户显式载入的数据，不能被较小的 Lua history_limit 立即裁掉。
     if (config_.historyLimit == 0U) {
         return preservedHistoryLimit_;
     }
     return (std::max)(config_.historyLimit, preservedHistoryLimit_);
 }
+
 WaveStats OscilloscopeBuffer::makeStats(const std::vector<WaveSample>& samples,
                                         std::size_t begin,
                                         std::size_t end,
-                                        const ChannelSpec& spec) const {
+                                        const ChannelSpec& spec) const
+{
     WaveStats stats{};
     stats.totalSamples = samples.size();
     if (begin >= end || begin >= samples.size() || end > samples.size()) {

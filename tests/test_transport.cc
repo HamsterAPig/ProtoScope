@@ -1,6 +1,6 @@
-#include "test_registry.hpp"
-
 #include "protoscope/transport/transport.hpp"
+
+#include "test_registry.hpp"
 
 #include <chrono>
 #include <optional>
@@ -11,20 +11,22 @@
 
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const char* message)
+{
     if (!condition) {
         throw std::runtime_error(message);
     }
 }
 
-std::uint16_t parsePort(const std::string& endpoint) {
+std::uint16_t parsePort(const std::string& endpoint)
+{
     const auto pos = endpoint.rfind(':');
     require(pos != std::string::npos, "endpoint 缺少端口");
     return static_cast<std::uint16_t>(std::stoi(endpoint.substr(pos + 1)));
 }
 
-template <typename Predicate>
-bool waitUntil(Predicate predicate) {
+template <typename Predicate> bool waitUntil(Predicate predicate)
+{
     for (int i = 0; i < 50; ++i) {
         if (predicate()) {
             return true;
@@ -36,11 +38,13 @@ bool waitUntil(Predicate predicate) {
 
 } // namespace
 
-void test_tcp_transport_roundtrip() {
+void test_tcp_transport_roundtrip()
+{
     using namespace protoscope::transport;
 
     TcpServerTransport server;
-    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = true}), "服务端打开失败");
+    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = true}),
+            "服务端打开失败");
 
     auto serverEvents = server.takeEvents();
     require(!serverEvents.empty(), "服务端应产生监听事件");
@@ -106,11 +110,13 @@ void test_tcp_transport_roundtrip() {
     server.close();
 }
 
-void test_transport_enqueue_send_async_roundtrip() {
+void test_transport_enqueue_send_async_roundtrip()
+{
     using namespace protoscope::transport;
 
     TcpServerTransport server;
-    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = true}), "服务端打开失败");
+    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = true}),
+            "服务端打开失败");
 
     const auto serverEvents = server.takeEvents();
     std::optional<std::uint16_t> listenPort;
@@ -178,11 +184,13 @@ void test_transport_enqueue_send_async_roundtrip() {
     server.close();
 }
 
-void test_tcp_server_connection_takeover_replaces_active_client() {
+void test_tcp_server_connection_takeover_replaces_active_client()
+{
     using namespace protoscope::transport;
 
     TcpServerTransport server;
-    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = false}), "服务端打开失败");
+    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = false}),
+            "服务端打开失败");
 
     auto serverEvents = server.takeEvents();
     std::optional<std::uint16_t> listenPort;
@@ -266,7 +274,8 @@ void test_tcp_server_connection_takeover_replaces_active_client() {
     server.close();
 }
 
-void test_serial_transport_error_path() {
+void test_serial_transport_error_path()
+{
     using namespace protoscope::transport;
 
     SerialTransport serial;
@@ -284,7 +293,8 @@ void test_serial_transport_error_path() {
     require(hasError, "无效串口应产生错误事件");
 }
 
-void test_udp_peer_transport_roundtrip() {
+void test_udp_peer_transport_roundtrip()
+{
     using namespace protoscope::transport;
 
     UdpPeerTransport peerA;

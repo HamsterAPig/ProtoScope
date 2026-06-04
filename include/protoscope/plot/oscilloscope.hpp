@@ -1,8 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -178,17 +178,10 @@ public:
                                       double visibleMaxTime,
                                       std::size_t pixelWidth,
                                       std::size_t maxSamples) const;
-    std::optional<CursorReadout> findNearest(std::size_t channelIndex,
-                                             double time,
-                                             double value,
-                                             double maxTimeDistance,
-                                             double maxValueDistance) const;
-    std::optional<CursorReadout> findNearestByTime(std::size_t channelIndex,
-                                                   double time,
-                                                   double maxTimeDistance) const;
-    MeasurementReadout measureWindow(std::size_t channelIndex,
-                                     double beginTime,
-                                     double endTime) const;
+    std::optional<CursorReadout> findNearest(
+        std::size_t channelIndex, double time, double value, double maxTimeDistance, double maxValueDistance) const;
+    std::optional<CursorReadout> findNearestByTime(std::size_t channelIndex, double time, double maxTimeDistance) const;
+    MeasurementReadout measureWindow(std::size_t channelIndex, double beginTime, double endTime) const;
 
     static DeltaReadout makeDelta(const CursorReadout& left, const CursorReadout& right);
 

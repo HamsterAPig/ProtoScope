@@ -22,6 +22,7 @@ include(cmake/Dependencies.cmake)
 include(cmake/EmbeddedProtocols.cmake)
 include(cmake/EmbeddedUiResources.cmake)
 include(cmake/VersionInfo.cmake)
+include(cmake/Format.cmake)
 
 add_subdirectory(src)
 add_subdirectory(tests)

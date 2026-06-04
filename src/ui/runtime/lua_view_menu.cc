@@ -1,12 +1,13 @@
-#include "protoscope/ui/gui_runtime.hpp"
-
 #include "gui_runtime_detail.hpp"
+
+#include "protoscope/ui/gui_runtime.hpp"
 
 #include <imgui.h>
 
 namespace protoscope::ui {
 
-void GuiRuntime::drawLuaViewMenu() {
+void GuiRuntime::drawLuaViewMenu()
+{
     if (!ImGui::BeginMenu("Lua视图")) {
         return;
     }

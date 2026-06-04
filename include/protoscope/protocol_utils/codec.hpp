@@ -1,8 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>

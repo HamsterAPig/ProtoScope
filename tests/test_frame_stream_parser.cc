@@ -1,10 +1,10 @@
-#include "test_registry.hpp"
-
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/frame_stream_parser.hpp"
 
-#include <memory>
+#include "test_registry.hpp"
+
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -12,13 +12,15 @@
 
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const char* message)
+{
     if (!condition) {
         throw std::runtime_error(message);
     }
 }
 
-std::vector<std::uint8_t> makeDynamicFrame(const std::vector<std::uint8_t>& payload) {
+std::vector<std::uint8_t> makeDynamicFrame(const std::vector<std::uint8_t>& payload)
+{
     std::vector<std::uint8_t> frame{0xAA, 0x55, static_cast<std::uint8_t>(payload.size())};
     frame.insert(frame.end(), payload.begin(), payload.end());
     const auto crc = protoscope::protocol_utils::crc16Modbus(frame);
@@ -27,7 +29,8 @@ std::vector<std::uint8_t> makeDynamicFrame(const std::vector<std::uint8_t>& payl
     return frame;
 }
 
-protoscope::scripting::FrameStreamParser makeDynamicParser(std::size_t capacity = 64) {
+protoscope::scripting::FrameStreamParser makeDynamicParser(std::size_t capacity = 64)
+{
     using namespace protoscope::scripting;
 
     StreamFieldDefinition countField;
@@ -59,7 +62,8 @@ protoscope::scripting::FrameStreamParser makeDynamicParser(std::size_t capacity 
     return FrameStreamParser(StreamBufferDefinition{.capacity = capacity, .dropOldest = true}, {frame});
 }
 
-std::shared_ptr<protoscope::scripting::StreamCountExpression> countConst(std::int64_t value) {
+std::shared_ptr<protoscope::scripting::StreamCountExpression> countConst(std::int64_t value)
+{
     using namespace protoscope::scripting;
     auto expression = std::make_shared<StreamCountExpression>();
     expression->op = StreamCountExpressionOp::Constant;
@@ -67,7 +71,8 @@ std::shared_ptr<protoscope::scripting::StreamCountExpression> countConst(std::in
     return expression;
 }
 
-std::shared_ptr<protoscope::scripting::StreamCountExpression> countField(std::string fieldName) {
+std::shared_ptr<protoscope::scripting::StreamCountExpression> countField(std::string fieldName)
+{
     using namespace protoscope::scripting;
     auto expression = std::make_shared<StreamCountExpression>();
     expression->op = StreamCountExpressionOp::Field;
@@ -78,7 +83,8 @@ std::shared_ptr<protoscope::scripting::StreamCountExpression> countField(std::st
 std::shared_ptr<protoscope::scripting::StreamCountExpression> countBinary(
     protoscope::scripting::StreamCountExpressionOp op,
     std::shared_ptr<protoscope::scripting::StreamCountExpression> operand,
-    std::int64_t argument) {
+    std::int64_t argument)
+{
     using namespace protoscope::scripting;
     auto expression = std::make_shared<StreamCountExpression>();
     expression->op = op;
@@ -89,7 +95,8 @@ std::shared_ptr<protoscope::scripting::StreamCountExpression> countBinary(
 
 protoscope::scripting::FrameStreamParser makeExpressionParser(
     const std::shared_ptr<protoscope::scripting::StreamCountExpression>& valuesCount,
-    const std::vector<protoscope::scripting::StreamFieldDefinition>& prefixFields = {}) {
+    const std::vector<protoscope::scripting::StreamFieldDefinition>& prefixFields = {})
+{
     using namespace protoscope::scripting;
 
     StreamFieldDefinition byteCount;
@@ -122,7 +129,8 @@ protoscope::scripting::FrameStreamParser makeExpressionParser(
 }
 
 std::vector<std::int64_t> parseExpressionValues(protoscope::scripting::FrameStreamParser& parser,
-                                                const std::vector<std::uint8_t>& payload) {
+                                                const std::vector<std::uint8_t>& payload)
+{
     const auto batch = parser.pushBytes(makeDynamicFrame(payload));
     require(batch.errors.empty(), "count 表达式不应解析失败");
     require(batch.frames.size() == 1, "count 表达式应解析出 1 帧");
@@ -138,7 +146,8 @@ std::vector<std::int64_t> parseExpressionValues(protoscope::scripting::FrameStre
 
 } // namespace
 
-void test_frame_stream_parser_waits_for_full_frame() {
+void test_frame_stream_parser_waits_for_full_frame()
+{
     auto parser = makeDynamicParser();
     const auto frame = makeDynamicFrame({0x03, 0x07, 0x08, 0x09});
 
@@ -158,7 +167,8 @@ void test_frame_stream_parser_waits_for_full_frame() {
     require(values[0] == 7 && values[1] == 8 && values[2] == 9, "动态 count 数组内容不正确");
 }
 
-void test_frame_stream_parser_handles_sticky_frames_and_noise_prefix() {
+void test_frame_stream_parser_handles_sticky_frames_and_noise_prefix()
+{
     auto parser = makeDynamicParser();
     auto first = makeDynamicFrame({0x01, 0x10});
     auto second = makeDynamicFrame({0x01, 0x20});
@@ -170,10 +180,12 @@ void test_frame_stream_parser_handles_sticky_frames_and_noise_prefix() {
     const auto batch = parser.pushBytes(combined);
     require(batch.frames.size() == 2, "粘包时应连续解析出 2 帧");
     require(!batch.errors.empty(), "噪声前缀应记录错误");
-    require(batch.errors.front().code == protoscope::scripting::StreamParseErrorCode::NoiseDiscarded, "噪声前缀错误码不正确");
+    require(batch.errors.front().code == protoscope::scripting::StreamParseErrorCode::NoiseDiscarded,
+            "噪声前缀错误码不正确");
 }
 
-void test_frame_stream_parser_crc_resync_keeps_following_frame() {
+void test_frame_stream_parser_crc_resync_keeps_following_frame()
+{
     auto parser = makeDynamicParser();
     auto broken = makeDynamicFrame({0x01, 0x33});
     auto good = makeDynamicFrame({0x01, 0x44});
@@ -189,23 +201,27 @@ void test_frame_stream_parser_crc_resync_keeps_following_frame() {
     require(batch.errors.front().code == protoscope::scripting::StreamParseErrorCode::CrcMismatch, "CRC 错误码不正确");
 }
 
-void test_frame_stream_parser_reports_overflow_drop_oldest() {
+void test_frame_stream_parser_reports_overflow_drop_oldest()
+{
     auto parser = makeDynamicParser(6);
     const auto batch = parser.pushBytes({0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17});
     require(!batch.errors.empty(), "超出容量时应报告 overflow");
-    require(batch.errors.front().code == protoscope::scripting::StreamParseErrorCode::Overflow, "overflow 错误码不正确");
+    require(batch.errors.front().code == protoscope::scripting::StreamParseErrorCode::Overflow,
+            "overflow 错误码不正确");
     require(batch.errors.front().droppedBytes == 2, "overflow 丢弃字节数不正确");
 }
 
-void test_frame_stream_parser_default_grows_without_drop_oldest() {
+void test_frame_stream_parser_default_grows_without_drop_oldest()
+{
     using namespace protoscope::scripting;
 
-    FrameStreamParser parser(StreamBufferDefinition{
-                                 .capacity = 4,
-                                 .maxCapacity = 16,
-                                 .dropOldest = false,
-                             },
-                             {});
+    FrameStreamParser parser(
+        StreamBufferDefinition{
+            .capacity = 4,
+            .maxCapacity = 16,
+            .dropOldest = false,
+        },
+        {});
     const auto batch = parser.pushBytes({0x01, 0x02, 0x03, 0x04, 0x05, 0x06});
 
     require(!batch.overflowed, "默认无损模式在预算内扩容时不应 overflow");
@@ -214,16 +230,18 @@ void test_frame_stream_parser_default_grows_without_drop_oldest() {
     require(batch.bufferSize == 6, "默认无损模式应保留完整输入");
 }
 
-void test_frame_stream_parser_near_overflow_threshold() {
+void test_frame_stream_parser_near_overflow_threshold()
+{
     using namespace protoscope::scripting;
 
-    FrameStreamParser parser(StreamBufferDefinition{
-                                 .capacity = 10,
-                                 .dropOldest = true,
-                                 .nearOverflowThresholdRatio = 0.8,
-                                 .nearOverflowNotify = true,
-                             },
-                             {});
+    FrameStreamParser parser(
+        StreamBufferDefinition{
+            .capacity = 10,
+            .dropOldest = true,
+            .nearOverflowThresholdRatio = 0.8,
+            .nearOverflowNotify = true,
+        },
+        {});
 
     const auto below = parser.pushBytes({0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07});
     require(!below.nearOverflow, "79% 以下不应触发 near-overflow");
@@ -244,8 +262,8 @@ void test_frame_stream_parser_near_overflow_threshold() {
             "实际溢出仍应保留原有 overflow 错误");
 }
 
-
-void test_frame_stream_parser_large_chunk_keeps_latest_window() {
+void test_frame_stream_parser_large_chunk_keeps_latest_window()
+{
     using namespace protoscope::scripting;
 
     StreamFrameDefinition frame;
@@ -262,7 +280,8 @@ void test_frame_stream_parser_large_chunk_keeps_latest_window() {
     require(batch.frames.back().raw == std::vector<std::uint8_t>({0xFE, 0x04, 0x05, 0x06}), "保留窗口尾部应为最新帧");
 }
 
-void test_frame_stream_parser_supports_fixed_size_raw_frame() {
+void test_frame_stream_parser_supports_fixed_size_raw_frame()
+{
     using namespace protoscope::scripting;
 
     StreamFrameDefinition frame;
@@ -279,7 +298,8 @@ void test_frame_stream_parser_supports_fixed_size_raw_frame() {
     require(batch.frames[0].fields.empty(), "无字段定义时不应生成 fields");
 }
 
-void test_frame_stream_parser_prefers_longer_same_header_candidate() {
+void test_frame_stream_parser_prefers_longer_same_header_candidate()
+{
     using namespace protoscope::scripting;
 
     StreamFrameDefinition shortFrame;
@@ -308,7 +328,8 @@ void test_frame_stream_parser_prefers_longer_same_header_candidate() {
     require(value.has_value() && *value == 0x7F, "long schema 字段应从完整帧中解析");
 }
 
-void test_frame_stream_parser_count_expression_arithmetic() {
+void test_frame_stream_parser_count_expression_arithmetic()
+{
     using namespace protoscope::scripting;
 
     auto divParser = makeExpressionParser(countBinary(StreamCountExpressionOp::Div, countField("byte_count"), 2));
@@ -324,7 +345,8 @@ void test_frame_stream_parser_count_expression_arithmetic() {
     require(mulValues.size() == 2, "mul count 表达式应支持元素数转换");
 }
 
-void test_frame_stream_parser_count_expression_remaining_if_flag_and_case() {
+void test_frame_stream_parser_count_expression_remaining_if_flag_and_case()
+{
     using namespace protoscope::scripting;
 
     auto remaining = std::make_shared<StreamCountExpression>();
@@ -356,7 +378,8 @@ void test_frame_stream_parser_count_expression_remaining_if_flag_and_case() {
     auto caseExpression = std::make_shared<StreamCountExpression>();
     caseExpression->op = StreamCountExpressionOp::Case;
     caseExpression->fieldName = "func";
-    caseExpression->cases.push_back(StreamCountCase{.value = 0x03, .expression = countBinary(StreamCountExpressionOp::Div, countField("byte_count"), 2)});
+    caseExpression->cases.push_back(StreamCountCase{
+        .value = 0x03, .expression = countBinary(StreamCountExpressionOp::Div, countField("byte_count"), 2)});
     caseExpression->cases.push_back(StreamCountCase{.value = 0x10, .expression = countConst(2)});
     caseExpression->defaultExpression = countConst(1);
     auto caseParser = makeExpressionParser(caseExpression, {func});
@@ -364,8 +387,8 @@ void test_frame_stream_parser_count_expression_remaining_if_flag_and_case() {
     require(caseValues.size() == 2 && caseValues[0] == 0x21, "case count 表达式应按功能码选择数量");
 }
 
-
-void test_frame_stream_parser_multi_schema_large_chunk_throughput() {
+void test_frame_stream_parser_multi_schema_large_chunk_throughput()
+{
     using namespace protoscope::scripting;
 
     StreamFrameDefinition fixed;
@@ -384,8 +407,7 @@ void test_frame_stream_parser_multi_schema_large_chunk_throughput() {
         bytes.push_back(static_cast<std::uint8_t>(index));
         bytes.push_back(static_cast<std::uint8_t>(index + 1));
         bytes.push_back(static_cast<std::uint8_t>(index + 2));
-        auto frame = makeDynamicFrame(
-            {0x02, static_cast<std::uint8_t>(index), static_cast<std::uint8_t>(index + 1)});
+        auto frame = makeDynamicFrame({0x02, static_cast<std::uint8_t>(index), static_cast<std::uint8_t>(index + 1)});
         bytes.insert(bytes.end(), frame.begin(), frame.end());
     }
 
@@ -394,7 +416,8 @@ void test_frame_stream_parser_multi_schema_large_chunk_throughput() {
     require(!batch.errors.empty(), "带噪声前缀的大块输入应报告噪声丢弃");
 }
 
-void test_frame_stream_parser_crc_frame_across_chunks() {
+void test_frame_stream_parser_crc_frame_across_chunks()
+{
     auto parser = makeDynamicParser(64);
     const auto frame = makeDynamicFrame({0x04, 0x10, 0x11, 0x12, 0x13});
 
@@ -407,7 +430,8 @@ void test_frame_stream_parser_crc_frame_across_chunks() {
     require(second.frames[0].raw == frame, "CRC 帧跨 chunk 后 raw 应保持一致");
 }
 
-void test_frame_stream_parser_overflow_keeps_latest_crc_window() {
+void test_frame_stream_parser_overflow_keeps_latest_crc_window()
+{
     auto parser = makeDynamicParser(16);
     const auto oldFrame = makeDynamicFrame({0x02, 0x01, 0x02});
     const auto newFrame = makeDynamicFrame({0x02, 0x09, 0x0A});
@@ -424,7 +448,8 @@ void test_frame_stream_parser_overflow_keeps_latest_crc_window() {
     require(batch.frames[0].raw == newFrame, "overflow 后应保留最新 CRC 帧");
 }
 
-void test_frame_stream_parser_runtime_profile_length_and_channel_map() {
+void test_frame_stream_parser_runtime_profile_length_and_channel_map()
+{
     using namespace protoscope::scripting;
 
     StreamFieldDefinition valuesField;
@@ -462,7 +487,8 @@ void test_frame_stream_parser_runtime_profile_length_and_channel_map() {
             "channel_map 应保持 C++ 内部 0-based 映射");
 }
 
-void test_frame_stream_parser_runtime_profile_errors() {
+void test_frame_stream_parser_runtime_profile_errors()
+{
     using namespace protoscope::scripting;
 
     StreamFrameDefinition frame;
@@ -478,13 +504,15 @@ void test_frame_stream_parser_runtime_profile_errors() {
     std::string error;
     require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 0, .channelMap = {}}, error),
             "长度为 0 应被拒绝");
-    require(!parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 0}}, error),
-            "重复 channel_map 应被拒绝");
+    require(
+        !parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 0}}, error),
+        "重复 channel_map 应被拒绝");
     require(parser.setRuntimeProfile("dynamic_profile", StreamRuntimeProfile{.length = 6, .channelMap = {0, 2}}, error),
             "非连续 channel_map (如 {0,2}) 应被接受");
 }
 
-void test_frame_stream_parser_rejects_unsafe_count_bounds() {
+void test_frame_stream_parser_rejects_unsafe_count_bounds()
+{
     using namespace protoscope::scripting;
 
     StreamFrameDefinition fixedFrame;
@@ -511,9 +539,8 @@ void test_frame_stream_parser_rejects_unsafe_count_bounds() {
     expressionField.name = "values";
     expressionField.type = StreamValueType::U8;
     expressionField.offset = 2;
-    expressionField.count.expression = countBinary(StreamCountExpressionOp::Mul,
-                                                   countConst((std::numeric_limits<std::int64_t>::max)()),
-                                                   2);
+    expressionField.count.expression =
+        countBinary(StreamCountExpressionOp::Mul, countConst((std::numeric_limits<std::int64_t>::max)()), 2);
     expressionFrame.fields = {expressionField};
     FrameStreamParser expressionParser(StreamBufferDefinition{.capacity = 64, .dropOldest = true}, {expressionFrame});
     const auto expressionBatch = expressionParser.pushBytes({0xAA, 0x66, 0x00, 0x01});
@@ -531,13 +558,14 @@ void test_frame_stream_parser_rejects_unsafe_count_bounds() {
         .extra = 0,
     };
     FrameStreamParser lengthParser(StreamBufferDefinition{.capacity = 64, .dropOldest = true}, {lengthFrame});
-   const auto lengthBatch = lengthParser.pushBytes({0xAA, 0x77});
-   require(!lengthBatch.errors.empty(), "长度字段 offset 溢出应安全报错");
-   require(lengthBatch.errors.front().code == StreamParseErrorCode::InvalidLength,
-           "长度字段 offset 溢出应归类为 invalid_length");
+    const auto lengthBatch = lengthParser.pushBytes({0xAA, 0x77});
+    require(!lengthBatch.errors.empty(), "长度字段 offset 溢出应安全报错");
+    require(lengthBatch.errors.front().code == StreamParseErrorCode::InvalidLength,
+            "长度字段 offset 溢出应归类为 invalid_length");
 }
 
-void test_frame_stream_parser_runtime_profile_truncated_fields() {
+void test_frame_stream_parser_runtime_profile_truncated_fields()
+{
     using namespace protoscope::scripting;
 
     // 构造 runtime_profile 帧，schema 声明 4 个固定 offset 字段
@@ -546,25 +574,25 @@ void test_frame_stream_parser_runtime_profile_truncated_fields() {
     frame.header = {0xFF, 0x26};
     frame.runtimeProfile = true;
     frame.crc = StreamCrcDefinition{.type = StreamCrcType::Crc16Modbus, .order = StreamCrcOrder::LoHi};
-   StreamFieldDefinition seqField;
-   seqField.name = "sequence";
-   seqField.type = StreamValueType::U16Be;
+    StreamFieldDefinition seqField;
+    seqField.name = "sequence";
+    seqField.type = StreamValueType::U16Be;
     seqField.offset = 2;
-   StreamFieldDefinition ch1Field;
-   ch1Field.name = "ch1";
-   ch1Field.type = StreamValueType::I16Be;
+    StreamFieldDefinition ch1Field;
+    ch1Field.name = "ch1";
+    ch1Field.type = StreamValueType::I16Be;
     ch1Field.offset = 4;
-   StreamFieldDefinition ch2Field;
-   ch2Field.name = "ch2";
-   ch2Field.type = StreamValueType::I16Be;
+    StreamFieldDefinition ch2Field;
+    ch2Field.name = "ch2";
+    ch2Field.type = StreamValueType::I16Be;
     ch2Field.offset = 6;
-   StreamFieldDefinition ch3Field;
-   ch3Field.name = "ch3";
-   ch3Field.type = StreamValueType::I16Be;
+    StreamFieldDefinition ch3Field;
+    ch3Field.name = "ch3";
+    ch3Field.type = StreamValueType::I16Be;
     ch3Field.offset = 8;
-   StreamFieldDefinition ch4Field;
-   ch4Field.name = "ch4";
-   ch4Field.type = StreamValueType::I16Be;
+    StreamFieldDefinition ch4Field;
+    ch4Field.name = "ch4";
+    ch4Field.type = StreamValueType::I16Be;
     ch4Field.offset = 10;
     frame.fields = {seqField, ch1Field, ch2Field, ch3Field, ch4Field};
 

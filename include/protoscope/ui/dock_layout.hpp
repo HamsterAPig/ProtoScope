@@ -60,14 +60,12 @@ std::filesystem::path executableDirectory();
 std::filesystem::path luaDockLayoutPath(const std::filesystem::path& executableDir, std::string_view layoutKey);
 std::filesystem::path luaDockLayoutMetaPath(const std::filesystem::path& executableDir, std::string_view layoutKey);
 void writeLuaDockLayoutMeta(const std::filesystem::path& path, int schemaVersion);
-LuaDockLayoutPaths resolveLuaDockLayoutPaths(
-    const std::filesystem::path& executableDir,
-    std::string_view protocolDir,
-    std::string_view scriptPath);
-ProtocolWorkspaceSwitchDecision decideProtocolWorkspaceSwitch(
-    std::string_view loadedProtocolDir,
-    std::string_view draftProtocolDir,
-    bool reloadClicked);
+LuaDockLayoutPaths resolveLuaDockLayoutPaths(const std::filesystem::path& executableDir,
+                                             std::string_view protocolDir,
+                                             std::string_view scriptPath);
+ProtocolWorkspaceSwitchDecision decideProtocolWorkspaceSwitch(std::string_view loadedProtocolDir,
+                                                              std::string_view draftProtocolDir,
+                                                              bool reloadClicked);
 WorkspaceLayoutMode workspaceLayoutModeAfterLoad(const LuaDockLayoutPaths& layoutPaths);
 bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol);
 bool shouldRunLuaDefaultDockLayout(WorkspaceLayoutMode layoutMode, bool pendingDefaultDockLayout);
@@ -75,15 +73,11 @@ bool canResetProtocolWorkspaceLayout(bool protocolWorkspaceLoaded, std::string_v
 DockLayoutIniHealth inspectDockLayoutIni(std::string_view iniContent);
 bool shouldRebuildDockLayout(const DockLayoutIniHealth& health);
 std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey);
-std::vector<std::string> buildLuaDockStableIds(
-    const std::vector<scripting::DockSnapshot>& docks,
-    std::string_view layoutKey);
-bool shouldKeepLuaWindowSettings(
-    std::string_view stableId,
-    std::string_view layoutKey);
+std::vector<std::string> buildLuaDockStableIds(const std::vector<scripting::DockSnapshot>& docks,
+                                               std::string_view layoutKey);
+bool shouldKeepLuaWindowSettings(std::string_view stableId, std::string_view layoutKey);
 std::string luaDockWindowName(const scripting::DockDescriptor& dock, std::string_view layoutKey);
-std::vector<LuaDockLayoutRequest> buildLuaDockLayoutRequests(
-    const std::vector<scripting::DockSnapshot>& docks,
-    std::string_view layoutKey);
+std::vector<LuaDockLayoutRequest> buildLuaDockLayoutRequests(const std::vector<scripting::DockSnapshot>& docks,
+                                                             std::string_view layoutKey);
 
 } // namespace protoscope::ui

@@ -1,9 +1,7 @@
-#include "test_registry.hpp"
-
 #include "protoscope/plugin/elf_static_view_bridge.hpp"
 #include "protoscope/ui/elf_static_address_file_watch.hpp"
 
-#include <elf_static_view/project.hpp>
+#include "test_registry.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -13,22 +11,26 @@
 #include <string>
 #include <utility>
 
+#include <elf_static_view/project.hpp>
+
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const char* message)
+{
     if (!condition) {
         throw std::runtime_error(message);
     }
 }
 
-std::uint64_t nowMs() {
+std::uint64_t nowMs()
+{
     return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
 
-std::filesystem::path makeUniqueTempFile(const char* name, const std::string& extension = ".json") {
+std::filesystem::path makeUniqueTempFile(const char* name, const std::string& extension = ".json")
+{
     return std::filesystem::temp_directory_path() / (std::string(name) + "-" + std::to_string(nowMs()) + extension);
 }
 
@@ -36,7 +38,8 @@ elf_static_view::ExpandedNode makeExpandedNode(std::string path,
                                                std::string displayName,
                                                std::string typeName,
                                                elf_static_view::Availability availability,
-                                               std::optional<std::uint64_t> absoluteAddress = std::nullopt) {
+                                               std::optional<std::uint64_t> absoluteAddress = std::nullopt)
+{
     return elf_static_view::ExpandedNode{
         .path = std::move(path),
         .display_name = std::move(displayName),
@@ -56,30 +59,19 @@ elf_static_view::ExpandedNode makeExpandedNode(std::string path,
     };
 }
 
-elf_static_view::ProjectModel sampleProjectModel() {
+elf_static_view::ProjectModel sampleProjectModel()
+{
     elf_static_view::ProjectModel model;
     model.file = "sample.elf";
-    model.expanded.push_back(makeExpandedNode("global.counter",
-                                              "counter",
-                                              "uint32_t",
-                                              elf_static_view::Availability::StaticAddressKnown,
-                                              0x20000010ULL));
-    model.expanded.push_back(makeExpandedNode("global.a_var_int",
-                                              "a_var_int",
-                                              "int",
-                                              elf_static_view::Availability::StaticAddressKnown,
-                                              0x20000000ULL));
-    auto objAdc = makeExpandedNode("global.objADC",
-                                   "objADC",
-                                   "AdcState",
-                                   elf_static_view::Availability::StaticAddressKnown,
-                                   0x20000100ULL);
+    model.expanded.push_back(makeExpandedNode(
+        "global.counter", "counter", "uint32_t", elf_static_view::Availability::StaticAddressKnown, 0x20000010ULL));
+    model.expanded.push_back(makeExpandedNode(
+        "global.a_var_int", "a_var_int", "int", elf_static_view::Availability::StaticAddressKnown, 0x20000000ULL));
+    auto objAdc = makeExpandedNode(
+        "global.objADC", "objADC", "AdcState", elf_static_view::Availability::StaticAddressKnown, 0x20000100ULL);
     objAdc.type_kind = elf_static_view::TypeKind::Struct;
-    objAdc.children.push_back(makeExpandedNode("global.objADC.member",
-                                               "member",
-                                               "uint16_t",
-                                               elf_static_view::Availability::StaticLayoutKnown,
-                                               0x20000104ULL));
+    objAdc.children.push_back(makeExpandedNode(
+        "global.objADC.member", "member", "uint16_t", elf_static_view::Availability::StaticLayoutKnown, 0x20000104ULL));
     model.expanded.push_back(std::move(objAdc));
     auto structArray = makeExpandedNode("global.h_var_struct_arr",
                                         "h_var_struct_arr",
@@ -102,16 +94,15 @@ elf_static_view::ProjectModel sampleProjectModel() {
         structArray.children.push_back(std::move(element));
     }
     model.expanded.push_back(std::move(structArray));
-    model.expanded.push_back(makeExpandedNode("global.runtime_only",
-                                              "runtime_only",
-                                              "int",
-                                              elf_static_view::Availability::RuntimeOnly));
+    model.expanded.push_back(
+        makeExpandedNode("global.runtime_only", "runtime_only", "int", elf_static_view::Availability::RuntimeOnly));
     return model;
 }
 
 } // namespace
 
-void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols() {
+void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols()
+{
     const auto path = makeUniqueTempFile("protoscope-elf-static-view-dump");
     {
         std::ofstream output(path, std::ios::binary);
@@ -135,7 +126,8 @@ void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols() {
     std::filesystem::remove(path);
 }
 
-void test_elf_static_view_bridge_queries_flattened_composite_members() {
+void test_elf_static_view_bridge_queries_flattened_composite_members()
+{
     const auto path = makeUniqueTempFile("protoscope-elf-static-view-composite");
     {
         std::ofstream output(path, std::ios::binary);
@@ -153,26 +145,25 @@ void test_elf_static_view_bridge_queries_flattened_composite_members() {
     require(memberResults[0].type == "uint16_t", "成员类型应来自展开后的复合成员");
 
     const auto arrayResults = bridge.query("h_var_struct_arr", 128);
-    const auto ageIt = std::find_if(arrayResults.begin(),
-                                    arrayResults.end(),
-                                    [](const protoscope::plugin::ElfStaticAddressEntry& entry) {
-                                        return entry.label == "global.h_var_struct_arr[0].age";
-                                    });
+    const auto ageIt = std::find_if(
+        arrayResults.begin(), arrayResults.end(), [](const protoscope::plugin::ElfStaticAddressEntry& entry) {
+            return entry.label == "global.h_var_struct_arr[0].age";
+        });
     require(ageIt != arrayResults.end(), "按父数组名查询时应包含 struct 数组展开成员");
     require(ageIt->value == "0x20001002", "struct 数组成员地址应来自静态布局地址");
 
     const auto objectPrefixResults = bridge.query("objADC", 64);
-    const auto memberIt = std::find_if(objectPrefixResults.begin(),
-                                       objectPrefixResults.end(),
-                                       [](const protoscope::plugin::ElfStaticAddressEntry& entry) {
-                                           return entry.label == "global.objADC.member";
-                                       });
+    const auto memberIt = std::find_if(
+        objectPrefixResults.begin(),
+        objectPrefixResults.end(),
+        [](const protoscope::plugin::ElfStaticAddressEntry& entry) { return entry.label == "global.objADC.member"; });
     require(memberIt != objectPrefixResults.end(), "按对象名前缀查询时应包含展开后的成员地址");
 
     std::filesystem::remove(path);
 }
 
-void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_reload() {
+void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_reload()
+{
     using protoscope::ui::ElfStaticAddressFileWatchState;
     using protoscope::ui::pollElfStaticAddressFileWatchState;
 
@@ -187,7 +178,8 @@ void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_relo
     state.watching = true;
     state.lastExists = true;
     state.lastWriteTimeNs = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::filesystem::last_write_time(path).time_since_epoch()).count());
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::filesystem::last_write_time(path).time_since_epoch())
+            .count());
     state.fileSize = std::filesystem::file_size(path);
 
     std::error_code error;
@@ -227,7 +219,8 @@ void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_relo
     std::filesystem::remove(path);
 }
 
-void test_elf_static_view_bridge_loads_private_binary_without_extension() {
+void test_elf_static_view_bridge_loads_private_binary_without_extension()
+{
     const auto path = makeUniqueTempFile("protoscope-elf-static-view-private", "");
     {
         elf_static_view::ProjectSnapshot snapshot;
@@ -254,7 +247,8 @@ void test_elf_static_view_bridge_loads_private_binary_without_extension() {
     std::filesystem::remove(path);
 }
 
-void test_elf_static_view_bridge_loads_variable_summary_export() {
+void test_elf_static_view_bridge_loads_variable_summary_export()
+{
     const auto path = makeUniqueTempFile("protoscope-elf-static-view-summary", ".esv");
     {
         elf_static_view::ExportOptions options;
@@ -288,7 +282,8 @@ void test_elf_static_view_bridge_loads_variable_summary_export() {
     std::filesystem::remove(path);
 }
 
-void test_elf_static_view_bridge_keeps_old_model_on_load_failure() {
+void test_elf_static_view_bridge_keeps_old_model_on_load_failure()
+{
     const auto path = makeUniqueTempFile("protoscope-elf-static-view-keep-old");
     const auto invalidPath = makeUniqueTempFile("protoscope-elf-static-view-invalid", ".txt");
     {

@@ -200,6 +200,7 @@ struct WaveDockState {
     std::uint64_t displayDataRevision{0};
     double displayDataSampleFrequencyHz{0.0};
     std::size_t lastLegendMeasurementChannelIndex{static_cast<std::size_t>(-1)};
+
     struct DisplayDataCacheKey {
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
@@ -209,16 +210,15 @@ struct WaveDockState {
         WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
         std::size_t rangeHash{0};
 
-        bool operator==(const DisplayDataCacheKey& other) const {
-            return dataRevision == other.dataRevision
-                && sampleFrequencyHz == other.sampleFrequencyHz
-                && viewMinTime == other.viewMinTime
-                && viewMaxTime == other.viewMaxTime
-                && channelCount == other.channelCount
-                && displayFormula == other.displayFormula
-                && rangeHash == other.rangeHash;
+        bool operator==(const DisplayDataCacheKey& other) const
+        {
+            return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
+                   viewMinTime == other.viewMinTime && viewMaxTime == other.viewMaxTime &&
+                   channelCount == other.channelCount && displayFormula == other.displayFormula &&
+                   rangeHash == other.rangeHash;
         }
     };
+
     bool cachedDisplayKeyValid{false};
     DisplayDataCacheKey cachedDisplayKey{};
     WaveSnapshot cachedFullSnapshot{};

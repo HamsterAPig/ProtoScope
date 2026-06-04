@@ -10,7 +10,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
                         const plot::WaveDisplayData& displayData,
                         const RenderBudget& renderBudget,
                         const ImPlotRect& limits,
-                        std::vector<std::size_t>& visibleChannelIndices) {
+                        std::vector<std::size_t>& visibleChannelIndices)
+{
     auto& view = wave.view;
     visibleChannelIndices.clear();
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
@@ -28,21 +29,19 @@ void renderWaveChannels(plot::WaveDockState& wave,
         }
         const ImVec4 color = channelColor(channel, channelIndex);
         const double downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
-        const std::size_t downsampleThreshold =
-            static_cast<std::size_t>(std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
+        const std::size_t downsampleThreshold = static_cast<std::size_t>(
+            std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
         if (sourceSampleCount <= downsampleThreshold) {
-            auto begin = std::lower_bound(channelSamples.begin(),
-                                          channelSamples.end(),
-                                          limits.X.Min,
-                                          [](const plot::WaveSample& sample, double value) {
-                                              return sample.time < value;
-                                          });
-            auto end = std::upper_bound(channelSamples.begin(),
-                                        channelSamples.end(),
-                                        limits.X.Max,
-                                        [](double value, const plot::WaveSample& sample) {
-                                            return value < sample.time;
-                                        });
+            auto begin =
+                std::lower_bound(channelSamples.begin(),
+                                 channelSamples.end(),
+                                 limits.X.Min,
+                                 [](const plot::WaveSample& sample, double value) { return sample.time < value; });
+            auto end =
+                std::upper_bound(channelSamples.begin(),
+                                 channelSamples.end(),
+                                 limits.X.Max,
+                                 [](double value, const plot::WaveSample& sample) { return value < sample.time; });
             if (begin != channelSamples.begin()) {
                 --begin;
             }
@@ -61,7 +60,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
             spec.LineColor = color;
             spec.LineWeight = 1.5F;
             applySavedLegendVisibility(wave, channel.label);
-            ImPlot::PlotLineG(channel.label.c_str(), &waveSampleGetter, &payload, static_cast<int>(rawVisibleCount), spec);
+            ImPlot::PlotLineG(
+                channel.label.c_str(), &waveSampleGetter, &payload, static_cast<int>(rawVisibleCount), spec);
             if (!currentPlotItemVisible(channel.label)) {
                 continue;
             }
@@ -110,7 +110,8 @@ void handleHoverReadout(plot::WaveViewState& view,
                         const std::vector<std::size_t>& visibleChannelIndices,
                         const ImPlotPoint& mousePos,
                         double timeSnapDistance,
-                        double valueSnapDistance) {
+                        double valueSnapDistance)
+{
     if (!ImPlot::IsPlotHovered() || !view.showHoverReadout || visibleChannelIndices.empty()) {
         return;
     }
@@ -120,12 +121,16 @@ void handleHoverReadout(plot::WaveViewState& view,
         return;
     }
     const auto& hoveredChannel = snapshot.channels[hovered->channelIndex];
-    ImPlot::Annotation(hovered->time, hovered->displayValue, ImVec4(1.0F, 1.0F, 0.2F, 1.0F), ImVec2(12.0F, -12.0F), true,
-        "%s t=%s y=%.6g %s",
-        hoveredChannel.label.c_str(),
-        formatMetricText(hovered->time, displayData.timeUnit.c_str()).c_str(),
-        hovered->value,
-        hoveredChannel.unit.c_str());
+    ImPlot::Annotation(hovered->time,
+                       hovered->displayValue,
+                       ImVec4(1.0F, 1.0F, 0.2F, 1.0F),
+                       ImVec2(12.0F, -12.0F),
+                       true,
+                       "%s t=%s y=%.6g %s",
+                       hoveredChannel.label.c_str(),
+                       formatMetricText(hovered->time, displayData.timeUnit.c_str()).c_str(),
+                       hovered->value,
+                       hoveredChannel.unit.c_str());
     if (view.showCursors && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         view.measurementChannelIndex = hovered->channelIndex;
     }
@@ -138,7 +143,8 @@ bool handlePlotCursors(plot::WaveViewState& view,
                        const ImPlotRect& limits,
                        double timeSnapDistance,
                        double smartSnapDistance,
-                       std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts) {
+                       std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts)
+{
     if (!view.showCursors) {
         return false;
     }
@@ -162,17 +168,19 @@ bool handlePlotCursors(plot::WaveViewState& view,
         if (smartSnapActive) {
             dragFlags |= ImPlotDragToolFlags_Delayed;
         }
-        ImPlot::DragLineX(static_cast<int>(100 + cursorIndex), &dragTime,
-            ImVec4(cursorIndex == 0 ? 0.2F : 1.0F, 0.9F, 0.3F, 1.0F),
-            1.5F,
-            dragFlags,
-            &clicked,
-            &hovered,
-            &held);
+        ImPlot::DragLineX(static_cast<int>(100 + cursorIndex),
+                          &dragTime,
+                          ImVec4(cursorIndex == 0 ? 0.2F : 1.0F, 0.9F, 0.3F, 1.0F),
+                          1.5F,
+                          dragFlags,
+                          &clicked,
+                          &hovered,
+                          &held);
         anyCursorHeld = anyCursorHeld || held;
         if (held && smartSnapActive) {
             // 核心流程：先用 DragLineX 写入的鼠标时间查吸附，再回写游标时间，配合 Delayed 让绘制使用受约束位置。
-            auto smartSnapTarget = findSmartCursorSnapByScope(displayData, view, dragTime, mousePos.y, limits, smartSnapDistance);
+            auto smartSnapTarget =
+                findSmartCursorSnapByScope(displayData, view, dragTime, mousePos.y, limits, smartSnapDistance);
             if (smartSnapTarget.has_value()) {
                 smartSnap = smartSnapTarget->readout;
                 snapLabel = smartSnapTarget->label;
@@ -205,13 +213,15 @@ bool handlePlotCursors(plot::WaveViewState& view,
         }
         cursorReadouts[cursorIndex] = best;
         if (held || hovered || cursor.pinned) {
-            drawCursorAnnotation(cursorIndex, *best, snapshot.channels[best->channelIndex], displayData.timeUnit, snapLabel);
+            drawCursorAnnotation(
+                cursorIndex, *best, snapshot.channels[best->channelIndex], displayData.timeUnit, snapLabel);
         }
     }
     return anyCursorHeld;
 }
 
-PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame) {
+PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame)
+{
     PlotRenderResult result;
     if (frame.fullSnapshot == nullptr || frame.displayData == nullptr || frame.fullSnapshot->channels.empty()) {
         ImGui::TextUnformatted("Lua 尚未通过 proto.plot.setup / proto.plot.push 提供波形数据。");
@@ -230,9 +240,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
         inputMap.Fit = ImGuiMouseButton_Middle;
         inputMap.ZoomMod = ImGuiMod_Ctrl;
     }
-    if (!ImPlot::BeginPlot("##oscilloscope",
-            ImVec2(-1.0F, -1.0F),
-            ImPlotFlags_NoLegend)) {
+    if (!ImPlot::BeginPlot("##oscilloscope", ImVec2(-1.0F, -1.0F), ImPlotFlags_NoLegend)) {
         inputMap = savedInputMap;
         if (!view.showAxisLabels) {
             ImPlot::PopStyleVar(2);
@@ -249,9 +257,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     if (frame.fullSnapshot != nullptr && frame.overviewDisplayData != nullptr) {
         const auto fullHistoryChannelIndices = channelIndicesForDerivedViews(wave, *frame.fullSnapshot);
         // 核心流程：X 轴双击默认查看当前内存保留的完整历史，复用概览缓存避免额外复制全量样本。
-        fullHistoryBounds = plot::computeDisplayBoundsForChannels(*frame.overviewDisplayData,
-                                                                  fullHistoryChannelIndices,
-                                                                  (std::max)(view.minVisibleTimeSpan, 1e-6));
+        fullHistoryBounds = plot::computeDisplayBoundsForChannels(
+            *frame.overviewDisplayData, fullHistoryChannelIndices, (std::max)(view.minVisibleTimeSpan, 1e-6));
     }
     applyMainPlotAxesAndLimits(view, frame.snapshot, displayData);
 
@@ -275,34 +282,35 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     std::vector<std::size_t> visibleChannelIndices;
     renderWaveChannels(wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices);
     syncLegendVisibilityState(wave, frame.snapshot);
-    const auto fitChannelIndices = excludesLegendHiddenChannels(view) ? channelIndicesForDerivedViews(wave, frame.snapshot) : visibleChannelIndicesForFit(frame.snapshot);
-    viewportChangedThisFrame = applyFitVisibleWaveforms(view, displayData, fitChannelIndices) || viewportChangedThisFrame;
+    const auto fitChannelIndices = excludesLegendHiddenChannels(view)
+                                       ? channelIndicesForDerivedViews(wave, frame.snapshot)
+                                       : visibleChannelIndicesForFit(frame.snapshot);
+    viewportChangedThisFrame =
+        applyFitVisibleWaveforms(view, displayData, fitChannelIndices) || viewportChangedThisFrame;
     const auto zoomSelectionResult = handleMainPlotZoomSelection(view);
     viewportChangedThisFrame = zoomSelectionResult.viewportChanged || viewportChangedThisFrame;
     viewportChangedThisFrame = applyPendingVerticalAutoFitOverride(view, derivedBounds) || viewportChangedThisFrame;
-    const bool offsetReset = !zoomSelectionResult.consumed
-        && handleActiveWaveformDoubleClickOffsetReset(wave, displayData, mousePos, timeSnapDistance, valueSnapDistance);
+    const bool offsetReset =
+        !zoomSelectionResult.consumed &&
+        handleActiveWaveformDoubleClickOffsetReset(wave, displayData, mousePos, timeSnapDistance, valueSnapDistance);
     const bool blockPlotInteractions = zoomSelectionResult.consumed || offsetReset;
     if (!blockPlotInteractions) {
-        handleHoverReadout(view, frame.snapshot, displayData, visibleChannelIndices, mousePos, timeSnapDistance, valueSnapDistance);
-        viewportChangedThisFrame = handleOscilloscopeChannelInteractions(wave,
-                                                                         displayData,
-                                                                         mousePos,
-                                                                         timeSnapDistance,
-                                                                         valueSnapDistance)
-            || viewportChangedThisFrame;
+        handleHoverReadout(
+            view, frame.snapshot, displayData, visibleChannelIndices, mousePos, timeSnapDistance, valueSnapDistance);
+        viewportChangedThisFrame =
+            handleOscilloscopeChannelInteractions(wave, displayData, mousePos, timeSnapDistance, valueSnapDistance) ||
+            viewportChangedThisFrame;
     }
 
-    const bool anyCursorHeld = blockPlotInteractions
-        ? false
-        : handlePlotCursors(view,
-                            frame.snapshot,
-                            displayData,
-                            mousePos,
-                            limits,
-                            timeSnapDistance,
-                            smartSnapDistance,
-                            result.cursorReadouts);
+    const bool anyCursorHeld = blockPlotInteractions ? false
+                                                     : handlePlotCursors(view,
+                                                                         frame.snapshot,
+                                                                         displayData,
+                                                                         mousePos,
+                                                                         limits,
+                                                                         timeSnapDistance,
+                                                                         smartSnapDistance,
+                                                                         result.cursorReadouts);
     const bool userInteracting = plotInteractionActive(anyCursorHeld);
     if (!viewportChangedThisFrame) {
         const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
@@ -322,19 +330,18 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     }
 
     if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {
-        const auto referenceChannelIndex =
-            view.referenceMode == plot::WaveMeasurementReferenceMode::Channel ? std::optional<std::size_t>(view.referenceChannelIndex)
-                                                                              : std::nullopt;
-        const auto manualReferenceValue =
-            view.referenceMode == plot::WaveMeasurementReferenceMode::ManualValue ? std::optional<double>(view.manualReferenceValue)
-                                                                                  : std::nullopt;
-        result.measurement =
-            measureDisplayWindow(displayData,
-                view.measurementChannelIndex,
-                result.cursorReadouts[0]->time,
-                result.cursorReadouts[1]->time,
-                referenceChannelIndex,
-                manualReferenceValue);
+        const auto referenceChannelIndex = view.referenceMode == plot::WaveMeasurementReferenceMode::Channel
+                                               ? std::optional<std::size_t>(view.referenceChannelIndex)
+                                               : std::nullopt;
+        const auto manualReferenceValue = view.referenceMode == plot::WaveMeasurementReferenceMode::ManualValue
+                                              ? std::optional<double>(view.manualReferenceValue)
+                                              : std::nullopt;
+        result.measurement = measureDisplayWindow(displayData,
+                                                  view.measurementChannelIndex,
+                                                  result.cursorReadouts[0]->time,
+                                                  result.cursorReadouts[1]->time,
+                                                  referenceChannelIndex,
+                                                  manualReferenceValue);
     }
     drawMeasurementOverlay(view, frame.snapshot, displayData, result);
 

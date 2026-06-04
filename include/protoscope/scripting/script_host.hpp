@@ -6,8 +6,6 @@
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/transport/transport.hpp"
 
-#include <sol/sol.hpp>
-
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -22,6 +20,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include <sol/sol.hpp>
 
 namespace protoscope::scripting {
 
@@ -105,8 +105,7 @@ struct FormTextDescriptor {
     std::string text;
 };
 
-struct FormSeparatorDescriptor {
-};
+struct FormSeparatorDescriptor {};
 
 enum class FormLayoutItemKind {
     Control,
@@ -450,12 +449,20 @@ private:
     void protoStatusClear();
     std::optional<DialogRequest> protoDialog(DialogKind kind, const sol::object& opts, std::string& error);
     std::optional<FileDialogRequest> protoFileDialog(FileDialogKind kind, const sol::object& opts, std::string& error);
-    std::tuple<sol::object, sol::object> protoFsOpen(sol::state_view lua, const std::string& path, const sol::object& opts);
-    std::tuple<sol::object, sol::object> protoFsRead(sol::state_view lua, std::uint64_t handle, const sol::object& opts);
-    std::tuple<sol::object, sol::object> protoFsWrite(sol::state_view lua, std::uint64_t handle, const sol::object& payload);
+    std::tuple<sol::object, sol::object> protoFsOpen(sol::state_view lua,
+                                                     const std::string& path,
+                                                     const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsRead(sol::state_view lua,
+                                                     std::uint64_t handle,
+                                                     const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsWrite(sol::state_view lua,
+                                                      std::uint64_t handle,
+                                                      const sol::object& payload);
     std::tuple<sol::object, sol::object> protoFsClose(sol::state_view lua, std::uint64_t handle);
     std::tuple<sol::object, sol::object> protoFsStat(sol::state_view lua, const std::string& path);
-    std::tuple<sol::object, sol::object> protoFsSendFile(sol::state_view lua, const std::string& path, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsSendFile(sol::state_view lua,
+                                                         const std::string& path,
+                                                         const sol::object& opts);
     std::uint64_t nextTxRequestId();
     std::uint64_t nextDialogId();
     std::uint64_t nextFileDialogId();

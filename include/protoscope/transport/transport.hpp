@@ -136,7 +136,8 @@ struct TransportTxEvent {
     std::uint64_t finishedAtMs{0};
 };
 
-using TransportEvent = std::variant<TransportOpenEvent, TransportCloseEvent, TransportErrorEvent, TransportBytesEvent, TransportTxEvent>;
+using TransportEvent =
+    std::variant<TransportOpenEvent, TransportCloseEvent, TransportErrorEvent, TransportBytesEvent, TransportTxEvent>;
 
 class ITransport {
 public:

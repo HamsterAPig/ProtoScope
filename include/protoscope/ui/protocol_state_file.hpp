@@ -1,12 +1,12 @@
 #pragma once
 
-#include <yaml-cpp/yaml.h>
-
 #include <chrono>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+
+#include <yaml-cpp/yaml.h>
 
 namespace protoscope::ui {
 

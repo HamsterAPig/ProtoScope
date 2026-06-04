@@ -133,20 +133,15 @@ std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& dis
 std::optional<CursorReadout> findNearestDisplayByTimeAcrossChannels(const WaveDisplayData& displayData,
                                                                     double time,
                                                                     double maxTimeDistance);
-std::optional<CursorReadout> findNearestDisplayPoint(const WaveDisplayData& displayData,
-                                                     double time,
-                                                     double value,
-                                                     double maxTimeDistance,
-                                                     double maxValueDistance);
+std::optional<CursorReadout> findNearestDisplayPoint(
+    const WaveDisplayData& displayData, double time, double value, double maxTimeDistance, double maxValueDistance);
 std::optional<CursorReadout> findNearestDisplayPointInChannels(const WaveDisplayData& displayData,
                                                                const std::vector<std::size_t>& channelIndices,
                                                                double time,
                                                                double value,
                                                                double maxTimeDistance,
                                                                double maxValueDistance);
-WaveViewport normalizeOverviewViewport(const WaveViewport& viewport,
-                                       const WaveDataBounds& bounds,
-                                       double minTimeWidth);
+WaveViewport normalizeOverviewViewport(const WaveViewport& viewport, const WaveDataBounds& bounds, double minTimeWidth);
 WaveViewport zoomViewport(const WaveViewport& viewport,
                           WaveZoomMode mode,
                           double wheelDelta,

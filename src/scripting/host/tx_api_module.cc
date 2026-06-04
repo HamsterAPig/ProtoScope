@@ -10,7 +10,8 @@ public:
 
     std::string_view id() const override { return "tx_api_module"; }
 
-    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
+    {
         auto* host = &host_;
         sol::state_view lua = ctx.lua;
         proto.set_function("send", [host, lua](const sol::object& payload, const sol::object& opts) {
@@ -42,7 +43,8 @@ private:
     ScriptHost& host_;
 };
 
-std::unique_ptr<IScriptHostApiModule> makeTxApiModule(ScriptHost& host) {
+std::unique_ptr<IScriptHostApiModule> makeTxApiModule(ScriptHost& host)
+{
     return std::make_unique<TxScriptHostApiModule>(host);
 }
 

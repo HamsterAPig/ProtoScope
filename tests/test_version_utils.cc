@@ -1,13 +1,14 @@
-#include "test_registry.hpp"
-
 #include "protoscope/ui/version_utils.hpp"
+
+#include "test_registry.hpp"
 
 #include <stdexcept>
 #include <string>
 
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const char* message)
+{
     if (!condition) {
         throw std::runtime_error(message);
     }
@@ -15,7 +16,8 @@ void require(bool condition, const char* message) {
 
 } // namespace
 
-void test_gui_runtime_version_utils() {
+void test_gui_runtime_version_utils()
+{
     using protoscope::ui::SemanticVersion;
 
     const auto v123 = protoscope::ui::parseSemanticTag("v1.2.3");
@@ -34,4 +36,3 @@ void test_gui_runtime_version_utils() {
     const SemanticVersion same{.major = 2, .minor = 4, .patch = 6};
     require(protoscope::ui::compareSemanticVersion(same, same) == 0, "相同版本应视为相等");
 }
-

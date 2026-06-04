@@ -1,10 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <array>
-#include <optional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -121,11 +121,8 @@ struct StreamFieldCount {
 };
 
 struct StreamFieldValue {
-    using Storage = std::variant<std::int64_t,
-                                 double,
-                                 std::vector<std::int64_t>,
-                                 std::vector<double>,
-                                 std::vector<std::uint8_t>>;
+    using Storage =
+        std::variant<std::int64_t, double, std::vector<std::int64_t>, std::vector<double>, std::vector<std::uint8_t>>;
 
     Storage value;
 
@@ -252,8 +249,7 @@ private:
 
     [[nodiscard]] std::size_t maxHeaderLength() const;
     [[nodiscard]] std::optional<CandidateMatch> findCandidate() const;
-    AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
-                               const ByteRingBuffer::LinearReadView& window) const;
+    AnalyzeResult analyzeFrame(const CompiledFrame& compiled, const ByteRingBuffer::LinearReadView& window) const;
     [[nodiscard]] bool applyRuntimeChannelMap(const StreamFrameDefinition& definition,
                                               StreamParsedFrame& frame,
                                               std::string& error) const;

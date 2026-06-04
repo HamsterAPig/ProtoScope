@@ -67,7 +67,8 @@ public:
     void respondFileDialog(const scripting::FileDialogEvent& event);
 
     std::optional<std::uint64_t> nextWakeupAtMs() const;
-    void setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
+    void setTransportFactoryForTest(
+        std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
 
 private:
     struct ActiveTxRequest {

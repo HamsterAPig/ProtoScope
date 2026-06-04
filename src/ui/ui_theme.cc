@@ -6,30 +6,33 @@ namespace protoscope::ui {
 
 namespace {
 
-UiStyleTokens makeDefaultTokens() {
-    return UiStyleTokens{
-        .appBackground = ImVec4(0.05F, 0.07F, 0.10F, 1.0F),
-        .panelBackground = ImVec4(0.09F, 0.11F, 0.15F, 1.0F),
-        .panelBackgroundAlt = ImVec4(0.12F, 0.14F, 0.19F, 1.0F),
-        .panelBorder = ImVec4(0.22F, 0.29F, 0.38F, 0.95F),
-        .accent = ImVec4(0.18F, 0.58F, 0.88F, 1.0F),
-        .accentMuted = ImVec4(0.18F, 0.58F, 0.88F, 0.24F),
-        .success = ImVec4(0.24F, 0.74F, 0.48F, 1.0F),
-        .warning = ImVec4(0.93F, 0.70F, 0.20F, 1.0F),
-        .danger = ImVec4(0.91F, 0.33F, 0.33F, 1.0F),
-        .textStrong = ImVec4(0.93F, 0.96F, 0.99F, 1.0F),
-        .textMuted = ImVec4(0.58F, 0.67F, 0.76F, 1.0F),
-    };
-}
+    UiStyleTokens makeDefaultTokens()
+    {
+        return UiStyleTokens{
+            .appBackground = ImVec4(0.05F, 0.07F, 0.10F, 1.0F),
+            .panelBackground = ImVec4(0.09F, 0.11F, 0.15F, 1.0F),
+            .panelBackgroundAlt = ImVec4(0.12F, 0.14F, 0.19F, 1.0F),
+            .panelBorder = ImVec4(0.22F, 0.29F, 0.38F, 0.95F),
+            .accent = ImVec4(0.18F, 0.58F, 0.88F, 1.0F),
+            .accentMuted = ImVec4(0.18F, 0.58F, 0.88F, 0.24F),
+            .success = ImVec4(0.24F, 0.74F, 0.48F, 1.0F),
+            .warning = ImVec4(0.93F, 0.70F, 0.20F, 1.0F),
+            .danger = ImVec4(0.91F, 0.33F, 0.33F, 1.0F),
+            .textStrong = ImVec4(0.93F, 0.96F, 0.99F, 1.0F),
+            .textMuted = ImVec4(0.58F, 0.67F, 0.76F, 1.0F),
+        };
+    }
 
 } // namespace
 
-const UiStyleTokens& defaultUiStyleTokens() {
+const UiStyleTokens& defaultUiStyleTokens()
+{
     static const UiStyleTokens tokens = makeDefaultTokens();
     return tokens;
 }
 
-void applyImGuiProfessionalDarkTheme() {
+void applyImGuiProfessionalDarkTheme()
+{
     const auto& tokens = defaultUiStyleTokens();
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = tokens.windowRounding;
@@ -91,7 +94,8 @@ void applyImGuiProfessionalDarkTheme() {
     colors[ImGuiCol_TextSelectedBg] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.30F);
 }
 
-void applyImPlotProfessionalDarkTheme() {
+void applyImPlotProfessionalDarkTheme()
+{
     const auto& tokens = defaultUiStyleTokens();
     ImPlotStyle& style = ImPlot::GetStyle();
     style.PlotBorderSize = 1.0F;
@@ -104,7 +108,8 @@ void applyImPlotProfessionalDarkTheme() {
     colors[ImPlotCol_FrameBg] = tokens.panelBackground;
     colors[ImPlotCol_PlotBg] = ImVec4(0.07F, 0.09F, 0.13F, 1.0F);
     colors[ImPlotCol_PlotBorder] = tokens.panelBorder;
-    colors[ImPlotCol_LegendBg] = ImVec4(tokens.panelBackgroundAlt.x, tokens.panelBackgroundAlt.y, tokens.panelBackgroundAlt.z, 0.92F);
+    colors[ImPlotCol_LegendBg] =
+        ImVec4(tokens.panelBackgroundAlt.x, tokens.panelBackgroundAlt.y, tokens.panelBackgroundAlt.z, 0.92F);
     colors[ImPlotCol_LegendBorder] = tokens.panelBorder;
     colors[ImPlotCol_LegendText] = tokens.textStrong;
     colors[ImPlotCol_TitleText] = tokens.textStrong;
@@ -115,11 +120,14 @@ void applyImPlotProfessionalDarkTheme() {
     colors[ImPlotCol_Crosshairs] = tokens.accent;
     colors[ImPlotCol_Selection] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.35F);
 }
-bool beginToolbarGroup(const char* id, const char* title, float minHeight) {
+
+bool beginToolbarGroup(const char* id, const char* title, float minHeight)
+{
     const auto& tokens = defaultUiStyleTokens();
     const bool hasTitle = title != nullptr && title[0] != '\0';
     ImGui::PushID(id);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(tokens.windowPaddingX, hasTitle ? tokens.windowPaddingY : tokens.framePaddingY));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(tokens.windowPaddingX, hasTitle ? tokens.windowPaddingY : tokens.framePaddingY));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, tokens.panelBackgroundAlt);
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     // 这里沿用 ImGui::BeginChild() 的原生语义：高度为 0 时占满剩余空间，调用方需要显式传入紧凑高度。
@@ -133,14 +141,16 @@ bool beginToolbarGroup(const char* id, const char* title, float minHeight) {
     return opened;
 }
 
-void endToolbarGroup() {
+void endToolbarGroup()
+{
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
     ImGui::PopID();
 }
 
-bool drawToolbarSectionButton(const char* label, const char* tooltip, bool active, const ImVec2& size) {
+bool drawToolbarSectionButton(const char* label, const char* tooltip, bool active, const ImVec2& size)
+{
     const auto& tokens = defaultUiStyleTokens();
     if (active) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.42F));
@@ -157,7 +167,8 @@ bool drawToolbarSectionButton(const char* label, const char* tooltip, bool activ
     return clicked;
 }
 
-void drawHeaderBadge(const char* label, const ImVec4& color, bool filled) {
+void drawHeaderBadge(const char* label, const ImVec4& color, bool filled)
+{
     const auto& tokens = defaultUiStyleTokens();
     const ImVec4 background = filled ? color : ImVec4(color.x, color.y, color.z, 0.16F);
     const ImVec4 border = filled ? color : ImVec4(color.x, color.y, color.z, 0.55F);
@@ -173,7 +184,8 @@ void drawHeaderBadge(const char* label, const ImVec4& color, bool filled) {
     ImGui::PopStyleColor(5);
 }
 
-bool drawDangerIconButton(const char* label, const char* tooltip) {
+bool drawDangerIconButton(const char* label, const char* tooltip)
+{
     const auto& tokens = defaultUiStyleTokens();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.18F));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(tokens.danger.x, tokens.danger.y, tokens.danger.z, 0.32F));
@@ -187,7 +199,8 @@ bool drawDangerIconButton(const char* label, const char* tooltip) {
     return clicked;
 }
 
-bool drawGhostIconButton(const char* label, const char* tooltip) {
+bool drawGhostIconButton(const char* label, const char* tooltip)
+{
     const auto& tokens = defaultUiStyleTokens();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0F, 1.0F, 1.0F, 0.04F));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.18F));
@@ -201,6 +214,3 @@ bool drawGhostIconButton(const char* label, const char* tooltip) {
 }
 
 } // namespace protoscope::ui
-
-
-

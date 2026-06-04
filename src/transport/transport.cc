@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include <asio/error.hpp>
 #include <asio/connect.hpp>
+#include <asio/error.hpp>
 #include <asio/executor_work_guard.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/address.hpp>
@@ -24,77 +24,86 @@ namespace protoscope::transport {
 
 namespace {
 
-std::uint64_t makeConnectionId() {
-    static std::atomic<std::uint64_t> counter{1};
-    return counter.fetch_add(1, std::memory_order_relaxed);
-}
-
-std::uint64_t currentTimeMs() {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count());
-}
-
-std::string endpointText(const asio::ip::tcp::endpoint& endpoint) {
-    return endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
-}
-
-std::string endpointText(const std::string& host, std::uint16_t port) {
-    return host + ":" + std::to_string(port);
-}
-
-asio::serial_port_base::parity::type parseParity(const std::string& parity) {
-    if (parity == "odd") {
-        return asio::serial_port_base::parity::odd;
+    std::uint64_t makeConnectionId()
+    {
+        static std::atomic<std::uint64_t> counter{1};
+        return counter.fetch_add(1, std::memory_order_relaxed);
     }
-    if (parity == "even") {
-        return asio::serial_port_base::parity::even;
-    }
-    return asio::serial_port_base::parity::none;
-}
 
-asio::serial_port_base::stop_bits::type parseStopBits(const std::string& stopBits) {
-    if (stopBits == "one_point_five") {
-        return asio::serial_port_base::stop_bits::onepointfive;
+    std::uint64_t currentTimeMs()
+    {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count());
     }
-    if (stopBits == "two") {
-        return asio::serial_port_base::stop_bits::two;
-    }
-    return asio::serial_port_base::stop_bits::one;
-}
 
-asio::serial_port_base::flow_control::type parseFlowControl(const std::string& flowControl) {
-    if (flowControl == "software") {
-        return asio::serial_port_base::flow_control::software;
+    std::string endpointText(const asio::ip::tcp::endpoint& endpoint)
+    {
+        return endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
     }
-    if (flowControl == "hardware") {
-        return asio::serial_port_base::flow_control::hardware;
-    }
-    return asio::serial_port_base::flow_control::none;
-}
 
-template <typename Writer>
-bool enqueueWrite(asio::io_context& ioContext, std::atomic<bool>& stopping, TransportTxTask task, Writer&& writer) {
-    if (task.payload.empty() || stopping.load(std::memory_order_relaxed)) {
-        return false;
+    std::string endpointText(const std::string& host, std::uint16_t port)
+    {
+        return host + ":" + std::to_string(port);
     }
-    asio::post(ioContext, [task = std::move(task), writer = std::forward<Writer>(writer)]() mutable {
-        writer(task);
-    });
-    return true;
-}
 
-template <typename Writable>
-std::pair<bool, std::string> writeBytes(Writable& writable, std::mutex& mutex, const std::vector<std::uint8_t>& bytes) {
-    try {
-        std::lock_guard lock(mutex);
-        asio::write(writable, asio::buffer(bytes));
-        return {true, {}};
-    } catch (const std::exception& ex) {
-        return {false, ex.what()};
+    asio::serial_port_base::parity::type parseParity(const std::string& parity)
+    {
+        if (parity == "odd") {
+            return asio::serial_port_base::parity::odd;
+        }
+        if (parity == "even") {
+            return asio::serial_port_base::parity::even;
+        }
+        return asio::serial_port_base::parity::none;
     }
-}
+
+    asio::serial_port_base::stop_bits::type parseStopBits(const std::string& stopBits)
+    {
+        if (stopBits == "one_point_five") {
+            return asio::serial_port_base::stop_bits::onepointfive;
+        }
+        if (stopBits == "two") {
+            return asio::serial_port_base::stop_bits::two;
+        }
+        return asio::serial_port_base::stop_bits::one;
+    }
+
+    asio::serial_port_base::flow_control::type parseFlowControl(const std::string& flowControl)
+    {
+        if (flowControl == "software") {
+            return asio::serial_port_base::flow_control::software;
+        }
+        if (flowControl == "hardware") {
+            return asio::serial_port_base::flow_control::hardware;
+        }
+        return asio::serial_port_base::flow_control::none;
+    }
+
+    template <typename Writer>
+    bool enqueueWrite(asio::io_context& ioContext, std::atomic<bool>& stopping, TransportTxTask task, Writer&& writer)
+    {
+        if (task.payload.empty() || stopping.load(std::memory_order_relaxed)) {
+            return false;
+        }
+        asio::post(ioContext,
+                   [task = std::move(task), writer = std::forward<Writer>(writer)]() mutable { writer(task); });
+        return true;
+    }
+
+    template <typename Writable>
+    std::pair<bool, std::string> writeBytes(Writable& writable,
+                                            std::mutex& mutex,
+                                            const std::vector<std::uint8_t>& bytes)
+    {
+        try {
+            std::lock_guard lock(mutex);
+            asio::write(writable, asio::buffer(bytes));
+            return {true, {}};
+        } catch (const std::exception& ex) {
+            return {false, ex.what()};
+        }
+    }
 
 } // namespace
 
@@ -137,16 +146,17 @@ struct SerialTransport::Runtime {
     std::atomic<bool> stopping{false};
 };
 
-TransportBase::TransportBase()
-    : state_(TransportState::Closed), txCount_(0), rxCount_(0) {}
+TransportBase::TransportBase() : state_(TransportState::Closed), txCount_(0), rxCount_(0) {}
 
 TransportBase::~TransportBase() = default;
 
-TransportState TransportBase::state() const {
+TransportState TransportBase::state() const
+{
     return state_.load(std::memory_order_relaxed);
 }
 
-std::vector<TransportEvent> TransportBase::takeEvents() {
+std::vector<TransportEvent> TransportBase::takeEvents()
+{
     // UI 主线程只做无阻塞取事件，不再主动驱动底层 I/O 轮询。
     std::lock_guard lock(eventsMutex_);
     std::vector<TransportEvent> out;
@@ -154,57 +164,65 @@ std::vector<TransportEvent> TransportBase::takeEvents() {
     return out;
 }
 
-std::uint64_t TransportBase::txCount() const {
+std::uint64_t TransportBase::txCount() const
+{
     return txCount_.load(std::memory_order_relaxed);
 }
 
-std::uint64_t TransportBase::rxCount() const {
+std::uint64_t TransportBase::rxCount() const
+{
     return rxCount_.load(std::memory_order_relaxed);
 }
 
-void TransportBase::pushEvent(TransportEvent event) {
+void TransportBase::pushEvent(TransportEvent event)
+{
     std::lock_guard lock(eventsMutex_);
     events_.push_back(std::move(event));
 }
 
-void TransportBase::setState(TransportState next) {
+void TransportBase::setState(TransportState next)
+{
     state_.store(next, std::memory_order_relaxed);
 }
 
-void TransportBase::addTx(std::size_t size) {
+void TransportBase::addTx(std::size_t size)
+{
     txCount_.fetch_add(size, std::memory_order_relaxed);
 }
 
-void TransportBase::addRx(std::size_t size) {
+void TransportBase::addRx(std::size_t size)
+{
     rxCount_.fetch_add(size, std::memory_order_relaxed);
 }
 
-std::uint64_t TransportBase::nowMs() {
+std::uint64_t TransportBase::nowMs()
+{
     return currentTimeMs();
 }
 
-TcpClientTransport::TcpClientTransport()
-    : runtime_(std::make_unique<Runtime>()) {}
+TcpClientTransport::TcpClientTransport() : runtime_(std::make_unique<Runtime>()) {}
 
-TcpClientTransport::~TcpClientTransport() {
+TcpClientTransport::~TcpClientTransport()
+{
     close();
 }
 
-TcpServerTransport::TcpServerTransport()
-    : runtime_(std::make_unique<Runtime>()) {}
+TcpServerTransport::TcpServerTransport() : runtime_(std::make_unique<Runtime>()) {}
 
-TcpServerTransport::~TcpServerTransport() {
+TcpServerTransport::~TcpServerTransport()
+{
     close();
 }
 
-SerialTransport::SerialTransport()
-    : runtime_(std::make_unique<Runtime>()) {}
+SerialTransport::SerialTransport() : runtime_(std::make_unique<Runtime>()) {}
 
-SerialTransport::~SerialTransport() {
+SerialTransport::~SerialTransport()
+{
     close();
 }
 
-const std::vector<TransportDescriptor>& transportDescriptors() {
+const std::vector<TransportDescriptor>& transportDescriptors()
+{
     static const std::vector<TransportDescriptor> descriptors{
         {TransportKind::TcpClient, "tcp_client", "TCP 客户端"},
         {TransportKind::TcpServer, "tcp_server", "TCP 服务端"},
@@ -214,7 +232,8 @@ const std::vector<TransportDescriptor>& transportDescriptors() {
     return descriptors;
 }
 
-std::optional<TransportKind> transportKindFromId(std::string_view id) {
+std::optional<TransportKind> transportKindFromId(std::string_view id)
+{
     for (const auto& descriptor : transportDescriptors()) {
         if (descriptor.id == id) {
             return descriptor.kind;
@@ -223,7 +242,8 @@ std::optional<TransportKind> transportKindFromId(std::string_view id) {
     return std::nullopt;
 }
 
-std::string_view transportKindId(TransportKind kind) {
+std::string_view transportKindId(TransportKind kind)
+{
     for (const auto& descriptor : transportDescriptors()) {
         if (descriptor.kind == kind) {
             return descriptor.id;
@@ -232,7 +252,8 @@ std::string_view transportKindId(TransportKind kind) {
     return "tcp_client";
 }
 
-std::string_view transportKindLabel(TransportKind kind) {
+std::string_view transportKindLabel(TransportKind kind)
+{
     for (const auto& descriptor : transportDescriptors()) {
         if (descriptor.kind == kind) {
             return descriptor.label;
@@ -241,21 +262,23 @@ std::string_view transportKindLabel(TransportKind kind) {
     return "TCP 客户端";
 }
 
-std::unique_ptr<ITransport> createTransport(TransportKind kind) {
+std::unique_ptr<ITransport> createTransport(TransportKind kind)
+{
     switch (kind) {
-    case TransportKind::TcpClient:
-        return std::make_unique<TcpClientTransport>();
-    case TransportKind::TcpServer:
-        return std::make_unique<TcpServerTransport>();
-    case TransportKind::Serial:
-        return std::make_unique<SerialTransport>();
-    case TransportKind::UdpPeer:
-        return std::make_unique<UdpPeerTransport>();
+        case TransportKind::TcpClient:
+            return std::make_unique<TcpClientTransport>();
+        case TransportKind::TcpServer:
+            return std::make_unique<TcpServerTransport>();
+        case TransportKind::Serial:
+            return std::make_unique<SerialTransport>();
+        case TransportKind::UdpPeer:
+            return std::make_unique<UdpPeerTransport>();
     }
     return nullptr;
 }
 
-ConnectionContext makeListenContext(const asio::ip::tcp::endpoint& endpoint) {
+ConnectionContext makeListenContext(const asio::ip::tcp::endpoint& endpoint)
+{
     return ConnectionContext{
         .kind = TransportKind::TcpServer,
         .endpoint = endpointText(endpoint),
@@ -265,7 +288,8 @@ ConnectionContext makeListenContext(const asio::ip::tcp::endpoint& endpoint) {
     };
 }
 
-ConnectionContext makeClientContext(const asio::ip::tcp::endpoint& endpoint) {
+ConnectionContext makeClientContext(const asio::ip::tcp::endpoint& endpoint)
+{
     return ConnectionContext{
         .kind = TransportKind::TcpServer,
         .endpoint = endpointText(endpoint),
@@ -275,7 +299,8 @@ ConnectionContext makeClientContext(const asio::ip::tcp::endpoint& endpoint) {
     };
 }
 
-bool TcpClientTransport::open(const TransportConfig& config) {
+bool TcpClientTransport::open(const TransportConfig& config)
+{
     close();
 
     if (!std::holds_alternative<TcpClientConfig>(config)) {
@@ -341,8 +366,9 @@ bool TcpClientTransport::open(const TransportConfig& config) {
                     eventContext.timestampMs = nowMs();
                     pushEvent(TransportBytesEvent{
                         std::move(eventContext),
-                        std::vector<std::uint8_t>(runtime_->readBuffer.begin(),
-                                                  runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
+                        std::vector<std::uint8_t>(
+                            runtime_->readBuffer.begin(),
+                            runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
                     });
                 }
                 (*scheduleRead)();
@@ -350,13 +376,12 @@ bool TcpClientTransport::open(const TransportConfig& config) {
     };
 
     (*scheduleRead)();
-    runtime_->ioThread = std::thread([this]() {
-        runtime_->ioContext.run();
-    });
+    runtime_->ioThread = std::thread([this]() { runtime_->ioContext.run(); });
     return true;
 }
 
-void TcpClientTransport::close() {
+void TcpClientTransport::close()
+{
     if (runtime_ == nullptr) {
         return;
     }
@@ -387,7 +412,8 @@ void TcpClientTransport::close() {
     }
 }
 
-bool TcpClientTransport::send(std::vector<std::uint8_t> bytes) {
+bool TcpClientTransport::send(std::vector<std::uint8_t> bytes)
+{
     if (state() != TransportState::Open || !context_.has_value() || bytes.empty()) {
         return false;
     }
@@ -405,7 +431,8 @@ bool TcpClientTransport::send(std::vector<std::uint8_t> bytes) {
     return false;
 }
 
-bool TcpClientTransport::enqueueSend(TransportTxTask task) {
+bool TcpClientTransport::enqueueSend(TransportTxTask task)
+{
     if (state() != TransportState::Open || !context_.has_value()) {
         return false;
     }
@@ -425,8 +452,8 @@ bool TcpClientTransport::enqueueSend(TransportTxTask task) {
             state = TransportTxState::Rejected;
         } else {
             addTx(txTask.payload.size());
-            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs
-                && finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
+            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs &&
+                finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
                 state = TransportTxState::Timeout;
             }
         }
@@ -443,7 +470,8 @@ bool TcpClientTransport::enqueueSend(TransportTxTask task) {
     });
 }
 
-bool TcpServerTransport::open(const TransportConfig& config) {
+bool TcpServerTransport::open(const TransportConfig& config)
+{
     close();
 
     if (!std::holds_alternative<TcpServerConfig>(config)) {
@@ -467,7 +495,8 @@ bool TcpServerTransport::open(const TransportConfig& config) {
         listenContext_ = makeListenContext(runtime_->acceptor.local_endpoint());
     } catch (const std::exception& ex) {
         setState(TransportState::Error);
-        pushEvent(TransportErrorEvent{{TransportKind::TcpServer, endpointText(tcp.bindAddress, tcp.port), 0, nowMs(), false}, ex.what()});
+        pushEvent(TransportErrorEvent{
+            {TransportKind::TcpServer, endpointText(tcp.bindAddress, tcp.port), 0, nowMs(), false}, ex.what()});
         return false;
     }
 
@@ -500,8 +529,9 @@ bool TcpServerTransport::open(const TransportConfig& config) {
                     eventContext.timestampMs = nowMs();
                     pushEvent(TransportBytesEvent{
                         std::move(eventContext),
-                        std::vector<std::uint8_t>(runtime_->readBuffer.begin(),
-                                                  runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
+                        std::vector<std::uint8_t>(
+                            runtime_->readBuffer.begin(),
+                            runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
                     });
                 }
                 (*scheduleRead)(generation);
@@ -550,13 +580,12 @@ bool TcpServerTransport::open(const TransportConfig& config) {
     };
 
     (*scheduleAccept)();
-    runtime_->ioThread = std::thread([this]() {
-        runtime_->ioContext.run();
-    });
+    runtime_->ioThread = std::thread([this]() { runtime_->ioContext.run(); });
     return true;
 }
 
-void TcpServerTransport::close() {
+void TcpServerTransport::close()
+{
     if (runtime_ == nullptr) {
         return;
     }
@@ -595,7 +624,8 @@ void TcpServerTransport::close() {
     }
 }
 
-bool TcpServerTransport::send(std::vector<std::uint8_t> bytes) {
+bool TcpServerTransport::send(std::vector<std::uint8_t> bytes)
+{
     if (state() != TransportState::Open || !clientContext_.has_value() || bytes.empty()) {
         return false;
     }
@@ -613,7 +643,8 @@ bool TcpServerTransport::send(std::vector<std::uint8_t> bytes) {
     return false;
 }
 
-bool TcpServerTransport::enqueueSend(TransportTxTask task) {
+bool TcpServerTransport::enqueueSend(TransportTxTask task)
+{
     if (state() != TransportState::Open || !clientContext_.has_value()) {
         return false;
     }
@@ -633,8 +664,8 @@ bool TcpServerTransport::enqueueSend(TransportTxTask task) {
             state = TransportTxState::Rejected;
         } else {
             addTx(txTask.payload.size());
-            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs
-                && finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
+            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs &&
+                finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
                 state = TransportTxState::Timeout;
             }
         }
@@ -651,7 +682,8 @@ bool TcpServerTransport::enqueueSend(TransportTxTask task) {
     });
 }
 
-bool SerialTransport::open(const TransportConfig& config) {
+bool SerialTransport::open(const TransportConfig& config)
+{
     close();
 
     if (!std::holds_alternative<SerialConfig>(config)) {
@@ -709,8 +741,9 @@ bool SerialTransport::open(const TransportConfig& config) {
                     eventContext.timestampMs = nowMs();
                     pushEvent(TransportBytesEvent{
                         std::move(eventContext),
-                        std::vector<std::uint8_t>(runtime_->readBuffer.begin(),
-                                                  runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
+                        std::vector<std::uint8_t>(
+                            runtime_->readBuffer.begin(),
+                            runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
                     });
                 }
                 (*scheduleRead)();
@@ -718,13 +751,12 @@ bool SerialTransport::open(const TransportConfig& config) {
     };
 
     (*scheduleRead)();
-    runtime_->ioThread = std::thread([this]() {
-        runtime_->ioContext.run();
-    });
+    runtime_->ioThread = std::thread([this]() { runtime_->ioContext.run(); });
     return true;
 }
 
-void SerialTransport::close() {
+void SerialTransport::close()
+{
     if (runtime_ == nullptr) {
         return;
     }
@@ -753,7 +785,8 @@ void SerialTransport::close() {
     }
 }
 
-bool SerialTransport::send(std::vector<std::uint8_t> bytes) {
+bool SerialTransport::send(std::vector<std::uint8_t> bytes)
+{
     if (state() != TransportState::Open || !context_.has_value() || bytes.empty()) {
         return false;
     }
@@ -771,7 +804,8 @@ bool SerialTransport::send(std::vector<std::uint8_t> bytes) {
     return false;
 }
 
-bool SerialTransport::enqueueSend(TransportTxTask task) {
+bool SerialTransport::enqueueSend(TransportTxTask task)
+{
     if (state() != TransportState::Open || !context_.has_value()) {
         return false;
     }
@@ -791,8 +825,8 @@ bool SerialTransport::enqueueSend(TransportTxTask task) {
             state = TransportTxState::Rejected;
         } else {
             addTx(txTask.payload.size());
-            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs
-                && finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
+            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs &&
+                finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
                 state = TransportTxState::Timeout;
             }
         }

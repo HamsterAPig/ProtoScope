@@ -29,6 +29,8 @@ void restoreWaveProtocolState(const YAML::Node& root, std::string_view protocolK
 YAML::Node encodeDockVisibilityState(const ProtocolDockVisibilityState& state);
 void decodeDockVisibilityState(const YAML::Node& node, ProtocolDockVisibilityState& state);
 void storeDockVisibilityState(YAML::Node& root, std::string_view protocolKey, const ProtocolDockVisibilityState& state);
-void restoreDockVisibilityState(const YAML::Node& root, std::string_view protocolKey, ProtocolDockVisibilityState& state);
+void restoreDockVisibilityState(const YAML::Node& root,
+                                std::string_view protocolKey,
+                                ProtocolDockVisibilityState& state);
 
 } // namespace protoscope::ui

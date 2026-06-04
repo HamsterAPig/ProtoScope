@@ -7,8 +7,10 @@
 
 namespace protoscope::protocol_utils {
 
-std::string bytesToHex(const std::vector<std::uint8_t>& bytes, bool withSpace) {
-    static constexpr std::array<char, 16> table{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+std::string bytesToHex(const std::vector<std::uint8_t>& bytes, bool withSpace)
+{
+    static constexpr std::array<char, 16> table{
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
     if (bytes.empty()) {
         return {};
     }
@@ -27,21 +29,23 @@ std::string bytesToHex(const std::vector<std::uint8_t>& bytes, bool withSpace) {
 }
 
 namespace {
-int hexNibble(char c) {
-    if (c >= '0' && c <= '9') {
-        return c - '0';
+    int hexNibble(char c)
+    {
+        if (c >= '0' && c <= '9') {
+            return c - '0';
+        }
+        if (c >= 'a' && c <= 'f') {
+            return c - 'a' + 10;
+        }
+        if (c >= 'A' && c <= 'F') {
+            return c - 'A' + 10;
+        }
+        return -1;
     }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + 10;
-    }
-    if (c >= 'A' && c <= 'F') {
-        return c - 'A' + 10;
-    }
-    return -1;
-}
 } // namespace
 
-std::size_t countHexDigits(std::string_view text) {
+std::size_t countHexDigits(std::string_view text)
+{
     std::size_t count = 0;
     for (const char ch : text) {
         if (hexNibble(ch) >= 0) {
@@ -51,7 +55,8 @@ std::size_t countHexDigits(std::string_view text) {
     return count;
 }
 
-std::optional<std::vector<std::uint8_t>> hexToBytes(std::string_view text) {
+std::optional<std::vector<std::uint8_t>> hexToBytes(std::string_view text)
+{
     std::string compact;
     compact.reserve(text.size());
     for (char ch : text) {
@@ -83,11 +88,13 @@ std::optional<std::vector<std::uint8_t>> hexToBytes(std::string_view text) {
     return out;
 }
 
-std::string normalizeHexText(std::string_view text) {
+std::string normalizeHexText(std::string_view text)
+{
     return normalizeHexEditorInput(text, text.size()).text;
 }
 
-HexEditorNormalization normalizeHexEditorInput(std::string_view text, std::size_t cursorPos) {
+HexEditorNormalization normalizeHexEditorInput(std::string_view text, std::size_t cursorPos)
+{
     std::string compact;
     compact.reserve(text.size());
     std::size_t digitsBeforeCursor = 0;
@@ -134,11 +141,13 @@ HexEditorNormalization normalizeHexEditorInput(std::string_view text, std::size_
     };
 }
 
-std::uint16_t crc16Modbus(const std::vector<std::uint8_t>& bytes) {
+std::uint16_t crc16Modbus(const std::vector<std::uint8_t>& bytes)
+{
     return crc16Modbus(bytes.data(), bytes.size());
 }
 
-std::uint16_t crc16Modbus(const std::uint8_t* bytes, std::size_t count) {
+std::uint16_t crc16Modbus(const std::uint8_t* bytes, std::size_t count)
+{
     std::uint16_t crc = 0xFFFF;
     for (std::size_t index = 0; index < count; ++index) {
         const auto value = bytes[index];
@@ -154,11 +163,13 @@ std::uint16_t crc16Modbus(const std::uint8_t* bytes, std::size_t count) {
     return crc;
 }
 
-std::uint16_t crc16CcittFalse(const std::vector<std::uint8_t>& bytes) {
+std::uint16_t crc16CcittFalse(const std::vector<std::uint8_t>& bytes)
+{
     return crc16CcittFalse(bytes.data(), bytes.size());
 }
 
-std::uint16_t crc16CcittFalse(const std::uint8_t* bytes, std::size_t count) {
+std::uint16_t crc16CcittFalse(const std::uint8_t* bytes, std::size_t count)
+{
     std::uint16_t crc = 0xFFFF;
     for (std::size_t index = 0; index < count; ++index) {
         const auto value = bytes[index];
@@ -174,11 +185,13 @@ std::uint16_t crc16CcittFalse(const std::uint8_t* bytes, std::size_t count) {
     return crc;
 }
 
-std::uint32_t crc32Ieee(const std::vector<std::uint8_t>& bytes) {
+std::uint32_t crc32Ieee(const std::vector<std::uint8_t>& bytes)
+{
     return crc32Ieee(bytes.data(), bytes.size());
 }
 
-std::uint32_t crc32Ieee(const std::uint8_t* bytes, std::size_t count) {
+std::uint32_t crc32Ieee(const std::uint8_t* bytes, std::size_t count)
+{
     std::uint32_t crc = 0xFFFFFFFFU;
     for (std::size_t index = 0; index < count; ++index) {
         const auto value = bytes[index];

@@ -7,21 +7,22 @@ namespace protoscope::ui {
 
 namespace {
 
-struct LogLevelMenuItem {
-    const char* label;
-    config::LogLevel level;
-};
+    struct LogLevelMenuItem {
+        const char* label;
+        config::LogLevel level;
+    };
 
-constexpr LogLevelMenuItem kLogLevelMenuItems[] = {
-    {.label = "调试", .level = config::LogLevel::Debug},
-    {.label = "信息", .level = config::LogLevel::Info},
-    {.label = "警告", .level = config::LogLevel::Warn},
-    {.label = "错误", .level = config::LogLevel::Error},
-};
+    constexpr LogLevelMenuItem kLogLevelMenuItems[] = {
+        {.label = "调试", .level = config::LogLevel::Debug},
+        {.label = "信息", .level = config::LogLevel::Info},
+        {.label = "警告", .level = config::LogLevel::Warn},
+        {.label = "错误", .level = config::LogLevel::Error},
+    };
 
 } // namespace
 
-void GuiRuntime::drawMainMenu() {
+void GuiRuntime::drawMainMenu()
+{
     syncLuaDockVisibilityDefaults();
 
     if (!ImGui::BeginMainMenuBar()) {
@@ -84,20 +85,16 @@ void GuiRuntime::drawMainMenu() {
         drawHeaderBadge("布局", defaultUiStyleTokens().accent, false);
         ImGui::SameLine();
         ImGui::TextDisabled("中心波形 / 左配置 / 右分析 / 底部事件流");
-        if (previousShowCommDock != showCommDock_
-            || previousShowProtocolDock != showProtocolDock_
-            || previousShowTransferDock != showTransferDock_
-            || previousShowLogDock != showLogDock_
-            || previousShowScriptDock != showScriptDock_
-            || previousShowWaveDock != showWaveDock_) {
+        if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
+            previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
+            previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
             pendingProtocolWorkspaceSave_ = true;
         }
         ImGui::Separator();
-        if (ImGui::MenuItem(
-                "重置当前协议 Dock 布局",
-                nullptr,
-                false,
-                canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_))) {
+        if (ImGui::MenuItem("重置当前协议 Dock 布局",
+                            nullptr,
+                            false,
+                            canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_))) {
             resetCurrentProtocolWorkspaceLayout();
         }
         ImGui::EndMenu();

@@ -8,7 +8,8 @@
 
 namespace protoscope::scripting {
 
-bool ScriptHost::loadScriptFile(const std::string& path) {
+bool ScriptHost::loadScriptFile(const std::string& path)
+{
     if (path.empty()) {
         setLastError("脚本路径为空");
         protoLog("error", lastError_);
@@ -128,47 +129,45 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
     auto nextRuntime = std::make_unique<Runtime>();
 
     try {
-        nextRuntime->lua.open_libraries(
-            sol::lib::base,
-            sol::lib::math,
-            sol::lib::package,
-            sol::lib::string,
-            sol::lib::table,
-            sol::lib::utf8,
-            sol::lib::os);
+        nextRuntime->lua.open_libraries(sol::lib::base,
+                                        sol::lib::math,
+                                        sol::lib::package,
+                                        sol::lib::string,
+                                        sol::lib::table,
+                                        sol::lib::utf8,
+                                        sol::lib::os);
 
         auto& lua = nextRuntime->lua;
-        lua.new_usertype<ProtoBuffer>("ProtoBuffer",
-                                      "size",
-                                      &ProtoBuffer::size,
-                                      "slice",
-                                      &ProtoBuffer::slice,
-                                      "to_hex",
-                                      &ProtoBuffer::toHex,
-                                      "bytes",
-                                      [this, bufferLua = sol::state_view(lua)](const ProtoBuffer& buffer, const sol::object& maxBytes) mutable {
-                                          std::size_t limit = buffer.bytes.size();
-                                          if (maxBytes.valid() && maxBytes.get_type() != sol::type::lua_nil && maxBytes.is<int>()) {
-                                              limit = std::min<std::size_t>(limit, static_cast<std::size_t>(std::max(0, maxBytes.as<int>())));
-                                          }
-                                          limit = std::min(limit, fileIoConfig_.maxChunkBytes);
-                                          sol::table table = bufferLua.create_table(static_cast<int>(limit), 0);
-                                          for (std::size_t index = 0; index < limit; ++index) {
-                                              table[index + 1] = buffer.bytes[index];
-                                          }
-                                          return table;
-                                      });
+        lua.new_usertype<ProtoBuffer>(
+            "ProtoBuffer",
+            "size",
+            &ProtoBuffer::size,
+            "slice",
+            &ProtoBuffer::slice,
+            "to_hex",
+            &ProtoBuffer::toHex,
+            "bytes",
+            [this, bufferLua = sol::state_view(lua)](const ProtoBuffer& buffer, const sol::object& maxBytes) mutable {
+                std::size_t limit = buffer.bytes.size();
+                if (maxBytes.valid() && maxBytes.get_type() != sol::type::lua_nil && maxBytes.is<int>()) {
+                    limit = std::min<std::size_t>(limit, static_cast<std::size_t>(std::max(0, maxBytes.as<int>())));
+                }
+                limit = std::min(limit, fileIoConfig_.maxChunkBytes);
+                sol::table table = bufferLua.create_table(static_cast<int>(limit), 0);
+                for (std::size_t index = 0; index < limit; ++index) {
+                    table[index + 1] = buffer.bytes[index];
+                }
+                return table;
+            });
 
         // 将协议脚本目录加入 Lua 模块搜索路径，使 main.lua 可 require 同目录模块。
         // 额外放开父目录，方便 protocols/<demo>/main.lua 共享 protocols/*.lua 公共脚本。
         // 使用 generic_string 格式，统一为 /，避免 Windows 反斜杠干扰 Lua package.path。
         const auto pkgPath = lua["package"]["path"].get<std::string>();
         const auto protocolParent = std::filesystem::path(nextProtocolDirectory).parent_path().generic_string();
-        lua["package"]["path"] = nextProtocolDirectory + "/?.lua;"
-                               + nextProtocolDirectory + "/?/init.lua;"
-                               + (protocolParent.empty() ? std::string() : protocolParent + "/?.lua;")
-                               + (protocolParent.empty() ? std::string() : protocolParent + "/?/init.lua;")
-                               + pkgPath;
+        lua["package"]["path"] = nextProtocolDirectory + "/?.lua;" + nextProtocolDirectory + "/?/init.lua;" +
+                                 (protocolParent.empty() ? std::string() : protocolParent + "/?.lua;") +
+                                 (protocolParent.empty() ? std::string() : protocolParent + "/?/init.lua;") + pkgPath;
         auto proto = lua.create_named_table("proto");
 
         // 核心流程：所有脚本侧能力统一经由模块注册器挂到 proto.*，避免加载流程继续膨胀。
@@ -197,7 +196,8 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
             for (const auto& control : dock.controls) {
                 nextControls.push_back(control);
                 const auto existing = snapshot.controlValues.find(control.id);
-                nextControlValues[control.id] = existing == snapshot.controlValues.end() ? defaultValueFor(control) : existing->second;
+                nextControlValues[control.id] =
+                    existing == snapshot.controlValues.end() ? defaultValueFor(control) : existing->second;
             }
         }
 
@@ -218,7 +218,8 @@ bool ScriptHost::loadScriptFile(const std::string& path) {
     }
 }
 
-bool ScriptHost::loadProtocolDirectory(const std::string& directory) {
+bool ScriptHost::loadProtocolDirectory(const std::string& directory)
+{
     const auto path = std::filesystem::path(directory) / "main.lua";
     return loadScriptFile(path.generic_string());
 }

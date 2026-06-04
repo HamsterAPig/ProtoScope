@@ -10,15 +10,13 @@ public:
 
     std::string_view id() const override { return "status_api_module"; }
 
-    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
+    {
         auto* host = &host_;
         sol::table statusApi = ctx.lua.create_table();
-        statusApi.set_function("set", [host](const std::string& text, const sol::object& opts) {
-            host->protoStatusSet(text, opts);
-        });
-        statusApi.set_function("clear", [host]() {
-            host->protoStatusClear();
-        });
+        statusApi.set_function(
+            "set", [host](const std::string& text, const sol::object& opts) { host->protoStatusSet(text, opts); });
+        statusApi.set_function("clear", [host]() { host->protoStatusClear(); });
         proto["status"] = statusApi;
     }
 
@@ -26,7 +24,8 @@ private:
     ScriptHost& host_;
 };
 
-std::unique_ptr<IScriptHostApiModule> makeStatusApiModule(ScriptHost& host) {
+std::unique_ptr<IScriptHostApiModule> makeStatusApiModule(ScriptHost& host)
+{
     return std::make_unique<StatusScriptHostApiModule>(host);
 }
 

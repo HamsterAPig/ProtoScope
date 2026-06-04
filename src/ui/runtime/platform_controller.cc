@@ -9,25 +9,28 @@
 
 namespace protoscope::ui {
 
-void GuiRuntime::sleepUntilNextFrame(std::uint64_t frameStartMs) const {
+void GuiRuntime::sleepUntilNextFrame(std::uint64_t frameStartMs) const
+{
     sleepUntil(frameStartMs + renderFrameIntervalMs(application_.docks().configState().fpsLimit));
 }
 
-void GuiRuntime::sleepUntil(std::uint64_t targetMs) const {
+void GuiRuntime::sleepUntil(std::uint64_t targetMs) const
+{
     const auto currentMs = nowMs();
     if (currentMs < targetMs) {
         std::this_thread::sleep_for(std::chrono::milliseconds(targetMs - currentMs));
     }
 }
 
-std::uint64_t GuiRuntime::nowMs() {
+std::uint64_t GuiRuntime::nowMs()
+{
     return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
 
-std::string GuiRuntime::formatTimestamp(std::uint64_t timestampMs) {
+std::string GuiRuntime::formatTimestamp(std::uint64_t timestampMs)
+{
     const auto timePoint = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestampMs));
     const auto secondsPoint = std::chrono::time_point_cast<std::chrono::seconds>(timePoint);
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint - secondsPoint).count();

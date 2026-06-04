@@ -6,8 +6,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <stdexcept>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 
 #include <yaml-cpp/yaml.h>
@@ -24,97 +24,102 @@ namespace protoscope::ui {
 
 namespace {
 
-constexpr const char* kDefaultLayoutKey = "default";
-constexpr int kModernLuaLayoutSchemaVersion = 3;
-constexpr const char* kLayoutMetaOwner = "protoscope";
+    constexpr const char* kDefaultLayoutKey = "default";
+    constexpr int kModernLuaLayoutSchemaVersion = 3;
+    constexpr const char* kLayoutMetaOwner = "protoscope";
 
-struct LuaDockLayoutMeta {
-    bool hasMeta{false};
-    int schemaVersion{0};
-};
+    struct LuaDockLayoutMeta {
+        bool hasMeta{false};
+        int schemaVersion{0};
+    };
 
-struct DockTreeStackEntry {
-    std::string nodeId;
-    std::size_t indent{0};
-};
+    struct DockTreeStackEntry {
+        std::string nodeId;
+        std::size_t indent{0};
+    };
 
-std::string trimCopy(std::string_view value) {
-    const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
-        return std::isspace(ch) != 0;
-    });
-    const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
-        return std::isspace(ch) != 0;
-    }).base();
-    if (first >= last) {
-        return {};
-    }
-    return std::string(first, last);
-}
-
-std::string_view trimView(std::string_view value) {
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
-        value.remove_prefix(1);
-    }
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
-        value.remove_suffix(1);
-    }
-    return value;
-}
-
-std::string extractIniAttribute(std::string_view line, std::string_view key) {
-    const auto begin = line.find(key);
-    if (begin == std::string_view::npos) {
-        return {};
-    }
-
-    const auto valueBegin = begin + key.size();
-    auto valueEnd = valueBegin;
-    while (valueEnd < line.size() && std::isspace(static_cast<unsigned char>(line[valueEnd])) == 0) {
-        ++valueEnd;
-    }
-    return std::string(line.substr(valueBegin, valueEnd - valueBegin));
-}
-
-std::string normalizeKeyPart(std::string_view value) {
-    auto text = trimCopy(value);
-    if (text.empty()) {
-        return {};
-    }
-
-    std::replace(text.begin(), text.end(), '\\', '/');
-    while (text.size() > 1 && text.ends_with('/')) {
-        text.pop_back();
-    }
-
-    // 核心逻辑：ImGui ID 中避免混入空白和路径分隔符，让同一路径稳定映射到同一个布局 key。
-    for (char& ch : text) {
-        const auto code = static_cast<unsigned char>(ch);
-        if (std::isspace(code) != 0 || ch == '/' || ch == ':' || ch == '*'
-            || ch == '?' || ch == '"' || ch == '<' || ch == '>' || ch == '|') {
-            ch = '_';
+    std::string trimCopy(std::string_view value)
+    {
+        const auto first =
+            std::find_if_not(value.begin(), value.end(), [](unsigned char ch) { return std::isspace(ch) != 0; });
+        const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
+                              return std::isspace(ch) != 0;
+                          }).base();
+        if (first >= last) {
+            return {};
         }
-    }
-    return text;
-}
-
-std::string protocolDirectoryKey(std::string_view protocolDir, std::string_view scriptPath) {
-    if (auto key = normalizeKeyPart(protocolDir); !key.empty()) {
-        return key;
+        return std::string(first, last);
     }
 
-    std::filesystem::path script(scriptPath);
-    if (script.has_parent_path()) {
-        if (auto key = normalizeKeyPart(script.parent_path().generic_string()); !key.empty()) {
+    std::string_view trimView(std::string_view value)
+    {
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
+            value.remove_prefix(1);
+        }
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
+            value.remove_suffix(1);
+        }
+        return value;
+    }
+
+    std::string extractIniAttribute(std::string_view line, std::string_view key)
+    {
+        const auto begin = line.find(key);
+        if (begin == std::string_view::npos) {
+            return {};
+        }
+
+        const auto valueBegin = begin + key.size();
+        auto valueEnd = valueBegin;
+        while (valueEnd < line.size() && std::isspace(static_cast<unsigned char>(line[valueEnd])) == 0) {
+            ++valueEnd;
+        }
+        return std::string(line.substr(valueBegin, valueEnd - valueBegin));
+    }
+
+    std::string normalizeKeyPart(std::string_view value)
+    {
+        auto text = trimCopy(value);
+        if (text.empty()) {
+            return {};
+        }
+
+        std::replace(text.begin(), text.end(), '\\', '/');
+        while (text.size() > 1 && text.ends_with('/')) {
+            text.pop_back();
+        }
+
+        // 核心逻辑：ImGui ID 中避免混入空白和路径分隔符，让同一路径稳定映射到同一个布局 key。
+        for (char& ch : text) {
+            const auto code = static_cast<unsigned char>(ch);
+            if (std::isspace(code) != 0 || ch == '/' || ch == ':' || ch == '*' || ch == '?' || ch == '"' || ch == '<' ||
+                ch == '>' || ch == '|') {
+                ch = '_';
+            }
+        }
+        return text;
+    }
+
+    std::string protocolDirectoryKey(std::string_view protocolDir, std::string_view scriptPath)
+    {
+        if (auto key = normalizeKeyPart(protocolDir); !key.empty()) {
             return key;
         }
-    }
 
-    return normalizeKeyPart(scriptPath);
-}
+        std::filesystem::path script(scriptPath);
+        if (script.has_parent_path()) {
+            if (auto key = normalizeKeyPart(script.parent_path().generic_string()); !key.empty()) {
+                return key;
+            }
+        }
+
+        return normalizeKeyPart(scriptPath);
+    }
 
 } // namespace
 
-std::optional<LuaDockAnchor> parseLuaDockAnchor(std::string_view value) {
+std::optional<LuaDockAnchor> parseLuaDockAnchor(std::string_view value)
+{
     if (value == "left") {
         return LuaDockAnchor::Left;
     }
@@ -136,18 +141,21 @@ std::optional<LuaDockAnchor> parseLuaDockAnchor(std::string_view value) {
     return std::nullopt;
 }
 
-bool isValidLuaDockAnchor(std::string_view value) {
+bool isValidLuaDockAnchor(std::string_view value)
+{
     return parseLuaDockAnchor(value).has_value();
 }
 
-std::string luaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath) {
+std::string luaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath)
+{
     if (auto key = protocolDirectoryKey(protocolDir, scriptPath); !key.empty()) {
         return key;
     }
     return kDefaultLayoutKey;
 }
 
-std::string legacyLuaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath) {
+std::string legacyLuaDockLayoutKey(std::string_view protocolDir, std::string_view scriptPath)
+{
     const auto protocolKey = normalizeKeyPart(protocolDir);
     const auto scriptKey = normalizeKeyPart(scriptPath);
     if (!protocolKey.empty() && !scriptKey.empty()) {
@@ -162,7 +170,8 @@ std::string legacyLuaDockLayoutKey(std::string_view protocolDir, std::string_vie
     return kDefaultLayoutKey;
 }
 
-std::filesystem::path executableDirectory() {
+std::filesystem::path executableDirectory()
+{
 #if defined(_WIN32)
     std::wstring buffer(MAX_PATH, L'\0');
     DWORD length = 0;
@@ -196,44 +205,49 @@ std::filesystem::path executableDirectory() {
 #endif
 }
 
-std::filesystem::path luaDockLayoutPath(const std::filesystem::path& executableDir, std::string_view layoutKey) {
+std::filesystem::path luaDockLayoutPath(const std::filesystem::path& executableDir, std::string_view layoutKey)
+{
     const auto key = normalizeKeyPart(layoutKey);
     return executableDir / "config" / "ui" / ((key.empty() ? std::string(kDefaultLayoutKey) : key) + ".imgui.ini");
 }
 
-std::filesystem::path luaDockLayoutMetaPath(const std::filesystem::path& executableDir, std::string_view layoutKey) {
+std::filesystem::path luaDockLayoutMetaPath(const std::filesystem::path& executableDir, std::string_view layoutKey)
+{
     const auto key = normalizeKeyPart(layoutKey);
     return executableDir / "config" / "ui" / ((key.empty() ? std::string(kDefaultLayoutKey) : key) + ".layout.yaml");
 }
 
 namespace {
 
-LuaDockLayoutMeta readLuaDockLayoutMeta(const std::filesystem::path& path) {
-    try {
-        if (!std::filesystem::exists(path)) {
+    LuaDockLayoutMeta readLuaDockLayoutMeta(const std::filesystem::path& path)
+    {
+        try {
+            if (!std::filesystem::exists(path)) {
+                return {};
+            }
+            const auto root = YAML::LoadFile(path.string());
+            if (!root || !root.IsMap() || root["owner"].as<std::string>("") != kLayoutMetaOwner) {
+                return {};
+            }
+            return LuaDockLayoutMeta{
+                .hasMeta = true,
+                .schemaVersion = root["schema_version"].as<int>(0),
+            };
+        } catch (const std::exception&) {
+            // 关键边界：meta 缺失或损坏都按 legacy 处理，避免因旁路文件阻断布局加载。
             return {};
         }
-        const auto root = YAML::LoadFile(path.string());
-        if (!root || !root.IsMap() || root["owner"].as<std::string>("") != kLayoutMetaOwner) {
-            return {};
-        }
-        return LuaDockLayoutMeta{
-            .hasMeta = true,
-            .schemaVersion = root["schema_version"].as<int>(0),
-        };
-    } catch (const std::exception&) {
-        // 关键边界：meta 缺失或损坏都按 legacy 处理，避免因旁路文件阻断布局加载。
-        return {};
     }
-}
 
-bool isModernLuaDockLayout(const LuaDockLayoutMeta& meta) {
-    return meta.hasMeta && meta.schemaVersion >= kModernLuaLayoutSchemaVersion;
-}
+    bool isModernLuaDockLayout(const LuaDockLayoutMeta& meta)
+    {
+        return meta.hasMeta && meta.schemaVersion >= kModernLuaLayoutSchemaVersion;
+    }
 
 } // namespace
 
-void writeLuaDockLayoutMeta(const std::filesystem::path& path, int schemaVersion) {
+void writeLuaDockLayoutMeta(const std::filesystem::path& path, int schemaVersion)
+{
     YAML::Node root;
     root["schema_version"] = schemaVersion;
     root["owner"] = kLayoutMetaOwner;
@@ -248,17 +262,18 @@ void writeLuaDockLayoutMeta(const std::filesystem::path& path, int schemaVersion
     }
 }
 
-LuaDockLayoutPaths resolveLuaDockLayoutPaths(
-    const std::filesystem::path& executableDir,
-    std::string_view protocolDir,
-    std::string_view scriptPath) {
+LuaDockLayoutPaths resolveLuaDockLayoutPaths(const std::filesystem::path& executableDir,
+                                             std::string_view protocolDir,
+                                             std::string_view scriptPath)
+{
     LuaDockLayoutPaths paths;
     paths.protocolKey = luaDockLayoutKey(protocolDir, scriptPath);
     paths.layoutPath = luaDockLayoutPath(executableDir, paths.protocolKey);
     paths.legacyLayoutPath = luaDockLayoutPath(executableDir, legacyLuaDockLayoutKey(protocolDir, scriptPath));
     paths.metaPath = luaDockLayoutMetaPath(executableDir, paths.protocolKey);
     paths.hasUserLayout = std::filesystem::exists(paths.layoutPath);
-    paths.hasLegacyLayout = paths.legacyLayoutPath != paths.layoutPath && std::filesystem::exists(paths.legacyLayoutPath);
+    paths.hasLegacyLayout =
+        paths.legacyLayoutPath != paths.layoutPath && std::filesystem::exists(paths.legacyLayoutPath);
     const auto meta = readLuaDockLayoutMeta(paths.metaPath);
     const bool hasModernUserLayout = paths.hasUserLayout && isModernLuaDockLayout(meta);
     paths.hasMeta = meta.hasMeta;
@@ -267,40 +282,43 @@ LuaDockLayoutPaths resolveLuaDockLayoutPaths(
     return paths;
 }
 
-WorkspaceLayoutMode workspaceLayoutModeAfterLoad(const LuaDockLayoutPaths& layoutPaths) {
-    return layoutPaths.hasUserLayout && !layoutPaths.isLegacyLayout
-        ? WorkspaceLayoutMode::Ready
-        : WorkspaceLayoutMode::NeedsDefaultBuild;
+WorkspaceLayoutMode workspaceLayoutModeAfterLoad(const LuaDockLayoutPaths& layoutPaths)
+{
+    return layoutPaths.hasUserLayout && !layoutPaths.isLegacyLayout ? WorkspaceLayoutMode::Ready
+                                                                    : WorkspaceLayoutMode::NeedsDefaultBuild;
 }
 
-ProtocolWorkspaceSwitchDecision decideProtocolWorkspaceSwitch(
-    std::string_view loadedProtocolDir,
-    std::string_view draftProtocolDir,
-    bool reloadClicked) {
+ProtocolWorkspaceSwitchDecision decideProtocolWorkspaceSwitch(std::string_view loadedProtocolDir,
+                                                              std::string_view draftProtocolDir,
+                                                              bool reloadClicked)
+{
     ProtocolWorkspaceSwitchDecision decision;
     decision.draftChanged = loadedProtocolDir != draftProtocolDir;
     if (reloadClicked) {
-        decision.reloadProtocolDir = decision.draftChanged
-            ? std::string(draftProtocolDir)
-            : std::string(loadedProtocolDir);
+        decision.reloadProtocolDir =
+            decision.draftChanged ? std::string(draftProtocolDir) : std::string(loadedProtocolDir);
     }
     return decision;
 }
 
-bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol) {
+bool shouldResetLuaDefaultDockStateOnProtocolSwitch(bool sameProtocol)
+{
     return !sameProtocol;
 }
 
-bool shouldRunLuaDefaultDockLayout(WorkspaceLayoutMode layoutMode, bool pendingDefaultDockLayout) {
+bool shouldRunLuaDefaultDockLayout(WorkspaceLayoutMode layoutMode, bool pendingDefaultDockLayout)
+{
     // Lua Dock 默认停靠只属于默认布局初始化事务；用户布局 Ready 后不再运行时补停靠。
     return layoutMode == WorkspaceLayoutMode::NeedsDefaultBuild && pendingDefaultDockLayout;
 }
 
-bool canResetProtocolWorkspaceLayout(bool protocolWorkspaceLoaded, std::string_view activeWorkspaceProtocolKey) {
+bool canResetProtocolWorkspaceLayout(bool protocolWorkspaceLoaded, std::string_view activeWorkspaceProtocolKey)
+{
     return protocolWorkspaceLoaded && !activeWorkspaceProtocolKey.empty();
 }
 
-DockLayoutIniHealth inspectDockLayoutIni(std::string_view iniContent) {
+DockLayoutIniHealth inspectDockLayoutIni(std::string_view iniContent)
+{
     DockLayoutIniHealth health;
     std::vector<DockTreeStackEntry> stack;
     bool inDockingData = false;
@@ -346,8 +364,8 @@ DockLayoutIniHealth inspectDockLayoutIni(std::string_view iniContent) {
             continue;
         }
 
-        if (rootSplitX && !rootNodeId.empty() && !stack.empty()
-            && stack.back().nodeId == rootNodeId && leftRootNodeId.empty()) {
+        if (rootSplitX && !rootNodeId.empty() && !stack.empty() && stack.back().nodeId == rootNodeId &&
+            leftRootNodeId.empty()) {
             leftRootNodeId = nodeId;
         }
 
@@ -356,10 +374,11 @@ DockLayoutIniHealth inspectDockLayoutIni(std::string_view iniContent) {
 
             // 关键边界：旧坏布局会把 CentralNode 放进根节点左分支，即使数量只有 1 也必须重建默认布局。
             if (rootSplitX && !leftRootNodeId.empty()) {
-                const bool centralInLeftBranch = nodeId == leftRootNodeId
-                    || std::any_of(stack.begin(), stack.end(), [&](const DockTreeStackEntry& entry) {
-                           return entry.nodeId == leftRootNodeId;
-                       });
+                const bool centralInLeftBranch =
+                    nodeId == leftRootNodeId ||
+                    std::any_of(stack.begin(), stack.end(), [&](const DockTreeStackEntry& entry) {
+                        return entry.nodeId == leftRootNodeId;
+                    });
                 health.centralNodeInLegacyLeftPane = health.centralNodeInLegacyLeftPane || centralInLeftBranch;
             }
         }
@@ -370,19 +389,21 @@ DockLayoutIniHealth inspectDockLayoutIni(std::string_view iniContent) {
     return health;
 }
 
-bool shouldRebuildDockLayout(const DockLayoutIniHealth& health) {
+bool shouldRebuildDockLayout(const DockLayoutIniHealth& health)
+{
     return health.centralNodeCount != 1 || health.centralNodeInLegacyLeftPane;
 }
 
-std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey) {
+std::string luaDockStableId(const scripting::DockDescriptor& dock, std::string_view layoutKey)
+{
     std::ostringstream stream;
     stream << "LuaDock:" << layoutKey << ':' << dock.id;
     return stream.str();
 }
 
-std::vector<std::string> buildLuaDockStableIds(
-    const std::vector<scripting::DockSnapshot>& docks,
-    std::string_view layoutKey) {
+std::vector<std::string> buildLuaDockStableIds(const std::vector<scripting::DockSnapshot>& docks,
+                                               std::string_view layoutKey)
+{
     std::vector<std::string> stableIds;
     stableIds.reserve(docks.size());
     for (const auto& dock : docks) {
@@ -391,9 +412,8 @@ std::vector<std::string> buildLuaDockStableIds(
     return stableIds;
 }
 
-bool shouldKeepLuaWindowSettings(
-    std::string_view stableId,
-    std::string_view layoutKey) {
+bool shouldKeepLuaWindowSettings(std::string_view stableId, std::string_view layoutKey)
+{
     if (!stableId.starts_with("LuaDock:")) {
         return true;
     }
@@ -403,15 +423,16 @@ bool shouldKeepLuaWindowSettings(
     return stableId.starts_with(activePrefix);
 }
 
-std::string luaDockWindowName(const scripting::DockDescriptor& dock, std::string_view layoutKey) {
+std::string luaDockWindowName(const scripting::DockDescriptor& dock, std::string_view layoutKey)
+{
     std::ostringstream stream;
     stream << dock.title << "###" << luaDockStableId(dock, layoutKey);
     return stream.str();
 }
 
-std::vector<LuaDockLayoutRequest> buildLuaDockLayoutRequests(
-    const std::vector<scripting::DockSnapshot>& docks,
-    std::string_view layoutKey) {
+std::vector<LuaDockLayoutRequest> buildLuaDockLayoutRequests(const std::vector<scripting::DockSnapshot>& docks,
+                                                             std::string_view layoutKey)
+{
     std::vector<LuaDockLayoutRequest> requests;
     requests.reserve(docks.size());
     std::unordered_map<std::string, std::string> groupedAnchors;

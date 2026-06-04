@@ -1,12 +1,13 @@
-#include "test_registry.hpp"
-
 #include "protoscope/transport/transport.hpp"
+
+#include "test_registry.hpp"
 
 #include <stdexcept>
 
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const char* message)
+{
     if (!condition) {
         throw std::runtime_error(message);
     }
@@ -14,7 +15,8 @@ void require(bool condition, const char* message) {
 
 } // namespace
 
-void test_serial_port_name_normalization() {
+void test_serial_port_name_normalization()
+{
     using namespace protoscope::transport;
 
     const auto ports = normalizeSerialPortNames({"COM10", "", "COM2", "COM1", "COM2", "/dev/ttyUSB1"});

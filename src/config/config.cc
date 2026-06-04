@@ -1,7 +1,6 @@
 #include "protoscope/config/config.hpp"
-#include "protoscope/config/embedded_protocols.hpp"
 
-#include <yaml-cpp/yaml.h>
+#include "protoscope/config/embedded_protocols.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -10,333 +9,365 @@
 #include <limits>
 #include <system_error>
 
+#include <yaml-cpp/yaml.h>
+
 namespace protoscope::config {
 
 namespace {
 
-template <typename T>
-T readScalar(const YAML::Node& node, const char* key, T fallback) {
-    if (!node || !node[key]) {
-        return fallback;
-    }
-    return node[key].as<T>();
-}
-
-std::vector<std::string> readStringList(const YAML::Node& node, const char* key, std::vector<std::string> fallback) {
-    if (!node || !node[key] || !node[key].IsSequence()) {
-        return fallback;
+    template <typename T> T readScalar(const YAML::Node& node, const char* key, T fallback)
+    {
+        if (!node || !node[key]) {
+            return fallback;
+        }
+        return node[key].as<T>();
     }
 
-    std::vector<std::string> values;
-    for (const auto& item : node[key]) {
-        values.push_back(item.as<std::string>());
+    std::vector<std::string> readStringList(const YAML::Node& node, const char* key, std::vector<std::string> fallback)
+    {
+        if (!node || !node[key] || !node[key].IsSequence()) {
+            return fallback;
+        }
+
+        std::vector<std::string> values;
+        for (const auto& item : node[key]) {
+            values.push_back(item.as<std::string>());
+        }
+        return values;
     }
-    return values;
-}
 
-bool hasScalar(const YAML::Node& node, const char* key) { return node && node[key]; }
-
-YAML::Node childNode(const YAML::Node& node, const char* key) {
-    if (!node) {
-        return {};
+    bool hasScalar(const YAML::Node& node, const char* key)
+    {
+        return node && node[key];
     }
-    return node[key];
-}
 
-double normalizePerformanceScale(const double scale) { return scale > 0.0 ? scale : 1.0; }
-
-std::size_t scaleIntegerBudget(const std::size_t fallback, const double scale) {
-    if (fallback == 0U) {
-        return 0U;
+    YAML::Node childNode(const YAML::Node& node, const char* key)
+    {
+        if (!node) {
+            return {};
+        }
+        return node[key];
     }
-    const auto scaled = std::round(static_cast<double>(fallback) * normalizePerformanceScale(scale));
-    if (scaled < 1.0) {
-        return 1U;
+
+    double normalizePerformanceScale(const double scale)
+    {
+        return scale > 0.0 ? scale : 1.0;
     }
-    const auto maxValue = static_cast<double>((std::numeric_limits<std::size_t>::max)());
-    if (scaled > maxValue) {
-        return (std::numeric_limits<std::size_t>::max)();
+
+    std::size_t scaleIntegerBudget(const std::size_t fallback, const double scale)
+    {
+        if (fallback == 0U) {
+            return 0U;
+        }
+        const auto scaled = std::round(static_cast<double>(fallback) * normalizePerformanceScale(scale));
+        if (scaled < 1.0) {
+            return 1U;
+        }
+        const auto maxValue = static_cast<double>((std::numeric_limits<std::size_t>::max)());
+        if (scaled > maxValue) {
+            return (std::numeric_limits<std::size_t>::max)();
+        }
+        return static_cast<std::size_t>(scaled);
     }
-    return static_cast<std::size_t>(scaled);
-}
 
-double scaleDoubleBudget(const double fallback, const double scale) {
-    if (fallback == 0.0) {
-        return 0.0;
+    double scaleDoubleBudget(const double fallback, const double scale)
+    {
+        if (fallback == 0.0) {
+            return 0.0;
+        }
+        return fallback * normalizePerformanceScale(scale);
     }
-    return fallback * normalizePerformanceScale(scale);
-}
 
-void applyPerformanceScale(AppConfig& config) {
-    const auto scale = normalizePerformanceScale(config.performance.scale);
-    config.performance.scale = scale;
+    void applyPerformanceScale(AppConfig& config)
+    {
+        const auto scale = normalizePerformanceScale(config.performance.scale);
+        config.performance.scale = scale;
 
-    // 核心流程：公共性能系数只缩放缺省预算；YAML 显式单项会在后续读取中覆盖这些值。
-    config.receive.transportReadBufferBytes = scaleIntegerBudget(config.receive.transportReadBufferBytes, scale);
-    config.scripting.workerRxQueueLimitBytes = scaleIntegerBudget(config.scripting.workerRxQueueLimitBytes, scale);
-    config.scripting.workerMemoryBudgetBytes = scaleIntegerBudget(config.scripting.workerMemoryBudgetBytes, scale);
-    config.scripting.workerOutputQueueLimit = scaleIntegerBudget(config.scripting.workerOutputQueueLimit, scale);
-    config.scripting.workerBatchBytes = scaleIntegerBudget(config.scripting.workerBatchBytes, scale);
-    config.scripting.workerOutputFlushBudgetMs = scaleDoubleBudget(config.scripting.workerOutputFlushBudgetMs, scale);
-    config.gui.realtimeBacklog.rxChunkBytesPerPump =
-        scaleIntegerBudget(config.gui.realtimeBacklog.rxChunkBytesPerPump, scale);
-    config.gui.realtimeBacklog.transferFrameRowsPerPump =
-        scaleIntegerBudget(config.gui.realtimeBacklog.transferFrameRowsPerPump, scale);
-    config.gui.realtimeBacklog.plotAppendsPerPump =
-        scaleIntegerBudget(config.gui.realtimeBacklog.plotAppendsPerPump, scale);
-    config.gui.realtimeBacklog.rawFirstBacklogWarnBytes =
-        scaleIntegerBudget(config.gui.realtimeBacklog.rawFirstBacklogWarnBytes, scale);
-}
-
-void readPerformanceSize(const YAML::Node& node,
-                         const char* key,
-                         std::size_t& value,
-                         bool& explicitOverride) {
-    if (!hasScalar(node, key)) {
-        return;
+        // 核心流程：公共性能系数只缩放缺省预算；YAML 显式单项会在后续读取中覆盖这些值。
+        config.receive.transportReadBufferBytes = scaleIntegerBudget(config.receive.transportReadBufferBytes, scale);
+        config.scripting.workerRxQueueLimitBytes = scaleIntegerBudget(config.scripting.workerRxQueueLimitBytes, scale);
+        config.scripting.workerMemoryBudgetBytes = scaleIntegerBudget(config.scripting.workerMemoryBudgetBytes, scale);
+        config.scripting.workerOutputQueueLimit = scaleIntegerBudget(config.scripting.workerOutputQueueLimit, scale);
+        config.scripting.workerBatchBytes = scaleIntegerBudget(config.scripting.workerBatchBytes, scale);
+        config.scripting.workerOutputFlushBudgetMs =
+            scaleDoubleBudget(config.scripting.workerOutputFlushBudgetMs, scale);
+        config.gui.realtimeBacklog.rxChunkBytesPerPump =
+            scaleIntegerBudget(config.gui.realtimeBacklog.rxChunkBytesPerPump, scale);
+        config.gui.realtimeBacklog.transferFrameRowsPerPump =
+            scaleIntegerBudget(config.gui.realtimeBacklog.transferFrameRowsPerPump, scale);
+        config.gui.realtimeBacklog.plotAppendsPerPump =
+            scaleIntegerBudget(config.gui.realtimeBacklog.plotAppendsPerPump, scale);
+        config.gui.realtimeBacklog.rawFirstBacklogWarnBytes =
+            scaleIntegerBudget(config.gui.realtimeBacklog.rawFirstBacklogWarnBytes, scale);
     }
-    value = node[key].as<std::size_t>();
-    explicitOverride = true;
-}
 
-void readPerformanceDouble(const YAML::Node& node,
-                           const char* key,
-                           double& value,
-                           bool& explicitOverride) {
-    if (!hasScalar(node, key)) {
-        return;
+    void readPerformanceSize(const YAML::Node& node, const char* key, std::size_t& value, bool& explicitOverride)
+    {
+        if (!hasScalar(node, key)) {
+            return;
+        }
+        value = node[key].as<std::size_t>();
+        explicitOverride = true;
     }
-    value = node[key].as<double>();
-    explicitOverride = true;
-}
 
-bool performanceValueChanged(const std::size_t value, const std::size_t scaledDefault) {
-    return value != scaledDefault;
-}
-
-bool performanceValueChanged(const double value, const double scaledDefault) {
-    return std::abs(value - scaledDefault) > 1e-12;
-}
-
-template <typename T>
-void writePerformanceScalar(YAML::Node node,
-                            const char* key,
-                            const T value,
-                            const T scaledDefault,
-                            const bool explicitOverride) {
-    if (explicitOverride || performanceValueChanged(value, scaledDefault)) {
-        node[key] = value;
+    void readPerformanceDouble(const YAML::Node& node, const char* key, double& value, bool& explicitOverride)
+    {
+        if (!hasScalar(node, key)) {
+            return;
+        }
+        value = node[key].as<double>();
+        explicitOverride = true;
     }
-}
 
-std::string normalizeTextPath(std::filesystem::path path) {
-    path.make_preferred();
-    return path.generic_string();
-}
+    bool performanceValueChanged(const std::size_t value, const std::size_t scaledDefault)
+    {
+        return value != scaledDefault;
+    }
 
-LogLevel parseLogLevel(const std::string& value) {
-    if (value == "debug") {
-        return LogLevel::Debug;
+    bool performanceValueChanged(const double value, const double scaledDefault)
+    {
+        return std::abs(value - scaledDefault) > 1e-12;
     }
-    if (value == "warn" || value == "warning") {
-        return LogLevel::Warn;
-    }
-    if (value == "error") {
-        return LogLevel::Error;
-    }
-    return LogLevel::Info;
-}
 
-std::string toLogLevelText(const LogLevel level) {
-    switch (level) {
-    case LogLevel::Debug:
-        return "debug";
-    case LogLevel::Info:
+    template <typename T>
+    void writePerformanceScalar(
+        YAML::Node node, const char* key, const T value, const T scaledDefault, const bool explicitOverride)
+    {
+        if (explicitOverride || performanceValueChanged(value, scaledDefault)) {
+            node[key] = value;
+        }
+    }
+
+    std::string normalizeTextPath(std::filesystem::path path)
+    {
+        path.make_preferred();
+        return path.generic_string();
+    }
+
+    LogLevel parseLogLevel(const std::string& value)
+    {
+        if (value == "debug") {
+            return LogLevel::Debug;
+        }
+        if (value == "warn" || value == "warning") {
+            return LogLevel::Warn;
+        }
+        if (value == "error") {
+            return LogLevel::Error;
+        }
+        return LogLevel::Info;
+    }
+
+    std::string toLogLevelText(const LogLevel level)
+    {
+        switch (level) {
+            case LogLevel::Debug:
+                return "debug";
+            case LogLevel::Info:
+                return "info";
+            case LogLevel::Warn:
+                return "warn";
+            case LogLevel::Error:
+                return "error";
+        }
         return "info";
-    case LogLevel::Warn:
-        return "warn";
-    case LogLevel::Error:
-        return "error";
     }
-    return "info";
-}
 
-plot::WaveControlMode parseWaveControlMode(const std::string& value, plot::WaveControlMode fallback) {
-    if (value == "legacy_global") {
-        return plot::WaveControlMode::LegacyGlobal;
+    plot::WaveControlMode parseWaveControlMode(const std::string& value, plot::WaveControlMode fallback)
+    {
+        if (value == "legacy_global") {
+            return plot::WaveControlMode::LegacyGlobal;
+        }
+        if (value == "oscilloscope") {
+            return plot::WaveControlMode::Oscilloscope;
+        }
+        return fallback;
     }
-    if (value == "oscilloscope") {
-        return plot::WaveControlMode::Oscilloscope;
-    }
-    return fallback;
-}
 
-const char* toWaveControlModeText(const plot::WaveControlMode mode) {
-    switch (mode) {
-    case plot::WaveControlMode::Oscilloscope:
+    const char* toWaveControlModeText(const plot::WaveControlMode mode)
+    {
+        switch (mode) {
+            case plot::WaveControlMode::Oscilloscope:
+                return "oscilloscope";
+            case plot::WaveControlMode::LegacyGlobal:
+                return "legacy_global";
+        }
         return "oscilloscope";
-    case plot::WaveControlMode::LegacyGlobal:
-        return "legacy_global";
     }
-    return "oscilloscope";
-}
 
-plot::WaveDisplayFormula parseWaveDisplayFormula(const std::string& value, plot::WaveDisplayFormula fallback) {
-    if (value == "scale_then_offset") {
-        return plot::WaveDisplayFormula::ScaleThenOffset;
+    plot::WaveDisplayFormula parseWaveDisplayFormula(const std::string& value, plot::WaveDisplayFormula fallback)
+    {
+        if (value == "scale_then_offset") {
+            return plot::WaveDisplayFormula::ScaleThenOffset;
+        }
+        if (value == "offset_then_scale") {
+            return plot::WaveDisplayFormula::OffsetThenScale;
+        }
+        return fallback;
     }
-    if (value == "offset_then_scale") {
-        return plot::WaveDisplayFormula::OffsetThenScale;
-    }
-    return fallback;
-}
 
-const char* toWaveDisplayFormulaText(const plot::WaveDisplayFormula formula) {
-    switch (formula) {
-    case plot::WaveDisplayFormula::OffsetThenScale:
+    const char* toWaveDisplayFormulaText(const plot::WaveDisplayFormula formula)
+    {
+        switch (formula) {
+            case plot::WaveDisplayFormula::OffsetThenScale:
+                return "offset_then_scale";
+            case plot::WaveDisplayFormula::ScaleThenOffset:
+                return "scale_then_offset";
+        }
         return "offset_then_scale";
-    case plot::WaveDisplayFormula::ScaleThenOffset:
-        return "scale_then_offset";
     }
-    return "offset_then_scale";
-}
 
-plot::WaveChannelCardWidthMode parseWaveChannelCardWidthMode(const std::string& value) {
-    if (value == "adaptive") {
-        return plot::WaveChannelCardWidthMode::Adaptive;
+    plot::WaveChannelCardWidthMode parseWaveChannelCardWidthMode(const std::string& value)
+    {
+        if (value == "adaptive") {
+            return plot::WaveChannelCardWidthMode::Adaptive;
+        }
+        return plot::WaveChannelCardWidthMode::Fixed;
     }
-    return plot::WaveChannelCardWidthMode::Fixed;
-}
 
-const char* toWaveChannelCardWidthModeText(const plot::WaveChannelCardWidthMode mode) {
-    switch (mode) {
-    case plot::WaveChannelCardWidthMode::Fixed:
+    const char* toWaveChannelCardWidthModeText(const plot::WaveChannelCardWidthMode mode)
+    {
+        switch (mode) {
+            case plot::WaveChannelCardWidthMode::Fixed:
+                return "fixed";
+            case plot::WaveChannelCardWidthMode::Adaptive:
+                return "adaptive";
+        }
         return "fixed";
-    case plot::WaveChannelCardWidthMode::Adaptive:
-        return "adaptive";
     }
-    return "fixed";
-}
 
-plot::WaveChannelDoubleClickAction parseWaveChannelDoubleClickAction(
-    const std::string& value,
-    plot::WaveChannelDoubleClickAction fallback) {
-    if (value == "reset_all") {
-        return plot::WaveChannelDoubleClickAction::ResetAll;
+    plot::WaveChannelDoubleClickAction parseWaveChannelDoubleClickAction(const std::string& value,
+                                                                         plot::WaveChannelDoubleClickAction fallback)
+    {
+        if (value == "reset_all") {
+            return plot::WaveChannelDoubleClickAction::ResetAll;
+        }
+        if (value == "reset_scale_offset") {
+            return plot::WaveChannelDoubleClickAction::ResetScaleOffset;
+        }
+        if (value == "reset_scale") {
+            return plot::WaveChannelDoubleClickAction::ResetScale;
+        }
+        if (value == "reset_offset") {
+            return plot::WaveChannelDoubleClickAction::ResetOffset;
+        }
+        return fallback;
     }
-    if (value == "reset_scale_offset") {
-        return plot::WaveChannelDoubleClickAction::ResetScaleOffset;
-    }
-    if (value == "reset_scale") {
-        return plot::WaveChannelDoubleClickAction::ResetScale;
-    }
-    if (value == "reset_offset") {
-        return plot::WaveChannelDoubleClickAction::ResetOffset;
-    }
-    return fallback;
-}
 
-const char* toWaveChannelDoubleClickActionText(const plot::WaveChannelDoubleClickAction action) {
-    switch (action) {
-    case plot::WaveChannelDoubleClickAction::ResetAll:
-        return "reset_all";
-    case plot::WaveChannelDoubleClickAction::ResetScaleOffset:
+    const char* toWaveChannelDoubleClickActionText(const plot::WaveChannelDoubleClickAction action)
+    {
+        switch (action) {
+            case plot::WaveChannelDoubleClickAction::ResetAll:
+                return "reset_all";
+            case plot::WaveChannelDoubleClickAction::ResetScaleOffset:
+                return "reset_scale_offset";
+            case plot::WaveChannelDoubleClickAction::ResetScale:
+                return "reset_scale";
+            case plot::WaveChannelDoubleClickAction::ResetOffset:
+                return "reset_offset";
+        }
         return "reset_scale_offset";
-    case plot::WaveChannelDoubleClickAction::ResetScale:
-        return "reset_scale";
-    case plot::WaveChannelDoubleClickAction::ResetOffset:
-        return "reset_offset";
     }
-    return "reset_scale_offset";
-}
 
-plot::WaveXAxisDoubleClickAction parseWaveXAxisDoubleClickAction(const std::string& value,
-                                                                 plot::WaveXAxisDoubleClickAction fallback) {
-    if (value == "fit_full_history") {
-        return plot::WaveXAxisDoubleClickAction::FitFullHistory;
+    plot::WaveXAxisDoubleClickAction parseWaveXAxisDoubleClickAction(const std::string& value,
+                                                                     plot::WaveXAxisDoubleClickAction fallback)
+    {
+        if (value == "fit_full_history") {
+            return plot::WaveXAxisDoubleClickAction::FitFullHistory;
+        }
+        if (value == "fit_visible_window") {
+            return plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
+        }
+        return fallback;
     }
-    if (value == "fit_visible_window") {
-        return plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
-    }
-    return fallback;
-}
 
-const char* toWaveXAxisDoubleClickActionText(const plot::WaveXAxisDoubleClickAction action) {
-    switch (action) {
-    case plot::WaveXAxisDoubleClickAction::FitFullHistory:
+    const char* toWaveXAxisDoubleClickActionText(const plot::WaveXAxisDoubleClickAction action)
+    {
+        switch (action) {
+            case plot::WaveXAxisDoubleClickAction::FitFullHistory:
+                return "fit_full_history";
+            case plot::WaveXAxisDoubleClickAction::FitVisibleWindow:
+                return "fit_visible_window";
+        }
         return "fit_full_history";
-    case plot::WaveXAxisDoubleClickAction::FitVisibleWindow:
-        return "fit_visible_window";
     }
-    return "fit_full_history";
-}
 
-plot::WaveHiddenChannelPolicy parseWaveHiddenChannelPolicy(const std::string& value,
-                                                           plot::WaveHiddenChannelPolicy fallback) {
-    if (value == "include_hidden") {
-        return plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
+    plot::WaveHiddenChannelPolicy parseWaveHiddenChannelPolicy(const std::string& value,
+                                                               plot::WaveHiddenChannelPolicy fallback)
+    {
+        if (value == "include_hidden") {
+            return plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
+        }
+        if (value == "visible_only") {
+            return plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
+        }
+        return fallback;
     }
-    if (value == "visible_only") {
-        return plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
-    }
-    return fallback;
-}
 
-const char* toWaveHiddenChannelPolicyText(const plot::WaveHiddenChannelPolicy policy) {
-    switch (policy) {
-    case plot::WaveHiddenChannelPolicy::IncludeInDerivedViews:
+    const char* toWaveHiddenChannelPolicyText(const plot::WaveHiddenChannelPolicy policy)
+    {
+        switch (policy) {
+            case plot::WaveHiddenChannelPolicy::IncludeInDerivedViews:
+                return "include_hidden";
+            case plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews:
+                return "visible_only";
+        }
         return "include_hidden";
-    case plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews:
-        return "visible_only";
     }
-    return "include_hidden";
-}
 
-plot::WaveCursorExtremeSnapPolicy parseWaveCursorExtremeSnapPolicy(const std::string& value,
-                                                                   plot::WaveCursorExtremeSnapPolicy fallback) {
-    if (value == "viewport_zone") {
-        return plot::WaveCursorExtremeSnapPolicy::ViewportZone;
+    plot::WaveCursorExtremeSnapPolicy parseWaveCursorExtremeSnapPolicy(const std::string& value,
+                                                                       plot::WaveCursorExtremeSnapPolicy fallback)
+    {
+        if (value == "viewport_zone") {
+            return plot::WaveCursorExtremeSnapPolicy::ViewportZone;
+        }
+        if (value == "nearest_waveform") {
+            return plot::WaveCursorExtremeSnapPolicy::NearestWaveform;
+        }
+        return fallback;
     }
-    if (value == "nearest_waveform") {
-        return plot::WaveCursorExtremeSnapPolicy::NearestWaveform;
-    }
-    return fallback;
-}
 
-const char* toWaveCursorExtremeSnapPolicyText(const plot::WaveCursorExtremeSnapPolicy policy) {
-    switch (policy) {
-    case plot::WaveCursorExtremeSnapPolicy::NearestWaveform:
+    const char* toWaveCursorExtremeSnapPolicyText(const plot::WaveCursorExtremeSnapPolicy policy)
+    {
+        switch (policy) {
+            case plot::WaveCursorExtremeSnapPolicy::NearestWaveform:
+                return "nearest_waveform";
+            case plot::WaveCursorExtremeSnapPolicy::ViewportZone:
+                return "viewport_zone";
+        }
         return "nearest_waveform";
-    case plot::WaveCursorExtremeSnapPolicy::ViewportZone:
-        return "viewport_zone";
     }
-    return "nearest_waveform";
-}
 
-double positiveOrFallback(double value, double fallback) {
-    return value > 0.0 ? value : fallback;
-}
-
-transport::TransportKind parseTransportKind(const std::string& value) {
-    if (const auto kind = transport::transportKindFromId(value)) {
-        return *kind;
+    double positiveOrFallback(double value, double fallback)
+    {
+        return value > 0.0 ? value : fallback;
     }
-    return transport::TransportKind::TcpClient;
-}
 
-std::string toTransportKindText(transport::TransportKind kind) {
-    return std::string(transport::transportKindId(kind));
-}
+    transport::TransportKind parseTransportKind(const std::string& value)
+    {
+        if (const auto kind = transport::transportKindFromId(value)) {
+            return *kind;
+        }
+        return transport::TransportKind::TcpClient;
+    }
 
-const std::vector<std::string> kDefaultSerialPorts = {"COM1", "COM2", "COM3", "COM4"};
+    std::string toTransportKindText(transport::TransportKind kind)
+    {
+        return std::string(transport::transportKindId(kind));
+    }
+
+    const std::vector<std::string> kDefaultSerialPorts = {"COM1", "COM2", "COM3", "COM4"};
 } // namespace
 
 ConfigStore::ConfigStore()
     : defaultConfigPath_(embedded::executableDirectory() / "config" / "protoscope.yaml"),
       defaultProtocolRootDir_(embedded::executableDirectory() / "protocols"),
-      defaultProtocolDir_(defaultProtocolRootDir_ / "templates" / "default_protocol") {}
+      defaultProtocolDir_(defaultProtocolRootDir_ / "templates" / "default_protocol")
+{
+}
 
-AppConfig ConfigStore::withDefaults() const {
+AppConfig ConfigStore::withDefaults() const
+{
     AppConfig config;
     config.protocol.rootDir = normalizeTextPath(defaultProtocolDir_.parent_path());
     config.protocol.selectedDir = normalizeTextPath(defaultProtocolDir_);
@@ -345,7 +376,8 @@ AppConfig ConfigStore::withDefaults() const {
     return config;
 }
 
-ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
+ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const
+{
     ConfigLoadResult result;
     result.config = withDefaults();
     result.resolvedPath = path.empty() ? defaultConfigPath_ : path;
@@ -370,8 +402,10 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         result.config.app.fpsLimit = readScalar<std::uint32_t>(app, "fps_limit", result.config.app.fpsLimit);
         result.config.app.idleRender = readScalar<std::string>(app, "idle_render", result.config.app.idleRender);
         if (const auto autoSave = childNode(app, "auto_save")) {
-            result.config.app.autoSave.enabled = readScalar<bool>(autoSave, "enabled", result.config.app.autoSave.enabled);
-            result.config.app.autoSave.intervalMs = readScalar<std::uint64_t>(autoSave, "interval_ms", result.config.app.autoSave.intervalMs);
+            result.config.app.autoSave.enabled =
+                readScalar<bool>(autoSave, "enabled", result.config.app.autoSave.enabled);
+            result.config.app.autoSave.intervalMs =
+                readScalar<std::uint64_t>(autoSave, "interval_ms", result.config.app.autoSave.intervalMs);
         }
         if (const auto configHotReload = childNode(app, "config_hot_reload")) {
             result.config.app.configHotReload.enabled =
@@ -383,67 +417,68 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.gui.window.title = readScalar<std::string>(window, "title", result.config.gui.window.title);
             result.config.gui.window.width = readScalar<int>(window, "width", result.config.gui.window.width);
             result.config.gui.window.height = readScalar<int>(window, "height", result.config.gui.window.height);
-            result.config.gui.window.maximized = readScalar<bool>(window, "maximized", result.config.gui.window.maximized);
+            result.config.gui.window.maximized =
+                readScalar<bool>(window, "maximized", result.config.gui.window.maximized);
         }
         if (const auto wave = childNode(gui, "wave")) {
-            result.config.gui.wave.controlMode =
-                parseWaveControlMode(readScalar<std::string>(wave,
-                                                             "control_mode",
-                                                             toWaveControlModeText(result.config.gui.wave.controlMode)),
-                                     result.config.gui.wave.controlMode);
-            result.config.gui.wave.displayFormula =
-                parseWaveDisplayFormula(readScalar<std::string>(wave,
-                                                                "display_formula",
-                                                                toWaveDisplayFormulaText(result.config.gui.wave.displayFormula)),
-                                        result.config.gui.wave.displayFormula);
+            result.config.gui.wave.controlMode = parseWaveControlMode(
+                readScalar<std::string>(
+                    wave, "control_mode", toWaveControlModeText(result.config.gui.wave.controlMode)),
+                result.config.gui.wave.controlMode);
+            result.config.gui.wave.displayFormula = parseWaveDisplayFormula(
+                readScalar<std::string>(
+                    wave, "display_formula", toWaveDisplayFormulaText(result.config.gui.wave.displayFormula)),
+                result.config.gui.wave.displayFormula);
             result.config.gui.wave.channelCardWidthMode =
                 parseWaveChannelCardWidthMode(readScalar<std::string>(wave, "channel_card_width_mode", "fixed"));
-            result.config.gui.wave.channelDoubleClickAction =
-                parseWaveChannelDoubleClickAction(
-                    readScalar<std::string>(wave,
-                                            "channel_double_click_action",
-                                            toWaveChannelDoubleClickActionText(result.config.gui.wave.channelDoubleClickAction)),
-                    result.config.gui.wave.channelDoubleClickAction);
-            result.config.gui.wave.xAxisDoubleClickAction =
-                parseWaveXAxisDoubleClickAction(
-                    readScalar<std::string>(wave,
-                                            "x_axis_double_click_action",
-                                            toWaveXAxisDoubleClickActionText(result.config.gui.wave.xAxisDoubleClickAction)),
-                    result.config.gui.wave.xAxisDoubleClickAction);
-            result.config.gui.wave.hiddenChannelPolicy =
-                parseWaveHiddenChannelPolicy(
-                    readScalar<std::string>(wave,
-                                            "hidden_channel_policy",
-                                            toWaveHiddenChannelPolicyText(result.config.gui.wave.hiddenChannelPolicy)),
-                    result.config.gui.wave.hiddenChannelPolicy);
-            result.config.gui.wave.cursorExtremeSnapPolicy =
-                parseWaveCursorExtremeSnapPolicy(
-                    readScalar<std::string>(wave,
-                                            "cursor_extreme_snap_policy",
-                                            toWaveCursorExtremeSnapPolicyText(result.config.gui.wave.cursorExtremeSnapPolicy)),
-                    result.config.gui.wave.cursorExtremeSnapPolicy);
+            result.config.gui.wave.channelDoubleClickAction = parseWaveChannelDoubleClickAction(
+                readScalar<std::string>(
+                    wave,
+                    "channel_double_click_action",
+                    toWaveChannelDoubleClickActionText(result.config.gui.wave.channelDoubleClickAction)),
+                result.config.gui.wave.channelDoubleClickAction);
+            result.config.gui.wave.xAxisDoubleClickAction = parseWaveXAxisDoubleClickAction(
+                readScalar<std::string>(
+                    wave,
+                    "x_axis_double_click_action",
+                    toWaveXAxisDoubleClickActionText(result.config.gui.wave.xAxisDoubleClickAction)),
+                result.config.gui.wave.xAxisDoubleClickAction);
+            result.config.gui.wave.hiddenChannelPolicy = parseWaveHiddenChannelPolicy(
+                readScalar<std::string>(wave,
+                                        "hidden_channel_policy",
+                                        toWaveHiddenChannelPolicyText(result.config.gui.wave.hiddenChannelPolicy)),
+                result.config.gui.wave.hiddenChannelPolicy);
+            result.config.gui.wave.cursorExtremeSnapPolicy = parseWaveCursorExtremeSnapPolicy(
+                readScalar<std::string>(
+                    wave,
+                    "cursor_extreme_snap_policy",
+                    toWaveCursorExtremeSnapPolicyText(result.config.gui.wave.cursorExtremeSnapPolicy)),
+                result.config.gui.wave.cursorExtremeSnapPolicy);
             result.config.gui.wave.zoomSelectionAutoExit =
                 readScalar<bool>(wave, "zoom_selection_auto_exit", result.config.gui.wave.zoomSelectionAutoExit);
-            result.config.gui.wave.maxRenderPointsPerChannel =
-                readScalar<std::size_t>(wave, "max_render_points_per_channel", result.config.gui.wave.maxRenderPointsPerChannel);
+            result.config.gui.wave.maxRenderPointsPerChannel = readScalar<std::size_t>(
+                wave, "max_render_points_per_channel", result.config.gui.wave.maxRenderPointsPerChannel);
             result.config.gui.wave.maxRenderVertices =
                 readScalar<std::size_t>(wave, "max_render_vertices", result.config.gui.wave.maxRenderVertices);
-            result.config.gui.wave.downsampleStartMultiplier =
-                readScalar<double>(wave, "downsample_start_multiplier", result.config.gui.wave.downsampleStartMultiplier);
+            result.config.gui.wave.downsampleStartMultiplier = readScalar<double>(
+                wave, "downsample_start_multiplier", result.config.gui.wave.downsampleStartMultiplier);
             result.config.gui.wave.overviewMaxSamples =
                 readScalar<std::size_t>(wave, "overview_max_samples", result.config.gui.wave.overviewMaxSamples);
             result.config.gui.wave.maxTotalSamples =
                 readScalar<std::size_t>(wave, "max_total_samples", result.config.gui.wave.maxTotalSamples);
             result.config.gui.wave.minVisibleTimeSpan =
                 readScalar<double>(wave, "min_visible_time_span", result.config.gui.wave.minVisibleTimeSpan);
-            result.config.gui.wave.channelCardFixedWidth =
-                positiveOrFallback(readScalar<double>(wave, "channel_card_fixed_width", result.config.gui.wave.channelCardFixedWidth), 128.0);
-            result.config.gui.wave.channelCardAdaptiveRatio =
-                positiveOrFallback(readScalar<double>(wave, "channel_card_adaptive_ratio", result.config.gui.wave.channelCardAdaptiveRatio),
-                                   0.22);
-            result.config.gui.wave.verticalAutoFitMultiplier =
-                positiveOrFallback(readScalar<double>(wave, "vertical_auto_fit_multiplier", result.config.gui.wave.verticalAutoFitMultiplier),
-                                   1.2);
+            result.config.gui.wave.channelCardFixedWidth = positiveOrFallback(
+                readScalar<double>(wave, "channel_card_fixed_width", result.config.gui.wave.channelCardFixedWidth),
+                128.0);
+            result.config.gui.wave.channelCardAdaptiveRatio = positiveOrFallback(
+                readScalar<double>(
+                    wave, "channel_card_adaptive_ratio", result.config.gui.wave.channelCardAdaptiveRatio),
+                0.22);
+            result.config.gui.wave.verticalAutoFitMultiplier = positiveOrFallback(
+                readScalar<double>(
+                    wave, "vertical_auto_fit_multiplier", result.config.gui.wave.verticalAutoFitMultiplier),
+                1.2);
             result.config.gui.wave.resetHistoryOnTimeReset =
                 readScalar<bool>(wave, "reset_history_on_time_reset", result.config.gui.wave.resetHistoryOnTimeReset);
             result.config.gui.wave.showAxisLabels =
@@ -453,22 +488,20 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.gui.wave.showFftLegend =
                 readScalar<bool>(wave, "show_fft_legend", result.config.gui.wave.showFftLegend);
             if (const auto logHistory = childNode(gui, "log_history")) {
-                result.config.gui.logHistory.transferRawLimit =
-                    readScalar<std::size_t>(logHistory, "transfer_raw_limit", result.config.gui.logHistory.transferRawLimit);
-                result.config.gui.logHistory.transferFrameLimit =
-                    readScalar<std::size_t>(logHistory, "transfer_frame_limit", result.config.gui.logHistory.transferFrameLimit);
+                result.config.gui.logHistory.transferRawLimit = readScalar<std::size_t>(
+                    logHistory, "transfer_raw_limit", result.config.gui.logHistory.transferRawLimit);
+                result.config.gui.logHistory.transferFrameLimit = readScalar<std::size_t>(
+                    logHistory, "transfer_frame_limit", result.config.gui.logHistory.transferFrameLimit);
                 result.config.gui.logHistory.hostLimit =
                     readScalar<std::size_t>(logHistory, "host_limit", result.config.gui.logHistory.hostLimit);
                 result.config.gui.logHistory.scriptLimit =
                     readScalar<std::size_t>(logHistory, "script_limit", result.config.gui.logHistory.scriptLimit);
             }
             if (const auto rawCapture = childNode(gui, "raw_capture")) {
-                result.config.gui.rawCapture.liveLimitBytes =
-                    readScalar<std::size_t>(rawCapture, "live_limit_bytes", result.config.gui.rawCapture.liveLimitBytes);
-                result.config.gui.rawCapture.recordingQueueLimitBytes =
-                    readScalar<std::size_t>(rawCapture,
-                                            "recording_queue_limit_bytes",
-                                            result.config.gui.rawCapture.recordingQueueLimitBytes);
+                result.config.gui.rawCapture.liveLimitBytes = readScalar<std::size_t>(
+                    rawCapture, "live_limit_bytes", result.config.gui.rawCapture.liveLimitBytes);
+                result.config.gui.rawCapture.recordingQueueLimitBytes = readScalar<std::size_t>(
+                    rawCapture, "recording_queue_limit_bytes", result.config.gui.rawCapture.recordingQueueLimitBytes);
             }
             if (const auto transferLog = childNode(gui, "transfer_log")) {
                 result.config.gui.replayRawHistoryOnSchemaSwitch =
@@ -505,20 +538,20 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                     readScalar<bool>(realtimeBacklog,
                                      "discard_backlog_on_disconnect",
                                      result.config.gui.realtimeBacklog.discardBacklogOnDisconnect);
-                result.config.gui.realtimeBacklog.pumpMinIntervalMs =
-                    readScalar<double>(realtimeBacklog,
-                                       "pump_min_interval_ms",
-                                       result.config.gui.realtimeBacklog.pumpMinIntervalMs);
+                result.config.gui.realtimeBacklog.pumpMinIntervalMs = readScalar<double>(
+                    realtimeBacklog, "pump_min_interval_ms", result.config.gui.realtimeBacklog.pumpMinIntervalMs);
             }
             result.config.gui.showAppHeader = readScalar<bool>(gui, "show_app_header", result.config.gui.showAppHeader);
-           result.config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
-            result.config.gui.luaDockRenderCopyMode = readScalar<bool>(gui, "lua_dock_render_copy_mode", result.config.gui.luaDockRenderCopyMode);
-           result.config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
+            result.config.gui.luaDockLayoutDebug =
+                readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
+            result.config.gui.luaDockRenderCopyMode =
+                readScalar<bool>(gui, "lua_dock_render_copy_mode", result.config.gui.luaDockRenderCopyMode);
+            result.config.gui.sendHistoryLimit =
+                readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
         }
         if (const auto elfSymbolCombo = childNode(gui, "elf_symbol_combo")) {
-            const int limit = readScalar<int>(elfSymbolCombo,
-                                              "limit",
-                                              static_cast<int>(result.config.gui.elfSymbolCombo.limit));
+            const int limit =
+                readScalar<int>(elfSymbolCombo, "limit", static_cast<int>(result.config.gui.elfSymbolCombo.limit));
             if (limit > 0) {
                 result.config.gui.elfSymbolCombo.limit = static_cast<std::size_t>(limit);
             }
@@ -531,7 +564,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
 
         const auto protocol = root["protocol"];
         result.config.protocol.rootDir = readScalar<std::string>(protocol, "root_dir", result.config.protocol.rootDir);
-        result.config.protocol.selectedDir = readScalar<std::string>(protocol, "selected_dir", result.config.protocol.selectedDir);
+        result.config.protocol.selectedDir =
+            readScalar<std::string>(protocol, "selected_dir", result.config.protocol.selectedDir);
         if (const auto tx = childNode(protocol, "tx")) {
             result.config.protocol.tx.sendTimeoutMs =
                 readScalar<std::uint64_t>(tx, "send_timeout_ms", result.config.protocol.tx.sendTimeoutMs);
@@ -551,14 +585,10 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                 result.config.receive.transportReadBufferBytes,
                                 result.config.performance.explicitOverrides.receiveTransportReadBufferBytes);
             if (const auto streamBuffer = childNode(receive, "stream_buffer")) {
-                result.config.receive.streamBuffer.nearOverflowThreshold =
-                    readScalar<double>(streamBuffer,
-                                       "near_overflow_threshold",
-                                       result.config.receive.streamBuffer.nearOverflowThreshold);
+                result.config.receive.streamBuffer.nearOverflowThreshold = readScalar<double>(
+                    streamBuffer, "near_overflow_threshold", result.config.receive.streamBuffer.nearOverflowThreshold);
                 result.config.receive.streamBuffer.popupEnabled =
-                    readScalar<bool>(streamBuffer,
-                                     "popup_enabled",
-                                     result.config.receive.streamBuffer.popupEnabled);
+                    readScalar<bool>(streamBuffer, "popup_enabled", result.config.receive.streamBuffer.popupEnabled);
             }
         }
 
@@ -580,10 +610,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                                 "memory_budget_bytes",
                                 result.config.scripting.workerMemoryBudgetBytes,
                                 result.config.performance.explicitOverrides.workerMemoryBudgetBytes);
-            result.config.scripting.workerMemoryBudgetAvailableRatio =
-                readScalar<double>(worker,
-                                   "memory_budget_available_ratio",
-                                   result.config.scripting.workerMemoryBudgetAvailableRatio);
+            result.config.scripting.workerMemoryBudgetAvailableRatio = readScalar<double>(
+                worker, "memory_budget_available_ratio", result.config.scripting.workerMemoryBudgetAvailableRatio);
             readPerformanceSize(worker,
                                 "output_queue_limit",
                                 result.config.scripting.workerOutputQueueLimit,
@@ -598,18 +626,14 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<double>(worker,
                                    "backpressure_rx_queue_high_watermark",
                                    result.config.scripting.workerBackpressureHighWatermark);
-            result.config.scripting.workerBackpressureLowWatermark =
-                readScalar<double>(worker,
-                                   "backpressure_rx_queue_low_watermark",
-                                   result.config.scripting.workerBackpressureLowWatermark);
+            result.config.scripting.workerBackpressureLowWatermark = readScalar<double>(
+                worker, "backpressure_rx_queue_low_watermark", result.config.scripting.workerBackpressureLowWatermark);
             readPerformanceDouble(worker,
-                                 "output_flush_budget_ms",
-                                 result.config.scripting.workerOutputFlushBudgetMs,
-                                 result.config.performance.explicitOverrides.workerOutputFlushBudgetMs);
-            result.config.scripting.drainRequestOutputsUnbounded =
-                readScalar<bool>(worker,
-                                 "drain_request_outputs_unbounded",
-                                 result.config.scripting.drainRequestOutputsUnbounded);
+                                  "output_flush_budget_ms",
+                                  result.config.scripting.workerOutputFlushBudgetMs,
+                                  result.config.performance.explicitOverrides.workerOutputFlushBudgetMs);
+            result.config.scripting.drainRequestOutputsUnbounded = readScalar<bool>(
+                worker, "drain_request_outputs_unbounded", result.config.scripting.drainRequestOutputsUnbounded);
         }
         if (const auto fileIo = childNode(scripting, "file_io")) {
             auto& config = result.config.scripting.fileIo;
@@ -625,7 +649,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::uint64_t>(fileIo, "max_write_file_size_bytes", config.maxWriteFileSizeBytes);
             if (const auto dialog = childNode(fileIo, "dialog")) {
                 config.dialog.enabled = readScalar<bool>(dialog, "enabled", config.dialog.enabled);
-                config.dialog.rememberLastDir = readScalar<bool>(dialog, "remember_last_dir", config.dialog.rememberLastDir);
+                config.dialog.rememberLastDir =
+                    readScalar<bool>(dialog, "remember_last_dir", config.dialog.rememberLastDir);
             }
             if (const auto sendFile = childNode(fileIo, "send_file")) {
                 config.sendFile.defaultChunkBytes =
@@ -642,8 +667,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
         result.config.configPath = normalizeTextPath(result.resolvedPath);
 
         const auto communication = root["communication"];
-        result.config.communication.kind =
-            parseTransportKind(readScalar<std::string>(communication, "kind", toTransportKindText(result.config.communication.kind)));
+        result.config.communication.kind = parseTransportKind(
+            readScalar<std::string>(communication, "kind", toTransportKindText(result.config.communication.kind)));
 
         if (const auto tcpClient = childNode(communication, "tcp_client")) {
             result.config.communication.tcpClient.host =
@@ -657,8 +682,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
                 readScalar<std::string>(tcpServer, "bind_address", result.config.communication.tcpServer.bindAddress);
             result.config.communication.tcpServer.port =
                 readScalar<std::uint16_t>(tcpServer, "port", result.config.communication.tcpServer.port);
-            result.config.communication.tcpServer.rejectNewConnection =
-                readScalar<bool>(tcpServer, "reject_new_connection", result.config.communication.tcpServer.rejectNewConnection);
+            result.config.communication.tcpServer.rejectNewConnection = readScalar<bool>(
+                tcpServer, "reject_new_connection", result.config.communication.tcpServer.rejectNewConnection);
         }
 
         if (const auto serial = childNode(communication, "serial")) {
@@ -692,7 +717,7 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
             result.config.communication.lastError.clear();
             result.config.communication.txCount = 0;
             result.config.communication.rxCount = 0;
-            (void)receive;
+            (void) receive;
         }
     } catch (const std::exception& ex) {
         result.error = std::string("读取 YAML 失败: ") + ex.what();
@@ -702,7 +727,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const {
     return result;
 }
 
-bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const {
+bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const
+{
     YAML::Node root;
     auto scaledDefaults = withDefaults();
     scaledDefaults.performance.scale = normalizePerformanceScale(config.performance.scale);
@@ -724,7 +750,8 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["window"]["maximized"] = config.gui.window.maximized;
     root["gui"]["wave"]["control_mode"] = toWaveControlModeText(config.gui.wave.controlMode);
     root["gui"]["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
-    root["gui"]["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
+    root["gui"]["wave"]["channel_card_width_mode"] =
+        toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
     root["gui"]["wave"]["channel_double_click_action"] =
         toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
     root["gui"]["wave"]["x_axis_double_click_action"] =
@@ -778,13 +805,12 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
         config.gui.realtimeBacklog.derivedBacklogDegradeEnabled;
     root["gui"]["realtime_backlog"]["discard_backlog_on_disconnect"] =
         config.gui.realtimeBacklog.discardBacklogOnDisconnect;
-    root["gui"]["realtime_backlog"]["pump_min_interval_ms"] =
-        config.gui.realtimeBacklog.pumpMinIntervalMs;
+    root["gui"]["realtime_backlog"]["pump_min_interval_ms"] = config.gui.realtimeBacklog.pumpMinIntervalMs;
     root["gui"]["show_app_header"] = config.gui.showAppHeader;
     root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
-   root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
+    root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
     root["gui"]["lua_dock_render_copy_mode"] = config.gui.luaDockRenderCopyMode;
-   root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;
+    root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;
     root["gui"]["elf_symbol_combo"]["debounce_ms"] = config.gui.elfSymbolCombo.debounceMs;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
@@ -828,8 +854,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
                            scaledDefaults.scripting.workerBatchBytes,
                            explicitOverrides.workerBatchBytes);
     root["scripting"]["worker"]["backpressure_enabled"] = config.scripting.workerBackpressureEnabled;
-    root["scripting"]["worker"]["backpressure_rx_queue_high_watermark"] = config.scripting.workerBackpressureHighWatermark;
-    root["scripting"]["worker"]["backpressure_rx_queue_low_watermark"] = config.scripting.workerBackpressureLowWatermark;
+    root["scripting"]["worker"]["backpressure_rx_queue_high_watermark"] =
+        config.scripting.workerBackpressureHighWatermark;
+    root["scripting"]["worker"]["backpressure_rx_queue_low_watermark"] =
+        config.scripting.workerBackpressureLowWatermark;
     writePerformanceScalar(root["scripting"]["worker"],
                            "output_flush_budget_ms",
                            config.scripting.workerOutputFlushBudgetMs,
@@ -851,8 +879,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["scripting"]["file_io"]["max_write_file_size_bytes"] = config.scripting.fileIo.maxWriteFileSizeBytes;
     root["scripting"]["file_io"]["dialog"]["enabled"] = config.scripting.fileIo.dialog.enabled;
     root["scripting"]["file_io"]["dialog"]["remember_last_dir"] = config.scripting.fileIo.dialog.rememberLastDir;
-    root["scripting"]["file_io"]["send_file"]["default_chunk_bytes"] = config.scripting.fileIo.sendFile.defaultChunkBytes;
-    root["scripting"]["file_io"]["send_file"]["max_inflight_chunks"] = config.scripting.fileIo.sendFile.maxInflightChunks;
+    root["scripting"]["file_io"]["send_file"]["default_chunk_bytes"] =
+        config.scripting.fileIo.sendFile.defaultChunkBytes;
+    root["scripting"]["file_io"]["send_file"]["max_inflight_chunks"] =
+        config.scripting.fileIo.sendFile.maxInflightChunks;
 
     root["logging"]["level"] = toLogLevelText(config.logging.level);
     if (!config.logging.filePath.empty()) {
@@ -893,11 +923,14 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     }
 }
 
-std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::path& dir) const {
+std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::path& dir) const
+{
     return normalizeProtocolDir(defaultProtocolDir_.parent_path(), dir);
 }
 
-std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::path& rootDir, const std::filesystem::path& dir) const {
+std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::path& rootDir,
+                                                        const std::filesystem::path& dir) const
+{
     std::filesystem::path candidate = dir.empty() ? defaultProtocolDir_ : dir;
     if (protocolEntryExists(candidate)) {
         return candidate;
@@ -910,20 +943,24 @@ std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::p
     return defaultProtocolDir_;
 }
 
-std::filesystem::path ConfigStore::mainLuaPath(const std::filesystem::path& protocolDir) const {
+std::filesystem::path ConfigStore::mainLuaPath(const std::filesystem::path& protocolDir) const
+{
     return protocolDir / "main.lua";
 }
 
-std::string ConfigStore::protocolName(const std::filesystem::path& protocolDir) const {
+std::string ConfigStore::protocolName(const std::filesystem::path& protocolDir) const
+{
     const auto filename = protocolDir.filename().string();
     return filename.empty() ? std::string("default_protocol") : filename;
 }
 
-bool ConfigStore::protocolEntryExists(const std::filesystem::path& protocolDir) const {
+bool ConfigStore::protocolEntryExists(const std::filesystem::path& protocolDir) const
+{
     return std::filesystem::exists(mainLuaPath(protocolDir));
 }
 
-std::vector<std::string> ConfigStore::scanProtocolDirectories(const std::filesystem::path& rootDir) const {
+std::vector<std::string> ConfigStore::scanProtocolDirectories(const std::filesystem::path& rootDir) const
+{
     std::vector<std::string> results;
     std::error_code ec;
     if (!std::filesystem::exists(rootDir, ec) || ec) {
@@ -947,15 +984,18 @@ std::vector<std::string> ConfigStore::scanProtocolDirectories(const std::filesys
     return results;
 }
 
-bool ConfigStore::ensureDefaultProtocolScript(const std::filesystem::path& protocolDir, std::string& error) const {
+bool ConfigStore::ensureDefaultProtocolScript(const std::filesystem::path& protocolDir, std::string& error) const
+{
     return embedded::ensureDefaultProtocolScript(protocolDir, error);
 }
 
-bool ConfigStore::ensureDefaultProtocolWorkspace(std::string& error) const {
+bool ConfigStore::ensureDefaultProtocolWorkspace(std::string& error) const
+{
     return embedded::ensureProtocolWorkspace(defaultProtocolRootDir_, error);
 }
 
-FileSnapshot ConfigStore::snapshot(const std::filesystem::path& path) const {
+FileSnapshot ConfigStore::snapshot(const std::filesystem::path& path) const
+{
     FileSnapshot result;
     result.path = path;
     result.exists = std::filesystem::exists(path);
@@ -965,12 +1005,14 @@ FileSnapshot ConfigStore::snapshot(const std::filesystem::path& path) const {
     return result;
 }
 
-bool ConfigStore::hasChanged(const FileSnapshot& previous) const {
+bool ConfigStore::hasChanged(const FileSnapshot& previous) const
+{
     const auto current = snapshot(previous.path);
     return current.exists != previous.exists || current.timestampMs != previous.timestampMs;
 }
 
-void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStore) const {
+void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStore) const
+{
     auto& comm = dockStore.commState();
     comm.kind = config.communication.kind;
     comm.tcpClient = config.communication.tcpClient;
@@ -994,9 +1036,9 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     configState.configHotReloadEnabled = config.app.configHotReload.enabled;
     configState.fpsLimit = config.app.fpsLimit;
     configState.idleRender = config.app.idleRender;
-   configState.luaDockLayoutDebug = config.gui.luaDockLayoutDebug;
+    configState.luaDockLayoutDebug = config.gui.luaDockLayoutDebug;
     configState.luaDockRenderCopyMode = config.gui.luaDockRenderCopyMode;
-   configState.loadedFromPath = config.configPath.empty() ? normalizeTextPath(defaultConfigPath_) : config.configPath;
+    configState.loadedFromPath = config.configPath.empty() ? normalizeTextPath(defaultConfigPath_) : config.configPath;
 
     auto& waveState = dockStore.waveState();
     auto& wave = waveState.view;
@@ -1024,7 +1066,8 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     waveState.buffer.setViewConfig(viewConfig);
 }
 
-AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
+AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
+{
     AppConfig config = withDefaults();
 
     config.communication = dockStore.commState();
@@ -1035,9 +1078,9 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     config.app.configHotReload.enabled = dockStore.configState().configHotReloadEnabled;
     config.app.fpsLimit = dockStore.configState().fpsLimit;
     config.app.idleRender = dockStore.configState().idleRender;
-   config.gui.luaDockLayoutDebug = dockStore.configState().luaDockLayoutDebug;
+    config.gui.luaDockLayoutDebug = dockStore.configState().luaDockLayoutDebug;
     config.gui.luaDockRenderCopyMode = dockStore.configState().luaDockRenderCopyMode;
-   config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
+    config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
     config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
@@ -1061,17 +1104,21 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const {
     return config;
 }
 
-const std::filesystem::path& ConfigStore::defaultConfigPath() const {
+const std::filesystem::path& ConfigStore::defaultConfigPath() const
+{
     return defaultConfigPath_;
 }
 
-const std::filesystem::path& ConfigStore::defaultProtocolDir() const {
+const std::filesystem::path& ConfigStore::defaultProtocolDir() const
+{
     return defaultProtocolDir_;
 }
 
-std::uint64_t ConfigStore::toTimestampMs(const std::filesystem::file_time_type& fileTime) {
+std::uint64_t ConfigStore::toTimestampMs(const std::filesystem::file_time_type& fileTime)
+{
     const auto normalized = fileTime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now();
-    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(normalized.time_since_epoch()).count());
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(normalized.time_since_epoch()).count());
 }
 
 } // namespace protoscope::config
