@@ -44,7 +44,7 @@ jobs:
         shell: pwsh
         run: |
           $cache = Get-Content build/CMakeCache.txt
-         $cache | Select-String "^CMAKE_C_COMPILER:|^CMAKE_CXX_COMPILER:|^CMAKE_MAKE_PROGRAM:"
+          $cache | Select-String "^CMAKE_C_COMPILER:|^CMAKE_CXX_COMPILER:|^CMAKE_MAKE_PROGRAM:"
 
           $cCompilerMatch = $cache | Select-String "^CMAKE_C_COMPILER:(?:FILEPATH|UNINITIALIZED|STRING)=(.+)$" | Select-Object -First 1
           $cxxCompilerMatch = $cache | Select-String "^CMAKE_CXX_COMPILER:(?:FILEPATH|UNINITIALIZED|STRING)=(.+)$" | Select-Object -First 1
