@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "relations": [],
+  "autoload": [
+    "startup.md",
+    "must/project-basics.md",
+    "must/engineering-guardrails.md",
+    "must/doc-routing.md",
+    "guides/zdocs-workflow.md",
+    "overview/project-overview.md",
+    "overview/entry-points.md"
+  ],
+  "routing": [
+    {
+      "name": "startup",
+      "paths": [],
+      "tags": [
+        "startup"
+      ],
+      "docs": [
+        "startup.md",
+        "must/project-basics.md",
+        "must/engineering-guardrails.md",
+        "must/doc-routing.md",
+        "guides/zdocs-workflow.md",
+        "overview/project-overview.md",
+        "overview/entry-points.md"
+      ],
+      "priority": 10
+    }
+  ],
+  "budgets": {}
+}

@@ -1,0 +1,26 @@
+{
+  "metadata": {
+    "schema": "codex/zstate",
+    "schemaVersion": 2
+  },
+  "artifactRoot": ".agents/zstate",
+  "decisionGuidance": {
+    "id": "decision-guidance",
+    "path": ".agents/zstate/decision.md"
+  },
+  "derivedIndex": {
+    "path": "codex_home://zstate/projects/protoscope-cea348dc7c69/index.sqlite",
+    "source": "derived_from_artifacts",
+    "rebuildable": true
+  },
+  "activeSessionId": null,
+  "sessions": [],
+  "decisions": [],
+  "approvals": [],
+  "outcomes": [],
+  "reflections": [],
+  "handoffs": [],
+  "memorySources": [],
+  "inputPreviews": [],
+  "exports": []
+}
