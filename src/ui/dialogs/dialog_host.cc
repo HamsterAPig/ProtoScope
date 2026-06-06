@@ -1,6 +1,7 @@
 #include "../runtime/gui_runtime_detail.hpp"
 
 #include "protoscope/ui/gui_runtime.hpp"
+#include "protoscope/ui/keyboard_shortcuts.hpp"
 
 namespace protoscope::ui {
 
@@ -116,6 +117,59 @@ void GuiRuntime::drawAboutDialog()
         ImGui::CloseCurrentPopup();
     }
 
+    ImGui::EndPopup();
+}
+
+void GuiRuntime::requestShortcutHelpDialog()
+{
+    shortcutHelpDialogRequested_ = true;
+}
+
+void GuiRuntime::drawShortcutHelpDialog()
+{
+    constexpr const char* popupId = "快捷键说明";
+    if (shortcutHelpDialogRequested_) {
+        ImGui::OpenPopup(popupId);
+        shortcutHelpDialogRequested_ = false;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(560.0F, 420.0F), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        return;
+    }
+
+    ImGui::TextUnformatted("全局快捷键会在输入框和弹窗中自动让路。");
+    ImGui::Separator();
+
+    const auto drawSection = [](const char* title, const ShortcutScope scope) {
+        if (!ImGui::CollapsingHeader(title, ImGuiTreeNodeFlags_DefaultOpen)) {
+            return;
+        }
+        if (ImGui::BeginTable(title, 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("按键", ImGuiTableColumnFlags_WidthFixed, 120.0F);
+            ImGui::TableSetupColumn("动作");
+            ImGui::TableHeadersRow();
+            for (const auto& shortcut : shortcutDescriptors()) {
+                if (shortcut.scope != scope) {
+                    continue;
+                }
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(shortcut.label);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(shortcut.description);
+            }
+            ImGui::EndTable();
+        }
+    };
+
+    drawSection("全局", ShortcutScope::Global);
+    drawSection("波形 Dock", ShortcutScope::WaveDock);
+
+    ImGui::Spacing();
+    if (ImGui::Button("关闭")) {
+        ImGui::CloseCurrentPopup();
+    }
     ImGui::EndPopup();
 }
 

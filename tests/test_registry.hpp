@@ -12,6 +12,8 @@ void test_hex_invalid_input();
 void test_hex_normalize_input();
 void test_hex_editor_cursor_normalize();
 void test_crc_known_vectors();
+void test_keyboard_shortcut_table_has_no_scope_duplicates();
+void test_keyboard_shortcut_labels_match_plan();
 void test_config_external_reload_state();
 void test_script_controls_snapshot();
 void test_script_optional_labels_allowed_for_compact_controls();

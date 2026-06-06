@@ -26,6 +26,7 @@ public:
     void drawDialogs(RuntimeUiContext&) override
     {
         runtime_.drawAboutDialog();
+        runtime_.drawShortcutHelpDialog();
         runtime_.drawUpdateCheckDialog();
         runtime_.drawDialogs();
         runtime_.drawRawCaptureFileDialogs();

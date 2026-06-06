@@ -1,4 +1,5 @@
 #include "protoscope/ui/gui_runtime.hpp"
+#include "protoscope/ui/keyboard_shortcuts.hpp"
 
 #include <imgui.h>
 
@@ -10,6 +11,9 @@ void GuiRuntime::drawHelpMenu()
         return;
     }
 
+    if (ImGui::MenuItem("快捷键说明", shortcutLabel(ShortcutAction::ShowShortcutHelp).data())) {
+        requestShortcutHelpDialog();
+    }
     if (ImGui::MenuItem("检查更新")) {
         startUpdateCheck();
     }

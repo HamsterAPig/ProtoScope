@@ -8,6 +8,7 @@
 #include "protoscope/ui/editable_combo.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/icons.hpp"
+#include "protoscope/ui/keyboard_shortcuts.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/render_frame_scheduler.hpp"
 #include "protoscope/ui/ui_component.hpp"
@@ -492,12 +493,14 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
             const bool previousShowLogDock = showLogDock_;
             const bool previousShowScriptDock = showScriptDock_;
             const bool previousShowWaveDock = showWaveDock_;
-            ImGui::MenuItem("通讯配置", nullptr, &showCommDock_);
-            ImGui::MenuItem("协议脚本 / 动态控件", nullptr, &showProtocolDock_);
-            ImGui::MenuItem("收发数据", nullptr, &showTransferDock_);
-            ImGui::MenuItem("日志", nullptr, &showLogDock_);
-            ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
-            ImGui::MenuItem("波形", nullptr, &showWaveDock_);
+            ImGui::MenuItem("通讯配置", shortcutLabel(ShortcutAction::ToggleCommDock).data(), &showCommDock_);
+            ImGui::MenuItem("协议脚本 / 动态控件",
+                            shortcutLabel(ShortcutAction::ToggleProtocolDock).data(),
+                            &showProtocolDock_);
+            ImGui::MenuItem("收发数据", shortcutLabel(ShortcutAction::ToggleTransferDock).data(), &showTransferDock_);
+            ImGui::MenuItem("日志", shortcutLabel(ShortcutAction::ToggleLogDock).data(), &showLogDock_);
+            ImGui::MenuItem("脚本", shortcutLabel(ShortcutAction::ToggleScriptDock).data(), &showScriptDock_);
+            ImGui::MenuItem("波形", shortcutLabel(ShortcutAction::ToggleWaveDock).data(), &showWaveDock_);
             if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
                 previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
                 previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
@@ -614,6 +617,7 @@ void GuiRuntime::renderFrame()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    handleGlobalShortcuts();
     syncRegisteredDialogs();
     drawRegisteredMenus();
     drawAppShell();

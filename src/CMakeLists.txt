@@ -204,8 +204,10 @@ endif()
 if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
         ui/editable_combo.cc
+        ui/keyboard_shortcuts.cc
         ui/ui_theme.cc
         ui/runtime/gui_runtime_core.cc
+        ui/runtime/shortcut_controller.cc
         ui/runtime/ui_components.cc
         ui/runtime/platform_controller.cc
         ui/runtime/config_controller.cc

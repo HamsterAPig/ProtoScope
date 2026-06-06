@@ -5,6 +5,7 @@ add_executable(protoscope_tests
     test_dock.cc
     test_dock_layout.cc
     test_frame_stream_parser.cc
+    test_keyboard_shortcuts.cc
     test_plot.cc
     test_protocol_state_file.cc
     test_runtime_scheduler.cc

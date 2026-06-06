@@ -95,6 +95,7 @@ private:
     void syncDialogQueue();
     void drawDialogs();
     void drawRawCaptureFileDialogs();
+    void handleGlobalShortcuts();
     void drawMainMenu();
     void drawHelpMenu();
     void drawLuaViewMenu();
@@ -158,6 +159,8 @@ private:
     void refreshWindowTitle();
     void requestAboutDialog();
     void drawAboutDialog();
+    void requestShortcutHelpDialog();
+    void drawShortcutHelpDialog();
     void startUpdateCheck();
     void drawUpdateCheckDialog();
     std::filesystem::path currentProtocolLayoutPath() const;
@@ -211,6 +214,7 @@ private:
     std::unordered_map<std::string, bool> luaDockVisibility_;
     float transferSendSectionHeight_{210.0F};
     bool aboutDialogRequested_{false};
+    bool shortcutHelpDialogRequested_{false};
     bool updateCheckDialogRequested_{false};
     bool updateCheckInProgress_{false};
     std::optional<UpdateCheckResult> updateCheckResult_;

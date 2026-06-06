@@ -2,6 +2,7 @@
 
 #include "protoscope/app/application.hpp"
 #include "protoscope/ui/icons.hpp"
+#include "protoscope/ui/keyboard_shortcuts.hpp"
 
 #include "wave_component.hpp"
 #include "wave_context.hpp"
@@ -25,6 +26,43 @@
 #include <implot_internal.h>
 
 namespace protoscope::ui {
+
+namespace {
+
+ImGuiKey toImGuiKey(const ShortcutKey key)
+{
+    switch (key) {
+        case ShortcutKey::A:
+            return ImGuiKey_A;
+        case ShortcutKey::C:
+            return ImGuiKey_C;
+        case ShortcutKey::F:
+            return ImGuiKey_F;
+        case ShortcutKey::Z:
+            return ImGuiKey_Z;
+        case ShortcutKey::Space:
+            return ImGuiKey_Space;
+        default:
+            return ImGuiKey_None;
+    }
+}
+
+bool chordPressed(const ShortcutChord& chord)
+{
+    const auto& io = ImGui::GetIO();
+    if (io.KeyCtrl != chord.ctrl || io.KeyShift != chord.shift || io.KeyAlt != chord.alt) {
+        return false;
+    }
+    return ImGui::IsKeyPressed(toImGuiKey(chord.key), false);
+}
+
+bool waveShortcutPressed(const ShortcutAction action)
+{
+    const auto* descriptor = findShortcut(action);
+    return descriptor != nullptr && chordPressed(descriptor->chord);
+}
+
+} // namespace
 
 std::string formatMetricText(double value, const char* baseUnit)
 {
@@ -644,9 +682,11 @@ void WaveDockRenderer::draw(bool& showWaveDock)
         auto& wave = application_.docks().waveState();
         auto& view = wave.view;
         const auto& config = wave.buffer.viewConfig();
+        const bool dockFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
         syncWaveViewToLatest();
         initializeWaveViewIfNeeded(view);
+        handleWaveShortcuts(dockFocused);
 
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
@@ -725,6 +765,54 @@ void WaveDockRenderer::draw(bool& showWaveDock)
         }
     }
     ImGui::End();
+}
+
+void WaveDockRenderer::handleWaveShortcuts(const bool dockFocused)
+{
+    const auto& io = ImGui::GetIO();
+    if (!dockFocused || io.WantTextInput ||
+        ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+        return;
+    }
+
+    auto& wave = application_.docks().waveState();
+    auto& view = wave.view;
+    if (waveShortcutPressed(ShortcutAction::WaveTogglePauseFollow)) {
+        view.autoFollowLatest = !view.autoFollowLatest;
+        application_.setStatusMessage(view.autoFollowLatest ? "波形自动跟随已恢复" : "波形自动跟随已暂停", false);
+        return;
+    }
+    if (waveShortcutPressed(ShortcutAction::WaveFitVisible)) {
+        view.fitVisibleWaveformsRequested = true;
+        application_.setStatusMessage("已请求适配当前可见波形", false);
+        return;
+    }
+    if (waveShortcutPressed(ShortcutAction::WaveToggleZoomSelection)) {
+        view.zoomSelectionActive = !view.zoomSelectionActive;
+        view.zoomSelectionDragging = false;
+        application_.setStatusMessage(view.zoomSelectionActive ? "框选放大已开启" : "框选放大已关闭", false);
+        return;
+    }
+    if (waveShortcutPressed(ShortcutAction::WaveToggleFft)) {
+        view.fft.enabled = !view.fft.enabled;
+        if (view.fft.enabled) {
+            view.fftSourceMinTime = view.viewMinTime;
+            view.fftSourceMaxTime = view.viewMaxTime;
+            view.fftSourceWindowValid = true;
+            view.fftViewportInitialized = false;
+        } else {
+            view.fftSourceWindowValid = false;
+            view.fftViewportInitialized = false;
+        }
+        wave.cachedFftKeyValid = false;
+        application_.setStatusMessage(view.fft.enabled ? "FFT 频谱模式已开启" : "FFT 频谱模式已关闭", false);
+        return;
+    }
+    if (waveShortcutPressed(ShortcutAction::WaveClearHistory)) {
+        // 核心流程：清空历史使用带修饰键组合，避免裸字母误清实时采样缓存。
+        application_.resetWaveHistory();
+        application_.setStatusMessage("当前波形历史已清空", false);
+    }
 }
 
 void WaveDockRenderer::syncWaveViewToLatest()

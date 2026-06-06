@@ -32,6 +32,7 @@ public:
 
 private:
     void syncWaveViewToLatest();
+    void handleWaveShortcuts(bool dockFocused);
     static std::string formatMetric(double value, const char* baseUnit);
 
 private:

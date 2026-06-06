@@ -2454,6 +2454,8 @@ static const TestCase kAllTests[] = {
     {"hex_normalize_input", &test_hex_normalize_input},
     {"hex_editor_cursor_normalize", &test_hex_editor_cursor_normalize},
     {"crc_known_vectors", &test_crc_known_vectors},
+    {"keyboard_shortcut_table_has_no_scope_duplicates", &test_keyboard_shortcut_table_has_no_scope_duplicates},
+    {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
     {"config_external_reload_state", &test_config_external_reload_state},
     {"script_controls_snapshot", &test_script_controls_snapshot},
     {"script_optional_labels_allowed_for_compact_controls", &test_script_optional_labels_allowed_for_compact_controls},
