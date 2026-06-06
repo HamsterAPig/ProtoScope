@@ -24,6 +24,7 @@ public:
     ElfStaticViewBridge& operator=(const ElfStaticViewBridge&) = delete;
 
     bool loadFile(const std::filesystem::path& path, std::string& error);
+    void clear();
     [[nodiscard]] std::vector<ElfStaticAddressEntry> query(std::string queryText, std::size_t limit) const;
     [[nodiscard]] std::optional<ElfStaticAddressEntry> findExactLabel(std::string label) const;
     [[nodiscard]] bool loaded() const;

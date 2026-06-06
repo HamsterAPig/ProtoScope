@@ -294,6 +294,7 @@ void GuiRuntime::loadCurrentProtocolControlState()
     const auto statePath = protocolControlStatePath();
     if (!std::filesystem::exists(statePath)) {
         syncLuaDockVisibilityDefaults();
+        restoreElfStaticAddressForCurrentProtocol({});
         return;
     }
 
@@ -303,6 +304,7 @@ void GuiRuntime::loadCurrentProtocolControlState()
         auto stateLock = ProtocolStateFileLock::acquire(statePath, options.lockWaitTimeout, lockError);
         if (!stateLock) {
             syncLuaDockVisibilityDefaults();
+            restoreElfStaticAddressForCurrentProtocol({});
             application_.setStatusMessage(std::string("加载协议控件状态失败: ") + lockError, true);
             return;
         }
@@ -310,6 +312,7 @@ void GuiRuntime::loadCurrentProtocolControlState()
         const auto loadResult = loadProtocolStateRootForUpdate(statePath);
         if (!loadResult.ok) {
             syncLuaDockVisibilityDefaults();
+            restoreElfStaticAddressForCurrentProtocol({});
             application_.setStatusMessage(std::string("加载协议控件状态失败: ") + loadResult.error, true);
             return;
         }
@@ -317,6 +320,7 @@ void GuiRuntime::loadCurrentProtocolControlState()
         const auto protocolsNode = root["protocols"];
         if (!protocolsNode || !protocolsNode.IsMap()) {
             syncLuaDockVisibilityDefaults();
+            restoreElfStaticAddressForCurrentProtocol({});
             if (loadResult.recovery.recoveredCorruptFile) {
                 application_.setStatusMessage(
                     "检测到损坏的协议控件状态，已备份为: " + loadResult.recovery.backupPath.filename().string(), true);
@@ -324,6 +328,7 @@ void GuiRuntime::loadCurrentProtocolControlState()
             return;
         }
         const auto protocolNode = protocolsNode[activeWorkspaceProtocolKey_];
+        restoreElfStaticAddressForCurrentProtocol(restoreElfStaticAddressPath(root, activeWorkspaceProtocolKey_));
         // 核心流程：Dock 可见性按协议工作区存储，旧文件缺字段时自动回退默认可见。
         ProtocolDockVisibilityState visibilityState;
         restoreDockVisibilityState(root, activeWorkspaceProtocolKey_, visibilityState);
@@ -421,6 +426,7 @@ void GuiRuntime::saveCurrentProtocolControlState()
         }
 
         protocolNode["controls"] = controlsNode;
+        storeElfStaticAddressPath(root, activeWorkspaceProtocolKey_, elfStaticAddressPath_);
         storeWaveProtocolState(root, activeWorkspaceProtocolKey_, application_.docks().waveState());
         writeSendHistoryNode(
             protocolNode, application_.docks().sendState(), configuredSendHistoryLimit(application_.captureConfig()));

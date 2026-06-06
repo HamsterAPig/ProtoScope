@@ -577,6 +577,28 @@ void test_application_refreshes_selected_elf_symbol_controls_with_on_control()
     application.shutdown();
 }
 
+void test_application_clear_elf_static_address_file_resets_queries()
+{
+    const auto tempDir = makeUniqueTempDir("protoscope-elf-clear-app");
+    const auto elfPath = tempDir / "symbols.json";
+    writeElfSymbolDump(elfPath, 0x20000010ULL, "uint32_t");
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    std::string error;
+    require(application.loadElfStaticAddressFile(elfPath, error), "初始 ELF 数据应可加载");
+    require(!application.queryElfStaticAddresses("target", 16).empty(), "加载后应可查询 ELF 符号");
+    const auto loadedRevision = application.elfStaticAddressRevision();
+
+    application.clearElfStaticAddressFile();
+
+    require(application.queryElfStaticAddresses("target", 16).empty(), "清理后查询结果应为空");
+    require(application.elfStaticAddressRevision() > loadedRevision, "清理已加载模型应推进 ELF revision");
+
+    application.shutdown();
+    std::filesystem::remove_all(tempDir);
+}
+
 void test_application_failed_protocol_reload_keeps_previous_runtime()
 {
     protoscope::app::Application application;

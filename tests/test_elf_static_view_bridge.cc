@@ -331,3 +331,27 @@ void test_elf_static_view_bridge_keeps_old_model_on_load_failure()
     std::filesystem::remove(path);
     std::filesystem::remove(invalidPath);
 }
+
+void test_elf_static_view_bridge_clear_resets_loaded_model()
+{
+    const auto path = makeUniqueTempFile("protoscope-elf-clear");
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << elf_static_view::render_dump_json(sampleProjectModel());
+    }
+
+    protoscope::plugin::ElfStaticViewBridge bridge;
+    std::string error;
+    require(bridge.loadFile(path, error), "桥接层应能加载有效模型");
+    require(bridge.loaded(), "加载成功后 bridge 应标记为 loaded");
+    require(!bridge.sourcePath().empty(), "加载成功后 sourcePath 不应为空");
+    require(!bridge.query("counter", 64).empty(), "加载成功后应能查询符号");
+
+    bridge.clear();
+
+    require(!bridge.loaded(), "clear 后 bridge 不应继续标记为 loaded");
+    require(bridge.sourcePath().empty(), "clear 后 sourcePath 应清空");
+    require(bridge.query("counter", 64).empty(), "clear 后查询结果应为空");
+
+    std::filesystem::remove(path);
+}

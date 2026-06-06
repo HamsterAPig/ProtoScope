@@ -157,6 +157,11 @@ private:
                                                       const dock::LogFilterState& filter,
                                                       bool includeBytePreview);
     void loadElfStaticAddressFromPath(const std::filesystem::path& path);
+    bool loadElfStaticAddressFromPath(const std::filesystem::path& path,
+                                      bool clearLoadedContextOnFailure,
+                                      bool saveProtocolStateOnSuccess);
+    void clearElfStaticAddressContext(bool clearDialogPath);
+    void restoreElfStaticAddressForCurrentProtocol(const std::string& savedPath);
     void drawElfStaticAddressDialog();
     void refreshWindowTitle();
     void requestAboutDialog();

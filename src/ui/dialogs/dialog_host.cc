@@ -654,17 +654,31 @@ bool GuiRuntime::exportLogRowsToPath(const std::filesystem::path& path,
 
 void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
 {
+    static_cast<void>(loadElfStaticAddressFromPath(path, false, true));
+}
+
+bool GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path,
+                                              bool clearLoadedContextOnFailure,
+                                              bool saveProtocolStateOnSuccess)
+{
     // 核心流程：加载成功后清空符号下拉缓存，让 Lua 控件基于新模型重新查询。
-    elfStaticAddressPath_ = path.generic_string();
+    std::error_code absoluteError;
+    const auto resolvedPath = std::filesystem::absolute(path, absoluteError);
+    const auto loadPath = absoluteError ? path : resolvedPath;
     std::string error;
-    if (!application_.loadElfStaticAddressFile(path, error)) {
+    if (!application_.loadElfStaticAddressFile(loadPath, error)) {
         elfStaticAddressError_ = error;
         application_.setStatusMessage("ELF/ElfStaticView 数据文件加载失败: " + error);
-        return;
+        if (clearLoadedContextOnFailure) {
+            clearElfStaticAddressContext(false);
+            elfStaticAddressError_ = error;
+        }
+        return false;
     }
+    elfStaticAddressPath_ = loadPath.generic_string();
     std::error_code watchError;
-    const bool exists = std::filesystem::exists(path, watchError);
-    elfStaticAddressWatch_.path = path;
+    const bool exists = std::filesystem::exists(loadPath, watchError);
+    elfStaticAddressWatch_.path = loadPath;
     elfStaticAddressWatch_.watching = true;
     elfStaticAddressWatch_.lastExists = exists && !watchError;
     elfStaticAddressWatch_.lastPollAtMs = 0;
@@ -672,12 +686,12 @@ void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
     elfStaticAddressWatch_.pendingReloadSinceMs = 0;
     elfStaticAddressWatch_.pendingStatusMessage.clear();
     if (elfStaticAddressWatch_.lastExists) {
-        const auto lastWriteTime = std::filesystem::last_write_time(path, watchError);
+        const auto lastWriteTime = std::filesystem::last_write_time(loadPath, watchError);
         if (!watchError) {
             elfStaticAddressWatch_.lastWriteTimeNs = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(lastWriteTime.time_since_epoch()).count());
         }
-        const auto fileSize = std::filesystem::file_size(path, watchError);
+        const auto fileSize = std::filesystem::file_size(loadPath, watchError);
         if (!watchError) {
             elfStaticAddressWatch_.fileSize = fileSize;
         }
@@ -686,6 +700,34 @@ void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
     elfStaticAddressDialogOpen_ = false;
     elfStaticAddressDialogOpened_ = false;
     elfStaticAddressError_.clear();
+    if (saveProtocolStateOnSuccess && protocolWorkspaceLoaded_ && !activeWorkspaceProtocolKey_.empty()) {
+        saveCurrentProtocolControlState();
+    }
+    return true;
+}
+
+void GuiRuntime::clearElfStaticAddressContext(bool clearDialogPath)
+{
+    // 核心流程：协议没有绑定 ELF 时必须清掉已加载模型和候选缓存，避免符号下拉串用上一个 Lua。
+    application_.clearElfStaticAddressFile();
+    elfStaticAddressWatch_ = ElfStaticAddressFileWatchState{};
+    elfSymbolComboStates_.clear();
+    elfStaticAddressError_.clear();
+    if (clearDialogPath) {
+        elfStaticAddressPath_.clear();
+    }
+}
+
+void GuiRuntime::restoreElfStaticAddressForCurrentProtocol(const std::string& savedPath)
+{
+    if (savedPath.empty()) {
+        clearElfStaticAddressContext(true);
+        return;
+    }
+
+    // 核心流程：自动恢复失败时保留 YAML 路径作为下次对话框默认值，但清空旧模型防止跨 Lua 泄漏。
+    elfStaticAddressPath_ = savedPath;
+    static_cast<void>(loadElfStaticAddressFromPath(std::filesystem::path(savedPath), true, false));
 }
 
 void GuiRuntime::drawElfStaticAddressDialog()

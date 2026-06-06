@@ -1,6 +1,7 @@
 #include "protoscope/ui/protocol_ui_state.hpp"
 
 #include <algorithm>
+#include <string>
 
 #include <yaml-cpp/yaml.h>
 
@@ -555,6 +556,44 @@ void storeWaveProtocolState(YAML::Node& root, std::string_view protocolKey, cons
 void restoreWaveProtocolState(const YAML::Node& root, std::string_view protocolKey, plot::WaveDockState& wave)
 {
     decodeWaveProtocolState(root["protocols"][std::string(protocolKey)]["wave"], wave);
+}
+
+YAML::Node encodeElfStaticAddressState(std::string_view path)
+{
+    YAML::Node node;
+    node["path"] = std::string(path);
+    return node;
+}
+
+std::string decodeElfStaticAddressPath(const YAML::Node& node)
+{
+    if (!node || !node.IsMap()) {
+        return {};
+    }
+    return node["path"].as<std::string>("");
+}
+
+void storeElfStaticAddressPath(YAML::Node& root, std::string_view protocolKey, std::string_view path)
+{
+    auto protocolNode = root["protocols"][std::string(protocolKey)];
+    if (path.empty()) {
+        protocolNode.remove("elf_static_address");
+        return;
+    }
+    protocolNode["elf_static_address"] = encodeElfStaticAddressState(path);
+}
+
+std::string restoreElfStaticAddressPath(const YAML::Node& root, std::string_view protocolKey)
+{
+    const auto protocolsNode = root["protocols"];
+    if (!protocolsNode || !protocolsNode.IsMap()) {
+        return {};
+    }
+    const auto protocolNode = protocolsNode[std::string(protocolKey)];
+    if (!protocolNode || !protocolNode.IsMap()) {
+        return {};
+    }
+    return decodeElfStaticAddressPath(protocolNode["elf_static_address"]);
 }
 
 YAML::Node encodeDockVisibilityState(const ProtocolDockVisibilityState& state)

@@ -154,6 +154,13 @@ bool ElfStaticViewBridge::loadFile(const std::filesystem::path& path, std::strin
     }
 }
 
+void ElfStaticViewBridge::clear()
+{
+    impl_->model.reset();
+    impl_->session.reset();
+    impl_->sourcePath.clear();
+}
+
 std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryText, std::size_t limit) const
 {
     if (!impl_->session || limit == 0) {

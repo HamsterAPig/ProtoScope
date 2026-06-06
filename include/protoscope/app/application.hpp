@@ -54,6 +54,7 @@ public:
     [[nodiscard]] std::uint64_t rawCaptureRecordingBytes() const;
     void resetWaveHistory();
     bool loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error);
+    void clearElfStaticAddressFile();
     [[nodiscard]] std::uint64_t elfStaticAddressRevision() const;
     [[nodiscard]] std::vector<scripting::ElfSymbolValue> queryElfStaticAddresses(const std::string& queryText,
                                                                                  std::size_t limit) const;

@@ -1305,6 +1305,15 @@ bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, st
     return true;
 }
 
+void Application::clearElfStaticAddressFile()
+{
+    const bool hadLoadedContext = elfStaticView_.loaded() || !elfStaticView_.sourcePath().empty();
+    elfStaticView_.clear();
+    if (hadLoadedContext) {
+        ++elfStaticAddressRevision_;
+    }
+}
+
 std::uint64_t Application::elfStaticAddressRevision() const
 {
     return elfStaticAddressRevision_;

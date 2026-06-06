@@ -1,4 +1,5 @@
 #include "protoscope/ui/protocol_state_file.hpp"
+#include "protoscope/ui/protocol_ui_state.hpp"
 
 #include "test_registry.hpp"
 
@@ -95,6 +96,27 @@ void test_protocol_state_file_preserves_other_protocol_nodes()
     require(parsed["protocols"]["proto_b"].IsDefined(), "合并写入应新增当前协议节点");
 
     std::filesystem::remove_all(root);
+}
+
+void test_protocol_state_file_roundtrips_elf_path_per_protocol()
+{
+    YAML::Node root;
+
+    protoscope::ui::storeElfStaticAddressPath(root, "proto_a", "D:/symbols/a.elf");
+    protoscope::ui::storeElfStaticAddressPath(root, "proto_b", "D:/symbols/b.elf");
+
+    require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_a") == "D:/symbols/a.elf",
+            "proto_a 应恢复自己的 ELF 路径");
+    require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_b") == "D:/symbols/b.elf",
+            "proto_b 应恢复自己的 ELF 路径");
+    require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_c").empty(),
+            "没有保存路径的协议应返回空路径");
+
+    protoscope::ui::storeElfStaticAddressPath(root, "proto_a", "");
+    require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_a").empty(),
+            "保存空路径应移除当前协议的 ELF 状态");
+    require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_b") == "D:/symbols/b.elf",
+            "清空 proto_a 不应影响 proto_b 的 ELF 状态");
 }
 
 void test_protocol_state_file_replace_failure_keeps_target()
