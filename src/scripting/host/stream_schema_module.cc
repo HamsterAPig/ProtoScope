@@ -124,7 +124,10 @@ sol::table makeStreamFieldsTable(sol::state_view lua, const StreamFieldMap& fiel
     return table;
 }
 
-sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& frame, bool includeRaw)
+sol::table makeStreamFrameTable(sol::state_view lua,
+                                const StreamParsedFrame& frame,
+                                bool includeRaw,
+                                bool includeFieldAliases)
 {
     sol::table table = lua.create_table(0, static_cast<int>(frame.fields.size() + 4));
     table["name"] = frame.name;
@@ -144,16 +147,21 @@ sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& fr
     for (const auto& [name, value] : frame.fields) {
         const auto luaValue = streamFieldValueToLua(lua, value);
         fields[name] = luaValue;
-        table[name] = luaValue;
+        if (includeFieldAliases) {
+            table[name] = luaValue;
+        }
     }
     return table;
 }
 
-sol::table makeStreamFrameArrayTable(sol::state_view lua, const std::vector<StreamParsedFrame>& frames, bool includeRaw)
+sol::table makeStreamFrameArrayTable(sol::state_view lua,
+                                     const std::vector<StreamParsedFrame>& frames,
+                                     bool includeRaw,
+                                     bool includeFieldAliases)
 {
     sol::table table = lua.create_table(static_cast<int>(frames.size()), 0);
     for (std::size_t index = 0; index < frames.size(); ++index) {
-        table[index + 1] = makeStreamFrameTable(lua, frames[index], includeRaw);
+        table[index + 1] = makeStreamFrameTable(lua, frames[index], includeRaw, includeFieldAliases);
     }
     return table;
 }
@@ -466,6 +474,17 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
             loaded->includeRawFrames = false;
         } else if (*rawOutput != "full") {
             error = "stream.raw_output 必须是 'full' 或 'omit'";
+            return nullptr;
+        }
+    }
+    if (const auto lowOverhead = luaBoolField(schemaTable, "low_overhead"); lowOverhead.has_value()) {
+        loaded->lowOverhead = *lowOverhead;
+    }
+    if (const auto fieldOutput = luaStringField(schemaTable, "field_output"); fieldOutput.has_value()) {
+        if (*fieldOutput == "fields_only") {
+            loaded->includeFieldAliases = false;
+        } else if (*fieldOutput != "compat") {
+            error = "stream.field_output 必须是 'compat' 或 'fields_only'";
             return nullptr;
         }
     }

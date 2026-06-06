@@ -82,6 +82,23 @@ double elapsedMilliseconds(std::chrono::steady_clock::time_point start, std::chr
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
+StreamParseBatch makeStreamParseBatchSnapshot(const StreamParseBatch& batch, bool lowOverhead)
+{
+    if (!lowOverhead) {
+        return batch;
+    }
+
+    StreamParseBatch snapshot;
+    snapshot.errors = batch.errors;
+    snapshot.bufferSize = batch.bufferSize;
+    snapshot.bufferCapacity = batch.bufferCapacity;
+    snapshot.nearOverflow = batch.nearOverflow;
+    snapshot.overflowed = batch.overflowed;
+    snapshot.droppedBytes = batch.droppedBytes;
+    // 核心流程：低开销模式的实时回调仍使用完整 batch，本地调试快照只保留摘要与错误，避免成功帧大 raw/字段重复常驻。
+    return snapshot;
+}
+
 std::string kindName(transport::TransportKind kind)
 {
     return std::string(transport::transportKindId(kind));
@@ -1632,8 +1649,11 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
     }
     if (runtime_->stream) {
         const auto parserStartedAt = std::chrono::steady_clock::now();
-        const auto batch = runtime_->stream->parser.pushBytes(event.bytes);
-        runtime_->stream->lastBatch = batch;
+        const StreamParseOptions parseOptions{
+            .includeFrameRaw = runtime_->stream->includeRawFrames || !runtime_->stream->lowOverhead,
+        };
+        const auto batch = runtime_->stream->parser.pushBytes(event.bytes, parseOptions);
+        runtime_->stream->lastBatch = makeStreamParseBatchSnapshot(batch, runtime_->stream->lowOverhead);
         const auto parserFinishedAt = std::chrono::steady_clock::now();
         lastTransportStats_.streamFrames = batch.frames.size();
         lastTransportStats_.streamErrors = batch.errors.size();

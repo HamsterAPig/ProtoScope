@@ -124,7 +124,10 @@ bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::
         sol::state_view view(runtime_->lua.lua_state());
         auto callback = callbackIter->second;
         auto result = callback(makeContextTable(view, ctx.connection),
-                               makeStreamFrameArrayTable(view, frames, runtime_->stream->includeRawFrames));
+                               makeStreamFrameArrayTable(view,
+                                                         frames,
+                                                         runtime_->stream->includeRawFrames,
+                                                         runtime_->stream->includeFieldAliases));
         if (!result.valid()) {
             protoLog("error", "stream.on_batch 执行失败: " + protectedCallError(result));
         }
@@ -156,7 +159,10 @@ void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const Strea
         sol::state_view view(runtime_->lua.lua_state());
         auto callback = callbackIter->second;
         auto result = callback(makeContextTable(view, ctx.connection),
-                               makeStreamFrameTable(view, frame, runtime_->stream->includeRawFrames));
+                               makeStreamFrameTable(view,
+                                                    frame,
+                                                    runtime_->stream->includeRawFrames,
+                                                    runtime_->stream->includeFieldAliases));
         if (!result.valid()) {
             protoLog("error", "stream.on_frame 执行失败: " + protectedCallError(result));
         }

@@ -208,6 +208,10 @@ struct StreamParseBatch {
     std::size_t droppedBytes{0};
 };
 
+struct StreamParseOptions {
+    bool includeFrameRaw{true};
+};
+
 class FrameStreamParser {
 public:
     FrameStreamParser(StreamBufferDefinition buffer, std::vector<StreamFrameDefinition> frames);
@@ -218,7 +222,8 @@ public:
     void clearRuntimeProfiles();
     bool setRuntimeProfile(const std::string& frameName, StreamRuntimeProfile profile, std::string& error);
     bool clearRuntimeProfile(const std::optional<std::string>& frameName, std::string& error);
-    StreamParseBatch pushBytes(const std::vector<std::uint8_t>& bytes);
+    StreamParseBatch pushBytes(const std::vector<std::uint8_t>& bytes,
+                               const StreamParseOptions& options = StreamParseOptions{});
 
 private:
     struct CompiledFrame {
@@ -249,7 +254,9 @@ private:
 
     [[nodiscard]] std::size_t maxHeaderLength() const;
     [[nodiscard]] std::optional<CandidateMatch> findCandidate() const;
-    AnalyzeResult analyzeFrame(const CompiledFrame& compiled, const ByteRingBuffer::LinearReadView& window) const;
+    AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
+                               const ByteRingBuffer::LinearReadView& window,
+                               const StreamParseOptions& options) const;
     [[nodiscard]] bool applyRuntimeChannelMap(const StreamFrameDefinition& definition,
                                               StreamParsedFrame& frame,
                                               std::string& error) const;

@@ -26,6 +26,7 @@ local M = {}
 ---@alias ProtoStreamCrcOrder 'hi_lo'|'lo_hi'
 ---@alias ProtoStreamCrcType 'crc16_modbus'|'crc16_ccitt_false'|'crc32_ieee'
 ---@alias ProtoStreamRawOutputMode 'full'|'omit' @full 兼容旧脚本；omit 可减少 frame.raw 展开成本。
+---@alias ProtoStreamFieldOutputMode 'compat'|'fields_only' @compat 保留顶层字段别名；fields_only 只写 frame.fields。
 ---@alias ProtoStreamFieldCount integer|string|ProtoStreamCountExpression
 
 ---@class ProtoStreamCountExpression
@@ -81,6 +82,8 @@ local M = {}
 ---@field buffer? ProtoStreamBufferDef
 ---@field frames ProtoStreamFrameDef[]
 ---@field raw_output? ProtoStreamRawOutputMode 是否向 Lua frame 暴露 raw；默认 full 兼容旧脚本。
+---@field low_overhead? boolean 低开销模式；与 `raw_output = "omit"` 配合时，成功帧不再保留大 raw 到实时解析快照。
+---@field field_output? ProtoStreamFieldOutputMode 字段输出模式；默认 compat 同时写 `frame.fields.xxx` 和 `frame.xxx`，`fields_only` 只写 `frame.fields`。
 ---@field on_batch? fun(ctx: ProtoConnectionContext, frames: ProtoStreamFrame[]) 完整有效帧批量回调；定义后优先于各 frame 的 `on_frame`
 ---@field on_error? fun(ctx: ProtoConnectionContext, err: ProtoStreamError)
 
@@ -89,7 +92,7 @@ local M = {}
 
 ---@class ProtoStreamFrame
 ---@field name string 帧名称
----@field raw ProtoBytes 原始完整帧
+---@field raw? ProtoBytes 原始完整帧；`raw_output = "omit"` 时不提供
 ---@field fields table<string, any> 已解码字段表
 ---@field crc_ok boolean CRC 是否通过；未启用 CRC 时也为 true
 ---@field channel_map? integer[] 当前帧生效的业务通道映射，Lua 侧使用 1-based 编号

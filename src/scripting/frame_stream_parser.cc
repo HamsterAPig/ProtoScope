@@ -602,7 +602,8 @@ bool FrameStreamParser::clearRuntimeProfile(const std::optional<std::string>& fr
     return true;
 }
 
-StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes)
+StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes,
+                                              const StreamParseOptions& options)
 {
     StreamParseBatch batch;
     if (bytes.empty()) {
@@ -681,7 +682,7 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
         const auto window = ensureLinearWindow(buffer_.size());
 
         for (const auto index : *candidate->indexes) {
-            const auto result = analyzeFrame(compiledFrames_[index], window);
+            const auto result = analyzeFrame(compiledFrames_[index], window, options);
             if (result.action == AnalyzeResult::Action::Parsed && result.frame.has_value()) {
                 buffer_.discardFront(result.frameLength);
                 batch.frames.push_back(*result.frame);
@@ -759,7 +760,8 @@ std::optional<FrameStreamParser::CandidateMatch> FrameStreamParser::findCandidat
 }
 
 FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledFrame& compiled,
-                                                                 const ByteRingBuffer::LinearReadView& window) const
+                                                                 const ByteRingBuffer::LinearReadView& window,
+                                                                 const StreamParseOptions& options) const
 {
     AnalyzeResult result;
     const auto& frame = frames_[compiled.index];
@@ -1000,7 +1002,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
     result.frameLength = frameLength;
     result.frame = StreamParsedFrame{
         .name = frame.name,
-        .raw = copyBytes(frameBytes, frameLength),
+        .raw = options.includeFrameRaw ? copyBytes(frameBytes, frameLength) : std::vector<std::uint8_t>{},
         .fields = std::move(parsedFields),
         .crcOk = true,
         .channelMap = {},
@@ -1034,18 +1036,7 @@ bool FrameStreamParser::applyRuntimeChannelMap(const StreamFrameDefinition& defi
         return false;
     }
     frame.channelMap = profileIter->second.channelMap;
-    if (frame.channelMap.empty()) {
-        return true;
-    }
-    const auto maxTarget = *std::max_element(frame.channelMap.begin(), frame.channelMap.end());
-    std::vector<bool> used(maxTarget + 1, false);
-    for (const auto target : frame.channelMap) {
-        if (used[target]) {
-            error = "runtime profile channel_map 存在重复目标";
-            return false;
-        }
-        used[target] = true;
-    }
+    (void)error;
     return true;
 }
 

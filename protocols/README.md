@@ -251,6 +251,8 @@ local schema = {
     capacity = 4096,
     max_capacity = 268435456,
   },
+  raw_output = "omit",
+  low_overhead = true,
   frames = {
     {
       name = "fc06_ack",
@@ -291,12 +293,16 @@ return schema
 - `on_frame`：完整有效帧回调；未定义 `on_batch` 时必填。
 - `on_batch`：完整有效帧批量回调，`frames` 中每项保持旧 `on_frame` 的 frame 结构；若同时定义 `on_batch` 与 `on_frame`，宿主只调用 `on_batch`。
 - `on_error`：解析错误回调。
+- `raw_output`：默认 `full` 会向 Lua 暴露 `frame.raw`；高速连续采样建议写 `omit`，避免逐字节展开 raw。
+- `low_overhead`：默认 `false` 保持调试快照兼容；高速场景可与 `raw_output = "omit"` 配合，成功帧不保留到 `lastStreamParseBatch()`。
+- `field_output`：默认 `compat` 同时写 `frame.fields.xxx` 和 `frame.xxx`；高频回调可写 `fields_only`，只保留 `frame.fields`。
 
 补充约定：
 
 - Lua `buffer.capacity` 是初始环形缓冲容量；默认不丢弃，容量不足时会在 `buffer.max_capacity`（默认 256MiB）内自动扩容。
 - 只有显式写 `overflow = "drop_oldest"` 时，parser 才会在容量超限时丢弃最旧字节。
 - 宿主 YAML `receive.stream_buffer.near_overflow_threshold` 与 `receive.stream_buffer.popup_enabled` 只控制“接近溢出”告警阈值和弹窗，不会改写协议 schema 的缓冲容量。
+- 高速协议推荐组合：`on_batch` + `raw_output = "omit"` + `low_overhead = true`；如果脚本只读 `frame.fields`，可进一步加 `field_output = "fields_only"`。
 
 ### 运行时长度 / 通道映射
 

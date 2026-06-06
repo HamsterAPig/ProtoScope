@@ -430,6 +430,18 @@ void test_frame_stream_parser_crc_frame_across_chunks()
     require(second.frames[0].raw == frame, "CRC 帧跨 chunk 后 raw 应保持一致");
 }
 
+void test_frame_stream_parser_can_omit_success_frame_raw()
+{
+    auto parser = makeDynamicParser(64);
+    const auto frame = makeDynamicFrame({0x02, 0x10, 0x11});
+
+    const auto batch = parser.pushBytes(frame, protoscope::scripting::StreamParseOptions{.includeFrameRaw = false});
+    require(batch.errors.empty(), "省略成功帧 raw 不应影响解析结果");
+    require(batch.frames.size() == 1, "省略成功帧 raw 后仍应产出 frame");
+    require(batch.frames[0].raw.empty(), "includeFrameRaw=false 时成功帧 raw 应为空");
+    require(batch.frames[0].fields.find("values") != batch.frames[0].fields.end(), "省略 raw 不应影响字段解析");
+}
+
 void test_frame_stream_parser_overflow_keeps_latest_crc_window()
 {
     auto parser = makeDynamicParser(16);

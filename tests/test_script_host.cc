@@ -881,6 +881,119 @@ end
     require(found, "raw_output=omit 应触发 stream frame 回调");
 }
 
+void test_script_stream_low_overhead_keeps_fields_and_trims_last_batch()
+{
+    const auto protocolDir = makeUniqueTempDir("protoscope-stream-low-overhead");
+    {
+        std::ofstream script(protocolDir / "main.lua");
+        script << R"lua(
+local function on_stream_frame(ctx, frame)
+    proto.emit("stream_low_overhead", {
+        raw_present = frame.raw ~= nil,
+        value = frame.fields.value,
+        top_value = frame.value,
+    })
+end
+
+function stream()
+    return {
+        raw_output = "omit",
+        low_overhead = true,
+        buffer = {
+            capacity = 16,
+            overflow = "drop_oldest",
+        },
+        frames = {
+            {
+                name = "stream_sample",
+                header = { 0xAA, 0x55 },
+                len = { offset = 3, type = "u8", means = "payload", extra = 5 },
+                crc = { type = "crc16_modbus", order = "lo_hi" },
+                fields = {
+                    { name = "value", type = "u8", offset = 4 },
+                },
+                on_frame = on_stream_frame,
+            },
+        },
+    }
+end
+)lua";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "low_overhead 协议应可加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), makeStreamFixtureFrame(0x35)});
+
+    bool found = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "stream_low_overhead") {
+            found = true;
+            require(event.payload.find("raw_present=false") != std::string::npos, "low_overhead 不应向 Lua 暴露 raw");
+            require(event.payload.find("value=53") != std::string::npos, "low_overhead 不应影响 fields 读取");
+            require(event.payload.find("top_value=53") != std::string::npos, "默认兼容模式仍应保留顶层字段别名");
+        }
+    }
+    require(found, "low_overhead 应触发 stream frame 回调");
+
+    const auto lastBatch = host.lastStreamParseBatch();
+    require(lastBatch.has_value(), "low_overhead 后应保留解析摘要");
+    require(lastBatch->frames.empty(), "low_overhead lastBatch 不应保留成功帧字段和 raw");
+    require(lastBatch->errors.empty(), "成功解析不应产生错误");
+    require(lastBatch->bufferSize == 0, "完整帧解析后缓冲区应清空");
+}
+
+void test_script_stream_field_output_fields_only_omits_top_aliases()
+{
+    const auto protocolDir = makeUniqueTempDir("protoscope-stream-fields-only");
+    {
+        std::ofstream script(protocolDir / "main.lua");
+        script << R"lua(
+local function on_stream_frame(ctx, frame)
+    proto.emit("stream_fields_only", {
+        field_value = frame.fields.value,
+        top_present = frame.value ~= nil,
+    })
+end
+
+function stream()
+    return {
+        field_output = "fields_only",
+        buffer = {
+            capacity = 16,
+            overflow = "drop_oldest",
+        },
+        frames = {
+            {
+                name = "stream_sample",
+                header = { 0xAA, 0x55 },
+                len = { offset = 3, type = "u8", means = "payload", extra = 5 },
+                crc = { type = "crc16_modbus", order = "lo_hi" },
+                fields = {
+                    { name = "value", type = "u8", offset = 4 },
+                },
+                on_frame = on_stream_frame,
+            },
+        },
+    }
+end
+)lua";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.generic_string()), "fields_only 协议应可加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), makeStreamFixtureFrame(0x36)});
+
+    bool found = false;
+    for (const auto& event : host.drainEvents()) {
+        if (event.name == "stream_fields_only") {
+            found = true;
+            require(event.payload.find("field_value=54") != std::string::npos, "fields_only 应保留 fields 字段");
+            require(event.payload.find("top_present=false") != std::string::npos, "fields_only 不应生成顶层字段别名");
+        }
+    }
+    require(found, "fields_only 应触发 stream frame 回调");
+}
+
 void test_script_stream_schema_reload_uses_current_callbacks()
 {
     const auto protocolDir = makeUniqueTempDir("protoscope-stream-reload-callbacks");
@@ -2516,6 +2629,10 @@ static const TestCase kAllTests[] = {
     {"script_stream_schema_reports_overflow_and_crc_error", &test_script_stream_schema_reports_overflow_and_crc_error},
     {"script_stream_runtime_profile_set_and_clear", &test_script_stream_runtime_profile_set_and_clear},
     {"script_stream_raw_output_omit_skips_frame_raw", &test_script_stream_raw_output_omit_skips_frame_raw},
+    {"script_stream_low_overhead_keeps_fields_and_trims_last_batch",
+     &test_script_stream_low_overhead_keeps_fields_and_trims_last_batch},
+    {"script_stream_field_output_fields_only_omits_top_aliases",
+     &test_script_stream_field_output_fields_only_omits_top_aliases},
     {"script_stream_schema_reload_uses_current_callbacks", &test_script_stream_schema_reload_uses_current_callbacks},
     {"script_stream_schema_rejects_count_function", &test_script_stream_schema_rejects_count_function},
     {"script_stream_schema_accepts_count_expression_table", &test_script_stream_schema_accepts_count_expression_table},
@@ -2539,6 +2656,7 @@ static const TestCase kAllTests[] = {
     {"frame_stream_parser_multi_schema_large_chunk_throughput",
      &test_frame_stream_parser_multi_schema_large_chunk_throughput},
     {"frame_stream_parser_crc_frame_across_chunks", &test_frame_stream_parser_crc_frame_across_chunks},
+    {"frame_stream_parser_can_omit_success_frame_raw", &test_frame_stream_parser_can_omit_success_frame_raw},
     {"frame_stream_parser_overflow_keeps_latest_crc_window",
      &test_frame_stream_parser_overflow_keeps_latest_crc_window},
     {"frame_stream_parser_runtime_profile_length_and_channel_map",
