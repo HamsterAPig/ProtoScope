@@ -115,6 +115,8 @@ struct GuiRealtimeBacklogConfig {
 struct GuiElfSymbolComboConfig {
     std::size_t limit{10};
     int debounceMs{300};
+    bool autoRefreshSelectedAddress{true};
+    bool autoRefreshEmitOnControl{false};
 };
 
 struct GuiConfig {

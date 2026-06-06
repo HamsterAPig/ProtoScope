@@ -126,6 +126,30 @@ void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols()
     std::filesystem::remove(path);
 }
 
+void test_elf_static_view_bridge_finds_exact_label_only()
+{
+    const auto path = makeUniqueTempFile("protoscope-elf-static-view-exact-label");
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << elf_static_view::render_dump_json(sampleProjectModel());
+    }
+
+    protoscope::plugin::ElfStaticViewBridge bridge;
+    std::string error;
+    require(bridge.loadFile(path, error), "桥接层应能加载精确 label 测试模型");
+
+    const auto exact = bridge.findExactLabel("global.counter");
+    require(exact.has_value(), "完整 label 应能精确查到");
+    require(exact->label == "global.counter", "精确查找应保留完整 label");
+    require(exact->value == "0x20000010", "精确查找应返回地址");
+    require(exact->type == "uint32_t", "精确查找应返回类型");
+
+    const auto fuzzyOnly = bridge.findExactLabel("counter");
+    require(!fuzzyOnly.has_value(), "普通候选查询可模糊命中的文本不应被当作精确 label");
+
+    std::filesystem::remove(path);
+}
+
 void test_elf_static_view_bridge_queries_flattened_composite_members()
 {
     const auto path = makeUniqueTempFile("protoscope-elf-static-view-composite");

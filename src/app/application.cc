@@ -1324,6 +1324,44 @@ std::vector<scripting::ElfSymbolValue> Application::queryElfStaticAddresses(cons
     return symbols;
 }
 
+void Application::refreshSelectedElfSymbolControls()
+{
+    const auto comboConfig = runtimeConfig_.gui.elfSymbolCombo;
+    if (!comboConfig.autoRefreshSelectedAddress) {
+        return;
+    }
+
+    const auto luaSnapshot = scriptWorker_.snapshot();
+    for (const auto& control : luaSnapshot.controlStates) {
+        if (control.descriptor.type != scripting::ControlType::ElfSymbolCombo) {
+            continue;
+        }
+        const auto* current = std::get_if<scripting::ElfSymbolValue>(&control.value);
+        if (current == nullptr || current->label.empty()) {
+            continue;
+        }
+
+        const auto refreshed = elfStaticView_.findExactLabel(current->label);
+        if (!refreshed.has_value() || (refreshed->value == current->value && refreshed->type == current->type)) {
+            continue;
+        }
+
+        const scripting::ElfSymbolValue refreshedValue{
+            .label = refreshed->label,
+            .value = refreshed->value,
+            .type = refreshed->type,
+        };
+        // 核心流程：默认只同步当前控件值；显式配置后才复用 updateControlValue 触发 Lua on_control。
+        if (comboConfig.autoRefreshEmitOnControl) {
+            updateControlValue(control.descriptor.id, refreshedValue);
+        } else {
+            static_cast<void>(restoreControlValue(control.descriptor.id, refreshedValue));
+        }
+    }
+    flushScriptOutputs();
+    syncDockState();
+}
+
 void Application::resetWaveHistory()
 {
     auto& wave = dockStore_.waveState();

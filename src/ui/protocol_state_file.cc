@@ -83,6 +83,14 @@ namespace {
         return YAML::Node(YAML::NodeType::Map);
     }
 
+    std::string readFileText(const std::filesystem::path& path)
+    {
+        std::ifstream input(path, std::ios::binary);
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        return buffer.str();
+    }
+
     std::filesystem::path temporaryStatePath(const std::filesystem::path& statePath)
     {
         static std::atomic_uint counter{0};
@@ -248,7 +256,8 @@ ProtocolStateLoadResult loadProtocolStateRootForUpdate(const std::filesystem::pa
     }
 
     try {
-        result.root = YAML::LoadFile(statePath.string());
+        // 核心流程：先把状态文件读入内存并关闭句柄，再解析 YAML；解析失败后才能在 Windows 上稳定移走坏文件。
+        result.root = YAML::Load(readFileText(statePath));
         if (!result.root || !result.root.IsMap()) {
             result.root = emptyMapNode();
         }

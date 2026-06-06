@@ -560,6 +560,14 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const
             if (debounceMs > 0) {
                 result.config.gui.elfSymbolCombo.debounceMs = debounceMs;
             }
+            result.config.gui.elfSymbolCombo.autoRefreshSelectedAddress = readScalar<bool>(
+                elfSymbolCombo,
+                "auto_refresh_selected_address",
+                result.config.gui.elfSymbolCombo.autoRefreshSelectedAddress);
+            result.config.gui.elfSymbolCombo.autoRefreshEmitOnControl = readScalar<bool>(
+                elfSymbolCombo,
+                "auto_refresh_emit_on_control",
+                result.config.gui.elfSymbolCombo.autoRefreshEmitOnControl);
         }
 
         const auto protocol = root["protocol"];
@@ -812,6 +820,10 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["lua_dock_render_copy_mode"] = config.gui.luaDockRenderCopyMode;
     root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;
     root["gui"]["elf_symbol_combo"]["debounce_ms"] = config.gui.elfSymbolCombo.debounceMs;
+    root["gui"]["elf_symbol_combo"]["auto_refresh_selected_address"] =
+        config.gui.elfSymbolCombo.autoRefreshSelectedAddress;
+    root["gui"]["elf_symbol_combo"]["auto_refresh_emit_on_control"] =
+        config.gui.elfSymbolCombo.autoRefreshEmitOnControl;
 
     root["protocol"]["root_dir"] = config.protocol.rootDir;
     root["protocol"]["selected_dir"] = config.protocol.selectedDir;

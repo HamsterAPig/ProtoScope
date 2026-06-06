@@ -186,6 +186,33 @@ std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryT
     return entries;
 }
 
+std::optional<ElfStaticAddressEntry> ElfStaticViewBridge::findExactLabel(std::string label) const
+{
+    if (!impl_->session || label.empty()) {
+        return std::nullopt;
+    }
+
+    elf_static_view::StaticAddressQueryOptions options;
+    options.name_query_text = label;
+    options.only_static_known = false;
+    options.include_runtime_only = false;
+    options.flatten_composite_members = true;
+    options.max_array_elements = 65536;
+
+    // 核心流程：查询会按候选规则做模糊匹配，自动刷新必须再用 key 精确过滤，避免相似 label 误更新。
+    const auto results = impl_->session->query(options);
+    for (const auto& result : results) {
+        if (result.key == label) {
+            return ElfStaticAddressEntry{
+                .label = result.key,
+                .value = formatAddress(result.value),
+                .type = result.value_type,
+            };
+        }
+    }
+    return std::nullopt;
+}
+
 bool ElfStaticViewBridge::loaded() const
 {
     return impl_->session != nullptr;

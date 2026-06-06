@@ -17,6 +17,8 @@
 #include <thread>
 #include <vector>
 
+#include <elf_static_view/project.hpp>
+
 namespace {
 
 void require(bool condition, const char* message)
@@ -311,6 +313,61 @@ int countOpenRows(const protoscope::dock::LogDockState& logState)
     return count;
 }
 
+elf_static_view::ExpandedNode makeElfSymbolNode(std::string path, std::string typeName, std::uint64_t address)
+{
+    return elf_static_view::ExpandedNode{
+        .path = std::move(path),
+        .display_name = "target",
+        .type_name = std::move(typeName),
+        .type_id = {},
+        .type_kind = elf_static_view::TypeKind::Base,
+        .availability = elf_static_view::Availability::StaticAddressKnown,
+        .absolute_address = address,
+        .relative_offset = std::nullopt,
+        .byte_size = std::nullopt,
+        .array_count = std::nullopt,
+        .array_stride = std::nullopt,
+        .depth = 0,
+        .children_lazy = false,
+        .children = {},
+        .export_path = {},
+    };
+}
+
+void writeElfSymbolDump(const std::filesystem::path& path,
+                        std::optional<std::uint64_t> targetAddress,
+                        std::string targetType)
+{
+    elf_static_view::ProjectModel model;
+    if (targetAddress.has_value()) {
+        model.expanded.push_back(makeElfSymbolNode("global.target", std::move(targetType), *targetAddress));
+    }
+    model.expanded.push_back(makeElfSymbolNode("global.target_shadow", "uint8_t", 0x20000080ULL));
+
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output << elf_static_view::render_dump_json(model);
+}
+
+const protoscope::scripting::ElfSymbolValue* findElfSymbolControl(const protoscope::app::Application& application,
+                                                                  const std::string& id)
+{
+    const auto& controls = application.docks().luaState().controlStates;
+    const auto iter = std::find_if(controls.begin(), controls.end(), [&](const auto& control) {
+        return control.descriptor.id == id;
+    });
+    if (iter == controls.end()) {
+        return nullptr;
+    }
+    return std::get_if<protoscope::scripting::ElfSymbolValue>(&iter->value);
+}
+
+std::size_t countScriptEvents(const protoscope::dock::ScriptDockState& scriptState, const std::string& name)
+{
+    return static_cast<std::size_t>(std::count_if(scriptState.rows.begin(), scriptState.rows.end(), [&](const auto& row) {
+        return row.direction == "EVENT" && row.message.find(name + ":") != std::string::npos;
+    }));
+}
+
 } // namespace
 
 void test_application_tcp_lua_read_version_roundtrip()
@@ -435,6 +492,87 @@ void test_application_tx_overflow_popup_keeps_dialog_payload()
     require(dialog.dedupeKey == "protocol.tx.overflow", "溢出弹窗 dedupeKey 不应改变");
     require(dialog.connection.endpoint.empty(), "无活动连接时应用层溢出弹窗仍应使用默认空 endpoint");
     require(dialog.connection.connectionId == 0, "无活动连接时应用层溢出弹窗 connectionId 应为 0");
+
+    application.shutdown();
+}
+
+void test_application_refreshes_selected_elf_symbol_controls_silently()
+{
+    const auto tempDir = makeUniqueTempDir("protoscope-elf-refresh-silent");
+    const auto elfPath = tempDir / "symbols.json";
+    writeElfSymbolDump(elfPath, 0x20000010ULL, "uint32_t");
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory("tests/fixtures/protocols/elf_symbol_combo", true),
+            "elf_symbol_combo 协议应可加载");
+    std::string error;
+    require(application.loadElfStaticAddressFile(elfPath, error), "初始 ELF 数据应可加载");
+
+    application.updateControlValue("target",
+                                   protoscope::scripting::ElfSymbolValue{
+                                       .label = "global.target",
+                                       .value = "0x20000010",
+                                       .type = "uint32_t",
+                                   });
+    const auto beforeEvents = countScriptEvents(application.docks().scriptState(), "symbol");
+
+    writeElfSymbolDump(elfPath, 0x20000044ULL, "uint64_t");
+    require(application.loadElfStaticAddressFile(elfPath, error), "更新后的 ELF 数据应可加载");
+    application.refreshSelectedElfSymbolControls();
+
+    const auto* refreshed = findElfSymbolControl(application, "target");
+    require(refreshed != nullptr, "应能找到已选 ELF 控件值");
+    require(refreshed->label == "global.target", "静默刷新不应改变 label");
+    require(refreshed->value == "0x20000044", "静默刷新应更新地址");
+    require(refreshed->type == "uint64_t", "静默刷新应更新类型");
+    require(countScriptEvents(application.docks().scriptState(), "symbol") == beforeEvents,
+            "默认静默刷新不应触发 on_control");
+
+    writeElfSymbolDump(elfPath, std::nullopt, "uint32_t");
+    require(application.loadElfStaticAddressFile(elfPath, error), "缺失目标 label 的 ELF 数据应可加载");
+    application.refreshSelectedElfSymbolControls();
+    refreshed = findElfSymbolControl(application, "target");
+    require(refreshed != nullptr && refreshed->value == "0x20000044" && refreshed->type == "uint64_t",
+            "label 消失时旧地址和类型应保持不变");
+
+    application.shutdown();
+}
+
+void test_application_refreshes_selected_elf_symbol_controls_with_on_control()
+{
+    const auto tempDir = makeUniqueTempDir("protoscope-elf-refresh-emit");
+    const auto elfPath = tempDir / "symbols.json";
+    writeElfSymbolDump(elfPath, 0x20000010ULL, "uint32_t");
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    auto config = application.captureConfig();
+    config.gui.elfSymbolCombo.autoRefreshEmitOnControl = true;
+    require(application.applyConfig(config), "应用应接受 ELF 自动刷新回调配置");
+    require(application.reloadProtocolDirectory("tests/fixtures/protocols/elf_symbol_combo", true),
+            "elf_symbol_combo 协议应可加载");
+    std::string error;
+    require(application.loadElfStaticAddressFile(elfPath, error), "初始 ELF 数据应可加载");
+
+    application.updateControlValue("target",
+                                   protoscope::scripting::ElfSymbolValue{
+                                       .label = "global.target",
+                                       .value = "0x20000010",
+                                       .type = "uint32_t",
+                                   });
+    const auto beforeEvents = countScriptEvents(application.docks().scriptState(), "symbol");
+
+    writeElfSymbolDump(elfPath, 0x20000088ULL, "uint16_t");
+    require(application.loadElfStaticAddressFile(elfPath, error), "更新后的 ELF 数据应可加载");
+    application.refreshSelectedElfSymbolControls();
+
+    const auto* refreshed = findElfSymbolControl(application, "target");
+    require(refreshed != nullptr, "应能找到已选 ELF 控件值");
+    require(refreshed->value == "0x20000088", "回调刷新应更新地址");
+    require(refreshed->type == "uint16_t", "回调刷新应更新类型");
+    require(countScriptEvents(application.docks().scriptState(), "symbol") == beforeEvents + 1,
+            "开启 emit 后刷新应触发一次 on_control");
 
     application.shutdown();
 }

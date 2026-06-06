@@ -57,6 +57,7 @@ public:
     [[nodiscard]] std::uint64_t elfStaticAddressRevision() const;
     [[nodiscard]] std::vector<scripting::ElfSymbolValue> queryElfStaticAddresses(const std::string& queryText,
                                                                                  std::size_t limit) const;
+    void refreshSelectedElfSymbolControls();
     void rebuildTransferFrameRows();
     void activateParsedTransferLogView();
     logging::LoggingFacade& logger();

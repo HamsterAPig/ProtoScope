@@ -1420,6 +1420,8 @@ void test_config_default_roundtrip()
     require(config.receive.transportReadBufferBytes == 64U * 1024U, "transport 读缓冲默认应为 64KiB");
     require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
     require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
+    require(config.gui.elfSymbolCombo.autoRefreshSelectedAddress, "ELF 已选地址默认应自动刷新");
+    require(!config.gui.elfSymbolCombo.autoRefreshEmitOnControl, "ELF 已选地址默认应静默刷新");
     require(!config.gui.showAppHeader, "现代应用栏默认应关闭");
     require(config.gui.sendHistoryLimit == 20, "发送历史条数默认值应为 20");
     require(!config.gui.replayRawHistoryOnSchemaSwitch, "raw 切到 schema 默认不应回放旧历史");
@@ -1463,6 +1465,8 @@ void test_config_default_roundtrip()
     config.receive.transportReadBufferBytes = 321;
     config.gui.elfSymbolCombo.limit = 12;
     config.gui.elfSymbolCombo.debounceMs = 350;
+    config.gui.elfSymbolCombo.autoRefreshSelectedAddress = false;
+    config.gui.elfSymbolCombo.autoRefreshEmitOnControl = true;
     config.gui.showAppHeader = true;
     config.gui.sendHistoryLimit = 7;
     config.gui.replayRawHistoryOnSchemaSwitch = true;
@@ -1531,6 +1535,8 @@ void test_config_default_roundtrip()
     require(reloaded.config.receive.transportReadBufferBytes == 321, "transport 读缓冲大小 roundtrip 失败");
     require(reloaded.config.gui.elfSymbolCombo.limit == 12, "ELF 变量候选上限 roundtrip 失败");
     require(reloaded.config.gui.elfSymbolCombo.debounceMs == 350, "ELF 变量候选消抖 roundtrip 失败");
+    require(!reloaded.config.gui.elfSymbolCombo.autoRefreshSelectedAddress, "ELF 已选地址自动刷新开关 roundtrip 失败");
+    require(reloaded.config.gui.elfSymbolCombo.autoRefreshEmitOnControl, "ELF 自动刷新回调开关 roundtrip 失败");
     require(reloaded.config.gui.showAppHeader, "现代应用栏开关 roundtrip 失败");
     require(reloaded.config.gui.sendHistoryLimit == 7, "发送历史条数 roundtrip 失败");
     require(reloaded.config.gui.replayRawHistoryOnSchemaSwitch, "raw 切到 schema 回放开关 roundtrip 失败");
@@ -2611,6 +2617,10 @@ static const TestCase kAllTests[] = {
     {"application_wave_legend_visibility_config_roundtrip", &test_application_wave_legend_visibility_config_roundtrip},
     {"application_wave_zoom_selection_auto_exit_config_roundtrip",
      &test_application_wave_zoom_selection_auto_exit_config_roundtrip},
+    {"application_refreshes_selected_elf_symbol_controls_silently",
+     &test_application_refreshes_selected_elf_symbol_controls_silently},
+    {"application_refreshes_selected_elf_symbol_controls_with_on_control",
+     &test_application_refreshes_selected_elf_symbol_controls_with_on_control},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
     {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
@@ -2714,6 +2724,7 @@ static const TestCase kAllTests[] = {
     {"raw_capture_file_rejects_profile_set_without_length", &test_raw_capture_file_rejects_profile_set_without_length},
     {"elf_static_view_bridge_loads_dump_json_and_queries_symbols",
      &test_elf_static_view_bridge_loads_dump_json_and_queries_symbols},
+    {"elf_static_view_bridge_finds_exact_label_only", &test_elf_static_view_bridge_finds_exact_label_only},
     {"elf_static_view_bridge_queries_flattened_composite_members",
      &test_elf_static_view_bridge_queries_flattened_composite_members},
     {"elf_static_view_bridge_loads_private_binary_without_extension",

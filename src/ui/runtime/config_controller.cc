@@ -54,6 +54,7 @@ bool GuiRuntime::pollElfStaticAddressFileChanges()
         application_.setStatusMessage(elfStaticAddressWatch_.pendingStatusMessage + ": " + loadError, true);
         return true;
     }
+    application_.refreshSelectedElfSymbolControls();
     if (result.clearComboCache) {
         elfSymbolComboStates_.clear();
     }

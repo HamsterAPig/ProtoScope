@@ -59,6 +59,8 @@ gui:
   elf_symbol_combo:
     limit: 10
     debounce_ms: 300
+    auto_refresh_selected_address: true
+    auto_refresh_emit_on_control: false
   send_history_limit: 20
   lua_dock_layout_debug: false
 
