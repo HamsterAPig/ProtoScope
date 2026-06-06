@@ -70,6 +70,12 @@ protocols/
 - `proto.send(data)`
   - 发送数据到当前连接
   - 支持 `number[]`，也支持 HEX 字符串
+- `proto.request(data, opts?)`
+  - 半双工请求，适合需要等待完整应答的场景
+  - `opts.timeout_ms` 可覆盖等待超时，`opts.tag` 便于标记业务
+- `proto.request_guarded(data, opts?)`
+  - 受保护半双工请求，`opts.max_attempts` 只统计当前这一次请求
+  - 当前 guarded 请求全部尝试失败后会熔断后续 guarded 请求；`proto.reset_request_guard()` 可显式恢复
 - `proto.emit(name, payload)`
   - 向主程序事件面板发出业务事件
   - `payload` 可为字符串、数字、布尔值或 table

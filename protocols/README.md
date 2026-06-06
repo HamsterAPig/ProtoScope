@@ -157,9 +157,20 @@ layout = {
 
 - `proto.send(payload, opts?)`：普通异步发送。适合从机 ACK、主动上报、广播或不需要宿主排队等待的报文。
 - `proto.request(payload, opts?)`：半双工请求。宿主负责排队、串行下发、超时、取消，以及前一条完成后的自动推进。
+- `proto.request_guarded(payload, opts?)`：受保护半双工请求。只有这个接口参与 guarded 超时重试和熔断；普通 `proto.request()` / `proto.send()` 不读取 guarded 状态。
+- `proto.reset_request_guard()`：显式解除 guarded 熔断，让新的 guarded 请求从 `attempt=1` 重新开始。
 - `proto.request_done(result?)`：脚本在确认收到完整业务应答后调用；不需要传 `request_id`。
 
-Lua 脚本保持传输无关：无论底层是 TCP、串口还是 UDP Peer，协议脚本都只处理 bytes、`ctx` 和 `proto.send/request`。如确实需要展示当前通讯来源，可读取 `ctx.kind`，取值为 `tcp_client`、`tcp_server`、`serial` 或 `udp_peer`。
+`proto.request(payload, opts?)` 的 `opts` 目前支持：
+
+- `timeout_ms`：等待 `request_done` 的超时时间。
+- `tag`：业务标签，便于日志和 `on_tx` 识别。
+
+`proto.request_guarded(payload, opts?)` 额外支持：
+
+- `max_attempts`：当前这一次 request 的最大尝试次数，最小值按 `1` 处理，空值默认 `1`。例如 `max_attempts = 3` 表示首发 1 次，超时后最多再重发 2 次。
+
+Lua 脚本保持传输无关：无论底层是 TCP、串口还是 UDP Peer，协议脚本都只处理 bytes、`ctx` 和 `proto.send/request/request_guarded`。如确实需要展示当前通讯来源，可读取 `ctx.kind`，取值为 `tcp_client`、`tcp_server`、`serial` 或 `udp_peer`。
 
 最小示例：
 
@@ -167,9 +178,10 @@ Lua 脚本保持传输无关：无论底层是 TCP、串口还是 UDP Peer，协
 local pending = {}
 local active_request_id = nil
 
-local request_id, err = proto.request({ 0xAA, 0x55, 0x01, 0x0D }, {
+local request_id, err = proto.request_guarded({ 0xAA, 0x55, 0x01, 0x0D }, {
   timeout_ms = 1000,
   tag = "read_version",
+  max_attempts = 3,
 })
 
 if request_id then
@@ -205,6 +217,10 @@ end
 ---@field queued_ms integer
 ---@field finished_ms integer
 ---@field error? string
+---@field guarded? boolean
+---@field attempt? integer
+---@field max_attempts? integer
+---@field guard_state? 'active'|'retrying'|'halted'|'reset'
 ```
 
 其中：
@@ -212,6 +228,9 @@ end
 - `sent`：字节已经写出。
 - `completed`：仅 `request` 在 `proto.request_done()` 之后触发。
 - `timeout` / `rejected` / `dropped` / `canceled`：都属于宿主终态。
+- `guard_state="retrying"`：当前 guarded request 的本次 attempt 超时，宿主会把下一次 attempt 放回队首。
+- `guard_state="halted"`：当前 guarded request 已最终失败，后续 guarded request 会被拒绝发送。
+- `guard_state="reset"`：脚本调用 `proto.reset_request_guard()` 后的恢复事件。
 
 推荐做法：
 

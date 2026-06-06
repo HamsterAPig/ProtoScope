@@ -247,6 +247,8 @@ scripting:
 
 - `proto.send(payload, opts?)`：普通异步发送。
 - `proto.request(payload, opts?)`：半双工请求，由宿主管理排队、超时和串行发送。
+- `proto.request_guarded(payload, opts?)`：受保护半双工请求，`max_attempts` 只统计当前请求；最终失败后熔断后续 guarded 请求。
+- `proto.reset_request_guard()`：解除 guarded 熔断，新的 guarded 请求从 `attempt=1` 重新开始。
 - `proto.request_done(result?)`：脚本确认当前请求已经收到完整业务应答。
 - `proto.emit(name, payload)`：输出脚本事件。
 - `proto.set_timer(name, interval_ms)` / `proto.cancel_timer(name)`：管理定时器。
