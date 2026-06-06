@@ -30,6 +30,18 @@ public:
             }
             return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
         });
+        proto.set_function("request_guarded", [host, lua](const sol::object& payload, const sol::object& opts) {
+            std::string error;
+            const auto request = host->protoSendLike(TxRequestKind::Request, payload, opts, error, true);
+            if (!request.has_value()) {
+                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+            }
+            return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
+        });
+        proto.set_function("reset_request_guard", [host]() {
+            host->protoResetRequestGuard();
+            return true;
+        });
         proto.set_function("request_done", [host, lua](const sol::object& result) {
             std::string error;
             if (host->protoRequestDone(result, error)) {

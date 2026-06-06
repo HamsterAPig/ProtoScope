@@ -179,6 +179,9 @@ struct TxRequest {
     std::vector<std::uint8_t> payload;
     std::uint64_t timeoutMs{1000};
     std::string tag;
+    bool guarded{false};
+    std::uint32_t attempt{1};
+    std::uint32_t maxAttempts{1};
     std::uint64_t createdAtMs{0};
     std::uint64_t fileJobId{0};
     std::uint64_t fileOffset{0};
@@ -207,6 +210,10 @@ struct TxEvent {
     std::uint64_t offset{0};
     std::uint64_t total{0};
     double progress{0.0};
+    bool guarded{false};
+    std::uint32_t attempt{1};
+    std::uint32_t maxAttempts{1};
+    std::optional<std::string> guardState{};
     std::optional<std::string> error{};
 };
 
@@ -349,6 +356,7 @@ public:
     std::vector<ScriptEvent> drainEvents();
     std::vector<ScriptLog> drainLogs();
     std::vector<TxRequest> drainTxRequests();
+    std::vector<transport::ConnectionContext> drainRequestGuardResets();
     std::vector<PlotSetup> drainPlotSetups();
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends();
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends(std::size_t maxRequests);
@@ -400,7 +408,9 @@ private:
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
                                            const sol::object& opts,
-                                           std::string& error);
+                                           std::string& error,
+                                           bool guarded = false);
+    void protoResetRequestGuard();
     void protoLog(const std::string& level, const std::string& message);
     void protoEmit(const std::string& eventName, const std::string& payload);
     void protoSetTimer(const std::string& name, std::uint64_t intervalMs);
@@ -467,6 +477,7 @@ private:
     std::vector<ScriptEvent> events_;
     std::vector<ScriptLog> logs_;
     std::vector<TxRequest> txRequests_;
+    std::vector<transport::ConnectionContext> requestGuardResets_;
     std::vector<PlotSetup> plotSetups_;
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends_;
     std::vector<RequestDoneResult> requestDoneResults_;

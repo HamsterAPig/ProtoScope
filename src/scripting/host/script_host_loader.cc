@@ -43,6 +43,7 @@ bool ScriptHost::loadScriptFile(const std::string& path)
         std::vector<ScriptEvent> events;
         std::vector<ScriptLog> logs;
         std::vector<TxRequest> txRequests;
+        std::vector<transport::ConnectionContext> requestGuardResets;
         std::vector<PlotSetup> plotSetups;
         std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends;
         std::vector<RequestDoneResult> requestDoneResults;
@@ -66,6 +67,7 @@ bool ScriptHost::loadScriptFile(const std::string& path)
         .events = std::move(events_),
         .logs = std::move(logs_),
         .txRequests = std::move(txRequests_),
+        .requestGuardResets = std::move(requestGuardResets_),
         .plotSetups = std::move(plotSetups_),
         .plotAppends = std::move(plotAppends_),
         .requestDoneResults = std::move(requestDoneResults_),
@@ -88,6 +90,7 @@ bool ScriptHost::loadScriptFile(const std::string& path)
         events_ = std::move(snapshot.events);
         logs_ = std::move(snapshot.logs);
         txRequests_ = std::move(snapshot.txRequests);
+        requestGuardResets_ = std::move(snapshot.requestGuardResets);
         plotSetups_ = std::move(snapshot.plotSetups);
         plotAppends_ = std::move(snapshot.plotAppends);
         requestDoneResults_ = std::move(snapshot.requestDoneResults);
@@ -113,6 +116,7 @@ bool ScriptHost::loadScriptFile(const std::string& path)
     events_.clear();
     logs_.clear();
     txRequests_.clear();
+    requestGuardResets_.clear();
     plotSetups_.clear();
     plotAppends_.clear();
     requestDoneResults_.clear();

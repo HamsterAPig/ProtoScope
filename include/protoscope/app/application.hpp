@@ -137,6 +137,7 @@ private:
                          scripting::TxEventState state,
                          std::optional<std::string> error,
                          std::uint64_t finishedAtMs);
+    void cancelPendingTxRequests(const std::string& reason, std::uint64_t finishedAtMs);
     void cancelAllTxRequests(const std::string& reason);
     void notifyTxOverflow(const std::string& message);
     void handleStreamBufferAlert(const transport::ConnectionContext& context,
@@ -173,6 +174,7 @@ private:
     std::deque<scripting::TxRequest> pendingTxQueue_;
     std::optional<ActiveTxRequest> activeWrite_;
     std::optional<ActiveTxRequest> activeHalfDuplexRequest_;
+    bool txRequestGuardHalted_{false};
     std::deque<scripting::DialogRequest> pendingDialogs_;
     std::unordered_map<std::uint64_t, scripting::DialogRequest> openDialogs_;
     std::deque<scripting::FileDialogRequest> pendingFileDialogs_;

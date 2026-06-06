@@ -337,6 +337,37 @@ namespace {
         return scripting::TxEventState::Rejected;
     }
 
+    bool isGuardedTerminalFailure(const scripting::TxRequest& request, scripting::TxEventState state)
+    {
+        if (!request.guarded) {
+            return false;
+        }
+        switch (state) {
+            case scripting::TxEventState::Failed:
+            case scripting::TxEventState::Rejected:
+            case scripting::TxEventState::Dropped:
+                return true;
+            case scripting::TxEventState::Timeout:
+                return request.attempt >= request.maxAttempts;
+            default:
+                return false;
+        }
+    }
+
+    std::optional<std::string> guardStateForEvent(const scripting::TxRequest& request, scripting::TxEventState state)
+    {
+        if (!request.guarded) {
+            return std::nullopt;
+        }
+        if (state == scripting::TxEventState::Timeout && request.attempt < request.maxAttempts) {
+            return std::string("retrying");
+        }
+        if (isGuardedTerminalFailure(request, state)) {
+            return std::string("halted");
+        }
+        return std::string("active");
+    }
+
     bool nearlyEqual(double left, double right)
     {
         return std::abs(left - right) <= 1e-12;
@@ -1806,6 +1837,11 @@ bool Application::processTransportEvent(const transport::TransportEvent& event)
                                                   .bytes = evt.bytes,
                                                   .queuedMs = activeWrite.request.createdAtMs,
                                                   .finishedMs = evt.finishedAtMs,
+                                                  .guarded = activeWrite.request.guarded,
+                                                  .attempt = activeWrite.request.attempt,
+                                                  .maxAttempts = activeWrite.request.maxAttempts,
+                                                  .guardState = guardStateForEvent(activeWrite.request,
+                                                                                   scripting::TxEventState::Sent),
                                                   .error = error,
                                               });
                     scriptWorker_.waitIdle();
@@ -1841,6 +1877,25 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         comm.lastPumpParserMs += stats.parserMs;
         comm.lastPumpCallbackMs += stats.callbackMs;
         comm.lastPumpScriptMs += stats.totalMs;
+        changed = true;
+    }
+
+    for (const auto& connection : batch.requestGuardResets) {
+        txRequestGuardHalted_ = false;
+        const auto resetAtMs = nowMs();
+        scriptWorker_.postTxEvent(
+            connection,
+            scripting::TxEvent{
+                .id = 0,
+                .kind = scripting::TxRequestKind::Request,
+                .state = scripting::TxEventState::Completed,
+                .tag = "request_guard",
+                .queuedMs = resetAtMs,
+                .finishedMs = resetAtMs,
+                .guarded = true,
+                .guardState = std::string("reset"),
+            });
+        scriptWorker_.waitIdle();
         changed = true;
     }
 
@@ -2069,10 +2124,16 @@ bool Application::processRequestTimeouts()
         return true;
     }
 
-    const auto request = activeHalfDuplexRequest_->request;
+    auto request = activeHalfDuplexRequest_->request;
     activeHalfDuplexRequest_.reset();
     scriptWorker_.postRequestAwaitingCompletion(false);
     finishTxRequest(request, scripting::TxEventState::Timeout, std::string("等待 request_done 超时"), currentMs);
+    if (request.guarded && request.attempt < request.maxAttempts) {
+        // 核心流程：guarded request 的重试只属于当前请求；
+        // 超时后把下一次 attempt 放回队首，避免后续请求抢在重试前发送。
+        ++request.attempt;
+        pendingTxQueue_.push_front(std::move(request));
+    }
     driveTxScheduler();
     return true;
 }
@@ -2092,6 +2153,15 @@ bool Application::driveTxScheduler()
         ActiveTxRequest active{};
         active.request = std::move(pendingTxQueue_.front());
         pendingTxQueue_.pop_front();
+
+        if (active.request.guarded && txRequestGuardHalted_) {
+            finishTxRequest(active.request,
+                            scripting::TxEventState::Rejected,
+                            std::string("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
+                            nowMs());
+            changed = true;
+            continue;
+        }
 
         transport::TransportTxTask task{};
         task.requestId = active.request.id;
@@ -2118,6 +2188,16 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
                                               : (request.kind == scripting::TxRequestKind::Request
                                                      ? runtimeConfig_.protocol.tx.requestTimeoutMs
                                                      : runtimeConfig_.protocol.tx.sendTimeoutMs);
+    request.maxAttempts = std::max<std::uint32_t>(1U, request.maxAttempts);
+    request.attempt = std::max<std::uint32_t>(1U, request.attempt);
+
+    if (request.guarded && txRequestGuardHalted_) {
+        finishTxRequest(request,
+                        scripting::TxEventState::Rejected,
+                        std::string("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
+                        nowMs());
+        return true;
+    }
 
     const std::size_t activeCount = pendingTxQueue_.size() + (activeWrite_.has_value() ? 1U : 0U) +
                                     (activeHalfDuplexRequest_.has_value() ? 1U : 0U);
@@ -2147,11 +2227,24 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     return true;
 }
 
+void Application::cancelPendingTxRequests(const std::string& reason, std::uint64_t finishedAtMs)
+{
+    while (!pendingTxQueue_.empty()) {
+        auto request = std::move(pendingTxQueue_.front());
+        pendingTxQueue_.pop_front();
+        finishTxRequest(request, scripting::TxEventState::Canceled, reason, finishedAtMs);
+    }
+}
+
 void Application::finishTxRequest(const scripting::TxRequest& request,
                                   scripting::TxEventState state,
                                   std::optional<std::string> error,
                                   std::uint64_t finishedAtMs)
 {
+    if (isGuardedTerminalFailure(request, state)) {
+        txRequestGuardHalted_ = true;
+    }
+
     if (state == scripting::TxEventState::Canceled && activeHalfDuplexRequest_.has_value() &&
         activeHalfDuplexRequest_->request.id == request.id) {
         scriptWorker_.postRequestAwaitingCompletion(false);
@@ -2187,6 +2280,10 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
             .progress = request.fileTotal == 0 ? 0.0
                                                : static_cast<double>(request.fileOffset + request.payload.size()) /
                                                      static_cast<double>(request.fileTotal),
+            .guarded = request.guarded,
+            .attempt = request.attempt,
+            .maxAttempts = request.maxAttempts,
+            .guardState = guardStateForEvent(request, state),
             .error = std::move(error),
         });
     scriptWorker_.waitIdle();
@@ -2204,11 +2301,7 @@ void Application::cancelAllTxRequests(const std::string& reason)
         finishTxRequest(activeHalfDuplexRequest_->request, scripting::TxEventState::Canceled, reason, finishedAtMs);
         activeHalfDuplexRequest_.reset();
     }
-    while (!pendingTxQueue_.empty()) {
-        auto request = std::move(pendingTxQueue_.front());
-        pendingTxQueue_.pop_front();
-        finishTxRequest(request, scripting::TxEventState::Canceled, reason, finishedAtMs);
-    }
+    cancelPendingTxRequests(reason, finishedAtMs);
 }
 
 void Application::notifyTxOverflow(const std::string& message)

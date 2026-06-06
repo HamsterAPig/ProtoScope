@@ -893,6 +893,220 @@ void test_application_request_timeout_drains_pending_rx_before_timeout()
     application.shutdown();
 }
 
+void test_application_guarded_request_timeout_retry_then_success_keeps_guard_active()
+{
+    const auto protocolDir = makeUniqueTempDir("protoscope-guarded-retry-success");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "guarded retry success 测试协议应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"guarded_retry\", title = \"Guarded Retry\", controls = {\n";
+        out << "    { type = \"button\", id = \"read\", label = \"Read\" },\n";
+        out << "    { type = \"button\", id = \"follow\", label = \"Follow\" },\n";
+        out << "  } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"read\" then\n";
+        out << "    proto.request_guarded({ 0x01 }, { timeout_ms = 20, tag = \"read\", max_attempts = 2 })\n";
+        out << "  elseif id == \"follow\" then\n";
+        out << "    proto.request_guarded({ 0x02 }, { timeout_ms = 1000, tag = \"follow\", max_attempts = 1 })\n";
+        out << "  end\n";
+        out << "end\n";
+        out << "function on_tx(ctx, evt)\n";
+        out << "  if evt.state == \"sent\" and evt.tag == \"read\" and evt.attempt == 2 then\n";
+        out << "    proto.request_done({ ok = true, message = \"read ok\" })\n";
+        out << "  elseif evt.state == \"sent\" and evt.tag == \"follow\" then\n";
+        out << "    proto.request_done({ ok = true, message = \"follow ok\" })\n";
+        out << "  end\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+            "guarded retry success 测试协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    application.updateControlValue("read", true);
+    application.pumpOnce();
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    application.pumpOnce();
+    application.pumpOnce();
+
+    require(transportState->sentTasks.size() == 2, "同一个 guarded request 应先超时再重发一次");
+    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01}, "第 1 次 attempt payload 应保持不变");
+    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01}, "第 2 次 attempt payload 应保持不变");
+
+    application.updateControlValue("follow", true);
+    application.pumpOnce();
+    require(transportState->sentTasks.size() == 3, "中间 attempt 成功后后续 guarded request 仍应可发送");
+    application.shutdown();
+}
+
+void test_application_guarded_request_final_timeout_halts_followup_guarded()
+{
+    const auto protocolDir = makeUniqueTempDir("protoscope-guarded-final-timeout");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "guarded final timeout 测试协议应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"guarded_halt\", title = \"Guarded Halt\", controls = { { type = \"button\", id = "
+               "\"go\", label = \"Go\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"go\" then\n";
+        out << "    proto.request_guarded({ 0x01 }, { timeout_ms = 20, tag = \"primary\", max_attempts = 2 })\n";
+        out << "    proto.request_guarded({ 0x02 }, { timeout_ms = 20, tag = \"follow\", max_attempts = 1 })\n";
+        out << "  end\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+            "guarded final timeout 测试协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    application.updateControlValue("go", true);
+    application.pumpOnce();
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    application.pumpOnce();
+    application.pumpOnce();
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    application.pumpOnce();
+    application.pumpOnce();
+
+    require(transportState->sentTasks.size() == 2,
+            "当前 guarded request 达到 max_attempts 后，后续 guarded request 不应发出");
+    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01}, "第 1 次 attempt 应发送 primary");
+    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01}, "第 2 次 attempt 应重发 primary");
+    require(application.docks().commState().lastError.find("熔断") != std::string::npos,
+            "guarded 熔断后应拒绝后续 guarded request");
+    application.shutdown();
+}
+
+void test_application_guarded_requests_count_attempts_independently()
+{
+    const auto protocolDir = makeUniqueTempDir("protoscope-guarded-independent-attempts");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "guarded independent attempts 测试协议应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"guarded_independent\", title = \"Guarded Independent\", controls = { { type = "
+               "\"button\", id = \"go\", label = \"Go\" } } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"go\" then\n";
+        out << "    proto.request_guarded({ 0x01 }, { timeout_ms = 20, tag = \"first\", max_attempts = 2 })\n";
+        out << "    proto.request_guarded({ 0x02 }, { timeout_ms = 20, tag = \"second\", max_attempts = 2 })\n";
+        out << "  end\n";
+        out << "end\n";
+        out << "function on_tx(ctx, evt)\n";
+        out << "  if evt.state == \"sent\" and evt.attempt == 2 then\n";
+        out << "    proto.request_done({ ok = true, message = evt.tag .. \" ok\" })\n";
+        out << "  end\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+            "guarded independent attempts 测试协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    application.updateControlValue("go", true);
+    for (int iteration = 0; iteration < 4; ++iteration) {
+        application.pumpOnce();
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        application.pumpOnce();
+    }
+
+    require(transportState->sentTasks.size() == 4, "两个 guarded request 应各自独立重试到第 2 次");
+    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01}, "first 第 1 次 attempt 应发送 0x01");
+    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01}, "first 第 2 次 attempt 应仍发送 0x01");
+    require(transportState->sentTasks[2].payload == std::vector<std::uint8_t>{0x02}, "second 第 1 次 attempt 应发送 0x02");
+    require(transportState->sentTasks[3].payload == std::vector<std::uint8_t>{0x02}, "second 第 2 次 attempt 应仍发送 0x02");
+    application.shutdown();
+}
+
+void test_application_guarded_request_reset_allows_new_attempts()
+{
+    const auto protocolDir = makeUniqueTempDir("protoscope-guarded-reset");
+    {
+        std::ofstream out(protocolDir / "main.lua");
+        require(out.good(), "guarded reset 测试协议应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"guarded_reset\", title = \"Guarded Reset\", controls = {\n";
+        out << "    { type = \"button\", id = \"fail\", label = \"Fail\" },\n";
+        out << "    { type = \"button\", id = \"reset\", label = \"Reset\" },\n";
+        out << "    { type = \"button\", id = \"again\", label = \"Again\" },\n";
+        out << "  } } }\n";
+        out << "end\n";
+        out << "function on_control(ctx, id, value)\n";
+        out << "  if id == \"fail\" then\n";
+        out << "    proto.request_guarded({ 0x01 }, { timeout_ms = 20, tag = \"fail\", max_attempts = 1 })\n";
+        out << "  elseif id == \"reset\" then\n";
+        out << "    proto.reset_request_guard()\n";
+        out << "  elseif id == \"again\" then\n";
+        out << "    proto.request_guarded({ 0x03 }, { timeout_ms = 1000, tag = \"again\", max_attempts = 2 })\n";
+        out << "  end\n";
+        out << "end\n";
+        out << "function on_tx(ctx, evt)\n";
+        out << "  if evt.state == \"sent\" and evt.tag == \"again\" then\n";
+        out << "    proto.request_done({ ok = true, message = \"again ok\" })\n";
+        out << "  end\n";
+        out << "end\n";
+    }
+
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "guarded reset 测试协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    application.updateControlValue("fail", true);
+    application.pumpOnce();
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    application.pumpOnce();
+    require(transportState->sentTasks.size() == 1, "max_attempts=1 的 guarded request 应只发送一次");
+
+    application.updateControlValue("reset", true);
+    application.pumpOnce();
+    application.updateControlValue("again", true);
+    application.pumpOnce();
+
+    require(transportState->sentTasks.size() == 2, "reset 后新的 guarded request 应从 attempt=1 重新发送");
+    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x03}, "reset 后的新请求 payload 应发送");
+    application.shutdown();
+}
+
 void test_application_request_done_failure_sets_comm_error()
 {
     const auto protocolDir = makeUniqueTempDir("protoscope-request-done-failure");

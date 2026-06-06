@@ -17,6 +17,7 @@ ProtoScope 脚本 API 定义文件。
 ---@alias ProtoTransportKind 'tcp_client'|'tcp_server'|'serial'|'udp_peer'
 ---@alias ProtoTxKind 'send'|'request'
 ---@alias ProtoTxState 'sent'|'completed'|'timeout'|'rejected'|'dropped'|'canceled'
+---@alias ProtoRequestGuardState 'active'|'retrying'|'halted'|'reset'
 ---@alias ProtoDialogKind 'alert'|'confirm'
 ---@alias ProtoDialogState 'closed'|'confirmed'|'canceled'
 ---@alias ProtoFileDialogKind 'open_file'|'save_file'|'open_dir'
@@ -173,6 +174,10 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field timeout_ms? integer
 ---@field tag? string
 
+-- 受保护请求的附加参数：max_attempts 只统计当前这一次请求。
+---@class ProtoGuardedRequestOptions : ProtoRequestOptions
+---@field max_attempts? integer
+
 -- 请求完成回传结果：脚本在收到响应后可上报最终处理状态。
 ---@class ProtoRequestDoneResult
 ---@field ok? boolean
@@ -192,6 +197,10 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field total? integer
 ---@field progress? number
 ---@field error? string
+---@field guarded? boolean
+---@field attempt? integer
+---@field max_attempts? integer
+---@field guard_state? ProtoRequestGuardState
 
 -- 状态栏配置：控制状态文本的提示级别。
 ---@class ProtoStatusOptions
@@ -300,6 +309,17 @@ function proto.send(payload, opts) end
 ---@return integer|nil request_id
 ---@return string|nil error
 function proto.request(payload, opts) end
+
+-- 发起受保护请求：当前请求所有 attempt 都失败后进入 guarded 熔断，后续 guarded 请求不再发送。
+---@param payload ProtoPayload
+---@param opts? ProtoGuardedRequestOptions
+---@return integer|nil request_id
+---@return string|nil error
+function proto.request_guarded(payload, opts) end
+
+-- 解除 guarded 请求熔断；不会影响普通 proto.request/proto.send。
+---@return boolean ok
+function proto.reset_request_guard() end
 
 -- 标记当前请求已经完成，宿主可据此结束等待并释放关联状态。
 ---@param result? ProtoRequestDoneResult

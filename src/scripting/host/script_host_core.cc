@@ -1041,6 +1041,14 @@ sol::table makeTxEventTable(sol::state_view lua, const TxEvent& event)
     table["bytes"] = static_cast<int>(event.bytes);
     table["queued_ms"] = event.queuedMs;
     table["finished_ms"] = event.finishedMs;
+    if (event.guarded) {
+        table["guarded"] = true;
+        table["attempt"] = static_cast<int>(event.attempt);
+        table["max_attempts"] = static_cast<int>(event.maxAttempts);
+    }
+    if (event.guardState.has_value()) {
+        table["guard_state"] = *event.guardState;
+    }
     if (event.fileJobId != 0) {
         table["file_job_id"] = event.fileJobId;
         table["offset"] = event.offset;
@@ -1807,6 +1815,13 @@ std::vector<TxRequest> ScriptHost::drainTxRequests()
     return drained;
 }
 
+std::vector<transport::ConnectionContext> ScriptHost::drainRequestGuardResets()
+{
+    auto drained = std::move(requestGuardResets_);
+    requestGuardResets_.clear();
+    return drained;
+}
+
 std::vector<PlotSetup> ScriptHost::drainPlotSetups()
 {
     auto drained = std::move(plotSetups_);
@@ -2038,12 +2053,14 @@ void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
 std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
                                                    const sol::object& payload,
                                                    const sol::object& opts,
-                                                   std::string& error)
+                                                   std::string& error,
+                                                   bool guarded)
 {
+    const std::string apiName = guarded ? "proto.request_guarded"
+                                        : std::string(kind == TxRequestKind::Request ? "proto.request" : "proto.send");
     const auto maybeBytes = bytesFromLuaObject(payload, error);
     if (!maybeBytes.has_value()) {
-        protoLog("error",
-                 std::string(kind == TxRequestKind::Request ? "proto.request" : "proto.send") + " 调用失败: " + error);
+        protoLog("error", apiName + " 调用失败: " + error);
         return std::nullopt;
     }
 
@@ -2052,6 +2069,9 @@ std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
     request.kind = kind;
     request.payload = *maybeBytes;
     request.timeoutMs = 0;
+    request.guarded = guarded;
+    request.attempt = 1;
+    request.maxAttempts = 1;
     request.createdAtMs = nowMs();
     if (activeConnection_.has_value()) {
         request.connection = *activeConnection_;
@@ -2065,9 +2085,7 @@ std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
     if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
         if (!opts.is<sol::table>()) {
             error = "opts 必须是 table";
-            protoLog(
-                "error",
-                std::string(kind == TxRequestKind::Request ? "proto.request" : "proto.send") + " 调用失败: " + error);
+            protoLog("error", apiName + " 调用失败: " + error);
             return std::nullopt;
         }
         const sol::table options = opts.as<sol::table>();
@@ -2075,10 +2093,29 @@ std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
             request.timeoutMs = static_cast<std::uint64_t>(std::max(0.0, *timeoutMs));
         }
         request.tag = luaStringField(options, "tag").value_or("");
+        if (guarded) {
+            if (const auto maxAttempts = luaNumberField(options, "max_attempts"); maxAttempts.has_value()) {
+                request.maxAttempts = static_cast<std::uint32_t>(std::max(1.0, *maxAttempts));
+            }
+        }
     }
 
     txRequests_.push_back(request);
     return request;
+}
+
+void ScriptHost::protoResetRequestGuard()
+{
+    transport::ConnectionContext connection{};
+    if (activeConnection_.has_value()) {
+        connection = *activeConnection_;
+    } else {
+        connection.endpoint = "detached";
+        connection.connectionId = 0;
+        connection.timestampMs = nowMs();
+        connection.readyForIo = false;
+    }
+    requestGuardResets_.push_back(std::move(connection));
 }
 
 bool ScriptHost::protoRequestDone(const sol::object& result, std::string& error)

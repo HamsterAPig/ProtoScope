@@ -1152,6 +1152,14 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
     require(text.find("@field kind ProtoTransportKind") != std::string::npos, "LuaLS API 应收紧 ctx.kind 类型");
     require(text.find("function proto.request(payload, opts) end") != std::string::npos,
             "LuaLS API 应声明 proto.request");
+    require(text.find("function proto.request_guarded(payload, opts) end") != std::string::npos,
+            "LuaLS API 应声明 proto.request_guarded");
+    require(text.find("@field max_attempts? integer") != std::string::npos,
+            "LuaLS API 应声明 guarded request 最大尝试次数");
+    require(text.find("@field guard_state? ProtoRequestGuardState") != std::string::npos,
+            "LuaLS API 应声明 guarded request 状态字段");
+    require(text.find("function proto.reset_request_guard() end") != std::string::npos,
+            "LuaLS API 应声明 guarded request reset 接口");
     require(text.find("function proto.request_done(result) end") != std::string::npos,
             "LuaLS API 应声明 proto.request_done");
     require(text.find("function proto.status.set(text, opts) end") != std::string::npos,
@@ -2690,6 +2698,14 @@ static const TestCase kAllTests[] = {
      &test_application_request_done_success_does_not_set_comm_error},
     {"application_request_timeout_drains_pending_rx_before_timeout",
      &test_application_request_timeout_drains_pending_rx_before_timeout},
+    {"application_guarded_request_timeout_retry_then_success_keeps_guard_active",
+     &test_application_guarded_request_timeout_retry_then_success_keeps_guard_active},
+    {"application_guarded_request_final_timeout_halts_followup_guarded",
+     &test_application_guarded_request_final_timeout_halts_followup_guarded},
+    {"application_guarded_requests_count_attempts_independently",
+     &test_application_guarded_requests_count_attempts_independently},
+    {"application_guarded_request_reset_allows_new_attempts",
+     &test_application_guarded_request_reset_allows_new_attempts},
     {"application_request_done_failure_sets_comm_error", &test_application_request_done_failure_sets_comm_error},
     {"application_open_transport_uses_serial_runtime_config",
      &test_application_open_transport_uses_serial_runtime_config},
