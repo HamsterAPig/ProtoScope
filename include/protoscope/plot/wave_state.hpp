@@ -219,12 +219,61 @@ struct WaveDockState {
         }
     };
 
+    struct OverviewDisplayDataCacheKey {
+        std::uint64_t dataRevision{0};
+        double sampleFrequencyHz{0.0};
+        std::size_t channelCount{0};
+        WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
+        std::size_t rangeHash{0};
+        std::size_t pointLimit{0};
+
+        bool operator==(const OverviewDisplayDataCacheKey& other) const
+        {
+            return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
+                   channelCount == other.channelCount && displayFormula == other.displayFormula &&
+                   rangeHash == other.rangeHash && pointLimit == other.pointLimit;
+        }
+    };
+
+    struct RenderEnvelopeCacheKey {
+        std::uint64_t dataRevision{0};
+        double sampleFrequencyHz{0.0};
+        double visibleMinTime{0.0};
+        double visibleMaxTime{0.0};
+        std::size_t channelIndex{0};
+        std::size_t pointLimit{0};
+        std::size_t sampleCount{0};
+        WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
+        double ratio{1.0};
+        double scale{1.0};
+        double offset{0.0};
+
+        bool operator==(const RenderEnvelopeCacheKey& other) const
+        {
+            return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
+                   visibleMinTime == other.visibleMinTime && visibleMaxTime == other.visibleMaxTime &&
+                   channelIndex == other.channelIndex && pointLimit == other.pointLimit &&
+                   sampleCount == other.sampleCount && displayFormula == other.displayFormula &&
+                   ratio == other.ratio && scale == other.scale && offset == other.offset;
+        }
+    };
+
+    struct RenderEnvelopeCacheEntry {
+        bool valid{false};
+        RenderEnvelopeCacheKey key{};
+        std::vector<EnvelopePoint> envelope;
+        std::size_t sourceSampleCount{0};
+    };
+
     bool cachedDisplayKeyValid{false};
     DisplayDataCacheKey cachedDisplayKey{};
+    bool cachedOverviewKeyValid{false};
+    OverviewDisplayDataCacheKey cachedOverviewKey{};
     WaveSnapshot cachedFullSnapshot{};
     WaveDisplayData cachedDisplayData{};
     WaveDisplayData cachedOverviewDisplayData{};
     WaveDataBounds cachedDisplayBounds{};
+    std::vector<RenderEnvelopeCacheEntry> renderEnvelopeCache;
     bool cachedFftKeyValid{false};
     WaveFftCacheKey cachedFftKey{};
     WaveFftFrame cachedFftFrame{};

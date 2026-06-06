@@ -956,7 +956,7 @@ void test_wave_display_data_uses_visible_window_only()
     require(std::abs(frequencyMapped.channels[0].samples.front().time - 4.0) < 1e-12, "频率时间轴应保留全局样本序号");
 }
 
-void test_wave_edge_render_data_keeps_adjacent_guard_points()
+void test_wave_main_render_data_uses_viewport_window()
 {
     protoscope::plot::WaveDockState wave;
     wave.buffer.configureChannels(1);
@@ -983,21 +983,23 @@ void test_wave_edge_render_data_keeps_adjacent_guard_points()
     require(frame.displayData != nullptr, "主视图交互数据源不能为空");
     require(frame.renderDisplayData != nullptr, "主视图渲染数据源不能为空");
     require(frame.displayData->channels.front().samples.size() == 1, "交互数据仍应只保留视口内样本");
-    require(frame.renderDisplayData->channels.front().samples.size() == 3, "渲染数据应保留完整历史样本");
+    require(frame.renderDisplayData == frame.displayData, "主图渲染应复用当前视口显示缓存");
+    require(frame.renderDisplayData->channels.front().samples.size() == 1, "渲染数据不应再携带完整历史样本");
+    require(frame.overviewDisplayData != nullptr, "概览数据源不能为空");
+    require(frame.overviewDisplayData->channels.front().samples.size() >= 3, "概览仍应保留完整历史的降采样视图");
 
     std::size_t sourceSampleCount = 0;
     const auto envelope = protoscope::ui::buildDisplayEnvelope(frame.renderDisplayData->channels.front().samples,
                                                                wave.view.viewMinTime,
                                                                wave.view.viewMaxTime,
-                                                               32,
-                                                               &sourceSampleCount);
+                                                                32,
+                                                                &sourceSampleCount);
     require(sourceSampleCount == 1, "包络统计仍应只统计视口内样本");
-    require(envelope.size() == 3, "包络应纳入左右相邻保护点以桥接视口边缘线段");
-    require(std::abs(envelope.front().time - 0.0) < 1e-12, "左侧保护点应来自视口外邻接样本");
-    require(std::abs(envelope.back().time - 20.0) < 1e-12, "右侧保护点应来自视口外邻接样本");
+    require(envelope.size() == 1, "主图包络应只基于当前视口缓存构建");
+    require(std::abs(envelope.front().time - 10.0) < 1e-12, "主图包络应落在当前视口样本上");
 }
 
-void test_wave_edge_render_data_keeps_sample_frequency_axis()
+void test_wave_main_render_data_uses_sample_frequency_viewport()
 {
     protoscope::plot::WaveDockState wave;
     wave.buffer.configureChannels(1);
@@ -1027,11 +1029,44 @@ void test_wave_edge_render_data_keeps_sample_frequency_axis()
     require(frame.displayData->channels.front().samples.size() == 1, "采样频率交互数据应只保留视口内样本");
     require(std::abs(frame.displayData->channels.front().samples.front().time - 0.1) < 1e-12,
             "采样频率交互时间应按全局样本序号换算");
-    require(frame.renderDisplayData->channels.front().samples.size() == 3, "采样频率渲染数据应保留完整历史");
-    require(std::abs(frame.renderDisplayData->channels.front().samples.front().time - 0.0) < 1e-12,
-            "完整渲染数据起点应按全局样本序号换算");
-    require(std::abs(frame.renderDisplayData->channels.front().samples.back().time - 0.2) < 1e-12,
-            "完整渲染数据终点应按全局样本序号换算");
+    require(frame.renderDisplayData == frame.displayData, "采样频率主图渲染应复用当前视口显示缓存");
+    require(frame.renderDisplayData->channels.front().samples.size() == 1, "采样频率渲染数据不应携带完整历史");
+    require(frame.overviewDisplayData != nullptr, "采样频率概览数据源不能为空");
+    require(std::abs(frame.overviewDisplayData->channels.front().samples.front().time - 0.0) < 1e-12,
+            "概览数据起点应按全局样本序号换算");
+    require(std::abs(frame.overviewDisplayData->channels.front().samples.back().time - 0.2) < 1e-12,
+            "概览数据终点应按全局样本序号换算");
+}
+
+void test_wave_overview_display_data_is_budgeted()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(2);
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(10000);
+    for (std::size_t index = 0; index < 10000; ++index) {
+        samples.push_back({.time = static_cast<double>(index), .value = std::sin(static_cast<double>(index) * 0.01)});
+    }
+    wave.buffer.append(0, protoscope::plot::WaveAppendRequest{.source = "perf", .samples = samples});
+    wave.buffer.append(1, protoscope::plot::WaveAppendRequest{.source = "perf", .samples = samples});
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.viewMinTime = 9000.0;
+    wave.view.viewMaxTime = 9010.0;
+    wave.view.visibleDuration = 10.0;
+    wave.view.centerTime = 9005.0;
+    wave.view.overviewMaxSamples = 32;
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+
+    require(frame.renderDisplayData == frame.displayData, "主图渲染应避免回退到完整历史数据");
+    require(frame.displayData->channels.front().samples.size() < 10000, "当前视口缓存不应包含全历史样本");
+    require(frame.overviewDisplayData != nullptr, "概览缓存不能为空");
+    for (const auto& channel : frame.overviewDisplayData->channels) {
+        require(channel.samples.size() <= wave.view.overviewMaxSamples * 2,
+                "概览显示数据应按 overview_max_samples 预算降采样");
+    }
+    require(wave.cachedOverviewKeyValid, "概览缓存键应在 prepare 后有效");
 }
 
 void test_wave_overview_bounds_use_full_history_window()

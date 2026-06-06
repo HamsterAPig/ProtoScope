@@ -5,6 +5,58 @@
 
 namespace protoscope::ui {
 
+namespace {
+
+    plot::WaveDockState::RenderEnvelopeCacheKey makeRenderEnvelopeCacheKey(
+        const plot::WaveDockState& wave,
+        const plot::ChannelView& channel,
+        std::size_t channelIndex,
+        const std::vector<plot::WaveSample>& samples,
+        const ImPlotRect& limits,
+        std::size_t pointLimit)
+    {
+        return {
+            .dataRevision = wave.displayDataRevision,
+            .sampleFrequencyHz = wave.view.sampleFrequencyHz,
+            .visibleMinTime = limits.X.Min,
+            .visibleMaxTime = limits.X.Max,
+            .channelIndex = channelIndex,
+            .pointLimit = pointLimit,
+            .sampleCount = samples.size(),
+            .displayFormula = wave.cachedFullSnapshot.config.displayFormula,
+            .ratio = channel.ratio,
+            .scale = channel.scale,
+            .offset = channel.offset,
+        };
+    }
+
+    const std::vector<plot::EnvelopePoint>& cachedRenderEnvelope(plot::WaveDockState& wave,
+                                                                 const plot::ChannelView& channel,
+                                                                 std::size_t channelIndex,
+                                                                 const std::vector<plot::WaveSample>& samples,
+                                                                 const ImPlotRect& limits,
+                                                                 std::size_t pointLimit,
+                                                                 std::size_t* sourceSampleCount)
+    {
+        if (wave.renderEnvelopeCache.size() <= channelIndex) {
+            wave.renderEnvelopeCache.resize(channelIndex + 1);
+        }
+        auto& entry = wave.renderEnvelopeCache[channelIndex];
+        const auto key = makeRenderEnvelopeCacheKey(wave, channel, channelIndex, samples, limits, pointLimit);
+        if (!entry.valid || !(entry.key == key)) {
+            // 核心流程：视口、数据和显示变换都没变时复用上一帧包络，避免 UI 空转反复扫样本。
+            entry.envelope = buildDisplayEnvelope(samples, limits.X.Min, limits.X.Max, pointLimit, &entry.sourceSampleCount);
+            entry.key = key;
+            entry.valid = true;
+        }
+        if (sourceSampleCount != nullptr) {
+            *sourceSampleCount = entry.sourceSampleCount;
+        }
+        return entry.envelope;
+    }
+
+} // namespace
+
 void renderWaveChannels(plot::WaveDockState& wave,
                         const plot::WaveSnapshot& snapshot,
                         const plot::WaveDisplayData& displayData,
@@ -17,20 +69,28 @@ void renderWaveChannels(plot::WaveDockState& wave,
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
         const auto& channelSamples = displayData.channels[channelIndex].samples;
-        std::size_t sourceSampleCount = 0;
-        const auto envelope = buildDisplayEnvelope(displayData.channels[channelIndex].samples,
-                                                   limits.X.Min,
-                                                   limits.X.Max,
-                                                   renderBudget.pointsPerChannel,
-                                                   &sourceSampleCount);
-        view.lastRenderSourceSampleCount += sourceSampleCount;
-        if (envelope.empty()) {
-            continue;
-        }
         const ImVec4 color = channelColor(channel, channelIndex);
         const double downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
         const std::size_t downsampleThreshold = static_cast<std::size_t>(
             std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
+        std::size_t sourceSampleCount = 0;
+        const auto visibleBegin =
+            std::lower_bound(channelSamples.begin(),
+                             channelSamples.end(),
+                             limits.X.Min,
+                             [](const plot::WaveSample& sample, double value) { return sample.time < value; });
+        const auto visibleEnd =
+            std::upper_bound(channelSamples.begin(),
+                             channelSamples.end(),
+                             limits.X.Max,
+                             [](double value, const plot::WaveSample& sample) { return value < sample.time; });
+        if (visibleBegin < visibleEnd) {
+            sourceSampleCount = static_cast<std::size_t>(std::distance(visibleBegin, visibleEnd));
+        }
+        if (sourceSampleCount == 0) {
+            continue;
+        }
+
         if (sourceSampleCount <= downsampleThreshold) {
             auto begin =
                 std::lower_bound(channelSamples.begin(),
@@ -66,6 +126,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
                 continue;
             }
             visibleChannelIndices.push_back(channelIndex);
+            view.lastRenderSourceSampleCount += sourceSampleCount;
             if (view.showPointsWhenSparse) {
                 ImPlotSpec pointSpec{};
                 pointSpec.Marker = ImPlotMarker_Circle;
@@ -82,7 +143,6 @@ void renderWaveChannels(plot::WaveDockState& wave,
             continue;
         }
 
-        view.lastRenderPointCount += envelope.size();
         ImPlotSpec legendSpec{};
         legendSpec.LineColor = color;
         legendSpec.LineWeight = 1.5F;
@@ -90,12 +150,24 @@ void renderWaveChannels(plot::WaveDockState& wave,
         applySavedLegendVisibility(wave, channel.label);
         ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
         const bool legendVisible = currentPlotItemVisible(channel.label);
-        if (legendVisible) {
-            visibleChannelIndices.push_back(channelIndex);
-        }
         if (!legendVisible && excludesLegendHiddenChannels(view)) {
             continue;
         }
+        if (legendVisible) {
+            visibleChannelIndices.push_back(channelIndex);
+        }
+        view.lastRenderSourceSampleCount += sourceSampleCount;
+        const auto& envelope = cachedRenderEnvelope(wave,
+                                                    channel,
+                                                    channelIndex,
+                                                    displayData.channels[channelIndex].samples,
+                                                    limits,
+                                                    renderBudget.pointsPerChannel,
+                                                    &sourceSampleCount);
+        if (envelope.empty()) {
+            continue;
+        }
+        view.lastRenderPointCount += envelope.size();
         if (view.phosphorGlowEnabled) {
             renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);
         } else {
