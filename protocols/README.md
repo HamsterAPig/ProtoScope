@@ -1,4 +1,4 @@
-﻿# ProtoScope Lua 协议脚本指南
+# ProtoScope Lua 协议脚本指南
 
 `protocols` 是 ProtoScope 的 Lua 协议资源根目录。宿主会自动注入全局 `proto`，协议脚本主要负责 4 件事：
 
@@ -33,13 +33,15 @@ function ui()
       tab_group = "protocol_tools",
       controls = {
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
+        { type = "checkbox", id = "hex_send", label = "HEX 发送", label_position = "right", default = true },
         { type = "button", id = "send_once", label = "发送一次" },
       },
       layout = {
-        kind = "form",
-        items = {
-          { control = "device_id" },
-          { control = "send_once" },
+        type = "flow",
+        children = {
+          { type = "control", id = "device_id" },
+          { type = "control", id = "hex_send" },
+          { type = "control", id = "send_once" },
         },
       },
     },
@@ -56,147 +58,98 @@ end
 - `anchor`：默认停靠位置，可选，默认是 `left_bottom`。
 - `tab_group`：分组名，可选。相同 `tab_group` 的 dock 会落到同一个 tab 组里。
 - `controls`：控件列表，必填。
-- `layout`：布局描述，可选。省略时宿主会按 `controls` 的声明顺序逐个渲染。
-
-### `anchor` 和 `tab_group`
-
-`anchor` 支持以下值：
-
-- `left`
-- `left_bottom`
-- `right_top`
-- `right_mid`
-- `right_bottom`
-- `main_bottom`
-
-同一个 `tab_group` 的 dock 会共享同一个锚点，宿主会以该组里第一个 dock 的锚点为准，后续 dock 继承这个锚点。没有显式设置 `tab_group` 时，宿主会用 `id` 作为默认分组名。
+- `layout`：新 Layout Tree，可选。省略时宿主会按 `controls` 的声明顺序逐个渲染。
 
 ### 控件类型
 
-`controls` 里的每个控件都必须提供 `type`、`id`、`label`。`type` 目前支持：
+`controls` 是控件描述数组。每个控件必须提供：
 
-- `button`
-- `input_text`
-- `input_int`
-- `input_float`
-- `checkbox`
-- `combo`
-- `elf_symbol_combo`
+- `type`：控件类型。
+- `id`：稳定控件 ID，回调和布局节点都通过它引用控件。
+- `label`：展示文案。`checkbox`、`input_text`、`input_int`、`input_float` 允许省略可见 label。
+- `label_position`：可选，`"left"` 或 `"right"`，默认 `"left"`；`button` 始终把 `label` 当按钮文本。
 
-常用字段说明：
+当前控件类型：
 
-- `default`：控件默认值，类型要和控件匹配。
-- `options`：`combo` 必填，字符串数组，至少 1 个选项。
-- `debounce_ms`：`elf_symbol_combo` 的输入消抖毫秒数，未设置时使用 `gui.elf_symbol_combo.debounce_ms`，默认 `300`。
-- `limit`：`elf_symbol_combo` 的候选上限，未设置时使用 `gui.elf_symbol_combo.limit`，默认 `10`。
+- `button`：按钮。点击后会触发 `on_control(ctx, id, true)`。
+- `input_text`：文本输入，`default` 是字符串。
+- `input_int`：整数输入，`default` 是整数。
+- `input_float`：浮点输入，`default` 是数字。
+- `checkbox`：布尔开关，`default` 是 boolean。
+- `combo`：下拉选择，必须提供 `options = { ... }`，`default` 是 1 基索引。
+- `elf_symbol_combo`：ELF 静态地址候选输入框。
 
-默认值规则：
+### Layout Tree
 
-- `button`：不需要 `default`。
-- `input_text`：默认空字符串。
-- `input_int`：默认 `0`。
-- `input_float`：默认 `0`。
-- `checkbox`：默认 `false`。
-- `combo`：`default` 按 1 开始的索引处理，超范围会被夹到有效区间。
-- `elf_symbol_combo`：`default` 可以直接给 `ProtoElfSymbolValue`，也就是带 `label`、`value`、`type` 的表。
+显式布局统一使用 `type + children` 的递归树，不再兼容旧的 `layout.kind`、`form.items`、`table.rows` control-only 写法。
 
-### `layout.kind = 'table'`
+通用规则：
 
-`table` 布局适合表格式面板，字段如下：
+- `{ type = "column", children = { ... } }`：纵向块级布局。
+- `{ type = "flow", spacing = 6, run_spacing = 5, children = { ... } }`：横向流式布局，空间不足时自动换行。
+- `{ type = "table", columns = 2, rows = { ... } }`：表格布局，单元格可以放任意 layout node。
+- `{ type = "group", title = "...", children = { ... } }`：标题分组。
+- `{ type = "collapse", title = "...", default_open = true, children = { ... } }`：折叠分组。
+- `{ type = "control", id = "xxx" }`：引用一个已声明控件。
+- `{ type = "text", text = "..." }`：说明文字。
+- `{ type = "separator" }`：分割线。
+- `{ type = "spacer" }`：占位空白。
 
-- `columns`：列数，必须是大于等于 1 的整数。
-- `rows`：行数组，不能为空。
-- `borders`：是否显示边框，可选。
-- `resizable`：是否允许列宽拖拽，可选，默认 `true`。
-- `row_bg`：是否显示隔行底色，可选，默认 `false`。
-- `sizing`：当前仅支持 `stretch`，可选。
+加载阶段会校验显式布局中的控件引用：未知控件、重复引用、遗漏已声明控件都会让协议加载失败。
 
-每个单元格只能二选一：
-
-- `{ control = "xxx" }`：引用一个已声明控件。
-- `{ spacer = true }`：占位，不渲染控件。
-
-约束：
-
-- `rows` 里的每一行都不能超过 `columns`。
-- 每个控件在整个 `table` 布局里只能出现一次。
-- 所有 `controls` 里的控件都必须被引用到，否则会报错。
-
-示例：
+完整示例：
 
 ```lua
 layout = {
-  kind = "table",
-  columns = 2,
-  borders = true,
-  resizable = true,
-  row_bg = true,
-  sizing = "stretch",
-  rows = {
+  type = "column",
+  children = {
+    { type = "text", text = "修改参数后立即生效。" },
     {
-      { control = "device_id" },
-      { control = "baudrate" },
+      type = "flow",
+      spacing = 6,
+      run_spacing = 5,
+      children = {
+        { type = "control", id = "send_once" },
+        { type = "control", id = "device_id" },
+      }
     },
     {
-      { control = "send_once" },
-      { spacer = true },
+      type = "collapse",
+      title = "采样设置",
+      default_open = false,
+      children = {
+        {
+          type = "flow",
+          children = {
+            { type = "control", id = "timeout_ms" },
+            { type = "control", id = "scale" },
+          }
+        }
+      }
     },
-  },
+    {
+      type = "table",
+      columns = 2,
+      borders = false,
+      resizable = true,
+      row_bg = false,
+      sizing = "stretch",
+      rows = {
+        {
+          { type = "control", id = "mode" },
+          {
+            type = "flow",
+            children = {
+              { type = "control", id = "hex_send" },
+              { type = "control", id = "auto_send" },
+            }
+          },
+        }
+      }
+    }
+  }
 }
 ```
-
-### `layout.kind = 'form'`
-
-`form` 布局适合按说明、分组和折叠组织控件。字段如下：
-
-- `items`：布局项数组，不能为空。
-
-每个 `item` 必须且只能声明一种类型：
-
-- `{ control = "xxx" }`：单个控件。
-- `{ controls = { "a", "b" } }`：同一行并排摆放多个控件。
-- `{ group = "标题", items = { ... } }`：分组标题。
-- `{ collapse = "标题", default_open = true, items = { ... } }`：可折叠分组。
-- `{ separator = true }`：分隔线。
-- `{ text = "说明文字" }`：说明文本。
-
-约束：
-
-- `control` 和 `controls` 引用的控件都必须在 `controls` 里预先声明。
-- 每个控件在整个 `form` 布局里只能出现一次。
-- `group` 和 `collapse` 只支持一层嵌套，不支持递归套娃。
-- `items` 不能为空。
-
-示例：
-
-```lua
-layout = {
-  kind = "form",
-  items = {
-    { text = "先配置连接参数，再点击发送。" },
-    { separator = true },
-    { group = "基础参数", items = {
-      { control = "device_id" },
-      { control = "baudrate" },
-    } },
-    { collapse = "发送动作", default_open = true, items = {
-      { controls = { "send_once", "auto_send" } },
-    } },
-  },
-}
-```
-
-### 默认布局
-
-如果 `layout` 省略，宿主会按 `controls` 的声明顺序逐个渲染控件。这个模式适合快速起步，但不适合想控制排版和分组的协议脚本。
-
-### 常见用法
-
-- 用 `form` 做参数面板，用 `text` 和 `separator` 先说明再输入。
-- 用 `table` 做密集的发送工具栏或调试面板。
-- 把同一功能区的多个 dock 放到同一个 `tab_group`，让它们共享一个停靠区域。
-- 运行控制、参数配置和状态展示可以拆成多个 dock，再用同一个 `tab_group` 合并为选项卡。
-- 需要从 ELF 里搜静态符号时，用 `elf_symbol_combo`；默认按全局配置消抖与限制候选数，大工程里可在 Lua 控件上按需覆盖。
 
 ## 发送模型
 

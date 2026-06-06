@@ -476,15 +476,17 @@ void test_script_table_layout_snapshot()
     const auto docks = host.dockSnapshots();
     require(docks.size() == 1, "table_layout 协议应只产出一个 dock");
     require(docks[0].descriptor.layout.has_value(), "table_layout 应解析 layout");
-    require(docks[0].descriptor.layout->kind == protoscope::scripting::DockLayoutKind::Table, "layout.kind 应为 table");
 
-    const auto& table = docks[0].descriptor.layout->table;
+    const auto& table = docks[0].descriptor.layout->root;
+    require(table.kind == protoscope::scripting::LayoutNodeKind::Table, "layout root 应为 table");
     require(table.columns == 2, "table_layout 列数应为 2");
     require(table.rows.size() == 3, "table_layout 应解析三行");
-    require(table.rows[0].cells.size() == 2, "第一行应有两列");
-    require(table.rows[0].cells[0].controlId == "device_id", "第一行第一列应绑定 device_id");
-    require(table.rows[1].cells[1].spacer, "第二行第二列应为 spacer");
-    require(table.rows[2].cells[0].controlId == "read_version", "第三行第一列应绑定 read_version");
+    require(table.rows[0].size() == 2, "第一行应有两列");
+    require(table.rows[0][0].kind == protoscope::scripting::LayoutNodeKind::Control, "第一行第一列应为 control");
+    require(table.rows[0][0].controlId == "device_id", "第一行第一列应绑定 device_id");
+    require(table.rows[0][0].controlIndex == 0, "第一行第一列应固化 controlIndex");
+    require(table.rows[1][1].kind == protoscope::scripting::LayoutNodeKind::Spacer, "第二行第二列应为 spacer");
+    require(table.rows[2][0].controlId == "read_version", "第三行第一列应绑定 read_version");
 }
 
 void test_script_form_layout_snapshot()
@@ -495,24 +497,57 @@ void test_script_form_layout_snapshot()
     const auto docks = host.dockSnapshots();
     require(docks.size() == 1, "form_layout 协议应只产出一个 dock");
     require(docks[0].descriptor.layout.has_value(), "form_layout 应解析 layout");
-    require(docks[0].descriptor.layout->kind == protoscope::scripting::DockLayoutKind::Form, "layout.kind 应为 form");
 
-    const auto& items = docks[0].descriptor.layout->form.items;
+    const auto& root = docks[0].descriptor.layout->root;
+    require(root.kind == protoscope::scripting::LayoutNodeKind::Column, "form_layout 根节点应为 column");
+    const auto& items = root.children;
     require(items.size() == 5, "form_layout 应解析 5 个顶层布局项");
-    require(items[0].kind == protoscope::scripting::FormLayoutItemKind::Text, "第一项应为 text");
-    require(items[1].kind == protoscope::scripting::FormLayoutItemKind::Controls, "第二项应为 controls");
-    require(items[1].controls.controlIds.size() == 2, "controls 应包含两个控件");
-    require(items[1].controls.controlIds[0] == "read_version", "同排第一个控件顺序错误");
-    require(items[1].controls.controlIds[1] == "device_id", "同排第二个控件顺序错误");
-    require(items[2].kind == protoscope::scripting::FormLayoutItemKind::Separator, "第三项应为 separator");
-    require(items[3].kind == protoscope::scripting::FormLayoutItemKind::Group, "第四项应为 group");
-    require(items[3].group && items[3].group->items.size() == 1, "group 内应有 1 个子项");
-    require(items[3].group->items[0].controls.controlIds[0] == "hex_send", "group 内第一个控件顺序错误");
-    require(items[3].group->items[0].controls.controlIds[1] == "mode", "group 内第二个控件顺序错误");
-    require(items[4].kind == protoscope::scripting::FormLayoutItemKind::Collapse, "第五项应为 collapse");
-    require(items[4].collapse && !items[4].collapse->defaultOpen, "collapse 默认展开状态解析错误");
-    require(items[4].collapse->items[0].controls.controlIds[0] == "timeout_ms", "collapse 内第一个控件顺序错误");
-    require(items[4].collapse->items[0].controls.controlIds[1] == "scale", "collapse 内第二个控件顺序错误");
+    require(items[0].kind == protoscope::scripting::LayoutNodeKind::Text, "第一项应为 text");
+    require(items[1].kind == protoscope::scripting::LayoutNodeKind::Flow, "第二项应为 flow");
+    require(items[1].children.size() == 2, "flow 应包含两个控件");
+    require(items[1].children[0].controlId == "read_version", "flow 第一个控件顺序错误");
+    require(items[1].children[1].controlId == "device_id", "flow 第二个控件顺序错误");
+    require(items[2].kind == protoscope::scripting::LayoutNodeKind::Separator, "第三项应为 separator");
+    require(items[3].kind == protoscope::scripting::LayoutNodeKind::Group, "第四项应为 group");
+    require(items[3].children.size() == 1, "group 内应有 1 个子项");
+    require(items[3].children[0].kind == protoscope::scripting::LayoutNodeKind::Flow, "group 内应嵌套 flow");
+    require(items[3].children[0].children[0].controlId == "hex_send", "group 内第一个控件顺序错误");
+    require(items[3].children[0].children[1].controlId == "mode", "group 内第二个控件顺序错误");
+    require(items[4].kind == protoscope::scripting::LayoutNodeKind::Collapse, "第五项应为 collapse");
+    require(!items[4].defaultOpen, "collapse 默认展开状态解析错误");
+    require(items[4].children[0].kind == protoscope::scripting::LayoutNodeKind::Flow, "collapse 内应嵌套 flow");
+    require(items[4].children[0].children[0].controlId == "timeout_ms", "collapse 内第一个控件顺序错误");
+    require(items[4].children[0].children[1].controlId == "scale", "collapse 内第二个控件顺序错误");
+}
+
+void test_script_flow_layout_snapshot()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("flow_layout").generic_string()), "flow_layout 协议应可加载");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 1, "flow_layout 协议应只产出一个 dock");
+    require(docks[0].descriptor.layout.has_value(), "flow_layout 应解析 layout");
+
+    const auto& root = docks[0].descriptor.layout->root;
+    require(root.kind == protoscope::scripting::LayoutNodeKind::Column, "flow_layout 根节点应为 column");
+    require(root.children.size() == 3, "flow_layout 应包含 flow、collapse、table 三个节点");
+    require(root.children[0].kind == protoscope::scripting::LayoutNodeKind::Flow, "第一项应为 flow");
+    require(root.children[0].spacing == 6.0F, "flow spacing 应解析");
+    require(root.children[0].runSpacing == 5.0F, "flow run_spacing 应解析");
+    require(root.children[1].kind == protoscope::scripting::LayoutNodeKind::Collapse, "第二项应为 collapse");
+    require(!root.children[1].defaultOpen, "collapse default_open 应解析");
+    require(root.children[1].children[0].kind == protoscope::scripting::LayoutNodeKind::Flow,
+            "collapse 内应允许嵌入 flow");
+    require(root.children[2].kind == protoscope::scripting::LayoutNodeKind::Table, "第三项应为 table");
+    require(root.children[2].rows[0][1].kind == protoscope::scripting::LayoutNodeKind::Flow,
+            "table cell 内应允许嵌入 flow");
+
+    const auto controls = host.controlsSnapshot();
+    require(controls[1].labelPosition == protoscope::scripting::ControlLabelPosition::Left,
+            "label_position 缺省应为 left");
+    require(controls[2].labelPosition == protoscope::scripting::ControlLabelPosition::Right,
+            "label_position 显式 right 应解析");
 }
 
 void test_script_duplicate_label_controls_allowed()
@@ -526,8 +561,8 @@ void test_script_duplicate_label_controls_allowed()
 
     const auto& formDock = docks[0];
     require(formDock.descriptor.layout.has_value(), "重复 label form 应解析 layout");
-    require(formDock.descriptor.layout->kind == protoscope::scripting::DockLayoutKind::Form,
-            "重复 label 夹具首个 dock 应为 form layout");
+    require(formDock.descriptor.layout->root.kind == protoscope::scripting::LayoutNodeKind::Flow,
+            "重复 label 夹具首个 dock 应为 flow layout");
     require(formDock.controls.size() == 2, "重复 label form 应保留两个控件");
     require(formDock.controls[0].descriptor.id == "src_addr", "第一个重复 label 控件 id 不应改变");
     require(formDock.controls[1].descriptor.id == "dst_addr", "第二个重复 label 控件 id 不应改变");
@@ -1232,6 +1267,23 @@ void test_script_form_layout_missing_control_fail()
     require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_form_missing_control").generic_string()),
             "遗漏控件的 form layout 应加载失败");
     require(host.lastError().find("缺少控件") != std::string::npos, "遗漏控件错误应包含缺少控件提示");
+}
+
+void test_script_layout_unknown_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_unknown_type").generic_string()),
+            "未知 layout type 应加载失败");
+    require(host.lastError().find("type 不支持") != std::string::npos, "未知 layout type 错误应包含 type 提示");
+}
+
+void test_script_invalid_label_position_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_label_position").generic_string()),
+            "非法 label_position 应加载失败");
+    require(host.lastError().find("label_position") != std::string::npos,
+            "非法 label_position 错误应包含字段名");
 }
 
 void test_script_runtime_error_logged()
@@ -2417,6 +2469,7 @@ static const TestCase kAllTests[] = {
     {"script_dock_layout_fields", &test_script_dock_layout_fields},
     {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
     {"script_form_layout_snapshot", &test_script_form_layout_snapshot},
+    {"script_flow_layout_snapshot", &test_script_flow_layout_snapshot},
     {"script_duplicate_label_controls_allowed", &test_script_duplicate_label_controls_allowed},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
@@ -2472,6 +2525,8 @@ static const TestCase kAllTests[] = {
     {"script_form_layout_unknown_control_fail", &test_script_form_layout_unknown_control_fail},
     {"script_form_layout_duplicate_control_fail", &test_script_form_layout_duplicate_control_fail},
     {"script_form_layout_missing_control_fail", &test_script_form_layout_missing_control_fail},
+    {"script_layout_unknown_type_fail", &test_script_layout_unknown_type_fail},
+    {"script_invalid_label_position_fail", &test_script_invalid_label_position_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"script_reload_invalid_types_fail_without_throw", &test_script_reload_invalid_types_fail_without_throw},
     {"script_non_function_callbacks_only_log_errors", &test_script_non_function_callbacks_only_log_errors},

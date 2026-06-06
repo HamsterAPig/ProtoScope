@@ -8,15 +8,15 @@ function ui()
         { type = "button", id = "read_version", label = "读取版本" }
       },
       layout = {
-        kind = "table",
+        type = "table",
         columns = 2,
         rows = {
           {
-            { control = "device_id" },
-            { control = "device_id" }
+            { type = "control", id = "device_id" },
+            { type = "control", id = "device_id" }
           },
           {
-            { control = "read_version" }
+            { type = "control", id = "read_version" }
           }
         }
       }

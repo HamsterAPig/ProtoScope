@@ -44,6 +44,11 @@ enum class ControlType {
     ElfSymbolCombo,
 };
 
+enum class ControlLabelPosition {
+    Left,
+    Right,
+};
+
 struct ElfSymbolValue {
     std::string label;
     std::string value;
@@ -52,6 +57,7 @@ struct ElfSymbolValue {
 
 struct ControlDescriptor {
     ControlType type{ControlType::Button};
+    ControlLabelPosition labelPosition{ControlLabelPosition::Left};
     std::string id;
     std::string label;
     std::string textDefault;
@@ -73,81 +79,38 @@ struct ControlSnapshot {
     ControlValue value;
 };
 
-enum class DockLayoutKind {
+enum class LayoutNodeKind {
+    Column,
     Flow,
     Table,
-    Form,
+    Group,
+    Collapse,
+    Control,
+    Text,
+    Separator,
+    Spacer,
 };
 
-struct TableCellDescriptor {
+struct LayoutNodeDescriptor {
+    LayoutNodeKind kind{LayoutNodeKind::Column};
+    std::vector<LayoutNodeDescriptor> children;
+    std::vector<std::vector<LayoutNodeDescriptor>> rows;
     std::string controlId;
-    bool spacer{false};
-};
-
-struct TableRowDescriptor {
-    std::vector<TableCellDescriptor> cells;
-};
-
-struct TableLayoutDescriptor {
+    std::size_t controlIndex{0};
+    std::string text;
+    std::string title;
+    bool defaultOpen{true};
     std::size_t columns{1};
     bool borders{false};
     bool resizable{true};
     bool rowBg{false};
     std::string sizing{"stretch"};
-    std::vector<TableRowDescriptor> rows;
-};
-
-struct FormControlRowDescriptor {
-    std::vector<std::string> controlIds;
-};
-
-struct FormTextDescriptor {
-    std::string text;
-};
-
-struct FormSeparatorDescriptor {};
-
-enum class FormLayoutItemKind {
-    Control,
-    Controls,
-    Group,
-    Collapse,
-    Separator,
-    Text,
-};
-
-struct FormGroupDescriptor;
-struct FormCollapseDescriptor;
-
-struct FormLayoutItemDescriptor {
-    FormLayoutItemKind kind{FormLayoutItemKind::Control};
-    std::string controlId;
-    FormControlRowDescriptor controls;
-    std::shared_ptr<FormGroupDescriptor> group;
-    std::shared_ptr<FormCollapseDescriptor> collapse;
-    FormTextDescriptor text;
-    FormSeparatorDescriptor separator;
-};
-
-struct FormGroupDescriptor {
-    std::string title;
-    std::vector<FormLayoutItemDescriptor> items;
-};
-
-struct FormCollapseDescriptor {
-    std::string title;
-    bool defaultOpen{true};
-    std::vector<FormLayoutItemDescriptor> items;
-};
-
-struct FormLayoutDescriptor {
-    std::vector<FormLayoutItemDescriptor> items;
+    float spacing{6.0F};
+    float runSpacing{5.0F};
 };
 
 struct DockLayoutDescriptor {
-    DockLayoutKind kind{DockLayoutKind::Flow};
-    TableLayoutDescriptor table;
-    FormLayoutDescriptor form;
+    LayoutNodeDescriptor root;
 };
 
 struct DockDescriptor {

@@ -14,7 +14,6 @@ ProtoScope 脚本 API 定义文件。
 ---@alias ProtoControlValue boolean|integer|number|string|ProtoElfSymbolValue|nil
 ---@alias ProtoBytes integer[]
 ---@alias ProtoPayload string|ProtoBytes|ProtoBuffer
----@alias ProtoFormLayoutItem ProtoFormControlItem|ProtoFormControlsItem|ProtoFormGroupItem|ProtoFormCollapseItem|ProtoFormSeparatorItem|ProtoFormTextItem
 ---@alias ProtoTransportKind 'tcp_client'|'tcp_server'|'serial'|'udp_peer'
 ---@alias ProtoTxKind 'send'|'request'
 ---@alias ProtoTxState 'sent'|'completed'|'timeout'|'rejected'|'dropped'|'canceled'
@@ -46,47 +45,55 @@ function ProtoBuffer:to_hex(max_bytes) end
 ---@return ProtoBytes
 function ProtoBuffer:bytes(max_bytes) end
 
--- 表格布局：用于以表格方式组织停靠面板中的控件。
----@class ProtoTableCell
----@field control? string
----@field spacer? boolean
+-- Layout Tree：所有显式布局都使用 type + children/rows 递归节点。
+---@alias ProtoControlLabelPosition 'left'|'right'
+---@alias ProtoLayoutNode ProtoColumnLayoutNode|ProtoFlowLayoutNode|ProtoTableLayoutNode|ProtoGroupLayoutNode|ProtoCollapseLayoutNode|ProtoControlLayoutNode|ProtoTextLayoutNode|ProtoSeparatorLayoutNode|ProtoSpacerLayoutNode
 
----@class ProtoTableLayout
----@field kind 'table'
+---@class ProtoColumnLayoutNode
+---@field type 'column'
+---@field children ProtoLayoutNode[]
+
+---@class ProtoFlowLayoutNode
+---@field type 'flow'
+---@field spacing? number
+---@field run_spacing? number
+---@field children ProtoLayoutNode[]
+
+---@class ProtoTableLayoutNode
+---@field type 'table'
 ---@field columns integer
 ---@field borders? boolean
 ---@field resizable? boolean
 ---@field row_bg? boolean
 ---@field sizing? 'stretch'
----@field rows ProtoTableCell[][]
+---@field rows ProtoLayoutNode[][]
 
--- 表单布局：用于把控件按分组、折叠、文本说明等结构组合起来。
----@class ProtoFormControlItem
----@field control string
+---@class ProtoGroupLayoutNode
+---@field type 'group'
+---@field title string
+---@field children ProtoLayoutNode[]
 
----@class ProtoFormControlsItem
----@field controls string[]
-
----@class ProtoFormGroupItem
----@field group string
----@field items ProtoFormLayoutItem[]
-
----@class ProtoFormCollapseItem
----@field collapse string
+---@class ProtoCollapseLayoutNode
+---@field type 'collapse'
+---@field title string
 ---@field default_open? boolean
----@field items ProtoFormLayoutItem[]
+---@field children ProtoLayoutNode[]
 
----@class ProtoFormSeparatorItem
----@field separator true
+---@class ProtoControlLayoutNode
+---@field type 'control'
+---@field id string
 
----@class ProtoFormTextItem
+---@class ProtoTextLayoutNode
+---@field type 'text'
 ---@field text string
 
----@class ProtoFormLayout
----@field kind 'form'
----@field items ProtoFormLayoutItem[]
+---@class ProtoSeparatorLayoutNode
+---@field type 'separator'
 
----@alias ProtoDockLayout ProtoTableLayout|ProtoFormLayout
+---@class ProtoSpacerLayoutNode
+---@field type 'spacer'
+
+---@alias ProtoDockLayout ProtoLayoutNode
 
 -- 连接上下文：宿主在打开、关闭、收发数据时传入的基础运行信息。
 ---@class ProtoConnectionContext
@@ -101,6 +108,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field type ProtoControlType
 ---@field id string
 ---@field label string
+---@field label_position? ProtoControlLabelPosition @标签相对控件的位置，默认 left；button 始终使用 label 作为按钮文本。
 ---@field default? ProtoControlValue
 ---@field options? string[]
 ---@field debounce_ms? integer @elf_symbol_combo 输入消抖毫秒数；未设置时使用 gui.elf_symbol_combo.debounce_ms，默认 300。

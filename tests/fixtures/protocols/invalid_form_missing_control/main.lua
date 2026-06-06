@@ -8,9 +8,9 @@ function ui()
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
       },
       layout = {
-        kind = "form",
-        items = {
-          { control = "read_version" }
+        type = "column",
+        children = {
+          { type = "control", id = "read_version" }
         }
       }
     }

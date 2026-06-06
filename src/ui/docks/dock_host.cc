@@ -14,6 +14,28 @@ namespace {
         return descriptor.label + "##lua_control_" + descriptor.id;
     }
 
+    std::string luaControlHiddenImGuiLabel(const scripting::ControlDescriptor& descriptor)
+    {
+        return "##lua_control_" + descriptor.id;
+    }
+
+    std::string luaControlInputLabel(const scripting::ControlDescriptor& descriptor)
+    {
+        if (descriptor.label.empty() || descriptor.labelPosition == scripting::ControlLabelPosition::Right) {
+            return luaControlImGuiLabel(descriptor);
+        }
+        return luaControlHiddenImGuiLabel(descriptor);
+    }
+
+    void drawLuaControlLeftLabel(const scripting::ControlDescriptor& descriptor)
+    {
+        if (descriptor.label.empty() || descriptor.labelPosition != scripting::ControlLabelPosition::Left) {
+            return;
+        }
+        ImGui::TextUnformatted(descriptor.label.c_str());
+        ImGui::SameLine();
+    }
+
     float compactLogToolbarHeight()
     {
         const ImGuiStyle& style = ImGui::GetStyle();
@@ -829,6 +851,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
 {
     const auto& descriptor = control.descriptor;
     const std::string imguiLabel = luaControlImGuiLabel(descriptor);
+    const std::string inputLabel = luaControlInputLabel(descriptor);
     switch (descriptor.type) {
         case scripting::ControlType::Button:
             if (ImGui::Button(imguiLabel.c_str())) {
@@ -838,7 +861,8 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
             break;
         case scripting::ControlType::Checkbox: {
             bool checked = std::get<bool>(control.value);
-            if (ImGui::Checkbox(imguiLabel.c_str(), &checked)) {
+            drawLuaControlLeftLabel(descriptor);
+            if (ImGui::Checkbox(inputLabel.c_str(), &checked)) {
                 application_.updateControlValue(descriptor.id, checked);
                 return true;
             }
@@ -847,7 +871,8 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
         case scripting::ControlType::InputText: {
             char buffer[512]{};
             std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
-            if (ImGui::InputText(imguiLabel.c_str(), buffer, sizeof(buffer))) {
+            drawLuaControlLeftLabel(descriptor);
+            if (ImGui::InputText(inputLabel.c_str(), buffer, sizeof(buffer))) {
                 application_.updateControlValue(descriptor.id, std::string(buffer));
                 return true;
             }
@@ -859,8 +884,9 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
             for (const auto& option : descriptor.comboOptions) {
                 items.push_back(option.c_str());
             }
+            drawLuaControlLeftLabel(descriptor);
             if (!items.empty() &&
-                ImGui::Combo(imguiLabel.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
+                ImGui::Combo(inputLabel.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
                 application_.updateControlValue(descriptor.id, index);
                 return true;
             }
@@ -900,8 +926,9 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
                 labels.push_back(option.label);
             }
 
+            drawLuaControlLeftLabel(descriptor);
             const auto edit = drawEditableCombo(
-                imguiLabel.c_str(), state.draft, labels, EditableComboOptions{.keepPopupOpenWhileEditing = true});
+                inputLabel.c_str(), state.draft, labels, EditableComboOptions{.keepPopupOpenWhileEditing = true});
             if (edit.edited) {
                 state.draft = edit.value;
                 state.editedAtMs = currentMs;
@@ -919,7 +946,8 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
         }
         case scripting::ControlType::InputInt: {
             int value = std::get<int>(control.value);
-            if (ImGui::InputInt(imguiLabel.c_str(), &value)) {
+            drawLuaControlLeftLabel(descriptor);
+            if (ImGui::InputInt(inputLabel.c_str(), &value)) {
                 application_.updateControlValue(descriptor.id, value);
                 return true;
             }
@@ -927,7 +955,8 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
         }
         case scripting::ControlType::InputFloat: {
             float value = std::get<float>(control.value);
-            if (ImGui::InputFloat(imguiLabel.c_str(), &value)) {
+            drawLuaControlLeftLabel(descriptor);
+            if (ImGui::InputFloat(inputLabel.c_str(), &value)) {
                 application_.updateControlValue(descriptor.id, value);
                 return true;
             }

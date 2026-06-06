@@ -105,19 +105,11 @@ private:
     void drawLogDock();
     void drawScriptDock();
     bool drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls, bool earlyExit = true);
-    bool drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
-                          const scripting::TableLayoutDescriptor& layout,
-                          std::string_view stableId,
-                          bool earlyExit = true);
-    bool drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
-                         const scripting::FormLayoutDescriptor& layout,
-                         std::string_view stableId,
-                         bool earlyExit = true);
-    bool drawLuaDockFormItems(const std::vector<scripting::FormLayoutItemDescriptor>& items,
-                              const std::unordered_map<std::string, const scripting::ControlSnapshot*>& controlsById,
-                              std::string_view stableId,
-                              std::size_t& widgetIndex,
-                              bool earlyExit = true);
+    bool drawLuaLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                           const std::vector<scripting::ControlSnapshot>& controls,
+                           std::string_view stableId,
+                           std::size_t& widgetIndex,
+                           bool earlyExit = true);
     bool drawDynamicControl(const scripting::ControlSnapshot& control);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);

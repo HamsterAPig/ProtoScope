@@ -283,6 +283,17 @@ std::optional<ControlType> parseControlType(std::string_view value)
     return std::nullopt;
 }
 
+std::optional<ControlLabelPosition> parseControlLabelPosition(std::string_view value)
+{
+    if (value == "left") {
+        return ControlLabelPosition::Left;
+    }
+    if (value == "right") {
+        return ControlLabelPosition::Right;
+    }
+    return std::nullopt;
+}
+
 bool controlAllowsEmptyLabel(ControlType type)
 {
     return type == ControlType::Checkbox || type == ControlType::InputText || type == ControlType::InputInt ||
@@ -472,6 +483,19 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     descriptor.type = *controlType;
     descriptor.id = readStringField(table, "id");
     descriptor.label = readStringField(table, "label");
+    const sol::object labelPositionObject = table["label_position"];
+    if (labelPositionObject.valid() && labelPositionObject.get_type() != sol::type::lua_nil) {
+        if (!labelPositionObject.is<std::string>()) {
+            error = "控件 label_position 必须是字符串 'left' 或 'right'";
+            return std::nullopt;
+        }
+        const auto labelPosition = parseControlLabelPosition(labelPositionObject.as<std::string>());
+        if (!labelPosition.has_value()) {
+            error = "控件 label_position 仅支持 'left' 或 'right'";
+            return std::nullopt;
+        }
+        descriptor.labelPosition = *labelPosition;
+    }
     if (descriptor.id.empty()) {
         error = "控件必须提供 id";
         return std::nullopt;
@@ -572,217 +596,275 @@ std::optional<std::vector<ControlDescriptor>> parseControlList(const sol::object
     return controls;
 }
 
-bool registerFormControlUse(const DockDescriptor& dock,
-                            const std::unordered_map<std::string, const ControlDescriptor*>& controlsById,
-                            std::unordered_set<std::string>& usedControls,
-                            const std::string& controlId,
-                            std::string& error)
+bool readOptionalBoolField(const sol::table& table,
+                           std::string_view field,
+                           bool defaultValue,
+                           const std::string& path,
+                           std::string& error)
+{
+    const sol::object value = table[std::string(field)];
+    if (!value.valid() || value.get_type() == sol::type::lua_nil) {
+        return defaultValue;
+    }
+    if (!value.is<bool>()) {
+        error = path + "." + std::string(field) + " 必须是 boolean";
+        return defaultValue;
+    }
+    return value.as<bool>();
+}
+
+std::optional<float> readOptionalFloatField(const sol::table& table,
+                                            std::string_view field,
+                                            float defaultValue,
+                                            const std::string& path,
+                                            std::string& error)
+{
+    const sol::object value = table[std::string(field)];
+    if (!value.valid() || value.get_type() == sol::type::lua_nil) {
+        return defaultValue;
+    }
+    if (!value.is<double>() && !value.is<int>()) {
+        error = path + "." + std::string(field) + " 必须是 number";
+        return std::nullopt;
+    }
+    const double number = value.is<double>() ? value.as<double>() : static_cast<double>(value.as<int>());
+    if (!std::isfinite(number) || number < 0.0) {
+        error = path + "." + std::string(field) + " 必须是非负 number";
+        return std::nullopt;
+    }
+    return static_cast<float>(number);
+}
+
+bool registerLayoutControlUse(const DockDescriptor& dock,
+                              const std::unordered_map<std::string, std::size_t>& controlsById,
+                              std::unordered_set<std::string>& usedControls,
+                              const std::string& controlId,
+                              const std::string& path,
+                              LayoutNodeDescriptor& node,
+                              std::string& error)
 {
     if (controlId.empty()) {
-        error = "dock '" + dock.id + "' 的 form layout control 不能为空字符串";
+        error = path + ".id 不能为空";
         return false;
     }
-    if (!controlsById.contains(controlId)) {
-        error = "dock '" + dock.id + "' 的 form layout 引用了未声明控件 '" + controlId + "'";
+    const auto controlIter = controlsById.find(controlId);
+    if (controlIter == controlsById.end()) {
+        error = "dock '" + dock.id + "' 的 layout 引用了未声明控件 '" + controlId + "'";
         return false;
     }
     if (!usedControls.emplace(controlId).second) {
-        error = "dock '" + dock.id + "' 的 form layout 重复引用控件 '" + controlId + "'";
+        error = "dock '" + dock.id + "' 的 layout 重复引用控件 '" + controlId + "'";
         return false;
     }
+    node.controlId = controlId;
+    node.controlIndex = controlIter->second;
     return true;
 }
 
-std::optional<std::vector<FormLayoutItemDescriptor>> parseFormLayoutItems(
+std::optional<LayoutNodeDescriptor> parseLayoutNode(
     const DockDescriptor& dock,
-    const sol::table& itemsTable,
-    const std::unordered_map<std::string, const ControlDescriptor*>& controlsById,
+    const sol::object& object,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
     std::unordered_set<std::string>& usedControls,
-    std::string& error,
-    int depth = 0)
+    const std::string& path,
+    std::string& error);
+
+std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
+    const DockDescriptor& dock,
+    const sol::table& table,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    const std::string& path,
+    std::string& error)
 {
-    if (itemsTable.size() == 0) {
-        error = "dock '" + dock.id + "' 的 form layout.items 不能为空";
+    const sol::object childrenObject = table["children"];
+    if (!childrenObject.valid() || childrenObject.get_type() == sol::type::lua_nil || !childrenObject.is<sol::table>()) {
+        error = path + ".children 必须是非空数组";
+        return std::nullopt;
+    }
+    const auto childrenTable = childrenObject.as<sol::table>();
+    if (childrenTable.size() == 0) {
+        error = path + ".children 必须是非空数组";
         return std::nullopt;
     }
 
-    // 核心流程：form 布局在解析阶段就完成控件引用校验，
-    // 渲染层只按声明顺序输出，避免运行时再做结构推断。
-    std::vector<FormLayoutItemDescriptor> items;
-    items.reserve(itemsTable.size());
-    for (std::size_t itemIndex = 1; itemIndex <= itemsTable.size(); ++itemIndex) {
-        const sol::object itemObject = itemsTable[itemIndex];
-        if (!itemObject.is<sol::table>()) {
-            error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "] 必须是 table";
+    std::vector<LayoutNodeDescriptor> children;
+    children.reserve(childrenTable.size());
+    for (std::size_t index = 1; index <= childrenTable.size(); ++index) {
+        auto child = parseLayoutNode(
+            dock, childrenTable[index], controlsById, usedControls, path + ".children[" + std::to_string(index) + "]", error);
+        if (!child.has_value()) {
             return std::nullopt;
         }
-
-        const auto itemTable = itemObject.as<sol::table>();
-        const bool hasControl = itemTable["control"].valid() && itemTable["control"].get_type() != sol::type::lua_nil;
-        const bool hasControls =
-            itemTable["controls"].valid() && itemTable["controls"].get_type() != sol::type::lua_nil;
-        const bool hasGroup = itemTable["group"].valid() && itemTable["group"].get_type() != sol::type::lua_nil;
-        const bool hasCollapse =
-            itemTable["collapse"].valid() && itemTable["collapse"].get_type() != sol::type::lua_nil;
-        const bool hasSeparator =
-            itemTable["separator"].valid() && itemTable["separator"].get_type() != sol::type::lua_nil;
-        const bool hasText = itemTable["text"].valid() && itemTable["text"].get_type() != sol::type::lua_nil;
-        const int declaredKinds = static_cast<int>(hasControl) + static_cast<int>(hasControls) +
-                                  static_cast<int>(hasGroup) + static_cast<int>(hasCollapse) +
-                                  static_cast<int>(hasSeparator) + static_cast<int>(hasText);
-        if (declaredKinds != 1) {
-            error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) +
-                    "] 必须且只能声明 control / controls / group / collapse / separator / text 之一";
-            return std::nullopt;
-        }
-
-        FormLayoutItemDescriptor item;
-        if (hasControl) {
-            const sol::object controlObject = itemTable["control"];
-            if (!controlObject.is<std::string>()) {
-                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) +
-                        "].control 必须是字符串";
-                return std::nullopt;
-            }
-            item.kind = FormLayoutItemKind::Control;
-            item.controlId = controlObject.as<std::string>();
-            if (!registerFormControlUse(dock, controlsById, usedControls, item.controlId, error)) {
-                return std::nullopt;
-            }
-        } else if (hasControls) {
-            const sol::object controlsObject = itemTable["controls"];
-            if (!controlsObject.is<sol::table>()) {
-                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) +
-                        "].controls 必须是非空数组";
-                return std::nullopt;
-            }
-            const auto controlsTable = controlsObject.as<sol::table>();
-            if (controlsTable.size() == 0) {
-                error =
-                    "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "].controls 不能为空";
-                return std::nullopt;
-            }
-            item.kind = FormLayoutItemKind::Controls;
-            item.controls.controlIds.reserve(controlsTable.size());
-            for (std::size_t controlIndex = 1; controlIndex <= controlsTable.size(); ++controlIndex) {
-                const sol::object controlIdObject = controlsTable[controlIndex];
-                if (!controlIdObject.is<std::string>()) {
-                    error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "].controls[" +
-                            std::to_string(controlIndex) + "] 必须是字符串";
-                    return std::nullopt;
-                }
-                const auto controlId = controlIdObject.as<std::string>();
-                if (!registerFormControlUse(dock, controlsById, usedControls, controlId, error)) {
-                    return std::nullopt;
-                }
-                item.controls.controlIds.push_back(controlId);
-            }
-        } else if (hasGroup || hasCollapse) {
-            if (depth >= 1) {
-                error = "dock '" + dock.id + "' 的 form layout 仅支持一层 group/collapse 嵌套";
-                return std::nullopt;
-            }
-            const char* keyName = hasGroup ? "group" : "collapse";
-            const sol::object titleObject = itemTable[keyName];
-            if (!titleObject.is<std::string>()) {
-                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "]." + keyName +
-                        " 必须是字符串";
-                return std::nullopt;
-            }
-            const sol::object nestedItemsObject = itemTable["items"];
-            if (!nestedItemsObject.is<sol::table>()) {
-                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) +
-                        "].items 必须是非空数组";
-                return std::nullopt;
-            }
-            auto nestedItems = parseFormLayoutItems(
-                dock, nestedItemsObject.as<sol::table>(), controlsById, usedControls, error, depth + 1);
-            if (!nestedItems.has_value()) {
-                return std::nullopt;
-            }
-            if (hasGroup) {
-                item.kind = FormLayoutItemKind::Group;
-                item.group = std::make_shared<FormGroupDescriptor>();
-                item.group->title = titleObject.as<std::string>();
-                item.group->items = std::move(*nestedItems);
-            } else {
-                item.kind = FormLayoutItemKind::Collapse;
-                item.collapse = std::make_shared<FormCollapseDescriptor>();
-                item.collapse->title = titleObject.as<std::string>();
-                item.collapse->defaultOpen = itemTable.get_or("default_open", true);
-                item.collapse->items = std::move(*nestedItems);
-            }
-        } else if (hasSeparator) {
-            const sol::object separatorObject = itemTable["separator"];
-            if (!separatorObject.is<bool>() || !separatorObject.as<bool>()) {
-                error = "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) +
-                        "].separator 必须是 true";
-                return std::nullopt;
-            }
-            item.kind = FormLayoutItemKind::Separator;
-        } else if (hasText) {
-            const sol::object textObject = itemTable["text"];
-            if (!textObject.is<std::string>()) {
-                error =
-                    "dock '" + dock.id + "' 的 form layout.items[" + std::to_string(itemIndex) + "].text 必须是字符串";
-                return std::nullopt;
-            }
-            item.kind = FormLayoutItemKind::Text;
-            item.text.text = textObject.as<std::string>();
-        }
-
-        items.push_back(std::move(item));
+        children.push_back(std::move(*child));
     }
-
-    return items;
+    return children;
 }
 
-std::optional<FormLayoutDescriptor> parseFormLayout(const DockDescriptor& dock,
-                                                    const sol::table& layoutTable,
-                                                    std::string& error)
+std::optional<LayoutNodeDescriptor> parseLayoutNode(
+    const DockDescriptor& dock,
+    const sol::object& object,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    const std::string& path,
+    std::string& error)
 {
-    const sol::object itemsObject = layoutTable["items"];
-    if (!itemsObject.valid() || itemsObject.get_type() == sol::type::lua_nil || !itemsObject.is<sol::table>()) {
-        error = "dock '" + dock.id + "' 的 form layout.items 必须是非空数组";
+    if (!object.is<sol::table>()) {
+        error = path + " 必须是 table";
         return std::nullopt;
     }
 
-    std::unordered_map<std::string, const ControlDescriptor*> controlsById;
-    controlsById.reserve(dock.controls.size());
-    for (const auto& control : dock.controls) {
-        if (!controlsById.emplace(control.id, &control).second) {
-            error = "dock '" + dock.id + "' 的控件 id 重复: " + control.id;
+    const auto table = object.as<sol::table>();
+    const sol::object typeObject = table["type"];
+    if (!typeObject.valid() || typeObject.get_type() == sol::type::lua_nil || !typeObject.is<std::string>()) {
+        error = path + ".type 必须是字符串";
+        return std::nullopt;
+    }
+
+    const std::string type = typeObject.as<std::string>();
+    LayoutNodeDescriptor node;
+    if (type == "column" || type == "flow") {
+        node.kind = type == "column" ? LayoutNodeKind::Column : LayoutNodeKind::Flow;
+        if (type == "flow") {
+            const auto spacing = readOptionalFloatField(table, "spacing", node.spacing, path, error);
+            const auto runSpacing = readOptionalFloatField(table, "run_spacing", node.runSpacing, path, error);
+            if (!spacing.has_value() || !runSpacing.has_value()) {
+                return std::nullopt;
+            }
+            node.spacing = *spacing;
+            node.runSpacing = *runSpacing;
+        }
+        auto children = parseLayoutChildren(dock, table, controlsById, usedControls, path, error);
+        if (!children.has_value()) {
             return std::nullopt;
         }
+        node.children = std::move(*children);
+        return node;
     }
-
-    std::unordered_set<std::string> usedControls;
-    usedControls.reserve(dock.controls.size());
-
-    auto items = parseFormLayoutItems(dock, itemsObject.as<sol::table>(), controlsById, usedControls, error);
-    if (!items.has_value()) {
-        return std::nullopt;
-    }
-
-    if (usedControls.size() != dock.controls.size()) {
-        std::vector<std::string> missingControls;
-        for (const auto& control : dock.controls) {
-            if (!usedControls.contains(control.id)) {
-                missingControls.push_back(control.id);
+    if (type == "group" || type == "collapse") {
+        const sol::object titleObject = table["title"];
+        if (!titleObject.valid() || titleObject.get_type() == sol::type::lua_nil || !titleObject.is<std::string>()) {
+            error = path + ".title 必须是字符串";
+            return std::nullopt;
+        }
+        node.kind = type == "group" ? LayoutNodeKind::Group : LayoutNodeKind::Collapse;
+        node.title = titleObject.as<std::string>();
+        if (node.title.empty()) {
+            error = path + ".title 不能为空";
+            return std::nullopt;
+        }
+        if (type == "collapse") {
+            node.defaultOpen = readOptionalBoolField(table, "default_open", true, path, error);
+            if (!error.empty()) {
+                return std::nullopt;
             }
         }
-        std::ostringstream stream;
-        stream << "dock '" << dock.id << "' 的 form layout 缺少控件:";
-        for (const auto& controlId : missingControls) {
-            stream << ' ' << controlId;
+        auto children = parseLayoutChildren(dock, table, controlsById, usedControls, path, error);
+        if (!children.has_value()) {
+            return std::nullopt;
         }
-        error = stream.str();
-        return std::nullopt;
+        node.children = std::move(*children);
+        return node;
+    }
+    if (type == "control") {
+        node.kind = LayoutNodeKind::Control;
+        const sol::object idObject = table["id"];
+        if (!idObject.valid() || idObject.get_type() == sol::type::lua_nil || !idObject.is<std::string>()) {
+            error = path + ".id 必须是字符串";
+            return std::nullopt;
+        }
+        if (!registerLayoutControlUse(dock, controlsById, usedControls, idObject.as<std::string>(), path, node, error)) {
+            return std::nullopt;
+        }
+        return node;
+    }
+    if (type == "text") {
+        node.kind = LayoutNodeKind::Text;
+        const sol::object textObject = table["text"];
+        if (!textObject.valid() || textObject.get_type() == sol::type::lua_nil || !textObject.is<std::string>()) {
+            error = path + ".text 必须是字符串";
+            return std::nullopt;
+        }
+        node.text = textObject.as<std::string>();
+        return node;
+    }
+    if (type == "separator") {
+        node.kind = LayoutNodeKind::Separator;
+        return node;
+    }
+    if (type == "spacer") {
+        node.kind = LayoutNodeKind::Spacer;
+        return node;
+    }
+    if (type == "table") {
+        node.kind = LayoutNodeKind::Table;
+        const sol::object columnsObject = table["columns"];
+        if (!columnsObject.valid() || columnsObject.get_type() == sol::type::lua_nil || !columnsObject.is<double>()) {
+            error = path + ".columns 必须是 >= 1 的整数";
+            return std::nullopt;
+        }
+        const auto columnsValue = columnsObject.as<double>();
+        if (!std::isfinite(columnsValue) || columnsValue < 1.0 || std::floor(columnsValue) != columnsValue) {
+            error = path + ".columns 必须是 >= 1 的整数";
+            return std::nullopt;
+        }
+        node.columns = static_cast<std::size_t>(columnsValue);
+        node.borders = readOptionalBoolField(table, "borders", false, path, error);
+        node.resizable = readOptionalBoolField(table, "resizable", true, path, error);
+        node.rowBg = readOptionalBoolField(table, "row_bg", false, path, error);
+        if (!error.empty()) {
+            return std::nullopt;
+        }
+        node.sizing = table.get_or("sizing", std::string("stretch"));
+        if (node.sizing != "stretch") {
+            error = path + ".sizing 目前仅支持 'stretch'";
+            return std::nullopt;
+        }
+
+        const sol::object rowsObject = table["rows"];
+        if (!rowsObject.valid() || rowsObject.get_type() == sol::type::lua_nil || !rowsObject.is<sol::table>()) {
+            error = path + ".rows 必须是非空数组";
+            return std::nullopt;
+        }
+        const auto rowsTable = rowsObject.as<sol::table>();
+        if (rowsTable.size() == 0) {
+            error = path + ".rows 必须是非空数组";
+            return std::nullopt;
+        }
+        node.rows.reserve(rowsTable.size());
+        for (std::size_t rowIndex = 1; rowIndex <= rowsTable.size(); ++rowIndex) {
+            const sol::object rowObject = rowsTable[rowIndex];
+            if (!rowObject.is<sol::table>()) {
+                error = path + ".rows[" + std::to_string(rowIndex) + "] 必须是 table";
+                return std::nullopt;
+            }
+            const auto rowTable = rowObject.as<sol::table>();
+            if (rowTable.size() > node.columns) {
+                error = path + ".rows[" + std::to_string(rowIndex) + "] 的单元格数量不能超过 columns";
+                return std::nullopt;
+            }
+            std::vector<LayoutNodeDescriptor> row;
+            row.reserve(rowTable.size());
+            for (std::size_t cellIndex = 1; cellIndex <= rowTable.size(); ++cellIndex) {
+                auto cell = parseLayoutNode(dock,
+                                            rowTable[cellIndex],
+                                            controlsById,
+                                            usedControls,
+                                            path + ".rows[" + std::to_string(rowIndex) + "][" +
+                                                std::to_string(cellIndex) + "]",
+                                            error);
+                if (!cell.has_value()) {
+                    return std::nullopt;
+                }
+                row.push_back(std::move(*cell));
+            }
+            node.rows.push_back(std::move(row));
+        }
+        return node;
     }
 
-    FormLayoutDescriptor layout;
-    layout.items = std::move(*items);
-    return layout;
+    error = path + ".type 不支持: " + type;
+    return std::nullopt;
 }
 
 std::optional<DockLayoutDescriptor> parseDockLayout(const DockDescriptor& dock,
@@ -794,156 +876,32 @@ std::optional<DockLayoutDescriptor> parseDockLayout(const DockDescriptor& dock,
         return std::nullopt;
     }
 
-    const auto layoutTable = object.as<sol::table>();
-    const sol::object kindObject = layoutTable["kind"];
-    if (!kindObject.valid() || kindObject.get_type() == sol::type::lua_nil || !kindObject.is<std::string>()) {
-        error = "dock '" + dock.id + "' 的 layout.kind 必须是字符串 'table' 或 'form'";
-        return std::nullopt;
-    }
-
-    const auto kind = kindObject.as<std::string>();
-    if (kind == "form") {
-        auto formLayout = parseFormLayout(dock, layoutTable, error);
-        if (!formLayout.has_value()) {
-            return std::nullopt;
-        }
-        DockLayoutDescriptor layout;
-        layout.kind = DockLayoutKind::Form;
-        layout.form = std::move(*formLayout);
-        return layout;
-    }
-
-    if (kind != "table") {
-        error = "dock '" + dock.id + "' 的 layout.kind 仅支持 'table' 或 'form'";
-        return std::nullopt;
-    }
-
-    const sol::object columnsObject = layoutTable["columns"];
-    if (!columnsObject.valid() || columnsObject.get_type() == sol::type::lua_nil || !columnsObject.is<double>()) {
-        error = "dock '" + dock.id + "' 的 layout.columns 必须是 >= 1 的整数";
-        return std::nullopt;
-    }
-    const auto columnsValue = columnsObject.as<double>();
-    if (!std::isfinite(columnsValue) || columnsValue < 1.0 || std::floor(columnsValue) != columnsValue) {
-        error = "dock '" + dock.id + "' 的 layout.columns 必须是 >= 1 的整数";
-        return std::nullopt;
-    }
-
-    const sol::object rowsObject = layoutTable["rows"];
-    if (!rowsObject.valid() || rowsObject.get_type() == sol::type::lua_nil || !rowsObject.is<sol::table>()) {
-        error = "dock '" + dock.id + "' 的 layout.rows 必须是非空数组";
-        return std::nullopt;
-    }
-
-    const auto rowsTable = rowsObject.as<sol::table>();
-    if (rowsTable.size() == 0) {
-        error = "dock '" + dock.id + "' 的 layout.rows 不能为空";
-        return std::nullopt;
-    }
-
-    std::unordered_map<std::string, const ControlDescriptor*> controlsById;
+    std::unordered_map<std::string, std::size_t> controlsById;
     controlsById.reserve(dock.controls.size());
-    for (const auto& control : dock.controls) {
-        if (!controlsById.emplace(control.id, &control).second) {
-            error = "dock '" + dock.id + "' 的 controls 中存在重复 id: " + control.id;
+    for (std::size_t index = 0; index < dock.controls.size(); ++index) {
+        const auto& control = dock.controls[index];
+        if (!controlsById.emplace(control.id, index).second) {
+            error = "dock '" + dock.id + "' 的控件 id 重复: " + control.id;
             return std::nullopt;
         }
-    }
-
-    DockLayoutDescriptor layout;
-    layout.kind = DockLayoutKind::Table;
-    layout.table.columns = static_cast<std::size_t>(columnsValue);
-    layout.table.borders = layoutTable.get_or("borders", false);
-    layout.table.resizable = layoutTable.get_or("resizable", true);
-    layout.table.rowBg = layoutTable.get_or("row_bg", false);
-    layout.table.sizing = readStringField(layoutTable, "sizing", "stretch");
-    if (layout.table.sizing != "stretch") {
-        error = "dock '" + dock.id + "' 的 layout.sizing 仅支持 'stretch'";
-        return std::nullopt;
     }
 
     std::unordered_set<std::string> usedControls;
     usedControls.reserve(dock.controls.size());
-    for (std::size_t rowIndex = 1; rowIndex <= rowsTable.size(); ++rowIndex) {
-        const sol::object rowObject = rowsTable[rowIndex];
-        if (!rowObject.is<sol::table>()) {
-            error = "dock '" + dock.id + "' 的 layout.rows[" + std::to_string(rowIndex) + "] 必须是数组";
-            return std::nullopt;
-        }
-
-        const auto rowTable = rowObject.as<sol::table>();
-        if (rowTable.size() > layout.table.columns) {
-            error =
-                "dock '" + dock.id + "' 的 layout.rows[" + std::to_string(rowIndex) + "] 单元格数量不能超过 columns";
-            return std::nullopt;
-        }
-
-        TableRowDescriptor row;
-        row.cells.reserve(rowTable.size());
-        for (std::size_t cellIndex = 1; cellIndex <= rowTable.size(); ++cellIndex) {
-            const sol::object cellObject = rowTable[cellIndex];
-            if (!cellObject.is<sol::table>()) {
-                error = "dock '" + dock.id + "' 的 layout.rows[" + std::to_string(rowIndex) + "][" +
-                        std::to_string(cellIndex) + "] 必须是 table";
-                return std::nullopt;
-            }
-
-            const auto cellTable = cellObject.as<sol::table>();
-            const sol::object controlObject = cellTable["control"];
-            const sol::object spacerObject = cellTable["spacer"];
-            const bool hasControl = controlObject.valid() && controlObject.get_type() != sol::type::lua_nil;
-            const bool hasSpacer = spacerObject.valid() && spacerObject.get_type() != sol::type::lua_nil;
-            if (hasControl == hasSpacer) {
-                error = "dock '" + dock.id + "' 的 layout.rows[" + std::to_string(rowIndex) + "][" +
-                        std::to_string(cellIndex) + "] 必须二选一：control 或 spacer";
-                return std::nullopt;
-            }
-
-            TableCellDescriptor cell;
-            if (hasSpacer) {
-                if (!spacerObject.is<bool>() || !spacerObject.as<bool>()) {
-                    error = "dock '" + dock.id + "' 的 layout.rows[" + std::to_string(rowIndex) + "][" +
-                            std::to_string(cellIndex) + "].spacer 必须为 true";
-                    return std::nullopt;
-                }
-                cell.spacer = true;
-            } else {
-                if (!controlObject.is<std::string>()) {
-                    error = "dock '" + dock.id + "' 的 layout.rows[" + std::to_string(rowIndex) + "][" +
-                            std::to_string(cellIndex) + "].control 必须是字符串";
-                    return std::nullopt;
-                }
-                cell.controlId = controlObject.as<std::string>();
-                if (cell.controlId.empty()) {
-                    error = "dock '" + dock.id + "' 的 layout.rows[" + std::to_string(rowIndex) + "][" +
-                            std::to_string(cellIndex) + "].control 不能为空";
-                    return std::nullopt;
-                }
-                if (!controlsById.contains(cell.controlId)) {
-                    error = "dock '" + dock.id + "' 的 layout.rows[" + std::to_string(rowIndex) + "][" +
-                            std::to_string(cellIndex) + "] 引用了未声明控件: " + cell.controlId;
-                    return std::nullopt;
-                }
-                if (!usedControls.emplace(cell.controlId).second) {
-                    error = "dock '" + dock.id + "' 的 table layout 重复引用控件: " + cell.controlId;
-                    return std::nullopt;
-                }
-            }
-            row.cells.push_back(std::move(cell));
-        }
-        layout.table.rows.push_back(std::move(row));
+    auto root = parseLayoutNode(dock, object, controlsById, usedControls, "dock '" + dock.id + "' 的 layout", error);
+    if (!root.has_value()) {
+        return std::nullopt;
     }
 
     if (usedControls.size() != dock.controls.size()) {
         std::vector<std::string> missingControls;
-        missingControls.reserve(dock.controls.size() - usedControls.size());
         for (const auto& control : dock.controls) {
             if (!usedControls.contains(control.id)) {
                 missingControls.push_back(control.id);
             }
         }
         std::ostringstream stream;
-        stream << "dock '" << dock.id << "' 的 table layout 缺少控件:";
+        stream << "dock '" << dock.id << "' 的 layout 缺少控件:";
         for (const auto& controlId : missingControls) {
             stream << ' ' << controlId;
         }
@@ -951,8 +909,12 @@ std::optional<DockLayoutDescriptor> parseDockLayout(const DockDescriptor& dock,
         return std::nullopt;
     }
 
+    DockLayoutDescriptor layout;
+    layout.root = std::move(*root);
     return layout;
 }
+
+
 
 std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view lua, std::string& error)
 {

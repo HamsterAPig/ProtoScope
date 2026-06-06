@@ -127,10 +127,10 @@ protocols/
 
 当前默认脚本使用 `ui()` 返回 Dock 数组；若只需单面板，也可继续返回 `controls()`。
 
-`ui()` 下的 dock 现在也支持显式 `layout`。默认 demo 已切到 `layout.kind = "table"`，
-用 `rows/cells` 声明控件在 dock 内的排布。
+`ui()` 下的 dock 现在也支持显式 Layout Tree。默认 demo 使用 `type + children`
+递归节点声明控件在 dock 内的排布。
 
-`ui()` + `table layout` 示例：
+`ui()` + `table layout node` 示例：
 
 ```lua
 function ui()
@@ -145,7 +145,7 @@ function ui()
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
       },
       layout = {
-        kind = "table",
+        type = "table",
         columns = 2,
         borders = false,
         resizable = true,
@@ -153,8 +153,8 @@ function ui()
         sizing = "stretch",
         rows = {
           {
-            { control = "read_version" },
-            { control = "device_id" },
+            { type = "control", id = "read_version" },
+            { type = "control", id = "device_id" },
           },
         }
       }

@@ -8,12 +8,12 @@ function ui()
         { type = "button", id = "read_version", label = "读取版本" }
       },
       layout = {
-        kind = "table",
+        type = "table",
         columns = 2,
         rows = {
           {
-            { control = "device_id" },
-            { spacer = true }
+            { type = "control", id = "device_id" },
+            { type = "spacer" }
           }
         }
       }

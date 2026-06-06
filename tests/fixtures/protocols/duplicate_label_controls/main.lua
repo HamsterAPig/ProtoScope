@@ -8,9 +8,10 @@ function ui()
         { type = "input_text", id = "dst_addr", label = "地址", default = "02" },
       },
       layout = {
-        kind = "form",
-        items = {
-          { controls = { "src_addr", "dst_addr" } },
+        type = "flow",
+        children = {
+          { type = "control", id = "src_addr" },
+          { type = "control", id = "dst_addr" },
         }
       }
     },
