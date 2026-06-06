@@ -287,7 +287,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
                                        : visibleChannelIndicesForFit(frame.snapshot);
     viewportChangedThisFrame =
         applyFitVisibleWaveforms(view, displayData, fitChannelIndices) || viewportChangedThisFrame;
-    const auto zoomSelectionResult = handleMainPlotZoomSelection(view);
+    const auto zoomSelectionResult = handleMainPlotZoomSelection(view, wave.suppressZoomSelectionEscapeThisFrame);
     viewportChangedThisFrame = zoomSelectionResult.viewportChanged || viewportChangedThisFrame;
     viewportChangedThisFrame = applyPendingVerticalAutoFitOverride(view, derivedBounds) || viewportChangedThisFrame;
     const bool offsetReset =

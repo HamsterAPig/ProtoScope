@@ -191,13 +191,16 @@ namespace {
         return false;
     }
 
-    bool handleFftZoomSelection(plot::WaveViewState& view, bool phasePlot, double minFrequencyWidth)
+    bool handleFftZoomSelection(plot::WaveViewState& view,
+                                bool phasePlot,
+                                double minFrequencyWidth,
+                                bool suppressEscapeCancel)
     {
         if (!view.zoomSelectionActive && !view.zoomSelectionDragging) {
             return false;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
-            ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+        const bool cancelByEscape = ImGui::IsKeyPressed(ImGuiKey_Escape) && !suppressEscapeCancel;
+        if (cancelByEscape || ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
             cancelFftZoomSelection(view);
             return true;
         }
@@ -763,7 +766,8 @@ namespace {
             ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftMagnitudeMin, view.fftMagnitudeMax, ImGuiCond_Always);
             drawFftChannelLines(*fftFrame, *frame.fullSnapshot, false);
             const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
-            const bool zoomSelectionConsumed = handleFftZoomSelection(view, false, minFrequencyWidth);
+                const bool zoomSelectionConsumed =
+                    handleFftZoomSelection(view, false, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);
             const auto limits = ImPlot::GetPlotLimits();
             if (!zoomSelectionConsumed) {
                 drawHoverReadout(view, *fftFrame, false, limits);
@@ -790,7 +794,8 @@ namespace {
             ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftPhaseMin, view.fftPhaseMax, ImGuiCond_Always);
             drawFftChannelLines(*fftFrame, *frame.fullSnapshot, true);
             const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
-            const bool zoomSelectionConsumed = handleFftZoomSelection(view, true, minFrequencyWidth);
+                const bool zoomSelectionConsumed =
+                    handleFftZoomSelection(view, true, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);
             const auto limits = ImPlot::GetPlotLimits();
             if (!zoomSelectionConsumed) {
                 drawHoverReadout(view, *fftFrame, true, limits);

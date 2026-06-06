@@ -228,6 +228,7 @@ struct WaveDockState {
     bool cachedFftKeyValid{false};
     WaveFftCacheKey cachedFftKey{};
     WaveFftFrame cachedFftFrame{};
+    bool suppressZoomSelectionEscapeThisFrame{false};
 };
 
 bool resetChannelConfigToDefault(WaveDockState& wave,

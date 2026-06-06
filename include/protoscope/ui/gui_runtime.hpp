@@ -68,6 +68,16 @@ private:
         std::vector<const dock::ReceiveRow*> rows;
     };
 
+    struct WaveFullscreenDockSnapshot {
+        bool showCommDock{true};
+        bool showProtocolDock{true};
+        bool showTransferDock{true};
+        bool showLogDock{true};
+        bool showScriptDock{true};
+        bool showWaveDock{true};
+        std::unordered_map<std::string, bool> luaDockVisibility;
+    };
+
     bool initializeWindow();
     bool initializeImGui();
     bool initializePlotContext();
@@ -90,6 +100,11 @@ private:
     void renderFrame();
     void drawAppHeader(float menuBarHeight);
     void drawStatusBar();
+    void processWaveFullscreenInput();
+    void enterWaveFullscreen();
+    void exitWaveFullscreen();
+    void applyWaveFocusFullscreen();
+    void restoreWaveFocusFullscreen();
     bool saveCurrentConfigToDisk();
     bool stopRawCaptureRecordingWithStatus();
     void syncDialogQueue();
@@ -208,6 +223,10 @@ private:
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};
+    bool waveFullscreenActive_{false};
+    bool waveFullscreenToggleRequested_{false};
+    config::GuiWaveFullscreenMode waveFullscreenActiveMode_{config::GuiWaveFullscreenMode::Focus};
+    std::optional<WaveFullscreenDockSnapshot> waveFullscreenSnapshot_;
     FilteredLogRowsCache transferLogRowsCache_;
     FilteredLogRowsCache hostLogRowsCache_;
     FilteredLogRowsCache scriptLogRowsCache_;

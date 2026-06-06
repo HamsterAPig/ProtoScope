@@ -1,8 +1,11 @@
 #include "protoscope/config/embedded_protocols.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -63,6 +66,39 @@ namespace {
         return true;
     }
 
+    std::optional<bool> fileMatchesResource(const fs::path& outputPath,
+                                            const cmrc::file& resourceFile,
+                                            std::string& error)
+    {
+        std::ifstream in(outputPath, std::ios::binary);
+        if (!in.good()) {
+            error = "打开文件失败: " + outputPath.string();
+            return std::nullopt;
+        }
+
+        in.seekg(0, std::ios::end);
+        const auto fileSize = in.tellg();
+        if (fileSize < 0) {
+            error = "读取文件大小失败: " + outputPath.string();
+            return std::nullopt;
+        }
+        if (static_cast<std::uintmax_t>(fileSize) != static_cast<std::uintmax_t>(resourceFile.size())) {
+            return false;
+        }
+
+        in.seekg(0, std::ios::beg);
+        std::vector<char> buffer(resourceFile.size());
+        if (!buffer.empty()) {
+            in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            if (!in.good()) {
+                error = "读取文件失败: " + outputPath.string();
+                return std::nullopt;
+            }
+        }
+
+        return std::equal(buffer.begin(), buffer.end(), resourceFile.begin(), resourceFile.end());
+    }
+
     bool extractOneResource(const char* resourcePath, const fs::path& outputPath, std::string& error)
     {
         auto resourceFs = cmrc::proto_resources::get_filesystem();
@@ -75,6 +111,34 @@ namespace {
             error += resourcePath;
             error += ", ";
             error += ex.what();
+            return false;
+        }
+    }
+
+    bool extractResourceIfChanged(const char* resourcePath, const fs::path& outputPath, std::string& error)
+    {
+        auto resourceFs = cmrc::proto_resources::get_filesystem();
+
+        try {
+            const auto resourceFile = resourceFs.open(resourcePath);
+            std::error_code ec;
+            const bool outputExists = fs::exists(outputPath, ec);
+            if (ec) {
+                error = "检查文件失败: " + outputPath.string() + ", " + ec.message();
+                return false;
+            }
+            if (outputExists) {
+                const auto matches = fileMatchesResource(outputPath, resourceFile, error);
+                if (!matches.has_value()) {
+                    return false;
+                }
+                if (*matches) {
+                    return true;
+                }
+            }
+            return writeFileFromResource(resourceFile, outputPath, error);
+        } catch (const std::exception& ex) {
+            error = "读取内嵌协议资源失败: " + std::string(resourcePath) + ", " + ex.what();
             return false;
         }
     }
@@ -176,17 +240,8 @@ bool ensureProtocolWorkspace(const fs::path& rootDir, std::string& error)
 
     for (const auto& entry : kProtocolResources) {
         const auto outputPath = rootDir / fs::path(entry.output_path);
-        ec.clear();
-        const bool outputExists = fs::exists(outputPath, ec);
-        if (ec) {
-            error = "检查内置协议文件失败: " + outputPath.string() + ", " + ec.message();
-            return false;
-        }
-        if (outputExists) {
-            continue;
-        }
-
-        if (!extractOneResource(entry.resource_path, outputPath, error)) {
+        // 核心流程：内嵌模板升级后要刷新旧副本，否则测试/运行时会继续加载过期 Lua 布局。
+        if (!extractResourceIfChanged(entry.resource_path, outputPath, error)) {
             return false;
         }
     }

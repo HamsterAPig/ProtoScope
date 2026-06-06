@@ -44,6 +44,8 @@ struct WaveContext {
     float availableHeight{0.0F};
     float contentWidth{0.0F};
     float toolsWidth{0.0F};
+    bool fullscreenActive{false};
+    bool* fullscreenToggleRequested{nullptr};
 };
 
 } // namespace protoscope::ui

@@ -30,6 +30,7 @@ enum class ShortcutKey {
     Escape,
     F1,
     F5,
+    F11,
 };
 
 enum class ShortcutAction {
@@ -51,6 +52,7 @@ enum class ShortcutAction {
     WaveFitVisible,
     WaveToggleZoomSelection,
     WaveToggleFft,
+    WaveToggleFullscreen,
     WaveClearHistory,
 };
 

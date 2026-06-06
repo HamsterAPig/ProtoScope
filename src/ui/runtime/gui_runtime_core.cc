@@ -8,7 +8,6 @@
 #include "protoscope/ui/editable_combo.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/icons.hpp"
-#include "protoscope/ui/keyboard_shortcuts.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/render_frame_scheduler.hpp"
 #include "protoscope/ui/ui_component.hpp"
@@ -367,6 +366,83 @@ RuntimeUiContext GuiRuntime::makeUiContext()
     };
 }
 
+void GuiRuntime::processWaveFullscreenInput()
+{
+    if (waveFullscreenActive_ && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        application_.docks().waveState().suppressZoomSelectionEscapeThisFrame = true;
+        exitWaveFullscreen();
+    }
+}
+
+void GuiRuntime::enterWaveFullscreen()
+{
+    if (waveFullscreenActive_) {
+        return;
+    }
+
+    waveFullscreenActiveMode_ = application_.runtimeConfig().gui.wave.fullscreenMode;
+    waveFullscreenActive_ = true;
+    showWaveDock_ = true;
+    if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
+        applyWaveFocusFullscreen();
+    }
+}
+
+void GuiRuntime::exitWaveFullscreen()
+{
+    if (!waveFullscreenActive_) {
+        return;
+    }
+
+    if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
+        restoreWaveFocusFullscreen();
+    }
+    waveFullscreenActive_ = false;
+    waveFullscreenSnapshot_.reset();
+}
+
+void GuiRuntime::applyWaveFocusFullscreen()
+{
+    if (!waveFullscreenSnapshot_) {
+        waveFullscreenSnapshot_ = WaveFullscreenDockSnapshot{
+            .showCommDock = showCommDock_,
+            .showProtocolDock = showProtocolDock_,
+            .showTransferDock = showTransferDock_,
+            .showLogDock = showLogDock_,
+            .showScriptDock = showScriptDock_,
+            .showWaveDock = showWaveDock_,
+            .luaDockVisibility = luaDockVisibility_,
+        };
+    }
+
+    // 核心流程：专注全屏只改运行期可见性快照，不触碰协议工作区保存标记。
+    showCommDock_ = false;
+    showProtocolDock_ = false;
+    showTransferDock_ = false;
+    showLogDock_ = false;
+    showScriptDock_ = false;
+    showWaveDock_ = true;
+    for (auto& [stableId, visible] : luaDockVisibility_) {
+        (void)stableId;
+        visible = false;
+    }
+}
+
+void GuiRuntime::restoreWaveFocusFullscreen()
+{
+    if (!waveFullscreenSnapshot_) {
+        return;
+    }
+
+    showCommDock_ = waveFullscreenSnapshot_->showCommDock;
+    showProtocolDock_ = waveFullscreenSnapshot_->showProtocolDock;
+    showTransferDock_ = waveFullscreenSnapshot_->showTransferDock;
+    showLogDock_ = waveFullscreenSnapshot_->showLogDock;
+    showScriptDock_ = waveFullscreenSnapshot_->showScriptDock;
+    showWaveDock_ = waveFullscreenSnapshot_->showWaveDock;
+    luaDockVisibility_ = waveFullscreenSnapshot_->luaDockVisibility;
+}
+
 void GuiRuntime::attachUiComponents()
 {
     auto context = makeUiContext();
@@ -493,14 +569,12 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
             const bool previousShowLogDock = showLogDock_;
             const bool previousShowScriptDock = showScriptDock_;
             const bool previousShowWaveDock = showWaveDock_;
-            ImGui::MenuItem("通讯配置", shortcutLabel(ShortcutAction::ToggleCommDock).data(), &showCommDock_);
-            ImGui::MenuItem("协议脚本 / 动态控件",
-                            shortcutLabel(ShortcutAction::ToggleProtocolDock).data(),
-                            &showProtocolDock_);
-            ImGui::MenuItem("收发数据", shortcutLabel(ShortcutAction::ToggleTransferDock).data(), &showTransferDock_);
-            ImGui::MenuItem("日志", shortcutLabel(ShortcutAction::ToggleLogDock).data(), &showLogDock_);
-            ImGui::MenuItem("脚本", shortcutLabel(ShortcutAction::ToggleScriptDock).data(), &showScriptDock_);
-            ImGui::MenuItem("波形", shortcutLabel(ShortcutAction::ToggleWaveDock).data(), &showWaveDock_);
+            ImGui::MenuItem("通讯配置", nullptr, &showCommDock_);
+            ImGui::MenuItem("协议脚本 / 动态控件", nullptr, &showProtocolDock_);
+            ImGui::MenuItem("收发数据", nullptr, &showTransferDock_);
+            ImGui::MenuItem("日志", nullptr, &showLogDock_);
+            ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
+            ImGui::MenuItem("波形", nullptr, &showWaveDock_);
             if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
                 previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
                 previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
@@ -617,6 +691,8 @@ void GuiRuntime::renderFrame()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    waveFullscreenToggleRequested_ = false;
+    processWaveFullscreenInput();
     handleGlobalShortcuts();
     syncRegisteredDialogs();
     drawRegisteredMenus();
@@ -631,12 +707,31 @@ void GuiRuntime::renderFrame()
 
     drawStatusBar();
     drawRegisteredDocks();
-    waveDockRenderer_.draw(showWaveDock_);
+    waveDockRenderer_.draw(showWaveDock_,
+                           waveFullscreenActive_,
+                           &waveFullscreenToggleRequested_,
+                           waveFullscreenActive_ &&
+                               waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus);
+    if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay) {
+        waveDockRenderer_.drawOverlay(waveFullscreenActive_, &waveFullscreenToggleRequested_);
+    }
     drawRegisteredDialogs();
+    if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus && !showWaveDock_) {
+        waveFullscreenToggleRequested_ = true;
+    }
     if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
         previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
         previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
-        pendingProtocolWorkspaceSave_ = true;
+        if (!waveFullscreenActive_ && !waveFullscreenToggleRequested_) {
+            pendingProtocolWorkspaceSave_ = true;
+        }
+    }
+    if (waveFullscreenToggleRequested_) {
+        if (waveFullscreenActive_) {
+            exitWaveFullscreen();
+        } else {
+            enterWaveFullscreen();
+        }
     }
 
     ImGui::Render();

@@ -338,6 +338,28 @@ namespace {
         return "nearest_waveform";
     }
 
+    GuiWaveFullscreenMode parseWaveFullscreenMode(const std::string& value, GuiWaveFullscreenMode fallback)
+    {
+        if (value == "focus") {
+            return GuiWaveFullscreenMode::Focus;
+        }
+        if (value == "overlay") {
+            return GuiWaveFullscreenMode::Overlay;
+        }
+        return fallback;
+    }
+
+    const char* toWaveFullscreenModeText(const GuiWaveFullscreenMode mode)
+    {
+        switch (mode) {
+            case GuiWaveFullscreenMode::Focus:
+                return "focus";
+            case GuiWaveFullscreenMode::Overlay:
+                return "overlay";
+        }
+        return "focus";
+    }
+
     double positiveOrFallback(double value, double fallback)
     {
         return value > 0.0 ? value : fallback;
@@ -487,6 +509,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const
                 readScalar<bool>(wave, "show_channel_legend", result.config.gui.wave.showChannelLegend);
             result.config.gui.wave.showFftLegend =
                 readScalar<bool>(wave, "show_fft_legend", result.config.gui.wave.showFftLegend);
+            result.config.gui.wave.fullscreenMode =
+                parseWaveFullscreenMode(readScalar<std::string>(
+                                            wave,
+                                            "fullscreen_mode",
+                                            toWaveFullscreenModeText(result.config.gui.wave.fullscreenMode)),
+                                        result.config.gui.wave.fullscreenMode);
             if (const auto logHistory = childNode(gui, "log_history")) {
                 result.config.gui.logHistory.transferRawLimit = readScalar<std::size_t>(
                     logHistory, "transfer_raw_limit", result.config.gui.logHistory.transferRawLimit);
@@ -781,6 +809,7 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     root["gui"]["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
     root["gui"]["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
     root["gui"]["wave"]["show_fft_legend"] = config.gui.wave.showFftLegend;
+    root["gui"]["wave"]["fullscreen_mode"] = toWaveFullscreenModeText(config.gui.wave.fullscreenMode);
     root["gui"]["log_history"]["transfer_raw_limit"] = config.gui.logHistory.transferRawLimit;
     root["gui"]["log_history"]["transfer_frame_limit"] = config.gui.logHistory.transferFrameLimit;
     root["gui"]["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;

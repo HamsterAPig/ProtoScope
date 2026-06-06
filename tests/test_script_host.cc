@@ -1458,6 +1458,8 @@ void test_config_default_roundtrip()
             "游标极值吸附策略默认应为 nearest_waveform");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
+    require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Focus,
+            "波形全屏模式默认应为 focus");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
     require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
@@ -1505,6 +1507,7 @@ void test_config_default_roundtrip()
     config.gui.wave.zoomSelectionAutoExit = true;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
+    config.gui.wave.fullscreenMode = protoscope::config::GuiWaveFullscreenMode::Overlay;
     config.gui.logHistory.transferRawLimit = 11;
     config.gui.logHistory.transferFrameLimit = 22;
     config.gui.logHistory.hostLimit = 33;
@@ -1570,6 +1573,8 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.wave.zoomSelectionAutoExit, "框选放大自动退出开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showChannelLegend, "波形图例显示开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
+    require(reloaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
+            "波形全屏模式 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
@@ -1721,9 +1726,10 @@ void test_config_wave_mode_invalid_fallback()
            "    control_mode: weird\n"
            "    display_formula: wrong\n"
            "    channel_card_width_mode: weird\n"
-           "    channel_double_click_action: weird\n"
-           "    x_axis_double_click_action: weird\n"
-           "    channel_card_fixed_width: 0\n"
+            "    channel_double_click_action: weird\n"
+            "    x_axis_double_click_action: weird\n"
+            "    fullscreen_mode: weird\n"
+            "    channel_card_fixed_width: 0\n"
            "    channel_card_adaptive_ratio: -0.5\n"
            "    vertical_auto_fit_multiplier: 0\n";
     out.close();
@@ -1740,6 +1746,8 @@ void test_config_wave_mode_invalid_fallback()
         "非法 channel_double_click_action 应回退到 reset_scale_offset");
     require(loaded.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
             "非法 x_axis_double_click_action 应回退到 fit_full_history");
+    require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Focus,
+            "非法 fullscreen_mode 应回退到 focus");
     require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
     require(std::abs(loaded.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "非正自适应比例应回退到 0.22");
     require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "非正 Auto Fit 系数应回退到 1.2");
@@ -1815,11 +1823,26 @@ void test_config_default_protocol_workspace_fills_missing_resources()
         std::ofstream out(protocolRoot / "keep.txt");
         out << "keep";
     }
+    const auto defaultProtocolScript = protocolRoot / "templates" / "default_protocol" / "main.lua";
+    std::filesystem::create_directories(defaultProtocolScript.parent_path());
+    {
+        std::ofstream out(defaultProtocolScript);
+        out << "function ui()\n"
+               "  return {{ id = 'protocol', title = '旧模板', controls = {}, layout = { kind = 'form' } }}\n"
+               "end\n";
+    }
 
     require(store.ensureDefaultProtocolWorkspace(error), "已有 protocols 根目录时初始化不应失败");
     require(std::filesystem::exists(protocolRoot / "keep.txt"), "已有 protocols 内容不应丢失");
-    require(std::filesystem::exists(protocolRoot / "templates" / "default_protocol" / "main.lua"),
-            "已有 protocols 根目录时也应补齐默认模板");
+    require(std::filesystem::exists(defaultProtocolScript), "已有 protocols 根目录时也应补齐默认模板");
+    {
+        std::ifstream input(defaultProtocolScript);
+        std::stringstream buffer;
+        buffer << input.rdbuf();
+        const auto scriptText = buffer.str();
+        require(scriptText.find("type = \"column\"") != std::string::npos, "旧版默认模板应刷新为当前 layout.type 格式");
+        require(scriptText.find("kind = 'form'") == std::string::npos, "旧版默认模板内容不应残留");
+    }
     require(std::filesystem::exists(protocolRoot / "templates" / "lua_waveform_demo" / "main.lua"),
             "已有 protocols 根目录时也应补齐波形模板");
     require(std::filesystem::exists(protocolRoot / "README.md"), "已有 protocols 根目录时应补齐 README");

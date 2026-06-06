@@ -577,7 +577,9 @@ static_assert(std::is_base_of_v<IWaveToolbarSection, WaveFftToolbarSection>,
 void drawWaveToolbar(app::Application& application,
                      plot::WaveDockState& wave,
                      const plot::ViewConfig& config,
-                     const plot::WaveDisplayData& displayData)
+                     const plot::WaveDisplayData& displayData,
+                     bool fullscreenActive,
+                     bool* fullscreenToggleRequested)
 {
     auto& view = wave.view;
     const double minVisibleTimeSpan = (std::max) (view.minVisibleTimeSpan, 1e-6);
@@ -628,6 +630,13 @@ void drawWaveToolbar(app::Application& application,
         if (drawToolbarActionButton(
                 "清", "清空当前波形历史缓存；不会修改协议脚本或串口连接状态。", collapsedButtonSize)) {
             application.resetWaveHistory();
+        }
+        if (fullscreenToggleRequested != nullptr &&
+            drawToolbarActionButton(fullscreenActive ? "退" : "全",
+                                    fullscreenActive ? "退出波形全屏。也可按 Esc 退出。"
+                                                     : "进入波形全屏；具体模式由 gui.wave.fullscreen_mode 控制。",
+                                    collapsedButtonSize)) {
+            *fullscreenToggleRequested = true;
         }
         if (drawToolbarActionButton(">", "展开右侧工具栏。", collapsedButtonSize)) {
             wave.toolsCollapsed = false;
@@ -690,6 +699,15 @@ void drawWaveToolbar(app::Application& application,
     if (drawAdaptiveToolbarButton(
             "清空历史", "清", "清空当前波形历史缓存；不会修改协议脚本或串口连接状态。", false, true)) {
         application.resetWaveHistory();
+    }
+    if (fullscreenToggleRequested != nullptr &&
+        drawAdaptiveToolbarButton(fullscreenActive ? "退出全屏" : "全屏",
+                                  fullscreenActive ? "退" : "全",
+                                  fullscreenActive ? "退出波形全屏。也可按 Esc 退出。"
+                                                   : "进入波形全屏；具体模式由 gui.wave.fullscreen_mode 控制。",
+                                  fullscreenActive,
+                                  true)) {
+        *fullscreenToggleRequested = true;
     }
     if (drawAdaptiveToolbarButton("折叠工具栏", "收", "收起为窄按钮列，保留常用操作入口。", false)) {
         wave.toolsCollapsed = true;

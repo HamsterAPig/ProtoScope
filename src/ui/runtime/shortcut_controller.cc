@@ -48,6 +48,8 @@ ImGuiKey toImGuiKey(const ShortcutKey key)
             return ImGuiKey_F1;
         case ShortcutKey::F5:
             return ImGuiKey_F5;
+        case ShortcutKey::F11:
+            return ImGuiKey_F11;
     }
     return ImGuiKey_None;
 }

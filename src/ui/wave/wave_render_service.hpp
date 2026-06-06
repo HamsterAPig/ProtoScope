@@ -78,7 +78,7 @@ bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveDisplayData& displayData,
                               const std::vector<std::size_t>& channelIndices);
-ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view);
+ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool suppressEscapeCancel = false);
 bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
                                                 const plot::WaveDisplayData& displayData,
                                                 const ImPlotPoint& mousePos,

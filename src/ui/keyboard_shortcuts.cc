@@ -6,7 +6,7 @@ namespace protoscope::ui {
 
 namespace {
 
-constexpr std::array<ShortcutDescriptor, 19> kShortcutDescriptors{{
+constexpr std::array<ShortcutDescriptor, 20> kShortcutDescriptors{{
     {ShortcutAction::SaveConfig,
      ShortcutScope::Global,
      {.key = ShortcutKey::S, .ctrl = true},
@@ -97,6 +97,11 @@ constexpr std::array<ShortcutDescriptor, 19> kShortcutDescriptors{{
      {.key = ShortcutKey::F},
      "F",
      "切换 FFT 频谱模式"},
+    {ShortcutAction::WaveToggleFullscreen,
+     ShortcutScope::WaveDock,
+     {.key = ShortcutKey::F11},
+     "F11",
+     "切换波形主视图全屏"},
     {ShortcutAction::WaveClearHistory,
      ShortcutScope::WaveDock,
      {.key = ShortcutKey::C, .ctrl = true, .shift = true},

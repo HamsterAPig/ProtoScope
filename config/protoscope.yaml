@@ -21,6 +21,7 @@ gui:
     height: 900
     maximized: false
   wave:
+    fullscreen_mode: focus
     control_mode: oscilloscope
     display_formula: offset_then_scale
     channel_card_width_mode: fixed

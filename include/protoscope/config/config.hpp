@@ -65,6 +65,11 @@ struct GuiWindowConfig {
     bool maximized{false};
 };
 
+enum class GuiWaveFullscreenMode {
+    Focus,
+    Overlay,
+};
+
 struct GuiWaveConfig {
     plot::WaveControlMode controlMode{plot::WaveControlMode::Oscilloscope};
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
@@ -87,6 +92,7 @@ struct GuiWaveConfig {
     bool showAxisLabels{false};
     bool showChannelLegend{true};
     bool showFftLegend{true};
+    GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Focus};
 };
 
 struct GuiLogHistoryConfig {

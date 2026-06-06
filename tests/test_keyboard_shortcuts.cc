@@ -26,11 +26,19 @@ void test_keyboard_shortcut_table_has_no_scope_duplicates()
 void test_keyboard_shortcut_labels_match_plan()
 {
     using protoscope::ui::ShortcutAction;
+    using protoscope::ui::ShortcutKey;
+    using protoscope::ui::ShortcutScope;
 
     require(protoscope::ui::shortcutLabel(ShortcutAction::SaveConfig) == "Ctrl+S", "保存配置快捷键应为 Ctrl+S");
     require(protoscope::ui::shortcutLabel(ShortcutAction::ReloadProtocol) == "F5", "重载协议快捷键应为 F5");
     require(protoscope::ui::shortcutLabel(ShortcutAction::ToggleWaveDock) == "Ctrl+6",
             "波形 Dock 快捷键应为 Ctrl+6");
+    require(protoscope::ui::shortcutLabel(ShortcutAction::WaveToggleFullscreen) == "F11",
+            "波形主视图全屏快捷键应为 F11");
+    const auto* fullscreenShortcut = protoscope::ui::findShortcut(ShortcutAction::WaveToggleFullscreen);
+    require(fullscreenShortcut != nullptr, "波形主视图全屏快捷键应注册到快捷键表");
+    require(fullscreenShortcut->scope == ShortcutScope::WaveDock, "波形主视图全屏快捷键应限定在波形 Dock");
+    require(fullscreenShortcut->chord.key == ShortcutKey::F11, "波形主视图全屏快捷键应绑定 F11");
     require(protoscope::ui::shortcutLabel(ShortcutAction::WaveClearHistory) == "Ctrl+Shift+C",
             "清空波形历史应使用防误触组合键");
 }
