@@ -970,36 +970,13 @@ bool GuiRuntime::drawDynamicElfSymbolComboControl(const scripting::ControlSnapsh
     const auto& descriptor = control.descriptor;
     auto& state = elfSymbolComboStates_[descriptor.id];
     const auto& current = std::get<scripting::ElfSymbolValue>(control.value);
-    if (state.draft.empty() && !current.label.empty()) {
-        state.draft = current.label;
-    }
+    seedElfSymbolComboDraft(state, current);
 
-    const auto comboConfig = application_.captureConfig().gui.elfSymbolCombo;
-    const std::size_t effectiveLimit = descriptor.limitConfigured ? descriptor.limit : comboConfig.limit;
-    const int effectiveDebounceMs = descriptor.debounceMsConfigured ? descriptor.debounceMs : comboConfig.debounceMs;
-    const auto loadedRevision = application_.elfStaticAddressRevision();
     const auto currentMs = nowMs();
-    if (state.editedAtMs == 0) {
-        state.editedAtMs = currentMs;
-    }
-    const bool elfReloaded = state.loadedRevision != loadedRevision;
-    const bool queryLimitChanged = state.queriedLimit != effectiveLimit;
-    const bool debounceElapsed = currentMs >= state.editedAtMs + static_cast<std::uint64_t>(effectiveDebounceMs);
-    if (elfReloaded || queryLimitChanged || (state.queriedDraft != state.draft && debounceElapsed)) {
-        // 核心流程：ELF 成功加载后用空查询预热候选；输入变化后按配置消抖实时刷新候选列表。
-        state.options = application_.queryElfStaticAddresses(state.draft, effectiveLimit);
-        state.queriedDraft = state.draft;
-        state.queriedLimit = effectiveLimit;
-        state.loadedRevision = loadedRevision;
-    }
-
-    std::vector<std::string> labels;
-    labels.reserve(state.options.size());
-    for (const auto& option : state.options) {
-        labels.push_back(option.label);
-    }
+    refreshElfSymbolComboOptionsIfNeeded(descriptor, state, currentMs);
 
     drawLuaControlLeftLabel(descriptor);
+    auto labels = elfSymbolComboLabels(state);
     const auto edit = drawEditableCombo(
         inputLabel.c_str(), state.draft, labels, EditableComboOptions{.keepPopupOpenWhileEditing = true});
     if (edit.edited) {
@@ -1009,9 +986,58 @@ bool GuiRuntime::drawDynamicElfSymbolComboControl(const scripting::ControlSnapsh
     if (!edit.selectedFromList) {
         return false;
     }
+    return commitElfSymbolComboSelection(descriptor, state, edit.value);
+}
 
+void GuiRuntime::seedElfSymbolComboDraft(ElfSymbolComboUiState& state, const scripting::ElfSymbolValue& current) const
+{
+    if (state.draft.empty() && !current.label.empty()) {
+        state.draft = current.label;
+    }
+}
+
+void GuiRuntime::refreshElfSymbolComboOptionsIfNeeded(const scripting::ControlDescriptor& descriptor,
+                                                      ElfSymbolComboUiState& state,
+                                                      const std::uint64_t currentMs)
+{
+    const auto comboConfig = application_.captureConfig().gui.elfSymbolCombo;
+    const std::size_t effectiveLimit = descriptor.limitConfigured ? descriptor.limit : comboConfig.limit;
+    const int effectiveDebounceMs = descriptor.debounceMsConfigured ? descriptor.debounceMs : comboConfig.debounceMs;
+    const auto loadedRevision = application_.elfStaticAddressRevision();
+    if (state.editedAtMs == 0) {
+        state.editedAtMs = currentMs;
+    }
+
+    const bool elfReloaded = state.loadedRevision != loadedRevision;
+    const bool queryLimitChanged = state.queriedLimit != effectiveLimit;
+    const bool debounceElapsed = currentMs >= state.editedAtMs + static_cast<std::uint64_t>(effectiveDebounceMs);
+    if (!elfReloaded && !queryLimitChanged && (state.queriedDraft == state.draft || !debounceElapsed)) {
+        return;
+    }
+
+    // 核心流程：ELF 成功加载后用空查询预热候选；输入变化后按配置消抖实时刷新候选列表。
+    state.options = application_.queryElfStaticAddresses(state.draft, effectiveLimit);
+    state.queriedDraft = state.draft;
+    state.queriedLimit = effectiveLimit;
+    state.loadedRevision = loadedRevision;
+}
+
+std::vector<std::string> GuiRuntime::elfSymbolComboLabels(const ElfSymbolComboUiState& state) const
+{
+    std::vector<std::string> labels;
+    labels.reserve(state.options.size());
+    for (const auto& option : state.options) {
+        labels.push_back(option.label);
+    }
+    return labels;
+}
+
+bool GuiRuntime::commitElfSymbolComboSelection(const scripting::ControlDescriptor& descriptor,
+                                               const ElfSymbolComboUiState& state,
+                                               const std::string& selectedLabel)
+{
     const auto selected = std::find_if(
-        state.options.begin(), state.options.end(), [&](const auto& option) { return option.label == edit.value; });
+        state.options.begin(), state.options.end(), [&](const auto& option) { return option.label == selectedLabel; });
     if (selected == state.options.end()) {
         return false;
     }

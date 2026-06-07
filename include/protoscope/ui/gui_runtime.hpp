@@ -218,6 +218,15 @@ private:
     std::filesystem::path currentProtocolLayoutPath() const;
     std::filesystem::path legacyProtocolLayoutPath() const;
     std::filesystem::path protocolControlStatePath() const;
+    struct ElfSymbolComboUiState;
+    void seedElfSymbolComboDraft(ElfSymbolComboUiState& state, const scripting::ElfSymbolValue& current) const;
+    void refreshElfSymbolComboOptionsIfNeeded(const scripting::ControlDescriptor& descriptor,
+                                              ElfSymbolComboUiState& state,
+                                              std::uint64_t currentMs);
+    std::vector<std::string> elfSymbolComboLabels(const ElfSymbolComboUiState& state) const;
+    bool commitElfSymbolComboSelection(const scripting::ControlDescriptor& descriptor,
+                                       const ElfSymbolComboUiState& state,
+                                       const std::string& selectedLabel);
 
     bool reloadConfigFromDisk();
     bool pollConfigFileChanges();
