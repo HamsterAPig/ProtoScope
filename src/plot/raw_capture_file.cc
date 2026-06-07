@@ -1,5 +1,6 @@
 #include "protoscope/plot/raw_capture_file.hpp"
 
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -346,6 +347,311 @@ namespace {
         return out.str();
     }
 
+    struct DecodedEventState {
+        std::uint64_t rxSize{0};
+        bool rxSizeSeen{false};
+        bool profileLengthSeen{false};
+        bool plotChannelCountSeen{false};
+        std::uint64_t plotChannelCount{0};
+    };
+
+    enum class EventFieldParseResult {
+        Handled,
+        Ignored,
+        Failed,
+    };
+
+    bool decodeEventType(std::string_view firstLine, RawCaptureEvent& event, std::string& error)
+    {
+        if (firstLine == "event: rx_bytes") {
+            event.type = RawCaptureEventType::RxBytes;
+            return true;
+        }
+        if (firstLine == "event: profile_set") {
+            event.type = RawCaptureEventType::ProfileSet;
+            return true;
+        }
+        if (firstLine == "event: profile_clear") {
+            event.type = RawCaptureEventType::ProfileClear;
+            return true;
+        }
+        if (firstLine == "event: plot_setup") {
+            event.type = RawCaptureEventType::PlotSetup;
+            return true;
+        }
+
+        error = "psraw 事件记录缺少 event 类型";
+        return false;
+    }
+
+    EventFieldParseResult parseStringHexField(std::string_view value,
+                                              std::string& target,
+                                              std::string_view errorMessage,
+                                              std::string& error)
+    {
+        if (!decodeStringHex(value, target)) {
+            error = std::string(errorMessage);
+            return EventFieldParseResult::Failed;
+        }
+        return EventFieldParseResult::Handled;
+    }
+
+    EventFieldParseResult parseFiniteDoubleField(std::string_view value,
+                                                 double& target,
+                                                 std::string_view errorMessage,
+                                                 std::string& error)
+    {
+        if (!parseDouble(value, target) || !std::isfinite(target)) {
+            error = std::string(errorMessage);
+            return EventFieldParseResult::Failed;
+        }
+        return EventFieldParseResult::Handled;
+    }
+
+    EventFieldParseResult parseColorField(std::string_view value,
+                                          std::optional<std::array<float, 4>>& target,
+                                          std::string_view errorMessage,
+                                          std::string& error)
+    {
+        if (!parseColor(value, target)) {
+            error = std::string(errorMessage);
+            return EventFieldParseResult::Failed;
+        }
+        return EventFieldParseResult::Handled;
+    }
+
+    EventFieldParseResult parseBaseEventField(std::string_view key,
+                                              std::string_view value,
+                                              RawCaptureEvent& event,
+                                              DecodedEventState& state,
+                                              std::string& error)
+    {
+        if (key == "timestamp_ms") {
+            if (!parseUnsigned(value, event.timestampMs)) {
+                error = "psraw 事件时间戳格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        }
+        if (key == "size") {
+            state.rxSizeSeen = parseUnsigned(value, state.rxSize);
+            if (!state.rxSizeSeen) {
+                error = "psraw rx_bytes size 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        }
+        if (key == "frame") {
+            event.profile.frameName = std::string(value);
+            return EventFieldParseResult::Handled;
+        }
+        if (key == "length") {
+            std::uint64_t lengthValue = 0;
+            if (!parseUnsigned(value, lengthValue) || lengthValue == 0) {
+                error = "psraw profile_set length 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            if (lengthValue > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+                error = "psraw profile_set length 过大";
+                return EventFieldParseResult::Failed;
+            }
+            event.profile.length = static_cast<std::size_t>(lengthValue);
+            state.profileLengthSeen = true;
+            return EventFieldParseResult::Handled;
+        }
+        if (key == "channel_map") {
+            if (!parseChannelMap(value, event.profile.channelMap)) {
+                error = "psraw profile_set channel_map 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        }
+        return EventFieldParseResult::Ignored;
+    }
+
+    EventFieldParseResult parsePlotSetupChannelField(std::string_view key,
+                                                     std::string_view value,
+                                                     RawCaptureEvent& event,
+                                                     const DecodedEventState& state,
+                                                     std::string& error)
+    {
+        constexpr std::string_view kChannelPrefix = "channel.";
+        if (key.rfind(kChannelPrefix, 0) != 0) {
+            return EventFieldParseResult::Ignored;
+        }
+
+        if (!state.plotChannelCountSeen) {
+            error = "psraw plot_setup channel 字段早于 channel_count";
+            return EventFieldParseResult::Failed;
+        }
+        const auto indexEnd = key.find('.', kChannelPrefix.size());
+        if (indexEnd == std::string_view::npos) {
+            error = "psraw plot_setup channel 字段格式错误";
+            return EventFieldParseResult::Failed;
+        }
+        std::uint64_t channelIndexValue = 0;
+        if (!parseUnsigned(key.substr(kChannelPrefix.size(), indexEnd - kChannelPrefix.size()), channelIndexValue) ||
+            channelIndexValue >= state.plotChannelCount) {
+            error = "psraw plot_setup channel 索引格式错误";
+            return EventFieldParseResult::Failed;
+        }
+
+        auto& channel = event.plotSetup.channels[static_cast<std::size_t>(channelIndexValue)];
+        const auto field = key.substr(indexEnd + 1);
+        if (field == "label") {
+            return parseStringHexField(value, channel.label, "psraw plot_setup channel label hex 格式错误", error);
+        } else if (field == "unit") {
+            return parseStringHexField(value, channel.unit, "psraw plot_setup channel unit hex 格式错误", error);
+        } else if (field == "ratio") {
+            return parseFiniteDoubleField(value, channel.ratio, "psraw plot_setup channel ratio 格式错误", error);
+        } else if (field == "scale") {
+            return parseFiniteDoubleField(value, channel.scale, "psraw plot_setup channel scale 格式错误", error);
+        } else if (field == "offset") {
+            return parseFiniteDoubleField(value, channel.offset, "psraw plot_setup channel offset 格式错误", error);
+        } else if (field == "color") {
+            return parseColorField(value, channel.color, "psraw plot_setup channel color 格式错误", error);
+        }
+        return EventFieldParseResult::Handled;
+    }
+
+    EventFieldParseResult parsePlotSetupViewField(std::string_view key,
+                                                  std::string_view value,
+                                                  RawCaptureEvent& event,
+                                                  std::string& error)
+    {
+        if (key == "view.time_scale") {
+            return parseFiniteDoubleField(
+                value, event.plotSetup.view.timeScale, "psraw plot_setup view.time_scale 格式错误", error);
+        }
+        if (key == "view.time_unit") {
+            return parseStringHexField(
+                value, event.plotSetup.view.timeUnit, "psraw plot_setup view.time_unit hex 格式错误", error);
+        }
+        if (key == "view.vertical_min") {
+            return parseFiniteDoubleField(
+                value, event.plotSetup.view.verticalMin, "psraw plot_setup view.vertical_min 格式错误", error);
+        }
+        if (key == "view.vertical_max") {
+            return parseFiniteDoubleField(
+                value, event.plotSetup.view.verticalMax, "psraw plot_setup view.vertical_max 格式错误", error);
+        }
+        if (key == "view.vertical_unit") {
+            return parseStringHexField(
+                value, event.plotSetup.view.verticalUnit, "psraw plot_setup view.vertical_unit hex 格式错误", error);
+        }
+        if (key == "view.history_limit") {
+            std::uint64_t historyLimit = 0;
+            if (!parseUnsigned(value, historyLimit) ||
+                historyLimit > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+                error = "psraw plot_setup view.history_limit 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            event.plotSetup.view.historyLimit = static_cast<std::size_t>(historyLimit);
+            return EventFieldParseResult::Handled;
+        }
+        return EventFieldParseResult::Ignored;
+    }
+
+    EventFieldParseResult parsePlotSetupField(std::string_view key,
+                                              std::string_view value,
+                                              RawCaptureEvent& event,
+                                              DecodedEventState& state,
+                                              std::string& error)
+    {
+        if (event.type != RawCaptureEventType::PlotSetup) {
+            return EventFieldParseResult::Ignored;
+        }
+
+        if (key == "source") {
+            return parseStringHexField(value, event.plotSetup.source, "psraw plot_setup source hex 格式错误", error);
+        }
+        if (key == "reset_history") {
+            if (!parseBool(value, event.plotSetup.resetHistory)) {
+                error = "psraw plot_setup reset_history 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        }
+        if (key == "channel_count") {
+            if (!parseUnsigned(value, state.plotChannelCount) || state.plotChannelCount == 0) {
+                error = "psraw plot_setup channel_count 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            if (state.plotChannelCount > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+                error = "psraw plot_setup channel_count 过大";
+                return EventFieldParseResult::Failed;
+            }
+            event.plotSetup.channels.resize(static_cast<std::size_t>(state.plotChannelCount));
+            state.plotChannelCountSeen = true;
+            return EventFieldParseResult::Handled;
+        }
+
+        auto result = parsePlotSetupChannelField(key, value, event, state, error);
+        if (result != EventFieldParseResult::Ignored) {
+            return result;
+        }
+        return parsePlotSetupViewField(key, value, event, error);
+    }
+
+    bool parseDecodedEventField(std::string_view key,
+                                std::string_view value,
+                                RawCaptureEvent& event,
+                                DecodedEventState& state,
+                                std::string& error)
+    {
+        auto result = parseBaseEventField(key, value, event, state, error);
+        if (result == EventFieldParseResult::Failed) {
+            return false;
+        }
+        if (result == EventFieldParseResult::Handled) {
+            return true;
+        }
+
+        result = parsePlotSetupField(key, value, event, state, error);
+        return result != EventFieldParseResult::Failed;
+    }
+
+    bool finalizeDecodedEvent(std::string_view bytes,
+                              std::size_t& cursor,
+                              RawCaptureEvent& event,
+                              const DecodedEventState& state,
+                              std::string& error)
+    {
+        if (event.type == RawCaptureEventType::RxBytes) {
+            if (!state.rxSizeSeen) {
+                error = "psraw rx_bytes 事件缺少 size";
+                return false;
+            }
+            if (state.rxSize > static_cast<std::uint64_t>(bytes.size() - cursor)) {
+                error = "psraw rx_bytes 事件 payload 超出文件范围";
+                return false;
+            }
+            const auto rxSize = static_cast<std::size_t>(state.rxSize);
+            event.bytes.assign(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+                               bytes.begin() + static_cast<std::ptrdiff_t>(cursor + rxSize));
+            cursor += rxSize;
+            return true;
+        }
+
+        if (event.type == RawCaptureEventType::PlotSetup) {
+            if (!state.plotChannelCountSeen) {
+                error = "psraw plot_setup 事件缺少 channel_count";
+                return false;
+            }
+            return true;
+        }
+
+        if (event.profile.frameName.empty()) {
+            error = "psraw profile 事件缺少 frame";
+            return false;
+        }
+        if (event.type == RawCaptureEventType::ProfileSet && !state.profileLengthSeen) {
+            error = "psraw profile_set 事件缺少 length";
+            return false;
+        }
+        return true;
+    }
+
     bool decodeEventStream(std::string_view bytes, std::vector<RawCaptureEvent>& events, std::string& error)
     {
         events.clear();
@@ -360,29 +666,15 @@ namespace {
                 cursor = lineEnd + 1;
                 continue;
             }
-            if (firstLine != "event: rx_bytes" && firstLine != "event: profile_set" &&
-                firstLine != "event: profile_clear" && firstLine != "event: plot_setup") {
-                error = "psraw 事件记录缺少 event 类型";
+            RawCaptureEvent event;
+            if (!decodeEventType(firstLine, event, error)) {
                 return false;
             }
 
-            RawCaptureEvent event;
-            if (firstLine == "event: rx_bytes") {
-                event.type = RawCaptureEventType::RxBytes;
-            } else if (firstLine == "event: profile_set") {
-                event.type = RawCaptureEventType::ProfileSet;
-            } else if (firstLine == "event: profile_clear") {
-                event.type = RawCaptureEventType::ProfileClear;
-            } else {
-                event.type = RawCaptureEventType::PlotSetup;
-            }
-
             cursor = lineEnd + 1;
-            std::uint64_t rxSize = 0;
-            bool sizeSeen = false;
-            bool lengthSeen = false;
-            bool plotChannelCountSeen = false;
-            std::uint64_t plotChannelCount = 0;
+            DecodedEventState state;
+
+            // 每条记录先解析文本字段，遇到空行后再按事件类型消费后续二进制 payload。
             while (cursor < bytes.size()) {
                 lineEnd = bytes.find('\n', cursor);
                 if (lineEnd == std::string::npos) {
@@ -400,168 +692,12 @@ namespace {
                 }
                 const auto key = trim(line.substr(0, pos));
                 const auto value = trim(line.substr(pos + 1));
-                if (key == "timestamp_ms") {
-                    if (!parseUnsigned(value, event.timestampMs)) {
-                        error = "psraw 事件时间戳格式错误";
-                        return false;
-                    }
-                } else if (key == "size") {
-                    sizeSeen = parseUnsigned(value, rxSize);
-                    if (!sizeSeen) {
-                        error = "psraw rx_bytes size 格式错误";
-                        return false;
-                    }
-                } else if (key == "frame") {
-                    event.profile.frameName = value;
-                } else if (key == "length") {
-                    std::uint64_t lengthValue = 0;
-                    if (!parseUnsigned(value, lengthValue) || lengthValue == 0) {
-                        error = "psraw profile_set length 格式错误";
-                        return false;
-                    }
-                    if (lengthValue > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
-                        error = "psraw profile_set length 过大";
-                        return false;
-                    }
-                    event.profile.length = static_cast<std::size_t>(lengthValue);
-                    lengthSeen = true;
-                } else if (key == "channel_map") {
-                    if (!parseChannelMap(value, event.profile.channelMap)) {
-                        error = "psraw profile_set channel_map 格式错误";
-                        return false;
-                    }
-                } else if (event.type == RawCaptureEventType::PlotSetup && key == "source") {
-                    if (!decodeStringHex(value, event.plotSetup.source)) {
-                        error = "psraw plot_setup source hex 格式错误";
-                        return false;
-                    }
-                } else if (event.type == RawCaptureEventType::PlotSetup && key == "reset_history") {
-                    if (!parseBool(value, event.plotSetup.resetHistory)) {
-                        error = "psraw plot_setup reset_history 格式错误";
-                        return false;
-                    }
-                } else if (event.type == RawCaptureEventType::PlotSetup && key == "channel_count") {
-                    if (!parseUnsigned(value, plotChannelCount) || plotChannelCount == 0) {
-                        error = "psraw plot_setup channel_count 格式错误";
-                        return false;
-                    }
-                    if (plotChannelCount > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
-                        error = "psraw plot_setup channel_count 过大";
-                        return false;
-                    }
-                    event.plotSetup.channels.resize(static_cast<std::size_t>(plotChannelCount));
-                    plotChannelCountSeen = true;
-                } else if (event.type == RawCaptureEventType::PlotSetup && key.rfind("channel.", 0) == 0) {
-                    if (!plotChannelCountSeen) {
-                        error = "psraw plot_setup channel 字段早于 channel_count";
-                        return false;
-                    }
-                    const auto indexPrefixSize = std::string("channel.").size();
-                    const auto indexEnd = key.find('.', indexPrefixSize);
-                    if (indexEnd == std::string::npos) {
-                        error = "psraw plot_setup channel 字段格式错误";
-                        return false;
-                    }
-                    std::uint64_t channelIndexValue = 0;
-                    if (!parseUnsigned(key.substr(indexPrefixSize, indexEnd - indexPrefixSize), channelIndexValue) ||
-                        channelIndexValue >= plotChannelCount) {
-                        error = "psraw plot_setup channel 索引格式错误";
-                        return false;
-                    }
-                    auto& channel = event.plotSetup.channels[static_cast<std::size_t>(channelIndexValue)];
-                    const auto field = key.substr(indexEnd + 1);
-                    if (field == "label") {
-                        if (!decodeStringHex(value, channel.label)) {
-                            error = "psraw plot_setup channel label hex 格式错误";
-                            return false;
-                        }
-                    } else if (field == "unit") {
-                        if (!decodeStringHex(value, channel.unit)) {
-                            error = "psraw plot_setup channel unit hex 格式错误";
-                            return false;
-                        }
-                    } else if (field == "ratio") {
-                        if (!parseDouble(value, channel.ratio) || !std::isfinite(channel.ratio)) {
-                            error = "psraw plot_setup channel ratio 格式错误";
-                            return false;
-                        }
-                    } else if (field == "scale") {
-                        if (!parseDouble(value, channel.scale) || !std::isfinite(channel.scale)) {
-                            error = "psraw plot_setup channel scale 格式错误";
-                            return false;
-                        }
-                    } else if (field == "offset") {
-                        if (!parseDouble(value, channel.offset) || !std::isfinite(channel.offset)) {
-                            error = "psraw plot_setup channel offset 格式错误";
-                            return false;
-                        }
-                    } else if (field == "color") {
-                        if (!parseColor(value, channel.color)) {
-                            error = "psraw plot_setup channel color 格式错误";
-                            return false;
-                        }
-                    }
-                } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.time_scale") {
-                    if (!parseDouble(value, event.plotSetup.view.timeScale) ||
-                        !std::isfinite(event.plotSetup.view.timeScale)) {
-                        error = "psraw plot_setup view.time_scale 格式错误";
-                        return false;
-                    }
-                } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.time_unit") {
-                    if (!decodeStringHex(value, event.plotSetup.view.timeUnit)) {
-                        error = "psraw plot_setup view.time_unit hex 格式错误";
-                        return false;
-                    }
-                } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.vertical_min") {
-                    if (!parseDouble(value, event.plotSetup.view.verticalMin) ||
-                        !std::isfinite(event.plotSetup.view.verticalMin)) {
-                        error = "psraw plot_setup view.vertical_min 格式错误";
-                        return false;
-                    }
-                } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.vertical_max") {
-                    if (!parseDouble(value, event.plotSetup.view.verticalMax) ||
-                        !std::isfinite(event.plotSetup.view.verticalMax)) {
-                        error = "psraw plot_setup view.vertical_max 格式错误";
-                        return false;
-                    }
-                } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.vertical_unit") {
-                    if (!decodeStringHex(value, event.plotSetup.view.verticalUnit)) {
-                        error = "psraw plot_setup view.vertical_unit hex 格式错误";
-                        return false;
-                    }
-                } else if (event.type == RawCaptureEventType::PlotSetup && key == "view.history_limit") {
-                    std::uint64_t historyLimit = 0;
-                    if (!parseUnsigned(value, historyLimit) ||
-                        historyLimit > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
-                        error = "psraw plot_setup view.history_limit 格式错误";
-                        return false;
-                    }
-                    event.plotSetup.view.historyLimit = static_cast<std::size_t>(historyLimit);
+                if (!parseDecodedEventField(key, value, event, state, error)) {
+                    return false;
                 }
             }
 
-            if (event.type == RawCaptureEventType::RxBytes) {
-                if (!sizeSeen) {
-                    error = "psraw rx_bytes 事件缺少 size";
-                    return false;
-                }
-                if (cursor + rxSize > bytes.size()) {
-                    error = "psraw rx_bytes 事件 payload 超出文件范围";
-                    return false;
-                }
-                event.bytes.assign(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
-                                   bytes.begin() + static_cast<std::ptrdiff_t>(cursor + rxSize));
-                cursor += static_cast<std::size_t>(rxSize);
-            } else if (event.type == RawCaptureEventType::PlotSetup) {
-                if (!plotChannelCountSeen) {
-                    error = "psraw plot_setup 事件缺少 channel_count";
-                    return false;
-                }
-            } else if (event.profile.frameName.empty()) {
-                error = "psraw profile 事件缺少 frame";
-                return false;
-            } else if (event.type == RawCaptureEventType::ProfileSet && !lengthSeen) {
-                error = "psraw profile_set 事件缺少 length";
+            if (!finalizeDecodedEvent(bytes, cursor, event, state, error)) {
                 return false;
             }
             events.push_back(std::move(event));
