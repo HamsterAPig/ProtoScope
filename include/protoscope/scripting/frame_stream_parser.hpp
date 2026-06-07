@@ -283,6 +283,8 @@ private:
 };
 
 std::string_view streamParseErrorCodeName(StreamParseErrorCode code);
+std::optional<StreamValueType> streamValueTypeFromName(std::string_view name);
+std::string_view streamValueTypeName(StreamValueType type);
 std::size_t streamValueWidth(StreamValueType type);
 bool streamValueTypeIsFloat(StreamValueType type);
 bool streamValueTypeIsSigned(StreamValueType type);

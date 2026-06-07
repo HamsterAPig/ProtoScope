@@ -5,11 +5,9 @@
 
 namespace protoscope::scripting {
 
-class CoreScriptHostApiModule final : public IScriptHostApiModule {
+class CoreScriptHostApiModule final : public ScriptHostApiModuleBase {
 public:
-    explicit CoreScriptHostApiModule(ScriptHost& host) : host_(host) {}
-
-    std::string_view id() const override { return "core_api_module"; }
+    explicit CoreScriptHostApiModule(ScriptHost& host) : ScriptHostApiModuleBase(host, "core_api_module") {}
 
     void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
     {
@@ -27,28 +25,19 @@ public:
         auto streamApi = lua.create_table();
         streamApi.set_function("set_profile", [host, lua](const sol::object& profile) {
             std::string error;
-            if (host->setStreamRuntimeProfile(profile, error)) {
-                return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
-            }
-            return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, error));
+            return script_host_lua::luaOkResult(lua, host->setStreamRuntimeProfile(profile, error), error);
         });
         streamApi.set_function("clear_profile", [host, lua](const sol::object& frameName) {
             std::string error;
-            if (host->clearStreamRuntimeProfile(frameName, error)) {
-                return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
-            }
-            return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, error));
+            return script_host_lua::luaOkResult(lua, host->clearStreamRuntimeProfile(frameName, error), error);
         });
         proto["stream"] = streamApi;
     }
-
-private:
-    ScriptHost& host_;
 };
 
 std::unique_ptr<IScriptHostApiModule> makeCoreApiModule(ScriptHost& host)
 {
-    return std::make_unique<CoreScriptHostApiModule>(host);
+    return makeScriptHostApiModule<CoreScriptHostApiModule>(host);
 }
 
 } // namespace protoscope::scripting

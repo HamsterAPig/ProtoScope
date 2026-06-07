@@ -3,10 +3,12 @@
 #include "protoscope/config/embedded_protocols.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <string_view>
 #include <system_error>
 
 #include <yaml-cpp/yaml.h>
@@ -47,6 +49,33 @@ namespace {
             return {};
         }
         return node[key];
+    }
+
+    template <typename T> struct EnumNamePair {
+        T value;
+        std::string_view name;
+    };
+
+    template <typename T, std::size_t N>
+    T lookupEnum(std::string_view text, const std::array<EnumNamePair<T>, N>& pairs, T fallback)
+    {
+        for (const auto& pair : pairs) {
+            if (pair.name == text) {
+                return pair.value;
+            }
+        }
+        return fallback;
+    }
+
+    template <typename T, std::size_t N>
+    const char* enumToText(T value, const std::array<EnumNamePair<T>, N>& pairs, const char* fallback)
+    {
+        for (const auto& pair : pairs) {
+            if (pair.value == value) {
+                return pair.name.data();
+            }
+        }
+        return fallback;
     }
 
     double normalizePerformanceScale(const double scale)
@@ -144,220 +173,151 @@ namespace {
         return path.generic_string();
     }
 
+    constexpr std::array<EnumNamePair<LogLevel>, 4> kLogLevelNames{{
+        {LogLevel::Debug, "debug"},
+        {LogLevel::Info, "info"},
+        {LogLevel::Warn, "warn"},
+        {LogLevel::Error, "error"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveControlMode>, 2> kWaveControlModeNames{{
+        {plot::WaveControlMode::LegacyGlobal, "legacy_global"},
+        {plot::WaveControlMode::Oscilloscope, "oscilloscope"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveDisplayFormula>, 2> kWaveDisplayFormulaNames{{
+        {plot::WaveDisplayFormula::ScaleThenOffset, "scale_then_offset"},
+        {plot::WaveDisplayFormula::OffsetThenScale, "offset_then_scale"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveChannelCardWidthMode>, 2> kWaveChannelCardWidthModeNames{{
+        {plot::WaveChannelCardWidthMode::Fixed, "fixed"},
+        {plot::WaveChannelCardWidthMode::Adaptive, "adaptive"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveChannelDoubleClickAction>, 4>
+        kWaveChannelDoubleClickActionNames{{
+            {plot::WaveChannelDoubleClickAction::ResetAll, "reset_all"},
+            {plot::WaveChannelDoubleClickAction::ResetScaleOffset, "reset_scale_offset"},
+            {plot::WaveChannelDoubleClickAction::ResetScale, "reset_scale"},
+            {plot::WaveChannelDoubleClickAction::ResetOffset, "reset_offset"},
+        }};
+
+    constexpr std::array<EnumNamePair<plot::WaveXAxisDoubleClickAction>, 2> kWaveXAxisDoubleClickActionNames{{
+        {plot::WaveXAxisDoubleClickAction::FitFullHistory, "fit_full_history"},
+        {plot::WaveXAxisDoubleClickAction::FitVisibleWindow, "fit_visible_window"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveHiddenChannelPolicy>, 2> kWaveHiddenChannelPolicyNames{{
+        {plot::WaveHiddenChannelPolicy::IncludeInDerivedViews, "include_hidden"},
+        {plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews, "visible_only"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveCursorExtremeSnapPolicy>, 2> kWaveCursorExtremeSnapPolicyNames{{
+        {plot::WaveCursorExtremeSnapPolicy::NearestWaveform, "nearest_waveform"},
+        {plot::WaveCursorExtremeSnapPolicy::ViewportZone, "viewport_zone"},
+    }};
+
+    constexpr std::array<EnumNamePair<GuiWaveFullscreenMode>, 2> kWaveFullscreenModeNames{{
+        {GuiWaveFullscreenMode::Focus, "focus"},
+        {GuiWaveFullscreenMode::Overlay, "overlay"},
+    }};
+
     LogLevel parseLogLevel(const std::string& value)
     {
-        if (value == "debug") {
-            return LogLevel::Debug;
-        }
         if (value == "warn" || value == "warning") {
             return LogLevel::Warn;
         }
-        if (value == "error") {
-            return LogLevel::Error;
-        }
-        return LogLevel::Info;
+        return lookupEnum(std::string_view{value}, kLogLevelNames, LogLevel::Info);
     }
 
     std::string toLogLevelText(const LogLevel level)
     {
-        switch (level) {
-            case LogLevel::Debug:
-                return "debug";
-            case LogLevel::Info:
-                return "info";
-            case LogLevel::Warn:
-                return "warn";
-            case LogLevel::Error:
-                return "error";
-        }
-        return "info";
+        return enumToText(level, kLogLevelNames, "info");
     }
 
     plot::WaveControlMode parseWaveControlMode(const std::string& value, plot::WaveControlMode fallback)
     {
-        if (value == "legacy_global") {
-            return plot::WaveControlMode::LegacyGlobal;
-        }
-        if (value == "oscilloscope") {
-            return plot::WaveControlMode::Oscilloscope;
-        }
-        return fallback;
+        return lookupEnum(std::string_view{value}, kWaveControlModeNames, fallback);
     }
 
     const char* toWaveControlModeText(const plot::WaveControlMode mode)
     {
-        switch (mode) {
-            case plot::WaveControlMode::Oscilloscope:
-                return "oscilloscope";
-            case plot::WaveControlMode::LegacyGlobal:
-                return "legacy_global";
-        }
-        return "oscilloscope";
+        return enumToText(mode, kWaveControlModeNames, "oscilloscope");
     }
 
     plot::WaveDisplayFormula parseWaveDisplayFormula(const std::string& value, plot::WaveDisplayFormula fallback)
     {
-        if (value == "scale_then_offset") {
-            return plot::WaveDisplayFormula::ScaleThenOffset;
-        }
-        if (value == "offset_then_scale") {
-            return plot::WaveDisplayFormula::OffsetThenScale;
-        }
-        return fallback;
+        return lookupEnum(std::string_view{value}, kWaveDisplayFormulaNames, fallback);
     }
 
     const char* toWaveDisplayFormulaText(const plot::WaveDisplayFormula formula)
     {
-        switch (formula) {
-            case plot::WaveDisplayFormula::OffsetThenScale:
-                return "offset_then_scale";
-            case plot::WaveDisplayFormula::ScaleThenOffset:
-                return "scale_then_offset";
-        }
-        return "offset_then_scale";
+        return enumToText(formula, kWaveDisplayFormulaNames, "offset_then_scale");
     }
 
     plot::WaveChannelCardWidthMode parseWaveChannelCardWidthMode(const std::string& value)
     {
-        if (value == "adaptive") {
-            return plot::WaveChannelCardWidthMode::Adaptive;
-        }
-        return plot::WaveChannelCardWidthMode::Fixed;
+        return lookupEnum(std::string_view{value}, kWaveChannelCardWidthModeNames, plot::WaveChannelCardWidthMode::Fixed);
     }
 
     const char* toWaveChannelCardWidthModeText(const plot::WaveChannelCardWidthMode mode)
     {
-        switch (mode) {
-            case plot::WaveChannelCardWidthMode::Fixed:
-                return "fixed";
-            case plot::WaveChannelCardWidthMode::Adaptive:
-                return "adaptive";
-        }
-        return "fixed";
+        return enumToText(mode, kWaveChannelCardWidthModeNames, "fixed");
     }
 
     plot::WaveChannelDoubleClickAction parseWaveChannelDoubleClickAction(const std::string& value,
                                                                          plot::WaveChannelDoubleClickAction fallback)
     {
-        if (value == "reset_all") {
-            return plot::WaveChannelDoubleClickAction::ResetAll;
-        }
-        if (value == "reset_scale_offset") {
-            return plot::WaveChannelDoubleClickAction::ResetScaleOffset;
-        }
-        if (value == "reset_scale") {
-            return plot::WaveChannelDoubleClickAction::ResetScale;
-        }
-        if (value == "reset_offset") {
-            return plot::WaveChannelDoubleClickAction::ResetOffset;
-        }
-        return fallback;
+        return lookupEnum(std::string_view{value}, kWaveChannelDoubleClickActionNames, fallback);
     }
 
     const char* toWaveChannelDoubleClickActionText(const plot::WaveChannelDoubleClickAction action)
     {
-        switch (action) {
-            case plot::WaveChannelDoubleClickAction::ResetAll:
-                return "reset_all";
-            case plot::WaveChannelDoubleClickAction::ResetScaleOffset:
-                return "reset_scale_offset";
-            case plot::WaveChannelDoubleClickAction::ResetScale:
-                return "reset_scale";
-            case plot::WaveChannelDoubleClickAction::ResetOffset:
-                return "reset_offset";
-        }
-        return "reset_scale_offset";
+        return enumToText(action, kWaveChannelDoubleClickActionNames, "reset_scale_offset");
     }
 
     plot::WaveXAxisDoubleClickAction parseWaveXAxisDoubleClickAction(const std::string& value,
                                                                      plot::WaveXAxisDoubleClickAction fallback)
     {
-        if (value == "fit_full_history") {
-            return plot::WaveXAxisDoubleClickAction::FitFullHistory;
-        }
-        if (value == "fit_visible_window") {
-            return plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
-        }
-        return fallback;
+        return lookupEnum(std::string_view{value}, kWaveXAxisDoubleClickActionNames, fallback);
     }
 
     const char* toWaveXAxisDoubleClickActionText(const plot::WaveXAxisDoubleClickAction action)
     {
-        switch (action) {
-            case plot::WaveXAxisDoubleClickAction::FitFullHistory:
-                return "fit_full_history";
-            case plot::WaveXAxisDoubleClickAction::FitVisibleWindow:
-                return "fit_visible_window";
-        }
-        return "fit_full_history";
+        return enumToText(action, kWaveXAxisDoubleClickActionNames, "fit_full_history");
     }
 
     plot::WaveHiddenChannelPolicy parseWaveHiddenChannelPolicy(const std::string& value,
                                                                plot::WaveHiddenChannelPolicy fallback)
     {
-        if (value == "include_hidden") {
-            return plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
-        }
-        if (value == "visible_only") {
-            return plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
-        }
-        return fallback;
+        return lookupEnum(std::string_view{value}, kWaveHiddenChannelPolicyNames, fallback);
     }
 
     const char* toWaveHiddenChannelPolicyText(const plot::WaveHiddenChannelPolicy policy)
     {
-        switch (policy) {
-            case plot::WaveHiddenChannelPolicy::IncludeInDerivedViews:
-                return "include_hidden";
-            case plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews:
-                return "visible_only";
-        }
-        return "include_hidden";
+        return enumToText(policy, kWaveHiddenChannelPolicyNames, "include_hidden");
     }
 
     plot::WaveCursorExtremeSnapPolicy parseWaveCursorExtremeSnapPolicy(const std::string& value,
                                                                        plot::WaveCursorExtremeSnapPolicy fallback)
     {
-        if (value == "viewport_zone") {
-            return plot::WaveCursorExtremeSnapPolicy::ViewportZone;
-        }
-        if (value == "nearest_waveform") {
-            return plot::WaveCursorExtremeSnapPolicy::NearestWaveform;
-        }
-        return fallback;
+        return lookupEnum(std::string_view{value}, kWaveCursorExtremeSnapPolicyNames, fallback);
     }
 
     const char* toWaveCursorExtremeSnapPolicyText(const plot::WaveCursorExtremeSnapPolicy policy)
     {
-        switch (policy) {
-            case plot::WaveCursorExtremeSnapPolicy::NearestWaveform:
-                return "nearest_waveform";
-            case plot::WaveCursorExtremeSnapPolicy::ViewportZone:
-                return "viewport_zone";
-        }
-        return "nearest_waveform";
+        return enumToText(policy, kWaveCursorExtremeSnapPolicyNames, "nearest_waveform");
     }
 
     GuiWaveFullscreenMode parseWaveFullscreenMode(const std::string& value, GuiWaveFullscreenMode fallback)
     {
-        if (value == "focus") {
-            return GuiWaveFullscreenMode::Focus;
-        }
-        if (value == "overlay") {
-            return GuiWaveFullscreenMode::Overlay;
-        }
-        return fallback;
+        return lookupEnum(std::string_view{value}, kWaveFullscreenModeNames, fallback);
     }
 
     const char* toWaveFullscreenModeText(const GuiWaveFullscreenMode mode)
     {
-        switch (mode) {
-            case GuiWaveFullscreenMode::Focus:
-                return "focus";
-            case GuiWaveFullscreenMode::Overlay:
-                return "overlay";
-        }
-        return "focus";
+        return enumToText(mode, kWaveFullscreenModeNames, "focus");
     }
 
     double positiveOrFallback(double value, double fallback)

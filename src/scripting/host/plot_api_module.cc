@@ -5,11 +5,9 @@
 
 namespace protoscope::scripting {
 
-class PlotScriptHostApiModule final : public IScriptHostApiModule {
+class PlotScriptHostApiModule final : public ScriptHostApiModuleBase {
 public:
-    explicit PlotScriptHostApiModule(ScriptHost& host) : host_(host) {}
-
-    std::string_view id() const override { return "plot_api_module"; }
+    explicit PlotScriptHostApiModule(ScriptHost& host) : ScriptHostApiModuleBase(host, "plot_api_module") {}
 
     void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
     {
@@ -40,13 +38,11 @@ public:
         proto["plot"] = plotApi;
     }
 
-private:
-    ScriptHost& host_;
 };
 
 std::unique_ptr<IScriptHostApiModule> makePlotApiModule(ScriptHost& host)
 {
-    return std::make_unique<PlotScriptHostApiModule>(host);
+    return makeScriptHostApiModule<PlotScriptHostApiModule>(host);
 }
 
 } // namespace protoscope::scripting

@@ -1,5 +1,6 @@
 #include "protoscope/ui/dock_layout.hpp"
 
+#include "test_helpers.hpp"
 #include "test_registry.hpp"
 
 #include <chrono>
@@ -12,12 +13,8 @@
 
 namespace {
 
-void require(bool condition, const char* message)
-{
-    if (!condition) {
-        throw std::runtime_error(message);
-    }
-}
+using protoscope::tests::makeUniqueTempDir;
+using protoscope::tests::require;
 
 protoscope::scripting::DockSnapshot makeDock(const char* id,
                                              const char* title,
@@ -34,8 +31,7 @@ protoscope::scripting::DockSnapshot makeDock(const char* id,
 
 std::filesystem::path uniqueLayoutRoot(const char* name)
 {
-    const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-    return std::filesystem::temp_directory_path() / (std::string(name) + "-" + std::to_string(ticks));
+    return makeUniqueTempDir(name);
 }
 
 } // namespace

@@ -17,33 +17,7 @@ std::string frameOnFrameCallbackKey(const std::string& frameName)
 
 std::optional<StreamValueType> parseStreamValueType(const std::string& text)
 {
-    if (text == "u8")
-        return StreamValueType::U8;
-    if (text == "i8")
-        return StreamValueType::I8;
-    if (text == "u16_be")
-        return StreamValueType::U16Be;
-    if (text == "u16_le")
-        return StreamValueType::U16Le;
-    if (text == "i16_be")
-        return StreamValueType::I16Be;
-    if (text == "i16_le")
-        return StreamValueType::I16Le;
-    if (text == "u32_be")
-        return StreamValueType::U32Be;
-    if (text == "u32_le")
-        return StreamValueType::U32Le;
-    if (text == "i32_be")
-        return StreamValueType::I32Be;
-    if (text == "i32_le")
-        return StreamValueType::I32Le;
-    if (text == "f32_be")
-        return StreamValueType::F32Be;
-    if (text == "f32_le")
-        return StreamValueType::F32Le;
-    if (text == "bytes")
-        return StreamValueType::Bytes;
-    return std::nullopt;
+    return streamValueTypeFromName(text);
 }
 
 bool streamValueTypeCanBeLength(StreamValueType type)

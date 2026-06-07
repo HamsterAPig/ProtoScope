@@ -1,6 +1,7 @@
 #include "script_file_system_facade.hpp"
 
 #include "script_host_internal.hpp"
+#include "script_host_lua_helpers.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -13,7 +14,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua
                                                              const sol::object& opts)
 {
     auto fail = [lua](const std::string& error) {
-        return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+        return script_host_lua::luaNilError(lua, error);
     };
     if (!fileIoConfig_.enabled) {
         return fail("scripting.file_io 已禁用");
@@ -111,7 +112,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua
 
     const auto id = handle->id;
     fileHandles_[id] = std::move(handle);
-    return std::make_tuple(sol::make_object(lua, id), sol::make_object(lua, sol::lua_nil));
+    return script_host_lua::luaValueOk(lua, id);
 }
 
 std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(sol::state_view lua,
@@ -119,7 +120,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(sol::state_view lua
                                                              const sol::object& opts)
 {
     auto fail = [lua](const std::string& error) {
-        return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+        return script_host_lua::luaNilError(lua, error);
     };
     const auto iter = fileHandles_.find(handleId);
     if (iter == fileHandles_.end() || !iter->second->readable) {
@@ -147,7 +148,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(sol::state_view lua
         return fail("eof");
     }
     buffer.bytes.resize(static_cast<std::size_t>(readCount));
-    return std::make_tuple(sol::make_object(lua, std::move(buffer)), sol::make_object(lua, sol::lua_nil));
+    return script_host_lua::luaValueOk(lua, std::move(buffer));
 }
 
 std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(sol::state_view lua,
@@ -155,7 +156,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(sol::state_view lu
                                                               const sol::object& payload)
 {
     auto fail = [lua](const std::string& error) {
-        return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, error));
+        return script_host_lua::luaOkResult(lua, false, error);
     };
     const auto iter = fileHandles_.find(handleId);
     if (iter == fileHandles_.end() || !iter->second->writable) {
@@ -175,23 +176,23 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(sol::state_view lu
         return fail("写入文件失败");
     }
     handle.bytesWritten += bytes->size();
-    return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
+    return script_host_lua::luaOkResult(lua, true, std::string{});
 }
 
 std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(sol::state_view lua, std::uint64_t handleId)
 {
     const auto iter = fileHandles_.find(handleId);
     if (iter == fileHandles_.end()) {
-        return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, "文件句柄已关闭"));
+        return script_host_lua::luaOkResult(lua, false, "文件句柄已关闭");
     }
     fileHandles_.erase(iter);
-    return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
+    return script_host_lua::luaOkResult(lua, true, std::string{});
 }
 
 std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua, const std::string& pathText)
 {
     auto fail = [lua](const std::string& error) {
-        return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+        return script_host_lua::luaNilError(lua, error);
     };
     if (!fileIoConfig_.enabled) {
         return fail("scripting.file_io 已禁用");
@@ -245,7 +246,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua
     table["mtime_ms"] = 0;
     table["is_file"] = regularFile;
     table["is_dir"] = directory;
-    return std::make_tuple(sol::make_object(lua, table), sol::make_object(lua, sol::lua_nil));
+    return script_host_lua::luaValueOk(lua, table);
 }
 
 std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view lua,
@@ -253,7 +254,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view
                                                                  const sol::object& opts)
 {
     auto fail = [lua](const std::string& error) {
-        return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+        return script_host_lua::luaNilError(lua, error);
     };
     std::string kind = "send";
     std::string tag = "file";
@@ -296,7 +297,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view
         .total = total,
     };
     pumpFileSendJob(jobId);
-    return std::make_tuple(sol::make_object(lua, jobId), sol::make_object(lua, sol::lua_nil));
+    return script_host_lua::luaValueOk(lua, jobId);
 }
 
 void ScriptHost::pumpFileSendJob(std::uint64_t jobId)

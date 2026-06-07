@@ -47,6 +47,16 @@ namespace {
         return host + ":" + std::to_string(port);
     }
 
+    struct TransportKindMapping {
+        TransportDescriptor descriptor;
+        std::unique_ptr<ITransport> (*create)();
+    };
+
+    template <typename Transport> std::unique_ptr<ITransport> makeTransport()
+    {
+        return std::make_unique<Transport>();
+    }
+
     asio::serial_port_base::parity::type parseParity(const std::string& parity)
     {
         if (parity == "odd") {
@@ -221,14 +231,41 @@ SerialTransport::~SerialTransport()
     close();
 }
 
+namespace {
+
+    const std::vector<TransportKindMapping>& transportKindMappings()
+    {
+        static const std::vector<TransportKindMapping> mappings{
+            {{TransportKind::TcpClient, "tcp_client", "TCP 客户端"}, &makeTransport<TcpClientTransport>},
+            {{TransportKind::TcpServer, "tcp_server", "TCP 服务端"}, &makeTransport<TcpServerTransport>},
+            {{TransportKind::Serial, "serial", "串口"}, &makeTransport<SerialTransport>},
+            {{TransportKind::UdpPeer, "udp_peer", "UDP Peer"}, &makeTransport<UdpPeerTransport>},
+        };
+        return mappings;
+    }
+
+    const TransportKindMapping* findTransportKindMapping(TransportKind kind)
+    {
+        for (const auto& mapping : transportKindMappings()) {
+            if (mapping.descriptor.kind == kind) {
+                return &mapping;
+            }
+        }
+        return nullptr;
+    }
+
+} // namespace
+
 const std::vector<TransportDescriptor>& transportDescriptors()
 {
-    static const std::vector<TransportDescriptor> descriptors{
-        {TransportKind::TcpClient, "tcp_client", "TCP 客户端"},
-        {TransportKind::TcpServer, "tcp_server", "TCP 服务端"},
-        {TransportKind::Serial, "serial", "串口"},
-        {TransportKind::UdpPeer, "udp_peer", "UDP Peer"},
-    };
+    static const std::vector<TransportDescriptor> descriptors = [] {
+        std::vector<TransportDescriptor> values;
+        values.reserve(transportKindMappings().size());
+        for (const auto& mapping : transportKindMappings()) {
+            values.push_back(mapping.descriptor);
+        }
+        return values;
+    }();
     return descriptors;
 }
 
@@ -244,35 +281,24 @@ std::optional<TransportKind> transportKindFromId(std::string_view id)
 
 std::string_view transportKindId(TransportKind kind)
 {
-    for (const auto& descriptor : transportDescriptors()) {
-        if (descriptor.kind == kind) {
-            return descriptor.id;
-        }
+    if (const auto* mapping = findTransportKindMapping(kind)) {
+        return mapping->descriptor.id;
     }
     return "tcp_client";
 }
 
 std::string_view transportKindLabel(TransportKind kind)
 {
-    for (const auto& descriptor : transportDescriptors()) {
-        if (descriptor.kind == kind) {
-            return descriptor.label;
-        }
+    if (const auto* mapping = findTransportKindMapping(kind)) {
+        return mapping->descriptor.label;
     }
     return "TCP 客户端";
 }
 
 std::unique_ptr<ITransport> createTransport(TransportKind kind)
 {
-    switch (kind) {
-        case TransportKind::TcpClient:
-            return std::make_unique<TcpClientTransport>();
-        case TransportKind::TcpServer:
-            return std::make_unique<TcpServerTransport>();
-        case TransportKind::Serial:
-            return std::make_unique<SerialTransport>();
-        case TransportKind::UdpPeer:
-            return std::make_unique<UdpPeerTransport>();
+    if (const auto* mapping = findTransportKindMapping(kind)) {
+        return mapping->create();
     }
     return nullptr;
 }

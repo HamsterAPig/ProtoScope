@@ -2,6 +2,7 @@
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 
+#include "test_helpers.hpp"
 #include "test_registry.hpp"
 
 #include <algorithm>
@@ -23,12 +24,9 @@
 
 namespace {
 
-void require(bool condition, const char* message)
-{
-    if (!condition) {
-        throw std::runtime_error(message);
-    }
-}
+using protoscope::tests::ScopedTempPath;
+using protoscope::tests::makeUniqueTempDir;
+using protoscope::tests::require;
 
 std::uint64_t currentTimeMs();
 
@@ -176,8 +174,6 @@ std::vector<std::uint8_t> makeRawImportStreamPayload(std::size_t frameCount)
     return payload;
 }
 
-std::filesystem::path makeUniqueTempDir(const char* prefix);
-
 std::filesystem::path makeSchemaSwitchReplayProtocolDir()
 {
     const auto protocolDir = makeUniqueTempDir("protoscope-schema-switch-replay");
@@ -206,13 +202,7 @@ std::filesystem::path makeSchemaSwitchReplayProtocolDir()
 
 bool waitUntil(auto&& predicate)
 {
-    for (int i = 0; i < 80; ++i) {
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return false;
+    return protoscope::tests::waitUntil(std::forward<decltype(predicate)>(predicate), 80);
 }
 
 std::uint64_t currentTimeMs()
@@ -221,29 +211,6 @@ std::uint64_t currentTimeMs()
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
-
-std::filesystem::path makeUniqueTempDir(const char* prefix)
-{
-    const auto path =
-        std::filesystem::temp_directory_path() / (std::string(prefix) + "-" + std::to_string(currentTimeMs()));
-    std::filesystem::create_directories(path);
-    return path;
-}
-
-struct ScopedTempPath {
-    explicit ScopedTempPath(std::filesystem::path path) : path_(std::move(path)) {}
-
-    ~ScopedTempPath()
-    {
-        std::error_code ec;
-        std::filesystem::remove_all(path_, ec);
-    }
-
-    const std::filesystem::path& path() const { return path_; }
-
-private:
-    std::filesystem::path path_;
-};
 
 protoscope::plot::RawCaptureEvent makePlotSetupEvent(bool resetHistory = true)
 {

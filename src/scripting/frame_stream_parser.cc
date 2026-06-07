@@ -3,6 +3,7 @@
 #include "protoscope/protocol_utils/codec.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <limits>
 #include <stdexcept>
@@ -17,6 +18,51 @@ namespace {
             return {};
         }
         return std::vector<std::uint8_t>(data, data + count);
+    }
+
+    struct StreamValueTypeInfo {
+        StreamValueType type{StreamValueType::U8};
+        std::string_view name{"u8"};
+        std::size_t width{1};
+        bool isFloat{false};
+        bool isSigned{false};
+        bool littleEndian{false};
+    };
+
+    constexpr std::array<StreamValueTypeInfo, 13> kStreamValueTypes{{
+        {StreamValueType::U8, "u8", 1, false, false, false},
+        {StreamValueType::I8, "i8", 1, false, true, false},
+        {StreamValueType::U16Be, "u16_be", 2, false, false, false},
+        {StreamValueType::U16Le, "u16_le", 2, false, false, true},
+        {StreamValueType::I16Be, "i16_be", 2, false, true, false},
+        {StreamValueType::I16Le, "i16_le", 2, false, true, true},
+        {StreamValueType::U32Be, "u32_be", 4, false, false, false},
+        {StreamValueType::U32Le, "u32_le", 4, false, false, true},
+        {StreamValueType::I32Be, "i32_be", 4, false, true, false},
+        {StreamValueType::I32Le, "i32_le", 4, false, true, true},
+        {StreamValueType::F32Be, "f32_be", 4, true, false, false},
+        {StreamValueType::F32Le, "f32_le", 4, true, false, true},
+        {StreamValueType::Bytes, "bytes", 1, false, false, false},
+    }};
+
+    const StreamValueTypeInfo& streamValueTypeInfo(StreamValueType type)
+    {
+        for (const auto& info : kStreamValueTypes) {
+            if (info.type == type) {
+                return info;
+            }
+        }
+        return kStreamValueTypes.front();
+    }
+
+    std::uint32_t readUnsignedValue(const std::uint8_t* bytes, std::size_t width, bool littleEndian)
+    {
+        std::uint32_t value = 0;
+        for (std::size_t index = 0; index < width; ++index) {
+            const auto byte = static_cast<std::uint32_t>(bytes[littleEndian ? index : width - index - 1]);
+            value |= byte << (index * 8U);
+        }
+        return value;
     }
 
     std::uint32_t readCrcValue(const std::uint8_t* frameBytes,
@@ -269,75 +315,26 @@ namespace {
                                               std::size_t offset,
                                               StreamValueType type)
     {
-        const auto require = [size, offset](std::size_t width) -> bool { return offset + width <= size; };
+        const auto& info = streamValueTypeInfo(type);
+        if (info.isFloat || type == StreamValueType::Bytes || offset > size || info.width > size - offset) {
+            return std::nullopt;
+        }
 
-        switch (type) {
-            case StreamValueType::U8:
-                return require(1) ? std::optional<std::int64_t>(raw[offset]) : std::nullopt;
-            case StreamValueType::I8:
-                return require(1) ? std::optional<std::int64_t>(static_cast<std::int8_t>(raw[offset])) : std::nullopt;
-            case StreamValueType::U16Be:
-                if (!require(2)) {
-                    return std::nullopt;
-                }
-                return static_cast<std::int64_t>((static_cast<std::uint16_t>(raw[offset]) << 8U) |
-                                                 static_cast<std::uint16_t>(raw[offset + 1]));
-            case StreamValueType::U16Le:
-                if (!require(2)) {
-                    return std::nullopt;
-                }
-                return static_cast<std::int64_t>(static_cast<std::uint16_t>(raw[offset]) |
-                                                 (static_cast<std::uint16_t>(raw[offset + 1]) << 8U));
-            case StreamValueType::I16Be:
-                if (!require(2)) {
-                    return std::nullopt;
-                }
-                return static_cast<std::int16_t>((static_cast<std::uint16_t>(raw[offset]) << 8U) |
-                                                 static_cast<std::uint16_t>(raw[offset + 1]));
-            case StreamValueType::I16Le:
-                if (!require(2)) {
-                    return std::nullopt;
-                }
-                return static_cast<std::int16_t>(static_cast<std::uint16_t>(raw[offset]) |
-                                                 (static_cast<std::uint16_t>(raw[offset + 1]) << 8U));
-            case StreamValueType::U32Be:
-                if (!require(4)) {
-                    return std::nullopt;
-                }
-                return static_cast<std::int64_t>((static_cast<std::uint32_t>(raw[offset]) << 24U) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 1]) << 16U) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 2]) << 8U) |
-                                                 static_cast<std::uint32_t>(raw[offset + 3]));
-            case StreamValueType::U32Le:
-                if (!require(4)) {
-                    return std::nullopt;
-                }
-                return static_cast<std::int64_t>(static_cast<std::uint32_t>(raw[offset]) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 1]) << 8U) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 2]) << 16U) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 3]) << 24U));
-            case StreamValueType::I32Be:
-                if (!require(4)) {
-                    return std::nullopt;
-                }
-                return static_cast<std::int32_t>((static_cast<std::uint32_t>(raw[offset]) << 24U) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 1]) << 16U) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 2]) << 8U) |
-                                                 static_cast<std::uint32_t>(raw[offset + 3]));
-            case StreamValueType::I32Le:
-                if (!require(4)) {
-                    return std::nullopt;
-                }
-                return static_cast<std::int32_t>(static_cast<std::uint32_t>(raw[offset]) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 1]) << 8U) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 2]) << 16U) |
-                                                 (static_cast<std::uint32_t>(raw[offset + 3]) << 24U));
-            case StreamValueType::F32Be:
-            case StreamValueType::F32Le:
-            case StreamValueType::Bytes:
+        const auto rawValue = readUnsignedValue(raw + offset, info.width, info.littleEndian);
+        if (!info.isSigned) {
+            return static_cast<std::int64_t>(rawValue);
+        }
+
+        switch (info.width) {
+            case 1:
+                return static_cast<std::int8_t>(rawValue);
+            case 2:
+                return static_cast<std::int16_t>(rawValue);
+            case 4:
+                return static_cast<std::int32_t>(rawValue);
+            default:
                 return std::nullopt;
         }
-        return std::nullopt;
     }
 
     std::optional<double> decodeFloat(const std::uint8_t* rawBytes,
@@ -345,26 +342,12 @@ namespace {
                                       std::size_t offset,
                                       StreamValueType type)
     {
-        if (offset + 4 > size) {
+        const auto& info = streamValueTypeInfo(type);
+        if (!info.isFloat || offset > size || info.width > size - offset) {
             return std::nullopt;
         }
-        std::uint32_t raw = 0;
-        switch (type) {
-            case StreamValueType::F32Be:
-                raw = (static_cast<std::uint32_t>(rawBytes[offset]) << 24U) |
-                      (static_cast<std::uint32_t>(rawBytes[offset + 1]) << 16U) |
-                      (static_cast<std::uint32_t>(rawBytes[offset + 2]) << 8U) |
-                      static_cast<std::uint32_t>(rawBytes[offset + 3]);
-                return static_cast<double>(std::bit_cast<float>(raw));
-            case StreamValueType::F32Le:
-                raw = static_cast<std::uint32_t>(rawBytes[offset]) |
-                      (static_cast<std::uint32_t>(rawBytes[offset + 1]) << 8U) |
-                      (static_cast<std::uint32_t>(rawBytes[offset + 2]) << 16U) |
-                      (static_cast<std::uint32_t>(rawBytes[offset + 3]) << 24U);
-                return static_cast<double>(std::bit_cast<float>(raw));
-            default:
-                return std::nullopt;
-        }
+        const auto raw = readUnsignedValue(rawBytes + offset, info.width, info.littleEndian);
+        return static_cast<double>(std::bit_cast<float>(raw));
     }
 
 } // namespace
@@ -1174,38 +1157,34 @@ std::string_view streamParseErrorCodeName(StreamParseErrorCode code)
     return "unknown";
 }
 
+std::optional<StreamValueType> streamValueTypeFromName(std::string_view name)
+{
+    for (const auto& info : kStreamValueTypes) {
+        if (info.name == name) {
+            return info.type;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string_view streamValueTypeName(StreamValueType type)
+{
+    return streamValueTypeInfo(type).name;
+}
+
 std::size_t streamValueWidth(StreamValueType type)
 {
-    switch (type) {
-        case StreamValueType::U8:
-        case StreamValueType::I8:
-        case StreamValueType::Bytes:
-            return 1;
-        case StreamValueType::U16Be:
-        case StreamValueType::U16Le:
-        case StreamValueType::I16Be:
-        case StreamValueType::I16Le:
-            return 2;
-        case StreamValueType::U32Be:
-        case StreamValueType::U32Le:
-        case StreamValueType::I32Be:
-        case StreamValueType::I32Le:
-        case StreamValueType::F32Be:
-        case StreamValueType::F32Le:
-            return 4;
-    }
-    return 1;
+    return streamValueTypeInfo(type).width;
 }
 
 bool streamValueTypeIsFloat(StreamValueType type)
 {
-    return type == StreamValueType::F32Be || type == StreamValueType::F32Le;
+    return streamValueTypeInfo(type).isFloat;
 }
 
 bool streamValueTypeIsSigned(StreamValueType type)
 {
-    return type == StreamValueType::I8 || type == StreamValueType::I16Be || type == StreamValueType::I16Le ||
-           type == StreamValueType::I32Be || type == StreamValueType::I32Le;
+    return streamValueTypeInfo(type).isSigned;
 }
 
 } // namespace protoscope::scripting

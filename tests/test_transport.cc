@@ -1,5 +1,6 @@
 #include "protoscope/transport/transport.hpp"
 
+#include "test_helpers.hpp"
 #include "test_registry.hpp"
 
 #include <chrono>
@@ -14,29 +15,14 @@
 
 namespace {
 
-void require(bool condition, const char* message)
-{
-    if (!condition) {
-        throw std::runtime_error(message);
-    }
-}
+using protoscope::tests::require;
+using protoscope::tests::waitUntil;
 
 std::uint16_t parsePort(const std::string& endpoint)
 {
     const auto pos = endpoint.rfind(':');
     require(pos != std::string::npos, "endpoint 缺少端口");
     return static_cast<std::uint16_t>(std::stoi(endpoint.substr(pos + 1)));
-}
-
-template <typename Predicate> bool waitUntil(Predicate predicate)
-{
-    for (int i = 0; i < 50; ++i) {
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return false;
 }
 
 std::uint16_t reserveFreeUdpPort()

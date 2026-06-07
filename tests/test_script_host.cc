@@ -3,6 +3,7 @@
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
+#include "test_helpers.hpp"
 #include "test_registry.hpp"
 
 #include <algorithm>
@@ -21,12 +22,9 @@
 
 namespace {
 
-void require(bool condition, const char* message)
-{
-    if (!condition) {
-        throw std::runtime_error(message);
-    }
-}
+using protoscope::tests::ScopedTempPath;
+using protoscope::tests::makeUniqueTempDir;
+using protoscope::tests::require;
 
 std::string readTextFile(const std::filesystem::path& path)
 {
@@ -68,28 +66,6 @@ struct ScopedCurrentPath {
 
     std::filesystem::path original_;
 };
-
-struct ScopedTempPath {
-    explicit ScopedTempPath(std::filesystem::path path) : path_(std::move(path)) {}
-
-    ~ScopedTempPath()
-    {
-        std::error_code ec;
-        std::filesystem::remove_all(path_, ec);
-    }
-
-    const std::filesystem::path& path() const { return path_; }
-
-private:
-    std::filesystem::path path_;
-};
-
-std::filesystem::path makeUniqueTempDir(const char* prefix)
-{
-    const auto path = std::filesystem::temp_directory_path() / (std::string(prefix) + "-" + std::to_string(nowMs()));
-    std::filesystem::create_directories(path);
-    return path;
-}
 
 std::uint16_t readBe16(const std::vector<std::uint8_t>& bytes, std::size_t offset)
 {
