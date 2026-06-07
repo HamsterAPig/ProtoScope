@@ -109,6 +109,14 @@ private:
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
     bool applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch);
+    void applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot& snapshot);
+    bool probeProtocolDirectory(const std::string& resolvedDirText);
+    void prepareProtocolRuntimeReload();
+    bool applyProtocolLoadResult(const std::string& resolvedDirText,
+                                 const std::string& protocolName,
+                                 const std::string& scriptPath,
+                                 const scripting::ScriptRuntimeLoadResult& loadResult);
+    void refreshTransferFrameDisplayAfterProtocolReload();
     bool handleTransportEvents();
     bool processTransportEvent(const transport::TransportEvent& event);
     bool processTransportOpenEvent(const transport::TransportOpenEvent& event);

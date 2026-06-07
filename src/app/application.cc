@@ -514,70 +514,18 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         // 核心流程：配置热加载只在协议目录真正变化时重载脚本，避免窗口刷新阶段重复刷加载日志。
         if (!forceReload && unchanged) {
             lua.lastError.clear();
-            const auto snapshot = scriptWorker_.snapshot();
-            lua.docks = snapshot.docks;
-            lua.controls = snapshot.controls;
-            lua.controlStates = snapshot.controlStates;
+            applyLuaScriptSnapshot(scriptWorker_.snapshot());
             return true;
         }
 
-        scripting::ScriptHost probeHost;
-        probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
-        if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
-            lua.lastError = probeHost.lastError();
-            loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
-            const auto snapshot = scriptWorker_.snapshot();
-            lua.docks = snapshot.docks;
-            lua.controls = snapshot.controls;
-            lua.controlStates = snapshot.controlStates;
+        if (!probeProtocolDirectory(resolvedDirText)) {
             return false;
         }
 
-        try {
-            cancelAllTxRequests("协议已重新加载");
-        } catch (const std::exception& ex) {
-            loggingFacade_.warn("protocol", std::string("协议重载前取消旧请求失败: ") + ex.what());
-        } catch (...) {
-            loggingFacade_.warn("protocol", "协议重载前取消旧请求失败: 未知异常");
-        }
-        try {
-            // 核心流程：取消旧 request 可能触发旧脚本 on_tx；替换宿主前丢弃旧输出，
-            // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
-            static_cast<void>(scriptWorker_.drainOutputs());
-        } catch (const std::exception& ex) {
-            loggingFacade_.warn("protocol", std::string("协议重载前清理旧脚本输出失败: ") + ex.what());
-        } catch (...) {
-            loggingFacade_.warn("protocol", "协议重载前清理旧脚本输出失败: 未知异常");
-        }
-
+        prepareProtocolRuntimeReload();
         scriptWorker_.setFileIoConfig(runtimeConfig_.scripting.fileIo);
         const auto loadResult = scriptWorker_.loadProtocolDirectory(resolvedDirText);
-        if (!loadResult.ok) {
-            lua.lastError = loadResult.lastError;
-            loggingFacade_.error("protocol", "协议加载失败: " + lua.lastError);
-            lua.docks = loadResult.snapshot.docks;
-            lua.controls = loadResult.snapshot.controls;
-            lua.controlStates = loadResult.snapshot.controlStates;
-            return false;
-        }
-
-        lua.protocolDir = resolvedDirText;
-        lua.protocolName = protocolName;
-        lua.scriptPath = scriptPath;
-        lua.loaded = true;
-        lua.docks = loadResult.snapshot.docks;
-        lua.controls = loadResult.snapshot.controls;
-        lua.controlStates = loadResult.snapshot.controlStates;
-        lua.lastError.clear();
-        if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
-            rebuildTransferFrameRows();
-        } else {
-            resetTransferFrameDisplayState();
-        }
-        loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
-        flushScriptOutputs();
-        syncDockState();
-        return true;
+        return applyProtocolLoadResult(resolvedDirText, protocolName, scriptPath, loadResult);
     } catch (const std::exception& ex) {
         lua.lastError = std::string("协议重载异常: ") + ex.what();
     } catch (...) {
@@ -585,11 +533,86 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     }
 
     loggingFacade_.error("protocol", lua.lastError);
-    const auto snapshot = scriptWorker_.snapshot();
+    applyLuaScriptSnapshot(scriptWorker_.snapshot());
+    return false;
+}
+
+void Application::applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot& snapshot)
+{
+    auto& lua = dockStore_.luaState();
     lua.docks = snapshot.docks;
     lua.controls = snapshot.controls;
     lua.controlStates = snapshot.controlStates;
+}
+
+bool Application::probeProtocolDirectory(const std::string& resolvedDirText)
+{
+    scripting::ScriptHost probeHost;
+    probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
+    if (probeHost.loadProtocolDirectory(resolvedDirText)) {
+        return true;
+    }
+
+    auto& lua = dockStore_.luaState();
+    lua.lastError = probeHost.lastError();
+    loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
+    applyLuaScriptSnapshot(scriptWorker_.snapshot());
     return false;
+}
+
+void Application::prepareProtocolRuntimeReload()
+{
+    try {
+        cancelAllTxRequests("协议已重新加载");
+    } catch (const std::exception& ex) {
+        loggingFacade_.warn("protocol", std::string("协议重载前取消旧请求失败: ") + ex.what());
+    } catch (...) {
+        loggingFacade_.warn("protocol", "协议重载前取消旧请求失败: 未知异常");
+    }
+    try {
+        // 核心流程：取消旧 request 可能触发旧脚本 on_tx；替换宿主前丢弃旧输出，
+        // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
+        static_cast<void>(scriptWorker_.drainOutputs());
+    } catch (const std::exception& ex) {
+        loggingFacade_.warn("protocol", std::string("协议重载前清理旧脚本输出失败: ") + ex.what());
+    } catch (...) {
+        loggingFacade_.warn("protocol", "协议重载前清理旧脚本输出失败: 未知异常");
+    }
+}
+
+bool Application::applyProtocolLoadResult(const std::string& resolvedDirText,
+                                          const std::string& protocolName,
+                                          const std::string& scriptPath,
+                                          const scripting::ScriptRuntimeLoadResult& loadResult)
+{
+    auto& lua = dockStore_.luaState();
+    if (!loadResult.ok) {
+        lua.lastError = loadResult.lastError;
+        loggingFacade_.error("protocol", "协议加载失败: " + lua.lastError);
+        applyLuaScriptSnapshot(loadResult.snapshot);
+        return false;
+    }
+
+    lua.protocolDir = resolvedDirText;
+    lua.protocolName = protocolName;
+    lua.scriptPath = scriptPath;
+    lua.loaded = true;
+    applyLuaScriptSnapshot(loadResult.snapshot);
+    lua.lastError.clear();
+    refreshTransferFrameDisplayAfterProtocolReload();
+    loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
+    flushScriptOutputs();
+    syncDockState();
+    return true;
+}
+
+void Application::refreshTransferFrameDisplayAfterProtocolReload()
+{
+    if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
+        rebuildTransferFrameRows();
+    } else {
+        resetTransferFrameDisplayState();
+    }
 }
 
 bool Application::pumpOnce()
