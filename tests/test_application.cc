@@ -515,8 +515,8 @@ void test_application_tx_overflow_popup_keeps_dialog_payload()
 
 void test_application_refreshes_selected_elf_symbol_controls_silently()
 {
-    const auto tempDir = makeUniqueTempDir("protoscope-elf-refresh-silent");
-    const auto elfPath = tempDir / "symbols.json";
+    const ScopedTempPath tempDir(makeUniqueTempDir("protoscope-elf-refresh-silent"));
+    const auto elfPath = tempDir.path() / "symbols.json";
     writeElfSymbolDump(elfPath, 0x20000010ULL, "uint32_t");
 
     protoscope::app::Application application;
@@ -558,8 +558,8 @@ void test_application_refreshes_selected_elf_symbol_controls_silently()
 
 void test_application_refreshes_selected_elf_symbol_controls_with_on_control()
 {
-    const auto tempDir = makeUniqueTempDir("protoscope-elf-refresh-emit");
-    const auto elfPath = tempDir / "symbols.json";
+    const ScopedTempPath tempDir(makeUniqueTempDir("protoscope-elf-refresh-emit"));
+    const auto elfPath = tempDir.path() / "symbols.json";
     writeElfSymbolDump(elfPath, 0x20000010ULL, "uint32_t");
 
     protoscope::app::Application application;
@@ -637,9 +637,9 @@ void test_application_failed_protocol_reload_keeps_previous_runtime()
 
 void test_application_same_protocol_reload_keeps_runtime_stable()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-reload-table-request");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-table-request"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "reload table request 测试协议应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"reload_request\", title = \"Reload Request\", controls = { { type = \"button\", id "
@@ -660,13 +660,13 @@ void test_application_same_protocol_reload_keeps_runtime_stable()
     });
 
     require(application.initialize(), "应用应可初始化默认 Lua 工作区");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "reload table request 协议应可加载");
     application.openTransport();
     application.pumpOnce();
 
     for (int attempt = 0; attempt < 5; ++attempt) {
-        require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+        require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
                 "同协议强制 reload 应持续成功");
         application.pumpOnce();
         const auto& lua = application.docks().luaState();
@@ -688,9 +688,9 @@ void test_application_same_protocol_reload_keeps_runtime_stable()
 
 void test_application_same_protocol_reload_without_force_preserves_runtime_state()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-reload-no-force-state");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-no-force-state"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "非强制 reload 测试协议应可写入");
         out << "local counter = 0\n";
         out << "function ui()\n";
@@ -707,15 +707,15 @@ void test_application_same_protocol_reload_without_force_preserves_runtime_state
 
     protoscope::app::Application application;
     require(application.initialize(), "应用应可初始化默认 Lua 工作区");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "非强制 reload 测试协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "非强制 reload 测试协议应可加载");
 
     application.updateControlValue("tick", true);
     require(application.docks().configState().statusMessage == "count:1", "首次触发应把计数写入状态栏");
 
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), false), "同协议非强制 reload 应成功");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), false), "同协议非强制 reload 应成功");
     const auto& lua = application.docks().luaState();
     require(lua.loaded, "同协议非强制 reload 后协议仍应处于已加载状态");
-    require(lua.protocolDir == protocolDir.generic_string(), "同协议非强制 reload 后协议目录应保持不变");
+    require(lua.protocolDir == protocolDir.path().generic_string(), "同协议非强制 reload 后协议目录应保持不变");
     require(lua.lastError.empty(), "同协议非强制 reload 成功后不应残留错误");
 
     application.updateControlValue("tick", true);
@@ -726,9 +726,9 @@ void test_application_same_protocol_reload_without_force_preserves_runtime_state
 
 void test_application_failed_reload_keeps_old_callbacks_alive()
 {
-    const auto validProtocolDir = makeUniqueTempDir("protoscope-reload-valid");
+    const ScopedTempPath validProtocolDir(makeUniqueTempDir("protoscope-reload-valid"));
     {
-        std::ofstream out(validProtocolDir / "main.lua");
+        std::ofstream out(validProtocolDir.path() / "main.lua");
         require(out.good(), "有效 reload 隔离协议应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"stable\", title = \"Stable\", controls = { { type = \"button\", id = \"ping\", "
@@ -739,9 +739,9 @@ void test_application_failed_reload_keeps_old_callbacks_alive()
         out << "end\n";
     }
 
-    const auto invalidProtocolDir = makeUniqueTempDir("protoscope-reload-invalid");
+    const ScopedTempPath invalidProtocolDir(makeUniqueTempDir("protoscope-reload-invalid"));
     {
-        std::ofstream out(invalidProtocolDir / "main.lua");
+        std::ofstream out(invalidProtocolDir.path() / "main.lua");
         require(out.good(), "非法 reload 隔离协议应可写入");
         out << "function ui()\n";
         out << "  error(\"ui boom\")\n";
@@ -753,10 +753,10 @@ void test_application_failed_reload_keeps_old_callbacks_alive()
 
     protoscope::app::Application application;
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(validProtocolDir.generic_string(), true), "有效协议应可加载");
+    require(application.reloadProtocolDirectory(validProtocolDir.path().generic_string(), true), "有效协议应可加载");
 
     const auto before = application.docks().luaState();
-    require(!application.reloadProtocolDirectory(invalidProtocolDir.generic_string(), true), "非法协议 reload 应失败");
+    require(!application.reloadProtocolDirectory(invalidProtocolDir.path().generic_string(), true), "非法协议 reload 应失败");
     const auto& after = application.docks().luaState();
     require(after.protocolDir == before.protocolDir, "失败 reload 后旧协议目录应保留");
     require(after.docks.size() == before.docks.size(), "失败 reload 后旧 Dock 快照应保留");
@@ -770,9 +770,9 @@ void test_application_failed_reload_keeps_old_callbacks_alive()
 
 void test_application_forced_reload_discards_old_tx_callback_outputs()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-reload-discard-old-tx");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-reload-discard-old-tx"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "reload 测试协议应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"reload_test\", title = \"Reload Test\", controls = { { type = \"button\", id = "
@@ -799,7 +799,7 @@ void test_application_forced_reload_discards_old_tx_callback_outputs()
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "reload 测试协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "reload 测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
 
@@ -807,7 +807,7 @@ void test_application_forced_reload_discards_old_tx_callback_outputs()
     require(transportState->sentTasks.size() == 1, "首次控制应发送 1 条 request");
     application.pumpOnce();
 
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "强制重载应成功");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "强制重载应成功");
     application.pumpOnce();
 
     require(transportState->sentTasks.size() == 1, "强制重载应丢弃旧 on_tx 追加的 request");
@@ -819,9 +819,9 @@ void test_application_forced_reload_discards_old_tx_callback_outputs()
 
 void test_application_request_done_success_does_not_set_comm_error()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-request-done-success");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-request-done-success"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "request_done 成功测试协议应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"request_done_success\", title = \"Request Done\", controls = { { type = "
@@ -843,7 +843,7 @@ void test_application_request_done_success_does_not_set_comm_error()
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "request_done 成功测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
@@ -858,9 +858,9 @@ void test_application_request_done_success_does_not_set_comm_error()
 
 void test_application_request_timeout_drains_pending_rx_before_timeout()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-request-timeout-drain");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-request-timeout-drain"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "request timeout drain 测试协议应可写入");
         out << "local seen = {}\n";
         out << "function ui()\n";
@@ -884,7 +884,7 @@ void test_application_request_timeout_drains_pending_rx_before_timeout()
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "request timeout drain 测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
@@ -911,9 +911,9 @@ void test_application_request_timeout_drains_pending_rx_before_timeout()
 
 void test_application_guarded_request_timeout_retry_then_success_keeps_guard_active()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-guarded-retry-success");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-guarded-retry-success"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "guarded retry success 测试协议应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"guarded_retry\", title = \"Guarded Retry\", controls = {\n";
@@ -945,7 +945,7 @@ void test_application_guarded_request_timeout_retry_then_success_keeps_guard_act
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "guarded retry success 测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
@@ -968,9 +968,9 @@ void test_application_guarded_request_timeout_retry_then_success_keeps_guard_act
 
 void test_application_guarded_request_final_timeout_halts_followup_guarded()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-guarded-final-timeout");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-guarded-final-timeout"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "guarded final timeout 测试协议应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"guarded_halt\", title = \"Guarded Halt\", controls = { { type = \"button\", id = "
@@ -992,7 +992,7 @@ void test_application_guarded_request_final_timeout_halts_followup_guarded()
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "guarded final timeout 测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
@@ -1017,9 +1017,9 @@ void test_application_guarded_request_final_timeout_halts_followup_guarded()
 
 void test_application_guarded_requests_count_attempts_independently()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-guarded-independent-attempts");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-guarded-independent-attempts"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "guarded independent attempts 测试协议应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"guarded_independent\", title = \"Guarded Independent\", controls = { { type = "
@@ -1046,7 +1046,7 @@ void test_application_guarded_requests_count_attempts_independently()
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "guarded independent attempts 测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
@@ -1068,9 +1068,9 @@ void test_application_guarded_requests_count_attempts_independently()
 
 void test_application_guarded_request_reset_allows_new_attempts()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-guarded-reset");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-guarded-reset"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "guarded reset 测试协议应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"guarded_reset\", title = \"Guarded Reset\", controls = {\n";
@@ -1103,7 +1103,7 @@ void test_application_guarded_request_reset_allows_new_attempts()
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "guarded reset 测试协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "guarded reset 测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
 
@@ -1125,9 +1125,9 @@ void test_application_guarded_request_reset_allows_new_attempts()
 
 void test_application_request_done_failure_sets_comm_error()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-request-done-failure");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-request-done-failure"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "request_done 失败测试协议应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"request_done_failure\", title = \"Request Done\", controls = { { type = "
@@ -1149,7 +1149,7 @@ void test_application_request_done_failure_sets_comm_error()
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "request_done 失败测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
@@ -1725,9 +1725,9 @@ void test_application_raw_capture_import_replays_runtime_profile_events()
 
 void test_application_raw_capture_import_replays_plot_setup_snapshot()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-raw-plot-setup-import");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-raw-plot-setup-import"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "plot_setup 导入测试协议应可写入");
         out << "function on_bytes(ctx, bytes)\n";
         out << "  local samples = {}\n";
@@ -1740,7 +1740,7 @@ void test_application_raw_capture_import_replays_plot_setup_snapshot()
 
     protoscope::plot::RawCaptureFileData capture;
     capture.protocolName = "raw_plot_setup_import";
-    capture.protocolDir = protocolDir.generic_string();
+    capture.protocolDir = protocolDir.path().generic_string();
     capture.sampleFrequencyHz = 1000.0;
     capture.capturedAtMs = 100;
     capture.events.push_back(makePlotSetupEvent(true));
@@ -1755,7 +1755,7 @@ void test_application_raw_capture_import_replays_plot_setup_snapshot()
 
     protoscope::app::Application application;
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "plot_setup 导入协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "plot_setup 导入协议应可加载");
     std::string error;
     require(application.importWaveRawCapture(capture, error), "带 plot_setup 的 psraw 导入应成功");
 
@@ -1779,9 +1779,9 @@ void test_application_raw_capture_import_replays_plot_setup_snapshot()
 
 void test_application_raw_capture_import_skips_duplicate_plot_setup_reset()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-raw-plot-setup-duplicate");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-raw-plot-setup-duplicate"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "重复 plot_setup 测试协议应可写入");
         out << "local function setup()\n";
         out << "  proto.plot.setup({\n";
@@ -1804,7 +1804,7 @@ void test_application_raw_capture_import_skips_duplicate_plot_setup_reset()
 
     protoscope::plot::RawCaptureFileData capture;
     capture.protocolName = "raw_plot_setup_duplicate";
-    capture.protocolDir = protocolDir.generic_string();
+    capture.protocolDir = protocolDir.path().generic_string();
     capture.sampleFrequencyHz = 1000.0;
     capture.capturedAtMs = 100;
     capture.events.push_back(protoscope::plot::RawCaptureEvent{
@@ -1819,7 +1819,7 @@ void test_application_raw_capture_import_skips_duplicate_plot_setup_reset()
 
     protoscope::app::Application application;
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "重复 plot_setup 导入协议应可加载");
     std::string error;
     require(application.importWaveRawCapture(capture, error), "重复 plot_setup psraw 导入应成功");
@@ -1907,9 +1907,9 @@ void test_application_raw_capture_import_updates_last_pump_diagnostics()
 
 void test_application_reload_rebuilds_frame_rows_with_count_expression()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-rebuild-count-expression");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-rebuild-count-expression"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "reload count 表达式测试协议应可写入");
         out << "function controls()\n";
         out << "  return {}\n";
@@ -1941,7 +1941,7 @@ void test_application_reload_rebuilds_frame_rows_with_count_expression()
         return std::make_unique<QueuedEventTransport>(transportState);
     });
     require(application.initialize(), "应用应可初始化默认 Lua 工作区");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "count 表达式协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "count 表达式协议应可加载");
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
     application.openTransport();
@@ -1959,7 +1959,7 @@ void test_application_reload_rebuilds_frame_rows_with_count_expression()
             "实时 on_frame 副作用应进入脚本事件");
 
     application.docks().scriptState().rows.clear();
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "同协议 reload 应成功");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "同协议 reload 应成功");
     require(application.docks().receiveState().frameRows.size() == 1U, "reload 后应重建历史逐帧记录");
     require(application.docks().receiveState().frameRows.front().message.find("values=[17, 34]") != std::string::npos,
             "历史重建应完整解析 count 表达式字段");
@@ -2044,7 +2044,7 @@ void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw()
 void test_application_switching_to_parsed_view_defaults_to_new_stream_only()
 {
     auto transportState = std::make_shared<QueuedEventTransport::State>();
-    const auto protocolDir = makeSchemaSwitchReplayProtocolDir();
+    const ScopedTempPath protocolDir(makeSchemaSwitchReplayProtocolDir());
 
     protoscope::app::Application application;
     application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
@@ -2052,7 +2052,7 @@ void test_application_switching_to_parsed_view_defaults_to_new_stream_only()
         return std::make_unique<QueuedEventTransport>(transportState);
     });
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true), "临时 stream 协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "临时 stream 协议应可加载");
 
     application.openTransport();
     application.pumpOnce();
@@ -2082,7 +2082,7 @@ void test_application_switching_to_parsed_view_defaults_to_new_stream_only()
 void test_application_switching_to_parsed_view_can_replay_old_raw_history()
 {
     auto transportState = std::make_shared<QueuedEventTransport::State>();
-    const auto protocolDir = makeSchemaSwitchReplayProtocolDir();
+    const ScopedTempPath protocolDir(makeSchemaSwitchReplayProtocolDir());
 
     protoscope::app::Application application;
     application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
@@ -2093,7 +2093,7 @@ void test_application_switching_to_parsed_view_can_replay_old_raw_history()
 
     auto config = application.captureConfig();
     config.gui.replayRawHistoryOnSchemaSwitch = true;
-    config.protocol.selectedDir = protocolDir.generic_string();
+    config.protocol.selectedDir = protocolDir.path().generic_string();
     require(application.applyConfig(config), "schema 切换回放配置应可应用");
 
     application.openTransport();

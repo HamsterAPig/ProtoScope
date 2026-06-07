@@ -848,9 +848,9 @@ void test_script_stream_runtime_profile_set_and_clear()
 
 void test_script_stream_raw_output_omit_skips_frame_raw()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-stream-raw-omit");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-stream-raw-omit"));
     {
-        std::ofstream script(protocolDir / "main.lua");
+        std::ofstream script(protocolDir.path() / "main.lua");
         script << R"lua(
 local function on_stream_frame(ctx, frame)
     proto.emit("stream_raw_mode", {
@@ -884,7 +884,7 @@ end
     }
 
     protoscope::scripting::ScriptHost host;
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "raw_output omit 协议应可加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "raw_output omit 协议应可加载");
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), makeStreamFixtureFrame(0x34)});
 
     bool found = false;
@@ -900,9 +900,9 @@ end
 
 void test_script_stream_low_overhead_keeps_fields_and_trims_last_batch()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-stream-low-overhead");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-stream-low-overhead"));
     {
-        std::ofstream script(protocolDir / "main.lua");
+        std::ofstream script(protocolDir.path() / "main.lua");
         script << R"lua(
 local function on_stream_frame(ctx, frame)
     proto.emit("stream_low_overhead", {
@@ -938,7 +938,7 @@ end
     }
 
     protoscope::scripting::ScriptHost host;
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "low_overhead 协议应可加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "low_overhead 协议应可加载");
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), makeStreamFixtureFrame(0x35)});
 
     bool found = false;
@@ -961,9 +961,9 @@ end
 
 void test_script_stream_field_output_fields_only_omits_top_aliases()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-stream-fields-only");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-stream-fields-only"));
     {
-        std::ofstream script(protocolDir / "main.lua");
+        std::ofstream script(protocolDir.path() / "main.lua");
         script << R"lua(
 local function on_stream_frame(ctx, frame)
     proto.emit("stream_fields_only", {
@@ -997,7 +997,7 @@ end
     }
 
     protoscope::scripting::ScriptHost host;
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "fields_only 协议应可加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "fields_only 协议应可加载");
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{sampleCtx(), makeStreamFixtureFrame(0x36)});
 
     bool found = false;
@@ -1013,9 +1013,9 @@ end
 
 void test_script_stream_schema_reload_uses_current_callbacks()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-stream-reload-callbacks");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-stream-reload-callbacks"));
     const auto writeProtocol = [&](const std::string& version) {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "stream reload 测试协议应可写入");
         out << "local version = \"" << version << "\"\n";
         out << "function controls() return {} end\n";
@@ -1044,7 +1044,7 @@ void test_script_stream_schema_reload_uses_current_callbacks()
         out << "end\n";
     };
     const auto writeBrokenProtocol = [&]() {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "stream reload 失败协议应可写入");
         out << "function controls() return {} end\n";
         out << "function stream()\n";
@@ -1058,28 +1058,28 @@ void test_script_stream_schema_reload_uses_current_callbacks()
     const auto ctx = sampleCtx();
 
     writeProtocol("A");
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "版本 A stream 协议应可加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "版本 A stream 协议应可加载");
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeStreamFixtureFrame(0x11)});
     auto events = host.drainEvents();
     require(hasEvent(events, "stream_frame_A"), "版本 A 应触发 A 的 on_frame");
     require(!hasEvent(events, "stream_frame_B"), "版本 A 不应触发 B 的 on_frame");
 
     writeProtocol("B");
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "版本 B stream 协议应可加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "版本 B stream 协议应可加载");
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeStreamFixtureFrame(0x22)});
     events = host.drainEvents();
     require(!hasEvent(events, "stream_frame_A"), "成功 reload 后不应继续触发 A 的 on_frame");
     require(hasEvent(events, "stream_frame_B"), "成功 reload 后应触发 B 的 on_frame");
 
     writeBrokenProtocol();
-    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "损坏 stream 协议应加载失败");
+    require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "损坏 stream 协议应加载失败");
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeStreamFixtureFrame(0x33)});
     events = host.drainEvents();
     require(!hasEvent(events, "stream_frame_A"), "失败 reload 后不应回退到 A");
     require(hasEvent(events, "stream_frame_B"), "失败 reload 后应保留 B 的 on_frame");
 
     writeProtocol("C");
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "版本 C stream 协议应可加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "版本 C stream 协议应可加载");
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeStreamFixtureFrame(0x44)});
     events = host.drainEvents();
     require(!hasEvent(events, "stream_frame_B"), "再次成功 reload 后不应继续触发 B 的 on_frame");
@@ -1098,9 +1098,9 @@ void test_script_stream_schema_reload_uses_current_callbacks()
 
 void test_script_stream_schema_rejects_count_function()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-count-function");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-count-function"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "count=function 测试协议应可写入");
         out << "function controls()\n";
         out << "  return {}\n";
@@ -1113,7 +1113,7 @@ void test_script_stream_schema_rejects_count_function()
     }
 
     protoscope::scripting::ScriptHost host;
-    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "count=function 应加载失败");
+    require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "count=function 应加载失败");
     require(host.lastError().find("stream.frames[1].fields[1].count") != std::string::npos,
             "错误应包含精确 schema 路径");
     require(host.lastError().find("不再支持 function") != std::string::npos, "错误应明确旧 function 写法已废弃");
@@ -1123,9 +1123,9 @@ void test_script_stream_schema_rejects_count_function()
 
 void test_script_stream_schema_accepts_count_expression_table()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-count-expression");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-count-expression"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "count 表达式测试协议应可写入");
         out << "function controls()\n";
         out << "  return {}\n";
@@ -1144,7 +1144,7 @@ void test_script_stream_schema_accepts_count_expression_table()
     }
 
     protoscope::scripting::ScriptHost host;
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "count 表达式 table 应可加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "count 表达式 table 应可加载");
     auto frame = std::vector<std::uint8_t>{0xAA, 0x55, 0x05, 0x04, 0x00, 0x11, 0x00, 0x22};
     const auto crc = protoscope::protocol_utils::crc16Modbus(frame);
     frame.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
@@ -1453,9 +1453,9 @@ void test_script_runtime_error_logged()
 
 void test_script_reload_invalid_types_fail_without_throw()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-invalid-lua-types");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-invalid-lua-types"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "非法 stream 测试脚本应可写入");
         out << "function stream()\n";
         out << "  return \"bad stream\"\n";
@@ -1463,26 +1463,26 @@ void test_script_reload_invalid_types_fail_without_throw()
     }
 
     protoscope::scripting::ScriptHost host;
-    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "stream() 返回非 table 应加载失败");
+    require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "stream() 返回非 table 应加载失败");
     require(host.lastError().find("stream() 必须返回 table") != std::string::npos, "stream 类型错误应返回清晰错误");
 
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "非法 ui 测试脚本应可写入");
         out << "function ui()\n";
         out << "  return \"bad ui\"\n";
         out << "end\n";
     }
 
-    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "ui() 返回非 table 应加载失败");
+    require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "ui() 返回非 table 应加载失败");
     require(host.lastError().find("ui() 必须返回 table") != std::string::npos, "ui 类型错误应返回清晰错误");
 }
 
 void test_script_non_function_callbacks_only_log_errors()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-non-function-callbacks");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-non-function-callbacks"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "非 function 回调测试脚本应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"safe\", title = \"Safe\", controls = { { type = \"button\", id = \"run\", label = "
@@ -1494,7 +1494,7 @@ void test_script_non_function_callbacks_only_log_errors()
     }
 
     protoscope::scripting::ScriptHost host;
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "非 function 回调不应阻止脚本加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "非 function 回调不应阻止脚本加载");
 
     const auto ctx = sampleCtx();
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
@@ -1516,9 +1516,9 @@ void test_script_non_function_callbacks_only_log_errors()
 
 void test_script_failed_reload_keeps_previous_runtime()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-script-reload-transaction");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-script-reload-transaction"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "reload 事务测试脚本应可写入");
         out << "function ui()\n";
         out << "  return { { id = \"safe\", title = \"Safe\", controls = { { type = \"button\", id = \"run\", label = "
@@ -1530,19 +1530,19 @@ void test_script_failed_reload_keeps_previous_runtime()
     }
 
     protoscope::scripting::ScriptHost host;
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "初始脚本应可加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "初始脚本应可加载");
     const auto beforeControls = host.controlsSnapshot();
     require(beforeControls.size() == 1, "初始脚本应提供一个控件");
 
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "reload 失败测试脚本应可写入");
         out << "function ui()\n";
         out << "  return \"bad ui\"\n";
         out << "end\n";
     }
 
-    require(!host.loadProtocolDirectory(protocolDir.generic_string()), "reload 加载期错误应返回失败");
+    require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "reload 加载期错误应返回失败");
     require(host.lastError().find("ui() 必须返回 table") != std::string::npos, "reload 失败应记录新错误");
     require(host.controlsSnapshot().size() == beforeControls.size(), "reload 失败应保留旧控件快照");
 
@@ -1567,8 +1567,8 @@ void test_protocol_directory_reload()
 void test_config_default_roundtrip()
 {
     protoscope::config::ConfigStore store;
-    const auto tempRoot = makeUniqueTempDir("protoscope-config-roundtrip");
-    const auto tempPath = tempRoot / "protoscope.yaml";
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-config-roundtrip"));
+    const auto tempPath = tempRoot.path() / "protoscope.yaml";
 
     auto config = store.load(tempPath).config;
     require(config.protocol.rootDir.find("protocols/templates") != std::string::npos,
@@ -1764,8 +1764,8 @@ void test_config_repo_default_yaml_loads()
 
 void test_script_file_io_proto_buffer_roundtrip()
 {
-    const auto tempRoot = makeUniqueTempDir("protoscope-script-file-io");
-    const auto protocolDir = tempRoot / "proto";
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-script-file-io"));
+    const auto protocolDir = tempRoot.path() / "proto";
     std::filesystem::create_directories(protocolDir);
     {
         std::ofstream data(protocolDir / "input.bin", std::ios::binary);
@@ -1808,8 +1808,8 @@ void test_script_file_io_proto_buffer_roundtrip()
 void test_config_performance_scale_applies_default_budgets()
 {
     protoscope::config::ConfigStore store;
-    const auto tempRoot = makeUniqueTempDir("protoscope-config-performance-scale");
-    const auto tempPath = tempRoot / "protoscope.yaml";
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-config-performance-scale"));
+    const auto tempPath = tempRoot.path() / "protoscope.yaml";
     {
         std::ofstream out(tempPath);
         out << R"yaml(
@@ -1844,8 +1844,8 @@ void test_config_performance_save_keeps_scaled_defaults_compact()
 {
     protoscope::config::ConfigStore store;
     std::string error;
-    const auto tempRoot = makeUniqueTempDir("protoscope-config-performance-save");
-    const auto scaledPath = tempRoot / "scaled.yaml";
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-config-performance-save"));
+    const auto scaledPath = tempRoot.path() / "scaled.yaml";
     {
         std::ofstream out(scaledPath);
         out << "performance:\n  scale: 2.0\n";
@@ -1864,7 +1864,7 @@ void test_config_performance_save_keeps_scaled_defaults_compact()
     require(scaledYaml.find("rx_chunk_bytes_per_pump") == std::string::npos,
             "未显式覆盖的实时 backlog 预算不应固化到 YAML");
 
-    const auto explicitPath = tempRoot / "explicit.yaml";
+    const auto explicitPath = tempRoot.path() / "explicit.yaml";
     {
         std::ofstream out(explicitPath);
         out << "performance:\n  scale: 2.0\nscripting:\n  worker:\n    batch_bytes: 123\n";
@@ -2069,9 +2069,9 @@ void test_script_plot_api_snapshot()
 
 void test_script_plot_push_accepts_compact_series()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-compact-plot");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-compact-plot"));
     {
-        std::ofstream script(protocolDir / "main.lua");
+        std::ofstream script(protocolDir.path() / "main.lua");
         script << R"lua(
 function on_open(ctx)
     proto.plot.setup({
@@ -2090,7 +2090,7 @@ end
     }
 
     protoscope::scripting::ScriptHost host;
-    require(host.loadProtocolDirectory(protocolDir.generic_string()), "compact plot 协议应可加载");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "compact plot 协议应可加载");
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{.context = sampleCtx()});
 
     const auto appends = host.drainPlotAppends();
@@ -2478,8 +2478,8 @@ void test_half_duplex_modbus_crc_resync_keeps_following_frame()
 
 void test_half_duplex_modbus_multi_schema_candidates()
 {
-    const auto tempRoot = makeUniqueTempDir("protoscope-half-duplex-multi-schema");
-    const auto protocolDir = tempRoot / "multi_schema";
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-half-duplex-multi-schema"));
+    const auto protocolDir = tempRoot.path() / "multi_schema";
     std::filesystem::create_directories(protocolDir);
 
     {
