@@ -701,6 +701,258 @@ namespace {
             (void) receive;
         }
     }
+
+    void writePerformanceConfig(YAML::Node& root, const AppConfig& scaledDefaults)
+    {
+        root["performance"]["scale"] = scaledDefaults.performance.scale;
+    }
+
+    void writeAppConfig(YAML::Node& root, const AppConfig& config)
+    {
+        root["app"]["language"] = config.app.language;
+        root["app"]["fps_limit"] = config.app.fpsLimit;
+        root["app"]["idle_render"] = config.app.idleRender;
+        root["app"]["auto_save"]["enabled"] = config.app.autoSave.enabled;
+        root["app"]["auto_save"]["interval_ms"] = config.app.autoSave.intervalMs;
+        root["app"]["config_hot_reload"]["enabled"] = config.app.configHotReload.enabled;
+    }
+
+    void writeGuiWaveConfig(YAML::Node& gui, const AppConfig& config)
+    {
+        gui["wave"]["control_mode"] = toWaveControlModeText(config.gui.wave.controlMode);
+        gui["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
+        gui["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
+        gui["wave"]["channel_double_click_action"] =
+            toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
+        gui["wave"]["x_axis_double_click_action"] =
+            toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction);
+        gui["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
+        gui["wave"]["cursor_extreme_snap_policy"] =
+            toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
+        gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
+        gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
+        gui["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
+        gui["wave"]["vertical_auto_fit_multiplier"] = config.gui.wave.verticalAutoFitMultiplier;
+        gui["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
+        gui["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
+        gui["wave"]["downsample_start_multiplier"] = config.gui.wave.downsampleStartMultiplier;
+        gui["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
+        gui["wave"]["max_total_samples"] = config.gui.wave.maxTotalSamples;
+        gui["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
+        gui["wave"]["reset_history_on_time_reset"] = config.gui.wave.resetHistoryOnTimeReset;
+        gui["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
+        gui["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
+        gui["wave"]["show_fft_legend"] = config.gui.wave.showFftLegend;
+        gui["wave"]["fullscreen_mode"] = toWaveFullscreenModeText(config.gui.wave.fullscreenMode);
+    }
+
+    void writeGuiRuntimeConfig(YAML::Node& gui, const AppConfig& config, const AppConfig& scaledDefaults)
+    {
+        const auto& explicitOverrides = config.performance.explicitOverrides;
+
+        gui["log_history"]["transfer_raw_limit"] = config.gui.logHistory.transferRawLimit;
+        gui["log_history"]["transfer_frame_limit"] = config.gui.logHistory.transferFrameLimit;
+        gui["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
+        gui["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
+        gui["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
+        gui["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
+        gui["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
+        gui["realtime_backlog"]["mode"] = config.gui.realtimeBacklog.mode;
+        writePerformanceScalar(gui["realtime_backlog"],
+                               "rx_chunk_bytes_per_pump",
+                               config.gui.realtimeBacklog.rxChunkBytesPerPump,
+                               scaledDefaults.gui.realtimeBacklog.rxChunkBytesPerPump,
+                               explicitOverrides.realtimeBacklogRxChunkBytesPerPump);
+        writePerformanceScalar(gui["realtime_backlog"],
+                               "transfer_frame_rows_per_pump",
+                               config.gui.realtimeBacklog.transferFrameRowsPerPump,
+                               scaledDefaults.gui.realtimeBacklog.transferFrameRowsPerPump,
+                               explicitOverrides.realtimeBacklogTransferFrameRowsPerPump);
+        writePerformanceScalar(gui["realtime_backlog"],
+                               "plot_appends_per_pump",
+                               config.gui.realtimeBacklog.plotAppendsPerPump,
+                               scaledDefaults.gui.realtimeBacklog.plotAppendsPerPump,
+                               explicitOverrides.realtimeBacklogPlotAppendsPerPump);
+        writePerformanceScalar(gui["realtime_backlog"],
+                               "raw_first_backlog_warn_bytes",
+                               config.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
+                               scaledDefaults.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
+                               explicitOverrides.realtimeBacklogRawFirstBacklogWarnBytes);
+        gui["realtime_backlog"]["derived_backlog_degrade_enabled"] =
+            config.gui.realtimeBacklog.derivedBacklogDegradeEnabled;
+        gui["realtime_backlog"]["discard_backlog_on_disconnect"] =
+            config.gui.realtimeBacklog.discardBacklogOnDisconnect;
+        gui["realtime_backlog"]["pump_min_interval_ms"] = config.gui.realtimeBacklog.pumpMinIntervalMs;
+        gui["show_app_header"] = config.gui.showAppHeader;
+        gui["send_history_limit"] = config.gui.sendHistoryLimit;
+        gui["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
+        gui["lua_dock_render_copy_mode"] = config.gui.luaDockRenderCopyMode;
+    }
+
+    void writeGuiElfSymbolComboConfig(YAML::Node& gui, const AppConfig& config)
+    {
+        gui["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;
+        gui["elf_symbol_combo"]["debounce_ms"] = config.gui.elfSymbolCombo.debounceMs;
+        gui["elf_symbol_combo"]["auto_refresh_selected_address"] = config.gui.elfSymbolCombo.autoRefreshSelectedAddress;
+        gui["elf_symbol_combo"]["auto_refresh_emit_on_control"] = config.gui.elfSymbolCombo.autoRefreshEmitOnControl;
+    }
+
+    void writeGuiConfig(YAML::Node& root, const AppConfig& config, const AppConfig& scaledDefaults)
+    {
+        auto gui = root["gui"];
+        gui["window"]["title"] = config.gui.window.title;
+        gui["window"]["width"] = config.gui.window.width;
+        gui["window"]["height"] = config.gui.window.height;
+        gui["window"]["maximized"] = config.gui.window.maximized;
+        writeGuiWaveConfig(gui, config);
+        writeGuiRuntimeConfig(gui, config, scaledDefaults);
+        writeGuiElfSymbolComboConfig(gui, config);
+    }
+
+    void writeProtocolConfig(YAML::Node& root, const AppConfig& config)
+    {
+        root["protocol"]["root_dir"] = config.protocol.rootDir;
+        root["protocol"]["selected_dir"] = config.protocol.selectedDir;
+        root["protocol"]["tx"]["send_timeout_ms"] = config.protocol.tx.sendTimeoutMs;
+        root["protocol"]["tx"]["request_timeout_ms"] = config.protocol.tx.requestTimeoutMs;
+        root["protocol"]["tx"]["max_pending"] = config.protocol.tx.maxPending;
+        root["protocol"]["tx"]["overflow_policy"] = config.protocol.tx.overflowPolicy;
+        root["protocol"]["tx"]["overflow_notify"] = config.protocol.tx.overflowNotify;
+    }
+
+    void writeReceiveConfig(YAML::Node& root, const AppConfig& config, const AppConfig& scaledDefaults)
+    {
+        const auto& explicitOverrides = config.performance.explicitOverrides;
+
+        root["receive"]["stream_buffer"]["near_overflow_threshold"] = config.receive.streamBuffer.nearOverflowThreshold;
+        root["receive"]["stream_buffer"]["popup_enabled"] = config.receive.streamBuffer.popupEnabled;
+        writePerformanceScalar(root["receive"],
+                               "transport_read_buffer_bytes",
+                               config.receive.transportReadBufferBytes,
+                               scaledDefaults.receive.transportReadBufferBytes,
+                               explicitOverrides.receiveTransportReadBufferBytes);
+    }
+
+    void writeScriptingWorkerConfig(YAML::Node& scripting, const AppConfig& config, const AppConfig& scaledDefaults)
+    {
+        const auto& explicitOverrides = config.performance.explicitOverrides;
+
+        if (config.scripting.pipeline.workerThreads.has_value()) {
+            scripting["pipeline"]["worker_threads"] = *config.scripting.pipeline.workerThreads;
+        }
+        scripting["worker"]["enabled"] = config.scripting.workerEnabled;
+        writePerformanceScalar(scripting["worker"],
+                               "rx_queue_limit_bytes",
+                               config.scripting.workerRxQueueLimitBytes,
+                               scaledDefaults.scripting.workerRxQueueLimitBytes,
+                               explicitOverrides.workerRxQueueLimitBytes);
+        writePerformanceScalar(scripting["worker"],
+                               "memory_budget_bytes",
+                               config.scripting.workerMemoryBudgetBytes,
+                               scaledDefaults.scripting.workerMemoryBudgetBytes,
+                               explicitOverrides.workerMemoryBudgetBytes);
+        scripting["worker"]["memory_budget_available_ratio"] = config.scripting.workerMemoryBudgetAvailableRatio;
+        writePerformanceScalar(scripting["worker"],
+                               "output_queue_limit",
+                               config.scripting.workerOutputQueueLimit,
+                               scaledDefaults.scripting.workerOutputQueueLimit,
+                               explicitOverrides.workerOutputQueueLimit);
+        writePerformanceScalar(scripting["worker"],
+                               "batch_bytes",
+                               config.scripting.workerBatchBytes,
+                               scaledDefaults.scripting.workerBatchBytes,
+                               explicitOverrides.workerBatchBytes);
+        scripting["worker"]["backpressure_enabled"] = config.scripting.workerBackpressureEnabled;
+        scripting["worker"]["backpressure_rx_queue_high_watermark"] = config.scripting.workerBackpressureHighWatermark;
+        scripting["worker"]["backpressure_rx_queue_low_watermark"] = config.scripting.workerBackpressureLowWatermark;
+        writePerformanceScalar(scripting["worker"],
+                               "output_flush_budget_ms",
+                               config.scripting.workerOutputFlushBudgetMs,
+                               scaledDefaults.scripting.workerOutputFlushBudgetMs,
+                               explicitOverrides.workerOutputFlushBudgetMs);
+    }
+
+    void writeScriptingFileIoConfig(YAML::Node& scripting, const AppConfig& config)
+    {
+        scripting["file_io"]["enabled"] = config.scripting.fileIo.enabled;
+        scripting["file_io"]["allow_protocol_dir"] = config.scripting.fileIo.allowProtocolDir;
+        scripting["file_io"]["allow_dialog_paths"] = config.scripting.fileIo.allowDialogPaths;
+        for (const auto& rootPath : config.scripting.fileIo.extraAllowedRoots) {
+            scripting["file_io"]["extra_allowed_roots"].push_back(rootPath);
+        }
+        if (config.scripting.fileIo.extraAllowedRoots.empty()) {
+            scripting["file_io"]["extra_allowed_roots"] = YAML::Node(YAML::NodeType::Sequence);
+        }
+        scripting["file_io"]["max_open_files"] = config.scripting.fileIo.maxOpenFiles;
+        scripting["file_io"]["default_chunk_bytes"] = config.scripting.fileIo.defaultChunkBytes;
+        scripting["file_io"]["max_chunk_bytes"] = config.scripting.fileIo.maxChunkBytes;
+        scripting["file_io"]["max_file_size_bytes"] = config.scripting.fileIo.maxFileSizeBytes;
+        scripting["file_io"]["max_write_file_size_bytes"] = config.scripting.fileIo.maxWriteFileSizeBytes;
+        scripting["file_io"]["dialog"]["enabled"] = config.scripting.fileIo.dialog.enabled;
+        scripting["file_io"]["dialog"]["remember_last_dir"] = config.scripting.fileIo.dialog.rememberLastDir;
+        scripting["file_io"]["send_file"]["default_chunk_bytes"] = config.scripting.fileIo.sendFile.defaultChunkBytes;
+        scripting["file_io"]["send_file"]["max_inflight_chunks"] = config.scripting.fileIo.sendFile.maxInflightChunks;
+    }
+
+    void writeScriptingConfig(YAML::Node& root, const AppConfig& config, const AppConfig& scaledDefaults)
+    {
+        auto scripting = root["scripting"];
+        writeScriptingWorkerConfig(scripting, config, scaledDefaults);
+        writeScriptingFileIoConfig(scripting, config);
+    }
+
+    void writeLoggingConfig(YAML::Node& root, const AppConfig& config)
+    {
+        root["logging"]["level"] = toLogLevelText(config.logging.level);
+        if (!config.logging.filePath.empty()) {
+            root["logging"]["file_path"] = config.logging.filePath;
+        }
+    }
+
+    void writeCommunicationConfig(YAML::Node& root, const AppConfig& config)
+    {
+        root["communication"]["kind"] = toTransportKindText(config.communication.kind);
+        root["communication"]["tcp_client"]["host"] = config.communication.tcpClient.host;
+        root["communication"]["tcp_client"]["port"] = config.communication.tcpClient.port;
+        root["communication"]["tcp_server"]["bind_address"] = config.communication.tcpServer.bindAddress;
+        root["communication"]["tcp_server"]["port"] = config.communication.tcpServer.port;
+        root["communication"]["tcp_server"]["reject_new_connection"] =
+            config.communication.tcpServer.rejectNewConnection;
+        root["communication"]["serial"]["port_name"] = config.communication.serial.portName;
+        root["communication"]["serial"]["baud_rate"] = config.communication.serial.baudRate;
+        root["communication"]["serial"]["data_bits"] = config.communication.serial.dataBits;
+        root["communication"]["serial"]["parity"] = config.communication.serial.parity;
+        root["communication"]["serial"]["stop_bits"] = config.communication.serial.stopBits;
+        root["communication"]["serial"]["flow_control"] = config.communication.serial.flowControl;
+        root["communication"]["udp_peer"]["bind_address"] = config.communication.udpPeer.bindAddress;
+        root["communication"]["udp_peer"]["bind_port"] = config.communication.udpPeer.bindPort;
+        root["communication"]["udp_peer"]["remote_host"] = config.communication.udpPeer.remoteHost;
+        root["communication"]["udp_peer"]["remote_port"] = config.communication.udpPeer.remotePort;
+    }
+
+    bool writeConfigYamlFile(const std::filesystem::path& path, const YAML::Node& root, std::string& error)
+    {
+        try {
+            if (!path.parent_path().empty()) {
+                std::error_code directoryError;
+                std::filesystem::create_directories(path.parent_path(), directoryError);
+                if (directoryError) {
+                    error = "创建配置目录失败: " + directoryError.message();
+                    return false;
+                }
+            }
+            std::ofstream out(path);
+            if (!out.good()) {
+                error = "无法写入配置文件";
+                return false;
+            }
+            out << root;
+            return true;
+        } catch (const std::exception& ex) {
+            error = ex.what();
+            return false;
+        }
+    }
 } // namespace
 
 ConfigStore::ConfigStore()
@@ -763,203 +1015,17 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
     scaledDefaults.performance.scale = normalizePerformanceScale(config.performance.scale);
     applyPerformanceScale(scaledDefaults);
 
-    const auto& explicitOverrides = config.performance.explicitOverrides;
+    // 核心流程：先按配置域组装 YAML，再统一处理目录创建和文件写入。
+    writePerformanceConfig(root, scaledDefaults);
+    writeAppConfig(root, config);
+    writeGuiConfig(root, config, scaledDefaults);
+    writeProtocolConfig(root, config);
+    writeReceiveConfig(root, config, scaledDefaults);
+    writeScriptingConfig(root, config, scaledDefaults);
+    writeLoggingConfig(root, config);
+    writeCommunicationConfig(root, config);
 
-    root["performance"]["scale"] = scaledDefaults.performance.scale;
-    root["app"]["language"] = config.app.language;
-    root["app"]["fps_limit"] = config.app.fpsLimit;
-    root["app"]["idle_render"] = config.app.idleRender;
-    root["app"]["auto_save"]["enabled"] = config.app.autoSave.enabled;
-    root["app"]["auto_save"]["interval_ms"] = config.app.autoSave.intervalMs;
-    root["app"]["config_hot_reload"]["enabled"] = config.app.configHotReload.enabled;
-
-    root["gui"]["window"]["title"] = config.gui.window.title;
-    root["gui"]["window"]["width"] = config.gui.window.width;
-    root["gui"]["window"]["height"] = config.gui.window.height;
-    root["gui"]["window"]["maximized"] = config.gui.window.maximized;
-    root["gui"]["wave"]["control_mode"] = toWaveControlModeText(config.gui.wave.controlMode);
-    root["gui"]["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
-    root["gui"]["wave"]["channel_card_width_mode"] =
-        toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
-    root["gui"]["wave"]["channel_double_click_action"] =
-        toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
-    root["gui"]["wave"]["x_axis_double_click_action"] =
-        toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction);
-    root["gui"]["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
-    root["gui"]["wave"]["cursor_extreme_snap_policy"] =
-        toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
-    root["gui"]["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
-    root["gui"]["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
-    root["gui"]["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
-    root["gui"]["wave"]["vertical_auto_fit_multiplier"] = config.gui.wave.verticalAutoFitMultiplier;
-    root["gui"]["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
-    root["gui"]["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
-    root["gui"]["wave"]["downsample_start_multiplier"] = config.gui.wave.downsampleStartMultiplier;
-    root["gui"]["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
-    root["gui"]["wave"]["max_total_samples"] = config.gui.wave.maxTotalSamples;
-    root["gui"]["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
-    root["gui"]["wave"]["reset_history_on_time_reset"] = config.gui.wave.resetHistoryOnTimeReset;
-    root["gui"]["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
-    root["gui"]["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
-    root["gui"]["wave"]["show_fft_legend"] = config.gui.wave.showFftLegend;
-    root["gui"]["wave"]["fullscreen_mode"] = toWaveFullscreenModeText(config.gui.wave.fullscreenMode);
-    root["gui"]["log_history"]["transfer_raw_limit"] = config.gui.logHistory.transferRawLimit;
-    root["gui"]["log_history"]["transfer_frame_limit"] = config.gui.logHistory.transferFrameLimit;
-    root["gui"]["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
-    root["gui"]["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
-    root["gui"]["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
-    root["gui"]["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
-    root["gui"]["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
-    root["gui"]["realtime_backlog"]["mode"] = config.gui.realtimeBacklog.mode;
-    writePerformanceScalar(root["gui"]["realtime_backlog"],
-                           "rx_chunk_bytes_per_pump",
-                           config.gui.realtimeBacklog.rxChunkBytesPerPump,
-                           scaledDefaults.gui.realtimeBacklog.rxChunkBytesPerPump,
-                           explicitOverrides.realtimeBacklogRxChunkBytesPerPump);
-    writePerformanceScalar(root["gui"]["realtime_backlog"],
-                           "transfer_frame_rows_per_pump",
-                           config.gui.realtimeBacklog.transferFrameRowsPerPump,
-                           scaledDefaults.gui.realtimeBacklog.transferFrameRowsPerPump,
-                           explicitOverrides.realtimeBacklogTransferFrameRowsPerPump);
-    writePerformanceScalar(root["gui"]["realtime_backlog"],
-                           "plot_appends_per_pump",
-                           config.gui.realtimeBacklog.plotAppendsPerPump,
-                           scaledDefaults.gui.realtimeBacklog.plotAppendsPerPump,
-                           explicitOverrides.realtimeBacklogPlotAppendsPerPump);
-    writePerformanceScalar(root["gui"]["realtime_backlog"],
-                           "raw_first_backlog_warn_bytes",
-                           config.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
-                           scaledDefaults.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
-                           explicitOverrides.realtimeBacklogRawFirstBacklogWarnBytes);
-    root["gui"]["realtime_backlog"]["derived_backlog_degrade_enabled"] =
-        config.gui.realtimeBacklog.derivedBacklogDegradeEnabled;
-    root["gui"]["realtime_backlog"]["discard_backlog_on_disconnect"] =
-        config.gui.realtimeBacklog.discardBacklogOnDisconnect;
-    root["gui"]["realtime_backlog"]["pump_min_interval_ms"] = config.gui.realtimeBacklog.pumpMinIntervalMs;
-    root["gui"]["show_app_header"] = config.gui.showAppHeader;
-    root["gui"]["send_history_limit"] = config.gui.sendHistoryLimit;
-    root["gui"]["lua_dock_layout_debug"] = config.gui.luaDockLayoutDebug;
-    root["gui"]["lua_dock_render_copy_mode"] = config.gui.luaDockRenderCopyMode;
-    root["gui"]["elf_symbol_combo"]["limit"] = config.gui.elfSymbolCombo.limit;
-    root["gui"]["elf_symbol_combo"]["debounce_ms"] = config.gui.elfSymbolCombo.debounceMs;
-    root["gui"]["elf_symbol_combo"]["auto_refresh_selected_address"] =
-        config.gui.elfSymbolCombo.autoRefreshSelectedAddress;
-    root["gui"]["elf_symbol_combo"]["auto_refresh_emit_on_control"] =
-        config.gui.elfSymbolCombo.autoRefreshEmitOnControl;
-
-    root["protocol"]["root_dir"] = config.protocol.rootDir;
-    root["protocol"]["selected_dir"] = config.protocol.selectedDir;
-    root["protocol"]["tx"]["send_timeout_ms"] = config.protocol.tx.sendTimeoutMs;
-    root["protocol"]["tx"]["request_timeout_ms"] = config.protocol.tx.requestTimeoutMs;
-    root["protocol"]["tx"]["max_pending"] = config.protocol.tx.maxPending;
-    root["protocol"]["tx"]["overflow_policy"] = config.protocol.tx.overflowPolicy;
-    root["protocol"]["tx"]["overflow_notify"] = config.protocol.tx.overflowNotify;
-    root["receive"]["stream_buffer"]["near_overflow_threshold"] = config.receive.streamBuffer.nearOverflowThreshold;
-    root["receive"]["stream_buffer"]["popup_enabled"] = config.receive.streamBuffer.popupEnabled;
-    writePerformanceScalar(root["receive"],
-                           "transport_read_buffer_bytes",
-                           config.receive.transportReadBufferBytes,
-                           scaledDefaults.receive.transportReadBufferBytes,
-                           explicitOverrides.receiveTransportReadBufferBytes);
-
-    if (config.scripting.pipeline.workerThreads.has_value()) {
-        root["scripting"]["pipeline"]["worker_threads"] = *config.scripting.pipeline.workerThreads;
-    }
-    root["scripting"]["worker"]["enabled"] = config.scripting.workerEnabled;
-    writePerformanceScalar(root["scripting"]["worker"],
-                           "rx_queue_limit_bytes",
-                           config.scripting.workerRxQueueLimitBytes,
-                           scaledDefaults.scripting.workerRxQueueLimitBytes,
-                           explicitOverrides.workerRxQueueLimitBytes);
-    writePerformanceScalar(root["scripting"]["worker"],
-                           "memory_budget_bytes",
-                           config.scripting.workerMemoryBudgetBytes,
-                           scaledDefaults.scripting.workerMemoryBudgetBytes,
-                           explicitOverrides.workerMemoryBudgetBytes);
-    root["scripting"]["worker"]["memory_budget_available_ratio"] = config.scripting.workerMemoryBudgetAvailableRatio;
-    writePerformanceScalar(root["scripting"]["worker"],
-                           "output_queue_limit",
-                           config.scripting.workerOutputQueueLimit,
-                           scaledDefaults.scripting.workerOutputQueueLimit,
-                           explicitOverrides.workerOutputQueueLimit);
-    writePerformanceScalar(root["scripting"]["worker"],
-                           "batch_bytes",
-                           config.scripting.workerBatchBytes,
-                           scaledDefaults.scripting.workerBatchBytes,
-                           explicitOverrides.workerBatchBytes);
-    root["scripting"]["worker"]["backpressure_enabled"] = config.scripting.workerBackpressureEnabled;
-    root["scripting"]["worker"]["backpressure_rx_queue_high_watermark"] =
-        config.scripting.workerBackpressureHighWatermark;
-    root["scripting"]["worker"]["backpressure_rx_queue_low_watermark"] =
-        config.scripting.workerBackpressureLowWatermark;
-    writePerformanceScalar(root["scripting"]["worker"],
-                           "output_flush_budget_ms",
-                           config.scripting.workerOutputFlushBudgetMs,
-                           scaledDefaults.scripting.workerOutputFlushBudgetMs,
-                           explicitOverrides.workerOutputFlushBudgetMs);
-    root["scripting"]["file_io"]["enabled"] = config.scripting.fileIo.enabled;
-    root["scripting"]["file_io"]["allow_protocol_dir"] = config.scripting.fileIo.allowProtocolDir;
-    root["scripting"]["file_io"]["allow_dialog_paths"] = config.scripting.fileIo.allowDialogPaths;
-    for (const auto& rootPath : config.scripting.fileIo.extraAllowedRoots) {
-        root["scripting"]["file_io"]["extra_allowed_roots"].push_back(rootPath);
-    }
-    if (config.scripting.fileIo.extraAllowedRoots.empty()) {
-        root["scripting"]["file_io"]["extra_allowed_roots"] = YAML::Node(YAML::NodeType::Sequence);
-    }
-    root["scripting"]["file_io"]["max_open_files"] = config.scripting.fileIo.maxOpenFiles;
-    root["scripting"]["file_io"]["default_chunk_bytes"] = config.scripting.fileIo.defaultChunkBytes;
-    root["scripting"]["file_io"]["max_chunk_bytes"] = config.scripting.fileIo.maxChunkBytes;
-    root["scripting"]["file_io"]["max_file_size_bytes"] = config.scripting.fileIo.maxFileSizeBytes;
-    root["scripting"]["file_io"]["max_write_file_size_bytes"] = config.scripting.fileIo.maxWriteFileSizeBytes;
-    root["scripting"]["file_io"]["dialog"]["enabled"] = config.scripting.fileIo.dialog.enabled;
-    root["scripting"]["file_io"]["dialog"]["remember_last_dir"] = config.scripting.fileIo.dialog.rememberLastDir;
-    root["scripting"]["file_io"]["send_file"]["default_chunk_bytes"] =
-        config.scripting.fileIo.sendFile.defaultChunkBytes;
-    root["scripting"]["file_io"]["send_file"]["max_inflight_chunks"] =
-        config.scripting.fileIo.sendFile.maxInflightChunks;
-
-    root["logging"]["level"] = toLogLevelText(config.logging.level);
-    if (!config.logging.filePath.empty()) {
-        root["logging"]["file_path"] = config.logging.filePath;
-    }
-
-    root["communication"]["kind"] = toTransportKindText(config.communication.kind);
-    root["communication"]["tcp_client"]["host"] = config.communication.tcpClient.host;
-    root["communication"]["tcp_client"]["port"] = config.communication.tcpClient.port;
-    root["communication"]["tcp_server"]["bind_address"] = config.communication.tcpServer.bindAddress;
-    root["communication"]["tcp_server"]["port"] = config.communication.tcpServer.port;
-    root["communication"]["tcp_server"]["reject_new_connection"] = config.communication.tcpServer.rejectNewConnection;
-    root["communication"]["serial"]["port_name"] = config.communication.serial.portName;
-    root["communication"]["serial"]["baud_rate"] = config.communication.serial.baudRate;
-    root["communication"]["serial"]["data_bits"] = config.communication.serial.dataBits;
-    root["communication"]["serial"]["parity"] = config.communication.serial.parity;
-    root["communication"]["serial"]["stop_bits"] = config.communication.serial.stopBits;
-    root["communication"]["serial"]["flow_control"] = config.communication.serial.flowControl;
-    root["communication"]["udp_peer"]["bind_address"] = config.communication.udpPeer.bindAddress;
-    root["communication"]["udp_peer"]["bind_port"] = config.communication.udpPeer.bindPort;
-    root["communication"]["udp_peer"]["remote_host"] = config.communication.udpPeer.remoteHost;
-    root["communication"]["udp_peer"]["remote_port"] = config.communication.udpPeer.remotePort;
-
-    try {
-        if (!path.parent_path().empty()) {
-            std::error_code directoryError;
-            std::filesystem::create_directories(path.parent_path(), directoryError);
-            if (directoryError) {
-                error = "创建配置目录失败: " + directoryError.message();
-                return false;
-            }
-        }
-        std::ofstream out(path);
-        if (!out.good()) {
-            error = "无法写入配置文件";
-            return false;
-        }
-        out << root;
-        return true;
-    } catch (const std::exception& ex) {
-        error = ex.what();
-        return false;
-    }
+    return writeConfigYamlFile(path, root, error);
 }
 
 std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::path& dir) const
