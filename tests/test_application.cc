@@ -596,8 +596,8 @@ void test_application_refreshes_selected_elf_symbol_controls_with_on_control()
 
 void test_application_clear_elf_static_address_file_resets_queries()
 {
-    const auto tempDir = makeUniqueTempDir("protoscope-elf-clear-app");
-    const auto elfPath = tempDir / "symbols.json";
+    const ScopedTempPath tempDir(makeUniqueTempDir("protoscope-elf-clear-app"));
+    const auto elfPath = tempDir.path() / "symbols.json";
     writeElfSymbolDump(elfPath, 0x20000010ULL, "uint32_t");
 
     protoscope::app::Application application;
@@ -613,7 +613,6 @@ void test_application_clear_elf_static_address_file_resets_queries()
     require(application.elfStaticAddressRevision() > loadedRevision, "清理已加载模型应推进 ELF revision");
 
     application.shutdown();
-    std::filesystem::remove_all(tempDir);
 }
 
 void test_application_failed_protocol_reload_keeps_previous_runtime()
@@ -1504,9 +1503,9 @@ void test_application_live_raw_capture_trims_to_limit()
 
 void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
 {
-    const auto protocolDir = makeUniqueTempDir("protoscope-live-runtime-profile");
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-live-runtime-profile"));
     {
-        std::ofstream out(protocolDir / "main.lua");
+        std::ofstream out(protocolDir.path() / "main.lua");
         require(out.good(), "runtime profile 裁剪测试协议应可写入");
         out << "function on_open(ctx)\n";
         out << "  proto.stream.set_profile({ frame = 'dynamic_profile', length = 8, channel_map = { 2, 1 } })\n";
@@ -1541,7 +1540,7 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
     config.gui.rawCapture.liveLimitBytes = secondFrame.size();
     require(application.initialize(), "应用初始化失败");
     require(application.applyConfig(config), "应用配置应可设置实时原始缓存上限");
-    require(application.reloadProtocolDirectory(protocolDir.generic_string(), true),
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
             "runtime profile 裁剪协议应可加载");
     application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
         static_cast<void>(kind);
@@ -1590,7 +1589,7 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
 
     protoscope::app::Application importedApplication;
     require(importedApplication.initialize(), "导入验证应用初始化失败");
-    require(importedApplication.reloadProtocolDirectory(protocolDir.generic_string(), true), "导入验证协议应可加载");
+    require(importedApplication.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "导入验证协议应可加载");
     require(importedApplication.importWaveRawCapture(*exported, error), "导出的 runtime profile raw 应可重新导入");
 }
 
