@@ -151,20 +151,8 @@ void GuiRuntime::drawStatusBar()
     ImGui::PopStyleVar();
 }
 
-void GuiRuntime::drawCommDock()
+void GuiRuntime::drawCommTransportModeSelector(dock::CommDockState& comm)
 {
-    if (!showCommDock_) {
-        return;
-    }
-
-    auto& comm = application_.docks().commState();
-    auto& configState = application_.docks().configState();
-
-    if (!ImGui::Begin("通讯配置", &showCommDock_)) {
-        ImGui::End();
-        return;
-    }
-
     const auto& transportItems = transport::transportDescriptors();
     int kindIndex = 0;
     for (std::size_t index = 0; index < transportItems.size(); ++index) {
@@ -182,127 +170,152 @@ void GuiRuntime::drawCommDock()
         comm.kind = transportItems[static_cast<std::size_t>(kindIndex)].kind;
         application_.markCommConfigEdited(true);
     }
+}
 
-    if (comm.kind == transport::TransportKind::TcpClient) {
-        char host[256]{};
-        std::snprintf(host, sizeof(host), "%s", comm.tcpClient.host.c_str());
-        if (ImGui::InputText("主机", host, sizeof(host))) {
-            comm.tcpClient.host = host;
-            application_.markCommConfigEdited(true);
-        }
-        int port = comm.tcpClient.port;
-        if (ImGui::InputInt("端口", &port)) {
-            comm.tcpClient.port = static_cast<std::uint16_t>(std::clamp(port, 0, 65535));
-            application_.markCommConfigEdited(true);
-        }
-    } else if (comm.kind == transport::TransportKind::TcpServer) {
-        char bindAddress[256]{};
-        std::snprintf(bindAddress, sizeof(bindAddress), "%s", comm.tcpServer.bindAddress.c_str());
-        if (ImGui::InputText("监听地址", bindAddress, sizeof(bindAddress))) {
-            comm.tcpServer.bindAddress = bindAddress;
-            application_.markCommConfigEdited(true);
-        }
-        int port = comm.tcpServer.port;
-        if (ImGui::InputInt("监听端口", &port)) {
-            comm.tcpServer.port = static_cast<std::uint16_t>(std::clamp(port, 0, 65535));
-            application_.markCommConfigEdited(true);
-        }
-        if (ImGui::Checkbox("拒绝新连接", &comm.tcpServer.rejectNewConnection)) {
-            application_.markCommConfigEdited(true);
-        }
-    } else if (comm.kind == transport::TransportKind::Serial) {
-        if (!serialPortsScanned_) {
-            refreshSerialPortOptions(comm);
-            serialPortsScanned_ = true;
-        }
-        if (ImGui::Button("刷新串口列表")) {
-            refreshSerialPortOptions(comm);
-        }
+void GuiRuntime::drawTcpClientCommConfig(dock::CommDockState& comm)
+{
+    char host[256]{};
+    std::snprintf(host, sizeof(host), "%s", comm.tcpClient.host.c_str());
+    if (ImGui::InputText("主机", host, sizeof(host))) {
+        comm.tcpClient.host = host;
+        application_.markCommConfigEdited(true);
+    }
+    int port = comm.tcpClient.port;
+    if (ImGui::InputInt("端口", &port)) {
+        comm.tcpClient.port = static_cast<std::uint16_t>(std::clamp(port, 0, 65535));
+        application_.markCommConfigEdited(true);
+    }
+}
 
-        syncDraftFromModel(serialPortDraft_, serialPortDraftModel_, comm.serial.portName);
-        if (const auto portEdit = drawEditableCombo("端口", serialPortDraft_, comm.serialPortOptions);
-            portEdit.edited && portEdit.value != comm.serial.portName) {
-            comm.serial.portName = portEdit.value;
-            serialPortDraftModel_ = comm.serial.portName;
-            application_.markCommConfigEdited(true);
-        }
+void GuiRuntime::drawTcpServerCommConfig(dock::CommDockState& comm)
+{
+    char bindAddress[256]{};
+    std::snprintf(bindAddress, sizeof(bindAddress), "%s", comm.tcpServer.bindAddress.c_str());
+    if (ImGui::InputText("监听地址", bindAddress, sizeof(bindAddress))) {
+        comm.tcpServer.bindAddress = bindAddress;
+        application_.markCommConfigEdited(true);
+    }
+    int port = comm.tcpServer.port;
+    if (ImGui::InputInt("监听端口", &port)) {
+        comm.tcpServer.port = static_cast<std::uint16_t>(std::clamp(port, 0, 65535));
+        application_.markCommConfigEdited(true);
+    }
+    if (ImGui::Checkbox("拒绝新连接", &comm.tcpServer.rejectNewConnection)) {
+        application_.markCommConfigEdited(true);
+    }
+}
 
-        std::vector<std::string> baudRateOptions;
-        for (std::size_t i = 0; i < std::size(kCommonBaudRates); ++i) {
-            baudRateOptions.push_back(std::to_string(kCommonBaudRates[i]));
-        }
-
-        const std::string currentBaudText = std::to_string(comm.serial.baudRate);
-        syncDraftFromModel(commonBaudRateDraft_, commonBaudRateDraftModel_, currentBaudText);
-        if (const auto baudEdit = drawEditableCombo("波特率", commonBaudRateDraft_, baudRateOptions, digitsOnly);
-            baudEdit.edited) {
-            if (!baudEdit.valid) {
-                application_.setStatusMessage("波特率仅接受纯数字");
-            } else {
-                const auto baudRate = static_cast<std::uint32_t>(std::stoul(baudEdit.value));
-                if (baudRate != comm.serial.baudRate) {
-                    comm.serial.baudRate = baudRate;
-                    commonBaudRateDraftModel_ = baudEdit.value;
-                    application_.markCommConfigEdited(true);
-                }
-            }
-        }
-        if (!digitsOnly(commonBaudRateDraft_)) {
-            ImGui::TextDisabled("波特率仅接受纯数字");
-        }
-
-        int dataBits = static_cast<int>(comm.serial.dataBits);
-        if (ImGui::InputInt("数据位", &dataBits)) {
-            comm.serial.dataBits = static_cast<std::uint32_t>(std::clamp(dataBits, 5, 8));
-            application_.markCommConfigEdited(true);
-        }
-
-        const char* parityItems[] = {"none", "odd", "even"};
-        int parityIndex = comm.serial.parity == "odd" ? 1 : (comm.serial.parity == "even" ? 2 : 0);
-        if (ImGui::Combo("奇偶校验", &parityIndex, parityItems, IM_ARRAYSIZE(parityItems))) {
-            comm.serial.parity = parityItems[parityIndex];
-            application_.markCommConfigEdited(true);
-        }
-
-        const char* stopBitItems[] = {"one", "one_point_five", "two"};
-        int stopBitIndex = comm.serial.stopBits == "two" ? 2 : (comm.serial.stopBits == "one_point_five" ? 1 : 0);
-        if (ImGui::Combo("停止位", &stopBitIndex, stopBitItems, IM_ARRAYSIZE(stopBitItems))) {
-            comm.serial.stopBits = stopBitItems[stopBitIndex];
-            application_.markCommConfigEdited(true);
-        }
-
-        const char* flowItems[] = {"none", "software", "hardware"};
-        int flowIndex = comm.serial.flowControl == "software" ? 1 : (comm.serial.flowControl == "hardware" ? 2 : 0);
-        if (ImGui::Combo("流控", &flowIndex, flowItems, IM_ARRAYSIZE(flowItems))) {
-            comm.serial.flowControl = flowItems[flowIndex];
-            application_.markCommConfigEdited(true);
-        }
-    } else if (comm.kind == transport::TransportKind::UdpPeer) {
-        char bindAddress[256]{};
-        std::snprintf(bindAddress, sizeof(bindAddress), "%s", comm.udpPeer.bindAddress.c_str());
-        if (ImGui::InputText("本地地址", bindAddress, sizeof(bindAddress))) {
-            comm.udpPeer.bindAddress = bindAddress;
-            application_.markCommConfigEdited(true);
-        }
-        int bindPort = comm.udpPeer.bindPort;
-        if (ImGui::InputInt("本地端口", &bindPort)) {
-            comm.udpPeer.bindPort = static_cast<std::uint16_t>(std::clamp(bindPort, 0, 65535));
-            application_.markCommConfigEdited(true);
-        }
-        char remoteHost[256]{};
-        std::snprintf(remoteHost, sizeof(remoteHost), "%s", comm.udpPeer.remoteHost.c_str());
-        if (ImGui::InputText("远端地址", remoteHost, sizeof(remoteHost))) {
-            comm.udpPeer.remoteHost = remoteHost;
-            application_.markCommConfigEdited(true);
-        }
-        int remotePort = comm.udpPeer.remotePort;
-        if (ImGui::InputInt("远端端口", &remotePort)) {
-            comm.udpPeer.remotePort = static_cast<std::uint16_t>(std::clamp(remotePort, 0, 65535));
-            application_.markCommConfigEdited(true);
-        }
+void GuiRuntime::drawSerialCommConfig(dock::CommDockState& comm)
+{
+    if (!serialPortsScanned_) {
+        refreshSerialPortOptions(comm);
+        serialPortsScanned_ = true;
+    }
+    if (ImGui::Button("刷新串口列表")) {
+        refreshSerialPortOptions(comm);
     }
 
-    ImGui::Separator();
+    syncDraftFromModel(serialPortDraft_, serialPortDraftModel_, comm.serial.portName);
+    if (const auto portEdit = drawEditableCombo("端口", serialPortDraft_, comm.serialPortOptions);
+        portEdit.edited && portEdit.value != comm.serial.portName) {
+        comm.serial.portName = portEdit.value;
+        serialPortDraftModel_ = comm.serial.portName;
+        application_.markCommConfigEdited(true);
+    }
+
+    std::vector<std::string> baudRateOptions;
+    for (std::size_t i = 0; i < std::size(kCommonBaudRates); ++i) {
+        baudRateOptions.push_back(std::to_string(kCommonBaudRates[i]));
+    }
+
+    const std::string currentBaudText = std::to_string(comm.serial.baudRate);
+    syncDraftFromModel(commonBaudRateDraft_, commonBaudRateDraftModel_, currentBaudText);
+    if (const auto baudEdit = drawEditableCombo("波特率", commonBaudRateDraft_, baudRateOptions, digitsOnly);
+        baudEdit.edited) {
+        if (!baudEdit.valid) {
+            application_.setStatusMessage("波特率仅接受纯数字");
+        } else {
+            const auto baudRate = static_cast<std::uint32_t>(std::stoul(baudEdit.value));
+            if (baudRate != comm.serial.baudRate) {
+                comm.serial.baudRate = baudRate;
+                commonBaudRateDraftModel_ = baudEdit.value;
+                application_.markCommConfigEdited(true);
+            }
+        }
+    }
+    if (!digitsOnly(commonBaudRateDraft_)) {
+        ImGui::TextDisabled("波特率仅接受纯数字");
+    }
+
+    int dataBits = static_cast<int>(comm.serial.dataBits);
+    if (ImGui::InputInt("数据位", &dataBits)) {
+        comm.serial.dataBits = static_cast<std::uint32_t>(std::clamp(dataBits, 5, 8));
+        application_.markCommConfigEdited(true);
+    }
+
+    const char* parityItems[] = {"none", "odd", "even"};
+    int parityIndex = comm.serial.parity == "odd" ? 1 : (comm.serial.parity == "even" ? 2 : 0);
+    if (ImGui::Combo("奇偶校验", &parityIndex, parityItems, IM_ARRAYSIZE(parityItems))) {
+        comm.serial.parity = parityItems[parityIndex];
+        application_.markCommConfigEdited(true);
+    }
+
+    const char* stopBitItems[] = {"one", "one_point_five", "two"};
+    int stopBitIndex = comm.serial.stopBits == "two" ? 2 : (comm.serial.stopBits == "one_point_five" ? 1 : 0);
+    if (ImGui::Combo("停止位", &stopBitIndex, stopBitItems, IM_ARRAYSIZE(stopBitItems))) {
+        comm.serial.stopBits = stopBitItems[stopBitIndex];
+        application_.markCommConfigEdited(true);
+    }
+
+    const char* flowItems[] = {"none", "software", "hardware"};
+    int flowIndex = comm.serial.flowControl == "software" ? 1 : (comm.serial.flowControl == "hardware" ? 2 : 0);
+    if (ImGui::Combo("流控", &flowIndex, flowItems, IM_ARRAYSIZE(flowItems))) {
+        comm.serial.flowControl = flowItems[flowIndex];
+        application_.markCommConfigEdited(true);
+    }
+}
+
+void GuiRuntime::drawUdpPeerCommConfig(dock::CommDockState& comm)
+{
+    char bindAddress[256]{};
+    std::snprintf(bindAddress, sizeof(bindAddress), "%s", comm.udpPeer.bindAddress.c_str());
+    if (ImGui::InputText("本地地址", bindAddress, sizeof(bindAddress))) {
+        comm.udpPeer.bindAddress = bindAddress;
+        application_.markCommConfigEdited(true);
+    }
+    int bindPort = comm.udpPeer.bindPort;
+    if (ImGui::InputInt("本地端口", &bindPort)) {
+        comm.udpPeer.bindPort = static_cast<std::uint16_t>(std::clamp(bindPort, 0, 65535));
+        application_.markCommConfigEdited(true);
+    }
+    char remoteHost[256]{};
+    std::snprintf(remoteHost, sizeof(remoteHost), "%s", comm.udpPeer.remoteHost.c_str());
+    if (ImGui::InputText("远端地址", remoteHost, sizeof(remoteHost))) {
+        comm.udpPeer.remoteHost = remoteHost;
+        application_.markCommConfigEdited(true);
+    }
+    int remotePort = comm.udpPeer.remotePort;
+    if (ImGui::InputInt("远端端口", &remotePort)) {
+        comm.udpPeer.remotePort = static_cast<std::uint16_t>(std::clamp(remotePort, 0, 65535));
+        application_.markCommConfigEdited(true);
+    }
+}
+
+void GuiRuntime::drawCommTransportConfig(dock::CommDockState& comm)
+{
+    if (comm.kind == transport::TransportKind::TcpClient) {
+        drawTcpClientCommConfig(comm);
+    } else if (comm.kind == transport::TransportKind::TcpServer) {
+        drawTcpServerCommConfig(comm);
+    } else if (comm.kind == transport::TransportKind::Serial) {
+        drawSerialCommConfig(comm);
+    } else if (comm.kind == transport::TransportKind::UdpPeer) {
+        drawUdpPeerCommConfig(comm);
+    }
+}
+
+void GuiRuntime::drawCommStatus(const dock::CommDockState& comm)
+{
     ImGui::Text("当前模式: %s", transport::transportKindLabel(comm.kind).data());
     ImGui::Text("连接状态: %s", transportStateLabel(comm.state));
     ImGui::Text("TX=%llu RX=%llu",
@@ -311,7 +324,10 @@ void GuiRuntime::drawCommDock()
     if (!comm.lastError.empty()) {
         ImGui::TextWrapped("错误：%s", comm.lastError.c_str());
     }
+}
 
+void GuiRuntime::drawCommActions(dock::ConfigDockState& configState)
+{
     if (ImGui::Button("连接")) {
         application_.openTransport();
     }
@@ -331,7 +347,10 @@ void GuiRuntime::drawCommDock()
             application_.setStatusMessage("保存配置失败: " + error, true);
         }
     }
+}
 
+void GuiRuntime::drawCommBacklogStatus(const dock::CommDockState& comm)
+{
     if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U ||
         comm.luaPendingItems > 0U || comm.uiPendingItems > 0U) {
         ImGui::Text("实时待处理: RX %zu bytes / 逐帧 %zu / 波形 %zu",
@@ -364,6 +383,28 @@ void GuiRuntime::drawCommDock()
     if (!comm.backlogWarning.empty()) {
         ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.0F, 1.0F), "%s", comm.backlogWarning.c_str());
     }
+}
+
+void GuiRuntime::drawCommDock()
+{
+    if (!showCommDock_) {
+        return;
+    }
+
+    auto& comm = application_.docks().commState();
+    auto& configState = application_.docks().configState();
+
+    if (!ImGui::Begin("通讯配置", &showCommDock_)) {
+        ImGui::End();
+        return;
+    }
+
+    drawCommTransportModeSelector(comm);
+    drawCommTransportConfig(comm);
+    ImGui::Separator();
+    drawCommStatus(comm);
+    drawCommActions(configState);
+    drawCommBacklogStatus(comm);
 
     ImGui::End();
 }

@@ -118,6 +118,15 @@ private:
     void drawHelpMenu();
     void drawLuaViewMenu();
     void drawCommDock();
+    void drawCommTransportModeSelector(dock::CommDockState& comm);
+    void drawCommTransportConfig(dock::CommDockState& comm);
+    void drawTcpClientCommConfig(dock::CommDockState& comm);
+    void drawTcpServerCommConfig(dock::CommDockState& comm);
+    void drawSerialCommConfig(dock::CommDockState& comm);
+    void drawUdpPeerCommConfig(dock::CommDockState& comm);
+    void drawCommStatus(const dock::CommDockState& comm);
+    void drawCommActions(dock::ConfigDockState& configState);
+    void drawCommBacklogStatus(const dock::CommDockState& comm);
     void drawProtocolDock();
     void drawLuaDockWindows();
     void drawTransferDock();
