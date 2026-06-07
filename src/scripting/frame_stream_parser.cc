@@ -65,6 +65,20 @@ namespace {
         return value;
     }
 
+    std::size_t streamCrcWidth(StreamCrcType type)
+    {
+        switch (type) {
+            case StreamCrcType::Crc16Modbus:
+            case StreamCrcType::Crc16CcittFalse:
+                return 2;
+            case StreamCrcType::Crc32Ieee:
+                return 4;
+            case StreamCrcType::None:
+                return 0;
+        }
+        return 0;
+    }
+
     std::uint32_t readCrcValue(const std::uint8_t* frameBytes,
                                std::size_t frameLength,
                                std::size_t crcWidth,
@@ -742,18 +756,18 @@ std::optional<FrameStreamParser::CandidateMatch> FrameStreamParser::findCandidat
     return std::nullopt;
 }
 
-FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledFrame& compiled,
-                                                                 const ByteRingBuffer::LinearReadView& window,
-                                                                 const StreamParseOptions& options) const
+bool FrameStreamParser::resolveFrameLength(const StreamFrameDefinition& frame,
+                                           const ByteRingBuffer::LinearReadView& window,
+                                           std::size_t& frameLength,
+                                           AnalyzeResult& result) const
 {
-    AnalyzeResult result;
-    const auto& frame = frames_[compiled.index];
     const auto* frameBytes = window.data;
     if (frameBytes == nullptr) {
-        return result;
+        return false;
     }
 
-    std::size_t frameLength = 0;
+    // 返回 false 表示窗口还不够，或 result 已经填充了可恢复错误。
+    frameLength = 0;
     if (frame.runtimeProfile) {
         const auto profileIter = runtimeProfiles_.find(frame.name);
         if (profileIter == runtimeProfiles_.end()) {
@@ -765,7 +779,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
                 .droppedBytes = 0,
                 .raw = {},
             };
-            return result;
+            return false;
         }
         frameLength = profileIter->second.length;
     } else if (frame.size.has_value()) {
@@ -782,11 +796,12 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
                 .droppedBytes = 0,
                 .raw = {},
             };
-            return result;
+            return false;
         }
         if (lengthFieldEnd > window.size) {
-            return result;
+            return false;
         }
+
         const auto parsedLength = decodeInteger(frameBytes, window.size, frame.len->offset, frame.len->type);
         if (!parsedLength.has_value() || *parsedLength < 0) {
             result.action = AnalyzeResult::Action::RecoverableError;
@@ -797,7 +812,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
                 .droppedBytes = 0,
                 .raw = {},
             };
-            return result;
+            return false;
         }
 
         if (frame.len->means == StreamLengthMeans::Payload) {
@@ -810,7 +825,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
                     .droppedBytes = 0,
                     .raw = {},
                 };
-                return result;
+                return false;
             }
         } else {
             frameLength = static_cast<std::size_t>(*parsedLength);
@@ -826,7 +841,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
             .droppedBytes = 0,
             .raw = {},
         };
-        return result;
+        return false;
     }
 
     if (frameLength > bufferDefinition_.capacity && bufferDefinition_.capacity > 0) {
@@ -838,18 +853,21 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
             .droppedBytes = 0,
             .raw = {},
         };
-        return result;
+        return false;
     }
 
+    return true;
+}
+
+bool FrameStreamParser::validateFrameBounds(const StreamFrameDefinition& frame,
+                                            const std::uint8_t* frameBytes,
+                                            const ByteRingBuffer::LinearReadView& window,
+                                            std::size_t frameLength,
+                                            std::size_t crcWidth,
+                                            AnalyzeResult& result) const
+{
     if (frameLength > window.size) {
-        return result;
-    }
-
-    std::size_t crcWidth = 0;
-    if (frame.crc.type == StreamCrcType::Crc16Modbus || frame.crc.type == StreamCrcType::Crc16CcittFalse) {
-        crcWidth = 2;
-    } else if (frame.crc.type == StreamCrcType::Crc32Ieee) {
-        crcWidth = 4;
+        return false;
     }
 
     if (frameLength < frame.header.size() + crcWidth) {
@@ -861,41 +879,59 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
             .droppedBytes = 0,
             .raw = copyBytes(frameBytes, frameLength),
         };
-        return result;
+        return false;
+    }
+    return true;
+}
+
+bool FrameStreamParser::validateFrameCrc(const StreamFrameDefinition& frame,
+                                         const std::uint8_t* frameBytes,
+                                         std::size_t frameLength,
+                                         std::size_t crcWidth,
+                                         AnalyzeResult& result) const
+{
+    if (crcWidth == 0) {
+        return true;
     }
 
-    if (crcWidth > 0) {
-        std::uint32_t expected = 0;
-        switch (frame.crc.type) {
-            case StreamCrcType::Crc16Modbus:
-                expected = protocol_utils::crc16Modbus(frameBytes, frameLength - crcWidth);
-                break;
-            case StreamCrcType::Crc16CcittFalse:
-                expected = protocol_utils::crc16CcittFalse(frameBytes, frameLength - crcWidth);
-                break;
-            case StreamCrcType::Crc32Ieee:
-                expected = protocol_utils::crc32Ieee(frameBytes, frameLength - crcWidth);
-                break;
-            case StreamCrcType::None:
-                break;
-        }
-
-        const auto actual = readCrcValue(frameBytes, frameLength, crcWidth, frame.crc.order);
-        if (expected != actual) {
-            result.action = AnalyzeResult::Action::RecoverableError;
-            result.error = StreamParseError{
-                .code = StreamParseErrorCode::CrcMismatch,
-                .message = "CRC 校验失败",
-                .frameName = frame.name,
-                .droppedBytes = 0,
-                .raw = copyBytes(frameBytes, frameLength),
-            };
-            return result;
-        }
+    std::uint32_t expected = 0;
+    switch (frame.crc.type) {
+        case StreamCrcType::Crc16Modbus:
+            expected = protocol_utils::crc16Modbus(frameBytes, frameLength - crcWidth);
+            break;
+        case StreamCrcType::Crc16CcittFalse:
+            expected = protocol_utils::crc16CcittFalse(frameBytes, frameLength - crcWidth);
+            break;
+        case StreamCrcType::Crc32Ieee:
+            expected = protocol_utils::crc32Ieee(frameBytes, frameLength - crcWidth);
+            break;
+        case StreamCrcType::None:
+            break;
     }
 
-    StreamFieldMap parsedFields;
-    parsedFields.reserve(frame.fields.size());
+    const auto actual = readCrcValue(frameBytes, frameLength, crcWidth, frame.crc.order);
+    if (expected == actual) {
+        return true;
+    }
+
+    result.action = AnalyzeResult::Action::RecoverableError;
+    result.error = StreamParseError{
+        .code = StreamParseErrorCode::CrcMismatch,
+        .message = "CRC 校验失败",
+        .frameName = frame.name,
+        .droppedBytes = 0,
+        .raw = copyBytes(frameBytes, frameLength),
+    };
+    return false;
+}
+
+bool FrameStreamParser::decodeFrameFields(const StreamFrameDefinition& frame,
+                                          const std::uint8_t* frameBytes,
+                                          std::size_t frameLength,
+                                          std::size_t crcWidth,
+                                          StreamFieldMap& parsedFields,
+                                          AnalyzeResult& result) const
+{
     std::size_t cursor = 0;
     const auto readableLimit = frameLength - crcWidth;
     for (const auto& field : frame.fields) {
@@ -912,7 +948,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
                 .droppedBytes = 0,
                 .raw = copyBytes(frameBytes, frameLength),
             };
-            return result;
+            return false;
         }
 
         std::size_t fieldBytes = 0;
@@ -928,7 +964,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
                 .droppedBytes = 0,
                 .raw = copyBytes(frameBytes, frameLength),
             };
-            return result;
+            return false;
         }
         if (start > readableLimit || fieldEnd > readableLimit) {
             // 运行时 profile 帧：超出帧边界的字段静默跳过，
@@ -945,7 +981,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
                 .droppedBytes = 0,
                 .raw = copyBytes(frameBytes, frameLength),
             };
-            return result;
+            return false;
         }
 
         if (field.type == StreamValueType::Bytes) {
@@ -979,6 +1015,39 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
         }
 
         cursor = std::max(cursor, fieldEnd);
+    }
+    return true;
+}
+
+FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledFrame& compiled,
+                                                                 const ByteRingBuffer::LinearReadView& window,
+                                                                 const StreamParseOptions& options) const
+{
+    AnalyzeResult result;
+    const auto& frame = frames_[compiled.index];
+    const auto* frameBytes = window.data;
+    if (frameBytes == nullptr) {
+        return result;
+    }
+
+    std::size_t frameLength = 0;
+    if (!resolveFrameLength(frame, window, frameLength, result)) {
+        return result;
+    }
+
+    const auto crcWidth = streamCrcWidth(frame.crc.type);
+    if (!validateFrameBounds(frame, frameBytes, window, frameLength, crcWidth, result)) {
+        return result;
+    }
+
+    if (!validateFrameCrc(frame, frameBytes, frameLength, crcWidth, result)) {
+        return result;
+    }
+
+    StreamFieldMap parsedFields;
+    parsedFields.reserve(frame.fields.size());
+    if (!decodeFrameFields(frame, frameBytes, frameLength, crcWidth, parsedFields, result)) {
+        return result;
     }
 
     result.action = AnalyzeResult::Action::Parsed;

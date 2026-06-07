@@ -257,6 +257,27 @@ private:
     AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
                                const ByteRingBuffer::LinearReadView& window,
                                const StreamParseOptions& options) const;
+    [[nodiscard]] bool resolveFrameLength(const StreamFrameDefinition& frame,
+                                          const ByteRingBuffer::LinearReadView& window,
+                                          std::size_t& frameLength,
+                                          AnalyzeResult& result) const;
+    [[nodiscard]] bool validateFrameBounds(const StreamFrameDefinition& frame,
+                                           const std::uint8_t* frameBytes,
+                                           const ByteRingBuffer::LinearReadView& window,
+                                           std::size_t frameLength,
+                                           std::size_t crcWidth,
+                                           AnalyzeResult& result) const;
+    [[nodiscard]] bool validateFrameCrc(const StreamFrameDefinition& frame,
+                                        const std::uint8_t* frameBytes,
+                                        std::size_t frameLength,
+                                        std::size_t crcWidth,
+                                        AnalyzeResult& result) const;
+    [[nodiscard]] bool decodeFrameFields(const StreamFrameDefinition& frame,
+                                         const std::uint8_t* frameBytes,
+                                         std::size_t frameLength,
+                                         std::size_t crcWidth,
+                                         StreamFieldMap& parsedFields,
+                                         AnalyzeResult& result) const;
     [[nodiscard]] bool applyRuntimeChannelMap(const StreamFrameDefinition& definition,
                                               StreamParsedFrame& frame,
                                               std::string& error) const;
