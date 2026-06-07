@@ -195,13 +195,12 @@ namespace {
         {plot::WaveChannelCardWidthMode::Adaptive, "adaptive"},
     }};
 
-    constexpr std::array<EnumNamePair<plot::WaveChannelDoubleClickAction>, 4>
-        kWaveChannelDoubleClickActionNames{{
-            {plot::WaveChannelDoubleClickAction::ResetAll, "reset_all"},
-            {plot::WaveChannelDoubleClickAction::ResetScaleOffset, "reset_scale_offset"},
-            {plot::WaveChannelDoubleClickAction::ResetScale, "reset_scale"},
-            {plot::WaveChannelDoubleClickAction::ResetOffset, "reset_offset"},
-        }};
+    constexpr std::array<EnumNamePair<plot::WaveChannelDoubleClickAction>, 4> kWaveChannelDoubleClickActionNames{{
+        {plot::WaveChannelDoubleClickAction::ResetAll, "reset_all"},
+        {plot::WaveChannelDoubleClickAction::ResetScaleOffset, "reset_scale_offset"},
+        {plot::WaveChannelDoubleClickAction::ResetScale, "reset_scale"},
+        {plot::WaveChannelDoubleClickAction::ResetOffset, "reset_offset"},
+    }};
 
     constexpr std::array<EnumNamePair<plot::WaveXAxisDoubleClickAction>, 2> kWaveXAxisDoubleClickActionNames{{
         {plot::WaveXAxisDoubleClickAction::FitFullHistory, "fit_full_history"},
@@ -258,7 +257,8 @@ namespace {
 
     plot::WaveChannelCardWidthMode parseWaveChannelCardWidthMode(const std::string& value)
     {
-        return lookupEnum(std::string_view{value}, kWaveChannelCardWidthModeNames, plot::WaveChannelCardWidthMode::Fixed);
+        return lookupEnum(
+            std::string_view{value}, kWaveChannelCardWidthModeNames, plot::WaveChannelCardWidthMode::Fixed);
     }
 
     const char* toWaveChannelCardWidthModeText(const plot::WaveChannelCardWidthMode mode)
@@ -339,6 +339,368 @@ namespace {
     }
 
     const std::vector<std::string> kDefaultSerialPorts = {"COM1", "COM2", "COM3", "COM4"};
+
+    void loadPerformanceConfig(const YAML::Node& root, AppConfig& config)
+    {
+        if (const auto performance = root["performance"]) {
+            config.performance.scale =
+                normalizePerformanceScale(readScalar<double>(performance, "scale", config.performance.scale));
+        }
+        applyPerformanceScale(config);
+    }
+
+    void loadAppConfig(const YAML::Node& root, AppConfig& config)
+    {
+        const auto app = root["app"];
+        config.app.language = readScalar<std::string>(app, "language", config.app.language);
+        config.app.fpsLimit = readScalar<std::uint32_t>(app, "fps_limit", config.app.fpsLimit);
+        config.app.idleRender = readScalar<std::string>(app, "idle_render", config.app.idleRender);
+        if (const auto autoSave = childNode(app, "auto_save")) {
+            config.app.autoSave.enabled = readScalar<bool>(autoSave, "enabled", config.app.autoSave.enabled);
+            config.app.autoSave.intervalMs =
+                readScalar<std::uint64_t>(autoSave, "interval_ms", config.app.autoSave.intervalMs);
+        }
+        if (const auto configHotReload = childNode(app, "config_hot_reload")) {
+            config.app.configHotReload.enabled =
+                readScalar<bool>(configHotReload, "enabled", config.app.configHotReload.enabled);
+        }
+    }
+
+    void loadGuiWindowConfig(const YAML::Node& gui, AppConfig& config)
+    {
+        if (const auto window = childNode(gui, "window")) {
+            config.gui.window.title = readScalar<std::string>(window, "title", config.gui.window.title);
+            config.gui.window.width = readScalar<int>(window, "width", config.gui.window.width);
+            config.gui.window.height = readScalar<int>(window, "height", config.gui.window.height);
+            config.gui.window.maximized = readScalar<bool>(window, "maximized", config.gui.window.maximized);
+        }
+    }
+
+    void loadGuiWaveConfig(const YAML::Node& wave, AppConfig& config)
+    {
+        config.gui.wave.controlMode = parseWaveControlMode(
+            readScalar<std::string>(wave, "control_mode", toWaveControlModeText(config.gui.wave.controlMode)),
+            config.gui.wave.controlMode);
+        config.gui.wave.displayFormula = parseWaveDisplayFormula(
+            readScalar<std::string>(wave, "display_formula", toWaveDisplayFormulaText(config.gui.wave.displayFormula)),
+            config.gui.wave.displayFormula);
+        config.gui.wave.channelCardWidthMode =
+            parseWaveChannelCardWidthMode(readScalar<std::string>(wave, "channel_card_width_mode", "fixed"));
+        config.gui.wave.channelDoubleClickAction = parseWaveChannelDoubleClickAction(
+            readScalar<std::string>(wave,
+                                    "channel_double_click_action",
+                                    toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction)),
+            config.gui.wave.channelDoubleClickAction);
+        config.gui.wave.xAxisDoubleClickAction = parseWaveXAxisDoubleClickAction(
+            readScalar<std::string>(wave,
+                                    "x_axis_double_click_action",
+                                    toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction)),
+            config.gui.wave.xAxisDoubleClickAction);
+        config.gui.wave.hiddenChannelPolicy = parseWaveHiddenChannelPolicy(
+            readScalar<std::string>(
+                wave, "hidden_channel_policy", toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy)),
+            config.gui.wave.hiddenChannelPolicy);
+        config.gui.wave.cursorExtremeSnapPolicy = parseWaveCursorExtremeSnapPolicy(
+            readScalar<std::string>(wave,
+                                    "cursor_extreme_snap_policy",
+                                    toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy)),
+            config.gui.wave.cursorExtremeSnapPolicy);
+        config.gui.wave.zoomSelectionAutoExit =
+            readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
+        config.gui.wave.maxRenderPointsPerChannel =
+            readScalar<std::size_t>(wave, "max_render_points_per_channel", config.gui.wave.maxRenderPointsPerChannel);
+        config.gui.wave.maxRenderVertices =
+            readScalar<std::size_t>(wave, "max_render_vertices", config.gui.wave.maxRenderVertices);
+        config.gui.wave.downsampleStartMultiplier =
+            readScalar<double>(wave, "downsample_start_multiplier", config.gui.wave.downsampleStartMultiplier);
+        config.gui.wave.overviewMaxSamples =
+            readScalar<std::size_t>(wave, "overview_max_samples", config.gui.wave.overviewMaxSamples);
+        config.gui.wave.maxTotalSamples =
+            readScalar<std::size_t>(wave, "max_total_samples", config.gui.wave.maxTotalSamples);
+        config.gui.wave.minVisibleTimeSpan =
+            readScalar<double>(wave, "min_visible_time_span", config.gui.wave.minVisibleTimeSpan);
+        config.gui.wave.channelCardFixedWidth = positiveOrFallback(
+            readScalar<double>(wave, "channel_card_fixed_width", config.gui.wave.channelCardFixedWidth), 128.0);
+        config.gui.wave.channelCardAdaptiveRatio = positiveOrFallback(
+            readScalar<double>(wave, "channel_card_adaptive_ratio", config.gui.wave.channelCardAdaptiveRatio), 0.22);
+        config.gui.wave.verticalAutoFitMultiplier = positiveOrFallback(
+            readScalar<double>(wave, "vertical_auto_fit_multiplier", config.gui.wave.verticalAutoFitMultiplier), 1.2);
+        config.gui.wave.resetHistoryOnTimeReset =
+            readScalar<bool>(wave, "reset_history_on_time_reset", config.gui.wave.resetHistoryOnTimeReset);
+        config.gui.wave.showAxisLabels = readScalar<bool>(wave, "show_axis_labels", config.gui.wave.showAxisLabels);
+        config.gui.wave.showChannelLegend =
+            readScalar<bool>(wave, "show_channel_legend", config.gui.wave.showChannelLegend);
+        config.gui.wave.showFftLegend = readScalar<bool>(wave, "show_fft_legend", config.gui.wave.showFftLegend);
+        config.gui.wave.fullscreenMode = parseWaveFullscreenMode(
+            readScalar<std::string>(wave, "fullscreen_mode", toWaveFullscreenModeText(config.gui.wave.fullscreenMode)),
+            config.gui.wave.fullscreenMode);
+    }
+
+    void loadGuiWaveScopedRuntimeConfig(const YAML::Node& gui, AppConfig& config)
+    {
+        // 保持旧版读取语义：这些 GUI 字段当前只在 gui.wave 节点存在时才会从配置覆盖。
+        if (const auto logHistory = childNode(gui, "log_history")) {
+            config.gui.logHistory.transferRawLimit =
+                readScalar<std::size_t>(logHistory, "transfer_raw_limit", config.gui.logHistory.transferRawLimit);
+            config.gui.logHistory.transferFrameLimit =
+                readScalar<std::size_t>(logHistory, "transfer_frame_limit", config.gui.logHistory.transferFrameLimit);
+            config.gui.logHistory.hostLimit =
+                readScalar<std::size_t>(logHistory, "host_limit", config.gui.logHistory.hostLimit);
+            config.gui.logHistory.scriptLimit =
+                readScalar<std::size_t>(logHistory, "script_limit", config.gui.logHistory.scriptLimit);
+        }
+        if (const auto rawCapture = childNode(gui, "raw_capture")) {
+            config.gui.rawCapture.liveLimitBytes =
+                readScalar<std::size_t>(rawCapture, "live_limit_bytes", config.gui.rawCapture.liveLimitBytes);
+            config.gui.rawCapture.recordingQueueLimitBytes = readScalar<std::size_t>(
+                rawCapture, "recording_queue_limit_bytes", config.gui.rawCapture.recordingQueueLimitBytes);
+        }
+        if (const auto transferLog = childNode(gui, "transfer_log")) {
+            config.gui.replayRawHistoryOnSchemaSwitch = readScalar<bool>(
+                transferLog, "replay_raw_history_on_schema_switch", config.gui.replayRawHistoryOnSchemaSwitch);
+        }
+        if (const auto realtimeBacklog = childNode(gui, "realtime_backlog")) {
+            config.gui.realtimeBacklog.mode =
+                readScalar<std::string>(realtimeBacklog, "mode", config.gui.realtimeBacklog.mode);
+            readPerformanceSize(realtimeBacklog,
+                                "rx_chunk_bytes_per_pump",
+                                config.gui.realtimeBacklog.rxChunkBytesPerPump,
+                                config.performance.explicitOverrides.realtimeBacklogRxChunkBytesPerPump);
+            readPerformanceSize(realtimeBacklog,
+                                "transfer_frame_rows_per_pump",
+                                config.gui.realtimeBacklog.transferFrameRowsPerPump,
+                                config.performance.explicitOverrides.realtimeBacklogTransferFrameRowsPerPump);
+            readPerformanceSize(realtimeBacklog,
+                                "plot_appends_per_pump",
+                                config.gui.realtimeBacklog.plotAppendsPerPump,
+                                config.performance.explicitOverrides.realtimeBacklogPlotAppendsPerPump);
+            readPerformanceSize(realtimeBacklog,
+                                "raw_first_backlog_warn_bytes",
+                                config.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
+                                config.performance.explicitOverrides.realtimeBacklogRawFirstBacklogWarnBytes);
+            config.gui.realtimeBacklog.derivedBacklogDegradeEnabled =
+                readScalar<bool>(realtimeBacklog,
+                                 "derived_backlog_degrade_enabled",
+                                 config.gui.realtimeBacklog.derivedBacklogDegradeEnabled);
+            config.gui.realtimeBacklog.discardBacklogOnDisconnect =
+                readScalar<bool>(realtimeBacklog,
+                                 "discard_backlog_on_disconnect",
+                                 config.gui.realtimeBacklog.discardBacklogOnDisconnect);
+            config.gui.realtimeBacklog.pumpMinIntervalMs = readScalar<double>(
+                realtimeBacklog, "pump_min_interval_ms", config.gui.realtimeBacklog.pumpMinIntervalMs);
+        }
+        config.gui.showAppHeader = readScalar<bool>(gui, "show_app_header", config.gui.showAppHeader);
+        config.gui.luaDockLayoutDebug = readScalar<bool>(gui, "lua_dock_layout_debug", config.gui.luaDockLayoutDebug);
+        config.gui.luaDockRenderCopyMode =
+            readScalar<bool>(gui, "lua_dock_render_copy_mode", config.gui.luaDockRenderCopyMode);
+        config.gui.sendHistoryLimit = readScalar<std::size_t>(gui, "send_history_limit", config.gui.sendHistoryLimit);
+    }
+
+    void loadGuiElfSymbolComboConfig(const YAML::Node& gui, AppConfig& config)
+    {
+        if (const auto elfSymbolCombo = childNode(gui, "elf_symbol_combo")) {
+            const int limit =
+                readScalar<int>(elfSymbolCombo, "limit", static_cast<int>(config.gui.elfSymbolCombo.limit));
+            if (limit > 0) {
+                config.gui.elfSymbolCombo.limit = static_cast<std::size_t>(limit);
+            }
+            const int debounceMs = readScalar<int>(elfSymbolCombo, "debounce_ms", config.gui.elfSymbolCombo.debounceMs);
+            if (debounceMs > 0) {
+                config.gui.elfSymbolCombo.debounceMs = debounceMs;
+            }
+            config.gui.elfSymbolCombo.autoRefreshSelectedAddress = readScalar<bool>(
+                elfSymbolCombo, "auto_refresh_selected_address", config.gui.elfSymbolCombo.autoRefreshSelectedAddress);
+            config.gui.elfSymbolCombo.autoRefreshEmitOnControl = readScalar<bool>(
+                elfSymbolCombo, "auto_refresh_emit_on_control", config.gui.elfSymbolCombo.autoRefreshEmitOnControl);
+        }
+    }
+
+    void loadGuiConfig(const YAML::Node& root, AppConfig& config)
+    {
+        const auto gui = root["gui"];
+        loadGuiWindowConfig(gui, config);
+        if (const auto wave = childNode(gui, "wave")) {
+            loadGuiWaveConfig(wave, config);
+            loadGuiWaveScopedRuntimeConfig(gui, config);
+        }
+        loadGuiElfSymbolComboConfig(gui, config);
+    }
+
+    void loadProtocolConfig(const YAML::Node& root, AppConfig& config)
+    {
+        const auto protocol = root["protocol"];
+        config.protocol.rootDir = readScalar<std::string>(protocol, "root_dir", config.protocol.rootDir);
+        config.protocol.selectedDir = readScalar<std::string>(protocol, "selected_dir", config.protocol.selectedDir);
+        if (const auto tx = childNode(protocol, "tx")) {
+            config.protocol.tx.sendTimeoutMs =
+                readScalar<std::uint64_t>(tx, "send_timeout_ms", config.protocol.tx.sendTimeoutMs);
+            config.protocol.tx.requestTimeoutMs =
+                readScalar<std::uint64_t>(tx, "request_timeout_ms", config.protocol.tx.requestTimeoutMs);
+            config.protocol.tx.maxPending = readScalar<std::size_t>(tx, "max_pending", config.protocol.tx.maxPending);
+            config.protocol.tx.overflowPolicy =
+                readScalar<std::string>(tx, "overflow_policy", config.protocol.tx.overflowPolicy);
+            config.protocol.tx.overflowNotify =
+                readScalar<std::string>(tx, "overflow_notify", config.protocol.tx.overflowNotify);
+        }
+    }
+
+    void loadReceiveConfig(const YAML::Node& root, AppConfig& config)
+    {
+        if (const auto receive = root["receive"]) {
+            readPerformanceSize(receive,
+                                "transport_read_buffer_bytes",
+                                config.receive.transportReadBufferBytes,
+                                config.performance.explicitOverrides.receiveTransportReadBufferBytes);
+            if (const auto streamBuffer = childNode(receive, "stream_buffer")) {
+                config.receive.streamBuffer.nearOverflowThreshold = readScalar<double>(
+                    streamBuffer, "near_overflow_threshold", config.receive.streamBuffer.nearOverflowThreshold);
+                config.receive.streamBuffer.popupEnabled =
+                    readScalar<bool>(streamBuffer, "popup_enabled", config.receive.streamBuffer.popupEnabled);
+            }
+        }
+    }
+
+    void loadScriptingWorkerConfig(const YAML::Node& scripting, AppConfig& config)
+    {
+        if (const auto pipeline = childNode(scripting, "pipeline")) {
+            if (pipeline["worker_threads"]) {
+                config.scripting.pipeline.workerThreads = readScalar<std::size_t>(pipeline, "worker_threads", 1U);
+            }
+        }
+        if (const auto worker = childNode(scripting, "worker")) {
+            config.scripting.workerEnabled = readScalar<bool>(worker, "enabled", config.scripting.workerEnabled);
+            readPerformanceSize(worker,
+                                "rx_queue_limit_bytes",
+                                config.scripting.workerRxQueueLimitBytes,
+                                config.performance.explicitOverrides.workerRxQueueLimitBytes);
+            readPerformanceSize(worker,
+                                "memory_budget_bytes",
+                                config.scripting.workerMemoryBudgetBytes,
+                                config.performance.explicitOverrides.workerMemoryBudgetBytes);
+            config.scripting.workerMemoryBudgetAvailableRatio = readScalar<double>(
+                worker, "memory_budget_available_ratio", config.scripting.workerMemoryBudgetAvailableRatio);
+            readPerformanceSize(worker,
+                                "output_queue_limit",
+                                config.scripting.workerOutputQueueLimit,
+                                config.performance.explicitOverrides.workerOutputQueueLimit);
+            readPerformanceSize(worker,
+                                "batch_bytes",
+                                config.scripting.workerBatchBytes,
+                                config.performance.explicitOverrides.workerBatchBytes);
+            config.scripting.workerBackpressureEnabled =
+                readScalar<bool>(worker, "backpressure_enabled", config.scripting.workerBackpressureEnabled);
+            config.scripting.workerBackpressureHighWatermark = readScalar<double>(
+                worker, "backpressure_rx_queue_high_watermark", config.scripting.workerBackpressureHighWatermark);
+            config.scripting.workerBackpressureLowWatermark = readScalar<double>(
+                worker, "backpressure_rx_queue_low_watermark", config.scripting.workerBackpressureLowWatermark);
+            readPerformanceDouble(worker,
+                                  "output_flush_budget_ms",
+                                  config.scripting.workerOutputFlushBudgetMs,
+                                  config.performance.explicitOverrides.workerOutputFlushBudgetMs);
+            config.scripting.drainRequestOutputsUnbounded = readScalar<bool>(
+                worker, "drain_request_outputs_unbounded", config.scripting.drainRequestOutputsUnbounded);
+        }
+    }
+
+    void loadScriptingFileIoConfig(const YAML::Node& scripting, AppConfig& appConfig)
+    {
+        if (const auto fileIo = childNode(scripting, "file_io")) {
+            auto& config = appConfig.scripting.fileIo;
+            config.enabled = readScalar<bool>(fileIo, "enabled", config.enabled);
+            config.allowProtocolDir = readScalar<bool>(fileIo, "allow_protocol_dir", config.allowProtocolDir);
+            config.allowDialogPaths = readScalar<bool>(fileIo, "allow_dialog_paths", config.allowDialogPaths);
+            config.extraAllowedRoots = readStringList(fileIo, "extra_allowed_roots", config.extraAllowedRoots);
+            config.maxOpenFiles = readScalar<std::size_t>(fileIo, "max_open_files", config.maxOpenFiles);
+            config.defaultChunkBytes = readScalar<std::size_t>(fileIo, "default_chunk_bytes", config.defaultChunkBytes);
+            config.maxChunkBytes = readScalar<std::size_t>(fileIo, "max_chunk_bytes", config.maxChunkBytes);
+            config.maxFileSizeBytes = readScalar<std::uint64_t>(fileIo, "max_file_size_bytes", config.maxFileSizeBytes);
+            config.maxWriteFileSizeBytes =
+                readScalar<std::uint64_t>(fileIo, "max_write_file_size_bytes", config.maxWriteFileSizeBytes);
+            if (const auto dialog = childNode(fileIo, "dialog")) {
+                config.dialog.enabled = readScalar<bool>(dialog, "enabled", config.dialog.enabled);
+                config.dialog.rememberLastDir =
+                    readScalar<bool>(dialog, "remember_last_dir", config.dialog.rememberLastDir);
+            }
+            if (const auto sendFile = childNode(fileIo, "send_file")) {
+                config.sendFile.defaultChunkBytes =
+                    readScalar<std::size_t>(sendFile, "default_chunk_bytes", config.sendFile.defaultChunkBytes);
+                config.sendFile.maxInflightChunks =
+                    readScalar<std::size_t>(sendFile, "max_inflight_chunks", config.sendFile.maxInflightChunks);
+            }
+        }
+    }
+
+    void loadScriptingConfig(const YAML::Node& root, AppConfig& config)
+    {
+        const auto scripting = root["scripting"];
+        loadScriptingWorkerConfig(scripting, config);
+        loadScriptingFileIoConfig(scripting, config);
+    }
+
+    void loadLoggingConfig(const YAML::Node& root, AppConfig& config)
+    {
+        const auto logging = root["logging"];
+        config.logging.level =
+            parseLogLevel(readScalar<std::string>(logging, "level", toLogLevelText(config.logging.level)));
+        config.logging.filePath = readScalar<std::string>(logging, "file_path", config.logging.filePath);
+    }
+
+    void loadCommunicationConfig(const YAML::Node& root, AppConfig& config)
+    {
+        const auto communication = root["communication"];
+        config.communication.kind = parseTransportKind(
+            readScalar<std::string>(communication, "kind", toTransportKindText(config.communication.kind)));
+
+        if (const auto tcpClient = childNode(communication, "tcp_client")) {
+            config.communication.tcpClient.host =
+                readScalar<std::string>(tcpClient, "host", config.communication.tcpClient.host);
+            config.communication.tcpClient.port =
+                readScalar<std::uint16_t>(tcpClient, "port", config.communication.tcpClient.port);
+        }
+
+        if (const auto tcpServer = childNode(communication, "tcp_server")) {
+            config.communication.tcpServer.bindAddress =
+                readScalar<std::string>(tcpServer, "bind_address", config.communication.tcpServer.bindAddress);
+            config.communication.tcpServer.port =
+                readScalar<std::uint16_t>(tcpServer, "port", config.communication.tcpServer.port);
+            config.communication.tcpServer.rejectNewConnection = readScalar<bool>(
+                tcpServer, "reject_new_connection", config.communication.tcpServer.rejectNewConnection);
+        }
+
+        if (const auto serial = childNode(communication, "serial")) {
+            config.communication.serial.portName =
+                readScalar<std::string>(serial, "port_name", config.communication.serial.portName);
+            config.communication.serial.baudRate =
+                readScalar<std::uint32_t>(serial, "baud_rate", config.communication.serial.baudRate);
+            config.communication.serial.dataBits =
+                readScalar<std::uint32_t>(serial, "data_bits", config.communication.serial.dataBits);
+            config.communication.serial.parity =
+                readScalar<std::string>(serial, "parity", config.communication.serial.parity);
+            config.communication.serial.stopBits =
+                readScalar<std::string>(serial, "stop_bits", config.communication.serial.stopBits);
+            config.communication.serial.flowControl =
+                readScalar<std::string>(serial, "flow_control", config.communication.serial.flowControl);
+        }
+
+        if (const auto udpPeer = childNode(communication, "udp_peer")) {
+            config.communication.udpPeer.bindAddress =
+                readScalar<std::string>(udpPeer, "bind_address", config.communication.udpPeer.bindAddress);
+            config.communication.udpPeer.bindPort =
+                readScalar<std::uint16_t>(udpPeer, "bind_port", config.communication.udpPeer.bindPort);
+            config.communication.udpPeer.remoteHost =
+                readScalar<std::string>(udpPeer, "remote_host", config.communication.udpPeer.remoteHost);
+            config.communication.udpPeer.remotePort =
+                readScalar<std::uint16_t>(udpPeer, "remote_port", config.communication.udpPeer.remotePort);
+        }
+        if (const auto receive = root["receive"]) {
+            config.communication.serialPortOptions = kDefaultSerialPorts;
+            config.communication.reconnectRequired = false;
+            config.communication.lastError.clear();
+            config.communication.txCount = 0;
+            config.communication.rxCount = 0;
+            (void) receive;
+        }
+    }
 } // namespace
 
 ConfigStore::ConfigStore()
@@ -377,348 +739,15 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const
         const YAML::Node root = YAML::LoadFile(result.resolvedPath.string());
         result.loadedFromDisk = true;
 
-        if (const auto performance = root["performance"]) {
-            result.config.performance.scale =
-                normalizePerformanceScale(readScalar<double>(performance, "scale", result.config.performance.scale));
-        }
-        applyPerformanceScale(result.config);
-
-        const auto app = root["app"];
-        result.config.app.language = readScalar<std::string>(app, "language", result.config.app.language);
-        result.config.app.fpsLimit = readScalar<std::uint32_t>(app, "fps_limit", result.config.app.fpsLimit);
-        result.config.app.idleRender = readScalar<std::string>(app, "idle_render", result.config.app.idleRender);
-        if (const auto autoSave = childNode(app, "auto_save")) {
-            result.config.app.autoSave.enabled =
-                readScalar<bool>(autoSave, "enabled", result.config.app.autoSave.enabled);
-            result.config.app.autoSave.intervalMs =
-                readScalar<std::uint64_t>(autoSave, "interval_ms", result.config.app.autoSave.intervalMs);
-        }
-        if (const auto configHotReload = childNode(app, "config_hot_reload")) {
-            result.config.app.configHotReload.enabled =
-                readScalar<bool>(configHotReload, "enabled", result.config.app.configHotReload.enabled);
-        }
-
-        const auto gui = root["gui"];
-        if (const auto window = childNode(gui, "window")) {
-            result.config.gui.window.title = readScalar<std::string>(window, "title", result.config.gui.window.title);
-            result.config.gui.window.width = readScalar<int>(window, "width", result.config.gui.window.width);
-            result.config.gui.window.height = readScalar<int>(window, "height", result.config.gui.window.height);
-            result.config.gui.window.maximized =
-                readScalar<bool>(window, "maximized", result.config.gui.window.maximized);
-        }
-        if (const auto wave = childNode(gui, "wave")) {
-            result.config.gui.wave.controlMode = parseWaveControlMode(
-                readScalar<std::string>(
-                    wave, "control_mode", toWaveControlModeText(result.config.gui.wave.controlMode)),
-                result.config.gui.wave.controlMode);
-            result.config.gui.wave.displayFormula = parseWaveDisplayFormula(
-                readScalar<std::string>(
-                    wave, "display_formula", toWaveDisplayFormulaText(result.config.gui.wave.displayFormula)),
-                result.config.gui.wave.displayFormula);
-            result.config.gui.wave.channelCardWidthMode =
-                parseWaveChannelCardWidthMode(readScalar<std::string>(wave, "channel_card_width_mode", "fixed"));
-            result.config.gui.wave.channelDoubleClickAction = parseWaveChannelDoubleClickAction(
-                readScalar<std::string>(
-                    wave,
-                    "channel_double_click_action",
-                    toWaveChannelDoubleClickActionText(result.config.gui.wave.channelDoubleClickAction)),
-                result.config.gui.wave.channelDoubleClickAction);
-            result.config.gui.wave.xAxisDoubleClickAction = parseWaveXAxisDoubleClickAction(
-                readScalar<std::string>(
-                    wave,
-                    "x_axis_double_click_action",
-                    toWaveXAxisDoubleClickActionText(result.config.gui.wave.xAxisDoubleClickAction)),
-                result.config.gui.wave.xAxisDoubleClickAction);
-            result.config.gui.wave.hiddenChannelPolicy = parseWaveHiddenChannelPolicy(
-                readScalar<std::string>(wave,
-                                        "hidden_channel_policy",
-                                        toWaveHiddenChannelPolicyText(result.config.gui.wave.hiddenChannelPolicy)),
-                result.config.gui.wave.hiddenChannelPolicy);
-            result.config.gui.wave.cursorExtremeSnapPolicy = parseWaveCursorExtremeSnapPolicy(
-                readScalar<std::string>(
-                    wave,
-                    "cursor_extreme_snap_policy",
-                    toWaveCursorExtremeSnapPolicyText(result.config.gui.wave.cursorExtremeSnapPolicy)),
-                result.config.gui.wave.cursorExtremeSnapPolicy);
-            result.config.gui.wave.zoomSelectionAutoExit =
-                readScalar<bool>(wave, "zoom_selection_auto_exit", result.config.gui.wave.zoomSelectionAutoExit);
-            result.config.gui.wave.maxRenderPointsPerChannel = readScalar<std::size_t>(
-                wave, "max_render_points_per_channel", result.config.gui.wave.maxRenderPointsPerChannel);
-            result.config.gui.wave.maxRenderVertices =
-                readScalar<std::size_t>(wave, "max_render_vertices", result.config.gui.wave.maxRenderVertices);
-            result.config.gui.wave.downsampleStartMultiplier = readScalar<double>(
-                wave, "downsample_start_multiplier", result.config.gui.wave.downsampleStartMultiplier);
-            result.config.gui.wave.overviewMaxSamples =
-                readScalar<std::size_t>(wave, "overview_max_samples", result.config.gui.wave.overviewMaxSamples);
-            result.config.gui.wave.maxTotalSamples =
-                readScalar<std::size_t>(wave, "max_total_samples", result.config.gui.wave.maxTotalSamples);
-            result.config.gui.wave.minVisibleTimeSpan =
-                readScalar<double>(wave, "min_visible_time_span", result.config.gui.wave.minVisibleTimeSpan);
-            result.config.gui.wave.channelCardFixedWidth = positiveOrFallback(
-                readScalar<double>(wave, "channel_card_fixed_width", result.config.gui.wave.channelCardFixedWidth),
-                128.0);
-            result.config.gui.wave.channelCardAdaptiveRatio = positiveOrFallback(
-                readScalar<double>(
-                    wave, "channel_card_adaptive_ratio", result.config.gui.wave.channelCardAdaptiveRatio),
-                0.22);
-            result.config.gui.wave.verticalAutoFitMultiplier = positiveOrFallback(
-                readScalar<double>(
-                    wave, "vertical_auto_fit_multiplier", result.config.gui.wave.verticalAutoFitMultiplier),
-                1.2);
-            result.config.gui.wave.resetHistoryOnTimeReset =
-                readScalar<bool>(wave, "reset_history_on_time_reset", result.config.gui.wave.resetHistoryOnTimeReset);
-            result.config.gui.wave.showAxisLabels =
-                readScalar<bool>(wave, "show_axis_labels", result.config.gui.wave.showAxisLabels);
-            result.config.gui.wave.showChannelLegend =
-                readScalar<bool>(wave, "show_channel_legend", result.config.gui.wave.showChannelLegend);
-            result.config.gui.wave.showFftLegend =
-                readScalar<bool>(wave, "show_fft_legend", result.config.gui.wave.showFftLegend);
-            result.config.gui.wave.fullscreenMode =
-                parseWaveFullscreenMode(readScalar<std::string>(
-                                            wave,
-                                            "fullscreen_mode",
-                                            toWaveFullscreenModeText(result.config.gui.wave.fullscreenMode)),
-                                        result.config.gui.wave.fullscreenMode);
-            if (const auto logHistory = childNode(gui, "log_history")) {
-                result.config.gui.logHistory.transferRawLimit = readScalar<std::size_t>(
-                    logHistory, "transfer_raw_limit", result.config.gui.logHistory.transferRawLimit);
-                result.config.gui.logHistory.transferFrameLimit = readScalar<std::size_t>(
-                    logHistory, "transfer_frame_limit", result.config.gui.logHistory.transferFrameLimit);
-                result.config.gui.logHistory.hostLimit =
-                    readScalar<std::size_t>(logHistory, "host_limit", result.config.gui.logHistory.hostLimit);
-                result.config.gui.logHistory.scriptLimit =
-                    readScalar<std::size_t>(logHistory, "script_limit", result.config.gui.logHistory.scriptLimit);
-            }
-            if (const auto rawCapture = childNode(gui, "raw_capture")) {
-                result.config.gui.rawCapture.liveLimitBytes = readScalar<std::size_t>(
-                    rawCapture, "live_limit_bytes", result.config.gui.rawCapture.liveLimitBytes);
-                result.config.gui.rawCapture.recordingQueueLimitBytes = readScalar<std::size_t>(
-                    rawCapture, "recording_queue_limit_bytes", result.config.gui.rawCapture.recordingQueueLimitBytes);
-            }
-            if (const auto transferLog = childNode(gui, "transfer_log")) {
-                result.config.gui.replayRawHistoryOnSchemaSwitch =
-                    readScalar<bool>(transferLog,
-                                     "replay_raw_history_on_schema_switch",
-                                     result.config.gui.replayRawHistoryOnSchemaSwitch);
-            }
-            if (const auto realtimeBacklog = childNode(gui, "realtime_backlog")) {
-                result.config.gui.realtimeBacklog.mode =
-                    readScalar<std::string>(realtimeBacklog, "mode", result.config.gui.realtimeBacklog.mode);
-                readPerformanceSize(realtimeBacklog,
-                                    "rx_chunk_bytes_per_pump",
-                                    result.config.gui.realtimeBacklog.rxChunkBytesPerPump,
-                                    result.config.performance.explicitOverrides.realtimeBacklogRxChunkBytesPerPump);
-                readPerformanceSize(
-                    realtimeBacklog,
-                    "transfer_frame_rows_per_pump",
-                    result.config.gui.realtimeBacklog.transferFrameRowsPerPump,
-                    result.config.performance.explicitOverrides.realtimeBacklogTransferFrameRowsPerPump);
-                readPerformanceSize(realtimeBacklog,
-                                    "plot_appends_per_pump",
-                                    result.config.gui.realtimeBacklog.plotAppendsPerPump,
-                                    result.config.performance.explicitOverrides.realtimeBacklogPlotAppendsPerPump);
-                readPerformanceSize(
-                    realtimeBacklog,
-                    "raw_first_backlog_warn_bytes",
-                    result.config.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
-                    result.config.performance.explicitOverrides.realtimeBacklogRawFirstBacklogWarnBytes);
-                result.config.gui.realtimeBacklog.derivedBacklogDegradeEnabled =
-                    readScalar<bool>(realtimeBacklog,
-                                     "derived_backlog_degrade_enabled",
-                                     result.config.gui.realtimeBacklog.derivedBacklogDegradeEnabled);
-                result.config.gui.realtimeBacklog.discardBacklogOnDisconnect =
-                    readScalar<bool>(realtimeBacklog,
-                                     "discard_backlog_on_disconnect",
-                                     result.config.gui.realtimeBacklog.discardBacklogOnDisconnect);
-                result.config.gui.realtimeBacklog.pumpMinIntervalMs = readScalar<double>(
-                    realtimeBacklog, "pump_min_interval_ms", result.config.gui.realtimeBacklog.pumpMinIntervalMs);
-            }
-            result.config.gui.showAppHeader = readScalar<bool>(gui, "show_app_header", result.config.gui.showAppHeader);
-            result.config.gui.luaDockLayoutDebug =
-                readScalar<bool>(gui, "lua_dock_layout_debug", result.config.gui.luaDockLayoutDebug);
-            result.config.gui.luaDockRenderCopyMode =
-                readScalar<bool>(gui, "lua_dock_render_copy_mode", result.config.gui.luaDockRenderCopyMode);
-            result.config.gui.sendHistoryLimit =
-                readScalar<std::size_t>(gui, "send_history_limit", result.config.gui.sendHistoryLimit);
-        }
-        if (const auto elfSymbolCombo = childNode(gui, "elf_symbol_combo")) {
-            const int limit =
-                readScalar<int>(elfSymbolCombo, "limit", static_cast<int>(result.config.gui.elfSymbolCombo.limit));
-            if (limit > 0) {
-                result.config.gui.elfSymbolCombo.limit = static_cast<std::size_t>(limit);
-            }
-            const int debounceMs =
-                readScalar<int>(elfSymbolCombo, "debounce_ms", result.config.gui.elfSymbolCombo.debounceMs);
-            if (debounceMs > 0) {
-                result.config.gui.elfSymbolCombo.debounceMs = debounceMs;
-            }
-            result.config.gui.elfSymbolCombo.autoRefreshSelectedAddress = readScalar<bool>(
-                elfSymbolCombo,
-                "auto_refresh_selected_address",
-                result.config.gui.elfSymbolCombo.autoRefreshSelectedAddress);
-            result.config.gui.elfSymbolCombo.autoRefreshEmitOnControl = readScalar<bool>(
-                elfSymbolCombo,
-                "auto_refresh_emit_on_control",
-                result.config.gui.elfSymbolCombo.autoRefreshEmitOnControl);
-        }
-
-        const auto protocol = root["protocol"];
-        result.config.protocol.rootDir = readScalar<std::string>(protocol, "root_dir", result.config.protocol.rootDir);
-        result.config.protocol.selectedDir =
-            readScalar<std::string>(protocol, "selected_dir", result.config.protocol.selectedDir);
-        if (const auto tx = childNode(protocol, "tx")) {
-            result.config.protocol.tx.sendTimeoutMs =
-                readScalar<std::uint64_t>(tx, "send_timeout_ms", result.config.protocol.tx.sendTimeoutMs);
-            result.config.protocol.tx.requestTimeoutMs =
-                readScalar<std::uint64_t>(tx, "request_timeout_ms", result.config.protocol.tx.requestTimeoutMs);
-            result.config.protocol.tx.maxPending =
-                readScalar<std::size_t>(tx, "max_pending", result.config.protocol.tx.maxPending);
-            result.config.protocol.tx.overflowPolicy =
-                readScalar<std::string>(tx, "overflow_policy", result.config.protocol.tx.overflowPolicy);
-            result.config.protocol.tx.overflowNotify =
-                readScalar<std::string>(tx, "overflow_notify", result.config.protocol.tx.overflowNotify);
-        }
-
-        if (const auto receive = root["receive"]) {
-            readPerformanceSize(receive,
-                                "transport_read_buffer_bytes",
-                                result.config.receive.transportReadBufferBytes,
-                                result.config.performance.explicitOverrides.receiveTransportReadBufferBytes);
-            if (const auto streamBuffer = childNode(receive, "stream_buffer")) {
-                result.config.receive.streamBuffer.nearOverflowThreshold = readScalar<double>(
-                    streamBuffer, "near_overflow_threshold", result.config.receive.streamBuffer.nearOverflowThreshold);
-                result.config.receive.streamBuffer.popupEnabled =
-                    readScalar<bool>(streamBuffer, "popup_enabled", result.config.receive.streamBuffer.popupEnabled);
-            }
-        }
-
-        const auto scripting = root["scripting"];
-        if (const auto pipeline = childNode(scripting, "pipeline")) {
-            if (pipeline["worker_threads"]) {
-                result.config.scripting.pipeline.workerThreads =
-                    readScalar<std::size_t>(pipeline, "worker_threads", 1U);
-            }
-        }
-        if (const auto worker = childNode(scripting, "worker")) {
-            result.config.scripting.workerEnabled =
-                readScalar<bool>(worker, "enabled", result.config.scripting.workerEnabled);
-            readPerformanceSize(worker,
-                                "rx_queue_limit_bytes",
-                                result.config.scripting.workerRxQueueLimitBytes,
-                                result.config.performance.explicitOverrides.workerRxQueueLimitBytes);
-            readPerformanceSize(worker,
-                                "memory_budget_bytes",
-                                result.config.scripting.workerMemoryBudgetBytes,
-                                result.config.performance.explicitOverrides.workerMemoryBudgetBytes);
-            result.config.scripting.workerMemoryBudgetAvailableRatio = readScalar<double>(
-                worker, "memory_budget_available_ratio", result.config.scripting.workerMemoryBudgetAvailableRatio);
-            readPerformanceSize(worker,
-                                "output_queue_limit",
-                                result.config.scripting.workerOutputQueueLimit,
-                                result.config.performance.explicitOverrides.workerOutputQueueLimit);
-            readPerformanceSize(worker,
-                                "batch_bytes",
-                                result.config.scripting.workerBatchBytes,
-                                result.config.performance.explicitOverrides.workerBatchBytes);
-            result.config.scripting.workerBackpressureEnabled =
-                readScalar<bool>(worker, "backpressure_enabled", result.config.scripting.workerBackpressureEnabled);
-            result.config.scripting.workerBackpressureHighWatermark =
-                readScalar<double>(worker,
-                                   "backpressure_rx_queue_high_watermark",
-                                   result.config.scripting.workerBackpressureHighWatermark);
-            result.config.scripting.workerBackpressureLowWatermark = readScalar<double>(
-                worker, "backpressure_rx_queue_low_watermark", result.config.scripting.workerBackpressureLowWatermark);
-            readPerformanceDouble(worker,
-                                  "output_flush_budget_ms",
-                                  result.config.scripting.workerOutputFlushBudgetMs,
-                                  result.config.performance.explicitOverrides.workerOutputFlushBudgetMs);
-            result.config.scripting.drainRequestOutputsUnbounded = readScalar<bool>(
-                worker, "drain_request_outputs_unbounded", result.config.scripting.drainRequestOutputsUnbounded);
-        }
-        if (const auto fileIo = childNode(scripting, "file_io")) {
-            auto& config = result.config.scripting.fileIo;
-            config.enabled = readScalar<bool>(fileIo, "enabled", config.enabled);
-            config.allowProtocolDir = readScalar<bool>(fileIo, "allow_protocol_dir", config.allowProtocolDir);
-            config.allowDialogPaths = readScalar<bool>(fileIo, "allow_dialog_paths", config.allowDialogPaths);
-            config.extraAllowedRoots = readStringList(fileIo, "extra_allowed_roots", config.extraAllowedRoots);
-            config.maxOpenFiles = readScalar<std::size_t>(fileIo, "max_open_files", config.maxOpenFiles);
-            config.defaultChunkBytes = readScalar<std::size_t>(fileIo, "default_chunk_bytes", config.defaultChunkBytes);
-            config.maxChunkBytes = readScalar<std::size_t>(fileIo, "max_chunk_bytes", config.maxChunkBytes);
-            config.maxFileSizeBytes = readScalar<std::uint64_t>(fileIo, "max_file_size_bytes", config.maxFileSizeBytes);
-            config.maxWriteFileSizeBytes =
-                readScalar<std::uint64_t>(fileIo, "max_write_file_size_bytes", config.maxWriteFileSizeBytes);
-            if (const auto dialog = childNode(fileIo, "dialog")) {
-                config.dialog.enabled = readScalar<bool>(dialog, "enabled", config.dialog.enabled);
-                config.dialog.rememberLastDir =
-                    readScalar<bool>(dialog, "remember_last_dir", config.dialog.rememberLastDir);
-            }
-            if (const auto sendFile = childNode(fileIo, "send_file")) {
-                config.sendFile.defaultChunkBytes =
-                    readScalar<std::size_t>(sendFile, "default_chunk_bytes", config.sendFile.defaultChunkBytes);
-                config.sendFile.maxInflightChunks =
-                    readScalar<std::size_t>(sendFile, "max_inflight_chunks", config.sendFile.maxInflightChunks);
-            }
-        }
-
-        const auto logging = root["logging"];
-        result.config.logging.level =
-            parseLogLevel(readScalar<std::string>(logging, "level", toLogLevelText(result.config.logging.level)));
-        result.config.logging.filePath = readScalar<std::string>(logging, "file_path", result.config.logging.filePath);
+        loadPerformanceConfig(root, result.config);
+        loadAppConfig(root, result.config);
+        loadGuiConfig(root, result.config);
+        loadProtocolConfig(root, result.config);
+        loadReceiveConfig(root, result.config);
+        loadScriptingConfig(root, result.config);
+        loadLoggingConfig(root, result.config);
         result.config.configPath = normalizeTextPath(result.resolvedPath);
-
-        const auto communication = root["communication"];
-        result.config.communication.kind = parseTransportKind(
-            readScalar<std::string>(communication, "kind", toTransportKindText(result.config.communication.kind)));
-
-        if (const auto tcpClient = childNode(communication, "tcp_client")) {
-            result.config.communication.tcpClient.host =
-                readScalar<std::string>(tcpClient, "host", result.config.communication.tcpClient.host);
-            result.config.communication.tcpClient.port =
-                readScalar<std::uint16_t>(tcpClient, "port", result.config.communication.tcpClient.port);
-        }
-
-        if (const auto tcpServer = childNode(communication, "tcp_server")) {
-            result.config.communication.tcpServer.bindAddress =
-                readScalar<std::string>(tcpServer, "bind_address", result.config.communication.tcpServer.bindAddress);
-            result.config.communication.tcpServer.port =
-                readScalar<std::uint16_t>(tcpServer, "port", result.config.communication.tcpServer.port);
-            result.config.communication.tcpServer.rejectNewConnection = readScalar<bool>(
-                tcpServer, "reject_new_connection", result.config.communication.tcpServer.rejectNewConnection);
-        }
-
-        if (const auto serial = childNode(communication, "serial")) {
-            result.config.communication.serial.portName =
-                readScalar<std::string>(serial, "port_name", result.config.communication.serial.portName);
-            result.config.communication.serial.baudRate =
-                readScalar<std::uint32_t>(serial, "baud_rate", result.config.communication.serial.baudRate);
-            result.config.communication.serial.dataBits =
-                readScalar<std::uint32_t>(serial, "data_bits", result.config.communication.serial.dataBits);
-            result.config.communication.serial.parity =
-                readScalar<std::string>(serial, "parity", result.config.communication.serial.parity);
-            result.config.communication.serial.stopBits =
-                readScalar<std::string>(serial, "stop_bits", result.config.communication.serial.stopBits);
-            result.config.communication.serial.flowControl =
-                readScalar<std::string>(serial, "flow_control", result.config.communication.serial.flowControl);
-        }
-
-        if (const auto udpPeer = childNode(communication, "udp_peer")) {
-            result.config.communication.udpPeer.bindAddress =
-                readScalar<std::string>(udpPeer, "bind_address", result.config.communication.udpPeer.bindAddress);
-            result.config.communication.udpPeer.bindPort =
-                readScalar<std::uint16_t>(udpPeer, "bind_port", result.config.communication.udpPeer.bindPort);
-            result.config.communication.udpPeer.remoteHost =
-                readScalar<std::string>(udpPeer, "remote_host", result.config.communication.udpPeer.remoteHost);
-            result.config.communication.udpPeer.remotePort =
-                readScalar<std::uint16_t>(udpPeer, "remote_port", result.config.communication.udpPeer.remotePort);
-        }
-        if (const auto receive = root["receive"]) {
-            result.config.communication.serialPortOptions = kDefaultSerialPorts;
-            result.config.communication.reconnectRequired = false;
-            result.config.communication.lastError.clear();
-            result.config.communication.txCount = 0;
-            result.config.communication.rxCount = 0;
-            (void) receive;
-        }
+        loadCommunicationConfig(root, result.config);
     } catch (const std::exception& ex) {
         result.error = std::string("读取 YAML 失败: ") + ex.what();
         result.loadedFromDisk = false;
