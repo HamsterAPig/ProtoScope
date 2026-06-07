@@ -4,7 +4,8 @@
 
 namespace {
 
-int runProtoScope() {
+int runProtoScope()
+{
     protoscope::app::Application app;
     if (!app.initialize()) {
         app.logger().error("main", "ProtoScope 初始化失败");
@@ -27,14 +28,16 @@ int runProtoScope() {
 
 } // namespace
 
-int main() {
+int main()
+{
     return runProtoScope();
 }
 
 #if defined(_WIN32)
 #include <windows.h>
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
+{
     return runProtoScope();
 }
 #endif

@@ -1,30 +1,33 @@
 #include "protoscope/config/embedded_protocols.hpp"
 
-#include <cmrc/cmrc.hpp>
-
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
 
+#include <cmrc/cmrc.hpp>
 #include <protoscope/config/embedded_protocols_manifest.hpp>
 
 #if defined(_WIN32)
-    #ifndef NOMINMAX
-        #define NOMINMAX
-    #endif
-    #ifndef WIN32_LEAN_AND_MEAN
-        #define WIN32_LEAN_AND_MEAN
-    #endif
-    #include <windows.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #elif defined(__APPLE__)
-    #include <mach-o/dyld.h>
-    #include <limits.h>
+#include <limits.h>
+
+#include <mach-o/dyld.h>
 #else
-    #include <limits.h>
-    #include <unistd.h>
+#include <limits.h>
+#include <unistd.h>
 #endif
 
 CMRC_DECLARE(proto_resources);
@@ -35,73 +38,126 @@ namespace fs = std::filesystem;
 
 namespace {
 
-bool writeFileFromResource(const cmrc::file& resourceFile,
-                           const fs::path& outputPath,
-                           std::string& error) {
-    std::error_code ec;
+    bool writeFileFromResource(const cmrc::file& resourceFile, const fs::path& outputPath, std::string& error)
+    {
+        std::error_code ec;
 
-    const auto parent = outputPath.parent_path();
-    if (!parent.empty()) {
-        fs::create_directories(parent, ec);
-        if (ec) {
-            error = "创建目录失败: " + parent.string() + ", " + ec.message();
+        const auto parent = outputPath.parent_path();
+        if (!parent.empty()) {
+            fs::create_directories(parent, ec);
+            if (ec) {
+                error = "创建目录失败: " + parent.string() + ", " + ec.message();
+                return false;
+            }
+        }
+
+        std::ofstream out(outputPath, std::ios::binary);
+        if (!out.good()) {
+            error = "打开文件失败: " + outputPath.string();
+            return false;
+        }
+
+        out.write(resourceFile.begin(), static_cast<std::streamsize>(resourceFile.size()));
+        if (!out.good()) {
+            error = "写入文件失败: " + outputPath.string();
+            return false;
+        }
+
+        return true;
+    }
+
+    std::optional<bool> fileMatchesResource(const fs::path& outputPath,
+                                            const cmrc::file& resourceFile,
+                                            std::string& error)
+    {
+        std::ifstream in(outputPath, std::ios::binary);
+        if (!in.good()) {
+            error = "打开文件失败: " + outputPath.string();
+            return std::nullopt;
+        }
+
+        in.seekg(0, std::ios::end);
+        const auto fileSize = in.tellg();
+        if (fileSize < 0) {
+            error = "读取文件大小失败: " + outputPath.string();
+            return std::nullopt;
+        }
+        if (static_cast<std::uintmax_t>(fileSize) != static_cast<std::uintmax_t>(resourceFile.size())) {
+            return false;
+        }
+
+        in.seekg(0, std::ios::beg);
+        std::vector<char> buffer(resourceFile.size());
+        if (!buffer.empty()) {
+            in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            if (!in.good()) {
+                error = "读取文件失败: " + outputPath.string();
+                return std::nullopt;
+            }
+        }
+
+        return std::equal(buffer.begin(), buffer.end(), resourceFile.begin(), resourceFile.end());
+    }
+
+    bool extractOneResource(const char* resourcePath, const fs::path& outputPath, std::string& error)
+    {
+        auto resourceFs = cmrc::proto_resources::get_filesystem();
+
+        try {
+            const auto resourceFile = resourceFs.open(resourcePath);
+            return writeFileFromResource(resourceFile, outputPath, error);
+        } catch (const std::exception& ex) {
+            error = "读取内嵌资源失败: ";
+            error += resourcePath;
+            error += ", ";
+            error += ex.what();
             return false;
         }
     }
 
-    std::ofstream out(outputPath, std::ios::binary);
-    if (!out.good()) {
-        error = "打开文件失败: " + outputPath.string();
-        return false;
+    bool extractResourceIfChanged(const char* resourcePath, const fs::path& outputPath, std::string& error)
+    {
+        auto resourceFs = cmrc::proto_resources::get_filesystem();
+
+        try {
+            const auto resourceFile = resourceFs.open(resourcePath);
+            std::error_code ec;
+            const bool outputExists = fs::exists(outputPath, ec);
+            if (ec) {
+                error = "检查文件失败: " + outputPath.string() + ", " + ec.message();
+                return false;
+            }
+            if (outputExists) {
+                const auto matches = fileMatchesResource(outputPath, resourceFile, error);
+                if (!matches.has_value()) {
+                    return false;
+                }
+                if (*matches) {
+                    return true;
+                }
+            }
+            return writeFileFromResource(resourceFile, outputPath, error);
+        } catch (const std::exception& ex) {
+            error = "读取内嵌协议资源失败: " + std::string(resourcePath) + ", " + ex.what();
+            return false;
+        }
     }
-
-    out.write(resourceFile.begin(), static_cast<std::streamsize>(resourceFile.size()));
-    if (!out.good()) {
-        error = "写入文件失败: " + outputPath.string();
-        return false;
-    }
-
-    return true;
-}
-
-bool extractOneResource(const char* resourcePath,
-                        const fs::path& outputPath,
-                        std::string& error) {
-    auto resourceFs = cmrc::proto_resources::get_filesystem();
-
-    try {
-        const auto resourceFile = resourceFs.open(resourcePath);
-        return writeFileFromResource(resourceFile, outputPath, error);
-    } catch (const std::exception& ex) {
-        error = "读取内嵌资源失败: ";
-        error += resourcePath;
-        error += ", ";
-        error += ex.what();
-        return false;
-    }
-}
 } // namespace
 
-bool extractResourceToFile(
-    const char* resourcePath,
-    const fs::path& outputPath,
-    std::string& error
-) {
+bool extractResourceToFile(const char* resourcePath, const fs::path& outputPath, std::string& error)
+{
     return extractOneResource(resourcePath, outputPath, error);
 }
 
-fs::path executableDirectory() {
+fs::path executableDirectory()
+{
 #if defined(_WIN32)
 
     std::wstring buffer;
     buffer.resize(MAX_PATH);
 
     while (true) {
-        const DWORD length = GetModuleFileNameW(
-            nullptr,
-            buffer.data(),
-            static_cast<DWORD>(buffer.size())
-        );
+        const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
 
         if (length == 0) {
             return fs::current_path();
@@ -157,7 +213,8 @@ fs::path executableDirectory() {
 #endif
 }
 
-bool ensureProtocolWorkspace(const fs::path& rootDir, std::string& error) {
+bool ensureProtocolWorkspace(const fs::path& rootDir, std::string& error)
+{
     std::error_code ec;
 
     if (fs::exists(rootDir, ec)) {
@@ -183,17 +240,8 @@ bool ensureProtocolWorkspace(const fs::path& rootDir, std::string& error) {
 
     for (const auto& entry : kProtocolResources) {
         const auto outputPath = rootDir / fs::path(entry.output_path);
-        ec.clear();
-        const bool outputExists = fs::exists(outputPath, ec);
-        if (ec) {
-            error = "检查内置协议文件失败: " + outputPath.string() + ", " + ec.message();
-            return false;
-        }
-        if (outputExists) {
-            continue;
-        }
-
-        if (!extractOneResource(entry.resource_path, outputPath, error)) {
+        // 核心流程：内嵌模板升级后要刷新旧副本，否则测试/运行时会继续加载过期 Lua 布局。
+        if (!extractResourceIfChanged(entry.resource_path, outputPath, error)) {
             return false;
         }
     }
@@ -201,7 +249,8 @@ bool ensureProtocolWorkspace(const fs::path& rootDir, std::string& error) {
     return true;
 }
 
-bool ensureDefaultProtocolScript(const fs::path& protocolDir, std::string& error) {
+bool ensureDefaultProtocolScript(const fs::path& protocolDir, std::string& error)
+{
     std::error_code ec;
 
     fs::create_directories(protocolDir, ec);
@@ -216,11 +265,7 @@ bool ensureDefaultProtocolScript(const fs::path& protocolDir, std::string& error
         return true;
     }
 
-    return extractOneResource(
-        "protocols/default_protocol/main.lua",
-        mainLuaPath,
-        error
-    );
+    return extractOneResource("protocols/default_protocol/main.lua", mainLuaPath, error);
 }
 
 } // namespace protoscope::config::embedded

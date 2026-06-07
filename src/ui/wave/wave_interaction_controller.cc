@@ -6,7 +6,8 @@
 
 namespace protoscope::ui {
 
-double scaleFromInteractionFactor(double scale, double factor) {
+double scaleFromInteractionFactor(double scale, double factor)
+{
     if (!std::isfinite(factor) || factor <= 0.0) {
         return scale;
     }
@@ -18,7 +19,8 @@ double scaleFromInteractionFactor(double scale, double factor) {
     return direction * magnitude * factor;
 }
 
-bool updateActiveChannelScale(plot::WaveDockState& wave, double factor) {
+bool updateActiveChannelScale(plot::WaveDockState& wave, double factor)
+{
     const auto channelIndex = wave.view.measurementChannelIndex;
     const auto spec = wave.buffer.channelSpec(channelIndex);
     if (!spec.has_value()) {
@@ -30,7 +32,8 @@ bool updateActiveChannelScale(plot::WaveDockState& wave, double factor) {
     return true;
 }
 
-bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta) {
+bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta)
+{
     const auto channelIndex = wave.view.measurementChannelIndex;
     const auto spec = wave.buffer.channelSpec(channelIndex);
     if (!spec.has_value()) {
@@ -46,7 +49,8 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const plot::WaveDisplayData& displayData,
                                            const ImPlotPoint& mousePos,
                                            double timeSnapDistance,
-                                           double valueSnapDistance) {
+                                           double valueSnapDistance)
+{
     auto& view = wave.view;
     if (view.controlMode != plot::WaveControlMode::Oscilloscope) {
         view.activeChannelOffsetDrag = false;
@@ -67,7 +71,8 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     if (ImPlot::IsAxisHovered(ImAxis_Y1) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         view.activeChannelScaleDrag = true;
     }
-    if (view.activeChannelScaleDrag && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && ImPlot::IsAxisHovered(ImAxis_Y1)) {
+    if (view.activeChannelScaleDrag && ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
+        ImPlot::IsAxisHovered(ImAxis_Y1)) {
         changed = updateActiveChannelScale(wave, std::exp(-static_cast<double>(io.MouseDelta.y) * 0.01)) || changed;
     }
 
@@ -106,7 +111,8 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     return changed;
 }
 
-bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::WaveDataBounds& bounds) {
+bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::WaveDataBounds& bounds)
+{
     if (GImPlot == nullptr || GImPlot->CurrentPlot == nullptr) {
         return false;
     }
@@ -137,16 +143,20 @@ bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::
     return true;
 }
 
-bool excludesLegendHiddenChannels(const plot::WaveViewState& view) {
+bool excludesLegendHiddenChannels(const plot::WaveViewState& view)
+{
     return view.hiddenChannelPolicy == plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
 }
 
-bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::string& label) {
-    return std::find(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label) != wave.hiddenChannelLabels.end();
+bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::string& label)
+{
+    return std::find(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label) !=
+           wave.hiddenChannelLabels.end();
 }
 
 std::vector<std::size_t> channelIndicesForDerivedViews(const plot::WaveDockState& wave,
-                                                       const plot::WaveSnapshot& snapshot) {
+                                                       const plot::WaveSnapshot& snapshot)
+{
     std::vector<std::size_t> indices;
     indices.reserve(snapshot.channels.size());
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
@@ -161,21 +171,25 @@ std::vector<std::size_t> channelIndicesForDerivedViews(const plot::WaveDockState
 
 plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
                                            const plot::WaveDisplayData& displayData,
-                                           const std::vector<std::size_t>& channelIndices) {
+                                           const std::vector<std::size_t>& channelIndices)
+{
     if (excludesLegendHiddenChannels(wave.view)) {
-        return plot::computeDisplayBoundsForChannels(displayData, channelIndices, (std::max)(wave.view.minVisibleTimeSpan, 1e-6));
+        return plot::computeDisplayBoundsForChannels(
+            displayData, channelIndices, (std::max)(wave.view.minVisibleTimeSpan, 1e-6));
     }
     return wave.cachedDisplayBounds;
 }
 
-void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::string& label) {
+void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::string& label)
+{
     const bool hidden = channelHiddenByLegendState(wave, label);
     if (hidden || wave.legendVisibilityRestorePending) {
         ImPlot::HideNextItem(hidden, wave.legendVisibilityRestorePending ? ImPlotCond_Always : ImPlotCond_Once);
     }
 }
 
-void syncLegendVisibilityState(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
+void syncLegendVisibilityState(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)
+{
     std::vector<std::string> hiddenLabels;
     hiddenLabels.reserve(snapshot.channels.size());
     for (const auto& channel : snapshot.channels) {
@@ -192,7 +206,8 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
                                                       double visibleMinTime,
                                                       double visibleMaxTime,
                                                       std::size_t pointLimit,
-                                                      std::size_t* sourceSampleCount) {
+                                                      std::size_t* sourceSampleCount)
+{
     std::vector<plot::EnvelopePoint> envelope;
     if (sourceSampleCount != nullptr) {
         *sourceSampleCount = 0;
@@ -203,12 +218,14 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
     if (visibleMaxTime < visibleMinTime) {
         std::swap(visibleMinTime, visibleMaxTime);
     }
-    auto begin = std::lower_bound(samples.begin(), samples.end(), visibleMinTime, [](const plot::WaveSample& sample, double value) {
-        return sample.time < value;
-    });
-    auto end = std::upper_bound(samples.begin(), samples.end(), visibleMaxTime, [](double value, const plot::WaveSample& sample) {
-        return value < sample.time;
-    });
+    auto begin = std::lower_bound(
+        samples.begin(), samples.end(), visibleMinTime, [](const plot::WaveSample& sample, double value) {
+            return sample.time < value;
+        });
+    auto end = std::upper_bound(
+        samples.begin(), samples.end(), visibleMaxTime, [](double value, const plot::WaveSample& sample) {
+            return value < sample.time;
+        });
     const std::size_t visibleSampleCount = begin < end ? static_cast<std::size_t>(std::distance(begin, end)) : 0;
     if (sourceSampleCount != nullptr) {
         *sourceSampleCount = visibleSampleCount;
@@ -256,18 +273,20 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
     return envelope;
 }
 
-void clampActiveChannel(plot::WaveViewState& view, std::size_t channelCount) {
+void clampActiveChannel(plot::WaveViewState& view, std::size_t channelCount)
+{
     if (channelCount == 0 || view.measurementChannelIndex >= channelCount) {
         view.measurementChannelIndex = 0;
     }
 }
 
-const char* snapScopeName(plot::WaveCursorSnapScope scope) {
+const char* snapScopeName(plot::WaveCursorSnapScope scope)
+{
     switch (scope) {
-    case plot::WaveCursorSnapScope::AllChannels:
-        return "全部波形";
-    case plot::WaveCursorSnapScope::ActiveChannel:
-        return "当前激活波形";
+        case plot::WaveCursorSnapScope::AllChannels:
+            return "全部波形";
+        case plot::WaveCursorSnapScope::ActiveChannel:
+            return "当前激活波形";
     }
     return "未知";
 }
@@ -275,19 +294,22 @@ const char* snapScopeName(plot::WaveCursorSnapScope scope) {
 std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDisplayData& displayData,
                                                              const plot::WaveViewState& view,
                                                              double time,
-                                                             double maxTimeDistance) {
+                                                             double maxTimeDistance)
+{
     if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
         return plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, time, maxTimeDistance);
     }
     return plot::findNearestDisplayByTimeAcrossChannels(displayData, time, maxTimeDistance);
 }
 
-bool currentPlotItemVisible(const std::string& label) {
+bool currentPlotItemVisible(const std::string& label)
+{
     const ImPlotItem* item = ImPlot::GetItem(label.c_str());
     return item != nullptr && item->Show;
 }
 
-std::vector<std::size_t> visibleChannelIndicesForFit(const plot::WaveSnapshot& snapshot) {
+std::vector<std::size_t> visibleChannelIndicesForFit(const plot::WaveSnapshot& snapshot)
+{
     std::vector<std::size_t> indices;
     indices.reserve(snapshot.channels.size());
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {

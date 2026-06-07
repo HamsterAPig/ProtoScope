@@ -12,7 +12,8 @@ void drawOverviewWindow(plot::WaveViewState& view,
                         const plot::WaveDisplayData& displayData,
                         const plot::WaveDataBounds& displayBounds,
                         const std::vector<std::size_t>& channelIndices,
-                        const RenderBudget& renderBudget) {
+                        const RenderBudget& renderBudget)
+{
     if (fullSnapshot.channels.empty()) {
         return;
     }
@@ -48,14 +49,15 @@ void drawOverviewWindow(plot::WaveViewState& view,
         overviewMaxValue = config.verticalMax;
     }
 
-    const ImPlotFlags plotFlags =
-        ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoMenus | ImPlotFlags_NoFrame;
+    const ImPlotFlags plotFlags = ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText |
+                                  ImPlotFlags_NoMenus | ImPlotFlags_NoFrame;
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     // 概览图需要跟随 splitter 压缩，避免 ImPlot 默认 150px 最小高度撑住内部绘图区。
     ImPlot::PushStyleVar(ImPlotStyleVar_PlotMinSize, ImVec2(64.0F, 24.0F));
     ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(2.0F, 2.0F));
     if (ImPlot::BeginPlot("##wave_overview", ImVec2(-1.0F, -1.0F), plotFlags)) {
-        constexpr ImPlotAxisFlags axisFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoDecorations;
+        constexpr ImPlotAxisFlags axisFlags =
+            ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoDecorations;
         ImPlot::SetupAxis(ImAxis_X1, nullptr, axisFlags);
         ImPlot::SetupAxis(ImAxis_Y1, nullptr, axisFlags);
         ImPlot::SetupAxisLimits(ImAxis_X1, overviewMinTime, overviewMaxTime, ImPlotCond_Always);
@@ -63,15 +65,16 @@ void drawOverviewWindow(plot::WaveViewState& view,
 
         const float contentWidth = ImGui::GetContentRegionAvail().x;
         const std::size_t pixelWidth = static_cast<std::size_t>((std::max)(contentWidth, 64.0F));
-        const std::size_t overviewPointLimit = view.overviewMaxSamples > 0
-            ? (std::min)({pixelWidth, renderBudget.pointsPerChannel, view.overviewMaxSamples})
-            : (std::min)(pixelWidth, renderBudget.pointsPerChannel);
+        const std::size_t overviewPointLimit =
+            view.overviewMaxSamples > 0
+                ? (std::min)({pixelWidth, renderBudget.pointsPerChannel, view.overviewMaxSamples})
+                : (std::min)(pixelWidth, renderBudget.pointsPerChannel);
         for (const std::size_t channelIndex : channelIndices) {
             if (channelIndex >= fullSnapshot.channels.size() || channelIndex >= displayData.channels.size()) {
                 continue;
             }
-            auto overview =
-                buildDisplayEnvelope(displayData.channels[channelIndex].samples, overviewMinTime, overviewMaxTime, overviewPointLimit);
+            auto overview = buildDisplayEnvelope(
+                displayData.channels[channelIndex].samples, overviewMinTime, overviewMaxTime, overviewPointLimit);
             if (overview.empty()) {
                 continue;
             }
@@ -80,8 +83,16 @@ void drawOverviewWindow(plot::WaveViewState& view,
             ImPlotSpec spec{};
             spec.LineColor = color;
             spec.LineWeight = 1.0F;
-            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview min").c_str(), &envelopeLineMinGetter, &payload, static_cast<int>(overview.size()), spec);
-            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview max").c_str(), &envelopeLineMaxGetter, &payload, static_cast<int>(overview.size()), spec);
+            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview min").c_str(),
+                              &envelopeLineMinGetter,
+                              &payload,
+                              static_cast<int>(overview.size()),
+                              spec);
+            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview max").c_str(),
+                              &envelopeLineMaxGetter,
+                              &payload,
+                              static_cast<int>(overview.size()),
+                              spec);
         }
 
         double rectMinTime = view.viewMinTime;
@@ -98,16 +109,22 @@ void drawOverviewWindow(plot::WaveViewState& view,
             .minStep = minVisibleTimeSpan,
             .valid = true,
         };
-        if (ImPlot::DragRect(300, &rectMinTime, &rectMinValue, &rectMaxTime, &rectMaxValue,
-                ImVec4(1.0F, 0.85F, 0.2F, 0.35F),
-                ImPlotDragToolFlags_NoFit,
-                nullptr,
-                 &rectHovered,
-                 &rectHeld)) {
-            const auto normalized = plot::normalizeOverviewViewport(
-                {.minTime = rectMinTime, .maxTime = rectMaxTime, .minValue = view.viewMinValue, .maxValue = view.viewMaxValue},
-                overviewBounds,
-                minVisibleTimeSpan);
+        if (ImPlot::DragRect(300,
+                             &rectMinTime,
+                             &rectMinValue,
+                             &rectMaxTime,
+                             &rectMaxValue,
+                             ImVec4(1.0F, 0.85F, 0.2F, 0.35F),
+                             ImPlotDragToolFlags_NoFit,
+                             nullptr,
+                             &rectHovered,
+                             &rectHeld)) {
+            const auto normalized = plot::normalizeOverviewViewport({.minTime = rectMinTime,
+                                                                     .maxTime = rectMaxTime,
+                                                                     .minValue = view.viewMinValue,
+                                                                     .maxValue = view.viewMaxValue},
+                                                                    overviewBounds,
+                                                                    minVisibleTimeSpan);
             view.viewMinTime = normalized.minTime;
             view.viewMaxTime = normalized.maxTime;
             view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
@@ -120,11 +137,10 @@ void drawOverviewWindow(plot::WaveViewState& view,
         const ImVec2 rectMaxPixel = ImPlot::PlotToPixels((std::max)(rectMinTime, rectMaxTime), overviewMinValue);
         const ImVec2 mousePixel = ImGui::GetMousePos();
         constexpr float kDragEdgePadding = 8.0F;
-        const bool mouseInsideWindowBody = ImPlot::IsPlotHovered()
-            && mousePixel.x > rectMinPixel.x + kDragEdgePadding
-            && mousePixel.x < rectMaxPixel.x - kDragEdgePadding
-            && mousePixel.y > rectMinPixel.y + kDragEdgePadding
-            && mousePixel.y < rectMaxPixel.y - kDragEdgePadding;
+        const bool mouseInsideWindowBody =
+            ImPlot::IsPlotHovered() && mousePixel.x > rectMinPixel.x + kDragEdgePadding &&
+            mousePixel.x < rectMaxPixel.x - kDragEdgePadding && mousePixel.y > rectMinPixel.y + kDragEdgePadding &&
+            mousePixel.y < rectMaxPixel.y - kDragEdgePadding;
         if (mouseInsideWindowBody && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             view.overviewWindowDragging = true;
             view.overviewDragLastTime = mousePlotPos.x;
@@ -134,8 +150,8 @@ void drawOverviewWindow(plot::WaveViewState& view,
         }
         if (view.overviewWindowDragging && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
             const double deltaTime = mousePlotPos.x - view.overviewDragLastTime;
-            const auto moved = plot::moveViewportByDelta(
-                currentViewport(view), deltaTime, overviewBounds, minVisibleTimeSpan);
+            const auto moved =
+                plot::moveViewportByDelta(currentViewport(view), deltaTime, overviewBounds, minVisibleTimeSpan);
             applyViewport(view, moved);
             view.overviewDragLastTime = mousePlotPos.x;
         }
@@ -145,7 +161,8 @@ void drawOverviewWindow(plot::WaveViewState& view,
         const auto& io = ImGui::GetIO();
         if (ImPlot::IsPlotHovered() && io.MouseWheel != 0.0F) {
             const auto mousePos = ImPlot::GetPlotMousePos();
-            const double centerTime = std::isfinite(mousePos.x) ? mousePos.x : 0.5 * (view.viewMinTime + view.viewMaxTime);
+            const double centerTime =
+                std::isfinite(mousePos.x) ? mousePos.x : 0.5 * (view.viewMinTime + view.viewMaxTime);
             const auto zoomed = plot::zoomViewport(currentViewport(view),
                                                    plot::WaveZoomMode::XOnly,
                                                    io.MouseWheel,

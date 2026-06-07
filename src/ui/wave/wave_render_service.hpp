@@ -4,15 +4,15 @@
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_state.hpp"
 
-#include <imgui.h>
-#include <implot.h>
-#include <implot_internal.h>
-
 #include <array>
 #include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include <imgui.h>
+#include <implot.h>
+#include <implot_internal.h>
 
 namespace protoscope::ui {
 
@@ -65,18 +65,10 @@ struct SmartCursorSnap {
 
 std::string formatMetricText(double value, const char* baseUnit);
 bool plotInteractionActive(bool toolHeld);
-bool drawRightPanelSplitter(const char* id,
-                            float& rightWidth,
-                            float minRightWidth,
-                            float minLeftWidth,
-                            float totalWidth,
-                            float thickness);
-bool drawHorizontalSplitter(const char* id,
-                            float& topHeight,
-                            float minTopHeight,
-                            float minBottomHeight,
-                            float totalHeight,
-                            float thickness);
+bool drawRightPanelSplitter(
+    const char* id, float& rightWidth, float minRightWidth, float minLeftWidth, float totalWidth, float thickness);
+bool drawHorizontalSplitter(
+    const char* id, float& topHeight, float minTopHeight, float minBottomHeight, float totalHeight, float thickness);
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits);
 bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits);
 bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
@@ -86,7 +78,7 @@ bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveDisplayData& displayData,
                               const std::vector<std::size_t>& channelIndices);
-ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view);
+ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool suppressEscapeCancel = false);
 bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
                                                 const plot::WaveDisplayData& displayData,
                                                 const ImPlotPoint& mousePos,

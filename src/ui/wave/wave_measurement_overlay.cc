@@ -7,18 +7,18 @@
 
 namespace protoscope::ui {
 
-bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io) {
-    return view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap
-        || (view.cursorSnapMode == plot::WaveCursorSnapMode::ModifierSnap && (io.KeyShift || io.KeyCtrl));
+bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io)
+{
+    return view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap ||
+           (view.cursorSnapMode == plot::WaveCursorSnapMode::ModifierSnap && (io.KeyShift || io.KeyCtrl));
 }
 
-double normalizedSnapScore(const plot::CursorReadout& readout,
-                           double time,
-                           double mouseValue,
-                           double maxTimeDistance,
-                           double maxValueDistance) {
+double normalizedSnapScore(
+    const plot::CursorReadout& readout, double time, double mouseValue, double maxTimeDistance, double maxValueDistance)
+{
     const double timeScore = maxTimeDistance > 0.0 ? std::abs(readout.time - time) / maxTimeDistance : 0.0;
-    const double valueScore = maxValueDistance > 0.0 ? std::abs(readout.displayValue - mouseValue) / maxValueDistance : 0.0;
+    const double valueScore =
+        maxValueDistance > 0.0 ? std::abs(readout.displayValue - mouseValue) / maxValueDistance : 0.0;
     return timeScore * timeScore + valueScore * valueScore;
 }
 
@@ -27,7 +27,8 @@ std::optional<SmartCursorSnap> findNearestWaveformExtreme(const plot::WaveDispla
                                                           double time,
                                                           double mouseValue,
                                                           double valueHeight,
-                                                          double maxTimeDistance) {
+                                                          double maxTimeDistance)
+{
     if (!std::isfinite(mouseValue) || valueHeight <= 0.0) {
         return std::nullopt;
     }
@@ -63,7 +64,8 @@ std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDis
                                                              double mouseValue,
                                                              const ImPlotRect& limits,
                                                              double maxTimeDistance,
-                                                             plot::WaveCursorExtremeSnapPolicy extremeSnapPolicy) {
+                                                             plot::WaveCursorExtremeSnapPolicy extremeSnapPolicy)
+{
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
     }
@@ -89,9 +91,9 @@ std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDis
                 displayData, channelIndex, time, maxTimeDistance, plot::WaveExtremeKind::Minimum);
             if (trough.has_value()) {
                 return SmartCursorSnap{.readout = *trough, .label = "Trough"};
+            }
         }
     }
-}
 
     // 常规智能吸附优先找最大跳变；找不到再交给调用方使用按时间最近点兜底。
     auto edge = plot::findStrongestEdgeNearTime(displayData, channelIndex, time, maxTimeDistance);
@@ -106,10 +108,16 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
                                                           double time,
                                                           double mouseValue,
                                                           const ImPlotRect& limits,
-                                                          double maxTimeDistance) {
+                                                          double maxTimeDistance)
+{
     if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
-        return findSmartCursorSnapForChannel(
-            displayData, view.measurementChannelIndex, time, mouseValue, limits, maxTimeDistance, view.cursorExtremeSnapPolicy);
+        return findSmartCursorSnapForChannel(displayData,
+                                             view.measurementChannelIndex,
+                                             time,
+                                             mouseValue,
+                                             limits,
+                                             maxTimeDistance,
+                                             view.cursorExtremeSnapPolicy);
     }
 
     std::optional<SmartCursorSnap> best;
@@ -121,7 +129,8 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
             continue;
         }
         const double timeDistance = std::abs(candidate->readout.time - time);
-        const double valueDistance = std::isfinite(mouseValue) ? std::abs(candidate->readout.displayValue - mouseValue) : 0.0;
+        const double valueDistance =
+            std::isfinite(mouseValue) ? std::abs(candidate->readout.displayValue - mouseValue) : 0.0;
         const double score = timeDistance * timeDistance + valueDistance * valueDistance;
         if (!best.has_value() || score < bestScore) {
             bestScore = score;
@@ -132,11 +141,12 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
 }
 
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
-                                               std::size_t channelIndex,
-                                               double beginTime,
-                                               double endTime,
-                                               std::optional<std::size_t> referenceChannelIndex,
-                                               std::optional<double> manualReferenceValue) {
+                                              std::size_t channelIndex,
+                                              double beginTime,
+                                              double endTime,
+                                              std::optional<std::size_t> referenceChannelIndex,
+                                              std::optional<double> manualReferenceValue)
+{
     plot::MeasurementReadout result{};
     if (channelIndex >= displayData.channels.size()) {
         return result;
@@ -145,12 +155,14 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
         std::swap(beginTime, endTime);
     }
     const auto& samples = displayData.channels[channelIndex].samples;
-    const auto begin = std::lower_bound(samples.begin(), samples.end(), beginTime, [](const plot::WaveSample& sample, double value) {
-        return sample.time < value;
-    });
-    const auto end = std::upper_bound(samples.begin(), samples.end(), endTime, [](double value, const plot::WaveSample& sample) {
-        return value < sample.time;
-    });
+    const auto begin =
+        std::lower_bound(samples.begin(), samples.end(), beginTime, [](const plot::WaveSample& sample, double value) {
+            return sample.time < value;
+        });
+    const auto end =
+        std::upper_bound(samples.begin(), samples.end(), endTime, [](double value, const plot::WaveSample& sample) {
+            return value < sample.time;
+        });
     if (begin >= end) {
         return result;
     }
@@ -176,25 +188,30 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
         const auto& referenceSamples = referenceChannel.samples;
         const auto& referenceActualValues = referenceChannel.actualValues;
         for (const double time : times) {
-            const auto match = std::lower_bound(referenceSamples.begin(), referenceSamples.end(), time, [](const plot::WaveSample& sample, double value) {
-                return sample.time < value;
-            });
+            const auto match =
+                std::lower_bound(referenceSamples.begin(),
+                                 referenceSamples.end(),
+                                 time,
+                                 [](const plot::WaveSample& sample, double value) { return sample.time < value; });
             if (match == referenceSamples.end() || std::abs(match->time - time) > 1e-9) {
                 referenceValues.clear();
                 break;
             }
             const auto referenceIndex = static_cast<std::size_t>(std::distance(referenceSamples.begin(), match));
-            referenceValues.push_back(referenceIndex < referenceActualValues.size() ? referenceActualValues[referenceIndex] : match->value);
+            referenceValues.push_back(
+                referenceIndex < referenceActualValues.size() ? referenceActualValues[referenceIndex] : match->value);
         }
     }
-    return plot::makeMeasurementReadout(channelIndex, times, values, referenceValues.size() == values.size() ? &referenceValues : nullptr);
+    return plot::makeMeasurementReadout(
+        channelIndex, times, values, referenceValues.size() == values.size() ? &referenceValues : nullptr);
 }
 
 void drawCursorAnnotation(std::size_t cursorIndex,
                           const plot::CursorReadout& readout,
                           const plot::ChannelView& channel,
                           std::string_view timeUnit,
-                          std::string_view snapLabel) {
+                          std::string_view snapLabel)
+{
     const std::string labelPrefix = snapLabel.empty() ? "" : std::string(snapLabel) + " ";
     ImPlot::Annotation(readout.time,
                        readout.displayValue,
@@ -206,13 +223,14 @@ void drawCursorAnnotation(std::size_t cursorIndex,
                        labelPrefix.c_str(),
                        formatMetricText(readout.time, std::string(timeUnit).c_str()).c_str(),
                        channel.label.c_str(),
-                        readout.value);
+                       readout.value);
 }
 
 void drawCursorIntervalHint(const plot::CursorReadout& left,
                             const plot::CursorReadout& right,
                             const plot::CursorIntervalText& intervalText,
-                            const ImPlotRect& limits) {
+                            const ImPlotRect& limits)
+{
     if (!intervalText.valid) {
         return;
     }
@@ -235,9 +253,9 @@ void drawCursorIntervalHint(const plot::CursorReadout& left,
     }
 
     const std::string label = intervalText.showFrequency
-        ? ("Δt " + formatMetricText(intervalText.delta, intervalText.deltaUnit.c_str()) + " / f "
-            + formatMetricText(intervalText.frequencyHz, "Hz"))
-        : ("Δsample " + formatMetricText(intervalText.delta, intervalText.deltaUnit.c_str()));
+                                  ? ("Δt " + formatMetricText(intervalText.delta, intervalText.deltaUnit.c_str()) +
+                                     " / f " + formatMetricText(intervalText.frequencyHz, "Hz"))
+                                  : ("Δsample " + formatMetricText(intervalText.delta, intervalText.deltaUnit.c_str()));
     const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
     const ImVec2 center = ImVec2(0.5F * (start.x + end.x), start.y);
     const ImVec2 textMin = ImVec2(center.x - 0.5F * textSize.x - 5.0F, center.y - textSize.y - 7.0F);

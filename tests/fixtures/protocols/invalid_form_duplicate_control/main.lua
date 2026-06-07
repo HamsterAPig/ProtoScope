@@ -7,10 +7,10 @@ function ui()
         { type = "button", id = "read_version", label = "读取版本" },
       },
       layout = {
-        kind = "form",
-        items = {
-          { control = "read_version" },
-          { control = "read_version" }
+        type = "column",
+        children = {
+          { type = "control", id = "read_version" },
+          { type = "control", id = "read_version" }
         }
       }
     }

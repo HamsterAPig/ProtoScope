@@ -1,6 +1,6 @@
-#include "test_registry.hpp"
-
 #include "protoscope/transport/transport.hpp"
+
+#include "test_registry.hpp"
 
 #include <chrono>
 #include <optional>
@@ -9,22 +9,27 @@
 #include <thread>
 #include <vector>
 
+#include <asio/io_context.hpp>
+#include <asio/ip/udp.hpp>
+
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const char* message)
+{
     if (!condition) {
         throw std::runtime_error(message);
     }
 }
 
-std::uint16_t parsePort(const std::string& endpoint) {
+std::uint16_t parsePort(const std::string& endpoint)
+{
     const auto pos = endpoint.rfind(':');
     require(pos != std::string::npos, "endpoint 缺少端口");
     return static_cast<std::uint16_t>(std::stoi(endpoint.substr(pos + 1)));
 }
 
-template <typename Predicate>
-bool waitUntil(Predicate predicate) {
+template <typename Predicate> bool waitUntil(Predicate predicate)
+{
     for (int i = 0; i < 50; ++i) {
         if (predicate()) {
             return true;
@@ -34,13 +39,23 @@ bool waitUntil(Predicate predicate) {
     return false;
 }
 
+std::uint16_t reserveFreeUdpPort()
+{
+    asio::io_context ioContext;
+    asio::ip::udp::socket socket(ioContext, asio::ip::udp::v4());
+    socket.bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), 0));
+    return socket.local_endpoint().port();
+}
+
 } // namespace
 
-void test_tcp_transport_roundtrip() {
+void test_tcp_transport_roundtrip()
+{
     using namespace protoscope::transport;
 
     TcpServerTransport server;
-    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = true}), "服务端打开失败");
+    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = true}),
+            "服务端打开失败");
 
     auto serverEvents = server.takeEvents();
     require(!serverEvents.empty(), "服务端应产生监听事件");
@@ -106,11 +121,13 @@ void test_tcp_transport_roundtrip() {
     server.close();
 }
 
-void test_transport_enqueue_send_async_roundtrip() {
+void test_transport_enqueue_send_async_roundtrip()
+{
     using namespace protoscope::transport;
 
     TcpServerTransport server;
-    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = true}), "服务端打开失败");
+    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = true}),
+            "服务端打开失败");
 
     const auto serverEvents = server.takeEvents();
     std::optional<std::uint16_t> listenPort;
@@ -124,6 +141,16 @@ void test_transport_enqueue_send_async_roundtrip() {
 
     TcpClientTransport client;
     require(client.open(TcpClientConfig{.host = "127.0.0.1", .port = *listenPort}), "客户端连接失败");
+    {
+        bool clientOpenKindSeen = false;
+        for (const auto& event : client.takeEvents()) {
+            if (const auto* opened = std::get_if<TransportOpenEvent>(&event)) {
+                clientOpenKindSeen = opened->context.kind == TransportKind::TcpClient;
+                break;
+            }
+        }
+        require(clientOpenKindSeen, "TCP Client 打开事件 kind 应为 TcpClient");
+    }
 
     const bool serverAccepted = waitUntil([&]() {
         for (const auto& event : server.takeEvents()) {
@@ -178,11 +205,13 @@ void test_transport_enqueue_send_async_roundtrip() {
     server.close();
 }
 
-void test_tcp_server_connection_takeover_replaces_active_client() {
+void test_tcp_server_connection_takeover_replaces_active_client()
+{
     using namespace protoscope::transport;
 
     TcpServerTransport server;
-    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = false}), "服务端打开失败");
+    require(server.open(TcpServerConfig{.bindAddress = "127.0.0.1", .port = 0, .rejectNewConnection = false}),
+            "服务端打开失败");
 
     auto serverEvents = server.takeEvents();
     std::optional<std::uint16_t> listenPort;
@@ -266,7 +295,8 @@ void test_tcp_server_connection_takeover_replaces_active_client() {
     server.close();
 }
 
-void test_serial_transport_error_path() {
+void test_serial_transport_error_path()
+{
     using namespace protoscope::transport;
 
     SerialTransport serial;
@@ -284,7 +314,8 @@ void test_serial_transport_error_path() {
     require(hasError, "无效串口应产生错误事件");
 }
 
-void test_udp_peer_transport_roundtrip() {
+void test_udp_peer_transport_roundtrip()
+{
     using namespace protoscope::transport;
 
     UdpPeerTransport peerA;
@@ -387,4 +418,38 @@ void test_udp_peer_transport_roundtrip() {
     peerB.close();
     require(peerA.state() == TransportState::Closed, "UDP Peer A close 后应为 Closed");
     require(peerB.state() == TransportState::Closed, "UDP Peer B close 后应为 Closed");
+}
+
+void test_udp_peer_failed_open_releases_bound_socket()
+{
+    using namespace protoscope::transport;
+
+    const auto bindPort = reserveFreeUdpPort();
+    UdpPeerTransport failedPeer;
+    const bool opened = failedPeer.open(UdpPeerConfig{
+        .bindAddress = "127.0.0.1",
+        .bindPort = bindPort,
+        .remoteHost = "invalid host name",
+        .remotePort = 9000,
+    });
+    require(!opened, "非法 UDP remoteHost 应打开失败");
+    require(failedPeer.state() == TransportState::Error, "UDP 打开失败后应进入 Error 状态");
+
+    bool errorSeen = false;
+    for (const auto& event : failedPeer.takeEvents()) {
+        if (const auto* error = std::get_if<TransportErrorEvent>(&event)) {
+            errorSeen = !error->message.empty() && error->context.kind == TransportKind::UdpPeer;
+        }
+    }
+    require(errorSeen, "UDP 打开失败应产生错误事件");
+
+    UdpPeerTransport retryPeer;
+    require(retryPeer.open(UdpPeerConfig{
+                .bindAddress = "127.0.0.1",
+                .bindPort = bindPort,
+                .remoteHost = "127.0.0.1",
+                .remotePort = bindPort,
+            }),
+            "UDP 打开失败后不应继续占用已绑定端口");
+    retryPeer.close();
 }

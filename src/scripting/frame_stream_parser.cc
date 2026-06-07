@@ -11,404 +11,374 @@ namespace protoscope::scripting {
 
 namespace {
 
-std::vector<std::uint8_t> copyBytes(const std::uint8_t* data, std::size_t count) {
-    if (data == nullptr || count == 0) {
-        return {};
+    std::vector<std::uint8_t> copyBytes(const std::uint8_t* data, std::size_t count)
+    {
+        if (data == nullptr || count == 0) {
+            return {};
+        }
+        return std::vector<std::uint8_t>(data, data + count);
     }
-    return std::vector<std::uint8_t>(data, data + count);
-}
 
-std::uint32_t readCrcValue(const std::uint8_t* frameBytes,
-                           std::size_t frameLength,
-                           std::size_t crcWidth,
-                           StreamCrcOrder order) {
-    const auto start = frameLength - crcWidth;
-    std::uint32_t value = 0;
-    if (order == StreamCrcOrder::LoHi) {
+    std::uint32_t readCrcValue(const std::uint8_t* frameBytes,
+                               std::size_t frameLength,
+                               std::size_t crcWidth,
+                               StreamCrcOrder order)
+    {
+        const auto start = frameLength - crcWidth;
+        std::uint32_t value = 0;
+        if (order == StreamCrcOrder::LoHi) {
+            for (std::size_t index = 0; index < crcWidth; ++index) {
+                value |= static_cast<std::uint32_t>(frameBytes[start + index]) << (index * 8U);
+            }
+            return value;
+        }
+
         for (std::size_t index = 0; index < crcWidth; ++index) {
-            value |= static_cast<std::uint32_t>(frameBytes[start + index]) << (index * 8U);
+            value = (value << 8U) | frameBytes[start + index];
         }
         return value;
     }
 
-    for (std::size_t index = 0; index < crcWidth; ++index) {
-        value = (value << 8U) | frameBytes[start + index];
-    }
-    return value;
-}
-
-bool checkedAddSize(std::size_t left, std::size_t right, std::size_t& out) {
-    if (left > (std::numeric_limits<std::size_t>::max)() - right) {
-        return false;
-    }
-    out = left + right;
-    return true;
-}
-
-bool checkedMultiplySize(std::size_t left, std::size_t right, std::size_t& out) {
-    if (left != 0 && right > (std::numeric_limits<std::size_t>::max)() / left) {
-        return false;
-    }
-    out = left * right;
-    return true;
-}
-
-bool checkedSubtractInt64(std::int64_t left, std::int64_t right, std::int64_t& out) {
-    const auto minValue = (std::numeric_limits<std::int64_t>::min)();
-    const auto maxValue = (std::numeric_limits<std::int64_t>::max)();
-    if ((right > 0 && left < minValue + right) || (right < 0 && left > maxValue + right)) {
-        return false;
-    }
-    out = left - right;
-    return true;
-}
-
-bool checkedMultiplyInt64(std::int64_t left, std::int64_t right, std::int64_t& out) {
-    const auto minValue = (std::numeric_limits<std::int64_t>::min)();
-    const auto maxValue = (std::numeric_limits<std::int64_t>::max)();
-    if (left > 0) {
-        if ((right > 0 && left > maxValue / right) || (right < 0 && right < minValue / left)) {
+    bool checkedAddSize(std::size_t left, std::size_t right, std::size_t& out)
+    {
+        if (left > (std::numeric_limits<std::size_t>::max)() - right) {
             return false;
         }
-    } else if (left < 0) {
-        if ((right > 0 && left < minValue / right) || (right < 0 && left < maxValue / right)) {
+        out = left + right;
+        return true;
+    }
+
+    bool checkedMultiplySize(std::size_t left, std::size_t right, std::size_t& out)
+    {
+        if (left != 0 && right > (std::numeric_limits<std::size_t>::max)() / left) {
             return false;
         }
+        out = left * right;
+        return true;
     }
-    out = left * right;
-    return true;
-}
 
-std::optional<std::int64_t> streamCountFieldValue(const StreamFieldMap& parsed,
-                                                  const std::string& fieldName,
-                                                  std::string& error) {
-    const auto iter = parsed.find(fieldName);
-    if (iter == parsed.end()) {
-        error = "引用字段不存在: " + fieldName;
-        return std::nullopt;
+    bool checkedSubtractInt64(std::int64_t left, std::int64_t right, std::int64_t& out)
+    {
+        const auto minValue = (std::numeric_limits<std::int64_t>::min)();
+        const auto maxValue = (std::numeric_limits<std::int64_t>::max)();
+        if ((right > 0 && left < minValue + right) || (right < 0 && left > maxValue + right)) {
+            return false;
+        }
+        out = left - right;
+        return true;
     }
-    const auto value = iter->second.integerScalar();
-    if (!value.has_value()) {
-        error = "引用字段不是整数: " + fieldName;
-        return std::nullopt;
-    }
-    return *value;
-}
 
-std::optional<std::int64_t> evaluateStreamCountExpression(const StreamCountExpression& expression,
-                                                          const StreamFieldMap& parsed,
-                                                          std::size_t frameLength,
-                                                          std::size_t readableLimit,
-                                                          std::size_t fieldStart,
-                                                          std::size_t fieldWidth,
-                                                          std::string& error) {
-    switch (expression.op) {
-    case StreamCountExpressionOp::Constant:
-        return expression.value;
-    case StreamCountExpressionOp::Field:
-        return streamCountFieldValue(parsed, expression.fieldName, error);
-    case StreamCountExpressionOp::Div: {
-        if (!expression.operand) {
-            error = "div 缺少 operand";
+    bool checkedMultiplyInt64(std::int64_t left, std::int64_t right, std::int64_t& out)
+    {
+        const auto minValue = (std::numeric_limits<std::int64_t>::min)();
+        const auto maxValue = (std::numeric_limits<std::int64_t>::max)();
+        if (left > 0) {
+            if ((right > 0 && left > maxValue / right) || (right < 0 && right < minValue / left)) {
+                return false;
+            }
+        } else if (left < 0) {
+            if ((right > 0 && left < minValue / right) || (right < 0 && left < maxValue / right)) {
+                return false;
+            }
+        }
+        out = left * right;
+        return true;
+    }
+
+    std::optional<std::int64_t> streamCountFieldValue(const StreamFieldMap& parsed,
+                                                      const std::string& fieldName,
+                                                      std::string& error)
+    {
+        const auto iter = parsed.find(fieldName);
+        if (iter == parsed.end()) {
+            error = "引用字段不存在: " + fieldName;
             return std::nullopt;
         }
-        const auto value = evaluateStreamCountExpression(*expression.operand,
+        const auto value = iter->second.integerScalar();
+        if (!value.has_value()) {
+            error = "引用字段不是整数: " + fieldName;
+            return std::nullopt;
+        }
+        return *value;
+    }
+
+    std::optional<std::int64_t> evaluateStreamCountExpression(const StreamCountExpression& expression,
+                                                              const StreamFieldMap& parsed,
+                                                              std::size_t frameLength,
+                                                              std::size_t readableLimit,
+                                                              std::size_t fieldStart,
+                                                              std::size_t fieldWidth,
+                                                              std::string& error)
+    {
+        switch (expression.op) {
+            case StreamCountExpressionOp::Constant:
+                return expression.value;
+            case StreamCountExpressionOp::Field:
+                return streamCountFieldValue(parsed, expression.fieldName, error);
+            case StreamCountExpressionOp::Div: {
+                if (!expression.operand) {
+                    error = "div 缺少 operand";
+                    return std::nullopt;
+                }
+                const auto value = evaluateStreamCountExpression(
+                    *expression.operand, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                std::optional<std::int64_t> argument = expression.argument;
+                if (expression.argumentExpression) {
+                    argument = evaluateStreamCountExpression(*expression.argumentExpression,
+                                                             parsed,
+                                                             frameLength,
+                                                             readableLimit,
+                                                             fieldStart,
+                                                             fieldWidth,
+                                                             error);
+                    if (!argument.has_value()) {
+                        return std::nullopt;
+                    }
+                }
+                if (*argument == 0) {
+                    error = "div.by 不能为 0";
+                    return std::nullopt;
+                }
+                return *value / *argument;
+            }
+            case StreamCountExpressionOp::Sub: {
+                if (!expression.operand) {
+                    error = "sub 缺少 operand";
+                    return std::nullopt;
+                }
+                const auto value = evaluateStreamCountExpression(
+                    *expression.operand, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                std::int64_t result = 0;
+                if (!checkedSubtractInt64(*value, expression.argument, result)) {
+                    error = "sub count 表达式溢出";
+                    return std::nullopt;
+                }
+                return result;
+            }
+            case StreamCountExpressionOp::Mul: {
+                if (!expression.operand) {
+                    error = "mul 缺少 operand";
+                    return std::nullopt;
+                }
+                const auto value = evaluateStreamCountExpression(
+                    *expression.operand, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                if (expression.argumentExpression) {
+                    const auto argument = evaluateStreamCountExpression(*expression.argumentExpression,
+                                                                        parsed,
+                                                                        frameLength,
+                                                                        readableLimit,
+                                                                        fieldStart,
+                                                                        fieldWidth,
+                                                                        error);
+                    if (!argument.has_value()) {
+                        return std::nullopt;
+                    }
+                    std::int64_t result = 0;
+                    if (!checkedMultiplyInt64(*value, *argument, result)) {
+                        error = "mul count 表达式溢出";
+                        return std::nullopt;
+                    }
+                    return result;
+                }
+                std::int64_t result = 0;
+                if (!checkedMultiplyInt64(*value, expression.argument, result)) {
+                    error = "mul count 表达式溢出";
+                    return std::nullopt;
+                }
+                return result;
+            }
+            case StreamCountExpressionOp::Remaining: {
+                const auto limit = expression.excludeCrc ? readableLimit : frameLength;
+                const auto unit = expression.argument > 0 ? static_cast<std::size_t>(expression.argument) : fieldWidth;
+                if (unit == 0) {
+                    error = "remaining.unit 必须大于 0";
+                    return std::nullopt;
+                }
+                if (fieldStart > limit) {
+                    error = "remaining 起点超出帧边界";
+                    return std::nullopt;
+                }
+                return static_cast<std::int64_t>((limit - fieldStart) / unit);
+            }
+            case StreamCountExpressionOp::IfFlag: {
+                const auto value = streamCountFieldValue(parsed, expression.fieldName, error);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                const auto mask = static_cast<std::uint64_t>(expression.argument);
+                const auto selected = (static_cast<std::uint64_t>(*value) & mask) != 0U ? expression.thenExpression
+                                                                                        : expression.elseExpression;
+                if (!selected) {
+                    error = "if_flag 缺少 then/else 表达式";
+                    return std::nullopt;
+                }
+                return evaluateStreamCountExpression(
+                    *selected, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
+            }
+            case StreamCountExpressionOp::Case: {
+                const auto value = streamCountFieldValue(parsed, expression.fieldName, error);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                for (const auto& item : expression.cases) {
+                    if (item.value == *value && item.expression) {
+                        return evaluateStreamCountExpression(
+                            *item.expression, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
+                    }
+                }
+                if (expression.defaultExpression) {
+                    return evaluateStreamCountExpression(*expression.defaultExpression,
                                                          parsed,
                                                          frameLength,
                                                          readableLimit,
                                                          fieldStart,
                                                          fieldWidth,
                                                          error);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        std::optional<std::int64_t> argument = expression.argument;
-        if (expression.argumentExpression) {
-            argument = evaluateStreamCountExpression(*expression.argumentExpression,
-                                                     parsed,
-                                                     frameLength,
-                                                     readableLimit,
-                                                     fieldStart,
-                                                     fieldWidth,
-                                                     error);
-            if (!argument.has_value()) {
+                }
+                error = "case 未匹配且没有 default";
                 return std::nullopt;
             }
+            case StreamCountExpressionOp::BitCount: {
+                if (!expression.operand) {
+                    error = "bit_count 缺少 operand";
+                    return std::nullopt;
+                }
+                const auto value = evaluateStreamCountExpression(
+                    *expression.operand, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                return static_cast<std::int64_t>(std::popcount(static_cast<std::uint64_t>(*value)));
+            }
         }
-        if (*argument == 0) {
-            error = "div.by 不能为 0";
-            return std::nullopt;
-        }
-        return *value / *argument;
+        error = "未知 count 表达式";
+        return std::nullopt;
     }
-    case StreamCountExpressionOp::Sub: {
-        if (!expression.operand) {
-            error = "sub 缺少 operand";
-            return std::nullopt;
-        }
-        const auto value = evaluateStreamCountExpression(*expression.operand,
-                                                         parsed,
-                                                         frameLength,
-                                                         readableLimit,
-                                                         fieldStart,
-                                                         fieldWidth,
-                                                         error);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        std::int64_t result = 0;
-        if (!checkedSubtractInt64(*value, expression.argument, result)) {
-            error = "sub count 表达式溢出";
-            return std::nullopt;
-        }
-        return result;
-    }
-    case StreamCountExpressionOp::Mul: {
-        if (!expression.operand) {
-            error = "mul 缺少 operand";
-            return std::nullopt;
-        }
-        const auto value = evaluateStreamCountExpression(*expression.operand,
-                                                         parsed,
-                                                         frameLength,
-                                                         readableLimit,
-                                                         fieldStart,
-                                                         fieldWidth,
-                                                         error);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        if (expression.argumentExpression) {
-            const auto argument = evaluateStreamCountExpression(*expression.argumentExpression,
-                                                                parsed,
-                                                                frameLength,
-                                                                readableLimit,
-                                                                fieldStart,
-                                                                fieldWidth,
-                                                                error);
-            if (!argument.has_value()) {
+
+    std::optional<std::int64_t> decodeInteger(const std::uint8_t* raw,
+                                              std::size_t size,
+                                              std::size_t offset,
+                                              StreamValueType type)
+    {
+        const auto require = [size, offset](std::size_t width) -> bool { return offset + width <= size; };
+
+        switch (type) {
+            case StreamValueType::U8:
+                return require(1) ? std::optional<std::int64_t>(raw[offset]) : std::nullopt;
+            case StreamValueType::I8:
+                return require(1) ? std::optional<std::int64_t>(static_cast<std::int8_t>(raw[offset])) : std::nullopt;
+            case StreamValueType::U16Be:
+                if (!require(2)) {
+                    return std::nullopt;
+                }
+                return static_cast<std::int64_t>((static_cast<std::uint16_t>(raw[offset]) << 8U) |
+                                                 static_cast<std::uint16_t>(raw[offset + 1]));
+            case StreamValueType::U16Le:
+                if (!require(2)) {
+                    return std::nullopt;
+                }
+                return static_cast<std::int64_t>(static_cast<std::uint16_t>(raw[offset]) |
+                                                 (static_cast<std::uint16_t>(raw[offset + 1]) << 8U));
+            case StreamValueType::I16Be:
+                if (!require(2)) {
+                    return std::nullopt;
+                }
+                return static_cast<std::int16_t>((static_cast<std::uint16_t>(raw[offset]) << 8U) |
+                                                 static_cast<std::uint16_t>(raw[offset + 1]));
+            case StreamValueType::I16Le:
+                if (!require(2)) {
+                    return std::nullopt;
+                }
+                return static_cast<std::int16_t>(static_cast<std::uint16_t>(raw[offset]) |
+                                                 (static_cast<std::uint16_t>(raw[offset + 1]) << 8U));
+            case StreamValueType::U32Be:
+                if (!require(4)) {
+                    return std::nullopt;
+                }
+                return static_cast<std::int64_t>((static_cast<std::uint32_t>(raw[offset]) << 24U) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 1]) << 16U) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 2]) << 8U) |
+                                                 static_cast<std::uint32_t>(raw[offset + 3]));
+            case StreamValueType::U32Le:
+                if (!require(4)) {
+                    return std::nullopt;
+                }
+                return static_cast<std::int64_t>(static_cast<std::uint32_t>(raw[offset]) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 1]) << 8U) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 2]) << 16U) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 3]) << 24U));
+            case StreamValueType::I32Be:
+                if (!require(4)) {
+                    return std::nullopt;
+                }
+                return static_cast<std::int32_t>((static_cast<std::uint32_t>(raw[offset]) << 24U) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 1]) << 16U) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 2]) << 8U) |
+                                                 static_cast<std::uint32_t>(raw[offset + 3]));
+            case StreamValueType::I32Le:
+                if (!require(4)) {
+                    return std::nullopt;
+                }
+                return static_cast<std::int32_t>(static_cast<std::uint32_t>(raw[offset]) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 1]) << 8U) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 2]) << 16U) |
+                                                 (static_cast<std::uint32_t>(raw[offset + 3]) << 24U));
+            case StreamValueType::F32Be:
+            case StreamValueType::F32Le:
+            case StreamValueType::Bytes:
                 return std::nullopt;
-            }
-            std::int64_t result = 0;
-            if (!checkedMultiplyInt64(*value, *argument, result)) {
-                error = "mul count 表达式溢出";
+        }
+        return std::nullopt;
+    }
+
+    std::optional<double> decodeFloat(const std::uint8_t* rawBytes,
+                                      std::size_t size,
+                                      std::size_t offset,
+                                      StreamValueType type)
+    {
+        if (offset + 4 > size) {
+            return std::nullopt;
+        }
+        std::uint32_t raw = 0;
+        switch (type) {
+            case StreamValueType::F32Be:
+                raw = (static_cast<std::uint32_t>(rawBytes[offset]) << 24U) |
+                      (static_cast<std::uint32_t>(rawBytes[offset + 1]) << 16U) |
+                      (static_cast<std::uint32_t>(rawBytes[offset + 2]) << 8U) |
+                      static_cast<std::uint32_t>(rawBytes[offset + 3]);
+                return static_cast<double>(std::bit_cast<float>(raw));
+            case StreamValueType::F32Le:
+                raw = static_cast<std::uint32_t>(rawBytes[offset]) |
+                      (static_cast<std::uint32_t>(rawBytes[offset + 1]) << 8U) |
+                      (static_cast<std::uint32_t>(rawBytes[offset + 2]) << 16U) |
+                      (static_cast<std::uint32_t>(rawBytes[offset + 3]) << 24U);
+                return static_cast<double>(std::bit_cast<float>(raw));
+            default:
                 return std::nullopt;
-            }
-            return result;
         }
-        std::int64_t result = 0;
-        if (!checkedMultiplyInt64(*value, expression.argument, result)) {
-            error = "mul count 表达式溢出";
-            return std::nullopt;
-        }
-        return result;
     }
-    case StreamCountExpressionOp::Remaining: {
-        const auto limit = expression.excludeCrc ? readableLimit : frameLength;
-        const auto unit = expression.argument > 0 ? static_cast<std::size_t>(expression.argument) : fieldWidth;
-        if (unit == 0) {
-            error = "remaining.unit 必须大于 0";
-            return std::nullopt;
-        }
-        if (fieldStart > limit) {
-            error = "remaining 起点超出帧边界";
-            return std::nullopt;
-        }
-        return static_cast<std::int64_t>((limit - fieldStart) / unit);
-    }
-    case StreamCountExpressionOp::IfFlag: {
-        const auto value = streamCountFieldValue(parsed, expression.fieldName, error);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        const auto mask = static_cast<std::uint64_t>(expression.argument);
-        const auto selected = (static_cast<std::uint64_t>(*value) & mask) != 0U
-            ? expression.thenExpression
-            : expression.elseExpression;
-        if (!selected) {
-            error = "if_flag 缺少 then/else 表达式";
-            return std::nullopt;
-        }
-        return evaluateStreamCountExpression(*selected,
-                                             parsed,
-                                             frameLength,
-                                             readableLimit,
-                                             fieldStart,
-                                             fieldWidth,
-                                             error);
-    }
-    case StreamCountExpressionOp::Case: {
-        const auto value = streamCountFieldValue(parsed, expression.fieldName, error);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        for (const auto& item : expression.cases) {
-            if (item.value == *value && item.expression) {
-                return evaluateStreamCountExpression(*item.expression,
-                                                     parsed,
-                                                     frameLength,
-                                                     readableLimit,
-                                                     fieldStart,
-                                                     fieldWidth,
-                                                     error);
-            }
-        }
-        if (expression.defaultExpression) {
-            return evaluateStreamCountExpression(*expression.defaultExpression,
-                                                 parsed,
-                                                 frameLength,
-                                                 readableLimit,
-                                                 fieldStart,
-                                                 fieldWidth,
-                                                 error);
-        }
-        error = "case 未匹配且没有 default";
-        return std::nullopt;
-    }
-    case StreamCountExpressionOp::BitCount: {
-        if (!expression.operand) {
-            error = "bit_count 缺少 operand";
-            return std::nullopt;
-        }
-        const auto value = evaluateStreamCountExpression(*expression.operand,
-                                                         parsed,
-                                                         frameLength,
-                                                         readableLimit,
-                                                         fieldStart,
-                                                         fieldWidth,
-                                                         error);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        return static_cast<std::int64_t>(std::popcount(static_cast<std::uint64_t>(*value)));
-    }
-    }
-    error = "未知 count 表达式";
-    return std::nullopt;
-}
-
-std::optional<std::int64_t> decodeInteger(const std::uint8_t* raw,
-                                          std::size_t size,
-                                          std::size_t offset,
-                                          StreamValueType type) {
-    const auto require = [size, offset](std::size_t width) -> bool {
-        return offset + width <= size;
-    };
-
-    switch (type) {
-    case StreamValueType::U8:
-        return require(1) ? std::optional<std::int64_t>(raw[offset]) : std::nullopt;
-    case StreamValueType::I8:
-        return require(1) ? std::optional<std::int64_t>(static_cast<std::int8_t>(raw[offset])) : std::nullopt;
-    case StreamValueType::U16Be:
-        if (!require(2)) {
-            return std::nullopt;
-        }
-        return static_cast<std::int64_t>(
-            (static_cast<std::uint16_t>(raw[offset]) << 8U)
-            | static_cast<std::uint16_t>(raw[offset + 1]));
-    case StreamValueType::U16Le:
-        if (!require(2)) {
-            return std::nullopt;
-        }
-        return static_cast<std::int64_t>(
-            static_cast<std::uint16_t>(raw[offset])
-            | (static_cast<std::uint16_t>(raw[offset + 1]) << 8U));
-    case StreamValueType::I16Be:
-        if (!require(2)) {
-            return std::nullopt;
-        }
-        return static_cast<std::int16_t>(
-            (static_cast<std::uint16_t>(raw[offset]) << 8U)
-            | static_cast<std::uint16_t>(raw[offset + 1]));
-    case StreamValueType::I16Le:
-        if (!require(2)) {
-            return std::nullopt;
-        }
-        return static_cast<std::int16_t>(
-            static_cast<std::uint16_t>(raw[offset])
-            | (static_cast<std::uint16_t>(raw[offset + 1]) << 8U));
-    case StreamValueType::U32Be:
-        if (!require(4)) {
-            return std::nullopt;
-        }
-        return static_cast<std::int64_t>(
-            (static_cast<std::uint32_t>(raw[offset]) << 24U)
-            | (static_cast<std::uint32_t>(raw[offset + 1]) << 16U)
-            | (static_cast<std::uint32_t>(raw[offset + 2]) << 8U)
-            | static_cast<std::uint32_t>(raw[offset + 3]));
-    case StreamValueType::U32Le:
-        if (!require(4)) {
-            return std::nullopt;
-        }
-        return static_cast<std::int64_t>(
-            static_cast<std::uint32_t>(raw[offset])
-            | (static_cast<std::uint32_t>(raw[offset + 1]) << 8U)
-            | (static_cast<std::uint32_t>(raw[offset + 2]) << 16U)
-            | (static_cast<std::uint32_t>(raw[offset + 3]) << 24U));
-    case StreamValueType::I32Be:
-        if (!require(4)) {
-            return std::nullopt;
-        }
-        return static_cast<std::int32_t>(
-            (static_cast<std::uint32_t>(raw[offset]) << 24U)
-            | (static_cast<std::uint32_t>(raw[offset + 1]) << 16U)
-            | (static_cast<std::uint32_t>(raw[offset + 2]) << 8U)
-            | static_cast<std::uint32_t>(raw[offset + 3]));
-    case StreamValueType::I32Le:
-        if (!require(4)) {
-            return std::nullopt;
-        }
-        return static_cast<std::int32_t>(
-            static_cast<std::uint32_t>(raw[offset])
-            | (static_cast<std::uint32_t>(raw[offset + 1]) << 8U)
-            | (static_cast<std::uint32_t>(raw[offset + 2]) << 16U)
-            | (static_cast<std::uint32_t>(raw[offset + 3]) << 24U));
-    case StreamValueType::F32Be:
-    case StreamValueType::F32Le:
-    case StreamValueType::Bytes:
-        return std::nullopt;
-    }
-    return std::nullopt;
-}
-
-std::optional<double> decodeFloat(const std::uint8_t* rawBytes,
-                                  std::size_t size,
-                                  std::size_t offset,
-                                  StreamValueType type) {
-    if (offset + 4 > size) {
-        return std::nullopt;
-    }
-    std::uint32_t raw = 0;
-    switch (type) {
-    case StreamValueType::F32Be:
-        raw = (static_cast<std::uint32_t>(rawBytes[offset]) << 24U)
-            | (static_cast<std::uint32_t>(rawBytes[offset + 1]) << 16U)
-            | (static_cast<std::uint32_t>(rawBytes[offset + 2]) << 8U)
-            | static_cast<std::uint32_t>(rawBytes[offset + 3]);
-        return static_cast<double>(std::bit_cast<float>(raw));
-    case StreamValueType::F32Le:
-        raw = static_cast<std::uint32_t>(rawBytes[offset])
-            | (static_cast<std::uint32_t>(rawBytes[offset + 1]) << 8U)
-            | (static_cast<std::uint32_t>(rawBytes[offset + 2]) << 16U)
-            | (static_cast<std::uint32_t>(rawBytes[offset + 3]) << 24U);
-        return static_cast<double>(std::bit_cast<float>(raw));
-    default:
-        return std::nullopt;
-    }
-}
 
 } // namespace
 
-ByteRingBuffer::ByteRingBuffer(std::size_t capacity)
-    : storage_(capacity, 0) {}
+ByteRingBuffer::ByteRingBuffer(std::size_t capacity) : storage_(capacity, 0) {}
 
-void ByteRingBuffer::reset() {
+void ByteRingBuffer::reset()
+{
     head_ = 0;
     size_ = 0;
 }
 
-void ByteRingBuffer::ensureCapacity(std::size_t capacity) {
+void ByteRingBuffer::ensureCapacity(std::size_t capacity)
+{
     if (capacity <= storage_.size()) {
         return;
     }
@@ -420,19 +390,23 @@ void ByteRingBuffer::ensureCapacity(std::size_t capacity) {
     head_ = 0;
 }
 
-std::size_t ByteRingBuffer::capacity() const {
+std::size_t ByteRingBuffer::capacity() const
+{
     return storage_.size();
 }
 
-std::size_t ByteRingBuffer::size() const {
+std::size_t ByteRingBuffer::size() const
+{
     return size_;
 }
 
-bool ByteRingBuffer::empty() const {
+bool ByteRingBuffer::empty() const
+{
     return size_ == 0;
 }
 
-std::size_t ByteRingBuffer::append(const std::vector<std::uint8_t>& bytes, bool dropOldest) {
+std::size_t ByteRingBuffer::append(const std::vector<std::uint8_t>& bytes, bool dropOldest)
+{
     const std::size_t bufferCapacity = storage_.size();
     if (bufferCapacity == 0) {
         return bytes.size();
@@ -467,8 +441,8 @@ std::size_t ByteRingBuffer::append(const std::vector<std::uint8_t>& bytes, bool 
     return dropped;
 }
 
-
-void ByteRingBuffer::appendContiguous(const std::uint8_t* bytes, std::size_t count) {
+void ByteRingBuffer::appendContiguous(const std::uint8_t* bytes, std::size_t count)
+{
     if (count == 0 || storage_.empty()) {
         return;
     }
@@ -477,14 +451,13 @@ void ByteRingBuffer::appendContiguous(const std::uint8_t* bytes, std::size_t cou
     const std::size_t firstCount = (std::min)(count, bufferCapacity - tail);
     std::copy_n(bytes, firstCount, storage_.begin() + static_cast<std::ptrdiff_t>(tail));
     if (firstCount < count) {
-        std::copy_n(bytes + firstCount,
-                    count - firstCount,
-                    storage_.begin());
+        std::copy_n(bytes + firstCount, count - firstCount, storage_.begin());
     }
     size_ = (std::min)(bufferCapacity, size_ + count);
 }
 
-void ByteRingBuffer::discardFront(std::size_t count) {
+void ByteRingBuffer::discardFront(std::size_t count)
+{
     const auto actual = std::min(count, size_);
     if (actual == 0 || storage_.empty()) {
         return;
@@ -493,14 +466,16 @@ void ByteRingBuffer::discardFront(std::size_t count) {
     size_ -= actual;
 }
 
-std::uint8_t ByteRingBuffer::at(std::size_t index) const {
+std::uint8_t ByteRingBuffer::at(std::size_t index) const
+{
     if (index >= size_ || storage_.empty()) {
         throw std::out_of_range("ByteRingBuffer::at 越界");
     }
     return storage_[(head_ + index) % storage_.size()];
 }
 
-std::vector<std::uint8_t> ByteRingBuffer::slice(std::size_t offset, std::size_t count) const {
+std::vector<std::uint8_t> ByteRingBuffer::slice(std::size_t offset, std::size_t count) const
+{
     if (offset >= size_ || count == 0) {
         return {};
     }
@@ -515,7 +490,8 @@ std::vector<std::uint8_t> ByteRingBuffer::slice(std::size_t offset, std::size_t 
 
 ByteRingBuffer::LinearReadView ByteRingBuffer::linearRead(std::size_t offset,
                                                           std::size_t count,
-                                                          std::vector<std::uint8_t>& scratch) const {
+                                                          std::vector<std::uint8_t>& scratch) const
+{
     if (offset >= size_ || count == 0 || storage_.empty()) {
         return {};
     }
@@ -532,11 +508,13 @@ ByteRingBuffer::LinearReadView ByteRingBuffer::linearRead(std::size_t offset,
     return LinearReadView{.data = scratch.data(), .size = actual, .copied = true};
 }
 
-bool StreamFieldValue::isIntegerScalar() const {
+bool StreamFieldValue::isIntegerScalar() const
+{
     return std::holds_alternative<std::int64_t>(value);
 }
 
-std::optional<std::int64_t> StreamFieldValue::integerScalar() const {
+std::optional<std::int64_t> StreamFieldValue::integerScalar() const
+{
     if (!std::holds_alternative<std::int64_t>(value)) {
         return std::nullopt;
     }
@@ -544,34 +522,39 @@ std::optional<std::int64_t> StreamFieldValue::integerScalar() const {
 }
 
 FrameStreamParser::FrameStreamParser(StreamBufferDefinition buffer, std::vector<StreamFrameDefinition> frames)
-    : bufferDefinition_(std::move(buffer))
-    , frames_(std::move(frames))
-    , buffer_(bufferDefinition_.capacity) {
+    : bufferDefinition_(std::move(buffer)), frames_(std::move(frames)), buffer_(bufferDefinition_.capacity)
+{
     buildCompiledFrames();
 }
 
-void FrameStreamParser::reset() {
+void FrameStreamParser::reset()
+{
     buffer_.reset();
 }
 
-const StreamBufferDefinition& FrameStreamParser::bufferDefinition() const {
+const StreamBufferDefinition& FrameStreamParser::bufferDefinition() const
+{
     return bufferDefinition_;
 }
 
-const std::vector<StreamFrameDefinition>& FrameStreamParser::frameDefinitions() const {
+const std::vector<StreamFrameDefinition>& FrameStreamParser::frameDefinitions() const
+{
     return frames_;
 }
 
-void FrameStreamParser::clearRuntimeProfiles() {
+void FrameStreamParser::clearRuntimeProfiles()
+{
     runtimeProfiles_.clear();
 }
 
 bool FrameStreamParser::setRuntimeProfile(const std::string& frameName,
                                           StreamRuntimeProfile profile,
-                                          std::string& error) {
-    const auto frameIter = std::find_if(frames_.begin(), frames_.end(), [&frameName](const StreamFrameDefinition& frame) {
-        return frame.name == frameName;
-    });
+                                          std::string& error)
+{
+    const auto frameIter =
+        std::find_if(frames_.begin(), frames_.end(), [&frameName](const StreamFrameDefinition& frame) {
+            return frame.name == frameName;
+        });
     if (frameIter == frames_.end()) {
         error = "未找到 stream frame: " + frameName;
         return false;
@@ -605,7 +588,8 @@ bool FrameStreamParser::setRuntimeProfile(const std::string& frameName,
     return true;
 }
 
-bool FrameStreamParser::clearRuntimeProfile(const std::optional<std::string>& frameName, std::string& error) {
+bool FrameStreamParser::clearRuntimeProfile(const std::optional<std::string>& frameName, std::string& error)
+{
     if (!frameName.has_value()) {
         runtimeProfiles_.clear();
         return true;
@@ -618,7 +602,9 @@ bool FrameStreamParser::clearRuntimeProfile(const std::optional<std::string>& fr
     return true;
 }
 
-StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes) {
+StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes,
+                                              const StreamParseOptions& options)
+{
     StreamParseBatch batch;
     if (bytes.empty()) {
         batch.bufferSize = buffer_.size();
@@ -628,9 +614,8 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
 
     if (!bufferDefinition_.dropOldest) {
         const auto availableCapacity = (std::numeric_limits<std::size_t>::max)() - buffer_.size();
-        const auto requiredCapacity = bytes.size() > availableCapacity
-            ? (std::numeric_limits<std::size_t>::max)()
-            : buffer_.size() + bytes.size();
+        const auto requiredCapacity = bytes.size() > availableCapacity ? (std::numeric_limits<std::size_t>::max)()
+                                                                       : buffer_.size() + bytes.size();
         if (requiredCapacity > buffer_.capacity() && bufferDefinition_.maxCapacity > buffer_.capacity()) {
             // 核心流程：默认无损模式下先按宿主预算扩容，避免小 Lua schema 容量直接触发丢帧。
             buffer_.ensureCapacity((std::min)(requiredCapacity, bufferDefinition_.maxCapacity));
@@ -697,7 +682,7 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
         const auto window = ensureLinearWindow(buffer_.size());
 
         for (const auto index : *candidate->indexes) {
-            const auto result = analyzeFrame(compiledFrames_[index], window);
+            const auto result = analyzeFrame(compiledFrames_[index], window, options);
             if (result.action == AnalyzeResult::Action::Parsed && result.frame.has_value()) {
                 buffer_.discardFront(result.frameLength);
                 batch.frames.push_back(*result.frame);
@@ -733,11 +718,13 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
     return batch;
 }
 
-std::size_t FrameStreamParser::maxHeaderLength() const {
+std::size_t FrameStreamParser::maxHeaderLength() const
+{
     return maxHeaderLength_;
 }
 
-std::optional<FrameStreamParser::CandidateMatch> FrameStreamParser::findCandidate() const {
+std::optional<FrameStreamParser::CandidateMatch> FrameStreamParser::findCandidate() const
+{
     const auto window = ensureLinearWindow(buffer_.size());
     for (std::size_t start = 0; start < window.size; ++start) {
         const auto first = window.data[start];
@@ -773,7 +760,9 @@ std::optional<FrameStreamParser::CandidateMatch> FrameStreamParser::findCandidat
 }
 
 FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledFrame& compiled,
-                                                                 const ByteRingBuffer::LinearReadView& window) const {
+                                                                 const ByteRingBuffer::LinearReadView& window,
+                                                                 const StreamParseOptions& options) const
+{
     AnalyzeResult result;
     const auto& frame = frames_[compiled.index];
     const auto* frameBytes = window.data;
@@ -895,17 +884,17 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
     if (crcWidth > 0) {
         std::uint32_t expected = 0;
         switch (frame.crc.type) {
-        case StreamCrcType::Crc16Modbus:
-            expected = protocol_utils::crc16Modbus(frameBytes, frameLength - crcWidth);
-            break;
-        case StreamCrcType::Crc16CcittFalse:
-            expected = protocol_utils::crc16CcittFalse(frameBytes, frameLength - crcWidth);
-            break;
-        case StreamCrcType::Crc32Ieee:
-            expected = protocol_utils::crc32Ieee(frameBytes, frameLength - crcWidth);
-            break;
-        case StreamCrcType::None:
-            break;
+            case StreamCrcType::Crc16Modbus:
+                expected = protocol_utils::crc16Modbus(frameBytes, frameLength - crcWidth);
+                break;
+            case StreamCrcType::Crc16CcittFalse:
+                expected = protocol_utils::crc16CcittFalse(frameBytes, frameLength - crcWidth);
+                break;
+            case StreamCrcType::Crc32Ieee:
+                expected = protocol_utils::crc32Ieee(frameBytes, frameLength - crcWidth);
+                break;
+            case StreamCrcType::None:
+                break;
         }
 
         const auto actual = readCrcValue(frameBytes, frameLength, crcWidth, frame.crc.order);
@@ -945,8 +934,8 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
 
         std::size_t fieldBytes = 0;
         std::size_t fieldEnd = start;
-        const bool fieldSizeOk = checkedMultiplySize(*count, width, fieldBytes)
-            && checkedAddSize(start, fieldBytes, fieldEnd);
+        const bool fieldSizeOk =
+            checkedMultiplySize(*count, width, fieldBytes) && checkedAddSize(start, fieldBytes, fieldEnd);
         if (!fieldSizeOk) {
             result.action = AnalyzeResult::Action::RecoverableError;
             result.error = StreamParseError{
@@ -980,23 +969,27 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
             parsedFields[field.name] = StreamFieldValue{copyBytes(frameBytes + start, *count)};
         } else if (streamValueTypeIsFloat(field.type)) {
             if (*count == 1) {
-                parsedFields[field.name] = StreamFieldValue{decodeFloat(frameBytes, frameLength, start, field.type).value_or(0.0)};
+                parsedFields[field.name] =
+                    StreamFieldValue{decodeFloat(frameBytes, frameLength, start, field.type).value_or(0.0)};
             } else {
                 std::vector<double> values;
                 values.reserve(*count);
                 for (std::size_t index = 0; index < *count; ++index) {
-                    values.push_back(decodeFloat(frameBytes, frameLength, start + index * width, field.type).value_or(0.0));
+                    values.push_back(
+                        decodeFloat(frameBytes, frameLength, start + index * width, field.type).value_or(0.0));
                 }
                 parsedFields[field.name] = StreamFieldValue{std::move(values)};
             }
         } else {
             if (*count == 1) {
-                parsedFields[field.name] = StreamFieldValue{decodeInteger(frameBytes, frameLength, start, field.type).value_or(0)};
+                parsedFields[field.name] =
+                    StreamFieldValue{decodeInteger(frameBytes, frameLength, start, field.type).value_or(0)};
             } else {
                 std::vector<std::int64_t> values;
                 values.reserve(*count);
                 for (std::size_t index = 0; index < *count; ++index) {
-                    values.push_back(decodeInteger(frameBytes, frameLength, start + index * width, field.type).value_or(0));
+                    values.push_back(
+                        decodeInteger(frameBytes, frameLength, start + index * width, field.type).value_or(0));
                 }
                 parsedFields[field.name] = StreamFieldValue{std::move(values)};
             }
@@ -1009,7 +1002,7 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
     result.frameLength = frameLength;
     result.frame = StreamParsedFrame{
         .name = frame.name,
-        .raw = copyBytes(frameBytes, frameLength),
+        .raw = options.includeFrameRaw ? copyBytes(frameBytes, frameLength) : std::vector<std::uint8_t>{},
         .fields = std::move(parsedFields),
         .crcOk = true,
         .channelMap = {},
@@ -1032,7 +1025,8 @@ FrameStreamParser::AnalyzeResult FrameStreamParser::analyzeFrame(const CompiledF
 
 bool FrameStreamParser::applyRuntimeChannelMap(const StreamFrameDefinition& definition,
                                                StreamParsedFrame& frame,
-                                               std::string& error) const {
+                                               std::string& error) const
+{
     if (!definition.runtimeProfile) {
         return true;
     }
@@ -1042,26 +1036,17 @@ bool FrameStreamParser::applyRuntimeChannelMap(const StreamFrameDefinition& defi
         return false;
     }
     frame.channelMap = profileIter->second.channelMap;
-    if (frame.channelMap.empty()) {
-        return true;
-    }
-    const auto maxTarget = *std::max_element(frame.channelMap.begin(), frame.channelMap.end());
-    std::vector<bool> used(maxTarget + 1, false);
-    for (const auto target : frame.channelMap) {
-        if (used[target]) {
-            error = "runtime profile channel_map 存在重复目标";
-            return false;
-        }
-        used[target] = true;
-    }
+    (void)error;
     return true;
 }
 
-ByteRingBuffer::LinearReadView FrameStreamParser::ensureLinearWindow(std::size_t count) const {
+ByteRingBuffer::LinearReadView FrameStreamParser::ensureLinearWindow(std::size_t count) const
+{
     return buffer_.linearRead(0, count, linearScratch_);
 }
 
-void FrameStreamParser::buildCompiledFrames() {
+void FrameStreamParser::buildCompiledFrames()
+{
     compiledFrames_.clear();
     compiledFrames_.reserve(frames_.size());
     maxHeaderLength_ = 0;
@@ -1093,8 +1078,8 @@ void FrameStreamParser::buildCompiledFrames() {
         for (const auto& field : frame.fields) {
             if (field.count.fixed.has_value()) {
                 std::size_t fieldBytes = 0;
-                if (!checkedMultiplySize(*field.count.fixed, streamValueWidth(field.type), fieldBytes)
-                    || !checkedAddSize(compiled.fixedFieldBytes, fieldBytes, compiled.fixedFieldBytes)) {
+                if (!checkedMultiplySize(*field.count.fixed, streamValueWidth(field.type), fieldBytes) ||
+                    !checkedAddSize(compiled.fixedFieldBytes, fieldBytes, compiled.fixedFieldBytes)) {
                     compiled.fixedFieldBytes = (std::numeric_limits<std::size_t>::max)();
                     break;
                 }
@@ -1127,7 +1112,8 @@ std::optional<std::size_t> FrameStreamParser::resolveFieldCount(const StreamFiel
                                                                 std::size_t frameLength,
                                                                 std::size_t readableLimit,
                                                                 std::size_t fieldStart,
-                                                                std::string& error) const {
+                                                                std::string& error) const
+{
     if (field.count.fixed.has_value()) {
         return field.count.fixed;
     }
@@ -1159,7 +1145,8 @@ std::optional<std::size_t> FrameStreamParser::resolveFieldCount(const StreamFiel
             error = "count 表达式结果不能为负数";
             return std::nullopt;
         }
-        if (static_cast<std::uint64_t>(*value) > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
+        if (static_cast<std::uint64_t>(*value) >
+            static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
             error = "count 表达式结果过大";
             return std::nullopt;
         }
@@ -1168,56 +1155,57 @@ std::optional<std::size_t> FrameStreamParser::resolveFieldCount(const StreamFiel
     return 1U;
 }
 
-std::string_view streamParseErrorCodeName(StreamParseErrorCode code) {
+std::string_view streamParseErrorCodeName(StreamParseErrorCode code)
+{
     switch (code) {
-    case StreamParseErrorCode::Overflow:
-        return "overflow";
-    case StreamParseErrorCode::NoiseDiscarded:
-        return "noise_discarded";
-    case StreamParseErrorCode::InvalidLength:
-        return "invalid_length";
-    case StreamParseErrorCode::CrcMismatch:
-        return "crc_mismatch";
-    case StreamParseErrorCode::FieldDecodeFailed:
-        return "field_decode_failed";
-    case StreamParseErrorCode::CountResolveFailed:
-        return "count_resolve_failed";
+        case StreamParseErrorCode::Overflow:
+            return "overflow";
+        case StreamParseErrorCode::NoiseDiscarded:
+            return "noise_discarded";
+        case StreamParseErrorCode::InvalidLength:
+            return "invalid_length";
+        case StreamParseErrorCode::CrcMismatch:
+            return "crc_mismatch";
+        case StreamParseErrorCode::FieldDecodeFailed:
+            return "field_decode_failed";
+        case StreamParseErrorCode::CountResolveFailed:
+            return "count_resolve_failed";
     }
     return "unknown";
 }
 
-std::size_t streamValueWidth(StreamValueType type) {
+std::size_t streamValueWidth(StreamValueType type)
+{
     switch (type) {
-    case StreamValueType::U8:
-    case StreamValueType::I8:
-    case StreamValueType::Bytes:
-        return 1;
-    case StreamValueType::U16Be:
-    case StreamValueType::U16Le:
-    case StreamValueType::I16Be:
-    case StreamValueType::I16Le:
-        return 2;
-    case StreamValueType::U32Be:
-    case StreamValueType::U32Le:
-    case StreamValueType::I32Be:
-    case StreamValueType::I32Le:
-    case StreamValueType::F32Be:
-    case StreamValueType::F32Le:
-        return 4;
+        case StreamValueType::U8:
+        case StreamValueType::I8:
+        case StreamValueType::Bytes:
+            return 1;
+        case StreamValueType::U16Be:
+        case StreamValueType::U16Le:
+        case StreamValueType::I16Be:
+        case StreamValueType::I16Le:
+            return 2;
+        case StreamValueType::U32Be:
+        case StreamValueType::U32Le:
+        case StreamValueType::I32Be:
+        case StreamValueType::I32Le:
+        case StreamValueType::F32Be:
+        case StreamValueType::F32Le:
+            return 4;
     }
     return 1;
 }
 
-bool streamValueTypeIsFloat(StreamValueType type) {
+bool streamValueTypeIsFloat(StreamValueType type)
+{
     return type == StreamValueType::F32Be || type == StreamValueType::F32Le;
 }
 
-bool streamValueTypeIsSigned(StreamValueType type) {
-    return type == StreamValueType::I8
-        || type == StreamValueType::I16Be
-        || type == StreamValueType::I16Le
-        || type == StreamValueType::I32Be
-        || type == StreamValueType::I32Le;
+bool streamValueTypeIsSigned(StreamValueType type)
+{
+    return type == StreamValueType::I8 || type == StreamValueType::I16Be || type == StreamValueType::I16Le ||
+           type == StreamValueType::I32Be || type == StreamValueType::I32Le;
 }
 
 } // namespace protoscope::scripting

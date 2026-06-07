@@ -14,115 +14,138 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
-#include <sys/types.h>
 #include <unistd.h>
+
+#include <sys/types.h>
 #endif
 
 namespace protoscope::ui {
 namespace {
 
-std::uint64_t fnv1a64(std::string_view value) {
-    std::uint64_t hash = 14695981039346656037ull;
-    for (const unsigned char ch : value) {
-        hash ^= ch;
-        hash *= 1099511628211ull;
+    std::uint64_t fnv1a64(std::string_view value)
+    {
+        std::uint64_t hash = 14695981039346656037ull;
+        for (const unsigned char ch : value) {
+            hash ^= ch;
+            hash *= 1099511628211ull;
+        }
+        return hash;
     }
-    return hash;
-}
 
-std::string normalizedPathKey(const std::filesystem::path& path) {
-    std::error_code ec;
-    auto absolutePath = std::filesystem::absolute(path, ec);
-    if (ec) {
-        absolutePath = path;
+    std::string normalizedPathKey(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        auto absolutePath = std::filesystem::absolute(path, ec);
+        if (ec) {
+            absolutePath = path;
+        }
+        return absolutePath.lexically_normal().generic_string();
     }
-    return absolutePath.lexically_normal().generic_string();
-}
 
-std::uint32_t currentProcessId() {
+    std::uint32_t currentProcessId()
+    {
 #if defined(_WIN32)
-    return static_cast<std::uint32_t>(GetCurrentProcessId());
+        return static_cast<std::uint32_t>(GetCurrentProcessId());
 #else
-    return static_cast<std::uint32_t>(getpid());
+        return static_cast<std::uint32_t>(getpid());
 #endif
-}
+    }
 
-std::string timestampForFileName() {
-    const auto now = std::chrono::system_clock::now();
-    const auto timeValue = std::chrono::system_clock::to_time_t(now);
-    std::tm localTime{};
+    std::string timestampForFileName()
+    {
+        const auto now = std::chrono::system_clock::now();
+        const auto timeValue = std::chrono::system_clock::to_time_t(now);
+        std::tm localTime{};
 #if defined(_WIN32)
-    localtime_s(&localTime, &timeValue);
+        localtime_s(&localTime, &timeValue);
 #else
-    localtime_r(&timeValue, &localTime);
+        localtime_r(&timeValue, &localTime);
 #endif
-    std::ostringstream out;
-    out << std::put_time(&localTime, "%Y%m%d-%H%M%S");
-    return out.str();
-}
-
-std::filesystem::path corruptBackupPath(const std::filesystem::path& statePath) {
-    const auto parent = statePath.parent_path();
-    const auto baseName = statePath.filename().string() + ".corrupt-" + timestampForFileName() + "-" +
-                          std::to_string(currentProcessId()) + ".bak";
-    auto candidate = parent / baseName;
-    for (int index = 1; std::filesystem::exists(candidate); ++index) {
-        candidate = parent / (baseName + "." + std::to_string(index));
+        std::ostringstream out;
+        out << std::put_time(&localTime, "%Y%m%d-%H%M%S");
+        return out.str();
     }
-    return candidate;
-}
 
-YAML::Node emptyMapNode() {
-    return YAML::Node(YAML::NodeType::Map);
-}
-
-std::filesystem::path temporaryStatePath(const std::filesystem::path& statePath) {
-    static std::atomic_uint counter{0};
-    const auto suffix = ".tmp." + std::to_string(currentProcessId()) + "." + std::to_string(++counter);
-    return statePath.parent_path() / (statePath.filename().string() + suffix);
-}
-
-bool ensureParentDirectory(const std::filesystem::path& path, std::string& error) {
-    const auto parent = path.parent_path();
-    if (parent.empty()) {
-        return true;
+    std::filesystem::path corruptBackupPath(const std::filesystem::path& statePath)
+    {
+        const auto parent = statePath.parent_path();
+        const auto baseName = statePath.filename().string() + ".corrupt-" + timestampForFileName() + "-" +
+                              std::to_string(currentProcessId()) + ".bak";
+        auto candidate = parent / baseName;
+        for (int index = 1;; ++index) {
+            std::error_code existsError;
+            if (!std::filesystem::exists(candidate, existsError) || existsError) {
+                break;
+            }
+            candidate = parent / (baseName + "." + std::to_string(index));
+        }
+        return candidate;
     }
-    std::error_code ec;
-    std::filesystem::create_directories(parent, ec);
-    if (!ec) {
-        return true;
-    }
-    error = "无法创建目录: " + parent.generic_string() + " (" + ec.message() + ")";
-    return false;
-}
 
-bool replaceFile(const std::filesystem::path& from, const std::filesystem::path& to, std::string& error) {
+    YAML::Node emptyMapNode()
+    {
+        return YAML::Node(YAML::NodeType::Map);
+    }
+
+    std::string readFileText(const std::filesystem::path& path)
+    {
+        std::ifstream input(path, std::ios::binary);
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        return buffer.str();
+    }
+
+    std::filesystem::path temporaryStatePath(const std::filesystem::path& statePath)
+    {
+        static std::atomic_uint counter{0};
+        const auto suffix = ".tmp." + std::to_string(currentProcessId()) + "." + std::to_string(++counter);
+        return statePath.parent_path() / (statePath.filename().string() + suffix);
+    }
+
+    bool ensureParentDirectory(const std::filesystem::path& path, std::string& error)
+    {
+        const auto parent = path.parent_path();
+        if (parent.empty()) {
+            return true;
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+        if (!ec) {
+            return true;
+        }
+        error = "无法创建目录: " + parent.generic_string() + " (" + ec.message() + ")";
+        return false;
+    }
+
+    bool replaceFile(const std::filesystem::path& from, const std::filesystem::path& to, std::string& error)
+    {
 #if defined(_WIN32)
-    if (MoveFileExW(from.wstring().c_str(),
-                    to.wstring().c_str(),
-                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
-        return true;
-    }
-    error = "替换状态文件失败: Windows error " + std::to_string(GetLastError());
-    return false;
+        if (MoveFileExW(from.wstring().c_str(),
+                        to.wstring().c_str(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+            return true;
+        }
+        error = "替换状态文件失败: Windows error " + std::to_string(GetLastError());
+        return false;
 #else
-    std::error_code ec;
-    std::filesystem::rename(from, to, ec);
-    if (!ec) {
-        return true;
-    }
-    error = "替换状态文件失败: " + ec.message();
-    return false;
+        std::error_code ec;
+        std::filesystem::rename(from, to, ec);
+        if (!ec) {
+            return true;
+        }
+        error = "替换状态文件失败: " + ec.message();
+        return false;
 #endif
-}
+    }
 
 #if defined(_WIN32)
-std::wstring mutexNameForPath(const std::filesystem::path& statePath) {
-    const auto hash = fnv1a64(normalizedPathKey(statePath));
-    std::wostringstream out;
-    out << L"Local\\ProtoScope.ProtocolState." << std::hex << hash;
-    return out.str();
-}
+    std::wstring mutexNameForPath(const std::filesystem::path& statePath)
+    {
+        const auto hash = fnv1a64(normalizedPathKey(statePath));
+        std::wostringstream out;
+        out << L"Local\\ProtoScope.ProtocolState." << std::hex << hash;
+        return out.str();
+    }
 #endif
 
 } // namespace
@@ -138,10 +161,10 @@ struct ProtocolStateFileLock::Impl {
 
 ProtocolStateFileLock::ProtocolStateFileLock() = default;
 
-ProtocolStateFileLock::ProtocolStateFileLock(std::unique_ptr<Impl> impl)
-    : impl_(std::move(impl)) {}
+ProtocolStateFileLock::ProtocolStateFileLock(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
-ProtocolStateFileLock::~ProtocolStateFileLock() {
+ProtocolStateFileLock::~ProtocolStateFileLock()
+{
     if (!impl_) {
         return;
     }
@@ -157,7 +180,7 @@ ProtocolStateFileLock::~ProtocolStateFileLock() {
         flock lock{};
         lock.l_type = F_UNLCK;
         lock.l_whence = SEEK_SET;
-        (void)fcntl(impl_->fd, F_SETLK, &lock);
+        (void) fcntl(impl_->fd, F_SETLK, &lock);
         close(impl_->fd);
     }
 #endif
@@ -167,13 +190,15 @@ ProtocolStateFileLock::ProtocolStateFileLock(ProtocolStateFileLock&& other) noex
 
 ProtocolStateFileLock& ProtocolStateFileLock::operator=(ProtocolStateFileLock&& other) noexcept = default;
 
-ProtocolStateFileLock::operator bool() const noexcept {
+ProtocolStateFileLock::operator bool() const noexcept
+{
     return static_cast<bool>(impl_);
 }
 
 std::optional<ProtocolStateFileLock> ProtocolStateFileLock::acquire(const std::filesystem::path& statePath,
                                                                     std::chrono::milliseconds timeout,
-                                                                    std::string& error) {
+                                                                    std::string& error)
+{
     error.clear();
 #if defined(_WIN32)
     const auto name = mutexNameForPath(statePath);
@@ -191,8 +216,8 @@ std::optional<ProtocolStateFileLock> ProtocolStateFileLock::acquire(const std::f
         return ProtocolStateFileLock(std::move(impl));
     }
     CloseHandle(handle);
-    error = result == WAIT_TIMEOUT ? "等待状态文件互斥锁超时" :
-                                     "等待状态文件互斥锁失败: Windows error " + std::to_string(GetLastError());
+    error = result == WAIT_TIMEOUT ? "等待状态文件互斥锁超时"
+                                   : "等待状态文件互斥锁失败: Windows error " + std::to_string(GetLastError());
     return std::nullopt;
 #else
     std::string parentError;
@@ -226,15 +251,22 @@ std::optional<ProtocolStateFileLock> ProtocolStateFileLock::acquire(const std::f
 #endif
 }
 
-ProtocolStateLoadResult loadProtocolStateRootForUpdate(const std::filesystem::path& statePath) {
+ProtocolStateLoadResult loadProtocolStateRootForUpdate(const std::filesystem::path& statePath)
+{
     ProtocolStateLoadResult result;
     result.root = emptyMapNode();
-    if (!std::filesystem::exists(statePath)) {
+    std::error_code existsError;
+    if (!std::filesystem::exists(statePath, existsError)) {
+        if (existsError) {
+            result.ok = false;
+            result.error = "检查协议状态文件失败: " + existsError.message();
+        }
         return result;
     }
 
     try {
-        result.root = YAML::LoadFile(statePath.string());
+        // 核心流程：先把状态文件读入内存并关闭句柄，再解析 YAML；解析失败后才能在 Windows 上稳定移走坏文件。
+        result.root = YAML::Load(readFileText(statePath));
         if (!result.root || !result.root.IsMap()) {
             result.root = emptyMapNode();
         }
@@ -268,7 +300,8 @@ ProtocolStateLoadResult loadProtocolStateRootForUpdate(const std::filesystem::pa
 
 bool writeProtocolStateRootAtomically(const std::filesystem::path& statePath,
                                       const YAML::Node& root,
-                                      std::string& error) {
+                                      std::string& error)
+{
     error.clear();
     if (!ensureParentDirectory(statePath, error)) {
         return false;

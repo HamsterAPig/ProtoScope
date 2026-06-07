@@ -53,6 +53,19 @@ protocols/
 - `波形`：查看 Lua 推送的多通道波形、总览、游标测量和 FFT 频谱。
 - Lua 动态 Dock：由当前协议脚本的 `ui()` 返回值创建。
 
+### 快捷键
+
+常用快捷键会在顶部菜单和 `帮助 -> 快捷键说明` 中显示。全局快捷键只在普通浏览态生效，输入框、文件路径框和弹窗会优先获得键盘控制权。
+
+- `Ctrl+S`：保存配置。
+- `Ctrl+R`：重新加载配置。
+- `F5`：重新加载当前协议。
+- `Ctrl+O`：打开 ELF/ElfStaticView 数据文件。
+- `Ctrl+I` / `Ctrl+E`：导入 / 导出原始波形。
+- `Ctrl+Shift+R`：开始或停止完整原始数据录制。
+- `Ctrl+1` 到 `Ctrl+6`：切换通讯配置、协议脚本、收发数据、日志、脚本、波形 Dock。
+- 波形 Dock 聚焦时，`Space` 暂停或恢复自动跟随，`A` 适配可见波形，`Z` 切换框选放大，`F` 切换 FFT，`Ctrl+Shift+C` 清空波形历史。
+
 ## 启动程序
 
 如果已经拿到编译好的程序，直接运行 `ProtoScope` 可执行文件即可。
@@ -234,6 +247,8 @@ scripting:
 
 - `proto.send(payload, opts?)`：普通异步发送。
 - `proto.request(payload, opts?)`：半双工请求，由宿主管理排队、超时和串行发送。
+- `proto.request_guarded(payload, opts?)`：受保护半双工请求，`max_attempts` 只统计当前请求；最终失败后熔断后续 guarded 请求。
+- `proto.reset_request_guard()`：解除 guarded 熔断，新的 guarded 请求从 `attempt=1` 重新开始。
 - `proto.request_done(result?)`：脚本确认当前请求已经收到完整业务应答。
 - `proto.emit(name, payload)`：输出脚本事件。
 - `proto.set_timer(name, interval_ms)` / `proto.cancel_timer(name)`：管理定时器。

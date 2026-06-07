@@ -1,20 +1,22 @@
-#include "test_registry.hpp"
-
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 
-#include <cstdint>
+#include "test_registry.hpp"
+
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
 #include <yaml-cpp/yaml.h>
 
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const char* message)
+{
     if (!condition) {
         throw std::runtime_error(message);
     }
@@ -22,7 +24,8 @@ void require(bool condition, const char* message) {
 
 } // namespace
 
-void test_config_external_reload_state() {
+void test_config_external_reload_state()
+{
     protoscope::dock::DockStore store;
     auto& config = store.configState();
 
@@ -41,7 +44,8 @@ void test_config_external_reload_state() {
     require(config.externalReloadMessage.empty(), "清理后外部重载提示应清空");
 }
 
-void test_bounded_dock_history_limiter_trims_from_front() {
+void test_bounded_dock_history_limiter_trims_from_front()
+{
     protoscope::dock::BoundedDockHistoryLimiter concreteLimiter;
     protoscope::dock::IDockHistoryLimiter& limiter = concreteLimiter;
 
@@ -62,13 +66,15 @@ void test_bounded_dock_history_limiter_trims_from_front() {
     require(rows.empty(), "limit 为 0 时 limiter 应清空全部记录");
 }
 
-void test_dock_log_and_script_split() {
+void test_dock_log_and_script_split()
+{
     protoscope::dock::DockStore store;
 
     store.appendReceiveRow({.timestampMs = 1, .direction = "RX", .endpoint = "tcp", .bytes = {0x01}, .message = {}});
     store.appendLogRow({.timestampMs = 2, .direction = "INFO", .endpoint = "host", .bytes = {}, .message = "saved"});
     store.appendLuaEvent({.name = "frame", .payload = "{status=ok}", .timestampMs = 3});
-    store.appendScriptRow({.timestampMs = 4, .direction = "LOG", .endpoint = "script", .bytes = {}, .message = "[info] opened"});
+    store.appendScriptRow(
+        {.timestampMs = 4, .direction = "LOG", .endpoint = "script", .bytes = {}, .message = "[info] opened"});
 
     require(store.receiveState().rows.size() == 1, "接收区应只保留 TX/RX 原始数据");
     require(store.logState().rows.size() == 1, "日志区应独立记录宿主日志");
@@ -81,7 +87,8 @@ void test_dock_log_and_script_split() {
     require(store.scriptState().rows.empty(), "脚本区应可单独清空");
 }
 
-void test_dock_history_limits_trim_all_log_types() {
+void test_dock_history_limits_trim_all_log_types()
+{
     protoscope::dock::DockStore store;
     store.setHistoryLimits({
         .transferRawRows = 3,
@@ -147,7 +154,8 @@ void test_dock_history_limits_trim_all_log_types() {
     require(store.scriptState().rows.front().message == "script-4", "调低脚本日志上限应立即裁剪旧记录");
 }
 
-void test_dock_receive_row_single_line_hex_and_ascii() {
+void test_dock_receive_row_single_line_hex_and_ascii()
+{
     const protoscope::dock::ReceiveRow row{
         .timestampMs = 0,
         .direction = "RX",
@@ -163,7 +171,8 @@ void test_dock_receive_row_single_line_hex_and_ascii() {
     require(asciiLine == "RX tcp | A..", "ASCII 单行展示不符合预期");
 }
 
-void test_dock_receive_row_single_line_message_and_timestamp() {
+void test_dock_receive_row_single_line_message_and_timestamp()
+{
     const protoscope::dock::ReceiveRow row{
         .timestampMs = 0,
         .direction = "INFO",
@@ -188,7 +197,8 @@ void test_dock_receive_row_single_line_message_and_timestamp() {
     require(headerOnly == "WARN", "空内容行不应追加多余分隔符");
 }
 
-void test_dock_receive_rows_text_export_format() {
+void test_dock_receive_rows_text_export_format()
+{
     const std::vector<protoscope::dock::ReceiveRow> rows{
         protoscope::dock::ReceiveRow{
             .timestampMs = 0,
@@ -208,8 +218,7 @@ void test_dock_receive_rows_text_export_format() {
     };
 
     const auto hexText = protoscope::dock::formatReceiveRowsText(rows, false, true);
-    require(hexText == "RX tcp | 41 0A\nINFO host | line1 line2  \n\n",
-            "日志导出文本应保留行边界并压平消息换行");
+    require(hexText == "RX tcp | 41 0A\nINFO host | line1 line2  \n\n", "日志导出文本应保留行边界并压平消息换行");
 
     const auto asciiText = protoscope::dock::formatReceiveRowsText(rows, false, false);
     require(asciiText.find("RX tcp | A.") == 0, "ASCII 导出应复用当前 ASCII 视图格式");
@@ -221,15 +230,14 @@ void test_dock_receive_rows_text_export_format() {
     require(emptyText.empty(), "空日志导出文本应为空字符串");
 }
 
-void test_dock_receive_row_visual_kind_classification() {
+void test_dock_receive_row_visual_kind_classification()
+{
+    using protoscope::dock::classifyReceiveRow;
     using protoscope::dock::ReceiveRow;
     using protoscope::dock::ReceiveRowVisualKind;
-    using protoscope::dock::classifyReceiveRow;
 
-    require(classifyReceiveRow(ReceiveRow{.direction = "RX"}) == ReceiveRowVisualKind::Rx,
-            "RX 行应被分类为接收样式");
-    require(classifyReceiveRow(ReceiveRow{.direction = "TX"}) == ReceiveRowVisualKind::Tx,
-            "TX 行应被分类为发送样式");
+    require(classifyReceiveRow(ReceiveRow{.direction = "RX"}) == ReceiveRowVisualKind::Rx, "RX 行应被分类为接收样式");
+    require(classifyReceiveRow(ReceiveRow{.direction = "TX"}) == ReceiveRowVisualKind::Tx, "TX 行应被分类为发送样式");
     require(classifyReceiveRow(ReceiveRow{.direction = "WARN"}) == ReceiveRowVisualKind::Warn,
             "WARN 行应被分类为警告样式");
     require(classifyReceiveRow(ReceiveRow{.direction = "ERROR"}) == ReceiveRowVisualKind::Error,
@@ -242,7 +250,8 @@ void test_dock_receive_row_visual_kind_classification() {
             "未知方向应回退到通用样式");
 }
 
-void test_dock_send_history_deduplicates_and_trims() {
+void test_dock_send_history_deduplicates_and_trims()
+{
     protoscope::dock::SendDockState send;
 
     protoscope::dock::rememberSendHistory(send, "AA 01", 3);
@@ -260,7 +269,8 @@ void test_dock_send_history_deduplicates_and_trims() {
     require(send.history.empty(), "发送历史条数为 0 时应禁用并清空历史");
 }
 
-void test_log_filter_keeps_order_and_matches_status() {
+void test_log_filter_keeps_order_and_matches_status()
+{
     std::vector<protoscope::dock::ReceiveRow> rows{
         {.timestampMs = 1, .direction = "RX", .endpoint = "usb", .bytes = {}, .message = "rx first"},
         {.timestampMs = 2, .direction = "TX", .endpoint = "usb", .bytes = {}, .message = "tx second"},
@@ -270,8 +280,7 @@ void test_log_filter_keeps_order_and_matches_status() {
     protoscope::dock::LogFilterState filter{};
     const auto allRows = protoscope::dock::filteredLogRows(rows, filter, true);
     require(allRows.size() == 3, "All 过滤应保留全部收发记录");
-    require(allRows[0] == &rows[0] && allRows[1] == &rows[1] && allRows[2] == &rows[2],
-            "All 过滤应保持原始顺序");
+    require(allRows[0] == &rows[0] && allRows[1] == &rows[1] && allRows[2] == &rows[2], "All 过滤应保持原始顺序");
 
     filter.status = protoscope::dock::LogStatusFilter::Rx;
     const auto rxRows = protoscope::dock::filteredLogRows(rows, filter, true);
@@ -284,7 +293,8 @@ void test_log_filter_keeps_order_and_matches_status() {
     require(txRows[0] == &rows[1], "Tx 过滤应只返回 TX 记录");
 }
 
-void test_log_filter_keyword_matches_metadata_and_bytes() {
+void test_log_filter_keyword_matches_metadata_and_bytes()
+{
     std::vector<protoscope::dock::ReceiveRow> rows{
         {.timestampMs = 1, .direction = "INFO", .endpoint = "host", .bytes = {}, .message = "Lua runtime opened"},
         {.timestampMs = 2, .direction = "RX", .endpoint = "uart", .bytes = {0x41, 0x42}, .message = {}},
@@ -307,7 +317,8 @@ void test_log_filter_keyword_matches_metadata_and_bytes() {
     require(hostRows.empty(), "宿主/脚本日志筛选不应匹配字节预览");
 }
 
-void test_log_filter_combines_status_and_keyword() {
+void test_log_filter_combines_status_and_keyword()
+{
     std::vector<protoscope::dock::ReceiveRow> rows{
         {.timestampMs = 1, .direction = "WARN", .endpoint = "host", .bytes = {}, .message = "timeout on tcp"},
         {.timestampMs = 2, .direction = "ERROR", .endpoint = "host", .bytes = {}, .message = "timeout on lua"},
@@ -323,7 +334,8 @@ void test_log_filter_combines_status_and_keyword() {
     require(rowsAfterFilter[0] == &rows[0], "组合筛选应只保留同时匹配的 WARN timeout 日志");
 }
 
-void test_wave_protocol_state_isolated_by_protocol_key() {
+void test_wave_protocol_state_isolated_by_protocol_key()
+{
     YAML::Node root;
 
     protoscope::plot::WaveDockState waveA;
@@ -395,14 +407,19 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredA.view.fft.enabled, "proto_a 应恢复 FFT 开关");
     require(restoredA.view.fft.pointCount == protoscope::plot::WaveFftPointCount::N1024, "proto_a 应恢复 FFT 点数");
     require(restoredA.view.fft.window == protoscope::plot::WaveFftWindow::BlackmanHarris, "proto_a 应恢复 FFT 窗函数");
-    require(restoredA.view.fft.magnitudeMode == protoscope::plot::WaveFftMagnitudeMode::Decibel, "proto_a 应恢复 FFT 幅值模式");
-    require(restoredA.view.fft.fundamentalMode == protoscope::plot::WaveFftFundamentalMode::Manual, "proto_a 应恢复 FFT 基波模式");
+    require(restoredA.view.fft.magnitudeMode == protoscope::plot::WaveFftMagnitudeMode::Decibel,
+            "proto_a 应恢复 FFT 幅值模式");
+    require(restoredA.view.fft.fundamentalMode == protoscope::plot::WaveFftFundamentalMode::Manual,
+            "proto_a 应恢复 FFT 基波模式");
     require(restoredA.view.fft.manualFundamentalHz == 50.0, "proto_a 应恢复手动基波频率");
     require(!restoredA.view.showFftLegend, "proto_a 应恢复 FFT 图例显示状态");
     require(restoredA.view.fftSourceWindowValid, "proto_a 应恢复 FFT 输入窗口状态");
-    require(restoredA.view.fftSourceMinTime == 0.25 && restoredA.view.fftSourceMaxTime == 0.75, "proto_a 应恢复 FFT 输入窗口");
-    require(restoredA.view.fftFrequencyMin == 10.0 && restoredA.view.fftFrequencyMax == 500.0, "proto_a 应恢复 FFT 频率轴");
-    require(restoredA.view.fftMagnitudeMin == -80.0 && restoredA.view.fftMagnitudeMax == 5.0, "proto_a 应恢复 FFT 幅值轴");
+    require(restoredA.view.fftSourceMinTime == 0.25 && restoredA.view.fftSourceMaxTime == 0.75,
+            "proto_a 应恢复 FFT 输入窗口");
+    require(restoredA.view.fftFrequencyMin == 10.0 && restoredA.view.fftFrequencyMax == 500.0,
+            "proto_a 应恢复 FFT 频率轴");
+    require(restoredA.view.fftMagnitudeMin == -80.0 && restoredA.view.fftMagnitudeMax == 5.0,
+            "proto_a 应恢复 FFT 幅值轴");
     require(restoredA.view.fftPhaseMin == -120.0 && restoredA.view.fftPhaseMax == 120.0, "proto_a 应恢复 FFT 相位轴");
     require(restoredA.view.measurement.variance && restoredA.view.measurement.cv && !restoredA.view.measurement.stddev,
             "proto_a 应恢复测量项选择");
@@ -411,7 +428,8 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
             "proto_a 应恢复测量参考模式");
     require(restoredA.view.referenceChannelIndex == 2, "proto_a 应恢复参考通道");
     require(restoredA.view.manualReferenceValue == 1.25, "proto_a 应恢复手动标定值");
-    require(restoredA.fftChannelEnabled.size() == 1 && restoredA.fftChannelEnabled[0] == 1, "proto_a 应恢复 FFT 通道选择");
+    require(restoredA.fftChannelEnabled.size() == 1 && restoredA.fftChannelEnabled[0] == 1,
+            "proto_a 应恢复 FFT 通道选择");
     require(restoredA.hiddenChannelLabels.size() == 1 && restoredA.hiddenChannelLabels[0] == "CH1",
             "proto_a 应恢复自己的主图 Legend 隐藏通道");
     require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
@@ -431,10 +449,12 @@ void test_wave_protocol_state_isolated_by_protocol_key() {
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
     require(!restoredB.view.fft.enabled, "不同协议不应串用 proto_a FFT 开关");
-    require(restoredB.view.measurement.stddev && !restoredB.view.measurement.variance, "老状态或其他协议应保留默认测量项");
+    require(restoredB.view.measurement.stddev && !restoredB.view.measurement.variance,
+            "老状态或其他协议应保留默认测量项");
 }
 
-void test_wave_protocol_state_cursor_extreme_snap_policy() {
+void test_wave_protocol_state_cursor_extreme_snap_policy()
+{
     protoscope::plot::WaveDockState wave;
     wave.view.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
 
@@ -450,11 +470,13 @@ void test_wave_protocol_state_cursor_extreme_snap_policy() {
     const auto legacy = YAML::Load("cursor_snap_mode: smart\ncursor_snap_scope: all_channels\n");
     protoscope::plot::WaveDockState legacyRestored;
     protoscope::ui::decodeWaveProtocolState(legacy, legacyRestored);
-    require(legacyRestored.view.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform,
-            "缺失游标极值吸附策略时应使用 nearest_waveform 默认值");
+    require(
+        legacyRestored.view.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform,
+        "缺失游标极值吸附策略时应使用 nearest_waveform 默认值");
 }
 
-void test_dock_visibility_state_isolated_by_protocol_key() {
+void test_dock_visibility_state_isolated_by_protocol_key()
+{
     YAML::Node root;
 
     protoscope::ui::ProtocolDockVisibilityState protoA;
@@ -488,7 +510,8 @@ void test_dock_visibility_state_isolated_by_protocol_key() {
     require(restoredA.showWaveDock, "proto_a 应恢复自己的波形可见性");
     require(!restoredA.luaDockVisibility["LuaDock:proto_a:main"], "proto_a 应恢复 Lua Dock 关闭状态");
     require(restoredA.luaDockVisibility["LuaDock:proto_a:advanced"], "proto_a 应恢复 Lua Dock 打开状态");
-    require(!restoredA.luaDockVisibility.contains("LuaDock:proto_b:main"), "proto_a 不应串用 proto_b 的 Lua Dock 可见性");
+    require(!restoredA.luaDockVisibility.contains("LuaDock:proto_b:main"),
+            "proto_a 不应串用 proto_b 的 Lua Dock 可见性");
 
     protoscope::ui::ProtocolDockVisibilityState restoredB;
     protoscope::ui::restoreDockVisibilityState(root, "proto_b", restoredB);
@@ -499,10 +522,12 @@ void test_dock_visibility_state_isolated_by_protocol_key() {
     require(restoredB.showScriptDock, "proto_b 应恢复自己的脚本可见性");
     require(!restoredB.showWaveDock, "proto_b 应恢复自己的波形可见性");
     require(restoredB.luaDockVisibility["LuaDock:proto_b:main"], "proto_b 应恢复 Lua Dock 打开状态");
-    require(!restoredB.luaDockVisibility.contains("LuaDock:proto_a:main"), "proto_b 不应串用 proto_a 的 Lua Dock 可见性");
+    require(!restoredB.luaDockVisibility.contains("LuaDock:proto_a:main"),
+            "proto_b 不应串用 proto_a 的 Lua Dock 可见性");
 }
 
-void test_dock_visibility_state_decode_missing_fields_defaults() {
+void test_dock_visibility_state_decode_missing_fields_defaults()
+{
     protoscope::ui::ProtocolDockVisibilityState state;
     state.showCommDock = false;
     state.luaDockVisibility["LuaDock:before:stale"] = false;

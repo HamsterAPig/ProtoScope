@@ -1,4 +1,4 @@
-#include "protoscope/ui/gui_runtime.hpp"
+#include "gui_runtime_detail.hpp"
 
 #include "protoscope/build/version.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
@@ -6,32 +6,33 @@
 #include "protoscope/transport/transport.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/editable_combo.hpp"
+#include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/icons.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/render_frame_scheduler.hpp"
+#include "protoscope/ui/ui_component.hpp"
 #include "protoscope/ui/ui_theme.hpp"
 
-#include "protoscope/ui/ui_component.hpp"
 #include "workspace_controller.hpp"
-#include "gui_runtime_detail.hpp"
 
 #if defined(_WIN32)
-#include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <windows.h>
 #endif
 
 #include <imgui.h>
-#include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
-#include <imgui_impl_opengl3.h>
+#include <imgui_internal.h>
 #include <implot.h>
-#include <yaml-cpp/yaml.h>
+
 #include <cmrc/cmrc.hpp>
+#include <imgui_impl_opengl3.h>
+#include <yaml-cpp/yaml.h>
 
 #define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
 #include <GL/gl.h>
+#include <GLFW/glfw3.h>
 #if defined(_WIN32)
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
@@ -41,14 +42,14 @@ CMRC_DECLARE(ui_resources);
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cctype>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cwchar>
 #include <cstring>
 #include <ctime>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -56,40 +57,37 @@ CMRC_DECLARE(ui_resources);
 #include <system_error>
 #include <thread>
 #include <unordered_map>
+
 namespace protoscope::ui {
 
 namespace {
-constexpr float kAppHeaderHeight = 58.0F;
-constexpr float kStatusBarHeight = 44.0F;
+    constexpr float kAppHeaderHeight = 58.0F;
+    constexpr float kStatusBarHeight = 44.0F;
 } // namespace
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
-    : application_(application),
-      configStore_(configStore),
-      workspaceController_(std::make_unique<WorkspaceController>(*this)),
-      executableDir_(executableDirectory()),
-      waveDockRenderer_(application) {}
+    : application_(application), configStore_(configStore),
+      workspaceController_(std::make_unique<WorkspaceController>(*this)), executableDir_(executableDirectory()),
+      waveDockRenderer_(application)
+{
+}
 
-GuiRuntime::~GuiRuntime() {
+GuiRuntime::~GuiRuntime()
+{
     shutdown();
 }
 
-const GuiRuntime::FilteredLogRowsCache& GuiRuntime::filteredLogRowsCached(
-    FilteredLogRowsCache& cache,
-    const std::deque<dock::ReceiveRow>& rows,
-    std::uint64_t version,
-    const dock::LogFilterState& filter,
-    bool includeBytePreview) {
-    const bool sameSourceAndFilter =
-        cache.source == &rows &&
-        cache.filter.keyword == filter.keyword &&
-        cache.filter.status == filter.status &&
-        cache.includeBytePreview == includeBytePreview;
-    const bool appendOnly =
-        sameSourceAndFilter &&
-        cache.version != version &&
-        cache.rowCount <= rows.size() &&
-        (cache.rowCount == 0U || (!rows.empty() && cache.firstRow == &rows.front()));
+const GuiRuntime::FilteredLogRowsCache& GuiRuntime::filteredLogRowsCached(FilteredLogRowsCache& cache,
+                                                                          const std::deque<dock::ReceiveRow>& rows,
+                                                                          std::uint64_t version,
+                                                                          const dock::LogFilterState& filter,
+                                                                          bool includeBytePreview)
+{
+    const bool sameSourceAndFilter = cache.source == &rows && cache.filter.keyword == filter.keyword &&
+                                     cache.filter.status == filter.status &&
+                                     cache.includeBytePreview == includeBytePreview;
+    const bool appendOnly = sameSourceAndFilter && cache.version != version && cache.rowCount <= rows.size() &&
+                            (cache.rowCount == 0U || (!rows.empty() && cache.firstRow == &rows.front()));
 
     if (appendOnly) {
         // 核心流程：高速收包时日志只追加未裁剪，过滤缓存增量处理新行，避免每帧全量扫描历史。
@@ -121,15 +119,16 @@ const GuiRuntime::FilteredLogRowsCache& GuiRuntime::filteredLogRowsCached(
             if (row == nullptr) {
                 continue;
             }
-            endpointWidth = (std::max)(endpointWidth,
-                                       ImGui::CalcTextSize(row->endpoint.empty() ? "-" : row->endpoint.c_str()).x);
+            endpointWidth =
+                (std::max)(endpointWidth, ImGui::CalcTextSize(row->endpoint.empty() ? "-" : row->endpoint.c_str()).x);
         }
         cache.endpointWidth = (std::clamp)(endpointWidth, 86.0F, 220.0F);
     }
     return cache;
 }
 
-bool GuiRuntime::initialize() {
+bool GuiRuntime::initialize()
+{
     if (!initializeWindow()) {
         return false;
     }
@@ -147,7 +146,8 @@ bool GuiRuntime::initialize() {
     return true;
 }
 
-int GuiRuntime::run() {
+int GuiRuntime::run()
+{
     while (running_ && window_ && !glfwWindowShouldClose(window_)) {
         const auto frameStartMs = nowMs();
         glfwPollEvents();
@@ -191,7 +191,8 @@ int GuiRuntime::run() {
     return 0;
 }
 
-void GuiRuntime::shutdown() {
+void GuiRuntime::shutdown()
+{
     if (!window_) {
         return;
     }
@@ -203,7 +204,8 @@ void GuiRuntime::shutdown() {
     shutdownWindow();
 }
 
-bool GuiRuntime::initializeWindow() {
+bool GuiRuntime::initializeWindow()
+{
     if (!glfwInit()) {
         return false;
     }
@@ -236,7 +238,8 @@ bool GuiRuntime::initializeWindow() {
     return true;
 }
 
-bool GuiRuntime::initializeImGui() {
+bool GuiRuntime::initializeImGui()
+{
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     applyImGuiProfessionalDarkTheme();
@@ -254,7 +257,8 @@ bool GuiRuntime::initializeImGui() {
     return true;
 }
 
-bool GuiRuntime::initializePlotContext() {
+bool GuiRuntime::initializePlotContext()
+{
     ImPlot::CreateContext();
     applyImPlotProfessionalDarkTheme();
     auto& inputMap = ImPlot::GetInputMap();
@@ -264,27 +268,33 @@ bool GuiRuntime::initializePlotContext() {
     return true;
 }
 
-void GuiRuntime::shutdownImGui() {
+void GuiRuntime::shutdownImGui()
+{
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 }
 
-void GuiRuntime::shutdownPlotContext() {
+void GuiRuntime::shutdownPlotContext()
+{
     ImPlot::DestroyContext();
 }
 
-void GuiRuntime::shutdownWindow() {
+void GuiRuntime::shutdownWindow()
+{
     glfwDestroyWindow(window_);
     window_ = nullptr;
     glfwTerminate();
 }
 
-void GuiRuntime::ensureChineseFont() {
+void GuiRuntime::ensureChineseFont()
+{
     ImGuiIO& io = ImGui::GetIO();
     for (const auto& candidate : candidateChineseFonts()) {
-        if (std::filesystem::exists(candidate)) {
-            io.Fonts->AddFontFromFileTTF(candidate.string().c_str(), 18.0F, nullptr, io.Fonts->GetGlyphRangesChineseFull());
+        std::error_code fontPathError;
+        if (std::filesystem::exists(candidate, fontPathError) && !fontPathError) {
+            io.Fonts->AddFontFromFileTTF(
+                candidate.string().c_str(), 18.0F, nullptr, io.Fonts->GetGlyphRangesChineseFull());
             break;
         }
     }
@@ -297,17 +307,15 @@ void GuiRuntime::ensureChineseFont() {
         iconConfig.FontDataOwnedByAtlas = false;
         iconConfig.GlyphMinAdvanceX = 18.0F;
         static constexpr ImWchar kIconRanges[] = {0xf000, 0xf8ff, 0};
-        io.Fonts->AddFontFromMemoryTTF(const_cast<char*>(iconFont.begin()),
-                                       static_cast<int>(iconFont.size()),
-                                       16.0F,
-                                       &iconConfig,
-                                       kIconRanges);
+        io.Fonts->AddFontFromMemoryTTF(
+            const_cast<char*>(iconFont.begin()), static_cast<int>(iconFont.size()), 16.0F, &iconConfig, kIconRanges);
     } catch (const std::exception&) {
         // 图标字体是体验增强资源，缺失时保留中文 UI 可用，不阻断主窗口启动。
     }
 }
 
-void GuiRuntime::registerUiComponents() {
+void GuiRuntime::registerUiComponents()
+{
     uiComponents_ = UiComponentRegistry::createRuntimeComponents(*this);
     menuContributors_.clear();
     dialogComponents_.clear();
@@ -328,7 +336,8 @@ void GuiRuntime::registerUiComponents() {
     }
 }
 
-void GuiRuntime::syncRuntimeState() {
+void GuiRuntime::syncRuntimeState()
+{
     runtimeState_.window = window_;
     runtimeState_.running = running_;
     runtimeState_.showWaveDock = showWaveDock_;
@@ -346,7 +355,8 @@ void GuiRuntime::syncRuntimeState() {
     };
 }
 
-RuntimeUiContext GuiRuntime::makeUiContext() {
+RuntimeUiContext GuiRuntime::makeUiContext()
+{
     syncRuntimeState();
     return RuntimeUiContext{
         .application = application_,
@@ -357,49 +367,133 @@ RuntimeUiContext GuiRuntime::makeUiContext() {
     };
 }
 
-void GuiRuntime::attachUiComponents() {
+void GuiRuntime::processWaveFullscreenInput()
+{
+    if (waveFullscreenActive_ && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        application_.docks().waveState().suppressZoomSelectionEscapeThisFrame = true;
+        exitWaveFullscreen();
+    }
+}
+
+void GuiRuntime::enterWaveFullscreen()
+{
+    if (waveFullscreenActive_) {
+        return;
+    }
+
+    waveFullscreenActiveMode_ = application_.runtimeConfig().gui.wave.fullscreenMode;
+    waveFullscreenActive_ = true;
+    showWaveDock_ = true;
+    if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
+        applyWaveFocusFullscreen();
+    }
+}
+
+void GuiRuntime::exitWaveFullscreen()
+{
+    if (!waveFullscreenActive_) {
+        return;
+    }
+
+    if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
+        restoreWaveFocusFullscreen();
+    }
+    waveFullscreenActive_ = false;
+    waveFullscreenSnapshot_.reset();
+}
+
+void GuiRuntime::applyWaveFocusFullscreen()
+{
+    if (!waveFullscreenSnapshot_) {
+        waveFullscreenSnapshot_ = WaveFullscreenDockSnapshot{
+            .showCommDock = showCommDock_,
+            .showProtocolDock = showProtocolDock_,
+            .showTransferDock = showTransferDock_,
+            .showLogDock = showLogDock_,
+            .showScriptDock = showScriptDock_,
+            .showWaveDock = showWaveDock_,
+            .luaDockVisibility = luaDockVisibility_,
+        };
+    }
+
+    // 核心流程：专注全屏只改运行期可见性快照，不触碰协议工作区保存标记。
+    showCommDock_ = false;
+    showProtocolDock_ = false;
+    showTransferDock_ = false;
+    showLogDock_ = false;
+    showScriptDock_ = false;
+    showWaveDock_ = true;
+    for (auto& [stableId, visible] : luaDockVisibility_) {
+        (void)stableId;
+        visible = false;
+    }
+}
+
+void GuiRuntime::restoreWaveFocusFullscreen()
+{
+    if (!waveFullscreenSnapshot_) {
+        return;
+    }
+
+    showCommDock_ = waveFullscreenSnapshot_->showCommDock;
+    showProtocolDock_ = waveFullscreenSnapshot_->showProtocolDock;
+    showTransferDock_ = waveFullscreenSnapshot_->showTransferDock;
+    showLogDock_ = waveFullscreenSnapshot_->showLogDock;
+    showScriptDock_ = waveFullscreenSnapshot_->showScriptDock;
+    showWaveDock_ = waveFullscreenSnapshot_->showWaveDock;
+    luaDockVisibility_ = waveFullscreenSnapshot_->luaDockVisibility;
+}
+
+void GuiRuntime::attachUiComponents()
+{
     auto context = makeUiContext();
     for (const auto& component : uiComponents_) {
         component->onAttach(context);
     }
 }
 
-void GuiRuntime::detachUiComponents() {
+void GuiRuntime::detachUiComponents()
+{
     auto context = makeUiContext();
     for (auto componentIter = uiComponents_.rbegin(); componentIter != uiComponents_.rend(); ++componentIter) {
         (*componentIter)->onDetach(context);
     }
 }
 
-void GuiRuntime::drawRegisteredMenus() {
+void GuiRuntime::drawRegisteredMenus()
+{
     auto context = makeUiContext();
     for (auto* menu : menuContributors_) {
         menu->drawMainMenuItems(context);
     }
 }
 
-void GuiRuntime::syncRegisteredDialogs() {
+void GuiRuntime::syncRegisteredDialogs()
+{
     auto context = makeUiContext();
     for (auto* dialog : dialogComponents_) {
         dialog->syncRequests(context);
     }
 }
 
-void GuiRuntime::drawRegisteredDialogs() {
+void GuiRuntime::drawRegisteredDialogs()
+{
     auto context = makeUiContext();
     for (auto* dialog : dialogComponents_) {
         dialog->drawDialogs(context);
     }
 }
 
-void GuiRuntime::drawRegisteredDocks() {
+void GuiRuntime::drawRegisteredDocks()
+{
     auto context = makeUiContext();
     for (auto* dock : dockComponents_) {
         dock->drawDock(context);
     }
 }
 
-bool GuiRuntime::saveCurrentConfigToDisk() {
+bool GuiRuntime::saveCurrentConfigToDisk()
+{
     std::string error;
     const auto path = std::filesystem::path(application_.docks().configState().loadedFromPath);
     if (!configStore_.save(path, application_.captureConfig(), error)) {
@@ -412,7 +506,8 @@ bool GuiRuntime::saveCurrentConfigToDisk() {
     return true;
 }
 
-bool GuiRuntime::stopRawCaptureRecordingWithStatus() {
+bool GuiRuntime::stopRawCaptureRecordingWithStatus()
+{
     std::string error;
     if (!application_.stopRawCaptureRecording(error)) {
         application_.setStatusMessage("完整原始数据录制停止失败: " + error, true);
@@ -421,7 +516,8 @@ bool GuiRuntime::stopRawCaptureRecordingWithStatus() {
     return true;
 }
 
-void GuiRuntime::drawAppHeader(const float menuBarHeight) {
+void GuiRuntime::drawAppHeader(const float menuBarHeight)
+{
     const auto& tokens = defaultUiStyleTokens();
     auto& lua = application_.docks().luaState();
     auto& comm = application_.docks().commState();
@@ -430,8 +526,8 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight) {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + menuBarHeight));
     ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, kAppHeaderHeight));
-    constexpr ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0F, 10.0F));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07F, 0.09F, 0.13F, 0.98F));
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
@@ -442,7 +538,9 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight) {
         ImGui::SameLine();
         drawHeaderBadge(currentProtocolTitle(lua).c_str(), tokens.accent, false);
         ImGui::SameLine();
-        drawHeaderBadge(transportStateLabel(comm.state), comm.state == transport::TransportState::Open ? tokens.success : tokens.warning, false);
+        drawHeaderBadge(transportStateLabel(comm.state),
+                        comm.state == transport::TransportState::Open ? tokens.success : tokens.warning,
+                        false);
         if (config.dirty) {
             ImGui::SameLine();
             drawHeaderBadge("配置未保存", tokens.warning, false);
@@ -478,12 +576,9 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight) {
             ImGui::MenuItem("日志", nullptr, &showLogDock_);
             ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
             ImGui::MenuItem("波形", nullptr, &showWaveDock_);
-            if (previousShowCommDock != showCommDock_
-                || previousShowProtocolDock != showProtocolDock_
-                || previousShowTransferDock != showTransferDock_
-                || previousShowLogDock != showLogDock_
-                || previousShowScriptDock != showScriptDock_
-                || previousShowWaveDock != showWaveDock_) {
+            if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
+                previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
+                previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
                 pendingProtocolWorkspaceSave_ = true;
             }
             ImGui::Separator();
@@ -507,7 +602,8 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight) {
             if (drawDangerIconButton("停止录制", "停止完整原始数据录制")) {
                 stopRawCaptureRecordingWithStatus();
             }
-        } else if (drawToolbarSectionButton("开始录制", "打开文件对话框并开始完整原始数据录制", false, ImVec2(0.0F, 0.0F))) {
+        } else if (drawToolbarSectionButton(
+                       "开始录制", "打开文件对话框并开始完整原始数据录制", false, ImVec2(0.0F, 0.0F))) {
             openRawCaptureRecordingDialog();
         }
         ImGui::SameLine();
@@ -520,7 +616,8 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight) {
     ImGui::PopStyleVar();
 }
 
-void GuiRuntime::buildModernDefaultLayout(ImGuiID dockspaceId) {
+void GuiRuntime::buildModernDefaultLayout(ImGuiID dockspaceId)
+{
     ImGui::DockBuilderRemoveNode(dockspaceId);
     ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
@@ -547,7 +644,8 @@ void GuiRuntime::buildModernDefaultLayout(ImGuiID dockspaceId) {
     ImGui::DockBuilderFinish(dockspaceId);
 }
 
-void GuiRuntime::drawAppShell() {
+void GuiRuntime::drawAppShell()
+{
     const float menuBarHeight = ImGui::GetFrameHeight();
     const bool showAppHeader = application_.runtimeConfig().gui.showAppHeader;
     const float headerHeight = showAppHeader ? kAppHeaderHeight : 0.0F;
@@ -561,9 +659,9 @@ void GuiRuntime::drawAppShell() {
 
     ImGui::SetNextWindowPos(dockPos);
     ImGui::SetNextWindowSize(dockSize);
-    constexpr ImGuiWindowFlags shellFlags =
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    constexpr ImGuiWindowFlags shellFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                            ImGuiWindowFlags_NoNavFocus;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, defaultUiStyleTokens().appBackground);
@@ -586,13 +684,17 @@ void GuiRuntime::drawAppShell() {
     ImGui::PopStyleVar(2);
 }
 
-void GuiRuntime::renderFrame() {
+void GuiRuntime::renderFrame()
+{
     refreshWindowTitle();
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    waveFullscreenToggleRequested_ = false;
+    processWaveFullscreenInput();
+    handleGlobalShortcuts();
     syncRegisteredDialogs();
     drawRegisteredMenus();
     drawAppShell();
@@ -606,15 +708,31 @@ void GuiRuntime::renderFrame() {
 
     drawStatusBar();
     drawRegisteredDocks();
-    waveDockRenderer_.draw(showWaveDock_);
+    waveDockRenderer_.draw(showWaveDock_,
+                           waveFullscreenActive_,
+                           &waveFullscreenToggleRequested_,
+                           waveFullscreenActive_ &&
+                               waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus);
+    if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay) {
+        waveDockRenderer_.drawOverlay(waveFullscreenActive_, &waveFullscreenToggleRequested_);
+    }
     drawRegisteredDialogs();
-    if (previousShowCommDock != showCommDock_
-        || previousShowProtocolDock != showProtocolDock_
-        || previousShowTransferDock != showTransferDock_
-        || previousShowLogDock != showLogDock_
-        || previousShowScriptDock != showScriptDock_
-        || previousShowWaveDock != showWaveDock_) {
-        pendingProtocolWorkspaceSave_ = true;
+    if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus && !showWaveDock_) {
+        waveFullscreenToggleRequested_ = true;
+    }
+    if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
+        previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
+        previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
+        if (!waveFullscreenActive_ && !waveFullscreenToggleRequested_) {
+            pendingProtocolWorkspaceSave_ = true;
+        }
+    }
+    if (waveFullscreenToggleRequested_) {
+        if (waveFullscreenActive_) {
+            exitWaveFullscreen();
+        } else {
+            enterWaveFullscreen();
+        }
     }
 
     ImGui::Render();
@@ -629,12 +747,14 @@ void GuiRuntime::renderFrame() {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
-void GuiRuntime::refreshWindowTitle() {
+void GuiRuntime::refreshWindowTitle()
+{
     if (!window_) {
         return;
     }
 
-    const auto title = std::string("ProtoScope ") + build::kVersion + " - " + currentProtocolTitle(application_.docks().luaState());
+    const auto title =
+        std::string("ProtoScope ") + build::kVersion + " - " + currentProtocolTitle(application_.docks().luaState());
     if (title == lastWindowTitle_) {
         return;
     }

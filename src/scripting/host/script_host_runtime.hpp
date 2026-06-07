@@ -9,6 +9,7 @@ public:
     explicit ScriptHostRuntimeFacade(ScriptHost& host) : host_(host) {}
 
     ScriptHost& host() { return host_; }
+
     const ScriptHost& host() const { return host_; }
 
 private:

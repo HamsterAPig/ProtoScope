@@ -6,14 +6,17 @@
 
 struct ImGuiIO;
 
-namespace protoscope::app { class Application; }
+namespace protoscope::app {
+class Application;
+}
+
 namespace protoscope::plot {
 struct ViewConfig;
 struct WaveDockState;
 struct WaveLayoutSizes;
 struct WaveViewState;
 struct WaveSnapshot;
-}
+} // namespace protoscope::plot
 
 namespace protoscope::ui {
 
@@ -41,6 +44,8 @@ struct WaveContext {
     float availableHeight{0.0F};
     float contentWidth{0.0F};
     float toolsWidth{0.0F};
+    bool fullscreenActive{false};
+    bool* fullscreenToggleRequested{nullptr};
 };
 
 } // namespace protoscope::ui

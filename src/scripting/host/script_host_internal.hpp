@@ -3,8 +3,6 @@
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/scripting/script_host.hpp"
 
-#include <sol/sol.hpp>
-
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -14,11 +12,15 @@
 #include <utility>
 #include <vector>
 
+#include <sol/sol.hpp>
+
 namespace protoscope::scripting {
 
 struct LoadedStreamSchema {
     explicit LoadedStreamSchema(StreamBufferDefinition buffer, std::vector<StreamFrameDefinition> frames)
-        : parser(std::move(buffer), std::move(frames)) {}
+        : parser(std::move(buffer), std::move(frames))
+    {
+    }
 
     FrameStreamParser parser;
     std::optional<StreamParseBatch> lastBatch;
@@ -26,6 +28,8 @@ struct LoadedStreamSchema {
     std::optional<std::string> onBatchCallbackKey;
     std::optional<std::string> onErrorCallbackKey;
     bool includeRawFrames{true};
+    bool lowOverhead{false};
+    bool includeFieldAliases{true};
 };
 
 struct ScriptHost::Runtime {
@@ -69,19 +73,21 @@ sol::object controlValueToLua(sol::state_view lua, const ControlDescriptor* desc
 std::optional<std::vector<std::uint8_t>> bytesFromLuaObject(const sol::object& object, std::string& error);
 std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view lua, std::string& error);
 std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
-    sol::state_view lua,
-    std::unordered_map<std::string, sol::protected_function>& callbacks,
-    std::string& error);
+    sol::state_view lua, std::unordered_map<std::string, sol::protected_function>& callbacks, std::string& error);
 
 sol::table makeContextTable(sol::state_view lua, const transport::ConnectionContext& connection);
 sol::table makeBytesTable(sol::state_view lua, const std::vector<std::uint8_t>& bytes);
 sol::table makeTxEventTable(sol::state_view lua, const TxEvent& event);
 sol::table makeDialogEventTable(sol::state_view lua, const DialogEvent& event);
 sol::table makeFileDialogEventTable(sol::state_view lua, const FileDialogEvent& event);
-sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& frame, bool includeRaw);
+sol::table makeStreamFrameTable(sol::state_view lua,
+                                const StreamParsedFrame& frame,
+                                bool includeRaw,
+                                bool includeFieldAliases);
 sol::table makeStreamFrameArrayTable(sol::state_view lua,
                                      const std::vector<StreamParsedFrame>& frames,
-                                     bool includeRaw);
+                                     bool includeRaw,
+                                     bool includeFieldAliases);
 sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& error);
 
 std::string protectedCallError(sol::protected_function_result& result);

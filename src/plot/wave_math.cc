@@ -1,4 +1,5 @@
 #include "protoscope/plot/wave_math.hpp"
+
 #include "protoscope/plot/wave_state.hpp"
 
 #include <algorithm>
@@ -12,89 +13,99 @@ namespace protoscope::plot {
 
 namespace {
 
-constexpr double kEpsilon = 1e-12;
+    constexpr double kEpsilon = 1e-12;
 
-std::string trimCopy(std::string_view text) {
-    const auto begin = text.find_first_not_of(" \t\r\n");
-    if (begin == std::string_view::npos) {
-        return {};
+    std::string trimCopy(std::string_view text)
+    {
+        const auto begin = text.find_first_not_of(" \t\r\n");
+        if (begin == std::string_view::npos) {
+            return {};
+        }
+        const auto end = text.find_last_not_of(" \t\r\n");
+        return std::string{text.substr(begin, end - begin + 1)};
     }
-    const auto end = text.find_last_not_of(" \t\r\n");
-    return std::string{text.substr(begin, end - begin + 1)};
-}
 
-double clampPositiveWidth(double width, double minWidth) {
-    return (std::max)(width, (std::max)(minWidth, kEpsilon));
-}
+    double clampPositiveWidth(double width, double minWidth)
+    {
+        return (std::max)(width, (std::max)(minWidth, kEpsilon));
+    }
 
-double resolveActualValue(const WaveDisplayChannel& channel, std::size_t sampleIndex, double fallbackValue) {
-    if (sampleIndex < channel.actualValues.size()) {
-        return channel.actualValues[sampleIndex];
+    double resolveActualValue(const WaveDisplayChannel& channel, std::size_t sampleIndex, double fallbackValue)
+    {
+        if (sampleIndex < channel.actualValues.size()) {
+            return channel.actualValues[sampleIndex];
+        }
+        return fallbackValue;
     }
-    return fallbackValue;
-}
 
-CursorReadout makeCursorReadout(const WaveDisplayChannel& channel, std::size_t channelIndex, std::size_t sampleIndex) {
-    const auto& sample = channel.samples[sampleIndex];
-    return CursorReadout{
-        .valid = true,
-        .channelIndex = channelIndex,
-        .sampleIndex = sampleIndex,
-        .time = sample.time,
-        .value = resolveActualValue(channel, sampleIndex, sample.value),
-        .displayValue = sample.value,
-    };
-}
+    CursorReadout makeCursorReadout(const WaveDisplayChannel& channel,
+                                    std::size_t channelIndex,
+                                    std::size_t sampleIndex)
+    {
+        const auto& sample = channel.samples[sampleIndex];
+        return CursorReadout{
+            .valid = true,
+            .channelIndex = channelIndex,
+            .sampleIndex = sampleIndex,
+            .time = sample.time,
+            .value = resolveActualValue(channel, sampleIndex, sample.value),
+            .displayValue = sample.value,
+        };
+    }
 
-bool extremeValueBetter(WaveExtremeKind kind, double candidateValue, double bestValue) {
-    return kind == WaveExtremeKind::Maximum ? candidateValue > bestValue : candidateValue < bestValue;
-}
+    bool extremeValueBetter(WaveExtremeKind kind, double candidateValue, double bestValue)
+    {
+        return kind == WaveExtremeKind::Maximum ? candidateValue > bestValue : candidateValue < bestValue;
+    }
 
-void clampTimeRange(double& minTime, double& maxTime, const WaveDataBounds& bounds) {
-    if (!bounds.valid) {
-        return;
+    void clampTimeRange(double& minTime, double& maxTime, const WaveDataBounds& bounds)
+    {
+        if (!bounds.valid) {
+            return;
+        }
+        const double width = maxTime - minTime;
+        const double dataWidth = (std::max)(bounds.maxTime - bounds.minTime, kEpsilon);
+        if (width >= dataWidth) {
+            minTime = bounds.minTime;
+            maxTime = bounds.maxTime;
+            return;
+        }
+        if (minTime < bounds.minTime) {
+            minTime = bounds.minTime;
+            maxTime = minTime + width;
+        }
+        if (maxTime > bounds.maxTime) {
+            maxTime = bounds.maxTime;
+            minTime = maxTime - width;
+        }
     }
-    const double width = maxTime - minTime;
-    const double dataWidth = (std::max)(bounds.maxTime - bounds.minTime, kEpsilon);
-    if (width >= dataWidth) {
-        minTime = bounds.minTime;
-        maxTime = bounds.maxTime;
-        return;
-    }
-    if (minTime < bounds.minTime) {
-        minTime = bounds.minTime;
-        maxTime = minTime + width;
-    }
-    if (maxTime > bounds.maxTime) {
-        maxTime = bounds.maxTime;
-        minTime = maxTime - width;
-    }
-}
 
-void clampValueRange(double& minValue, double& maxValue, const WaveDataBounds& bounds) {
-    if (!bounds.valid) {
-        return;
+    void clampValueRange(double& minValue, double& maxValue, const WaveDataBounds& bounds)
+    {
+        if (!bounds.valid) {
+            return;
+        }
+        const double height = maxValue - minValue;
+        const double dataHeight = (std::max)(bounds.maxValue - bounds.minValue, kEpsilon);
+        if (height >= dataHeight) {
+            minValue = bounds.minValue;
+            maxValue = bounds.maxValue;
+            return;
+        }
+        if (minValue < bounds.minValue) {
+            minValue = bounds.minValue;
+            maxValue = minValue + height;
+        }
+        if (maxValue > bounds.maxValue) {
+            maxValue = bounds.maxValue;
+            minValue = maxValue - height;
+        }
     }
-    const double height = maxValue - minValue;
-    const double dataHeight = (std::max)(bounds.maxValue - bounds.minValue, kEpsilon);
-    if (height >= dataHeight) {
-        minValue = bounds.minValue;
-        maxValue = bounds.maxValue;
-        return;
-    }
-    if (minValue < bounds.minValue) {
-        minValue = bounds.minValue;
-        maxValue = minValue + height;
-    }
-    if (maxValue > bounds.maxValue) {
-        maxValue = bounds.maxValue;
-        minValue = maxValue - height;
-    }
-}
 
 } // namespace
 
-FrequencyParseResult parseSampleFrequencyText(std::string_view text) {
+FrequencyParseResult parseSampleFrequencyText(std::string_view text)
+{
     const std::string trimmed = trimCopy(text);
     if (trimmed.empty()) {
         return {.accepted = true, .valueHz = 0.0, .error = {}};
@@ -120,8 +131,9 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
                                 float minOverviewHeight,
                                 float minMainHeight,
                                 float minToolsWidth,
-                                 float maxToolsWidth,
-                                 float fixedContentHeight) {
+                                float maxToolsWidth,
+                                float fixedContentHeight)
+{
     WaveLayoutSizes result{};
     const float safeContentWidth = (std::max)(contentWidth, 0.0F);
     const float safeContentHeight = (std::max)(contentHeight, 0.0F);
@@ -148,9 +160,8 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
     }
 
     if (availableHeight < safeMinOverview + safeMinMain) {
-        const float overviewRatio = safeMinOverview + safeMinMain > 0.0F
-            ? safeMinOverview / (safeMinOverview + safeMinMain)
-            : 0.35F;
+        const float overviewRatio =
+            safeMinOverview + safeMinMain > 0.0F ? safeMinOverview / (safeMinOverview + safeMinMain) : 0.35F;
         result.overviewHeight = std::floor(availableHeight * overviewRatio);
         result.mainHeight = availableHeight - result.overviewHeight;
         return result;
@@ -161,7 +172,8 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
     return result;
 }
 
-bool scriptTimeUsable(const std::vector<WaveSample>& samples) {
+bool scriptTimeUsable(const std::vector<WaveSample>& samples)
+{
     if (samples.empty()) {
         return false;
     }
@@ -179,7 +191,8 @@ bool scriptTimeUsable(const std::vector<WaveSample>& samples) {
     return true;
 }
 
-std::pair<std::size_t, std::size_t> displaySampleRange(const ChannelView& channel) {
+std::pair<std::size_t, std::size_t> displaySampleRange(const ChannelView& channel)
+{
     if (channel.samples == nullptr || channel.totalSamples == 0) {
         return {0, 0};
     }
@@ -191,7 +204,8 @@ std::pair<std::size_t, std::size_t> displaySampleRange(const ChannelView& channe
     return {begin, end};
 }
 
-bool scriptTimeUsable(const ChannelView& channel, std::size_t begin, std::size_t end) {
+bool scriptTimeUsable(const ChannelView& channel, std::size_t begin, std::size_t end)
+{
     if (channel.samples == nullptr || begin >= end) {
         return false;
     }
@@ -209,7 +223,8 @@ bool scriptTimeUsable(const ChannelView& channel, std::size_t begin, std::size_t
     return true;
 }
 
-void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data) {
+void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data)
+{
     data.channels.resize(snapshot.channels.size());
     for (auto& channel : data.channels) {
         channel.samples.clear();
@@ -273,13 +288,15 @@ void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz
     }
 }
 
-WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz) {
+WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz)
+{
     WaveDisplayData data{};
     buildDisplayDataInto(snapshot, sampleFrequencyHz, data);
     return data;
 }
 
-void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, double maxTime, double sampleFrequencyHz) {
+void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, double maxTime, double sampleFrequencyHz)
+{
     if (sampleFrequencyHz <= 0.0 || !std::isfinite(sampleFrequencyHz)) {
         return;
     }
@@ -299,7 +316,8 @@ void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, do
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,
-                                                      double maxTimeDistance) {
+                                                      double maxTimeDistance)
+{
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
     }
@@ -342,7 +360,8 @@ std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& dis
 
 std::optional<CursorReadout> findNearestDisplayByTimeAcrossChannels(const WaveDisplayData& displayData,
                                                                     double time,
-                                                                    double maxTimeDistance) {
+                                                                    double maxTimeDistance)
+{
     std::optional<CursorReadout> best;
     double bestDistance = std::numeric_limits<double>::infinity();
     for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
@@ -359,11 +378,9 @@ std::optional<CursorReadout> findNearestDisplayByTimeAcrossChannels(const WaveDi
     return best;
 }
 
-std::optional<CursorReadout> findNearestDisplayPoint(const WaveDisplayData& displayData,
-                                                     double time,
-                                                     double value,
-                                                     double maxTimeDistance,
-                                                     double maxValueDistance) {
+std::optional<CursorReadout> findNearestDisplayPoint(
+    const WaveDisplayData& displayData, double time, double value, double maxTimeDistance, double maxValueDistance)
+{
     std::optional<CursorReadout> best;
     double bestScore = std::numeric_limits<double>::infinity();
     for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
@@ -390,7 +407,8 @@ std::optional<CursorReadout> findNearestDisplayPointInChannels(const WaveDisplay
                                                                double time,
                                                                double value,
                                                                double maxTimeDistance,
-                                                               double maxValueDistance) {
+                                                               double maxValueDistance)
+{
     std::optional<CursorReadout> best;
     double bestScore = std::numeric_limits<double>::infinity();
     for (const std::size_t channelIndex : channelIndices) {
@@ -415,7 +433,8 @@ std::optional<CursorReadout> findNearestDisplayPointInChannels(const WaveDisplay
     return best;
 }
 
-void includeSampleInBounds(WaveDataBounds& bounds, const std::vector<WaveSample>& samples, std::size_t index) {
+void includeSampleInBounds(WaveDataBounds& bounds, const std::vector<WaveSample>& samples, std::size_t index)
+{
     const auto& sample = samples[index];
     if (!std::isfinite(sample.time) || !std::isfinite(sample.value)) {
         return;
@@ -433,7 +452,8 @@ void includeSampleInBounds(WaveDataBounds& bounds, const std::vector<WaveSample>
     bounds.valid = true;
 }
 
-void finalizeDisplayBounds(WaveDataBounds& bounds) {
+void finalizeDisplayBounds(WaveDataBounds& bounds)
+{
     if (!bounds.valid) {
         bounds.minTime = 0.0;
         bounds.maxTime = 1.0;
@@ -450,7 +470,8 @@ void finalizeDisplayBounds(WaveDataBounds& bounds) {
     }
 }
 
-WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep) {
+WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep)
+{
     WaveDataBounds bounds{};
     bounds.minTime = std::numeric_limits<double>::infinity();
     bounds.maxTime = -std::numeric_limits<double>::infinity();
@@ -470,7 +491,8 @@ WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallback
 
 WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
                                                const std::vector<std::size_t>& channelIndices,
-                                               double fallbackStep) {
+                                               double fallbackStep)
+{
     WaveDataBounds bounds{};
     bounds.minTime = std::numeric_limits<double>::infinity();
     bounds.maxTime = -std::numeric_limits<double>::infinity();
@@ -494,7 +516,8 @@ WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
 
 const WaveDataBounds& selectXAxisDoubleClickBounds(const WaveXAxisDoubleClickAction action,
                                                    const WaveDataBounds& visibleWindowBounds,
-                                                   const WaveDataBounds& fullHistoryBounds) {
+                                                   const WaveDataBounds& fullHistoryBounds)
+{
     // 核心流程：X 轴双击默认回到当前内存保留的全历史；全历史无效时保留旧的当前窗口 fallback。
     if (action == WaveXAxisDoubleClickAction::FitFullHistory && fullHistoryBounds.valid) {
         return fullHistoryBounds;
@@ -502,9 +525,8 @@ const WaveDataBounds& selectXAxisDoubleClickBounds(const WaveXAxisDoubleClickAct
     return visibleWindowBounds;
 }
 
-WaveViewport normalizeOverviewViewport(const WaveViewport& viewport,
-                                       const WaveDataBounds& bounds,
-                                       double minTimeWidth) {
+WaveViewport normalizeOverviewViewport(const WaveViewport& viewport, const WaveDataBounds& bounds, double minTimeWidth)
+{
     WaveViewport next = viewport;
     if (next.maxTime < next.minTime) {
         std::swap(next.minTime, next.maxTime);
@@ -521,9 +543,8 @@ WaveViewport normalizeOverviewViewport(const WaveViewport& viewport,
 
     const double minWidth = clampPositiveWidth(minTimeWidth, bounds.minStep);
     double width = clampPositiveWidth(next.maxTime - next.minTime, minWidth);
-    const double center = std::isfinite(0.5 * (next.minTime + next.maxTime))
-        ? 0.5 * (next.minTime + next.maxTime)
-        : 0.5 * (fallbackMin + fallbackMax);
+    const double center = std::isfinite(0.5 * (next.minTime + next.maxTime)) ? 0.5 * (next.minTime + next.maxTime)
+                                                                             : 0.5 * (fallbackMin + fallbackMax);
     next.minTime = center - 0.5 * width;
     next.maxTime = next.minTime + width;
 
@@ -546,7 +567,8 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
                           double centerValue,
                           const WaveDataBounds& bounds,
                           double minTimeWidth,
-                          bool clampTimeToBounds) {
+                          bool clampTimeToBounds)
+{
     if (std::abs(wheelDelta) <= kEpsilon) {
         return viewport;
     }
@@ -588,7 +610,8 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
 CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           const CursorReadout& right,
                                           WaveTimeAxisSource axisSource,
-                                          std::string_view timeUnit) {
+                                          std::string_view timeUnit)
+{
     if (!left.valid || !right.valid) {
         return {};
     }
@@ -612,7 +635,8 @@ CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
 std::optional<CursorReadout> findStrongestEdgeNearTime(const WaveDisplayData& displayData,
                                                        std::size_t channelIndex,
                                                        double centerTime,
-                                                       double maxTimeDistance) {
+                                                       double maxTimeDistance)
+{
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
     }
@@ -628,7 +652,8 @@ std::optional<CursorReadout> findStrongestEdgeNearTime(const WaveDisplayData& di
     for (std::size_t index = 1; index < samples.size(); ++index) {
         const auto& left = samples[index - 1];
         const auto& right = samples[index];
-        if (!std::isfinite(left.time) || !std::isfinite(left.value) || !std::isfinite(right.time) || !std::isfinite(right.value)) {
+        if (!std::isfinite(left.time) || !std::isfinite(left.value) || !std::isfinite(right.time) ||
+            !std::isfinite(right.value)) {
             continue;
         }
         const double edgeTime = 0.5 * (left.time + right.time);
@@ -663,7 +688,8 @@ std::optional<CursorReadout> findLocalExtremeNearTime(const WaveDisplayData& dis
                                                       std::size_t channelIndex,
                                                       double centerTime,
                                                       double maxTimeDistance,
-                                                      WaveExtremeKind kind) {
+                                                      WaveExtremeKind kind)
+{
     if (channelIndex >= displayData.channels.size()) {
         return std::nullopt;
     }
@@ -682,8 +708,8 @@ std::optional<CursorReadout> findLocalExtremeNearTime(const WaveDisplayData& dis
     auto acceptCandidate = [&](std::optional<CursorReadout>& best, double& bestDistance, std::size_t index) {
         const auto& current = samples[index];
         const double distance = std::abs(current.time - centerTime);
-        if (!best.has_value() || extremeValueBetter(kind, current.value, best->displayValue)
-            || (std::abs(current.value - best->displayValue) <= kEpsilon && distance < bestDistance)) {
+        if (!best.has_value() || extremeValueBetter(kind, current.value, best->displayValue) ||
+            (std::abs(current.value - best->displayValue) <= kEpsilon && distance < bestDistance)) {
             bestDistance = distance;
             best = makeCursorReadout(channel, channelIndex, index);
         }
@@ -723,7 +749,8 @@ std::optional<CursorReadout> findLocalExtremeNearTime(const WaveDisplayData& dis
     return windowMaxValue - windowMinValue > kEpsilon ? bestWindowExtreme : std::nullopt;
 }
 
-double applyCursorDragSnap(double dragTime, const std::optional<CursorReadout>& smartSnap) {
+double applyCursorDragSnap(double dragTime, const std::optional<CursorReadout>& smartSnap)
+{
     if (smartSnap.has_value() && std::isfinite(smartSnap->time)) {
         // 拖动时智能吸附结果必须覆盖鼠标时间，否则 UI 游标线会继续跟随鼠标移动。
         return smartSnap->time;
@@ -731,7 +758,8 @@ double applyCursorDragSnap(double dragTime, const std::optional<CursorReadout>& 
     return dragTime;
 }
 
-void lockCursorInterval(double movedTime, double& pairedTime, double lockedInterval, bool movedLeftCursor) {
+void lockCursorInterval(double movedTime, double& pairedTime, double lockedInterval, bool movedLeftCursor)
+{
     if (!std::isfinite(lockedInterval) || lockedInterval <= 0.0) {
         return;
     }
@@ -741,7 +769,8 @@ void lockCursorInterval(double movedTime, double& pairedTime, double lockedInter
 WaveViewport moveViewportByDelta(const WaveViewport& viewport,
                                  double deltaTime,
                                  const WaveDataBounds& bounds,
-                                 double minTimeWidth) {
+                                 double minTimeWidth)
+{
     WaveViewport moved = viewport;
     if (!std::isfinite(deltaTime)) {
         deltaTime = 0.0;
@@ -751,7 +780,8 @@ WaveViewport moveViewportByDelta(const WaveViewport& viewport,
     return normalizeOverviewViewport(moved, bounds, minTimeWidth);
 }
 
-double cursorTimeInViewport(const WaveViewport& viewport, double ratio) {
+double cursorTimeInViewport(const WaveViewport& viewport, double ratio)
+{
     const double minTime = (std::min)(viewport.minTime, viewport.maxTime);
     const double maxTime = (std::max)(viewport.minTime, viewport.maxTime);
     if (!std::isfinite(minTime) || !std::isfinite(maxTime)) {
@@ -765,7 +795,8 @@ double cursorTimeInViewport(const WaveViewport& viewport, double ratio) {
 double resolveChannelCardWidth(WaveChannelCardWidthMode mode,
                                double fixedWidth,
                                double adaptiveRatio,
-                               double availableWidth) {
+                               double availableWidth)
+{
     if (mode == WaveChannelCardWidthMode::Fixed) {
         return fixedWidth > 0.0 ? fixedWidth : 128.0;
     }
@@ -775,7 +806,8 @@ double resolveChannelCardWidth(WaveChannelCardWidthMode mode,
     return (std::clamp)(availableWidth * safeRatio, 160.0, 220.0);
 }
 
-WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double multiplier) {
+WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double multiplier)
+{
     const double safeMultiplier = multiplier > 0.0 ? multiplier : 1.2;
     double maxAbs = (std::max)(std::abs(minValue), std::abs(maxValue));
     if (maxAbs <= kEpsilon) {
@@ -791,7 +823,8 @@ WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double
 bool resetChannelConfigToDefault(WaveDockState& wave,
                                  std::size_t channelIndex,
                                  const ChannelSpec& defaultSpec,
-                                 WaveChannelDoubleClickAction action) {
+                                 WaveChannelDoubleClickAction action)
+{
     const auto currentSpec = wave.buffer.channelSpec(channelIndex);
     if (!currentSpec.has_value()) {
         return false;
@@ -800,19 +833,19 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
     auto updated = *currentSpec;
     // 核心流程：按配置只回退指定字段，避免双击误触清掉用户想保留的通道覆盖。
     switch (action) {
-    case WaveChannelDoubleClickAction::ResetAll:
-        updated = defaultSpec;
-        break;
-    case WaveChannelDoubleClickAction::ResetScaleOffset:
-        updated.scale = defaultSpec.scale;
-        updated.offset = defaultSpec.offset;
-        break;
-    case WaveChannelDoubleClickAction::ResetScale:
-        updated.scale = defaultSpec.scale;
-        break;
-    case WaveChannelDoubleClickAction::ResetOffset:
-        updated.offset = defaultSpec.offset;
-        break;
+        case WaveChannelDoubleClickAction::ResetAll:
+            updated = defaultSpec;
+            break;
+        case WaveChannelDoubleClickAction::ResetScaleOffset:
+            updated.scale = defaultSpec.scale;
+            updated.offset = defaultSpec.offset;
+            break;
+        case WaveChannelDoubleClickAction::ResetScale:
+            updated.scale = defaultSpec.scale;
+            break;
+        case WaveChannelDoubleClickAction::ResetOffset:
+            updated.offset = defaultSpec.offset;
+            break;
     }
 
     if (channelIndex >= wave.channelOverrides.size()) {
@@ -831,14 +864,16 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
     return true;
 }
 
-bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, WaveChannelDoubleClickAction action) {
+bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, WaveChannelDoubleClickAction action)
+{
     if (channelIndex >= wave.defaultChannelSpecs.size()) {
         return false;
     }
     return resetChannelConfigToDefault(wave, channelIndex, wave.defaultChannelSpecs[channelIndex], action);
 }
 
-bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex) {
+bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex)
+{
     return resetChannelConfigToDefault(wave, channelIndex, WaveChannelDoubleClickAction::ResetOffset);
 }
 

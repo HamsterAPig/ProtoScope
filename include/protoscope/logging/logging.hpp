@@ -35,7 +35,11 @@ public:
     void info(std::string endpoint, std::string message);
     void warn(std::string endpoint, std::string message);
     void error(std::string endpoint, std::string message);
-    void host(config::LogLevel level, std::string direction, std::string endpoint, std::string message, std::optional<std::uint64_t> timestampMs = std::nullopt);
+    void host(config::LogLevel level,
+              std::string direction,
+              std::string endpoint,
+              std::string message,
+              std::optional<std::uint64_t> timestampMs = std::nullopt);
     void script(std::string levelText, std::string message, std::optional<std::uint64_t> timestampMs = std::nullopt);
 
     config::AppLoggingConfig currentConfig() const;
@@ -43,7 +47,9 @@ public:
 private:
     void log(LogRecord record);
     void rebuildLogger();
-    static config::LogLevel parseLevelOrFallback(const std::string& levelText, config::LogLevel fallback, bool* recognized = nullptr);
+    static config::LogLevel parseLevelOrFallback(const std::string& levelText,
+                                                 config::LogLevel fallback,
+                                                 bool* recognized = nullptr);
     static std::string levelText(config::LogLevel level);
     static std::string levelDirection(config::LogLevel level);
     static std::uint64_t nowMs();

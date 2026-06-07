@@ -13,8 +13,11 @@ public:
     virtual ~IUiComponent() = default;
 
     virtual std::string_view id() const = 0;
+
     virtual void onAttach(RuntimeUiContext&) {}
+
     virtual void onDetach(RuntimeUiContext&) {}
+
     virtual void onFrame(RuntimeUiContext&) {}
 };
 
@@ -26,6 +29,7 @@ public:
 class IDialogComponent : public IUiComponent {
 public:
     virtual void syncRequests(RuntimeUiContext&) {}
+
     virtual void drawDialogs(RuntimeUiContext&) = 0;
 };
 

@@ -1,93 +1,102 @@
 #include "protoscope/plugin/elf_static_view_bridge.hpp"
 
-#include <elf_static_view/project.hpp>
-
 #include <fstream>
 #include <iomanip>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <string_view>
 #include <utility>
+
+#include <elf_static_view/project.hpp>
 
 namespace protoscope::plugin {
 
 namespace {
 
-constexpr std::string_view kElfStaticViewPrivateMagic = "ESVEXP01";
+    constexpr std::string_view kElfStaticViewPrivateMagic = "ESVEXP01";
+    // 查询结果条数和数组展开预算是两件事：前者限制 UI 返回多少条，后者只影响候选展开深度。
+    constexpr std::size_t kElfStaticViewQueryArrayBudget = 65536;
 
-std::string readFileBytes(const std::filesystem::path& path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-        throw std::runtime_error("打开文件失败: " + path.string());
-    }
-
-    std::ostringstream buffer;
-    buffer << input.rdbuf();
-    return buffer.str();
-}
-
-std::string readFilePrefix(const std::filesystem::path& path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-        throw std::runtime_error("打开文件失败: " + path.string());
-    }
-
-    std::string prefix(64, '\0');
-    input.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
-    prefix.resize(static_cast<std::size_t>(input.gcount()));
-    return prefix;
-}
-
-bool isWhitespace(char value) {
-    return value == ' ' || value == '\t' || value == '\r' || value == '\n'
-        || value == '\f' || value == '\v';
-}
-
-bool looksLikeElfStaticViewData(std::string_view prefix) {
-    if (prefix.starts_with(kElfStaticViewPrivateMagic)) {
-        return true;
-    }
-    for (char value : prefix) {
-        if (isWhitespace(value)) {
-            continue;
+    std::string readFileBytes(const std::filesystem::path& path)
+    {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) {
+            throw std::runtime_error("打开文件失败: " + path.string());
         }
-        return value == '{' || value == '[';
+
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        return buffer.str();
     }
-    return false;
-}
 
-std::string formatAddress(std::uint64_t value) {
-    std::ostringstream builder;
-    builder << "0x" << std::uppercase << std::hex << value;
-    return builder.str();
-}
-
-std::string normalizeNameQuery(std::string queryText) {
-    for (char& ch : queryText) {
-        if (ch == '*' || ch == '?') {
-            ch = ' ';
+    std::string readFilePrefix(const std::filesystem::path& path)
+    {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) {
+            throw std::runtime_error("打开文件失败: " + path.string());
         }
-    }
-    return queryText;
-}
 
-std::optional<elf_static_view::ProjectModel> parseDataModel(const std::string& bytes,
-                                                            const std::filesystem::path& path,
-                                                            std::string& error) {
-    try {
-        auto importedData = elf_static_view::import_project_data_bytes(bytes, path.string());
-        return std::move(importedData.snapshot.model);
-    } catch (const std::exception& importError) {
+        std::string prefix(64, '\0');
+        input.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
+        prefix.resize(static_cast<std::size_t>(input.gcount()));
+        return prefix;
+    }
+
+    bool isWhitespace(char value)
+    {
+        return value == ' ' || value == '\t' || value == '\r' || value == '\n' || value == '\f' || value == '\v';
+    }
+
+    bool looksLikeElfStaticViewData(std::string_view prefix)
+    {
+        if (prefix.starts_with(kElfStaticViewPrivateMagic)) {
+            return true;
+        }
+        for (char value : prefix) {
+            if (isWhitespace(value)) {
+                continue;
+            }
+            return value == '{' || value == '[';
+        }
+        return false;
+    }
+
+    std::string formatAddress(std::uint64_t value)
+    {
+        std::ostringstream builder;
+        builder << "0x" << std::uppercase << std::hex << value;
+        return builder.str();
+    }
+
+    std::string normalizeNameQuery(std::string queryText)
+    {
+        for (char& ch : queryText) {
+            if (ch == '*' || ch == '?') {
+                ch = ' ';
+            }
+        }
+        return queryText;
+    }
+
+    std::optional<elf_static_view::ProjectModel> parseDataModel(const std::string& bytes,
+                                                                const std::filesystem::path& path,
+                                                                std::string& error)
+    {
         try {
-            return elf_static_view::parse_dump_json(bytes);
-        } catch (const std::exception& dumpError) {
-            error = std::string("导入 ElfStaticView 数据失败: ") + importError.what()
-                  + "；解析旧版 dump JSON 失败: " + dumpError.what();
-            return std::nullopt;
+            auto importedData = elf_static_view::import_project_data_bytes(bytes, path.string());
+            return std::move(importedData.snapshot.model);
+        } catch (const std::exception& importError) {
+            try {
+                return elf_static_view::parse_dump_json(bytes);
+            } catch (const std::exception& dumpError) {
+                error = std::string("导入 ElfStaticView 数据失败: ") + importError.what() +
+                        "；解析旧版 dump JSON 失败: " + dumpError.what();
+                return std::nullopt;
+            }
         }
     }
-}
 
 } // namespace
 
@@ -97,18 +106,22 @@ struct ElfStaticViewBridge::Impl {
     std::string sourcePath;
 };
 
-ElfStaticViewBridge::ElfStaticViewBridge()
-    : impl_(std::make_unique<Impl>()) {}
+ElfStaticViewBridge::ElfStaticViewBridge() : impl_(std::make_unique<Impl>()) {}
 
 ElfStaticViewBridge::~ElfStaticViewBridge() = default;
 ElfStaticViewBridge::ElfStaticViewBridge(ElfStaticViewBridge&&) noexcept = default;
 ElfStaticViewBridge& ElfStaticViewBridge::operator=(ElfStaticViewBridge&&) noexcept = default;
 
-bool ElfStaticViewBridge::loadFile(const std::filesystem::path& path, std::string& error) {
+bool ElfStaticViewBridge::loadFile(const std::filesystem::path& path, std::string& error)
+{
     error.clear();
     try {
-        if (!std::filesystem::exists(path)) {
+        std::error_code existsError;
+        if (!std::filesystem::exists(path, existsError)) {
             error = "文件不存在: " + path.string();
+            if (existsError) {
+                error += " (" + existsError.message() + ")";
+            }
             return false;
         }
 
@@ -148,7 +161,15 @@ bool ElfStaticViewBridge::loadFile(const std::filesystem::path& path, std::strin
     }
 }
 
-std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryText, std::size_t limit) const {
+void ElfStaticViewBridge::clear()
+{
+    impl_->model.reset();
+    impl_->session.reset();
+    impl_->sourcePath.clear();
+}
+
+std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryText, std::size_t limit) const
+{
     if (!impl_->session || limit == 0) {
         return {};
     }
@@ -161,7 +182,7 @@ std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryT
     options.only_static_known = false;
     options.include_runtime_only = false;
     options.flatten_composite_members = true;
-    options.max_array_elements = limit;
+    options.max_array_elements = kElfStaticViewQueryArrayBudget;
 
     std::vector<ElfStaticAddressEntry> entries;
     const auto results = impl_->session->query(options);
@@ -179,11 +200,40 @@ std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryT
     return entries;
 }
 
-bool ElfStaticViewBridge::loaded() const {
+std::optional<ElfStaticAddressEntry> ElfStaticViewBridge::findExactLabel(std::string label) const
+{
+    if (!impl_->session || label.empty()) {
+        return std::nullopt;
+    }
+
+    elf_static_view::StaticAddressQueryOptions options;
+    options.name_query_text = label;
+    options.only_static_known = false;
+    options.include_runtime_only = false;
+    options.flatten_composite_members = true;
+    options.max_array_elements = kElfStaticViewQueryArrayBudget;
+
+    // 核心流程：查询会按候选规则做模糊匹配，自动刷新必须再用 key 精确过滤，避免相似 label 误更新。
+    const auto results = impl_->session->query(options);
+    for (const auto& result : results) {
+        if (result.key == label) {
+            return ElfStaticAddressEntry{
+                .label = result.key,
+                .value = formatAddress(result.value),
+                .type = result.value_type,
+            };
+        }
+    }
+    return std::nullopt;
+}
+
+bool ElfStaticViewBridge::loaded() const
+{
     return impl_->session != nullptr;
 }
 
-const std::string& ElfStaticViewBridge::sourcePath() const {
+const std::string& ElfStaticViewBridge::sourcePath() const
+{
     return impl_->sourcePath;
 }
 

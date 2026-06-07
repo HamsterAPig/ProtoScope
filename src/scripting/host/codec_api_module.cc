@@ -11,11 +11,10 @@ public:
 
     std::string_view id() const override { return "codec_api_module"; }
 
-    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
+    {
         sol::table bitsApi = ctx.lua.create_table();
-        bitsApi.set_function("count", [](std::uint32_t value) {
-            return std::popcount(value);
-        });
+        bitsApi.set_function("count", [](std::uint32_t value) { return std::popcount(value); });
         proto["bits"] = bitsApi;
         proto.set_function("crc16_modbus", [](const sol::object& payload) -> std::uint16_t {
             std::string error;
@@ -38,7 +37,8 @@ private:
     ScriptHost& host_;
 };
 
-std::unique_ptr<IScriptHostApiModule> makeCodecApiModule(ScriptHost& host) {
+std::unique_ptr<IScriptHostApiModule> makeCodecApiModule(ScriptHost& host)
+{
     return std::make_unique<CodecScriptHostApiModule>(host);
 }
 

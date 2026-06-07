@@ -1,4 +1,5 @@
 #include "script_callback_dispatcher.hpp"
+
 #include "script_host_internal.hpp"
 
 #include <exception>
@@ -7,7 +8,8 @@
 
 namespace protoscope::scripting {
 
-std::optional<sol::protected_function> ScriptHost::resolveGlobalCallback(const char* name) {
+std::optional<sol::protected_function> ScriptHost::resolveGlobalCallback(const char* name)
+{
     if (!scriptLoaded_ || !runtime_) {
         return std::nullopt;
     }
@@ -30,7 +32,8 @@ std::optional<sol::protected_function> ScriptHost::resolveGlobalCallback(const c
     return std::nullopt;
 }
 
-void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
+void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx)
+{
     const auto callback = resolveGlobalCallback("on_open");
     if (!callback.has_value()) {
         return;
@@ -48,7 +51,8 @@ void ScriptHost::callbackOnOpen(const ScriptHostContext& ctx) {
     }
 }
 
-void ScriptHost::callbackOnClose(const ScriptHostContext& ctx) {
+void ScriptHost::callbackOnClose(const ScriptHostContext& ctx)
+{
     const auto callback = resolveGlobalCallback("on_close");
     if (!callback.has_value()) {
         return;
@@ -66,7 +70,8 @@ void ScriptHost::callbackOnClose(const ScriptHostContext& ctx) {
     }
 }
 
-void ScriptHost::callbackOnError(const ScriptHostContext& ctx, const std::string& message) {
+void ScriptHost::callbackOnError(const ScriptHostContext& ctx, const std::string& message)
+{
     const auto callback = resolveGlobalCallback("on_error");
     if (!callback.has_value()) {
         return;
@@ -84,14 +89,16 @@ void ScriptHost::callbackOnError(const ScriptHostContext& ctx, const std::string
     }
 }
 
-void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes) {
+void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector<std::uint8_t>& bytes)
+{
     const auto callback = resolveGlobalCallback("on_bytes");
     if (!callback.has_value()) {
         return;
     }
     try {
         sol::state_view view(runtime_->lua.lua_state());
-        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), makeBytesTable(view, bytes));
+        sol::protected_function_result result =
+            (*callback)(makeContextTable(view, ctx.connection), makeBytesTable(view, bytes));
         if (!result.valid()) {
             protoLog("error", "on_bytes 执行失败: " + protectedCallError(result));
         }
@@ -102,7 +109,8 @@ void ScriptHost::callbackOnBytes(const ScriptHostContext& ctx, const std::vector
     }
 }
 
-bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::vector<StreamParsedFrame>& frames) {
+bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::vector<StreamParsedFrame>& frames)
+{
     if (!scriptLoaded_ || !runtime_ || !runtime_->stream || !runtime_->stream->onBatchCallbackKey.has_value()) {
         return false;
     }
@@ -116,7 +124,10 @@ bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::
         sol::state_view view(runtime_->lua.lua_state());
         auto callback = callbackIter->second;
         auto result = callback(makeContextTable(view, ctx.connection),
-                               makeStreamFrameArrayTable(view, frames, runtime_->stream->includeRawFrames));
+                               makeStreamFrameArrayTable(view,
+                                                         frames,
+                                                         runtime_->stream->includeRawFrames,
+                                                         runtime_->stream->includeFieldAliases));
         if (!result.valid()) {
             protoLog("error", "stream.on_batch 执行失败: " + protectedCallError(result));
         }
@@ -128,7 +139,8 @@ bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::
     return true;
 }
 
-void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame) {
+void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const StreamParsedFrame& frame)
+{
     if (!scriptLoaded_ || !runtime_ || !runtime_->stream) {
         return;
     }
@@ -147,7 +159,10 @@ void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const Strea
         sol::state_view view(runtime_->lua.lua_state());
         auto callback = callbackIter->second;
         auto result = callback(makeContextTable(view, ctx.connection),
-                               makeStreamFrameTable(view, frame, runtime_->stream->includeRawFrames));
+                               makeStreamFrameTable(view,
+                                                    frame,
+                                                    runtime_->stream->includeRawFrames,
+                                                    runtime_->stream->includeFieldAliases));
         if (!result.valid()) {
             protoLog("error", "stream.on_frame 执行失败: " + protectedCallError(result));
         }
@@ -158,7 +173,8 @@ void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const Strea
     }
 }
 
-void ScriptHost::callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error) {
+void ScriptHost::callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error)
+{
     if (!scriptLoaded_ || !runtime_ || !runtime_->stream || !runtime_->stream->onErrorCallbackKey.has_value()) {
         return;
     }
@@ -182,7 +198,8 @@ void ScriptHost::callbackOnStreamError(const ScriptHostContext& ctx, const Strea
     }
 }
 
-void ScriptHost::callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName) {
+void ScriptHost::callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName)
+{
     const auto callback = resolveGlobalCallback("on_timer");
     if (!callback.has_value()) {
         return;
@@ -200,7 +217,8 @@ void ScriptHost::callbackOnTimer(const ScriptHostContext& ctx, const std::string
     }
 }
 
-void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value) {
+void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value)
+{
     const auto callback = resolveGlobalCallback("on_control");
     if (!callback.has_value()) {
         return;
@@ -208,7 +226,9 @@ void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::stri
     try {
         sol::state_view view(runtime_->lua.lua_state());
         sol::protected_function_result result =
-            (*callback)(makeContextTable(view, ctx.connection), id, controlValueToLua(view, findControlDescriptor(controls_, id), value));
+            (*callback)(makeContextTable(view, ctx.connection),
+                        id,
+                        controlValueToLua(view, findControlDescriptor(controls_, id), value));
         if (!result.valid()) {
             protoLog("error", "on_control 执行失败: " + protectedCallError(result));
         }
@@ -219,14 +239,16 @@ void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::stri
     }
 }
 
-void ScriptHost::callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event) {
+void ScriptHost::callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event)
+{
     const auto callback = resolveGlobalCallback("on_tx");
     if (!callback.has_value()) {
         return;
     }
     try {
         sol::state_view view(runtime_->lua.lua_state());
-        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), makeTxEventTable(view, event));
+        sol::protected_function_result result =
+            (*callback)(makeContextTable(view, ctx.connection), makeTxEventTable(view, event));
         if (!result.valid()) {
             protoLog("error", "on_tx 执行失败: " + protectedCallError(result));
         }
@@ -237,14 +259,16 @@ void ScriptHost::callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event
     }
 }
 
-void ScriptHost::callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event) {
+void ScriptHost::callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event)
+{
     const auto callback = resolveGlobalCallback("on_dialog");
     if (!callback.has_value()) {
         return;
     }
     try {
         sol::state_view view(runtime_->lua.lua_state());
-        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), makeDialogEventTable(view, event));
+        sol::protected_function_result result =
+            (*callback)(makeContextTable(view, ctx.connection), makeDialogEventTable(view, event));
         if (!result.valid()) {
             protoLog("error", "on_dialog 执行失败: " + protectedCallError(result));
         }
@@ -255,14 +279,16 @@ void ScriptHost::callbackOnDialog(const ScriptHostContext& ctx, const DialogEven
     }
 }
 
-void ScriptHost::callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event) {
+void ScriptHost::callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event)
+{
     const auto callback = resolveGlobalCallback("on_file_dialog");
     if (!callback.has_value()) {
         return;
     }
     try {
         sol::state_view view(runtime_->lua.lua_state());
-        sol::protected_function_result result = (*callback)(makeContextTable(view, ctx.connection), makeFileDialogEventTable(view, event));
+        sol::protected_function_result result =
+            (*callback)(makeContextTable(view, ctx.connection), makeFileDialogEventTable(view, event));
         if (!result.valid()) {
             protoLog("error", "on_file_dialog 执行失败: " + protectedCallError(result));
         }

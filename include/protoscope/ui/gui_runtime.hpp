@@ -2,15 +2,15 @@
 
 #include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
-#include "protoscope/ui/elf_static_address_file_watch.hpp"
 #include "protoscope/ui/dock_layout.hpp"
+#include "protoscope/ui/elf_static_address_file_watch.hpp"
 #include "protoscope/ui/ui_component.hpp"
 #include "protoscope/ui/ui_host_context.hpp"
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <future>
@@ -68,6 +68,16 @@ private:
         std::vector<const dock::ReceiveRow*> rows;
     };
 
+    struct WaveFullscreenDockSnapshot {
+        bool showCommDock{true};
+        bool showProtocolDock{true};
+        bool showTransferDock{true};
+        bool showLogDock{true};
+        bool showScriptDock{true};
+        bool showWaveDock{true};
+        std::unordered_map<std::string, bool> luaDockVisibility;
+    };
+
     bool initializeWindow();
     bool initializeImGui();
     bool initializePlotContext();
@@ -90,11 +100,17 @@ private:
     void renderFrame();
     void drawAppHeader(float menuBarHeight);
     void drawStatusBar();
+    void processWaveFullscreenInput();
+    void enterWaveFullscreen();
+    void exitWaveFullscreen();
+    void applyWaveFocusFullscreen();
+    void restoreWaveFocusFullscreen();
     bool saveCurrentConfigToDisk();
     bool stopRawCaptureRecordingWithStatus();
     void syncDialogQueue();
     void drawDialogs();
     void drawRawCaptureFileDialogs();
+    void handleGlobalShortcuts();
     void drawMainMenu();
     void drawHelpMenu();
     void drawLuaViewMenu();
@@ -104,17 +120,12 @@ private:
     void drawTransferDock();
     void drawLogDock();
     void drawScriptDock();
-    bool drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls);
-    bool drawLuaDockTable(const scripting::DockSnapshot& dockSnapshot,
-                          const scripting::TableLayoutDescriptor& layout,
-                          std::string_view stableId);
-    bool drawLuaDockForm(const scripting::DockSnapshot& dockSnapshot,
-                         const scripting::FormLayoutDescriptor& layout,
-                         std::string_view stableId);
-    bool drawLuaDockFormItems(const std::vector<scripting::FormLayoutItemDescriptor>& items,
-                              const std::unordered_map<std::string, const scripting::ControlSnapshot*>& controlsById,
-                              std::string_view stableId,
-                              std::size_t& widgetIndex);
+    bool drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls, bool earlyExit = true);
+    bool drawLuaLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                           const std::vector<scripting::ControlSnapshot>& controls,
+                           std::string_view stableId,
+                           std::size_t& widgetIndex,
+                           bool earlyExit = true);
     bool drawDynamicControl(const scripting::ControlSnapshot& control);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
@@ -154,10 +165,17 @@ private:
                                                       const dock::LogFilterState& filter,
                                                       bool includeBytePreview);
     void loadElfStaticAddressFromPath(const std::filesystem::path& path);
+    bool loadElfStaticAddressFromPath(const std::filesystem::path& path,
+                                      bool clearLoadedContextOnFailure,
+                                      bool saveProtocolStateOnSuccess);
+    void clearElfStaticAddressContext(bool clearDialogPath);
+    void restoreElfStaticAddressForCurrentProtocol(const std::string& savedPath);
     void drawElfStaticAddressDialog();
     void refreshWindowTitle();
     void requestAboutDialog();
     void drawAboutDialog();
+    void requestShortcutHelpDialog();
+    void drawShortcutHelpDialog();
     void startUpdateCheck();
     void drawUpdateCheckDialog();
     std::filesystem::path currentProtocolLayoutPath() const;
@@ -205,12 +223,17 @@ private:
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};
+    bool waveFullscreenActive_{false};
+    bool waveFullscreenToggleRequested_{false};
+    config::GuiWaveFullscreenMode waveFullscreenActiveMode_{config::GuiWaveFullscreenMode::Focus};
+    std::optional<WaveFullscreenDockSnapshot> waveFullscreenSnapshot_;
     FilteredLogRowsCache transferLogRowsCache_;
     FilteredLogRowsCache hostLogRowsCache_;
     FilteredLogRowsCache scriptLogRowsCache_;
     std::unordered_map<std::string, bool> luaDockVisibility_;
     float transferSendSectionHeight_{210.0F};
     bool aboutDialogRequested_{false};
+    bool shortcutHelpDialogRequested_{false};
     bool updateCheckDialogRequested_{false};
     bool updateCheckInProgress_{false};
     std::optional<UpdateCheckResult> updateCheckResult_;
@@ -248,6 +271,7 @@ private:
     std::string elfStaticAddressPath_;
     std::string elfStaticAddressError_;
     ElfStaticAddressFileWatchState elfStaticAddressWatch_;
+
     struct ElfSymbolComboUiState {
         std::string draft;
         std::string queriedDraft;
@@ -256,6 +280,7 @@ private:
         std::size_t queriedLimit{0};
         std::vector<scripting::ElfSymbolValue> options;
     };
+
     std::unordered_map<std::string, ElfSymbolComboUiState> elfSymbolComboStates_;
     WaveDockRenderer waveDockRenderer_;
 };

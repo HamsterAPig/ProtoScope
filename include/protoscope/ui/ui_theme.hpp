@@ -37,7 +37,10 @@ void applyImPlotProfessionalDarkTheme();
 // title 为空时仅绘制容器背景和边框，不绘制内部标题与分割线，并使用更紧凑的子窗口纵向留白。
 bool beginToolbarGroup(const char* id, const char* title, float minHeight = 0.0F);
 void endToolbarGroup();
-bool drawToolbarSectionButton(const char* label, const char* tooltip, bool active = false, const ImVec2& size = ImVec2(0.0F, 0.0F));
+bool drawToolbarSectionButton(const char* label,
+                              const char* tooltip,
+                              bool active = false,
+                              const ImVec2& size = ImVec2(0.0F, 0.0F));
 void drawHeaderBadge(const char* label, const ImVec4& color, bool filled = false);
 bool drawDangerIconButton(const char* label, const char* tooltip);
 bool drawGhostIconButton(const char* label, const char* tooltip);

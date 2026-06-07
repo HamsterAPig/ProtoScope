@@ -250,6 +250,9 @@ function stream()
     buffer = {
       capacity = 4096,
     },
+    raw_output = "omit",
+    low_overhead = true,
+    field_output = "fields_only",
     frames = {
       {
         name = "fc03_request",

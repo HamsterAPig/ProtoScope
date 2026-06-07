@@ -14,22 +14,42 @@ function ui()
         { type = "input_float", id = "scale", label = "缩放", default = 1.0 },
       },
       layout = {
-        kind = "form",
-        items = {
-          { text = "修改参数后立即生效。" },
-          { controls = { "read_version", "device_id" } },
-          { separator = true },
+        type = "column",
+        children = {
+          { type = "text", text = "修改参数后立即生效。" },
           {
-            group = "发送参数",
-            items = {
-              { controls = { "hex_send", "mode" } },
+            type = "flow",
+            children = {
+              { type = "control", id = "read_version" },
+              { type = "control", id = "device_id" },
+            }
+          },
+          { type = "separator" },
+          {
+            type = "group",
+            title = "发送参数",
+            children = {
+              {
+                type = "flow",
+                children = {
+                  { type = "control", id = "hex_send" },
+                  { type = "control", id = "mode" },
+                }
+              },
             }
           },
           {
-            collapse = "采样设置",
+            type = "collapse",
+            title = "采样设置",
             default_open = false,
-            items = {
-              { controls = { "timeout_ms", "scale" } },
+            children = {
+              {
+                type = "flow",
+                children = {
+                  { type = "control", id = "timeout_ms" },
+                  { type = "control", id = "scale" },
+                }
+              },
             }
           }
         }

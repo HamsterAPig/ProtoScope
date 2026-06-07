@@ -529,6 +529,7 @@ function stream()
       capacity = 4096,
     },
     raw_output = "omit",
+    low_overhead = true,
     frames = {
       {
         name = "fc03_response",

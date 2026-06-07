@@ -7,8 +7,13 @@
 
 struct GLFWwindow;
 
-namespace protoscope::app { class Application; }
-namespace protoscope::config { class ConfigStore; }
+namespace protoscope::app {
+class Application;
+}
+
+namespace protoscope::config {
+class ConfigStore;
+}
 
 namespace protoscope::ui {
 

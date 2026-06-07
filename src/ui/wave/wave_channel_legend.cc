@@ -6,12 +6,13 @@
 
 namespace protoscope::ui {
 
-ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth, const plot::WaveViewState& view) {
+ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth, const plot::WaveViewState& view)
+{
     const auto& style = ImGui::GetStyle();
     const float titleHeight = ImGui::GetTextLineHeightWithSpacing();
     const float lineHeight = ImGui::GetTextLineHeight();
-    const float cardWidth = static_cast<float>(
-        plot::resolveChannelCardWidth(view.channelCardWidthMode, view.channelCardFixedWidth, view.channelCardAdaptiveRatio, availableWidth));
+    const float cardWidth = static_cast<float>(plot::resolveChannelCardWidth(
+        view.channelCardWidthMode, view.channelCardFixedWidth, view.channelCardAdaptiveRatio, availableWidth));
     const float cardHeight = 18.0F + lineHeight * 2.0F;
     const float stripHeight = cardHeight + style.FramePadding.y * 2.0F + style.ScrollbarSize + 6.0F;
     const float separatorHeight = style.ItemSpacing.y + 1.0F + style.ItemSpacing.y;
@@ -23,14 +24,16 @@ ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth, const plo
     };
 }
 
-void drawChannelCardText(const ImVec2& min, const ImVec2& max, const std::string& text, ImU32 color) {
+void drawChannelCardText(const ImVec2& min, const ImVec2& max, const std::string& text, ImU32 color)
+{
     auto* drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(min, max, true);
     drawList->AddText(min, color, text.c_str());
     drawList->PopClipRect();
 }
 
-void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active) {
+void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active)
+{
     ImGui::BeginTooltip();
     ImGui::TextUnformatted(spec.label.c_str());
     ImGui::Text("单位：%s", spec.unit.empty() ? "-" : spec.unit.c_str());
@@ -44,7 +47,8 @@ void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active) {
 void drawChannelLegendPopup(plot::WaveDockState& wave,
                             std::size_t channelIndex,
                             const plot::ChannelSpec& spec,
-                            bool active) {
+                            bool active)
+{
     const plot::ChannelSpec defaultSpec = channelDefaultSpec(wave, channelIndex, spec);
     auto updated = spec;
     ImGui::Text("%s", spec.label.c_str());
@@ -91,7 +95,8 @@ void drawChannelLegendPopup(plot::WaveDockState& wave,
 
 double offsetParameterDeltaFromDisplayDelta(const plot::ChannelSpec& spec,
                                             plot::WaveDisplayFormula formula,
-                                            double displayDelta) {
+                                            double displayDelta)
+{
     if (formula == plot::WaveDisplayFormula::ScaleThenOffset) {
         return displayDelta;
     }

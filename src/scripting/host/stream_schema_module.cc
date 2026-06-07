@@ -5,36 +5,54 @@
 
 namespace protoscope::scripting {
 
-std::string streamFieldCountPath(const std::size_t frameIndex, const std::size_t fieldIndex) {
+std::string streamFieldCountPath(const std::size_t frameIndex, const std::size_t fieldIndex)
+{
     return "stream.frames[" + std::to_string(frameIndex + 1) + "].fields[" + std::to_string(fieldIndex + 1) + "].count";
 }
 
-std::string frameOnFrameCallbackKey(const std::string& frameName) {
+std::string frameOnFrameCallbackKey(const std::string& frameName)
+{
     return "stream.frame." + frameName + ".on_frame";
 }
 
-std::optional<StreamValueType> parseStreamValueType(const std::string& text) {
-    if (text == "u8") return StreamValueType::U8;
-    if (text == "i8") return StreamValueType::I8;
-    if (text == "u16_be") return StreamValueType::U16Be;
-    if (text == "u16_le") return StreamValueType::U16Le;
-    if (text == "i16_be") return StreamValueType::I16Be;
-    if (text == "i16_le") return StreamValueType::I16Le;
-    if (text == "u32_be") return StreamValueType::U32Be;
-    if (text == "u32_le") return StreamValueType::U32Le;
-    if (text == "i32_be") return StreamValueType::I32Be;
-    if (text == "i32_le") return StreamValueType::I32Le;
-    if (text == "f32_be") return StreamValueType::F32Be;
-    if (text == "f32_le") return StreamValueType::F32Le;
-    if (text == "bytes") return StreamValueType::Bytes;
+std::optional<StreamValueType> parseStreamValueType(const std::string& text)
+{
+    if (text == "u8")
+        return StreamValueType::U8;
+    if (text == "i8")
+        return StreamValueType::I8;
+    if (text == "u16_be")
+        return StreamValueType::U16Be;
+    if (text == "u16_le")
+        return StreamValueType::U16Le;
+    if (text == "i16_be")
+        return StreamValueType::I16Be;
+    if (text == "i16_le")
+        return StreamValueType::I16Le;
+    if (text == "u32_be")
+        return StreamValueType::U32Be;
+    if (text == "u32_le")
+        return StreamValueType::U32Le;
+    if (text == "i32_be")
+        return StreamValueType::I32Be;
+    if (text == "i32_le")
+        return StreamValueType::I32Le;
+    if (text == "f32_be")
+        return StreamValueType::F32Be;
+    if (text == "f32_le")
+        return StreamValueType::F32Le;
+    if (text == "bytes")
+        return StreamValueType::Bytes;
     return std::nullopt;
 }
 
-bool streamValueTypeCanBeLength(StreamValueType type) {
+bool streamValueTypeCanBeLength(StreamValueType type)
+{
     return type != StreamValueType::Bytes && !streamValueTypeIsFloat(type);
 }
 
-std::optional<StreamLengthMeans> parseStreamLengthMeans(const std::string& text) {
+std::optional<StreamLengthMeans> parseStreamLengthMeans(const std::string& text)
+{
     if (text == "payload") {
         return StreamLengthMeans::Payload;
     }
@@ -44,7 +62,8 @@ std::optional<StreamLengthMeans> parseStreamLengthMeans(const std::string& text)
     return std::nullopt;
 }
 
-std::optional<StreamCrcType> parseStreamCrcType(const std::string& text) {
+std::optional<StreamCrcType> parseStreamCrcType(const std::string& text)
+{
     if (text == "crc16_modbus") {
         return StreamCrcType::Crc16Modbus;
     }
@@ -57,7 +76,8 @@ std::optional<StreamCrcType> parseStreamCrcType(const std::string& text) {
     return std::nullopt;
 }
 
-std::optional<StreamCrcOrder> parseStreamCrcOrder(const std::string& text) {
+std::optional<StreamCrcOrder> parseStreamCrcOrder(const std::string& text)
+{
     if (text == "hi_lo") {
         return StreamCrcOrder::HiLo;
     }
@@ -67,7 +87,8 @@ std::optional<StreamCrcOrder> parseStreamCrcOrder(const std::string& text) {
     return std::nullopt;
 }
 
-sol::object streamFieldValueToLua(sol::state_view lua, const StreamFieldValue& value) {
+sol::object streamFieldValueToLua(sol::state_view lua, const StreamFieldValue& value)
+{
     if (std::holds_alternative<std::int64_t>(value.value)) {
         return sol::make_object(lua, std::get<std::int64_t>(value.value));
     }
@@ -94,7 +115,8 @@ sol::object streamFieldValueToLua(sol::state_view lua, const StreamFieldValue& v
     return sol::make_object(lua, table);
 }
 
-sol::table makeStreamFieldsTable(sol::state_view lua, const StreamFieldMap& fields) {
+sol::table makeStreamFieldsTable(sol::state_view lua, const StreamFieldMap& fields)
+{
     sol::table table = lua.create_table(0, static_cast<int>(fields.size()));
     for (const auto& [name, value] : fields) {
         table[name] = streamFieldValueToLua(lua, value);
@@ -102,7 +124,11 @@ sol::table makeStreamFieldsTable(sol::state_view lua, const StreamFieldMap& fiel
     return table;
 }
 
-sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& frame, bool includeRaw) {
+sol::table makeStreamFrameTable(sol::state_view lua,
+                                const StreamParsedFrame& frame,
+                                bool includeRaw,
+                                bool includeFieldAliases)
+{
     sol::table table = lua.create_table(0, static_cast<int>(frame.fields.size() + 4));
     table["name"] = frame.name;
     if (includeRaw) {
@@ -121,22 +147,27 @@ sol::table makeStreamFrameTable(sol::state_view lua, const StreamParsedFrame& fr
     for (const auto& [name, value] : frame.fields) {
         const auto luaValue = streamFieldValueToLua(lua, value);
         fields[name] = luaValue;
-        table[name] = luaValue;
+        if (includeFieldAliases) {
+            table[name] = luaValue;
+        }
     }
     return table;
 }
 
 sol::table makeStreamFrameArrayTable(sol::state_view lua,
                                      const std::vector<StreamParsedFrame>& frames,
-                                     bool includeRaw) {
+                                     bool includeRaw,
+                                     bool includeFieldAliases)
+{
     sol::table table = lua.create_table(static_cast<int>(frames.size()), 0);
     for (std::size_t index = 0; index < frames.size(); ++index) {
-        table[index + 1] = makeStreamFrameTable(lua, frames[index], includeRaw);
+        table[index + 1] = makeStreamFrameTable(lua, frames[index], includeRaw, includeFieldAliases);
     }
     return table;
 }
 
-sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& error) {
+sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& error)
+{
     sol::table table = lua.create_table();
     table["code"] = std::string(streamParseErrorCodeName(error.code));
     table["message"] = error.message;
@@ -150,14 +181,16 @@ sol::table makeStreamErrorTable(sol::state_view lua, const StreamParseError& err
     return table;
 }
 
-std::shared_ptr<StreamCountExpression> makeConstantCountExpression(std::int64_t value) {
+std::shared_ptr<StreamCountExpression> makeConstantCountExpression(std::int64_t value)
+{
     auto expression = std::make_shared<StreamCountExpression>();
     expression->op = StreamCountExpressionOp::Constant;
     expression->value = value;
     return expression;
 }
 
-std::shared_ptr<StreamCountExpression> makeFieldCountExpression(std::string fieldName) {
+std::shared_ptr<StreamCountExpression> makeFieldCountExpression(std::string fieldName)
+{
     auto expression = std::make_shared<StreamCountExpression>();
     expression->op = StreamCountExpressionOp::Field;
     expression->fieldName = std::move(fieldName);
@@ -166,7 +199,8 @@ std::shared_ptr<StreamCountExpression> makeFieldCountExpression(std::string fiel
 
 std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const sol::object& object, std::string& error);
 
-std::shared_ptr<StreamCountExpression> parseStreamCountOperand(const sol::table& table, std::string& error) {
+std::shared_ptr<StreamCountExpression> parseStreamCountOperand(const sol::table& table, std::string& error)
+{
     const sol::object exprObject = table["expr"];
     if (exprObject.valid() && exprObject.get_type() != sol::type::lua_nil) {
         return parseStreamCountExpressionObject(exprObject, error);
@@ -185,7 +219,8 @@ std::shared_ptr<StreamCountExpression> parseStreamCountOperand(const sol::table&
     return nullptr;
 }
 
-std::shared_ptr<StreamCountExpression> parseStreamCountExpressionTable(const sol::table& table, std::string& error) {
+std::shared_ptr<StreamCountExpression> parseStreamCountExpressionTable(const sol::table& table, std::string& error)
+{
     const auto op = luaStringField(table, "op");
     if (!op.has_value()) {
         error = "count 表达式缺少 op";
@@ -240,7 +275,7 @@ std::shared_ptr<StreamCountExpression> parseStreamCountExpressionTable(const sol
 
         auto expression = std::make_shared<StreamCountExpression>();
         expression->op = *op == "div" ? StreamCountExpressionOp::Div
-            : (*op == "sub" ? StreamCountExpressionOp::Sub : StreamCountExpressionOp::Mul);
+                                      : (*op == "sub" ? StreamCountExpressionOp::Sub : StreamCountExpressionOp::Mul);
         expression->operand = std::move(operand);
         expression->argument = argument.value_or(0);
         expression->argumentExpression = std::move(argumentExpression);
@@ -337,7 +372,8 @@ std::shared_ptr<StreamCountExpression> parseStreamCountExpressionTable(const sol
     return nullptr;
 }
 
-std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const sol::object& object, std::string& error) {
+std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const sol::object& object, std::string& error)
+{
     if (!object.valid() || object.get_type() == sol::type::lua_nil) {
         error = "count 表达式不能为空";
         return nullptr;
@@ -357,9 +393,8 @@ std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const so
 }
 
 std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
-    sol::state_view lua,
-    std::unordered_map<std::string, sol::protected_function>& callbacks,
-    std::string& error) {
+    sol::state_view lua, std::unordered_map<std::string, sol::protected_function>& callbacks, std::string& error)
+{
     const sol::object streamObject = lua["stream"];
     if (!streamObject.valid() || streamObject.get_type() == sol::type::lua_nil) {
         return nullptr;
@@ -387,7 +422,8 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
 
     const auto schemaTable = schemaObject.as<sol::table>();
     StreamBufferDefinition bufferDefinition;
-    if (const sol::object bufferObject = schemaTable["buffer"]; bufferObject.valid() && bufferObject.get_type() != sol::type::lua_nil) {
+    if (const sol::object bufferObject = schemaTable["buffer"];
+        bufferObject.valid() && bufferObject.get_type() != sol::type::lua_nil) {
         if (!bufferObject.is<sol::table>()) {
             error = "stream.buffer 必须是 table";
             return nullptr;
@@ -406,7 +442,8 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
                 error = "stream.buffer.max_capacity 必须大于 0";
                 return nullptr;
             }
-            bufferDefinition.maxCapacity = (std::max)(static_cast<std::size_t>(*maxCapacity), bufferDefinition.capacity);
+            bufferDefinition.maxCapacity =
+                (std::max)(static_cast<std::size_t>(*maxCapacity), bufferDefinition.capacity);
         }
         if (const auto overflow = luaStringField(bufferTable, "overflow"); overflow.has_value()) {
             if (*overflow != "drop_oldest") {
@@ -440,7 +477,19 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
             return nullptr;
         }
     }
-    if (const sol::object onBatchObject = schemaTable["on_batch"]; onBatchObject.valid() && onBatchObject.get_type() != sol::type::lua_nil) {
+    if (const auto lowOverhead = luaBoolField(schemaTable, "low_overhead"); lowOverhead.has_value()) {
+        loaded->lowOverhead = *lowOverhead;
+    }
+    if (const auto fieldOutput = luaStringField(schemaTable, "field_output"); fieldOutput.has_value()) {
+        if (*fieldOutput == "fields_only") {
+            loaded->includeFieldAliases = false;
+        } else if (*fieldOutput != "compat") {
+            error = "stream.field_output 必须是 'compat' 或 'fields_only'";
+            return nullptr;
+        }
+    }
+    if (const sol::object onBatchObject = schemaTable["on_batch"];
+        onBatchObject.valid() && onBatchObject.get_type() != sol::type::lua_nil) {
         if (!onBatchObject.is<sol::protected_function>()) {
             error = "stream.on_batch 必须是 function";
             return nullptr;
@@ -482,7 +531,8 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
         const sol::object lenObject = frameTable["len"];
         const bool hasLen = lenObject.valid() && lenObject.get_type() != sol::type::lua_nil;
         const bool runtimeProfile = luaBoolField(frameTable, "runtime_profile").value_or(false);
-        const int modeCount = static_cast<int>(fixedSize.has_value()) + static_cast<int>(hasLen) + static_cast<int>(runtimeProfile);
+        const int modeCount =
+            static_cast<int>(fixedSize.has_value()) + static_cast<int>(hasLen) + static_cast<int>(runtimeProfile);
         if (modeCount != 1) {
             error = "frame.size、frame.len 与 frame.runtime_profile 必须三选一";
             return nullptr;
@@ -537,7 +587,8 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
             frame.len = lenDefinition;
         }
 
-        if (const sol::object crcObject = frameTable["crc"]; crcObject.valid() && crcObject.get_type() != sol::type::lua_nil) {
+        if (const sol::object crcObject = frameTable["crc"];
+            crcObject.valid() && crcObject.get_type() != sol::type::lua_nil) {
             if (crcObject.is<bool>() && !crcObject.as<bool>()) {
                 frame.crc.type = StreamCrcType::None;
             } else if (crcObject.is<sol::table>()) {
@@ -566,7 +617,8 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
             }
         }
 
-        if (const sol::object fieldsObject = frameTable["fields"]; fieldsObject.valid() && fieldsObject.get_type() != sol::type::lua_nil) {
+        if (const sol::object fieldsObject = frameTable["fields"];
+            fieldsObject.valid() && fieldsObject.get_type() != sol::type::lua_nil) {
             if (!fieldsObject.is<sol::table>()) {
                 error = "frame.fields 必须是数组";
                 return nullptr;
@@ -619,9 +671,9 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
                     } else if (countObject.is<std::string>()) {
                         field.count.fieldName = countObject.as<std::string>();
                     } else if (countObject.is<sol::protected_function>()) {
-                        error = countPath
-                              + " 检测到 function；该写法已废弃，不再支持 function。"
-                                " 请迁移为 count 表达式 table，例如 count = { op = \"div\", field = \"byte_count\", by = 2 }";
+                        error = countPath + " 检测到 function；该写法已废弃，不再支持 function。"
+                                            " 请迁移为 count 表达式 table，例如 count = { op = \"div\", field = "
+                                            "\"byte_count\", by = 2 }";
                         return nullptr;
                     } else if (countObject.is<sol::table>()) {
                         field.count.expression = parseStreamCountExpressionObject(countObject, error);
@@ -655,7 +707,8 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
         frames.push_back(std::move(frame));
     }
 
-    if (const sol::object onErrorObject = schemaTable["on_error"]; onErrorObject.valid() && onErrorObject.get_type() != sol::type::lua_nil) {
+    if (const sol::object onErrorObject = schemaTable["on_error"];
+        onErrorObject.valid() && onErrorObject.get_type() != sol::type::lua_nil) {
         if (!onErrorObject.is<sol::protected_function>()) {
             error = "stream.on_error 必须是 function";
             return nullptr;

@@ -7,9 +7,9 @@ function ui()
         { type = "button", id = "read_version", label = "读取版本" },
       },
       layout = {
-        kind = "form",
-        items = {
-          { control = "missing_control" }
+        type = "column",
+        children = {
+          { type = "control", id = "missing_control" }
         }
       }
     }

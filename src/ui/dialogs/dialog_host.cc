@@ -1,75 +1,86 @@
-#include "protoscope/ui/gui_runtime.hpp"
-
 #include "../runtime/gui_runtime_detail.hpp"
+
+#include "protoscope/ui/gui_runtime.hpp"
+#include "protoscope/ui/keyboard_shortcuts.hpp"
+
+#include <system_error>
 
 namespace protoscope::ui {
 
 namespace {
 
-bool dialogUsesCustomWindowOptions(const scripting::DialogRequest& dialog) {
-    return dialog.window.width.has_value() || dialog.window.height.has_value() || dialog.window.x.has_value()
-           || dialog.window.y.has_value() || !dialog.window.resizable || !dialog.window.movable || dialog.window.autoResize;
-}
-
-ImVec2 dialogViewportFallbackSize() {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    if (viewport == nullptr || viewport->Size.x <= 0.0F || viewport->Size.y <= 0.0F) {
-        return ImVec2(1280.0F, 720.0F);
+    bool dialogUsesCustomWindowOptions(const scripting::DialogRequest& dialog)
+    {
+        return dialog.window.width.has_value() || dialog.window.height.has_value() || dialog.window.x.has_value() ||
+               dialog.window.y.has_value() || !dialog.window.resizable || !dialog.window.movable ||
+               dialog.window.autoResize;
     }
-    return viewport->Size;
-}
 
-ImVec2 dialogDefaultSize(const scripting::DialogRequest& dialog) {
-    const ImVec2 viewportSize = dialogViewportFallbackSize();
-    const float minWidth = 420.0F;
-    const float minHeight = 200.0F;
-    const float width = dialog.window.width.has_value()
-                            ? static_cast<float>(*dialog.window.width)
-                            : std::max(minWidth, viewportSize.x * 0.40F);
-    const float height = dialog.window.height.has_value()
-                             ? static_cast<float>(*dialog.window.height)
-                             : std::max(minHeight, viewportSize.y * 0.25F);
-    return ImVec2(width, height);
-}
-
-void applyDialogWindowOptions(const scripting::DialogRequest& dialog) {
-    const ImVec2 initialSize = dialogDefaultSize(dialog);
-    if (!dialog.window.autoResize) {
-        ImGui::SetNextWindowSize(initialSize, ImGuiCond_Appearing);
-    }
-    if (dialog.window.x.has_value() || dialog.window.y.has_value()) {
+    ImVec2 dialogViewportFallbackSize()
+    {
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        const ImVec2 viewportPos = viewport != nullptr ? viewport->Pos : ImVec2(0.0F, 0.0F);
-        const ImVec2 viewportSize = viewport != nullptr ? viewport->Size : dialogViewportFallbackSize();
-        const float defaultX = viewportPos.x + std::max(0.0F, (viewportSize.x - initialSize.x) * 0.5F);
-        const float defaultY = viewportPos.y + std::max(0.0F, (viewportSize.y - initialSize.y) * 0.3F);
-        const float x = dialog.window.x.has_value() ? viewportPos.x + static_cast<float>(*dialog.window.x) : defaultX;
-        const float y = dialog.window.y.has_value() ? viewportPos.y + static_cast<float>(*dialog.window.y) : defaultY;
-        ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Appearing);
+        if (viewport == nullptr || viewport->Size.x <= 0.0F || viewport->Size.y <= 0.0F) {
+            return ImVec2(1280.0F, 720.0F);
+        }
+        return viewport->Size;
     }
-}
 
-ImGuiWindowFlags dialogWindowFlags(const scripting::DialogRequest& dialog) {
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings;
-    if (dialog.window.autoResize) {
-        flags |= ImGuiWindowFlags_AlwaysAutoResize;
+    ImVec2 dialogDefaultSize(const scripting::DialogRequest& dialog)
+    {
+        const ImVec2 viewportSize = dialogViewportFallbackSize();
+        const float minWidth = 420.0F;
+        const float minHeight = 200.0F;
+        const float width = dialog.window.width.has_value() ? static_cast<float>(*dialog.window.width)
+                                                            : std::max(minWidth, viewportSize.x * 0.40F);
+        const float height = dialog.window.height.has_value() ? static_cast<float>(*dialog.window.height)
+                                                              : std::max(minHeight, viewportSize.y * 0.25F);
+        return ImVec2(width, height);
     }
-    if (!dialog.window.resizable) {
-        flags |= ImGuiWindowFlags_NoResize;
+
+    void applyDialogWindowOptions(const scripting::DialogRequest& dialog)
+    {
+        const ImVec2 initialSize = dialogDefaultSize(dialog);
+        if (!dialog.window.autoResize) {
+            ImGui::SetNextWindowSize(initialSize, ImGuiCond_Appearing);
+        }
+        if (dialog.window.x.has_value() || dialog.window.y.has_value()) {
+            const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            const ImVec2 viewportPos = viewport != nullptr ? viewport->Pos : ImVec2(0.0F, 0.0F);
+            const ImVec2 viewportSize = viewport != nullptr ? viewport->Size : dialogViewportFallbackSize();
+            const float defaultX = viewportPos.x + std::max(0.0F, (viewportSize.x - initialSize.x) * 0.5F);
+            const float defaultY = viewportPos.y + std::max(0.0F, (viewportSize.y - initialSize.y) * 0.3F);
+            const float x =
+                dialog.window.x.has_value() ? viewportPos.x + static_cast<float>(*dialog.window.x) : defaultX;
+            const float y =
+                dialog.window.y.has_value() ? viewportPos.y + static_cast<float>(*dialog.window.y) : defaultY;
+            ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Appearing);
+        }
     }
-    if (!dialog.window.movable) {
-        flags |= ImGuiWindowFlags_NoMove;
+
+    ImGuiWindowFlags dialogWindowFlags(const scripting::DialogRequest& dialog)
+    {
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings;
+        if (dialog.window.autoResize) {
+            flags |= ImGuiWindowFlags_AlwaysAutoResize;
+        }
+        if (!dialog.window.resizable) {
+            flags |= ImGuiWindowFlags_NoResize;
+        }
+        if (!dialog.window.movable) {
+            flags |= ImGuiWindowFlags_NoMove;
+        }
+        return flags;
     }
-    return flags;
-}
 
 } // namespace
 
-void GuiRuntime::requestAboutDialog() {
+void GuiRuntime::requestAboutDialog()
+{
     aboutDialogRequested_ = true;
 }
 
-void GuiRuntime::drawAboutDialog() {
+void GuiRuntime::drawAboutDialog()
+{
     constexpr const char* popupId = "关于 ProtoScope";
     if (aboutDialogRequested_) {
         ImGui::OpenPopup(popupId);
@@ -111,7 +122,61 @@ void GuiRuntime::drawAboutDialog() {
     ImGui::EndPopup();
 }
 
-void GuiRuntime::startUpdateCheck() {
+void GuiRuntime::requestShortcutHelpDialog()
+{
+    shortcutHelpDialogRequested_ = true;
+}
+
+void GuiRuntime::drawShortcutHelpDialog()
+{
+    constexpr const char* popupId = "快捷键说明";
+    if (shortcutHelpDialogRequested_) {
+        ImGui::OpenPopup(popupId);
+        shortcutHelpDialogRequested_ = false;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(560.0F, 420.0F), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        return;
+    }
+
+    ImGui::TextUnformatted("全局快捷键会在输入框和弹窗中自动让路。");
+    ImGui::Separator();
+
+    const auto drawSection = [](const char* title, const ShortcutScope scope) {
+        if (!ImGui::CollapsingHeader(title, ImGuiTreeNodeFlags_DefaultOpen)) {
+            return;
+        }
+        if (ImGui::BeginTable(title, 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("按键", ImGuiTableColumnFlags_WidthFixed, 120.0F);
+            ImGui::TableSetupColumn("动作");
+            ImGui::TableHeadersRow();
+            for (const auto& shortcut : shortcutDescriptors()) {
+                if (shortcut.scope != scope) {
+                    continue;
+                }
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(shortcut.label);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(shortcut.description);
+            }
+            ImGui::EndTable();
+        }
+    };
+
+    drawSection("全局", ShortcutScope::Global);
+    drawSection("波形 Dock", ShortcutScope::WaveDock);
+
+    ImGui::Spacing();
+    if (ImGui::Button("关闭")) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void GuiRuntime::startUpdateCheck()
+{
     updateCheckDialogRequested_ = true;
     if (updateCheckInProgress_) {
         return;
@@ -119,20 +184,19 @@ void GuiRuntime::startUpdateCheck() {
 
     updateCheckResult_.reset();
     updateCheckInProgress_ = true;
-    updateCheckFuture_ = std::async(std::launch::async, [] {
-        return checkForUpdates();
-    });
+    updateCheckFuture_ = std::async(std::launch::async, [] { return checkForUpdates(); });
 }
 
-void GuiRuntime::drawUpdateCheckDialog() {
+void GuiRuntime::drawUpdateCheckDialog()
+{
     constexpr const char* popupId = "检查更新";
     if (updateCheckDialogRequested_) {
         ImGui::OpenPopup(popupId);
         updateCheckDialogRequested_ = false;
     }
 
-    if (updateCheckInProgress_ && updateCheckFuture_.valid()
-        && updateCheckFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+    if (updateCheckInProgress_ && updateCheckFuture_.valid() &&
+        updateCheckFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
         updateCheckResult_ = updateCheckFuture_.get();
         updateCheckInProgress_ = false;
     }
@@ -182,8 +246,8 @@ void GuiRuntime::drawUpdateCheckDialog() {
     ImGui::EndPopup();
 }
 
-
-void GuiRuntime::syncDialogQueue() {
+void GuiRuntime::syncDialogQueue()
+{
     for (auto& request : application_.drainDialogRequests()) {
         dialogQueue_.push_back(std::move(request));
     }
@@ -197,7 +261,8 @@ void GuiRuntime::syncDialogQueue() {
     }
 }
 
-void GuiRuntime::drawDialogs() {
+void GuiRuntime::drawDialogs()
+{
     syncDialogQueue();
     if (!activeDialog_.has_value()) {
         return;
@@ -258,11 +323,11 @@ void GuiRuntime::drawDialogs() {
     ImGui::EndPopup();
 }
 
-void GuiRuntime::openRawCaptureImportDialog() {
+void GuiRuntime::openRawCaptureImportDialog()
+{
 #if defined(_WIN32)
-    const auto defaultPath = rawCaptureImportPath_.empty()
-                               ? executableDir_ / "captures" / "capture.psraw"
-                               : std::filesystem::path(rawCaptureImportPath_);
+    const auto defaultPath = rawCaptureImportPath_.empty() ? executableDir_ / "captures" / "capture.psraw"
+                                                           : std::filesystem::path(rawCaptureImportPath_);
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
                                        L"导入原始波形",
@@ -287,12 +352,12 @@ void GuiRuntime::openRawCaptureImportDialog() {
 #endif
 }
 
-void GuiRuntime::openRawCaptureExportDialog() {
+void GuiRuntime::openRawCaptureExportDialog()
+{
     const auto& lua = application_.docks().luaState();
     const std::string baseName = lua.protocolName.empty() ? std::string("wave-capture") : lua.protocolName + "-wave";
-    const auto defaultPath = rawCaptureExportPath_.empty()
-                               ? executableDir_ / "captures" / (baseName + ".psraw")
-                               : std::filesystem::path(rawCaptureExportPath_);
+    const auto defaultPath = rawCaptureExportPath_.empty() ? executableDir_ / "captures" / (baseName + ".psraw")
+                                                           : std::filesystem::path(rawCaptureExportPath_);
 #if defined(_WIN32)
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
@@ -316,12 +381,13 @@ void GuiRuntime::openRawCaptureExportDialog() {
 #endif
 }
 
-void GuiRuntime::openRawCaptureRecordingDialog() {
+void GuiRuntime::openRawCaptureRecordingDialog()
+{
     const auto& lua = application_.docks().luaState();
-    const std::string baseName = lua.protocolName.empty() ? std::string("raw-recording") : lua.protocolName + "-raw-recording";
-    const auto defaultPath = rawCaptureRecordingPath_.empty()
-                               ? executableDir_ / "captures" / (baseName + ".psraw")
-                               : std::filesystem::path(rawCaptureRecordingPath_);
+    const std::string baseName =
+        lua.protocolName.empty() ? std::string("raw-recording") : lua.protocolName + "-raw-recording";
+    const auto defaultPath = rawCaptureRecordingPath_.empty() ? executableDir_ / "captures" / (baseName + ".psraw")
+                                                              : std::filesystem::path(rawCaptureRecordingPath_);
 #if defined(_WIN32)
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
@@ -345,46 +411,50 @@ void GuiRuntime::openRawCaptureRecordingDialog() {
 #endif
 }
 
-void GuiRuntime::openTransferLogExportDialog() {
+void GuiRuntime::openTransferLogExportDialog()
+{
     openLogExportDialog(LogExportTarget::Transfer);
 }
 
-void GuiRuntime::openHostLogExportDialog() {
+void GuiRuntime::openHostLogExportDialog()
+{
     openLogExportDialog(LogExportTarget::Host);
 }
 
-void GuiRuntime::openScriptLogExportDialog() {
+void GuiRuntime::openScriptLogExportDialog()
+{
     openLogExportDialog(LogExportTarget::Script);
 }
 
-void GuiRuntime::openLogExportDialog(LogExportTarget target) {
+void GuiRuntime::openLogExportDialog(LogExportTarget target)
+{
     const char* title = "收发数据日志";
     const char* defaultFileName = "transfer-log.log";
 #if defined(_WIN32)
     const wchar_t* windowsTitle = L"导出收发数据日志";
 #endif
     switch (target) {
-    case LogExportTarget::Host:
-        title = "系统日志";
-        defaultFileName = "host-log.log";
+        case LogExportTarget::Host:
+            title = "系统日志";
+            defaultFileName = "host-log.log";
 #if defined(_WIN32)
-        windowsTitle = L"导出系统日志";
+            windowsTitle = L"导出系统日志";
 #endif
-        break;
-    case LogExportTarget::Script:
-        title = "Lua 日志";
-        defaultFileName = "lua-log.log";
+            break;
+        case LogExportTarget::Script:
+            title = "Lua 日志";
+            defaultFileName = "lua-log.log";
 #if defined(_WIN32)
-        windowsTitle = L"导出 Lua 日志";
+            windowsTitle = L"导出 Lua 日志";
 #endif
-        break;
-    case LogExportTarget::Transfer:
-    default:
-        break;
+            break;
+        case LogExportTarget::Transfer:
+        default:
+            break;
     }
 
 #if defined(_WIN32)
-    (void)title;
+    (void) title;
 #endif
     const auto defaultPath = executableDir_ / "logs" / defaultFileName;
 #if defined(_WIN32)
@@ -412,18 +482,21 @@ void GuiRuntime::openLogExportDialog(LogExportTarget target) {
 #endif
 }
 
-void GuiRuntime::openElfStaticAddressDialog() {
+void GuiRuntime::openElfStaticAddressDialog()
+{
 #if defined(_WIN32)
     const auto defaultPath =
         elfStaticAddressPath_.empty() ? executableDir_ : std::filesystem::path(elfStaticAddressPath_);
     std::string dialogError;
-    const auto path = nativeFileDialog(window_,
-                                       L"打开 ELF/ElfStaticView 数据文件",
-                                       L"ELF/ElfStaticView Files (*.elf;*.out;*.axf;*.json;*.esv)\0*.elf;*.out;*.axf;*.json;*.esv\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
-                                       false,
-                                       nullptr,
-                                       dialogError);
+    const auto path =
+        nativeFileDialog(window_,
+                         L"打开 ELF/ElfStaticView 数据文件",
+                         L"ELF/ElfStaticView Files "
+                         L"(*.elf;*.out;*.axf;*.json;*.esv)\0*.elf;*.out;*.axf;*.json;*.esv\0All Files (*.*)\0*.*\0",
+                         defaultPath,
+                         false,
+                         nullptr,
+                         dialogError);
     if (!dialogError.empty()) {
         application_.setStatusMessage(dialogError);
     }
@@ -440,7 +513,8 @@ void GuiRuntime::openElfStaticAddressDialog() {
 #endif
 }
 
-void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path) {
+void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path)
+{
     // 核心流程：原生对话框和非 Windows 回退弹窗共用同一条导入链路，避免两套行为分叉。
     rawCaptureImportPath_ = path.generic_string();
     std::string error;
@@ -450,8 +524,12 @@ void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path) {
         application_.setStatusMessage("原始波形导入失败: " + error);
         return;
     }
-    if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir))) {
+    std::error_code protocolEntryError;
+    if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
         rawCaptureImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
+        if (protocolEntryError) {
+            rawCaptureImportError_ += " (" + protocolEntryError.message() + ")";
+        }
         application_.setStatusMessage("原始波形导入失败: " + rawCaptureImportError_);
         return;
     }
@@ -471,7 +549,8 @@ void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path) {
     }
 }
 
-void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path) {
+void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path)
+{
     // 核心流程：导出路径只在 UI 层选择，实际写入仍交给 Application 统一处理。
     rawCaptureExportPath_ = path.generic_string();
     std::string error;
@@ -481,15 +560,15 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path) {
         return;
     }
     const auto& rawCapture = application_.docks().waveState().rawCapture;
-    application_.setStatusMessage(rawCapture.truncated
-                                      ? "原始波形导出成功（实时缓存已截断，仅包含最近原始字节）"
-                                      : "原始波形导出成功");
+    application_.setStatusMessage(rawCapture.truncated ? "原始波形导出成功（实时缓存已截断，仅包含最近原始字节）"
+                                                       : "原始波形导出成功");
     rawCaptureExportDialogOpen_ = false;
     rawCaptureExportDialogOpened_ = false;
     rawCaptureExportError_.clear();
 }
 
-void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& path) {
+void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& path)
+{
     // 核心流程：菜单只负责选择完整录制路径，录制状态和写入错误统一收口到 Application。
     rawCaptureRecordingPath_ = path.generic_string();
     std::string error;
@@ -503,71 +582,73 @@ void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& pat
     rawCaptureRecordingError_.clear();
 }
 
-std::vector<dock::ReceiveRow> GuiRuntime::logExportRows(LogExportTarget target) {
+std::vector<dock::ReceiveRow> GuiRuntime::logExportRows(LogExportTarget target)
+{
     auto& docks = application_.docks();
     switch (target) {
-    case LogExportTarget::Transfer: {
-        const auto& receive = docks.receiveState();
-        const auto filteredRows = dock::filteredLogRows(receive.rows, receive.filter, true);
-        std::vector<dock::ReceiveRow> rows;
-        rows.reserve(filteredRows.size());
-        for (const auto* row : filteredRows) {
-            rows.push_back(*row);
+        case LogExportTarget::Transfer: {
+            const auto& receive = docks.receiveState();
+            const auto filteredRows = dock::filteredLogRows(receive.rows, receive.filter, true);
+            std::vector<dock::ReceiveRow> rows;
+            rows.reserve(filteredRows.size());
+            for (const auto* row : filteredRows) {
+                rows.push_back(*row);
+            }
+            return rows;
         }
-        return rows;
-    }
-    case LogExportTarget::Host: {
-        const auto& logState = docks.logState();
-        const auto filteredRows = dock::filteredLogRows(logState.rows, logState.filter, false);
-        std::vector<dock::ReceiveRow> rows;
-        rows.reserve(filteredRows.size());
-        for (const auto* row : filteredRows) {
-            rows.push_back(*row);
+        case LogExportTarget::Host: {
+            const auto& logState = docks.logState();
+            const auto filteredRows = dock::filteredLogRows(logState.rows, logState.filter, false);
+            std::vector<dock::ReceiveRow> rows;
+            rows.reserve(filteredRows.size());
+            for (const auto* row : filteredRows) {
+                rows.push_back(*row);
+            }
+            return rows;
         }
-        return rows;
-    }
-    case LogExportTarget::Script: {
-        const auto& scriptState = docks.scriptState();
-        const auto filteredRows = dock::filteredLogRows(scriptState.rows, scriptState.filter, false);
-        std::vector<dock::ReceiveRow> rows;
-        rows.reserve(filteredRows.size());
-        for (const auto* row : filteredRows) {
-            rows.push_back(*row);
+        case LogExportTarget::Script: {
+            const auto& scriptState = docks.scriptState();
+            const auto filteredRows = dock::filteredLogRows(scriptState.rows, scriptState.filter, false);
+            std::vector<dock::ReceiveRow> rows;
+            rows.reserve(filteredRows.size());
+            for (const auto* row : filteredRows) {
+                rows.push_back(*row);
+            }
+            return rows;
         }
-        return rows;
-    }
     }
     return {};
 }
 
-bool GuiRuntime::exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path) {
+bool GuiRuntime::exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path)
+{
     auto& docks = application_.docks();
     bool showTimestamps = true;
     bool showHex = false;
     std::string_view title = "收发数据日志";
 
     switch (target) {
-    case LogExportTarget::Transfer: {
-        const auto& receive = docks.receiveState();
-        showTimestamps = receive.showTimestamps;
-        showHex = receive.showHex;
-        title = "收发数据日志";
-        break;
-    }
-    case LogExportTarget::Host: {
-        const auto& logState = docks.logState();
-        showTimestamps = logState.showTimestamps;
-        showHex = false;
-        title = "系统日志";
-        break;
-    }
-    case LogExportTarget::Script: {
-        const auto& scriptState = docks.scriptState();
-        showTimestamps = scriptState.showTimestamps;
-        showHex = false;
-        title = "Lua 日志";
-        break;
-    }
+        case LogExportTarget::Transfer: {
+            const auto& receive = docks.receiveState();
+            showTimestamps = receive.showTimestamps;
+            showHex = receive.showHex;
+            title = "收发数据日志";
+            break;
+        }
+        case LogExportTarget::Host: {
+            const auto& logState = docks.logState();
+            showTimestamps = logState.showTimestamps;
+            showHex = false;
+            title = "系统日志";
+            break;
+        }
+        case LogExportTarget::Script: {
+            const auto& scriptState = docks.scriptState();
+            showTimestamps = scriptState.showTimestamps;
+            showHex = false;
+            title = "Lua 日志";
+            break;
+        }
     }
 
     const auto rows = logExportRows(target);
@@ -584,7 +665,8 @@ bool GuiRuntime::exportLogRowsToPath(const std::filesystem::path& path,
                                      std::span<const dock::ReceiveRow> rows,
                                      bool showTimestamps,
                                      bool showHex,
-                                     std::string_view title) {
+                                     std::string_view title)
+{
     auto fail = [&](std::string message) {
         logExportError_ = std::string(title) + "导出失败: " + message;
         application_.setStatusMessage(logExportError_);
@@ -630,18 +712,33 @@ bool GuiRuntime::exportLogRowsToPath(const std::filesystem::path& path,
     }
 }
 
-void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path) {
+void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
+{
+    static_cast<void>(loadElfStaticAddressFromPath(path, false, true));
+}
+
+bool GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path,
+                                              bool clearLoadedContextOnFailure,
+                                              bool saveProtocolStateOnSuccess)
+{
     // 核心流程：加载成功后清空符号下拉缓存，让 Lua 控件基于新模型重新查询。
-    elfStaticAddressPath_ = path.generic_string();
+    std::error_code absoluteError;
+    const auto resolvedPath = std::filesystem::absolute(path, absoluteError);
+    const auto loadPath = absoluteError ? path : resolvedPath;
     std::string error;
-    if (!application_.loadElfStaticAddressFile(path, error)) {
+    if (!application_.loadElfStaticAddressFile(loadPath, error)) {
         elfStaticAddressError_ = error;
         application_.setStatusMessage("ELF/ElfStaticView 数据文件加载失败: " + error);
-        return;
+        if (clearLoadedContextOnFailure) {
+            clearElfStaticAddressContext(false);
+            elfStaticAddressError_ = error;
+        }
+        return false;
     }
+    elfStaticAddressPath_ = loadPath.generic_string();
     std::error_code watchError;
-    const bool exists = std::filesystem::exists(path, watchError);
-    elfStaticAddressWatch_.path = path;
+    const bool exists = std::filesystem::exists(loadPath, watchError);
+    elfStaticAddressWatch_.path = loadPath;
     elfStaticAddressWatch_.watching = true;
     elfStaticAddressWatch_.lastExists = exists && !watchError;
     elfStaticAddressWatch_.lastPollAtMs = 0;
@@ -649,12 +746,12 @@ void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
     elfStaticAddressWatch_.pendingReloadSinceMs = 0;
     elfStaticAddressWatch_.pendingStatusMessage.clear();
     if (elfStaticAddressWatch_.lastExists) {
-        const auto lastWriteTime = std::filesystem::last_write_time(path, watchError);
+        const auto lastWriteTime = std::filesystem::last_write_time(loadPath, watchError);
         if (!watchError) {
             elfStaticAddressWatch_.lastWriteTimeNs = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(lastWriteTime.time_since_epoch()).count());
         }
-        const auto fileSize = std::filesystem::file_size(path, watchError);
+        const auto fileSize = std::filesystem::file_size(loadPath, watchError);
         if (!watchError) {
             elfStaticAddressWatch_.fileSize = fileSize;
         }
@@ -663,9 +760,38 @@ void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
     elfStaticAddressDialogOpen_ = false;
     elfStaticAddressDialogOpened_ = false;
     elfStaticAddressError_.clear();
+    if (saveProtocolStateOnSuccess && protocolWorkspaceLoaded_ && !activeWorkspaceProtocolKey_.empty()) {
+        saveCurrentProtocolControlState();
+    }
+    return true;
 }
 
-void GuiRuntime::drawElfStaticAddressDialog() {
+void GuiRuntime::clearElfStaticAddressContext(bool clearDialogPath)
+{
+    // 核心流程：协议没有绑定 ELF 时必须清掉已加载模型和候选缓存，避免符号下拉串用上一个 Lua。
+    application_.clearElfStaticAddressFile();
+    elfStaticAddressWatch_ = ElfStaticAddressFileWatchState{};
+    elfSymbolComboStates_.clear();
+    elfStaticAddressError_.clear();
+    if (clearDialogPath) {
+        elfStaticAddressPath_.clear();
+    }
+}
+
+void GuiRuntime::restoreElfStaticAddressForCurrentProtocol(const std::string& savedPath)
+{
+    if (savedPath.empty()) {
+        clearElfStaticAddressContext(true);
+        return;
+    }
+
+    // 核心流程：自动恢复失败时保留 YAML 路径作为下次对话框默认值，但清空旧模型防止跨 Lua 泄漏。
+    elfStaticAddressPath_ = savedPath;
+    static_cast<void>(loadElfStaticAddressFromPath(std::filesystem::path(savedPath), true, false));
+}
+
+void GuiRuntime::drawElfStaticAddressDialog()
+{
     if (!elfStaticAddressDialogOpen_) {
         return;
     }
@@ -705,7 +831,8 @@ void GuiRuntime::drawElfStaticAddressDialog() {
     }
 }
 
-void GuiRuntime::drawRawCaptureFileDialogs() {
+void GuiRuntime::drawRawCaptureFileDialogs()
+{
     if (rawCaptureImportDialogOpen_) {
         const char* popupId = "导入原始波形##psraw_import";
         if (!rawCaptureImportDialogOpened_) {
@@ -815,7 +942,8 @@ void GuiRuntime::drawRawCaptureFileDialogs() {
     }
 }
 
-void GuiRuntime::drawLogExportFileDialog() {
+void GuiRuntime::drawLogExportFileDialog()
+{
     if (!logExportDialogOpen_) {
         return;
     }

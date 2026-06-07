@@ -19,342 +19,394 @@ namespace protoscope::app {
 
 namespace {
 
-constexpr std::size_t kRawCaptureReplayChunkBytes = 1024;
-constexpr std::size_t kTransportEventsPerPump = 256;
-constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
+    constexpr std::size_t kRawCaptureReplayChunkBytes = 1024;
+    constexpr std::size_t kTransportEventsPerPump = 256;
+    constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
 
-std::uint64_t nowMs() {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count());
-}
-
-std::uint64_t nowUs() {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
-}
-
-double elapsedMilliseconds(std::chrono::steady_clock::time_point start,
-                           std::chrono::steady_clock::time_point end) {
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-
-const char* stateMessage(transport::TransportState state) {
-    switch (state) {
-    case transport::TransportState::Closed:
-        return "closed";
-    case transport::TransportState::Opening:
-        return "opening";
-    case transport::TransportState::Open:
-        return "open";
-    case transport::TransportState::Error:
-        return "error";
+    std::uint64_t nowMs()
+    {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count());
     }
-    return "unknown";
-}
 
-bool sameColor(const std::optional<std::array<float, 4>>& left, const std::optional<std::array<float, 4>>& right) {
-    if (left.has_value() != right.has_value()) {
-        return false;
+    std::uint64_t nowUs()
+    {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
     }
-    if (!left.has_value()) {
+
+    double elapsedMilliseconds(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end)
+    {
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    }
+
+    const char* stateMessage(transport::TransportState state)
+    {
+        switch (state) {
+            case transport::TransportState::Closed:
+                return "closed";
+            case transport::TransportState::Opening:
+                return "opening";
+            case transport::TransportState::Open:
+                return "open";
+            case transport::TransportState::Error:
+                return "error";
+        }
+        return "unknown";
+    }
+
+    bool sameColor(const std::optional<std::array<float, 4>>& left, const std::optional<std::array<float, 4>>& right)
+    {
+        if (left.has_value() != right.has_value()) {
+            return false;
+        }
+        if (!left.has_value()) {
+            return true;
+        }
+        for (std::size_t index = 0; index < left->size(); ++index) {
+            if (std::abs((*left)[index] - (*right)[index]) > 1e-6F) {
+                return false;
+            }
+        }
         return true;
     }
-    for (std::size_t index = 0; index < left->size(); ++index) {
-        if (std::abs((*left)[index] - (*right)[index]) > 1e-6F) {
+
+    bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer)
+    {
+        if (setupChannels.size() != buffer.channelCount()) {
             return false;
         }
-    }
-    return true;
-}
-
-bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer) {
-    if (setupChannels.size() != buffer.channelCount()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < setupChannels.size(); ++i) {
-        const auto current = buffer.channelSpec(i);
-        if (!current.has_value()) {
-            return false;
-        }
-        const auto& setup = setupChannels[i];
-        if (current->label != setup.label || current->unit != setup.unit || !sameColor(current->color, setup.color)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool sameFullChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer) {
-    if (!sameChannelSpecs(setupChannels, buffer)) {
-        return false;
-    }
-    for (std::size_t index = 0; index < setupChannels.size(); ++index) {
-        const auto current = buffer.channelSpec(index);
-        const auto& setup = setupChannels[index];
-        if (!current.has_value() || std::abs(current->ratio - setup.ratio) > 1e-12
-            || std::abs(current->scale - setup.scale) > 1e-12
-            || std::abs(current->offset - setup.offset) > 1e-12) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool sameChannelIdentity(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer) {
-    if (setupChannels.size() != buffer.channelCount()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < setupChannels.size(); ++i) {
-        const auto current = buffer.channelSpec(i);
-        if (!current.has_value()) {
-            return false;
-        }
-        const auto& setup = setupChannels[i];
-        if (current->label != setup.label || current->unit != setup.unit) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::uint64_t rawCaptureEventRxBytes(const std::vector<plot::RawCaptureEvent>& events) {
-    std::uint64_t total = 0;
-    for (const auto& event : events) {
-        if (event.type == plot::RawCaptureEventType::RxBytes) {
-            total += static_cast<std::uint64_t>(event.bytes.size());
-        }
-    }
-    return total;
-}
-
-void applyActiveRawProfileEvent(std::vector<plot::RawCaptureEvent>& activeProfiles,
-                                const plot::RawCaptureEvent& event) {
-    if (event.type == plot::RawCaptureEventType::ProfileClear && event.profile.frameName.empty()) {
-        activeProfiles.clear();
-        return;
-    }
-
-    const auto sameFrame = [&event](const plot::RawCaptureEvent& item) {
-        return item.profile.frameName == event.profile.frameName;
-    };
-    activeProfiles.erase(std::remove_if(activeProfiles.begin(), activeProfiles.end(), sameFrame),
-                         activeProfiles.end());
-    if (event.type == plot::RawCaptureEventType::ProfileSet) {
-        activeProfiles.push_back(event);
-    }
-}
-
-plot::RawCapturePlotSetupEventData toRawPlotSetup(const scripting::PlotSetup& setup) {
-    plot::RawCapturePlotSetupEventData rawSetup;
-    rawSetup.source = setup.source;
-    rawSetup.view = setup.view;
-    rawSetup.resetHistory = setup.resetHistory;
-    rawSetup.channels.reserve(setup.channels.size());
-    for (const auto& channel : setup.channels) {
-        rawSetup.channels.push_back(plot::ChannelSpec{
-            .label = channel.label,
-            .unit = channel.unit,
-            .ratio = channel.ratio,
-            .scale = channel.scale,
-            .offset = channel.offset,
-            .color = channel.color,
-        });
-    }
-    return rawSetup;
-}
-
-bool nearlyEqual(double left, double right);
-bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config);
-
-bool sameAppliedPlotSetup(const plot::WaveDockState& wave, const plot::RawCapturePlotSetupEventData& setup) {
-    const auto currentConfig = wave.buffer.viewConfig();
-    return sameFullChannelSpecs(setup.channels, wave.buffer)
-        && nearlyEqual(currentConfig.timeScale, setup.view.timeScale)
-        && currentConfig.timeUnit == setup.view.timeUnit
-        && nearlyEqual(currentConfig.verticalMin, setup.view.verticalMin)
-        && nearlyEqual(currentConfig.verticalMax, setup.view.verticalMax)
-        && currentConfig.verticalUnit == setup.view.verticalUnit
-        && currentConfig.historyLimit == setup.view.historyLimit
-        && sameWaveViewState(wave.view, setup.view);
-}
-
-std::optional<plot::RawCapturePlotSetupEventData> currentPlotSetupSnapshot(const plot::WaveDockState& wave,
-                                                                           std::string source) {
-    if (wave.defaultChannelSpecs.empty()) {
-        return std::nullopt;
-    }
-    plot::RawCapturePlotSetupEventData setup;
-    setup.source = std::move(source);
-    setup.channels = wave.defaultChannelSpecs;
-    setup.view = wave.buffer.viewConfig();
-    setup.resetHistory = false;
-    return setup;
-}
-
-std::vector<plot::RawCaptureEvent> trimRawCaptureEventsToPayloadWindow(
-    const std::vector<plot::RawCaptureEvent>& events,
-    std::uint64_t keepStart) {
-    std::vector<plot::RawCaptureEvent> activeProfiles;
-    std::optional<plot::RawCaptureEvent> activePlotSetup;
-    std::vector<plot::RawCaptureEvent> keptEvents;
-    std::uint64_t rxCursor = 0;
-
-    for (const auto& event : events) {
-        if (event.type != plot::RawCaptureEventType::RxBytes) {
-            if (rxCursor < keepStart) {
-                if (event.type == plot::RawCaptureEventType::ProfileSet
-                    || event.type == plot::RawCaptureEventType::ProfileClear) {
-                    applyActiveRawProfileEvent(activeProfiles, event);
-                } else if (event.type == plot::RawCaptureEventType::PlotSetup) {
-                    activePlotSetup = event;
-                }
-            } else {
-                keptEvents.push_back(event);
+        for (std::size_t i = 0; i < setupChannels.size(); ++i) {
+            const auto current = buffer.channelSpec(i);
+            if (!current.has_value()) {
+                return false;
             }
-            continue;
+            const auto& setup = setupChannels[i];
+            if (current->label != setup.label || current->unit != setup.unit ||
+                !sameColor(current->color, setup.color)) {
+                return false;
+            }
         }
-
-        const auto eventStart = rxCursor;
-        const auto eventSize = static_cast<std::uint64_t>(event.bytes.size());
-        const auto eventEnd = eventStart + eventSize;
-        rxCursor = eventEnd;
-        if (eventEnd <= keepStart || event.bytes.empty()) {
-            continue;
-        }
-
-        plot::RawCaptureEvent kept = event;
-        if (eventStart < keepStart) {
-            const auto trimPrefix = static_cast<std::size_t>(keepStart - eventStart);
-            kept.bytes.assign(event.bytes.begin() + static_cast<std::ptrdiff_t>(trimPrefix), event.bytes.end());
-        }
-        keptEvents.push_back(std::move(kept));
+        return true;
     }
 
-    std::vector<plot::RawCaptureEvent> activeEvents;
-    activeEvents.reserve(activeProfiles.size() + keptEvents.size() + (activePlotSetup.has_value() ? 1U : 0U));
-    activeEvents.insert(activeEvents.end(),
-                        std::make_move_iterator(activeProfiles.begin()),
-                        std::make_move_iterator(activeProfiles.end()));
-    if (activePlotSetup.has_value()) {
-        activeEvents.push_back(std::move(*activePlotSetup));
+    bool sameFullChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels,
+                              const plot::OscilloscopeBuffer& buffer)
+    {
+        if (!sameChannelSpecs(setupChannels, buffer)) {
+            return false;
+        }
+        for (std::size_t index = 0; index < setupChannels.size(); ++index) {
+            const auto current = buffer.channelSpec(index);
+            const auto& setup = setupChannels[index];
+            if (!current.has_value() || std::abs(current->ratio - setup.ratio) > 1e-12 ||
+                std::abs(current->scale - setup.scale) > 1e-12 || std::abs(current->offset - setup.offset) > 1e-12) {
+                return false;
+            }
+        }
+        return true;
     }
-    activeEvents.insert(activeEvents.end(),
-                        std::make_move_iterator(keptEvents.begin()),
-                        std::make_move_iterator(keptEvents.end()));
-    return activeEvents;
-}
 
-std::string transferFrameFieldValueText(const scripting::StreamFieldValue& value) {
-    return std::visit(
-        [](const auto& stored) -> std::string {
-            using ValueType = std::decay_t<decltype(stored)>;
-            std::ostringstream builder;
-            if constexpr (std::is_same_v<ValueType, std::vector<std::uint8_t>>) {
-                builder << protocol_utils::bytesToHex(stored, true);
-            } else if constexpr (std::is_same_v<ValueType, std::vector<std::int64_t>>
-                                 || std::is_same_v<ValueType, std::vector<double>>) {
-                builder << "[";
-                for (std::size_t index = 0; index < stored.size(); ++index) {
-                    if (index > 0) {
-                        builder << ", ";
+    bool sameChannelIdentity(const std::vector<plot::ChannelSpec>& setupChannels,
+                             const plot::OscilloscopeBuffer& buffer)
+    {
+        if (setupChannels.size() != buffer.channelCount()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < setupChannels.size(); ++i) {
+            const auto current = buffer.channelSpec(i);
+            if (!current.has_value()) {
+                return false;
+            }
+            const auto& setup = setupChannels[i];
+            if (current->label != setup.label || current->unit != setup.unit) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::uint64_t rawCaptureEventRxBytes(const std::vector<plot::RawCaptureEvent>& events)
+    {
+        std::uint64_t total = 0;
+        for (const auto& event : events) {
+            if (event.type == plot::RawCaptureEventType::RxBytes) {
+                total += static_cast<std::uint64_t>(event.bytes.size());
+            }
+        }
+        return total;
+    }
+
+    void applyActiveRawProfileEvent(std::vector<plot::RawCaptureEvent>& activeProfiles,
+                                    const plot::RawCaptureEvent& event)
+    {
+        if (event.type == plot::RawCaptureEventType::ProfileClear && event.profile.frameName.empty()) {
+            activeProfiles.clear();
+            return;
+        }
+
+        const auto sameFrame = [&event](const plot::RawCaptureEvent& item) {
+            return item.profile.frameName == event.profile.frameName;
+        };
+        activeProfiles.erase(std::remove_if(activeProfiles.begin(), activeProfiles.end(), sameFrame),
+                             activeProfiles.end());
+        if (event.type == plot::RawCaptureEventType::ProfileSet) {
+            activeProfiles.push_back(event);
+        }
+    }
+
+    plot::RawCapturePlotSetupEventData toRawPlotSetup(const scripting::PlotSetup& setup)
+    {
+        plot::RawCapturePlotSetupEventData rawSetup;
+        rawSetup.source = setup.source;
+        rawSetup.view = setup.view;
+        rawSetup.resetHistory = setup.resetHistory;
+        rawSetup.channels.reserve(setup.channels.size());
+        for (const auto& channel : setup.channels) {
+            rawSetup.channels.push_back(plot::ChannelSpec{
+                .label = channel.label,
+                .unit = channel.unit,
+                .ratio = channel.ratio,
+                .scale = channel.scale,
+                .offset = channel.offset,
+                .color = channel.color,
+            });
+        }
+        return rawSetup;
+    }
+
+    bool nearlyEqual(double left, double right);
+    bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config);
+
+    bool sameAppliedPlotSetup(const plot::WaveDockState& wave, const plot::RawCapturePlotSetupEventData& setup)
+    {
+        const auto currentConfig = wave.buffer.viewConfig();
+        return sameFullChannelSpecs(setup.channels, wave.buffer) &&
+               nearlyEqual(currentConfig.timeScale, setup.view.timeScale) &&
+               currentConfig.timeUnit == setup.view.timeUnit &&
+               nearlyEqual(currentConfig.verticalMin, setup.view.verticalMin) &&
+               nearlyEqual(currentConfig.verticalMax, setup.view.verticalMax) &&
+               currentConfig.verticalUnit == setup.view.verticalUnit &&
+               currentConfig.historyLimit == setup.view.historyLimit && sameWaveViewState(wave.view, setup.view);
+    }
+
+    std::optional<plot::RawCapturePlotSetupEventData> currentPlotSetupSnapshot(const plot::WaveDockState& wave,
+                                                                               std::string source)
+    {
+        if (wave.defaultChannelSpecs.empty()) {
+            return std::nullopt;
+        }
+        plot::RawCapturePlotSetupEventData setup;
+        setup.source = std::move(source);
+        setup.channels = wave.defaultChannelSpecs;
+        setup.view = wave.buffer.viewConfig();
+        setup.resetHistory = false;
+        return setup;
+    }
+
+    std::vector<plot::RawCaptureEvent> trimRawCaptureEventsToPayloadWindow(
+        const std::vector<plot::RawCaptureEvent>& events, std::uint64_t keepStart)
+    {
+        std::vector<plot::RawCaptureEvent> activeProfiles;
+        std::optional<plot::RawCaptureEvent> activePlotSetup;
+        std::vector<plot::RawCaptureEvent> keptEvents;
+        std::uint64_t rxCursor = 0;
+
+        for (const auto& event : events) {
+            if (event.type != plot::RawCaptureEventType::RxBytes) {
+                if (rxCursor < keepStart) {
+                    if (event.type == plot::RawCaptureEventType::ProfileSet ||
+                        event.type == plot::RawCaptureEventType::ProfileClear) {
+                        applyActiveRawProfileEvent(activeProfiles, event);
+                    } else if (event.type == plot::RawCaptureEventType::PlotSetup) {
+                        activePlotSetup = event;
                     }
-                    builder << stored[index];
+                } else {
+                    keptEvents.push_back(event);
                 }
-                builder << "]";
-            } else if constexpr (std::is_same_v<ValueType, double>) {
-                builder << std::setprecision(6) << stored;
-            } else {
-                builder << stored;
+                continue;
             }
-            return builder.str();
-        },
-        value.value);
-}
 
-std::string transferFrameMessage(const scripting::StreamParsedFrame& frame) {
-    std::ostringstream builder;
-    builder << "frame";
-    if (!frame.name.empty()) {
-        builder << " " << frame.name;
-    }
-    builder << " len=" << frame.raw.size();
-    if (!frame.fields.empty()) {
-        builder << " fields={";
-        bool first = true;
-        for (const auto& [name, value] : frame.fields) {
-            if (!first) {
-                builder << ", ";
+            const auto eventStart = rxCursor;
+            const auto eventSize = static_cast<std::uint64_t>(event.bytes.size());
+            const auto eventEnd = eventStart + eventSize;
+            rxCursor = eventEnd;
+            if (eventEnd <= keepStart || event.bytes.empty()) {
+                continue;
             }
-            first = false;
-            builder << name << "=" << transferFrameFieldValueText(value);
+
+            plot::RawCaptureEvent kept = event;
+            if (eventStart < keepStart) {
+                const auto trimPrefix = static_cast<std::size_t>(keepStart - eventStart);
+                kept.bytes.assign(event.bytes.begin() + static_cast<std::ptrdiff_t>(trimPrefix), event.bytes.end());
+            }
+            keptEvents.push_back(std::move(kept));
         }
-        builder << "}";
-    }
-    return builder.str();
-}
 
-transport::TransportTxKind toTransportTxKind(scripting::TxRequestKind kind) {
-    switch (kind) {
-    case scripting::TxRequestKind::Send:
+        std::vector<plot::RawCaptureEvent> activeEvents;
+        activeEvents.reserve(activeProfiles.size() + keptEvents.size() + (activePlotSetup.has_value() ? 1U : 0U));
+        activeEvents.insert(activeEvents.end(),
+                            std::make_move_iterator(activeProfiles.begin()),
+                            std::make_move_iterator(activeProfiles.end()));
+        if (activePlotSetup.has_value()) {
+            activeEvents.push_back(std::move(*activePlotSetup));
+        }
+        activeEvents.insert(
+            activeEvents.end(), std::make_move_iterator(keptEvents.begin()), std::make_move_iterator(keptEvents.end()));
+        return activeEvents;
+    }
+
+    std::string transferFrameFieldValueText(const scripting::StreamFieldValue& value)
+    {
+        return std::visit(
+            [](const auto& stored) -> std::string {
+                using ValueType = std::decay_t<decltype(stored)>;
+                std::ostringstream builder;
+                if constexpr (std::is_same_v<ValueType, std::vector<std::uint8_t>>) {
+                    builder << protocol_utils::bytesToHex(stored, true);
+                } else if constexpr (std::is_same_v<ValueType, std::vector<std::int64_t>> ||
+                                     std::is_same_v<ValueType, std::vector<double>>) {
+                    builder << "[";
+                    for (std::size_t index = 0; index < stored.size(); ++index) {
+                        if (index > 0) {
+                            builder << ", ";
+                        }
+                        builder << stored[index];
+                    }
+                    builder << "]";
+                } else if constexpr (std::is_same_v<ValueType, double>) {
+                    builder << std::setprecision(6) << stored;
+                } else {
+                    builder << stored;
+                }
+                return builder.str();
+            },
+            value.value);
+    }
+
+    std::string transferFrameMessage(const scripting::StreamParsedFrame& frame)
+    {
+        std::ostringstream builder;
+        builder << "frame";
+        if (!frame.name.empty()) {
+            builder << " " << frame.name;
+        }
+        builder << " len=" << frame.raw.size();
+        if (!frame.fields.empty()) {
+            builder << " fields={";
+            bool first = true;
+            for (const auto& [name, value] : frame.fields) {
+                if (!first) {
+                    builder << ", ";
+                }
+                first = false;
+                builder << name << "=" << transferFrameFieldValueText(value);
+            }
+            builder << "}";
+        }
+        return builder.str();
+    }
+
+    transport::TransportTxKind toTransportTxKind(scripting::TxRequestKind kind)
+    {
+        switch (kind) {
+            case scripting::TxRequestKind::Send:
+                return transport::TransportTxKind::Send;
+            case scripting::TxRequestKind::Request:
+                return transport::TransportTxKind::Request;
+        }
         return transport::TransportTxKind::Send;
-    case scripting::TxRequestKind::Request:
-        return transport::TransportTxKind::Request;
     }
-    return transport::TransportTxKind::Send;
-}
 
-scripting::TxEventState toScriptTxState(transport::TransportTxState state) {
-    switch (state) {
-    case transport::TransportTxState::Sent:
-        return scripting::TxEventState::Sent;
-    case transport::TransportTxState::Timeout:
-        return scripting::TxEventState::Timeout;
-    case transport::TransportTxState::Rejected:
+    scripting::TxEventState toScriptTxState(transport::TransportTxState state)
+    {
+        switch (state) {
+            case transport::TransportTxState::Sent:
+                return scripting::TxEventState::Sent;
+            case transport::TransportTxState::Timeout:
+                return scripting::TxEventState::Timeout;
+            case transport::TransportTxState::Rejected:
+                return scripting::TxEventState::Rejected;
+            case transport::TransportTxState::Dropped:
+                return scripting::TxEventState::Dropped;
+            case transport::TransportTxState::Canceled:
+                return scripting::TxEventState::Canceled;
+        }
         return scripting::TxEventState::Rejected;
-    case transport::TransportTxState::Dropped:
-        return scripting::TxEventState::Dropped;
-    case transport::TransportTxState::Canceled:
-        return scripting::TxEventState::Canceled;
     }
-    return scripting::TxEventState::Rejected;
-}
 
-bool nearlyEqual(double left, double right) {
-    return std::abs(left - right) <= 1e-12;
-}
+    bool isGuardedTerminalFailure(const scripting::TxRequest& request, scripting::TxEventState state)
+    {
+        if (!request.guarded) {
+            return false;
+        }
+        switch (state) {
+            case scripting::TxEventState::Failed:
+            case scripting::TxEventState::Rejected:
+            case scripting::TxEventState::Dropped:
+                return true;
+            case scripting::TxEventState::Timeout:
+                return request.attempt >= request.maxAttempts;
+            default:
+                return false;
+        }
+    }
 
-std::string formatFrequencyInput(double valueHz) {
-    if (!(std::isfinite(valueHz)) || valueHz <= 0.0) {
-        return {};
+    std::optional<std::string> guardStateForEvent(const scripting::TxRequest& request, scripting::TxEventState state)
+    {
+        if (!request.guarded) {
+            return std::nullopt;
+        }
+        if (state == scripting::TxEventState::Timeout && request.attempt < request.maxAttempts) {
+            return std::string("retrying");
+        }
+        if (isGuardedTerminalFailure(request, state)) {
+            return std::string("halted");
+        }
+        return std::string("active");
     }
-    std::ostringstream out;
-    out << valueHz;
-    return out.str();
-}
 
-bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config) {
-    const double defaultVisibleDuration = (std::max)(view.minVisibleTimeSpan, (std::max)(config.timeScale * 1000.0, config.timeScale));
-    if (!nearlyEqual(view.visibleDuration, defaultVisibleDuration)) {
-        return false;
+    bool nearlyEqual(double left, double right)
+    {
+        return std::abs(left - right) <= 1e-12;
     }
-    if (!nearlyEqual(view.manualVerticalMin, config.verticalMin) || !nearlyEqual(view.manualVerticalMax, config.verticalMax)) {
-        return false;
+
+    std::string formatFrequencyInput(double valueHz)
+    {
+        if (!(std::isfinite(valueHz)) || valueHz <= 0.0) {
+            return {};
+        }
+        std::ostringstream out;
+        out << valueHz;
+        return out.str();
     }
-    if (!nearlyEqual(view.viewMinValue, config.verticalMin) || !nearlyEqual(view.viewMaxValue, config.verticalMax)) {
-        return false;
+
+    bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config)
+    {
+        const double defaultVisibleDuration =
+            (std::max)(view.minVisibleTimeSpan, (std::max)(config.timeScale * 1000.0, config.timeScale));
+        if (!nearlyEqual(view.visibleDuration, defaultVisibleDuration)) {
+            return false;
+        }
+        if (!nearlyEqual(view.manualVerticalMin, config.verticalMin) ||
+            !nearlyEqual(view.manualVerticalMax, config.verticalMax)) {
+            return false;
+        }
+        if (!nearlyEqual(view.viewMinValue, config.verticalMin) ||
+            !nearlyEqual(view.viewMaxValue, config.verticalMax)) {
+            return false;
+        }
+        return true;
     }
-    return true;
-}
 
 } // namespace
 
 Application::Application() = default;
 
-bool Application::initialize() {
+bool Application::initialize()
+{
     loggingFacade_.bindDockStore(&dockStore_);
     std::string workspaceError;
     if (!configStore_.ensureDefaultProtocolWorkspace(workspaceError)) {
@@ -365,12 +417,16 @@ bool Application::initialize() {
     const auto loaded = configStore_.load(configStore_.defaultConfigPath());
     runtimeConfig_ = loaded.config;
     loggingFacade_.applyConfig(loaded.config.logging);
-    applyConfig(loaded.config);
+    const bool configApplied = applyConfig(loaded.config);
 
     auto& configState = dockStore_.configState();
     configState.loadedFromPath = loaded.resolvedPath.generic_string();
     configState.fileTimestampMs = configStore_.snapshot(loaded.resolvedPath).timestampMs;
-    if (loaded.loadedFromDisk) {
+    if (!configApplied) {
+        const auto& lua = dockStore_.luaState();
+        const auto message = lua.lastError.empty() ? std::string("协议加载失败") : "协议加载失败: " + lua.lastError;
+        dockStore_.markDirty(message);
+    } else if (loaded.loadedFromDisk) {
         dockStore_.clearDirty("已从 YAML 加载配置");
     } else if (!loaded.error.empty()) {
         dockStore_.markDirty(loaded.error);
@@ -382,12 +438,12 @@ bool Application::initialize() {
     return true;
 }
 
-bool Application::applyConfig(const config::AppConfig& config) {
+bool Application::applyConfig(const config::AppConfig& config)
+{
     runtimeConfig_ = config;
     resetStreamBufferAlertState();
     const auto postprocessWorkerThreads = scripting::resolvePipelineWorkerThreads(
-        config.scripting.pipeline.workerThreads,
-        std::thread::hardware_concurrency());
+        config.scripting.pipeline.workerThreads, std::thread::hardware_concurrency());
     scriptWorker_.configure(scripting::ScriptRuntimeWorkerConfig{
         .enabled = config.scripting.workerEnabled,
         .postprocessWorkerThreads = postprocessWorkerThreads,
@@ -409,7 +465,8 @@ bool Application::applyConfig(const config::AppConfig& config) {
     return reloadProtocolDirectory(dockStore_.luaState().protocolDir);
 }
 
-void Application::setLogLevel(const config::LogLevel level) {
+void Application::setLogLevel(const config::LogLevel level)
+{
     runtimeConfig_.logging.level = level;
     auto logging = loggingFacade_.currentConfig();
     logging.level = level;
@@ -417,7 +474,8 @@ void Application::setLogLevel(const config::LogLevel level) {
     loggingFacade_.applyConfig(logging);
 }
 
-config::AppConfig Application::captureConfig() const {
+config::AppConfig Application::captureConfig() const
+{
     auto captured = configStore_.captureFromDock(dockStore_);
     captured.performance = runtimeConfig_.performance;
     captured.gui.window = runtimeConfig_.gui.window;
@@ -430,6 +488,7 @@ config::AppConfig Application::captureConfig() const {
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
     captured.gui.replayRawHistoryOnSchemaSwitch = runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch;
+    captured.protocol.tx = runtimeConfig_.protocol.tx;
     captured.app.language = runtimeConfig_.app.language;
     captured.receive = runtimeConfig_.receive;
     captured.scripting = runtimeConfig_.scripting;
@@ -437,11 +496,13 @@ config::AppConfig Application::captureConfig() const {
     return captured;
 }
 
-const config::AppConfig& Application::runtimeConfig() const {
+const config::AppConfig& Application::runtimeConfig() const
+{
     return runtimeConfig_;
 }
 
-bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool forceReload) {
+bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool forceReload)
+{
     auto& lua = dockStore_.luaState();
     try {
         const auto resolvedDir = configStore_.normalizeProtocolDir(lua.protocolRootDir, protocolDir);
@@ -531,7 +592,8 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     return false;
 }
 
-bool Application::pumpOnce() {
+bool Application::pumpOnce()
+{
     bool changed = false;
     const bool hadPendingScriptPlotAppends = !pendingScriptPlotAppends_.empty();
     changed = handleTransportEvents() || changed;
@@ -547,20 +609,24 @@ bool Application::pumpOnce() {
     return changed;
 }
 
-void Application::shutdown() {
+void Application::shutdown()
+{
     closeTransport();
     scriptWorker_.stop();
 }
 
-dock::DockStore& Application::docks() {
+dock::DockStore& Application::docks()
+{
     return dockStore_;
 }
 
-const dock::DockStore& Application::docks() const {
+const dock::DockStore& Application::docks() const
+{
     return dockStore_;
 }
 
-void Application::openTransport() {
+void Application::openTransport()
+{
     cancelAllTxRequests("连接重新打开");
     pendingTransportEvents_.clear();
     pendingRxByteChunks_.clear();
@@ -585,7 +651,8 @@ void Application::openTransport() {
     syncDockState();
 }
 
-void Application::closeTransport() {
+void Application::closeTransport()
+{
     cancelAllTxRequests("连接已关闭");
     if (activeConnection_.has_value()) {
         resetStreamBufferAlertState(activeConnection_->connectionId);
@@ -610,7 +677,8 @@ void Application::closeTransport() {
     syncDockState();
 }
 
-bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
+bool Application::sendManualPayload(const std::string& payload, bool hexMode)
+{
     if (!transport_ || transport_->state() != transport::TransportState::Open) {
         dockStore_.commState().lastError = "连接未打开，无法发送";
         loggingFacade_.warn("transport", dockStore_.commState().lastError);
@@ -654,7 +722,8 @@ bool Application::sendManualPayload(const std::string& payload, bool hexMode) {
     return true;
 }
 
-void Application::appendTransferRow(dock::ReceiveRow row) {
+void Application::appendTransferRow(dock::ReceiveRow row)
+{
     // 核心流程：RawChunks 模式只维护原始历史；逐帧解析延迟到 ParsedFrames 视图，避免高速 RX 时主线程逐帧膨胀。
     if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
         appendTransferFrameRows(row);
@@ -662,11 +731,12 @@ void Application::appendTransferRow(dock::ReceiveRow row) {
     dockStore_.appendReceiveRow(std::move(row));
 }
 
-void Application::appendLiveRawCapture(const transport::TransportBytesEvent& event) {
+void Application::appendLiveRawCapture(const transport::TransportBytesEvent& event)
+{
     auto& wave = dockStore_.waveState();
     const auto& lua = dockStore_.luaState();
-    if (!wave.rawCapture.payload.empty()
-        && (wave.rawCapture.protocolDir != lua.protocolDir || wave.rawCapture.protocolName != lua.protocolName)) {
+    if (!wave.rawCapture.payload.empty() &&
+        (wave.rawCapture.protocolDir != lua.protocolDir || wave.rawCapture.protocolName != lua.protocolName)) {
         wave.rawCapture = {};
     }
     if (wave.rawCapture.payload.empty()) {
@@ -691,8 +761,8 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
     // 核心流程：实时接收只保存最近一段原始字节，完整历史应由显式录制或外部文件承载。
     wave.rawCapture.truncated = true;
     const auto keepStart = rawCaptureEventRxBytes(wave.rawCapture.events) > limit
-        ? rawCaptureEventRxBytes(wave.rawCapture.events) - limit
-        : 0U;
+                               ? rawCaptureEventRxBytes(wave.rawCapture.events) - limit
+                               : 0U;
     wave.rawCapture.events = trimRawCaptureEventsToPayloadWindow(wave.rawCapture.events, keepStart);
     if (limit == 0U) {
         wave.rawCapture.payload.clear();
@@ -704,7 +774,8 @@ void Application::appendLiveRawCapture(const transport::TransportBytesEvent& eve
         wave.rawCapture.payload.begin() + static_cast<std::vector<std::uint8_t>::difference_type>(removeCount));
 }
 
-void Application::appendRawCaptureEvent(const plot::RawCaptureEvent& event) {
+void Application::appendRawCaptureEvent(const plot::RawCaptureEvent& event)
+{
     auto& rawCapture = dockStore_.waveState().rawCapture;
     rawCapture.events.push_back(event);
     if (event.type == plot::RawCaptureEventType::RxBytes) {
@@ -712,7 +783,8 @@ void Application::appendRawCaptureEvent(const plot::RawCaptureEvent& event) {
     }
 }
 
-bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup) {
+bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup)
+{
     auto& wave = dockStore_.waveState();
     const auto previousConfig = wave.buffer.viewConfig();
     const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
@@ -763,8 +835,8 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
     const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
     const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
     if (shouldResetView) {
-        wave.view.visibleDuration = (std::max)(wave.view.minVisibleTimeSpan,
-                                               (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
+        wave.view.visibleDuration =
+            (std::max)(wave.view.minVisibleTimeSpan, (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
         wave.view.manualVerticalMin = setup.view.verticalMin;
         wave.view.manualVerticalMax = setup.view.verticalMax;
         wave.view.viewMinValue = setup.view.verticalMin;
@@ -775,7 +847,8 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
     return true;
 }
 
-void Application::recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventData& setup, std::uint64_t timestampMs) {
+void Application::recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventData& setup, std::uint64_t timestampMs)
+{
     const plot::RawCaptureEvent event{
         .type = plot::RawCaptureEventType::PlotSetup,
         .timestampMs = timestampMs,
@@ -794,20 +867,22 @@ void Application::recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventDa
     }
 }
 
-void Application::appendRawCaptureRecording(const transport::TransportBytesEvent& event) {
+void Application::appendRawCaptureRecording(const transport::TransportBytesEvent& event)
+{
     if (!rawCaptureRecording_.isOpen() || event.bytes.empty()) {
         return;
     }
 
     std::string error;
-    if (rawCaptureRecording_.appendEvent(plot::RawCaptureEvent{
-            .type = plot::RawCaptureEventType::RxBytes,
-            .timestampMs = event.context.timestampMs,
-            .bytes = event.bytes,
-            .profile = {},
-            .plotSetup = {},
-        },
-        error)) {
+    if (rawCaptureRecording_.appendEvent(
+            plot::RawCaptureEvent{
+                .type = plot::RawCaptureEventType::RxBytes,
+                .timestampMs = event.context.timestampMs,
+                .bytes = event.bytes,
+                .profile = {},
+                .plotSetup = {},
+            },
+            error)) {
         return;
     }
 
@@ -819,7 +894,8 @@ void Application::appendRawCaptureRecording(const transport::TransportBytesEvent
     loggingFacade_.error("raw_capture", message);
 }
 
-std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState() const {
+std::optional<Application::TransferFrameParserState> Application::makeTransferFrameParserState() const
+{
     const auto snapshot = scriptWorker_.snapshot();
     const auto bufferDefinition = snapshot.streamBuffer;
     auto frameDefinitions = snapshot.streamFrames;
@@ -834,19 +910,22 @@ std::optional<Application::TransferFrameParserState> Application::makeTransferFr
     };
 }
 
-void Application::resetTransferFrameParser() {
+void Application::resetTransferFrameParser()
+{
     // 核心流程：收发记录视图使用独立 parser，不复用 Lua 回调 parser，避免 UI 展示影响协议运行态。
     transferFrameParser_ = makeTransferFrameParserState();
 }
 
-void Application::resetTransferFrameDisplayState() {
+void Application::resetTransferFrameDisplayState()
+{
     dockStore_.clearTransferFrameRows();
     pendingTransferFrameRows_.clear();
     resetTransferFrameParser();
 }
 
 dock::ReceiveRow Application::makeTransferFrameRow(const dock::ReceiveRow& sourceRow,
-                                                   const scripting::StreamParsedFrame& frame) const {
+                                                   const scripting::StreamParsedFrame& frame) const
+{
     return dock::ReceiveRow{
         .timestampMs = sourceRow.timestampMs,
         .direction = sourceRow.direction,
@@ -856,7 +935,8 @@ dock::ReceiveRow Application::makeTransferFrameRow(const dock::ReceiveRow& sourc
     };
 }
 
-void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow) {
+void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow)
+{
     if (sourceRow.bytes.empty() || (sourceRow.direction != "RX" && sourceRow.direction != "TX")) {
         return;
     }
@@ -896,7 +976,8 @@ void Application::appendTransferFrameRows(const dock::ReceiveRow& sourceRow) {
     enqueueTransferFrameRows(std::move(frameRows));
 }
 
-void Application::rebuildTransferFrameRows() {
+void Application::rebuildTransferFrameRows()
+{
     const auto rows = dockStore_.receiveState().rows;
     resetTransferFrameDisplayState();
     for (const auto& row : rows) {
@@ -905,7 +986,8 @@ void Application::rebuildTransferFrameRows() {
     flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
 }
 
-void Application::activateParsedTransferLogView() {
+void Application::activateParsedTransferLogView()
+{
     // 核心流程：RawChunks 不实时生成逐帧行；用户切到 ParsedFrames 时再按原始历史完整回放。
     resetTransferFrameDisplayState();
     for (const auto& row : dockStore_.receiveState().rows) {
@@ -914,7 +996,8 @@ void Application::activateParsedTransferLogView() {
     flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
 }
 
-void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config) {
+void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config)
+{
     dockStore_.setHistoryLimits(dock::DockHistoryLimits{
         .transferRawRows = config.transferRawLimit,
         .transferFrameRows = config.transferFrameLimit,
@@ -924,7 +1007,8 @@ void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config) 
     trimPendingTransferFrameRowsToLimit();
 }
 
-void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value) {
+void Application::updateControlValue(const std::string& id, const scripting::ControlValue& value)
+{
     transport::ConnectionContext context;
     if (activeConnection_.has_value()) {
         context = *activeConnection_;
@@ -941,7 +1025,8 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
     syncDockState();
 }
 
-bool Application::restoreControlValue(const std::string& id, const scripting::ControlValue& value) {
+bool Application::restoreControlValue(const std::string& id, const scripting::ControlValue& value)
+{
     if (!scriptWorker_.setControlValue(id, value)) {
         return false;
     }
@@ -949,16 +1034,19 @@ bool Application::restoreControlValue(const std::string& id, const scripting::Co
     return true;
 }
 
-void Application::markCommConfigEdited(bool reconnectRequired) {
+void Application::markCommConfigEdited(bool reconnectRequired)
+{
     dockStore_.commState().reconnectRequired = reconnectRequired;
     dockStore_.markDirty(reconnectRequired ? "通讯配置已修改，需重新连接" : "通讯配置已修改");
 }
 
-void Application::markProtocolEdited() {
+void Application::markProtocolEdited()
+{
     dockStore_.markDirty("协议配置已修改");
 }
 
-void Application::setStatusMessage(std::string message, bool markDirty) {
+void Application::setStatusMessage(std::string message, bool markDirty)
+{
     if (markDirty) {
         dockStore_.markDirty(message);
         return;
@@ -966,7 +1054,8 @@ void Application::setStatusMessage(std::string message, bool markDirty) {
     dockStore_.configState().statusMessage = std::move(message);
 }
 
-bool Application::setSendHexMode(bool enabled) {
+bool Application::setSendHexMode(bool enabled)
+{
     auto& send = dockStore_.sendState();
     if (send.hexMode == enabled) {
         return true;
@@ -999,7 +1088,8 @@ bool Application::setSendHexMode(bool enabled) {
     return true;
 }
 
-bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const {
+bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const
+{
     const auto& lua = dockStore_.luaState();
     const auto& wave = dockStore_.waveState();
 
@@ -1035,7 +1125,8 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
     return plot::writeRawCaptureFile(path, capture, error);
 }
 
-bool Application::startRawCaptureRecording(const std::filesystem::path& path, std::string& error) {
+bool Application::startRawCaptureRecording(const std::filesystem::path& path, std::string& error)
+{
     if (rawCaptureRecording_.isOpen()) {
         error = "已有完整原始数据录制正在进行";
         return false;
@@ -1079,7 +1170,8 @@ bool Application::startRawCaptureRecording(const std::filesystem::path& path, st
     return true;
 }
 
-bool Application::stopRawCaptureRecording(std::string& error) {
+bool Application::stopRawCaptureRecording(std::string& error)
+{
     if (!rawCaptureRecording_.isOpen()) {
         return true;
     }
@@ -1090,24 +1182,29 @@ bool Application::stopRawCaptureRecording(std::string& error) {
         return false;
     }
 
-    setStatusMessage("完整原始数据录制已停止: " + path.generic_string() + " (" + std::to_string(bytesWritten) + " bytes)");
+    setStatusMessage("完整原始数据录制已停止: " + path.generic_string() + " (" + std::to_string(bytesWritten) +
+                     " bytes)");
     loggingFacade_.info("raw_capture", "完整原始数据录制已停止: " + path.generic_string());
     return true;
 }
 
-bool Application::isRawCaptureRecording() const {
+bool Application::isRawCaptureRecording() const
+{
     return rawCaptureRecording_.isOpen();
 }
 
-const std::filesystem::path& Application::rawCaptureRecordingPath() const {
+const std::filesystem::path& Application::rawCaptureRecordingPath() const
+{
     return rawCaptureRecording_.path();
 }
 
-std::uint64_t Application::rawCaptureRecordingBytes() const {
+std::uint64_t Application::rawCaptureRecordingBytes() const
+{
     return rawCaptureRecording_.bytesWritten();
 }
 
-bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error) {
+bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error)
+{
     auto& lua = dockStore_.luaState();
     if (!lua.loaded) {
         error = "当前协议尚未加载";
@@ -1141,16 +1238,18 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
         suppressRawCaptureProfileEvents_ = true;
         suppressRawCapturePlotSetupEvents_ = true;
         for (const auto& recordedEvent : capture.events) {
-            replayContext.timestampMs = recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
+            replayContext.timestampMs =
+                recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
             if (recordedEvent.type == plot::RawCaptureEventType::ProfileSet) {
                 std::string profileError;
-                if (!scriptWorker_.applyStreamRuntimeProfileEvent(scripting::StreamRuntimeProfileEvent{
-                        .cleared = false,
-                        .frameName = recordedEvent.profile.frameName,
-                        .length = recordedEvent.profile.length,
-                        .channelMap = recordedEvent.profile.channelMap,
-                    },
-                    profileError)) {
+                if (!scriptWorker_.applyStreamRuntimeProfileEvent(
+                        scripting::StreamRuntimeProfileEvent{
+                            .cleared = false,
+                            .frameName = recordedEvent.profile.frameName,
+                            .length = recordedEvent.profile.length,
+                            .channelMap = recordedEvent.profile.channelMap,
+                        },
+                        profileError)) {
                     suppressRawCaptureProfileEvents_ = false;
                     suppressRawCapturePlotSetupEvents_ = false;
                     error = "导入 profile_set 失败: " + profileError;
@@ -1161,13 +1260,14 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
                 flushScriptOutputs();
             } else if (recordedEvent.type == plot::RawCaptureEventType::ProfileClear) {
                 std::string clearError;
-                if (!scriptWorker_.applyStreamRuntimeProfileEvent(scripting::StreamRuntimeProfileEvent{
-                        .cleared = true,
-                        .frameName = recordedEvent.profile.frameName,
-                        .length = 0,
-                        .channelMap = {},
-                    },
-                    clearError)) {
+                if (!scriptWorker_.applyStreamRuntimeProfileEvent(
+                        scripting::StreamRuntimeProfileEvent{
+                            .cleared = true,
+                            .frameName = recordedEvent.profile.frameName,
+                            .length = 0,
+                            .channelMap = {},
+                        },
+                        clearError)) {
                     suppressRawCaptureProfileEvents_ = false;
                     suppressRawCapturePlotSetupEvents_ = false;
                     error = "导入 profile_clear 失败: " + clearError;
@@ -1177,7 +1277,8 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
                 scriptWorker_.waitIdle();
                 flushScriptOutputs();
             } else if (recordedEvent.type == plot::RawCaptureEventType::PlotSetup) {
-                // 核心流程：raw 回放可能先由 Lua on_open/on_bytes 产生同一 setup；完全一致时跳过，避免 reset_history 二次清空样本。
+                // 核心流程：raw 回放可能先由 Lua on_open/on_bytes 产生同一 setup；完全一致时跳过，避免 reset_history
+                // 二次清空样本。
                 if (!sameAppliedPlotSetup(wave, recordedEvent.plotSetup)) {
                     applyPlotSetup(recordedEvent.plotSetup);
                 }
@@ -1185,10 +1286,15 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
                 std::size_t cursor = 0;
                 while (cursor < recordedEvent.bytes.size()) {
                     const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, recordedEvent.bytes.size() - cursor);
-                    std::vector<std::uint8_t> chunk(recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
-                                                    recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
+                    std::vector<std::uint8_t> chunk(
+                        recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+                        recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
                     scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-                    scriptWorker_.waitIdle();
+                    if (runtimeConfig_.scripting.workerEnabled) {
+                        // 核心流程：异步 worker 需要显式等到队列排空后再 flush，禁用 worker 时
+                        // postTransportBytes 内部已经同步等待完成，避免重复阻塞。
+                        scriptWorker_.waitIdle();
+                    }
                     flushScriptOutputs();
                     cursor += chunkSize;
                 }
@@ -1209,15 +1315,19 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
             std::vector<std::uint8_t> chunk(capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor),
                                             capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
             scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-            scriptWorker_.waitIdle();
+            if (runtimeConfig_.scripting.workerEnabled) {
+                // 核心流程：异步 worker 需要先等到脚本消费完当前 chunk，再把输出合并到回放结果。
+                scriptWorker_.waitIdle();
+            }
             flushScriptOutputs();
             cursor += chunkSize;
         }
     }
 
     flushScriptOutputs();
-    const auto importedSnapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(),
-                                                       std::numeric_limits<double>::infinity());
+    const auto importedSnapshot =
+        wave.buffer.snapshot(
+            -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
     std::size_t importedHistoryLimit = 0;
     for (const auto& channel : importedSnapshot.channels) {
         importedHistoryLimit = (std::max)(importedHistoryLimit, channel.totalSamples);
@@ -1229,7 +1339,8 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     return true;
 }
 
-bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error) {
+bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error)
+{
     if (!elfStaticView_.loadFile(path, error)) {
         return false;
     }
@@ -1238,12 +1349,23 @@ bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, st
     return true;
 }
 
-std::uint64_t Application::elfStaticAddressRevision() const {
+void Application::clearElfStaticAddressFile()
+{
+    const bool hadLoadedContext = elfStaticView_.loaded() || !elfStaticView_.sourcePath().empty();
+    elfStaticView_.clear();
+    if (hadLoadedContext) {
+        ++elfStaticAddressRevision_;
+    }
+}
+
+std::uint64_t Application::elfStaticAddressRevision() const
+{
     return elfStaticAddressRevision_;
 }
 
 std::vector<scripting::ElfSymbolValue> Application::queryElfStaticAddresses(const std::string& queryText,
-                                                                            std::size_t limit) const {
+                                                                            std::size_t limit) const
+{
     std::vector<scripting::ElfSymbolValue> symbols;
     for (const auto& entry : elfStaticView_.query(queryText, limit)) {
         symbols.push_back(scripting::ElfSymbolValue{
@@ -1255,7 +1377,46 @@ std::vector<scripting::ElfSymbolValue> Application::queryElfStaticAddresses(cons
     return symbols;
 }
 
-void Application::resetWaveHistory() {
+void Application::refreshSelectedElfSymbolControls()
+{
+    const auto comboConfig = runtimeConfig_.gui.elfSymbolCombo;
+    if (!comboConfig.autoRefreshSelectedAddress) {
+        return;
+    }
+
+    const auto luaSnapshot = scriptWorker_.snapshot();
+    for (const auto& control : luaSnapshot.controlStates) {
+        if (control.descriptor.type != scripting::ControlType::ElfSymbolCombo) {
+            continue;
+        }
+        const auto* current = std::get_if<scripting::ElfSymbolValue>(&control.value);
+        if (current == nullptr || current->label.empty()) {
+            continue;
+        }
+
+        const auto refreshed = elfStaticView_.findExactLabel(current->label);
+        if (!refreshed.has_value() || (refreshed->value == current->value && refreshed->type == current->type)) {
+            continue;
+        }
+
+        const scripting::ElfSymbolValue refreshedValue{
+            .label = refreshed->label,
+            .value = refreshed->value,
+            .type = refreshed->type,
+        };
+        // 核心流程：默认只同步当前控件值；显式配置后才复用 updateControlValue 触发 Lua on_control。
+        if (comboConfig.autoRefreshEmitOnControl) {
+            updateControlValue(control.descriptor.id, refreshedValue);
+        } else {
+            static_cast<void>(restoreControlValue(control.descriptor.id, refreshedValue));
+        }
+    }
+    flushScriptOutputs();
+    syncDockState();
+}
+
+void Application::resetWaveHistory()
+{
     auto& wave = dockStore_.waveState();
     wave.buffer.clear();
     wave.rawCapture = {};
@@ -1269,7 +1430,8 @@ void Application::resetWaveHistory() {
     wave.statusMessage = "波形历史已清空";
 }
 
-std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
+std::optional<std::uint64_t> Application::nextWakeupAtMs() const
+{
     const auto scriptSnapshot = scriptWorker_.snapshot();
     if (!pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || !pendingTransferFrameRows_.empty() ||
         scriptSnapshot.pendingPlotAppends > 0U || scriptSnapshot.pendingWorkerRxBytes > 0U) {
@@ -1284,51 +1446,56 @@ std::optional<std::uint64_t> Application::nextWakeupAtMs() const {
     return nextWakeup;
 }
 
-void Application::setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory) {
+void Application::setTransportFactoryForTest(
+    std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory)
+{
     transportFactoryForTest_ = std::move(factory);
 }
 
-std::unique_ptr<transport::ITransport> Application::createTransport(transport::TransportKind kind) const {
+std::unique_ptr<transport::ITransport> Application::createTransport(transport::TransportKind kind) const
+{
     if (transportFactoryForTest_) {
         return transportFactoryForTest_(kind);
     }
     return transport::createTransport(kind);
 }
 
-transport::TransportConfig Application::currentTransportConfig(transport::TransportKind kind) const {
+transport::TransportConfig Application::currentTransportConfig(transport::TransportKind kind) const
+{
     const auto& comm = dockStore_.commState();
     switch (kind) {
-    case transport::TransportKind::TcpClient:
-        return [&] {
-            auto config = comm.tcpClient;
-            config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
-            return config;
-        }();
-    case transport::TransportKind::TcpServer:
-        return [&] {
-            auto config = comm.tcpServer;
-            config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
-            return config;
-        }();
-    case transport::TransportKind::Serial:
-        return [&] {
-            auto config = comm.serial;
-            config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
-            return config;
-        }();
-    case transport::TransportKind::UdpPeer:
-        return [&] {
-            auto config = comm.udpPeer;
-            config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
-            return config;
-        }();
+        case transport::TransportKind::TcpClient:
+            return [&] {
+                auto config = comm.tcpClient;
+                config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
+                return config;
+            }();
+        case transport::TransportKind::TcpServer:
+            return [&] {
+                auto config = comm.tcpServer;
+                config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
+                return config;
+            }();
+        case transport::TransportKind::Serial:
+            return [&] {
+                auto config = comm.serial;
+                config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
+                return config;
+            }();
+        case transport::TransportKind::UdpPeer:
+            return [&] {
+                auto config = comm.udpPeer;
+                config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
+                return config;
+            }();
     }
     auto config = comm.tcpClient;
     config.readBufferBytes = runtimeConfig_.receive.transportReadBufferBytes;
     return config;
 }
 
-void Application::syncDockState() {
+void Application::syncDockState()
+{
     auto& comm = dockStore_.commState();
     if (transport_) {
         comm.state = transport_->state();
@@ -1345,15 +1512,16 @@ void Application::syncDockState() {
     comm.parserPendingBytes = scriptSnapshot.pendingWorkerRxBytes;
     comm.postprocessPendingBatches = 0U;
     comm.luaPendingItems = scriptSnapshot.inputQueueSize;
-    comm.uiPendingItems = scriptSnapshot.outputQueueSize + pendingTransferFrameRows_.size() + pendingScriptPlotAppends_.size();
+    comm.uiPendingItems =
+        scriptSnapshot.outputQueueSize + pendingTransferFrameRows_.size() + pendingScriptPlotAppends_.size();
     comm.postprocessWorkerThreads = scriptSnapshot.postprocessWorkerThreads;
     comm.backlogWarning.clear();
     const auto rawFirstWarnBytes = runtimeConfig_.gui.realtimeBacklog.rawFirstBacklogWarnBytes;
     if (rawFirstWarnBytes > 0U && comm.pendingRxBytes >= rawFirstWarnBytes) {
         comm.backlogWarning = "raw-first backlog 已超过告警阈值；原始数据继续保留，派生 UI 可能延后或降级";
-    } else if (runtimeConfig_.gui.realtimeBacklog.derivedBacklogDegradeEnabled
-               && (comm.pendingTransferFrameRows > runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump
-                   || comm.pendingPlotAppends > runtimeConfig_.gui.realtimeBacklog.plotAppendsPerPump)) {
+    } else if (runtimeConfig_.gui.realtimeBacklog.derivedBacklogDegradeEnabled &&
+               (comm.pendingTransferFrameRows > runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump ||
+                comm.pendingPlotAppends > runtimeConfig_.gui.realtimeBacklog.plotAppendsPerPump)) {
         comm.backlogWarning = "派生 UI backlog 已超过单轮预算；transfer rows / plot append 将分批追赶";
     }
     comm.lastErrorSummary = scriptSnapshot.lastTransportStats.lastErrorSummary;
@@ -1367,7 +1535,8 @@ void Application::syncDockState() {
     const auto waveRevision = wave.buffer.dataRevision();
     if (!cachedWaveSummaryRevision_.has_value() || *cachedWaveSummaryRevision_ != waveRevision) {
         wave.channelSummaries.clear();
-        const auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+        const auto snapshot =
+            wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
         for (const auto& channel : snapshot.channels) {
             wave.channelSummaries.push_back(channel.label + " samples=" + std::to_string(channel.totalSamples));
         }
@@ -1375,7 +1544,8 @@ void Application::syncDockState() {
     }
 }
 
-bool Application::handleTransportEvents() {
+bool Application::handleTransportEvents()
+{
     bool changed = false;
     auto& comm = dockStore_.commState();
     comm.lastPumpEvents = 0;
@@ -1435,7 +1605,8 @@ bool Application::handleTransportEvents() {
     return changed || !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty();
 }
 
-bool Application::processPendingRxBytes(const std::size_t maxBytes) {
+bool Application::processPendingRxBytes(const std::size_t maxBytes)
+{
     if (pendingRxByteChunks_.empty() || maxBytes == 0U) {
         return false;
     }
@@ -1445,8 +1616,9 @@ bool Application::processPendingRxBytes(const std::size_t maxBytes) {
     const auto chunkSize = (std::min)(remaining, maxBytes);
     transport::TransportBytesEvent chunk{
         .context = pending.context,
-        .bytes = std::vector<std::uint8_t>(pending.bytes.begin() + static_cast<std::ptrdiff_t>(pending.offset),
-                                           pending.bytes.begin() + static_cast<std::ptrdiff_t>(pending.offset + chunkSize)),
+        .bytes =
+            std::vector<std::uint8_t>(pending.bytes.begin() + static_cast<std::ptrdiff_t>(pending.offset),
+                                      pending.bytes.begin() + static_cast<std::ptrdiff_t>(pending.offset + chunkSize)),
     };
 
     // 核心流程：大 RX 事件拆成小块喂给脚本和 UI，避免单次 pump 长时间占住主线程。
@@ -1458,7 +1630,8 @@ bool Application::processPendingRxBytes(const std::size_t maxBytes) {
     return changed;
 }
 
-void Application::enqueuePendingRxBytes(transport::TransportBytesEvent event) {
+void Application::enqueuePendingRxBytes(transport::TransportBytesEvent event)
+{
     pendingRxByteChunks_.push_back(PendingRxBytes{
         .context = event.context,
         .bytes = std::move(event.bytes),
@@ -1466,7 +1639,8 @@ void Application::enqueuePendingRxBytes(transport::TransportBytesEvent event) {
     });
 }
 
-void Application::detachPendingRealtimeBacklogFromConnection() {
+void Application::detachPendingRealtimeBacklogFromConnection()
+{
     for (auto& pending : pendingRxByteChunks_) {
         pending.context.readyForIo = false;
     }
@@ -1475,7 +1649,8 @@ void Application::detachPendingRealtimeBacklogFromConnection() {
     while (!pendingTransportEvents_.empty()) {
         auto event = std::move(pendingTransportEvents_.front());
         pendingTransportEvents_.pop_front();
-        if (auto* bytes = std::get_if<transport::TransportBytesEvent>(&event); bytes != nullptr && !bytes->bytes.empty()) {
+        if (auto* bytes = std::get_if<transport::TransportBytesEvent>(&event);
+            bytes != nullptr && !bytes->bytes.empty()) {
             bytes->context.readyForIo = false;
             detachedRxBytes.push_back(PendingRxBytes{
                 .context = bytes->context,
@@ -1489,7 +1664,8 @@ void Application::detachPendingRealtimeBacklogFromConnection() {
                                 std::make_move_iterator(detachedRxBytes.end()));
 }
 
-Application::RealtimeBacklogDiscardCounts Application::clearPendingRealtimeBacklog() {
+Application::RealtimeBacklogDiscardCounts Application::clearPendingRealtimeBacklog()
+{
     RealtimeBacklogDiscardCounts counts{
         .transportEvents = pendingTransportEvents_.size(),
         .rxBytes = pendingRxByteCount(),
@@ -1508,7 +1684,8 @@ Application::RealtimeBacklogDiscardCounts Application::clearPendingRealtimeBackl
     return counts;
 }
 
-void Application::logRealtimeBacklogDiscard(const RealtimeBacklogDiscardCounts& counts) {
+void Application::logRealtimeBacklogDiscard(const RealtimeBacklogDiscardCounts& counts)
+{
     const auto total = counts.transportEvents + counts.rxBytes + counts.transferFrameRows + counts.plotAppends +
                        counts.scriptLogs + counts.scriptEvents;
     if (total == 0U) {
@@ -1517,31 +1694,34 @@ void Application::logRealtimeBacklogDiscard(const RealtimeBacklogDiscardCounts& 
 
     std::ostringstream message;
     message << "断开时已丢弃实时 UI backlog: transport_events=" << counts.transportEvents
-            << ", rx_bytes=" << counts.rxBytes
-            << ", transfer_frame_rows=" << counts.transferFrameRows
-            << ", plot_appends=" << counts.plotAppends
-            << ", script_logs=" << counts.scriptLogs
+            << ", rx_bytes=" << counts.rxBytes << ", transfer_frame_rows=" << counts.transferFrameRows
+            << ", plot_appends=" << counts.plotAppends << ", script_logs=" << counts.scriptLogs
             << ", script_events=" << counts.scriptEvents;
     loggingFacade_.host(config::LogLevel::Warn, "BACKLOG_DROP", "realtime", message.str(), nowMs());
 }
 
-bool Application::responsiveBacklogMode() const {
+bool Application::responsiveBacklogMode() const
+{
     return runtimeConfig_.gui.realtimeBacklog.mode != "complete";
 }
 
-std::size_t Application::rxBytesPerPump() const {
-    return (std::max<std::size_t>)(runtimeConfig_.gui.realtimeBacklog.rxChunkBytesPerPump, 1U);
+std::size_t Application::rxBytesPerPump() const
+{
+    return (std::max<std::size_t>) (runtimeConfig_.gui.realtimeBacklog.rxChunkBytesPerPump, 1U);
 }
 
-std::size_t Application::transferFrameRowsPerPump() const {
-    return (std::max<std::size_t>)(runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump, 1U);
+std::size_t Application::transferFrameRowsPerPump() const
+{
+    return (std::max<std::size_t>) (runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump, 1U);
 }
 
-std::size_t Application::plotAppendsPerPump() const {
-    return (std::max<std::size_t>)(runtimeConfig_.gui.realtimeBacklog.plotAppendsPerPump, 1U);
+std::size_t Application::plotAppendsPerPump() const
+{
+    return (std::max<std::size_t>) (runtimeConfig_.gui.realtimeBacklog.plotAppendsPerPump, 1U);
 }
 
-std::size_t Application::pendingRxByteCount() const {
+std::size_t Application::pendingRxByteCount() const
+{
     std::size_t total = 0;
     for (const auto& pending : pendingRxByteChunks_) {
         total += pending.bytes.size() - pending.offset;
@@ -1554,11 +1734,13 @@ std::size_t Application::pendingRxByteCount() const {
     return total;
 }
 
-bool Application::hasPendingRequestDrainWork() const {
+bool Application::hasPendingRequestDrainWork() const
+{
     return !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || scriptWorker_.pendingRxBytes() > 0U;
 }
 
-bool Application::drainRequestTimeoutBacklog() {
+bool Application::drainRequestTimeoutBacklog()
+{
     if (!hasPendingRequestDrainWork()) {
         return false;
     }
@@ -1575,7 +1757,8 @@ bool Application::drainRequestTimeoutBacklog() {
     return true;
 }
 
-bool Application::processTransportEvent(const transport::TransportEvent& event) {
+bool Application::processTransportEvent(const transport::TransportEvent& event)
+{
     bool changed = false;
     std::visit(
         [this, &changed]<typename T0>(const T0& evt) {
@@ -1597,7 +1780,8 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                     scriptWorker_.postTransportClose(evt);
                     scriptWorker_.waitIdle();
                 }
-                loggingFacade_.host(config::LogLevel::Info, "CLOSE", evt.context.endpoint, evt.reason, evt.context.timestampMs);
+                loggingFacade_.host(
+                    config::LogLevel::Info, "CLOSE", evt.context.endpoint, evt.reason, evt.context.timestampMs);
                 resetStreamBufferAlertState(evt.context.connectionId);
                 if (activeConnection_.has_value() && activeConnection_->connectionId == evt.context.connectionId) {
                     activeConnection_.reset();
@@ -1613,7 +1797,8 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                     scriptWorker_.postTransportError(evt);
                     scriptWorker_.waitIdle();
                 }
-                loggingFacade_.host(config::LogLevel::Error, "ERROR", evt.context.endpoint, evt.message, evt.context.timestampMs);
+                loggingFacade_.host(
+                    config::LogLevel::Error, "ERROR", evt.context.endpoint, evt.message, evt.context.timestampMs);
                 dockStore_.commState().lastError = evt.message;
                 changed = true;
             } else if constexpr (std::is_same_v<T, transport::TransportBytesEvent>) {
@@ -1647,8 +1832,10 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                 auto activeWrite = *activeWrite_;
                 activeWrite_.reset();
                 const auto state = toScriptTxState(evt.state);
-                const std::optional<std::string> error = evt.error.empty() ? std::nullopt : std::optional<std::string>{evt.error};
-                if (state == scripting::TxEventState::Sent && activeWrite.request.kind == scripting::TxRequestKind::Request) {
+                const std::optional<std::string> error =
+                    evt.error.empty() ? std::nullopt : std::optional<std::string>{evt.error};
+                if (state == scripting::TxEventState::Sent &&
+                    activeWrite.request.kind == scripting::TxRequestKind::Request) {
                     activeWrite.sentAtMs = evt.finishedAtMs;
                     activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
                     activeHalfDuplexRequest_ = activeWrite;
@@ -1663,6 +1850,11 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
                                                   .bytes = evt.bytes,
                                                   .queuedMs = activeWrite.request.createdAtMs,
                                                   .finishedMs = evt.finishedAtMs,
+                                                  .guarded = activeWrite.request.guarded,
+                                                  .attempt = activeWrite.request.attempt,
+                                                  .maxAttempts = activeWrite.request.maxAttempts,
+                                                  .guardState = guardStateForEvent(activeWrite.request,
+                                                                                   scripting::TxEventState::Sent),
                                                   .error = error,
                                               });
                     scriptWorker_.waitIdle();
@@ -1686,7 +1878,8 @@ bool Application::processTransportEvent(const transport::TransportEvent& event) 
     return changed;
 }
 
-bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch) {
+bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch)
+{
     bool changed = false;
     if (batch.transportStats.has_value()) {
         const auto& stats = *batch.transportStats;
@@ -1697,6 +1890,25 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         comm.lastPumpParserMs += stats.parserMs;
         comm.lastPumpCallbackMs += stats.callbackMs;
         comm.lastPumpScriptMs += stats.totalMs;
+        changed = true;
+    }
+
+    for (const auto& connection : batch.requestGuardResets) {
+        txRequestGuardHalted_ = false;
+        const auto resetAtMs = nowMs();
+        scriptWorker_.postTxEvent(
+            connection,
+            scripting::TxEvent{
+                .id = 0,
+                .kind = scripting::TxRequestKind::Request,
+                .state = scripting::TxEventState::Completed,
+                .tag = "request_guard",
+                .queuedMs = resetAtMs,
+                .finishedMs = resetAtMs,
+                .guarded = true,
+                .guardState = std::string("reset"),
+            });
+        scriptWorker_.waitIdle();
         changed = true;
     }
 
@@ -1723,10 +1935,11 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         if (result.ok && !result.message.empty() && dockStore_.commState().lastError == result.message) {
             dockStore_.commState().lastError.clear();
         }
-        finishTxRequest(activeRequest,
-                        result.ok ? scripting::TxEventState::Completed : scripting::TxEventState::Failed,
-                        (!result.ok && !result.message.empty()) ? std::optional<std::string>{result.message} : std::nullopt,
-                        result.timestampMs);
+        finishTxRequest(
+            activeRequest,
+            result.ok ? scripting::TxEventState::Completed : scripting::TxEventState::Failed,
+            (!result.ok && !result.message.empty()) ? std::optional<std::string>{result.message} : std::nullopt,
+            result.timestampMs);
         completionConsumed = true;
         changed = true;
     }
@@ -1734,14 +1947,16 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
     for (const auto& profileEvent : batch.streamRuntimeProfiles) {
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         const plot::RawCaptureEvent event{
-            .type = profileEvent.cleared ? plot::RawCaptureEventType::ProfileClear : plot::RawCaptureEventType::ProfileSet,
+            .type =
+                profileEvent.cleared ? plot::RawCaptureEventType::ProfileClear : plot::RawCaptureEventType::ProfileSet,
             .timestampMs = timestampMs,
             .bytes = {},
-            .profile = plot::RawCaptureProfileEventData{
-                .frameName = profileEvent.frameName,
-                .length = profileEvent.length,
-                .channelMap = profileEvent.channelMap,
-            },
+            .profile =
+                plot::RawCaptureProfileEventData{
+                    .frameName = profileEvent.frameName,
+                    .length = profileEvent.length,
+                    .channelMap = profileEvent.channelMap,
+                },
             .plotSetup = {},
         };
         if (!suppressRawCaptureProfileEvents_) {
@@ -1854,7 +2069,8 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
     return changed;
 }
 
-bool Application::flushScriptOutputs() {
+bool Application::flushScriptOutputs()
+{
     bool changed = false;
     const auto flushBudgetMs = runtimeConfig_.scripting.workerOutputFlushBudgetMs;
     std::uint64_t flushStartedAt = 0;
@@ -1866,8 +2082,7 @@ bool Application::flushScriptOutputs() {
     auto batch = scriptWorker_.drainOneOutput();
     while (batch.has_value()) {
         changed = applyScriptOutputBatch(*batch) || changed;
-        if (flushBudgetMs > 0.0 &&
-            (nowUs() - flushStartedAt) >= static_cast<std::uint64_t>(flushBudgetMs * 1000.0)) {
+        if (flushBudgetMs > 0.0 && (nowUs() - flushStartedAt) >= static_cast<std::uint64_t>(flushBudgetMs * 1000.0)) {
             break;
         }
         batch = scriptWorker_.drainOneOutput();
@@ -1875,7 +2090,8 @@ bool Application::flushScriptOutputs() {
     return changed;
 }
 
-bool Application::flushScriptOutputsUnbounded() {
+bool Application::flushScriptOutputsUnbounded()
+{
     bool changed = false;
     auto batch = scriptWorker_.drainOneOutput();
     while (batch.has_value()) {
@@ -1885,15 +2101,18 @@ bool Application::flushScriptOutputsUnbounded() {
     return changed;
 }
 
-bool Application::flushScriptStatusAndDialogs() {
+bool Application::flushScriptStatusAndDialogs()
+{
     return false;
 }
 
-bool Application::processScriptRequestCompletions() {
+bool Application::processScriptRequestCompletions()
+{
     return false;
 }
 
-bool Application::processRequestTimeouts() {
+bool Application::processRequestTimeouts()
+{
     if (!activeHalfDuplexRequest_.has_value()) {
         return false;
     }
@@ -1918,15 +2137,22 @@ bool Application::processRequestTimeouts() {
         return true;
     }
 
-    const auto request = activeHalfDuplexRequest_->request;
+    auto request = activeHalfDuplexRequest_->request;
     activeHalfDuplexRequest_.reset();
     scriptWorker_.postRequestAwaitingCompletion(false);
     finishTxRequest(request, scripting::TxEventState::Timeout, std::string("等待 request_done 超时"), currentMs);
+    if (request.guarded && request.attempt < request.maxAttempts) {
+        // 核心流程：guarded request 的重试只属于当前请求；
+        // 超时后把下一次 attempt 放回队首，避免后续请求抢在重试前发送。
+        ++request.attempt;
+        pendingTxQueue_.push_front(std::move(request));
+    }
     driveTxScheduler();
     return true;
 }
 
-bool Application::driveTxScheduler() {
+bool Application::driveTxScheduler()
+{
     bool changed = false;
     while (!activeWrite_.has_value() && !activeHalfDuplexRequest_.has_value() && !pendingTxQueue_.empty()) {
         if (!transport_ || transport_->state() != transport::TransportState::Open) {
@@ -1941,6 +2167,15 @@ bool Application::driveTxScheduler() {
         active.request = std::move(pendingTxQueue_.front());
         pendingTxQueue_.pop_front();
 
+        if (active.request.guarded && txRequestGuardHalted_) {
+            finishTxRequest(active.request,
+                            scripting::TxEventState::Rejected,
+                            std::string("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
+                            nowMs());
+            changed = true;
+            continue;
+        }
+
         transport::TransportTxTask task{};
         task.requestId = active.request.id;
         task.kind = toTransportTxKind(active.request.kind);
@@ -1948,7 +2183,8 @@ bool Application::driveTxScheduler() {
         task.timeoutMs = active.request.timeoutMs;
         task.queuedAtMs = active.request.createdAtMs;
         if (!transport_->enqueueSend(std::move(task))) {
-            finishTxRequest(active.request, scripting::TxEventState::Rejected, std::string("transport enqueueSend 失败"), nowMs());
+            finishTxRequest(
+                active.request, scripting::TxEventState::Rejected, std::string("transport enqueueSend 失败"), nowMs());
             changed = true;
             continue;
         }
@@ -1959,16 +2195,25 @@ bool Application::driveTxScheduler() {
     return changed;
 }
 
-bool Application::enqueueTxRequest(scripting::TxRequest request) {
-    request.timeoutMs = request.timeoutMs > 0
-        ? request.timeoutMs
-        : (request.kind == scripting::TxRequestKind::Request
-               ? runtimeConfig_.protocol.tx.requestTimeoutMs
-               : runtimeConfig_.protocol.tx.sendTimeoutMs);
+bool Application::enqueueTxRequest(scripting::TxRequest request)
+{
+    request.timeoutMs = request.timeoutMs > 0 ? request.timeoutMs
+                                              : (request.kind == scripting::TxRequestKind::Request
+                                                     ? runtimeConfig_.protocol.tx.requestTimeoutMs
+                                                     : runtimeConfig_.protocol.tx.sendTimeoutMs);
+    request.maxAttempts = std::max<std::uint32_t>(1U, request.maxAttempts);
+    request.attempt = std::max<std::uint32_t>(1U, request.attempt);
 
-    const std::size_t activeCount = pendingTxQueue_.size()
-        + (activeWrite_.has_value() ? 1U : 0U)
-        + (activeHalfDuplexRequest_.has_value() ? 1U : 0U);
+    if (request.guarded && txRequestGuardHalted_) {
+        finishTxRequest(request,
+                        scripting::TxEventState::Rejected,
+                        std::string("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
+                        nowMs());
+        return true;
+    }
+
+    const std::size_t activeCount = pendingTxQueue_.size() + (activeWrite_.has_value() ? 1U : 0U) +
+                                    (activeHalfDuplexRequest_.has_value() ? 1U : 0U);
     if (activeCount < runtimeConfig_.protocol.tx.maxPending) {
         pendingTxQueue_.push_back(std::move(request));
         return true;
@@ -1995,12 +2240,26 @@ bool Application::enqueueTxRequest(scripting::TxRequest request) {
     return true;
 }
 
+void Application::cancelPendingTxRequests(const std::string& reason, std::uint64_t finishedAtMs)
+{
+    while (!pendingTxQueue_.empty()) {
+        auto request = std::move(pendingTxQueue_.front());
+        pendingTxQueue_.pop_front();
+        finishTxRequest(request, scripting::TxEventState::Canceled, reason, finishedAtMs);
+    }
+}
+
 void Application::finishTxRequest(const scripting::TxRequest& request,
                                   scripting::TxEventState state,
                                   std::optional<std::string> error,
-                                  std::uint64_t finishedAtMs) {
-    if (state == scripting::TxEventState::Canceled && activeHalfDuplexRequest_.has_value()
-        && activeHalfDuplexRequest_->request.id == request.id) {
+                                  std::uint64_t finishedAtMs)
+{
+    if (isGuardedTerminalFailure(request, state)) {
+        txRequestGuardHalted_ = true;
+    }
+
+    if (state == scripting::TxEventState::Canceled && activeHalfDuplexRequest_.has_value() &&
+        activeHalfDuplexRequest_->request.id == request.id) {
         scriptWorker_.postRequestAwaitingCompletion(false);
     }
 
@@ -2018,28 +2277,33 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
         loggingFacade_.warn("protocol", *error);
     }
 
-    scriptWorker_.postTxEvent(request.connection,
-                              scripting::TxEvent{
-                                  .id = request.id,
-                                  .kind = request.kind,
-                                  .state = state,
-                                  .tag = request.tag,
-                                  .bytes = request.payload.size(),
-                                  .queuedMs = request.createdAtMs,
-                                  .finishedMs = finishedAtMs,
-                                  .fileJobId = request.fileJobId,
-                                  .offset = request.fileOffset,
-                                  .total = request.fileTotal,
-                                  .progress = request.fileTotal == 0
-                                      ? 0.0
-                                      : static_cast<double>(request.fileOffset + request.payload.size()) /
-                                            static_cast<double>(request.fileTotal),
-                                  .error = std::move(error),
-                              });
+    scriptWorker_.postTxEvent(
+        request.connection,
+        scripting::TxEvent{
+            .id = request.id,
+            .kind = request.kind,
+            .state = state,
+            .tag = request.tag,
+            .bytes = request.payload.size(),
+            .queuedMs = request.createdAtMs,
+            .finishedMs = finishedAtMs,
+            .fileJobId = request.fileJobId,
+            .offset = request.fileOffset,
+            .total = request.fileTotal,
+            .progress = request.fileTotal == 0 ? 0.0
+                                               : static_cast<double>(request.fileOffset + request.payload.size()) /
+                                                     static_cast<double>(request.fileTotal),
+            .guarded = request.guarded,
+            .attempt = request.attempt,
+            .maxAttempts = request.maxAttempts,
+            .guardState = guardStateForEvent(request, state),
+            .error = std::move(error),
+        });
     scriptWorker_.waitIdle();
 }
 
-void Application::cancelAllTxRequests(const std::string& reason) {
+void Application::cancelAllTxRequests(const std::string& reason)
+{
     const auto finishedAtMs = nowMs();
     if (activeWrite_.has_value()) {
         finishTxRequest(activeWrite_->request, scripting::TxEventState::Canceled, reason, finishedAtMs);
@@ -2050,14 +2314,11 @@ void Application::cancelAllTxRequests(const std::string& reason) {
         finishTxRequest(activeHalfDuplexRequest_->request, scripting::TxEventState::Canceled, reason, finishedAtMs);
         activeHalfDuplexRequest_.reset();
     }
-    while (!pendingTxQueue_.empty()) {
-        auto request = std::move(pendingTxQueue_.front());
-        pendingTxQueue_.pop_front();
-        finishTxRequest(request, scripting::TxEventState::Canceled, reason, finishedAtMs);
-    }
+    cancelPendingTxRequests(reason, finishedAtMs);
 }
 
-void Application::notifyTxOverflow(const std::string& message) {
+void Application::notifyTxOverflow(const std::string& message)
+{
     setStatusMessage(message, false);
     loggingFacade_.warn("protocol", message);
     if (runtimeConfig_.protocol.tx.overflowNotify == "popup_once") {
@@ -2082,15 +2343,17 @@ void Application::notifyTxOverflow(const std::string& message) {
 
 void Application::handleStreamBufferAlert(const transport::ConnectionContext& context,
                                           const scripting::StreamParseBatch& batch,
-                                          const scripting::StreamBufferDefinition& bufferDefinition) {
+                                          const scripting::StreamBufferDefinition& bufferDefinition)
+{
     if (batch.bufferCapacity == 0 || batch.overflowed) {
         return;
     }
 
     const double thresholdRatio = runtimeConfig_.receive.streamBuffer.nearOverflowThreshold > 0.0
-        ? runtimeConfig_.receive.streamBuffer.nearOverflowThreshold
-        : bufferDefinition.nearOverflowThresholdRatio;
-    const bool nearOverflow = static_cast<double>(batch.bufferSize) / static_cast<double>(batch.bufferCapacity) >= thresholdRatio;
+                                      ? runtimeConfig_.receive.streamBuffer.nearOverflowThreshold
+                                      : bufferDefinition.nearOverflowThresholdRatio;
+    const bool nearOverflow =
+        static_cast<double>(batch.bufferSize) / static_cast<double>(batch.bufferCapacity) >= thresholdRatio;
     if (!nearOverflow) {
         return;
     }
@@ -2106,8 +2369,7 @@ void Application::handleStreamBufferAlert(const transport::ConnectionContext& co
     setStatusMessage(status.str(), true);
 
     std::ostringstream logMessage;
-    logMessage << status.str()
-               << ", threshold=" << static_cast<int>(thresholdRatio * 100.0)
+    logMessage << status.str() << ", threshold=" << static_cast<int>(thresholdRatio * 100.0)
                << "%, endpoint=" << context.endpoint;
     loggingFacade_.warn("stream_buffer", logMessage.str());
 
@@ -2123,8 +2385,8 @@ void Application::handleStreamBufferAlert(const transport::ConnectionContext& co
         .kind = scripting::DialogKind::Alert,
         .connection = context,
         .title = "协议解析缓冲区占用过高",
-        .message = "当前连接 " + context.endpoint + " 的协议解析缓冲区已达到 " + std::to_string(batch.bufferSize) + "/" +
-            std::to_string(batch.bufferCapacity) + " bytes，告警阈值 " + thresholdText + "%。",
+        .message = "当前连接 " + context.endpoint + " 的协议解析缓冲区已达到 " + std::to_string(batch.bufferSize) +
+                   "/" + std::to_string(batch.bufferCapacity) + " bytes，告警阈值 " + thresholdText + "%。",
         .level = "warn",
         .dedupeKey = "receive.stream_buffer.near_overflow",
         .createdAtMs = createdAtMs,
@@ -2133,14 +2395,16 @@ void Application::handleStreamBufferAlert(const transport::ConnectionContext& co
     streamBufferAlertState_.popupOpen = true;
 }
 
-void Application::resetStreamBufferAlertState(const std::uint64_t connectionId) {
+void Application::resetStreamBufferAlertState(const std::uint64_t connectionId)
+{
     if (connectionId != 0 && streamBufferAlertState_.connectionId != connectionId) {
         return;
     }
     streamBufferAlertState_ = StreamBufferAlertState{};
 }
 
-void Application::enqueueDialogRequest(const scripting::DialogRequest& request) {
+void Application::enqueueDialogRequest(const scripting::DialogRequest& request)
+{
     if (!request.dedupeKey.empty() && dialogDedupeKeys_.contains(request.dedupeKey)) {
         return;
     }
@@ -2151,11 +2415,13 @@ void Application::enqueueDialogRequest(const scripting::DialogRequest& request) 
     }
 }
 
-bool Application::flushScriptLogs() {
+bool Application::flushScriptLogs()
+{
     return false;
 }
 
-void Application::enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows) {
+void Application::enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows)
+{
     if (rows.empty()) {
         return;
     }
@@ -2165,7 +2431,8 @@ void Application::enqueueTransferFrameRows(std::vector<dock::ReceiveRow> rows) {
     trimPendingTransferFrameRowsToLimit();
 }
 
-void Application::trimPendingTransferFrameRowsToLimit() {
+void Application::trimPendingTransferFrameRowsToLimit()
+{
     const auto limit = runtimeConfig_.gui.logHistory.transferFrameLimit;
     if (limit == 0U) {
         pendingTransferFrameRows_.clear();
@@ -2182,7 +2449,8 @@ void Application::trimPendingTransferFrameRowsToLimit() {
     }
 }
 
-bool Application::flushPendingTransferFrameRows(std::size_t maxRows) {
+bool Application::flushPendingTransferFrameRows(std::size_t maxRows)
+{
     if (pendingTransferFrameRows_.empty() || maxRows == 0) {
         return false;
     }
@@ -2197,15 +2465,18 @@ bool Application::flushPendingTransferFrameRows(std::size_t maxRows) {
     return true;
 }
 
-logging::LoggingFacade& Application::logger() {
+logging::LoggingFacade& Application::logger()
+{
     return loggingFacade_;
 }
 
-const logging::LoggingFacade& Application::logger() const {
+const logging::LoggingFacade& Application::logger() const
+{
     return loggingFacade_;
 }
 
-std::vector<scripting::DialogRequest> Application::drainDialogRequests() {
+std::vector<scripting::DialogRequest> Application::drainDialogRequests()
+{
     std::vector<scripting::DialogRequest> drained;
     drained.reserve(pendingDialogs_.size());
     while (!pendingDialogs_.empty()) {
@@ -2215,7 +2486,8 @@ std::vector<scripting::DialogRequest> Application::drainDialogRequests() {
     return drained;
 }
 
-void Application::respondDialog(const scripting::DialogEvent& event) {
+void Application::respondDialog(const scripting::DialogEvent& event)
+{
     const auto iter = openDialogs_.find(event.id);
     if (iter == openDialogs_.end()) {
         return;
@@ -2235,7 +2507,8 @@ void Application::respondDialog(const scripting::DialogEvent& event) {
     scriptWorker_.postDialogEvent(request.connection, event);
 }
 
-std::vector<scripting::FileDialogRequest> Application::drainFileDialogRequests() {
+std::vector<scripting::FileDialogRequest> Application::drainFileDialogRequests()
+{
     std::vector<scripting::FileDialogRequest> drained;
     drained.reserve(pendingFileDialogs_.size());
     while (!pendingFileDialogs_.empty()) {
@@ -2245,7 +2518,8 @@ std::vector<scripting::FileDialogRequest> Application::drainFileDialogRequests()
     return drained;
 }
 
-void Application::respondFileDialog(const scripting::FileDialogEvent& event) {
+void Application::respondFileDialog(const scripting::FileDialogEvent& event)
+{
     const auto iter = openFileDialogs_.find(event.id);
     if (iter == openFileDialogs_.end()) {
         return;
@@ -2255,7 +2529,8 @@ void Application::respondFileDialog(const scripting::FileDialogEvent& event) {
     scriptWorker_.postFileDialogEvent(request.connection, event);
 }
 
-bool Application::flushScriptPlots() {
+bool Application::flushScriptPlots()
+{
     return false;
 }
 

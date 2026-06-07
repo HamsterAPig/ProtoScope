@@ -1,10 +1,5 @@
 #include "protoscope/logging/logging.hpp"
 
-#include <spdlog/logger.h>
-#include <spdlog/sinks/basic_file_sink.h>
-#include <spdlog/sinks/stdout_color_sinks.h>
-#include <spdlog/spdlog.h>
-
 #include <chrono>
 #include <exception>
 #include <filesystem>
@@ -12,23 +7,29 @@
 #include <utility>
 #include <vector>
 
+#include <spdlog/logger.h>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
+
 namespace protoscope::logging {
 
 namespace {
 
-spdlog::level::level_enum toSpdlogLevel(const config::LogLevel level) {
-    switch (level) {
-    case config::LogLevel::Debug:
-        return spdlog::level::debug;
-    case config::LogLevel::Info:
+    spdlog::level::level_enum toSpdlogLevel(const config::LogLevel level)
+    {
+        switch (level) {
+            case config::LogLevel::Debug:
+                return spdlog::level::debug;
+            case config::LogLevel::Info:
+                return spdlog::level::info;
+            case config::LogLevel::Warn:
+                return spdlog::level::warn;
+            case config::LogLevel::Error:
+                return spdlog::level::err;
+        }
         return spdlog::level::info;
-    case config::LogLevel::Warn:
-        return spdlog::level::warn;
-    case config::LogLevel::Error:
-        return spdlog::level::err;
     }
-    return spdlog::level::info;
-}
 
 } // namespace
 
@@ -39,23 +40,26 @@ struct LoggingFacade::Impl {
     std::string activeFilePath;
 };
 
-LoggingFacade::LoggingFacade()
-    : impl_(std::make_unique<Impl>()) {
+LoggingFacade::LoggingFacade() : impl_(std::make_unique<Impl>())
+{
     rebuildLogger();
 }
 
 LoggingFacade::~LoggingFacade() = default;
 
-void LoggingFacade::bindDockStore(dock::DockStore* dockStore) {
+void LoggingFacade::bindDockStore(dock::DockStore* dockStore)
+{
     dockStore_ = dockStore;
 }
 
-void LoggingFacade::applyConfig(const config::AppLoggingConfig& config) {
+void LoggingFacade::applyConfig(const config::AppLoggingConfig& config)
+{
     config_ = config;
     rebuildLogger();
 }
 
-void LoggingFacade::debug(std::string endpoint, std::string message) {
+void LoggingFacade::debug(std::string endpoint, std::string message)
+{
     log(LogRecord{
         .level = config::LogLevel::Debug,
         .audience = LogAudience::Host,
@@ -66,7 +70,8 @@ void LoggingFacade::debug(std::string endpoint, std::string message) {
     });
 }
 
-void LoggingFacade::info(std::string endpoint, std::string message) {
+void LoggingFacade::info(std::string endpoint, std::string message)
+{
     log(LogRecord{
         .level = config::LogLevel::Info,
         .audience = LogAudience::Host,
@@ -77,7 +82,8 @@ void LoggingFacade::info(std::string endpoint, std::string message) {
     });
 }
 
-void LoggingFacade::warn(std::string endpoint, std::string message) {
+void LoggingFacade::warn(std::string endpoint, std::string message)
+{
     log(LogRecord{
         .level = config::LogLevel::Warn,
         .audience = LogAudience::Host,
@@ -88,7 +94,8 @@ void LoggingFacade::warn(std::string endpoint, std::string message) {
     });
 }
 
-void LoggingFacade::error(std::string endpoint, std::string message) {
+void LoggingFacade::error(std::string endpoint, std::string message)
+{
     log(LogRecord{
         .level = config::LogLevel::Error,
         .audience = LogAudience::Host,
@@ -103,7 +110,8 @@ void LoggingFacade::host(config::LogLevel level,
                          std::string direction,
                          std::string endpoint,
                          std::string message,
-                         std::optional<std::uint64_t> timestampMs) {
+                         std::optional<std::uint64_t> timestampMs)
+{
     log(LogRecord{
         .level = level,
         .audience = LogAudience::Host,
@@ -114,7 +122,8 @@ void LoggingFacade::host(config::LogLevel level,
     });
 }
 
-void LoggingFacade::script(std::string levelTextValue, std::string message, std::optional<std::uint64_t> timestampMs) {
+void LoggingFacade::script(std::string levelTextValue, std::string message, std::optional<std::uint64_t> timestampMs)
+{
     bool recognized = false;
     const auto level = parseLevelOrFallback(levelTextValue, config::LogLevel::Info, &recognized);
     if (!recognized) {
@@ -132,11 +141,13 @@ void LoggingFacade::script(std::string levelTextValue, std::string message, std:
     });
 }
 
-config::AppLoggingConfig LoggingFacade::currentConfig() const {
+config::AppLoggingConfig LoggingFacade::currentConfig() const
+{
     return config_;
 }
 
-void LoggingFacade::log(LogRecord record) {
+void LoggingFacade::log(LogRecord record)
+{
     if (record.level < config_.level) {
         return;
     }
@@ -165,7 +176,8 @@ void LoggingFacade::log(LogRecord record) {
     }
 }
 
-void LoggingFacade::rebuildLogger() {
+void LoggingFacade::rebuildLogger()
+{
     impl_->consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     impl_->consoleSink->set_level(toSpdlogLevel(config_.level));
     impl_->fileSink.reset();
@@ -211,7 +223,8 @@ void LoggingFacade::rebuildLogger() {
 
 config::LogLevel LoggingFacade::parseLevelOrFallback(const std::string& levelTextValue,
                                                      const config::LogLevel fallback,
-                                                     bool* recognized) {
+                                                     bool* recognized)
+{
     if (recognized) {
         *recognized = true;
     }
@@ -233,38 +246,40 @@ config::LogLevel LoggingFacade::parseLevelOrFallback(const std::string& levelTex
     return fallback;
 }
 
-std::string LoggingFacade::levelText(const config::LogLevel level) {
+std::string LoggingFacade::levelText(const config::LogLevel level)
+{
     switch (level) {
-    case config::LogLevel::Debug:
-        return "debug";
-    case config::LogLevel::Info:
-        return "info";
-    case config::LogLevel::Warn:
-        return "warn";
-    case config::LogLevel::Error:
-        return "error";
+        case config::LogLevel::Debug:
+            return "debug";
+        case config::LogLevel::Info:
+            return "info";
+        case config::LogLevel::Warn:
+            return "warn";
+        case config::LogLevel::Error:
+            return "error";
     }
     return "info";
 }
 
-std::string LoggingFacade::levelDirection(const config::LogLevel level) {
+std::string LoggingFacade::levelDirection(const config::LogLevel level)
+{
     switch (level) {
-    case config::LogLevel::Debug:
-        return "DEBUG";
-    case config::LogLevel::Info:
-        return "INFO";
-    case config::LogLevel::Warn:
-        return "WARN";
-    case config::LogLevel::Error:
-        return "ERROR";
+        case config::LogLevel::Debug:
+            return "DEBUG";
+        case config::LogLevel::Info:
+            return "INFO";
+        case config::LogLevel::Warn:
+            return "WARN";
+        case config::LogLevel::Error:
+            return "ERROR";
     }
     return "INFO";
 }
 
-std::uint64_t LoggingFacade::nowMs() {
+std::uint64_t LoggingFacade::nowMs()
+{
     return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
 

@@ -1,4 +1,4 @@
-#include "test_registry.hpp"
+#include "../src/ui/wave/wave_render_service.hpp"
 
 #include "protoscope/config/config.hpp"
 #include "protoscope/plot/oscilloscope.hpp"
@@ -6,29 +6,54 @@
 #include "protoscope/plot/wave_fft.hpp"
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_state.hpp"
-#include "../src/ui/wave/wave_render_service.hpp"
 
-#include <cmath>
+#include "test_registry.hpp"
+
 #include <array>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const char* message)
+{
     if (!condition) {
         throw std::runtime_error(message);
     }
 }
 
+struct ScopedTempFile {
+    explicit ScopedTempFile(const char* stem)
+    {
+        const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ = std::filesystem::temp_directory_path() /
+                (std::string(stem) + "-" + std::to_string(ticks) + ".psraw");
+    }
+
+    ~ScopedTempFile()
+    {
+        std::error_code error;
+        std::filesystem::remove(path_, error);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
 protoscope::plot::WaveDisplayData makeDisplayData(std::vector<protoscope::plot::WaveSample> displaySamples,
-                                                  std::vector<double> actualValues) {
+                                                  std::vector<double> actualValues)
+{
     protoscope::plot::WaveDisplayData displayData;
     displayData.channels.push_back({
         .samples = std::move(displaySamples),
@@ -37,7 +62,8 @@ protoscope::plot::WaveDisplayData makeDisplayData(std::vector<protoscope::plot::
     return displayData;
 }
 
-protoscope::plot::WaveDockState makeChannelResetWave() {
+protoscope::plot::WaveDockState makeChannelResetWave()
+{
     protoscope::plot::WaveDockState wave;
     wave.buffer.configureChannels(1);
     wave.defaultChannelSpecs.push_back({
@@ -47,13 +73,14 @@ protoscope::plot::WaveDockState makeChannelResetWave() {
         .scale = 1.5,
         .offset = -0.25,
     });
-    wave.buffer.setChannelSpec(0, {
-        .label = "Renamed",
-        .unit = "V",
-        .ratio = 3.0,
-        .scale = 4.0,
-        .offset = 10.0,
-    });
+    wave.buffer.setChannelSpec(0,
+                               {
+                                   .label = "Renamed",
+                                   .unit = "V",
+                                   .ratio = 3.0,
+                                   .scale = 4.0,
+                                   .offset = 10.0,
+                               });
     wave.channelOverrides.resize(1);
     wave.channelOverrides[0].labelOverridden = true;
     wave.channelOverrides[0].ratioOverridden = true;
@@ -68,7 +95,8 @@ protoscope::plot::WaveDockState makeChannelResetWave() {
 
 } // namespace
 
-void test_plot_history_trim_and_envelope() {
+void test_plot_history_trim_and_envelope()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     const auto initialRevision = buffer.dataRevision();
     buffer.setViewConfig(protoscope::plot::ViewConfig{
@@ -103,15 +131,17 @@ void test_plot_history_trim_and_envelope() {
     require(envelope.points[0].sampleCount >= 1, "包络点应记录桶内样本数");
 }
 
-
-void test_plot_history_limit_zero_keeps_all_samples() {
+void test_plot_history_limit_zero_keeps_all_samples()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.setViewConfig(protoscope::plot::ViewConfig{.historyLimit = 0});
     buffer.configureChannels(1);
-    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "zero-limit",
-        .samples = {{0.0, 1.0}, {1.0, 2.0}},
-    }), "追加采样应触发裁剪流程");
+    require(buffer.append(0,
+                          protoscope::plot::WaveAppendRequest{
+                              .source = "zero-limit",
+                              .samples = {{0.0, 1.0}, {1.0, 2.0}},
+                          }),
+            "追加采样应触发裁剪流程");
 
     const auto snapshot = buffer.snapshot(0.0, 1.0);
     require(snapshot.channels.size() == 1, "通道仍应存在");
@@ -121,20 +151,26 @@ void test_plot_history_limit_zero_keeps_all_samples() {
             "保留点应覆盖完整输入顺序");
 }
 
-void test_plot_time_reset_clears_history_by_default() {
+void test_plot_time_reset_clears_history_by_default()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V"});
-    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "run-1",
-        .samples = {{.time = 0.0, .value = 1.0}, {.time = 1.0, .value = 2.0}},
-    }), "第一轮样本应追加成功");
-    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "run-2",
-        .samples = {{.time = 0.0, .value = 10.0}, {.time = 1.0, .value = 20.0}},
-    }), "第二轮从 t=0 开始应清空旧历史后追加成功");
+    require(buffer.append(0,
+                          protoscope::plot::WaveAppendRequest{
+                              .source = "run-1",
+                              .samples = {{.time = 0.0, .value = 1.0}, {.time = 1.0, .value = 2.0}},
+                          }),
+            "第一轮样本应追加成功");
+    require(buffer.append(0,
+                          protoscope::plot::WaveAppendRequest{
+                              .source = "run-2",
+                              .samples = {{.time = 0.0, .value = 10.0}, {.time = 1.0, .value = 20.0}},
+                          }),
+            "第二轮从 t=0 开始应清空旧历史后追加成功");
 
-    const auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    const auto snapshot =
+        buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     require(snapshot.channels.size() == 1, "应保留新一轮通道");
     require(snapshot.channels.front().totalSamples == 2, "默认策略下第二轮不应被旧历史挡住");
     require(snapshot.channels.front().samples != nullptr, "应能读取新一轮样本");
@@ -143,17 +179,23 @@ void test_plot_time_reset_clears_history_by_default() {
     require(snapshot.channels.front().label == "CH1", "重开采集不应丢通道配置");
 }
 
-void test_plot_time_reset_can_continue_history() {
+void test_plot_time_reset_can_continue_history()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.setResetHistoryOnTimeReset(false);
-    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .samples = {{.time = 0.0, .value = 1.0}, {.time = 1.0, .value = 2.0}},
-    }), "第一轮样本应追加成功");
-    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .samples = {{.time = 0.0, .value = 10.0}, {.time = 1.0, .value = 20.0}},
-    }), "继续累加策略下第二轮样本应追加成功");
+    require(buffer.append(0,
+                          protoscope::plot::WaveAppendRequest{
+                              .samples = {{.time = 0.0, .value = 1.0}, {.time = 1.0, .value = 2.0}},
+                          }),
+            "第一轮样本应追加成功");
+    require(buffer.append(0,
+                          protoscope::plot::WaveAppendRequest{
+                              .samples = {{.time = 0.0, .value = 10.0}, {.time = 1.0, .value = 20.0}},
+                          }),
+            "继续累加策略下第二轮样本应追加成功");
 
-    const auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    const auto snapshot =
+        buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     require(snapshot.channels.size() == 1, "应保留通道");
     require(snapshot.channels.front().totalSamples == 4, "继续累加策略应保留两轮历史");
     require(snapshot.channels.front().samples != nullptr, "应能读取累加后的样本");
@@ -161,18 +203,22 @@ void test_plot_time_reset_can_continue_history() {
     require(std::abs(snapshot.channels.front().samples[3].time - 3.0) < 1e-12, "第二轮末尾应连续显示");
 }
 
-void test_wave_sample_frequency_visible_range_filters_by_sample_index() {
+void test_wave_sample_frequency_visible_range_filters_by_sample_index()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
-    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .samples = {
-            {.time = 100.0, .value = 0.0},
-            {.time = 101.0, .value = 1.0},
-            {.time = 102.0, .value = 2.0},
-            {.time = 103.0, .value = 3.0},
-            {.time = 104.0, .value = 4.0},
-            {.time = 105.0, .value = 5.0},
-        },
-    }), "非零脚本时间样本应追加成功");
+    require(buffer.append(0,
+                          protoscope::plot::WaveAppendRequest{
+                              .samples =
+                                  {
+                                      {.time = 100.0, .value = 0.0},
+                                      {.time = 101.0, .value = 1.0},
+                                      {.time = 102.0, .value = 2.0},
+                                      {.time = 103.0, .value = 3.0},
+                                      {.time = 104.0, .value = 4.0},
+                                      {.time = 105.0, .value = 5.0},
+                                  },
+                          }),
+            "非零脚本时间样本应追加成功");
 
     auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
     protoscope::plot::applySampleFrequencyVisibleRange(snapshot, 0.2, 0.4, 10.0);
@@ -186,7 +232,8 @@ void test_wave_sample_frequency_visible_range_filters_by_sample_index() {
             "Fs 显示窗口终点应使用 sampleIndex/Fs");
 }
 
-void test_plot_limited_envelope_preserves_spikes() {
+void test_plot_limited_envelope_preserves_spikes()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.setViewConfig(protoscope::plot::ViewConfig{
         .timeScale = 1.0,
@@ -223,73 +270,31 @@ void test_plot_limited_envelope_preserves_spikes() {
     require(foundNegativeSpike, "min/max 桶应保留负向尖峰");
 }
 
-void test_wave_layout_solver_clamps_without_overflow() {
-    const auto layout = protoscope::plot::solveWaveLayout(900.0F,
-                                                          420.0F,
-                                                          240.0F,
-                                                          300.0F,
-                                                          34.0F,
-                                                          false,
-                                                          6.0F,
-                                                          6.0F,
-                                                          72.0F,
-                                                          160.0F,
-                                                          220.0F,
-                                                          520.0F,
-                                                          58.0F);
+void test_wave_layout_solver_clamps_without_overflow()
+{
+    const auto layout = protoscope::plot::solveWaveLayout(
+        900.0F, 420.0F, 240.0F, 300.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 58.0F);
     require(layout.toolsWidth >= 220.0F && layout.toolsWidth <= 520.0F, "工具栏宽度应被夹取到允许范围");
     require(layout.overviewHeight >= 72.0F, "概览高度不应低于最小值");
     require(layout.mainHeight >= 160.0F, "主视图高度不应低于最小值");
     require(layout.overviewHeight + layout.mainHeight + 6.0F + 58.0F <= 420.0F + 1e-3F, "布局总高度不应溢出父窗口");
 
-    const auto draggedOverview = protoscope::plot::solveWaveLayout(900.0F,
-                                                                   600.0F,
-                                                                   260.0F,
-                                                                   300.0F,
-                                                                   34.0F,
-                                                                   false,
-                                                                   6.0F,
-                                                                   6.0F,
-                                                                   72.0F,
-                                                                   160.0F,
-                                                                   220.0F,
-                                                                   520.0F,
-                                                                   70.0F);
+    const auto draggedOverview = protoscope::plot::solveWaveLayout(
+        900.0F, 600.0F, 260.0F, 300.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 70.0F);
     require(std::abs(draggedOverview.overviewHeight - 260.0F) < 1e-3F, "概览高度应尊重用户拖拽值，不应被 35% 上限拉回");
 
-    const auto splitterReserved = protoscope::plot::solveWaveLayout(230.0F,
-                                                                    420.0F,
-                                                                    120.0F,
-                                                                    280.0F,
-                                                                    34.0F,
-                                                                    false,
-                                                                    6.0F,
-                                                                    6.0F,
-                                                                    72.0F,
-                                                                    160.0F,
-                                                                    220.0F,
-                                                                    520.0F,
-                                                                    58.0F);
+    const auto splitterReserved = protoscope::plot::solveWaveLayout(
+        230.0F, 420.0F, 120.0F, 280.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 58.0F);
     require(splitterReserved.toolsWidth <= 224.0F, "工具栏宽度应为内容区保留 splitter 空间");
 
-    const auto compact = protoscope::plot::solveWaveLayout(320.0F,
-                                                           120.0F,
-                                                           160.0F,
-                                                           300.0F,
-                                                           34.0F,
-                                                           true,
-                                                           6.0F,
-                                                           6.0F,
-                                                           72.0F,
-                                                           160.0F,
-                                                           220.0F,
-                                                           520.0F,
-                                                           40.0F);
+    const auto compact = protoscope::plot::solveWaveLayout(
+        320.0F, 120.0F, 160.0F, 300.0F, 34.0F, true, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 40.0F);
     require(compact.toolsWidth == 34.0F, "折叠工具栏应使用折叠宽度");
     require(compact.overviewHeight + compact.mainHeight + 6.0F + 40.0F <= 120.0F + 1e-3F, "紧凑布局也不应产生纵向溢出");
 }
 
-void test_plot_low_density_envelope_keeps_single_value_line() {
+void test_plot_low_density_envelope_keeps_single_value_line()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.setViewConfig(protoscope::plot::ViewConfig{
         .timeScale = 1.0,
@@ -302,14 +307,16 @@ void test_plot_low_density_envelope_keeps_single_value_line() {
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 2.0, .offset = -1.0});
 
-    require(buffer.append(0, protoscope::plot::WaveAppendRequest{
-                               .source = "low-density",
-                               .samples = {
-                                   {.time = 0.0, .value = 1.0},
-                                   {.time = 1.0, .value = -2.0},
-                                   {.time = 2.0, .value = 3.0},
-                               },
-                           }),
+    require(buffer.append(0,
+                          protoscope::plot::WaveAppendRequest{
+                              .source = "low-density",
+                              .samples =
+                                  {
+                                      {.time = 0.0, .value = 1.0},
+                                      {.time = 1.0, .value = -2.0},
+                                      {.time = 2.0, .value = 3.0},
+                                  },
+                          }),
             "追加低密度采样应成功");
 
     const auto envelope = buffer.buildEnvelope(0, 0.0, 2.0, 4);
@@ -324,18 +331,21 @@ void test_plot_low_density_envelope_keeps_single_value_line() {
     require(std::abs(envelope.points[2].minValue - 4.0) < 1e-12, "低密度包络应保留 offset_then_scale 后的正值");
 }
 
-void test_plot_cursor_snap_and_delta() {
+void test_plot_cursor_snap_and_delta()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V"});
-    buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "test",
-        .samples = {
-            {.time = 0.0, .value = 0.0},
-            {.time = 0.5, .value = 1.0},
-            {.time = 1.0, .value = 0.0},
-        },
-    });
+    buffer.append(0,
+                  protoscope::plot::WaveAppendRequest{
+                      .source = "test",
+                      .samples =
+                          {
+                              {.time = 0.0, .value = 0.0},
+                              {.time = 0.5, .value = 1.0},
+                              {.time = 1.0, .value = 0.0},
+                          },
+                  });
 
     const auto left = buffer.findNearest(0, 0.48, 0.9, 0.1, 0.2);
     const auto right = buffer.findNearest(0, 1.01, 0.05, 0.1, 0.2);
@@ -350,19 +360,22 @@ void test_plot_cursor_snap_and_delta() {
     require(std::abs(delta.frequencyHz - 2.0) < 1e-9, "频率计算错误");
 }
 
-void test_plot_cursor_snap_by_time_and_measurement() {
+void test_plot_cursor_snap_by_time_and_measurement()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V"});
-    buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "test",
-        .samples = {
-            {.time = 0.0, .value = -1.0},
-            {.time = 0.5, .value = 1.0},
-            {.time = 1.0, .value = 0.0},
-            {.time = 1.5, .value = 0.5},
-        },
-    });
+    buffer.append(0,
+                  protoscope::plot::WaveAppendRequest{
+                      .source = "test",
+                      .samples =
+                          {
+                              {.time = 0.0, .value = -1.0},
+                              {.time = 0.5, .value = 1.0},
+                              {.time = 1.0, .value = 0.0},
+                              {.time = 1.5, .value = 0.5},
+                          },
+                  });
 
     const auto snap = buffer.findNearestByTime(0, 0.94, 0.2);
     require(snap.has_value(), "按时间吸附应成功");
@@ -376,7 +389,8 @@ void test_plot_cursor_snap_by_time_and_measurement() {
     require(std::abs(measurement.peakToPeak - 2.0) < 1e-9, "峰峰值错误");
 }
 
-void test_plot_measurement_dispersion_metrics() {
+void test_plot_measurement_dispersion_metrics()
+{
     const std::vector<double> times{0.0, 1.0, 2.0, 3.0};
     const std::vector<double> values{1.0, 2.0, 3.0, 4.0};
     const auto measurement = protoscope::plot::makeMeasurementReadout(0, times, values);
@@ -402,14 +416,16 @@ void test_plot_measurement_dispersion_metrics() {
     require(!single.cv.has_value(), "mean 为 0 时 CV 应无效");
 }
 
-void test_plot_measurement_error_metrics() {
+void test_plot_measurement_error_metrics()
+{
     const std::vector<double> times{0.0, 1.0, 2.0, 3.0};
     const std::vector<double> values{1.0, 2.0, 3.0, 4.0};
     const std::vector<double> reference{0.0, 2.0, 4.0, 4.0};
     const auto measurement = protoscope::plot::makeMeasurementReadout(0, times, values, &reference);
 
     require(measurement.absoluteError.has_value() && std::abs(*measurement.absoluteError) < 1e-9, "绝对误差错误");
-    require(measurement.relativeErrorPercent.has_value() && std::abs(*measurement.relativeErrorPercent) < 1e-9, "相对误差错误");
+    require(measurement.relativeErrorPercent.has_value() && std::abs(*measurement.relativeErrorPercent) < 1e-9,
+            "相对误差错误");
     require(measurement.meanError.has_value() && std::abs(*measurement.meanError) < 1e-9, "平均误差错误");
     require(measurement.mse.has_value() && std::abs(*measurement.mse - 0.5) < 1e-9, "MSE 错误");
     require(measurement.rmse.has_value() && std::abs(*measurement.rmse - std::sqrt(0.5)) < 1e-9, "RMSE 错误");
@@ -418,13 +434,16 @@ void test_plot_measurement_error_metrics() {
     require(measurement.bias.has_value() && std::abs(*measurement.bias) < 1e-9, "bias 应等于平均误差");
 }
 
-void test_wave_cursor_smart_snap_edge() {
-    const auto displayData = makeDisplayData({
-        {.time = 0.0, .value = 0.0},
-        {.time = 1.0, .value = 0.0},
-        {.time = 1.1, .value = -10.0},
-        {.time = 2.0, .value = -10.0},
-    }, {0.0, 0.0, 5.0, 5.0});
+void test_wave_cursor_smart_snap_edge()
+{
+    const auto displayData = makeDisplayData(
+        {
+            {.time = 0.0, .value = 0.0},
+            {.time = 1.0, .value = 0.0},
+            {.time = 1.1, .value = -10.0},
+            {.time = 2.0, .value = -10.0},
+        },
+        {0.0, 0.0, 5.0, 5.0});
 
     const auto edge = protoscope::plot::findStrongestEdgeNearTime(displayData, 0, 1.02, 0.08);
     require(edge.has_value(), "智能吸附应找到附近最大跳变边沿");
@@ -437,16 +456,19 @@ void test_wave_cursor_smart_snap_edge() {
     require(!farEdge.has_value(), "窗口外边沿不应被吸附");
 }
 
-void test_wave_cursor_smart_snap_extreme() {
-    const auto displayData = makeDisplayData({
-        {.time = 0.0, .value = 0.0},
-        {.time = 1.0, .value = -4.0},
-        {.time = 2.0, .value = 0.0},
-        {.time = 3.0, .value = 6.0},
-        {.time = 4.0, .value = 0.0},
-        {.time = 5.0, .value = -2.0},
-        {.time = 6.0, .value = 0.0},
-    }, {0.0, 2.0, 0.0, -3.0, 0.0, 1.0, 0.0});
+void test_wave_cursor_smart_snap_extreme()
+{
+    const auto displayData = makeDisplayData(
+        {
+            {.time = 0.0, .value = 0.0},
+            {.time = 1.0, .value = -4.0},
+            {.time = 2.0, .value = 0.0},
+            {.time = 3.0, .value = 6.0},
+            {.time = 4.0, .value = 0.0},
+            {.time = 5.0, .value = -2.0},
+            {.time = 6.0, .value = 0.0},
+        },
+        {0.0, 2.0, 0.0, -3.0, 0.0, 1.0, 0.0});
 
     const auto peak = protoscope::plot::findLocalExtremeNearTime(
         displayData, 0, 2.8, 0.4, protoscope::plot::WaveExtremeKind::Maximum);
@@ -467,12 +489,15 @@ void test_wave_cursor_smart_snap_extreme() {
     require(!farPeak.has_value(), "窗口外极值不应被吸附");
 }
 
-void test_wave_cursor_nearest_waveform_extreme_policy_snaps_to_local_trough() {
-    const auto displayData = makeDisplayData({
-        {.time = 0.0, .value = 80.0},
-        {.time = 1.0, .value = 70.0},
-        {.time = 2.0, .value = 80.0},
-    }, {80.0, 70.0, 80.0});
+void test_wave_cursor_nearest_waveform_extreme_policy_snaps_to_local_trough()
+{
+    const auto displayData = makeDisplayData(
+        {
+            {.time = 0.0, .value = 80.0},
+            {.time = 1.0, .value = 70.0},
+            {.time = 2.0, .value = 80.0},
+        },
+        {80.0, 70.0, 80.0});
     protoscope::plot::WaveViewState view;
     view.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform;
     const ImPlotRect limits(0.0, 2.0, 0.0, 100.0);
@@ -483,12 +508,15 @@ void test_wave_cursor_nearest_waveform_extreme_policy_snaps_to_local_trough() {
     require(snap->readout.sampleIndex == 1, "默认极值策略应命中靠近鼠标的谷值样本");
 }
 
-void test_wave_cursor_viewport_zone_extreme_policy_keeps_bottom_zone_behavior() {
-    const auto displayData = makeDisplayData({
-        {.time = 0.0, .value = 80.0},
-        {.time = 1.0, .value = 70.0},
-        {.time = 2.0, .value = 80.0},
-    }, {80.0, 70.0, 80.0});
+void test_wave_cursor_viewport_zone_extreme_policy_keeps_bottom_zone_behavior()
+{
+    const auto displayData = makeDisplayData(
+        {
+            {.time = 0.0, .value = 80.0},
+            {.time = 1.0, .value = 70.0},
+            {.time = 2.0, .value = 80.0},
+        },
+        {80.0, 70.0, 80.0});
     protoscope::plot::WaveViewState view;
     view.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
     const ImPlotRect limits(0.0, 2.0, 0.0, 100.0);
@@ -501,12 +529,14 @@ void test_wave_cursor_viewport_zone_extreme_policy_keeps_bottom_zone_behavior() 
     require(bottomZone->label == "Trough", "旧极值策略底部区域应返回谷值");
 }
 
-void test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms() {
+void test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms()
+{
     struct Case {
         const char* name;
         double scale;
         double offset;
     };
+
     const std::vector<Case> cases{
         {"no_transform", 1.0, 0.0},
         {"offset_only", 1.0, 2.0},
@@ -533,17 +563,20 @@ void test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms() {
         require(peak->sampleIndex == 3, "平顶峰值应回退到搜索窗口内距离鼠标时间最近的视觉峰值样本");
         require(std::abs(peak->value - 1.0) < 1e-9, "峰值吸附读数应保持真实测量值");
         require(std::abs(peak->displayValue - ((1.0 + item.offset) * item.scale)) < 1e-9,
-            "峰值吸附锚点应使用 offset/scale 后的显示值");
+                "峰值吸附锚点应使用 offset/scale 后的显示值");
     }
 }
 
-void test_wave_cursor_extreme_snap_falls_back_to_window_trough() {
-    const auto displayData = makeDisplayData({
-        {.time = 0.0, .value = 2.0},
-        {.time = 1.0, .value = -3.0},
-        {.time = 2.0, .value = -3.0},
-        {.time = 3.0, .value = -1.0},
-    }, {2.0, -30.0, -30.0, -1.0});
+void test_wave_cursor_extreme_snap_falls_back_to_window_trough()
+{
+    const auto displayData = makeDisplayData(
+        {
+            {.time = 0.0, .value = 2.0},
+            {.time = 1.0, .value = -3.0},
+            {.time = 2.0, .value = -3.0},
+            {.time = 3.0, .value = -1.0},
+        },
+        {2.0, -30.0, -30.0, -1.0});
 
     const auto trough = protoscope::plot::findLocalExtremeNearTime(
         displayData, 0, 1.2, 1.3, protoscope::plot::WaveExtremeKind::Minimum);
@@ -557,7 +590,8 @@ void test_wave_cursor_extreme_snap_falls_back_to_window_trough() {
     require(!farPeak.has_value(), "搜索窗口外的平底谷值不应污染峰值吸附");
 }
 
-void test_wave_cursor_smart_snap_fallback_to_nearest() {
+void test_wave_cursor_smart_snap_fallback_to_nearest()
+{
     const std::vector<protoscope::plot::WaveSample> flatSamples{
         {.time = 0.0, .value = 1.0},
         {.time = 1.0, .value = 1.0},
@@ -565,11 +599,11 @@ void test_wave_cursor_smart_snap_fallback_to_nearest() {
     };
     const auto displayData = makeDisplayData(flatSamples, {1.0, 1.0, 1.0});
     require(!protoscope::plot::findStrongestEdgeNearTime(displayData, 0, 1.0, 0.5).has_value(),
-        "平坦波形不应产生边沿吸附");
+            "平坦波形不应产生边沿吸附");
     require(!protoscope::plot::findLocalExtremeNearTime(
-                displayData, 0, 1.0, 0.5, protoscope::plot::WaveExtremeKind::Maximum)
+                 displayData, 0, 1.0, 0.5, protoscope::plot::WaveExtremeKind::Maximum)
                  .has_value(),
-        "平坦波形不应产生极值吸附");
+            "平坦波形不应产生极值吸附");
 
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
@@ -579,7 +613,8 @@ void test_wave_cursor_smart_snap_fallback_to_nearest() {
     require(nearest->sampleIndex == 1, "兜底最近点索引错误");
 }
 
-void test_wave_cursor_drag_time_uses_smart_snap() {
+void test_wave_cursor_drag_time_uses_smart_snap()
+{
     const double dragTime = 1.02;
     const std::optional<protoscope::plot::CursorReadout> smartSnap = protoscope::plot::CursorReadout{
         .valid = true,
@@ -596,18 +631,21 @@ void test_wave_cursor_drag_time_uses_smart_snap() {
     require(std::abs(fallbackTime - dragTime) < 1e-9, "无智能吸附结果时应保留拖动时间");
 }
 
-void test_plot_channel_scale_and_offset_apply_to_display_only() {
+void test_plot_channel_scale_and_offset_apply_to_display_only()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = -2.0, .offset = 1.5});
-    buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "test",
-        .samples = {
-            {.time = 0.0, .value = -1.0},
-            {.time = 0.5, .value = 1.0},
-            {.time = 1.0, .value = 0.0},
-        },
-    });
+    buffer.append(0,
+                  protoscope::plot::WaveAppendRequest{
+                      .source = "test",
+                      .samples =
+                          {
+                              {.time = 0.0, .value = -1.0},
+                              {.time = 0.5, .value = 1.0},
+                              {.time = 1.0, .value = 0.0},
+                          },
+                  });
 
     const auto snapshot = buffer.snapshot(0.0, 1.0);
     require(snapshot.channels.size() == 1, "应存在 1 个通道");
@@ -644,14 +682,16 @@ void test_plot_channel_scale_and_offset_apply_to_display_only() {
     protoscope::plot::OscilloscopeBuffer zeroScaleBuffer;
     zeroScaleBuffer.configureChannels(1);
     zeroScaleBuffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 0.0, .offset = 1.25});
-    zeroScaleBuffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "test",
-        .samples = {
-            {.time = 0.0, .value = -10.0},
-            {.time = 0.5, .value = 5.0},
-            {.time = 1.0, .value = 9.0},
-        },
-    });
+    zeroScaleBuffer.append(0,
+                           protoscope::plot::WaveAppendRequest{
+                               .source = "test",
+                               .samples =
+                                   {
+                                       {.time = 0.0, .value = -10.0},
+                                       {.time = 0.5, .value = 5.0},
+                                       {.time = 1.0, .value = 9.0},
+                                   },
+                           });
     const auto zeroMeasurement = zeroScaleBuffer.measureWindow(0, 0.0, 1.0);
     require(zeroMeasurement.valid, "zero-scale 测量应有效");
     require(std::abs(zeroMeasurement.minValue + 10.0) < 1e-9, "scale=0 时最小值仍应保持真实值");
@@ -659,18 +699,58 @@ void test_plot_channel_scale_and_offset_apply_to_display_only() {
     require(std::abs(zeroMeasurement.rmsValue - std::sqrt(206.0 / 3.0)) < 1e-9, "scale=0 时 RMS 仍应按真实值计算");
 }
 
-void test_plot_build_display_data_into_reuses_storage_and_matches_output() {
+void test_plot_snapshot_without_stats_keeps_ranges_and_samples()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .ratio = 2.0, .scale = 3.0, .offset = -1.0});
-    buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "test",
-        .samples = {
-            {.time = 0.0, .value = 1.0},
-            {.time = 0.5, .value = 2.0},
-            {.time = 1.0, .value = 3.0},
-        },
-    });
+    buffer.append(0,
+                  protoscope::plot::WaveAppendRequest{
+                      .source = "test",
+                      .samples =
+                          {
+                              {.time = 0.0, .value = 1.0},
+                              {.time = 0.5, .value = 2.0},
+                              {.time = 1.0, .value = 3.0},
+                          },
+                  });
+
+    const auto lightweight = buffer.snapshot(0.0, 1.0, false);
+    require(lightweight.channels.size() == 1, "轻量快照应保留通道");
+    require(lightweight.channels[0].samples != nullptr, "轻量快照应保留原始样本指针");
+    require(lightweight.channels[0].visibleBegin == 0, "轻量快照应保留可视起点");
+    require(lightweight.channels[0].visibleEnd == 3, "轻量快照应保留可视终点");
+    require(lightweight.channels[0].stats.totalSamples == 3, "轻量快照应保留总样本数");
+    require(lightweight.channels[0].stats.visibleSamples == 3, "轻量快照应保留可视样本数");
+    require(std::abs(lightweight.channels[0].stats.sampleRateHz - 2.0) < 1e-12, "轻量快照应保留采样率摘要");
+    require(lightweight.channels[0].stats.minValue == 0.0 && lightweight.channels[0].stats.maxValue == 0.0,
+            "轻量快照不应计算 min/max 统计");
+
+    const auto display = protoscope::plot::buildDisplayData(lightweight, 0.0);
+    require(display.channels.size() == 1, "轻量快照仍应可构建显示数据");
+    require(std::abs(display.channels[0].samples[1].value - 9.0) < 1e-12,
+            "轻量快照构建显示数据时仍应应用通道变换");
+
+    const auto full = buffer.snapshot(0.0, 1.0);
+    require(std::abs(full.channels[0].stats.minValue - 3.0) < 1e-12, "默认快照仍应计算 min 统计");
+    require(std::abs(full.channels[0].stats.maxValue - 15.0) < 1e-12, "默认快照仍应计算 max 统计");
+}
+
+void test_plot_build_display_data_into_reuses_storage_and_matches_output()
+{
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .ratio = 2.0, .scale = 3.0, .offset = -1.0});
+    buffer.append(0,
+                  protoscope::plot::WaveAppendRequest{
+                      .source = "test",
+                      .samples =
+                          {
+                              {.time = 0.0, .value = 1.0},
+                              {.time = 0.5, .value = 2.0},
+                              {.time = 1.0, .value = 3.0},
+                          },
+                  });
 
     const auto snapshot = buffer.snapshot(0.0, 1.0);
     const auto expected = protoscope::plot::buildDisplayData(snapshot, 10.0);
@@ -693,7 +773,8 @@ void test_plot_build_display_data_into_reuses_storage_and_matches_output() {
     require(std::abs(reused.channels[0].samples[2].time - 1.0) < 1e-12, "脚本时间轴应保留原始时间");
 }
 
-void test_plot_channel_ratio_and_formula_modes() {
+void test_plot_channel_ratio_and_formula_modes()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.setViewConfig({
         .timeScale = 1.0,
@@ -706,13 +787,15 @@ void test_plot_channel_ratio_and_formula_modes() {
     });
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .ratio = 0.25, .scale = 3.0, .offset = 1.0});
-    buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "test",
-        .samples = {
-            {.time = 0.0, .value = 8.0},
-            {.time = 1.0, .value = -4.0},
-        },
-    });
+    buffer.append(0,
+                  protoscope::plot::WaveAppendRequest{
+                      .source = "test",
+                      .samples =
+                          {
+                              {.time = 0.0, .value = 8.0},
+                              {.time = 1.0, .value = -4.0},
+                          },
+                  });
 
     const auto snapshot = buffer.snapshot(0.0, 1.0);
     require(std::abs(snapshot.channels[0].stats.maxValue - 7.0) < 1e-9, "scale_then_offset 最大值错误");
@@ -730,7 +813,8 @@ void test_plot_channel_ratio_and_formula_modes() {
     require(std::abs(nearest->displayValue - 7.0) < 1e-9, "display data 应同时返回显示值");
 }
 
-void test_plot_channel_transform_updates_are_isolated() {
+void test_plot_channel_transform_updates_are_isolated()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(2);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .ratio = 1.0, .scale = 2.0, .offset = 0.5});
@@ -760,7 +844,8 @@ void test_plot_channel_transform_updates_are_isolated() {
     require(std::abs(second.offset + 2.0) < 1e-9, "单通道 offset 变更不应影响其他通道");
 }
 
-void test_plot_cursor_snap_scope_selection() {
+void test_plot_cursor_snap_scope_selection()
+{
     protoscope::plot::WaveDisplayData displayData;
     displayData.channels.resize(2);
     displayData.channels[0].samples = {
@@ -783,7 +868,8 @@ void test_plot_cursor_snap_scope_selection() {
     require(std::abs(allChannels->time - 0.5) < 1e-9, "全部波形模式应命中真正最近的时间点");
 }
 
-void test_plot_hover_readout_ignores_hidden_channels() {
+void test_plot_hover_readout_ignores_hidden_channels()
+{
     protoscope::plot::WaveDisplayData displayData;
     displayData.channels.resize(2);
     displayData.channels[0].samples = {
@@ -794,16 +880,19 @@ void test_plot_hover_readout_ignores_hidden_channels() {
     };
 
     const std::vector<std::size_t> onlyFirstVisible{0};
-    const auto visibleOnly = protoscope::plot::findNearestDisplayPointInChannels(displayData, onlyFirstVisible, 1.02, 10.1, 0.1, 0.2);
+    const auto visibleOnly =
+        protoscope::plot::findNearestDisplayPointInChannels(displayData, onlyFirstVisible, 1.02, 10.1, 0.1, 0.2);
     require(visibleOnly.has_value(), "悬停吸附应在可见通道内继续命中候选");
     require(visibleOnly->channelIndex == 0, "隐藏通道不应参与悬停吸附评分");
 
     const std::vector<std::size_t> noVisibleChannels{};
-    const auto allHidden = protoscope::plot::findNearestDisplayPointInChannels(displayData, noVisibleChannels, 1.02, 10.1, 0.1, 0.2);
+    const auto allHidden =
+        protoscope::plot::findNearestDisplayPointInChannels(displayData, noVisibleChannels, 1.02, 10.1, 0.1, 0.2);
     require(!allHidden.has_value(), "所有候选通道隐藏时悬停吸附应为空");
 }
 
-void test_plot_limited_envelope_edges() {
+void test_plot_limited_envelope_edges()
+{
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V"});
@@ -843,7 +932,8 @@ void test_plot_limited_envelope_edges() {
     require(zeroWidth.sourceSampleCount == 0, "像素宽度为 0 时不应统计源样本");
 }
 
-void test_wave_frequency_parse_and_axis_mapping() {
+void test_wave_frequency_parse_and_axis_mapping()
+{
     using protoscope::plot::WaveSample;
     const auto tenK = protoscope::plot::parseSampleFrequencyText("10e3");
     require(tenK.accepted && std::abs(tenK.valueHz - 10000.0) < 1e-9, "10e3 应解析为 10000Hz");
@@ -893,7 +983,8 @@ void test_wave_frequency_parse_and_axis_mapping() {
     require(mapped.timeUnit == "sample", "点数轴单位应为 sample");
 }
 
-void test_wave_display_data_uses_visible_window_only() {
+void test_wave_display_data_uses_visible_window_only()
+{
     using protoscope::plot::WaveSample;
     std::vector<WaveSample> samples;
     for (int index = 0; index < 100; ++index) {
@@ -921,21 +1012,23 @@ void test_wave_display_data_uses_visible_window_only() {
     require(std::abs(mapped.channels[0].samples.back().value - 44.0) < 1e-12, "显示数据应止于窗口终点前");
 
     const auto frequencyMapped = protoscope::plot::buildDisplayData(snapshot, 10.0);
-    require(std::abs(frequencyMapped.channels[0].samples.front().time - 4.0) < 1e-12,
-            "频率时间轴应保留全局样本序号");
+    require(std::abs(frequencyMapped.channels[0].samples.front().time - 4.0) < 1e-12, "频率时间轴应保留全局样本序号");
 }
 
-void test_wave_edge_render_data_keeps_adjacent_guard_points() {
+void test_wave_main_render_data_uses_viewport_window()
+{
     protoscope::plot::WaveDockState wave;
     wave.buffer.configureChannels(1);
-    wave.buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "edge",
-        .samples = {
-            {.time = 0.0, .value = 0.0},
-            {.time = 10.0, .value = 1.0},
-            {.time = 20.0, .value = 0.0},
-        },
-    });
+    wave.buffer.append(0,
+                       protoscope::plot::WaveAppendRequest{
+                           .source = "edge",
+                           .samples =
+                               {
+                                   {.time = 0.0, .value = 0.0},
+                                   {.time = 10.0, .value = 1.0},
+                                   {.time = 20.0, .value = 0.0},
+                               },
+                       });
 
     wave.view.initialized = true;
     wave.view.autoFollowLatest = false;
@@ -949,31 +1042,36 @@ void test_wave_edge_render_data_keeps_adjacent_guard_points() {
     require(frame.displayData != nullptr, "主视图交互数据源不能为空");
     require(frame.renderDisplayData != nullptr, "主视图渲染数据源不能为空");
     require(frame.displayData->channels.front().samples.size() == 1, "交互数据仍应只保留视口内样本");
-    require(frame.renderDisplayData->channels.front().samples.size() == 3, "渲染数据应保留完整历史样本");
+    require(frame.renderDisplayData == frame.displayData, "主图渲染应复用当前视口显示缓存");
+    require(frame.renderDisplayData->channels.front().samples.size() == 1, "渲染数据不应再携带完整历史样本");
+    require(frame.overviewDisplayData != nullptr, "概览数据源不能为空");
+    require(frame.overviewDisplayData->channels.front().samples.size() >= 3, "概览仍应保留完整历史的降采样视图");
 
     std::size_t sourceSampleCount = 0;
     const auto envelope = protoscope::ui::buildDisplayEnvelope(frame.renderDisplayData->channels.front().samples,
                                                                wave.view.viewMinTime,
                                                                wave.view.viewMaxTime,
-                                                               32,
-                                                               &sourceSampleCount);
+                                                                32,
+                                                                &sourceSampleCount);
     require(sourceSampleCount == 1, "包络统计仍应只统计视口内样本");
-    require(envelope.size() == 3, "包络应纳入左右相邻保护点以桥接视口边缘线段");
-    require(std::abs(envelope.front().time - 0.0) < 1e-12, "左侧保护点应来自视口外邻接样本");
-    require(std::abs(envelope.back().time - 20.0) < 1e-12, "右侧保护点应来自视口外邻接样本");
+    require(envelope.size() == 1, "主图包络应只基于当前视口缓存构建");
+    require(std::abs(envelope.front().time - 10.0) < 1e-12, "主图包络应落在当前视口样本上");
 }
 
-void test_wave_edge_render_data_keeps_sample_frequency_axis() {
+void test_wave_main_render_data_uses_sample_frequency_viewport()
+{
     protoscope::plot::WaveDockState wave;
     wave.buffer.configureChannels(1);
-    wave.buffer.append(0, protoscope::plot::WaveAppendRequest{
-        .source = "edge",
-        .samples = {
-            {.time = 100.0, .value = 0.0},
-            {.time = 101.0, .value = 1.0},
-            {.time = 102.0, .value = 0.0},
-        },
-    });
+    wave.buffer.append(0,
+                       protoscope::plot::WaveAppendRequest{
+                           .source = "edge",
+                           .samples =
+                               {
+                                   {.time = 100.0, .value = 0.0},
+                                   {.time = 101.0, .value = 1.0},
+                                   {.time = 102.0, .value = 0.0},
+                               },
+                       });
 
     wave.view.initialized = true;
     wave.view.autoFollowLatest = false;
@@ -990,14 +1088,48 @@ void test_wave_edge_render_data_keeps_sample_frequency_axis() {
     require(frame.displayData->channels.front().samples.size() == 1, "采样频率交互数据应只保留视口内样本");
     require(std::abs(frame.displayData->channels.front().samples.front().time - 0.1) < 1e-12,
             "采样频率交互时间应按全局样本序号换算");
-    require(frame.renderDisplayData->channels.front().samples.size() == 3, "采样频率渲染数据应保留完整历史");
-    require(std::abs(frame.renderDisplayData->channels.front().samples.front().time - 0.0) < 1e-12,
-            "完整渲染数据起点应按全局样本序号换算");
-    require(std::abs(frame.renderDisplayData->channels.front().samples.back().time - 0.2) < 1e-12,
-            "完整渲染数据终点应按全局样本序号换算");
+    require(frame.renderDisplayData == frame.displayData, "采样频率主图渲染应复用当前视口显示缓存");
+    require(frame.renderDisplayData->channels.front().samples.size() == 1, "采样频率渲染数据不应携带完整历史");
+    require(frame.overviewDisplayData != nullptr, "采样频率概览数据源不能为空");
+    require(std::abs(frame.overviewDisplayData->channels.front().samples.front().time - 0.0) < 1e-12,
+            "概览数据起点应按全局样本序号换算");
+    require(std::abs(frame.overviewDisplayData->channels.front().samples.back().time - 0.2) < 1e-12,
+            "概览数据终点应按全局样本序号换算");
 }
 
-void test_wave_overview_bounds_use_full_history_window() {
+void test_wave_overview_display_data_is_budgeted()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(2);
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(10000);
+    for (std::size_t index = 0; index < 10000; ++index) {
+        samples.push_back({.time = static_cast<double>(index), .value = std::sin(static_cast<double>(index) * 0.01)});
+    }
+    wave.buffer.append(0, protoscope::plot::WaveAppendRequest{.source = "perf", .samples = samples});
+    wave.buffer.append(1, protoscope::plot::WaveAppendRequest{.source = "perf", .samples = samples});
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.viewMinTime = 9000.0;
+    wave.view.viewMaxTime = 9010.0;
+    wave.view.visibleDuration = 10.0;
+    wave.view.centerTime = 9005.0;
+    wave.view.overviewMaxSamples = 32;
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+
+    require(frame.renderDisplayData == frame.displayData, "主图渲染应避免回退到完整历史数据");
+    require(frame.displayData->channels.front().samples.size() < 10000, "当前视口缓存不应包含全历史样本");
+    require(frame.overviewDisplayData != nullptr, "概览缓存不能为空");
+    for (const auto& channel : frame.overviewDisplayData->channels) {
+        require(channel.samples.size() <= wave.view.overviewMaxSamples * 2,
+                "概览显示数据应按 overview_max_samples 预算降采样");
+    }
+    require(wave.cachedOverviewKeyValid, "概览缓存键应在 prepare 后有效");
+}
+
+void test_wave_overview_bounds_use_full_history_window()
+{
     std::vector<protoscope::plot::WaveSample> samples;
     samples.reserve(20);
     for (std::size_t index = 0; index < 20; ++index) {
@@ -1046,7 +1178,8 @@ void test_wave_overview_bounds_use_full_history_window() {
     protoscope::plot::applySampleFrequencyVisibleRange(frequencyMainSnapshot, 1.5, 1.9, 10.0);
     const auto frequencyMainDisplay = protoscope::plot::buildDisplayData(frequencyMainSnapshot, 10.0);
     const auto frequencyOverviewDisplay = protoscope::plot::buildDisplayData(fullSnapshot, 10.0);
-    const auto frequencyMainBounds = protoscope::plot::computeDisplayBoundsForChannels(frequencyMainDisplay, {0}, 0.001);
+    const auto frequencyMainBounds =
+        protoscope::plot::computeDisplayBoundsForChannels(frequencyMainDisplay, {0}, 0.001);
     const auto frequencyOverviewBounds =
         protoscope::plot::computeDisplayBoundsForChannels(frequencyOverviewDisplay, {0}, 0.001);
     require(std::abs(frequencyMainBounds.minTime - 1.5) < 1e-12, "Fs 主视图应按当前窗口换算起点");
@@ -1062,7 +1195,8 @@ void test_wave_overview_bounds_use_full_history_window() {
     require(includeHiddenBounds.maxValue > visibleOnlyBounds.maxValue, "包含隐藏通道时应能看到隐藏通道上限");
 }
 
-void test_wave_x_axis_double_click_bounds_selects_full_history() {
+void test_wave_x_axis_double_click_bounds_selects_full_history()
+{
     const protoscope::plot::WaveDataBounds visibleWindow{
         .minTime = 5.0,
         .maxTime = 6.0,
@@ -1099,15 +1233,16 @@ void test_wave_x_axis_double_click_bounds_selects_full_history() {
     require(std::abs(fallbackBounds.maxTime - 6.0) < 1e-12, "全历史无效时应回退当前窗口终点");
 }
 
-void test_wave_fft_detects_50hz_and_150hz_components() {
+void test_wave_fft_detects_50hz_and_150hz_components()
+{
     constexpr double sampleFrequencyHz = 1024.0;
     constexpr std::size_t pointCount = 1024;
     std::vector<protoscope::plot::WaveSample> samples;
     samples.reserve(pointCount);
     for (std::size_t index = 0; index < pointCount; ++index) {
         const double time = static_cast<double>(index) / sampleFrequencyHz;
-        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time)
-            + 0.5 * std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time) +
+                             0.5 * std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
         samples.push_back({.time = time, .value = value});
     }
 
@@ -1127,13 +1262,8 @@ void test_wave_fft_detects_50hz_and_150hz_components() {
         .window = protoscope::plot::WaveFftWindow::Rectangular,
     };
 
-    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
-                                                          displayData,
-                                                          config,
-                                                          std::vector<std::uint8_t>{1},
-                                                          0.0,
-                                                          1.0,
-                                                          sampleFrequencyHz);
+    const auto frame = protoscope::plot::buildWaveFftFrame(
+        snapshot, displayData, config, std::vector<std::uint8_t>{1}, 0.0, 1.0, sampleFrequencyHz);
     require(frame.valid, "FFT 帧应计算成功");
     require(std::abs(frame.frequencyResolutionHz - 1.0) < 1e-12, "1024Hz/1024 点应得到 1Hz/bin");
     require(frame.channels.size() == 1 && frame.channels[0].valid, "CH1 应有有效频谱");
@@ -1151,15 +1281,16 @@ void test_wave_fft_detects_50hz_and_150hz_components() {
     require(std::abs(frame.channels[0].fundamental->frequencyHz - 50.0) < 1e-12, "自动基波应为 50Hz");
 }
 
-void test_wave_fft_visible_samples_supports_non_power_of_two() {
+void test_wave_fft_visible_samples_supports_non_power_of_two()
+{
     constexpr double sampleFrequencyHz = 1000.0;
     constexpr std::size_t pointCount = 1000;
     std::vector<protoscope::plot::WaveSample> samples;
     samples.reserve(pointCount);
     for (std::size_t index = 0; index < pointCount; ++index) {
         const double time = static_cast<double>(index) / sampleFrequencyHz;
-        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time)
-            + 0.5 * std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
+        const double value = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time) +
+                             0.5 * std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
         samples.push_back({.time = time, .value = value});
     }
 
@@ -1179,13 +1310,8 @@ void test_wave_fft_visible_samples_supports_non_power_of_two() {
         .window = protoscope::plot::WaveFftWindow::Rectangular,
     };
 
-    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
-                                                          displayData,
-                                                          config,
-                                                          std::vector<std::uint8_t>{1},
-                                                          0.0,
-                                                          1.0,
-                                                          sampleFrequencyHz);
+    const auto frame = protoscope::plot::buildWaveFftFrame(
+        snapshot, displayData, config, std::vector<std::uint8_t>{1}, 0.0, 1.0, sampleFrequencyHz);
     require(frame.valid, "非 2^n 可视样本 FFT 应计算成功");
     require(frame.pointCount == 1000, "VisibleSamples 应吃完整 1000 点");
     require(std::abs(frame.frequencyResolutionHz - 1.0) < 1e-12, "1000Hz/1000 点应得到 1Hz/bin");
@@ -1194,7 +1320,8 @@ void test_wave_fft_visible_samples_supports_non_power_of_two() {
     require(frame.channels[0].bins[150].magnitude > 0.4, "150Hz 峰值应保留");
 }
 
-void test_wave_fft_manual_point_count_supports_non_power_of_two() {
+void test_wave_fft_manual_point_count_supports_non_power_of_two()
+{
     constexpr double sampleFrequencyHz = 1500.0;
     constexpr std::size_t sampleCount = 1000;
     std::vector<protoscope::plot::WaveSample> samples;
@@ -1222,13 +1349,8 @@ void test_wave_fft_manual_point_count_supports_non_power_of_two() {
         .manualPointCount = 750,
     };
 
-    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
-                                                          displayData,
-                                                          config,
-                                                          std::vector<std::uint8_t>{1},
-                                                          0.0,
-                                                          1.0,
-                                                          sampleFrequencyHz);
+    const auto frame = protoscope::plot::buildWaveFftFrame(
+        snapshot, displayData, config, std::vector<std::uint8_t>{1}, 0.0, 1.0, sampleFrequencyHz);
     require(frame.valid, "手动非 2^n 点数 FFT 应计算成功");
     require(frame.pointCount == 750, "Manual 应强制使用手动点数");
     require(frame.channels[0].usedSampleCount == 750, "Manual 应只使用最近的手动 N 点");
@@ -1237,7 +1359,8 @@ void test_wave_fft_manual_point_count_supports_non_power_of_two() {
     require(frame.channels[0].bins[30].magnitude > 0.9, "60Hz 峰值应保留");
 }
 
-void test_wave_fft_fit_viewport_resets_frequency_and_value_ranges() {
+void test_wave_fft_fit_viewport_resets_frequency_and_value_ranges()
+{
     constexpr double sampleFrequencyHz = 1000.0;
     constexpr std::size_t pointCount = 1000;
     std::vector<protoscope::plot::WaveSample> samples;
@@ -1263,13 +1386,8 @@ void test_wave_fft_fit_viewport_resets_frequency_and_value_ranges() {
         .pointCount = protoscope::plot::WaveFftPointCount::VisibleSamples,
         .window = protoscope::plot::WaveFftWindow::Rectangular,
     };
-    const auto frame = protoscope::plot::buildWaveFftFrame(snapshot,
-                                                          displayData,
-                                                          config,
-                                                          std::vector<std::uint8_t>{1},
-                                                          0.0,
-                                                          1.0,
-                                                          sampleFrequencyHz);
+    const auto frame = protoscope::plot::buildWaveFftFrame(
+        snapshot, displayData, config, std::vector<std::uint8_t>{1}, 0.0, 1.0, sampleFrequencyHz);
     const auto viewport = protoscope::plot::makeFftFitViewport(frame);
     require(frame.valid, "FFT 帧应计算成功");
     require(std::abs(viewport.frequencyMin) < 1e-12, "显示全部频谱应从 0Hz 开始");
@@ -1280,7 +1398,8 @@ void test_wave_fft_fit_viewport_resets_frequency_and_value_ranges() {
     require(std::abs(viewport.phaseMax - 180.0) < 1e-12, "显示全部频谱应恢复相位上限");
 }
 
-void test_wave_viewport_zoom_modes_and_clamp() {
+void test_wave_viewport_zoom_modes_and_clamp()
+{
     const protoscope::plot::WaveViewport viewport{
         .minTime = 2.0,
         .maxTime = 6.0,
@@ -1307,8 +1426,8 @@ void test_wave_viewport_zoom_modes_and_clamp() {
     require(std::abs(yOnly.minTime - viewport.minTime) < 1e-12, "Y-only 不应改变横轴最小值");
     require((yOnly.maxValue - yOnly.minValue) < 4.0, "Y-only 滚轮应缩小纵轴范围");
 
-    const auto xy = protoscope::plot::zoomViewport(
-        viewport, protoscope::plot::WaveZoomMode::XY, 1.0, 4.0, 0.0, bounds, 0.1, true);
+    const auto xy =
+        protoscope::plot::zoomViewport(viewport, protoscope::plot::WaveZoomMode::XY, 1.0, 4.0, 0.0, bounds, 0.1, true);
     require((xy.maxTime - xy.minTime) < 4.0, "XY 滚轮应缩小横轴范围");
     require((xy.maxValue - xy.minValue) < 4.0, "XY 滚轮应缩小纵轴范围");
 
@@ -1324,7 +1443,8 @@ void test_wave_viewport_zoom_modes_and_clamp() {
     require((clamped.maxTime - clamped.minTime) >= 0.1, "缩放宽度不应小于最小范围");
 }
 
-void test_wave_overview_viewport_normalize() {
+void test_wave_overview_viewport_normalize()
+{
     const protoscope::plot::WaveDataBounds bounds{
         .minTime = 0.0,
         .maxTime = 10.0,
@@ -1360,7 +1480,8 @@ void test_wave_overview_viewport_normalize() {
     require((tiny.maxTime - tiny.minTime) >= 0.5 - 1e-12, "概览窗口宽度不应小于最小时间宽度");
 }
 
-void test_wave_cursor_position_in_viewport() {
+void test_wave_cursor_position_in_viewport()
+{
     const protoscope::plot::WaveViewport viewport{
         .minTime = 10.0,
         .maxTime = 20.0,
@@ -1369,18 +1490,19 @@ void test_wave_cursor_position_in_viewport() {
     };
 
     require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, 0.5) - 15.0) < 1e-12,
-        "单游标快捷定位应落在视窗中点");
+            "单游标快捷定位应落在视窗中点");
     require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, 0.4) - 14.0) < 1e-12,
-        "双游标左侧快捷定位应落在视窗 40% 位置");
+            "双游标左侧快捷定位应落在视窗 40% 位置");
     require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, 0.6) - 16.0) < 1e-12,
-        "双游标右侧快捷定位应落在视窗 60% 位置");
+            "双游标右侧快捷定位应落在视窗 60% 位置");
     require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, -1.0) - 10.0) < 1e-12,
-        "游标快捷定位比例应夹紧到左边界");
+            "游标快捷定位比例应夹紧到左边界");
     require(std::abs(protoscope::plot::cursorTimeInViewport(viewport, 2.0) - 20.0) < 1e-12,
-        "游标快捷定位比例应夹紧到右边界");
+            "游标快捷定位比例应夹紧到右边界");
 }
 
-void test_wave_cursor_interval_text_by_axis() {
+void test_wave_cursor_interval_text_by_axis()
+{
     const protoscope::plot::CursorReadout left{
         .valid = true,
         .channelIndex = 0,
@@ -1402,8 +1524,8 @@ void test_wave_cursor_interval_text_by_axis() {
     require(!sample.showFrequency, "点数轴不应伪装显示 Hz");
     require(sample.deltaUnit == "sample", "点数轴间隔单位应为 sample");
 
-    const auto scriptTime = protoscope::plot::makeCursorIntervalText(
-        left, right, protoscope::plot::WaveTimeAxisSource::ScriptTime, "ms");
+    const auto scriptTime =
+        protoscope::plot::makeCursorIntervalText(left, right, protoscope::plot::WaveTimeAxisSource::ScriptTime, "ms");
     require(scriptTime.valid, "脚本时间轴游标间隔应有效");
     require(scriptTime.showFrequency, "脚本时间轴应显示倒数频率");
     require(std::abs(scriptTime.frequencyHz - 0.25) < 1e-12, "脚本时间轴频率计算错误");
@@ -1415,7 +1537,8 @@ void test_wave_cursor_interval_text_by_axis() {
     require(std::abs(sampledTime.frequencyHz - 0.25) < 1e-12, "采样频率时间轴频率计算错误");
 }
 
-void test_wave_cursor_interval_lock() {
+void test_wave_cursor_interval_lock()
+{
     double right = 3.0;
     protoscope::plot::lockCursorInterval(1.0, right, 2.0, true);
     require(std::abs(right - 3.0) < 1e-12, "移动左游标时右游标应保持锁定间隔");
@@ -1425,7 +1548,8 @@ void test_wave_cursor_interval_lock() {
     require(std::abs(left - 3.0) < 1e-12, "移动右游标时左游标应保持锁定间隔");
 }
 
-void test_wave_channel_card_width_modes() {
+void test_wave_channel_card_width_modes()
+{
     const double fixedWidth = protoscope::plot::resolveChannelCardWidth(
         protoscope::plot::WaveChannelCardWidthMode::Fixed, 128.0, 0.22, 1000.0);
     require(std::abs(fixedWidth - 128.0) < 1e-12, "固定模式应直接使用配置宽度");
@@ -1435,7 +1559,8 @@ void test_wave_channel_card_width_modes() {
     require(std::abs(adaptiveWidth - 220.0) < 1e-12, "自适应模式应按比例计算并保留上限夹取");
 }
 
-void test_wave_vertical_auto_fit_multiplier() {
+void test_wave_vertical_auto_fit_multiplier()
+{
     const auto negativeRange = protoscope::plot::makeVerticalAutoFitRange(-10.0, 5.0, 1.2);
     require(std::abs(negativeRange.minValue + 12.0) < 1e-12, "负向范围 Auto Fit 下限应乘以系数");
     require(std::abs(negativeRange.maxValue - 12.0) < 1e-12, "负向范围 Auto Fit 上限应乘以系数");
@@ -1445,7 +1570,8 @@ void test_wave_vertical_auto_fit_multiplier() {
     require(std::abs(positiveRange.maxValue - 3.6) < 1e-12, "正向范围 Auto Fit 上限应围绕 0 对称");
 }
 
-void test_wave_visible_channel_bounds_ignore_hidden_channels() {
+void test_wave_visible_channel_bounds_ignore_hidden_channels()
+{
     protoscope::plot::WaveDisplayData data;
     data.channels.push_back({
         .samples = {{.time = 0.0, .value = -1.0}, {.time = 1.0, .value = 1.0}},
@@ -1471,7 +1597,8 @@ void test_wave_visible_channel_bounds_ignore_hidden_channels() {
     require(!empty.valid, "没有可见通道时 bounds 应保持无效");
 }
 
-void test_wave_hidden_channel_policy_defaults_to_visible_only() {
+void test_wave_hidden_channel_policy_defaults_to_visible_only()
+{
     protoscope::config::GuiWaveConfig config;
     protoscope::plot::WaveViewState view;
 
@@ -1481,12 +1608,12 @@ void test_wave_hidden_channel_policy_defaults_to_visible_only() {
             "运行态默认隐藏 CH 策略应只让可见通道参与派生视图");
 }
 
-void test_wave_channel_reset_all_uses_protocol_default() {
+void test_wave_channel_reset_all_uses_protocol_default()
+{
     auto wave = makeChannelResetWave();
 
-    require(protoscope::plot::resetChannelConfigToDefault(wave,
-                                                          0,
-                                                          protoscope::plot::WaveChannelDoubleClickAction::ResetAll),
+    require(protoscope::plot::resetChannelConfigToDefault(
+                wave, 0, protoscope::plot::WaveChannelDoubleClickAction::ResetAll),
             "恢复全部默认应成功");
     const auto spec = wave.buffer.channelSpec(0);
     require(spec.has_value(), "恢复全部默认后通道配置仍应存在");
@@ -1500,12 +1627,12 @@ void test_wave_channel_reset_all_uses_protocol_default() {
     require(!wave.channelOverrides[0].offsetOverridden, "恢复全部默认应清除 offset override");
 }
 
-void test_wave_channel_reset_scale_offset_preserves_label_and_ratio() {
+void test_wave_channel_reset_scale_offset_preserves_label_and_ratio()
+{
     auto wave = makeChannelResetWave();
 
-    require(protoscope::plot::resetChannelConfigToDefault(wave,
-                                                          0,
-                                                          protoscope::plot::WaveChannelDoubleClickAction::ResetScaleOffset),
+    require(protoscope::plot::resetChannelConfigToDefault(
+                wave, 0, protoscope::plot::WaveChannelDoubleClickAction::ResetScaleOffset),
             "恢复 scale/offset 默认应成功");
     const auto spec = wave.buffer.channelSpec(0);
     require(spec.has_value(), "恢复 scale/offset 后通道配置仍应存在");
@@ -1519,12 +1646,12 @@ void test_wave_channel_reset_scale_offset_preserves_label_and_ratio() {
     require(!wave.channelOverrides[0].offsetOverridden, "恢复 scale/offset 应清除 offset override");
 }
 
-void test_wave_channel_reset_scale_preserves_offset() {
+void test_wave_channel_reset_scale_preserves_offset()
+{
     auto wave = makeChannelResetWave();
 
-    require(protoscope::plot::resetChannelConfigToDefault(wave,
-                                                          0,
-                                                          protoscope::plot::WaveChannelDoubleClickAction::ResetScale),
+    require(protoscope::plot::resetChannelConfigToDefault(
+                wave, 0, protoscope::plot::WaveChannelDoubleClickAction::ResetScale),
             "恢复 scale 默认应成功");
     const auto spec = wave.buffer.channelSpec(0);
     require(spec.has_value(), "恢复 scale 后通道配置仍应存在");
@@ -1534,7 +1661,8 @@ void test_wave_channel_reset_scale_preserves_offset() {
     require(wave.channelOverrides[0].offsetOverridden, "恢复 scale 应保留 offset override");
 }
 
-void test_wave_offset_reset_uses_protocol_default_only() {
+void test_wave_offset_reset_uses_protocol_default_only()
+{
     protoscope::plot::WaveDockState wave;
     wave.buffer.configureChannels(1);
     wave.defaultChannelSpecs.push_back({
@@ -1544,13 +1672,14 @@ void test_wave_offset_reset_uses_protocol_default_only() {
         .scale = 1.5,
         .offset = -0.25,
     });
-    wave.buffer.setChannelSpec(0, {
-        .label = "Renamed",
-        .unit = "V",
-        .ratio = 3.0,
-        .scale = 4.0,
-        .offset = 10.0,
-    });
+    wave.buffer.setChannelSpec(0,
+                               {
+                                   .label = "Renamed",
+                                   .unit = "V",
+                                   .ratio = 3.0,
+                                   .scale = 4.0,
+                                   .offset = 10.0,
+                               });
     wave.channelOverrides.resize(1);
     wave.channelOverrides[0].labelOverridden = true;
     wave.channelOverrides[0].ratioOverridden = true;
@@ -1574,9 +1703,10 @@ void test_wave_offset_reset_uses_protocol_default_only() {
     require(wave.channelOverrides[0].labelOverridden, "label override 应保留");
 }
 
-void test_raw_capture_file_roundtrip() {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-roundtrip.psraw";
-    std::filesystem::remove(tempPath);
+void test_raw_capture_file_roundtrip()
+{
+    const ScopedTempFile tempFile("protoscope-roundtrip");
+    const auto& tempPath = tempFile.path();
 
     const protoscope::plot::RawCaptureFileData capture{
         .protocolName = "default_protocol",
@@ -1599,12 +1729,12 @@ void test_raw_capture_file_roundtrip() {
     require(loaded->capturedAtMs == capture.capturedAtMs, "psraw 应保留采集时间");
     require(loaded->payload == capture.payload, "psraw 应保留原始 payload");
 
-    std::filesystem::remove(tempPath);
 }
 
-void test_raw_capture_file_plot_setup_roundtrip() {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-plot-setup-roundtrip.psraw";
-    std::filesystem::remove(tempPath);
+void test_raw_capture_file_plot_setup_roundtrip()
+{
+    const ScopedTempFile tempFile("protoscope-plot-setup-roundtrip");
+    const auto& tempPath = tempFile.path();
 
     protoscope::plot::RawCaptureEvent setupEvent;
     setupEvent.type = protoscope::plot::RawCaptureEventType::PlotSetup;
@@ -1612,7 +1742,12 @@ void test_raw_capture_file_plot_setup_roundtrip() {
     setupEvent.plotSetup.source = "温度曲线";
     setupEvent.plotSetup.resetHistory = true;
     setupEvent.plotSetup.channels = {
-        {.label = "温度A", .unit = "℃", .ratio = 0.5, .scale = 2.0, .offset = -1.0, .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F}},
+        {.label = "温度A",
+         .unit = "℃",
+         .ratio = 0.5,
+         .scale = 2.0,
+         .offset = -1.0,
+         .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F}},
         {.label = "压力B", .unit = "kPa", .ratio = 1.5, .scale = 3.0, .offset = 4.0},
     };
     setupEvent.plotSetup.view.timeScale = 0.25;
@@ -1668,12 +1803,12 @@ void test_raw_capture_file_plot_setup_roundtrip() {
     require(loadedSetup.view.verticalUnit == "℃", "plot_setup 应保留 vertical_unit");
     require(loadedSetup.view.historyLimit == 4096U, "plot_setup 应保留 history_limit");
 
-    std::filesystem::remove(tempPath);
 }
 
-void test_raw_capture_file_plot_setup_rejects_bad_fields() {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-plot-setup-bad-fields.psraw";
-    std::filesystem::remove(tempPath);
+void test_raw_capture_file_plot_setup_rejects_bad_fields()
+{
+    const ScopedTempFile tempFile("protoscope-plot-setup-bad-fields");
+    const auto& tempPath = tempFile.path();
 
     protoscope::plot::RawCaptureEvent setupEvent;
     setupEvent.type = protoscope::plot::RawCaptureEventType::PlotSetup;
@@ -1714,10 +1849,10 @@ void test_raw_capture_file_plot_setup_rejects_bad_fields() {
     broken.replace(ratioPos, ratioEnd - ratioPos, "channel.0.ratio: nope");
     require(!protoscope::plot::decodeRawCaptureFile(broken, error).has_value(), "坏数值 ratio 应拒绝解析");
 
-    std::filesystem::remove(tempPath);
 }
 
-void test_raw_capture_file_v2_event_stream_still_reads() {
+void test_raw_capture_file_v2_event_stream_still_reads()
+{
     const std::string eventBytes = "event: rx_bytes\n"
                                    "timestamp_ms: 2\n"
                                    "size: 3\n"
@@ -1730,9 +1865,9 @@ void test_raw_capture_file_v2_event_stream_still_reads() {
                                      "sample_frequency_hz: 1024\n"
                                      "captured_at_ms: 1\n"
                                      "truncated: false\n"
-                                     "payload_size: ")
-                       + std::to_string(eventBytes.size())
-                       + "\n"
+                                     "payload_size: ") +
+                         std::to_string(eventBytes.size()) +
+                         "\n"
                          "event_stream: true\n"
                          "\n";
     header.resize(4096, '\0');
@@ -1744,7 +1879,8 @@ void test_raw_capture_file_v2_event_stream_still_reads() {
     require(parsed->payload == std::vector<std::uint8_t>({'a', 'b', 'c'}), "v2 psraw 应保留 rx bytes");
 }
 
-void test_raw_capture_file_rejects_size_mismatch() {
+void test_raw_capture_file_rejects_size_mismatch()
+{
     const std::string broken = "ProtoScopeRawCapture\n"
                                "version: 2\n"
                                "protocol_name: default_protocol\n"
@@ -1760,7 +1896,8 @@ void test_raw_capture_file_rejects_size_mismatch() {
     require(!parsed.has_value(), "raw_size 不匹配时应拒绝解析");
 }
 
-void test_raw_capture_file_requires_protocol_fields() {
+void test_raw_capture_file_requires_protocol_fields()
+{
     const std::string broken = "ProtoScopeRawCapture\n"
                                "version: 2\n"
                                "sample_frequency_hz: 1024\n"
@@ -1774,9 +1911,10 @@ void test_raw_capture_file_requires_protocol_fields() {
     require(!parsed.has_value(), "缺少 protocol 字段时应拒绝解析");
 }
 
-void test_raw_capture_file_rejects_trailing_bytes() {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-trailing-bytes.psraw";
-    std::filesystem::remove(tempPath);
+void test_raw_capture_file_rejects_trailing_bytes()
+{
+    const ScopedTempFile tempFile("protoscope-trailing-bytes");
+    const auto& tempPath = tempFile.path();
     const protoscope::plot::RawCaptureFileData capture{
         .protocolName = "default_protocol",
         .protocolDir = "protocols/templates/default_protocol",
@@ -1795,12 +1933,12 @@ void test_raw_capture_file_rejects_trailing_bytes() {
     dirty.append("junk");
     const auto parsed = protoscope::plot::decodeRawCaptureFile(dirty, error);
     require(!parsed.has_value(), "payload 后存在尾随脏字节时应拒绝解析");
-    std::filesystem::remove(tempPath);
 }
 
-void test_raw_capture_file_rejects_profile_set_without_length() {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-profile-missing-length.psraw";
-    std::filesystem::remove(tempPath);
+void test_raw_capture_file_rejects_profile_set_without_length()
+{
+    const ScopedTempFile tempFile("protoscope-profile-missing-length");
+    const auto& tempPath = tempFile.path();
     protoscope::plot::RawCaptureFileData capture{
         .protocolName = "runtime_profile_stream",
         .protocolDir = "tests/fixtures/protocols/runtime_profile_stream",
@@ -1827,5 +1965,4 @@ void test_raw_capture_file_rejects_profile_set_without_length() {
     bytes.replace(pos, std::string("length: 8\n").size(), "leng_x: 8\n");
     const auto parsed = protoscope::plot::decodeRawCaptureFile(bytes, error);
     require(!parsed.has_value(), "profile_set 缺少 length 时应拒绝解析");
-    std::filesystem::remove(tempPath);
 }

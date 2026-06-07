@@ -5,7 +5,8 @@
 
 namespace protoscope::ui {
 
-void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
+void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)
+{
     if (snapshot.channels.empty()) {
         return;
     }
@@ -17,10 +18,11 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
     ImGui::AlignTextToFramePadding();
     ImGui::Text("图例 / 吸附范围：%s", snapScopeName(view.cursorSnapScope));
     ImGui::SameLine();
-    const float buttonWidth = ImGui::CalcTextSize(wave.legendCollapsed ? "v" : "^").x
-        + ImGui::GetStyle().FramePadding.x * 2.0F;
+    const float buttonWidth =
+        ImGui::CalcTextSize(wave.legendCollapsed ? "v" : "^").x + ImGui::GetStyle().FramePadding.x * 2.0F;
     ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - buttonWidth));
-    if (ImGui::SmallButton(wave.legendCollapsed ? "v##wave_channel_legend_collapse" : "^##wave_channel_legend_collapse")) {
+    if (ImGui::SmallButton(wave.legendCollapsed ? "v##wave_channel_legend_collapse"
+                                                : "^##wave_channel_legend_collapse")) {
         wave.legendCollapsed = !wave.legendCollapsed;
     }
     if (ImGui::IsItemHovered()) {
@@ -71,10 +73,10 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
 
             const bool hovered = ImGui::IsItemHovered();
             const ImVec2 cardMax(cardMin.x + cardSize.x, cardMin.y + cardSize.y);
-            const ImU32 fillColor = ImGui::GetColorU32(active ? ImVec4(0.18F, 0.28F, 0.20F, 0.95F)
-                                                              : ImVec4(0.11F, 0.12F, 0.14F, 0.95F));
-            const ImU32 borderColor = ImGui::GetColorU32(active ? ImVec4(0.50F, 0.82F, 0.56F, 1.0F)
-                                                                : ImVec4(1.0F, 1.0F, 1.0F, 0.14F));
+            const ImU32 fillColor =
+                ImGui::GetColorU32(active ? ImVec4(0.18F, 0.28F, 0.20F, 0.95F) : ImVec4(0.11F, 0.12F, 0.14F, 0.95F));
+            const ImU32 borderColor =
+                ImGui::GetColorU32(active ? ImVec4(0.50F, 0.82F, 0.56F, 1.0F) : ImVec4(1.0F, 1.0F, 1.0F, 0.14F));
             auto* drawList = ImGui::GetWindowDrawList();
             drawList->AddRectFilled(cardMin, cardMax, fillColor, rounding);
             drawList->AddRect(cardMin, cardMax, borderColor, rounding, 0, active ? 2.0F : 1.0F);
@@ -91,9 +93,9 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
             const ImVec2 summaryMin(textMin.x, titleMax.y + textSpacingY);
             const ImVec2 summaryMax(textMax.x, summaryMin.y + lineHeight);
             drawChannelCardText(textMin, titleMax, spec->label, ImGui::GetColorU32(ImGuiCol_Text));
-            const std::string summary = "R " + formatMetricText(spec->ratio, nullptr)
-                + "  S " + formatMetricText(spec->scale, nullptr)
-                + "  O " + formatMetricText(spec->offset, nullptr);
+            const std::string summary = "R " + formatMetricText(spec->ratio, nullptr) + "  S " +
+                                        formatMetricText(spec->scale, nullptr) + "  O " +
+                                        formatMetricText(spec->offset, nullptr);
             drawChannelCardText(summaryMin, summaryMax, summary, ImGui::GetColorU32(ImGuiCol_TextDisabled));
 
             if (hovered) {
@@ -108,9 +110,10 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
 
         // 交互约定：鼠标停在卡片条上滚轮优先转成横向滚动，减少必须拖滚动条的成本。
         if (ImGui::IsWindowHovered() && ImGui::GetScrollMaxX() > 0.0F && std::abs(ImGui::GetIO().MouseWheel) > 0.0F) {
-            const float targetScroll = (std::clamp)(ImGui::GetScrollX() - ImGui::GetIO().MouseWheel * metrics.cardWidth * 0.85F,
-                                                    0.0F,
-                                                    ImGui::GetScrollMaxX());
+            const float targetScroll =
+                (std::clamp)(ImGui::GetScrollX() - ImGui::GetIO().MouseWheel * metrics.cardWidth * 0.85F,
+                             0.0F,
+                             ImGui::GetScrollMaxX());
             ImGui::SetScrollX(targetScroll);
         }
     }
@@ -120,12 +123,14 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
     wave.lastLegendMeasurementChannelIndex = view.measurementChannelIndex;
 }
 
-void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot) {
+void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)
+{
     static_cast<void>(wave);
     static_cast<void>(snapshot);
 }
 
-float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveDockState& wave) {
+float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveDockState& wave)
+{
     if (snapshot.channels.empty()) {
         return 0.0F;
     }

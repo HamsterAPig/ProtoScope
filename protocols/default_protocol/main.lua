@@ -17,11 +17,51 @@ function ui()
         { type = "elf_symbol_combo", id = "target_symbol", label = "ELF 变量" },
       },
       layout = {
-        kind = "form",
-        items = {
-          { collapse = "基础控制", default_open = true, items = {{ controls = { "read_version", "device_id" } }} },
-          { collapse = "高级控制", default_open = false, items = {{ controls = { "hex_send", "mode", "timeout_ms", "scale" } }} },
-          { collapse = "读取变量地址", default_open = true, items = {{ controls = { "target_symbol" } }} },
+        type = "column",
+        children = {
+          {
+            type = "collapse",
+            title = "基础控制",
+            default_open = true,
+            children = {
+              {
+                type = "flow",
+                children = {
+                  { type = "control", id = "read_version" },
+                  { type = "control", id = "device_id" },
+                }
+              }
+            }
+          },
+          {
+            type = "collapse",
+            title = "高级控制",
+            default_open = false,
+            children = {
+              {
+                type = "flow",
+                children = {
+                  { type = "control", id = "hex_send" },
+                  { type = "control", id = "mode" },
+                  { type = "control", id = "timeout_ms" },
+                  { type = "control", id = "scale" },
+                }
+              }
+            }
+          },
+          {
+            type = "collapse",
+            title = "读取变量地址",
+            default_open = true,
+            children = {
+              {
+                type = "flow",
+                children = {
+                  { type = "control", id = "target_symbol" },
+                }
+              }
+            }
+          },
         }
       }
     }

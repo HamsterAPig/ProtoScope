@@ -2,10 +2,10 @@
 
 #include "script_host_context.hpp"
 
-#include <sol/sol.hpp>
-
 #include <memory>
 #include <string_view>
+
+#include <sol/sol.hpp>
 
 namespace protoscope::scripting {
 

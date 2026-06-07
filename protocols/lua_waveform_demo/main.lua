@@ -183,32 +183,50 @@ function ui()
         { type = "checkbox", id = "show_saw", label = "显示锯齿", default = defaults.show_saw },
       },
       layout = {
-        kind = "form",
-        items = {
-          { collapse = "运行控制", default_open = true, items = { { controls = { "start", "pause", "resume", "clear_history" } } } },
+        type = "column",
+        children = {
           {
-            collapse = "运行选项",
+            type = "collapse",
+            title = "运行控制",
             default_open = true,
-            items = {
-              { control = "frequency_hz" },
-              { control = "amplitude" },
-              { control = "offset" },
-              { control = "phase_deg" },
-              { control = "sample_rate_hz" },
-              { control = "points_per_tick" },
-              { control = "timer_ms" },
+            children = {
+              {
+                type = "flow",
+                children = {
+                  { type = "control", id = "start" },
+                  { type = "control", id = "pause" },
+                  { type = "control", id = "resume" },
+                  { type = "control", id = "clear_history" },
+                }
+              }
             }
           },
           {
-            collapse = "波形显示",
+            type = "collapse",
+            title = "运行选项",
             default_open = true,
-            items = {
+            children = {
+              { type = "control", id = "frequency_hz" },
+              { type = "control", id = "amplitude" },
+              { type = "control", id = "offset" },
+              { type = "control", id = "phase_deg" },
+              { type = "control", id = "sample_rate_hz" },
+              { type = "control", id = "points_per_tick" },
+              { type = "control", id = "timer_ms" },
+            }
+          },
+          {
+            type = "collapse",
+            title = "波形显示",
+            default_open = true,
+            children = {
               {
-                controls = {
-                  "show_sine",
-                  "show_triangle",
-                  "show_square",
-                  "show_saw",
+                type = "flow",
+                children = {
+                  { type = "control", id = "show_sine" },
+                  { type = "control", id = "show_triangle" },
+                  { type = "control", id = "show_square" },
+                  { type = "control", id = "show_saw" },
                 }
               }
             }

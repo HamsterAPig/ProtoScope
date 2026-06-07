@@ -21,31 +21,35 @@ namespace protoscope::transport {
 
 namespace {
 
-std::uint64_t makeUdpConnectionId() {
-    static std::atomic<std::uint64_t> counter{1};
-    return counter.fetch_add(1, std::memory_order_relaxed);
-}
-
-std::string endpointText(const asio::ip::udp::endpoint& endpoint) {
-    return endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
-}
-
-std::string endpointText(const std::string& host, std::uint16_t port) {
-    return host + ":" + std::to_string(port);
-}
-
-std::pair<bool, std::string> sendUdpBytes(asio::ip::udp::socket& socket,
-                                          std::mutex& mutex,
-                                          const asio::ip::udp::endpoint& remote,
-                                          const std::vector<std::uint8_t>& bytes) {
-    try {
-        std::lock_guard lock(mutex);
-        socket.send_to(asio::buffer(bytes), remote);
-        return {true, {}};
-    } catch (const std::exception& ex) {
-        return {false, ex.what()};
+    std::uint64_t makeUdpConnectionId()
+    {
+        static std::atomic<std::uint64_t> counter{1};
+        return counter.fetch_add(1, std::memory_order_relaxed);
     }
-}
+
+    std::string endpointText(const asio::ip::udp::endpoint& endpoint)
+    {
+        return endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
+    }
+
+    std::string endpointText(const std::string& host, std::uint16_t port)
+    {
+        return host + ":" + std::to_string(port);
+    }
+
+    std::pair<bool, std::string> sendUdpBytes(asio::ip::udp::socket& socket,
+                                              std::mutex& mutex,
+                                              const asio::ip::udp::endpoint& remote,
+                                              const std::vector<std::uint8_t>& bytes)
+    {
+        try {
+            std::lock_guard lock(mutex);
+            socket.send_to(asio::buffer(bytes), remote);
+            return {true, {}};
+        } catch (const std::exception& ex) {
+            return {false, ex.what()};
+        }
+    }
 
 } // namespace
 
@@ -64,14 +68,15 @@ struct UdpPeerTransport::Runtime {
     std::atomic<bool> stopping{false};
 };
 
-UdpPeerTransport::UdpPeerTransport()
-    : runtime_(std::make_unique<Runtime>()) {}
+UdpPeerTransport::UdpPeerTransport() : runtime_(std::make_unique<Runtime>()) {}
 
-UdpPeerTransport::~UdpPeerTransport() {
+UdpPeerTransport::~UdpPeerTransport()
+{
     close();
 }
 
-bool UdpPeerTransport::open(const TransportConfig& config) {
+bool UdpPeerTransport::open(const TransportConfig& config)
+{
     close();
 
     if (!std::holds_alternative<UdpPeerConfig>(config)) {
@@ -91,11 +96,12 @@ bool UdpPeerTransport::open(const TransportConfig& config) {
         runtime_->socket.bind(asio::ip::udp::endpoint(bindAddress, udp.bindPort));
 
         auto results = runtime_->resolver.resolve(
-            runtime_->socket.local_endpoint().protocol(),
-            udp.remoteHost,
-            std::to_string(udp.remotePort));
+            runtime_->socket.local_endpoint().protocol(), udp.remoteHost, std::to_string(udp.remotePort));
         runtime_->remoteEndpoint = results.begin()->endpoint();
     } catch (const std::exception& ex) {
+        runtime_ = std::make_unique<Runtime>();
+        context_.reset();
+        remoteEndpointText_.clear();
         setState(TransportState::Error);
         pushEvent(TransportErrorEvent{{TransportKind::UdpPeer, fallbackEndpoint, 0, nowMs(), true}, ex.what()});
         return false;
@@ -147,8 +153,9 @@ bool UdpPeerTransport::open(const TransportConfig& config) {
                     eventContext.timestampMs = nowMs();
                     pushEvent(TransportBytesEvent{
                         std::move(eventContext),
-                        std::vector<std::uint8_t>(runtime_->readBuffer.begin(),
-                                                  runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
+                        std::vector<std::uint8_t>(
+                            runtime_->readBuffer.begin(),
+                            runtime_->readBuffer.begin() + static_cast<std::ptrdiff_t>(bytesRead)),
                     });
                 }
                 (*scheduleRead)();
@@ -156,13 +163,12 @@ bool UdpPeerTransport::open(const TransportConfig& config) {
     };
 
     (*scheduleRead)();
-    runtime_->ioThread = std::thread([this]() {
-        runtime_->ioContext.run();
-    });
+    runtime_->ioThread = std::thread([this]() { runtime_->ioContext.run(); });
     return true;
 }
 
-void UdpPeerTransport::close() {
+void UdpPeerTransport::close()
+{
     const auto previous = context_;
     runtime_->stopping.store(true, std::memory_order_relaxed);
     asio::error_code ignored;
@@ -187,7 +193,8 @@ void UdpPeerTransport::close() {
     }
 }
 
-bool UdpPeerTransport::send(std::vector<std::uint8_t> bytes) {
+bool UdpPeerTransport::send(std::vector<std::uint8_t> bytes)
+{
     if (state() != TransportState::Open || !context_.has_value() || bytes.empty()) {
         return false;
     }
@@ -205,13 +212,15 @@ bool UdpPeerTransport::send(std::vector<std::uint8_t> bytes) {
     return false;
 }
 
-bool UdpPeerTransport::enqueueSend(TransportTxTask task) {
+bool UdpPeerTransport::enqueueSend(TransportTxTask task)
+{
     if (state() != TransportState::Open || !context_.has_value() || task.payload.empty()) {
         return false;
     }
     asio::post(runtime_->ioContext, [this, txTask = std::move(task)]() mutable {
         const auto writeStartedAtMs = nowMs();
-        const auto [ok, error] = sendUdpBytes(runtime_->socket, runtime_->socketMutex, runtime_->remoteEndpoint, txTask.payload);
+        const auto [ok, error] =
+            sendUdpBytes(runtime_->socket, runtime_->socketMutex, runtime_->remoteEndpoint, txTask.payload);
         const auto finishedAtMs = nowMs();
 
         TransportTxState state = TransportTxState::Sent;
@@ -225,8 +234,8 @@ bool UdpPeerTransport::enqueueSend(TransportTxTask task) {
             state = TransportTxState::Rejected;
         } else {
             addTx(txTask.payload.size());
-            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs
-                && finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
+            if (txTask.timeoutMs > 0 && finishedAtMs > writeStartedAtMs &&
+                finishedAtMs - writeStartedAtMs > txTask.timeoutMs) {
                 state = TransportTxState::Timeout;
             }
         }

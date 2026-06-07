@@ -46,6 +46,7 @@ struct ScriptRuntimeOutputBatch {
     std::vector<ScriptEvent> events;
     std::vector<ScriptLog> logs;
     std::vector<TxRequest> txRequests;
+    std::vector<transport::ConnectionContext> requestGuardResets;
     std::vector<PlotSetup> plotSetups;
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends;
     std::vector<RequestDoneResult> requestDoneResults;

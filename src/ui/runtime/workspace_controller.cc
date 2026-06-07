@@ -1,83 +1,100 @@
-#include "protoscope/ui/gui_runtime.hpp"
-
-#include "../runtime/gui_runtime_detail.hpp"
 #include "workspace_controller.hpp"
 
+#include "../runtime/gui_runtime_detail.hpp"
+
+#include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/protocol_state_file.hpp"
 
 #include <exception>
+#include <system_error>
 
 namespace protoscope::ui {
 
-WorkspaceController::WorkspaceController(GuiRuntime& runtime)
-    : runtime_(runtime) {}
+WorkspaceController::WorkspaceController(GuiRuntime& runtime) : runtime_(runtime) {}
 
-void WorkspaceController::requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload) {
+void WorkspaceController::requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload)
+{
     runtime_.requestProtocolWorkspaceSwitch(std::move(protocolDir), forceReload);
 }
 
-void WorkspaceController::processPendingProtocolWorkspaceSwitch() {
+void WorkspaceController::processPendingProtocolWorkspaceSwitch()
+{
     runtime_.processPendingProtocolWorkspaceSwitch();
 }
 
-bool WorkspaceController::switchProtocolWorkspace(const std::string& protocolDir, bool forceReload) {
+bool WorkspaceController::switchProtocolWorkspace(const std::string& protocolDir, bool forceReload)
+{
     return runtime_.switchProtocolWorkspace(protocolDir, forceReload);
 }
 
-void WorkspaceController::loadCurrentProtocolWorkspace() {
+void WorkspaceController::loadCurrentProtocolWorkspace()
+{
     runtime_.loadCurrentProtocolWorkspace();
 }
 
-void WorkspaceController::saveCurrentProtocolWorkspace() {
+void WorkspaceController::saveCurrentProtocolWorkspace()
+{
     runtime_.saveCurrentProtocolWorkspace();
 }
 
-void WorkspaceController::resetCurrentProtocolWorkspaceLayout() {
+void WorkspaceController::resetCurrentProtocolWorkspaceLayout()
+{
     runtime_.resetCurrentProtocolWorkspaceLayout();
 }
 
-void WorkspaceController::loadCurrentProtocolControlState() {
+void WorkspaceController::loadCurrentProtocolControlState()
+{
     runtime_.loadCurrentProtocolControlState();
 }
 
-void WorkspaceController::saveCurrentProtocolControlState() {
+void WorkspaceController::saveCurrentProtocolControlState()
+{
     runtime_.saveCurrentProtocolControlState();
 }
 
-void WorkspaceController::pruneCurrentLuaDockSettings() {
+void WorkspaceController::pruneCurrentLuaDockSettings()
+{
     runtime_.pruneCurrentLuaDockSettings();
 }
 
-bool WorkspaceController::isLuaDockVisible(std::string_view stableId) const {
+bool WorkspaceController::isLuaDockVisible(std::string_view stableId) const
+{
     return runtime_.isLuaDockVisible(stableId);
 }
 
-bool WorkspaceController::setLuaDockVisible(std::string_view stableId, bool visible) {
+bool WorkspaceController::setLuaDockVisible(std::string_view stableId, bool visible)
+{
     return runtime_.setLuaDockVisible(stableId, visible);
 }
 
-void WorkspaceController::syncLuaDockVisibilityDefaults() {
+void WorkspaceController::syncLuaDockVisibilityDefaults()
+{
     runtime_.syncLuaDockVisibilityDefaults();
 }
 
-std::filesystem::path WorkspaceController::currentProtocolLayoutPath() const {
+std::filesystem::path WorkspaceController::currentProtocolLayoutPath() const
+{
     return runtime_.currentProtocolLayoutPath();
 }
 
-std::filesystem::path WorkspaceController::legacyProtocolLayoutPath() const {
+std::filesystem::path WorkspaceController::legacyProtocolLayoutPath() const
+{
     return runtime_.legacyProtocolLayoutPath();
 }
 
-std::filesystem::path WorkspaceController::protocolControlStatePath() const {
+std::filesystem::path WorkspaceController::protocolControlStatePath() const
+{
     return runtime_.protocolControlStatePath();
 }
 
-void GuiRuntime::requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload) {
+void GuiRuntime::requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload)
+{
     pendingProtocolDir_ = std::move(protocolDir);
     pendingProtocolForceReload_ = forceReload;
 }
 
-void GuiRuntime::processPendingProtocolWorkspaceSwitch() {
+void GuiRuntime::processPendingProtocolWorkspaceSwitch()
+{
     if (!pendingProtocolDir_.has_value()) {
         return;
     }
@@ -97,14 +114,16 @@ void GuiRuntime::processPendingProtocolWorkspaceSwitch() {
     application_.setStatusMessage("协议重载失败", true);
 }
 
-bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool forceReload) {
+bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool forceReload)
+{
     try {
         const auto& previousLua = application_.docks().luaState();
-        const auto requestedDir = configStore_.normalizeProtocolDir(previousLua.protocolRootDir, protocolDir).generic_string();
-        const bool sameProtocol = protocolWorkspaceLoaded_
-            && previousLua.loaded
-            && previousLua.protocolDir == requestedDir
-            && activeWorkspaceProtocolKey_ == luaDockLayoutKey(requestedDir, configStore_.mainLuaPath(requestedDir).generic_string());
+        const auto requestedDir =
+            configStore_.normalizeProtocolDir(previousLua.protocolRootDir, protocolDir).generic_string();
+        const bool sameProtocol =
+            protocolWorkspaceLoaded_ && previousLua.loaded && previousLua.protocolDir == requestedDir &&
+            activeWorkspaceProtocolKey_ ==
+                luaDockLayoutKey(requestedDir, configStore_.mainLuaPath(requestedDir).generic_string());
 
         if (shouldResetLuaDefaultDockStateOnProtocolSwitch(sameProtocol)) {
             saveCurrentProtocolWorkspace();
@@ -140,7 +159,8 @@ bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool fo
     return false;
 }
 
-void GuiRuntime::loadCurrentProtocolWorkspace() {
+void GuiRuntime::loadCurrentProtocolWorkspace()
+{
     const auto& lua = application_.docks().luaState();
     const auto layoutPaths = resolveLuaDockLayoutPaths(executableDir_, lua.protocolDir, lua.scriptPath);
     activeWorkspaceProtocolKey_ = layoutPaths.protocolKey;
@@ -150,7 +170,9 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
     workspaceLayoutMode_ = workspaceLayoutModeAfterLoad(layoutPaths);
     if (application_.docks().configState().luaDockLayoutDebug) {
         const char* modeLabel = workspaceLayoutMode_ == WorkspaceLayoutMode::NeedsDefaultBuild ? "rebuilding" : "ready";
-        application_.setStatusMessage("LuaDockLayout: load protocol=" + activeWorkspaceProtocolKey_ + " schemaVersion=" + std::to_string(layoutPaths.schemaVersion) + " isLegacy=" + (layoutPaths.isLegacyLayout ? "true" : "false") + " mode=" + modeLabel);
+        application_.setStatusMessage("LuaDockLayout: load protocol=" + activeWorkspaceProtocolKey_ +
+                                      " schemaVersion=" + std::to_string(layoutPaths.schemaVersion) + " isLegacy=" +
+                                      (layoutPaths.isLegacyLayout ? "true" : "false") + " mode=" + modeLabel);
     }
     pendingLuaDefaultDockLayout_ = false;
     pendingProtocolWorkspaceSave_ = false;
@@ -162,9 +184,9 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
             workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
             pendingProtocolWorkspaceSave_ = true;
             application_.setStatusMessage(
-                std::string("检测到损坏的协议 Dock 布局，已回退默认布局: CentralNode=")
-                + std::to_string(savedLayoutHealth->centralNodeCount)
-                + (savedLayoutHealth->centralNodeInLegacyLeftPane ? " left-pane=true" : " left-pane=false"));
+                std::string("检测到损坏的协议 Dock 布局，已回退默认布局: CentralNode=") +
+                std::to_string(savedLayoutHealth->centralNodeCount) +
+                (savedLayoutHealth->centralNodeInLegacyLeftPane ? " left-pane=true" : " left-pane=false"));
         } else {
             ImGui::LoadIniSettingsFromDisk(layoutPaths.layoutPath.string().c_str());
         }
@@ -181,26 +203,38 @@ void GuiRuntime::loadCurrentProtocolWorkspace() {
     loadCurrentProtocolControlState();
 }
 
-void GuiRuntime::saveCurrentProtocolWorkspace() {
+void GuiRuntime::saveCurrentProtocolWorkspace()
+{
     if (!protocolWorkspaceLoaded_ || activeWorkspaceProtocolKey_.empty()) {
         return;
     }
 
-    const auto layoutPath = currentProtocolLayoutPath();
-    std::filesystem::create_directories(layoutPath.parent_path());
-    pruneCurrentLuaDockSettings();
-    ImGui::SaveIniSettingsToDisk(layoutPath.string().c_str());
     try {
+        const auto layoutPath = currentProtocolLayoutPath();
+        const auto parentPath = layoutPath.parent_path();
+        if (!parentPath.empty()) {
+            std::error_code directoryError;
+            std::filesystem::create_directories(parentPath, directoryError);
+            if (directoryError) {
+                application_.setStatusMessage("保存协议 Dock 布局目录失败: " + directoryError.message(), true);
+                ImGui::GetIO().WantSaveIniSettings = false;
+                pendingProtocolWorkspaceSave_ = false;
+                return;
+            }
+        }
+        pruneCurrentLuaDockSettings();
+        ImGui::SaveIniSettingsToDisk(layoutPath.string().c_str());
         writeLuaDockLayoutMeta(luaDockLayoutMetaPath(executableDir_, activeWorkspaceProtocolKey_), 3);
     } catch (const std::exception& ex) {
-        application_.setStatusMessage(std::string("保存协议布局 meta 失败: ") + ex.what(), true);
+        application_.setStatusMessage(std::string("保存协议 Dock 布局失败: ") + ex.what(), true);
     }
     ImGui::GetIO().WantSaveIniSettings = false;
     pendingProtocolWorkspaceSave_ = false;
     saveCurrentProtocolControlState();
 }
 
-void GuiRuntime::resetCurrentProtocolWorkspaceLayout() {
+void GuiRuntime::resetCurrentProtocolWorkspaceLayout()
+{
     if (!canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_)) {
         application_.setStatusMessage("当前没有可重置的协议 Dock 布局", true);
         return;
@@ -217,7 +251,8 @@ void GuiRuntime::resetCurrentProtocolWorkspaceLayout() {
     application_.setStatusMessage("当前协议 Dock 布局将在下一帧重置");
 }
 
-void GuiRuntime::pruneCurrentLuaDockSettings() {
+void GuiRuntime::pruneCurrentLuaDockSettings()
+{
     if (activeWorkspaceProtocolKey_.empty()) {
         return;
     }
@@ -225,7 +260,8 @@ void GuiRuntime::pruneCurrentLuaDockSettings() {
     keepOnlyCurrentLuaDockSettings(activeWorkspaceProtocolKey_);
 }
 
-bool GuiRuntime::isLuaDockVisible(std::string_view stableId) const {
+bool GuiRuntime::isLuaDockVisible(std::string_view stableId) const
+{
     const auto iter = luaDockVisibility_.find(std::string(stableId));
     if (iter == luaDockVisibility_.end()) {
         return true;
@@ -233,7 +269,8 @@ bool GuiRuntime::isLuaDockVisible(std::string_view stableId) const {
     return iter->second;
 }
 
-bool GuiRuntime::setLuaDockVisible(std::string_view stableId, bool visible) {
+bool GuiRuntime::setLuaDockVisible(std::string_view stableId, bool visible)
+{
     const auto key = std::string(stableId);
     const auto iter = luaDockVisibility_.find(key);
     if (iter != luaDockVisibility_.end() && iter->second == visible) {
@@ -243,7 +280,8 @@ bool GuiRuntime::setLuaDockVisible(std::string_view stableId, bool visible) {
     return true;
 }
 
-void GuiRuntime::syncLuaDockVisibilityDefaults() {
+void GuiRuntime::syncLuaDockVisibilityDefaults()
+{
     const auto& lua = application_.docks().luaState();
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
     for (const auto& dockSnapshot : lua.docks) {
@@ -254,7 +292,8 @@ void GuiRuntime::syncLuaDockVisibilityDefaults() {
     }
 }
 
-void GuiRuntime::loadCurrentProtocolControlState() {
+void GuiRuntime::loadCurrentProtocolControlState()
+{
     showCommDock_ = true;
     showProtocolDock_ = true;
     showTransferDock_ = true;
@@ -264,8 +303,13 @@ void GuiRuntime::loadCurrentProtocolControlState() {
     luaDockVisibility_.clear();
 
     const auto statePath = protocolControlStatePath();
-    if (!std::filesystem::exists(statePath)) {
+    std::error_code existsError;
+    if (!std::filesystem::exists(statePath, existsError)) {
         syncLuaDockVisibilityDefaults();
+        restoreElfStaticAddressForCurrentProtocol({});
+        if (existsError) {
+            application_.setStatusMessage("检查协议控件状态文件失败: " + existsError.message(), true);
+        }
         return;
     }
 
@@ -275,6 +319,7 @@ void GuiRuntime::loadCurrentProtocolControlState() {
         auto stateLock = ProtocolStateFileLock::acquire(statePath, options.lockWaitTimeout, lockError);
         if (!stateLock) {
             syncLuaDockVisibilityDefaults();
+            restoreElfStaticAddressForCurrentProtocol({});
             application_.setStatusMessage(std::string("加载协议控件状态失败: ") + lockError, true);
             return;
         }
@@ -282,6 +327,7 @@ void GuiRuntime::loadCurrentProtocolControlState() {
         const auto loadResult = loadProtocolStateRootForUpdate(statePath);
         if (!loadResult.ok) {
             syncLuaDockVisibilityDefaults();
+            restoreElfStaticAddressForCurrentProtocol({});
             application_.setStatusMessage(std::string("加载协议控件状态失败: ") + loadResult.error, true);
             return;
         }
@@ -289,14 +335,15 @@ void GuiRuntime::loadCurrentProtocolControlState() {
         const auto protocolsNode = root["protocols"];
         if (!protocolsNode || !protocolsNode.IsMap()) {
             syncLuaDockVisibilityDefaults();
+            restoreElfStaticAddressForCurrentProtocol({});
             if (loadResult.recovery.recoveredCorruptFile) {
                 application_.setStatusMessage(
-                    "检测到损坏的协议控件状态，已备份为: " + loadResult.recovery.backupPath.filename().string(),
-                    true);
+                    "检测到损坏的协议控件状态，已备份为: " + loadResult.recovery.backupPath.filename().string(), true);
             }
             return;
         }
         const auto protocolNode = protocolsNode[activeWorkspaceProtocolKey_];
+        restoreElfStaticAddressForCurrentProtocol(restoreElfStaticAddressPath(root, activeWorkspaceProtocolKey_));
         // 核心流程：Dock 可见性按协议工作区存储，旧文件缺字段时自动回退默认可见。
         ProtocolDockVisibilityState visibilityState;
         restoreDockVisibilityState(root, activeWorkspaceProtocolKey_, visibilityState);
@@ -317,8 +364,7 @@ void GuiRuntime::loadCurrentProtocolControlState() {
             syncLuaDockVisibilityDefaults();
             if (loadResult.recovery.recoveredCorruptFile) {
                 application_.setStatusMessage(
-                    "检测到损坏的协议控件状态，已备份为: " + loadResult.recovery.backupPath.filename().string(),
-                    true);
+                    "检测到损坏的协议控件状态，已备份为: " + loadResult.recovery.backupPath.filename().string(), true);
             }
             return;
         }
@@ -345,7 +391,8 @@ void GuiRuntime::loadCurrentProtocolControlState() {
     }
 }
 
-void GuiRuntime::saveCurrentProtocolControlState() {
+void GuiRuntime::saveCurrentProtocolControlState()
+{
     const auto statePath = protocolControlStatePath();
     try {
         const ProtocolStateFileOptions options;
@@ -394,10 +441,10 @@ void GuiRuntime::saveCurrentProtocolControlState() {
         }
 
         protocolNode["controls"] = controlsNode;
+        storeElfStaticAddressPath(root, activeWorkspaceProtocolKey_, elfStaticAddressPath_);
         storeWaveProtocolState(root, activeWorkspaceProtocolKey_, application_.docks().waveState());
-        writeSendHistoryNode(protocolNode,
-                             application_.docks().sendState(),
-                             configuredSendHistoryLimit(application_.captureConfig()));
+        writeSendHistoryNode(
+            protocolNode, application_.docks().sendState(), configuredSendHistoryLimit(application_.captureConfig()));
         std::string writeError;
         if (!writeProtocolStateRootAtomically(statePath, root, writeError)) {
             application_.setStatusMessage(std::string("保存协议控件状态失败: ") + writeError, true);
@@ -405,24 +452,26 @@ void GuiRuntime::saveCurrentProtocolControlState() {
         }
         if (loadResult.recovery.recoveredCorruptFile) {
             application_.setStatusMessage(
-                "检测到损坏的协议控件状态，已备份并重建: " + loadResult.recovery.backupPath.filename().string(),
-                true);
+                "检测到损坏的协议控件状态，已备份并重建: " + loadResult.recovery.backupPath.filename().string(), true);
         }
     } catch (const std::exception& ex) {
         application_.setStatusMessage(std::string("保存协议控件状态失败: ") + ex.what(), true);
     }
 }
 
-std::filesystem::path GuiRuntime::currentProtocolLayoutPath() const {
+std::filesystem::path GuiRuntime::currentProtocolLayoutPath() const
+{
     return luaDockLayoutPath(executableDir_, activeWorkspaceProtocolKey_);
 }
 
-std::filesystem::path GuiRuntime::legacyProtocolLayoutPath() const {
+std::filesystem::path GuiRuntime::legacyProtocolLayoutPath() const
+{
     const auto& lua = application_.docks().luaState();
     return luaDockLayoutPath(executableDir_, legacyLuaDockLayoutKey(lua.protocolDir, lua.scriptPath));
 }
 
-std::filesystem::path GuiRuntime::protocolControlStatePath() const {
+std::filesystem::path GuiRuntime::protocolControlStatePath() const
+{
     return std::filesystem::path("config") / "ui" / "protocol-control-state.yaml";
 }
 

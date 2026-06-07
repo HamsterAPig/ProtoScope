@@ -54,9 +54,11 @@ public:
     [[nodiscard]] std::uint64_t rawCaptureRecordingBytes() const;
     void resetWaveHistory();
     bool loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error);
+    void clearElfStaticAddressFile();
     [[nodiscard]] std::uint64_t elfStaticAddressRevision() const;
     [[nodiscard]] std::vector<scripting::ElfSymbolValue> queryElfStaticAddresses(const std::string& queryText,
                                                                                  std::size_t limit) const;
+    void refreshSelectedElfSymbolControls();
     void rebuildTransferFrameRows();
     void activateParsedTransferLogView();
     logging::LoggingFacade& logger();
@@ -67,7 +69,8 @@ public:
     void respondFileDialog(const scripting::FileDialogEvent& event);
 
     std::optional<std::uint64_t> nextWakeupAtMs() const;
-    void setTransportFactoryForTest(std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
+    void setTransportFactoryForTest(
+        std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
 
 private:
     struct ActiveTxRequest {
@@ -134,6 +137,7 @@ private:
                          scripting::TxEventState state,
                          std::optional<std::string> error,
                          std::uint64_t finishedAtMs);
+    void cancelPendingTxRequests(const std::string& reason, std::uint64_t finishedAtMs);
     void cancelAllTxRequests(const std::string& reason);
     void notifyTxOverflow(const std::string& message);
     void handleStreamBufferAlert(const transport::ConnectionContext& context,
@@ -170,6 +174,7 @@ private:
     std::deque<scripting::TxRequest> pendingTxQueue_;
     std::optional<ActiveTxRequest> activeWrite_;
     std::optional<ActiveTxRequest> activeHalfDuplexRequest_;
+    bool txRequestGuardHalted_{false};
     std::deque<scripting::DialogRequest> pendingDialogs_;
     std::unordered_map<std::uint64_t, scripting::DialogRequest> openDialogs_;
     std::deque<scripting::FileDialogRequest> pendingFileDialogs_;

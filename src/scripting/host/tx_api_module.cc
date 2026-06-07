@@ -10,7 +10,8 @@ public:
 
     std::string_view id() const override { return "tx_api_module"; }
 
-    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override {
+    void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
+    {
         auto* host = &host_;
         sol::state_view lua = ctx.lua;
         proto.set_function("send", [host, lua](const sol::object& payload, const sol::object& opts) {
@@ -29,6 +30,18 @@ public:
             }
             return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
         });
+        proto.set_function("request_guarded", [host, lua](const sol::object& payload, const sol::object& opts) {
+            std::string error;
+            const auto request = host->protoSendLike(TxRequestKind::Request, payload, opts, error, true);
+            if (!request.has_value()) {
+                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+            }
+            return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
+        });
+        proto.set_function("reset_request_guard", [host]() {
+            host->protoResetRequestGuard();
+            return true;
+        });
         proto.set_function("request_done", [host, lua](const sol::object& result) {
             std::string error;
             if (host->protoRequestDone(result, error)) {
@@ -42,7 +55,8 @@ private:
     ScriptHost& host_;
 };
 
-std::unique_ptr<IScriptHostApiModule> makeTxApiModule(ScriptHost& host) {
+std::unique_ptr<IScriptHostApiModule> makeTxApiModule(ScriptHost& host)
+{
     return std::make_unique<TxScriptHostApiModule>(host);
 }
 

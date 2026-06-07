@@ -12,7 +12,9 @@ public:
     virtual ~IScriptHostService() = default;
 
     virtual std::string_view id() const = 0;
+
     virtual void reset(ScriptHostContextInternal&) {}
+
     virtual void tick(ScriptHostContextInternal&, std::uint64_t) {}
 };
 

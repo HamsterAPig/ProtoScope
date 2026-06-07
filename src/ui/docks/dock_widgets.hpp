@@ -4,7 +4,8 @@
 
 namespace protoscope::ui {
 
-inline void drawDockHelpMarker(const char* text) {
+inline void drawDockHelpMarker(const char* text)
+{
     if (text == nullptr || text[0] == '\0') {
         return;
     }

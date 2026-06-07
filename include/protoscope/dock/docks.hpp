@@ -72,8 +72,12 @@ struct LogFilterState {
 };
 
 bool matchesLogFilter(const ReceiveRow& row, const LogFilterState& filter, bool includeBytePreview);
-std::vector<const ReceiveRow*> filteredLogRows(const std::deque<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview);
-std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows, const LogFilterState& filter, bool includeBytePreview);
+std::vector<const ReceiveRow*> filteredLogRows(const std::deque<ReceiveRow>& rows,
+                                               const LogFilterState& filter,
+                                               bool includeBytePreview);
+std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows,
+                                               const LogFilterState& filter,
+                                               bool includeBytePreview);
 
 struct CommDockState {
     transport::TransportKind kind{transport::TransportKind::TcpClient};
@@ -155,7 +159,8 @@ public:
 
 class BoundedDockHistoryLimiter final : public IDockHistoryLimiter {
 public:
-    bool trimRows(std::deque<ReceiveRow>& rows, std::size_t limit) const override {
+    bool trimRows(std::deque<ReceiveRow>& rows, std::size_t limit) const override
+    {
         if (rows.size() <= limit) {
             return false;
         }
@@ -197,6 +202,7 @@ struct ConfigDockState {
     std::string loadedFromPath{"config/protoscope.yaml"};
     std::string statusMessage;
     bool luaDockLayoutDebug{false};
+    bool luaDockRenderCopyMode{true};
     bool pendingExternalReload{false};
     std::uint64_t pendingExternalReloadTimestampMs{0};
     std::string externalReloadMessage;
@@ -255,8 +261,7 @@ private:
     plot::WaveDockState wave_{};
     ConfigDockState config_{};
     DockHistoryLimits historyLimits_{};
-    std::unique_ptr<IDockHistoryLimiter> historyLimiter_{
-        std::make_unique<BoundedDockHistoryLimiter>()};
+    std::unique_ptr<IDockHistoryLimiter> historyLimiter_{std::make_unique<BoundedDockHistoryLimiter>()};
 };
 
 } // namespace protoscope::dock

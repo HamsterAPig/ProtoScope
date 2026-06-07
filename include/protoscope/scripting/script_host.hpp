@@ -6,8 +6,6 @@
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/transport/transport.hpp"
 
-#include <sol/sol.hpp>
-
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -22,6 +20,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include <sol/sol.hpp>
 
 namespace protoscope::scripting {
 
@@ -44,6 +44,11 @@ enum class ControlType {
     ElfSymbolCombo,
 };
 
+enum class ControlLabelPosition {
+    Left,
+    Right,
+};
+
 struct ElfSymbolValue {
     std::string label;
     std::string value;
@@ -52,6 +57,7 @@ struct ElfSymbolValue {
 
 struct ControlDescriptor {
     ControlType type{ControlType::Button};
+    ControlLabelPosition labelPosition{ControlLabelPosition::Left};
     std::string id;
     std::string label;
     std::string textDefault;
@@ -73,82 +79,38 @@ struct ControlSnapshot {
     ControlValue value;
 };
 
-enum class DockLayoutKind {
+enum class LayoutNodeKind {
+    Column,
     Flow,
     Table,
-    Form,
+    Group,
+    Collapse,
+    Control,
+    Text,
+    Separator,
+    Spacer,
 };
 
-struct TableCellDescriptor {
+struct LayoutNodeDescriptor {
+    LayoutNodeKind kind{LayoutNodeKind::Column};
+    std::vector<LayoutNodeDescriptor> children;
+    std::vector<std::vector<LayoutNodeDescriptor>> rows;
     std::string controlId;
-    bool spacer{false};
-};
-
-struct TableRowDescriptor {
-    std::vector<TableCellDescriptor> cells;
-};
-
-struct TableLayoutDescriptor {
+    std::size_t controlIndex{0};
+    std::string text;
+    std::string title;
+    bool defaultOpen{true};
     std::size_t columns{1};
     bool borders{false};
     bool resizable{true};
     bool rowBg{false};
     std::string sizing{"stretch"};
-    std::vector<TableRowDescriptor> rows;
-};
-
-struct FormControlRowDescriptor {
-    std::vector<std::string> controlIds;
-};
-
-struct FormTextDescriptor {
-    std::string text;
-};
-
-struct FormSeparatorDescriptor {
-};
-
-enum class FormLayoutItemKind {
-    Control,
-    Controls,
-    Group,
-    Collapse,
-    Separator,
-    Text,
-};
-
-struct FormGroupDescriptor;
-struct FormCollapseDescriptor;
-
-struct FormLayoutItemDescriptor {
-    FormLayoutItemKind kind{FormLayoutItemKind::Control};
-    std::string controlId;
-    FormControlRowDescriptor controls;
-    std::shared_ptr<FormGroupDescriptor> group;
-    std::shared_ptr<FormCollapseDescriptor> collapse;
-    FormTextDescriptor text;
-    FormSeparatorDescriptor separator;
-};
-
-struct FormGroupDescriptor {
-    std::string title;
-    std::vector<FormLayoutItemDescriptor> items;
-};
-
-struct FormCollapseDescriptor {
-    std::string title;
-    bool defaultOpen{true};
-    std::vector<FormLayoutItemDescriptor> items;
-};
-
-struct FormLayoutDescriptor {
-    std::vector<FormLayoutItemDescriptor> items;
+    float spacing{6.0F};
+    float runSpacing{5.0F};
 };
 
 struct DockLayoutDescriptor {
-    DockLayoutKind kind{DockLayoutKind::Flow};
-    TableLayoutDescriptor table;
-    FormLayoutDescriptor form;
+    LayoutNodeDescriptor root;
 };
 
 struct DockDescriptor {
@@ -217,6 +179,9 @@ struct TxRequest {
     std::vector<std::uint8_t> payload;
     std::uint64_t timeoutMs{1000};
     std::string tag;
+    bool guarded{false};
+    std::uint32_t attempt{1};
+    std::uint32_t maxAttempts{1};
     std::uint64_t createdAtMs{0};
     std::uint64_t fileJobId{0};
     std::uint64_t fileOffset{0};
@@ -245,6 +210,10 @@ struct TxEvent {
     std::uint64_t offset{0};
     std::uint64_t total{0};
     double progress{0.0};
+    bool guarded{false};
+    std::uint32_t attempt{1};
+    std::uint32_t maxAttempts{1};
+    std::optional<std::string> guardState{};
     std::optional<std::string> error{};
 };
 
@@ -387,6 +356,7 @@ public:
     std::vector<ScriptEvent> drainEvents();
     std::vector<ScriptLog> drainLogs();
     std::vector<TxRequest> drainTxRequests();
+    std::vector<transport::ConnectionContext> drainRequestGuardResets();
     std::vector<PlotSetup> drainPlotSetups();
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends();
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainPlotAppends(std::size_t maxRequests);
@@ -438,7 +408,9 @@ private:
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
                                            const sol::object& opts,
-                                           std::string& error);
+                                           std::string& error,
+                                           bool guarded = false);
+    void protoResetRequestGuard();
     void protoLog(const std::string& level, const std::string& message);
     void protoEmit(const std::string& eventName, const std::string& payload);
     void protoSetTimer(const std::string& name, std::uint64_t intervalMs);
@@ -450,12 +422,20 @@ private:
     void protoStatusClear();
     std::optional<DialogRequest> protoDialog(DialogKind kind, const sol::object& opts, std::string& error);
     std::optional<FileDialogRequest> protoFileDialog(FileDialogKind kind, const sol::object& opts, std::string& error);
-    std::tuple<sol::object, sol::object> protoFsOpen(sol::state_view lua, const std::string& path, const sol::object& opts);
-    std::tuple<sol::object, sol::object> protoFsRead(sol::state_view lua, std::uint64_t handle, const sol::object& opts);
-    std::tuple<sol::object, sol::object> protoFsWrite(sol::state_view lua, std::uint64_t handle, const sol::object& payload);
+    std::tuple<sol::object, sol::object> protoFsOpen(sol::state_view lua,
+                                                     const std::string& path,
+                                                     const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsRead(sol::state_view lua,
+                                                     std::uint64_t handle,
+                                                     const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsWrite(sol::state_view lua,
+                                                      std::uint64_t handle,
+                                                      const sol::object& payload);
     std::tuple<sol::object, sol::object> protoFsClose(sol::state_view lua, std::uint64_t handle);
     std::tuple<sol::object, sol::object> protoFsStat(sol::state_view lua, const std::string& path);
-    std::tuple<sol::object, sol::object> protoFsSendFile(sol::state_view lua, const std::string& path, const sol::object& opts);
+    std::tuple<sol::object, sol::object> protoFsSendFile(sol::state_view lua,
+                                                         const std::string& path,
+                                                         const sol::object& opts);
     std::uint64_t nextTxRequestId();
     std::uint64_t nextDialogId();
     std::uint64_t nextFileDialogId();
@@ -497,6 +477,7 @@ private:
     std::vector<ScriptEvent> events_;
     std::vector<ScriptLog> logs_;
     std::vector<TxRequest> txRequests_;
+    std::vector<transport::ConnectionContext> requestGuardResets_;
     std::vector<PlotSetup> plotSetups_;
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends_;
     std::vector<RequestDoneResult> requestDoneResults_;

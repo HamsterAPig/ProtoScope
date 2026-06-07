@@ -7,11 +7,11 @@ function ui()
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" }
       },
       layout = {
-        kind = "table",
+        type = "table",
         columns = 1,
         rows = {
           {
-            { control = "missing_control" }
+            { type = "control", id = "missing_control" }
           }
         }
       }

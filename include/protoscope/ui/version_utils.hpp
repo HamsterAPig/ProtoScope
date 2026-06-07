@@ -12,7 +12,8 @@ struct SemanticVersion {
     int patch{0};
 };
 
-inline std::optional<SemanticVersion> parseSemanticTag(std::string_view tag) {
+inline std::optional<SemanticVersion> parseSemanticTag(std::string_view tag)
+{
     if (tag.size() < 6 || tag.front() != 'v') {
         return std::nullopt;
     }
@@ -44,7 +45,8 @@ inline std::optional<SemanticVersion> parseSemanticTag(std::string_view tag) {
     return version;
 }
 
-inline int compareSemanticVersion(const SemanticVersion& lhs, const SemanticVersion& rhs) {
+inline int compareSemanticVersion(const SemanticVersion& lhs, const SemanticVersion& rhs)
+{
     if (lhs.major != rhs.major) {
         return lhs.major < rhs.major ? -1 : 1;
     }

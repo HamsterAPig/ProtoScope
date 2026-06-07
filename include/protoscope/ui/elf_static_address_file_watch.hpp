@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -27,10 +27,10 @@ struct ElfStaticAddressFilePollResult {
     std::string statusMessage;
 };
 
-inline ElfStaticAddressFilePollResult pollElfStaticAddressFileWatchState(
-    ElfStaticAddressFileWatchState& state,
-    std::uint64_t currentMs,
-    std::error_code& error) {
+inline ElfStaticAddressFilePollResult pollElfStaticAddressFileWatchState(ElfStaticAddressFileWatchState& state,
+                                                                         std::uint64_t currentMs,
+                                                                         std::error_code& error)
+{
     constexpr std::uint64_t kElfFilePollIntervalMs = 500;
     constexpr std::uint64_t kElfFileReloadStableMs = 1000;
 
@@ -83,9 +83,8 @@ inline ElfStaticAddressFilePollResult pollElfStaticAddressFileWatchState(
     }
 
     const auto lastWriteTimeNs = toFileTimeNs(lastWriteTime);
-    const bool metadataChanged = !state.lastExists
-        || state.lastWriteTimeNs != lastWriteTimeNs
-        || state.fileSize != fileSize;
+    const bool metadataChanged =
+        !state.lastExists || state.lastWriteTimeNs != lastWriteTimeNs || state.fileSize != fileSize;
 
     if (!state.lastExists) {
         state.lastExists = true;
@@ -114,8 +113,8 @@ inline ElfStaticAddressFilePollResult pollElfStaticAddressFileWatchState(
         return result;
     }
 
-    if (state.pendingReload && state.pendingReloadSinceMs != 0
-        && currentMs - state.pendingReloadSinceMs >= kElfFileReloadStableMs) {
+    if (state.pendingReload && state.pendingReloadSinceMs != 0 &&
+        currentMs - state.pendingReloadSinceMs >= kElfFileReloadStableMs) {
         state.pendingReload = false;
         state.pendingReloadSinceMs = 0;
         state.pendingStatusMessage.clear();

@@ -1,14 +1,14 @@
 #pragma once
 
+#include "protoscope/plot/oscilloscope.hpp"
+
 #include <cstdint>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
-
-#include "protoscope/plot/oscilloscope.hpp"
 
 namespace protoscope::plot {
 

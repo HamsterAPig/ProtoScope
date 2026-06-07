@@ -70,6 +70,12 @@ protocols/
 - `proto.send(data)`
   - 发送数据到当前连接
   - 支持 `number[]`，也支持 HEX 字符串
+- `proto.request(data, opts?)`
+  - 半双工请求，适合需要等待完整应答的场景
+  - `opts.timeout_ms` 可覆盖等待超时，`opts.tag` 便于标记业务
+- `proto.request_guarded(data, opts?)`
+  - 受保护半双工请求，`opts.max_attempts` 只统计当前这一次请求
+  - 当前 guarded 请求全部尝试失败后会熔断后续 guarded 请求；`proto.reset_request_guard()` 可显式恢复
 - `proto.emit(name, payload)`
   - 向主程序事件面板发出业务事件
   - `payload` 可为字符串、数字、布尔值或 table
@@ -127,10 +133,10 @@ protocols/
 
 当前默认脚本使用 `ui()` 返回 Dock 数组；若只需单面板，也可继续返回 `controls()`。
 
-`ui()` 下的 dock 现在也支持显式 `layout`。默认 demo 已切到 `layout.kind = "table"`，
-用 `rows/cells` 声明控件在 dock 内的排布。
+`ui()` 下的 dock 现在也支持显式 Layout Tree。默认 demo 使用 `type + children`
+递归节点声明控件在 dock 内的排布。
 
-`ui()` + `table layout` 示例：
+`ui()` + `table layout node` 示例：
 
 ```lua
 function ui()
@@ -145,7 +151,7 @@ function ui()
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
       },
       layout = {
-        kind = "table",
+        type = "table",
         columns = 2,
         borders = false,
         resizable = true,
@@ -153,8 +159,8 @@ function ui()
         sizing = "stretch",
         rows = {
           {
-            { control = "read_version" },
-            { control = "device_id" },
+            { type = "control", id = "read_version" },
+            { type = "control", id = "device_id" },
           },
         }
       }

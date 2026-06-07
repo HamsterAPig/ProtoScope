@@ -5,7 +5,8 @@
 namespace protoscope::scripting {
 
 std::size_t resolvePipelineWorkerThreads(const std::optional<std::size_t> configuredThreads,
-                                         const unsigned int hardwareConcurrency) {
+                                         const unsigned int hardwareConcurrency)
+{
     const auto machineLimit = hardwareConcurrency > 1U ? static_cast<std::size_t>(hardwareConcurrency - 1U) : 1U;
     if (!configuredThreads.has_value()) {
         return machineLimit;

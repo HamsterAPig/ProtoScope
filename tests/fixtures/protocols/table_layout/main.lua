@@ -12,7 +12,7 @@ function ui()
         { type = "button", id = "read_version", label = "读取版本" }
       },
       layout = {
-        kind = "table",
+        type = "table",
         columns = 2,
         borders = false,
         resizable = true,
@@ -20,16 +20,16 @@ function ui()
         sizing = "stretch",
         rows = {
           {
-            { control = "device_id" },
-            { control = "mode" }
+            { type = "control", id = "device_id" },
+            { type = "control", id = "mode" }
           },
           {
-            { control = "hex_send" },
-            { spacer = true }
+            { type = "control", id = "hex_send" },
+            { type = "spacer" }
           },
           {
-            { control = "read_version" },
-            { spacer = true }
+            { type = "control", id = "read_version" },
+            { type = "spacer" }
           }
         }
       }
