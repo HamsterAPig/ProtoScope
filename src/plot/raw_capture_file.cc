@@ -705,6 +705,141 @@ namespace {
         return true;
     }
 
+    struct DecodedRawCaptureHeader {
+        RawCaptureFileData capture;
+        std::uint64_t payloadSize{0};
+    };
+
+    struct RawCaptureHeaderState {
+        bool separatorSeen{false};
+        bool versionSeen{false};
+        bool protocolNameSeen{false};
+        bool protocolDirSeen{false};
+        bool sampleFrequencySeen{false};
+        bool rawSizeSeen{false};
+        bool capturedAtSeen{false};
+    };
+
+    bool parseRawCaptureHeaderField(std::string_view key,
+                                    std::string_view value,
+                                    DecodedRawCaptureHeader& header,
+                                    RawCaptureHeaderState& state,
+                                    std::string& error)
+    {
+        if (key == "version") {
+            state.versionSeen = (value == kVersionEvents || value == kVersionLegacyEvents);
+        } else if (key == "protocol_name") {
+            state.protocolNameSeen = true;
+            header.capture.protocolName = std::string(value);
+        } else if (key == "protocol_dir") {
+            state.protocolDirSeen = true;
+            header.capture.protocolDir = std::string(value);
+        } else if (key == "sample_frequency_hz") {
+            state.sampleFrequencySeen = parseDouble(value, header.capture.sampleFrequencyHz);
+        } else if (key == "payload_size" || key == "raw_size") {
+            state.rawSizeSeen = parseUnsigned(value, header.payloadSize);
+        } else if (key == "captured_at_ms") {
+            state.capturedAtSeen = parseUnsigned(value, header.capture.capturedAtMs);
+        } else if (key == "truncated") {
+            if (!parseBool(value, header.capture.truncated)) {
+                error = "psraw 文件头 truncated 字段格式错误";
+                return false;
+            }
+        } else if (key == "event_stream") {
+            bool eventsMode = false;
+            if (!parseBool(value, eventsMode)) {
+                error = "psraw 文件头 event_stream 字段格式错误";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool validateRawCaptureHeaderState(const RawCaptureHeaderState& state, std::string& error)
+    {
+        if (!state.separatorSeen) {
+            error = "psraw 文件头缺少空行分隔";
+            return false;
+        }
+        if (!state.versionSeen || !state.protocolNameSeen || !state.protocolDirSeen || !state.sampleFrequencySeen ||
+            !state.rawSizeSeen || !state.capturedAtSeen) {
+            error = "psraw 文件头缺少必要字段";
+            return false;
+        }
+        return true;
+    }
+
+    bool parseRawCaptureHeader(std::string_view headerText, DecodedRawCaptureHeader& header, std::string& error)
+    {
+        RawCaptureHeaderState state;
+        std::size_t lineBegin = 0;
+        for (;;) {
+            std::size_t lineEnd = headerText.find('\n', lineBegin);
+            if (lineEnd == std::string::npos) {
+                lineEnd = headerText.size();
+            }
+            auto line = trim(headerText.substr(lineBegin, lineEnd - lineBegin));
+            lineBegin = lineEnd + 1;
+            if (line.empty()) {
+                state.separatorSeen = true;
+                break;
+            }
+            if (line == kFileMagic) {
+                continue;
+            }
+            const auto separator = line.find(':');
+            if (separator == std::string::npos) {
+                error = "psraw 文件头字段格式错误";
+                return false;
+            }
+            const auto key = trim(line.substr(0, separator));
+            const auto value = trim(line.substr(separator + 1));
+            if (!parseRawCaptureHeaderField(key, value, header, state, error)) {
+                return false;
+            }
+            if (lineEnd >= headerText.size()) {
+                break;
+            }
+        }
+        return validateRawCaptureHeaderState(state, error);
+    }
+
+    bool sliceRawCapturePayload(std::string_view bytes,
+                                std::uint64_t payloadSize,
+                                std::string_view& payloadBytes,
+                                std::string& error)
+    {
+        if (payloadSize >
+            (std::numeric_limits<std::uint64_t>::max)() - static_cast<std::uint64_t>(kStreamHeaderBytes)) {
+            error = "psraw payload 长度溢出";
+            return false;
+        }
+
+        const auto expectedFileSize = static_cast<std::uint64_t>(kStreamHeaderBytes) + payloadSize;
+        if (expectedFileSize > static_cast<std::uint64_t>(bytes.size())) {
+            error = "psraw payload 长度超出文件大小";
+            return false;
+        }
+        if (expectedFileSize != static_cast<std::uint64_t>(bytes.size())) {
+            error = "psraw payload 后存在尾随脏字节";
+            return false;
+        }
+
+        payloadBytes = std::string_view(bytes.data() + static_cast<std::ptrdiff_t>(kStreamHeaderBytes),
+                                        static_cast<std::size_t>(payloadSize));
+        return true;
+    }
+
+    void rebuildRawCapturePayloadFromEvents(RawCaptureFileData& capture)
+    {
+        capture.payload.clear();
+        for (const auto& event : capture.events) {
+            if (event.type == RawCaptureEventType::RxBytes) {
+                capture.payload.insert(capture.payload.end(), event.bytes.begin(), event.bytes.end());
+            }
+        }
+    }
+
 } // namespace
 
 std::string encodeRawCaptureHeader(const RawCaptureFileData& capture)
@@ -717,114 +852,27 @@ std::string encodeRawCaptureHeader(const RawCaptureFileData& capture)
 
 std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, std::string& error)
 {
-    if (bytes.empty()) {
+    if (bytes.size() < kStreamHeaderBytes) {
         error = "psraw 文件长度不足";
         return std::nullopt;
     }
 
-    const std::size_t headerSize = kStreamHeaderBytes;
-    if (bytes.size() < headerSize) {
-        error = "psraw 文件长度不足";
-        return std::nullopt;
-    }
-    const auto headerText = std::string_view(bytes.data(), headerSize);
-    std::size_t lineBegin = 0;
-    bool separatorSeen = false;
-    RawCaptureFileData capture;
-    std::uint64_t payloadSize = 0;
-    bool versionSeen = false;
-    bool protocolNameSeen = false;
-    bool protocolDirSeen = false;
-    bool sampleFrequencySeen = false;
-    bool rawSizeSeen = false;
-    bool capturedAtSeen = false;
-    bool eventsMode = false;
-    for (;;) {
-        std::size_t lineEnd = headerText.find('\n', lineBegin);
-        if (lineEnd == std::string::npos) {
-            lineEnd = headerText.size();
-        }
-        auto line = trim(headerText.substr(lineBegin, lineEnd - lineBegin));
-        lineBegin = lineEnd + 1;
-        if (line.empty()) {
-            separatorSeen = true;
-            break;
-        }
-        if (line == kFileMagic) {
-            continue;
-        }
-        const auto separator = line.find(':');
-        if (separator == std::string::npos) {
-            error = "psraw 文件头字段格式错误";
-            return std::nullopt;
-        }
-        const auto key = trim(line.substr(0, separator));
-        const auto value = trim(line.substr(separator + 1));
-        if (key == "version") {
-            versionSeen = (value == kVersionEvents || value == kVersionLegacyEvents);
-        } else if (key == "protocol_name") {
-            protocolNameSeen = true;
-            capture.protocolName = value;
-        } else if (key == "protocol_dir") {
-            protocolDirSeen = true;
-            capture.protocolDir = value;
-        } else if (key == "sample_frequency_hz") {
-            sampleFrequencySeen = parseDouble(value, capture.sampleFrequencyHz);
-        } else if (key == "payload_size" || key == "raw_size") {
-            rawSizeSeen = parseUnsigned(value, payloadSize);
-        } else if (key == "captured_at_ms") {
-            capturedAtSeen = parseUnsigned(value, capture.capturedAtMs);
-        } else if (key == "truncated") {
-            if (!parseBool(value, capture.truncated)) {
-                error = "psraw 文件头 truncated 字段格式错误";
-                return std::nullopt;
-            }
-        } else if (key == "event_stream") {
-            if (!parseBool(value, eventsMode)) {
-                error = "psraw 文件头 event_stream 字段格式错误";
-                return std::nullopt;
-            }
-        }
-        if (lineEnd >= headerText.size()) {
-            break;
-        }
-    }
-
-    if (!separatorSeen) {
-        error = "psraw 文件头缺少空行分隔";
-        return std::nullopt;
-    }
-    if (!versionSeen || !protocolNameSeen || !protocolDirSeen || !sampleFrequencySeen || !rawSizeSeen ||
-        !capturedAtSeen) {
-        error = "psraw 文件头缺少必要字段";
-        return std::nullopt;
-    }
-    if (payloadSize > (std::numeric_limits<std::uint64_t>::max)() - static_cast<std::uint64_t>(headerSize)) {
-        error = "psraw payload 长度溢出";
-        return std::nullopt;
-    }
-    const auto expectedFileSize = static_cast<std::uint64_t>(headerSize) + payloadSize;
-    if (expectedFileSize > static_cast<std::uint64_t>(bytes.size())) {
-        error = "psraw payload 长度超出文件大小";
-        return std::nullopt;
-    }
-    if (expectedFileSize != static_cast<std::uint64_t>(bytes.size())) {
-        error = "psraw payload 后存在尾随脏字节";
+    DecodedRawCaptureHeader header;
+    const auto headerText = std::string_view(bytes.data(), kStreamHeaderBytes);
+    if (!parseRawCaptureHeader(headerText, header, error)) {
         return std::nullopt;
     }
 
-    const auto payloadBytes =
-        std::string_view(bytes.data() + static_cast<std::ptrdiff_t>(headerSize), static_cast<std::size_t>(payloadSize));
-    if (!decodeEventStream(payloadBytes, capture.events, error)) {
+    std::string_view payloadBytes;
+    if (!sliceRawCapturePayload(bytes, header.payloadSize, payloadBytes, error)) {
         return std::nullopt;
     }
-    capture.payload.clear();
-    for (const auto& event : capture.events) {
-        if (event.type == RawCaptureEventType::RxBytes) {
-            capture.payload.insert(capture.payload.end(), event.bytes.begin(), event.bytes.end());
-        }
+
+    if (!decodeEventStream(payloadBytes, header.capture.events, error)) {
+        return std::nullopt;
     }
-    return capture;
+    rebuildRawCapturePayloadFromEvents(header.capture);
+    return header.capture;
 }
 
 bool writeRawCaptureFile(const std::filesystem::path& path, const RawCaptureFileData& capture, std::string& error)
