@@ -134,7 +134,13 @@ private:
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
     void processPendingProtocolWorkspaceSwitch();
     bool switchProtocolWorkspace(const std::string& protocolDir, bool forceReload);
+    [[nodiscard]] bool isSameProtocolWorkspace(const std::string& requestedDir) const;
+    void resetLuaDefaultDockStateForProtocolSwitch();
+    bool reloadProtocolWorkspace(const std::string& protocolDir, bool forceReload, bool sameProtocol);
+    void loadProtocolWorkspaceAfterReload(bool sameProtocol);
     void loadCurrentProtocolWorkspace();
+    void beginProtocolWorkspaceLoad(const LuaDockLayoutPaths& layoutPaths);
+    void loadProtocolWorkspaceLayoutIni(const LuaDockLayoutPaths& layoutPaths);
     void saveCurrentProtocolWorkspace();
     void resetCurrentProtocolWorkspaceLayout();
     void loadCurrentProtocolControlState();

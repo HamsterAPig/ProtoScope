@@ -120,33 +120,17 @@ bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool fo
         const auto& previousLua = application_.docks().luaState();
         const auto requestedDir =
             configStore_.normalizeProtocolDir(previousLua.protocolRootDir, protocolDir).generic_string();
-        const bool sameProtocol =
-            protocolWorkspaceLoaded_ && previousLua.loaded && previousLua.protocolDir == requestedDir &&
-            activeWorkspaceProtocolKey_ ==
-                luaDockLayoutKey(requestedDir, configStore_.mainLuaPath(requestedDir).generic_string());
+        const bool sameProtocol = isSameProtocolWorkspace(requestedDir);
 
         if (shouldResetLuaDefaultDockStateOnProtocolSwitch(sameProtocol)) {
-            saveCurrentProtocolWorkspace();
-            defaultDockedLuaStableIds_.clear();
-            defaultLuaDockNodes_.clear();
-            protocolWorkspaceLoaded_ = false;
-            workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
-            pendingLuaDefaultDockLayout_ = false;
-            pendingProtocolWorkspaceSave_ = false;
+            resetLuaDefaultDockStateForProtocolSwitch();
         }
 
-        if (!application_.reloadProtocolDirectory(protocolDir, forceReload)) {
-            if (!sameProtocol) {
-                loadCurrentProtocolWorkspace();
-            }
+        if (!reloadProtocolWorkspace(protocolDir, forceReload, sameProtocol)) {
             return false;
         }
 
-        if (sameProtocol) {
-            loadCurrentProtocolControlState();
-        } else {
-            loadCurrentProtocolWorkspace();
-        }
+        loadProtocolWorkspaceAfterReload(sameProtocol);
         return true;
     } catch (const std::exception& ex) {
         application_.logger().error("protocol", std::string("协议工作区切换异常: ") + ex.what());
@@ -159,10 +143,56 @@ bool GuiRuntime::switchProtocolWorkspace(const std::string& protocolDir, bool fo
     return false;
 }
 
+bool GuiRuntime::isSameProtocolWorkspace(const std::string& requestedDir) const
+{
+    const auto& previousLua = application_.docks().luaState();
+    return protocolWorkspaceLoaded_ && previousLua.loaded && previousLua.protocolDir == requestedDir &&
+           activeWorkspaceProtocolKey_ ==
+               luaDockLayoutKey(requestedDir, configStore_.mainLuaPath(requestedDir).generic_string());
+}
+
+void GuiRuntime::resetLuaDefaultDockStateForProtocolSwitch()
+{
+    saveCurrentProtocolWorkspace();
+    defaultDockedLuaStableIds_.clear();
+    defaultLuaDockNodes_.clear();
+    protocolWorkspaceLoaded_ = false;
+    workspaceLayoutMode_ = WorkspaceLayoutMode::NeedsDefaultBuild;
+    pendingLuaDefaultDockLayout_ = false;
+    pendingProtocolWorkspaceSave_ = false;
+}
+
+bool GuiRuntime::reloadProtocolWorkspace(const std::string& protocolDir, bool forceReload, bool sameProtocol)
+{
+    if (application_.reloadProtocolDirectory(protocolDir, forceReload)) {
+        return true;
+    }
+    if (!sameProtocol) {
+        loadCurrentProtocolWorkspace();
+    }
+    return false;
+}
+
+void GuiRuntime::loadProtocolWorkspaceAfterReload(bool sameProtocol)
+{
+    if (sameProtocol) {
+        loadCurrentProtocolControlState();
+    } else {
+        loadCurrentProtocolWorkspace();
+    }
+}
+
 void GuiRuntime::loadCurrentProtocolWorkspace()
 {
     const auto& lua = application_.docks().luaState();
     const auto layoutPaths = resolveLuaDockLayoutPaths(executableDir_, lua.protocolDir, lua.scriptPath);
+    beginProtocolWorkspaceLoad(layoutPaths);
+    loadProtocolWorkspaceLayoutIni(layoutPaths);
+    loadCurrentProtocolControlState();
+}
+
+void GuiRuntime::beginProtocolWorkspaceLoad(const LuaDockLayoutPaths& layoutPaths)
+{
     activeWorkspaceProtocolKey_ = layoutPaths.protocolKey;
     protocolWorkspaceLoaded_ = true;
     defaultDockedLuaStableIds_.clear();
@@ -176,7 +206,10 @@ void GuiRuntime::loadCurrentProtocolWorkspace()
     }
     pendingLuaDefaultDockLayout_ = false;
     pendingProtocolWorkspaceSave_ = false;
+}
 
+void GuiRuntime::loadProtocolWorkspaceLayoutIni(const LuaDockLayoutPaths& layoutPaths)
+{
     ImGui::ClearIniSettings();
     if (layoutPaths.hasUserLayout && !layoutPaths.isLegacyLayout) {
         const auto savedLayoutHealth = readDockLayoutIniHealth(layoutPaths.layoutPath);
@@ -200,7 +233,6 @@ void GuiRuntime::loadCurrentProtocolWorkspace()
         pendingProtocolWorkspaceSave_ = true;
     }
     ImGui::GetIO().WantSaveIniSettings = false;
-    loadCurrentProtocolControlState();
 }
 
 void GuiRuntime::saveCurrentProtocolWorkspace()
