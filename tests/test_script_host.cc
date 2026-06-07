@@ -1742,6 +1742,15 @@ void test_config_default_roundtrip()
     require(reloaded.config.scripting.fileIo.extraAllowedRoots.size() == 1 &&
                 reloaded.config.scripting.fileIo.extraAllowedRoots[0] == "firmware",
             "Lua 文件 IO 额外授权根 roundtrip 失败");
+
+    const auto blockedParent = tempRoot.path() / "blocked-parent";
+    {
+        std::ofstream blocker(blockedParent, std::ios::binary | std::ios::trunc);
+        blocker << "not a directory";
+    }
+    error.clear();
+    require(!store.save(blockedParent / "protoscope.yaml", config, error), "父路径为文件时配置写回应失败");
+    require(error.find("创建配置目录失败") != std::string::npos, "配置目录创建失败应返回明确错误");
 }
 
 void test_config_repo_default_yaml_loads()

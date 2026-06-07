@@ -953,7 +953,12 @@ bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& confi
 
     try {
         if (!path.parent_path().empty()) {
-            std::filesystem::create_directories(path.parent_path());
+            std::error_code directoryError;
+            std::filesystem::create_directories(path.parent_path(), directoryError);
+            if (directoryError) {
+                error = "创建配置目录失败: " + directoryError.message();
+                return false;
+            }
         }
         std::ofstream out(path);
         if (!out.good()) {
