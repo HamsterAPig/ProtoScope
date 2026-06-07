@@ -1254,6 +1254,97 @@ std::optional<DialogWindowOptions> luaDialogWindowOptions(const sol::table& tabl
     return options;
 }
 
+std::optional<FileDialogKind> resolveFileDialogKind(FileDialogKind kind, const sol::table& table, std::string& error)
+{
+    if (kind != FileDialogKind::OpenFile) {
+        return kind;
+    }
+
+    const auto mode = luaStringField(table, "mode").value_or("open");
+    if (mode == "save") {
+        return FileDialogKind::SaveFile;
+    }
+    if (mode == "open") {
+        return FileDialogKind::OpenFile;
+    }
+
+    error = "mode 必须是 open 或 save";
+    return std::nullopt;
+}
+
+transport::ConnectionContext fileDialogConnectionContext(
+    const std::optional<transport::ConnectionContext>& activeConnection, std::uint64_t createdAtMs)
+{
+    if (activeConnection.has_value()) {
+        return *activeConnection;
+    }
+
+    transport::ConnectionContext connection{};
+    connection.timestampMs = createdAtMs;
+    connection.endpoint = "detached";
+    return connection;
+}
+
+FileDialogFilter parseFileDialogFilter(const sol::table& filterTable)
+{
+    FileDialogFilter filter;
+    filter.name = luaStringField(filterTable, "name").value_or("Files");
+
+    const sol::object patternsObject = filterTable["patterns"];
+    if (patternsObject.is<sol::table>()) {
+        const auto patterns = patternsObject.as<sol::table>();
+        for (std::size_t patternIndex = 1; patternIndex <= patterns.size(); ++patternIndex) {
+            const sol::object pattern = patterns[patternIndex];
+            if (pattern.is<std::string>()) {
+                filter.patterns.push_back(pattern.as<std::string>());
+            }
+        }
+    }
+    return filter;
+}
+
+std::optional<std::vector<FileDialogFilter>> parseFileDialogFilters(const sol::table& table, std::string& error)
+{
+    std::vector<FileDialogFilter> parsed;
+    const sol::object filtersObject = table["filters"];
+    if (!filtersObject.valid() || filtersObject.get_type() == sol::type::lua_nil) {
+        return parsed;
+    }
+    if (!filtersObject.is<sol::table>()) {
+        error = "filters 必须是数组";
+        return std::nullopt;
+    }
+
+    const auto filters = filtersObject.as<sol::table>();
+    for (std::size_t index = 1; index <= filters.size(); ++index) {
+        const sol::object filterObject = filters[index];
+        if (!filterObject.is<sol::table>()) {
+            error = "filters 元素必须是 table";
+            return std::nullopt;
+        }
+        parsed.push_back(parseFileDialogFilter(filterObject.as<sol::table>()));
+    }
+    return parsed;
+}
+
+FileDialogRequest makeFileDialogRequest(std::uint64_t id,
+                                        FileDialogKind kind,
+                                        transport::ConnectionContext connection,
+                                        const sol::table& table,
+                                        std::vector<FileDialogFilter> filters,
+                                        std::uint64_t createdAtMs)
+{
+    return FileDialogRequest{
+        .id = id,
+        .kind = kind,
+        .connection = std::move(connection),
+        .title = luaStringField(table, "title").value_or(kind == FileDialogKind::OpenDir ? "选择目录" : "选择文件"),
+        .defaultPath = luaStringField(table, "default_path").value_or("."),
+        .filters = std::move(filters),
+        .createdAtMs = createdAtMs,
+    };
+}
+
 std::optional<std::int64_t> luaIntegerValue(const sol::object& object)
 {
     if (!object.valid() || object.get_type() == sol::type::lua_nil) {
@@ -2312,64 +2403,24 @@ std::optional<FileDialogRequest> ScriptHost::protoFileDialog(FileDialogKind kind
     }
 
     const auto table = opts.as<sol::table>();
-    if (kind == FileDialogKind::OpenFile) {
-        const auto mode = luaStringField(table, "mode").value_or("open");
-        if (mode == "save") {
-            kind = FileDialogKind::SaveFile;
-        } else if (mode != "open") {
-            error = "mode 必须是 open 或 save";
-            return std::nullopt;
-        }
+    const auto resolvedKind = resolveFileDialogKind(kind, table, error);
+    if (!resolvedKind.has_value()) {
+        return std::nullopt;
     }
 
     const auto createdAtMs = nowMs();
-    transport::ConnectionContext connection{};
-    if (activeConnection_.has_value()) {
-        connection = *activeConnection_;
-    } else {
-        connection.timestampMs = createdAtMs;
-        connection.endpoint = "detached";
-    }
-    FileDialogRequest request{
-        .id = nextFileDialogId(),
-        .kind = kind,
-        .connection = connection,
-        .title = luaStringField(table, "title").value_or(kind == FileDialogKind::OpenDir ? "选择目录" : "选择文件"),
-        .defaultPath = luaStringField(table, "default_path").value_or("."),
-        .filters = {},
-        .createdAtMs = createdAtMs,
-    };
-
-    const sol::object filtersObject = table["filters"];
-    if (filtersObject.valid() && filtersObject.get_type() != sol::type::lua_nil) {
-        if (!filtersObject.is<sol::table>()) {
-            error = "filters 必须是数组";
-            return std::nullopt;
-        }
-        const auto filters = filtersObject.as<sol::table>();
-        for (std::size_t index = 1; index <= filters.size(); ++index) {
-            const sol::object filterObject = filters[index];
-            if (!filterObject.is<sol::table>()) {
-                error = "filters 元素必须是 table";
-                return std::nullopt;
-            }
-            const auto filterTable = filterObject.as<sol::table>();
-            FileDialogFilter filter;
-            filter.name = luaStringField(filterTable, "name").value_or("Files");
-            const sol::object patternsObject = filterTable["patterns"];
-            if (patternsObject.is<sol::table>()) {
-                const auto patterns = patternsObject.as<sol::table>();
-                for (std::size_t patternIndex = 1; patternIndex <= patterns.size(); ++patternIndex) {
-                    const sol::object pattern = patterns[patternIndex];
-                    if (pattern.is<std::string>()) {
-                        filter.patterns.push_back(pattern.as<std::string>());
-                    }
-                }
-            }
-            request.filters.push_back(std::move(filter));
-        }
+    auto filters = parseFileDialogFilters(table, error);
+    if (!filters.has_value()) {
+        return std::nullopt;
     }
 
+    // 成员函数只补齐宿主状态，Lua 参数解析保持在无状态 helper 中。
+    const FileDialogRequest request = makeFileDialogRequest(nextFileDialogId(),
+                                                            *resolvedKind,
+                                                            fileDialogConnectionContext(activeConnection_, createdAtMs),
+                                                            table,
+                                                            std::move(*filters),
+                                                            createdAtMs);
     fileDialogRequests_.push_back(request);
     return request;
 }
