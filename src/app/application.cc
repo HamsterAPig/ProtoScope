@@ -1878,7 +1878,7 @@ bool Application::processTransportEvent(const transport::TransportEvent& event)
     return changed;
 }
 
-bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch)
+bool Application::applyScriptTransportStats(const scripting::ScriptRuntimeOutputBatch& batch)
 {
     bool changed = false;
     if (batch.transportStats.has_value()) {
@@ -1892,22 +1892,26 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         comm.lastPumpScriptMs += stats.totalMs;
         changed = true;
     }
+    return changed;
+}
 
+bool Application::applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
     for (const auto& connection : batch.requestGuardResets) {
         txRequestGuardHalted_ = false;
         const auto resetAtMs = nowMs();
-        scriptWorker_.postTxEvent(
-            connection,
-            scripting::TxEvent{
-                .id = 0,
-                .kind = scripting::TxRequestKind::Request,
-                .state = scripting::TxEventState::Completed,
-                .tag = "request_guard",
-                .queuedMs = resetAtMs,
-                .finishedMs = resetAtMs,
-                .guarded = true,
-                .guardState = std::string("reset"),
-            });
+        scriptWorker_.postTxEvent(connection,
+                                  scripting::TxEvent{
+                                      .id = 0,
+                                      .kind = scripting::TxRequestKind::Request,
+                                      .state = scripting::TxEventState::Completed,
+                                      .tag = "request_guard",
+                                      .queuedMs = resetAtMs,
+                                      .finishedMs = resetAtMs,
+                                      .guarded = true,
+                                      .guardState = std::string("reset"),
+                                  });
         scriptWorker_.waitIdle();
         changed = true;
     }
@@ -1943,7 +1947,12 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         completionConsumed = true;
         changed = true;
     }
+    return changed;
+}
 
+bool Application::applyScriptRuntimeProfileEvents(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
     for (const auto& profileEvent : batch.streamRuntimeProfiles) {
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         const plot::RawCaptureEvent event{
@@ -1970,7 +1979,12 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         }
         changed = true;
     }
+    return changed;
+}
 
+bool Application::applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
     for (const auto& update : batch.statusUpdates) {
         setStatusMessage(update.clear ? std::string{} : update.text, false);
         changed = true;
@@ -1993,7 +2007,12 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         loggingFacade_.script(log.level, log.message, log.timestampMs);
         changed = true;
     }
+    return changed;
+}
 
+bool Application::applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
     auto& wave = dockStore_.waveState();
     for (const auto& setup : batch.plotSetups) {
         auto rawSetup = toRawPlotSetup(setup);
@@ -2064,7 +2083,17 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
             changed = true;
         }
     }
+    return changed;
+}
 
+bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
+    changed = applyScriptTransportStats(batch) || changed;
+    changed = applyScriptTxOutputs(batch) || changed;
+    changed = applyScriptRuntimeProfileEvents(batch) || changed;
+    changed = applyScriptUiAndLogOutputs(batch) || changed;
+    changed = applyScriptPlotOutputs(batch) || changed;
     changed = driveTxScheduler() || changed;
     return changed;
 }

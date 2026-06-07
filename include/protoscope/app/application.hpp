@@ -133,6 +133,11 @@ private:
     bool processRequestTimeouts();
     bool driveTxScheduler();
     bool enqueueTxRequest(scripting::TxRequest request);
+    bool applyScriptTransportStats(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptRuntimeProfileEvents(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
     void finishTxRequest(const scripting::TxRequest& request,
                          scripting::TxEventState state,
                          std::optional<std::string> error,
