@@ -167,6 +167,19 @@ private:
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
     void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
     void appendRawCaptureEvent(const plot::RawCaptureEvent& event);
+    bool validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const;
+    void prepareRawCaptureImportReplay(const plot::RawCaptureFileData& capture);
+    [[nodiscard]] transport::ConnectionContext makeRawCaptureReplayContext(
+        const plot::RawCaptureFileData& capture) const;
+    bool replayRawCaptureEvents(const plot::RawCaptureFileData& capture, std::string& error);
+    bool replayRawCaptureEvent(const plot::RawCaptureEvent& event,
+                               transport::ConnectionContext& replayContext,
+                               std::string& error);
+    bool applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent& event, bool cleared, std::string& error);
+    void replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
+                               const std::vector<std::uint8_t>& bytes);
+    void finishRawCaptureImportReplay();
+    void cancelRawCaptureImportReplay();
     bool applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup);
     void recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventData& setup, std::uint64_t timestampMs);
     void resetTransferFrameParser();

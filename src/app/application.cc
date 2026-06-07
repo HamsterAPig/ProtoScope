@@ -1226,9 +1226,9 @@ std::uint64_t Application::rawCaptureRecordingBytes() const
     return rawCaptureRecording_.bytesWritten();
 }
 
-bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error)
+bool Application::validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const
 {
-    auto& lua = dockStore_.luaState();
+    const auto& lua = dockStore_.luaState();
     if (!lua.loaded) {
         error = "当前协议尚未加载";
         return false;
@@ -1237,7 +1237,11 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
         error = "导入文件协议目录与当前工作区不一致";
         return false;
     }
+    return true;
+}
 
+void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& capture)
+{
     // 核心流程：导入回放必须先清空旧波形与旧原始缓冲，再走一次 on_bytes -> flushScriptPlots，
     // 避免导入样本与现场采集样本混在同一份波形/原始容器里。
     scriptWorker_.waitIdle();
@@ -1251,106 +1255,110 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
     wave.view.sampleFrequencyError.clear();
     wave.buffer.setHistoryTrimSuspended(true);
+}
 
-    if (!capture.events.empty()) {
-        transport::ConnectionContext replayContext;
-        replayContext.endpoint = "psraw-import";
-        replayContext.connectionId = 0;
-        replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
-        replayContext.readyForIo = false;
-        suppressRawCaptureProfileEvents_ = true;
-        suppressRawCapturePlotSetupEvents_ = true;
-        for (const auto& recordedEvent : capture.events) {
-            replayContext.timestampMs =
-                recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
-            if (recordedEvent.type == plot::RawCaptureEventType::ProfileSet) {
-                std::string profileError;
-                if (!scriptWorker_.applyStreamRuntimeProfileEvent(
-                        scripting::StreamRuntimeProfileEvent{
-                            .cleared = false,
-                            .frameName = recordedEvent.profile.frameName,
-                            .length = recordedEvent.profile.length,
-                            .channelMap = recordedEvent.profile.channelMap,
-                        },
-                        profileError)) {
-                    suppressRawCaptureProfileEvents_ = false;
-                    suppressRawCapturePlotSetupEvents_ = false;
-                    error = "导入 profile_set 失败: " + profileError;
-                    wave.buffer.setHistoryTrimSuspended(false);
-                    return false;
-                }
-                scriptWorker_.waitIdle();
-                flushScriptOutputs();
-            } else if (recordedEvent.type == plot::RawCaptureEventType::ProfileClear) {
-                std::string clearError;
-                if (!scriptWorker_.applyStreamRuntimeProfileEvent(
-                        scripting::StreamRuntimeProfileEvent{
-                            .cleared = true,
-                            .frameName = recordedEvent.profile.frameName,
-                            .length = 0,
-                            .channelMap = {},
-                        },
-                        clearError)) {
-                    suppressRawCaptureProfileEvents_ = false;
-                    suppressRawCapturePlotSetupEvents_ = false;
-                    error = "导入 profile_clear 失败: " + clearError;
-                    wave.buffer.setHistoryTrimSuspended(false);
-                    return false;
-                }
-                scriptWorker_.waitIdle();
-                flushScriptOutputs();
-            } else if (recordedEvent.type == plot::RawCaptureEventType::PlotSetup) {
-                // 核心流程：raw 回放可能先由 Lua on_open/on_bytes 产生同一 setup；完全一致时跳过，避免 reset_history
-                // 二次清空样本。
-                if (!sameAppliedPlotSetup(wave, recordedEvent.plotSetup)) {
-                    applyPlotSetup(recordedEvent.plotSetup);
-                }
-            } else if (!recordedEvent.bytes.empty()) {
-                std::size_t cursor = 0;
-                while (cursor < recordedEvent.bytes.size()) {
-                    const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, recordedEvent.bytes.size() - cursor);
-                    std::vector<std::uint8_t> chunk(
-                        recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
-                        recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
-                    scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-                    if (runtimeConfig_.scripting.workerEnabled) {
-                        // 核心流程：异步 worker 需要显式等到队列排空后再 flush，禁用 worker 时
-                        // postTransportBytes 内部已经同步等待完成，避免重复阻塞。
-                        scriptWorker_.waitIdle();
-                    }
-                    flushScriptOutputs();
-                    cursor += chunkSize;
-                }
-            }
-        }
-        flushScriptOutputs();
-        suppressRawCaptureProfileEvents_ = false;
-        suppressRawCapturePlotSetupEvents_ = false;
-    } else if (!capture.payload.empty()) {
-        transport::ConnectionContext replayContext;
-        replayContext.endpoint = "psraw-import";
-        replayContext.connectionId = 0;
-        replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
-        replayContext.readyForIo = false;
-        std::size_t cursor = 0;
-        while (cursor < capture.payload.size()) {
-            const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, capture.payload.size() - cursor);
-            std::vector<std::uint8_t> chunk(capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor),
-                                            capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
-            scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-            if (runtimeConfig_.scripting.workerEnabled) {
-                // 核心流程：异步 worker 需要先等到脚本消费完当前 chunk，再把输出合并到回放结果。
-                scriptWorker_.waitIdle();
-            }
-            flushScriptOutputs();
-            cursor += chunkSize;
+transport::ConnectionContext Application::makeRawCaptureReplayContext(const plot::RawCaptureFileData& capture) const
+{
+    transport::ConnectionContext replayContext;
+    replayContext.endpoint = "psraw-import";
+    replayContext.connectionId = 0;
+    replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
+    replayContext.readyForIo = false;
+    return replayContext;
+}
+
+bool Application::replayRawCaptureEvents(const plot::RawCaptureFileData& capture, std::string& error)
+{
+    auto replayContext = makeRawCaptureReplayContext(capture);
+    suppressRawCaptureProfileEvents_ = true;
+    suppressRawCapturePlotSetupEvents_ = true;
+
+    for (const auto& recordedEvent : capture.events) {
+        replayContext.timestampMs =
+            recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
+        if (!replayRawCaptureEvent(recordedEvent, replayContext, error)) {
+            cancelRawCaptureImportReplay();
+            return false;
         }
     }
 
     flushScriptOutputs();
+    suppressRawCaptureProfileEvents_ = false;
+    suppressRawCapturePlotSetupEvents_ = false;
+    return true;
+}
+
+bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
+                                        transport::ConnectionContext& replayContext,
+                                        std::string& error)
+{
+    if (event.type == plot::RawCaptureEventType::ProfileSet) {
+        return applyRawCaptureRuntimeProfileEvent(event, false, error);
+    }
+    if (event.type == plot::RawCaptureEventType::ProfileClear) {
+        return applyRawCaptureRuntimeProfileEvent(event, true, error);
+    }
+    if (event.type == plot::RawCaptureEventType::PlotSetup) {
+        auto& wave = dockStore_.waveState();
+        // 核心流程：raw 回放可能先由 Lua on_open/on_bytes 产生同一 setup；完全一致时跳过，避免 reset_history
+        // 二次清空样本。
+        if (!sameAppliedPlotSetup(wave, event.plotSetup)) {
+            applyPlotSetup(event.plotSetup);
+        }
+        return true;
+    }
+    if (!event.bytes.empty()) {
+        replayRawCaptureBytes(replayContext, event.bytes);
+    }
+    return true;
+}
+
+bool Application::applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent& event,
+                                                     bool cleared,
+                                                     std::string& error)
+{
+    std::string profileError;
+    if (!scriptWorker_.applyStreamRuntimeProfileEvent(
+            scripting::StreamRuntimeProfileEvent{
+                .cleared = cleared,
+                .frameName = event.profile.frameName,
+                .length = cleared ? 0 : event.profile.length,
+                .channelMap = cleared ? std::vector<std::size_t>{} : event.profile.channelMap,
+            },
+            profileError)) {
+        error = cleared ? "导入 profile_clear 失败: " + profileError : "导入 profile_set 失败: " + profileError;
+        return false;
+    }
+
+    scriptWorker_.waitIdle();
+    flushScriptOutputs();
+    return true;
+}
+
+void Application::replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
+                                        const std::vector<std::uint8_t>& bytes)
+{
+    std::size_t cursor = 0;
+    while (cursor < bytes.size()) {
+        const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, bytes.size() - cursor);
+        std::vector<std::uint8_t> chunk(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+                                        bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
+        scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
+        if (runtimeConfig_.scripting.workerEnabled) {
+            // 核心流程：异步 worker 需要先等到脚本消费完当前 chunk，再把输出合并到回放结果。
+            scriptWorker_.waitIdle();
+        }
+        flushScriptOutputs();
+        cursor += chunkSize;
+    }
+}
+
+void Application::finishRawCaptureImportReplay()
+{
+    auto& wave = dockStore_.waveState();
+    flushScriptOutputs();
     const auto importedSnapshot =
-        wave.buffer.snapshot(
-            -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
+        wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
     std::size_t importedHistoryLimit = 0;
     for (const auto& channel : importedSnapshot.channels) {
         importedHistoryLimit = (std::max)(importedHistoryLimit, channel.totalSamples);
@@ -1359,6 +1367,31 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     wave.buffer.preserveHistoryLimitAtLeast(importedHistoryLimit);
     syncDockState();
     wave.statusMessage = "原始波形已导入";
+}
+
+void Application::cancelRawCaptureImportReplay()
+{
+    suppressRawCaptureProfileEvents_ = false;
+    suppressRawCapturePlotSetupEvents_ = false;
+    dockStore_.waveState().buffer.setHistoryTrimSuspended(false);
+}
+
+bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error)
+{
+    if (!validateRawCaptureImport(capture, error)) {
+        return false;
+    }
+
+    prepareRawCaptureImportReplay(capture);
+    if (!capture.events.empty()) {
+        if (!replayRawCaptureEvents(capture, error)) {
+            return false;
+        }
+    } else if (!capture.payload.empty()) {
+        replayRawCaptureBytes(makeRawCaptureReplayContext(capture), capture.payload);
+    }
+
+    finishRawCaptureImportReplay();
     return true;
 }
 
