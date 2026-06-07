@@ -484,6 +484,7 @@ config::AppConfig Application::captureConfig() const
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
     captured.gui.replayRawHistoryOnSchemaSwitch = runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch;
+    captured.protocol.tx = runtimeConfig_.protocol.tx;
     captured.app.language = runtimeConfig_.app.language;
     captured.receive = runtimeConfig_.receive;
     captured.scripting = runtimeConfig_.scripting;

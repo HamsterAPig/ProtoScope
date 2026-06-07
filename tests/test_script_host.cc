@@ -1727,6 +1727,24 @@ void test_config_default_roundtrip()
             "Lua 文件 IO 额外授权根 roundtrip 失败");
 }
 
+void test_config_repo_default_yaml_loads()
+{
+    protoscope::config::ConfigStore store;
+    const std::filesystem::path repoConfigPath = std::filesystem::path{"config"} / "protoscope.yaml";
+
+    require(std::filesystem::exists(repoConfigPath), "源码默认配置文件应存在");
+    const auto loaded = store.load(repoConfigPath);
+
+    if (!loaded.error.empty()) {
+        throw std::runtime_error("源码默认配置 YAML 读取失败: " + loaded.error);
+    }
+    require(loaded.loadedFromDisk, "源码默认配置应从磁盘读取");
+    require(std::abs(loaded.config.scripting.workerBackpressureHighWatermark - 0.5) < 1e-12,
+            "默认配置应读取 worker 高水位");
+    require(std::abs(loaded.config.scripting.workerBackpressureLowWatermark - 0.3) < 1e-12,
+            "默认配置应读取 worker 低水位");
+}
+
 void test_script_file_io_proto_buffer_roundtrip()
 {
     const auto tempRoot = makeUniqueTempDir("protoscope-script-file-io");
@@ -1739,6 +1757,9 @@ void test_script_file_io_proto_buffer_roundtrip()
     {
         std::ofstream script(protocolDir / "main.lua");
         script << "function on_open(ctx)\n";
+        script << "  local bad_job, bad_err = proto.fs.send_file('input.bin', { kind = 'invalid' })\n";
+        script << "  assert(bad_job == nil)\n";
+        script << "  assert(bad_err and bad_err:find('kind'))\n";
         script << "  local h = assert(proto.fs.open('input.bin', { mode = 'read' }))\n";
         script << "  local chunk, err = proto.fs.read(h, { max_bytes = 3 })\n";
         script << "  assert(chunk, err)\n";
@@ -2689,6 +2710,7 @@ static const TestCase kAllTests[] = {
     {"update_check_rejects_response_without_semantic_tags", &test_update_check_rejects_response_without_semantic_tags},
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"config_default_roundtrip", &test_config_default_roundtrip},
+    {"config_repo_default_yaml_loads", &test_config_repo_default_yaml_loads},
     {"config_performance_scale_applies_default_budgets", &test_config_performance_scale_applies_default_budgets},
     {"config_performance_save_keeps_scaled_defaults_compact",
      &test_config_performance_save_keeps_scaled_defaults_compact},
@@ -2830,6 +2852,8 @@ static const TestCase kAllTests[] = {
     {"application_open_transport_uses_udp_peer_runtime_config",
      &test_application_open_transport_uses_udp_peer_runtime_config},
     {"application_set_log_level_updates_runtime_config", &test_application_set_log_level_updates_runtime_config},
+    {"application_capture_config_preserves_protocol_tx_runtime_config",
+     &test_application_capture_config_preserves_protocol_tx_runtime_config},
     {"application_wave_legend_visibility_config_roundtrip", &test_application_wave_legend_visibility_config_roundtrip},
     {"application_wave_zoom_selection_auto_exit_config_roundtrip",
      &test_application_wave_zoom_selection_auto_exit_config_roundtrip},

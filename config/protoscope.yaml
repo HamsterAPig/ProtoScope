@@ -96,7 +96,7 @@ scripting:
     memory_budget_available_ratio: 0.0
     backpressure_enabled: true
     backpressure_rx_queue_high_watermark: 0.5
-   backpressure_rx_queue_low_watermark: 0.3
+    backpressure_rx_queue_low_watermark: 0.3
     # drain_request_outputs_unbounded: false
     #   true:  超时前使用无帧预算限制的 drain（flushScriptOutputsUnbounded）
     #   false: 使用受帧预算限制的 drain（flushScriptOutputs，默认值）

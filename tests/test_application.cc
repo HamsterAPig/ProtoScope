@@ -1233,6 +1233,29 @@ void test_application_set_log_level_updates_runtime_config()
     application.shutdown();
 }
 
+void test_application_capture_config_preserves_protocol_tx_runtime_config()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto config = application.captureConfig();
+    config.protocol.tx.sendTimeoutMs = 111;
+    config.protocol.tx.requestTimeoutMs = 222;
+    config.protocol.tx.maxPending = 3;
+    config.protocol.tx.overflowPolicy = "drop_newest";
+    config.protocol.tx.overflowNotify = "status";
+    require(application.applyConfig(config), "应用应接受协议 TX 运行时配置");
+
+    const auto captured = application.captureConfig();
+    require(captured.protocol.tx.sendTimeoutMs == 111, "captureConfig 应保留 send_timeout_ms");
+    require(captured.protocol.tx.requestTimeoutMs == 222, "captureConfig 应保留 request_timeout_ms");
+    require(captured.protocol.tx.maxPending == 3, "captureConfig 应保留 max_pending");
+    require(captured.protocol.tx.overflowPolicy == "drop_newest", "captureConfig 应保留 overflow_policy");
+    require(captured.protocol.tx.overflowNotify == "status", "captureConfig 应保留 overflow_notify");
+
+    application.shutdown();
+}
+
 void test_application_wave_legend_visibility_config_roundtrip()
 {
     protoscope::app::Application application;

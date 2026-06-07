@@ -255,22 +255,24 @@ if(PROTOSCOPE_ENABLE_GUI)
     endif()
 endif()
 
-if(WIN32)
-    add_executable(ProtoScope WIN32 main.cc)
-else()
-    add_executable(ProtoScope main.cc)
-endif()
+if(PROTOSCOPE_ENABLE_GUI)
+    if(WIN32)
+        add_executable(ProtoScope WIN32 main.cc)
+    else()
+        add_executable(ProtoScope main.cc)
+    endif()
 
-target_link_libraries(ProtoScope
-    PRIVATE
-        protoscope_app
-        protoscope_config
-        $<$<BOOL:${PROTOSCOPE_ENABLE_GUI}>:protoscope_ui>
-)
+    target_link_libraries(ProtoScope
+        PRIVATE
+            protoscope_app
+            protoscope_config
+            protoscope_ui
+    )
 
-target_compile_features(ProtoScope PRIVATE cxx_std_20)
-if(WIN32)
-    target_link_libraries(ProtoScope PRIVATE ws2_32)
+    target_compile_features(ProtoScope PRIVATE cxx_std_20)
+    if(WIN32)
+        target_link_libraries(ProtoScope PRIVATE ws2_32)
+    endif()
 endif()
 
 foreach(target_name IN ITEMS
@@ -284,13 +286,12 @@ foreach(target_name IN ITEMS
     protoscope_config
     protoscope_app
     protoscope_update_check
-    ProtoScope
 )
     protoscope_enable_warnings(${target_name})
 endforeach()
 
 if(PROTOSCOPE_ENABLE_GUI)
-    foreach(target_name IN ITEMS protoscope_imgui protoscope_ui)
+    foreach(target_name IN ITEMS protoscope_imgui protoscope_ui ProtoScope)
         protoscope_enable_warnings(${target_name})
     endforeach()
 endif()

@@ -73,7 +73,11 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua
         if (!std::filesystem::is_regular_file(path, errorCode)) {
             return fail("文件不存在或不是普通文件: " + path.generic_string());
         }
-        if (std::filesystem::file_size(path, errorCode) > fileIoConfig_.maxFileSizeBytes) {
+        const auto size = std::filesystem::file_size(path, errorCode);
+        if (errorCode) {
+            return fail("读取文件大小失败: " + errorCode.message());
+        }
+        if (size > fileIoConfig_.maxFileSizeBytes) {
             return fail("文件大小超过 max_file_size_bytes");
         }
     } else {
@@ -230,12 +234,15 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view
                                                                  const std::string& pathText,
                                                                  const sol::object& opts)
 {
+    auto fail = [lua](const std::string& error) {
+        return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+    };
     std::string kind = "send";
     std::string tag = "file";
     std::size_t chunkSize = fileIoConfig_.sendFile.defaultChunkBytes;
     if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
         if (!opts.is<sol::table>()) {
-            return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, "opts 必须是 table"));
+            return fail("opts 必须是 table");
         }
         const auto table = opts.as<sol::table>();
         kind = luaStringField(table, "kind").value_or(kind);
@@ -245,6 +252,9 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view
             chunkSize = static_cast<std::size_t>(std::max(1, chunk.as<int>()));
         }
     }
+    if (kind != "send" && kind != "request") {
+        return fail("kind 必须是 send/request");
+    }
     chunkSize = std::min(chunkSize, fileIoConfig_.maxChunkBytes);
     const auto [handleObject, openError] = protoFsOpen(lua, pathText, sol::make_object(lua, sol::lua_nil));
     if (!handleObject.valid() || handleObject.get_type() == sol::type::lua_nil) {
@@ -252,7 +262,12 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view
     }
 
     const auto handleId = handleObject.as<std::uint64_t>();
-    const auto total = std::filesystem::file_size(fileHandles_[handleId]->path);
+    std::error_code sizeError;
+    const auto total = std::filesystem::file_size(fileHandles_[handleId]->path, sizeError);
+    if (sizeError) {
+        protoFsClose(lua, handleId);
+        return fail("读取文件大小失败: " + sizeError.message());
+    }
     const auto jobId = nextFileJobId();
     fileSendJobs_[jobId] = FileSendJob{
         .id = jobId,
