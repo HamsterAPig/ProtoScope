@@ -76,6 +76,7 @@ private:
         bool showScriptDock{true};
         bool showWaveDock{true};
         std::unordered_map<std::string, bool> luaDockVisibility;
+        std::string dockIniSnapshot;
     };
 
     bool initializeWindow();

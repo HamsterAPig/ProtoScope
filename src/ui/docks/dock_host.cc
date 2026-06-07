@@ -674,17 +674,17 @@ void GuiRuntime::drawTransferDock()
                 const float oldY = ImGui::GetCursorPosY();
                 ImGui::SetCursorPosY(oldY + (payloadHeight - frameHeight) * 0.5F);
 
-                if (sendState.hexMode) {
+                const bool hexModeBeforeClick = sendState.hexMode;
+                if (hexModeBeforeClick) {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
                 }
-                if (ImGui::Button("HEX", ImVec2(-FLT_MIN, 0.0F))) {
-                    if (!application_.setSendHexMode(!sendState.hexMode)) {
-                        application_.setStatusMessage("HEX 模式切换失败", true);
-                    }
-                }
-                if (sendState.hexMode) {
+                const bool hexModeToggleRequested = ImGui::Button("HEX##transfer_send_hex", ImVec2(-FLT_MIN, 0.0F));
+                if (hexModeBeforeClick) {
                     ImGui::PopStyleColor(2);
+                }
+                if (hexModeToggleRequested && !application_.setSendHexMode(!hexModeBeforeClick)) {
+                    application_.setStatusMessage("HEX 模式切换失败", true);
                 }
                 drawIconTooltip(sendState.hexMode ? "HEX 发送已开启" : "HEX 发送已关闭");
 

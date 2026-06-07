@@ -57,6 +57,7 @@ CMRC_DECLARE(ui_resources);
 #include <system_error>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 
 namespace protoscope::ui {
 
@@ -405,6 +406,12 @@ void GuiRuntime::exitWaveFullscreen()
 void GuiRuntime::applyWaveFocusFullscreen()
 {
     if (!waveFullscreenSnapshot_) {
+        std::size_t dockIniSize = 0;
+        const char* dockIniData = ImGui::SaveIniSettingsToMemory(&dockIniSize);
+        std::string dockIniSnapshot;
+        if (dockIniData != nullptr && dockIniSize > 0U) {
+            dockIniSnapshot.assign(dockIniData, dockIniSize);
+        }
         waveFullscreenSnapshot_ = WaveFullscreenDockSnapshot{
             .showCommDock = showCommDock_,
             .showProtocolDock = showProtocolDock_,
@@ -413,6 +420,7 @@ void GuiRuntime::applyWaveFocusFullscreen()
             .showScriptDock = showScriptDock_,
             .showWaveDock = showWaveDock_,
             .luaDockVisibility = luaDockVisibility_,
+            .dockIniSnapshot = std::move(dockIniSnapshot),
         };
     }
 
@@ -442,6 +450,12 @@ void GuiRuntime::restoreWaveFocusFullscreen()
     showScriptDock_ = waveFullscreenSnapshot_->showScriptDock;
     showWaveDock_ = waveFullscreenSnapshot_->showWaveDock;
     luaDockVisibility_ = waveFullscreenSnapshot_->luaDockVisibility;
+    if (!waveFullscreenSnapshot_->dockIniSnapshot.empty()) {
+        // Focus 全屏只临时改运行期 Dock，退出时恢复进入前的 ImGui 布局内存快照，避免 tab 顺序被临时布局覆盖。
+        ImGui::LoadIniSettingsFromMemory(waveFullscreenSnapshot_->dockIniSnapshot.data(),
+                                         waveFullscreenSnapshot_->dockIniSnapshot.size());
+        ImGui::GetIO().WantSaveIniSettings = false;
+    }
 }
 
 void GuiRuntime::attachUiComponents()
