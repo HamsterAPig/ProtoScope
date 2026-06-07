@@ -405,15 +405,9 @@ void ensureFftChannelState(plot::WaveDockState& wave)
     }
 }
 
-void drawFftToolbarSectionContent(plot::WaveDockState& wave)
+void drawFftModeToggle(plot::WaveDockState& wave)
 {
     auto& view = wave.view;
-    ensureFftChannelState(wave);
-
-    if (!ImGui::CollapsingHeader("FFT")) {
-        return;
-    }
-
     bool enabled = view.fft.enabled;
     if (drawAdaptiveToolbarButton(
             "启用 FFT 频谱模式", "FFT", "启用后主图横坐标切换为频率 Hz，输入数据来自当前可视区。", enabled)) {
@@ -430,7 +424,11 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave)
         }
         wave.cachedFftKeyValid = false;
     }
+}
 
+void drawFftPointCountControls(plot::WaveDockState& wave)
+{
+    auto& view = wave.view;
     const char* pointItems[] = {
         "全部可视样本", "Auto 2^n", "手动", "256", "512", "1024", "2048", "4096", "8192", "16384"};
     int pointIndex = static_cast<int>(view.fft.pointCount);
@@ -454,7 +452,11 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave)
         view.fft.autoMaxPointCount = static_cast<std::size_t>((std::clamp) (autoMaxPointCount, 256, 16384));
         wave.cachedFftKeyValid = false;
     }
+}
 
+void drawFftInputWindowActions(plot::WaveDockState& wave)
+{
+    auto& view = wave.view;
     if (ImGui::Button("刷新输入窗口")) {
         view.fftSourceMinTime = view.viewMinTime;
         view.fftSourceMaxTime = view.viewMaxTime;
@@ -468,7 +470,11 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave)
         view.fftFitAllRequested = true;
     }
     addItemHelp("重置频率、幅值和相位轴范围，不改变 FFT 输入窗口。");
+}
 
+void drawFftSpectrumOptions(plot::WaveDockState& wave)
+{
+    auto& view = wave.view;
     const char* windowItems[] = {"Rectangular", "Hann", "Hamming", "Blackman-Harris"};
     int windowIndex = static_cast<int>(view.fft.window);
     if (ImGui::Combo("窗函数", &windowIndex, windowItems, IM_ARRAYSIZE(windowItems))) {
@@ -495,7 +501,11 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave)
         view.fft.manualFundamentalHz = (std::max) (0.0, view.fft.manualFundamentalHz);
         wave.cachedFftKeyValid = false;
     }
+}
 
+void drawFftLegendControls(plot::WaveDockState& wave)
+{
+    auto& view = wave.view;
     if (ImGui::TreeNode("Legend")) {
         if (drawAdaptiveToolbarButton("显示频谱图例",
                                       "例",
@@ -505,7 +515,11 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave)
         }
         ImGui::TreePop();
     }
+}
 
+void drawFftChannelSelectionControls(plot::WaveDockState& wave)
+{
+    auto& view = wave.view;
     if (ImGui::TreeNode("参与通道")) {
         if (ImGui::Button("启用全部通道")) {
             std::fill(wave.fftChannelEnabled.begin(), wave.fftChannelEnabled.end(), 1);
@@ -540,7 +554,11 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave)
         ImGui::NewLine();
         ImGui::TreePop();
     }
+}
 
+void drawFftFrequencySummary(const plot::WaveDockState& wave)
+{
+    const auto& view = wave.view;
     const auto& fftFrame = wave.cachedFftFrame;
     ImGui::SeparatorText("频率换算");
     ImGui::Text("Fs: %s", formatMetricText(view.sampleFrequencyHz, "Hz").c_str());
@@ -562,6 +580,24 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave)
     } else {
         ImGui::TextUnformatted(fftFrame.message.empty() ? "启用后显示 N、Δf 和频率范围。" : fftFrame.message.c_str());
     }
+}
+
+void drawFftToolbarSectionContent(plot::WaveDockState& wave)
+{
+    ensureFftChannelState(wave);
+
+    if (!ImGui::CollapsingHeader("FFT")) {
+        return;
+    }
+
+    // 核心流程：工具栏入口只负责段落编排，具体状态修改保留在各自控件段落内。
+    drawFftModeToggle(wave);
+    drawFftPointCountControls(wave);
+    drawFftInputWindowActions(wave);
+    drawFftSpectrumOptions(wave);
+    drawFftLegendControls(wave);
+    drawFftChannelSelectionControls(wave);
+    drawFftFrequencySummary(wave);
 }
 
 class WaveFftToolbarSection final : public IWaveToolbarSection {
