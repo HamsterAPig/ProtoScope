@@ -1414,6 +1414,90 @@ std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& 
     return setup;
 }
 
+std::optional<plot::WaveSample> parseExpandedPlotSample(const sol::table& sampleTable,
+                                                        std::size_t index,
+                                                        std::string& error)
+{
+    const auto time = luaNumberField(sampleTable, "t");
+    const auto value = luaNumberField(sampleTable, "y");
+    if (!time.has_value() || !value.has_value()) {
+        error = "plot.push.samples[" + std::to_string(index) + "] 必须包含数字字段 t / y";
+        return std::nullopt;
+    }
+    return plot::WaveSample{.time = *time, .value = *value};
+}
+
+std::optional<std::vector<plot::WaveSample>> parseExpandedPlotSamples(const sol::table& samplesTable,
+                                                                      std::string& error)
+{
+    std::vector<plot::WaveSample> samples;
+    samples.reserve(samplesTable.size());
+    for (std::size_t index = 1; index <= samplesTable.size(); ++index) {
+        const sol::object sampleObject = samplesTable[index];
+        if (!sampleObject.is<sol::table>()) {
+            error = "plot.push.samples[" + std::to_string(index) + "] 必须是 table";
+            return std::nullopt;
+        }
+
+        const auto sample = parseExpandedPlotSample(sampleObject.as<sol::table>(), index, error);
+        if (!sample.has_value()) {
+            return std::nullopt;
+        }
+        samples.push_back(*sample);
+    }
+    return samples;
+}
+
+std::optional<plot::WaveSample> parseCompactPlotSample(
+    const sol::object& valueObject, double t0, double dt, std::size_t index, std::string& error)
+{
+    if (!valueObject.is<double>() && !valueObject.is<int>()) {
+        error = "plot.push.values[" + std::to_string(index) + "] 必须是 number";
+        return std::nullopt;
+    }
+
+    const double time = t0 + dt * static_cast<double>(index - 1);
+    return plot::WaveSample{.time = time, .value = valueObject.as<double>()};
+}
+
+std::optional<std::vector<plot::WaveSample>> parseCompactPlotSamples(const sol::table& table, std::string& error)
+{
+    const sol::object valuesObject = table["values"];
+    if (!valuesObject.is<sol::table>()) {
+        error = "plot.push.samples 或 compact plot.push.values 必须是 table";
+        return std::nullopt;
+    }
+
+    const auto t0 = luaNumberField(table, "t0");
+    const auto dt = luaNumberField(table, "dt");
+    if (!t0.has_value() || !dt.has_value()) {
+        error = "compact plot.push 必须包含数字字段 t0 / dt";
+        return std::nullopt;
+    }
+
+    std::vector<plot::WaveSample> samples;
+    const sol::table valuesTable = valuesObject.as<sol::table>();
+    samples.reserve(valuesTable.size());
+    for (std::size_t index = 1; index <= valuesTable.size(); ++index) {
+        const auto sample = parseCompactPlotSample(valuesTable[index], *t0, *dt, index, error);
+        if (!sample.has_value()) {
+            return std::nullopt;
+        }
+        samples.push_back(*sample);
+    }
+    return samples;
+}
+
+std::optional<std::vector<plot::WaveSample>> parsePlotAppendSamples(const sol::table& table, std::string& error)
+{
+    // Lua API 同时支持逐点 samples 与紧凑 values，两条路径在这里统一成 WaveSample 列表。
+    const sol::object samplesObject = table["samples"];
+    if (samplesObject.is<sol::table>()) {
+        return parseExpandedPlotSamples(samplesObject.as<sol::table>(), error);
+    }
+    return parseCompactPlotSamples(table, error);
+}
+
 std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object, std::string& error)
 {
     if (!object.is<sol::table>()) {
@@ -1421,55 +1505,18 @@ std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object
         return std::nullopt;
     }
     const sol::table table = object.as<sol::table>();
-    plot::WaveAppendRequest request{};
-    request.source = luaStringField(table, "source").value_or("");
-
-    const sol::object samplesObject = table["samples"];
-    if (samplesObject.is<sol::table>()) {
-        const sol::table samplesTable = samplesObject.as<sol::table>();
-        for (std::size_t index = 1; index <= samplesTable.size(); ++index) {
-            const sol::object sampleObject = samplesTable[index];
-            if (!sampleObject.is<sol::table>()) {
-                error = "plot.push.samples[" + std::to_string(index) + "] 必须是 table";
-                return std::nullopt;
-            }
-            const sol::table sampleTable = sampleObject.as<sol::table>();
-            const auto time = luaNumberField(sampleTable, "t");
-            const auto value = luaNumberField(sampleTable, "y");
-            if (!time.has_value() || !value.has_value()) {
-                error = "plot.push.samples[" + std::to_string(index) + "] 必须包含数字字段 t / y";
-                return std::nullopt;
-            }
-            request.samples.push_back(plot::WaveSample{.time = *time, .value = *value});
-        }
-    } else {
-        const sol::object valuesObject = table["values"];
-        if (!valuesObject.is<sol::table>()) {
-            error = "plot.push.samples 或 compact plot.push.values 必须是 table";
-            return std::nullopt;
-        }
-        const auto t0 = luaNumberField(table, "t0");
-        const auto dt = luaNumberField(table, "dt");
-        if (!t0.has_value() || !dt.has_value()) {
-            error = "compact plot.push 必须包含数字字段 t0 / dt";
-            return std::nullopt;
-        }
-        const sol::table valuesTable = valuesObject.as<sol::table>();
-        request.samples.reserve(valuesTable.size());
-        for (std::size_t index = 1; index <= valuesTable.size(); ++index) {
-            const sol::object valueObject = valuesTable[index];
-            if (!valueObject.is<double>() && !valueObject.is<int>()) {
-                error = "plot.push.values[" + std::to_string(index) + "] 必须是 number";
-                return std::nullopt;
-            }
-            const double time = *t0 + *dt * static_cast<double>(index - 1);
-            request.samples.push_back(plot::WaveSample{.time = time, .value = valueObject.as<double>()});
-        }
+    auto samples = parsePlotAppendSamples(table, error);
+    if (!samples.has_value()) {
+        return std::nullopt;
     }
-    if (request.samples.empty()) {
+    if (samples->empty()) {
         error = "plot.push 采样不能为空";
         return std::nullopt;
     }
+
+    plot::WaveAppendRequest request{};
+    request.source = luaStringField(table, "source").value_or("");
+    request.samples = std::move(*samples);
     return request;
 }
 
