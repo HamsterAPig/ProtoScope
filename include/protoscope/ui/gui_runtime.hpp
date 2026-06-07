@@ -106,6 +106,8 @@ private:
     void processWaveFullscreenInput();
     void enterWaveFullscreen();
     void exitWaveFullscreen();
+    void captureWaveFullscreenDockSnapshot();
+    void restoreWaveFullscreenDockIniSnapshot();
     void applyWaveFocusFullscreen();
     void restoreWaveFocusFullscreen();
     bool saveCurrentConfigToDisk();

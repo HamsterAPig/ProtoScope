@@ -222,6 +222,11 @@ namespace {
         {GuiWaveFullscreenMode::Overlay, "overlay"},
     }};
 
+    constexpr std::array<EnumNamePair<GuiFontChineseGlyphRange>, 2> kFontChineseGlyphRangeNames{{
+        {GuiFontChineseGlyphRange::SimplifiedCommon, "simplified_common"},
+        {GuiFontChineseGlyphRange::Full, "full"},
+    }};
+
     LogLevel parseLogLevel(const std::string& value)
     {
         if (value == "warn" || value == "warning") {
@@ -320,6 +325,16 @@ namespace {
         return enumToText(mode, kWaveFullscreenModeNames, "overlay");
     }
 
+    GuiFontChineseGlyphRange parseFontChineseGlyphRange(const std::string& value, GuiFontChineseGlyphRange fallback)
+    {
+        return lookupEnum(std::string_view{value}, kFontChineseGlyphRangeNames, fallback);
+    }
+
+    const char* toFontChineseGlyphRangeText(const GuiFontChineseGlyphRange range)
+    {
+        return enumToText(range, kFontChineseGlyphRangeNames, "simplified_common");
+    }
+
     double positiveOrFallback(double value, double fallback)
     {
         return value > 0.0 ? value : fallback;
@@ -373,6 +388,16 @@ namespace {
             config.gui.window.width = readScalar<int>(window, "width", config.gui.window.width);
             config.gui.window.height = readScalar<int>(window, "height", config.gui.window.height);
             config.gui.window.maximized = readScalar<bool>(window, "maximized", config.gui.window.maximized);
+        }
+    }
+
+    void loadGuiFontConfig(const YAML::Node& gui, AppConfig& config)
+    {
+        if (const auto font = childNode(gui, "font")) {
+            config.gui.font.chineseGlyphRange = parseFontChineseGlyphRange(
+                readScalar<std::string>(
+                    font, "chinese_glyph_range", toFontChineseGlyphRangeText(config.gui.font.chineseGlyphRange)),
+                config.gui.font.chineseGlyphRange);
         }
     }
 
@@ -519,6 +544,7 @@ namespace {
     {
         const auto gui = root["gui"];
         loadGuiWindowConfig(gui, config);
+        loadGuiFontConfig(gui, config);
         if (const auto wave = childNode(gui, "wave")) {
             loadGuiWaveConfig(wave, config);
             loadGuiWaveScopedRuntimeConfig(gui, config);
@@ -797,6 +823,11 @@ namespace {
         gui["elf_symbol_combo"]["auto_refresh_emit_on_control"] = config.gui.elfSymbolCombo.autoRefreshEmitOnControl;
     }
 
+    void writeGuiFontConfig(YAML::Node& gui, const AppConfig& config)
+    {
+        gui["font"]["chinese_glyph_range"] = toFontChineseGlyphRangeText(config.gui.font.chineseGlyphRange);
+    }
+
     void writeGuiConfig(YAML::Node& root, const AppConfig& config, const AppConfig& scaledDefaults)
     {
         auto gui = root["gui"];
@@ -804,6 +835,7 @@ namespace {
         gui["window"]["width"] = config.gui.window.width;
         gui["window"]["height"] = config.gui.window.height;
         gui["window"]["maximized"] = config.gui.window.maximized;
+        writeGuiFontConfig(gui, config);
         writeGuiWaveConfig(gui, config);
         writeGuiRuntimeConfig(gui, config, scaledDefaults);
         writeGuiElfSymbolComboConfig(gui, config);

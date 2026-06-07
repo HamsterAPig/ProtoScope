@@ -1584,6 +1584,8 @@ void test_config_default_roundtrip()
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
     require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式默认应为 overlay");
+    require(config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
+            "中文字体默认应只加载常用简中字形");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
     require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
@@ -1632,6 +1634,7 @@ void test_config_default_roundtrip()
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
     config.gui.wave.fullscreenMode = protoscope::config::GuiWaveFullscreenMode::Overlay;
+    config.gui.font.chineseGlyphRange = protoscope::config::GuiFontChineseGlyphRange::Full;
     config.gui.logHistory.transferRawLimit = 11;
     config.gui.logHistory.transferFrameLimit = 22;
     config.gui.logHistory.hostLimit = 33;
@@ -1699,6 +1702,8 @@ void test_config_default_roundtrip()
     require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
     require(reloaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式 roundtrip 失败");
+    require(reloaded.config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::Full,
+            "中文字体字形范围 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
@@ -1881,6 +1886,8 @@ void test_config_wave_mode_invalid_fallback()
     const auto tempPath = tempRoot.path() / "config.yaml";
     std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
     out << "gui:\n"
+           "  font:\n"
+           "    chinese_glyph_range: weird\n"
            "  wave:\n"
            "    control_mode: weird\n"
            "    display_formula: wrong\n"
@@ -1907,6 +1914,8 @@ void test_config_wave_mode_invalid_fallback()
             "非法 x_axis_double_click_action 应回退到 fit_full_history");
     require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "非法 fullscreen_mode 应回退到 overlay");
+    require(loaded.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
+            "非法 chinese_glyph_range 应回退到 simplified_common");
     require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
     require(std::abs(loaded.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "非正自适应比例应回退到 0.22");
     require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "非正 Auto Fit 系数应回退到 1.2");

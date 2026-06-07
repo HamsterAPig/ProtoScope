@@ -240,8 +240,8 @@ void GuiRuntime::saveCurrentProtocolWorkspace()
     if (!protocolWorkspaceLoaded_ || activeWorkspaceProtocolKey_.empty()) {
         return;
     }
-    if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
-        // Focus 全屏会临时隐藏其它 Dock；保存时跳过这段临时布局，避免污染协议布局文件。
+    if (waveFullscreenActive_) {
+        // 波形全屏期间可能产生临时窗口焦点或 Dock ini 变化；退出恢复快照后再允许保存。
         ImGui::GetIO().WantSaveIniSettings = false;
         return;
     }

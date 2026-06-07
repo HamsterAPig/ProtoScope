@@ -64,6 +64,17 @@ namespace protoscope::ui {
 namespace {
     constexpr float kAppHeaderHeight = 58.0F;
     constexpr float kStatusBarHeight = 44.0F;
+
+    const ImWchar* chineseGlyphRangesForConfig(ImFontAtlas& fonts, config::GuiFontChineseGlyphRange range)
+    {
+        switch (range) {
+            case config::GuiFontChineseGlyphRange::Full:
+                return fonts.GetGlyphRangesChineseFull();
+            case config::GuiFontChineseGlyphRange::SimplifiedCommon:
+                return fonts.GetGlyphRangesChineseSimplifiedCommon();
+        }
+        return fonts.GetGlyphRangesChineseSimplifiedCommon();
+    }
 } // namespace
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
@@ -294,8 +305,11 @@ void GuiRuntime::ensureChineseFont()
     for (const auto& candidate : candidateChineseFonts()) {
         std::error_code fontPathError;
         if (std::filesystem::exists(candidate, fontPathError) && !fontPathError) {
+            // 核心流程：默认只构建常用简中字符，避免启动首帧前烘焙全量 CJK 字体图集导致白屏和 CPU 峰值。
+            const auto* chineseRanges =
+                chineseGlyphRangesForConfig(*io.Fonts, application_.runtimeConfig().gui.font.chineseGlyphRange);
             io.Fonts->AddFontFromFileTTF(
-                candidate.string().c_str(), 18.0F, nullptr, io.Fonts->GetGlyphRangesChineseFull());
+                candidate.string().c_str(), 18.0F, nullptr, chineseRanges);
             break;
         }
     }
@@ -383,6 +397,7 @@ void GuiRuntime::enterWaveFullscreen()
     }
 
     waveFullscreenActiveMode_ = application_.runtimeConfig().gui.wave.fullscreenMode;
+    captureWaveFullscreenDockSnapshot();
     waveFullscreenActive_ = true;
     if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
         showWaveDock_ = true;
@@ -398,32 +413,50 @@ void GuiRuntime::exitWaveFullscreen()
 
     if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
         restoreWaveFocusFullscreen();
+    } else if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay) {
+        restoreWaveFullscreenDockIniSnapshot();
     }
     waveFullscreenActive_ = false;
     waveFullscreenSnapshot_.reset();
 }
 
-void GuiRuntime::applyWaveFocusFullscreen()
+void GuiRuntime::captureWaveFullscreenDockSnapshot()
 {
-    if (!waveFullscreenSnapshot_) {
-        std::size_t dockIniSize = 0;
-        const char* dockIniData = ImGui::SaveIniSettingsToMemory(&dockIniSize);
-        std::string dockIniSnapshot;
-        if (dockIniData != nullptr && dockIniSize > 0U) {
-            dockIniSnapshot.assign(dockIniData, dockIniSize);
-        }
-        waveFullscreenSnapshot_ = WaveFullscreenDockSnapshot{
-            .showCommDock = showCommDock_,
-            .showProtocolDock = showProtocolDock_,
-            .showTransferDock = showTransferDock_,
-            .showLogDock = showLogDock_,
-            .showScriptDock = showScriptDock_,
-            .showWaveDock = showWaveDock_,
-            .luaDockVisibility = luaDockVisibility_,
-            .dockIniSnapshot = std::move(dockIniSnapshot),
-        };
+    if (waveFullscreenSnapshot_) {
+        return;
     }
 
+    std::size_t dockIniSize = 0;
+    const char* dockIniData = ImGui::SaveIniSettingsToMemory(&dockIniSize);
+    std::string dockIniSnapshot;
+    if (dockIniData != nullptr && dockIniSize > 0U) {
+        dockIniSnapshot.assign(dockIniData, dockIniSize);
+    }
+    waveFullscreenSnapshot_ = WaveFullscreenDockSnapshot{
+        .showCommDock = showCommDock_,
+        .showProtocolDock = showProtocolDock_,
+        .showTransferDock = showTransferDock_,
+        .showLogDock = showLogDock_,
+        .showScriptDock = showScriptDock_,
+        .showWaveDock = showWaveDock_,
+        .luaDockVisibility = luaDockVisibility_,
+        .dockIniSnapshot = std::move(dockIniSnapshot),
+    };
+}
+
+void GuiRuntime::restoreWaveFullscreenDockIniSnapshot()
+{
+    if (!waveFullscreenSnapshot_ || waveFullscreenSnapshot_->dockIniSnapshot.empty()) {
+        return;
+    }
+
+    ImGui::LoadIniSettingsFromMemory(waveFullscreenSnapshot_->dockIniSnapshot.data(),
+                                     waveFullscreenSnapshot_->dockIniSnapshot.size());
+    ImGui::GetIO().WantSaveIniSettings = false;
+}
+
+void GuiRuntime::applyWaveFocusFullscreen()
+{
     // 核心流程：专注全屏只改运行期可见性快照，不触碰协议工作区保存标记。
     showCommDock_ = false;
     showProtocolDock_ = false;
@@ -450,12 +483,8 @@ void GuiRuntime::restoreWaveFocusFullscreen()
     showScriptDock_ = waveFullscreenSnapshot_->showScriptDock;
     showWaveDock_ = waveFullscreenSnapshot_->showWaveDock;
     luaDockVisibility_ = waveFullscreenSnapshot_->luaDockVisibility;
-    if (!waveFullscreenSnapshot_->dockIniSnapshot.empty()) {
-        // Focus 全屏只临时改运行期 Dock，退出时恢复进入前的 ImGui 布局内存快照，避免 tab 顺序被临时布局覆盖。
-        ImGui::LoadIniSettingsFromMemory(waveFullscreenSnapshot_->dockIniSnapshot.data(),
-                                         waveFullscreenSnapshot_->dockIniSnapshot.size());
-        ImGui::GetIO().WantSaveIniSettings = false;
-    }
+    // Focus 全屏只临时改运行期 Dock，退出时恢复进入前的 ImGui 布局内存快照，避免 tab 顺序被临时布局覆盖。
+    restoreWaveFullscreenDockIniSnapshot();
 }
 
 void GuiRuntime::attachUiComponents()

@@ -125,9 +125,19 @@ struct GuiElfSymbolComboConfig {
     bool autoRefreshEmitOnControl{false};
 };
 
+enum class GuiFontChineseGlyphRange {
+    SimplifiedCommon,
+    Full,
+};
+
+struct GuiFontConfig {
+    GuiFontChineseGlyphRange chineseGlyphRange{GuiFontChineseGlyphRange::SimplifiedCommon};
+};
+
 struct GuiConfig {
     GuiWindowConfig window{};
     GuiWaveConfig wave{};
+    GuiFontConfig font{};
     GuiLogHistoryConfig logHistory{};
     GuiRawCaptureConfig rawCapture{};
     GuiRealtimeBacklogConfig realtimeBacklog{};
