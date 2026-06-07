@@ -347,6 +347,7 @@ void test_elf_static_view_bridge_keeps_old_model_on_load_failure()
     std::string error;
     require(bridge.loadFile(path, error), "桥接层应先加载有效 JSON");
     require(!bridge.loadFile(path.parent_path() / "missing.json", error), "加载缺失文件应失败");
+    require(error.find("文件不存在") != std::string::npos, "缺失文件错误应清楚提示路径不存在");
     require(!bridge.loadFile(invalidPath, error), "加载无效内容应失败");
     require(error.find("ElfStaticView") != std::string::npos, "错误信息应包含数据导入上下文");
     require(error.find("ELF 扫描失败") != std::string::npos, "错误信息应包含 ELF 扫描上下文");

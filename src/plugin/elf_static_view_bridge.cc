@@ -5,6 +5,7 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <string_view>
 #include <utility>
 
@@ -115,8 +116,12 @@ bool ElfStaticViewBridge::loadFile(const std::filesystem::path& path, std::strin
 {
     error.clear();
     try {
-        if (!std::filesystem::exists(path)) {
+        std::error_code existsError;
+        if (!std::filesystem::exists(path, existsError)) {
             error = "文件不存在: " + path.string();
+            if (existsError) {
+                error += " (" + existsError.message() + ")";
+            }
             return false;
         }
 

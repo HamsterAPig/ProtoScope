@@ -188,18 +188,30 @@ namespace {
         }
 
         try {
+            auto isExistingDirectory = [](const std::filesystem::path& value) {
+                std::error_code existsError;
+                if (!std::filesystem::exists(value, existsError) || existsError) {
+                    return false;
+                }
+                std::error_code directoryError;
+                return std::filesystem::is_directory(value, directoryError) && !directoryError;
+            };
+
             std::filesystem::path folder = defaultPath;
             if (!pickFolder) {
-                const bool isDirectory =
-                    std::filesystem::exists(defaultPath) && std::filesystem::is_directory(defaultPath);
+                const bool isDirectory = isExistingDirectory(defaultPath);
                 const auto fileName = isDirectory ? std::filesystem::path{} : defaultPath.filename();
                 if (!fileName.empty()) {
                     const auto wideFileName = fileName.wstring();
                     dialog->SetFileName(wideFileName.c_str());
                 }
                 folder = isDirectory ? defaultPath : defaultPath.parent_path();
-            } else if (std::filesystem::exists(defaultPath) && !std::filesystem::is_directory(defaultPath)) {
-                folder = defaultPath.parent_path();
+            } else {
+                std::error_code defaultPathError;
+                if (std::filesystem::exists(defaultPath, defaultPathError) && !defaultPathError &&
+                    !isExistingDirectory(defaultPath)) {
+                    folder = defaultPath.parent_path();
+                }
             }
 
             if (folder.empty()) {
