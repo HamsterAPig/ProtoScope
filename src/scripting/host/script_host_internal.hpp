@@ -39,6 +39,11 @@ struct ScriptHost::Runtime {
     std::unordered_map<std::string, StreamRuntimeProfile> streamRuntimeProfiles;
 };
 
+struct ScriptHost::LoadedScript {
+    std::unique_ptr<LoadedStreamSchema> streamSchema;
+    std::vector<DockDescriptor> docks;
+};
+
 struct ScriptHost::FileHandle {
     std::uint64_t id{0};
     std::filesystem::path path;
@@ -65,6 +70,29 @@ struct ScriptHost::FileSendJob {
     std::uint64_t nextOffset{0};
     std::size_t inflight{0};
     bool eof{false};
+};
+
+struct ScriptHost::LoadSnapshot {
+    bool scriptLoaded{false};
+    std::string scriptPath;
+    std::string protocolDirectory;
+    std::unordered_map<std::string, ControlValue> controlValues;
+    std::vector<ScriptEvent> events;
+    std::vector<ScriptLog> logs;
+    std::vector<TxRequest> txRequests;
+    std::vector<transport::ConnectionContext> requestGuardResets;
+    std::vector<PlotSetup> plotSetups;
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends;
+    std::vector<RequestDoneResult> requestDoneResults;
+    std::vector<StatusUpdate> statusUpdates;
+    std::vector<DialogRequest> dialogRequests;
+    std::vector<FileDialogRequest> fileDialogRequests;
+    std::unordered_map<std::string, TimerState> timers;
+    std::unordered_map<std::uint64_t, std::unique_ptr<FileHandle>> fileHandles;
+    std::unordered_map<std::uint64_t, FileSendJob> fileSendJobs;
+    std::vector<AuthorizedPath> dialogAuthorizedPaths;
+    std::optional<transport::ConnectionContext> activeConnection;
+    bool requestAwaitingCompletion{false};
 };
 
 ControlValue defaultValueFor(const ControlDescriptor& descriptor);

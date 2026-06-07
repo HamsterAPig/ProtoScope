@@ -384,6 +384,13 @@ public:
     void setRequestAwaitingCompletion(bool active);
 
 private:
+    struct Runtime;
+    struct FileHandle;
+    struct AuthorizedPath;
+    struct FileSendJob;
+    struct LoadSnapshot;
+    struct LoadedScript;
+
     sol::state& luaState();
     sol::state_view luaView();
     const std::vector<ControlDescriptor>& controlDescriptors() const;
@@ -417,6 +424,16 @@ private:
                               const std::vector<StreamParsedFrame>& frames);
 
     void registerLuaApi(sol::state_view lua, sol::table& proto);
+    LoadSnapshot captureLoadSnapshot();
+    void restoreLoadSnapshot(LoadSnapshot&& snapshot, std::string message);
+    void resetForScriptLoad(const std::string& path, const std::string& protocolDirectory);
+    void configureLuaRuntimeForScriptLoad(Runtime& runtime, const std::string& protocolDirectory);
+    std::unique_ptr<LoadedScript> loadScriptIntoRuntime(Runtime& runtime, const std::string& path, std::string& error);
+    void commitLoadedScript(std::unique_ptr<Runtime> runtime,
+                            std::unique_ptr<LoadedScript> loadedScript,
+                            const std::unordered_map<std::string, ControlValue>& previousControlValues,
+                            const std::string& path,
+                            const std::string& protocolDirectory);
 
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
@@ -467,11 +484,6 @@ private:
     friend class StatusScriptHostApiModule;
     friend class TxScriptHostApiModule;
     friend class UiScriptHostApiModule;
-
-    struct Runtime;
-    struct FileHandle;
-    struct AuthorizedPath;
-    struct FileSendJob;
 
 private:
     struct TimerState {
