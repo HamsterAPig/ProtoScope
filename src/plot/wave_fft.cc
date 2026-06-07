@@ -126,6 +126,130 @@ namespace {
         };
     }
 
+    WaveFftChannelResult makeFftChannelResult(const WaveSnapshot& snapshot, std::size_t channelIndex, bool enabled)
+    {
+        WaveFftChannelResult result{};
+        result.channelIndex = channelIndex;
+        result.label = snapshot.channels[channelIndex].label;
+        result.unit = snapshot.channels[channelIndex].unit;
+        result.enabled = enabled;
+        return result;
+    }
+
+    std::vector<double> collectVisibleFiniteFftValues(const WaveDisplayChannel& displayChannel,
+                                                      double viewMinTime,
+                                                      double viewMaxTime)
+    {
+        const std::size_t sampleCount = (std::min)(displayChannel.samples.size(), displayChannel.actualValues.size());
+        const auto beginIt =
+            std::lower_bound(displayChannel.samples.begin(),
+                             displayChannel.samples.begin() + static_cast<std::ptrdiff_t>(sampleCount),
+                             viewMinTime,
+                             [](const WaveSample& sample, double value) { return sample.time < value; });
+        const auto endIt = std::upper_bound(beginIt,
+                                            displayChannel.samples.begin() + static_cast<std::ptrdiff_t>(sampleCount),
+                                            viewMaxTime,
+                                            [](double value, const WaveSample& sample) { return value < sample.time; });
+        const std::size_t beginIndex = static_cast<std::size_t>(std::distance(displayChannel.samples.begin(), beginIt));
+        const std::size_t endIndex = static_cast<std::size_t>(std::distance(displayChannel.samples.begin(), endIt));
+        std::vector<double> values;
+        values.reserve(endIndex > beginIndex ? endIndex - beginIndex : 0);
+        // 核心流程：FFT 只扫描当前时间窗口，避免大历史下每帧遍历整条通道。
+        for (std::size_t sampleIndex = beginIndex; sampleIndex < endIndex; ++sampleIndex) {
+            const double value = displayChannel.actualValues[sampleIndex];
+            if (std::isfinite(value)) {
+                values.push_back(value);
+            }
+        }
+        return values;
+    }
+
+    double applyFftWindow(std::vector<double>& values, WaveFftWindow window, std::size_t pointCount)
+    {
+        values.erase(values.begin(), values.end() - static_cast<std::ptrdiff_t>(pointCount));
+        double coherentGain = 0.0;
+        for (std::size_t index = 0; index < pointCount; ++index) {
+            const double weight = windowWeight(window, index, pointCount);
+            coherentGain += weight;
+            values[index] *= weight;
+        }
+        coherentGain /= static_cast<double>(pointCount);
+        if (coherentGain <= 0.0 || !std::isfinite(coherentGain)) {
+            return 1.0;
+        }
+        return coherentGain;
+    }
+
+    std::vector<std::complex<double>> computeRealFftSpectrum(std::vector<double>& values, std::size_t pointCount)
+    {
+        const std::size_t binCount = pointCount / 2 + 1;
+        std::vector<std::complex<double>> spectrum(binCount);
+        pocketfft::shape_t shape{pointCount};
+        pocketfft::stride_t inputStride{static_cast<std::ptrdiff_t>(sizeof(double))};
+        pocketfft::stride_t outputStride{static_cast<std::ptrdiff_t>(sizeof(std::complex<double>))};
+        pocketfft::r2c<double>(
+            shape, inputStride, outputStride, 0, pocketfft::FORWARD, values.data(), spectrum.data(), 1.0, 1);
+        return spectrum;
+    }
+
+    void appendFftBins(WaveFftChannelResult& result,
+                       WaveFftFrame& frame,
+                       const std::vector<std::complex<double>>& spectrum,
+                       std::size_t pointCount,
+                       double coherentGain,
+                       WaveFftMagnitudeMode magnitudeMode,
+                       double frequencyResolutionHz)
+    {
+        result.bins.reserve(spectrum.size());
+        for (std::size_t binIndex = 0; binIndex < spectrum.size(); ++binIndex) {
+            const auto complexValue = spectrum[binIndex];
+            double magnitude = std::abs(complexValue) / (static_cast<double>(pointCount) * coherentGain);
+            if (binIndex > 0 && binIndex + 1 < spectrum.size()) {
+                magnitude *= 2.0;
+            }
+            const double shownMagnitude = displayMagnitude(magnitude, magnitudeMode);
+            const double phaseRadians = std::atan2(complexValue.imag(), complexValue.real());
+            const double phaseDegrees = wrapPhaseDegrees(phaseRadians);
+            result.bins.push_back({
+                .frequencyHz = static_cast<double>(binIndex) * frequencyResolutionHz,
+                .magnitude = magnitude,
+                .displayMagnitude = shownMagnitude,
+                .phaseRadians = phaseRadians,
+                .phaseDegrees = phaseDegrees,
+            });
+            if (result.bins.size() == 1 && frame.channels.empty()) {
+                frame.minDisplayMagnitude = shownMagnitude;
+                frame.maxDisplayMagnitude = shownMagnitude;
+            } else {
+                frame.minDisplayMagnitude = (std::min)(frame.minDisplayMagnitude, shownMagnitude);
+                frame.maxDisplayMagnitude = (std::max)(frame.maxDisplayMagnitude, shownMagnitude);
+            }
+        }
+    }
+
+    void updateFrameAfterFftChannel(WaveFftFrame& frame,
+                                    WaveFftChannelResult& result,
+                                    const WaveFftConfig& config,
+                                    std::size_t pointCount,
+                                    double sampleFrequencyHz)
+    {
+        result.usedSampleCount = pointCount;
+        frame.usedSampleCount = (std::max)(frame.usedSampleCount, result.usedSampleCount);
+        frame.pointCount = (std::max)(frame.pointCount, pointCount);
+        frame.frequencyResolutionHz = sampleFrequencyHz / static_cast<double>(pointCount);
+        frame.maxFrequencyHz = sampleFrequencyHz * 0.5;
+        result.valid = !result.bins.empty();
+        result.fundamental =
+            config.fundamentalMode == WaveFftFundamentalMode::Manual && config.manualFundamentalHz > 0.0
+                ? std::optional<WaveFftPeak>(
+                      WaveFftPeak{.frequencyHz = config.manualFundamentalHz, .magnitude = 0.0, .binIndex = 0})
+                : findFundamentalPeak(result.bins);
+        if (!frame.fundamentalHz.has_value() && result.fundamental.has_value()) {
+            frame.fundamentalHz = result.fundamental->frequencyHz;
+        }
+        frame.valid = true;
+    }
+
 } // namespace
 
 bool operator==(const WaveFftConfig& lhs, const WaveFftConfig& rhs)
@@ -263,38 +387,14 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
     frame.channels.reserve(channelCount);
     for (std::size_t channelIndex = 0; channelIndex < channelCount; ++channelIndex) {
         const bool enabled = channelIndex < channelEnabled.size() && channelEnabled[channelIndex] != 0;
-        WaveFftChannelResult result{};
-        result.channelIndex = channelIndex;
-        result.label = snapshot.channels[channelIndex].label;
-        result.unit = snapshot.channels[channelIndex].unit;
-        result.enabled = enabled;
+        auto result = makeFftChannelResult(snapshot, channelIndex, enabled);
         if (!enabled) {
             frame.channels.push_back(std::move(result));
             continue;
         }
 
         const auto& displayChannel = displayData.channels[channelIndex];
-        const std::size_t sampleCount = (std::min)(displayChannel.samples.size(), displayChannel.actualValues.size());
-        const auto beginIt =
-            std::lower_bound(displayChannel.samples.begin(),
-                             displayChannel.samples.begin() + static_cast<std::ptrdiff_t>(sampleCount),
-                             viewMinTime,
-                             [](const WaveSample& sample, double value) { return sample.time < value; });
-        const auto endIt = std::upper_bound(beginIt,
-                                            displayChannel.samples.begin() + static_cast<std::ptrdiff_t>(sampleCount),
-                                            viewMaxTime,
-                                            [](double value, const WaveSample& sample) { return value < sample.time; });
-        const std::size_t beginIndex = static_cast<std::size_t>(std::distance(displayChannel.samples.begin(), beginIt));
-        const std::size_t endIndex = static_cast<std::size_t>(std::distance(displayChannel.samples.begin(), endIt));
-        std::vector<double> values;
-        values.reserve(endIndex > beginIndex ? endIndex - beginIndex : 0);
-        // 核心流程：FFT 只扫描当前时间窗口，避免大历史下每帧遍历整条通道。
-        for (std::size_t sampleIndex = beginIndex; sampleIndex < endIndex; ++sampleIndex) {
-            const double value = displayChannel.actualValues[sampleIndex];
-            if (std::isfinite(value)) {
-                values.push_back(value);
-            }
-        }
+        auto values = collectVisibleFiniteFftValues(displayChannel, viewMinTime, viewMaxTime);
         result.visibleSampleCount = values.size();
         frame.visibleSampleCount = (std::max)(frame.visibleSampleCount, result.visibleSampleCount);
 
@@ -305,68 +405,11 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
             continue;
         }
 
-        values.erase(values.begin(), values.end() - static_cast<std::ptrdiff_t>(pointCount));
-        double coherentGain = 0.0;
-        for (std::size_t index = 0; index < pointCount; ++index) {
-            const double weight = windowWeight(config.window, index, pointCount);
-            coherentGain += weight;
-            values[index] *= weight;
-        }
-        coherentGain /= static_cast<double>(pointCount);
-        if (coherentGain <= 0.0 || !std::isfinite(coherentGain)) {
-            coherentGain = 1.0;
-        }
-
-        const std::size_t binCount = pointCount / 2 + 1;
-        std::vector<std::complex<double>> spectrum(binCount);
-        pocketfft::shape_t shape{pointCount};
-        pocketfft::stride_t inputStride{static_cast<std::ptrdiff_t>(sizeof(double))};
-        pocketfft::stride_t outputStride{static_cast<std::ptrdiff_t>(sizeof(std::complex<double>))};
-        pocketfft::r2c<double>(
-            shape, inputStride, outputStride, 0, pocketfft::FORWARD, values.data(), spectrum.data(), 1.0, 1);
-
-        result.usedSampleCount = pointCount;
-        frame.usedSampleCount = (std::max)(frame.usedSampleCount, result.usedSampleCount);
-        frame.pointCount = (std::max)(frame.pointCount, pointCount);
-        frame.frequencyResolutionHz = sampleFrequencyHz / static_cast<double>(pointCount);
-        frame.maxFrequencyHz = sampleFrequencyHz * 0.5;
-
-        result.bins.reserve(binCount);
-        for (std::size_t binIndex = 0; binIndex < binCount; ++binIndex) {
-            const auto complexValue = spectrum[binIndex];
-            double magnitude = std::abs(complexValue) / (static_cast<double>(pointCount) * coherentGain);
-            if (binIndex > 0 && binIndex + 1 < binCount) {
-                magnitude *= 2.0;
-            }
-            const double shownMagnitude = displayMagnitude(magnitude, config.magnitudeMode);
-            const double phaseRadians = std::atan2(complexValue.imag(), complexValue.real());
-            const double phaseDegrees = wrapPhaseDegrees(phaseRadians);
-            result.bins.push_back({
-                .frequencyHz = static_cast<double>(binIndex) * frame.frequencyResolutionHz,
-                .magnitude = magnitude,
-                .displayMagnitude = shownMagnitude,
-                .phaseRadians = phaseRadians,
-                .phaseDegrees = phaseDegrees,
-            });
-            if (result.bins.size() == 1 && frame.channels.empty()) {
-                frame.minDisplayMagnitude = shownMagnitude;
-                frame.maxDisplayMagnitude = shownMagnitude;
-            } else {
-                frame.minDisplayMagnitude = (std::min)(frame.minDisplayMagnitude, shownMagnitude);
-                frame.maxDisplayMagnitude = (std::max)(frame.maxDisplayMagnitude, shownMagnitude);
-            }
-        }
-
-        result.valid = !result.bins.empty();
-        result.fundamental =
-            config.fundamentalMode == WaveFftFundamentalMode::Manual && config.manualFundamentalHz > 0.0
-                ? std::optional<WaveFftPeak>(
-                      WaveFftPeak{.frequencyHz = config.manualFundamentalHz, .magnitude = 0.0, .binIndex = 0})
-                : findFundamentalPeak(result.bins);
-        if (!frame.fundamentalHz.has_value() && result.fundamental.has_value()) {
-            frame.fundamentalHz = result.fundamental->frequencyHz;
-        }
-        frame.valid = true;
+        const double coherentGain = applyFftWindow(values, config.window, pointCount);
+        auto spectrum = computeRealFftSpectrum(values, pointCount);
+        const double frequencyResolutionHz = sampleFrequencyHz / static_cast<double>(pointCount);
+        appendFftBins(result, frame, spectrum, pointCount, coherentGain, config.magnitudeMode, frequencyResolutionHz);
+        updateFrameAfterFftChannel(frame, result, config, pointCount, sampleFrequencyHz);
         frame.channels.push_back(std::move(result));
     }
 
