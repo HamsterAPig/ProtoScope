@@ -366,6 +366,379 @@ std::shared_ptr<StreamCountExpression> parseStreamCountExpressionObject(const so
     return nullptr;
 }
 
+bool parseStreamBufferDefinition(const sol::table& schemaTable,
+                                 StreamBufferDefinition& bufferDefinition,
+                                 std::string& error)
+{
+    if (const sol::object bufferObject = schemaTable["buffer"];
+        bufferObject.valid() && bufferObject.get_type() != sol::type::lua_nil) {
+        if (!bufferObject.is<sol::table>()) {
+            error = "stream.buffer 必须是 table";
+            return false;
+        }
+        const auto bufferTable = bufferObject.as<sol::table>();
+        if (const auto capacity = luaIntegerValue(bufferTable["capacity"]); capacity.has_value()) {
+            if (*capacity <= 0) {
+                error = "stream.buffer.capacity 必须大于 0";
+                return false;
+            }
+            bufferDefinition.capacity = static_cast<std::size_t>(*capacity);
+            bufferDefinition.maxCapacity = (std::max)(bufferDefinition.maxCapacity, bufferDefinition.capacity);
+        }
+        if (const auto maxCapacity = luaIntegerValue(bufferTable["max_capacity"]); maxCapacity.has_value()) {
+            if (*maxCapacity <= 0) {
+                error = "stream.buffer.max_capacity 必须大于 0";
+                return false;
+            }
+            bufferDefinition.maxCapacity =
+                (std::max)(static_cast<std::size_t>(*maxCapacity), bufferDefinition.capacity);
+        }
+        if (const auto overflow = luaStringField(bufferTable, "overflow"); overflow.has_value()) {
+            if (*overflow != "drop_oldest") {
+                error = "stream.buffer.overflow 目前仅支持 drop_oldest";
+                return false;
+            }
+            bufferDefinition.dropOldest = true;
+        }
+    }
+    return true;
+}
+
+bool applyLoadedStreamOptions(const sol::table& schemaTable,
+                              LoadedStreamSchema& loaded,
+                              std::unordered_map<std::string, sol::protected_function>& callbacks,
+                              std::string& error)
+{
+    if (const auto rawOutput = luaStringField(schemaTable, "raw_output"); rawOutput.has_value()) {
+        if (*rawOutput == "omit") {
+            loaded.includeRawFrames = false;
+        } else if (*rawOutput != "full") {
+            error = "stream.raw_output 必须是 'full' 或 'omit'";
+            return false;
+        }
+    }
+    if (const auto lowOverhead = luaBoolField(schemaTable, "low_overhead"); lowOverhead.has_value()) {
+        loaded.lowOverhead = *lowOverhead;
+    }
+    if (const auto fieldOutput = luaStringField(schemaTable, "field_output"); fieldOutput.has_value()) {
+        if (*fieldOutput == "fields_only") {
+            loaded.includeFieldAliases = false;
+        } else if (*fieldOutput != "compat") {
+            error = "stream.field_output 必须是 'compat' 或 'fields_only'";
+            return false;
+        }
+    }
+    if (const sol::object onBatchObject = schemaTable["on_batch"];
+        onBatchObject.valid() && onBatchObject.get_type() != sol::type::lua_nil) {
+        if (!onBatchObject.is<sol::protected_function>()) {
+            error = "stream.on_batch 必须是 function";
+            return false;
+        }
+        const std::string onBatchCallbackKey = "stream.on_batch";
+        callbacks.insert_or_assign(onBatchCallbackKey, onBatchObject.as<sol::protected_function>());
+        loaded.onBatchCallbackKey = onBatchCallbackKey;
+    }
+    return true;
+}
+
+bool parseStreamFrameHeader(const sol::table& frameTable, StreamFrameDefinition& frame, std::string& error)
+{
+    std::string bytesError;
+    const auto header = bytesFromLuaObject(frameTable["header"], bytesError);
+    if (!header.has_value() || header->empty()) {
+        error = "frame.header 必须是非空 byte[]";
+        return false;
+    }
+    frame.header = *header;
+    return true;
+}
+
+bool parseStreamFrameLengthDefinition(const sol::object& lenObject,
+                                      StreamLengthDefinition& lenDefinition,
+                                      std::string& error)
+{
+    if (!lenObject.is<sol::table>()) {
+        error = "frame.len 必须是 table";
+        return false;
+    }
+    const auto lenTable = lenObject.as<sol::table>();
+    const auto offset = luaIntegerValue(lenTable["offset"]);
+    if (!offset.has_value() || *offset <= 0) {
+        error = "frame.len.offset 必须是从 1 开始的正整数";
+        return false;
+    }
+    lenDefinition.offset = static_cast<std::size_t>(*offset - 1);
+
+    const auto typeText = luaStringField(lenTable, "type");
+    if (!typeText.has_value()) {
+        error = "frame.len.type 不能为空";
+        return false;
+    }
+    const auto valueType = parseStreamValueType(*typeText);
+    if (!valueType.has_value() || !streamValueTypeCanBeLength(*valueType)) {
+        error = "frame.len.type 必须是整数类型";
+        return false;
+    }
+    lenDefinition.type = *valueType;
+
+    const auto meansText = luaStringField(lenTable, "means").value_or("payload");
+    const auto means = parseStreamLengthMeans(meansText);
+    if (!means.has_value()) {
+        error = "frame.len.means 仅支持 payload 或 frame";
+        return false;
+    }
+    lenDefinition.means = *means;
+    if (const auto extra = luaIntegerValue(lenTable["extra"]); extra.has_value()) {
+        if (*extra < 0) {
+            error = "frame.len.extra 不能为负数";
+            return false;
+        }
+        lenDefinition.extra = static_cast<std::size_t>(*extra);
+    }
+    return true;
+}
+
+bool parseStreamFrameSizeMode(const sol::table& frameTable, StreamFrameDefinition& frame, std::string& error)
+{
+    const auto fixedSize = luaIntegerValue(frameTable["size"]);
+    const sol::object lenObject = frameTable["len"];
+    const bool hasLen = lenObject.valid() && lenObject.get_type() != sol::type::lua_nil;
+    const bool runtimeProfile = luaBoolField(frameTable, "runtime_profile").value_or(false);
+    const int modeCount =
+        static_cast<int>(fixedSize.has_value()) + static_cast<int>(hasLen) + static_cast<int>(runtimeProfile);
+    if (modeCount != 1) {
+        error = "frame.size、frame.len 与 frame.runtime_profile 必须三选一";
+        return false;
+    }
+    frame.runtimeProfile = runtimeProfile;
+    if (fixedSize.has_value()) {
+        if (*fixedSize <= 0) {
+            error = "frame.size 必须大于 0";
+            return false;
+        }
+        frame.size = static_cast<std::size_t>(*fixedSize);
+    } else if (hasLen) {
+        StreamLengthDefinition lenDefinition;
+        if (!parseStreamFrameLengthDefinition(lenObject, lenDefinition, error)) {
+            return false;
+        }
+        frame.len = lenDefinition;
+    }
+    return true;
+}
+
+bool parseStreamFrameCrcDefinition(const sol::table& frameTable, StreamFrameDefinition& frame, std::string& error)
+{
+    if (const sol::object crcObject = frameTable["crc"];
+        crcObject.valid() && crcObject.get_type() != sol::type::lua_nil) {
+        if (crcObject.is<bool>() && !crcObject.as<bool>()) {
+            frame.crc.type = StreamCrcType::None;
+        } else if (crcObject.is<sol::table>()) {
+            const auto crcTable = crcObject.as<sol::table>();
+            const auto crcTypeText = luaStringField(crcTable, "type");
+            if (!crcTypeText.has_value()) {
+                error = "frame.crc.type 不能为空";
+                return false;
+            }
+            const auto crcType = parseStreamCrcType(*crcTypeText);
+            if (!crcType.has_value()) {
+                error = "未知 frame.crc.type: " + *crcTypeText;
+                return false;
+            }
+            frame.crc.type = *crcType;
+            const auto orderText = luaStringField(crcTable, "order").value_or("lo_hi");
+            const auto order = parseStreamCrcOrder(orderText);
+            if (!order.has_value()) {
+                error = "frame.crc.order 仅支持 lo_hi 或 hi_lo";
+                return false;
+            }
+            frame.crc.order = *order;
+        } else {
+            error = "frame.crc 必须是 table 或 false";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool parseStreamFieldCount(const sol::object& countObject,
+                           const std::size_t frameIndex,
+                           const std::size_t fieldIndex,
+                           StreamFieldDefinition& field,
+                           std::string& error)
+{
+    if (!countObject.valid() || countObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+
+    const auto countPath = streamFieldCountPath(frameIndex, fieldIndex);
+    if (const auto count = luaIntegerValue(countObject); count.has_value()) {
+        if (*count < 0) {
+            error = countPath + " 不能为负数";
+            return false;
+        }
+        field.count.fixed = static_cast<std::size_t>(*count);
+    } else if (countObject.is<std::string>()) {
+        field.count.fieldName = countObject.as<std::string>();
+    } else if (countObject.is<sol::protected_function>()) {
+        error = countPath + " 检测到 function；该写法已废弃，不再支持 function。"
+                            " 请迁移为 count 表达式 table，例如 count = { op = \"div\", field = "
+                            "\"byte_count\", by = 2 }";
+        return false;
+    } else if (countObject.is<sol::table>()) {
+        field.count.expression = parseStreamCountExpressionObject(countObject, error);
+        if (!field.count.expression) {
+            error = countPath + " 表达式无效: " + error;
+            return false;
+        }
+    } else {
+        error = countPath + " 仅支持整数、字段名或 count 表达式 table";
+        return false;
+    }
+    return true;
+}
+
+std::optional<StreamFieldDefinition> parseStreamFieldDefinition(const sol::object& fieldObject,
+                                                                const std::size_t frameIndex,
+                                                                const std::size_t fieldIndex,
+                                                                std::string& error)
+{
+    if (!fieldObject.valid() || !fieldObject.is<sol::table>()) {
+        error = "frame.fields 元素必须是 table";
+        return std::nullopt;
+    }
+    const auto fieldTable = fieldObject.as<sol::table>();
+    StreamFieldDefinition field;
+    field.name = fieldTable.get_or("name", std::string());
+    if (field.name.empty()) {
+        error = "field.name 不能为空";
+        return std::nullopt;
+    }
+
+    const auto typeText = luaStringField(fieldTable, "type");
+    if (!typeText.has_value()) {
+        error = "field.type 不能为空";
+        return std::nullopt;
+    }
+    const auto type = parseStreamValueType(*typeText);
+    if (!type.has_value()) {
+        error = "未知字段类型: " + *typeText;
+        return std::nullopt;
+    }
+    field.type = *type;
+
+    if (const auto offset = luaIntegerValue(fieldTable["offset"]); offset.has_value()) {
+        if (*offset <= 0) {
+            error = "field.offset 必须是从 1 开始的正整数";
+            return std::nullopt;
+        }
+        field.offset = static_cast<std::size_t>(*offset - 1);
+    }
+
+    if (!parseStreamFieldCount(fieldTable["count"], frameIndex, fieldIndex, field, error)) {
+        return std::nullopt;
+    }
+    return field;
+}
+
+bool parseStreamFrameFields(const sol::table& frameTable,
+                            const std::size_t frameIndex,
+                            StreamFrameDefinition& frame,
+                            std::string& error)
+{
+    if (const sol::object fieldsObject = frameTable["fields"];
+        fieldsObject.valid() && fieldsObject.get_type() != sol::type::lua_nil) {
+        if (!fieldsObject.is<sol::table>()) {
+            error = "frame.fields 必须是数组";
+            return false;
+        }
+        const auto fieldsTable = fieldsObject.as<sol::table>();
+        frame.fields.reserve(fieldsTable.size());
+        for (std::size_t fieldIndex = 1; fieldIndex <= fieldsTable.size(); ++fieldIndex) {
+            auto field = parseStreamFieldDefinition(fieldsTable[fieldIndex], frameIndex, fieldIndex - 1, error);
+            if (!field.has_value()) {
+                return false;
+            }
+            frame.fields.push_back(std::move(*field));
+        }
+    }
+    return true;
+}
+
+bool registerStreamFrameCallback(const sol::table& frameTable,
+                                 const StreamFrameDefinition& frame,
+                                 LoadedStreamSchema& loaded,
+                                 std::unordered_map<std::string, sol::protected_function>& callbacks,
+                                 std::string& error)
+{
+    if (const sol::object onFrameObject = frameTable["on_frame"];
+        onFrameObject.valid() && onFrameObject.get_type() != sol::type::lua_nil) {
+        if (!onFrameObject.is<sol::protected_function>()) {
+            error = "frame.on_frame 必须是 function";
+            return false;
+        }
+        const auto callbackKey = frameOnFrameCallbackKey(frame.name);
+        callbacks.insert_or_assign(callbackKey, onFrameObject.as<sol::protected_function>());
+        loaded.frameCallbackKeys.insert_or_assign(frame.name, callbackKey);
+    } else if (!loaded.onBatchCallbackKey.has_value()) {
+        error = "frame.on_frame 必须是 function，除非 stream.on_batch 已定义";
+        return false;
+    }
+    return true;
+}
+
+std::optional<StreamFrameDefinition> parseStreamFrameDefinition(
+    const sol::object& frameObject,
+    const std::size_t frameIndex,
+    LoadedStreamSchema& loaded,
+    std::unordered_map<std::string, sol::protected_function>& callbacks,
+    std::unordered_set<std::string>& frameNames,
+    std::string& error)
+{
+    if (!frameObject.valid() || !frameObject.is<sol::table>()) {
+        error = "stream.frames 元素必须是 table";
+        return std::nullopt;
+    }
+    const auto frameTable = frameObject.as<sol::table>();
+
+    StreamFrameDefinition frame;
+    frame.name = frameTable.get_or("name", std::string());
+    if (frame.name.empty()) {
+        error = "stream.frames[].name 不能为空";
+        return std::nullopt;
+    }
+    if (!frameNames.insert(frame.name).second) {
+        error = "stream.frames[].name 不能重复: " + frame.name;
+        return std::nullopt;
+    }
+
+    if (!parseStreamFrameHeader(frameTable, frame, error) || !parseStreamFrameSizeMode(frameTable, frame, error) ||
+        !parseStreamFrameCrcDefinition(frameTable, frame, error) ||
+        !parseStreamFrameFields(frameTable, frameIndex, frame, error) ||
+        !registerStreamFrameCallback(frameTable, frame, loaded, callbacks, error)) {
+        return std::nullopt;
+    }
+    return frame;
+}
+
+bool registerStreamErrorCallback(const sol::table& schemaTable,
+                                 LoadedStreamSchema& loaded,
+                                 std::unordered_map<std::string, sol::protected_function>& callbacks,
+                                 std::string& error)
+{
+    if (const sol::object onErrorObject = schemaTable["on_error"];
+        onErrorObject.valid() && onErrorObject.get_type() != sol::type::lua_nil) {
+        if (!onErrorObject.is<sol::protected_function>()) {
+            error = "stream.on_error 必须是 function";
+            return false;
+        }
+        const std::string onErrorCallbackKey = "stream.on_error";
+        callbacks.insert_or_assign(onErrorCallbackKey, onErrorObject.as<sol::protected_function>());
+        loaded.onErrorCallbackKey = onErrorCallbackKey;
+    }
+    return true;
+}
+
 std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
     sol::state_view lua, std::unordered_map<std::string, sol::protected_function>& callbacks, std::string& error)
 {
@@ -396,36 +769,8 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
 
     const auto schemaTable = schemaObject.as<sol::table>();
     StreamBufferDefinition bufferDefinition;
-    if (const sol::object bufferObject = schemaTable["buffer"];
-        bufferObject.valid() && bufferObject.get_type() != sol::type::lua_nil) {
-        if (!bufferObject.is<sol::table>()) {
-            error = "stream.buffer 必须是 table";
-            return nullptr;
-        }
-        const auto bufferTable = bufferObject.as<sol::table>();
-        if (const auto capacity = luaIntegerValue(bufferTable["capacity"]); capacity.has_value()) {
-            if (*capacity <= 0) {
-                error = "stream.buffer.capacity 必须大于 0";
-                return nullptr;
-            }
-            bufferDefinition.capacity = static_cast<std::size_t>(*capacity);
-            bufferDefinition.maxCapacity = (std::max)(bufferDefinition.maxCapacity, bufferDefinition.capacity);
-        }
-        if (const auto maxCapacity = luaIntegerValue(bufferTable["max_capacity"]); maxCapacity.has_value()) {
-            if (*maxCapacity <= 0) {
-                error = "stream.buffer.max_capacity 必须大于 0";
-                return nullptr;
-            }
-            bufferDefinition.maxCapacity =
-                (std::max)(static_cast<std::size_t>(*maxCapacity), bufferDefinition.capacity);
-        }
-        if (const auto overflow = luaStringField(bufferTable, "overflow"); overflow.has_value()) {
-            if (*overflow != "drop_oldest") {
-                error = "stream.buffer.overflow 目前仅支持 drop_oldest";
-                return nullptr;
-            }
-            bufferDefinition.dropOldest = true;
-        }
+    if (!parseStreamBufferDefinition(schemaTable, bufferDefinition, error)) {
+        return nullptr;
     }
 
     const sol::object framesObject = schemaTable["frames"];
@@ -443,253 +788,21 @@ std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
     std::vector<StreamFrameDefinition> frames;
     frames.reserve(framesTable.size());
     auto loaded = std::make_unique<LoadedStreamSchema>(bufferDefinition, std::vector<StreamFrameDefinition>{});
-    if (const auto rawOutput = luaStringField(schemaTable, "raw_output"); rawOutput.has_value()) {
-        if (*rawOutput == "omit") {
-            loaded->includeRawFrames = false;
-        } else if (*rawOutput != "full") {
-            error = "stream.raw_output 必须是 'full' 或 'omit'";
-            return nullptr;
-        }
-    }
-    if (const auto lowOverhead = luaBoolField(schemaTable, "low_overhead"); lowOverhead.has_value()) {
-        loaded->lowOverhead = *lowOverhead;
-    }
-    if (const auto fieldOutput = luaStringField(schemaTable, "field_output"); fieldOutput.has_value()) {
-        if (*fieldOutput == "fields_only") {
-            loaded->includeFieldAliases = false;
-        } else if (*fieldOutput != "compat") {
-            error = "stream.field_output 必须是 'compat' 或 'fields_only'";
-            return nullptr;
-        }
-    }
-    if (const sol::object onBatchObject = schemaTable["on_batch"];
-        onBatchObject.valid() && onBatchObject.get_type() != sol::type::lua_nil) {
-        if (!onBatchObject.is<sol::protected_function>()) {
-            error = "stream.on_batch 必须是 function";
-            return nullptr;
-        }
-        const std::string onBatchCallbackKey = "stream.on_batch";
-        callbacks.insert_or_assign(onBatchCallbackKey, onBatchObject.as<sol::protected_function>());
-        loaded->onBatchCallbackKey = onBatchCallbackKey;
+    if (!applyLoadedStreamOptions(schemaTable, *loaded, callbacks, error)) {
+        return nullptr;
     }
     std::unordered_set<std::string> frameNames;
 
     for (std::size_t index = 1; index <= framesTable.size(); ++index) {
-        const sol::object frameObject = framesTable[index];
-        if (!frameObject.valid() || !frameObject.is<sol::table>()) {
-            error = "stream.frames 元素必须是 table";
+        auto frame = parseStreamFrameDefinition(framesTable[index], index - 1, *loaded, callbacks, frameNames, error);
+        if (!frame.has_value()) {
             return nullptr;
         }
-        const auto frameTable = frameObject.as<sol::table>();
-
-        StreamFrameDefinition frame;
-        frame.name = frameTable.get_or("name", std::string());
-        if (frame.name.empty()) {
-            error = "stream.frames[].name 不能为空";
-            return nullptr;
-        }
-        if (!frameNames.insert(frame.name).second) {
-            error = "stream.frames[].name 不能重复: " + frame.name;
-            return nullptr;
-        }
-
-        std::string bytesError;
-        const auto header = bytesFromLuaObject(frameTable["header"], bytesError);
-        if (!header.has_value() || header->empty()) {
-            error = "frame.header 必须是非空 byte[]";
-            return nullptr;
-        }
-        frame.header = *header;
-
-        const auto fixedSize = luaIntegerValue(frameTable["size"]);
-        const sol::object lenObject = frameTable["len"];
-        const bool hasLen = lenObject.valid() && lenObject.get_type() != sol::type::lua_nil;
-        const bool runtimeProfile = luaBoolField(frameTable, "runtime_profile").value_or(false);
-        const int modeCount =
-            static_cast<int>(fixedSize.has_value()) + static_cast<int>(hasLen) + static_cast<int>(runtimeProfile);
-        if (modeCount != 1) {
-            error = "frame.size、frame.len 与 frame.runtime_profile 必须三选一";
-            return nullptr;
-        }
-        frame.runtimeProfile = runtimeProfile;
-        if (fixedSize.has_value()) {
-            if (*fixedSize <= 0) {
-                error = "frame.size 必须大于 0";
-                return nullptr;
-            }
-            frame.size = static_cast<std::size_t>(*fixedSize);
-        } else if (hasLen) {
-            if (!lenObject.is<sol::table>()) {
-                error = "frame.len 必须是 table";
-                return nullptr;
-            }
-            const auto lenTable = lenObject.as<sol::table>();
-            StreamLengthDefinition lenDefinition;
-            const auto offset = luaIntegerValue(lenTable["offset"]);
-            if (!offset.has_value() || *offset <= 0) {
-                error = "frame.len.offset 必须是从 1 开始的正整数";
-                return nullptr;
-            }
-            lenDefinition.offset = static_cast<std::size_t>(*offset - 1);
-
-            const auto typeText = luaStringField(lenTable, "type");
-            if (!typeText.has_value()) {
-                error = "frame.len.type 不能为空";
-                return nullptr;
-            }
-            const auto valueType = parseStreamValueType(*typeText);
-            if (!valueType.has_value() || !streamValueTypeCanBeLength(*valueType)) {
-                error = "frame.len.type 必须是整数类型";
-                return nullptr;
-            }
-            lenDefinition.type = *valueType;
-
-            const auto meansText = luaStringField(lenTable, "means").value_or("payload");
-            const auto means = parseStreamLengthMeans(meansText);
-            if (!means.has_value()) {
-                error = "frame.len.means 仅支持 payload 或 frame";
-                return nullptr;
-            }
-            lenDefinition.means = *means;
-            if (const auto extra = luaIntegerValue(lenTable["extra"]); extra.has_value()) {
-                if (*extra < 0) {
-                    error = "frame.len.extra 不能为负数";
-                    return nullptr;
-                }
-                lenDefinition.extra = static_cast<std::size_t>(*extra);
-            }
-            frame.len = lenDefinition;
-        }
-
-        if (const sol::object crcObject = frameTable["crc"];
-            crcObject.valid() && crcObject.get_type() != sol::type::lua_nil) {
-            if (crcObject.is<bool>() && !crcObject.as<bool>()) {
-                frame.crc.type = StreamCrcType::None;
-            } else if (crcObject.is<sol::table>()) {
-                const auto crcTable = crcObject.as<sol::table>();
-                const auto crcTypeText = luaStringField(crcTable, "type");
-                if (!crcTypeText.has_value()) {
-                    error = "frame.crc.type 不能为空";
-                    return nullptr;
-                }
-                const auto crcType = parseStreamCrcType(*crcTypeText);
-                if (!crcType.has_value()) {
-                    error = "未知 frame.crc.type: " + *crcTypeText;
-                    return nullptr;
-                }
-                frame.crc.type = *crcType;
-                const auto orderText = luaStringField(crcTable, "order").value_or("lo_hi");
-                const auto order = parseStreamCrcOrder(orderText);
-                if (!order.has_value()) {
-                    error = "frame.crc.order 仅支持 lo_hi 或 hi_lo";
-                    return nullptr;
-                }
-                frame.crc.order = *order;
-            } else {
-                error = "frame.crc 必须是 table 或 false";
-                return nullptr;
-            }
-        }
-
-        if (const sol::object fieldsObject = frameTable["fields"];
-            fieldsObject.valid() && fieldsObject.get_type() != sol::type::lua_nil) {
-            if (!fieldsObject.is<sol::table>()) {
-                error = "frame.fields 必须是数组";
-                return nullptr;
-            }
-            const auto fieldsTable = fieldsObject.as<sol::table>();
-            frame.fields.reserve(fieldsTable.size());
-            for (std::size_t fieldIndex = 1; fieldIndex <= fieldsTable.size(); ++fieldIndex) {
-                const sol::object fieldObject = fieldsTable[fieldIndex];
-                if (!fieldObject.valid() || !fieldObject.is<sol::table>()) {
-                    error = "frame.fields 元素必须是 table";
-                    return nullptr;
-                }
-                const auto fieldTable = fieldObject.as<sol::table>();
-                StreamFieldDefinition field;
-                field.name = fieldTable.get_or("name", std::string());
-                if (field.name.empty()) {
-                    error = "field.name 不能为空";
-                    return nullptr;
-                }
-
-                const auto typeText = luaStringField(fieldTable, "type");
-                if (!typeText.has_value()) {
-                    error = "field.type 不能为空";
-                    return nullptr;
-                }
-                const auto type = parseStreamValueType(*typeText);
-                if (!type.has_value()) {
-                    error = "未知字段类型: " + *typeText;
-                    return nullptr;
-                }
-                field.type = *type;
-
-                if (const auto offset = luaIntegerValue(fieldTable["offset"]); offset.has_value()) {
-                    if (*offset <= 0) {
-                        error = "field.offset 必须是从 1 开始的正整数";
-                        return nullptr;
-                    }
-                    field.offset = static_cast<std::size_t>(*offset - 1);
-                }
-
-                const sol::object countObject = fieldTable["count"];
-                if (countObject.valid() && countObject.get_type() != sol::type::lua_nil) {
-                    const auto countPath = streamFieldCountPath(index - 1, fieldIndex - 1);
-                    if (const auto count = luaIntegerValue(countObject); count.has_value()) {
-                        if (*count < 0) {
-                            error = countPath + " 不能为负数";
-                            return nullptr;
-                        }
-                        field.count.fixed = static_cast<std::size_t>(*count);
-                    } else if (countObject.is<std::string>()) {
-                        field.count.fieldName = countObject.as<std::string>();
-                    } else if (countObject.is<sol::protected_function>()) {
-                        error = countPath + " 检测到 function；该写法已废弃，不再支持 function。"
-                                            " 请迁移为 count 表达式 table，例如 count = { op = \"div\", field = "
-                                            "\"byte_count\", by = 2 }";
-                        return nullptr;
-                    } else if (countObject.is<sol::table>()) {
-                        field.count.expression = parseStreamCountExpressionObject(countObject, error);
-                        if (!field.count.expression) {
-                            error = countPath + " 表达式无效: " + error;
-                            return nullptr;
-                        }
-                    } else {
-                        error = countPath + " 仅支持整数、字段名或 count 表达式 table";
-                        return nullptr;
-                    }
-                }
-
-                frame.fields.push_back(std::move(field));
-            }
-        }
-
-        if (const sol::object onFrameObject = frameTable["on_frame"];
-            onFrameObject.valid() && onFrameObject.get_type() != sol::type::lua_nil) {
-            if (!onFrameObject.is<sol::protected_function>()) {
-                error = "frame.on_frame 必须是 function";
-                return nullptr;
-            }
-            const auto callbackKey = frameOnFrameCallbackKey(frame.name);
-            callbacks.insert_or_assign(callbackKey, onFrameObject.as<sol::protected_function>());
-            loaded->frameCallbackKeys.insert_or_assign(frame.name, callbackKey);
-        } else if (!loaded->onBatchCallbackKey.has_value()) {
-            error = "frame.on_frame 必须是 function，除非 stream.on_batch 已定义";
-            return nullptr;
-        }
-        frames.push_back(std::move(frame));
+        frames.push_back(std::move(*frame));
     }
 
-    if (const sol::object onErrorObject = schemaTable["on_error"];
-        onErrorObject.valid() && onErrorObject.get_type() != sol::type::lua_nil) {
-        if (!onErrorObject.is<sol::protected_function>()) {
-            error = "stream.on_error 必须是 function";
-            return nullptr;
-        }
-        const std::string onErrorCallbackKey = "stream.on_error";
-        callbacks.insert_or_assign(onErrorCallbackKey, onErrorObject.as<sol::protected_function>());
-        loaded->onErrorCallbackKey = onErrorCallbackKey;
+    if (!registerStreamErrorCallback(schemaTable, *loaded, callbacks, error)) {
+        return nullptr;
     }
 
     loaded->parser = FrameStreamParser(bufferDefinition, std::move(frames));
