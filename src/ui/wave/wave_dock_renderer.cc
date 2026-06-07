@@ -669,6 +669,114 @@ public:
     }
 };
 
+struct WaveContentPlan {
+    plot::WaveLayoutSizes layout{};
+    WaveFrameData frame{};
+    WaveFrameState frameState{};
+    float contentWidth{0.0F};
+    float toolsWidth{0.0F};
+};
+
+struct WaveComponentSet {
+    WaveOverviewComponent overview;
+    WaveLegendComponent legend;
+    WavePlotComponent plot;
+    WaveFftComponent fft;
+    WaveMeasurementOverlayComponent measurementOverlay;
+    WaveToolbarComponent toolbar;
+    std::array<IWaveComponent*, 6> all;
+
+    WaveComponentSet() : all{&overview, &legend, &plot, &fft, &measurementOverlay, &toolbar} {}
+};
+
+WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewState& view, const ImVec2& available)
+{
+    const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
+    const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
+    const float legendHeight =
+        view.showChannelLegend ? measureChannelLegendHeight(wave.cachedFullSnapshot, wave) : 0.0F;
+    const float overviewRequestedHeight =
+        wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.overviewPanelHeight;
+    const float overviewMinHeight = wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.minOverviewPanelHeight;
+    const float mainPlotAxisReserve = ImGui::GetTextLineHeightWithSpacing() + spacingHeight;
+    const float fixedContentHeight = legendHeight + spacingHeight * 2.0F + mainPlotAxisReserve;
+
+    WaveContentPlan plan;
+    plan.layout = plot::solveWaveLayout(available.x,
+                                        available.y,
+                                        overviewRequestedHeight,
+                                        wave.toolsExpandedWidth,
+                                        wave.toolsCollapsedWidth,
+                                        wave.toolsCollapsed,
+                                        wave.contentToolsSplitterWidth + spacingWidth * 2.0F,
+                                        wave.overviewCollapsed ? 0.0F : wave.overviewMainSplitterHeight,
+                                        overviewMinHeight,
+                                        wave.minMainPanelHeight,
+                                        wave.minToolsExpandedWidth,
+                                        wave.maxToolsExpandedWidth,
+                                        fixedContentHeight);
+    wave.toolsExpandedWidth = wave.toolsCollapsed ? wave.toolsExpandedWidth : plan.layout.toolsWidth;
+    plan.toolsWidth = plan.layout.toolsWidth;
+    plan.contentWidth =
+        (std::max)(0.0F, available.x - plan.toolsWidth - wave.contentToolsSplitterWidth - spacingWidth * 2.0F);
+    plan.frame = prepareWaveFrame(wave, plan.contentWidth);
+    return plan;
+}
+
+WaveContext makeWaveContext(app::Application& application,
+                            plot::WaveDockState& wave,
+                            plot::WaveViewState& view,
+                            const plot::ViewConfig& config,
+                            WaveContentPlan& plan,
+                            const ImVec2& available,
+                            bool fullscreenActive,
+                            bool* fullscreenToggleRequested)
+{
+    WaveContext context{application, wave, view, *plan.frame.fullSnapshot, ImGui::GetIO(), plan.frameState};
+    context.config = &config;
+    context.layout = &plan.layout;
+    context.renderFrame = &plan.frame;
+    context.availableWidth = available.x;
+    context.availableHeight = available.y;
+    context.contentWidth = plan.contentWidth;
+    context.toolsWidth = plan.toolsWidth;
+    context.fullscreenActive = fullscreenActive;
+    context.fullscreenToggleRequested = fullscreenToggleRequested;
+    return context;
+}
+
+void prepareWaveComponents(WaveComponentSet& components, WaveContext& context)
+{
+    for (auto* component : components.all) {
+        component->prepare(context);
+    }
+}
+
+void drawWaveContentComponents(WaveComponentSet& components, WaveContext& context)
+{
+    ImGui::BeginChild(
+        "##wave_content", ImVec2(context.contentWidth, context.availableHeight), false, ImGuiWindowFlags_NoScrollbar);
+    components.overview.draw(context);
+    components.legend.draw(context);
+    if (context.view.fft.enabled) {
+        components.fft.draw(context);
+    } else {
+        components.plot.draw(context);
+        components.measurementOverlay.draw(context);
+    }
+    ImGui::EndChild();
+
+    components.toolbar.draw(context);
+}
+
+void commitWaveComponents(WaveComponentSet& components, WaveContext& context)
+{
+    for (auto* component : components.all) {
+        component->handleInput(context);
+        component->commit(context);
+    }
+}
+
 WaveDockRenderer::WaveDockRenderer(app::Application& application) : application_(application) {}
 
 std::string WaveDockRenderer::formatMetric(double value, const char* baseUnit)
@@ -718,84 +826,16 @@ void WaveDockRenderer::drawContent(const ImVec2& available,
 
     syncWaveViewToLatest();
     initializeWaveViewIfNeeded(view);
-    const bool dockFocused =
-        shortcutFocusOverride || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    const bool dockFocused = shortcutFocusOverride || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     handleWaveShortcuts(dockFocused, fullscreenToggleRequested);
 
-    const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
-    const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
-    const float legendHeight = view.showChannelLegend ? measureChannelLegendHeight(wave.cachedFullSnapshot, wave) : 0.0F;
-    const float overviewRequestedHeight =
-        wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.overviewPanelHeight;
-    const float overviewMinHeight = wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.minOverviewPanelHeight;
-    const float mainPlotAxisReserve = ImGui::GetTextLineHeightWithSpacing() + spacingHeight;
-    const float fixedContentHeight = legendHeight + spacingHeight * 2.0F + mainPlotAxisReserve;
-    const auto layout = plot::solveWaveLayout(available.x,
-                                              available.y,
-                                              overviewRequestedHeight,
-                                              wave.toolsExpandedWidth,
-                                              wave.toolsCollapsedWidth,
-                                              wave.toolsCollapsed,
-                                              wave.contentToolsSplitterWidth + spacingWidth * 2.0F,
-                                              wave.overviewCollapsed ? 0.0F : wave.overviewMainSplitterHeight,
-                                              overviewMinHeight,
-                                              wave.minMainPanelHeight,
-                                              wave.minToolsExpandedWidth,
-                                              wave.maxToolsExpandedWidth,
-                                              fixedContentHeight);
-    wave.toolsExpandedWidth = wave.toolsCollapsed ? wave.toolsExpandedWidth : layout.toolsWidth;
-    const float toolsWidth = layout.toolsWidth;
-    const float contentWidth =
-        (std::max)(0.0F, available.x - toolsWidth - wave.contentToolsSplitterWidth - spacingWidth * 2.0F);
-    auto frame = prepareWaveFrame(wave, contentWidth);
-    const auto& fullSnapshot = *frame.fullSnapshot;
-    WaveFrameState frameState;
-    WaveContext context{application_, wave, view, fullSnapshot, ImGui::GetIO(), frameState};
-    context.config = &config;
-    context.layout = &layout;
-    context.renderFrame = &frame;
-    context.availableWidth = available.x;
-    context.availableHeight = available.y;
-    context.contentWidth = contentWidth;
-    context.toolsWidth = toolsWidth;
-    context.fullscreenActive = fullscreenActive;
-    context.fullscreenToggleRequested = fullscreenToggleRequested;
-
-    WaveOverviewComponent overviewComponent;
-    WaveLegendComponent legendComponent;
-    WavePlotComponent plotComponent;
-    WaveFftComponent fftComponent;
-    WaveMeasurementOverlayComponent measurementOverlayComponent;
-    WaveToolbarComponent toolbarComponent;
-    std::array<IWaveComponent*, 6> components{
-        &overviewComponent,
-        &legendComponent,
-        &plotComponent,
-        &fftComponent,
-        &measurementOverlayComponent,
-        &toolbarComponent,
-    };
-
-    for (auto* component : components) {
-        component->prepare(context);
-    }
-
-    ImGui::BeginChild("##wave_content", ImVec2(contentWidth, available.y), false, ImGuiWindowFlags_NoScrollbar);
-    overviewComponent.draw(context);
-    legendComponent.draw(context);
-    if (view.fft.enabled) {
-        fftComponent.draw(context);
-    } else {
-        plotComponent.draw(context);
-        measurementOverlayComponent.draw(context);
-    }
-    ImGui::EndChild();
-
-    toolbarComponent.draw(context);
-    for (auto* component : components) {
-        component->handleInput(context);
-        component->commit(context);
-    }
+    auto plan = buildWaveContentPlan(wave, view, available);
+    auto context =
+        makeWaveContext(application_, wave, view, config, plan, available, fullscreenActive, fullscreenToggleRequested);
+    WaveComponentSet components;
+    prepareWaveComponents(components, context);
+    drawWaveContentComponents(components, context);
+    commitWaveComponents(components, context);
     wave.suppressZoomSelectionEscapeThisFrame = false;
 }
 
