@@ -477,44 +477,9 @@ bool GuiRuntime::drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& 
     return false;
 }
 
-void GuiRuntime::drawTransferDock()
+void GuiRuntime::drawTransferLogSection(float logHeight)
 {
-    if (!showTransferDock_) {
-        return;
-    }
-
-    auto& sendState = application_.docks().sendState();
-    const auto& comm = application_.docks().commState();
     auto& receive = application_.docks().receiveState();
-
-    if (!ImGui::Begin("收发数据", &showTransferDock_)) {
-        ImGui::End();
-        return;
-    }
-
-    const ImGuiStyle& style = ImGui::GetStyle();
-
-    const float availableHeight = ImGui::GetContentRegionAvail().y;
-    const float splitterThickness = style.FramePadding.y * 2.0F;
-    const float minPayloadHeight = ImGui::GetFrameHeight();
-    const float sendBorderSlack = 2.0F;
-    // 发送区最小高度要覆盖 Child 边距、表格 CellPadding 和边框，否则窗口较小时输入框会被挤没。
-    const float minSendHeight =
-        minPayloadHeight + style.WindowPadding.y * 2.0F + style.CellPadding.y * 2.0F + sendBorderSlack;
-    // 扣除 ItemSpacing 间隙，避免 3 个部件（日志区、分割条、发送区）总高度超出可用区域导致纵向滚动条
-    const float childSpacing = style.ItemSpacing.y * 2.0F;
-    if (transferSendSectionHeight_ <= 0.0F) {
-        transferSendSectionHeight_ = minSendHeight;
-    }
-
-    const float maxSendHeight = (std::max)(minSendHeight, availableHeight - splitterThickness - childSpacing);
-    transferSendSectionHeight_ = (std::clamp)(transferSendSectionHeight_, minSendHeight, maxSendHeight);
-
-    float logHeight = (std::max)(0.0F, availableHeight - transferSendSectionHeight_ - splitterThickness - childSpacing);
-
-    // =========================
-    // 上方：收发记录区
-    // =========================
     if (ImGui::BeginChild("##transfer_log_section", ImVec2(0.0F, logHeight), true)) {
         if (ImGui::BeginTable(
                 "##transfer_log_toolbar", 12, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings)) {
@@ -616,21 +581,12 @@ void GuiRuntime::drawTransferDock()
             filteredRows.endpointWidth);
     }
     ImGui::EndChild();
+}
 
-    // =========================
-    // splitter
-    // drawHorizontalSplitter 按 top height 工作
-    // 所以这里传 logHeight
-    // =========================
-    drawHorizontalSplitter("##transfer_splitter", logHeight, 0.0F, minSendHeight, availableHeight, splitterThickness);
-
-    transferSendSectionHeight_ =
-        (std::max)(minSendHeight, availableHeight - logHeight - splitterThickness - childSpacing);
-
-    // =========================
-    // 下方：发送区
-    // HEX | Payload | SEND
-    // =========================
+void GuiRuntime::drawTransferSendSection(float minPayloadHeight, const ImGuiStyle& style)
+{
+    auto& sendState = application_.docks().sendState();
+    const auto& comm = application_.docks().commState();
     if (ImGui::BeginChild("##transfer_send_section", ImVec2(0.0F, transferSendSectionHeight_), true)) {
         char buffer[2048]{};
         std::snprintf(buffer, sizeof(buffer), "%s", sendState.payload.c_str());
@@ -755,6 +711,52 @@ void GuiRuntime::drawTransferDock()
         }
     }
     ImGui::EndChild();
+}
+
+void GuiRuntime::drawTransferDock()
+{
+    if (!showTransferDock_) {
+        return;
+    }
+
+    if (!ImGui::Begin("收发数据", &showTransferDock_)) {
+        ImGui::End();
+        return;
+    }
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+
+    const float availableHeight = ImGui::GetContentRegionAvail().y;
+    const float splitterThickness = style.FramePadding.y * 2.0F;
+    const float minPayloadHeight = ImGui::GetFrameHeight();
+    const float sendBorderSlack = 2.0F;
+    // 发送区最小高度要覆盖 Child 边距、表格 CellPadding 和边框，否则窗口较小时输入框会被挤没。
+    const float minSendHeight =
+        minPayloadHeight + style.WindowPadding.y * 2.0F + style.CellPadding.y * 2.0F + sendBorderSlack;
+    // 扣除 ItemSpacing 间隙，避免 3 个部件（日志区、分割条、发送区）总高度超出可用区域导致纵向滚动条
+    const float childSpacing = style.ItemSpacing.y * 2.0F;
+    if (transferSendSectionHeight_ <= 0.0F) {
+        transferSendSectionHeight_ = minSendHeight;
+    }
+
+    const float maxSendHeight = (std::max)(minSendHeight, availableHeight - splitterThickness - childSpacing);
+    transferSendSectionHeight_ = (std::clamp)(transferSendSectionHeight_, minSendHeight, maxSendHeight);
+
+    float logHeight = (std::max)(0.0F, availableHeight - transferSendSectionHeight_ - splitterThickness - childSpacing);
+
+    drawTransferLogSection(logHeight);
+
+    // =========================
+    // splitter
+    // drawHorizontalSplitter 按 top height 工作
+    // 所以这里传 logHeight
+    // =========================
+    drawHorizontalSplitter("##transfer_splitter", logHeight, 0.0F, minSendHeight, availableHeight, splitterThickness);
+
+    transferSendSectionHeight_ =
+        (std::max)(minSendHeight, availableHeight - logHeight - splitterThickness - childSpacing);
+
+    drawTransferSendSection(minPayloadHeight, style);
 
     ImGui::End();
 }

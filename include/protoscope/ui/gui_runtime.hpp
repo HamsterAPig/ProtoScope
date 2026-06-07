@@ -119,6 +119,8 @@ private:
     void drawProtocolDock();
     void drawLuaDockWindows();
     void drawTransferDock();
+    void drawTransferLogSection(float logHeight);
+    void drawTransferSendSection(float minPayloadHeight, const ImGuiStyle& style);
     void drawLogDock();
     void drawScriptDock();
     bool drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls, bool earlyExit = true);
