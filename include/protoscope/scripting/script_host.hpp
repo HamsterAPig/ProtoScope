@@ -7,6 +7,7 @@
 #include "protoscope/transport/transport.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -402,6 +403,18 @@ private:
     void callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event);
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
     std::optional<sol::protected_function> resolveGlobalCallback(const char* name);
+
+    void beginTransportBytesEvent(const transport::TransportBytesEvent& event);
+    void handleStreamTransportBytes(const transport::TransportBytesEvent& event,
+                                    std::chrono::steady_clock::time_point startedAt);
+    void handleRawTransportBytes(const transport::TransportBytesEvent& event,
+                                 std::chrono::steady_clock::time_point startedAt);
+    StreamParseBatch parseTransportStreamBytes(const std::vector<std::uint8_t>& bytes,
+                                               std::chrono::steady_clock::time_point& parserFinishedAt);
+    void dispatchStreamParseErrors(const transport::ConnectionContext& context, const StreamParseBatch& batch);
+    void updateStreamParseErrorSummary(const StreamParseBatch& batch);
+    void dispatchStreamFrames(const transport::ConnectionContext& context,
+                              const std::vector<StreamParsedFrame>& frames);
 
     void registerLuaApi(sol::state_view lua, sol::table& proto);
 

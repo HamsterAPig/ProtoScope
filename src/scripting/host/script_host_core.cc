@@ -1636,9 +1636,8 @@ void ScriptHost::onTransportError(const transport::TransportErrorEvent& event)
     callbackOnError(ScriptHostContext{event.context}, event.message);
 }
 
-void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
+void ScriptHost::beginTransportBytesEvent(const transport::TransportBytesEvent& event)
 {
-    const auto startedAt = std::chrono::steady_clock::now();
     lastTransportStats_ = ScriptHostTransportStats{
         .bytes = event.bytes.size(),
         .streamMode = runtime_ && runtime_->stream,
@@ -1647,73 +1646,116 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
     if (event.context.readyForIo) {
         activeConnection_ = event.context;
     }
-    if (runtime_->stream) {
-        const auto parserStartedAt = std::chrono::steady_clock::now();
-        const StreamParseOptions parseOptions{
-            .includeFrameRaw = runtime_->stream->includeRawFrames || !runtime_->stream->lowOverhead,
-        };
-        const auto batch = runtime_->stream->parser.pushBytes(event.bytes, parseOptions);
-        runtime_->stream->lastBatch = makeStreamParseBatchSnapshot(batch, runtime_->stream->lowOverhead);
-        const auto parserFinishedAt = std::chrono::steady_clock::now();
-        lastTransportStats_.streamFrames = batch.frames.size();
-        lastTransportStats_.streamErrors = batch.errors.size();
-        lastTransportStats_.parserMs = elapsedMilliseconds(parserStartedAt, parserFinishedAt);
-        const auto callbackStartedAt = parserFinishedAt;
-        for (const auto& error : batch.errors) {
-            callbackOnStreamError(ScriptHostContext{event.context}, error);
-        }
-        // 错误汇总：按 code 分组计数，生成诊断日志
-        if (!batch.errors.empty()) {
-            std::unordered_map<StreamParseErrorCode, std::size_t> errorCounts;
-            std::string crcFrameNames;
-            std::size_t overflowDroppedBytes = 0;
-            for (const auto& error : batch.errors) {
-                errorCounts[error.code]++;
-                if (error.code == StreamParseErrorCode::CrcMismatch && error.frameName.has_value()) {
-                    if (!crcFrameNames.empty()) {
-                        crcFrameNames += ", ";
-                    }
-                    crcFrameNames += *error.frameName;
-                }
-                if (error.code == StreamParseErrorCode::Overflow) {
-                    overflowDroppedBytes += error.droppedBytes;
-                }
-            }
-            std::string summary;
-            for (const auto& [code, count] : errorCounts) {
-                if (!summary.empty()) {
-                    summary += ", ";
-                }
-                summary += std::string(streamParseErrorCodeName(code)) + " \xc3\x97 " + std::to_string(count);
-                if (code == StreamParseErrorCode::Overflow) {
-                    summary += " (dropped=" + std::to_string(overflowDroppedBytes) +
-                               " bytes, capacity=" + std::to_string(batch.bufferCapacity) + " bytes)";
-                }
-            }
-            protoLog("warn", "stream parse errors: " + summary);
-            if (!crcFrameNames.empty()) {
-                protoLog("warn", "  crc_mismatch frames: " + crcFrameNames);
-            }
-            lastTransportStats_.lastErrorSummary = std::move(summary);
-        } else {
-            lastTransportStats_.lastErrorSummary.clear();
-        }
-        // 核心流程：同一 parser 链顺序产出完整帧；若脚本支持 on_batch，则只批量调用一次，避免重复 on_frame。
-        if (!batch.frames.empty() && !callbackOnStreamBatch(ScriptHostContext{event.context}, batch.frames)) {
-            for (const auto& frame : batch.frames) {
-                callbackOnStreamFrame(ScriptHostContext{event.context}, frame);
-            }
-        }
-        const auto finishedAt = std::chrono::steady_clock::now();
-        lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
-        lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);
+}
+
+StreamParseBatch ScriptHost::parseTransportStreamBytes(const std::vector<std::uint8_t>& bytes,
+                                                       std::chrono::steady_clock::time_point& parserFinishedAt)
+{
+    const auto parserStartedAt = std::chrono::steady_clock::now();
+    const StreamParseOptions parseOptions{
+        .includeFrameRaw = runtime_->stream->includeRawFrames || !runtime_->stream->lowOverhead,
+    };
+    const auto batch = runtime_->stream->parser.pushBytes(bytes, parseOptions);
+    runtime_->stream->lastBatch = makeStreamParseBatchSnapshot(batch, runtime_->stream->lowOverhead);
+    parserFinishedAt = std::chrono::steady_clock::now();
+    lastTransportStats_.streamFrames = batch.frames.size();
+    lastTransportStats_.streamErrors = batch.errors.size();
+    lastTransportStats_.parserMs = elapsedMilliseconds(parserStartedAt, parserFinishedAt);
+    return batch;
+}
+
+void ScriptHost::dispatchStreamParseErrors(const transport::ConnectionContext& context, const StreamParseBatch& batch)
+{
+    for (const auto& error : batch.errors) {
+        callbackOnStreamError(ScriptHostContext{context}, error);
+    }
+}
+
+void ScriptHost::updateStreamParseErrorSummary(const StreamParseBatch& batch)
+{
+    if (batch.errors.empty()) {
+        lastTransportStats_.lastErrorSummary.clear();
         return;
     }
+
+    std::unordered_map<StreamParseErrorCode, std::size_t> errorCounts;
+    std::string crcFrameNames;
+    std::size_t overflowDroppedBytes = 0;
+    for (const auto& error : batch.errors) {
+        errorCounts[error.code]++;
+        if (error.code == StreamParseErrorCode::CrcMismatch && error.frameName.has_value()) {
+            if (!crcFrameNames.empty()) {
+                crcFrameNames += ", ";
+            }
+            crcFrameNames += *error.frameName;
+        }
+        if (error.code == StreamParseErrorCode::Overflow) {
+            overflowDroppedBytes += error.droppedBytes;
+        }
+    }
+
+    std::string summary;
+    for (const auto& [code, count] : errorCounts) {
+        if (!summary.empty()) {
+            summary += ", ";
+        }
+        summary += std::string(streamParseErrorCodeName(code)) + " × " + std::to_string(count);
+        if (code == StreamParseErrorCode::Overflow) {
+            summary += " (dropped=" + std::to_string(overflowDroppedBytes) +
+                       " bytes, capacity=" + std::to_string(batch.bufferCapacity) + " bytes)";
+        }
+    }
+    protoLog("warn", "stream parse errors: " + summary);
+    if (!crcFrameNames.empty()) {
+        protoLog("warn", "  crc_mismatch frames: " + crcFrameNames);
+    }
+    lastTransportStats_.lastErrorSummary = std::move(summary);
+}
+
+void ScriptHost::dispatchStreamFrames(const transport::ConnectionContext& context,
+                                      const std::vector<StreamParsedFrame>& frames)
+{
+    // 核心流程：同一 parser 链顺序产出完整帧；若脚本支持 on_batch，则只批量调用一次，避免重复 on_frame。
+    if (!frames.empty() && !callbackOnStreamBatch(ScriptHostContext{context}, frames)) {
+        for (const auto& frame : frames) {
+            callbackOnStreamFrame(ScriptHostContext{context}, frame);
+        }
+    }
+}
+
+void ScriptHost::handleStreamTransportBytes(const transport::TransportBytesEvent& event,
+                                            std::chrono::steady_clock::time_point startedAt)
+{
+    std::chrono::steady_clock::time_point parserFinishedAt;
+    const auto batch = parseTransportStreamBytes(event.bytes, parserFinishedAt);
+    const auto callbackStartedAt = parserFinishedAt;
+    dispatchStreamParseErrors(event.context, batch);
+    updateStreamParseErrorSummary(batch);
+    dispatchStreamFrames(event.context, batch.frames);
+    const auto finishedAt = std::chrono::steady_clock::now();
+    lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
+    lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);
+}
+
+void ScriptHost::handleRawTransportBytes(const transport::TransportBytesEvent& event,
+                                         std::chrono::steady_clock::time_point startedAt)
+{
     const auto callbackStartedAt = std::chrono::steady_clock::now();
     callbackOnBytes(ScriptHostContext{event.context}, event.bytes);
     const auto finishedAt = std::chrono::steady_clock::now();
     lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
     lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);
+}
+
+void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
+{
+    const auto startedAt = std::chrono::steady_clock::now();
+    beginTransportBytesEvent(event);
+    if (runtime_->stream) {
+        handleStreamTransportBytes(event, startedAt);
+        return;
+    }
+    handleRawTransportBytes(event, startedAt);
 }
 
 void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value)
