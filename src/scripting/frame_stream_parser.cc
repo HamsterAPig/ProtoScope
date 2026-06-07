@@ -162,6 +162,189 @@ namespace {
         return *value;
     }
 
+    struct StreamCountEvaluationContext {
+        const StreamFieldMap& parsed;
+        std::size_t frameLength{0};
+        std::size_t readableLimit{0};
+        std::size_t fieldStart{0};
+        std::size_t fieldWidth{0};
+    };
+
+    std::optional<std::int64_t> evaluateStreamCountExpression(const StreamCountExpression& expression,
+                                                              const StreamCountEvaluationContext& context,
+                                                              std::string& error);
+
+    std::optional<std::int64_t> evaluateCountOperand(const StreamCountExpression& expression,
+                                                     const StreamCountEvaluationContext& context,
+                                                     std::string_view opName,
+                                                     std::string& error)
+    {
+        if (!expression.operand) {
+            error = std::string(opName) + " 缺少 operand";
+            return std::nullopt;
+        }
+        return evaluateStreamCountExpression(*expression.operand, context, error);
+    }
+
+    std::optional<std::int64_t> evaluateCountArgument(const StreamCountExpression& expression,
+                                                      const StreamCountEvaluationContext& context,
+                                                      std::string& error)
+    {
+        if (!expression.argumentExpression) {
+            return expression.argument;
+        }
+        return evaluateStreamCountExpression(*expression.argumentExpression, context, error);
+    }
+
+    std::optional<std::int64_t> evaluateDivCountExpression(const StreamCountExpression& expression,
+                                                           const StreamCountEvaluationContext& context,
+                                                           std::string& error)
+    {
+        const auto value = evaluateCountOperand(expression, context, "div", error);
+        if (!value.has_value()) {
+            return std::nullopt;
+        }
+        const auto argument = evaluateCountArgument(expression, context, error);
+        if (!argument.has_value()) {
+            return std::nullopt;
+        }
+        if (*argument == 0) {
+            error = "div.by 不能为 0";
+            return std::nullopt;
+        }
+        return *value / *argument;
+    }
+
+    std::optional<std::int64_t> evaluateSubCountExpression(const StreamCountExpression& expression,
+                                                           const StreamCountEvaluationContext& context,
+                                                           std::string& error)
+    {
+        const auto value = evaluateCountOperand(expression, context, "sub", error);
+        if (!value.has_value()) {
+            return std::nullopt;
+        }
+        std::int64_t result = 0;
+        if (!checkedSubtractInt64(*value, expression.argument, result)) {
+            error = "sub count 表达式溢出";
+            return std::nullopt;
+        }
+        return result;
+    }
+
+    std::optional<std::int64_t> evaluateMulCountExpression(const StreamCountExpression& expression,
+                                                           const StreamCountEvaluationContext& context,
+                                                           std::string& error)
+    {
+        const auto value = evaluateCountOperand(expression, context, "mul", error);
+        if (!value.has_value()) {
+            return std::nullopt;
+        }
+        const auto argument = evaluateCountArgument(expression, context, error);
+        if (!argument.has_value()) {
+            return std::nullopt;
+        }
+        std::int64_t result = 0;
+        if (!checkedMultiplyInt64(*value, *argument, result)) {
+            error = "mul count 表达式溢出";
+            return std::nullopt;
+        }
+        return result;
+    }
+
+    std::optional<std::int64_t> evaluateRemainingCountExpression(const StreamCountExpression& expression,
+                                                                 const StreamCountEvaluationContext& context,
+                                                                 std::string& error)
+    {
+        const auto limit = expression.excludeCrc ? context.readableLimit : context.frameLength;
+        const auto unit = expression.argument > 0 ? static_cast<std::size_t>(expression.argument) : context.fieldWidth;
+        if (unit == 0) {
+            error = "remaining.unit 必须大于 0";
+            return std::nullopt;
+        }
+        if (context.fieldStart > limit) {
+            error = "remaining 起点超出帧边界";
+            return std::nullopt;
+        }
+        return static_cast<std::int64_t>((limit - context.fieldStart) / unit);
+    }
+
+    std::optional<std::int64_t> evaluateIfFlagCountExpression(const StreamCountExpression& expression,
+                                                              const StreamCountEvaluationContext& context,
+                                                              std::string& error)
+    {
+        const auto value = streamCountFieldValue(context.parsed, expression.fieldName, error);
+        if (!value.has_value()) {
+            return std::nullopt;
+        }
+        const auto mask = static_cast<std::uint64_t>(expression.argument);
+        const auto selected =
+            (static_cast<std::uint64_t>(*value) & mask) != 0U ? expression.thenExpression : expression.elseExpression;
+        if (!selected) {
+            error = "if_flag 缺少 then/else 表达式";
+            return std::nullopt;
+        }
+        return evaluateStreamCountExpression(*selected, context, error);
+    }
+
+    std::optional<std::int64_t> evaluateCaseCountExpression(const StreamCountExpression& expression,
+                                                            const StreamCountEvaluationContext& context,
+                                                            std::string& error)
+    {
+        const auto value = streamCountFieldValue(context.parsed, expression.fieldName, error);
+        if (!value.has_value()) {
+            return std::nullopt;
+        }
+        for (const auto& item : expression.cases) {
+            if (item.value == *value && item.expression) {
+                return evaluateStreamCountExpression(*item.expression, context, error);
+            }
+        }
+        if (expression.defaultExpression) {
+            return evaluateStreamCountExpression(*expression.defaultExpression, context, error);
+        }
+        error = "case 未匹配且没有 default";
+        return std::nullopt;
+    }
+
+    std::optional<std::int64_t> evaluateBitCountExpression(const StreamCountExpression& expression,
+                                                           const StreamCountEvaluationContext& context,
+                                                           std::string& error)
+    {
+        const auto value = evaluateCountOperand(expression, context, "bit_count", error);
+        if (!value.has_value()) {
+            return std::nullopt;
+        }
+        return static_cast<std::int64_t>(std::popcount(static_cast<std::uint64_t>(*value)));
+    }
+
+    std::optional<std::int64_t> evaluateStreamCountExpression(const StreamCountExpression& expression,
+                                                              const StreamCountEvaluationContext& context,
+                                                              std::string& error)
+    {
+        switch (expression.op) {
+            case StreamCountExpressionOp::Constant:
+                return expression.value;
+            case StreamCountExpressionOp::Field:
+                return streamCountFieldValue(context.parsed, expression.fieldName, error);
+            case StreamCountExpressionOp::Div:
+                return evaluateDivCountExpression(expression, context, error);
+            case StreamCountExpressionOp::Sub:
+                return evaluateSubCountExpression(expression, context, error);
+            case StreamCountExpressionOp::Mul:
+                return evaluateMulCountExpression(expression, context, error);
+            case StreamCountExpressionOp::Remaining:
+                return evaluateRemainingCountExpression(expression, context, error);
+            case StreamCountExpressionOp::IfFlag:
+                return evaluateIfFlagCountExpression(expression, context, error);
+            case StreamCountExpressionOp::Case:
+                return evaluateCaseCountExpression(expression, context, error);
+            case StreamCountExpressionOp::BitCount:
+                return evaluateBitCountExpression(expression, context, error);
+        }
+        error = "未知 count 表达式";
+        return std::nullopt;
+    }
+
     std::optional<std::int64_t> evaluateStreamCountExpression(const StreamCountExpression& expression,
                                                               const StreamFieldMap& parsed,
                                                               std::size_t frameLength,
@@ -170,158 +353,15 @@ namespace {
                                                               std::size_t fieldWidth,
                                                               std::string& error)
     {
-        switch (expression.op) {
-            case StreamCountExpressionOp::Constant:
-                return expression.value;
-            case StreamCountExpressionOp::Field:
-                return streamCountFieldValue(parsed, expression.fieldName, error);
-            case StreamCountExpressionOp::Div: {
-                if (!expression.operand) {
-                    error = "div 缺少 operand";
-                    return std::nullopt;
-                }
-                const auto value = evaluateStreamCountExpression(
-                    *expression.operand, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
-                if (!value.has_value()) {
-                    return std::nullopt;
-                }
-                std::optional<std::int64_t> argument = expression.argument;
-                if (expression.argumentExpression) {
-                    argument = evaluateStreamCountExpression(*expression.argumentExpression,
-                                                             parsed,
-                                                             frameLength,
-                                                             readableLimit,
-                                                             fieldStart,
-                                                             fieldWidth,
-                                                             error);
-                    if (!argument.has_value()) {
-                        return std::nullopt;
-                    }
-                }
-                if (*argument == 0) {
-                    error = "div.by 不能为 0";
-                    return std::nullopt;
-                }
-                return *value / *argument;
-            }
-            case StreamCountExpressionOp::Sub: {
-                if (!expression.operand) {
-                    error = "sub 缺少 operand";
-                    return std::nullopt;
-                }
-                const auto value = evaluateStreamCountExpression(
-                    *expression.operand, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
-                if (!value.has_value()) {
-                    return std::nullopt;
-                }
-                std::int64_t result = 0;
-                if (!checkedSubtractInt64(*value, expression.argument, result)) {
-                    error = "sub count 表达式溢出";
-                    return std::nullopt;
-                }
-                return result;
-            }
-            case StreamCountExpressionOp::Mul: {
-                if (!expression.operand) {
-                    error = "mul 缺少 operand";
-                    return std::nullopt;
-                }
-                const auto value = evaluateStreamCountExpression(
-                    *expression.operand, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
-                if (!value.has_value()) {
-                    return std::nullopt;
-                }
-                if (expression.argumentExpression) {
-                    const auto argument = evaluateStreamCountExpression(*expression.argumentExpression,
-                                                                        parsed,
-                                                                        frameLength,
-                                                                        readableLimit,
-                                                                        fieldStart,
-                                                                        fieldWidth,
-                                                                        error);
-                    if (!argument.has_value()) {
-                        return std::nullopt;
-                    }
-                    std::int64_t result = 0;
-                    if (!checkedMultiplyInt64(*value, *argument, result)) {
-                        error = "mul count 表达式溢出";
-                        return std::nullopt;
-                    }
-                    return result;
-                }
-                std::int64_t result = 0;
-                if (!checkedMultiplyInt64(*value, expression.argument, result)) {
-                    error = "mul count 表达式溢出";
-                    return std::nullopt;
-                }
-                return result;
-            }
-            case StreamCountExpressionOp::Remaining: {
-                const auto limit = expression.excludeCrc ? readableLimit : frameLength;
-                const auto unit = expression.argument > 0 ? static_cast<std::size_t>(expression.argument) : fieldWidth;
-                if (unit == 0) {
-                    error = "remaining.unit 必须大于 0";
-                    return std::nullopt;
-                }
-                if (fieldStart > limit) {
-                    error = "remaining 起点超出帧边界";
-                    return std::nullopt;
-                }
-                return static_cast<std::int64_t>((limit - fieldStart) / unit);
-            }
-            case StreamCountExpressionOp::IfFlag: {
-                const auto value = streamCountFieldValue(parsed, expression.fieldName, error);
-                if (!value.has_value()) {
-                    return std::nullopt;
-                }
-                const auto mask = static_cast<std::uint64_t>(expression.argument);
-                const auto selected = (static_cast<std::uint64_t>(*value) & mask) != 0U ? expression.thenExpression
-                                                                                        : expression.elseExpression;
-                if (!selected) {
-                    error = "if_flag 缺少 then/else 表达式";
-                    return std::nullopt;
-                }
-                return evaluateStreamCountExpression(
-                    *selected, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
-            }
-            case StreamCountExpressionOp::Case: {
-                const auto value = streamCountFieldValue(parsed, expression.fieldName, error);
-                if (!value.has_value()) {
-                    return std::nullopt;
-                }
-                for (const auto& item : expression.cases) {
-                    if (item.value == *value && item.expression) {
-                        return evaluateStreamCountExpression(
-                            *item.expression, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
-                    }
-                }
-                if (expression.defaultExpression) {
-                    return evaluateStreamCountExpression(*expression.defaultExpression,
-                                                         parsed,
-                                                         frameLength,
-                                                         readableLimit,
-                                                         fieldStart,
-                                                         fieldWidth,
-                                                         error);
-                }
-                error = "case 未匹配且没有 default";
-                return std::nullopt;
-            }
-            case StreamCountExpressionOp::BitCount: {
-                if (!expression.operand) {
-                    error = "bit_count 缺少 operand";
-                    return std::nullopt;
-                }
-                const auto value = evaluateStreamCountExpression(
-                    *expression.operand, parsed, frameLength, readableLimit, fieldStart, fieldWidth, error);
-                if (!value.has_value()) {
-                    return std::nullopt;
-                }
-                return static_cast<std::int64_t>(std::popcount(static_cast<std::uint64_t>(*value)));
-            }
-        }
-        error = "未知 count 表达式";
-        return std::nullopt;
+        // 递归求值共享同一份上下文，避免每个操作分支重复传递边界参数。
+        const StreamCountEvaluationContext context{
+            .parsed = parsed,
+            .frameLength = frameLength,
+            .readableLimit = readableLimit,
+            .fieldStart = fieldStart,
+            .fieldWidth = fieldWidth,
+        };
+        return evaluateStreamCountExpression(expression, context, error);
     }
 
     std::optional<std::int64_t> decodeInteger(const std::uint8_t* raw,
