@@ -613,11 +613,8 @@ std::optional<std::vector<ControlDescriptor>> parseControlList(const sol::object
     return controls;
 }
 
-bool readOptionalBoolField(const sol::table& table,
-                           std::string_view field,
-                           bool defaultValue,
-                           const std::string& path,
-                           std::string& error)
+bool readOptionalBoolField(
+    const sol::table& table, std::string_view field, bool defaultValue, const std::string& path, std::string& error)
 {
     const sol::object value = table[std::string(field)];
     if (!value.valid() || value.get_type() == sol::type::lua_nil) {
@@ -630,11 +627,8 @@ bool readOptionalBoolField(const sol::table& table,
     return value.as<bool>();
 }
 
-std::optional<float> readOptionalFloatField(const sol::table& table,
-                                            std::string_view field,
-                                            float defaultValue,
-                                            const std::string& path,
-                                            std::string& error)
+std::optional<float> readOptionalFloatField(
+    const sol::table& table, std::string_view field, float defaultValue, const std::string& path, std::string& error)
 {
     const sol::object value = table[std::string(field)];
     if (!value.valid() || value.get_type() == sol::type::lua_nil) {
@@ -678,13 +672,12 @@ bool registerLayoutControlUse(const DockDescriptor& dock,
     return true;
 }
 
-std::optional<LayoutNodeDescriptor> parseLayoutNode(
-    const DockDescriptor& dock,
-    const sol::object& object,
-    const std::unordered_map<std::string, std::size_t>& controlsById,
-    std::unordered_set<std::string>& usedControls,
-    const std::string& path,
-    std::string& error);
+std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
+                                                    const sol::object& object,
+                                                    const std::unordered_map<std::string, std::size_t>& controlsById,
+                                                    std::unordered_set<std::string>& usedControls,
+                                                    const std::string& path,
+                                                    std::string& error);
 
 std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     const DockDescriptor& dock,
@@ -695,7 +688,8 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     std::string& error)
 {
     const sol::object childrenObject = table["children"];
-    if (!childrenObject.valid() || childrenObject.get_type() == sol::type::lua_nil || !childrenObject.is<sol::table>()) {
+    if (!childrenObject.valid() || childrenObject.get_type() == sol::type::lua_nil ||
+        !childrenObject.is<sol::table>()) {
         error = path + ".children 必须是非空数组";
         return std::nullopt;
     }
@@ -708,8 +702,12 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     std::vector<LayoutNodeDescriptor> children;
     children.reserve(childrenTable.size());
     for (std::size_t index = 1; index <= childrenTable.size(); ++index) {
-        auto child = parseLayoutNode(
-            dock, childrenTable[index], controlsById, usedControls, path + ".children[" + std::to_string(index) + "]", error);
+        auto child = parseLayoutNode(dock,
+                                     childrenTable[index],
+                                     controlsById,
+                                     usedControls,
+                                     path + ".children[" + std::to_string(index) + "]",
+                                     error);
         if (!child.has_value()) {
             return std::nullopt;
         }
@@ -718,13 +716,12 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     return children;
 }
 
-std::optional<LayoutNodeDescriptor> parseLayoutNode(
-    const DockDescriptor& dock,
-    const sol::object& object,
-    const std::unordered_map<std::string, std::size_t>& controlsById,
-    std::unordered_set<std::string>& usedControls,
-    const std::string& path,
-    std::string& error)
+std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
+                                                    const sol::object& object,
+                                                    const std::unordered_map<std::string, std::size_t>& controlsById,
+                                                    std::unordered_set<std::string>& usedControls,
+                                                    const std::string& path,
+                                                    std::string& error)
 {
     if (!object.is<sol::table>()) {
         error = path + " 必须是 table";
@@ -790,7 +787,8 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(
             error = path + ".id 必须是字符串";
             return std::nullopt;
         }
-        if (!registerLayoutControlUse(dock, controlsById, usedControls, idObject.as<std::string>(), path, node, error)) {
+        if (!registerLayoutControlUse(
+                dock, controlsById, usedControls, idObject.as<std::string>(), path, node, error)) {
             return std::nullopt;
         }
         return node;
@@ -863,13 +861,13 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(
             std::vector<LayoutNodeDescriptor> row;
             row.reserve(rowTable.size());
             for (std::size_t cellIndex = 1; cellIndex <= rowTable.size(); ++cellIndex) {
-                auto cell = parseLayoutNode(dock,
-                                            rowTable[cellIndex],
-                                            controlsById,
-                                            usedControls,
-                                            path + ".rows[" + std::to_string(rowIndex) + "][" +
-                                                std::to_string(cellIndex) + "]",
-                                            error);
+                auto cell =
+                    parseLayoutNode(dock,
+                                    rowTable[cellIndex],
+                                    controlsById,
+                                    usedControls,
+                                    path + ".rows[" + std::to_string(rowIndex) + "][" + std::to_string(cellIndex) + "]",
+                                    error);
                 if (!cell.has_value()) {
                     return std::nullopt;
                 }
@@ -931,75 +929,87 @@ std::optional<DockLayoutDescriptor> parseDockLayout(const DockDescriptor& dock,
     return layout;
 }
 
-
-
-std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view lua, std::string& error)
+std::optional<DockDescriptor> parseSingleDockDescriptor(const sol::object& object, std::string& error)
 {
-    const sol::object uiObject = lua["ui"];
-    if (uiObject.valid() && uiObject.get_type() != sol::type::lua_nil) {
-        if (!uiObject.is<sol::protected_function>()) {
-            error = "ui 必须是 function";
-            return std::nullopt;
-        }
-
-        auto uiFunction = uiObject.as<sol::protected_function>();
-        auto uiResult = uiFunction();
-        if (!uiResult.valid()) {
-            error = "ui() 执行失败";
-            return std::nullopt;
-        }
-
-        const sol::object docksObject = uiResult.get<sol::object>();
-        if (!docksObject.is<sol::table>()) {
-            error = "ui() 必须返回 table";
-            return std::nullopt;
-        }
-
-        const auto dockTable = docksObject.as<sol::table>();
-        std::vector<DockDescriptor> docks;
-        docks.reserve(dockTable.size());
-        for (std::size_t index = 1; index <= dockTable.size(); ++index) {
-            const sol::object dockObject = dockTable[index];
-            if (!dockObject.is<sol::table>()) {
-                error = "ui() 每个 dock 都必须是 table";
-                return std::nullopt;
-            }
-
-            const auto dockEntry = dockObject.as<sol::table>();
-            DockDescriptor dock;
-            dock.id = readStringField(dockEntry, "id");
-            dock.title = readStringField(dockEntry, "title");
-            dock.anchor = readStringField(dockEntry, "anchor", "left_bottom");
-            dock.tabGroup = readStringField(dockEntry, "tab_group");
-            if (dock.id.empty() || dock.title.empty()) {
-                error = "dock 必须提供 id 和 title";
-                return std::nullopt;
-            }
-            if (!isValidDockAnchor(dock.anchor)) {
-                error = "dock anchor 不支持: " + dock.anchor;
-                return std::nullopt;
-            }
-
-            const sol::object controlsObject = dockEntry["controls"];
-            auto controls = parseControlList(controlsObject, error);
-            if (!controls.has_value()) {
-                return std::nullopt;
-            }
-            dock.controls = std::move(*controls);
-            const sol::object layoutObject = dockEntry["layout"];
-            if (layoutObject.valid() && layoutObject.get_type() != sol::type::lua_nil) {
-                auto layout = parseDockLayout(dock, layoutObject, error);
-                if (!layout.has_value()) {
-                    return std::nullopt;
-                }
-                dock.layout = std::move(*layout);
-            }
-            docks.push_back(std::move(dock));
-        }
-        return docks;
+    if (!object.is<sol::table>()) {
+        error = "ui() 每个 dock 都必须是 table";
+        return std::nullopt;
     }
 
-    const sol::object controlsObject = lua["controls"];
+    const auto dockEntry = object.as<sol::table>();
+    DockDescriptor dock;
+    dock.id = readStringField(dockEntry, "id");
+    dock.title = readStringField(dockEntry, "title");
+    dock.anchor = readStringField(dockEntry, "anchor", "left_bottom");
+    dock.tabGroup = readStringField(dockEntry, "tab_group");
+    if (dock.id.empty() || dock.title.empty()) {
+        error = "dock 必须提供 id 和 title";
+        return std::nullopt;
+    }
+    if (!isValidDockAnchor(dock.anchor)) {
+        error = "dock anchor 不支持: " + dock.anchor;
+        return std::nullopt;
+    }
+
+    const sol::object controlsObject = dockEntry["controls"];
+    auto controls = parseControlList(controlsObject, error);
+    if (!controls.has_value()) {
+        return std::nullopt;
+    }
+    dock.controls = std::move(*controls);
+
+    const sol::object layoutObject = dockEntry["layout"];
+    if (layoutObject.valid() && layoutObject.get_type() != sol::type::lua_nil) {
+        auto layout = parseDockLayout(dock, layoutObject, error);
+        if (!layout.has_value()) {
+            return std::nullopt;
+        }
+        dock.layout = std::move(*layout);
+    }
+    return dock;
+}
+
+std::optional<std::vector<DockDescriptor>> parseDockDescriptorList(const sol::object& object, std::string& error)
+{
+    if (!object.is<sol::table>()) {
+        error = "ui() 必须返回 table";
+        return std::nullopt;
+    }
+
+    const auto dockTable = object.as<sol::table>();
+    std::vector<DockDescriptor> docks;
+    docks.reserve(dockTable.size());
+    for (std::size_t index = 1; index <= dockTable.size(); ++index) {
+        auto dock = parseSingleDockDescriptor(dockTable[index], error);
+        if (!dock.has_value()) {
+            return std::nullopt;
+        }
+        docks.push_back(std::move(*dock));
+    }
+    return docks;
+}
+
+std::optional<std::vector<DockDescriptor>> parseUiDockDescriptors(const sol::object& uiObject, std::string& error)
+{
+    if (!uiObject.is<sol::protected_function>()) {
+        error = "ui 必须是 function";
+        return std::nullopt;
+    }
+
+    auto uiFunction = uiObject.as<sol::protected_function>();
+    auto uiResult = uiFunction();
+    if (!uiResult.valid()) {
+        error = "ui() 执行失败";
+        return std::nullopt;
+    }
+
+    const sol::object docksObject = uiResult.get<sol::object>();
+    return parseDockDescriptorList(docksObject, error);
+}
+
+std::optional<std::vector<DockDescriptor>> parseDefaultDockDescriptors(const sol::object& controlsObject,
+                                                                       std::string& error)
+{
     if (!controlsObject.valid() || controlsObject.get_type() == sol::type::lua_nil) {
         return std::vector<DockDescriptor>{};
     }
@@ -1026,6 +1036,16 @@ std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view 
     dock.title = kDefaultDockTitle;
     dock.controls = std::move(*controls);
     return std::vector<DockDescriptor>{std::move(dock)};
+}
+
+std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view lua, std::string& error)
+{
+    const sol::object uiObject = lua["ui"];
+    if (uiObject.valid() && uiObject.get_type() != sol::type::lua_nil) {
+        return parseUiDockDescriptors(uiObject, error);
+    }
+
+    return parseDefaultDockDescriptors(lua["controls"], error);
 }
 
 sol::table makeContextTable(sol::state_view lua, const transport::ConnectionContext& connection)
@@ -2112,11 +2132,8 @@ void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
     controlValues_[id] = std::move(value);
 }
 
-std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
-                                                   const sol::object& payload,
-                                                   const sol::object& opts,
-                                                   std::string& error,
-                                                   bool guarded)
+std::optional<TxRequest> ScriptHost::protoSendLike(
+    TxRequestKind kind, const sol::object& payload, const sol::object& opts, std::string& error, bool guarded)
 {
     const std::string apiName = guarded ? "proto.request_guarded"
                                         : std::string(kind == TxRequestKind::Request ? "proto.request" : "proto.send");
