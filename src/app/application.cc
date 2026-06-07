@@ -1759,122 +1759,146 @@ bool Application::drainRequestTimeoutBacklog()
 
 bool Application::processTransportEvent(const transport::TransportEvent& event)
 {
-    bool changed = false;
-    std::visit(
-        [this, &changed]<typename T0>(const T0& evt) {
+    return std::visit(
+        [this]<typename T0>(const T0& evt) {
             using T = std::decay_t<T0>;
             if constexpr (std::is_same_v<T, transport::TransportOpenEvent>) {
-                if (evt.context.readyForIo) {
-                    activeConnection_ = evt.context;
-                    scriptWorker_.postTransportOpen(evt);
-                    scriptWorker_.waitIdle();
-                }
-                loggingFacade_.host(config::LogLevel::Info,
-                                    "OPEN",
-                                    evt.context.endpoint,
-                                    stateMessage(dockStore_.commState().state),
-                                    evt.context.timestampMs);
-                changed = true;
+                return processTransportOpenEvent(evt);
             } else if constexpr (std::is_same_v<T, transport::TransportCloseEvent>) {
-                if (evt.context.readyForIo) {
-                    scriptWorker_.postTransportClose(evt);
-                    scriptWorker_.waitIdle();
-                }
-                loggingFacade_.host(
-                    config::LogLevel::Info, "CLOSE", evt.context.endpoint, evt.reason, evt.context.timestampMs);
-                resetStreamBufferAlertState(evt.context.connectionId);
-                if (activeConnection_.has_value() && activeConnection_->connectionId == evt.context.connectionId) {
-                    activeConnection_.reset();
-                }
-                cancelAllTxRequests(evt.reason.empty() ? "连接已关闭" : evt.reason);
-                std::string recordingError;
-                if (rawCaptureRecording_.isOpen() && !stopRawCaptureRecording(recordingError)) {
-                    loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
-                }
-                changed = true;
+                return processTransportCloseEvent(evt);
             } else if constexpr (std::is_same_v<T, transport::TransportErrorEvent>) {
-                if (evt.context.readyForIo) {
-                    scriptWorker_.postTransportError(evt);
-                    scriptWorker_.waitIdle();
-                }
-                loggingFacade_.host(
-                    config::LogLevel::Error, "ERROR", evt.context.endpoint, evt.message, evt.context.timestampMs);
-                dockStore_.commState().lastError = evt.message;
-                changed = true;
+                return processTransportErrorEvent(evt);
             } else if constexpr (std::is_same_v<T, transport::TransportBytesEvent>) {
-                if (!evt.bytes.empty()) {
-                    // 核心流程：只消费当前活动连接的字节事件，旧连接的迟到回包直接忽略，
-                    // 避免双窗口接管场景下脚本状态与 UI 日志被过期连接污染。
-                    if (activeConnection_.has_value() && evt.context.readyForIo &&
-                        activeConnection_->connectionId != evt.context.connectionId) {
-                        return;
-                    }
-                    appendRawCaptureRecording(evt);
-                    appendLiveRawCapture(evt);
-                    scriptWorker_.postTransportBytes(evt);
-                    if (evt.context.readyForIo) {
-                        activeConnection_ = evt.context;
-                    }
-                    appendTransferRow(dock::ReceiveRow{
-                        .timestampMs = evt.context.timestampMs,
-                        .direction = "RX",
-                        .endpoint = evt.context.endpoint,
-                        .bytes = evt.bytes,
-                        .message = {},
-                    });
-                    changed = true;
-                }
+                return processTransportBytesEvent(evt);
             } else if constexpr (std::is_same_v<T, transport::TransportTxEvent>) {
-                if (!activeWrite_.has_value() || activeWrite_->request.id != evt.requestId) {
-                    return;
-                }
-
-                auto activeWrite = *activeWrite_;
-                activeWrite_.reset();
-                const auto state = toScriptTxState(evt.state);
-                const std::optional<std::string> error =
-                    evt.error.empty() ? std::nullopt : std::optional<std::string>{evt.error};
-                if (state == scripting::TxEventState::Sent &&
-                    activeWrite.request.kind == scripting::TxRequestKind::Request) {
-                    activeWrite.sentAtMs = evt.finishedAtMs;
-                    activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
-                    activeHalfDuplexRequest_ = activeWrite;
-                    scriptWorker_.postRequestAwaitingCompletion(true);
-                    // 核心流程：先进入等待 ACK 状态再回调 on_tx，允许脚本在 sent 事件中立即调用 proto.request_done。
-                    scriptWorker_.postTxEvent(activeWrite.request.connection,
-                                              scripting::TxEvent{
-                                                  .id = activeWrite.request.id,
-                                                  .kind = activeWrite.request.kind,
-                                                  .state = scripting::TxEventState::Sent,
-                                                  .tag = activeWrite.request.tag,
-                                                  .bytes = evt.bytes,
-                                                  .queuedMs = activeWrite.request.createdAtMs,
-                                                  .finishedMs = evt.finishedAtMs,
-                                                  .guarded = activeWrite.request.guarded,
-                                                  .attempt = activeWrite.request.attempt,
-                                                  .maxAttempts = activeWrite.request.maxAttempts,
-                                                  .guardState = guardStateForEvent(activeWrite.request,
-                                                                                   scripting::TxEventState::Sent),
-                                                  .error = error,
-                                              });
-                    scriptWorker_.waitIdle();
-                    appendTransferRow(dock::ReceiveRow{
-                        .timestampMs = evt.finishedAtMs,
-                        .direction = "TX",
-                        .endpoint = activeWrite.request.connection.endpoint,
-                        .bytes = activeWrite.request.payload,
-                        .message = {},
-                    });
-                    changed = true;
-                    return;
-                }
-
-                finishTxRequest(activeWrite.request, state, error, evt.finishedAtMs);
-                changed = true;
-                changed = driveTxScheduler() || changed;
+                return processTransportTxEvent(evt);
             }
+            return false;
         },
         event);
+}
+
+bool Application::processTransportOpenEvent(const transport::TransportOpenEvent& event)
+{
+    if (event.context.readyForIo) {
+        activeConnection_ = event.context;
+        scriptWorker_.postTransportOpen(event);
+        scriptWorker_.waitIdle();
+    }
+    loggingFacade_.host(config::LogLevel::Info,
+                        "OPEN",
+                        event.context.endpoint,
+                        stateMessage(dockStore_.commState().state),
+                        event.context.timestampMs);
+    return true;
+}
+
+bool Application::processTransportCloseEvent(const transport::TransportCloseEvent& event)
+{
+    if (event.context.readyForIo) {
+        scriptWorker_.postTransportClose(event);
+        scriptWorker_.waitIdle();
+    }
+    loggingFacade_.host(
+        config::LogLevel::Info, "CLOSE", event.context.endpoint, event.reason, event.context.timestampMs);
+    resetStreamBufferAlertState(event.context.connectionId);
+    if (activeConnection_.has_value() && activeConnection_->connectionId == event.context.connectionId) {
+        activeConnection_.reset();
+    }
+    cancelAllTxRequests(event.reason.empty() ? "连接已关闭" : event.reason);
+    std::string recordingError;
+    if (rawCaptureRecording_.isOpen() && !stopRawCaptureRecording(recordingError)) {
+        loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
+    }
+    return true;
+}
+
+bool Application::processTransportErrorEvent(const transport::TransportErrorEvent& event)
+{
+    if (event.context.readyForIo) {
+        scriptWorker_.postTransportError(event);
+        scriptWorker_.waitIdle();
+    }
+    loggingFacade_.host(
+        config::LogLevel::Error, "ERROR", event.context.endpoint, event.message, event.context.timestampMs);
+    dockStore_.commState().lastError = event.message;
+    return true;
+}
+
+bool Application::processTransportBytesEvent(const transport::TransportBytesEvent& event)
+{
+    if (event.bytes.empty()) {
+        return false;
+    }
+    // 核心流程：只消费当前活动连接的字节事件，旧连接的迟到回包直接忽略，
+    // 避免双窗口接管场景下脚本状态与 UI 日志被过期连接污染。
+    if (activeConnection_.has_value() && event.context.readyForIo &&
+        activeConnection_->connectionId != event.context.connectionId) {
+        return false;
+    }
+    appendRawCaptureRecording(event);
+    appendLiveRawCapture(event);
+    scriptWorker_.postTransportBytes(event);
+    if (event.context.readyForIo) {
+        activeConnection_ = event.context;
+    }
+    appendTransferRow(dock::ReceiveRow{
+        .timestampMs = event.context.timestampMs,
+        .direction = "RX",
+        .endpoint = event.context.endpoint,
+        .bytes = event.bytes,
+        .message = {},
+    });
+    return true;
+}
+
+bool Application::processTransportTxEvent(const transport::TransportTxEvent& event)
+{
+    if (!activeWrite_.has_value() || activeWrite_->request.id != event.requestId) {
+        return false;
+    }
+
+    auto activeWrite = *activeWrite_;
+    activeWrite_.reset();
+    const auto state = toScriptTxState(event.state);
+    const std::optional<std::string> error =
+        event.error.empty() ? std::nullopt : std::optional<std::string>{event.error};
+    if (state == scripting::TxEventState::Sent && activeWrite.request.kind == scripting::TxRequestKind::Request) {
+        activeWrite.sentAtMs = event.finishedAtMs;
+        activeWrite.waitDeadlineMs = event.finishedAtMs + activeWrite.request.timeoutMs;
+        activeHalfDuplexRequest_ = activeWrite;
+        scriptWorker_.postRequestAwaitingCompletion(true);
+        // 核心流程：先进入等待 ACK 状态再回调 on_tx，允许脚本在 sent 事件中立即调用 proto.request_done。
+        scriptWorker_.postTxEvent(
+            activeWrite.request.connection,
+            scripting::TxEvent{
+                .id = activeWrite.request.id,
+                .kind = activeWrite.request.kind,
+                .state = scripting::TxEventState::Sent,
+                .tag = activeWrite.request.tag,
+                .bytes = event.bytes,
+                .queuedMs = activeWrite.request.createdAtMs,
+                .finishedMs = event.finishedAtMs,
+                .guarded = activeWrite.request.guarded,
+                .attempt = activeWrite.request.attempt,
+                .maxAttempts = activeWrite.request.maxAttempts,
+                .guardState = guardStateForEvent(activeWrite.request, scripting::TxEventState::Sent),
+                .error = error,
+            });
+        scriptWorker_.waitIdle();
+        appendTransferRow(dock::ReceiveRow{
+            .timestampMs = event.finishedAtMs,
+            .direction = "TX",
+            .endpoint = activeWrite.request.connection.endpoint,
+            .bytes = activeWrite.request.payload,
+            .message = {},
+        });
+        return true;
+    }
+
+    finishTxRequest(activeWrite.request, state, error, event.finishedAtMs);
+    bool changed = true;
+    changed = driveTxScheduler() || changed;
     return changed;
 }
 

@@ -111,6 +111,11 @@ private:
     bool applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch);
     bool handleTransportEvents();
     bool processTransportEvent(const transport::TransportEvent& event);
+    bool processTransportOpenEvent(const transport::TransportOpenEvent& event);
+    bool processTransportCloseEvent(const transport::TransportCloseEvent& event);
+    bool processTransportErrorEvent(const transport::TransportErrorEvent& event);
+    bool processTransportBytesEvent(const transport::TransportBytesEvent& event);
+    bool processTransportTxEvent(const transport::TransportTxEvent& event);
     bool processPendingRxBytes(std::size_t maxBytes);
     void enqueuePendingRxBytes(transport::TransportBytesEvent event);
     void detachPendingRealtimeBacklogFromConnection();
