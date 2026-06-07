@@ -897,114 +897,148 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
     const std::string inputLabel = luaControlInputLabel(descriptor);
     switch (descriptor.type) {
         case scripting::ControlType::Button:
-            if (ImGui::Button(imguiLabel.c_str())) {
-                application_.updateControlValue(descriptor.id, true);
-                return true;
-            }
-            break;
-        case scripting::ControlType::Checkbox: {
-            bool checked = std::get<bool>(control.value);
-            drawLuaControlLeftLabel(descriptor);
-            if (ImGui::Checkbox(inputLabel.c_str(), &checked)) {
-                application_.updateControlValue(descriptor.id, checked);
-                return true;
-            }
-            break;
-        }
-        case scripting::ControlType::InputText: {
-            char buffer[512]{};
-            std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
-            drawLuaControlLeftLabel(descriptor);
-            if (ImGui::InputText(inputLabel.c_str(), buffer, sizeof(buffer))) {
-                application_.updateControlValue(descriptor.id, std::string(buffer));
-                return true;
-            }
-            break;
-        }
-        case scripting::ControlType::Combo: {
-            int index = std::get<int>(control.value);
-            std::vector<const char*> items;
-            for (const auto& option : descriptor.comboOptions) {
-                items.push_back(option.c_str());
-            }
-            drawLuaControlLeftLabel(descriptor);
-            if (!items.empty() &&
-                ImGui::Combo(inputLabel.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
-                application_.updateControlValue(descriptor.id, index);
-                return true;
-            }
-            break;
-        }
-        case scripting::ControlType::ElfSymbolCombo: {
-            auto& state = elfSymbolComboStates_[descriptor.id];
-            const auto& current = std::get<scripting::ElfSymbolValue>(control.value);
-            if (state.draft.empty() && !current.label.empty()) {
-                state.draft = current.label;
-            }
+            return drawDynamicButtonControl(control, imguiLabel);
+        case scripting::ControlType::Checkbox:
+            return drawDynamicCheckboxControl(control, inputLabel);
+        case scripting::ControlType::InputText:
+            return drawDynamicTextControl(control, inputLabel);
+        case scripting::ControlType::Combo:
+            return drawDynamicComboControl(control, inputLabel);
+        case scripting::ControlType::ElfSymbolCombo:
+            return drawDynamicElfSymbolComboControl(control, inputLabel);
+        case scripting::ControlType::InputInt:
+            return drawDynamicIntControl(control, inputLabel);
+        case scripting::ControlType::InputFloat:
+            return drawDynamicFloatControl(control, inputLabel);
+    }
+    return false;
+}
 
-            const auto comboConfig = application_.captureConfig().gui.elfSymbolCombo;
-            const std::size_t effectiveLimit = descriptor.limitConfigured ? descriptor.limit : comboConfig.limit;
-            const int effectiveDebounceMs =
-                descriptor.debounceMsConfigured ? descriptor.debounceMs : comboConfig.debounceMs;
-            const auto loadedRevision = application_.elfStaticAddressRevision();
-            const auto currentMs = nowMs();
-            if (state.editedAtMs == 0) {
-                state.editedAtMs = currentMs;
-            }
-            const bool elfReloaded = state.loadedRevision != loadedRevision;
-            const bool queryLimitChanged = state.queriedLimit != effectiveLimit;
-            const bool debounceElapsed =
-                currentMs >= state.editedAtMs + static_cast<std::uint64_t>(effectiveDebounceMs);
-            if (elfReloaded || queryLimitChanged || (state.queriedDraft != state.draft && debounceElapsed)) {
-                // 核心流程：ELF 成功加载后用空查询预热候选；输入变化后按配置消抖实时刷新候选列表。
-                state.options = application_.queryElfStaticAddresses(state.draft, effectiveLimit);
-                state.queriedDraft = state.draft;
-                state.queriedLimit = effectiveLimit;
-                state.loadedRevision = loadedRevision;
-            }
+bool GuiRuntime::drawDynamicButtonControl(const scripting::ControlSnapshot& control, const std::string& imguiLabel)
+{
+    if (ImGui::Button(imguiLabel.c_str())) {
+        application_.updateControlValue(control.descriptor.id, true);
+        return true;
+    }
+    return false;
+}
 
-            std::vector<std::string> labels;
-            labels.reserve(state.options.size());
-            for (const auto& option : state.options) {
-                labels.push_back(option.label);
-            }
+bool GuiRuntime::drawDynamicCheckboxControl(const scripting::ControlSnapshot& control, const std::string& inputLabel)
+{
+    const auto& descriptor = control.descriptor;
+    bool checked = std::get<bool>(control.value);
+    drawLuaControlLeftLabel(descriptor);
+    if (ImGui::Checkbox(inputLabel.c_str(), &checked)) {
+        application_.updateControlValue(descriptor.id, checked);
+        return true;
+    }
+    return false;
+}
 
-            drawLuaControlLeftLabel(descriptor);
-            const auto edit = drawEditableCombo(
-                inputLabel.c_str(), state.draft, labels, EditableComboOptions{.keepPopupOpenWhileEditing = true});
-            if (edit.edited) {
-                state.draft = edit.value;
-                state.editedAtMs = currentMs;
-            }
-            if (edit.selectedFromList) {
-                const auto selected = std::find_if(state.options.begin(), state.options.end(), [&](const auto& option) {
-                    return option.label == edit.value;
-                });
-                if (selected != state.options.end()) {
-                    application_.updateControlValue(descriptor.id, *selected);
-                    return true;
-                }
-            }
-            break;
-        }
-        case scripting::ControlType::InputInt: {
-            int value = std::get<int>(control.value);
-            drawLuaControlLeftLabel(descriptor);
-            if (ImGui::InputInt(inputLabel.c_str(), &value)) {
-                application_.updateControlValue(descriptor.id, value);
-                return true;
-            }
-            break;
-        }
-        case scripting::ControlType::InputFloat: {
-            float value = std::get<float>(control.value);
-            drawLuaControlLeftLabel(descriptor);
-            if (ImGui::InputFloat(inputLabel.c_str(), &value)) {
-                application_.updateControlValue(descriptor.id, value);
-                return true;
-            }
-            break;
-        }
+bool GuiRuntime::drawDynamicTextControl(const scripting::ControlSnapshot& control, const std::string& inputLabel)
+{
+    const auto& descriptor = control.descriptor;
+    char buffer[512]{};
+    std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
+    drawLuaControlLeftLabel(descriptor);
+    if (ImGui::InputText(inputLabel.c_str(), buffer, sizeof(buffer))) {
+        application_.updateControlValue(descriptor.id, std::string(buffer));
+        return true;
+    }
+    return false;
+}
+
+bool GuiRuntime::drawDynamicComboControl(const scripting::ControlSnapshot& control, const std::string& inputLabel)
+{
+    const auto& descriptor = control.descriptor;
+    int index = std::get<int>(control.value);
+    std::vector<const char*> items;
+    for (const auto& option : descriptor.comboOptions) {
+        items.push_back(option.c_str());
+    }
+    drawLuaControlLeftLabel(descriptor);
+    if (!items.empty() && ImGui::Combo(inputLabel.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
+        application_.updateControlValue(descriptor.id, index);
+        return true;
+    }
+    return false;
+}
+
+bool GuiRuntime::drawDynamicElfSymbolComboControl(const scripting::ControlSnapshot& control,
+                                                  const std::string& inputLabel)
+{
+    const auto& descriptor = control.descriptor;
+    auto& state = elfSymbolComboStates_[descriptor.id];
+    const auto& current = std::get<scripting::ElfSymbolValue>(control.value);
+    if (state.draft.empty() && !current.label.empty()) {
+        state.draft = current.label;
+    }
+
+    const auto comboConfig = application_.captureConfig().gui.elfSymbolCombo;
+    const std::size_t effectiveLimit = descriptor.limitConfigured ? descriptor.limit : comboConfig.limit;
+    const int effectiveDebounceMs = descriptor.debounceMsConfigured ? descriptor.debounceMs : comboConfig.debounceMs;
+    const auto loadedRevision = application_.elfStaticAddressRevision();
+    const auto currentMs = nowMs();
+    if (state.editedAtMs == 0) {
+        state.editedAtMs = currentMs;
+    }
+    const bool elfReloaded = state.loadedRevision != loadedRevision;
+    const bool queryLimitChanged = state.queriedLimit != effectiveLimit;
+    const bool debounceElapsed = currentMs >= state.editedAtMs + static_cast<std::uint64_t>(effectiveDebounceMs);
+    if (elfReloaded || queryLimitChanged || (state.queriedDraft != state.draft && debounceElapsed)) {
+        // 核心流程：ELF 成功加载后用空查询预热候选；输入变化后按配置消抖实时刷新候选列表。
+        state.options = application_.queryElfStaticAddresses(state.draft, effectiveLimit);
+        state.queriedDraft = state.draft;
+        state.queriedLimit = effectiveLimit;
+        state.loadedRevision = loadedRevision;
+    }
+
+    std::vector<std::string> labels;
+    labels.reserve(state.options.size());
+    for (const auto& option : state.options) {
+        labels.push_back(option.label);
+    }
+
+    drawLuaControlLeftLabel(descriptor);
+    const auto edit = drawEditableCombo(
+        inputLabel.c_str(), state.draft, labels, EditableComboOptions{.keepPopupOpenWhileEditing = true});
+    if (edit.edited) {
+        state.draft = edit.value;
+        state.editedAtMs = currentMs;
+    }
+    if (!edit.selectedFromList) {
+        return false;
+    }
+
+    const auto selected = std::find_if(
+        state.options.begin(), state.options.end(), [&](const auto& option) { return option.label == edit.value; });
+    if (selected == state.options.end()) {
+        return false;
+    }
+    application_.updateControlValue(descriptor.id, *selected);
+    return true;
+}
+
+bool GuiRuntime::drawDynamicIntControl(const scripting::ControlSnapshot& control, const std::string& inputLabel)
+{
+    const auto& descriptor = control.descriptor;
+    int value = std::get<int>(control.value);
+    drawLuaControlLeftLabel(descriptor);
+    if (ImGui::InputInt(inputLabel.c_str(), &value)) {
+        application_.updateControlValue(descriptor.id, value);
+        return true;
+    }
+    return false;
+}
+
+bool GuiRuntime::drawDynamicFloatControl(const scripting::ControlSnapshot& control, const std::string& inputLabel)
+{
+    const auto& descriptor = control.descriptor;
+    float value = std::get<float>(control.value);
+    drawLuaControlLeftLabel(descriptor);
+    if (ImGui::InputFloat(inputLabel.c_str(), &value)) {
+        application_.updateControlValue(descriptor.id, value);
+        return true;
     }
     return false;
 }

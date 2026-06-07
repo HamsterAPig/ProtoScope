@@ -141,6 +141,13 @@ private:
                            std::size_t& widgetIndex,
                            bool earlyExit = true);
     bool drawDynamicControl(const scripting::ControlSnapshot& control);
+    bool drawDynamicButtonControl(const scripting::ControlSnapshot& control, const std::string& imguiLabel);
+    bool drawDynamicCheckboxControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicTextControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicComboControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicElfSymbolComboControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicIntControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicFloatControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
     void processPendingProtocolWorkspaceSwitch();
