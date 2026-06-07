@@ -15,6 +15,8 @@ namespace protoscope::plugin {
 namespace {
 
     constexpr std::string_view kElfStaticViewPrivateMagic = "ESVEXP01";
+    // 查询结果条数和数组展开预算是两件事：前者限制 UI 返回多少条，后者只影响候选展开深度。
+    constexpr std::size_t kElfStaticViewQueryArrayBudget = 65536;
 
     std::string readFileBytes(const std::filesystem::path& path)
     {
@@ -175,7 +177,7 @@ std::vector<ElfStaticAddressEntry> ElfStaticViewBridge::query(std::string queryT
     options.only_static_known = false;
     options.include_runtime_only = false;
     options.flatten_composite_members = true;
-    options.max_array_elements = limit;
+    options.max_array_elements = kElfStaticViewQueryArrayBudget;
 
     std::vector<ElfStaticAddressEntry> entries;
     const auto results = impl_->session->query(options);
@@ -204,7 +206,7 @@ std::optional<ElfStaticAddressEntry> ElfStaticViewBridge::findExactLabel(std::st
     options.only_static_known = false;
     options.include_runtime_only = false;
     options.flatten_composite_members = true;
-    options.max_array_elements = 65536;
+    options.max_array_elements = kElfStaticViewQueryArrayBudget;
 
     // 核心流程：查询会按候选规则做模糊匹配，自动刷新必须再用 key 精确过滤，避免相似 label 误更新。
     const auto results = impl_->session->query(options);

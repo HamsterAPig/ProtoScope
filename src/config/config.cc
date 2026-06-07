@@ -976,6 +976,18 @@ std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::p
     if (protocolEntryExists(candidate)) {
         return candidate;
     }
+    if (!dir.empty() && dir.is_relative() && !rootDir.empty()) {
+        // 核心流程：配置里 selected_dir 常保存为 root_dir 下的相对路径；
+        // 先按当前协议根目录解析，避免错误回退到扫描结果里的第一个协议。
+        const auto byProtocolName = rootDir / dir.filename();
+        if (protocolEntryExists(byProtocolName)) {
+            return byProtocolName;
+        }
+        const auto byRootRelativePath = rootDir / dir;
+        if (protocolEntryExists(byRootRelativePath)) {
+            return byRootRelativePath;
+        }
+    }
 
     const auto scanned = scanProtocolDirectories(rootDir);
     if (!scanned.empty()) {

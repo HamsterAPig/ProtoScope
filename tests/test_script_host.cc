@@ -2020,6 +2020,10 @@ void test_protocol_scan_and_root_roundtrip()
 
     const auto normalized = store.normalizeProtocolDir(tempRoot, tempRoot / "missing");
     require(normalized == alphaDir, "root-aware 协议目录归一化应优先回退到当前 root 下的有效目录");
+
+    const auto rootPrefixedRelative = std::filesystem::path{"protocols"} / "templates" / "beta";
+    const auto normalizedRelative = store.normalizeProtocolDir(tempRoot, rootPrefixedRelative);
+    require(normalizedRelative == betaDir, "root-aware 协议目录归一化应按协议名解析 root 前缀相对路径");
 }
 
 void test_script_plot_api_snapshot()

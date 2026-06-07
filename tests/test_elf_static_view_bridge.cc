@@ -176,6 +176,12 @@ void test_elf_static_view_bridge_queries_flattened_composite_members()
     require(ageIt != arrayResults.end(), "按父数组名查询时应包含 struct 数组展开成员");
     require(ageIt->value == "0x20001002", "struct 数组成员地址应来自静态布局地址");
 
+    const auto deepArrayMember = bridge.query("h_var_struct_arr[11].age", 1);
+    require(deepArrayMember.size() == 1, "结果条数上限仍应生效");
+    require(deepArrayMember[0].label == "global.h_var_struct_arr[11].age",
+            "候选上限不应影响数组展开预算");
+    require(deepArrayMember[0].value == "0x2000105A", "深层数组成员地址应完整保留");
+
     const auto objectPrefixResults = bridge.query("objADC", 64);
     const auto memberIt = std::find_if(
         objectPrefixResults.begin(),

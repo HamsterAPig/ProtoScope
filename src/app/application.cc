@@ -417,12 +417,16 @@ bool Application::initialize()
     const auto loaded = configStore_.load(configStore_.defaultConfigPath());
     runtimeConfig_ = loaded.config;
     loggingFacade_.applyConfig(loaded.config.logging);
-    applyConfig(loaded.config);
+    const bool configApplied = applyConfig(loaded.config);
 
     auto& configState = dockStore_.configState();
     configState.loadedFromPath = loaded.resolvedPath.generic_string();
     configState.fileTimestampMs = configStore_.snapshot(loaded.resolvedPath).timestampMs;
-    if (loaded.loadedFromDisk) {
+    if (!configApplied) {
+        const auto& lua = dockStore_.luaState();
+        const auto message = lua.lastError.empty() ? std::string("协议加载失败") : "协议加载失败: " + lua.lastError;
+        dockStore_.markDirty(message);
+    } else if (loaded.loadedFromDisk) {
         dockStore_.clearDirty("已从 YAML 加载配置");
     } else if (!loaded.error.empty()) {
         dockStore_.markDirty(loaded.error);
@@ -1286,7 +1290,11 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
                         recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
                         recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
                     scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-                    scriptWorker_.waitIdle();
+                    if (runtimeConfig_.scripting.workerEnabled) {
+                        // 核心流程：异步 worker 需要显式等到队列排空后再 flush，禁用 worker 时
+                        // postTransportBytes 内部已经同步等待完成，避免重复阻塞。
+                        scriptWorker_.waitIdle();
+                    }
                     flushScriptOutputs();
                     cursor += chunkSize;
                 }
@@ -1307,7 +1315,10 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
             std::vector<std::uint8_t> chunk(capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor),
                                             capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
             scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-            scriptWorker_.waitIdle();
+            if (runtimeConfig_.scripting.workerEnabled) {
+                // 核心流程：异步 worker 需要先等到脚本消费完当前 chunk，再把输出合并到回放结果。
+                scriptWorker_.waitIdle();
+            }
             flushScriptOutputs();
             cursor += chunkSize;
         }
