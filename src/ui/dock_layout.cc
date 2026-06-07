@@ -39,6 +39,21 @@ namespace {
         std::size_t indent{0};
     };
 
+    enum class DockLayoutIniLineAction {
+        Skip,
+        InspectNode,
+        Stop,
+    };
+
+    struct DockLayoutIniInspectionState {
+        DockLayoutIniHealth health;
+        std::vector<DockTreeStackEntry> stack;
+        bool inDockingData{false};
+        bool rootSplitX{false};
+        std::string rootNodeId;
+        std::string leftRootNodeId;
+    };
+
     std::string trimCopy(std::string_view value)
     {
         const auto first =
@@ -76,6 +91,105 @@ namespace {
             ++valueEnd;
         }
         return std::string(line.substr(valueBegin, valueEnd - valueBegin));
+    }
+
+    void stripTrailingCarriageReturn(std::string& line)
+    {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+    }
+
+    DockLayoutIniLineAction classifyDockLayoutIniLine(DockLayoutIniInspectionState& state, std::string_view trimmed)
+    {
+        if (!state.inDockingData) {
+            state.inDockingData = trimmed == "[Docking][Data]";
+            return DockLayoutIniLineAction::Skip;
+        }
+        if (!trimmed.empty() && trimmed.front() == '[') {
+            return DockLayoutIniLineAction::Stop;
+        }
+        if (!trimmed.starts_with("DockSpace") && !trimmed.starts_with("DockNode")) {
+            return DockLayoutIniLineAction::Skip;
+        }
+        return DockLayoutIniLineAction::InspectNode;
+    }
+
+    std::size_t dockLayoutLineIndent(std::string_view line)
+    {
+        const auto indentPos = line.find_first_not_of(' ');
+        return indentPos == std::string_view::npos ? std::size_t{0} : indentPos;
+    }
+
+    void pruneClosedDockTreeNodes(std::vector<DockTreeStackEntry>& stack, std::size_t indent)
+    {
+        while (!stack.empty() && stack.back().indent >= indent) {
+            stack.pop_back();
+        }
+    }
+
+    void inspectDockSpaceLine(DockLayoutIniInspectionState& state,
+                              const std::string& nodeId,
+                              std::size_t indent,
+                              std::string_view trimmed)
+    {
+        state.rootNodeId = nodeId;
+        state.leftRootNodeId.clear();
+        state.rootSplitX = trimmed.find("Split=X") != std::string_view::npos;
+        state.stack.push_back({nodeId, indent});
+    }
+
+    void captureLegacyLeftRootNode(DockLayoutIniInspectionState& state, const std::string& nodeId)
+    {
+        if (state.rootSplitX && !state.rootNodeId.empty() && !state.stack.empty() &&
+            state.stack.back().nodeId == state.rootNodeId && state.leftRootNodeId.empty()) {
+            state.leftRootNodeId = nodeId;
+        }
+    }
+
+    bool dockNodeIsInsideLegacyLeftPane(const DockLayoutIniInspectionState& state, const std::string& nodeId)
+    {
+        if (!state.rootSplitX || state.leftRootNodeId.empty()) {
+            return false;
+        }
+        return nodeId == state.leftRootNodeId ||
+               std::any_of(state.stack.begin(), state.stack.end(), [&](const DockTreeStackEntry& entry) {
+                   return entry.nodeId == state.leftRootNodeId;
+               });
+    }
+
+    void inspectCentralDockNode(DockLayoutIniInspectionState& state, const std::string& nodeId, std::string_view trimmed)
+    {
+        if (trimmed.find("CentralNode=1") == std::string_view::npos) {
+            return;
+        }
+
+        ++state.health.centralNodeCount;
+        // 关键边界：旧坏布局会把 CentralNode 放进根节点左分支，即使数量只有 1 也必须重建默认布局。
+        state.health.centralNodeInLegacyLeftPane =
+            state.health.centralNodeInLegacyLeftPane || dockNodeIsInsideLegacyLeftPane(state, nodeId);
+    }
+
+    void inspectDockLayoutNodeLine(DockLayoutIniInspectionState& state,
+                                   std::string_view line,
+                                   std::string_view trimmed)
+    {
+        const auto indent = dockLayoutLineIndent(line);
+        pruneClosedDockTreeNodes(state.stack, indent);
+
+        const auto nodeId = extractIniAttribute(trimmed, "ID=");
+        if (nodeId.empty()) {
+            return;
+        }
+
+        if (trimmed.starts_with("DockSpace")) {
+            inspectDockSpaceLine(state, nodeId, indent, trimmed);
+            return;
+        }
+
+        captureLegacyLeftRootNode(state, nodeId);
+        inspectCentralDockNode(state, nodeId, trimmed);
+        state.stack.push_back({nodeId, indent});
     }
 
     std::string normalizeKeyPart(std::string_view value)
@@ -322,74 +436,26 @@ bool canResetProtocolWorkspaceLayout(bool protocolWorkspaceLoaded, std::string_v
 
 DockLayoutIniHealth inspectDockLayoutIni(std::string_view iniContent)
 {
-    DockLayoutIniHealth health;
-    std::vector<DockTreeStackEntry> stack;
-    bool inDockingData = false;
-    bool rootSplitX = false;
-    std::string rootNodeId;
-    std::string leftRootNodeId;
+    DockLayoutIniInspectionState state;
 
     std::istringstream input{std::string(iniContent)};
     std::string line;
     while (std::getline(input, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
+        stripTrailingCarriageReturn(line);
 
         const auto trimmed = trimView(line);
-        if (!inDockingData) {
-            inDockingData = trimmed == "[Docking][Data]";
-            continue;
+        switch (classifyDockLayoutIniLine(state, trimmed)) {
+            case DockLayoutIniLineAction::Skip:
+                continue;
+            case DockLayoutIniLineAction::Stop:
+                return state.health;
+            case DockLayoutIniLineAction::InspectNode:
+                inspectDockLayoutNodeLine(state, line, trimmed);
+                break;
         }
-        if (!trimmed.empty() && trimmed.front() == '[') {
-            break;
-        }
-        if (!trimmed.starts_with("DockSpace") && !trimmed.starts_with("DockNode")) {
-            continue;
-        }
-
-        const auto indentPos = line.find_first_not_of(' ');
-        const auto indent = indentPos == std::string::npos ? std::size_t{0} : indentPos;
-        while (!stack.empty() && stack.back().indent >= indent) {
-            stack.pop_back();
-        }
-
-        const auto nodeId = extractIniAttribute(trimmed, "ID=");
-        if (nodeId.empty()) {
-            continue;
-        }
-
-        if (trimmed.starts_with("DockSpace")) {
-            rootNodeId = nodeId;
-            leftRootNodeId.clear();
-            rootSplitX = trimmed.find("Split=X") != std::string_view::npos;
-            stack.push_back({nodeId, indent});
-            continue;
-        }
-
-        if (rootSplitX && !rootNodeId.empty() && !stack.empty() && stack.back().nodeId == rootNodeId &&
-            leftRootNodeId.empty()) {
-            leftRootNodeId = nodeId;
-        }
-
-        if (trimmed.find("CentralNode=1") != std::string_view::npos) {
-            ++health.centralNodeCount;
-
-            // 关键边界：旧坏布局会把 CentralNode 放进根节点左分支，即使数量只有 1 也必须重建默认布局。
-            if (rootSplitX && !leftRootNodeId.empty()) {
-                const bool centralInLeftBranch =
-                    nodeId == leftRootNodeId ||
-                    std::any_of(stack.begin(), stack.end(), [&](const DockTreeStackEntry& entry) {
-                        return entry.nodeId == leftRootNodeId;
-                    });
-                health.centralNodeInLegacyLeftPane = health.centralNodeInLegacyLeftPane || centralInLeftBranch;
-            }
-        }
-
-        stack.push_back({nodeId, indent});
     }
 
-    return health;
+    return state.health;
 }
 
 bool shouldRebuildDockLayout(const DockLayoutIniHealth& health)
