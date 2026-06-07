@@ -6,6 +6,7 @@
 #include "protoscope/ui/protocol_state_file.hpp"
 
 #include <exception>
+#include <system_error>
 
 namespace protoscope::ui {
 
@@ -208,14 +209,24 @@ void GuiRuntime::saveCurrentProtocolWorkspace()
         return;
     }
 
-    const auto layoutPath = currentProtocolLayoutPath();
-    std::filesystem::create_directories(layoutPath.parent_path());
-    pruneCurrentLuaDockSettings();
-    ImGui::SaveIniSettingsToDisk(layoutPath.string().c_str());
     try {
+        const auto layoutPath = currentProtocolLayoutPath();
+        const auto parentPath = layoutPath.parent_path();
+        if (!parentPath.empty()) {
+            std::error_code directoryError;
+            std::filesystem::create_directories(parentPath, directoryError);
+            if (directoryError) {
+                application_.setStatusMessage("保存协议 Dock 布局目录失败: " + directoryError.message(), true);
+                ImGui::GetIO().WantSaveIniSettings = false;
+                pendingProtocolWorkspaceSave_ = false;
+                return;
+            }
+        }
+        pruneCurrentLuaDockSettings();
+        ImGui::SaveIniSettingsToDisk(layoutPath.string().c_str());
         writeLuaDockLayoutMeta(luaDockLayoutMetaPath(executableDir_, activeWorkspaceProtocolKey_), 3);
     } catch (const std::exception& ex) {
-        application_.setStatusMessage(std::string("保存协议布局 meta 失败: ") + ex.what(), true);
+        application_.setStatusMessage(std::string("保存协议 Dock 布局失败: ") + ex.what(), true);
     }
     ImGui::GetIO().WantSaveIniSettings = false;
     pendingProtocolWorkspaceSave_ = false;
@@ -292,9 +303,13 @@ void GuiRuntime::loadCurrentProtocolControlState()
     luaDockVisibility_.clear();
 
     const auto statePath = protocolControlStatePath();
-    if (!std::filesystem::exists(statePath)) {
+    std::error_code existsError;
+    if (!std::filesystem::exists(statePath, existsError)) {
         syncLuaDockVisibilityDefaults();
         restoreElfStaticAddressForCurrentProtocol({});
+        if (existsError) {
+            application_.setStatusMessage("检查协议控件状态文件失败: " + existsError.message(), true);
+        }
         return;
     }
 

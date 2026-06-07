@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_map>
 
 #include <yaml-cpp/yaml.h>
@@ -271,9 +272,11 @@ LuaDockLayoutPaths resolveLuaDockLayoutPaths(const std::filesystem::path& execut
     paths.layoutPath = luaDockLayoutPath(executableDir, paths.protocolKey);
     paths.legacyLayoutPath = luaDockLayoutPath(executableDir, legacyLuaDockLayoutKey(protocolDir, scriptPath));
     paths.metaPath = luaDockLayoutMetaPath(executableDir, paths.protocolKey);
-    paths.hasUserLayout = std::filesystem::exists(paths.layoutPath);
-    paths.hasLegacyLayout =
-        paths.legacyLayoutPath != paths.layoutPath && std::filesystem::exists(paths.legacyLayoutPath);
+    std::error_code layoutError;
+    paths.hasUserLayout = std::filesystem::exists(paths.layoutPath, layoutError) && !layoutError;
+    std::error_code legacyLayoutError;
+    paths.hasLegacyLayout = paths.legacyLayoutPath != paths.layoutPath &&
+                            std::filesystem::exists(paths.legacyLayoutPath, legacyLayoutError) && !legacyLayoutError;
     const auto meta = readLuaDockLayoutMeta(paths.metaPath);
     const bool hasModernUserLayout = paths.hasUserLayout && isModernLuaDockLayout(meta);
     paths.hasMeta = meta.hasMeta;
