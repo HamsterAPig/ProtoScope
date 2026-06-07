@@ -151,6 +151,11 @@ private:
     bool applyScriptRuntimeProfileEvents(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups);
+    void enqueueScriptPlotAppends(const std::vector<std::pair<std::size_t, plot::WaveAppendRequest>>& appends);
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainScriptPlotAppendsForPump(
+        std::size_t maxPlotAppends);
+    bool appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests);
     void finishTxRequest(const scripting::TxRequest& request,
                          scripting::TxEventState state,
                          std::optional<std::string> error,

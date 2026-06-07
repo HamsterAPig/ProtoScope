@@ -177,6 +177,43 @@ namespace {
         return rawSetup;
     }
 
+    std::string scriptPlotAppendKey(std::size_t channelIndex, const std::string& source)
+    {
+        auto key = std::to_string(channelIndex);
+        key.push_back('\x1F');
+        key.append(source);
+        return key;
+    }
+
+    void mergePlotAppendSamples(plot::WaveAppendRequest& target, plot::WaveAppendRequest& source)
+    {
+        target.samples.insert(target.samples.end(),
+                              std::make_move_iterator(source.samples.begin()),
+                              std::make_move_iterator(source.samples.end()));
+    }
+
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergeNonEmptyScriptPlotAppends(
+        std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests)
+    {
+        std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergedRequests;
+        std::unordered_map<std::string, std::size_t> mergedIndexes;
+        mergedRequests.reserve(requests.size());
+        for (auto append : requests) {
+            auto& [channelIndex, request] = append;
+            if (request.samples.empty()) {
+                continue;
+            }
+            const auto key = scriptPlotAppendKey(channelIndex, request.source);
+            const auto [position, inserted] = mergedIndexes.emplace(key, mergedRequests.size());
+            if (inserted) {
+                mergedRequests.emplace_back(channelIndex, std::move(request));
+                continue;
+            }
+            mergePlotAppendSamples(mergedRequests[position->second].second, request);
+        }
+        return mergedRequests;
+    }
+
     bool nearlyEqual(double left, double right);
     bool sameWaveViewState(const plot::WaveViewState& view, const plot::ViewConfig& config);
 
@@ -2092,31 +2129,43 @@ bool Application::applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutpu
 
 bool Application::applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
 {
+    const bool setupChanged = applyScriptPlotSetups(batch.plotSetups);
+    enqueueScriptPlotAppends(batch.plotAppends);
+    auto appendRequests = drainScriptPlotAppendsForPump(plotAppendsPerPump());
+    return appendScriptPlotRequestsToWave(std::move(appendRequests)) || setupChanged;
+}
+
+bool Application::applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups)
+{
     bool changed = false;
-    auto& wave = dockStore_.waveState();
-    for (const auto& setup : batch.plotSetups) {
+    for (const auto& setup : setups) {
         auto rawSetup = toRawPlotSetup(setup);
         applyPlotSetup(rawSetup);
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         recordPlotSetupSnapshot(rawSetup, timestampMs);
         changed = true;
     }
+    return changed;
+}
 
-    for (auto append : batch.plotAppends) {
+void Application::enqueueScriptPlotAppends(const std::vector<std::pair<std::size_t, plot::WaveAppendRequest>>& appends)
+{
+    for (auto append : appends) {
         pendingScriptPlotAppends_.push_back(std::move(append));
     }
+}
 
+std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> Application::drainScriptPlotAppendsForPump(
+    const std::size_t maxPlotAppends)
+{
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> appendRequests;
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> deferred;
     std::unordered_map<std::string, std::size_t> selectedIndexes;
-    const auto maxPlotAppends = plotAppendsPerPump();
     while (!pendingScriptPlotAppends_.empty()) {
         auto append = std::move(pendingScriptPlotAppends_.front());
         pendingScriptPlotAppends_.pop_front();
         auto& [channelIndex, request] = append;
-        auto key = std::to_string(channelIndex);
-        key.push_back('\x1F');
-        key.append(request.source);
+        const auto key = scriptPlotAppendKey(channelIndex, request.source);
         if (!selectedIndexes.contains(key) && selectedIndexes.size() >= maxPlotAppends) {
             deferred.emplace_back(channelIndex, std::move(request));
             continue;
@@ -2126,38 +2175,20 @@ bool Application::applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBat
             appendRequests.emplace_back(channelIndex, std::move(request));
             continue;
         }
-        auto& targetSamples = appendRequests[position->second].second.samples;
-        targetSamples.insert(targetSamples.end(),
-                             std::make_move_iterator(request.samples.begin()),
-                             std::make_move_iterator(request.samples.end()));
+        mergePlotAppendSamples(appendRequests[position->second].second, request);
     }
 
     for (auto& append : deferred) {
         pendingScriptPlotAppends_.push_back(std::move(append));
     }
+    return appendRequests;
+}
 
-    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergedRequests;
-    std::unordered_map<std::string, std::size_t> mergedIndexes;
-    mergedRequests.reserve(appendRequests.size());
-    for (auto append : appendRequests) {
-        auto& [channelIndex, request] = append;
-        if (request.samples.empty()) {
-            continue;
-        }
-        auto key = std::to_string(channelIndex);
-        key.push_back('\x1F');
-        key.append(request.source);
-        const auto [position, inserted] = mergedIndexes.emplace(key, mergedRequests.size());
-        if (inserted) {
-            mergedRequests.emplace_back(channelIndex, std::move(request));
-            continue;
-        }
-        auto& targetSamples = mergedRequests[position->second].second.samples;
-        targetSamples.insert(targetSamples.end(),
-                             std::make_move_iterator(request.samples.begin()),
-                             std::make_move_iterator(request.samples.end()));
-    }
-
+bool Application::appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests)
+{
+    bool changed = false;
+    auto mergedRequests = mergeNonEmptyScriptPlotAppends(std::move(requests));
+    auto& wave = dockStore_.waveState();
     for (auto& [channelIndex, request] : mergedRequests) {
         if (wave.buffer.append(channelIndex, std::move(request))) {
             changed = true;
