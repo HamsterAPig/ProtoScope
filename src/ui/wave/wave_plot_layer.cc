@@ -92,16 +92,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
         }
 
         if (sourceSampleCount <= downsampleThreshold) {
-            auto begin =
-                std::lower_bound(channelSamples.begin(),
-                                 channelSamples.end(),
-                                 limits.X.Min,
-                                 [](const plot::WaveSample& sample, double value) { return sample.time < value; });
-            auto end =
-                std::upper_bound(channelSamples.begin(),
-                                 channelSamples.end(),
-                                 limits.X.Max,
-                                 [](double value, const plot::WaveSample& sample) { return value < sample.time; });
+            auto begin = visibleBegin;
+            auto end = visibleEnd;
             if (begin != channelSamples.begin()) {
                 --begin;
             }

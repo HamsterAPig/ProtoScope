@@ -1314,7 +1314,8 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
 
     flushScriptOutputs();
     const auto importedSnapshot =
-        wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+        wave.buffer.snapshot(
+            -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
     std::size_t importedHistoryLimit = 0;
     for (const auto& channel : importedSnapshot.channels) {
         importedHistoryLimit = (std::max)(importedHistoryLimit, channel.totalSamples);

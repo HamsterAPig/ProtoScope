@@ -404,7 +404,7 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
     return true;
 }
 
-WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleMaxTime) const
+WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleMaxTime, bool computeStats) const
 {
     WaveSnapshot snapshot{};
     snapshot.source = source_;
@@ -426,7 +426,19 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
         view.samples = channel.samples.data();
         view.visibleBegin = lowerBoundByTime(channel.samples, visibleMinTime);
         view.visibleEnd = upperBoundByTime(channel.samples, visibleMaxTime);
-        view.stats = makeStats(channel.samples, view.visibleBegin, view.visibleEnd, channel.spec);
+        if (computeStats) {
+            view.stats = makeStats(channel.samples, view.visibleBegin, view.visibleEnd, channel.spec);
+        } else {
+            // 核心流程：主视图缓存全历史快照只需要范围和样本指针，跳过 min/max 全量扫描。
+            view.stats.totalSamples = view.totalSamples;
+            view.stats.visibleSamples = view.visibleEnd > view.visibleBegin ? view.visibleEnd - view.visibleBegin : 0;
+            if (view.stats.visibleSamples > 1) {
+                const double span = channel.samples[view.visibleEnd - 1].time - channel.samples[view.visibleBegin].time;
+                if (span > kEpsilon) {
+                    view.stats.sampleRateHz = static_cast<double>(view.stats.visibleSamples - 1) / span;
+                }
+            }
+        }
         snapshot.channels.push_back(view);
     }
     return snapshot;

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -51,13 +50,7 @@ namespace {
             hashCombine(rangeHash, channel.visibleBegin);
             hashCombine(rangeHash, channel.visibleEnd);
             hashCombine(rangeHash, channel.totalSamples);
-            hashCombine(rangeHash, std::hash<std::string>{}(channel.label));
-            hashCombine(rangeHash, std::hash<std::string>{}(channel.unit));
-            hashCombine(rangeHash, std::hash<double>{}(channel.ratio));
-            hashCombine(rangeHash, std::hash<double>{}(channel.scale));
-            hashCombine(rangeHash, std::hash<double>{}(channel.offset));
         }
-        hashCombine(rangeHash, std::hash<std::string>{}(snapshot.config.timeUnit));
         return {
             .dataRevision = dataRevision,
             .sampleFrequencyHz = view.sampleFrequencyHz,
@@ -252,7 +245,8 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
     if (wave.displayDataRevision != dataRevision || wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) {
         // 核心流程：全量快照只保留通道元数据和原始样本指针，显示缓存按当前窗口单独构建，避免高速采样时反复复制全历史。
         wave.cachedFullSnapshot =
-            wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+            wave.buffer.snapshot(
+                -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
         wave.displayDataRevision = dataRevision;
         wave.displayDataSampleFrequencyHz = view.sampleFrequencyHz;
         wave.cachedDisplayKeyValid = false;

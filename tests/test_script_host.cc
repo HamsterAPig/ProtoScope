@@ -2896,6 +2896,8 @@ static const TestCase kAllTests[] = {
     {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
+    {"plot_snapshot_without_stats_keeps_ranges_and_samples",
+     &test_plot_snapshot_without_stats_keeps_ranges_and_samples},
     {"plot_build_display_data_into_reuses_storage_and_matches_output",
      &test_plot_build_display_data_into_reuses_storage_and_matches_output},
     {"plot_channel_ratio_and_formula_modes", &test_plot_channel_ratio_and_formula_modes},

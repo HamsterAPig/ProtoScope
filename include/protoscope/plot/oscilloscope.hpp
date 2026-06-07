@@ -168,7 +168,7 @@ public:
     std::optional<double> latestTime() const;
 
     bool append(std::size_t channelIndex, WaveAppendRequest request);
-    WaveSnapshot snapshot(double visibleMinTime, double visibleMaxTime) const;
+    WaveSnapshot snapshot(double visibleMinTime, double visibleMaxTime, bool computeStats = true) const;
     EnvelopeView buildEnvelope(std::size_t channelIndex,
                                double visibleMinTime,
                                double visibleMaxTime,

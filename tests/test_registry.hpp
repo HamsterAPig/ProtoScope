@@ -153,6 +153,7 @@ void test_wave_cursor_extreme_snap_falls_back_to_window_trough();
 void test_wave_cursor_smart_snap_fallback_to_nearest();
 void test_wave_cursor_drag_time_uses_smart_snap();
 void test_plot_channel_scale_and_offset_apply_to_display_only();
+void test_plot_snapshot_without_stats_keeps_ranges_and_samples();
 void test_plot_build_display_data_into_reuses_storage_and_matches_output();
 void test_plot_channel_ratio_and_formula_modes();
 void test_plot_channel_transform_updates_are_isolated();

@@ -677,6 +677,43 @@ void test_plot_channel_scale_and_offset_apply_to_display_only()
     require(std::abs(zeroMeasurement.rmsValue - std::sqrt(206.0 / 3.0)) < 1e-9, "scale=0 时 RMS 仍应按真实值计算");
 }
 
+void test_plot_snapshot_without_stats_keeps_ranges_and_samples()
+{
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .ratio = 2.0, .scale = 3.0, .offset = -1.0});
+    buffer.append(0,
+                  protoscope::plot::WaveAppendRequest{
+                      .source = "test",
+                      .samples =
+                          {
+                              {.time = 0.0, .value = 1.0},
+                              {.time = 0.5, .value = 2.0},
+                              {.time = 1.0, .value = 3.0},
+                          },
+                  });
+
+    const auto lightweight = buffer.snapshot(0.0, 1.0, false);
+    require(lightweight.channels.size() == 1, "轻量快照应保留通道");
+    require(lightweight.channels[0].samples != nullptr, "轻量快照应保留原始样本指针");
+    require(lightweight.channels[0].visibleBegin == 0, "轻量快照应保留可视起点");
+    require(lightweight.channels[0].visibleEnd == 3, "轻量快照应保留可视终点");
+    require(lightweight.channels[0].stats.totalSamples == 3, "轻量快照应保留总样本数");
+    require(lightweight.channels[0].stats.visibleSamples == 3, "轻量快照应保留可视样本数");
+    require(std::abs(lightweight.channels[0].stats.sampleRateHz - 2.0) < 1e-12, "轻量快照应保留采样率摘要");
+    require(lightweight.channels[0].stats.minValue == 0.0 && lightweight.channels[0].stats.maxValue == 0.0,
+            "轻量快照不应计算 min/max 统计");
+
+    const auto display = protoscope::plot::buildDisplayData(lightweight, 0.0);
+    require(display.channels.size() == 1, "轻量快照仍应可构建显示数据");
+    require(std::abs(display.channels[0].samples[1].value - 9.0) < 1e-12,
+            "轻量快照构建显示数据时仍应应用通道变换");
+
+    const auto full = buffer.snapshot(0.0, 1.0);
+    require(std::abs(full.channels[0].stats.minValue - 3.0) < 1e-12, "默认快照仍应计算 min 统计");
+    require(std::abs(full.channels[0].stats.maxValue - 15.0) < 1e-12, "默认快照仍应计算 max 统计");
+}
+
 void test_plot_build_display_data_into_reuses_storage_and_matches_output()
 {
     protoscope::plot::OscilloscopeBuffer buffer;
