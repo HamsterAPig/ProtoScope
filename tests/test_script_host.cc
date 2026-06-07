@@ -14,7 +14,9 @@
 #include <initializer_list>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -65,6 +67,21 @@ struct ScopedCurrentPath {
     ~ScopedCurrentPath() { std::filesystem::current_path(original_); }
 
     std::filesystem::path original_;
+};
+
+struct ScopedTempPath {
+    explicit ScopedTempPath(std::filesystem::path path) : path_(std::move(path)) {}
+
+    ~ScopedTempPath()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
 };
 
 std::filesystem::path makeUniqueTempDir(const char* prefix)
@@ -1760,6 +1777,8 @@ void test_script_file_io_proto_buffer_roundtrip()
         script << "  local bad_job, bad_err = proto.fs.send_file('input.bin', { kind = 'invalid' })\n";
         script << "  assert(bad_job == nil)\n";
         script << "  assert(bad_err and bad_err:find('kind'))\n";
+        script << "  local stat = assert(proto.fs.stat('input.bin'))\n";
+        script << "  assert(stat.is_file and stat.size == 6)\n";
         script << "  local h = assert(proto.fs.open('input.bin', { mode = 'read' }))\n";
         script << "  local chunk, err = proto.fs.read(h, { max_bytes = 3 })\n";
         script << "  assert(chunk, err)\n";
@@ -1861,7 +1880,8 @@ void test_config_performance_save_keeps_scaled_defaults_compact()
 void test_config_wave_mode_invalid_fallback()
 {
     protoscope::config::ConfigStore store;
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-config-wave-invalid.yaml";
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-config-wave-invalid"));
+    const auto tempPath = tempRoot.path() / "config.yaml";
     std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
     out << "gui:\n"
            "  wave:\n"
@@ -1898,9 +1918,8 @@ void test_config_wave_mode_invalid_fallback()
 void test_config_logging_roundtrip()
 {
     protoscope::config::ConfigStore store;
-    const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-config-logging";
-    const auto tempPath = tempRoot / "logging.yaml";
-    std::filesystem::create_directories(tempRoot);
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-config-logging"));
+    const auto tempPath = tempRoot.path() / "logging.yaml";
 
     auto base = store.load(tempPath).config;
     base.logging.level = protoscope::config::LogLevel::Warn;
@@ -1917,7 +1936,7 @@ void test_config_logging_roundtrip()
     reloaded = store.load(tempPath).config;
     require(reloaded.logging.filePath.empty(), "空日志路径应保持为空");
 
-    const auto missingPath = tempRoot / "missing.yaml";
+    const auto missingPath = tempRoot.path() / "missing.yaml";
     const auto missing = store.load(missingPath).config;
     require(missing.logging.filePath.empty(), "缺失日志路径时应默认为空");
     require(missing.logging.level == protoscope::config::LogLevel::Info, "缺失日志等级时应回退到 info");
@@ -1995,34 +2014,34 @@ void test_config_default_protocol_workspace_fills_missing_resources()
 void test_protocol_scan_and_root_roundtrip()
 {
     protoscope::config::ConfigStore store;
-    const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-protocol-scan";
-    const auto alphaDir = tempRoot / "alpha";
-    const auto betaDir = tempRoot / "beta";
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-protocol-scan"));
+    const auto alphaDir = tempRoot.path() / "alpha";
+    const auto betaDir = tempRoot.path() / "beta";
     std::string error;
 
     require(store.ensureDefaultProtocolScript(alphaDir, error), "alpha 协议脚本补建失败");
     require(store.ensureDefaultProtocolScript(betaDir, error), "beta 协议脚本补建失败");
 
-    const auto scanned = store.scanProtocolDirectories(tempRoot);
+    const auto scanned = store.scanProtocolDirectories(tempRoot.path());
     require(scanned.size() == 2, "协议目录扫描数量不正确");
     require(scanned[0].find("alpha") != std::string::npos, "扫描结果应包含 alpha");
     require(scanned[1].find("beta") != std::string::npos, "扫描结果应包含 beta");
 
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-protocol-root-roundtrip.yaml";
+    const auto tempPath = tempRoot.path() / "protoscope-protocol-root-roundtrip.yaml";
     auto config = store.load(tempPath).config;
-    config.protocol.rootDir = tempRoot.generic_string();
+    config.protocol.rootDir = tempRoot.path().generic_string();
     config.protocol.selectedDir = betaDir.generic_string();
 
     require(store.save(tempPath, config, error), "协议根目录保存失败");
     const auto reloaded = store.load(tempPath);
-    require(reloaded.config.protocol.rootDir == tempRoot.generic_string(), "协议根目录 roundtrip 失败");
+    require(reloaded.config.protocol.rootDir == tempRoot.path().generic_string(), "协议根目录 roundtrip 失败");
     require(reloaded.config.protocol.selectedDir == betaDir.generic_string(), "协议目录 roundtrip 失败");
 
-    const auto normalized = store.normalizeProtocolDir(tempRoot, tempRoot / "missing");
+    const auto normalized = store.normalizeProtocolDir(tempRoot.path(), tempRoot.path() / "missing");
     require(normalized == alphaDir, "root-aware 协议目录归一化应优先回退到当前 root 下的有效目录");
 
     const auto rootPrefixedRelative = std::filesystem::path{"protocols"} / "templates" / "beta";
-    const auto normalizedRelative = store.normalizeProtocolDir(tempRoot, rootPrefixedRelative);
+    const auto normalizedRelative = store.normalizeProtocolDir(tempRoot.path(), rootPrefixedRelative);
     require(normalizedRelative == betaDir, "root-aware 协议目录归一化应按协议名解析 root 前缀相对路径");
 }
 

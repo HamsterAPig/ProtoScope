@@ -130,6 +130,16 @@ void test_transport_enqueue_send_async_roundtrip()
 
     TcpClientTransport client;
     require(client.open(TcpClientConfig{.host = "127.0.0.1", .port = *listenPort}), "客户端连接失败");
+    {
+        bool clientOpenKindSeen = false;
+        for (const auto& event : client.takeEvents()) {
+            if (const auto* opened = std::get_if<TransportOpenEvent>(&event)) {
+                clientOpenKindSeen = opened->context.kind == TransportKind::TcpClient;
+                break;
+            }
+        }
+        require(clientOpenKindSeen, "TCP Client 打开事件 kind 应为 TcpClient");
+    }
 
     const bool serverAccepted = waitUntil([&]() {
         for (const auto& event : server.takeEvents()) {

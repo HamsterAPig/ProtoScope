@@ -10,6 +10,7 @@
 #include <fstream>
 #include <optional>
 #include <stdexcept>
+#include <system_error>
 #include <string>
 #include <thread>
 #include <utility>
@@ -34,6 +35,21 @@ std::filesystem::path makeWorkerProtocolDir(const char* name, const std::string&
     out << script;
     return dir;
 }
+
+struct ScopedTempPath {
+    explicit ScopedTempPath(std::filesystem::path path) : path_(std::move(path)) {}
+
+    ~ScopedTempPath()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
 
 protoscope::transport::ConnectionContext workerContext(std::uint64_t timestampMs = 1)
 {
@@ -145,6 +161,7 @@ end
 
 void test_script_runtime_worker_disabled_mode_waits_for_rx_idle()
 {
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("sync", workerProbeScript()));
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
         .enabled = false,
@@ -152,8 +169,7 @@ void test_script_runtime_worker_disabled_mode_waits_for_rx_idle()
         .outputQueueLimit = 128U,
         .batchBytes = 1024U,
     });
-    const auto protocolDir = makeWorkerProtocolDir("sync", workerProbeScript());
-    const auto loaded = worker.loadProtocolDirectory(protocolDir.generic_string());
+    const auto loaded = worker.loadProtocolDirectory(protocolDir.path().generic_string());
     require(loaded.ok, "worker 同步模式测试协议应可加载");
     (void) worker.drainOutputs();
 
@@ -166,6 +182,7 @@ void test_script_runtime_worker_disabled_mode_waits_for_rx_idle()
 
 void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
 {
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("rx-limit", workerProbeScript()));
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
         .enabled = true,
@@ -174,8 +191,7 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
         .batchBytes = 1U,
         .backpressureEnabled = false,
     });
-    const auto protocolDir = makeWorkerProtocolDir("rx-limit", workerProbeScript());
-    const auto loaded = worker.loadProtocolDirectory(protocolDir.generic_string());
+    const auto loaded = worker.loadProtocolDirectory(protocolDir.path().generic_string());
     require(loaded.ok, "worker 限流测试协议应可加载");
     (void) worker.drainOutputs();
 
@@ -206,6 +222,7 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
 
 void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events()
 {
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("batch-bytes", workerBatchProbeScript()));
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
         .enabled = true,
@@ -214,8 +231,7 @@ void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events()
         .batchBytes = 3U,
         .backpressureEnabled = false,
     });
-    const auto protocolDir = makeWorkerProtocolDir("batch-bytes", workerBatchProbeScript());
-    const auto loaded = worker.loadProtocolDirectory(protocolDir.generic_string());
+    const auto loaded = worker.loadProtocolDirectory(protocolDir.path().generic_string());
     require(loaded.ok, "worker 分块测试协议应可加载");
     (void) worker.drainOutputs();
 

@@ -291,7 +291,7 @@ ConnectionContext makeListenContext(const asio::ip::tcp::endpoint& endpoint)
 ConnectionContext makeClientContext(const asio::ip::tcp::endpoint& endpoint)
 {
     return ConnectionContext{
-        .kind = TransportKind::TcpServer,
+        .kind = TransportKind::TcpClient,
         .endpoint = endpointText(endpoint),
         .connectionId = makeConnectionId(),
         .timestampMs = currentTimeMs(),

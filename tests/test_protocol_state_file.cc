@@ -7,7 +7,9 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <system_error>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -27,6 +29,21 @@ std::filesystem::path makeTempRoot(std::string_view name)
     return root;
 }
 
+struct ScopedTempRoot {
+    explicit ScopedTempRoot(std::filesystem::path path) : path_(std::move(path)) {}
+
+    ~ScopedTempRoot()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
 void writeText(const std::filesystem::path& path, std::string_view text)
 {
     std::filesystem::create_directories(path.parent_path());
@@ -38,8 +55,8 @@ void writeText(const std::filesystem::path& path, std::string_view text)
 
 void test_protocol_state_file_backs_up_corrupt_yaml()
 {
-    const auto root = makeTempRoot("protocol-state-corrupt");
-    const auto statePath = root / "config" / "ui" / "protocol-control-state.yaml";
+    const ScopedTempRoot root(makeTempRoot("protocol-state-corrupt"));
+    const auto statePath = root.path() / "config" / "ui" / "protocol-control-state.yaml";
     writeText(statePath, "protocols:\n  proto_a:\n    send:\n      history: []es: ~\n");
 
     const auto loadResult = protoscope::ui::loadProtocolStateRootForUpdate(statePath);
@@ -49,14 +66,12 @@ void test_protocol_state_file_backs_up_corrupt_yaml()
     require(std::filesystem::exists(loadResult.recovery.backupPath), "损坏 YAML 应被备份");
     require(!std::filesystem::exists(statePath), "损坏原文件应被移走，避免下次继续解析失败");
     require(loadResult.root.IsMap(), "恢复后的 root 应是空 map");
-
-    std::filesystem::remove_all(root);
 }
 
 void test_protocol_state_file_atomic_write_replaces_valid_yaml()
 {
-    const auto root = makeTempRoot("protocol-state-atomic");
-    const auto statePath = root / "config" / "ui" / "protocol-control-state.yaml";
+    const ScopedTempRoot root(makeTempRoot("protocol-state-atomic"));
+    const auto statePath = root.path() / "config" / "ui" / "protocol-control-state.yaml";
 
     YAML::Node stateRoot;
     stateRoot["protocols"]["proto_a"]["controls"]["device_id"]["type"] = "input_text";
@@ -68,14 +83,12 @@ void test_protocol_state_file_atomic_write_replaces_valid_yaml()
     const auto parsed = YAML::LoadFile(statePath.string());
     require(parsed["protocols"]["proto_a"]["controls"]["device_id"]["value"].as<std::string>() == "01",
             "写入后的 YAML 应可解析并保留值");
-
-    std::filesystem::remove_all(root);
 }
 
 void test_protocol_state_file_preserves_other_protocol_nodes()
 {
-    const auto root = makeTempRoot("protocol-state-merge");
-    const auto statePath = root / "config" / "ui" / "protocol-control-state.yaml";
+    const ScopedTempRoot root(makeTempRoot("protocol-state-merge"));
+    const auto statePath = root.path() / "config" / "ui" / "protocol-control-state.yaml";
 
     YAML::Node initialRoot;
     initialRoot["protocols"]["proto_a"]["controls"]["device_id"]["type"] = "input_text";
@@ -94,8 +107,6 @@ void test_protocol_state_file_preserves_other_protocol_nodes()
     const auto parsed = YAML::LoadFile(statePath.string());
     require(parsed["protocols"]["proto_a"].IsDefined(), "合并写入不应删除其他协议节点");
     require(parsed["protocols"]["proto_b"].IsDefined(), "合并写入应新增当前协议节点");
-
-    std::filesystem::remove_all(root);
 }
 
 void test_protocol_state_file_roundtrips_elf_path_per_protocol()
@@ -121,8 +132,8 @@ void test_protocol_state_file_roundtrips_elf_path_per_protocol()
 
 void test_protocol_state_file_replace_failure_keeps_target()
 {
-    const auto root = makeTempRoot("protocol-state-replace-failure");
-    const auto statePath = root / "config" / "ui" / "protocol-control-state.yaml";
+    const ScopedTempRoot root(makeTempRoot("protocol-state-replace-failure"));
+    const auto statePath = root.path() / "config" / "ui" / "protocol-control-state.yaml";
     std::filesystem::create_directories(statePath);
 
     YAML::Node stateRoot;
@@ -133,6 +144,4 @@ void test_protocol_state_file_replace_failure_keeps_target()
             "目标是目录时原子替换应失败");
     require(std::filesystem::is_directory(statePath), "替换失败不应破坏原目标");
     require(!error.empty(), "替换失败应返回明确错误");
-
-    std::filesystem::remove_all(root);
 }

@@ -13,8 +13,10 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <system_error>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <elf_static_view/project.hpp>
@@ -227,6 +229,21 @@ std::filesystem::path makeUniqueTempDir(const char* prefix)
     std::filesystem::create_directories(path);
     return path;
 }
+
+struct ScopedTempPath {
+    explicit ScopedTempPath(std::filesystem::path path) : path_(std::move(path)) {}
+
+    ~ScopedTempPath()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
 
 protoscope::plot::RawCaptureEvent makePlotSetupEvent(bool resetHistory = true)
 {
@@ -1329,9 +1346,8 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
 
 void test_application_logging_filters_script_and_host()
 {
-    const auto tempRoot = std::filesystem::temp_directory_path() / "protoscope-logging-test";
-    std::filesystem::create_directories(tempRoot);
-    const auto logPath = tempRoot / "runtime.log";
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-logging-test"));
+    const auto logPath = tempRoot.path() / "runtime.log";
     std::error_code ec;
     std::filesystem::remove(logPath, ec);
 
@@ -1407,8 +1423,8 @@ void test_application_raw_capture_export_import_roundtrip()
     require(!liveSnapshot.channels.empty(), "实时 RX 后应生成波形通道");
     require(liveSnapshot.channels.front().totalSamples > 0, "实时 RX 后应生成波形样本");
 
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-application-roundtrip.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-application-roundtrip"));
+    const auto tempPath = tempRoot.path() / "capture.psraw";
 
     std::string error;
     require(application.exportWaveRawCapture(tempPath, error), "应用导出 psraw 应成功");
@@ -1440,7 +1456,6 @@ void test_application_raw_capture_export_import_roundtrip()
     require(secondImportedSnapshot.channels.front().totalSamples == importedSnapshot.channels.front().totalSamples,
             "第二次导入应清空旧波形后完整回放，不应被第一次导入的样本挡住");
 
-    std::filesystem::remove(tempPath);
     application.shutdown();
 }
 
@@ -1469,8 +1484,8 @@ void test_application_live_raw_capture_trims_to_limit()
     require(rawCapture.truncated, "实时原始缓存超过上限后应标记截断");
     require(rawCapture.payload == expectedTail, "实时原始缓存应只保留最新尾部字节");
 
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-live-raw-capture-limit.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-live-raw-capture-limit"));
+    const auto tempPath = tempRoot.path() / "capture.psraw";
 
     std::string error;
     require(application.exportWaveRawCapture(tempPath, error), "截断后的实时缓存仍应可导出");
@@ -1484,7 +1499,6 @@ void test_application_live_raw_capture_trims_to_limit()
                                  " expected=" + std::to_string(expectedTail.size()));
     }
 
-    std::filesystem::remove(tempPath);
     application.shutdown();
 }
 
@@ -1561,8 +1575,8 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
                 rawCapture.events.front().type == protoscope::plot::RawCaptureEventType::ProfileSet,
             "裁剪窗口前的活动 profile 应被补到事件流开头");
 
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-live-runtime-profile-trim.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-live-runtime-profile-trim"));
+    const auto tempPath = tempRoot.path() / "capture.psraw";
     std::string error;
     require(application.exportWaveRawCapture(tempPath, error), "裁剪后的 runtime profile raw 应可导出");
     const auto exported = protoscope::plot::readRawCaptureFile(tempPath, error);
@@ -1578,7 +1592,6 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
     require(importedApplication.initialize(), "导入验证应用初始化失败");
     require(importedApplication.reloadProtocolDirectory(protocolDir.generic_string(), true), "导入验证协议应可加载");
     require(importedApplication.importWaveRawCapture(*exported, error), "导出的 runtime profile raw 应可重新导入");
-    std::filesystem::remove(tempPath);
 }
 
 void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims()
@@ -1599,8 +1612,8 @@ void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_t
     std::string error;
     require(application.stopRawCaptureRecording(error), "未开始录制时停止应无副作用");
 
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-full-raw-recording.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-full-raw-recording"));
+    const auto tempPath = tempRoot.path() / "capture.psraw";
     require(application.startRawCaptureRecording(tempPath, error), "完整原始数据录制应可启动");
     require(application.isRawCaptureRecording(), "启动后应处于录制状态");
 
@@ -1625,7 +1638,6 @@ void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_t
     require(!recorded->truncated, "完整录制文件不应标记截断");
     require(recorded->payload == transportState->queuedRxBytes, "完整录制文件应保存全部 RX 原始字节");
 
-    std::filesystem::remove(tempPath);
     application.shutdown();
 }
 
@@ -1653,15 +1665,14 @@ void test_application_raw_capture_import_preserves_full_history()
     require(importedSnapshot.channels.front().totalSamples == capture.payload.size(),
             "导入回放应保留完整原始数据生成的波形历史");
 
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-application-full-history.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-application-full-history"));
+    const auto tempPath = tempRoot.path() / "capture.psraw";
     require(application.exportWaveRawCapture(tempPath, error), "完整历史导入后应仍可导出 psraw");
     const auto exported = protoscope::plot::readRawCaptureFile(tempPath, error);
     if (!exported.has_value()) {
         throw std::runtime_error("导出的 psraw 应可重新读取: " + error);
     }
     require(exported->payload == capture.payload, "再次导出应保留完整原始 payload");
-    std::filesystem::remove(tempPath);
     application.shutdown();
 }
 

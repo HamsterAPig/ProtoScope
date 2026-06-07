@@ -217,16 +217,34 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua
     }
 
     std::error_code errorCode;
-    if (!std::filesystem::exists(path, errorCode)) {
+    const bool exists = std::filesystem::exists(path, errorCode);
+    if (errorCode) {
+        return fail("检测路径存在性失败: " + errorCode.message());
+    }
+    if (!exists) {
         return fail("路径不存在: " + path.generic_string());
     }
+    const bool regularFile = std::filesystem::is_regular_file(path, errorCode);
+    if (errorCode) {
+        return fail("读取文件类型失败: " + errorCode.message());
+    }
+    std::uint64_t fileSize = 0;
+    if (regularFile) {
+        const auto size = std::filesystem::file_size(path, errorCode);
+        if (errorCode) {
+            return fail("读取文件大小失败: " + errorCode.message());
+        }
+        fileSize = static_cast<std::uint64_t>(size);
+    }
+    const bool directory = std::filesystem::is_directory(path, errorCode);
+    if (errorCode) {
+        return fail("读取目录类型失败: " + errorCode.message());
+    }
     sol::table table = lua.create_table();
-    table["size"] = std::filesystem::is_regular_file(path, errorCode)
-                        ? static_cast<std::uint64_t>(std::filesystem::file_size(path, errorCode))
-                        : 0U;
+    table["size"] = fileSize;
     table["mtime_ms"] = 0;
-    table["is_file"] = std::filesystem::is_regular_file(path, errorCode);
-    table["is_dir"] = std::filesystem::is_directory(path, errorCode);
+    table["is_file"] = regularFile;
+    table["is_dir"] = directory;
     return std::make_tuple(sol::make_object(lua, table), sol::make_object(lua, sol::lua_nil));
 }
 

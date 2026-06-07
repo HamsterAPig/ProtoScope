@@ -10,6 +10,7 @@
 #include "test_registry.hpp"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +18,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -28,6 +30,26 @@ void require(bool condition, const char* message)
         throw std::runtime_error(message);
     }
 }
+
+struct ScopedTempFile {
+    explicit ScopedTempFile(const char* stem)
+    {
+        const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ = std::filesystem::temp_directory_path() /
+                (std::string(stem) + "-" + std::to_string(ticks) + ".psraw");
+    }
+
+    ~ScopedTempFile()
+    {
+        std::error_code error;
+        std::filesystem::remove(path_, error);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
 
 protoscope::plot::WaveDisplayData makeDisplayData(std::vector<protoscope::plot::WaveSample> displaySamples,
                                                   std::vector<double> actualValues)
@@ -1683,8 +1705,8 @@ void test_wave_offset_reset_uses_protocol_default_only()
 
 void test_raw_capture_file_roundtrip()
 {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-roundtrip.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempFile tempFile("protoscope-roundtrip");
+    const auto& tempPath = tempFile.path();
 
     const protoscope::plot::RawCaptureFileData capture{
         .protocolName = "default_protocol",
@@ -1707,13 +1729,12 @@ void test_raw_capture_file_roundtrip()
     require(loaded->capturedAtMs == capture.capturedAtMs, "psraw 应保留采集时间");
     require(loaded->payload == capture.payload, "psraw 应保留原始 payload");
 
-    std::filesystem::remove(tempPath);
 }
 
 void test_raw_capture_file_plot_setup_roundtrip()
 {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-plot-setup-roundtrip.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempFile tempFile("protoscope-plot-setup-roundtrip");
+    const auto& tempPath = tempFile.path();
 
     protoscope::plot::RawCaptureEvent setupEvent;
     setupEvent.type = protoscope::plot::RawCaptureEventType::PlotSetup;
@@ -1782,13 +1803,12 @@ void test_raw_capture_file_plot_setup_roundtrip()
     require(loadedSetup.view.verticalUnit == "℃", "plot_setup 应保留 vertical_unit");
     require(loadedSetup.view.historyLimit == 4096U, "plot_setup 应保留 history_limit");
 
-    std::filesystem::remove(tempPath);
 }
 
 void test_raw_capture_file_plot_setup_rejects_bad_fields()
 {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-plot-setup-bad-fields.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempFile tempFile("protoscope-plot-setup-bad-fields");
+    const auto& tempPath = tempFile.path();
 
     protoscope::plot::RawCaptureEvent setupEvent;
     setupEvent.type = protoscope::plot::RawCaptureEventType::PlotSetup;
@@ -1829,7 +1849,6 @@ void test_raw_capture_file_plot_setup_rejects_bad_fields()
     broken.replace(ratioPos, ratioEnd - ratioPos, "channel.0.ratio: nope");
     require(!protoscope::plot::decodeRawCaptureFile(broken, error).has_value(), "坏数值 ratio 应拒绝解析");
 
-    std::filesystem::remove(tempPath);
 }
 
 void test_raw_capture_file_v2_event_stream_still_reads()
@@ -1894,8 +1913,8 @@ void test_raw_capture_file_requires_protocol_fields()
 
 void test_raw_capture_file_rejects_trailing_bytes()
 {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-trailing-bytes.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempFile tempFile("protoscope-trailing-bytes");
+    const auto& tempPath = tempFile.path();
     const protoscope::plot::RawCaptureFileData capture{
         .protocolName = "default_protocol",
         .protocolDir = "protocols/templates/default_protocol",
@@ -1914,13 +1933,12 @@ void test_raw_capture_file_rejects_trailing_bytes()
     dirty.append("junk");
     const auto parsed = protoscope::plot::decodeRawCaptureFile(dirty, error);
     require(!parsed.has_value(), "payload 后存在尾随脏字节时应拒绝解析");
-    std::filesystem::remove(tempPath);
 }
 
 void test_raw_capture_file_rejects_profile_set_without_length()
 {
-    const auto tempPath = std::filesystem::temp_directory_path() / "protoscope-profile-missing-length.psraw";
-    std::filesystem::remove(tempPath);
+    const ScopedTempFile tempFile("protoscope-profile-missing-length");
+    const auto& tempPath = tempFile.path();
     protoscope::plot::RawCaptureFileData capture{
         .protocolName = "runtime_profile_stream",
         .protocolDir = "tests/fixtures/protocols/runtime_profile_stream",
@@ -1947,5 +1965,4 @@ void test_raw_capture_file_rejects_profile_set_without_length()
     bytes.replace(pos, std::string("length: 8\n").size(), "leng_x: 8\n");
     const auto parsed = protoscope::plot::decodeRawCaptureFile(bytes, error);
     require(!parsed.has_value(), "profile_set 缺少 length 时应拒绝解析");
-    std::filesystem::remove(tempPath);
 }
