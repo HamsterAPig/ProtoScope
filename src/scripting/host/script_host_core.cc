@@ -409,6 +409,128 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
     return std::nullopt;
 }
 
+bool applyControlLabelPosition(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    const sol::object labelPositionObject = table["label_position"];
+    if (!labelPositionObject.valid() || labelPositionObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!labelPositionObject.is<std::string>()) {
+        error = "控件 label_position 必须是字符串 'left' 或 'right'";
+        return false;
+    }
+    const auto labelPosition = parseControlLabelPosition(labelPositionObject.as<std::string>());
+    if (!labelPosition.has_value()) {
+        error = "控件 label_position 仅支持 'left' 或 'right'";
+        return false;
+    }
+    descriptor.labelPosition = *labelPosition;
+    return true;
+}
+
+bool validateControlIdentity(const ControlDescriptor& descriptor, std::string& error)
+{
+    if (descriptor.id.empty()) {
+        error = "控件必须提供 id";
+        return false;
+    }
+    if (descriptor.label.empty() && !controlAllowsEmptyLabel(descriptor.type)) {
+        // 核心流程：只有可用控件自身形态表达含义的紧凑型控件允许隐藏可见 label。
+        error = "控件必须提供 label";
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::vector<std::string>> parseComboOptions(const sol::table& table, std::string& error)
+{
+    const sol::object optionsObject = table["options"];
+    if (!optionsObject.valid() || !optionsObject.is<sol::table>()) {
+        error = "combo 控件必须提供 options";
+        return std::nullopt;
+    }
+
+    std::vector<std::string> optionsList;
+    const auto options = optionsObject.as<sol::table>();
+    for (std::size_t index = 1; index <= options.size(); ++index) {
+        const sol::object option = options[index];
+        if (!option.is<std::string>()) {
+            error = "combo options 必须全部是 string";
+            return std::nullopt;
+        }
+        optionsList.push_back(option.as<std::string>());
+    }
+
+    if (optionsList.empty()) {
+        error = "combo options 不能为空";
+        return std::nullopt;
+    }
+    return optionsList;
+}
+
+bool applyComboControlConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    auto options = parseComboOptions(table, error);
+    if (!options.has_value()) {
+        return false;
+    }
+    descriptor.comboOptions = std::move(*options);
+
+    const int defaultIndex = table.get_or("default", 1);
+    descriptor.comboDefaultIndex = std::clamp(defaultIndex, 1, static_cast<int>(descriptor.comboOptions.size())) - 1;
+    return true;
+}
+
+bool applyElfSymbolComboConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    const sol::object debounceObject = table["debounce_ms"];
+    if (debounceObject.valid() && debounceObject.get_type() != sol::type::lua_nil) {
+        descriptor.debounceMs = debounceObject.as<int>();
+        descriptor.debounceMsConfigured = true;
+    }
+    const sol::object limitObject = table["limit"];
+    int limit = static_cast<int>(descriptor.limit);
+    if (limitObject.valid() && limitObject.get_type() != sol::type::lua_nil) {
+        limit = limitObject.as<int>();
+        descriptor.limitConfigured = true;
+    }
+    if (descriptor.debounceMs <= 0) {
+        error = "elf_symbol_combo debounce_ms 必须大于 0";
+        return false;
+    }
+    if (limit <= 0) {
+        error = "elf_symbol_combo limit 必须大于 0";
+        return false;
+    }
+    descriptor.limit = static_cast<std::size_t>(limit);
+    return true;
+}
+
+bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    switch (descriptor.type) {
+        case ControlType::Button:
+            return true;
+        case ControlType::InputText:
+            descriptor.textDefault = readStringField(table, "default");
+            return true;
+        case ControlType::InputInt:
+            descriptor.intDefault = table.get_or("default", 0);
+            return true;
+        case ControlType::InputFloat:
+            descriptor.floatDefault = table.get_or("default", 0.0F);
+            return true;
+        case ControlType::Checkbox:
+            descriptor.boolDefault = table.get_or("default", false);
+            return true;
+        case ControlType::Combo:
+            return applyComboControlConfig(descriptor, table, error);
+        case ControlType::ElfSymbolCombo:
+            return applyElfSymbolComboConfig(descriptor, table, error);
+    }
+    return true;
+}
+
 sol::object controlValueToLua(sol::state_view lua, const ControlDescriptor* descriptor, const ControlValue& value)
 {
     if (descriptor == nullptr) {
@@ -500,94 +622,9 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     descriptor.type = *controlType;
     descriptor.id = readStringField(table, "id");
     descriptor.label = readStringField(table, "label");
-    const sol::object labelPositionObject = table["label_position"];
-    if (labelPositionObject.valid() && labelPositionObject.get_type() != sol::type::lua_nil) {
-        if (!labelPositionObject.is<std::string>()) {
-            error = "控件 label_position 必须是字符串 'left' 或 'right'";
-            return std::nullopt;
-        }
-        const auto labelPosition = parseControlLabelPosition(labelPositionObject.as<std::string>());
-        if (!labelPosition.has_value()) {
-            error = "控件 label_position 仅支持 'left' 或 'right'";
-            return std::nullopt;
-        }
-        descriptor.labelPosition = *labelPosition;
-    }
-    if (descriptor.id.empty()) {
-        error = "控件必须提供 id";
+    if (!applyControlLabelPosition(descriptor, table, error) || !validateControlIdentity(descriptor, error) ||
+        !applyControlTypeConfig(descriptor, table, error)) {
         return std::nullopt;
-    }
-    if (descriptor.label.empty() && !controlAllowsEmptyLabel(descriptor.type)) {
-        // 核心流程：只有可用控件自身形态表达含义的紧凑型控件允许隐藏可见 label。
-        error = "控件必须提供 label";
-        return std::nullopt;
-    }
-
-    switch (descriptor.type) {
-        case ControlType::Button:
-            break;
-        case ControlType::InputText:
-            descriptor.textDefault = readStringField(table, "default");
-            break;
-        case ControlType::InputInt:
-            descriptor.intDefault = table.get_or("default", 0);
-            break;
-        case ControlType::InputFloat:
-            descriptor.floatDefault = table.get_or("default", 0.0F);
-            break;
-        case ControlType::Checkbox:
-            descriptor.boolDefault = table.get_or("default", false);
-            break;
-        case ControlType::Combo: {
-            const sol::object optionsObject = table["options"];
-            if (!optionsObject.valid() || !optionsObject.is<sol::table>()) {
-                error = "combo 控件必须提供 options";
-                return std::nullopt;
-            }
-
-            const auto options = optionsObject.as<sol::table>();
-            for (std::size_t index = 1; index <= options.size(); ++index) {
-                const sol::object option = options[index];
-                if (!option.is<std::string>()) {
-                    error = "combo options 必须全部是 string";
-                    return std::nullopt;
-                }
-                descriptor.comboOptions.push_back(option.as<std::string>());
-            }
-
-            if (descriptor.comboOptions.empty()) {
-                error = "combo options 不能为空";
-                return std::nullopt;
-            }
-
-            const int defaultIndex = table.get_or("default", 1);
-            descriptor.comboDefaultIndex =
-                std::clamp(defaultIndex, 1, static_cast<int>(descriptor.comboOptions.size())) - 1;
-            break;
-        }
-        case ControlType::ElfSymbolCombo: {
-            const sol::object debounceObject = table["debounce_ms"];
-            if (debounceObject.valid() && debounceObject.get_type() != sol::type::lua_nil) {
-                descriptor.debounceMs = debounceObject.as<int>();
-                descriptor.debounceMsConfigured = true;
-            }
-            const sol::object limitObject = table["limit"];
-            int limit = static_cast<int>(descriptor.limit);
-            if (limitObject.valid() && limitObject.get_type() != sol::type::lua_nil) {
-                limit = limitObject.as<int>();
-                descriptor.limitConfigured = true;
-            }
-            if (descriptor.debounceMs <= 0) {
-                error = "elf_symbol_combo debounce_ms 必须大于 0";
-                return std::nullopt;
-            }
-            if (limit <= 0) {
-                error = "elf_symbol_combo limit 必须大于 0";
-                return std::nullopt;
-            }
-            descriptor.limit = static_cast<std::size_t>(limit);
-            break;
-        }
     }
 
     return descriptor;
