@@ -4,6 +4,8 @@
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/elf_static_address_file_watch.hpp"
+#include "protoscope/ui/protocol_state_file.hpp"
+#include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/ui_component.hpp"
 #include "protoscope/ui/ui_host_context.hpp"
 #include "protoscope/ui/update_check.hpp"
@@ -144,7 +146,15 @@ private:
     void saveCurrentProtocolWorkspace();
     void resetCurrentProtocolWorkspaceLayout();
     void loadCurrentProtocolControlState();
+    void resetProtocolControlLoadDefaults();
+    void useDefaultProtocolControlState();
+    void reportRecoveredProtocolStateBackup(const ProtocolStateFileRecovery& recovery, std::string_view messagePrefix);
+    void restoreProtocolWorkspaceState(const YAML::Node& root, const YAML::Node& protocolNode);
+    void restorePersistedControlValues(const YAML::Node& controlsNode);
     void saveCurrentProtocolControlState();
+    ProtocolDockVisibilityState captureCurrentDockVisibilityState() const;
+    YAML::Node buildPersistedControlState() const;
+    void storeCurrentProtocolState(YAML::Node& root, YAML::Node& protocolNode);
     void pruneCurrentLuaDockSettings();
     bool isLuaDockVisible(std::string_view stableId) const;
     bool setLuaDockVisible(std::string_view stableId, bool visible);
