@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <exception>
 #include <filesystem>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 
@@ -19,8 +20,27 @@ bool ScriptHost::loadScriptFile(const std::string& path)
     std::filesystem::path filePath;
     try {
         filePath = std::filesystem::path(path);
-        if (!std::filesystem::exists(filePath)) {
+        std::error_code fileProbeError;
+        const bool fileExists = std::filesystem::exists(filePath, fileProbeError);
+        if (fileProbeError) {
+            setLastError("检查脚本文件失败: " + fileProbeError.message() + ": " + path);
+            protoLog("error", lastError_);
+            return false;
+        }
+        if (!fileExists) {
             setLastError("未找到脚本文件: " + path);
+            protoLog("error", lastError_);
+            return false;
+        }
+
+        const bool regularFile = std::filesystem::is_regular_file(filePath, fileProbeError);
+        if (fileProbeError) {
+            setLastError("检查脚本文件失败: " + fileProbeError.message() + ": " + path);
+            protoLog("error", lastError_);
+            return false;
+        }
+        if (!regularFile) {
+            setLastError("脚本路径不是普通文件: " + path);
             protoLog("error", lastError_);
             return false;
         }

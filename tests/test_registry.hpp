@@ -16,6 +16,7 @@ void test_keyboard_shortcut_table_has_no_scope_duplicates();
 void test_keyboard_shortcut_labels_match_plan();
 void test_config_external_reload_state();
 void test_script_controls_snapshot();
+void test_script_load_directory_rejected_before_lua_dofile();
 void test_script_optional_labels_allowed_for_compact_controls();
 void test_script_required_labels_still_reject_visual_controls();
 void test_default_protocol_logs_elf_symbol_info();

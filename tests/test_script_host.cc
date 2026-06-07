@@ -292,6 +292,16 @@ void test_script_controls_snapshot()
     require(foundElfSymbolCombo, "默认协议应示范 elf_symbol_combo 控件");
 }
 
+void test_script_load_directory_rejected_before_lua_dofile()
+{
+    const ScopedTempPath scriptDir(makeUniqueTempDir("protoscope-script-load-directory"));
+    protoscope::scripting::ScriptHost host;
+
+    require(!host.loadScriptFile(scriptDir.path().generic_string()), "目录路径不应作为 Lua 脚本加载");
+    require(host.lastError().find("不是普通文件") != std::string::npos,
+            "目录路径应在文件探测阶段给出明确错误");
+}
+
 void test_script_optional_labels_allowed_for_compact_controls()
 {
     protoscope::scripting::ScriptHost host;
@@ -2663,6 +2673,7 @@ static const TestCase kAllTests[] = {
     {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
     {"config_external_reload_state", &test_config_external_reload_state},
     {"script_controls_snapshot", &test_script_controls_snapshot},
+    {"script_load_directory_rejected_before_lua_dofile", &test_script_load_directory_rejected_before_lua_dofile},
     {"script_optional_labels_allowed_for_compact_controls", &test_script_optional_labels_allowed_for_compact_controls},
     {"script_required_labels_still_reject_visual_controls", &test_script_required_labels_still_reject_visual_controls},
     {"default_protocol_logs_elf_symbol_info", &test_default_protocol_logs_elf_symbol_info},
