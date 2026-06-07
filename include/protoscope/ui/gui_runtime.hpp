@@ -142,6 +142,31 @@ private:
                            std::string_view stableId,
                            std::size_t& widgetIndex,
                            bool earlyExit = true);
+    bool drawLuaLayoutChildren(const std::vector<scripting::LayoutNodeDescriptor>& children,
+                               const std::vector<scripting::ControlSnapshot>& controls,
+                               std::string_view stableId,
+                               std::size_t& widgetIndex,
+                               bool earlyExit);
+    bool drawLuaFlowLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                               const std::vector<scripting::ControlSnapshot>& controls,
+                               std::string_view stableId,
+                               std::size_t& widgetIndex,
+                               bool earlyExit);
+    bool drawLuaTableLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                                const std::vector<scripting::ControlSnapshot>& controls,
+                                std::string_view stableId,
+                                std::size_t& widgetIndex,
+                                bool earlyExit);
+    bool drawLuaGroupLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                                const std::vector<scripting::ControlSnapshot>& controls,
+                                std::string_view stableId,
+                                std::size_t& widgetIndex,
+                                bool earlyExit);
+    bool drawLuaCollapseLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                                   const std::vector<scripting::ControlSnapshot>& controls,
+                                   std::string_view stableId,
+                                   std::size_t& widgetIndex,
+                                   bool earlyExit);
     bool drawDynamicControl(const scripting::ControlSnapshot& control);
     bool drawDynamicButtonControl(const scripting::ControlSnapshot& control, const std::string& imguiLabel);
     bool drawDynamicCheckboxControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
