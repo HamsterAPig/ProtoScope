@@ -309,6 +309,139 @@ namespace {
         }
     }
 
+    void encodeWaveViewSwitches(YAML::Node& node, const plot::WaveViewState& view)
+    {
+        node["auto_follow_latest"] = view.autoFollowLatest;
+        node["pause_auto_follow_on_interaction"] = view.pauseAutoFollowOnInteraction;
+        node["lock_vertical_range"] = view.lockVerticalRange;
+        node["show_points_when_sparse"] = view.showPointsWhenSparse;
+        node["show_axis_labels"] = view.showAxisLabels;
+        node["show_channel_legend"] = view.showChannelLegend;
+        node["show_fft_legend"] = view.showFftLegend;
+        node["show_hover_readout"] = view.showHoverReadout;
+        node["show_cursors"] = view.showCursors;
+        node["show_measurement_overlay"] = view.showMeasurementOverlay;
+        node["phosphor_glow_enabled"] = view.phosphorGlowEnabled;
+        node["cursor_interval_locked"] = view.cursorIntervalLocked;
+    }
+
+    void encodeWaveViewAxesAndCursors(YAML::Node& node, const plot::WaveViewState& view)
+    {
+        node["measurement_channel_index"] = view.measurementChannelIndex;
+        node["sample_frequency_hz"] = view.sampleFrequencyHz;
+        node["sample_frequency_input"] = view.sampleFrequencyInput;
+        node["time_axis_source"] = axisSourceName(view.timeAxisSource);
+        node["cursor_snap_mode"] = snapModeName(view.cursorSnapMode);
+        node["cursor_snap_scope"] = snapScopeName(view.cursorSnapScope);
+        node["cursor_extreme_snap_policy"] = extremeSnapPolicyName(view.cursorExtremeSnapPolicy);
+        node["locked_cursor_interval"] = view.lockedCursorInterval;
+    }
+
+    void encodeWaveMeasurementState(YAML::Node& node, const plot::WaveViewState& view)
+    {
+        node["measurement"] = encodeMeasurementSelection(view.measurement);
+        node["measurement_reference_mode"] = measurementReferenceModeName(view.referenceMode);
+        node["reference_channel_index"] = view.referenceChannelIndex;
+        node["manual_reference_value"] = view.manualReferenceValue;
+    }
+
+    YAML::Node encodeWaveFftChannelSelection(const plot::WaveDockState& wave)
+    {
+        YAML::Node channelsNode;
+        for (std::size_t channelIndex = 0; channelIndex < wave.fftChannelEnabled.size(); ++channelIndex) {
+            if (wave.fftChannelEnabled[channelIndex] == 0) {
+                continue;
+            }
+            channelsNode.push_back(channelIndex);
+        }
+        return channelsNode;
+    }
+
+    YAML::Node encodeWaveFftState(const plot::WaveDockState& wave)
+    {
+        const auto& view = wave.view;
+        YAML::Node fftNode;
+        fftNode["enabled"] = view.fft.enabled;
+        fftNode["point_count"] = fftPointCountStateName(view.fft.pointCount);
+        fftNode["window"] = fftWindowStateName(view.fft.window);
+        fftNode["magnitude_mode"] = fftMagnitudeModeStateName(view.fft.magnitudeMode);
+        fftNode["fundamental_mode"] = fftFundamentalModeStateName(view.fft.fundamentalMode);
+        fftNode["manual_fundamental_hz"] = view.fft.manualFundamentalHz;
+        fftNode["manual_point_count"] = view.fft.manualPointCount;
+        fftNode["auto_max_point_count"] = view.fft.autoMaxPointCount;
+        fftNode["source_window_valid"] = view.fftSourceWindowValid;
+        fftNode["source_min_time"] = view.fftSourceMinTime;
+        fftNode["source_max_time"] = view.fftSourceMaxTime;
+        fftNode["frequency_min"] = view.fftFrequencyMin;
+        fftNode["frequency_max"] = view.fftFrequencyMax;
+        fftNode["magnitude_min"] = view.fftMagnitudeMin;
+        fftNode["magnitude_max"] = view.fftMagnitudeMax;
+        fftNode["phase_min"] = view.fftPhaseMin;
+        fftNode["phase_max"] = view.fftPhaseMax;
+        fftNode["channel_enabled"] = encodeWaveFftChannelSelection(wave);
+        return fftNode;
+    }
+
+    void encodeWavePanelState(YAML::Node& node, const plot::WaveDockState& wave)
+    {
+        node["tools_collapsed"] = wave.toolsCollapsed;
+        node["overview_collapsed"] = wave.overviewCollapsed;
+        node["legend_collapsed"] = wave.legendCollapsed;
+        node["tools_expanded_width"] = wave.toolsExpandedWidth;
+        node["overview_panel_height"] = wave.overviewPanelHeight;
+        node["overview_collapsed_height"] = wave.overviewCollapsedHeight;
+    }
+
+    YAML::Node encodeHiddenChannelLabels(const plot::WaveDockState& wave)
+    {
+        YAML::Node hiddenChannelsNode;
+        for (const auto& label : wave.hiddenChannelLabels) {
+            if (!label.empty()) {
+                hiddenChannelsNode.push_back(label);
+            }
+        }
+        return hiddenChannelsNode;
+    }
+
+    YAML::Node encodeWaveCursorState(const plot::WaveViewState& view)
+    {
+        YAML::Node cursorsNode;
+        for (const auto& cursor : view.cursors) {
+            YAML::Node cursorNode;
+            cursorNode["enabled"] = cursor.enabled;
+            cursorNode["pinned"] = cursor.pinned;
+            cursorNode["channel_index"] = cursor.channelIndex;
+            cursorNode["time"] = cursor.time;
+            cursorNode["value"] = cursor.value;
+            cursorsNode.push_back(cursorNode);
+        }
+        return cursorsNode;
+    }
+
+    YAML::Node encodeWaveChannelOverrides(const plot::WaveDockState& wave)
+    {
+        YAML::Node overridesNode;
+        for (std::size_t channelIndex = 0; channelIndex < wave.channelOverrides.size(); ++channelIndex) {
+            const auto& overrideState = wave.channelOverrides[channelIndex];
+            if (!overrideState.labelOverridden && !overrideState.ratioOverridden && !overrideState.scaleOverridden &&
+                !overrideState.offsetOverridden) {
+                continue;
+            }
+            YAML::Node entry;
+            entry["channel_index"] = channelIndex;
+            entry["label_overridden"] = overrideState.labelOverridden;
+            entry["ratio_overridden"] = overrideState.ratioOverridden;
+            entry["scale_overridden"] = overrideState.scaleOverridden;
+            entry["offset_overridden"] = overrideState.offsetOverridden;
+            entry["label"] = overrideState.label;
+            entry["ratio"] = overrideState.ratio;
+            entry["scale"] = overrideState.scale;
+            entry["offset"] = overrideState.offset;
+            overridesNode.push_back(entry);
+        }
+        return overridesNode;
+    }
+
     void resetMissingWaveProtocolState(plot::WaveDockState& wave)
     {
         wave.hiddenChannelLabels.clear();
@@ -479,103 +612,15 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave)
 {
     YAML::Node node;
     const auto& view = wave.view;
-    node["auto_follow_latest"] = view.autoFollowLatest;
-    node["pause_auto_follow_on_interaction"] = view.pauseAutoFollowOnInteraction;
-    node["lock_vertical_range"] = view.lockVerticalRange;
-    node["show_points_when_sparse"] = view.showPointsWhenSparse;
-    node["show_axis_labels"] = view.showAxisLabels;
-    node["show_channel_legend"] = view.showChannelLegend;
-    node["show_fft_legend"] = view.showFftLegend;
-    node["show_hover_readout"] = view.showHoverReadout;
-    node["show_cursors"] = view.showCursors;
-    node["show_measurement_overlay"] = view.showMeasurementOverlay;
-    node["phosphor_glow_enabled"] = view.phosphorGlowEnabled;
-    node["cursor_interval_locked"] = view.cursorIntervalLocked;
-    node["measurement_channel_index"] = view.measurementChannelIndex;
-    node["sample_frequency_hz"] = view.sampleFrequencyHz;
-    node["sample_frequency_input"] = view.sampleFrequencyInput;
-    node["time_axis_source"] = axisSourceName(view.timeAxisSource);
-    node["cursor_snap_mode"] = snapModeName(view.cursorSnapMode);
-    node["cursor_snap_scope"] = snapScopeName(view.cursorSnapScope);
-    node["cursor_extreme_snap_policy"] = extremeSnapPolicyName(view.cursorExtremeSnapPolicy);
-    node["locked_cursor_interval"] = view.lockedCursorInterval;
-    node["measurement"] = encodeMeasurementSelection(view.measurement);
-    node["measurement_reference_mode"] = measurementReferenceModeName(view.referenceMode);
-    node["reference_channel_index"] = view.referenceChannelIndex;
-    node["manual_reference_value"] = view.manualReferenceValue;
-    YAML::Node fftNode;
-    fftNode["enabled"] = view.fft.enabled;
-    fftNode["point_count"] = fftPointCountStateName(view.fft.pointCount);
-    fftNode["window"] = fftWindowStateName(view.fft.window);
-    fftNode["magnitude_mode"] = fftMagnitudeModeStateName(view.fft.magnitudeMode);
-    fftNode["fundamental_mode"] = fftFundamentalModeStateName(view.fft.fundamentalMode);
-    fftNode["manual_fundamental_hz"] = view.fft.manualFundamentalHz;
-    fftNode["manual_point_count"] = view.fft.manualPointCount;
-    fftNode["auto_max_point_count"] = view.fft.autoMaxPointCount;
-    fftNode["source_window_valid"] = view.fftSourceWindowValid;
-    fftNode["source_min_time"] = view.fftSourceMinTime;
-    fftNode["source_max_time"] = view.fftSourceMaxTime;
-    fftNode["frequency_min"] = view.fftFrequencyMin;
-    fftNode["frequency_max"] = view.fftFrequencyMax;
-    fftNode["magnitude_min"] = view.fftMagnitudeMin;
-    fftNode["magnitude_max"] = view.fftMagnitudeMax;
-    fftNode["phase_min"] = view.fftPhaseMin;
-    fftNode["phase_max"] = view.fftPhaseMax;
-    YAML::Node fftChannelsNode;
-    for (std::size_t channelIndex = 0; channelIndex < wave.fftChannelEnabled.size(); ++channelIndex) {
-        if (wave.fftChannelEnabled[channelIndex] == 0) {
-            continue;
-        }
-        fftChannelsNode.push_back(channelIndex);
-    }
-    fftNode["channel_enabled"] = fftChannelsNode;
-    node["fft"] = fftNode;
-    node["tools_collapsed"] = wave.toolsCollapsed;
-    node["overview_collapsed"] = wave.overviewCollapsed;
-    node["legend_collapsed"] = wave.legendCollapsed;
-    node["tools_expanded_width"] = wave.toolsExpandedWidth;
-    node["overview_panel_height"] = wave.overviewPanelHeight;
-    node["overview_collapsed_height"] = wave.overviewCollapsedHeight;
-    YAML::Node hiddenChannelsNode;
-    for (const auto& label : wave.hiddenChannelLabels) {
-        if (!label.empty()) {
-            hiddenChannelsNode.push_back(label);
-        }
-    }
-    node["hidden_channel_labels"] = hiddenChannelsNode;
-
-    YAML::Node cursorsNode;
-    for (const auto& cursor : view.cursors) {
-        YAML::Node cursorNode;
-        cursorNode["enabled"] = cursor.enabled;
-        cursorNode["pinned"] = cursor.pinned;
-        cursorNode["channel_index"] = cursor.channelIndex;
-        cursorNode["time"] = cursor.time;
-        cursorNode["value"] = cursor.value;
-        cursorsNode.push_back(cursorNode);
-    }
-    node["cursors"] = cursorsNode;
-
-    YAML::Node overridesNode;
-    for (std::size_t channelIndex = 0; channelIndex < wave.channelOverrides.size(); ++channelIndex) {
-        const auto& overrideState = wave.channelOverrides[channelIndex];
-        if (!overrideState.labelOverridden && !overrideState.ratioOverridden && !overrideState.scaleOverridden &&
-            !overrideState.offsetOverridden) {
-            continue;
-        }
-        YAML::Node entry;
-        entry["channel_index"] = channelIndex;
-        entry["label_overridden"] = overrideState.labelOverridden;
-        entry["ratio_overridden"] = overrideState.ratioOverridden;
-        entry["scale_overridden"] = overrideState.scaleOverridden;
-        entry["offset_overridden"] = overrideState.offsetOverridden;
-        entry["label"] = overrideState.label;
-        entry["ratio"] = overrideState.ratio;
-        entry["scale"] = overrideState.scale;
-        entry["offset"] = overrideState.offset;
-        overridesNode.push_back(entry);
-    }
-    node["channel_overrides"] = overridesNode;
+    // 核心流程：按状态组写出 YAML，字段名与解码端 helper 一一对应。
+    encodeWaveViewSwitches(node, view);
+    encodeWaveViewAxesAndCursors(node, view);
+    encodeWaveMeasurementState(node, view);
+    node["fft"] = encodeWaveFftState(wave);
+    encodeWavePanelState(node, wave);
+    node["hidden_channel_labels"] = encodeHiddenChannelLabels(wave);
+    node["cursors"] = encodeWaveCursorState(view);
+    node["channel_overrides"] = encodeWaveChannelOverrides(wave);
     return node;
 }
 
