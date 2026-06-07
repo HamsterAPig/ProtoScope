@@ -265,6 +265,11 @@ void test_dock_send_history_deduplicates_and_trims()
     require(send.history[1] == "AA 01", "重复发送内容应去重后置顶");
     require(send.history[2] == "CC 03", "裁剪时应移除最旧历史");
 
+    protoscope::dock::trimSendHistory(send, 2);
+    require(send.history.size() == 2, "直接裁剪发送历史时应按配置条数保留");
+    require(send.history[0] == "DD 04", "直接裁剪不应改变最新历史顺序");
+    require(send.history[1] == "AA 01", "直接裁剪应丢弃末尾旧历史");
+
     protoscope::dock::rememberSendHistory(send, "EE 05", 0);
     require(send.history.empty(), "发送历史条数为 0 时应禁用并清空历史");
 }

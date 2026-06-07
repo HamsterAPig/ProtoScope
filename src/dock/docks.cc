@@ -274,8 +274,9 @@ void trimSendHistory(SendDockState& sendState, std::size_t limit)
         sendState.history.clear();
         return;
     }
-    while (sendState.history.size() > limit) {
-        sendState.history.pop_back();
+    if (sendState.history.size() > limit) {
+        // 核心流程：发送历史按“最新在前”保存，一次性裁掉末尾旧记录，避免逐条弹出。
+        sendState.history.resize(limit);
     }
 }
 
