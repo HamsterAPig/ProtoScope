@@ -260,7 +260,7 @@ private:
     bool showWaveDock_{true};
     bool waveFullscreenActive_{false};
     bool waveFullscreenToggleRequested_{false};
-    config::GuiWaveFullscreenMode waveFullscreenActiveMode_{config::GuiWaveFullscreenMode::Focus};
+    config::GuiWaveFullscreenMode waveFullscreenActiveMode_{config::GuiWaveFullscreenMode::Overlay};
     std::optional<WaveFullscreenDockSnapshot> waveFullscreenSnapshot_;
     FilteredLogRowsCache transferLogRowsCache_;
     FilteredLogRowsCache hostLogRowsCache_;

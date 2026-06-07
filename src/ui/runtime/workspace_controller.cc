@@ -240,6 +240,11 @@ void GuiRuntime::saveCurrentProtocolWorkspace()
     if (!protocolWorkspaceLoaded_ || activeWorkspaceProtocolKey_.empty()) {
         return;
     }
+    if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
+        // Focus 全屏会临时隐藏其它 Dock；保存时跳过这段临时布局，避免污染协议布局文件。
+        ImGui::GetIO().WantSaveIniSettings = false;
+        return;
+    }
 
     try {
         const auto layoutPath = currentProtocolLayoutPath();
@@ -492,6 +497,17 @@ ProtocolDockVisibilityState GuiRuntime::captureCurrentDockVisibilityState() cons
     visibilityState.showScriptDock = showScriptDock_;
     visibilityState.showWaveDock = showWaveDock_;
     visibilityState.luaDockVisibility = luaDockVisibility_;
+    if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus &&
+        waveFullscreenSnapshot_) {
+        // Focus 全屏的 Dock 可见性只是运行期快照，控件状态保存仍使用进入全屏前的可见性。
+        visibilityState.showCommDock = waveFullscreenSnapshot_->showCommDock;
+        visibilityState.showProtocolDock = waveFullscreenSnapshot_->showProtocolDock;
+        visibilityState.showTransferDock = waveFullscreenSnapshot_->showTransferDock;
+        visibilityState.showLogDock = waveFullscreenSnapshot_->showLogDock;
+        visibilityState.showScriptDock = waveFullscreenSnapshot_->showScriptDock;
+        visibilityState.showWaveDock = waveFullscreenSnapshot_->showWaveDock;
+        visibilityState.luaDockVisibility = waveFullscreenSnapshot_->luaDockVisibility;
+    }
     return visibilityState;
 }
 

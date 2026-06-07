@@ -317,7 +317,7 @@ namespace {
 
     const char* toWaveFullscreenModeText(const GuiWaveFullscreenMode mode)
     {
-        return enumToText(mode, kWaveFullscreenModeNames, "focus");
+        return enumToText(mode, kWaveFullscreenModeNames, "overlay");
     }
 
     double positiveOrFallback(double value, double fallback)

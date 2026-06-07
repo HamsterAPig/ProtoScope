@@ -384,8 +384,8 @@ void GuiRuntime::enterWaveFullscreen()
 
     waveFullscreenActiveMode_ = application_.runtimeConfig().gui.wave.fullscreenMode;
     waveFullscreenActive_ = true;
-    showWaveDock_ = true;
     if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
+        showWaveDock_ = true;
         applyWaveFocusFullscreen();
     }
 }

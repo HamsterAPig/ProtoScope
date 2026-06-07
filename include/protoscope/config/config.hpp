@@ -92,7 +92,7 @@ struct GuiWaveConfig {
     bool showAxisLabels{false};
     bool showChannelLegend{true};
     bool showFftLegend{true};
-    GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Focus};
+    GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Overlay};
 };
 
 struct GuiLogHistoryConfig {

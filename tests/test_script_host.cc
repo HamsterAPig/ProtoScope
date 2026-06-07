@@ -1582,8 +1582,8 @@ void test_config_default_roundtrip()
             "游标极值吸附策略默认应为 nearest_waveform");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
-    require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Focus,
-            "波形全屏模式默认应为 focus");
+    require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
+            "波形全屏模式默认应为 overlay");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
     require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
@@ -1755,6 +1755,8 @@ void test_config_repo_default_yaml_loads()
             "默认配置应读取 worker 高水位");
     require(std::abs(loaded.config.scripting.workerBackpressureLowWatermark - 0.3) < 1e-12,
             "默认配置应读取 worker 低水位");
+    require(loaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
+            "源码默认配置应读取 overlay 波形全屏模式");
 }
 
 void test_script_file_io_proto_buffer_roundtrip()
@@ -1903,8 +1905,8 @@ void test_config_wave_mode_invalid_fallback()
         "非法 channel_double_click_action 应回退到 reset_scale_offset");
     require(loaded.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
             "非法 x_axis_double_click_action 应回退到 fit_full_history");
-    require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Focus,
-            "非法 fullscreen_mode 应回退到 focus");
+    require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
+            "非法 fullscreen_mode 应回退到 overlay");
     require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
     require(std::abs(loaded.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "非正自适应比例应回退到 0.22");
     require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "非正 Auto Fit 系数应回退到 1.2");
