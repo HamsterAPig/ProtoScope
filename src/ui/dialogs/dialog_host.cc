@@ -3,6 +3,8 @@
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/keyboard_shortcuts.hpp"
 
+#include <system_error>
+
 namespace protoscope::ui {
 
 namespace {
@@ -522,8 +524,12 @@ void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path)
         application_.setStatusMessage("原始波形导入失败: " + error);
         return;
     }
-    if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir))) {
+    std::error_code protocolEntryError;
+    if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
         rawCaptureImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
+        if (protocolEntryError) {
+            rawCaptureImportError_ += " (" + protocolEntryError.message() + ")";
+        }
         application_.setStatusMessage("原始波形导入失败: " + rawCaptureImportError_);
         return;
     }

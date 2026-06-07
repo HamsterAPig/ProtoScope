@@ -72,7 +72,11 @@ namespace {
         const auto baseName = statePath.filename().string() + ".corrupt-" + timestampForFileName() + "-" +
                               std::to_string(currentProcessId()) + ".bak";
         auto candidate = parent / baseName;
-        for (int index = 1; std::filesystem::exists(candidate); ++index) {
+        for (int index = 1;; ++index) {
+            std::error_code existsError;
+            if (!std::filesystem::exists(candidate, existsError) || existsError) {
+                break;
+            }
             candidate = parent / (baseName + "." + std::to_string(index));
         }
         return candidate;
@@ -251,7 +255,12 @@ ProtocolStateLoadResult loadProtocolStateRootForUpdate(const std::filesystem::pa
 {
     ProtocolStateLoadResult result;
     result.root = emptyMapNode();
-    if (!std::filesystem::exists(statePath)) {
+    std::error_code existsError;
+    if (!std::filesystem::exists(statePath, existsError)) {
+        if (existsError) {
+            result.ok = false;
+            result.error = "检查协议状态文件失败: " + existsError.message();
+        }
         return result;
     }
 

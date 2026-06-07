@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <system_error>
 #include <utility>
 
 namespace protoscope::plot {
@@ -702,7 +703,12 @@ bool writeRawCaptureFile(const std::filesystem::path& path, const RawCaptureFile
 
     try {
         if (path.has_parent_path()) {
-            std::filesystem::create_directories(path.parent_path());
+            std::error_code directoryError;
+            std::filesystem::create_directories(path.parent_path(), directoryError);
+            if (directoryError) {
+                error = "创建 psraw 目录失败: " + directoryError.message();
+                return false;
+            }
         }
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
         if (!out.good()) {
@@ -793,7 +799,12 @@ bool RawCaptureStreamWriter::open(const std::filesystem::path& path,
 
     try {
         if (path.has_parent_path()) {
-            std::filesystem::create_directories(path.parent_path());
+            std::error_code directoryError;
+            std::filesystem::create_directories(path.parent_path(), directoryError);
+            if (directoryError) {
+                error = "创建 psraw 录制目录失败: " + directoryError.message();
+                return false;
+            }
         }
         out_.open(path, std::ios::binary | std::ios::trunc);
         if (!out_.good()) {

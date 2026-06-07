@@ -291,7 +291,8 @@ void GuiRuntime::ensureChineseFont()
 {
     ImGuiIO& io = ImGui::GetIO();
     for (const auto& candidate : candidateChineseFonts()) {
-        if (std::filesystem::exists(candidate)) {
+        std::error_code fontPathError;
+        if (std::filesystem::exists(candidate, fontPathError) && !fontPathError) {
             io.Fonts->AddFontFromFileTTF(
                 candidate.string().c_str(), 18.0F, nullptr, io.Fonts->GetGlyphRangesChineseFull());
             break;
