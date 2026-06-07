@@ -404,8 +404,12 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const
     result.config = withDefaults();
     result.resolvedPath = path.empty() ? defaultConfigPath_ : path;
 
-    if (!std::filesystem::exists(result.resolvedPath)) {
+    std::error_code existsError;
+    if (!std::filesystem::exists(result.resolvedPath, existsError)) {
         result.config.configPath = normalizeTextPath(result.resolvedPath);
+        if (existsError) {
+            result.error = "检查配置文件失败: " + existsError.message();
+        }
         return result;
     }
 
@@ -1009,7 +1013,8 @@ std::string ConfigStore::protocolName(const std::filesystem::path& protocolDir) 
 
 bool ConfigStore::protocolEntryExists(const std::filesystem::path& protocolDir) const
 {
-    return std::filesystem::exists(mainLuaPath(protocolDir));
+    std::error_code error;
+    return std::filesystem::exists(mainLuaPath(protocolDir), error) && !error;
 }
 
 std::vector<std::string> ConfigStore::scanProtocolDirectories(const std::filesystem::path& rootDir) const
@@ -1051,9 +1056,13 @@ FileSnapshot ConfigStore::snapshot(const std::filesystem::path& path) const
 {
     FileSnapshot result;
     result.path = path;
-    result.exists = std::filesystem::exists(path);
+    std::error_code error;
+    result.exists = std::filesystem::exists(path, error) && !error;
     if (result.exists) {
-        result.timestampMs = toTimestampMs(std::filesystem::last_write_time(path));
+        const auto lastWriteTime = std::filesystem::last_write_time(path, error);
+        if (!error) {
+            result.timestampMs = toTimestampMs(lastWriteTime);
+        }
     }
     return result;
 }

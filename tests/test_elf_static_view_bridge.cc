@@ -9,6 +9,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 
 #include <elf_static_view/project.hpp>
@@ -33,6 +34,21 @@ std::filesystem::path makeUniqueTempFile(const char* name, const std::string& ex
 {
     return std::filesystem::temp_directory_path() / (std::string(name) + "-" + std::to_string(nowMs()) + extension);
 }
+
+struct ScopedTempFile {
+    explicit ScopedTempFile(std::filesystem::path path) : path_(std::move(path)) {}
+
+    ~ScopedTempFile()
+    {
+        std::error_code error;
+        std::filesystem::remove(path_, error);
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
 
 elf_static_view::ExpandedNode makeExpandedNode(std::string path,
                                                std::string displayName,
@@ -103,7 +119,8 @@ elf_static_view::ProjectModel sampleProjectModel()
 
 void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols()
 {
-    const auto path = makeUniqueTempFile("protoscope-elf-static-view-dump");
+    const ScopedTempFile tempFile(makeUniqueTempFile("protoscope-elf-static-view-dump"));
+    const auto& path = tempFile.path();
     {
         std::ofstream output(path, std::ios::binary);
         output << elf_static_view::render_dump_json(sampleProjectModel());
@@ -123,12 +140,12 @@ void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols()
     require(wildcardResults[0].label == "global.a_var_int", "a_var* 应命中 a_var_int");
     require(wildcardResults[0].value == "0x20000000", "a_var_int 地址应格式化为十六进制字符串");
 
-    std::filesystem::remove(path);
 }
 
 void test_elf_static_view_bridge_finds_exact_label_only()
 {
-    const auto path = makeUniqueTempFile("protoscope-elf-static-view-exact-label");
+    const ScopedTempFile tempFile(makeUniqueTempFile("protoscope-elf-static-view-exact-label"));
+    const auto& path = tempFile.path();
     {
         std::ofstream output(path, std::ios::binary);
         output << elf_static_view::render_dump_json(sampleProjectModel());
@@ -147,12 +164,12 @@ void test_elf_static_view_bridge_finds_exact_label_only()
     const auto fuzzyOnly = bridge.findExactLabel("counter");
     require(!fuzzyOnly.has_value(), "普通候选查询可模糊命中的文本不应被当作精确 label");
 
-    std::filesystem::remove(path);
 }
 
 void test_elf_static_view_bridge_queries_flattened_composite_members()
 {
-    const auto path = makeUniqueTempFile("protoscope-elf-static-view-composite");
+    const ScopedTempFile tempFile(makeUniqueTempFile("protoscope-elf-static-view-composite"));
+    const auto& path = tempFile.path();
     {
         std::ofstream output(path, std::ios::binary);
         output << elf_static_view::render_dump_json(sampleProjectModel());
@@ -189,7 +206,6 @@ void test_elf_static_view_bridge_queries_flattened_composite_members()
         [](const protoscope::plugin::ElfStaticAddressEntry& entry) { return entry.label == "global.objADC.member"; });
     require(memberIt != objectPrefixResults.end(), "按对象名前缀查询时应包含展开后的成员地址");
 
-    std::filesystem::remove(path);
 }
 
 void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_reload()
@@ -197,7 +213,8 @@ void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_relo
     using protoscope::ui::ElfStaticAddressFileWatchState;
     using protoscope::ui::pollElfStaticAddressFileWatchState;
 
-    const auto path = makeUniqueTempFile("protoscope-elf-watch");
+    const ScopedTempFile tempFile(makeUniqueTempFile("protoscope-elf-watch"));
+    const auto& path = tempFile.path();
     {
         std::ofstream output(path, std::ios::binary);
         output << "v1";
@@ -246,12 +263,12 @@ void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_relo
     require(stable.shouldReload, "重建稳定后应触发自动重载");
     require(stable.clearComboCache, "自动重载后应要求清空符号下拉缓存");
 
-    std::filesystem::remove(path);
 }
 
 void test_elf_static_view_bridge_loads_private_binary_without_extension()
 {
-    const auto path = makeUniqueTempFile("protoscope-elf-static-view-private", "");
+    const ScopedTempFile tempFile(makeUniqueTempFile("protoscope-elf-static-view-private", ""));
+    const auto& path = tempFile.path();
     {
         elf_static_view::ProjectSnapshot snapshot;
         snapshot.source_file = "sample.elf";
@@ -274,12 +291,12 @@ void test_elf_static_view_bridge_loads_private_binary_without_extension()
     require(results.size() == 1, "私有二进制导出应能查询静态地址");
     require(results[0].value == "0x20000010", "私有二进制导出的地址应保持一致");
 
-    std::filesystem::remove(path);
 }
 
 void test_elf_static_view_bridge_loads_variable_summary_export()
 {
-    const auto path = makeUniqueTempFile("protoscope-elf-static-view-summary", ".esv");
+    const ScopedTempFile tempFile(makeUniqueTempFile("protoscope-elf-static-view-summary", ".esv"));
+    const auto& path = tempFile.path();
     {
         elf_static_view::ExportOptions options;
         options.format = elf_static_view::ExportFormat::JsonCompact;
@@ -309,13 +326,14 @@ void test_elf_static_view_bridge_loads_variable_summary_export()
     require(results[0].label == "global.a_var_int", "轻量变量摘要应保留变量路径");
     require(results[0].value == "0x20000000", "轻量变量摘要应保留静态地址");
 
-    std::filesystem::remove(path);
 }
 
 void test_elf_static_view_bridge_keeps_old_model_on_load_failure()
 {
-    const auto path = makeUniqueTempFile("protoscope-elf-static-view-keep-old");
-    const auto invalidPath = makeUniqueTempFile("protoscope-elf-static-view-invalid", ".txt");
+    const ScopedTempFile tempFile(makeUniqueTempFile("protoscope-elf-static-view-keep-old"));
+    const ScopedTempFile invalidTempFile(makeUniqueTempFile("protoscope-elf-static-view-invalid", ".txt"));
+    const auto& path = tempFile.path();
+    const auto& invalidPath = invalidTempFile.path();
     {
         std::ofstream output(path, std::ios::binary);
         output << elf_static_view::render_dump_json(sampleProjectModel());
@@ -334,13 +352,12 @@ void test_elf_static_view_bridge_keeps_old_model_on_load_failure()
     require(error.find("ELF 扫描失败") != std::string::npos, "错误信息应包含 ELF 扫描上下文");
     require(!bridge.query("counter", 64).empty(), "加载失败后应保留旧模型");
 
-    std::filesystem::remove(path);
-    std::filesystem::remove(invalidPath);
 }
 
 void test_elf_static_view_bridge_clear_resets_loaded_model()
 {
-    const auto path = makeUniqueTempFile("protoscope-elf-clear");
+    const ScopedTempFile tempFile(makeUniqueTempFile("protoscope-elf-clear"));
+    const auto& path = tempFile.path();
     {
         std::ofstream output(path, std::ios::binary);
         output << elf_static_view::render_dump_json(sampleProjectModel());
@@ -359,5 +376,4 @@ void test_elf_static_view_bridge_clear_resets_loaded_model()
     require(bridge.sourcePath().empty(), "clear 后 sourcePath 应清空");
     require(bridge.query("counter", 64).empty(), "clear 后查询结果应为空");
 
-    std::filesystem::remove(path);
 }

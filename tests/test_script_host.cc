@@ -2028,7 +2028,15 @@ void test_protocol_scan_and_root_roundtrip()
     require(scanned[1].find("beta") != std::string::npos, "扫描结果应包含 beta");
 
     const auto tempPath = tempRoot.path() / "protoscope-protocol-root-roundtrip.yaml";
-    auto config = store.load(tempPath).config;
+    const auto missingLoad = store.load(tempPath);
+    require(!missingLoad.loadedFromDisk, "缺失配置文件应使用默认配置");
+    require(missingLoad.error.empty(), "普通缺失配置文件不应记录错误");
+    const auto missingSnapshot = store.snapshot(tempPath);
+    require(!missingSnapshot.exists && missingSnapshot.timestampMs == 0, "缺失配置文件快照应保持空状态");
+    require(!store.hasChanged(missingSnapshot), "缺失配置文件重复快照不应误报变化");
+    require(!store.protocolEntryExists(tempRoot.path() / "missing_protocol"), "缺失协议入口应返回 false");
+
+    auto config = missingLoad.config;
     config.protocol.rootDir = tempRoot.path().generic_string();
     config.protocol.selectedDir = betaDir.generic_string();
 
