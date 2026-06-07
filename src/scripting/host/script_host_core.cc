@@ -1359,6 +1359,91 @@ std::optional<std::int64_t> luaIntegerValue(const sol::object& object)
     return std::nullopt;
 }
 
+PlotChannelDescriptor makePlotChannelDescriptor(const sol::table& channelTable, std::size_t index)
+{
+    PlotChannelDescriptor descriptor{};
+    descriptor.label = luaStringField(channelTable, "label").value_or("CH" + std::to_string(index));
+    descriptor.unit = luaStringField(channelTable, "unit").value_or("");
+    descriptor.ratio = finiteOrDefault(luaNumberField(channelTable, "ratio").value_or(1.0), 1.0);
+    descriptor.scale = finiteOrDefault(luaNumberField(channelTable, "scale").value_or(1.0), 1.0);
+    descriptor.offset = finiteOrDefault(luaNumberField(channelTable, "offset").value_or(0.0), 0.0);
+    return descriptor;
+}
+
+bool applyPlotChannelColor(PlotChannelDescriptor& descriptor,
+                           const sol::table& channelTable,
+                           std::size_t index,
+                           std::string& error)
+{
+    const auto colorText = luaStringField(channelTable, "color");
+    if (!colorText.has_value()) {
+        return true;
+    }
+
+    descriptor.color = parseColorText(*colorText);
+    if (descriptor.color.has_value()) {
+        return true;
+    }
+
+    error = "plot.setup.channels[" + std::to_string(index) + "].color 必须是 #RRGGBB 或 #RRGGBBAA";
+    return false;
+}
+
+std::optional<PlotChannelDescriptor> parsePlotChannelDescriptor(const sol::object& channelObject,
+                                                                std::size_t index,
+                                                                std::string& error)
+{
+    if (!channelObject.is<sol::table>()) {
+        error = "plot.setup.channels[" + std::to_string(index) + "] 必须是 table";
+        return std::nullopt;
+    }
+
+    const sol::table channelTable = channelObject.as<sol::table>();
+    auto descriptor = makePlotChannelDescriptor(channelTable, index);
+    if (!applyPlotChannelColor(descriptor, channelTable, index, error)) {
+        return std::nullopt;
+    }
+    return descriptor;
+}
+
+std::optional<std::vector<PlotChannelDescriptor>> parsePlotSetupChannels(const sol::table& table, std::string& error)
+{
+    const sol::object channelsObject = table["channels"];
+    if (!channelsObject.is<sol::table>()) {
+        error = "plot.setup.channels 必须是 table";
+        return std::nullopt;
+    }
+
+    std::vector<PlotChannelDescriptor> channels;
+    const sol::table channelsTable = channelsObject.as<sol::table>();
+    channels.reserve(channelsTable.size());
+    for (std::size_t index = 1; index <= channelsTable.size(); ++index) {
+        auto descriptor = parsePlotChannelDescriptor(channelsTable[index], index, error);
+        if (!descriptor.has_value()) {
+            return std::nullopt;
+        }
+        channels.push_back(std::move(*descriptor));
+    }
+    if (channels.empty()) {
+        error = "plot.setup.channels 不能为空";
+        return std::nullopt;
+    }
+    return channels;
+}
+
+plot::ViewConfig parsePlotSetupViewConfig(const sol::table& table)
+{
+    plot::ViewConfig view{};
+    view.timeScale = luaNumberField(table, "time_scale").value_or(1.0);
+    view.timeUnit = luaStringField(table, "time_unit").value_or("s");
+    view.verticalMin = luaNumberField(table, "vertical_min").value_or(-1.0);
+    view.verticalMax = luaNumberField(table, "vertical_max").value_or(1.0);
+    view.verticalUnit = luaStringField(table, "vertical_unit").value_or("V");
+    const double historyLimit = luaNumberField(table, "history_limit").value_or(0.0);
+    view.historyLimit = historyLimit <= 0.0 ? 0U : static_cast<std::size_t>(historyLimit);
+    return view;
+}
+
 std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& error)
 {
     if (!object.is<sol::table>()) {
@@ -1366,51 +1451,17 @@ std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& 
         return std::nullopt;
     }
     const sol::table table = object.as<sol::table>();
+    auto channels = parsePlotSetupChannels(table, error);
+    if (!channels.has_value()) {
+        return std::nullopt;
+    }
 
+    // 顶层解析只负责编排字段，channel 与 view 的细节由 helper 保持内聚。
     PlotSetup setup{};
     setup.source = luaStringField(table, "source").value_or("");
     setup.resetHistory = luaBoolField(table, "reset_history").value_or(false);
-
-    const sol::object channelsObject = table["channels"];
-    if (!channelsObject.is<sol::table>()) {
-        error = "plot.setup.channels 必须是 table";
-        return std::nullopt;
-    }
-    const sol::table channelsTable = channelsObject.as<sol::table>();
-    for (std::size_t index = 1; index <= channelsTable.size(); ++index) {
-        const sol::object channelObject = channelsTable[index];
-        if (!channelObject.is<sol::table>()) {
-            error = "plot.setup.channels[" + std::to_string(index) + "] 必须是 table";
-            return std::nullopt;
-        }
-        const sol::table channelTable = channelObject.as<sol::table>();
-        PlotChannelDescriptor descriptor{};
-        descriptor.label = luaStringField(channelTable, "label").value_or("CH" + std::to_string(index));
-        descriptor.unit = luaStringField(channelTable, "unit").value_or("");
-        descriptor.ratio = finiteOrDefault(luaNumberField(channelTable, "ratio").value_or(1.0), 1.0);
-        descriptor.scale = finiteOrDefault(luaNumberField(channelTable, "scale").value_or(1.0), 1.0);
-        descriptor.offset = finiteOrDefault(luaNumberField(channelTable, "offset").value_or(0.0), 0.0);
-        if (const auto colorText = luaStringField(channelTable, "color"); colorText.has_value()) {
-            descriptor.color = parseColorText(*colorText);
-            if (!descriptor.color.has_value()) {
-                error = "plot.setup.channels[" + std::to_string(index) + "].color 必须是 #RRGGBB 或 #RRGGBBAA";
-                return std::nullopt;
-            }
-        }
-        setup.channels.push_back(std::move(descriptor));
-    }
-    if (setup.channels.empty()) {
-        error = "plot.setup.channels 不能为空";
-        return std::nullopt;
-    }
-
-    setup.view.timeScale = luaNumberField(table, "time_scale").value_or(1.0);
-    setup.view.timeUnit = luaStringField(table, "time_unit").value_or("s");
-    setup.view.verticalMin = luaNumberField(table, "vertical_min").value_or(-1.0);
-    setup.view.verticalMax = luaNumberField(table, "vertical_max").value_or(1.0);
-    setup.view.verticalUnit = luaStringField(table, "vertical_unit").value_or("V");
-    const double historyLimit = luaNumberField(table, "history_limit").value_or(0.0);
-    setup.view.historyLimit = historyLimit <= 0.0 ? 0U : static_cast<std::size_t>(historyLimit);
+    setup.channels = std::move(*channels);
+    setup.view = parsePlotSetupViewConfig(table);
     return setup;
 }
 
