@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <exception>
 #include <iomanip>
 #include <iterator>
@@ -177,12 +178,28 @@ namespace {
         return rawSetup;
     }
 
+    using ScriptPlotAppendRequest = std::pair<std::size_t, plot::WaveAppendRequest>;
+
+    struct ScriptPlotAppendDrainState {
+        std::vector<ScriptPlotAppendRequest> selected;
+        std::vector<ScriptPlotAppendRequest> deferred;
+        std::unordered_map<std::string, std::size_t> selectedIndexes;
+        std::size_t maxSelectedKeys{0};
+    };
+
     std::string scriptPlotAppendKey(std::size_t channelIndex, const std::string& source)
     {
         auto key = std::to_string(channelIndex);
         key.push_back('\x1F');
         key.append(source);
         return key;
+    }
+
+    ScriptPlotAppendRequest takePendingScriptPlotAppend(std::deque<ScriptPlotAppendRequest>& pending)
+    {
+        auto append = std::move(pending.front());
+        pending.pop_front();
+        return append;
     }
 
     void mergePlotAppendSamples(plot::WaveAppendRequest& target, plot::WaveAppendRequest& source)
@@ -192,10 +209,52 @@ namespace {
                               std::make_move_iterator(source.samples.end()));
     }
 
-    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergeNonEmptyScriptPlotAppends(
-        std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests)
+    bool shouldDeferNewScriptPlotAppend(const ScriptPlotAppendDrainState& state, const std::string& key)
     {
-        std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergedRequests;
+        return !state.selectedIndexes.contains(key) && state.selectedIndexes.size() >= state.maxSelectedKeys;
+    }
+
+    void deferScriptPlotAppend(ScriptPlotAppendDrainState& state, ScriptPlotAppendRequest& append)
+    {
+        auto& [channelIndex, request] = append;
+        state.deferred.emplace_back(channelIndex, std::move(request));
+    }
+
+    void selectOrMergeScriptPlotAppend(ScriptPlotAppendDrainState& state,
+                                       ScriptPlotAppendRequest& append,
+                                       std::string key)
+    {
+        auto& [channelIndex, request] = append;
+        const auto [position, inserted] = state.selectedIndexes.emplace(std::move(key), state.selected.size());
+        if (inserted) {
+            state.selected.emplace_back(channelIndex, std::move(request));
+            return;
+        }
+        mergePlotAppendSamples(state.selected[position->second].second, request);
+    }
+
+    void drainScriptPlotAppendCandidate(ScriptPlotAppendDrainState& state, ScriptPlotAppendRequest append)
+    {
+        auto& [channelIndex, request] = append;
+        const auto key = scriptPlotAppendKey(channelIndex, request.source);
+        if (shouldDeferNewScriptPlotAppend(state, key)) {
+            deferScriptPlotAppend(state, append);
+            return;
+        }
+        selectOrMergeScriptPlotAppend(state, append, key);
+    }
+
+    void restoreDeferredScriptPlotAppends(std::deque<ScriptPlotAppendRequest>& pending,
+                                          std::vector<ScriptPlotAppendRequest>& deferred)
+    {
+        for (auto& append : deferred) {
+            pending.push_back(std::move(append));
+        }
+    }
+
+    std::vector<ScriptPlotAppendRequest> mergeNonEmptyScriptPlotAppends(std::vector<ScriptPlotAppendRequest> requests)
+    {
+        std::vector<ScriptPlotAppendRequest> mergedRequests;
         std::unordered_map<std::string, std::size_t> mergedIndexes;
         mergedRequests.reserve(requests.size());
         for (auto append : requests) {
@@ -2158,30 +2217,15 @@ void Application::enqueueScriptPlotAppends(const std::vector<std::pair<std::size
 std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> Application::drainScriptPlotAppendsForPump(
     const std::size_t maxPlotAppends)
 {
-    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> appendRequests;
-    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> deferred;
-    std::unordered_map<std::string, std::size_t> selectedIndexes;
+    ScriptPlotAppendDrainState drainState{.maxSelectedKeys = maxPlotAppends};
     while (!pendingScriptPlotAppends_.empty()) {
-        auto append = std::move(pendingScriptPlotAppends_.front());
-        pendingScriptPlotAppends_.pop_front();
-        auto& [channelIndex, request] = append;
-        const auto key = scriptPlotAppendKey(channelIndex, request.source);
-        if (!selectedIndexes.contains(key) && selectedIndexes.size() >= maxPlotAppends) {
-            deferred.emplace_back(channelIndex, std::move(request));
-            continue;
-        }
-        const auto [position, inserted] = selectedIndexes.emplace(key, appendRequests.size());
-        if (inserted) {
-            appendRequests.emplace_back(channelIndex, std::move(request));
-            continue;
-        }
-        mergePlotAppendSamples(appendRequests[position->second].second, request);
+        auto append = takePendingScriptPlotAppend(pendingScriptPlotAppends_);
+        drainScriptPlotAppendCandidate(drainState, std::move(append));
     }
 
-    for (auto& append : deferred) {
-        pendingScriptPlotAppends_.push_back(std::move(append));
-    }
-    return appendRequests;
+    // 保持预算外的不同源 append 原始顺序，留到后续 pump 继续处理。
+    restoreDeferredScriptPlotAppends(pendingScriptPlotAppends_, drainState.deferred);
+    return std::move(drainState.selected);
 }
 
 bool Application::appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests)
