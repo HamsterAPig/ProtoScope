@@ -318,6 +318,8 @@ bool TcpClientTransport::open(const TransportConfig& config)
         auto results = runtime_->resolver.resolve(tcp.host, std::to_string(tcp.port));
         asio::connect(runtime_->socket, results);
     } catch (const std::exception& ex) {
+        runtime_ = std::make_unique<Runtime>();
+        context_.reset();
         setState(TransportState::Error);
         pushEvent(TransportErrorEvent{{TransportKind::TcpClient, fallbackEndpoint, 0, nowMs(), true}, ex.what()});
         return false;
@@ -494,6 +496,9 @@ bool TcpServerTransport::open(const TransportConfig& config)
         runtime_->acceptor.listen();
         listenContext_ = makeListenContext(runtime_->acceptor.local_endpoint());
     } catch (const std::exception& ex) {
+        runtime_ = std::make_unique<Runtime>();
+        listenContext_.reset();
+        clientContext_.reset();
         setState(TransportState::Error);
         pushEvent(TransportErrorEvent{
             {TransportKind::TcpServer, endpointText(tcp.bindAddress, tcp.port), 0, nowMs(), false}, ex.what()});
@@ -704,6 +709,8 @@ bool SerialTransport::open(const TransportConfig& config)
         runtime_->serialPort.set_option(asio::serial_port_base::stop_bits(parseStopBits(serial.stopBits)));
         runtime_->serialPort.set_option(asio::serial_port_base::flow_control(parseFlowControl(serial.flowControl)));
     } catch (const std::exception& ex) {
+        runtime_ = std::make_unique<Runtime>();
+        context_.reset();
         setState(TransportState::Error);
         pushEvent(TransportErrorEvent{{TransportKind::Serial, serial.portName, 0, nowMs(), true}, ex.what()});
         return false;

@@ -2846,6 +2846,7 @@ static const TestCase kAllTests[] = {
      &test_tcp_server_connection_takeover_replaces_active_client},
     {"serial_transport_error_path", &test_serial_transport_error_path},
     {"udp_peer_transport_roundtrip", &test_udp_peer_transport_roundtrip},
+    {"udp_peer_failed_open_releases_bound_socket", &test_udp_peer_failed_open_releases_bound_socket},
     {"serial_port_name_normalization", &test_serial_port_name_normalization},
     {"script_dialog_requests_keep_connection_context", &test_script_dialog_requests_keep_connection_context},
     {"script_dialog_requests_detached_without_active_connection",

@@ -206,6 +206,7 @@ void test_transport_enqueue_send_async_roundtrip();
 void test_tcp_server_connection_takeover_replaces_active_client();
 void test_serial_transport_error_path();
 void test_udp_peer_transport_roundtrip();
+void test_udp_peer_failed_open_releases_bound_socket();
 void test_serial_port_name_normalization();
 void test_script_dialog_requests_keep_connection_context();
 void test_script_dialog_requests_detached_without_active_connection();

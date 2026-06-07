@@ -9,6 +9,9 @@
 #include <thread>
 #include <vector>
 
+#include <asio/io_context.hpp>
+#include <asio/ip/udp.hpp>
+
 namespace {
 
 void require(bool condition, const char* message)
@@ -34,6 +37,14 @@ template <typename Predicate> bool waitUntil(Predicate predicate)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     return false;
+}
+
+std::uint16_t reserveFreeUdpPort()
+{
+    asio::io_context ioContext;
+    asio::ip::udp::socket socket(ioContext, asio::ip::udp::v4());
+    socket.bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), 0));
+    return socket.local_endpoint().port();
 }
 
 } // namespace
@@ -407,4 +418,38 @@ void test_udp_peer_transport_roundtrip()
     peerB.close();
     require(peerA.state() == TransportState::Closed, "UDP Peer A close 后应为 Closed");
     require(peerB.state() == TransportState::Closed, "UDP Peer B close 后应为 Closed");
+}
+
+void test_udp_peer_failed_open_releases_bound_socket()
+{
+    using namespace protoscope::transport;
+
+    const auto bindPort = reserveFreeUdpPort();
+    UdpPeerTransport failedPeer;
+    const bool opened = failedPeer.open(UdpPeerConfig{
+        .bindAddress = "127.0.0.1",
+        .bindPort = bindPort,
+        .remoteHost = "invalid host name",
+        .remotePort = 9000,
+    });
+    require(!opened, "非法 UDP remoteHost 应打开失败");
+    require(failedPeer.state() == TransportState::Error, "UDP 打开失败后应进入 Error 状态");
+
+    bool errorSeen = false;
+    for (const auto& event : failedPeer.takeEvents()) {
+        if (const auto* error = std::get_if<TransportErrorEvent>(&event)) {
+            errorSeen = !error->message.empty() && error->context.kind == TransportKind::UdpPeer;
+        }
+    }
+    require(errorSeen, "UDP 打开失败应产生错误事件");
+
+    UdpPeerTransport retryPeer;
+    require(retryPeer.open(UdpPeerConfig{
+                .bindAddress = "127.0.0.1",
+                .bindPort = bindPort,
+                .remoteHost = "127.0.0.1",
+                .remotePort = bindPort,
+            }),
+            "UDP 打开失败后不应继续占用已绑定端口");
+    retryPeer.close();
 }

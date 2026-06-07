@@ -99,6 +99,9 @@ bool UdpPeerTransport::open(const TransportConfig& config)
             runtime_->socket.local_endpoint().protocol(), udp.remoteHost, std::to_string(udp.remotePort));
         runtime_->remoteEndpoint = results.begin()->endpoint();
     } catch (const std::exception& ex) {
+        runtime_ = std::make_unique<Runtime>();
+        context_.reset();
+        remoteEndpointText_.clear();
         setState(TransportState::Error);
         pushEvent(TransportErrorEvent{{TransportKind::UdpPeer, fallbackEndpoint, 0, nowMs(), true}, ex.what()});
         return false;
