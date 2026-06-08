@@ -87,6 +87,32 @@ end
 - `checkbox`：布尔开关，`default` 是 boolean。
 - `combo`：下拉选择，必须提供 `options = { ... }`，`default` 是 1 基索引。
 - `elf_symbol_combo`：ELF 静态地址候选输入框，值是 `{ label, value, type }` 结构；可选 `debounce_ms` 和 `limit`，未写时使用 `gui.elf_symbol_combo.debounce_ms` 与 `gui.elf_symbol_combo.limit`。
+- `value_table`：只读寄存器显示表。`rows` 支持普通行（`id + label + unit? + note?`）、bit 展开行（在一个源 `id` 下声明 `bits = { ... }`）、批量行（`start_id + len + labels + units`）。row id 只用于内部匹配，不显示到界面；`note` 字段在悬浮时作为 tooltip 展示。
+
+```lua
+controls = {
+  { type = "value_table", id = "holding_values", label = "保持寄存器",
+    rows = {
+      { id = 0x1010, label = "电压", unit = "V", note = "母线电压" },
+
+      { id = 0x1020, label = "状态字",
+        bits = {
+          { bit = 0, label = "运行", values = { [0] = "停止", [1] = "运行" } },
+          { bit = 1, label = "告警", values = { [0] = "正常", [1] = "告警" }, note = "设备告警位" },
+          { bit = 5, label = "远程模式" },
+        },
+      },
+
+      { start_id = 0x1030, len = 3,
+        labels = { "温度", "湿度", "压力" },
+        units = { "C", "%", "kPa" },
+      },
+    },
+  },
+}
+```
+
+`proto.set_control("holding_values", { [0x1010] = "220.1", [0x1020] = 0x0023 })` 按 row id 更新。对于 U16 bit 源行，收到整数后自动展开 bit。也可以传 `{ start_id = ..., values = { ... } }` 做范围更新。schema 自动化流填充使用 `value_targets.controls` 映射，解析帧后自动写入目标 value_table 控件，再调用 on_batch/on_frame，handler 覆盖优先。
 
 ### Layout Tree
 
@@ -306,6 +332,17 @@ return schema
 - `raw_output`：默认 `full` 会向 Lua 暴露 `frame.raw`；高速连续采样建议写 `omit`，避免逐字节展开 raw。
 - `low_overhead`：默认 `false` 保持调试快照兼容；高速场景可与 `raw_output = "omit"` 配合，成功帧不保留到 `lastStreamParseBatch()`。
 - `field_output`：默认 `compat` 同时写 `frame.fields.xxx` 和 `frame.xxx`；高频回调可写 `fields_only`，只保留 `frame.fields`。
+- `value_targets`：声明解析帧后自动填充 value_table 控件。`controls` 里每项指定目标控件 id、`values_field` 和注册起始 `start_field` 或 `start_id`。
+
+```lua
+value_targets = {
+  controls = {
+    { id = "holding_values", start_field = "start_addr", values_field = "registers" },
+  },
+},
+```
+
+自动填充发生在 `on_batch/on_frame` 之前，Lua handler 里再次 `set_control` 同一行会覆盖自动值。
 
 补充约定：
 

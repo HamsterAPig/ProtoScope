@@ -185,6 +185,7 @@ private:
     bool drawDynamicElfSymbolComboControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
     bool drawDynamicIntControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
     bool drawDynamicFloatControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawValueTableControl(const scripting::ControlSnapshot& control);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
     void processPendingProtocolWorkspaceSwitch();

@@ -1067,6 +1067,9 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
         case scripting::ControlType::ElfSymbolCombo:
             updated = drawDynamicElfSymbolComboControl(control, inputLabel);
             break;
+        case scripting::ControlType::ValueTable:
+            updated = drawValueTableControl(control);
+            break;
         case scripting::ControlType::InputInt:
             updated = drawDynamicIntControl(control, inputLabel);
             break;
@@ -1235,6 +1238,51 @@ bool GuiRuntime::drawDynamicFloatControl(const scripting::ControlSnapshot& contr
         application_.updateControlValue(descriptor.id, value);
         return true;
     }
+    return false;
+}
+
+bool GuiRuntime::drawValueTableControl(const scripting::ControlSnapshot& control)
+{
+    const auto* value = std::get_if<scripting::ValueTableValue>(&control.value);
+    if (value == nullptr) {
+        return false;
+    }
+
+    const auto& descriptor = control.descriptor;
+    if (!descriptor.label.empty()) {
+        ImGui::TextUnformatted(descriptor.label.c_str());
+    }
+
+    const std::string tableId = "##lua_value_table_" + descriptor.id;
+    constexpr ImGuiTableFlags flags =
+        ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+    if (!ImGui::BeginTable(tableId.c_str(), 3, flags)) {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("label");
+    ImGui::TableSetupColumn("value");
+    ImGui::TableSetupColumn("unit");
+    ImGui::TableHeadersRow();
+    for (std::size_t index = 0; index < descriptor.valueRows.size(); ++index) {
+        const auto& row = descriptor.valueRows[index];
+        const char* rowValue = "";
+        if (index < value->rows.size() && value->rows[index].set) {
+            rowValue = value->rows[index].value.c_str();
+        }
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(row.label.c_str());
+        if (!row.note.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+            ImGui::SetTooltip("%s", row.note.c_str());
+        }
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextUnformatted(rowValue);
+        ImGui::TableSetColumnIndex(2);
+        ImGui::TextUnformatted(row.unit.c_str());
+    }
+    ImGui::EndTable();
     return false;
 }
 

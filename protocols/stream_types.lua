@@ -68,6 +68,17 @@ local M = {}
 ---@field offset? integer 字段起始 offset，Lua 下标从 1 开始；不写时按前一字段顺延
 ---@field count? ProtoStreamFieldCount 字段数量，可写整数、已解析字段名或纯 C++ count 表达式 table；旧 `function(...)` 写法已彻底废弃且不再兼容
 
+---@class ProtoStreamValueTargetControl
+---@field id? string goal value_table control id; also `control` or `control_id`
+---@field control? string
+---@field control_id? string
+---@field start_field? string start row id field name
+---@field start_id? integer fixed start row id
+---@field values_field string register array field name
+
+---@class ProtoStreamValueTargets
+---@field controls ProtoStreamValueTargetControl[]
+
 ---@class ProtoStreamFrameDef
 ---@field name string 帧名称，必须唯一
 ---@field header ProtoBytes 用于同步的固定帧头字节序列
@@ -77,6 +88,7 @@ local M = {}
 ---@field crc? ProtoStreamCrcDef|false CRC 配置；省略或 `false` 表示不校验
 ---@field fields? ProtoStreamFieldDef[] 字段定义
 ---@field on_frame? fun(ctx: ProtoConnectionContext, frame: ProtoStreamFrame) 完整有效帧回调；未定义 `on_batch` 时必填
+---@field value_targets? ProtoStreamValueTargets 解析后自动填充 value_table 控件
 
 ---@class ProtoStreamSchema
 ---@field buffer? ProtoStreamBufferDef

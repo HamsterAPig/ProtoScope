@@ -1,5 +1,6 @@
 #include "script_host_internal.hpp"
 
+#include <limits>
 #include <unordered_set>
 #include <utility>
 
@@ -870,6 +871,95 @@ bool registerStreamFrameCallback(const sol::table& frameTable,
     return true;
 }
 
+std::optional<std::uint32_t> streamSchemaU32Value(const sol::object& object,
+                                                  const char* fieldPath,
+                                                  std::string& error)
+{
+    const auto value = luaIntegerValue(object);
+    if (!value.has_value() || *value < 0 ||
+        *value > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
+        error = std::string(fieldPath) + " 必须是 0..4294967295 范围内的整数";
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(*value);
+}
+
+std::string streamTargetControlId(const sol::table& targetTable)
+{
+    if (const auto value = luaStringField(targetTable, "control_id"); value.has_value()) {
+        return *value;
+    }
+    if (const auto value = luaStringField(targetTable, "control"); value.has_value()) {
+        return *value;
+    }
+    return luaStringField(targetTable, "id").value_or("");
+}
+
+bool parseStreamValueTargets(const sol::table& frameTable,
+                             const StreamFrameDefinition& frame,
+                             LoadedStreamSchema& loaded,
+                             std::string& error)
+{
+    const sol::object targetsObject = frameTable["value_targets"];
+    if (!targetsObject.valid() || targetsObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!targetsObject.is<sol::table>()) {
+        error = "frame.value_targets 必须是 table";
+        return false;
+    }
+
+    const auto targetsTable = targetsObject.as<sol::table>();
+    const sol::object controlsObject = targetsTable["controls"];
+    if (!controlsObject.valid() || !controlsObject.is<sol::table>()) {
+        error = "frame.value_targets.controls 必须是 table";
+        return false;
+    }
+
+    std::vector<StreamValueTargetControl> controls;
+    const auto controlsTable = controlsObject.as<sol::table>();
+    controls.reserve(controlsTable.size());
+    for (std::size_t index = 1; index <= controlsTable.size(); ++index) {
+        const sol::object targetObject = controlsTable[index];
+        if (!targetObject.is<sol::table>()) {
+            error = "frame.value_targets.controls 元素必须是 table";
+            return false;
+        }
+
+        const auto targetTable = targetObject.as<sol::table>();
+        StreamValueTargetControl target;
+        target.controlId = streamTargetControlId(targetTable);
+        target.valuesField = luaStringField(targetTable, "values_field").value_or("");
+        target.startField = luaStringField(targetTable, "start_field");
+        if (target.controlId.empty()) {
+            error = "frame.value_targets.controls[].id 不能为空";
+            return false;
+        }
+        if (target.valuesField.empty()) {
+            error = "frame.value_targets.controls[].values_field 不能为空";
+            return false;
+        }
+
+        const sol::object startIdObject = targetTable["start_id"];
+        if (startIdObject.valid() && startIdObject.get_type() != sol::type::lua_nil) {
+            target.startId = streamSchemaU32Value(startIdObject, "frame.value_targets.controls[].start_id", error);
+            if (!target.startId.has_value()) {
+                return false;
+            }
+        }
+        if (!target.startId.has_value() && !target.startField.has_value()) {
+            error = "frame.value_targets.controls[] 必须提供 start_field 或 start_id";
+            return false;
+        }
+        controls.push_back(std::move(target));
+    }
+
+    if (!controls.empty()) {
+        loaded.valueTargetsByFrame.insert_or_assign(frame.name, std::move(controls));
+    }
+    return true;
+}
+
 std::optional<StreamFrameDefinition> parseStreamFrameDefinition(
     const sol::object& frameObject,
     const std::size_t frameIndex,
@@ -898,6 +988,7 @@ std::optional<StreamFrameDefinition> parseStreamFrameDefinition(
     if (!parseStreamFrameHeader(frameTable, frame, error) || !parseStreamFrameSizeMode(frameTable, frame, error) ||
         !parseStreamFrameCrcDefinition(frameTable, frame, error) ||
         !parseStreamFrameFields(frameTable, frameIndex, frame, error) ||
+        !parseStreamValueTargets(frameTable, frame, loaded, error) ||
         !registerStreamFrameCallback(frameTable, frame, loaded, callbacks, error)) {
         return std::nullopt;
     }

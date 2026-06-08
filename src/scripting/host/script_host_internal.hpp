@@ -3,6 +3,7 @@
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/scripting/script_host.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -16,6 +17,13 @@
 
 namespace protoscope::scripting {
 
+struct StreamValueTargetControl {
+    std::string controlId;
+    std::optional<std::uint32_t> startId;
+    std::optional<std::string> startField;
+    std::string valuesField;
+};
+
 struct LoadedStreamSchema {
     explicit LoadedStreamSchema(StreamBufferDefinition buffer, std::vector<StreamFrameDefinition> frames)
         : parser(std::move(buffer), std::move(frames))
@@ -25,6 +33,7 @@ struct LoadedStreamSchema {
     FrameStreamParser parser;
     std::optional<StreamParseBatch> lastBatch;
     std::unordered_map<std::string, std::string> frameCallbackKeys;
+    std::unordered_map<std::string, std::vector<StreamValueTargetControl>> valueTargetsByFrame;
     std::optional<std::string> onBatchCallbackKey;
     std::optional<std::string> onErrorCallbackKey;
     bool includeRawFrames{true};

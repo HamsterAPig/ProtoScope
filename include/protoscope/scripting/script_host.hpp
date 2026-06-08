@@ -43,6 +43,7 @@ enum class ControlType {
     Checkbox,
     Combo,
     ElfSymbolCombo,
+    ValueTable,
 };
 
 enum class ControlLabelPosition {
@@ -54,6 +55,30 @@ struct ElfSymbolValue {
     std::string label;
     std::string value;
     std::string type;
+};
+
+struct ValueTableBitValueLabels {
+    std::string zero{"0"};
+    std::string one{"1"};
+};
+
+struct ValueTableRowDescriptor {
+    std::uint32_t id{0};
+    std::uint32_t sourceId{0};
+    std::optional<std::uint8_t> bit;
+    std::string label;
+    std::string unit;
+    std::string note;
+    ValueTableBitValueLabels bitValues;
+};
+
+struct ValueTableCellValue {
+    std::string value;
+    bool set{false};
+};
+
+struct ValueTableValue {
+    std::vector<ValueTableCellValue> rows;
 };
 
 struct ControlDescriptor {
@@ -71,9 +96,12 @@ struct ControlDescriptor {
     std::size_t limit{64};
     bool debounceMsConfigured{false};
     bool limitConfigured{false};
+    std::vector<ValueTableRowDescriptor> valueRows;
+    std::unordered_map<std::uint32_t, std::size_t> valueRowById;
+    std::unordered_map<std::uint32_t, std::vector<std::size_t>> valueBitRowsBySourceId;
 };
 
-using ControlValue = std::variant<bool, int, float, std::string, ElfSymbolValue>;
+using ControlValue = std::variant<bool, int, float, std::string, ElfSymbolValue, ValueTableValue>;
 
 struct ControlSnapshot {
     ControlDescriptor descriptor;
@@ -423,6 +451,7 @@ private:
                                                std::chrono::steady_clock::time_point& parserFinishedAt);
     void dispatchStreamParseErrors(const transport::ConnectionContext& context, const StreamParseBatch& batch);
     void updateStreamParseErrorSummary(const StreamParseBatch& batch);
+    void applyStreamValueTargets(const std::vector<StreamParsedFrame>& frames);
     void dispatchStreamFrames(const transport::ConnectionContext& context,
                               const std::vector<StreamParsedFrame>& frames);
 

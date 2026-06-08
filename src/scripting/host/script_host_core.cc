@@ -197,6 +197,8 @@ std::optional<std::array<float, 4>> parseColorText(std::string_view text)
     return std::array<float, 4>{*red, *green, *blue, *alpha};
 }
 
+ValueTableValue defaultValueTableFor(const ControlDescriptor& descriptor);
+
 ControlValue defaultValueFor(const ControlDescriptor& descriptor)
 {
     switch (descriptor.type) {
@@ -214,6 +216,8 @@ ControlValue defaultValueFor(const ControlDescriptor& descriptor)
             return descriptor.comboDefaultIndex;
         case ControlType::ElfSymbolCombo:
             return ElfSymbolValue{};
+        case ControlType::ValueTable:
+            return defaultValueTableFor(descriptor);
     }
     return false;
 }
@@ -305,6 +309,9 @@ std::optional<ControlType> parseControlType(std::string_view value)
     if (value == "elf_symbol_combo") {
         return ControlType::ElfSymbolCombo;
     }
+    if (value == "value_table") {
+        return ControlType::ValueTable;
+    }
     return std::nullopt;
 }
 
@@ -323,6 +330,300 @@ bool controlAllowsEmptyLabel(ControlType type)
 {
     return type == ControlType::Checkbox || type == ControlType::InputText || type == ControlType::InputInt ||
            type == ControlType::InputFloat;
+}
+
+ValueTableValue defaultValueTableFor(const ControlDescriptor& descriptor)
+{
+    ValueTableValue value;
+    value.rows.resize(descriptor.valueRows.size());
+    return value;
+}
+
+std::optional<std::uint32_t> readLuaU32(const sol::object& object, std::string_view fieldName, std::string& error)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        error = std::string(fieldName) + " 必须是整数";
+        return std::nullopt;
+    }
+    if (!object.is<int>() && !object.is<double>()) {
+        error = std::string(fieldName) + " 必须是整数";
+        return std::nullopt;
+    }
+
+    const auto number = object.as<double>();
+    if (!std::isfinite(number) || number < 0.0 ||
+        number > static_cast<double>(std::numeric_limits<std::uint32_t>::max()) || std::floor(number) != number) {
+        error = std::string(fieldName) + " 必须是 0..4294967295 范围内的整数";
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(number);
+}
+
+std::optional<std::uint8_t> readLuaBitIndex(const sol::object& object, std::string& error)
+{
+    const auto value = readLuaU32(object, "value_table bit", error);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    if (*value > 15U) {
+        error = "value_table bit 仅支持 0..15";
+        return std::nullopt;
+    }
+    return static_cast<std::uint8_t>(*value);
+}
+
+std::string scalarLuaValueToDisplayString(const sol::object& object)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return {};
+    }
+    if (object.is<std::string>()) {
+        return object.as<std::string>();
+    }
+    if (object.is<bool>()) {
+        return object.as<bool>() ? "true" : "false";
+    }
+    if (object.is<int>()) {
+        return std::to_string(object.as<int>());
+    }
+    if (object.is<double>()) {
+        std::ostringstream builder;
+        builder << object.as<double>();
+        return builder.str();
+    }
+    return serializeLuaObject(object, 0);
+}
+
+std::optional<std::uint16_t> luaU16Value(const sol::object& object, std::string& error)
+{
+    const auto value = readLuaU32(object, "value_table bit 源值", error);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    if (*value > 0xFFFFU) {
+        error = "value_table bit 源值必须是 U16";
+        return std::nullopt;
+    }
+    return static_cast<std::uint16_t>(*value);
+}
+
+void ensureValueTableSize(const ControlDescriptor& descriptor, ValueTableValue& value)
+{
+    value.rows.resize(descriptor.valueRows.size());
+}
+
+void setValueTableCell(const ControlDescriptor& descriptor,
+                       ValueTableValue& value,
+                       const std::size_t rowIndex,
+                       std::string text)
+{
+    if (rowIndex >= descriptor.valueRows.size()) {
+        return;
+    }
+    ensureValueTableSize(descriptor, value);
+    value.rows[rowIndex].value = std::move(text);
+    value.rows[rowIndex].set = true;
+}
+
+void applyValueTableBitRows(const ControlDescriptor& descriptor,
+                            ValueTableValue& value,
+                            const std::uint32_t sourceId,
+                            const std::uint16_t sourceValue)
+{
+    const auto bitRows = descriptor.valueBitRowsBySourceId.find(sourceId);
+    if (bitRows == descriptor.valueBitRowsBySourceId.end()) {
+        return;
+    }
+
+    for (const auto rowIndex : bitRows->second) {
+        if (rowIndex >= descriptor.valueRows.size()) {
+            continue;
+        }
+        const auto& row = descriptor.valueRows[rowIndex];
+        if (!row.bit.has_value()) {
+            continue;
+        }
+        const auto bitValue = ((sourceValue >> *row.bit) & 0x1U) == 0U ? 0 : 1;
+        setValueTableCell(descriptor, value, rowIndex, bitValue == 0 ? row.bitValues.zero : row.bitValues.one);
+    }
+}
+
+bool applyValueTableLuaRegisterValue(const ControlDescriptor& descriptor,
+                                     ValueTableValue& value,
+                                     const std::uint32_t id,
+                                     const sol::object& object,
+                                     std::string& error)
+{
+    const auto rowIter = descriptor.valueRowById.find(id);
+    if (rowIter != descriptor.valueRowById.end()) {
+        setValueTableCell(descriptor, value, rowIter->second, scalarLuaValueToDisplayString(object));
+    }
+
+    if (descriptor.valueBitRowsBySourceId.find(id) != descriptor.valueBitRowsBySourceId.end()) {
+        const auto sourceValue = luaU16Value(object, error);
+        if (!sourceValue.has_value()) {
+            return false;
+        }
+        applyValueTableBitRows(descriptor, value, id, *sourceValue);
+    }
+    return true;
+}
+
+std::optional<ValueTableValue> valueTableValueFromLuaPatch(const ControlDescriptor& descriptor,
+                                                           const sol::object& object,
+                                                           std::string& error)
+{
+    ValueTableValue patch = defaultValueTableFor(descriptor);
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return patch;
+    }
+    if (!object.is<sol::table>()) {
+        error = "value_table 控件仅支持 table";
+        return std::nullopt;
+    }
+
+    const auto table = object.as<sol::table>();
+    const sol::object startIdObject = table["start_id"];
+    const sol::object valuesObject = table["values"];
+    if (startIdObject.valid() && startIdObject.get_type() != sol::type::lua_nil) {
+        const auto startId = readLuaU32(startIdObject, "value_table start_id", error);
+        if (!startId.has_value()) {
+            return std::nullopt;
+        }
+        if (!valuesObject.valid() || !valuesObject.is<sol::table>()) {
+            error = "value_table range 更新必须提供 values 数组";
+            return std::nullopt;
+        }
+        const auto values = valuesObject.as<sol::table>();
+        for (std::size_t index = 1; index <= values.size(); ++index) {
+            if (*startId > std::numeric_limits<std::uint32_t>::max() - static_cast<std::uint32_t>(index - 1U)) {
+                error = "value_table range 更新 id 超出 U32";
+                return std::nullopt;
+            }
+            const auto id = *startId + static_cast<std::uint32_t>(index - 1U);
+            if (!applyValueTableLuaRegisterValue(descriptor, patch, id, values[index], error)) {
+                return std::nullopt;
+            }
+        }
+        return patch;
+    }
+
+    for (const auto& pair : table) {
+        const auto id = readLuaU32(pair.first, "value_table row id", error);
+        if (!id.has_value()) {
+            return std::nullopt;
+        }
+        if (!applyValueTableLuaRegisterValue(descriptor, patch, *id, pair.second, error)) {
+            return std::nullopt;
+        }
+    }
+    return patch;
+}
+
+void mergeValueTableValue(const ControlDescriptor& descriptor, ValueTableValue& target, const ValueTableValue& patch)
+{
+    ensureValueTableSize(descriptor, target);
+    for (std::size_t index = 0; index < patch.rows.size() && index < target.rows.size(); ++index) {
+        if (!patch.rows[index].set) {
+            continue;
+        }
+        target.rows[index] = patch.rows[index];
+    }
+}
+
+std::string streamIntegerToDisplayString(std::int64_t value)
+{
+    return std::to_string(value);
+}
+
+std::string streamDoubleToDisplayString(double value)
+{
+    std::ostringstream builder;
+    builder << value;
+    return builder.str();
+}
+
+bool applyValueTableIntegerRegisterValue(const ControlDescriptor& descriptor,
+                                         ValueTableValue& value,
+                                         const std::uint32_t id,
+                                         const std::int64_t stored)
+{
+    const auto rowIter = descriptor.valueRowById.find(id);
+    if (rowIter != descriptor.valueRowById.end()) {
+        setValueTableCell(descriptor, value, rowIter->second, streamIntegerToDisplayString(stored));
+    }
+    if (descriptor.valueBitRowsBySourceId.find(id) == descriptor.valueBitRowsBySourceId.end()) {
+        return true;
+    }
+    if (stored < 0 || stored > 0xFFFF) {
+        return false;
+    }
+    applyValueTableBitRows(descriptor, value, id, static_cast<std::uint16_t>(stored));
+    return true;
+}
+
+bool applyValueTableDoubleRegisterValue(const ControlDescriptor& descriptor,
+                                        ValueTableValue& value,
+                                        const std::uint32_t id,
+                                        const double stored)
+{
+    const auto rowIter = descriptor.valueRowById.find(id);
+    if (rowIter != descriptor.valueRowById.end()) {
+        setValueTableCell(descriptor, value, rowIter->second, streamDoubleToDisplayString(stored));
+    }
+    if (descriptor.valueBitRowsBySourceId.find(id) == descriptor.valueBitRowsBySourceId.end()) {
+        return true;
+    }
+    if (!std::isfinite(stored) || stored < 0.0 || stored > 65535.0 || std::floor(stored) != stored) {
+        return false;
+    }
+    applyValueTableBitRows(descriptor, value, id, static_cast<std::uint16_t>(stored));
+    return true;
+}
+
+std::optional<std::uint32_t> streamFieldU32(const StreamFieldValue& field)
+{
+    const auto value = field.integerScalar();
+    if (!value.has_value() || *value < 0 ||
+        *value > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(*value);
+}
+
+bool applyStreamValueTargetValues(const ControlDescriptor& descriptor,
+                                  ValueTableValue& patch,
+                                  const std::uint32_t startId,
+                                  const StreamFieldValue& values)
+{
+    if (const auto* integers = std::get_if<std::vector<std::int64_t>>(&values.value); integers != nullptr) {
+        for (std::size_t index = 0; index < integers->size(); ++index) {
+            if (startId > std::numeric_limits<std::uint32_t>::max() - static_cast<std::uint32_t>(index)) {
+                return false;
+            }
+            if (!applyValueTableIntegerRegisterValue(
+                    descriptor, patch, startId + static_cast<std::uint32_t>(index), (*integers)[index])) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (const auto* doubles = std::get_if<std::vector<double>>(&values.value); doubles != nullptr) {
+        for (std::size_t index = 0; index < doubles->size(); ++index) {
+            if (startId > std::numeric_limits<std::uint32_t>::max() - static_cast<std::uint32_t>(index)) {
+                return false;
+            }
+            if (!applyValueTableDoubleRegisterValue(
+                    descriptor, patch, startId + static_cast<std::uint32_t>(index), (*doubles)[index])) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (const auto integer = values.integerScalar(); integer.has_value()) {
+        return applyValueTableIntegerRegisterValue(descriptor, patch, startId, *integer);
+    }
+    return false;
 }
 
 bool isValidDockAnchor(std::string_view value)
@@ -411,6 +712,8 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
             }
             return symbol;
         }
+        case ControlType::ValueTable:
+            return valueTableValueFromLuaPatch(descriptor, object, error);
     }
 
     error = "控件 " + descriptor.id + " 类型不匹配，实际收到 " + luaTypeName(object.get_type());
@@ -514,6 +817,215 @@ bool applyElfSymbolComboConfig(ControlDescriptor& descriptor, const sol::table& 
     return true;
 }
 
+bool appendValueTableRow(ControlDescriptor& descriptor, ValueTableRowDescriptor row, std::string& error)
+{
+    if (row.label.empty()) {
+        error = "value_table 行必须提供 label";
+        return false;
+    }
+
+    const auto rowIndex = descriptor.valueRows.size();
+    if (row.bit.has_value()) {
+        descriptor.valueBitRowsBySourceId[row.sourceId].push_back(rowIndex);
+    } else {
+        if (descriptor.valueRowById.find(row.id) != descriptor.valueRowById.end()) {
+            error = "value_table row id 不能重复: " + std::to_string(row.id);
+            return false;
+        }
+        descriptor.valueRowById.emplace(row.id, rowIndex);
+    }
+    descriptor.valueRows.push_back(std::move(row));
+    return true;
+}
+
+std::vector<std::string> readValueTableStringArray(const sol::object& object, const char* fieldName, std::string& error)
+{
+    std::vector<std::string> values;
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return values;
+    }
+    if (!object.is<sol::table>()) {
+        error = std::string("value_table ") + fieldName + " 必须是 string 数组";
+        return {};
+    }
+
+    const auto table = object.as<sol::table>();
+    values.reserve(table.size());
+    for (std::size_t index = 1; index <= table.size(); ++index) {
+        const sol::object value = table[index];
+        if (!value.is<std::string>()) {
+            error = std::string("value_table ") + fieldName + " 必须全部是 string";
+            return {};
+        }
+        values.push_back(value.as<std::string>());
+    }
+    return values;
+}
+
+bool applyValueTableBitValueLabels(ValueTableRowDescriptor& row, const sol::object& valuesObject, std::string& error)
+{
+    if (!valuesObject.valid() || valuesObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!valuesObject.is<sol::table>()) {
+        error = "value_table bit values 必须是 table";
+        return false;
+    }
+
+    for (const auto& pair : valuesObject.as<sol::table>()) {
+        const auto key = readLuaU32(pair.first, "value_table bit values key", error);
+        if (!key.has_value()) {
+            return false;
+        }
+        if (*key > 1U || !pair.second.is<std::string>()) {
+            error = "value_table bit values 仅支持 [0]/[1] = string";
+            return false;
+        }
+        if (*key == 0U) {
+            row.bitValues.zero = pair.second.as<std::string>();
+        } else {
+            row.bitValues.one = pair.second.as<std::string>();
+        }
+    }
+    return true;
+}
+
+bool applyValueTableRangeRows(ControlDescriptor& descriptor, const sol::table& rowTable, std::string& error)
+{
+    const auto startId = readLuaU32(rowTable["start_id"], "value_table start_id", error);
+    if (!startId.has_value()) {
+        return false;
+    }
+    const auto len = readLuaU32(rowTable["len"], "value_table len", error);
+    if (!len.has_value() || *len == 0U) {
+        error = "value_table range len 必须大于 0";
+        return false;
+    }
+    if (*startId > std::numeric_limits<std::uint32_t>::max() - (*len - 1U)) {
+        error = "value_table range id 超出 U32";
+        return false;
+    }
+
+    auto labels = readValueTableStringArray(rowTable["labels"], "labels", error);
+    if (!error.empty()) {
+        return false;
+    }
+    auto units = readValueTableStringArray(rowTable["units"], "units", error);
+    if (!error.empty()) {
+        return false;
+    }
+    if (labels.size() < *len) {
+        error = "value_table range labels 数量必须不少于 len";
+        return false;
+    }
+
+    for (std::uint32_t offset = 0; offset < *len; ++offset) {
+        ValueTableRowDescriptor row;
+        row.id = *startId + offset;
+        row.sourceId = row.id;
+        row.label = labels[offset];
+        if (offset < units.size()) {
+            row.unit = units[offset];
+        }
+        if (!appendValueTableRow(descriptor, std::move(row), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool applyValueTableBitRows(ControlDescriptor& descriptor,
+                            const sol::table& rowTable,
+                            const std::uint32_t sourceId,
+                            std::string& error)
+{
+    const sol::object bitsObject = rowTable["bits"];
+    if (!bitsObject.valid() || !bitsObject.is<sol::table>()) {
+        error = "value_table bits 必须是 table";
+        return false;
+    }
+
+    const auto bits = bitsObject.as<sol::table>();
+    for (std::size_t index = 1; index <= bits.size(); ++index) {
+        const sol::object bitObject = bits[index];
+        if (!bitObject.is<sol::table>()) {
+            error = "value_table bits 元素必须是 table";
+            return false;
+        }
+        const auto bitTable = bitObject.as<sol::table>();
+        ValueTableRowDescriptor row;
+        row.id = sourceId;
+        row.sourceId = sourceId;
+        row.bit = readLuaBitIndex(bitTable["bit"], error);
+        if (!row.bit.has_value()) {
+            return false;
+        }
+        row.label = readStringField(bitTable, "label");
+        row.unit = readStringField(bitTable, "unit");
+        row.note = readStringField(bitTable, "note");
+        if (!applyValueTableBitValueLabels(row, bitTable["values"], error)) {
+            return false;
+        }
+        if (!appendValueTableRow(descriptor, std::move(row), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool applyValueTableControlConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    const sol::object rowsObject = table["rows"];
+    if (!rowsObject.valid() || !rowsObject.is<sol::table>()) {
+        error = "value_table 控件必须提供 rows";
+        return false;
+    }
+
+    const auto rows = rowsObject.as<sol::table>();
+    for (std::size_t index = 1; index <= rows.size(); ++index) {
+        const sol::object rowObject = rows[index];
+        if (!rowObject.is<sol::table>()) {
+            error = "value_table rows 元素必须是 table";
+            return false;
+        }
+        const auto rowTable = rowObject.as<sol::table>();
+        const sol::object startIdObject = rowTable["start_id"];
+        if (startIdObject.valid() && startIdObject.get_type() != sol::type::lua_nil) {
+            if (!applyValueTableRangeRows(descriptor, rowTable, error)) {
+                return false;
+            }
+            continue;
+        }
+
+        const auto id = readLuaU32(rowTable["id"], "value_table row id", error);
+        if (!id.has_value()) {
+            return false;
+        }
+        const sol::object bitsObject = rowTable["bits"];
+        if (bitsObject.valid() && bitsObject.get_type() != sol::type::lua_nil) {
+            if (!applyValueTableBitRows(descriptor, rowTable, *id, error)) {
+                return false;
+            }
+            continue;
+        }
+
+        ValueTableRowDescriptor row;
+        row.id = *id;
+        row.sourceId = *id;
+        row.label = readStringField(rowTable, "label");
+        row.unit = readStringField(rowTable, "unit");
+        row.note = readStringField(rowTable, "note");
+        if (!appendValueTableRow(descriptor, std::move(row), error)) {
+            return false;
+        }
+    }
+    if (descriptor.valueRows.empty()) {
+        error = "value_table rows 不能为空";
+        return false;
+    }
+    return true;
+}
+
 bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
 {
     switch (descriptor.type) {
@@ -535,6 +1047,8 @@ bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& tab
             return applyComboControlConfig(descriptor, table, error);
         case ControlType::ElfSymbolCombo:
             return applyElfSymbolComboConfig(descriptor, table, error);
+        case ControlType::ValueTable:
+            return applyValueTableControlConfig(descriptor, table, error);
     }
     return true;
 }
@@ -557,10 +1071,32 @@ sol::object controlValueToLua(sol::state_view lua, const ControlDescriptor* desc
         return sol::make_object(lua, table);
     }
 
+    if (descriptor->type == ControlType::ValueTable) {
+        const auto* tableValue = std::get_if<ValueTableValue>(&value);
+        if (tableValue == nullptr) {
+            return sol::make_object(lua, sol::lua_nil);
+        }
+        sol::table rows = lua.create_table();
+        for (std::size_t index = 0; index < descriptor->valueRows.size(); ++index) {
+            const auto& row = descriptor->valueRows[index];
+            sol::table item = lua.create_table();
+            item["label"] = row.label;
+            item["value"] = index < tableValue->rows.size() && tableValue->rows[index].set
+                                ? tableValue->rows[index].value
+                                : std::string();
+            item["unit"] = row.unit;
+            if (!row.note.empty()) {
+                item["note"] = row.note;
+            }
+            rows[index + 1] = item;
+        }
+        return sol::make_object(lua, rows);
+    }
+
     return std::visit(
         [&lua](const auto& current) -> sol::object {
             using ValueType = std::decay_t<decltype(current)>;
-            if constexpr (std::is_same_v<ValueType, ElfSymbolValue>) {
+            if constexpr (std::is_same_v<ValueType, ElfSymbolValue> || std::is_same_v<ValueType, ValueTableValue>) {
                 return sol::make_object(lua, sol::lua_nil);
             } else {
                 return sol::make_object(lua, current);
@@ -2146,6 +2682,57 @@ void ScriptHost::updateStreamParseErrorSummary(const StreamParseBatch& batch)
     lastTransportStats_.lastErrorSummary = std::move(summary);
 }
 
+void ScriptHost::applyStreamValueTargets(const std::vector<StreamParsedFrame>& frames)
+{
+    if (!runtime_ || !runtime_->stream || runtime_->stream->valueTargetsByFrame.empty()) {
+        return;
+    }
+
+    for (const auto& frame : frames) {
+        const auto targetsIter = runtime_->stream->valueTargetsByFrame.find(frame.name);
+        if (targetsIter == runtime_->stream->valueTargetsByFrame.end()) {
+            continue;
+        }
+        for (const auto& target : targetsIter->second) {
+            const auto* descriptor = findControlDescriptor(controls_, target.controlId);
+            if (descriptor == nullptr || descriptor->type != ControlType::ValueTable) {
+                continue;
+            }
+
+            std::optional<std::uint32_t> startId = target.startId;
+            if (!startId.has_value() && target.startField.has_value()) {
+                const auto startIter = frame.fields.find(*target.startField);
+                if (startIter == frame.fields.end()) {
+                    continue;
+                }
+                startId = streamFieldU32(startIter->second);
+            }
+            if (!startId.has_value()) {
+                continue;
+            }
+
+            const auto valuesIter = frame.fields.find(target.valuesField);
+            if (valuesIter == frame.fields.end()) {
+                continue;
+            }
+
+            auto current = defaultValueTableFor(*descriptor);
+            if (const auto currentIter = controlValues_.find(target.controlId); currentIter != controlValues_.end()) {
+                if (const auto* tableValue = std::get_if<ValueTableValue>(&currentIter->second); tableValue != nullptr) {
+                    current = *tableValue;
+                }
+            }
+
+            auto patch = defaultValueTableFor(*descriptor);
+            if (!applyStreamValueTargetValues(*descriptor, patch, *startId, valuesIter->second)) {
+                continue;
+            }
+            mergeValueTableValue(*descriptor, current, patch);
+            controlValues_[target.controlId] = std::move(current);
+        }
+    }
+}
+
 void ScriptHost::dispatchStreamFrames(const transport::ConnectionContext& context,
                                       const std::vector<StreamParsedFrame>& frames)
 {
@@ -2165,6 +2752,7 @@ void ScriptHost::handleStreamTransportBytes(const transport::TransportBytesEvent
     const auto callbackStartedAt = parserFinishedAt;
     dispatchStreamParseErrors(event.context, batch);
     updateStreamParseErrorSummary(batch);
+    applyStreamValueTargets(batch.frames);
     dispatchStreamFrames(event.context, batch.frames);
     const auto finishedAt = std::chrono::steady_clock::now();
     lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
@@ -2198,6 +2786,20 @@ void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::s
     if (descriptor == nullptr) {
         return;
     }
+    if (descriptor->type == ControlType::ValueTable) {
+        auto current = defaultValueTableFor(*descriptor);
+        if (const auto iter = controlValues_.find(id); iter != controlValues_.end()) {
+            if (const auto* tableValue = std::get_if<ValueTableValue>(&iter->second); tableValue != nullptr) {
+                current = *tableValue;
+            }
+        }
+        if (const auto* patch = std::get_if<ValueTableValue>(&value); patch != nullptr) {
+            mergeValueTableValue(*descriptor, current, *patch);
+        }
+        controlValues_[id] = std::move(current);
+        callbackOnControl(ScriptHostContext{ctx}, id, value);
+        return;
+    }
     controlValues_[id] = value;
     callbackOnControl(ScriptHostContext{ctx}, id, value);
 }
@@ -2207,6 +2809,14 @@ bool ScriptHost::setControlValue(const std::string& id, const ControlValue& valu
     const auto* descriptor = findControlDescriptor(controls_, id);
     if (descriptor == nullptr) {
         return false;
+    }
+    if (descriptor->type == ControlType::ValueTable) {
+        auto next = defaultValueTableFor(*descriptor);
+        if (const auto* tableValue = std::get_if<ValueTableValue>(&value); tableValue != nullptr) {
+            mergeValueTableValue(*descriptor, next, *tableValue);
+        }
+        controlValues_[id] = std::move(next);
+        return true;
     }
     controlValues_[id] = value;
     return true;
@@ -2543,6 +3153,20 @@ const ControlValue* ScriptHost::findControlValue(const std::string& id) const
 
 void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
 {
+    const auto* descriptor = findControlDescriptor(controls_, id);
+    if (descriptor != nullptr && descriptor->type == ControlType::ValueTable) {
+        auto current = defaultValueTableFor(*descriptor);
+        if (const auto iter = controlValues_.find(id); iter != controlValues_.end()) {
+            if (const auto* tableValue = std::get_if<ValueTableValue>(&iter->second); tableValue != nullptr) {
+                current = *tableValue;
+            }
+        }
+        if (const auto* patch = std::get_if<ValueTableValue>(&value); patch != nullptr) {
+            mergeValueTableValue(*descriptor, current, *patch);
+        }
+        controlValues_[id] = std::move(current);
+        return;
+    }
     controlValues_[id] = std::move(value);
 }
 
@@ -2846,6 +3470,14 @@ std::string ScriptHost::valueToString(const ControlValue& value)
                     return std::string("nil");
                 }
                 return current.label + "=" + current.value + " (" + current.type + ")";
+            } else if constexpr (std::is_same_v<ValueType, ValueTableValue>) {
+                std::size_t setCount = 0;
+                for (const auto& row : current.rows) {
+                    if (row.set) {
+                        ++setCount;
+                    }
+                }
+                return "value_table rows=" + std::to_string(setCount);
             } else {
                 std::ostringstream builder;
                 builder << current;

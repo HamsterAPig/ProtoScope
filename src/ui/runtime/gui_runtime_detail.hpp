@@ -455,6 +455,8 @@ namespace {
                 return "combo";
             case scripting::ControlType::ElfSymbolCombo:
                 return "elf_symbol_combo";
+            case scripting::ControlType::ValueTable:
+                return "value_table";
         }
         return "unknown";
     }
@@ -496,6 +498,8 @@ namespace {
                     break;
                 case scripting::ControlType::Button:
                     break;
+                case scripting::ControlType::ValueTable:
+                    break;
             }
         } catch (const std::exception&) {
             return std::nullopt;
@@ -522,6 +526,8 @@ namespace {
             case scripting::ControlType::ElfSymbolCombo:
                 break;
             case scripting::ControlType::Button:
+                break;
+            case scripting::ControlType::ValueTable:
                 break;
         }
     }

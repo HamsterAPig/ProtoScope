@@ -2755,6 +2755,98 @@ void test_half_duplex_modbus_multi_schema_candidates()
     require(foundBeta, "应按第二个候选 schema 解析 beta_frame");
 }
 
+void test_script_value_table_parse_and_update()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-value-table-parse"));
+    {
+        std::ofstream out(protocolDir.path() / "main.lua");
+        require(out.good(), "value_table 测试脚本应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"safe\", title = \"Safe\", controls = {\n";
+        out << "    { type = \"value_table\", id = \"regs\", label = \"寄存器\", rows = {\n";
+        out << "      { id = 0x1010, label = \"电压\", unit = \"V\", note = \"母线\" },\n";
+        out << "      { id = 0x1020, label = \"状态字\",\n";
+        out << "        bits = {\n";
+        out << "          { bit = 0, label = \"运行\", values = { [0] = \"停\", [1] = \"转\" } },\n";
+        out << "          { bit = 5, label = \"远程\" },\n";
+        out << "        },\n";
+        out << "      },\n";
+        out << "      { start_id = 0x1030, len = 2, labels = { \"温度\", \"湿度\" }, units = { \"C\", \"%\" } },\n";
+        out << "    } },\n";
+        out << "  } } }\n";
+        out << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "value_table 协议应可加载");
+
+    auto controls = host.controlsSnapshot();
+    const protoscope::scripting::ControlDescriptor* desc = nullptr;
+    for (const auto& c : controls) {
+        if (c.id == "regs") {
+            desc = &c;
+            break;
+        }
+    }
+    require(desc != nullptr, "应能找到 regs 控件");
+    require(desc->type == protoscope::scripting::ControlType::ValueTable, "regs 应为 value_table 类型");
+    require(desc->valueRows.size() == 5, "应展开为 5 行: 1 普通 + 2 bit + 2 range");
+    require(desc->valueRows[0].id == 0x1010U, "第一行 id 应为 0x1010");
+    require(desc->valueRows[0].label == "电压", "第一行 label 应为 电压");
+    require(desc->valueRows[0].note == "母线", "第一行 note 应为 母线");
+    require(desc->valueRows[1].bit.has_value() && *desc->valueRows[1].bit == 0, "bit0 行");
+    require(desc->valueRows[2].bit.has_value() && *desc->valueRows[2].bit == 5, "bit5 行");
+    require(desc->valueRows[3].id == 0x1030U, "range 首行 id 应为 0x1030");
+    require(desc->valueRows[4].id == 0x1031U, "range 第二行 id 应为 0x1031");
+    require(desc->valueRowById.size() == 3, "普通+range 行共计 3 个 row id 索引");
+    require(desc->valueBitRowsBySourceId.size() == 1, "应有一个 bit 源 id 索引");
+
+    {
+        using namespace protoscope::scripting;
+        ValueTableValue patch;
+        patch.rows.resize(desc->valueRows.size());
+        patch.rows[0].value = "220.1";
+        patch.rows[0].set = true;
+        host.onControl(sampleCtx(), "regs", patch);
+    }
+
+    const auto snapshot = host.controlStatesSnapshot();
+    const protoscope::scripting::ControlSnapshot* cs = nullptr;
+    for (const auto& s : snapshot) {
+        if (s.descriptor.id == "regs") {
+            cs = &s;
+        }
+    }
+    require(cs != nullptr, "regs 应在快照中");
+    const auto* tv = std::get_if<protoscope::scripting::ValueTableValue>(&cs->value);
+    require(tv != nullptr, "值应为 ValueTableValue");
+    require(tv->rows[0].set && tv->rows[0].value == "220.1", "电压应为 220.1");
+
+    {
+        using namespace protoscope::scripting;
+        ValueTableValue patch;
+        patch.rows.resize(desc->valueRows.size());
+        patch.rows[3].value = "25.3";
+        patch.rows[3].set = true;
+        patch.rows[4].value = "68.1";
+        patch.rows[4].set = true;
+        host.onControl(sampleCtx(), "regs", patch);
+    }
+
+    const auto snapshot2 = host.controlStatesSnapshot();
+    const protoscope::scripting::ControlSnapshot* cs2 = nullptr;
+    for (const auto& s : snapshot2) {
+        if (s.descriptor.id == "regs") {
+            cs2 = &s;
+        }
+    }
+    require(cs2 != nullptr, "regs 应在快照中");
+    const auto* tvFinal = std::get_if<protoscope::scripting::ValueTableValue>(&cs2->value);
+    require(tvFinal != nullptr && tvFinal->rows[3].value == "25.3" && tvFinal->rows[4].value == "68.1",
+        "range 更新应正确写入");
+    require(tvFinal->rows[0].value == "220.1", "之前的普通行更新应保留");
+}
+
 namespace {
 
 static const TestCase kAllTests[] = {
@@ -2775,6 +2867,7 @@ static const TestCase kAllTests[] = {
     {"script_elf_symbol_combo_descriptor_defaults", &test_script_elf_symbol_combo_descriptor_defaults},
     {"script_elf_symbol_combo_invalid_config_fails", &test_script_elf_symbol_combo_invalid_config_fails},
     {"script_elf_symbol_combo_get_control_returns_table", &test_script_elf_symbol_combo_get_control_returns_table},
+    {"script_value_table_parse_and_update", &test_script_value_table_parse_and_update},
     {"script_on_open_log", &test_script_on_open_log},
     {"script_on_close_log", &test_script_on_close_log},
     {"script_on_error_log", &test_script_on_error_log},

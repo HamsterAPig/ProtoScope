@@ -24,6 +24,7 @@ void test_default_protocol_logs_elf_symbol_info();
 void test_script_elf_symbol_combo_descriptor_defaults();
 void test_script_elf_symbol_combo_invalid_config_fails();
 void test_script_elf_symbol_combo_get_control_returns_table();
+void test_script_value_table_parse_and_update();
 void test_script_on_open_log();
 void test_script_on_close_log();
 void test_script_on_error_log();
