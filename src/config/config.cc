@@ -473,6 +473,8 @@ namespace {
                 readScalar<std::size_t>(logHistory, "host_limit", config.gui.logHistory.hostLimit);
             config.gui.logHistory.scriptLimit =
                 readScalar<std::size_t>(logHistory, "script_limit", config.gui.logHistory.scriptLimit);
+            config.gui.logHistory.requestTraceLimit =
+                readScalar<std::size_t>(logHistory, "request_trace_limit", config.gui.logHistory.requestTraceLimit);
         }
         if (const auto rawCapture = childNode(gui, "raw_capture")) {
             config.gui.rawCapture.liveLimitBytes =
@@ -780,6 +782,7 @@ namespace {
         gui["log_history"]["transfer_frame_limit"] = config.gui.logHistory.transferFrameLimit;
         gui["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
         gui["log_history"]["script_limit"] = config.gui.logHistory.scriptLimit;
+        gui["log_history"]["request_trace_limit"] = config.gui.logHistory.requestTraceLimit;
         gui["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
         gui["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
         gui["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;

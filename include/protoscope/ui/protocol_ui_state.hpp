@@ -16,6 +16,7 @@ struct ProtocolDockVisibilityState {
     bool showCommDock{true};
     bool showProtocolDock{true};
     bool showTransferDock{true};
+    bool showRequestTraceDock{true};
     bool showLogDock{true};
     bool showScriptDock{true};
     bool showWaveDock{true};

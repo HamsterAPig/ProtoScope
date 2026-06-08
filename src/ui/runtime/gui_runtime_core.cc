@@ -364,6 +364,7 @@ void GuiRuntime::syncRuntimeState()
         {"comm", showCommDock_},
         {"protocol", showProtocolDock_},
         {"transfer", showTransferDock_},
+        {"request_trace", showRequestTraceDock_},
         {"log", showLogDock_},
         {"script", showScriptDock_},
         {"wave", showWaveDock_},
@@ -436,6 +437,7 @@ void GuiRuntime::captureWaveFullscreenDockSnapshot()
         .showCommDock = showCommDock_,
         .showProtocolDock = showProtocolDock_,
         .showTransferDock = showTransferDock_,
+        .showRequestTraceDock = showRequestTraceDock_,
         .showLogDock = showLogDock_,
         .showScriptDock = showScriptDock_,
         .showWaveDock = showWaveDock_,
@@ -461,6 +463,7 @@ void GuiRuntime::applyWaveFocusFullscreen()
     showCommDock_ = false;
     showProtocolDock_ = false;
     showTransferDock_ = false;
+    showRequestTraceDock_ = false;
     showLogDock_ = false;
     showScriptDock_ = false;
     showWaveDock_ = true;
@@ -479,6 +482,7 @@ void GuiRuntime::restoreWaveFocusFullscreen()
     showCommDock_ = waveFullscreenSnapshot_->showCommDock;
     showProtocolDock_ = waveFullscreenSnapshot_->showProtocolDock;
     showTransferDock_ = waveFullscreenSnapshot_->showTransferDock;
+    showRequestTraceDock_ = waveFullscreenSnapshot_->showRequestTraceDock;
     showLogDock_ = waveFullscreenSnapshot_->showLogDock;
     showScriptDock_ = waveFullscreenSnapshot_->showScriptDock;
     showWaveDock_ = waveFullscreenSnapshot_->showWaveDock;
@@ -610,17 +614,20 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
             const bool previousShowCommDock = showCommDock_;
             const bool previousShowProtocolDock = showProtocolDock_;
             const bool previousShowTransferDock = showTransferDock_;
+            const bool previousShowRequestTraceDock = showRequestTraceDock_;
             const bool previousShowLogDock = showLogDock_;
             const bool previousShowScriptDock = showScriptDock_;
             const bool previousShowWaveDock = showWaveDock_;
             ImGui::MenuItem("通讯配置", nullptr, &showCommDock_);
             ImGui::MenuItem("协议脚本 / 动态控件", nullptr, &showProtocolDock_);
             ImGui::MenuItem("收发数据", nullptr, &showTransferDock_);
+            ImGui::MenuItem("请求追踪", nullptr, &showRequestTraceDock_);
             ImGui::MenuItem("日志", nullptr, &showLogDock_);
             ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
             ImGui::MenuItem("波形", nullptr, &showWaveDock_);
             if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
-                previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
+                previousShowTransferDock != showTransferDock_ ||
+                previousShowRequestTraceDock != showRequestTraceDock_ || previousShowLogDock != showLogDock_ ||
                 previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
                 pendingProtocolWorkspaceSave_ = true;
             }
@@ -745,6 +752,7 @@ void GuiRuntime::renderFrame()
     const bool previousShowCommDock = showCommDock_;
     const bool previousShowProtocolDock = showProtocolDock_;
     const bool previousShowTransferDock = showTransferDock_;
+    const bool previousShowRequestTraceDock = showRequestTraceDock_;
     const bool previousShowLogDock = showLogDock_;
     const bool previousShowScriptDock = showScriptDock_;
     const bool previousShowWaveDock = showWaveDock_;
@@ -769,8 +777,9 @@ void GuiRuntime::renderFrame()
         waveFullscreenToggleRequested_ = true;
     }
     if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
-        previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
-        previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
+        previousShowTransferDock != showTransferDock_ || previousShowRequestTraceDock != showRequestTraceDock_ ||
+        previousShowLogDock != showLogDock_ || previousShowScriptDock != showScriptDock_ ||
+        previousShowWaveDock != showWaveDock_) {
         if (!waveFullscreenActive_ && !waveFullscreenToggleRequested_) {
             pendingProtocolWorkspaceSave_ = true;
         }

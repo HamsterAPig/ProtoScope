@@ -691,6 +691,98 @@ namespace {
         return std::string("active");
     }
 
+    dock::RequestTraceKind toRequestTraceKind(scripting::TxRequestKind kind)
+    {
+        switch (kind) {
+            case scripting::TxRequestKind::Send:
+                return dock::RequestTraceKind::Send;
+            case scripting::TxRequestKind::Request:
+                return dock::RequestTraceKind::Request;
+        }
+        return dock::RequestTraceKind::Send;
+    }
+
+    dock::RequestTraceState toRequestTraceState(scripting::TxEventState state)
+    {
+        switch (state) {
+            case scripting::TxEventState::Sent:
+                return dock::RequestTraceState::Sent;
+            case scripting::TxEventState::Completed:
+                return dock::RequestTraceState::Completed;
+            case scripting::TxEventState::Failed:
+                return dock::RequestTraceState::Failed;
+            case scripting::TxEventState::Timeout:
+                return dock::RequestTraceState::Timeout;
+            case scripting::TxEventState::Rejected:
+                return dock::RequestTraceState::Rejected;
+            case scripting::TxEventState::Dropped:
+                return dock::RequestTraceState::Dropped;
+            case scripting::TxEventState::Canceled:
+                return dock::RequestTraceState::Canceled;
+        }
+        return dock::RequestTraceState::Rejected;
+    }
+
+    std::string guardStateForTrace(const scripting::TxRequest& request, dock::RequestTraceState state)
+    {
+        if (!request.guarded) {
+            return {};
+        }
+        if (state == dock::RequestTraceState::Queued) {
+            return "queued";
+        }
+        const auto txState = [&]() -> std::optional<scripting::TxEventState> {
+            switch (state) {
+                case dock::RequestTraceState::Sent:
+                    return scripting::TxEventState::Sent;
+                case dock::RequestTraceState::Completed:
+                    return scripting::TxEventState::Completed;
+                case dock::RequestTraceState::Failed:
+                    return scripting::TxEventState::Failed;
+                case dock::RequestTraceState::Timeout:
+                    return scripting::TxEventState::Timeout;
+                case dock::RequestTraceState::Rejected:
+                    return scripting::TxEventState::Rejected;
+                case dock::RequestTraceState::Dropped:
+                    return scripting::TxEventState::Dropped;
+                case dock::RequestTraceState::Canceled:
+                    return scripting::TxEventState::Canceled;
+                default:
+                    return std::nullopt;
+            }
+        }();
+        if (!txState.has_value()) {
+            return {};
+        }
+        const auto guardState = guardStateForEvent(request, *txState);
+        return guardState.value_or(std::string{});
+    }
+
+    dock::RequestTraceRow makeRequestTraceRow(const scripting::TxRequest& request,
+                                             dock::RequestTraceState state,
+                                             const std::optional<std::string>& error,
+                                             std::uint64_t timestampMs)
+    {
+        return dock::RequestTraceRow{
+            .timestampMs = timestampMs,
+            .id = request.id,
+            .kind = toRequestTraceKind(request.kind),
+            .state = state,
+            .endpoint = request.connection.endpoint,
+            .tag = request.tag,
+            .bytes = request.payload.size(),
+            .queuedMs = request.createdAtMs,
+            .finishedMs = timestampMs,
+            .timeoutMs = request.timeoutMs,
+            .durationMs = timestampMs >= request.createdAtMs ? timestampMs - request.createdAtMs : 0,
+            .guarded = request.guarded,
+            .attempt = request.attempt,
+            .maxAttempts = request.maxAttempts,
+            .guardState = guardStateForTrace(request, state),
+            .error = error.value_or(std::string{}),
+        };
+    }
+
     bool nearlyEqual(double left, double right)
     {
         return std::abs(left - right) <= 1e-12;
@@ -1372,6 +1464,7 @@ void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config)
         .transferFrameRows = config.transferFrameLimit,
         .hostLogRows = config.hostLimit,
         .scriptLogRows = config.scriptLimit,
+        .requestTraceRows = config.requestTraceLimit,
     });
     trimPendingTransferFrameRowsToLimit();
 }
@@ -2897,6 +2990,8 @@ bool Application::processTransportTxEvent(const transport::TransportTxEvent& eve
                 .error = error,
             });
         scriptWorker_.waitIdle();
+        dockStore_.appendRequestTraceRow(
+            makeRequestTraceRow(activeWrite.request, dock::RequestTraceState::Sent, error, event.finishedAtMs));
         appendTransferRow(dock::ReceiveRow{
             .timestampMs = event.finishedAtMs,
             .direction = "TX",
@@ -2936,6 +3031,19 @@ bool Application::applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch
     for (const auto& connection : batch.requestGuardResets) {
         txRequestGuardHalted_ = false;
         const auto resetAtMs = nowMs();
+        dockStore_.appendRequestTraceRow(dock::RequestTraceRow{
+            .timestampMs = resetAtMs,
+            .id = 0,
+            .kind = dock::RequestTraceKind::Request,
+            .state = dock::RequestTraceState::GuardReset,
+            .endpoint = connection.endpoint,
+            .tag = "request_guard",
+            .queuedMs = resetAtMs,
+            .finishedMs = resetAtMs,
+            .guarded = true,
+            .guardState = "reset",
+            .error = {},
+        });
         scriptWorker_.postTxEvent(connection,
                                   scripting::TxEvent{
                                       .id = 0,
@@ -3188,6 +3296,8 @@ bool Application::processRequestTimeouts()
         // 核心流程：guarded request 的重试只属于当前请求；
         // 超时后把下一次 attempt 放回队首，避免后续请求抢在重试前发送。
         ++request.attempt;
+        dockStore_.appendRequestTraceRow(
+            makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, currentMs));
         pendingTxQueue_.push_front(std::move(request));
     }
     driveTxScheduler();
@@ -3258,6 +3368,8 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     const std::size_t activeCount = pendingTxQueue_.size() + (activeWrite_.has_value() ? 1U : 0U) +
                                     (activeHalfDuplexRequest_.has_value() ? 1U : 0U);
     if (activeCount < runtimeConfig_.protocol.tx.maxPending) {
+        dockStore_.appendRequestTraceRow(
+            makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, nowMs()));
         pendingTxQueue_.push_back(std::move(request));
         return true;
     }
@@ -3267,6 +3379,8 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
         auto dropped = std::move(pendingTxQueue_.front());
         pendingTxQueue_.pop_front();
         finishTxRequest(dropped, scripting::TxEventState::Dropped, overflowMessage, nowMs());
+        dockStore_.appendRequestTraceRow(
+            makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, nowMs()));
         pendingTxQueue_.push_back(std::move(request));
         notifyTxOverflow(overflowMessage);
         return true;
@@ -3305,6 +3419,8 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
         activeHalfDuplexRequest_->request.id == request.id) {
         scriptWorker_.postRequestAwaitingCompletion(false);
     }
+
+    dockStore_.appendRequestTraceRow(makeRequestTraceRow(request, toRequestTraceState(state), error, finishedAtMs));
 
     if (state == scripting::TxEventState::Sent) {
         appendTransferRow(dock::ReceiveRow{

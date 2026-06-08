@@ -148,6 +148,7 @@ void GuiRuntime::drawMainMenu()
         const bool previousShowCommDock = showCommDock_;
         const bool previousShowProtocolDock = showProtocolDock_;
         const bool previousShowTransferDock = showTransferDock_;
+        const bool previousShowRequestTraceDock = showRequestTraceDock_;
         const bool previousShowLogDock = showLogDock_;
         const bool previousShowScriptDock = showScriptDock_;
         const bool previousShowWaveDock = showWaveDock_;
@@ -157,6 +158,9 @@ void GuiRuntime::drawMainMenu()
                         shortcutLabel(ShortcutAction::ToggleProtocolDock).data(),
                         &showProtocolDock_);
         ImGui::MenuItem("收发数据", shortcutLabel(ShortcutAction::ToggleTransferDock).data(), &showTransferDock_);
+        ImGui::MenuItem("请求追踪",
+                        shortcutLabel(ShortcutAction::ToggleRequestTraceDock).data(),
+                        &showRequestTraceDock_);
         ImGui::MenuItem("日志", shortcutLabel(ShortcutAction::ToggleLogDock).data(), &showLogDock_);
         ImGui::MenuItem("脚本", shortcutLabel(ShortcutAction::ToggleScriptDock).data(), &showScriptDock_);
         ImGui::MenuItem("波形", shortcutLabel(ShortcutAction::ToggleWaveDock).data(), &showWaveDock_);
@@ -165,8 +169,9 @@ void GuiRuntime::drawMainMenu()
         ImGui::SameLine();
         ImGui::TextDisabled("中心波形 / 左配置 / 右分析 / 底部事件流");
         if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
-            previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
-            previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
+            previousShowTransferDock != showTransferDock_ || previousShowRequestTraceDock != showRequestTraceDock_ ||
+            previousShowLogDock != showLogDock_ || previousShowScriptDock != showScriptDock_ ||
+            previousShowWaveDock != showWaveDock_) {
             pendingProtocolWorkspaceSave_ = true;
         }
         ImGui::Separator();

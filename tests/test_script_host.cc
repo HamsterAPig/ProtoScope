@@ -1682,6 +1682,7 @@ void test_config_default_roundtrip()
     require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
     require(config.gui.logHistory.scriptLimit == 5000, "脚本日志默认上限应为 5000");
+    require(config.gui.logHistory.requestTraceLimit == 5000, "请求追踪默认上限应为 5000");
     require(config.gui.rawCapture.liveLimitBytes == 64U * 1024U * 1024U, "实时原始缓存默认上限应为 64MiB");
     require(config.gui.rawCapture.recordingQueueLimitBytes == 256U * 1024U * 1024U,
             "完整原始录制队列默认硬上限应为 256MiB");
@@ -1731,6 +1732,7 @@ void test_config_default_roundtrip()
     config.gui.logHistory.transferFrameLimit = 22;
     config.gui.logHistory.hostLimit = 33;
     config.gui.logHistory.scriptLimit = 44;
+    config.gui.logHistory.requestTraceLimit = 55;
     config.gui.rawCapture.liveLimitBytes = 123;
     config.gui.rawCapture.recordingQueueLimitBytes = 456;
     config.gui.wave.resetHistoryOnTimeReset = false;
@@ -1804,6 +1806,7 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.logHistory.transferFrameLimit == 22, "逐帧收发历史上限 roundtrip 失败");
     require(reloaded.config.gui.logHistory.hostLimit == 33, "宿主日志历史上限 roundtrip 失败");
     require(reloaded.config.gui.logHistory.scriptLimit == 44, "脚本日志历史上限 roundtrip 失败");
+    require(reloaded.config.gui.logHistory.requestTraceLimit == 55, "请求追踪历史上限 roundtrip 失败");
     require(reloaded.config.gui.rawCapture.liveLimitBytes == 123, "实时原始缓存上限 roundtrip 失败");
     require(reloaded.config.gui.rawCapture.recordingQueueLimitBytes == 456, "完整原始录制队列上限 roundtrip 失败");
     require(!reloaded.config.gui.wave.resetHistoryOnTimeReset, "波形时间回绕策略 roundtrip 失败");
@@ -2763,6 +2766,7 @@ static const TestCase kAllTests[] = {
     {"keyboard_shortcut_table_has_no_scope_duplicates", &test_keyboard_shortcut_table_has_no_scope_duplicates},
     {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
     {"config_external_reload_state", &test_config_external_reload_state},
+    {"request_trace_filter_and_clear", &test_request_trace_filter_and_clear},
     {"script_controls_snapshot", &test_script_controls_snapshot},
     {"script_load_directory_rejected_before_lua_dofile", &test_script_load_directory_rejected_before_lua_dofile},
     {"script_optional_labels_allowed_for_compact_controls", &test_script_optional_labels_allowed_for_compact_controls},

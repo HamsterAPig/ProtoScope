@@ -101,6 +101,7 @@ struct GuiLogHistoryConfig {
     std::size_t transferFrameLimit{120000};
     std::size_t hostLimit{5000};
     std::size_t scriptLimit{5000};
+    std::size_t requestTraceLimit{5000};
 };
 
 struct GuiRawCaptureConfig {

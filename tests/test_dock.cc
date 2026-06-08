@@ -95,6 +95,7 @@ void test_dock_history_limits_trim_all_log_types()
         .transferFrameRows = 4,
         .hostLogRows = 2,
         .scriptLogRows = 2,
+        .requestTraceRows = 3,
     });
 
     for (std::size_t index = 0; index < 5; ++index) {
@@ -119,6 +120,16 @@ void test_dock_history_limits_trim_all_log_types()
             .bytes = {},
             .message = "script-" + std::to_string(index),
         });
+        store.appendRequestTraceRow({
+            .timestampMs = static_cast<std::uint64_t>(index),
+            .id = index + 1,
+            .kind = protoscope::dock::RequestTraceKind::Request,
+            .state = protoscope::dock::RequestTraceState::Queued,
+            .endpoint = "tcp",
+            .tag = "request-" + std::to_string(index),
+            .guardState = {},
+            .error = {},
+        });
     }
 
     std::vector<protoscope::dock::ReceiveRow> frameRows;
@@ -137,21 +148,80 @@ void test_dock_history_limits_trim_all_log_types()
     require(store.receiveState().frameRows.size() == 4, "逐帧收发记录应按上限裁剪");
     require(store.logState().rows.size() == 2, "宿主日志应按上限裁剪");
     require(store.scriptState().rows.size() == 2, "脚本日志应按上限裁剪");
+    require(store.requestTraceState().rows.size() == 3, "请求追踪应按上限裁剪");
     require(store.receiveState().rows.front().message == "raw-2", "原始收发记录应保留最近历史");
     require(store.receiveState().frameRows.front().message == "frame-2", "逐帧收发记录应保留最近历史");
     require(store.logState().rows.front().message == "host-3", "宿主日志应保留最近历史");
     require(store.scriptState().rows.front().message == "script-3", "脚本日志应保留最近历史");
+    require(store.requestTraceState().rows.front().tag == "request-2", "请求追踪应保留最近历史");
 
     store.setHistoryLimits({
         .transferRawRows = 1,
         .transferFrameRows = 1,
         .hostLogRows = 1,
         .scriptLogRows = 1,
+        .requestTraceRows = 1,
     });
     require(store.receiveState().rows.front().message == "raw-4", "调低原始记录上限应立即裁剪旧记录");
     require(store.receiveState().frameRows.front().message == "frame-5", "调低逐帧记录上限应立即裁剪旧记录");
     require(store.logState().rows.front().message == "host-4", "调低宿主日志上限应立即裁剪旧记录");
     require(store.scriptState().rows.front().message == "script-4", "调低脚本日志上限应立即裁剪旧记录");
+    require(store.requestTraceState().rows.front().tag == "request-4", "调低请求追踪上限应立即裁剪旧记录");
+}
+
+void test_request_trace_filter_and_clear()
+{
+    protoscope::dock::DockStore store;
+    store.appendRequestTraceRow({
+        .timestampMs = 1,
+        .id = 10,
+        .kind = protoscope::dock::RequestTraceKind::Request,
+        .state = protoscope::dock::RequestTraceState::Queued,
+        .endpoint = "tcp://device",
+        .tag = "read_version",
+        .guarded = true,
+        .guardState = "queued",
+        .error = {},
+    });
+    store.appendRequestTraceRow({
+        .timestampMs = 2,
+        .id = 10,
+        .kind = protoscope::dock::RequestTraceKind::Request,
+        .state = protoscope::dock::RequestTraceState::Completed,
+        .endpoint = "tcp://device",
+        .tag = "read_version",
+        .bytes = 4,
+        .durationMs = 15,
+        .guarded = true,
+        .guardState = "active",
+        .error = {},
+    });
+    store.appendRequestTraceRow({
+        .timestampMs = 3,
+        .id = 11,
+        .kind = protoscope::dock::RequestTraceKind::Request,
+        .state = protoscope::dock::RequestTraceState::Timeout,
+        .endpoint = "tcp://device",
+        .tag = "read_status",
+        .guardState = {},
+        .error = "等待 request_done 超时",
+    });
+
+    auto& trace = store.requestTraceState();
+    trace.filter.keyword = "version";
+    auto filtered = protoscope::dock::filteredRequestTraceRows(trace.rows, trace.filter);
+    require(filtered.size() == 2, "请求追踪关键字应匹配 tag");
+
+    trace.filter.keyword.clear();
+    trace.filter.status = protoscope::dock::RequestTraceStatusFilter::Failure;
+    filtered = protoscope::dock::filteredRequestTraceRows(trace.rows, trace.filter);
+    require(filtered.size() == 1, "请求追踪失败筛选应只保留失败终态");
+    require(filtered[0]->state == protoscope::dock::RequestTraceState::Timeout, "失败筛选应保留超时记录");
+
+    const auto versionBeforeClear = trace.rowsVersion;
+    store.clearRequestTraceRows();
+    require(trace.rows.empty(), "请求追踪应可清空");
+    require(trace.rowsVersion == versionBeforeClear + 1, "清空请求追踪应递增版本号");
 }
 
 void test_dock_receive_row_single_line_hex_and_ascii()
@@ -521,6 +591,7 @@ void test_dock_visibility_state_isolated_by_protocol_key()
     protoA.showCommDock = false;
     protoA.showProtocolDock = true;
     protoA.showTransferDock = false;
+    protoA.showRequestTraceDock = false;
     protoA.showLogDock = true;
     protoA.showScriptDock = false;
     protoA.showWaveDock = true;
@@ -532,6 +603,7 @@ void test_dock_visibility_state_isolated_by_protocol_key()
     protoB.showCommDock = true;
     protoB.showProtocolDock = false;
     protoB.showTransferDock = true;
+    protoB.showRequestTraceDock = true;
     protoB.showLogDock = false;
     protoB.showScriptDock = true;
     protoB.showWaveDock = false;
@@ -543,6 +615,7 @@ void test_dock_visibility_state_isolated_by_protocol_key()
     require(!restoredA.showCommDock, "proto_a 应恢复自己的通讯配置可见性");
     require(restoredA.showProtocolDock, "proto_a 应恢复自己的协议脚本可见性");
     require(!restoredA.showTransferDock, "proto_a 应恢复自己的收发可见性");
+    require(!restoredA.showRequestTraceDock, "proto_a 应恢复自己的请求追踪可见性");
     require(restoredA.showLogDock, "proto_a 应恢复自己的日志可见性");
     require(!restoredA.showScriptDock, "proto_a 应恢复自己的脚本可见性");
     require(restoredA.showWaveDock, "proto_a 应恢复自己的波形可见性");
@@ -556,6 +629,7 @@ void test_dock_visibility_state_isolated_by_protocol_key()
     require(restoredB.showCommDock, "proto_b 应恢复自己的通讯配置可见性");
     require(!restoredB.showProtocolDock, "proto_b 应恢复自己的协议脚本可见性");
     require(restoredB.showTransferDock, "proto_b 应恢复自己的收发可见性");
+    require(restoredB.showRequestTraceDock, "proto_b 应恢复自己的请求追踪可见性");
     require(!restoredB.showLogDock, "proto_b 应恢复自己的日志可见性");
     require(restoredB.showScriptDock, "proto_b 应恢复自己的脚本可见性");
     require(!restoredB.showWaveDock, "proto_b 应恢复自己的波形可见性");
@@ -583,6 +657,7 @@ void test_dock_visibility_state_decode_missing_fields_defaults()
     require(defaultState.showCommDock, "缺失的 comm 字段应保持默认可见");
     require(defaultState.showProtocolDock, "缺失的 protocol 字段应保持默认可见");
     require(defaultState.showTransferDock, "缺失的 transfer 字段应保持默认可见");
+    require(defaultState.showRequestTraceDock, "缺失的 request_trace 字段应保持默认可见");
     require(!defaultState.showLogDock, "存在的 log 字段应按配置恢复");
     require(defaultState.showScriptDock, "缺失的 script 字段应保持默认可见");
     require(defaultState.showWaveDock, "缺失的 wave 字段应保持默认可见");

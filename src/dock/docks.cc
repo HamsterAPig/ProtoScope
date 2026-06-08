@@ -153,6 +153,17 @@ namespace {
         return containsIgnoreCase(protocol_utils::bytesToHex(row.bytes, true), keyword) ||
                containsIgnoreCase(bytesToAsciiPreview(row.bytes), keyword);
     }
+
+    bool matchesRequestTraceKeyword(const RequestTraceRow& row, std::string_view keyword)
+    {
+        if (keyword.empty()) {
+            return true;
+        }
+        return containsIgnoreCase(std::to_string(row.id), keyword) || containsIgnoreCase(row.endpoint, keyword) ||
+               containsIgnoreCase(row.tag, keyword) || containsIgnoreCase(requestTraceKindLabel(row.kind), keyword) ||
+               containsIgnoreCase(requestTraceStateLabel(row.state), keyword) ||
+               containsIgnoreCase(row.guardState, keyword) || containsIgnoreCase(row.error, keyword);
+    }
 } // namespace
 
 ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row)
@@ -219,6 +230,88 @@ std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& ro
     return filteredLogRowsImpl(rows, filter, includeBytePreview);
 }
 
+const char* requestTraceKindLabel(RequestTraceKind kind)
+{
+    switch (kind) {
+        case RequestTraceKind::Send:
+            return "send";
+        case RequestTraceKind::Request:
+            return "request";
+    }
+    return "send";
+}
+
+const char* requestTraceStateLabel(RequestTraceState state)
+{
+    switch (state) {
+        case RequestTraceState::Queued:
+            return "排队";
+        case RequestTraceState::Sent:
+            return "已发送";
+        case RequestTraceState::Completed:
+            return "完成";
+        case RequestTraceState::Failed:
+            return "失败";
+        case RequestTraceState::Timeout:
+            return "超时";
+        case RequestTraceState::Rejected:
+            return "拒绝";
+        case RequestTraceState::Dropped:
+            return "丢弃";
+        case RequestTraceState::Canceled:
+            return "取消";
+        case RequestTraceState::GuardReset:
+            return "熔断重置";
+    }
+    return "未知";
+}
+
+bool isRequestTraceFailure(RequestTraceState state)
+{
+    switch (state) {
+        case RequestTraceState::Failed:
+        case RequestTraceState::Timeout:
+        case RequestTraceState::Rejected:
+        case RequestTraceState::Dropped:
+        case RequestTraceState::Canceled:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool matchesRequestTraceFilter(const RequestTraceRow& row, const RequestTraceFilterState& filter)
+{
+    if (!matchesRequestTraceKeyword(row, filter.keyword)) {
+        return false;
+    }
+
+    switch (filter.status) {
+        case RequestTraceStatusFilter::All:
+            return true;
+        case RequestTraceStatusFilter::Active:
+            return row.state == RequestTraceState::Queued || row.state == RequestTraceState::Sent;
+        case RequestTraceStatusFilter::Success:
+            return row.state == RequestTraceState::Completed || row.state == RequestTraceState::GuardReset;
+        case RequestTraceStatusFilter::Failure:
+            return isRequestTraceFailure(row.state);
+    }
+    return true;
+}
+
+std::vector<const RequestTraceRow*> filteredRequestTraceRows(const std::deque<RequestTraceRow>& rows,
+                                                            const RequestTraceFilterState& filter)
+{
+    std::vector<const RequestTraceRow*> filtered;
+    filtered.reserve(rows.size());
+    for (const auto& row : rows) {
+        if (matchesRequestTraceFilter(row, filter)) {
+            filtered.push_back(&row);
+        }
+    }
+    return filtered;
+}
+
 std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex)
 {
     if (!row.message.empty()) {
@@ -280,6 +373,18 @@ void trimSendHistory(SendDockState& sendState, std::size_t limit)
     }
 }
 
+void trimRequestTraceRows(RequestTraceDockState& traceState, std::size_t limit)
+{
+    if (limit == 0U) {
+        traceState.rows.clear();
+        return;
+    }
+    // 核心流程：请求追踪按时间线追加，只保留最新记录，避免长期联调时 UI 历史无限增长。
+    while (traceState.rows.size() > limit) {
+        traceState.rows.pop_front();
+    }
+}
+
 void rememberSendHistory(SendDockState& sendState, std::string payload, std::size_t limit)
 {
     if (limit == 0U || payload.empty()) {
@@ -324,6 +429,13 @@ void DockStore::appendScriptRow(ReceiveRow row)
     ++script_.rowsVersion;
 }
 
+void DockStore::appendRequestTraceRow(RequestTraceRow row)
+{
+    requestTrace_.rows.push_back(std::move(row));
+    trimRequestTraceRows(requestTrace_, historyLimits_.requestTraceRows);
+    ++requestTrace_.rowsVersion;
+}
+
 void DockStore::clearLogRows()
 {
     log_.rows.clear();
@@ -334,6 +446,12 @@ void DockStore::clearScriptRows()
 {
     script_.rows.clear();
     ++script_.rowsVersion;
+}
+
+void DockStore::clearRequestTraceRows()
+{
+    requestTrace_.rows.clear();
+    ++requestTrace_.rowsVersion;
 }
 
 void DockStore::appendTransferFrameRows(std::vector<ReceiveRow> rows)
@@ -369,6 +487,11 @@ void DockStore::setHistoryLimits(DockHistoryLimits limits)
     }
     if (historyLimiter_->trimRows(script_.rows, historyLimits_.scriptLogRows)) {
         ++script_.rowsVersion;
+    }
+    const auto beforeRequestTraceRows = requestTrace_.rows.size();
+    trimRequestTraceRows(requestTrace_, historyLimits_.requestTraceRows);
+    if (requestTrace_.rows.size() != beforeRequestTraceRows) {
+        ++requestTrace_.rowsVersion;
     }
 }
 
@@ -429,6 +552,11 @@ ScriptDockState& DockStore::scriptState()
     return script_;
 }
 
+RequestTraceDockState& DockStore::requestTraceState()
+{
+    return requestTrace_;
+}
+
 SendDockState& DockStore::sendState()
 {
     return send_;
@@ -467,6 +595,11 @@ const LogDockState& DockStore::logState() const
 const ScriptDockState& DockStore::scriptState() const
 {
     return script_;
+}
+
+const RequestTraceDockState& DockStore::requestTraceState() const
+{
+    return requestTrace_;
 }
 
 const SendDockState& DockStore::sendState() const

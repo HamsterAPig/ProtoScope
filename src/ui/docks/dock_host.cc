@@ -132,6 +132,37 @@ namespace {
         return clicked;
     }
 
+    bool drawRequestTraceFilterButton(const char* label,
+                                      const char* tooltip,
+                                      dock::RequestTraceStatusFilter value,
+                                      dock::RequestTraceFilterState& filter)
+    {
+        if (!drawTransferToolbarButton(label, tooltip, filter.status == value)) {
+            return false;
+        }
+        filter.status = value;
+        return true;
+    }
+
+    void drawRequestTraceKeywordFilterInput(const char* id, dock::RequestTraceFilterState& filter, float width)
+    {
+        char buffer[128]{};
+        std::snprintf(buffer, sizeof(buffer), "%s", filter.keyword.c_str());
+        ImGui::SetNextItemWidth(width);
+        if (ImGui::InputText(id, buffer, sizeof(buffer))) {
+            filter.keyword = buffer;
+        }
+        drawIconTooltip("按请求 ID、类型、状态、tag、端点、guard 状态和错误筛选");
+    }
+
+    std::string requestTraceDurationText(const dock::RequestTraceRow& row)
+    {
+        if (row.durationMs == 0U && row.state == dock::RequestTraceState::Queued) {
+            return "-";
+        }
+        return std::to_string(row.durationMs) + " ms";
+    }
+
 } // namespace
 
 void GuiRuntime::drawStatusBar()
@@ -810,6 +841,107 @@ void GuiRuntime::drawTransferDock()
 
     drawTransferSendSection(minPayloadHeight, style);
 
+    ImGui::End();
+}
+
+void GuiRuntime::drawRequestTraceDock()
+{
+    if (!showRequestTraceDock_) {
+        return;
+    }
+
+    if (!ImGui::Begin("请求追踪", &showRequestTraceDock_)) {
+        ImGui::End();
+        return;
+    }
+
+    auto& trace = application_.docks().requestTraceState();
+    if (beginToolbarGroup("request_trace_toolbar", nullptr, ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.y)) {
+        ImGui::TextUnformatted(PROTOSCOPE_ICON_EXCHANGE " 请求时间线");
+        ImGui::SameLine();
+        drawRequestTraceKeywordFilterInput("关键字##request_trace_keyword", trace.filter, 180.0F);
+        ImGui::SameLine();
+        drawRequestTraceFilterButton("全部", "显示全部请求事件", dock::RequestTraceStatusFilter::All, trace.filter);
+        ImGui::SameLine();
+        drawRequestTraceFilterButton(
+            "进行中", "仅显示排队和已发送事件", dock::RequestTraceStatusFilter::Active, trace.filter);
+        ImGui::SameLine();
+        drawRequestTraceFilterButton("成功", "仅显示完成和熔断重置事件", dock::RequestTraceStatusFilter::Success, trace.filter);
+        ImGui::SameLine();
+        drawRequestTraceFilterButton("失败", "仅显示失败、超时、拒绝、丢弃和取消事件", dock::RequestTraceStatusFilter::Failure, trace.filter);
+        ImGui::SameLine();
+        drawTransferToolbarToggleButton(PROTOSCOPE_ICON_CLOCK " 时间", trace.showTimestamps, "显示或隐藏时间列");
+        ImGui::SameLine();
+        drawTransferToolbarToggleButton(PROTOSCOPE_ICON_PAUSE " 暂停", trace.pauseScroll, "暂停自动滚动");
+        ImGui::SameLine();
+        if (drawTransferToolbarDangerButton(PROTOSCOPE_ICON_TRASH " 清空", "清空请求追踪时间线")) {
+            application_.docks().clearRequestTraceRows();
+        }
+        endToolbarGroup();
+    }
+
+    const auto rows = dock::filteredRequestTraceRows(trace.rows, trace.filter);
+    if (ImGui::BeginChild("##request_trace_rows", ImVec2(0.0F, 0.0F), true)) {
+        if (rows.empty()) {
+            ImGui::TextDisabled("暂无请求事件");
+        } else if (ImGui::BeginTable("##request_trace_table",
+                                     trace.showTimestamps ? 10 : 9,
+                                     ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                         ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+                                         ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp)) {
+            if (trace.showTimestamps) {
+                ImGui::TableSetupColumn("时间", ImGuiTableColumnFlags_WidthFixed, 96.0F);
+            }
+            ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 64.0F);
+            ImGui::TableSetupColumn("类型", ImGuiTableColumnFlags_WidthFixed, 72.0F);
+            ImGui::TableSetupColumn("状态", ImGuiTableColumnFlags_WidthFixed, 86.0F);
+            ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+            ImGui::TableSetupColumn("端点", ImGuiTableColumnFlags_WidthStretch, 1.2F);
+            ImGui::TableSetupColumn("尝试", ImGuiTableColumnFlags_WidthFixed, 70.0F);
+            ImGui::TableSetupColumn("字节", ImGuiTableColumnFlags_WidthFixed, 64.0F);
+            ImGui::TableSetupColumn("耗时", ImGuiTableColumnFlags_WidthFixed, 82.0F);
+            ImGui::TableSetupColumn("详情", ImGuiTableColumnFlags_WidthStretch, 1.6F);
+            ImGui::TableHeadersRow();
+
+            for (const auto* row : rows) {
+                ImGui::TableNextRow();
+                int column = 0;
+                if (trace.showTimestamps) {
+                    ImGui::TableSetColumnIndex(column++);
+                    ImGui::TextUnformatted(formatTimestamp(row->timestampMs).c_str());
+                }
+                ImGui::TableSetColumnIndex(column++);
+                if (row->id == 0U) {
+                    ImGui::TextUnformatted("-");
+                } else {
+                    ImGui::Text("%llu", static_cast<unsigned long long>(row->id));
+                }
+                ImGui::TableSetColumnIndex(column++);
+                ImGui::TextUnformatted(dock::requestTraceKindLabel(row->kind));
+                ImGui::TableSetColumnIndex(column++);
+                ImGui::TextUnformatted(dock::requestTraceStateLabel(row->state));
+                ImGui::TableSetColumnIndex(column++);
+                ImGui::TextUnformatted(row->tag.empty() ? "-" : row->tag.c_str());
+                ImGui::TableSetColumnIndex(column++);
+                ImGui::TextUnformatted(row->endpoint.empty() ? "-" : row->endpoint.c_str());
+                ImGui::TableSetColumnIndex(column++);
+                ImGui::Text("%u/%u", row->attempt, row->maxAttempts);
+                ImGui::TableSetColumnIndex(column++);
+                ImGui::Text("%zu", row->bytes);
+                ImGui::TableSetColumnIndex(column++);
+                const auto duration = requestTraceDurationText(*row);
+                ImGui::TextUnformatted(duration.c_str());
+                ImGui::TableSetColumnIndex(column++);
+                const std::string detail = !row->error.empty() ? row->error : row->guardState;
+                ImGui::TextUnformatted(detail.empty() ? "-" : detail.c_str());
+            }
+            ImGui::EndTable();
+            if (!trace.pauseScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2.0F) {
+                ImGui::SetScrollHereY(1.0F);
+            }
+        }
+    }
+    ImGui::EndChild();
     ImGui::End();
 }
 

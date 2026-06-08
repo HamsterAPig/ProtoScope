@@ -845,6 +845,15 @@ void test_application_request_done_success_does_not_set_comm_error()
     application.pumpOnce();
 
     require(application.docks().commState().lastError.empty(), "request_done ok=true 的成功消息不应显示到通讯配置错误");
+    const auto& requestTraceRows = application.docks().requestTraceState().rows;
+    const auto hasTraceState = [&](protoscope::dock::RequestTraceState state) {
+        return std::any_of(requestTraceRows.begin(), requestTraceRows.end(), [&](const auto& row) {
+            return row.tag == "read" && row.state == state;
+        });
+    };
+    require(hasTraceState(protoscope::dock::RequestTraceState::Queued), "请求追踪应记录 request 排队事件");
+    require(hasTraceState(protoscope::dock::RequestTraceState::Sent), "请求追踪应记录 request 已发送事件");
+    require(hasTraceState(protoscope::dock::RequestTraceState::Completed), "请求追踪应记录 request 完成事件");
     application.shutdown();
 }
 

@@ -393,6 +393,7 @@ void GuiRuntime::resetProtocolControlLoadDefaults()
     showCommDock_ = true;
     showProtocolDock_ = true;
     showTransferDock_ = true;
+    showRequestTraceDock_ = true;
     showLogDock_ = true;
     showScriptDock_ = true;
     showWaveDock_ = true;
@@ -420,6 +421,7 @@ void GuiRuntime::restoreProtocolWorkspaceState(const YAML::Node& root, const YAM
     showCommDock_ = visibilityState.showCommDock;
     showProtocolDock_ = visibilityState.showProtocolDock;
     showTransferDock_ = visibilityState.showTransferDock;
+    showRequestTraceDock_ = visibilityState.showRequestTraceDock;
     showLogDock_ = visibilityState.showLogDock;
     showScriptDock_ = visibilityState.showScriptDock;
     showWaveDock_ = visibilityState.showWaveDock;
@@ -493,6 +495,7 @@ ProtocolDockVisibilityState GuiRuntime::captureCurrentDockVisibilityState() cons
     visibilityState.showCommDock = showCommDock_;
     visibilityState.showProtocolDock = showProtocolDock_;
     visibilityState.showTransferDock = showTransferDock_;
+    visibilityState.showRequestTraceDock = showRequestTraceDock_;
     visibilityState.showLogDock = showLogDock_;
     visibilityState.showScriptDock = showScriptDock_;
     visibilityState.showWaveDock = showWaveDock_;
@@ -503,6 +506,7 @@ ProtocolDockVisibilityState GuiRuntime::captureCurrentDockVisibilityState() cons
         visibilityState.showCommDock = waveFullscreenSnapshot_->showCommDock;
         visibilityState.showProtocolDock = waveFullscreenSnapshot_->showProtocolDock;
         visibilityState.showTransferDock = waveFullscreenSnapshot_->showTransferDock;
+        visibilityState.showRequestTraceDock = waveFullscreenSnapshot_->showRequestTraceDock;
         visibilityState.showLogDock = waveFullscreenSnapshot_->showLogDock;
         visibilityState.showScriptDock = waveFullscreenSnapshot_->showScriptDock;
         visibilityState.showWaveDock = waveFullscreenSnapshot_->showWaveDock;
