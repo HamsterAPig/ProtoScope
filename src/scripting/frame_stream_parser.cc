@@ -843,6 +843,88 @@ std::optional<FrameStreamParser::CandidateMatch> FrameStreamParser::findCandidat
     return std::nullopt;
 }
 
+void FrameStreamParser::setInvalidLengthError(const StreamFrameDefinition& frame,
+                                              std::string_view message,
+                                              AnalyzeResult& result) const
+{
+    result.action = AnalyzeResult::Action::RecoverableError;
+    result.error = StreamParseError{
+        .code = StreamParseErrorCode::InvalidLength,
+        .message = std::string(message),
+        .frameName = frame.name,
+        .droppedBytes = 0,
+        .raw = {},
+    };
+}
+
+bool FrameStreamParser::resolveRuntimeProfileFrameLength(const StreamFrameDefinition& frame,
+                                                         std::size_t& frameLength,
+                                                         AnalyzeResult& result) const
+{
+    const auto profileIter = runtimeProfiles_.find(frame.name);
+    if (profileIter == runtimeProfiles_.end()) {
+        setInvalidLengthError(frame, "runtime_profile 帧缺少运行时长度", result);
+        return false;
+    }
+    frameLength = profileIter->second.length;
+    return true;
+}
+
+bool FrameStreamParser::resolveLengthFieldFrameLength(const StreamFrameDefinition& frame,
+                                                      const ByteRingBuffer::LinearReadView& window,
+                                                      std::size_t& frameLength,
+                                                      AnalyzeResult& result) const
+{
+    const auto* frameBytes = window.data;
+    if (frameBytes == nullptr || !frame.len.has_value()) {
+        return false;
+    }
+
+    const auto width = streamValueWidth(frame.len->type);
+    std::size_t lengthFieldEnd = 0;
+    if (!checkedAddSize(frame.len->offset, width, lengthFieldEnd)) {
+        setInvalidLengthError(frame, "长度字段 offset 溢出", result);
+        return false;
+    }
+    if (lengthFieldEnd > window.size) {
+        return false;
+    }
+
+    const auto parsedLength = decodeInteger(frameBytes, window.size, frame.len->offset, frame.len->type);
+    if (!parsedLength.has_value() || *parsedLength < 0) {
+        setInvalidLengthError(frame, "长度字段解析失败", result);
+        return false;
+    }
+
+    if (frame.len->means == StreamLengthMeans::Payload) {
+        if (!checkedAddSize(static_cast<std::size_t>(*parsedLength), frame.len->extra, frameLength)) {
+            setInvalidLengthError(frame, "长度字段加成后溢出", result);
+            return false;
+        }
+        return true;
+    }
+
+    frameLength = static_cast<std::size_t>(*parsedLength);
+    return true;
+}
+
+bool FrameStreamParser::validateResolvedFrameLength(const StreamFrameDefinition& frame,
+                                                    std::size_t frameLength,
+                                                    AnalyzeResult& result) const
+{
+    if (frameLength == 0) {
+        setInvalidLengthError(frame, "帧长度必须大于 0", result);
+        return false;
+    }
+
+    if (frameLength > bufferDefinition_.capacity && bufferDefinition_.capacity > 0) {
+        setInvalidLengthError(frame, "帧长度超过缓冲区容量", result);
+        return false;
+    }
+
+    return true;
+}
+
 bool FrameStreamParser::resolveFrameLength(const StreamFrameDefinition& frame,
                                            const ByteRingBuffer::LinearReadView& window,
                                            std::size_t& frameLength,
@@ -856,94 +938,18 @@ bool FrameStreamParser::resolveFrameLength(const StreamFrameDefinition& frame,
     // 返回 false 表示窗口还不够，或 result 已经填充了可恢复错误。
     frameLength = 0;
     if (frame.runtimeProfile) {
-        const auto profileIter = runtimeProfiles_.find(frame.name);
-        if (profileIter == runtimeProfiles_.end()) {
-            result.action = AnalyzeResult::Action::RecoverableError;
-            result.error = StreamParseError{
-                .code = StreamParseErrorCode::InvalidLength,
-                .message = "runtime_profile 帧缺少运行时长度",
-                .frameName = frame.name,
-                .droppedBytes = 0,
-                .raw = {},
-            };
+        if (!resolveRuntimeProfileFrameLength(frame, frameLength, result)) {
             return false;
         }
-        frameLength = profileIter->second.length;
     } else if (frame.size.has_value()) {
         frameLength = *frame.size;
     } else if (frame.len.has_value()) {
-        const auto width = streamValueWidth(frame.len->type);
-        std::size_t lengthFieldEnd = 0;
-        if (!checkedAddSize(frame.len->offset, width, lengthFieldEnd)) {
-            result.action = AnalyzeResult::Action::RecoverableError;
-            result.error = StreamParseError{
-                .code = StreamParseErrorCode::InvalidLength,
-                .message = "长度字段 offset 溢出",
-                .frameName = frame.name,
-                .droppedBytes = 0,
-                .raw = {},
-            };
+        if (!resolveLengthFieldFrameLength(frame, window, frameLength, result)) {
             return false;
-        }
-        if (lengthFieldEnd > window.size) {
-            return false;
-        }
-
-        const auto parsedLength = decodeInteger(frameBytes, window.size, frame.len->offset, frame.len->type);
-        if (!parsedLength.has_value() || *parsedLength < 0) {
-            result.action = AnalyzeResult::Action::RecoverableError;
-            result.error = StreamParseError{
-                .code = StreamParseErrorCode::InvalidLength,
-                .message = "长度字段解析失败",
-                .frameName = frame.name,
-                .droppedBytes = 0,
-                .raw = {},
-            };
-            return false;
-        }
-
-        if (frame.len->means == StreamLengthMeans::Payload) {
-            if (!checkedAddSize(static_cast<std::size_t>(*parsedLength), frame.len->extra, frameLength)) {
-                result.action = AnalyzeResult::Action::RecoverableError;
-                result.error = StreamParseError{
-                    .code = StreamParseErrorCode::InvalidLength,
-                    .message = "长度字段加成后溢出",
-                    .frameName = frame.name,
-                    .droppedBytes = 0,
-                    .raw = {},
-                };
-                return false;
-            }
-        } else {
-            frameLength = static_cast<std::size_t>(*parsedLength);
         }
     }
 
-    if (frameLength == 0) {
-        result.action = AnalyzeResult::Action::RecoverableError;
-        result.error = StreamParseError{
-            .code = StreamParseErrorCode::InvalidLength,
-            .message = "帧长度必须大于 0",
-            .frameName = frame.name,
-            .droppedBytes = 0,
-            .raw = {},
-        };
-        return false;
-    }
-
-    if (frameLength > bufferDefinition_.capacity && bufferDefinition_.capacity > 0) {
-        result.action = AnalyzeResult::Action::RecoverableError;
-        result.error = StreamParseError{
-            .code = StreamParseErrorCode::InvalidLength,
-            .message = "帧长度超过缓冲区容量",
-            .frameName = frame.name,
-            .droppedBytes = 0,
-            .raw = {},
-        };
-        return false;
-    }
-
-    return true;
+    return validateResolvedFrameLength(frame, frameLength, result);
 }
 
 bool FrameStreamParser::validateFrameBounds(const StreamFrameDefinition& frame,

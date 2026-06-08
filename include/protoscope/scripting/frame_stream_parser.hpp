@@ -272,6 +272,19 @@ private:
     [[nodiscard]] bool discardCandidatePrefix(const CandidateMatch& candidate, StreamParseBatch& batch);
     CandidateParseResult analyzeCandidateFrames(const CandidateMatch& candidate,
                                                 const StreamParseOptions& options) const;
+    void setInvalidLengthError(const StreamFrameDefinition& frame,
+                               std::string_view message,
+                               AnalyzeResult& result) const;
+    [[nodiscard]] bool resolveRuntimeProfileFrameLength(const StreamFrameDefinition& frame,
+                                                        std::size_t& frameLength,
+                                                        AnalyzeResult& result) const;
+    [[nodiscard]] bool resolveLengthFieldFrameLength(const StreamFrameDefinition& frame,
+                                                     const ByteRingBuffer::LinearReadView& window,
+                                                     std::size_t& frameLength,
+                                                     AnalyzeResult& result) const;
+    [[nodiscard]] bool validateResolvedFrameLength(const StreamFrameDefinition& frame,
+                                                   std::size_t frameLength,
+                                                   AnalyzeResult& result) const;
     [[nodiscard]] std::size_t maxHeaderLength() const;
     [[nodiscard]] std::optional<CandidateMatch> findCandidate() const;
     AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
