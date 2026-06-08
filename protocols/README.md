@@ -446,7 +446,7 @@ proto.plot.setup({
   source = "demo",
   reset_history = true,
   channels = {
-    { label = "CH1", unit = "V", color = "#4FC3F7" },
+    { label = "CH1", unit = "V", color = "#4FC3F7", line_width = 2.5 },
     { label = "CH2", unit = "V", color = "#81C784" },
   },
 })

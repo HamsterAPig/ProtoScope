@@ -149,6 +149,7 @@ struct PlotChannelDescriptor {
     double scale{1.0};
     double offset{0.0};
     std::optional<std::array<float, 4>> color;
+    std::optional<float> lineWidth;
 };
 
 struct PlotSetup {

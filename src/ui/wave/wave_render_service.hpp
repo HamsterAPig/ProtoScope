@@ -107,12 +107,13 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
                                                       double maxTime,
                                                       std::size_t maxPoints,
                                                       std::size_t* sourceSampleCount = nullptr);
-void renderEnvelopeAsBars(const std::vector<plot::EnvelopePoint>& points, const ImVec4& color);
+void renderEnvelopeAsBars(const std::vector<plot::EnvelopePoint>& points, const ImVec4& color, float lineWidth);
 void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
                             const ImVec4& color,
                             double latestTime,
                             double persistenceWindow,
-                            double glowIntensity);
+                            double glowIntensity,
+                            float lineWidth);
 ImVec4 withAlpha(ImVec4 color, float alphaScale);
 ImVec4 fallbackChannelColor(std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelSpec& spec, std::size_t channelIndex);

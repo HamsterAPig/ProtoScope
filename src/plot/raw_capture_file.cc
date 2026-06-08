@@ -194,6 +194,31 @@ namespace {
         return true;
     }
 
+    std::string serializeLineWidth(const std::optional<float>& lineWidth)
+    {
+        if (!lineWidth.has_value()) {
+            return "none";
+        }
+        std::ostringstream out;
+        out << std::setprecision(9) << resolveChannelLineWidth(lineWidth);
+        return out.str();
+    }
+
+    bool parseLineWidth(std::string_view text, std::optional<float>& lineWidth)
+    {
+        const auto cleaned = trim(text);
+        if (cleaned == "none" || cleaned.empty()) {
+            lineWidth = std::nullopt;
+            return true;
+        }
+        double parsed = 0.0;
+        if (!parseDouble(cleaned, parsed) || !std::isfinite(parsed)) {
+            return false;
+        }
+        lineWidth = sanitizeChannelLineWidth(parsed);
+        return true;
+    }
+
     std::string encodePlotSetupRecord(const RawCaptureEvent& event)
     {
         std::ostringstream out;
@@ -209,7 +234,8 @@ namespace {
                 << "channel." << index << ".ratio: " << std::setprecision(17) << channel.ratio << '\n'
                 << "channel." << index << ".scale: " << std::setprecision(17) << channel.scale << '\n'
                 << "channel." << index << ".offset: " << std::setprecision(17) << channel.offset << '\n'
-                << "channel." << index << ".color: " << serializeColor(channel.color) << '\n';
+                << "channel." << index << ".color: " << serializeColor(channel.color) << '\n'
+                << "channel." << index << ".line_width: " << serializeLineWidth(channel.lineWidth) << '\n';
         }
         out << "view.time_scale: " << std::setprecision(17) << event.plotSetup.view.timeScale << '\n'
             << "view.time_unit: " << encodeStringHex(event.plotSetup.view.timeUnit) << '\n'
@@ -510,6 +536,12 @@ namespace {
             return parseFiniteDoubleField(value, channel.offset, "psraw plot_setup channel offset 格式错误", error);
         } else if (field == "color") {
             return parseColorField(value, channel.color, "psraw plot_setup channel color 格式错误", error);
+        } else if (field == "line_width") {
+            if (!parseLineWidth(value, channel.lineWidth)) {
+                error = "psraw plot_setup channel line_width 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
         }
         return EventFieldParseResult::Handled;
     }

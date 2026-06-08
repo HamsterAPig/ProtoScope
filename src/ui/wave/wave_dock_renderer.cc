@@ -516,6 +516,7 @@ plot::ChannelSpec fallbackChannelDefaultSpec(const plot::ChannelSpec& spec)
         .scale = 1.0,
         .offset = 0.0,
         .color = spec.color,
+        .lineWidth = spec.lineWidth,
     };
 }
 

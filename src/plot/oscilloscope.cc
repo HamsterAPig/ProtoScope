@@ -133,6 +133,31 @@ namespace {
 
 } // namespace
 
+float sanitizeChannelLineWidth(double lineWidth)
+{
+    if (!std::isfinite(lineWidth)) {
+        return kDefaultChannelLineWidth;
+    }
+    return static_cast<float>((std::clamp)(lineWidth,
+                                           static_cast<double>(kMinChannelLineWidth),
+                                           static_cast<double>(kMaxChannelLineWidth)));
+}
+
+float resolveChannelLineWidth(const std::optional<float>& lineWidth)
+{
+    return lineWidth.has_value() ? sanitizeChannelLineWidth(*lineWidth) : kDefaultChannelLineWidth;
+}
+
+float resolveChannelLineWidth(const ChannelSpec& spec)
+{
+    return resolveChannelLineWidth(spec.lineWidth);
+}
+
+float resolveChannelLineWidth(const ChannelView& channel)
+{
+    return resolveChannelLineWidth(channel.lineWidth);
+}
+
 MeasurementReadout makeMeasurementReadout(std::size_t channelIndex,
                                           const std::vector<double>& times,
                                           const std::vector<double>& values,
@@ -291,9 +316,13 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
     spec.ratio = sanitizeRatio(spec.ratio);
     spec.scale = sanitizeScale(spec.scale);
     spec.offset = sanitizeOffset(spec.offset);
+    if (spec.lineWidth.has_value()) {
+        spec.lineWidth = sanitizeChannelLineWidth(*spec.lineWidth);
+    }
     auto& channelSpec = channels_[channelIndex].spec;
     if (channelSpec.label != spec.label || channelSpec.unit != spec.unit || channelSpec.ratio != spec.ratio ||
-        channelSpec.scale != spec.scale || channelSpec.offset != spec.offset) {
+        channelSpec.scale != spec.scale || channelSpec.offset != spec.offset || channelSpec.color != spec.color ||
+        channelSpec.lineWidth != spec.lineWidth) {
         channelSpec = std::move(spec);
         ++dataRevision_;
     }
@@ -454,6 +483,7 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
         view.scale = channel.spec.scale;
         view.offset = channel.spec.offset;
         view.color = channel.spec.color;
+        view.lineWidth = channel.spec.lineWidth;
         view.totalSamples = channel.samples.size();
         view.samples = channel.samples.data();
         view.visibleBegin = lowerBoundByTime(channel.samples, visibleMinTime);

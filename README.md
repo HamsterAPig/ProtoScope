@@ -453,7 +453,7 @@ proto.plot.setup().history_limit
 proto.plot.setup({
   source = "default_protocol",
   channels = {
-    { label = "CH1", unit = "V" },
+    { label = "CH1", unit = "V", line_width = 2.5 },
   },
   time_scale = 0.2,
   time_unit = "s",

@@ -1586,6 +1586,31 @@ bool applyPlotChannelColor(PlotChannelDescriptor& descriptor,
     return false;
 }
 
+bool applyPlotChannelLineWidth(PlotChannelDescriptor& descriptor,
+                               const sol::table& channelTable,
+                               std::size_t index,
+                               std::string& error)
+{
+    const sol::object lineWidthObject = channelTable["line_width"];
+    if (!lineWidthObject.valid() || lineWidthObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+
+    std::optional<double> lineWidth;
+    if (lineWidthObject.is<double>()) {
+        lineWidth = lineWidthObject.as<double>();
+    } else if (lineWidthObject.is<int>()) {
+        lineWidth = static_cast<double>(lineWidthObject.as<int>());
+    }
+    if (!lineWidth.has_value() || !std::isfinite(*lineWidth)) {
+        error = "plot.setup.channels[" + std::to_string(index) + "].line_width 必须是有限数字";
+        return false;
+    }
+
+    descriptor.lineWidth = plot::sanitizeChannelLineWidth(*lineWidth);
+    return true;
+}
+
 std::optional<PlotChannelDescriptor> parsePlotChannelDescriptor(const sol::object& channelObject,
                                                                 std::size_t index,
                                                                 std::string& error)
@@ -1598,6 +1623,9 @@ std::optional<PlotChannelDescriptor> parsePlotChannelDescriptor(const sol::objec
     const sol::table channelTable = channelObject.as<sol::table>();
     auto descriptor = makePlotChannelDescriptor(channelTable, index);
     if (!applyPlotChannelColor(descriptor, channelTable, index, error)) {
+        return std::nullopt;
+    }
+    if (!applyPlotChannelLineWidth(descriptor, channelTable, index, error)) {
         return std::nullopt;
     }
     return descriptor;

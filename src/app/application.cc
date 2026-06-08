@@ -81,6 +81,17 @@ namespace {
         return true;
     }
 
+    bool sameLineWidth(const std::optional<float>& left, const std::optional<float>& right)
+    {
+        if (left.has_value() != right.has_value()) {
+            return false;
+        }
+        if (!left.has_value()) {
+            return true;
+        }
+        return std::abs(*left - *right) <= 1e-6F;
+    }
+
     bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer)
     {
         if (setupChannels.size() != buffer.channelCount()) {
@@ -93,7 +104,7 @@ namespace {
             }
             const auto& setup = setupChannels[i];
             if (current->label != setup.label || current->unit != setup.unit ||
-                !sameColor(current->color, setup.color)) {
+                !sameColor(current->color, setup.color) || !sameLineWidth(current->lineWidth, setup.lineWidth)) {
                 return false;
             }
         }
@@ -276,6 +287,7 @@ namespace {
                 .scale = channel.scale,
                 .offset = channel.offset,
                 .color = channel.color,
+                .lineWidth = channel.lineWidth,
             });
         }
         return rawSetup;

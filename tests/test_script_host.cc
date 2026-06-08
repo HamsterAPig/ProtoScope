@@ -1332,6 +1332,8 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
     require(text.find("function on_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_dialog");
     require(text.find("function on_file_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_file_dialog");
     require(text.find("@field color? string") != std::string::npos, "LuaLS API 应声明 ProtoPlotChannel.color");
+    require(text.find("@field line_width? number") != std::string::npos,
+            "LuaLS API 应声明 ProtoPlotChannel.line_width");
 }
 
 void test_script_missing_callbacks_allowed()
@@ -2176,6 +2178,9 @@ void test_script_plot_api_snapshot()
     require(std::abs(setups[0].channels[1].scale - 1.0) < 1e-12, "CH2 scale 默认值错误");
     require(std::abs(setups[0].channels[0].offset - 0.0) < 1e-12, "CH1 offset 解析错误");
     require(std::abs(setups[0].channels[1].offset - 1.0) < 1e-12, "CH2 offset 解析错误");
+    require(setups[0].channels[0].lineWidth.has_value(), "CH1 line_width 应解析为显式线宽");
+    require(std::abs(*setups[0].channels[0].lineWidth - 2.5F) < 1e-6F, "CH1 line_width 解析错误");
+    require(!setups[0].channels[1].lineWidth.has_value(), "CH2 未配置 line_width 时应保留默认样式");
     require(appends.size() == 2, "打开连接后应推送 2 组通道数据");
     require(appends[0].second.samples.size() == 3, "通道采样点数量不正确");
 }

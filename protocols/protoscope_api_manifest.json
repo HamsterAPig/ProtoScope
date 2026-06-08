@@ -146,6 +146,7 @@
         "---@field scale? number",
         "---@field offset? number",
         "---@field color? string @支持 '#RRGGBB' 或 '#RRGGBBAA'。",
+        "---@field line_width? number @主波形区线宽，范围 0.5 到 8.0；省略时使用默认线宽。",
         "",
         "-- 波形初始化参数：用于一次性配置波形来源、通道和视图范围。",
         "---@class ProtoPlotSetup",

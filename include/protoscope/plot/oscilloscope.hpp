@@ -36,8 +36,16 @@ struct ChannelSpec {
     double scale{1.0};
     double offset{0.0};
     std::optional<std::array<float, 4>> color{};
+    std::optional<float> lineWidth{};
 };
 
+inline constexpr float kDefaultChannelLineWidth{1.5F};
+inline constexpr float kMinChannelLineWidth{0.5F};
+inline constexpr float kMaxChannelLineWidth{8.0F};
+
+float sanitizeChannelLineWidth(double lineWidth);
+float resolveChannelLineWidth(const std::optional<float>& lineWidth);
+float resolveChannelLineWidth(const ChannelSpec& spec);
 double applyChannelActualValue(double rawValue, const ChannelSpec& spec);
 double applyChannelDisplayTransform(double rawValue,
                                     const ChannelSpec& spec,
@@ -125,12 +133,15 @@ struct ChannelView {
     double scale{1.0};
     double offset{0.0};
     std::optional<std::array<float, 4>> color{};
+    std::optional<float> lineWidth{};
     std::size_t totalSamples{0};
     std::size_t visibleBegin{0};
     std::size_t visibleEnd{0};
     const WaveSample* samples{nullptr};
     WaveStats stats{};
 };
+
+float resolveChannelLineWidth(const ChannelView& channel);
 
 struct EnvelopePoint {
     double time{0.0};

@@ -227,7 +227,8 @@ protoscope::plot::RawCaptureEvent makePlotSetupEvent(bool resetHistory = true)
          .ratio = 0.5,
          .scale = 2.0,
          .offset = -1.0,
-         .color = std::array<float, 4>{26.0F / 255.0F, 51.0F / 255.0F, 76.0F / 255.0F, 1.0F}},
+         .color = std::array<float, 4>{26.0F / 255.0F, 51.0F / 255.0F, 76.0F / 255.0F, 1.0F},
+         .lineWidth = std::optional<float>{3.25F}},
     };
     event.plotSetup.view.timeScale = 0.5;
     event.plotSetup.view.timeUnit = "ms";
@@ -2062,12 +2063,17 @@ void test_application_raw_capture_import_replays_plot_setup_snapshot()
     require(std::abs(spec->scale - 2.0) < 1e-12, "导入 plot_setup 后应恢复 scale");
     require(std::abs(spec->offset + 1.0) < 1e-12, "导入 plot_setup 后应恢复 offset");
     require(spec->color.has_value(), "导入 plot_setup 后应恢复颜色");
+    require(spec->lineWidth.has_value(), "导入 plot_setup 后应恢复 line_width");
+    require(std::abs(*spec->lineWidth - 3.25F) < 1e-6F, "导入 plot_setup 后 line_width 错误");
     const auto viewConfig = application.docks().waveState().buffer.viewConfig();
     require(viewConfig.historyLimit == 128U, "导入 plot_setup 后应恢复 history_limit");
     require(viewConfig.timeUnit == "ms", "导入 plot_setup 后应恢复 time_unit");
     const auto snapshot = application.docks().waveState().buffer.snapshot(-std::numeric_limits<double>::infinity(),
                                                                           std::numeric_limits<double>::infinity());
     require(!snapshot.channels.empty(), "导入 plot_setup 后应有波形通道");
+    require(snapshot.channels.front().lineWidth.has_value(), "导入 plot_setup 后快照应携带 line_width");
+    require(std::abs(*snapshot.channels.front().lineWidth - 3.25F) < 1e-6F,
+            "导入 plot_setup 后快照 line_width 错误");
     require(snapshot.channels.front().totalSamples == 3U, "导入 plot_setup 后应回放 raw 样本");
     application.shutdown();
 }
@@ -2084,7 +2090,7 @@ void test_application_raw_capture_import_skips_duplicate_plot_setup_reset()
         out << "    time_scale = 0.5, time_unit = 'ms', vertical_min = -20, vertical_max = 100, vertical_unit = '℃', "
                "history_limit = 128,\n";
         out << "    channels = { { label = '温度A', unit = '℃', ratio = 0.5, scale = 2.0, offset = -1.0, color = "
-               "'#1a334cff' } }\n";
+               "'#1a334cff', line_width = 3.25 } }\n";
         out << "  })\n";
         out << "end\n";
         out << "function on_bytes(ctx, bytes)\n";
