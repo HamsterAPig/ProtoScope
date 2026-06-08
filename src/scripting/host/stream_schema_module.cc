@@ -472,41 +472,74 @@ bool parseStreamBufferDefinition(const sol::table& schemaTable,
     return true;
 }
 
+bool applyRawFrameOutputOption(const sol::table& schemaTable, LoadedStreamSchema& loaded, std::string& error)
+{
+    const auto rawOutput = luaStringField(schemaTable, "raw_output");
+    if (!rawOutput.has_value()) {
+        return true;
+    }
+    if (*rawOutput == "omit") {
+        loaded.includeRawFrames = false;
+        return true;
+    }
+    if (*rawOutput == "full") {
+        return true;
+    }
+    error = "stream.raw_output 必须是 'full' 或 'omit'";
+    return false;
+}
+
+bool applyFieldOutputOption(const sol::table& schemaTable, LoadedStreamSchema& loaded, std::string& error)
+{
+    const auto fieldOutput = luaStringField(schemaTable, "field_output");
+    if (!fieldOutput.has_value()) {
+        return true;
+    }
+    if (*fieldOutput == "fields_only") {
+        loaded.includeFieldAliases = false;
+        return true;
+    }
+    if (*fieldOutput == "compat") {
+        return true;
+    }
+    error = "stream.field_output 必须是 'compat' 或 'fields_only'";
+    return false;
+}
+
+bool registerStreamBatchCallback(const sol::table& schemaTable,
+                                 LoadedStreamSchema& loaded,
+                                 std::unordered_map<std::string, sol::protected_function>& callbacks,
+                                 std::string& error)
+{
+    const sol::object onBatchObject = schemaTable["on_batch"];
+    if (!onBatchObject.valid() || onBatchObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!onBatchObject.is<sol::protected_function>()) {
+        error = "stream.on_batch 必须是 function";
+        return false;
+    }
+    const std::string onBatchCallbackKey = "stream.on_batch";
+    callbacks.insert_or_assign(onBatchCallbackKey, onBatchObject.as<sol::protected_function>());
+    loaded.onBatchCallbackKey = onBatchCallbackKey;
+    return true;
+}
+
 bool applyLoadedStreamOptions(const sol::table& schemaTable,
                               LoadedStreamSchema& loaded,
                               std::unordered_map<std::string, sol::protected_function>& callbacks,
                               std::string& error)
 {
-    if (const auto rawOutput = luaStringField(schemaTable, "raw_output"); rawOutput.has_value()) {
-        if (*rawOutput == "omit") {
-            loaded.includeRawFrames = false;
-        } else if (*rawOutput != "full") {
-            error = "stream.raw_output 必须是 'full' 或 'omit'";
-            return false;
-        }
+    if (!applyRawFrameOutputOption(schemaTable, loaded, error)) {
+        return false;
     }
     if (const auto lowOverhead = luaBoolField(schemaTable, "low_overhead"); lowOverhead.has_value()) {
         loaded.lowOverhead = *lowOverhead;
     }
-    if (const auto fieldOutput = luaStringField(schemaTable, "field_output"); fieldOutput.has_value()) {
-        if (*fieldOutput == "fields_only") {
-            loaded.includeFieldAliases = false;
-        } else if (*fieldOutput != "compat") {
-            error = "stream.field_output 必须是 'compat' 或 'fields_only'";
-            return false;
-        }
+    if (!applyFieldOutputOption(schemaTable, loaded, error)) {
+        return false;
     }
-    if (const sol::object onBatchObject = schemaTable["on_batch"];
-        onBatchObject.valid() && onBatchObject.get_type() != sol::type::lua_nil) {
-        if (!onBatchObject.is<sol::protected_function>()) {
-            error = "stream.on_batch 必须是 function";
-            return false;
-        }
-        const std::string onBatchCallbackKey = "stream.on_batch";
-        callbacks.insert_or_assign(onBatchCallbackKey, onBatchObject.as<sol::protected_function>());
-        loaded.onBatchCallbackKey = onBatchCallbackKey;
-    }
-    return true;
+    return registerStreamBatchCallback(schemaTable, loaded, callbacks, error);
 }
 
 bool parseStreamFrameHeader(const sol::table& frameTable, StreamFrameDefinition& frame, std::string& error)
