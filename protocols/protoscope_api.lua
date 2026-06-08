@@ -83,6 +83,8 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@class ProtoControlLayoutNode
 ---@field type 'control'
 ---@field id string
+---@field min_width? number @控件最小宽度约束，必须为正数；只在 layout control 节点上生效。
+---@field max_width? number @控件最大宽度约束，必须为正数；同时设置时要求 min_width <= max_width。
 
 ---@class ProtoTextLayoutNode
 ---@field type 'text'

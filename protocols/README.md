@@ -54,6 +54,8 @@ end
 { type = "control", id = "device_id", min_width = 180, max_width = 260 }
 ```
 
+宽度约束只属于 layout 的 `control` 节点。顶层控件描述只声明控件类型、标签、默认值和选项，不声明布局宽度。
+
 ### `ui()` 返回值
 
 `ui()` 返回一个数组，每一项都是一个 `DockDescriptor`：
@@ -64,6 +66,8 @@ end
 - `tab_group`：分组名，可选。相同 `tab_group` 的 dock 会落到同一个 tab 组里。
 - `controls`：控件列表，必填。
 - `layout`：新 Layout Tree，可选。省略时宿主会按 `controls` 的声明顺序逐个渲染。
+
+可用 `anchor`：`left`、`left_bottom`、`right_top`、`right_mid`、`right_bottom`、`main_bottom`。
 
 ### 控件类型
 
@@ -82,7 +86,7 @@ end
 - `input_float`：浮点输入，`default` 是数字。
 - `checkbox`：布尔开关，`default` 是 boolean。
 - `combo`：下拉选择，必须提供 `options = { ... }`，`default` 是 1 基索引。
-- `elf_symbol_combo`：ELF 静态地址候选输入框。
+- `elf_symbol_combo`：ELF 静态地址候选输入框，值是 `{ label, value, type }` 结构；可选 `debounce_ms` 和 `limit`，未写时使用 `gui.elf_symbol_combo.debounce_ms` 与 `gui.elf_symbol_combo.limit`。
 
 ### Layout Tree
 
@@ -428,6 +432,7 @@ count = {
 - `proto.status.set(text, { level = "info"|"warn"|"error" })`
 - `proto.status.clear()`
 - `proto.ui.alert({ title = "...", message = "...", level = "warn", window = { width = 520, height = 260, x = 120, y = 80, resizable = true, movable = true, auto_resize = false } })`
+- `proto.ui.confirm({ title = "...", message = "...", tag = "confirm_send", dedupe_key = "confirm_send" })`
 - `proto.plot.setup({ source = "...", reset_history = true, channels = { ... } })`
 - `proto.plot.push(channel_index, { source = "...", samples = { { t = 0.0, y = 1.23 } } })`
 
@@ -439,8 +444,42 @@ count = {
 - `auto_resize`：是否使用 ImGui 自动尺寸
 
 如果不传 `window`，ProtoScope 会继续沿用原有自动尺寸弹窗行为；标题只保留在窗口标题栏，不会在正文重复显示。
+`dedupe_key` 可用于同类弹窗去重；未设置时每次调用都按独立弹窗请求处理。
 
 `proto.fs.*` 仍使用系统原生文件对话框，不支持用同一套 `window` 参数控制宽高、位置或拖动开关。
+
+文件 IO 常用调用：
+
+```lua
+proto.fs.open_file_dialog({
+  title = "选择样本",
+  mode = "open",
+  filters = {
+    { name = "Binary", pattern = "*.bin" },
+    { name = "All", pattern = "*" },
+  },
+})
+
+local handle, err = proto.fs.open(path, {
+  mode = "read",
+  binary = true,
+  create_dirs = false,
+  overwrite = false,
+})
+
+local chunk, read_err = proto.fs.read(handle, { size = 4096 })
+proto.fs.close(handle)
+
+local job_id, send_err = proto.fs.send_file(path, {
+  kind = "send",
+  chunk_size = 256,
+  tag = "firmware",
+})
+```
+
+- `open_file_dialog.mode` 支持 `open` 和 `save`，结果通过 `on_file_dialog(ctx, evt)` 异步返回。
+- `proto.fs.open()` 的 `mode` 支持 `read`、`write`、`append`；写入模式可配合 `create_dirs` 和 `overwrite`。
+- `proto.fs.send_file()` 会分块读取文件并通过宿主 TX 队列发送，`kind` 可选择 `send` 或 `request`，进度与结果通过 `on_tx(ctx, evt)` 返回。
 
 最小波形示例：
 
