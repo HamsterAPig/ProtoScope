@@ -33,6 +33,7 @@ namespace {
         if (descriptor.label.empty() || descriptor.labelPosition != scripting::ControlLabelPosition::Left) {
             return;
         }
+        ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(descriptor.label.c_str());
         ImGui::SameLine();
     }
