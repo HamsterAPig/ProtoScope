@@ -47,6 +47,48 @@ namespace {
         return kEpsilon;
     }
 
+    void sortSamplesByTime(std::vector<WaveSample>& samples)
+    {
+        // 核心流程：实时链路通常按时间递增推送大批量采样，已递增时跳过排序以降低 append 成本。
+        const bool monotonic =
+            std::is_sorted(samples.begin(), samples.end(), [](const WaveSample& left, const WaveSample& right) {
+                return left.time < right.time;
+            });
+        if (!monotonic) {
+            std::sort(samples.begin(), samples.end(), [](const WaveSample& left, const WaveSample& right) {
+                return left.time < right.time;
+            });
+        }
+    }
+
+    bool startsAtHistoryOrigin(const std::vector<WaveSample>& samples, double lastTime)
+    {
+        if (samples.empty()) {
+            return false;
+        }
+        const double firstTime = samples.front().time;
+        return firstTime <= lastTime && firstTime <= kEpsilon;
+    }
+
+    void shiftSamplesAfterLastTime(std::vector<WaveSample>& samples, double lastTime)
+    {
+        if (samples.empty()) {
+            return;
+        }
+        const double offset = lastTime + estimateTimeStep(samples) - samples.front().time;
+        for (auto& sample : samples) {
+            sample.time += offset;
+        }
+    }
+
+    void dropSamplesNotAfterLastTime(std::vector<WaveSample>& samples, double lastTime)
+    {
+        samples.erase(std::remove_if(samples.begin(),
+                                     samples.end(),
+                                     [lastTime](const WaveSample& sample) { return sample.time <= lastTime; }),
+                      samples.end());
+    }
+
     double nearestRankPercentile(const std::vector<double>& sortedValues, double percentile)
     {
         if (sortedValues.empty()) {
@@ -337,68 +379,58 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
     if (request.samples.empty()) {
         return false;
     }
+    auto& channel = ensureChannel(channelIndex);
+    applyAppendSource(request.source);
+
+    sortSamplesByTime(request.samples);
+
+    if (!channel.samples.empty()) {
+        const double lastTime = channel.samples.back().time;
+        if (startsAtHistoryOrigin(request.samples, lastTime)) {
+            if (resetHistoryOnTimeReset_) {
+                return appendAfterHistoryReset(channelIndex, request);
+            }
+            shiftSamplesAfterLastTime(request.samples, lastTime);
+        }
+        dropSamplesNotAfterLastTime(request.samples, lastTime);
+    }
+
+    return appendPreparedSamples(channel, request.samples);
+}
+
+OscilloscopeBuffer::ChannelBuffer& OscilloscopeBuffer::ensureChannel(std::size_t channelIndex)
+{
     if (channelIndex >= channels_.size()) {
         configureChannels(channelIndex + 1);
     }
-    auto& channel = channels_[channelIndex];
-    const std::string requestSource = request.source;
-    if (!requestSource.empty()) {
-        source_ = requestSource;
-    }
+    return channels_[channelIndex];
+}
 
-    // 核心流程：实时链路通常按时间递增推送大批量采样，已递增时跳过排序以降低 append 成本。
-    const bool monotonic = std::is_sorted(
-        request.samples.begin(), request.samples.end(), [](const WaveSample& left, const WaveSample& right) {
-            return left.time < right.time;
-        });
-    if (!monotonic) {
-        std::sort(request.samples.begin(), request.samples.end(), [](const WaveSample& left, const WaveSample& right) {
-            return left.time < right.time;
-        });
+void OscilloscopeBuffer::applyAppendSource(const std::string& source)
+{
+    if (!source.empty()) {
+        source_ = source;
     }
+}
 
-    if (!channel.samples.empty()) {
-        const double lastTime = channel.samples.back().time;
-        const double firstTime = request.samples.front().time;
-        if (firstTime <= lastTime && firstTime <= kEpsilon) {
-            if (resetHistoryOnTimeReset_) {
-                // 核心流程：脚本二次运行常从 t=0 重新输出，默认把它视为新一轮采集，避免旧历史挡住新样本。
-                for (auto& existingChannel : channels_) {
-                    existingChannel.samples.clear();
-                }
-                preservedHistoryLimit_ = 0;
-                if (channelIndex >= channels_.size()) {
-                    configureChannels(channelIndex + 1);
-                }
-                auto& resetChannel = channels_[channelIndex];
-                if (!requestSource.empty()) {
-                    source_ = requestSource;
-                }
-                resetChannel.samples.insert(resetChannel.samples.end(), request.samples.begin(), request.samples.end());
-                trimHistory(resetChannel);
-                ++dataRevision_;
-                return true;
-            }
-            const double offset = lastTime + estimateTimeStep(request.samples) - firstTime;
-            for (auto& sample : request.samples) {
-                sample.time += offset;
-            }
-        }
+bool OscilloscopeBuffer::appendAfterHistoryReset(std::size_t channelIndex, const WaveAppendRequest& request)
+{
+    // 核心流程：脚本二次运行常从 t=0 重新输出，默认把它视为新一轮采集，避免旧历史挡住新样本。
+    for (auto& existingChannel : channels_) {
+        existingChannel.samples.clear();
     }
+    preservedHistoryLimit_ = 0;
+    auto& resetChannel = ensureChannel(channelIndex);
+    applyAppendSource(request.source);
+    return appendPreparedSamples(resetChannel, request.samples);
+}
 
-    if (!channel.samples.empty()) {
-        const double lastTime = channel.samples.back().time;
-        request.samples.erase(std::remove_if(request.samples.begin(),
-                                             request.samples.end(),
-                                             [lastTime](const WaveSample& sample) { return sample.time <= lastTime; }),
-                              request.samples.end());
-    }
-
-    if (request.samples.empty()) {
+bool OscilloscopeBuffer::appendPreparedSamples(ChannelBuffer& channel, const std::vector<WaveSample>& samples)
+{
+    if (samples.empty()) {
         return false;
     }
-
-    channel.samples.insert(channel.samples.end(), request.samples.begin(), request.samples.end());
+    channel.samples.insert(channel.samples.end(), samples.begin(), samples.end());
     trimHistory(channel);
     ++dataRevision_;
     return true;

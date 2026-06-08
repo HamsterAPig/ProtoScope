@@ -191,6 +191,10 @@ private:
         std::vector<WaveSample> samples;
     };
 
+    ChannelBuffer& ensureChannel(std::size_t channelIndex);
+    void applyAppendSource(const std::string& source);
+    bool appendAfterHistoryReset(std::size_t channelIndex, const WaveAppendRequest& request);
+    bool appendPreparedSamples(ChannelBuffer& channel, const std::vector<WaveSample>& samples);
     std::size_t lowerBoundByTime(const std::vector<WaveSample>& samples, double time) const;
     std::size_t upperBoundByTime(const std::vector<WaveSample>& samples, double time) const;
     std::size_t effectiveHistoryLimit() const;
