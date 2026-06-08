@@ -226,6 +226,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/runtime/lua_view_menu.cc
         ui/runtime/help_menu.cc
         ui/docks/dock_host.cc
+        ui/docks/offline_replay_dock.cc
         ui/docks/lua_dock_host.cc
         ui/dialogs/dialog_host.cc
         ui/wave/wave_channel_legend.cc

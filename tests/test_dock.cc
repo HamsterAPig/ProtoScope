@@ -592,6 +592,7 @@ void test_dock_visibility_state_isolated_by_protocol_key()
     protoA.showProtocolDock = true;
     protoA.showTransferDock = false;
     protoA.showRequestTraceDock = false;
+    protoA.showOfflineReplayDock = false;
     protoA.showLogDock = true;
     protoA.showScriptDock = false;
     protoA.showWaveDock = true;
@@ -604,6 +605,7 @@ void test_dock_visibility_state_isolated_by_protocol_key()
     protoB.showProtocolDock = false;
     protoB.showTransferDock = true;
     protoB.showRequestTraceDock = true;
+    protoB.showOfflineReplayDock = true;
     protoB.showLogDock = false;
     protoB.showScriptDock = true;
     protoB.showWaveDock = false;
@@ -616,6 +618,7 @@ void test_dock_visibility_state_isolated_by_protocol_key()
     require(restoredA.showProtocolDock, "proto_a 应恢复自己的协议脚本可见性");
     require(!restoredA.showTransferDock, "proto_a 应恢复自己的收发可见性");
     require(!restoredA.showRequestTraceDock, "proto_a 应恢复自己的请求追踪可见性");
+    require(!restoredA.showOfflineReplayDock, "proto_a 应恢复自己的离线复现可见性");
     require(restoredA.showLogDock, "proto_a 应恢复自己的日志可见性");
     require(!restoredA.showScriptDock, "proto_a 应恢复自己的脚本可见性");
     require(restoredA.showWaveDock, "proto_a 应恢复自己的波形可见性");
@@ -630,6 +633,7 @@ void test_dock_visibility_state_isolated_by_protocol_key()
     require(!restoredB.showProtocolDock, "proto_b 应恢复自己的协议脚本可见性");
     require(restoredB.showTransferDock, "proto_b 应恢复自己的收发可见性");
     require(restoredB.showRequestTraceDock, "proto_b 应恢复自己的请求追踪可见性");
+    require(restoredB.showOfflineReplayDock, "proto_b 应恢复自己的离线复现可见性");
     require(!restoredB.showLogDock, "proto_b 应恢复自己的日志可见性");
     require(restoredB.showScriptDock, "proto_b 应恢复自己的脚本可见性");
     require(!restoredB.showWaveDock, "proto_b 应恢复自己的波形可见性");
@@ -658,6 +662,7 @@ void test_dock_visibility_state_decode_missing_fields_defaults()
     require(defaultState.showProtocolDock, "缺失的 protocol 字段应保持默认可见");
     require(defaultState.showTransferDock, "缺失的 transfer 字段应保持默认可见");
     require(defaultState.showRequestTraceDock, "缺失的 request_trace 字段应保持默认可见");
+    require(defaultState.showOfflineReplayDock, "缺失的 offline_replay 字段应保持默认可见");
     require(!defaultState.showLogDock, "存在的 log 字段应按配置恢复");
     require(defaultState.showScriptDock, "缺失的 script 字段应保持默认可见");
     require(defaultState.showWaveDock, "缺失的 wave 字段应保持默认可见");

@@ -51,6 +51,7 @@ private:
     friend class ProtocolDockComponent;
     friend class LuaDockComponent;
     friend class RequestTraceDockComponent;
+    friend class OfflineReplayDockComponent;
     friend class LogDockComponent;
     friend class WorkspaceController;
 
@@ -76,6 +77,7 @@ private:
         bool showProtocolDock{true};
         bool showTransferDock{true};
         bool showRequestTraceDock{true};
+        bool showOfflineReplayDock{true};
         bool showLogDock{true};
         bool showScriptDock{true};
         bool showWaveDock{true};
@@ -137,6 +139,7 @@ private:
     void drawTransferLogSection(float logHeight);
     void drawTransferSendSection(float minPayloadHeight, const ImGuiStyle& style);
     void drawRequestTraceDock();
+    void drawOfflineReplayDock();
     void drawLogDock();
     void drawScriptDock();
     bool drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls, bool earlyExit = true);
@@ -307,6 +310,7 @@ private:
     bool showProtocolDock_{true};
     bool showTransferDock_{true};
     bool showRequestTraceDock_{true};
+    bool showOfflineReplayDock_{true};
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};

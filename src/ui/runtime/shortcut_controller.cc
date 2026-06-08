@@ -42,6 +42,8 @@ ImGuiKey toImGuiKey(const ShortcutKey key)
             return ImGuiKey_6;
         case ShortcutKey::Digit7:
             return ImGuiKey_7;
+        case ShortcutKey::Digit8:
+            return ImGuiKey_8;
         case ShortcutKey::Space:
             return ImGuiKey_Space;
         case ShortcutKey::Escape:
@@ -142,6 +144,10 @@ void GuiRuntime::handleGlobalShortcuts()
     }
     if (shortcutPressed(ShortcutAction::ToggleRequestTraceDock)) {
         toggleDock(showRequestTraceDock_, pendingProtocolWorkspaceSave_);
+        return;
+    }
+    if (shortcutPressed(ShortcutAction::ToggleOfflineReplayDock)) {
+        toggleDock(showOfflineReplayDock_, pendingProtocolWorkspaceSave_);
         return;
     }
     if (shortcutPressed(ShortcutAction::ToggleLogDock)) {

@@ -6,7 +6,7 @@ namespace protoscope::ui {
 
 namespace {
 
-constexpr std::array<ShortcutDescriptor, 21> kShortcutDescriptors{{
+constexpr std::array<ShortcutDescriptor, 22> kShortcutDescriptors{{
     {ShortcutAction::SaveConfig,
      ShortcutScope::Global,
      {.key = ShortcutKey::S, .ctrl = true},
@@ -62,6 +62,11 @@ constexpr std::array<ShortcutDescriptor, 21> kShortcutDescriptors{{
      {.key = ShortcutKey::Digit7, .ctrl = true},
      "Ctrl+7",
      "显示或隐藏请求追踪 Dock"},
+    {ShortcutAction::ToggleOfflineReplayDock,
+     ShortcutScope::Global,
+     {.key = ShortcutKey::Digit8, .ctrl = true},
+     "Ctrl+8",
+     "显示或隐藏离线复现 Dock"},
     {ShortcutAction::ToggleLogDock,
      ShortcutScope::Global,
      {.key = ShortcutKey::Digit4, .ctrl = true},

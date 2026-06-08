@@ -365,6 +365,7 @@ void GuiRuntime::syncRuntimeState()
         {"protocol", showProtocolDock_},
         {"transfer", showTransferDock_},
         {"request_trace", showRequestTraceDock_},
+        {"offline_replay", showOfflineReplayDock_},
         {"log", showLogDock_},
         {"script", showScriptDock_},
         {"wave", showWaveDock_},
@@ -438,6 +439,7 @@ void GuiRuntime::captureWaveFullscreenDockSnapshot()
         .showProtocolDock = showProtocolDock_,
         .showTransferDock = showTransferDock_,
         .showRequestTraceDock = showRequestTraceDock_,
+        .showOfflineReplayDock = showOfflineReplayDock_,
         .showLogDock = showLogDock_,
         .showScriptDock = showScriptDock_,
         .showWaveDock = showWaveDock_,
@@ -464,6 +466,7 @@ void GuiRuntime::applyWaveFocusFullscreen()
     showProtocolDock_ = false;
     showTransferDock_ = false;
     showRequestTraceDock_ = false;
+    showOfflineReplayDock_ = false;
     showLogDock_ = false;
     showScriptDock_ = false;
     showWaveDock_ = true;
@@ -483,6 +486,7 @@ void GuiRuntime::restoreWaveFocusFullscreen()
     showProtocolDock_ = waveFullscreenSnapshot_->showProtocolDock;
     showTransferDock_ = waveFullscreenSnapshot_->showTransferDock;
     showRequestTraceDock_ = waveFullscreenSnapshot_->showRequestTraceDock;
+    showOfflineReplayDock_ = waveFullscreenSnapshot_->showOfflineReplayDock;
     showLogDock_ = waveFullscreenSnapshot_->showLogDock;
     showScriptDock_ = waveFullscreenSnapshot_->showScriptDock;
     showWaveDock_ = waveFullscreenSnapshot_->showWaveDock;
@@ -615,6 +619,7 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
             const bool previousShowProtocolDock = showProtocolDock_;
             const bool previousShowTransferDock = showTransferDock_;
             const bool previousShowRequestTraceDock = showRequestTraceDock_;
+            const bool previousShowOfflineReplayDock = showOfflineReplayDock_;
             const bool previousShowLogDock = showLogDock_;
             const bool previousShowScriptDock = showScriptDock_;
             const bool previousShowWaveDock = showWaveDock_;
@@ -622,12 +627,14 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
             ImGui::MenuItem("协议脚本 / 动态控件", nullptr, &showProtocolDock_);
             ImGui::MenuItem("收发数据", nullptr, &showTransferDock_);
             ImGui::MenuItem("请求追踪", nullptr, &showRequestTraceDock_);
+            ImGui::MenuItem("离线复现", nullptr, &showOfflineReplayDock_);
             ImGui::MenuItem("日志", nullptr, &showLogDock_);
             ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
             ImGui::MenuItem("波形", nullptr, &showWaveDock_);
             if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
                 previousShowTransferDock != showTransferDock_ ||
-                previousShowRequestTraceDock != showRequestTraceDock_ || previousShowLogDock != showLogDock_ ||
+                previousShowRequestTraceDock != showRequestTraceDock_ ||
+                previousShowOfflineReplayDock != showOfflineReplayDock_ || previousShowLogDock != showLogDock_ ||
                 previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
                 pendingProtocolWorkspaceSave_ = true;
             }
@@ -689,6 +696,8 @@ void GuiRuntime::buildModernDefaultLayout(ImGuiID dockspaceId)
     ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
     ImGui::DockBuilderDockWindow("波形", rightPane);
     ImGui::DockBuilderDockWindow("收发数据", rightPane);
+    ImGui::DockBuilderDockWindow("请求追踪", rightPane);
+    ImGui::DockBuilderDockWindow("离线复现", rightPane);
     ImGui::DockBuilderDockWindow("脚本", rightPane);
     ImGui::DockBuilderDockWindow("日志", rightPane);
     ImGui::DockBuilderFinish(dockspaceId);
@@ -753,6 +762,7 @@ void GuiRuntime::renderFrame()
     const bool previousShowProtocolDock = showProtocolDock_;
     const bool previousShowTransferDock = showTransferDock_;
     const bool previousShowRequestTraceDock = showRequestTraceDock_;
+    const bool previousShowOfflineReplayDock = showOfflineReplayDock_;
     const bool previousShowLogDock = showLogDock_;
     const bool previousShowScriptDock = showScriptDock_;
     const bool previousShowWaveDock = showWaveDock_;
@@ -778,7 +788,8 @@ void GuiRuntime::renderFrame()
     }
     if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
         previousShowTransferDock != showTransferDock_ || previousShowRequestTraceDock != showRequestTraceDock_ ||
-        previousShowLogDock != showLogDock_ || previousShowScriptDock != showScriptDock_ ||
+        previousShowOfflineReplayDock != showOfflineReplayDock_ || previousShowLogDock != showLogDock_ ||
+        previousShowScriptDock != showScriptDock_ ||
         previousShowWaveDock != showWaveDock_) {
         if (!waveFullscreenActive_ && !waveFullscreenToggleRequested_) {
             pendingProtocolWorkspaceSave_ = true;

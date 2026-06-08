@@ -749,6 +749,7 @@ YAML::Node encodeDockVisibilityState(const ProtocolDockVisibilityState& state)
     staticNode["protocol"] = state.showProtocolDock;
     staticNode["transfer"] = state.showTransferDock;
     staticNode["request_trace"] = state.showRequestTraceDock;
+    staticNode["offline_replay"] = state.showOfflineReplayDock;
     staticNode["log"] = state.showLogDock;
     staticNode["script"] = state.showScriptDock;
     staticNode["wave"] = state.showWaveDock;
@@ -773,6 +774,7 @@ void decodeDockVisibilityState(const YAML::Node& node, ProtocolDockVisibilitySta
         state.showProtocolDock = staticNode["protocol"].as<bool>(state.showProtocolDock);
         state.showTransferDock = staticNode["transfer"].as<bool>(state.showTransferDock);
         state.showRequestTraceDock = staticNode["request_trace"].as<bool>(state.showRequestTraceDock);
+        state.showOfflineReplayDock = staticNode["offline_replay"].as<bool>(state.showOfflineReplayDock);
         state.showLogDock = staticNode["log"].as<bool>(state.showLogDock);
         state.showScriptDock = staticNode["script"].as<bool>(state.showScriptDock);
         state.showWaveDock = staticNode["wave"].as<bool>(state.showWaveDock);

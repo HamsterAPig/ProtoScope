@@ -149,6 +149,7 @@ void GuiRuntime::drawMainMenu()
         const bool previousShowProtocolDock = showProtocolDock_;
         const bool previousShowTransferDock = showTransferDock_;
         const bool previousShowRequestTraceDock = showRequestTraceDock_;
+        const bool previousShowOfflineReplayDock = showOfflineReplayDock_;
         const bool previousShowLogDock = showLogDock_;
         const bool previousShowScriptDock = showScriptDock_;
         const bool previousShowWaveDock = showWaveDock_;
@@ -161,6 +162,9 @@ void GuiRuntime::drawMainMenu()
         ImGui::MenuItem("请求追踪",
                         shortcutLabel(ShortcutAction::ToggleRequestTraceDock).data(),
                         &showRequestTraceDock_);
+        ImGui::MenuItem("离线复现",
+                        shortcutLabel(ShortcutAction::ToggleOfflineReplayDock).data(),
+                        &showOfflineReplayDock_);
         ImGui::MenuItem("日志", shortcutLabel(ShortcutAction::ToggleLogDock).data(), &showLogDock_);
         ImGui::MenuItem("脚本", shortcutLabel(ShortcutAction::ToggleScriptDock).data(), &showScriptDock_);
         ImGui::MenuItem("波形", shortcutLabel(ShortcutAction::ToggleWaveDock).data(), &showWaveDock_);
@@ -170,7 +174,8 @@ void GuiRuntime::drawMainMenu()
         ImGui::TextDisabled("中心波形 / 左配置 / 右分析 / 底部事件流");
         if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
             previousShowTransferDock != showTransferDock_ || previousShowRequestTraceDock != showRequestTraceDock_ ||
-            previousShowLogDock != showLogDock_ || previousShowScriptDock != showScriptDock_ ||
+            previousShowOfflineReplayDock != showOfflineReplayDock_ || previousShowLogDock != showLogDock_ ||
+            previousShowScriptDock != showScriptDock_ ||
             previousShowWaveDock != showWaveDock_) {
             pendingProtocolWorkspaceSave_ = true;
         }
