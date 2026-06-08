@@ -554,22 +554,19 @@ bool parseStreamFrameHeader(const sol::table& frameTable, StreamFrameDefinition&
     return true;
 }
 
-bool parseStreamFrameLengthDefinition(const sol::object& lenObject,
-                                      StreamLengthDefinition& lenDefinition,
-                                      std::string& error)
+bool parseStreamLengthOffset(const sol::table& lenTable, StreamLengthDefinition& lenDefinition, std::string& error)
 {
-    if (!lenObject.is<sol::table>()) {
-        error = "frame.len 必须是 table";
-        return false;
-    }
-    const auto lenTable = lenObject.as<sol::table>();
     const auto offset = luaIntegerValue(lenTable["offset"]);
     if (!offset.has_value() || *offset <= 0) {
         error = "frame.len.offset 必须是从 1 开始的正整数";
         return false;
     }
     lenDefinition.offset = static_cast<std::size_t>(*offset - 1);
+    return true;
+}
 
+bool parseStreamLengthType(const sol::table& lenTable, StreamLengthDefinition& lenDefinition, std::string& error)
+{
     const auto typeText = luaStringField(lenTable, "type");
     if (!typeText.has_value()) {
         error = "frame.len.type 不能为空";
@@ -581,7 +578,11 @@ bool parseStreamFrameLengthDefinition(const sol::object& lenObject,
         return false;
     }
     lenDefinition.type = *valueType;
+    return true;
+}
 
+bool parseStreamLengthMode(const sol::table& lenTable, StreamLengthDefinition& lenDefinition, std::string& error)
+{
     const auto meansText = luaStringField(lenTable, "means").value_or("payload");
     const auto means = parseStreamLengthMeans(meansText);
     if (!means.has_value()) {
@@ -597,6 +598,20 @@ bool parseStreamFrameLengthDefinition(const sol::object& lenObject,
         lenDefinition.extra = static_cast<std::size_t>(*extra);
     }
     return true;
+}
+
+bool parseStreamFrameLengthDefinition(const sol::object& lenObject,
+                                      StreamLengthDefinition& lenDefinition,
+                                      std::string& error)
+{
+    if (!lenObject.is<sol::table>()) {
+        error = "frame.len 必须是 table";
+        return false;
+    }
+    const auto lenTable = lenObject.as<sol::table>();
+    return parseStreamLengthOffset(lenTable, lenDefinition, error) &&
+           parseStreamLengthType(lenTable, lenDefinition, error) &&
+           parseStreamLengthMode(lenTable, lenDefinition, error);
 }
 
 bool parseStreamFrameSizeMode(const sol::table& frameTable, StreamFrameDefinition& frame, std::string& error)
