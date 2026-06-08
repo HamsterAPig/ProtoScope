@@ -1018,6 +1018,138 @@ bool FrameStreamParser::validateFrameCrc(const StreamFrameDefinition& frame,
     return false;
 }
 
+void FrameStreamParser::setCountResolveError(const StreamFrameDefinition& frame,
+                                             const std::uint8_t* frameBytes,
+                                             std::size_t frameLength,
+                                             const std::string& countError,
+                                             AnalyzeResult& result) const
+{
+    result.action = AnalyzeResult::Action::RecoverableError;
+    result.error = StreamParseError{
+        .code = StreamParseErrorCode::CountResolveFailed,
+        .message = countError.empty() ? "字段数量解析失败" : countError,
+        .frameName = frame.name,
+        .droppedBytes = 0,
+        .raw = copyBytes(frameBytes, frameLength),
+    };
+}
+
+void FrameStreamParser::setFieldDecodeError(const StreamFrameDefinition& frame,
+                                            const std::uint8_t* frameBytes,
+                                            std::size_t frameLength,
+                                            std::string_view message,
+                                            AnalyzeResult& result) const
+{
+    result.action = AnalyzeResult::Action::RecoverableError;
+    result.error = StreamParseError{
+        .code = StreamParseErrorCode::FieldDecodeFailed,
+        .message = std::string(message),
+        .frameName = frame.name,
+        .droppedBytes = 0,
+        .raw = copyBytes(frameBytes, frameLength),
+    };
+}
+
+bool FrameStreamParser::resolveFieldDecodePlan(const StreamFrameDefinition& frame,
+                                               const StreamFieldDefinition& field,
+                                               const std::uint8_t* frameBytes,
+                                               std::size_t frameLength,
+                                               std::size_t readableLimit,
+                                               std::size_t cursor,
+                                               const StreamFieldMap& parsedFields,
+                                               FieldDecodePlan& plan,
+                                               AnalyzeResult& result) const
+{
+    plan = FieldDecodePlan{
+        .start = field.offset.value_or(cursor),
+        .count = 0,
+        .width = streamValueWidth(field.type),
+        .end = field.offset.value_or(cursor),
+    };
+
+    std::string countError;
+    const auto count = resolveFieldCount(field, parsedFields, frameLength, readableLimit, plan.start, countError);
+    if (!count.has_value()) {
+        setCountResolveError(frame, frameBytes, frameLength, countError, result);
+        return false;
+    }
+
+    plan.count = *count;
+    std::size_t fieldBytes = 0;
+    if (!checkedMultiplySize(plan.count, plan.width, fieldBytes) ||
+        !checkedAddSize(plan.start, fieldBytes, plan.end)) {
+        setFieldDecodeError(frame, frameBytes, frameLength, "字段大小溢出", result);
+        return false;
+    }
+    return true;
+}
+
+FrameStreamParser::FieldDecodeBoundsAction
+FrameStreamParser::validateFieldDecodeBounds(const StreamFrameDefinition& frame,
+                                             const std::uint8_t* frameBytes,
+                                             std::size_t frameLength,
+                                             std::size_t readableLimit,
+                                             const FieldDecodePlan& plan,
+                                             AnalyzeResult& result) const
+{
+    if (plan.start <= readableLimit && plan.end <= readableLimit) {
+        return FieldDecodeBoundsAction::Decode;
+    }
+
+    // 运行时 profile 帧：超出帧边界的字段静默跳过，
+    // 对应字段在 Lua 侧为 nil，由脚本侧兜底处理。
+    if (frame.runtimeProfile) {
+        return FieldDecodeBoundsAction::Skip;
+    }
+
+    // 静态帧：越界是硬错误
+    setFieldDecodeError(frame, frameBytes, frameLength, "字段超出帧有效载荷范围", result);
+    return FieldDecodeBoundsAction::Error;
+}
+
+void FrameStreamParser::decodeFieldValue(const StreamFieldDefinition& field,
+                                         const std::uint8_t* frameBytes,
+                                         std::size_t frameLength,
+                                         const FieldDecodePlan& plan,
+                                         StreamFieldMap& parsedFields) const
+{
+    if (field.type == StreamValueType::Bytes) {
+        parsedFields[field.name] = StreamFieldValue{copyBytes(frameBytes + plan.start, plan.count)};
+        return;
+    }
+
+    if (streamValueTypeIsFloat(field.type)) {
+        if (plan.count == 1) {
+            parsedFields[field.name] =
+                StreamFieldValue{decodeFloat(frameBytes, frameLength, plan.start, field.type).value_or(0.0)};
+            return;
+        }
+
+        std::vector<double> values;
+        values.reserve(plan.count);
+        for (std::size_t index = 0; index < plan.count; ++index) {
+            values.push_back(
+                decodeFloat(frameBytes, frameLength, plan.start + index * plan.width, field.type).value_or(0.0));
+        }
+        parsedFields[field.name] = StreamFieldValue{std::move(values)};
+        return;
+    }
+
+    if (plan.count == 1) {
+        parsedFields[field.name] =
+            StreamFieldValue{decodeInteger(frameBytes, frameLength, plan.start, field.type).value_or(0)};
+        return;
+    }
+
+    std::vector<std::int64_t> values;
+    values.reserve(plan.count);
+    for (std::size_t index = 0; index < plan.count; ++index) {
+        values.push_back(
+            decodeInteger(frameBytes, frameLength, plan.start + index * plan.width, field.type).value_or(0));
+    }
+    parsedFields[field.name] = StreamFieldValue{std::move(values)};
+}
+
 bool FrameStreamParser::decodeFrameFields(const StreamFrameDefinition& frame,
                                           const std::uint8_t* frameBytes,
                                           std::size_t frameLength,
@@ -1028,86 +1160,22 @@ bool FrameStreamParser::decodeFrameFields(const StreamFrameDefinition& frame,
     std::size_t cursor = 0;
     const auto readableLimit = frameLength - crcWidth;
     for (const auto& field : frame.fields) {
-        const auto width = streamValueWidth(field.type);
-        const auto start = field.offset.value_or(cursor);
-        std::string countError;
-        const auto count = resolveFieldCount(field, parsedFields, frameLength, readableLimit, start, countError);
-        if (!count.has_value()) {
-            result.action = AnalyzeResult::Action::RecoverableError;
-            result.error = StreamParseError{
-                .code = StreamParseErrorCode::CountResolveFailed,
-                .message = countError.empty() ? "字段数量解析失败" : countError,
-                .frameName = frame.name,
-                .droppedBytes = 0,
-                .raw = copyBytes(frameBytes, frameLength),
-            };
+        FieldDecodePlan plan;
+        if (!resolveFieldDecodePlan(
+                frame, field, frameBytes, frameLength, readableLimit, cursor, parsedFields, plan, result)) {
             return false;
         }
 
-        std::size_t fieldBytes = 0;
-        std::size_t fieldEnd = start;
-        const bool fieldSizeOk =
-            checkedMultiplySize(*count, width, fieldBytes) && checkedAddSize(start, fieldBytes, fieldEnd);
-        if (!fieldSizeOk) {
-            result.action = AnalyzeResult::Action::RecoverableError;
-            result.error = StreamParseError{
-                .code = StreamParseErrorCode::FieldDecodeFailed,
-                .message = "字段大小溢出",
-                .frameName = frame.name,
-                .droppedBytes = 0,
-                .raw = copyBytes(frameBytes, frameLength),
-            };
+        const auto boundsAction = validateFieldDecodeBounds(frame, frameBytes, frameLength, readableLimit, plan, result);
+        if (boundsAction == FieldDecodeBoundsAction::Error) {
             return false;
         }
-        if (start > readableLimit || fieldEnd > readableLimit) {
-            // 运行时 profile 帧：超出帧边界的字段静默跳过，
-            // 对应字段在 Lua 侧为 nil，由脚本侧兜底处理。
-            if (frame.runtimeProfile) {
-                continue;
-            }
-            // 静态帧：越界是硬错误
-            result.action = AnalyzeResult::Action::RecoverableError;
-            result.error = StreamParseError{
-                .code = StreamParseErrorCode::FieldDecodeFailed,
-                .message = "字段超出帧有效载荷范围",
-                .frameName = frame.name,
-                .droppedBytes = 0,
-                .raw = copyBytes(frameBytes, frameLength),
-            };
-            return false;
+        if (boundsAction == FieldDecodeBoundsAction::Skip) {
+            continue;
         }
 
-        if (field.type == StreamValueType::Bytes) {
-            parsedFields[field.name] = StreamFieldValue{copyBytes(frameBytes + start, *count)};
-        } else if (streamValueTypeIsFloat(field.type)) {
-            if (*count == 1) {
-                parsedFields[field.name] =
-                    StreamFieldValue{decodeFloat(frameBytes, frameLength, start, field.type).value_or(0.0)};
-            } else {
-                std::vector<double> values;
-                values.reserve(*count);
-                for (std::size_t index = 0; index < *count; ++index) {
-                    values.push_back(
-                        decodeFloat(frameBytes, frameLength, start + index * width, field.type).value_or(0.0));
-                }
-                parsedFields[field.name] = StreamFieldValue{std::move(values)};
-            }
-        } else {
-            if (*count == 1) {
-                parsedFields[field.name] =
-                    StreamFieldValue{decodeInteger(frameBytes, frameLength, start, field.type).value_or(0)};
-            } else {
-                std::vector<std::int64_t> values;
-                values.reserve(*count);
-                for (std::size_t index = 0; index < *count; ++index) {
-                    values.push_back(
-                        decodeInteger(frameBytes, frameLength, start + index * width, field.type).value_or(0));
-                }
-                parsedFields[field.name] = StreamFieldValue{std::move(values)};
-            }
-        }
-
-        cursor = std::max(cursor, fieldEnd);
+        decodeFieldValue(field, frameBytes, frameLength, plan, parsedFields);
+        cursor = std::max(cursor, plan.end);
     }
     return true;
 }

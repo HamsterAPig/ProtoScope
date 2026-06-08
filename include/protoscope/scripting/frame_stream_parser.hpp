@@ -265,6 +265,19 @@ private:
         std::size_t frameLength{0};
     };
 
+    struct FieldDecodePlan {
+        std::size_t start{0};
+        std::size_t count{0};
+        std::size_t width{0};
+        std::size_t end{0};
+    };
+
+    enum class FieldDecodeBoundsAction {
+        Decode,
+        Skip,
+        Error,
+    };
+
     void ensureAppendCapacity(std::size_t incomingSize);
     [[nodiscard]] StreamParseBatch appendIncomingBytes(const std::vector<std::uint8_t>& bytes);
     void updateNearOverflowStatus(StreamParseBatch& batch) const;
@@ -285,6 +298,36 @@ private:
     [[nodiscard]] bool validateResolvedFrameLength(const StreamFrameDefinition& frame,
                                                    std::size_t frameLength,
                                                    AnalyzeResult& result) const;
+    void setCountResolveError(const StreamFrameDefinition& frame,
+                              const std::uint8_t* frameBytes,
+                              std::size_t frameLength,
+                              const std::string& countError,
+                              AnalyzeResult& result) const;
+    void setFieldDecodeError(const StreamFrameDefinition& frame,
+                             const std::uint8_t* frameBytes,
+                             std::size_t frameLength,
+                             std::string_view message,
+                             AnalyzeResult& result) const;
+    [[nodiscard]] bool resolveFieldDecodePlan(const StreamFrameDefinition& frame,
+                                              const StreamFieldDefinition& field,
+                                              const std::uint8_t* frameBytes,
+                                              std::size_t frameLength,
+                                              std::size_t readableLimit,
+                                              std::size_t cursor,
+                                              const StreamFieldMap& parsedFields,
+                                              FieldDecodePlan& plan,
+                                              AnalyzeResult& result) const;
+    [[nodiscard]] FieldDecodeBoundsAction validateFieldDecodeBounds(const StreamFrameDefinition& frame,
+                                                                    const std::uint8_t* frameBytes,
+                                                                    std::size_t frameLength,
+                                                                    std::size_t readableLimit,
+                                                                    const FieldDecodePlan& plan,
+                                                                    AnalyzeResult& result) const;
+    void decodeFieldValue(const StreamFieldDefinition& field,
+                          const std::uint8_t* frameBytes,
+                          std::size_t frameLength,
+                          const FieldDecodePlan& plan,
+                          StreamFieldMap& parsedFields) const;
     [[nodiscard]] std::size_t maxHeaderLength() const;
     [[nodiscard]] std::optional<CandidateMatch> findCandidate() const;
     AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
