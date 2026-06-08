@@ -791,69 +791,98 @@ bool registerStreamErrorCallback(const sol::table& schemaTable,
     return true;
 }
 
-std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
-    sol::state_view lua, std::unordered_map<std::string, sol::protected_function>& callbacks, std::string& error)
+std::optional<sol::table> loadStreamSchemaTable(sol::state_view lua, std::string& error)
 {
     const sol::object streamObject = lua["stream"];
     if (!streamObject.valid() || streamObject.get_type() == sol::type::lua_nil) {
-        return nullptr;
+        return std::nullopt;
     }
     if (!streamObject.is<sol::protected_function>()) {
         error = "stream 必须是 function";
-        return nullptr;
+        return std::nullopt;
     }
 
     auto streamFunction = streamObject.as<sol::protected_function>();
     auto streamResult = streamFunction();
     if (!streamResult.valid()) {
         error = "stream() 执行失败: " + protectedCallError(streamResult);
-        return nullptr;
+        return std::nullopt;
     }
 
     const sol::object schemaObject = streamResult.get<sol::object>();
     if (!schemaObject.valid() || schemaObject.get_type() == sol::type::lua_nil) {
-        return nullptr;
+        return std::nullopt;
     }
     if (!schemaObject.is<sol::table>()) {
         error = "stream() 必须返回 table";
-        return nullptr;
+        return std::nullopt;
     }
+    return schemaObject.as<sol::table>();
+}
 
-    const auto schemaTable = schemaObject.as<sol::table>();
-    StreamBufferDefinition bufferDefinition;
-    if (!parseStreamBufferDefinition(schemaTable, bufferDefinition, error)) {
-        return nullptr;
-    }
-
+std::optional<sol::table> parseStreamFramesTable(const sol::table& schemaTable, std::string& error)
+{
     const sol::object framesObject = schemaTable["frames"];
     if (!framesObject.valid() || !framesObject.is<sol::table>()) {
         error = "stream.frames 必须是非空数组";
-        return nullptr;
+        return std::nullopt;
     }
 
     const auto framesTable = framesObject.as<sol::table>();
     if (framesTable.size() == 0) {
         error = "stream.frames 不能为空";
+        return std::nullopt;
+    }
+    return framesTable;
+}
+
+bool parseStreamFrameDefinitions(const sol::table& framesTable,
+                                 LoadedStreamSchema& loaded,
+                                 std::unordered_map<std::string, sol::protected_function>& callbacks,
+                                 std::vector<StreamFrameDefinition>& frames,
+                                 std::string& error)
+{
+    std::unordered_set<std::string> frameNames;
+    frames.reserve(framesTable.size());
+    for (std::size_t index = 1; index <= framesTable.size(); ++index) {
+        auto frame = parseStreamFrameDefinition(framesTable[index], index - 1, loaded, callbacks, frameNames, error);
+        if (!frame.has_value()) {
+            return false;
+        }
+        frames.push_back(std::move(*frame));
+    }
+    return true;
+}
+
+std::unique_ptr<LoadedStreamSchema> parseLoadedStreamSchema(
+    sol::state_view lua, std::unordered_map<std::string, sol::protected_function>& callbacks, std::string& error)
+{
+    const auto schemaTable = loadStreamSchemaTable(lua, error);
+    if (!schemaTable.has_value()) {
+        return nullptr;
+    }
+
+    StreamBufferDefinition bufferDefinition;
+    if (!parseStreamBufferDefinition(*schemaTable, bufferDefinition, error)) {
+        return nullptr;
+    }
+
+    const auto framesTable = parseStreamFramesTable(*schemaTable, error);
+    if (!framesTable.has_value()) {
         return nullptr;
     }
 
     std::vector<StreamFrameDefinition> frames;
-    frames.reserve(framesTable.size());
     auto loaded = std::make_unique<LoadedStreamSchema>(bufferDefinition, std::vector<StreamFrameDefinition>{});
-    if (!applyLoadedStreamOptions(schemaTable, *loaded, callbacks, error)) {
+    if (!applyLoadedStreamOptions(*schemaTable, *loaded, callbacks, error)) {
         return nullptr;
     }
-    std::unordered_set<std::string> frameNames;
 
-    for (std::size_t index = 1; index <= framesTable.size(); ++index) {
-        auto frame = parseStreamFrameDefinition(framesTable[index], index - 1, *loaded, callbacks, frameNames, error);
-        if (!frame.has_value()) {
-            return nullptr;
-        }
-        frames.push_back(std::move(*frame));
+    if (!parseStreamFrameDefinitions(*framesTable, *loaded, callbacks, frames, error)) {
+        return nullptr;
     }
 
-    if (!registerStreamErrorCallback(schemaTable, *loaded, callbacks, error)) {
+    if (!registerStreamErrorCallback(*schemaTable, *loaded, callbacks, error)) {
         return nullptr;
     }
 
