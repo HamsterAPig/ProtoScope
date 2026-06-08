@@ -628,6 +628,31 @@ bool parseStreamFrameSizeMode(const sol::table& frameTable, StreamFrameDefinitio
     return true;
 }
 
+bool parseStreamFrameCrcTable(const sol::table& crcTable, StreamFrameDefinition& frame, std::string& error)
+{
+    const auto crcTypeText = luaStringField(crcTable, "type");
+    if (!crcTypeText.has_value()) {
+        error = "frame.crc.type 不能为空";
+        return false;
+    }
+    const auto crcType = parseStreamCrcType(*crcTypeText);
+    if (!crcType.has_value()) {
+        error = "未知 frame.crc.type: " + *crcTypeText;
+        return false;
+    }
+
+    const auto orderText = luaStringField(crcTable, "order").value_or("lo_hi");
+    const auto order = parseStreamCrcOrder(orderText);
+    if (!order.has_value()) {
+        error = "frame.crc.order 仅支持 lo_hi 或 hi_lo";
+        return false;
+    }
+
+    frame.crc.type = *crcType;
+    frame.crc.order = *order;
+    return true;
+}
+
 bool parseStreamFrameCrcDefinition(const sol::table& frameTable, StreamFrameDefinition& frame, std::string& error)
 {
     if (const sol::object crcObject = frameTable["crc"];
@@ -635,25 +660,9 @@ bool parseStreamFrameCrcDefinition(const sol::table& frameTable, StreamFrameDefi
         if (crcObject.is<bool>() && !crcObject.as<bool>()) {
             frame.crc.type = StreamCrcType::None;
         } else if (crcObject.is<sol::table>()) {
-            const auto crcTable = crcObject.as<sol::table>();
-            const auto crcTypeText = luaStringField(crcTable, "type");
-            if (!crcTypeText.has_value()) {
-                error = "frame.crc.type 不能为空";
+            if (!parseStreamFrameCrcTable(crcObject.as<sol::table>(), frame, error)) {
                 return false;
             }
-            const auto crcType = parseStreamCrcType(*crcTypeText);
-            if (!crcType.has_value()) {
-                error = "未知 frame.crc.type: " + *crcTypeText;
-                return false;
-            }
-            frame.crc.type = *crcType;
-            const auto orderText = luaStringField(crcTable, "order").value_or("lo_hi");
-            const auto order = parseStreamCrcOrder(orderText);
-            if (!order.has_value()) {
-                error = "frame.crc.order 仅支持 lo_hi 或 hi_lo";
-                return false;
-            }
-            frame.crc.order = *order;
         } else {
             error = "frame.crc 必须是 table 或 false";
             return false;
