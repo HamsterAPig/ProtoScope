@@ -131,13 +131,6 @@ namespace {
         return clicked;
     }
 
-    std::string formatMilliseconds(double value)
-    {
-        char buffer[32]{};
-        std::snprintf(buffer, sizeof(buffer), "%.2f", value);
-        return buffer;
-    }
-
 } // namespace
 
 void GuiRuntime::drawStatusBar()
@@ -186,15 +179,6 @@ void GuiRuntime::drawStatusBar()
                 std::to_string(static_cast<unsigned long long>(application_.rawCaptureRecordingBytes())) + " bytes";
             ImGui::SameLine();
             drawHeaderBadge(recordingText.c_str(), tokens.danger, true);
-        }
-        if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U ||
-            comm.luaPendingItems > 0U || comm.uiPendingItems > 0U) {
-            const std::string pendingText =
-                "待处理 rx_input " + std::to_string(comm.rxInputQueueBytes) + " / parser " +
-                std::to_string(comm.parserPendingBytes) + " / post " + std::to_string(comm.postprocessPendingBatches) +
-                " / lua " + std::to_string(comm.luaPendingItems) + " / ui " + std::to_string(comm.uiPendingItems);
-            ImGui::SameLine();
-            drawHeaderBadge(pendingText.c_str(), tokens.accent, false);
         }
         if (!config.statusMessage.empty()) {
             ImGui::SameLine();
@@ -404,39 +388,10 @@ void GuiRuntime::drawCommActions(dock::ConfigDockState& configState)
     }
 }
 
-void GuiRuntime::drawCommBacklogStatus(const dock::CommDockState& comm)
+void GuiRuntime::drawCommParserStatus(const dock::CommDockState& comm)
 {
-    if (comm.pendingRxBytes > 0U || comm.pendingTransferFrameRows > 0U || comm.pendingPlotAppends > 0U ||
-        comm.luaPendingItems > 0U || comm.uiPendingItems > 0U) {
-        ImGui::Text("实时待处理: RX %zu bytes / 逐帧 %zu / 波形 %zu",
-                    comm.pendingRxBytes,
-                    comm.pendingTransferFrameRows,
-                    comm.pendingPlotAppends);
-        ImGui::Text("拆分队列: rx_input %zu / parser %zu / postprocess %zu / lua %zu / ui %zu / 后处理线程 %zu",
-                    comm.rxInputQueueBytes,
-                    comm.parserPendingBytes,
-                    comm.postprocessPendingBatches,
-                    comm.luaPendingItems,
-                    comm.uiPendingItems,
-                    comm.postprocessWorkerThreads);
-    }
-    if (comm.lastPumpEvents > 0U || comm.lastPumpRxBytes > 0U || comm.lastPumpScriptMs > 0.0) {
-        ImGui::Text("上轮处理: 事件 %zu / RX %zu bytes / 帧 %zu / 错误 %zu",
-                    comm.lastPumpEvents,
-                    comm.lastPumpRxBytes,
-                    comm.lastPumpStreamFrames,
-                    comm.lastPumpStreamErrors);
-        ImGui::Text("上轮耗时: pump %sms / parser %sms / Lua回调 %sms / 脚本总计 %sms",
-                    formatMilliseconds(comm.lastPumpTransportMs).c_str(),
-                    formatMilliseconds(comm.lastPumpParserMs).c_str(),
-                    formatMilliseconds(comm.lastPumpCallbackMs).c_str(),
-                    formatMilliseconds(comm.lastPumpScriptMs).c_str());
-    }
     if (!comm.lastErrorSummary.empty()) {
         ImGui::TextColored(ImVec4(1.0F, 0.5F, 0.0F, 1.0F), "解析错误: %s", comm.lastErrorSummary.c_str());
-    }
-    if (!comm.backlogWarning.empty()) {
-        ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.0F, 1.0F), "%s", comm.backlogWarning.c_str());
     }
 }
 
@@ -459,7 +414,7 @@ void GuiRuntime::drawCommDock()
     ImGui::Separator();
     drawCommStatus(comm);
     drawCommActions(configState);
-    drawCommBacklogStatus(comm);
+    drawCommParserStatus(comm);
 
     ImGui::End();
 }

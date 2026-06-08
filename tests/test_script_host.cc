@@ -3056,6 +3056,8 @@ static const TestCase kAllTests[] = {
      &test_application_switching_to_parsed_view_can_replay_old_raw_history},
     {"application_rx_events_are_processed_with_budget", &test_application_rx_events_are_processed_with_budget},
     {"application_large_rx_event_drains_by_byte_budget", &test_application_large_rx_event_drains_by_byte_budget},
+    {"application_comm_pressure_debug_log_respects_log_level",
+     &test_application_comm_pressure_debug_log_respects_log_level},
     {"application_responsive_disconnect_discards_realtime_backlog",
      &test_application_responsive_disconnect_discards_realtime_backlog},
     {"application_complete_disconnect_keeps_realtime_backlog",

@@ -265,6 +265,7 @@ void test_application_switching_to_parsed_view_defaults_to_new_stream_only();
 void test_application_switching_to_parsed_view_can_replay_old_raw_history();
 void test_application_rx_events_are_processed_with_budget();
 void test_application_large_rx_event_drains_by_byte_budget();
+void test_application_comm_pressure_debug_log_respects_log_level();
 void test_application_responsive_disconnect_discards_realtime_backlog();
 void test_application_complete_disconnect_keeps_realtime_backlog();
 void test_application_transfer_frame_rows_drain_after_input_stops();

@@ -273,6 +273,18 @@ bool hasReceiveBytes(const protoscope::dock::ReceiveDockState& receiveState, con
     return false;
 }
 
+bool hasHostLogMessage(const protoscope::dock::LogDockState& logState,
+                       const std::string& endpoint,
+                       const std::string& messageFragment)
+{
+    for (const auto& row : logState.rows) {
+        if (row.endpoint == endpoint && row.message.find(messageFragment) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool hasScriptEvent(const protoscope::dock::ScriptDockState& scriptState, const std::string& name)
 {
     for (const auto& row : scriptState.rows) {
@@ -2510,6 +2522,72 @@ void test_application_large_rx_event_drains_by_byte_budget()
     }
     require(application.docks().receiveState().frameRows.size() == frameCount, "worker 应异步 drain 大 RX 事件");
     require(application.docks().commState().pendingRxBytes == 0U, "worker drain 完成后不应残留 pending 字节");
+}
+
+void test_application_comm_pressure_debug_log_respects_log_level()
+{
+    struct ScenarioResult {
+        bool pressureLogVisible{false};
+        std::size_t pendingTransferFrameRows{0};
+        std::string backlogWarning;
+    };
+
+    const auto runScenario = [](protoscope::config::LogLevel level) {
+        constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_chunked_stream";
+        constexpr std::size_t frameCount = 5;
+        auto transportState = std::make_shared<QueuedEventTransport::State>();
+
+        protoscope::app::Application application;
+        application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+            static_cast<void>(kind);
+            return std::make_unique<QueuedEventTransport>(transportState);
+        });
+        require(application.initialize(), "应用初始化失败");
+        require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+
+        auto config = application.captureConfig();
+        config.logging.level = level;
+        config.gui.realtimeBacklog.transferFrameRowsPerPump = 1;
+        require(application.applyConfig(config), "实时 backlog 与日志配置应可应用");
+        require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可重新加载");
+        application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+        application.activateParsedTransferLogView();
+
+        application.openTransport();
+        application.pumpOnce();
+
+        const protoscope::transport::ConnectionContext ctx{
+            .endpoint = "queued://wave",
+            .connectionId = 7,
+            .timestampMs = 301,
+            .readyForIo = true,
+        };
+        transportState->pendingEvents.push_back(
+            protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamPayload(frameCount)});
+
+        require(application.pumpOnce(), "第一轮 pump 应生成实时 backlog 压力");
+        const auto& comm = application.docks().commState();
+        ScenarioResult result{
+            .pressureLogVisible =
+                hasHostLogMessage(application.docks().logState(), "comm_pressure", "派生 UI backlog"),
+            .pendingTransferFrameRows = comm.pendingTransferFrameRows,
+            .backlogWarning = comm.backlogWarning,
+        };
+        application.shutdown();
+        return result;
+    };
+
+    const auto debugResult = runScenario(protoscope::config::LogLevel::Debug);
+    require(debugResult.pendingTransferFrameRows > 0U, "Debug 场景应真实构造 pending 逐帧 backlog");
+    require(debugResult.backlogWarning.find("派生 UI backlog") != std::string::npos,
+            "Debug 场景应保留 commState backlog 告警");
+    require(debugResult.pressureLogVisible, "Debug 日志级别应把通讯压力写入宿主日志");
+
+    const auto infoResult = runScenario(protoscope::config::LogLevel::Info);
+    require(infoResult.pendingTransferFrameRows > 0U, "Info 场景应同样保留 commState pending 逐帧 backlog");
+    require(infoResult.backlogWarning.find("派生 UI backlog") != std::string::npos,
+            "Info 场景应同样保留 commState backlog 告警");
+    require(!infoResult.pressureLogVisible, "Info 日志级别不应显示通讯压力 Debug 日志");
 }
 
 void test_application_responsive_disconnect_discards_realtime_backlog()

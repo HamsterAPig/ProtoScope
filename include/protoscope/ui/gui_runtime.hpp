@@ -128,7 +128,7 @@ private:
     void drawUdpPeerCommConfig(dock::CommDockState& comm);
     void drawCommStatus(const dock::CommDockState& comm);
     void drawCommActions(dock::ConfigDockState& configState);
-    void drawCommBacklogStatus(const dock::CommDockState& comm);
+    void drawCommParserStatus(const dock::CommDockState& comm);
     void drawProtocolDock();
     void drawLuaDockWindows();
     void drawTransferDock();

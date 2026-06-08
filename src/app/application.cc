@@ -30,6 +30,7 @@ namespace {
     constexpr std::size_t kRawCaptureReplaySeekNoticeEvents = 4096;
     constexpr std::size_t kTransportEventsPerPump = 256;
     constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
+    constexpr std::uint64_t kCommPressureDebugLogIntervalMs = 2000;
 
     std::uint64_t nowMs()
     {
@@ -2293,6 +2294,7 @@ void Application::syncDockState()
         comm.backlogWarning = "派生 UI backlog 已超过单轮预算；transfer rows / plot append 将分批追赶";
     }
     comm.lastErrorSummary = scriptSnapshot.lastTransportStats.lastErrorSummary;
+    maybeLogCommPressureDebug(comm);
 
     auto& lua = dockStore_.luaState();
     lua.docks = scriptSnapshot.docks;
@@ -2310,6 +2312,95 @@ void Application::syncDockState()
         }
         cachedWaveSummaryRevision_ = waveRevision;
     }
+}
+
+void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
+{
+    if (loggingFacade_.currentConfig().level != config::LogLevel::Debug) {
+        return;
+    }
+
+    CommPressureDebugSnapshot snapshot{
+        .pendingRxBytes = comm.pendingRxBytes,
+        .pendingTransferFrameRows = comm.pendingTransferFrameRows,
+        .pendingPlotAppends = comm.pendingPlotAppends,
+        .rxInputQueueBytes = comm.rxInputQueueBytes,
+        .parserPendingBytes = comm.parserPendingBytes,
+        .postprocessPendingBatches = comm.postprocessPendingBatches,
+        .luaPendingItems = comm.luaPendingItems,
+        .uiPendingItems = comm.uiPendingItems,
+        .postprocessWorkerThreads = comm.postprocessWorkerThreads,
+        .backlogWarning = comm.backlogWarning,
+        .lastPumpEvents = comm.lastPumpEvents,
+        .lastPumpRxBytes = comm.lastPumpRxBytes,
+        .lastPumpStreamFrames = comm.lastPumpStreamFrames,
+        .lastPumpStreamErrors = comm.lastPumpStreamErrors,
+        .lastPumpTransportMs = comm.lastPumpTransportMs,
+        .lastPumpParserMs = comm.lastPumpParserMs,
+        .lastPumpCallbackMs = comm.lastPumpCallbackMs,
+        .lastPumpScriptMs = comm.lastPumpScriptMs,
+    };
+
+    const auto hasPressure = [](const CommPressureDebugSnapshot& value) {
+        return value.pendingRxBytes > 0U || value.pendingTransferFrameRows > 0U || value.pendingPlotAppends > 0U ||
+               value.rxInputQueueBytes > 0U || value.parserPendingBytes > 0U ||
+               value.postprocessPendingBatches > 0U || value.luaPendingItems > 0U || value.uiPendingItems > 0U ||
+               !value.backlogWarning.empty();
+    };
+    const auto pressureValuesChanged = [](const CommPressureDebugSnapshot& current,
+                                          const CommPressureDebugSnapshot& previous) {
+        return current.pendingRxBytes != previous.pendingRxBytes ||
+               current.pendingTransferFrameRows != previous.pendingTransferFrameRows ||
+               current.pendingPlotAppends != previous.pendingPlotAppends ||
+               current.rxInputQueueBytes != previous.rxInputQueueBytes ||
+               current.parserPendingBytes != previous.parserPendingBytes ||
+               current.postprocessPendingBatches != previous.postprocessPendingBatches ||
+               current.luaPendingItems != previous.luaPendingItems || current.uiPendingItems != previous.uiPendingItems ||
+               current.postprocessWorkerThreads != previous.postprocessWorkerThreads ||
+               current.backlogWarning != previous.backlogWarning;
+    };
+
+    const bool active = hasPressure(snapshot);
+    const bool previousActive = commPressureDebugLog_.hasSnapshot && hasPressure(commPressureDebugLog_.lastSnapshot);
+    if (!active && !previousActive) {
+        return;
+    }
+
+    const auto now = nowMs();
+    const bool changed =
+        !commPressureDebugLog_.hasSnapshot || pressureValuesChanged(snapshot, commPressureDebugLog_.lastSnapshot);
+    const bool intervalElapsed =
+        commPressureDebugLog_.lastLogMs == 0U || now - commPressureDebugLog_.lastLogMs >= kCommPressureDebugLogIntervalMs;
+    if (!changed && !intervalElapsed) {
+        return;
+    }
+
+    // 调试日志节流：压力指标仍保留在状态结构中，但默认不再直接占用主界面。
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(2);
+    message << "通讯压力: rx_backlog=" << snapshot.pendingRxBytes << " bytes"
+            << ", parser_backlog=" << snapshot.parserPendingBytes << " bytes"
+            << ", frame_rows=" << snapshot.pendingTransferFrameRows
+            << ", plot_appends=" << snapshot.pendingPlotAppends
+            << ", rx_input=" << snapshot.rxInputQueueBytes << " bytes"
+            << ", post_batches=" << snapshot.postprocessPendingBatches
+            << ", lua_pending=" << snapshot.luaPendingItems
+            << ", ui_pending=" << snapshot.uiPendingItems
+            << ", post_threads=" << snapshot.postprocessWorkerThreads
+            << ", last_pump_events=" << snapshot.lastPumpEvents
+            << ", last_pump_rx=" << snapshot.lastPumpRxBytes << " bytes"
+            << ", last_stream_frames=" << snapshot.lastPumpStreamFrames
+            << ", last_stream_errors=" << snapshot.lastPumpStreamErrors
+            << ", pump_ms=" << snapshot.lastPumpTransportMs
+            << ", parser_ms=" << snapshot.lastPumpParserMs
+            << ", lua_callback_ms=" << snapshot.lastPumpCallbackMs
+            << ", script_ms=" << snapshot.lastPumpScriptMs
+            << ", warning=" << (snapshot.backlogWarning.empty() ? "none" : snapshot.backlogWarning);
+    loggingFacade_.debug("comm_pressure", message.str());
+
+    commPressureDebugLog_.hasSnapshot = true;
+    commPressureDebugLog_.lastSnapshot = std::move(snapshot);
+    commPressureDebugLog_.lastLogMs = now;
 }
 
 bool Application::handleTransportEvents()

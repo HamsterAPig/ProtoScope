@@ -125,6 +125,35 @@ private:
         std::size_t scriptEvents{0};
     };
 
+    struct CommPressureDebugSnapshot {
+        std::size_t pendingRxBytes{0};
+        std::size_t pendingTransferFrameRows{0};
+        std::size_t pendingPlotAppends{0};
+        std::size_t rxInputQueueBytes{0};
+        std::size_t parserPendingBytes{0};
+        std::size_t postprocessPendingBatches{0};
+        std::size_t luaPendingItems{0};
+        std::size_t uiPendingItems{0};
+        std::size_t postprocessWorkerThreads{0};
+        std::string backlogWarning;
+        std::size_t lastPumpEvents{0};
+        std::size_t lastPumpRxBytes{0};
+        std::size_t lastPumpStreamFrames{0};
+        std::size_t lastPumpStreamErrors{0};
+        double lastPumpTransportMs{0.0};
+        double lastPumpParserMs{0.0};
+        double lastPumpCallbackMs{0.0};
+        double lastPumpScriptMs{0.0};
+
+        bool operator==(const CommPressureDebugSnapshot&) const = default;
+    };
+
+    struct CommPressureDebugLogState {
+        bool hasSnapshot{false};
+        CommPressureDebugSnapshot lastSnapshot{};
+        std::uint64_t lastLogMs{0};
+    };
+
     struct RawCaptureReplayState {
         bool loaded{false};
         bool playing{false};
@@ -139,6 +168,7 @@ private:
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
+    void maybeLogCommPressureDebug(const dock::CommDockState& comm);
     bool applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch);
     void applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot& snapshot);
     bool probeProtocolDirectory(const std::string& resolvedDirText);
@@ -265,6 +295,7 @@ private:
     std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;
     std::optional<std::uint64_t> cachedWaveSummaryRevision_;
+    CommPressureDebugLogState commPressureDebugLog_{};
     bool suppressRawCaptureProfileEvents_{false};
     bool suppressRawCapturePlotSetupEvents_{false};
 };
