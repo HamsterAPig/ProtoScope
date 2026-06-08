@@ -115,6 +115,14 @@ std::string txKindName(TxRequestKind kind)
     return "send";
 }
 
+std::string txRequestApiName(TxRequestKind kind, bool guarded)
+{
+    if (guarded) {
+        return "proto.request_guarded";
+    }
+    return kind == TxRequestKind::Request ? "proto.request" : "proto.send";
+}
+
 std::string txEventStateName(TxEventState state)
 {
     switch (state) {
@@ -2358,26 +2366,23 @@ void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
     controlValues_[id] = std::move(value);
 }
 
-std::optional<TxRequest> ScriptHost::protoSendLike(
-    TxRequestKind kind, const sol::object& payload, const sol::object& opts, std::string& error, bool guarded)
+TxRequest ScriptHost::createTxRequest(TxRequestKind kind, std::vector<std::uint8_t> payload, bool guarded)
 {
-    const std::string apiName = guarded ? "proto.request_guarded"
-                                        : std::string(kind == TxRequestKind::Request ? "proto.request" : "proto.send");
-    const auto maybeBytes = bytesFromLuaObject(payload, error);
-    if (!maybeBytes.has_value()) {
-        protoLog("error", apiName + " 调用失败: " + error);
-        return std::nullopt;
-    }
-
     TxRequest request{};
     request.id = nextTxRequestId();
     request.kind = kind;
-    request.payload = *maybeBytes;
+    request.payload = std::move(payload);
     request.timeoutMs = 0;
     request.guarded = guarded;
     request.attempt = 1;
     request.maxAttempts = 1;
     request.createdAtMs = nowMs();
+    applyTxRequestConnection(request);
+    return request;
+}
+
+void ScriptHost::applyTxRequestConnection(TxRequest& request) const
+{
     if (activeConnection_.has_value()) {
         request.connection = *activeConnection_;
     } else {
@@ -2386,12 +2391,16 @@ std::optional<TxRequest> ScriptHost::protoSendLike(
         request.connection.timestampMs = request.createdAtMs;
         request.connection.readyForIo = false;
     }
+}
 
+bool ScriptHost::applyTxRequestOptions(
+    TxRequest& request, const sol::object& opts, const std::string& apiName, std::string& error, bool guarded)
+{
     if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
         if (!opts.is<sol::table>()) {
             error = "opts 必须是 table";
             protoLog("error", apiName + " 调用失败: " + error);
-            return std::nullopt;
+            return false;
         }
         const sol::table options = opts.as<sol::table>();
         if (const auto timeoutMs = luaNumberField(options, "timeout_ms"); timeoutMs.has_value()) {
@@ -2403,6 +2412,23 @@ std::optional<TxRequest> ScriptHost::protoSendLike(
                 request.maxAttempts = static_cast<std::uint32_t>(std::max(1.0, *maxAttempts));
             }
         }
+    }
+    return true;
+}
+
+std::optional<TxRequest> ScriptHost::protoSendLike(
+    TxRequestKind kind, const sol::object& payload, const sol::object& opts, std::string& error, bool guarded)
+{
+    const std::string apiName = txRequestApiName(kind, guarded);
+    auto maybeBytes = bytesFromLuaObject(payload, error);
+    if (!maybeBytes.has_value()) {
+        protoLog("error", apiName + " 调用失败: " + error);
+        return std::nullopt;
+    }
+
+    TxRequest request = createTxRequest(kind, std::move(*maybeBytes), guarded);
+    if (!applyTxRequestOptions(request, opts, apiName, error, guarded)) {
+        return std::nullopt;
     }
 
     txRequests_.push_back(request);
