@@ -686,6 +686,52 @@ bool parseStreamFrameCrcDefinition(const sol::table& frameTable, StreamFrameDefi
     return true;
 }
 
+bool parseStreamFieldCountInteger(const std::int64_t count,
+                                  const std::string& countPath,
+                                  StreamFieldDefinition& field,
+                                  std::string& error)
+{
+    if (count < 0) {
+        error = countPath + " 不能为负数";
+        return false;
+    }
+    field.count.fixed = static_cast<std::size_t>(count);
+    return true;
+}
+
+bool parseStreamFieldCountFieldName(const std::string& fieldName, StreamFieldDefinition& field)
+{
+    field.count.fieldName = fieldName;
+    return true;
+}
+
+bool parseStreamFieldCountDeprecatedFunction(const std::string& countPath, std::string& error)
+{
+    error = countPath + " 检测到 function；该写法已废弃，不再支持 function。"
+                        " 请迁移为 count 表达式 table，例如 count = { op = \"div\", field = "
+                        "\"byte_count\", by = 2 }";
+    return false;
+}
+
+bool parseStreamFieldCountExpressionTable(const sol::object& countObject,
+                                          const std::string& countPath,
+                                          StreamFieldDefinition& field,
+                                          std::string& error)
+{
+    field.count.expression = parseStreamCountExpressionObject(countObject, error);
+    if (!field.count.expression) {
+        error = countPath + " 表达式无效: " + error;
+        return false;
+    }
+    return true;
+}
+
+bool parseStreamFieldCountUnsupportedType(const std::string& countPath, std::string& error)
+{
+    error = countPath + " 仅支持整数、字段名或 count 表达式 table";
+    return false;
+}
+
 bool parseStreamFieldCount(const sol::object& countObject,
                            const std::size_t frameIndex,
                            const std::size_t fieldIndex,
@@ -698,29 +744,18 @@ bool parseStreamFieldCount(const sol::object& countObject,
 
     const auto countPath = streamFieldCountPath(frameIndex, fieldIndex);
     if (const auto count = luaIntegerValue(countObject); count.has_value()) {
-        if (*count < 0) {
-            error = countPath + " 不能为负数";
-            return false;
-        }
-        field.count.fixed = static_cast<std::size_t>(*count);
-    } else if (countObject.is<std::string>()) {
-        field.count.fieldName = countObject.as<std::string>();
-    } else if (countObject.is<sol::protected_function>()) {
-        error = countPath + " 检测到 function；该写法已废弃，不再支持 function。"
-                            " 请迁移为 count 表达式 table，例如 count = { op = \"div\", field = "
-                            "\"byte_count\", by = 2 }";
-        return false;
-    } else if (countObject.is<sol::table>()) {
-        field.count.expression = parseStreamCountExpressionObject(countObject, error);
-        if (!field.count.expression) {
-            error = countPath + " 表达式无效: " + error;
-            return false;
-        }
-    } else {
-        error = countPath + " 仅支持整数、字段名或 count 表达式 table";
-        return false;
+        return parseStreamFieldCountInteger(*count, countPath, field, error);
     }
-    return true;
+    if (countObject.is<std::string>()) {
+        return parseStreamFieldCountFieldName(countObject.as<std::string>(), field);
+    }
+    if (countObject.is<sol::protected_function>()) {
+        return parseStreamFieldCountDeprecatedFunction(countPath, error);
+    }
+    if (countObject.is<sol::table>()) {
+        return parseStreamFieldCountExpressionTable(countObject, countPath, field, error);
+    }
+    return parseStreamFieldCountUnsupportedType(countPath, error);
 }
 
 bool parseStreamFieldName(const sol::table& fieldTable, StreamFieldDefinition& field, std::string& error)
