@@ -639,31 +639,32 @@ bool FrameStreamParser::clearRuntimeProfile(const std::optional<std::string>& fr
     return true;
 }
 
-StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes,
-                                              const StreamParseOptions& options)
+void FrameStreamParser::ensureAppendCapacity(std::size_t incomingSize)
 {
-    StreamParseBatch batch;
-    if (bytes.empty()) {
-        batch.bufferSize = buffer_.size();
-        batch.bufferCapacity = buffer_.capacity();
-        return batch;
+    if (bufferDefinition_.dropOldest) {
+        return;
     }
 
-    if (!bufferDefinition_.dropOldest) {
-        const auto availableCapacity = (std::numeric_limits<std::size_t>::max)() - buffer_.size();
-        const auto requiredCapacity = bytes.size() > availableCapacity ? (std::numeric_limits<std::size_t>::max)()
-                                                                       : buffer_.size() + bytes.size();
-        if (requiredCapacity > buffer_.capacity() && bufferDefinition_.maxCapacity > buffer_.capacity()) {
-            // 核心流程：默认无损模式下先按宿主预算扩容，避免小 Lua schema 容量直接触发丢帧。
-            buffer_.ensureCapacity((std::min)(requiredCapacity, bufferDefinition_.maxCapacity));
-        }
+    const auto availableCapacity = (std::numeric_limits<std::size_t>::max)() - buffer_.size();
+    const auto requiredCapacity = incomingSize > availableCapacity ? (std::numeric_limits<std::size_t>::max)()
+                                                                   : buffer_.size() + incomingSize;
+    if (requiredCapacity > buffer_.capacity() && bufferDefinition_.maxCapacity > buffer_.capacity()) {
+        // 核心流程：默认无损模式下先按宿主预算扩容，避免小 Lua schema 容量直接触发丢帧。
+        buffer_.ensureCapacity((std::min)(requiredCapacity, bufferDefinition_.maxCapacity));
     }
+}
+
+StreamParseBatch FrameStreamParser::appendIncomingBytes(const std::vector<std::uint8_t>& bytes)
+{
+    ensureAppendCapacity(bytes.size());
 
     const auto dropped = buffer_.append(bytes, bufferDefinition_.dropOldest);
+    StreamParseBatch batch;
     batch.bufferSize = buffer_.size();
     batch.bufferCapacity = buffer_.capacity();
     batch.droppedBytes = dropped;
     batch.overflowed = dropped > 0;
+
     if (dropped > 0) {
         batch.errors.push_back(StreamParseError{
             .code = StreamParseErrorCode::Overflow,
@@ -674,11 +675,98 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
         });
     }
 
+    updateNearOverflowStatus(batch);
+    return batch;
+}
+
+void FrameStreamParser::updateNearOverflowStatus(StreamParseBatch& batch) const
+{
     if (bufferDefinition_.nearOverflowNotify && batch.bufferCapacity > 0 && !batch.overflowed) {
         const auto ratio = static_cast<double>(batch.bufferSize) / static_cast<double>(batch.bufferCapacity);
         batch.nearOverflow = ratio >= bufferDefinition_.nearOverflowThresholdRatio;
     }
+}
 
+void FrameStreamParser::discardUnmatchedPrefix(StreamParseBatch& batch)
+{
+    const auto keep = maxHeaderLength() > 0 ? maxHeaderLength() - 1U : 0U;
+    if (buffer_.size() <= keep) {
+        return;
+    }
+
+    const auto droppedNoise = buffer_.size() - keep;
+    buffer_.discardFront(droppedNoise);
+    batch.errors.push_back(StreamParseError{
+        .code = StreamParseErrorCode::NoiseDiscarded,
+        .message = "未找到匹配帧头，已丢弃噪声前缀",
+        .frameName = std::nullopt,
+        .droppedBytes = droppedNoise,
+        .raw = {},
+    });
+}
+
+bool FrameStreamParser::discardCandidatePrefix(const CandidateMatch& candidate, StreamParseBatch& batch)
+{
+    if (candidate.start == 0) {
+        return false;
+    }
+
+    buffer_.discardFront(candidate.start);
+    batch.errors.push_back(StreamParseError{
+        .code = StreamParseErrorCode::NoiseDiscarded,
+        .message = "已跳过帧头前噪声字节",
+        .frameName = std::nullopt,
+        .droppedBytes = candidate.start,
+        .raw = {},
+    });
+    return true;
+}
+
+FrameStreamParser::CandidateParseResult
+FrameStreamParser::analyzeCandidateFrames(const CandidateMatch& candidate, const StreamParseOptions& options) const
+{
+    bool needMore = false;
+    std::optional<StreamParseError> firstError;
+    const auto window = ensureLinearWindow(buffer_.size());
+
+    for (const auto index : *candidate.indexes) {
+        const auto result = analyzeFrame(compiledFrames_[index], window, options);
+        if (result.action == AnalyzeResult::Action::Parsed && result.frame.has_value()) {
+            return CandidateParseResult{
+                .action = CandidateParseResult::Action::Parsed,
+                .frame = result.frame,
+                .error = std::nullopt,
+                .frameLength = result.frameLength,
+            };
+        }
+        if (result.action == AnalyzeResult::Action::NeedMore) {
+            needMore = true;
+            continue;
+        }
+        if (!firstError.has_value() && result.error.has_value()) {
+            firstError = result.error;
+        }
+    }
+
+    if (needMore) {
+        return CandidateParseResult{.action = CandidateParseResult::Action::NeedMore};
+    }
+    return CandidateParseResult{
+        .action = CandidateParseResult::Action::RecoverableError,
+        .frame = std::nullopt,
+        .error = firstError,
+        .frameLength = 0,
+    };
+}
+
+StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes,
+                                              const StreamParseOptions& options)
+{
+    if (bytes.empty()) {
+        return StreamParseBatch{.bufferSize = buffer_.size(), .bufferCapacity = buffer_.capacity()};
+    }
+
+    auto batch = appendIncomingBytes(bytes);
     if (frames_.empty()) {
         return batch;
     }
@@ -686,67 +774,26 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
     while (!buffer_.empty()) {
         const auto candidate = findCandidate();
         if (!candidate.has_value()) {
-            const auto keep = maxHeaderLength() > 0 ? maxHeaderLength() - 1U : 0U;
-            if (buffer_.size() > keep) {
-                const auto droppedNoise = buffer_.size() - keep;
-                buffer_.discardFront(droppedNoise);
-                batch.errors.push_back(StreamParseError{
-                    .code = StreamParseErrorCode::NoiseDiscarded,
-                    .message = "未找到匹配帧头，已丢弃噪声前缀",
-                    .frameName = std::nullopt,
-                    .droppedBytes = droppedNoise,
-                    .raw = {},
-                });
-            }
+            discardUnmatchedPrefix(batch);
             break;
         }
 
-        if (candidate->start > 0) {
-            buffer_.discardFront(candidate->start);
-            batch.errors.push_back(StreamParseError{
-                .code = StreamParseErrorCode::NoiseDiscarded,
-                .message = "已跳过帧头前噪声字节",
-                .frameName = std::nullopt,
-                .droppedBytes = candidate->start,
-                .raw = {},
-            });
+        if (discardCandidatePrefix(*candidate, batch)) {
             continue;
         }
 
-        bool needMore = false;
-        bool parsed = false;
-        std::optional<StreamParseError> firstError;
-        const auto window = ensureLinearWindow(buffer_.size());
-
-        for (const auto index : *candidate->indexes) {
-            const auto result = analyzeFrame(compiledFrames_[index], window, options);
-            if (result.action == AnalyzeResult::Action::Parsed && result.frame.has_value()) {
-                buffer_.discardFront(result.frameLength);
-                batch.frames.push_back(*result.frame);
-                firstError.reset();
-                needMore = false;
-                parsed = true;
-                break;
-            }
-            if (result.action == AnalyzeResult::Action::NeedMore) {
-                needMore = true;
-                continue;
-            }
-            if (!firstError.has_value() && result.error.has_value()) {
-                firstError = result.error;
-            }
-        }
-
-        if (parsed) {
+        const auto parseResult = analyzeCandidateFrames(*candidate, options);
+        if (parseResult.action == CandidateParseResult::Action::Parsed && parseResult.frame.has_value()) {
+            buffer_.discardFront(parseResult.frameLength);
+            batch.frames.push_back(*parseResult.frame);
             continue;
         }
-
-        if (needMore) {
+        if (parseResult.action == CandidateParseResult::Action::NeedMore) {
             break;
         }
 
-        if (firstError.has_value()) {
-            batch.errors.push_back(*firstError);
+        if (parseResult.error.has_value()) {
+            batch.errors.push_back(*parseResult.error);
         }
         buffer_.discardFront(1);
     }

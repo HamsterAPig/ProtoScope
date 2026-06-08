@@ -252,6 +252,26 @@ private:
         std::size_t frameLength{0};
     };
 
+    struct CandidateParseResult {
+        enum class Action {
+            NeedMore,
+            Parsed,
+            RecoverableError,
+        };
+
+        Action action{Action::NeedMore};
+        std::optional<StreamParsedFrame> frame;
+        std::optional<StreamParseError> error;
+        std::size_t frameLength{0};
+    };
+
+    void ensureAppendCapacity(std::size_t incomingSize);
+    [[nodiscard]] StreamParseBatch appendIncomingBytes(const std::vector<std::uint8_t>& bytes);
+    void updateNearOverflowStatus(StreamParseBatch& batch) const;
+    void discardUnmatchedPrefix(StreamParseBatch& batch);
+    [[nodiscard]] bool discardCandidatePrefix(const CandidateMatch& candidate, StreamParseBatch& batch);
+    CandidateParseResult analyzeCandidateFrames(const CandidateMatch& candidate,
+                                                const StreamParseOptions& options) const;
     [[nodiscard]] std::size_t maxHeaderLength() const;
     [[nodiscard]] std::optional<CandidateMatch> findCandidate() const;
     AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
