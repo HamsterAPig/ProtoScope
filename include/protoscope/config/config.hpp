@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace protoscope::config {
 
@@ -224,7 +225,9 @@ public:
     ConfigStore();
 
     ConfigLoadResult load(const std::filesystem::path& path) const;
+    ConfigLoadResult loadText(std::string_view yamlText, const std::filesystem::path& sourcePath = {}) const;
     bool save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const;
+    bool saveText(const AppConfig& config, std::string& yamlText, std::string& error) const;
 
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& dir) const;
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& rootDir,

@@ -2,7 +2,9 @@
 #include "protoscope/ui/keyboard_shortcuts.hpp"
 #include "protoscope/ui/ui_theme.hpp"
 
+#include <cmath>
 #include <imgui.h>
+#include <string>
 
 namespace protoscope::ui {
 
@@ -42,6 +44,12 @@ void GuiRuntime::drawMainMenu()
         if (ImGui::MenuItem("重新加载协议", shortcutLabel(ShortcutAction::ReloadProtocol).data())) {
             requestProtocolWorkspaceSwitch(application_.docks().luaState().protocolDir, true);
         }
+        if (ImGui::MenuItem("导入现场会话包...")) {
+            openSessionPackageImportDialog();
+        }
+        if (ImGui::MenuItem("导出现场会话包...")) {
+            openSessionPackageExportDialog();
+        }
         if (ImGui::MenuItem("重置当前协议 Dock 布局",
                             nullptr,
                             false,
@@ -55,8 +63,14 @@ void GuiRuntime::drawMainMenu()
         if (ImGui::MenuItem("导入原始波形...", shortcutLabel(ShortcutAction::ImportRawWave).data())) {
             openRawCaptureImportDialog();
         }
+        if (ImGui::MenuItem("载入原始回放时间轴...")) {
+            openRawCaptureReplayTimelineDialog();
+        }
         if (ImGui::MenuItem("导出原始波形...", shortcutLabel(ShortcutAction::ExportRawWave).data())) {
             openRawCaptureExportDialog();
+        }
+        if (ImGui::MenuItem("导出波形分析报告...")) {
+            openWaveAnalysisExportDialog();
         }
         ImGui::Separator();
         const bool recording = application_.isRawCaptureRecording();
@@ -71,6 +85,47 @@ void GuiRuntime::drawMainMenu()
                             false,
                             recording)) {
             stopRawCaptureRecordingWithStatus();
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("回放")) {
+        const auto status = application_.rawCaptureReplayStatus();
+        ImGui::Text("事件 %zu / %zu", status.eventIndex, status.eventCount);
+        ImGui::Text("倍速 %.1fx", status.speed);
+        std::string error;
+        if (ImGui::MenuItem("继续", nullptr, false, status.loaded && !status.playing)) {
+            if (!application_.playRawCaptureReplay(error)) {
+                application_.setStatusMessage("原始回放继续失败: " + error);
+            }
+        }
+        if (ImGui::MenuItem("暂停", nullptr, false, status.loaded && status.playing)) {
+            application_.pauseRawCaptureReplay();
+        }
+        if (ImGui::MenuItem("单步", nullptr, false, status.loaded)) {
+            if (!application_.stepRawCaptureReplay(error)) {
+                application_.setStatusMessage("原始回放单步失败: " + error);
+            }
+        }
+        if (ImGui::BeginMenu("倍速", status.loaded)) {
+            for (const double speed : {0.5, 1.0, 2.0, 4.0, 8.0}) {
+                const bool selected = std::abs(status.speed - speed) < 0.001;
+                const std::string label = std::to_string(speed) + "x";
+                if (ImGui::MenuItem(label.c_str(), nullptr, selected)) {
+                    application_.setRawCaptureReplaySpeed(speed);
+                }
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem("定位到开头", nullptr, false, status.loaded)) {
+            if (!application_.seekRawCaptureReplay(0, error)) {
+                application_.setStatusMessage("原始回放定位失败: " + error);
+            }
+        }
+        if (ImGui::MenuItem("定位到中点", nullptr, false, status.loaded && status.eventCount > 0)) {
+            if (!application_.seekRawCaptureReplay(status.eventCount / 2, error)) {
+                application_.setStatusMessage("原始回放定位失败: " + error);
+            }
         }
         ImGui::EndMenu();
     }

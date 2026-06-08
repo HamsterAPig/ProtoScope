@@ -205,6 +205,10 @@ private:
     void openRawCaptureImportDialog();
     void openRawCaptureExportDialog();
     void openRawCaptureRecordingDialog();
+    void openRawCaptureReplayTimelineDialog();
+    void openSessionPackageImportDialog();
+    void openSessionPackageExportDialog();
+    void openWaveAnalysisExportDialog();
     void openTransferLogExportDialog();
     void openHostLogExportDialog();
     void openScriptLogExportDialog();
@@ -212,7 +216,11 @@ private:
     void openElfStaticAddressDialog();
     void importRawCaptureFromPath(const std::filesystem::path& path);
     void exportRawCaptureToPath(const std::filesystem::path& path);
+    void loadRawCaptureReplayTimelineFromPath(const std::filesystem::path& path);
     void startRawCaptureRecordingToPath(const std::filesystem::path& path);
+    void importSessionPackageFromPath(const std::filesystem::path& path);
+    void exportSessionPackageToPath(const std::filesystem::path& path);
+    void exportWaveAnalysisReportToPath(const std::filesystem::path& path);
     void drawLogExportFileDialog();
     std::vector<dock::ReceiveRow> logExportRows(LogExportTarget target);
     bool exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path);
@@ -331,6 +339,14 @@ private:
     bool rawCaptureRecordingDialogOpened_{false};
     std::string rawCaptureRecordingPath_;
     std::string rawCaptureRecordingError_;
+    bool sessionPackageImportDialogOpen_{false};
+    bool sessionPackageImportDialogOpened_{false};
+    std::string sessionPackageImportPath_;
+    std::string sessionPackageImportError_;
+    bool sessionPackageExportDialogOpen_{false};
+    bool sessionPackageExportDialogOpened_{false};
+    std::string sessionPackageExportPath_;
+    std::string sessionPackageExportError_;
     bool logExportDialogOpen_{false};
     bool logExportDialogOpened_{false};
     LogExportTarget logExportTarget_{LogExportTarget::Transfer};

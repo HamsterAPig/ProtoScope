@@ -1,6 +1,7 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
+#include "protoscope/session/session_package.hpp"
 
 #include "test_helpers.hpp"
 #include "test_registry.hpp"
@@ -16,6 +17,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -1421,6 +1423,300 @@ void test_application_raw_capture_export_import_roundtrip()
     require(!secondImportedSnapshot.channels.empty(), "第二次导入 psraw 后应恢复波形通道");
     require(secondImportedSnapshot.channels.front().totalSamples == importedSnapshot.channels.front().totalSamples,
             "第二次导入应清空旧波形后完整回放，不应被第一次导入的样本挡住");
+
+    application.shutdown();
+}
+
+void test_application_session_package_export_contains_replay_assets()
+{
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    transportState->queuedRxBytes = {'P', 'K', 'G', '\n'};
+
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+
+    application.openTransport();
+    for (int i = 0; i < 4; ++i) {
+        application.pumpOnce();
+    }
+    auto& wave = application.docks().waveState();
+    wave.view.sampleFrequencyHz = 4096.0;
+    wave.view.sampleFrequencyInput = "4096";
+    wave.analysisMarkers = {{
+        .id = 42,
+        .label = "startup edge",
+        .note = "field note",
+        .startTime = 0.125,
+        .endTime = 0.250,
+        .channelIndex = 1,
+    }};
+    require(wave.rawCapture.payload == transportState->queuedRxBytes, "会话包导出前应已有实时原始字节");
+
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-session-package"));
+    const auto packagePath = tempRoot.path() / "field.pssession";
+    std::string error;
+    require(application.exportSessionPackage(packagePath, error), "应用导出现场会话包应成功");
+
+    const auto package = protoscope::session::readSessionPackage(packagePath, error);
+    if (!package.has_value()) {
+        throw std::runtime_error("导出后的现场会话包应可读取: " + error);
+    }
+
+    const auto* manifestEntry = protoscope::session::findSessionPackageEntry(*package, "manifest.yaml");
+    const auto* rawEntry = protoscope::session::findSessionPackageEntry(*package, "raw_capture.psraw");
+    const auto* configEntry = protoscope::session::findSessionPackageEntry(*package, "config.yaml");
+    const auto* luaEntry = protoscope::session::findSessionPackageEntry(*package, "protocol/main.lua");
+    const auto* markersEntry = protoscope::session::findSessionPackageEntry(*package, "analysis/markers.yaml");
+    const auto* summaryEntry = protoscope::session::findSessionPackageEntry(*package, "logs/summary.txt");
+    require(manifestEntry != nullptr, "现场会话包应包含 manifest.yaml");
+    require(rawEntry != nullptr, "现场会话包应包含 raw_capture.psraw");
+    require(configEntry != nullptr, "现场会话包应包含配置 YAML");
+    require(luaEntry != nullptr, "现场会话包应包含当前协议 main.lua");
+    require(markersEntry != nullptr, "现场会话包应包含分析标记 YAML");
+    require(summaryEntry != nullptr, "现场会话包应包含日志摘要");
+
+    const std::string_view rawBytes(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
+    const auto capture = protoscope::plot::decodeRawCaptureFile(rawBytes, error);
+    if (!capture.has_value()) {
+        throw std::runtime_error("会话包内 raw_capture.psraw 应可解析: " + error);
+    }
+    require(capture->payload == transportState->queuedRxBytes, "会话包内 psraw 应保留实时 RX 原始字节");
+    require(capture->sampleFrequencyHz == 4096.0, "会话包内 psraw 应保留采样频率");
+
+    const std::string configText(configEntry->bytes.begin(), configEntry->bytes.end());
+    const std::string luaText(luaEntry->bytes.begin(), luaEntry->bytes.end());
+    const std::string manifestText(manifestEntry->bytes.begin(), manifestEntry->bytes.end());
+    const std::string markersText(markersEntry->bytes.begin(), markersEntry->bytes.end());
+    const std::string summaryText(summaryEntry->bytes.begin(), summaryEntry->bytes.end());
+    require(manifestText.find("raw_capture.psraw") != std::string::npos, "会话包 manifest 应列出原始波形");
+    require(manifestText.find("protocol/main.lua") != std::string::npos, "会话包 manifest 应列出协议脚本");
+    require(manifestText.find("analysis/markers.yaml") != std::string::npos, "会话包 manifest 应列出分析标记");
+    require(configText.find("protocol:") != std::string::npos, "会话包配置应包含 protocol 配置域");
+    require(luaText.find("proto") != std::string::npos, "会话包协议脚本应包含 Lua 协议内容");
+    require(markersText.find("startup edge") != std::string::npos, "会话包分析标记应保留 label");
+    require(summaryText.find("raw_capture_bytes: 4") != std::string::npos, "会话包日志摘要应包含原始字节数");
+
+    application.shutdown();
+
+    protoscope::app::Application importedApplication;
+    require(importedApplication.initialize(), "导入应用初始化失败");
+    require(importedApplication.importSessionPackage(packagePath, error), "导入现场会话包应成功");
+    const auto& importedLua = importedApplication.docks().luaState();
+    require(importedLua.protocolDir.find("ProtoScope-session-protocol-") != std::string::npos,
+            "导入现场包应使用释放出的临时协议目录");
+    const auto importedConfig = importedApplication.captureConfig();
+    require(importedConfig.protocol.selectedDir.find("ProtoScope-session-protocol-") == std::string::npos,
+            "保存配置时不应写入现场包临时协议目录");
+    require(importedApplication.docks().waveState().rawCapture.payload == transportState->queuedRxBytes,
+            "导入现场包后应回放包内 raw payload");
+    const auto& importedMarkers = importedApplication.docks().waveState().analysisMarkers;
+    require(importedMarkers.size() == 1, "导入现场包后应恢复分析标记");
+    require(importedMarkers.front().label == "startup edge", "导入现场包后分析标记 label 应保留");
+    require(importedMarkers.front().channelIndex == 1, "导入现场包后分析标记通道应保留");
+    importedApplication.shutdown();
+}
+
+void test_application_wave_analysis_report_exports_summary_and_markers()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto& wave = application.docks().waveState();
+    wave.view.sampleFrequencyHz = 2048.0;
+    wave.view.viewMinTime = 1.0;
+    wave.view.viewMaxTime = 2.0;
+    wave.rawCapture.payload = {0x10, 0x20, 0x30};
+    wave.rawCapture.events = {{
+        .type = protoscope::plot::RawCaptureEventType::RxBytes,
+        .timestampMs = 10,
+        .bytes = {0x10, 0x20, 0x30},
+        .profile = {},
+        .plotSetup = {},
+    }};
+    wave.analysisMarkers = {{
+        .id = 7,
+        .label = "M1,\"edge\"",
+        .note = "peak, stable",
+        .startTime = 1.25,
+        .endTime = 1.50,
+        .channelIndex = 2,
+    }};
+
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-wave-analysis"));
+    const auto reportPath = tempRoot.path() / "analysis.csv";
+    std::string error;
+    require(application.exportWaveAnalysisReport(reportPath, error), "波形分析报告应可导出");
+
+    std::ifstream in(reportPath, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    require(text.find("section,key,value\n") != std::string::npos, "分析报告应包含 summary 表头");
+    require(text.find("summary,sample_frequency_hz,2048") != std::string::npos, "分析报告应包含采样频率");
+    require(text.find("summary,raw_capture_bytes,3") != std::string::npos, "分析报告应包含原始字节数");
+    require(text.find("summary,markers,1") != std::string::npos, "分析报告应包含 marker 总数");
+    require(text.find("marker,7,\"M1,\"\"edge\"\"\",\"peak, stable\",2,1.25,1.5") != std::string::npos,
+            "分析报告应导出并转义 marker 字段");
+
+    application.shutdown();
+}
+
+void test_application_session_package_import_without_markers_clears_existing_state()
+{
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    transportState->queuedRxBytes = {'O', 'L', 'D'};
+
+    protoscope::app::Application exporter;
+    exporter.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(exporter.initialize(), "导出应用初始化失败");
+    exporter.openTransport();
+    for (int i = 0; i < 4; ++i) {
+        exporter.pumpOnce();
+    }
+
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-session-package-legacy"));
+    const auto fullPackagePath = tempRoot.path() / "full.pssession";
+    const auto legacyPackagePath = tempRoot.path() / "legacy.pssession";
+    std::string error;
+    require(exporter.exportSessionPackage(fullPackagePath, error), "导出完整现场包应成功");
+    exporter.shutdown();
+
+    auto package = protoscope::session::readSessionPackage(fullPackagePath, error);
+    if (!package.has_value()) {
+        throw std::runtime_error("完整现场包应可读取: " + error);
+    }
+    package->entries.erase(
+        std::remove_if(package->entries.begin(),
+                       package->entries.end(),
+                       [](const protoscope::session::SessionPackageEntry& entry) {
+                           return entry.name == "analysis/markers.yaml";
+                       }),
+        package->entries.end());
+    require(protoscope::session::writeSessionPackage(legacyPackagePath, *package, error), "旧现场包应可重新写入");
+
+    protoscope::app::Application importer;
+    require(importer.initialize(), "导入应用初始化失败");
+    importer.docks().waveState().analysisMarkers = {{
+        .id = 99,
+        .label = "旧标记",
+        .note = "导入前残留",
+        .startTime = 0.0,
+        .endTime = 1.0,
+        .channelIndex = 0,
+    }};
+    require(importer.importSessionPackage(legacyPackagePath, error), "缺少 markers 的旧现场包也应可导入");
+    require(importer.docks().waveState().analysisMarkers.empty(), "旧现场包缺少 markers 时应清空导入前分析标记");
+    importer.shutdown();
+}
+
+void test_application_session_package_import_invalid_protocol_rolls_back_runtime()
+{
+    protoscope::app::Application exporter;
+    require(exporter.initialize(), "导出应用初始化失败");
+
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-session-package-invalid"));
+    const auto fullPackagePath = tempRoot.path() / "full.pssession";
+    const auto invalidPackagePath = tempRoot.path() / "invalid.pssession";
+    std::string error;
+    require(exporter.exportSessionPackage(fullPackagePath, error), "导出现场包应成功");
+    exporter.shutdown();
+
+    auto package = protoscope::session::readSessionPackage(fullPackagePath, error);
+    if (!package.has_value()) {
+        throw std::runtime_error("现场包应可读取: " + error);
+    }
+    bool scriptReplaced = false;
+    for (auto& entry : package->entries) {
+        if (entry.name == "protocol/main.lua") {
+            const std::string invalidScript = "function ui(\n";
+            entry.bytes.assign(invalidScript.begin(), invalidScript.end());
+            scriptReplaced = true;
+            break;
+        }
+    }
+    require(scriptReplaced, "测试现场包应包含 protocol/main.lua");
+    require(protoscope::session::writeSessionPackage(invalidPackagePath, *package, error), "无效协议现场包应可写入");
+
+    protoscope::app::Application importer;
+    require(importer.initialize(), "导入应用初始化失败");
+    const auto beforeLua = importer.docks().luaState();
+    const auto beforeConfig = importer.captureConfig();
+    require(!importer.importSessionPackage(invalidPackagePath, error), "无效协议现场包导入应失败");
+    const auto& afterLua = importer.docks().luaState();
+    const auto afterConfig = importer.captureConfig();
+    require(afterLua.protocolDir == beforeLua.protocolDir, "现场包导入失败后运行协议目录应回滚");
+    require(afterLua.scriptPath == beforeLua.scriptPath, "现场包导入失败后运行脚本路径应回滚");
+    require(afterConfig.protocol.selectedDir == beforeConfig.protocol.selectedDir,
+            "现场包导入失败后保存配置不应指向临时协议目录");
+    importer.shutdown();
+}
+
+void test_application_raw_capture_replay_timeline_steps_events()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    const auto& lua = application.docks().luaState();
+
+    protoscope::plot::RawCaptureFileData capture{
+        .protocolName = lua.protocolName,
+        .protocolDir = lua.protocolDir,
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 123,
+        .payload = {0x11, 0x22},
+        .events = {{.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                    .timestampMs = 223,
+                    .bytes = {0x11, 0x22},
+                    .profile = {},
+                    .plotSetup = {}}},
+    };
+
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "载入原始回放时间轴应成功");
+    auto status = application.rawCaptureReplayStatus();
+    require(status.loaded && !status.playing, "载入后应处于已载入且暂停状态");
+    require(status.eventIndex == 0 && status.eventCount == 1, "载入后时间轴应指向首个事件");
+
+    require(application.playRawCaptureReplay(error), "继续回放应成功");
+    application.pumpOnce();
+    status = application.rawCaptureReplayStatus();
+    require(status.loaded && status.playing, "初始等待未满足时仍应保持播放状态");
+    require(status.eventIndex == 0, "首个事件应等待 capturedAt 到事件 timestamp 的间隔");
+    application.pauseRawCaptureReplay();
+
+    require(application.stepRawCaptureReplay(error), "单步回放首个事件应成功");
+    status = application.rawCaptureReplayStatus();
+    require(status.loaded && !status.playing, "单步后仍应保留时间轴上下文");
+    require(status.eventIndex == 1 && status.eventCount == 1, "单步后事件索引应前进");
+    require(application.docks().waveState().rawCapture.payload == capture.payload, "单步后应保留原始回放 payload");
+
+    require(application.seekRawCaptureReplay(0, error), "回放时间轴应可重新定位到开头");
+    require(application.playRawCaptureReplay(error), "回放时间轴继续播放应成功");
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    application.pumpOnce();
+    status = application.rawCaptureReplayStatus();
+    require(status.loaded && !status.playing, "自动播放到末尾后应保留时间轴且停止播放");
+    require(status.eventIndex == 1 && status.eventCount == 1, "自动播放到末尾后应保留末尾位置");
+    require(application.seekRawCaptureReplay(0, error), "自动播放结束后仍应可重新定位");
+
+    application.shutdown();
+}
+
+void test_application_loads_protocol_action_templates()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    require(application.reloadProtocolDirectory("protocols/templates/file_dialog", true),
+            "文件对话框模板应可加载");
+    require(application.reloadProtocolDirectory("protocols/templates/send_file", true),
+            "文件发送模板应可加载");
+    require(application.reloadProtocolDirectory("protocols/templates/request_guarded", true),
+            "受保护请求模板应可加载");
 
     application.shutdown();
 }

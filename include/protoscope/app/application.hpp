@@ -47,13 +47,30 @@ public:
     void setLogLevel(config::LogLevel level);
     bool setSendHexMode(bool enabled);
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
+    bool exportSessionPackage(const std::filesystem::path& path, std::string& error) const;
+    bool importSessionPackage(const std::filesystem::path& path, std::string& error);
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
+    struct RawCaptureReplayStatus {
+        bool loaded{false};
+        bool playing{false};
+        std::size_t eventIndex{0};
+        std::size_t eventCount{0};
+        double speed{1.0};
+    };
+    bool loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture, std::string& error);
+    bool playRawCaptureReplay(std::string& error);
+    void pauseRawCaptureReplay();
+    bool stepRawCaptureReplay(std::string& error);
+    bool seekRawCaptureReplay(std::size_t eventIndex, std::string& error);
+    void setRawCaptureReplaySpeed(double speed);
+    [[nodiscard]] RawCaptureReplayStatus rawCaptureReplayStatus() const;
     bool startRawCaptureRecording(const std::filesystem::path& path, std::string& error);
     bool stopRawCaptureRecording(std::string& error);
     [[nodiscard]] bool isRawCaptureRecording() const;
     [[nodiscard]] const std::filesystem::path& rawCaptureRecordingPath() const;
     [[nodiscard]] std::uint64_t rawCaptureRecordingBytes() const;
     void resetWaveHistory();
+    bool exportWaveAnalysisReport(const std::filesystem::path& path, std::string& error) const;
     bool loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error);
     void clearElfStaticAddressFile();
     [[nodiscard]] std::uint64_t elfStaticAddressRevision() const;
@@ -104,6 +121,17 @@ private:
         std::size_t plotAppends{0};
         std::size_t scriptLogs{0};
         std::size_t scriptEvents{0};
+    };
+
+    struct RawCaptureReplayState {
+        bool loaded{false};
+        bool playing{false};
+        plot::RawCaptureFileData capture{};
+        transport::ConnectionContext context{};
+        std::size_t eventIndex{0};
+        double speed{1.0};
+        double accumulatedMs{0.0};
+        std::uint64_t lastPumpMs{0};
     };
 
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
@@ -184,6 +212,8 @@ private:
     [[nodiscard]] transport::ConnectionContext makeRawCaptureReplayContext(
         const plot::RawCaptureFileData& capture) const;
     bool replayRawCaptureEvents(const plot::RawCaptureFileData& capture, std::string& error);
+    bool pumpRawCaptureReplay(std::string& error);
+    bool replayRawCaptureEventAt(std::size_t eventIndex, std::string& error);
     bool replayRawCaptureEvent(const plot::RawCaptureEvent& event,
                                transport::ConnectionContext& replayContext,
                                std::string& error);
@@ -207,6 +237,7 @@ private:
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
     config::AppConfig runtimeConfig_{};
+    std::optional<config::ProtocolConfig> captureProtocolConfigOverride_;
     logging::LoggingFacade loggingFacade_{};
     scripting::ScriptRuntimeWorker scriptWorker_;
     plugin::ElfStaticViewBridge elfStaticView_;
@@ -227,6 +258,7 @@ private:
     StreamBufferAlertState streamBufferAlertState_{};
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
+    RawCaptureReplayState rawCaptureReplay_;
     std::deque<transport::TransportEvent> pendingTransportEvents_;
     std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;

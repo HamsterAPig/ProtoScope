@@ -962,6 +962,36 @@ namespace {
         root["communication"]["udp_peer"]["remote_port"] = config.communication.udpPeer.remotePort;
     }
 
+    YAML::Node buildConfigYamlRoot(const AppConfig& config, AppConfig scaledDefaults)
+    {
+        YAML::Node root;
+        scaledDefaults.performance.scale = normalizePerformanceScale(config.performance.scale);
+        applyPerformanceScale(scaledDefaults);
+
+        // 核心流程：文件保存和现场包内存保存必须走同一套字段写入逻辑，避免配置格式分叉。
+        writePerformanceConfig(root, scaledDefaults);
+        writeAppConfig(root, config);
+        writeGuiConfig(root, config, scaledDefaults);
+        writeProtocolConfig(root, config);
+        writeReceiveConfig(root, config, scaledDefaults);
+        writeScriptingConfig(root, config, scaledDefaults);
+        writeLoggingConfig(root, config);
+        writeCommunicationConfig(root, config);
+        return root;
+    }
+
+    void loadConfigYamlRoot(const YAML::Node& root, AppConfig& config)
+    {
+        loadPerformanceConfig(root, config);
+        loadAppConfig(root, config);
+        loadGuiConfig(root, config);
+        loadProtocolConfig(root, config);
+        loadReceiveConfig(root, config);
+        loadScriptingConfig(root, config);
+        loadLoggingConfig(root, config);
+        loadCommunicationConfig(root, config);
+    }
+
     bool writeConfigYamlFile(const std::filesystem::path& path, const YAML::Node& root, std::string& error)
     {
         try {
@@ -1023,15 +1053,8 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const
         const YAML::Node root = YAML::LoadFile(result.resolvedPath.string());
         result.loadedFromDisk = true;
 
-        loadPerformanceConfig(root, result.config);
-        loadAppConfig(root, result.config);
-        loadGuiConfig(root, result.config);
-        loadProtocolConfig(root, result.config);
-        loadReceiveConfig(root, result.config);
-        loadScriptingConfig(root, result.config);
-        loadLoggingConfig(root, result.config);
+        loadConfigYamlRoot(root, result.config);
         result.config.configPath = normalizeTextPath(result.resolvedPath);
-        loadCommunicationConfig(root, result.config);
     } catch (const std::exception& ex) {
         result.error = std::string("读取 YAML 失败: ") + ex.what();
         result.loadedFromDisk = false;
@@ -1040,24 +1063,40 @@ ConfigLoadResult ConfigStore::load(const std::filesystem::path& path) const
     return result;
 }
 
+ConfigLoadResult ConfigStore::loadText(std::string_view yamlText, const std::filesystem::path& sourcePath) const
+{
+    ConfigLoadResult result;
+    result.config = withDefaults();
+    result.resolvedPath = sourcePath.empty() ? defaultConfigPath_ : sourcePath;
+
+    try {
+        const YAML::Node root = YAML::Load(std::string(yamlText));
+        result.loadedFromDisk = true;
+        loadConfigYamlRoot(root, result.config);
+        result.config.configPath = normalizeTextPath(result.resolvedPath);
+    } catch (const std::exception& ex) {
+        result.error = std::string("读取 YAML 文本失败: ") + ex.what();
+        result.loadedFromDisk = false;
+    }
+    return result;
+}
+
 bool ConfigStore::save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const
 {
-    YAML::Node root;
-    auto scaledDefaults = withDefaults();
-    scaledDefaults.performance.scale = normalizePerformanceScale(config.performance.scale);
-    applyPerformanceScale(scaledDefaults);
-
-    // 核心流程：先按配置域组装 YAML，再统一处理目录创建和文件写入。
-    writePerformanceConfig(root, scaledDefaults);
-    writeAppConfig(root, config);
-    writeGuiConfig(root, config, scaledDefaults);
-    writeProtocolConfig(root, config);
-    writeReceiveConfig(root, config, scaledDefaults);
-    writeScriptingConfig(root, config, scaledDefaults);
-    writeLoggingConfig(root, config);
-    writeCommunicationConfig(root, config);
-
+    const auto root = buildConfigYamlRoot(config, withDefaults());
     return writeConfigYamlFile(path, root, error);
+}
+
+bool ConfigStore::saveText(const AppConfig& config, std::string& yamlText, std::string& error) const
+{
+    try {
+        const auto root = buildConfigYamlRoot(config, withDefaults());
+        yamlText = YAML::Dump(root);
+        return true;
+    } catch (const std::exception& ex) {
+        error = std::string("生成 YAML 文本失败: ") + ex.what();
+        return false;
+    }
 }
 
 std::filesystem::path ConfigStore::normalizeProtocolDir(const std::filesystem::path& dir) const

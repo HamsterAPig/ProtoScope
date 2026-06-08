@@ -1963,6 +1963,9 @@ void test_config_default_protocol_workspace_initializes_half_duplex_demos()
             "半双工主机模板脚本应生成");
     require(std::filesystem::exists(templateRoot / "half_duplex_modbus_slave" / "main.lua"),
             "半双工从机模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "file_dialog" / "main.lua"), "文件对话框模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "send_file" / "main.lua"), "文件发送模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "request_guarded" / "main.lua"), "受保护请求模板脚本应生成");
     require(std::filesystem::exists(templateRoot / "README.md"), "模板 README 应生成");
     require(std::filesystem::exists(protocolRoot / "stream_types.lua"), "stream schema 类型提示文件应生成");
     require(std::filesystem::exists(protocolRoot / "README.md"), "protocols README 应生成");
@@ -2012,6 +2015,12 @@ void test_config_default_protocol_workspace_fills_missing_resources()
     }
     require(std::filesystem::exists(protocolRoot / "templates" / "lua_waveform_demo" / "main.lua"),
             "已有 protocols 根目录时也应补齐波形模板");
+    require(std::filesystem::exists(protocolRoot / "templates" / "file_dialog" / "main.lua"),
+            "已有 protocols 根目录时也应补齐文件对话框模板");
+    require(std::filesystem::exists(protocolRoot / "templates" / "send_file" / "main.lua"),
+            "已有 protocols 根目录时也应补齐文件发送模板");
+    require(std::filesystem::exists(protocolRoot / "templates" / "request_guarded" / "main.lua"),
+            "已有 protocols 根目录时也应补齐受保护请求模板");
     require(std::filesystem::exists(protocolRoot / "README.md"), "已有 protocols 根目录时应补齐 README");
     require(std::filesystem::exists(protocolRoot / "protoscope_api.lua"),
             "已有 protocols 根目录时应补齐 LuaLS API 提示文件");
@@ -2792,6 +2801,8 @@ static const TestCase kAllTests[] = {
     {"log_filter_keyword_matches_metadata_and_bytes", &test_log_filter_keyword_matches_metadata_and_bytes},
     {"log_filter_combines_status_and_keyword", &test_log_filter_combines_status_and_keyword},
     {"wave_protocol_state_isolated_by_protocol_key", &test_wave_protocol_state_isolated_by_protocol_key},
+    {"wave_protocol_state_missing_wave_node_clears_analysis_markers",
+     &test_wave_protocol_state_missing_wave_node_clears_analysis_markers},
     {"wave_protocol_state_cursor_extreme_snap_policy", &test_wave_protocol_state_cursor_extreme_snap_policy},
     {"dock_visibility_state_isolated_by_protocol_key", &test_dock_visibility_state_isolated_by_protocol_key},
     {"dock_visibility_state_decode_missing_fields_defaults",
@@ -2904,6 +2915,17 @@ static const TestCase kAllTests[] = {
      &test_application_clear_elf_static_address_file_resets_queries},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
+    {"application_session_package_export_contains_replay_assets",
+     &test_application_session_package_export_contains_replay_assets},
+    {"application_wave_analysis_report_exports_summary_and_markers",
+     &test_application_wave_analysis_report_exports_summary_and_markers},
+    {"application_session_package_import_without_markers_clears_existing_state",
+     &test_application_session_package_import_without_markers_clears_existing_state},
+    {"application_session_package_import_invalid_protocol_rolls_back_runtime",
+     &test_application_session_package_import_invalid_protocol_rolls_back_runtime},
+    {"application_raw_capture_replay_timeline_steps_events",
+     &test_application_raw_capture_replay_timeline_steps_events},
+    {"application_loads_protocol_action_templates", &test_application_loads_protocol_action_templates},
     {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
     {"application_live_raw_capture_trim_keeps_runtime_profile_event",
      &test_application_live_raw_capture_trim_keeps_runtime_profile_event},
@@ -3006,6 +3028,9 @@ static const TestCase kAllTests[] = {
      &test_application_raw_capture_import_updates_last_pump_diagnostics},
     {"raw_capture_file_rejects_trailing_bytes", &test_raw_capture_file_rejects_trailing_bytes},
     {"raw_capture_file_rejects_profile_set_without_length", &test_raw_capture_file_rejects_profile_set_without_length},
+    {"session_package_roundtrip_preserves_binary_entries", &test_session_package_roundtrip_preserves_binary_entries},
+    {"session_package_rejects_truncated_entry", &test_session_package_rejects_truncated_entry},
+    {"session_package_rejects_excessive_entry_count", &test_session_package_rejects_excessive_entry_count},
     {"elf_static_view_bridge_loads_dump_json_and_queries_symbols",
      &test_elf_static_view_bridge_loads_dump_json_and_queries_symbols},
     {"elf_static_view_bridge_finds_exact_label_only", &test_elf_static_view_bridge_finds_exact_label_only},

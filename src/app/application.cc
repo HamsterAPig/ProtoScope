@@ -2,19 +2,25 @@
 
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/pipeline_threading.hpp"
+#include "protoscope/session/session_package.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <deque>
 #include <exception>
+#include <fstream>
 #include <iomanip>
 #include <iterator>
 #include <limits>
 #include <sstream>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+
+#include <yaml-cpp/yaml.h>
 
 namespace protoscope::app {
 
@@ -138,6 +144,102 @@ namespace {
             }
         }
         return total;
+    }
+
+    std::vector<std::uint8_t> stringBytes(std::string_view text)
+    {
+        return {text.begin(), text.end()};
+    }
+
+    std::string stringFromBytes(const std::vector<std::uint8_t>& bytes)
+    {
+        return {bytes.begin(), bytes.end()};
+    }
+
+    std::vector<std::uint8_t> readFileBytes(const std::filesystem::path& path, std::string& error)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.good()) {
+            error = "无法读取文件: " + path.generic_string();
+            return {};
+        }
+        return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    }
+
+    bool writeFileBytes(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes, std::string& error)
+    {
+        std::error_code directoryError;
+        const auto parent = path.parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent, directoryError);
+            if (directoryError) {
+                error = "创建目录失败: " + directoryError.message();
+                return false;
+            }
+        }
+        std::ofstream out(path, std::ios::binary);
+        if (!out.good()) {
+            error = "无法写入文件: " + path.generic_string();
+            return false;
+        }
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!out.good()) {
+            error = "写入文件失败: " + path.generic_string();
+            return false;
+        }
+        return true;
+    }
+
+    std::string csvEscape(std::string_view text)
+    {
+        std::string escaped;
+        escaped.reserve(text.size() + 2);
+        escaped.push_back('"');
+        for (const char ch : text) {
+            if (ch == '"') {
+                escaped.push_back('"');
+            }
+            escaped.push_back(ch);
+        }
+        escaped.push_back('"');
+        return escaped;
+    }
+
+    std::string encodeAnalysisMarkersYaml(const std::vector<plot::WaveAnalysisMarker>& markers)
+    {
+        YAML::Node root;
+        for (const auto& marker : markers) {
+            YAML::Node item;
+            item["id"] = marker.id;
+            item["label"] = marker.label;
+            item["note"] = marker.note;
+            item["start_time"] = marker.startTime;
+            item["end_time"] = marker.endTime;
+            item["channel_index"] = marker.channelIndex;
+            root["markers"].push_back(item);
+        }
+        return YAML::Dump(root);
+    }
+
+    std::vector<plot::WaveAnalysisMarker> decodeAnalysisMarkersYaml(std::string_view yamlText)
+    {
+        std::vector<plot::WaveAnalysisMarker> markers;
+        const auto root = YAML::Load(std::string(yamlText));
+        const auto node = root["markers"];
+        if (!node || !node.IsSequence()) {
+            return markers;
+        }
+        for (const auto& item : node) {
+            plot::WaveAnalysisMarker marker;
+            marker.id = item["id"].as<std::uint64_t>(0);
+            marker.label = item["label"].as<std::string>("");
+            marker.note = item["note"].as<std::string>("");
+            marker.startTime = item["start_time"].as<double>(0.0);
+            marker.endTime = item["end_time"].as<double>(marker.startTime);
+            marker.channelIndex = item["channel_index"].as<std::size_t>(0);
+            markers.push_back(std::move(marker));
+        }
+        return markers;
     }
 
     void applyActiveRawProfileEvent(std::vector<plot::RawCaptureEvent>& activeProfiles,
@@ -536,6 +638,7 @@ bool Application::initialize()
 
 bool Application::applyConfig(const config::AppConfig& config)
 {
+    captureProtocolConfigOverride_.reset();
     runtimeConfig_ = config;
     resetStreamBufferAlertState();
     const auto postprocessWorkerThreads = scripting::resolvePipelineWorkerThreads(
@@ -573,6 +676,10 @@ void Application::setLogLevel(const config::LogLevel level)
 config::AppConfig Application::captureConfig() const
 {
     auto captured = configStore_.captureFromDock(dockStore_);
+    if (captureProtocolConfigOverride_.has_value()) {
+        captured.protocol.rootDir = captureProtocolConfigOverride_->rootDir;
+        captured.protocol.selectedDir = captureProtocolConfigOverride_->selectedDir;
+    }
     captured.performance = runtimeConfig_.performance;
     captured.gui.window = runtimeConfig_.gui.window;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
@@ -621,7 +728,11 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         prepareProtocolRuntimeReload();
         scriptWorker_.setFileIoConfig(runtimeConfig_.scripting.fileIo);
         const auto loadResult = scriptWorker_.loadProtocolDirectory(resolvedDirText);
-        return applyProtocolLoadResult(resolvedDirText, protocolName, scriptPath, loadResult);
+        if (!applyProtocolLoadResult(resolvedDirText, protocolName, scriptPath, loadResult)) {
+            return false;
+        }
+        captureProtocolConfigOverride_.reset();
+        return true;
     } catch (const std::exception& ex) {
         lua.lastError = std::string("协议重载异常: ") + ex.what();
     } catch (...) {
@@ -716,6 +827,13 @@ bool Application::pumpOnce()
     bool changed = false;
     const bool hadPendingScriptPlotAppends = !pendingScriptPlotAppends_.empty();
     changed = handleTransportEvents() || changed;
+    std::string replayError;
+    const bool replayChanged = pumpRawCaptureReplay(replayError);
+    changed = replayChanged || changed;
+    if (!replayChanged && !replayError.empty()) {
+        loggingFacade_.error("wave", replayError);
+        dockStore_.waveState().statusMessage = replayError;
+    }
     scriptWorker_.postTick(nowMs());
     changed = flushScriptOutputs() || changed;
     changed = processRequestTimeouts() || changed;
@@ -730,6 +848,10 @@ bool Application::pumpOnce()
 
 void Application::shutdown()
 {
+    if (rawCaptureReplay_.loaded) {
+        cancelRawCaptureImportReplay();
+        rawCaptureReplay_ = RawCaptureReplayState{};
+    }
     closeTransport();
     scriptWorker_.stop();
 }
@@ -1244,6 +1366,208 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
     return plot::writeRawCaptureFile(path, capture, error);
 }
 
+bool Application::exportSessionPackage(const std::filesystem::path& path, std::string& error) const
+{
+    const auto createdAtMs = nowMs();
+
+    std::string configYaml;
+    if (!configStore_.saveText(captureConfig(), configYaml, error)) {
+        return false;
+    }
+
+    const auto& lua = dockStore_.luaState();
+    const auto& wave = dockStore_.waveState();
+    plot::RawCaptureFileData capture = wave.rawCapture;
+    capture.protocolName = lua.protocolName.empty() ? capture.protocolName : lua.protocolName;
+    capture.protocolDir = lua.protocolDir.empty() ? capture.protocolDir : lua.protocolDir;
+    capture.sampleFrequencyHz = wave.view.sampleFrequencyHz;
+    if (capture.capturedAtMs == 0) {
+        capture.capturedAtMs = createdAtMs;
+    }
+    if (capture.protocolName.empty() || capture.protocolDir.empty()) {
+        error = "当前协议元数据不完整，无法导出现场包";
+        return false;
+    }
+    const auto eventRxBytes = rawCaptureEventRxBytes(capture.events);
+    if (!capture.events.empty() && eventRxBytes >= capture.payload.size()) {
+        const auto keepStart = eventRxBytes - static_cast<std::uint64_t>(capture.payload.size());
+        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, keepStart);
+    } else if (!capture.payload.empty()) {
+        capture.events.clear();
+        capture.events.push_back(plot::RawCaptureEvent{
+            .type = plot::RawCaptureEventType::RxBytes,
+            .timestampMs = capture.capturedAtMs,
+            .bytes = capture.payload,
+            .profile = {},
+            .plotSetup = {},
+        });
+    } else {
+        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, eventRxBytes);
+    }
+
+    std::vector<std::uint8_t> rawCaptureBytes;
+    if (!plot::encodeRawCaptureFile(capture, rawCaptureBytes, error)) {
+        return false;
+    }
+
+    std::ostringstream logSummary;
+    const auto& transfer = dockStore_.receiveState();
+    const auto& hostLog = dockStore_.logState();
+    const auto& scriptLog = dockStore_.scriptState();
+    logSummary << "transfer_rows: " << transfer.rows.size() << '\n';
+    logSummary << "transfer_frame_rows: " << transfer.frameRows.size() << '\n';
+    logSummary << "host_log_rows: " << hostLog.rows.size() << '\n';
+    logSummary << "script_log_rows: " << scriptLog.rows.size() << '\n';
+    logSummary << "raw_capture_events: " << capture.events.size() << '\n';
+    logSummary << "raw_capture_bytes: " << capture.payload.size() << '\n';
+    const auto analysisMarkersYaml = encodeAnalysisMarkersYaml(wave.analysisMarkers);
+
+    std::string scriptReadError;
+    auto protocolScriptBytes = readFileBytes(configStore_.mainLuaPath(lua.protocolDir), scriptReadError);
+    if (!scriptReadError.empty()) {
+        error = "读取当前协议脚本失败: " + scriptReadError;
+        return false;
+    }
+
+    std::ostringstream manifest;
+    manifest << "format: protoscope_session_package\n";
+    manifest << "version: 1\n";
+    manifest << "created_at_ms: " << createdAtMs << '\n';
+    manifest << "protocol_name: " << lua.protocolName << '\n';
+    manifest << "protocol_dir: " << lua.protocolDir << '\n';
+    manifest << "sample_frequency_hz: " << capture.sampleFrequencyHz << '\n';
+    manifest << "entries:\n";
+    manifest << "- manifest.yaml\n";
+    manifest << "- config.yaml\n";
+    manifest << "- raw_capture.psraw\n";
+    manifest << "- protocol/main.lua\n";
+    manifest << "- analysis/markers.yaml\n";
+    manifest << "- logs/summary.txt\n";
+
+    session::SessionPackageData package{
+        .createdAtMs = createdAtMs,
+        .entries = {
+            {.name = "manifest.yaml", .bytes = stringBytes(manifest.str())},
+            {.name = "config.yaml", .bytes = stringBytes(configYaml)},
+            {.name = "raw_capture.psraw", .bytes = std::move(rawCaptureBytes)},
+            {.name = "protocol/main.lua", .bytes = std::move(protocolScriptBytes)},
+            {.name = "analysis/markers.yaml", .bytes = stringBytes(analysisMarkersYaml)},
+            {.name = "logs/summary.txt", .bytes = stringBytes(logSummary.str())},
+        },
+    };
+    return session::writeSessionPackage(path, package, error);
+}
+
+bool Application::importSessionPackage(const std::filesystem::path& path, std::string& error)
+{
+    const auto previousConfig = runtimeConfig_;
+    const auto previousWave = dockStore_.waveState();
+    const auto previousCaptureProtocolOverride = captureProtocolConfigOverride_;
+    auto rollbackImport = [&]() {
+        std::string rollbackError;
+        if (!applyConfig(previousConfig)) {
+            rollbackError = "恢复导入前配置失败";
+        }
+        dockStore_.waveState() = previousWave;
+        captureProtocolConfigOverride_ = previousCaptureProtocolOverride;
+        if (!rollbackError.empty()) {
+            error += "; " + rollbackError;
+        }
+    };
+
+    const auto package = session::readSessionPackage(path, error);
+    if (!package.has_value()) {
+        return false;
+    }
+
+    const auto* configEntry = session::findSessionPackageEntry(*package, "config.yaml");
+    if (configEntry == nullptr) {
+        error = "现场包缺少 config.yaml";
+        return false;
+    }
+
+    auto loaded = configStore_.loadText(stringFromBytes(configEntry->bytes));
+    if (!loaded.error.empty()) {
+        error = loaded.error;
+        return false;
+    }
+    loaded.config.configPath = runtimeConfig_.configPath;
+
+    std::optional<config::ProtocolConfig> persistentProtocolConfig;
+    std::optional<std::string> importedProtocolDir;
+    const auto* protocolEntry = session::findSessionPackageEntry(*package, "protocol/main.lua");
+    if (protocolEntry != nullptr && !protocolEntry->bytes.empty()) {
+        persistentProtocolConfig = loaded.config.protocol;
+        const auto protocolDir =
+            std::filesystem::temp_directory_path() / ("ProtoScope-session-protocol-" + std::to_string(nowUs()));
+        const auto mainLuaPath = protocolDir / "main.lua";
+        if (!writeFileBytes(mainLuaPath, protocolEntry->bytes, error)) {
+            const auto writeError = error;
+            error = "释放现场包协议脚本失败: " + writeError;
+            return false;
+        }
+        scripting::ScriptHost probeHost;
+        probeHost.setFileIoConfig(loaded.config.scripting.fileIo);
+        if (!probeHost.loadProtocolDirectory(protocolDir.generic_string())) {
+            error = "现场包协议脚本无效: " + probeHost.lastError();
+            return false;
+        }
+        loaded.config.protocol.rootDir = protocolDir.parent_path().generic_string();
+        loaded.config.protocol.selectedDir = protocolDir.generic_string();
+        importedProtocolDir = loaded.config.protocol.selectedDir;
+    }
+
+    std::optional<plot::RawCaptureFileData> rawCapture;
+    const auto* rawEntry = session::findSessionPackageEntry(*package, "raw_capture.psraw");
+    if (rawEntry != nullptr && !rawEntry->bytes.empty()) {
+        const auto rawText = std::string_view(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
+        auto capture = plot::decodeRawCaptureFile(rawText, error);
+        if (!capture.has_value()) {
+            return false;
+        }
+        if (importedProtocolDir.has_value()) {
+            capture->protocolDir = *importedProtocolDir;
+        }
+        rawCapture = std::move(*capture);
+    }
+
+    std::vector<plot::WaveAnalysisMarker> importedMarkers;
+    const auto* markerEntry = session::findSessionPackageEntry(*package, "analysis/markers.yaml");
+    if (markerEntry != nullptr) {
+        try {
+            const auto markerText =
+                std::string_view(reinterpret_cast<const char*>(markerEntry->bytes.data()), markerEntry->bytes.size());
+            importedMarkers = decodeAnalysisMarkersYaml(markerText);
+        } catch (const std::exception& ex) {
+            error = std::string("解析现场包分析标记失败: ") + ex.what();
+            return false;
+        }
+    }
+
+    if (!applyConfig(loaded.config)) {
+        error = "应用现场包配置失败";
+        rollbackImport();
+        return false;
+    }
+    if (persistentProtocolConfig.has_value()) {
+        captureProtocolConfigOverride_ = *persistentProtocolConfig;
+    }
+
+    if (rawCapture.has_value()) {
+        if (!importWaveRawCapture(*rawCapture, error)) {
+            rollbackImport();
+            return false;
+        }
+    }
+
+    auto& wave = dockStore_.waveState();
+    wave.analysisMarkers.clear();
+    wave.analysisMarkers = std::move(importedMarkers);
+
+    setStatusMessage("现场包已导入: " + path.generic_string());
+    return true;
+}
+
 bool Application::startRawCaptureRecording(const std::filesystem::path& path, std::string& error)
 {
     if (rawCaptureRecording_.isOpen()) {
@@ -1384,6 +1708,95 @@ bool Application::replayRawCaptureEvents(const plot::RawCaptureFileData& capture
     return true;
 }
 
+bool Application::pumpRawCaptureReplay(std::string& error)
+{
+    if (!rawCaptureReplay_.loaded || !rawCaptureReplay_.playing) {
+        return false;
+    }
+    if (rawCaptureReplay_.capture.events.empty()) {
+        replayRawCaptureBytes(rawCaptureReplay_.context, rawCaptureReplay_.capture.payload);
+        finishRawCaptureImportReplay();
+        rawCaptureReplay_.playing = false;
+        rawCaptureReplay_.eventIndex = rawCaptureReplay_.capture.payload.empty() ? 0U : 1U;
+        rawCaptureReplay_.lastPumpMs = 0;
+        rawCaptureReplay_.accumulatedMs = 0.0;
+        return true;
+    }
+
+    const auto now = nowMs();
+    if (rawCaptureReplay_.lastPumpMs == 0) {
+        rawCaptureReplay_.lastPumpMs = now;
+    }
+    rawCaptureReplay_.accumulatedMs +=
+        static_cast<double>(now - rawCaptureReplay_.lastPumpMs) * rawCaptureReplay_.speed;
+    rawCaptureReplay_.lastPumpMs = now;
+
+    bool changed = false;
+    while (rawCaptureReplay_.eventIndex < rawCaptureReplay_.capture.events.size()) {
+        double waitMs = 0.0;
+        if (rawCaptureReplay_.eventIndex == 0) {
+            const auto& current = rawCaptureReplay_.capture.events[0];
+            if (current.timestampMs > rawCaptureReplay_.capture.capturedAtMs) {
+                waitMs = static_cast<double>(current.timestampMs - rawCaptureReplay_.capture.capturedAtMs);
+            }
+        } else {
+            const auto& previous = rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex - 1];
+            const auto& current = rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex];
+            if (current.timestampMs > previous.timestampMs) {
+                waitMs = static_cast<double>(current.timestampMs - previous.timestampMs);
+            }
+        }
+        if (waitMs > rawCaptureReplay_.accumulatedMs) {
+            break;
+        }
+        rawCaptureReplay_.accumulatedMs -= waitMs;
+        if (!replayRawCaptureEventAt(rawCaptureReplay_.eventIndex, error)) {
+            rawCaptureReplay_.playing = false;
+            cancelRawCaptureImportReplay();
+            rawCaptureReplay_ = RawCaptureReplayState{};
+            dockStore_.waveState().statusMessage = "原始回放时间轴已卸载: " + error;
+            return false;
+        }
+        changed = true;
+    }
+
+    if (rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size()) {
+        finishRawCaptureImportReplay();
+        rawCaptureReplay_.playing = false;
+        rawCaptureReplay_.lastPumpMs = 0;
+        rawCaptureReplay_.accumulatedMs = 0.0;
+        return true;
+    }
+    return changed;
+}
+
+bool Application::replayRawCaptureEventAt(const std::size_t eventIndex, std::string& error)
+{
+    if (!rawCaptureReplay_.loaded) {
+        error = "尚未载入原始回放时间轴";
+        return false;
+    }
+    if (eventIndex >= rawCaptureReplay_.capture.events.size()) {
+        return true;
+    }
+
+    const auto& event = rawCaptureReplay_.capture.events[eventIndex];
+    rawCaptureReplay_.context.timestampMs =
+        event.timestampMs == 0 ? rawCaptureReplay_.context.timestampMs : event.timestampMs;
+    suppressRawCaptureProfileEvents_ = true;
+    suppressRawCapturePlotSetupEvents_ = true;
+    if (!replayRawCaptureEvent(event, rawCaptureReplay_.context, error)) {
+        suppressRawCaptureProfileEvents_ = false;
+        suppressRawCapturePlotSetupEvents_ = false;
+        return false;
+    }
+    suppressRawCaptureProfileEvents_ = false;
+    suppressRawCapturePlotSetupEvents_ = false;
+    flushScriptOutputs();
+    rawCaptureReplay_.eventIndex = eventIndex + 1;
+    return true;
+}
+
 bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
                                         transport::ConnectionContext& replayContext,
                                         std::string& error)
@@ -1491,6 +1904,119 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     return true;
 }
 
+bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture, std::string& error)
+{
+    if (!validateRawCaptureImport(capture, error)) {
+        return false;
+    }
+    if (capture.events.empty() && capture.payload.empty()) {
+        error = "原始波形没有可回放事件";
+        return false;
+    }
+
+    if (rawCaptureReplay_.loaded) {
+        cancelRawCaptureImportReplay();
+    }
+    auto replayCapture = capture;
+    if (replayCapture.events.empty() && !replayCapture.payload.empty()) {
+        replayCapture.events.push_back(plot::RawCaptureEvent{
+            .type = plot::RawCaptureEventType::RxBytes,
+            .timestampMs = replayCapture.capturedAtMs,
+            .bytes = replayCapture.payload,
+            .profile = {},
+            .plotSetup = {},
+        });
+    }
+    prepareRawCaptureImportReplay(replayCapture);
+    rawCaptureReplay_ = RawCaptureReplayState{};
+    rawCaptureReplay_.loaded = true;
+    rawCaptureReplay_.playing = false;
+    rawCaptureReplay_.capture = std::move(replayCapture);
+    rawCaptureReplay_.context = makeRawCaptureReplayContext(rawCaptureReplay_.capture);
+    rawCaptureReplay_.speed = 1.0;
+    dockStore_.waveState().statusMessage = "原始回放时间轴已载入";
+    return true;
+}
+
+bool Application::playRawCaptureReplay(std::string& error)
+{
+    if (!rawCaptureReplay_.loaded) {
+        error = "尚未载入原始回放时间轴";
+        return false;
+    }
+    rawCaptureReplay_.playing = true;
+    rawCaptureReplay_.lastPumpMs = nowMs();
+    return true;
+}
+
+void Application::pauseRawCaptureReplay()
+{
+    rawCaptureReplay_.playing = false;
+}
+
+bool Application::stepRawCaptureReplay(std::string& error)
+{
+    if (!rawCaptureReplay_.loaded) {
+        error = "尚未载入原始回放时间轴";
+        return false;
+    }
+    rawCaptureReplay_.playing = false;
+    return replayRawCaptureEventAt(rawCaptureReplay_.eventIndex, error);
+}
+
+bool Application::seekRawCaptureReplay(const std::size_t eventIndex, std::string& error)
+{
+    if (!rawCaptureReplay_.loaded) {
+        error = "尚未载入原始回放时间轴";
+        return false;
+    }
+
+    const auto capture = rawCaptureReplay_.capture;
+    const auto speed = rawCaptureReplay_.speed;
+    const bool wasPlaying = rawCaptureReplay_.playing;
+    const auto targetIndex = (std::min)(eventIndex, capture.events.empty() ? std::size_t{1} : capture.events.size());
+    prepareRawCaptureImportReplay(capture);
+    rawCaptureReplay_ = RawCaptureReplayState{};
+    rawCaptureReplay_.loaded = true;
+    rawCaptureReplay_.playing = false;
+    rawCaptureReplay_.capture = capture;
+    rawCaptureReplay_.context = makeRawCaptureReplayContext(capture);
+    rawCaptureReplay_.speed = speed;
+    for (std::size_t index = 0; index < targetIndex; ++index) {
+        if (!replayRawCaptureEventAt(index, error)) {
+            cancelRawCaptureImportReplay();
+            rawCaptureReplay_ = RawCaptureReplayState{};
+            dockStore_.waveState().statusMessage = "原始回放定位失败，时间轴已卸载";
+            return false;
+        }
+    }
+    if (rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size()) {
+        finishRawCaptureImportReplay();
+        rawCaptureReplay_.playing = false;
+    } else {
+        rawCaptureReplay_.playing = wasPlaying;
+        rawCaptureReplay_.lastPumpMs = nowMs();
+    }
+    return true;
+}
+
+void Application::setRawCaptureReplaySpeed(const double speed)
+{
+    rawCaptureReplay_.speed = (std::max)(0.1, (std::min)(speed, 16.0));
+}
+
+Application::RawCaptureReplayStatus Application::rawCaptureReplayStatus() const
+{
+    return RawCaptureReplayStatus{
+        .loaded = rawCaptureReplay_.loaded,
+        .playing = rawCaptureReplay_.playing,
+        .eventIndex = rawCaptureReplay_.eventIndex,
+        .eventCount = rawCaptureReplay_.capture.events.empty() ? (rawCaptureReplay_.capture.payload.empty() ? 0U : 1U)
+                                                               : rawCaptureReplay_.capture.events.size(),
+        .speed = rawCaptureReplay_.speed,
+    };
+}
+
 bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error)
 {
     if (!elfStaticView_.loadFile(path, error)) {
@@ -1572,6 +2098,7 @@ void Application::resetWaveHistory()
     auto& wave = dockStore_.waveState();
     wave.buffer.clear();
     wave.rawCapture = {};
+    wave.analysisMarkers.clear();
     wave.channelSummaries.clear();
     wave.view.initialized = false;
     wave.view.centerTime = 0.0;
@@ -1582,9 +2109,58 @@ void Application::resetWaveHistory()
     wave.statusMessage = "波形历史已清空";
 }
 
+bool Application::exportWaveAnalysisReport(const std::filesystem::path& path, std::string& error) const
+{
+    const auto& wave = dockStore_.waveState();
+    try {
+        if (path.has_parent_path()) {
+            std::error_code directoryError;
+            std::filesystem::create_directories(path.parent_path(), directoryError);
+            if (directoryError) {
+                error = "创建分析报告目录失败: " + directoryError.message();
+                return false;
+            }
+        }
+
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (!out.good()) {
+            error = "无法写入波形分析报告";
+            return false;
+        }
+
+        const auto& view = wave.view;
+        out << "section,key,value\n";
+        out << "summary,protocol," << csvEscape(dockStore_.luaState().protocolName) << '\n';
+        out << "summary,protocol_dir," << csvEscape(dockStore_.luaState().protocolDir) << '\n';
+        out << "summary,sample_frequency_hz," << view.sampleFrequencyHz << '\n';
+        out << "summary,view_min_time," << view.viewMinTime << '\n';
+        out << "summary,view_max_time," << view.viewMaxTime << '\n';
+        out << "summary,raw_capture_bytes," << wave.rawCapture.payload.size() << '\n';
+        out << "summary,raw_capture_events," << wave.rawCapture.events.size() << '\n';
+        out << "summary,markers," << wave.analysisMarkers.size() << '\n';
+        out << '\n';
+        out << "marker,id,label,note,channel_index,start_time,end_time\n";
+        for (const auto& marker : wave.analysisMarkers) {
+            out << "marker," << marker.id << ',' << csvEscape(marker.label) << ',' << csvEscape(marker.note) << ','
+                << marker.channelIndex << ',' << marker.startTime << ',' << marker.endTime << '\n';
+        }
+        if (!out.good()) {
+            error = "写入波形分析报告失败";
+            return false;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return false;
+    }
+}
+
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const
 {
     const auto scriptSnapshot = scriptWorker_.snapshot();
+    if (rawCaptureReplay_.loaded && rawCaptureReplay_.playing) {
+        return nowMs();
+    }
     if (!pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || !pendingTransferFrameRows_.empty() ||
         scriptSnapshot.pendingPlotAppends > 0U || scriptSnapshot.pendingWorkerRxBytes > 0U) {
         return nowMs();

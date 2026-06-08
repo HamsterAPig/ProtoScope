@@ -383,6 +383,14 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.channelOverrides[0].scale = 2.5;
     waveA.channelOverrides[0].offsetOverridden = true;
     waveA.channelOverrides[0].offset = -0.25;
+    waveA.analysisMarkers = {{
+        .id = 1001,
+        .label = "标记A",
+        .note = "协议A波形标记",
+        .startTime = 0.125,
+        .endTime = 0.250,
+        .channelIndex = 0,
+    }};
     protoscope::ui::storeWaveProtocolState(root, "proto_a", waveA);
 
     protoscope::plot::WaveDockState waveB;
@@ -440,6 +448,8 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
     require(restoredA.legendCollapsed, "proto_a 应恢复自己的图例折叠状态");
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
+    require(restoredA.analysisMarkers.size() == 1 && restoredA.analysisMarkers[0].label == "标记A",
+            "proto_a 应恢复自己的分析标记");
 
     protoscope::plot::WaveDockState restoredB;
     restoredB.buffer.configureChannels(1);
@@ -454,8 +464,31 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
     require(!restoredB.view.fft.enabled, "不同协议不应串用 proto_a FFT 开关");
+    require(restoredB.analysisMarkers.empty(), "不同协议不应串用 proto_a 分析标记");
     require(restoredB.view.measurement.stddev && !restoredB.view.measurement.variance,
             "老状态或其他协议应保留默认测量项");
+}
+
+void test_wave_protocol_state_missing_wave_node_clears_analysis_markers()
+{
+    YAML::Node root;
+    root["protocols"]["other"]["wave"]["show_hover_readout"] = true;
+
+    protoscope::plot::WaveDockState wave;
+    wave.hiddenChannelLabels = {"CH1"};
+    wave.analysisMarkers = {{
+        .id = 1,
+        .label = "残留标记",
+        .note = "旧协议",
+        .startTime = 0.0,
+        .endTime = 1.0,
+        .channelIndex = 0,
+    }};
+
+    protoscope::ui::restoreWaveProtocolState(root, "missing", wave);
+    require(wave.hiddenChannelLabels.empty(), "缺失协议 wave 节点时应清空隐藏通道状态");
+    require(wave.analysisMarkers.empty(), "缺失协议 wave 节点时应清空分析标记");
+    require(wave.legendVisibilityRestorePending, "缺失协议 wave 节点时应重新应用图例可见性");
 }
 
 void test_wave_protocol_state_cursor_extreme_snap_policy()

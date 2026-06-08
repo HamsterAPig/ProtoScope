@@ -3,6 +3,8 @@
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/keyboard_shortcuts.hpp"
 
+#include <optional>
+#include <string_view>
 #include <system_error>
 
 namespace protoscope::ui {
@@ -352,6 +354,30 @@ void GuiRuntime::openRawCaptureImportDialog()
 #endif
 }
 
+void GuiRuntime::openRawCaptureReplayTimelineDialog()
+{
+#if defined(_WIN32)
+    const auto defaultPath = rawCaptureImportPath_.empty() ? executableDir_ / "captures" / "capture.psraw"
+                                                           : std::filesystem::path(rawCaptureImportPath_);
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"载入原始回放时间轴",
+                                       L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       false,
+                                       L"psraw",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        loadRawCaptureReplayTimelineFromPath(*path);
+    }
+#else
+    application_.setStatusMessage("当前平台暂未实现原始回放时间轴文件对话框");
+#endif
+}
+
 void GuiRuntime::openRawCaptureExportDialog()
 {
     const auto& lua = application_.docks().luaState();
@@ -408,6 +434,64 @@ void GuiRuntime::openRawCaptureRecordingDialog()
     rawCaptureRecordingDialogOpened_ = false;
     rawCaptureRecordingError_.clear();
     rawCaptureRecordingPath_ = defaultPath.generic_string();
+#endif
+}
+
+void GuiRuntime::openSessionPackageImportDialog()
+{
+#if defined(_WIN32)
+    const auto defaultPath = sessionPackageImportPath_.empty() ? executableDir_ / "captures" / "session.pssession"
+                                                               : std::filesystem::path(sessionPackageImportPath_);
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"导入现场会话包",
+                                       L"ProtoScope Session Package (*.pssession)\0*.pssession\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       false,
+                                       L"pssession",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        importSessionPackageFromPath(*path);
+    }
+#else
+    sessionPackageImportDialogOpen_ = true;
+    sessionPackageImportDialogOpened_ = false;
+    sessionPackageImportError_.clear();
+    if (sessionPackageImportPath_.empty()) {
+        sessionPackageImportPath_ = (executableDir_ / "captures" / "session.pssession").generic_string();
+    }
+#endif
+}
+
+void GuiRuntime::openSessionPackageExportDialog()
+{
+    const auto& lua = application_.docks().luaState();
+    const std::string baseName = lua.protocolName.empty() ? std::string("session") : lua.protocolName + "-session";
+    const auto defaultPath = sessionPackageExportPath_.empty() ? executableDir_ / "captures" / (baseName + ".pssession")
+                                                               : std::filesystem::path(sessionPackageExportPath_);
+#if defined(_WIN32)
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"导出现场会话包",
+                                       L"ProtoScope Session Package (*.pssession)\0*.pssession\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       true,
+                                       L"pssession",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        exportSessionPackageToPath(*path);
+    }
+#else
+    sessionPackageExportDialogOpen_ = true;
+    sessionPackageExportDialogOpened_ = false;
+    sessionPackageExportError_.clear();
+    sessionPackageExportPath_ = defaultPath.generic_string();
 #endif
 }
 
@@ -567,6 +651,39 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path)
     rawCaptureExportError_.clear();
 }
 
+void GuiRuntime::loadRawCaptureReplayTimelineFromPath(const std::filesystem::path& path)
+{
+    rawCaptureImportPath_ = path.generic_string();
+    std::string error;
+    const auto capture = plot::readRawCaptureFile(path, error);
+    if (!capture.has_value()) {
+        rawCaptureImportError_ = error;
+        application_.setStatusMessage("原始回放时间轴载入失败: " + error);
+        return;
+    }
+    std::error_code protocolEntryError;
+    if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
+        rawCaptureImportError_ = "回放文件引用的协议目录不存在: " + capture->protocolDir;
+        if (protocolEntryError) {
+            rawCaptureImportError_ += " (" + protocolEntryError.message() + ")";
+        }
+        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureImportError_);
+        return;
+    }
+
+    const auto& currentLua = application_.docks().luaState();
+    if (currentLua.protocolDir != capture->protocolDir && !switchProtocolWorkspace(capture->protocolDir, false)) {
+        rawCaptureImportError_ = "切换回放协议失败";
+        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureImportError_);
+    } else if (!application_.loadRawCaptureReplayTimeline(*capture, error)) {
+        rawCaptureImportError_ = error;
+        application_.setStatusMessage("原始回放时间轴载入失败: " + error);
+    } else {
+        application_.setStatusMessage("原始回放时间轴已载入");
+        rawCaptureImportError_.clear();
+    }
+}
+
 void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& path)
 {
     // 核心流程：菜单只负责选择完整录制路径，录制状态和写入错误统一收口到 Application。
@@ -580,6 +697,71 @@ void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& pat
     rawCaptureRecordingDialogOpen_ = false;
     rawCaptureRecordingDialogOpened_ = false;
     rawCaptureRecordingError_.clear();
+}
+
+void GuiRuntime::importSessionPackageFromPath(const std::filesystem::path& path)
+{
+    sessionPackageImportPath_ = path.generic_string();
+    std::string error;
+    if (!application_.importSessionPackage(path, error)) {
+        sessionPackageImportError_ = error;
+        application_.setStatusMessage("现场会话包导入失败: " + error);
+        return;
+    }
+    application_.setStatusMessage("现场会话包导入成功");
+    sessionPackageImportDialogOpen_ = false;
+    sessionPackageImportDialogOpened_ = false;
+    sessionPackageImportError_.clear();
+}
+
+void GuiRuntime::exportSessionPackageToPath(const std::filesystem::path& path)
+{
+    sessionPackageExportPath_ = path.generic_string();
+    std::string error;
+    if (!application_.exportSessionPackage(path, error)) {
+        sessionPackageExportError_ = error;
+        application_.setStatusMessage("现场会话包导出失败: " + error);
+        return;
+    }
+    application_.setStatusMessage("现场会话包导出成功");
+    sessionPackageExportDialogOpen_ = false;
+    sessionPackageExportDialogOpened_ = false;
+    sessionPackageExportError_.clear();
+}
+
+void GuiRuntime::openWaveAnalysisExportDialog()
+{
+#if defined(_WIN32)
+    const auto& lua = application_.docks().luaState();
+    const std::string baseName = lua.protocolName.empty() ? std::string("wave-analysis") : lua.protocolName + "-analysis";
+    const auto defaultPath = executableDir_ / "captures" / (baseName + ".csv");
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"导出波形分析报告",
+                                       L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       true,
+                                       L"csv",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        exportWaveAnalysisReportToPath(*path);
+    }
+#else
+    application_.setStatusMessage("当前平台暂未实现波形分析报告文件对话框");
+#endif
+}
+
+void GuiRuntime::exportWaveAnalysisReportToPath(const std::filesystem::path& path)
+{
+    std::string error;
+    if (!application_.exportWaveAnalysisReport(path, error)) {
+        application_.setStatusMessage("波形分析报告导出失败: " + error);
+        return;
+    }
+    application_.setStatusMessage("波形分析报告导出成功");
 }
 
 std::vector<dock::ReceiveRow> GuiRuntime::logExportRows(LogExportTarget target)
@@ -935,6 +1117,78 @@ void GuiRuntime::drawRawCaptureFileDialogs()
                 rawCaptureRecordingDialogOpen_ = false;
                 rawCaptureRecordingDialogOpened_ = false;
                 rawCaptureRecordingError_.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    if (sessionPackageImportDialogOpen_) {
+        const char* popupId = "导入现场会话包##pssession_import";
+        if (!sessionPackageImportDialogOpened_) {
+            ImGui::OpenPopup(popupId);
+            sessionPackageImportDialogOpened_ = true;
+        }
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+            ImGui::TextUnformatted("请输入 .pssession 文件路径");
+            char buffer[1024]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", sessionPackageImportPath_.c_str());
+            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+                sessionPackageImportPath_ = buffer;
+            }
+            if (!sessionPackageImportError_.empty()) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", sessionPackageImportError_.c_str());
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("导入", ImVec2(90.0F, 0.0F))) {
+                importSessionPackageFromPath(sessionPackageImportPath_);
+                if (!sessionPackageImportDialogOpen_) {
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+                sessionPackageImportDialogOpen_ = false;
+                sessionPackageImportDialogOpened_ = false;
+                sessionPackageImportError_.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    if (sessionPackageExportDialogOpen_) {
+        const char* popupId = "导出现场会话包##pssession_export";
+        if (!sessionPackageExportDialogOpened_) {
+            ImGui::OpenPopup(popupId);
+            sessionPackageExportDialogOpened_ = true;
+        }
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+            ImGui::TextUnformatted("请输入导出 .pssession 文件路径");
+            char buffer[1024]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", sessionPackageExportPath_.c_str());
+            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+                sessionPackageExportPath_ = buffer;
+            }
+            if (!sessionPackageExportError_.empty()) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", sessionPackageExportError_.c_str());
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
+                exportSessionPackageToPath(sessionPackageExportPath_);
+                if (!sessionPackageExportDialogOpen_) {
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+                sessionPackageExportDialogOpen_ = false;
+                sessionPackageExportDialogOpened_ = false;
+                sessionPackageExportError_.clear();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();

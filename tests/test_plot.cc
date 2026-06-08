@@ -6,12 +6,14 @@
 #include "protoscope/plot/wave_fft.hpp"
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_state.hpp"
+#include "protoscope/session/session_package.hpp"
 
 #include "test_registry.hpp"
 
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -1965,4 +1967,58 @@ void test_raw_capture_file_rejects_profile_set_without_length()
     bytes.replace(pos, std::string("length: 8\n").size(), "leng_x: 8\n");
     const auto parsed = protoscope::plot::decodeRawCaptureFile(bytes, error);
     require(!parsed.has_value(), "profile_set 缺少 length 时应拒绝解析");
+}
+
+void test_session_package_roundtrip_preserves_binary_entries()
+{
+    protoscope::session::SessionPackageData package{
+        .createdAtMs = 123456,
+        .entries = {
+            {.name = "manifest.txt", .bytes = {'o', 'k', '\n'}},
+            {.name = "capture.psraw", .bytes = {0x00, 0x01, static_cast<std::uint8_t>(0xFF), '\n'}},
+        },
+    };
+
+    std::string error;
+    const auto encoded = protoscope::session::encodeSessionPackage(package);
+    const auto decoded = protoscope::session::decodeSessionPackage(encoded, error);
+    if (!decoded.has_value()) {
+        throw std::runtime_error("会话包 roundtrip 应成功: " + error);
+    }
+
+    require(decoded->createdAtMs == package.createdAtMs, "会话包 created_at_ms 应保留");
+    const auto* manifest = protoscope::session::findSessionPackageEntry(*decoded, "manifest.txt");
+    const auto* capture = protoscope::session::findSessionPackageEntry(*decoded, "capture.psraw");
+    require(manifest != nullptr && manifest->bytes == package.entries[0].bytes, "manifest 条目应保留");
+    require(capture != nullptr && capture->bytes == package.entries[1].bytes, "二进制 capture 条目应保留");
+}
+
+void test_session_package_rejects_truncated_entry()
+{
+    protoscope::session::SessionPackageData package{
+        .createdAtMs = 1,
+        .entries = {{.name = "capture.psraw", .bytes = {0x01, 0x02, 0x03}}},
+    };
+
+    auto encoded = protoscope::session::encodeSessionPackage(package);
+    encoded.resize(encoded.size() - std::string("\nendentry\n").size());
+
+    std::string error;
+    const auto decoded = protoscope::session::decodeSessionPackage(encoded, error);
+    require(!decoded.has_value(), "截断会话包应拒绝解析");
+    require(!error.empty(), "截断会话包应给出错误信息");
+}
+
+void test_session_package_rejects_excessive_entry_count()
+{
+    const std::string bytes =
+        "ProtoScopeSessionPackage\n"
+        "version: 1\n"
+        "created_at_ms: 1\n"
+        "entries: 999999999\n";
+
+    std::string error;
+    const auto decoded = protoscope::session::decodeSessionPackage(bytes, error);
+    require(!decoded.has_value(), "entries 过大的会话包应拒绝解析");
+    require(error.find("entries") != std::string::npos, "entries 过大错误应指向 entries 字段");
 }

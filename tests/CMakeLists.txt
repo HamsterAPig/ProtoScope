@@ -30,6 +30,7 @@ target_link_libraries(protoscope_tests
         protoscope_elf_static_view
         protoscope_protocol_utils
         protoscope_plot
+        protoscope_session
         protoscope_scripting
         protoscope_transport
         protoscope_ui

@@ -850,6 +850,29 @@ std::string encodeRawCaptureHeader(const RawCaptureFileData& capture)
     return encodeRawCaptureHeaderWithSize(normalized, rawSize, true);
 }
 
+bool encodeRawCaptureFile(const RawCaptureFileData& capture, std::vector<std::uint8_t>& bytes, std::string& error)
+{
+    RawCaptureFileData normalized = capture;
+    normalized.events = normalizedEvents(capture);
+    const auto rawSize = totalEventBytes(normalized);
+    std::string header;
+    if (!encodeFixedRawCaptureHeader(normalized, rawSize, true, header, error)) {
+        return false;
+    }
+
+    bytes.clear();
+    bytes.reserve(header.size() + static_cast<std::size_t>(rawSize));
+    bytes.insert(bytes.end(), header.begin(), header.end());
+    for (const auto& event : normalized.events) {
+        const auto record = encodeEventRecord(event);
+        bytes.insert(bytes.end(), record.begin(), record.end());
+        if (event.type == RawCaptureEventType::RxBytes && !event.bytes.empty()) {
+            bytes.insert(bytes.end(), event.bytes.begin(), event.bytes.end());
+        }
+    }
+    return true;
+}
+
 std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, std::string& error)
 {
     if (bytes.size() < kStreamHeaderBytes) {

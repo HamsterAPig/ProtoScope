@@ -1,7 +1,9 @@
 #include "protoscope/ui/protocol_ui_state.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
+#include <utility>
 
 #include <yaml-cpp/yaml.h>
 
@@ -417,7 +419,6 @@ namespace {
         }
         return cursorsNode;
     }
-
     YAML::Node encodeWaveChannelOverrides(const plot::WaveDockState& wave)
     {
         YAML::Node overridesNode;
@@ -442,9 +443,26 @@ namespace {
         return overridesNode;
     }
 
+    YAML::Node encodeWaveAnalysisMarkers(const plot::WaveDockState& wave)
+    {
+        YAML::Node markersNode;
+        for (const auto& marker : wave.analysisMarkers) {
+            YAML::Node markerNode;
+            markerNode["id"] = marker.id;
+            markerNode["label"] = marker.label;
+            markerNode["note"] = marker.note;
+            markerNode["start_time"] = marker.startTime;
+            markerNode["end_time"] = marker.endTime;
+            markerNode["channel_index"] = marker.channelIndex;
+            markersNode.push_back(markerNode);
+        }
+        return markersNode;
+    }
+
     void resetMissingWaveProtocolState(plot::WaveDockState& wave)
     {
         wave.hiddenChannelLabels.clear();
+        wave.analysisMarkers.clear();
         wave.legendVisibilityRestorePending = true;
     }
 
@@ -606,6 +624,26 @@ namespace {
         }
     }
 
+    void decodeWaveAnalysisMarkers(const YAML::Node& node, plot::WaveDockState& wave)
+    {
+        wave.analysisMarkers.clear();
+        const auto markersNode = node["analysis_markers"];
+        if (!markersNode || !markersNode.IsSequence()) {
+            return;
+        }
+
+        for (const auto& entry : markersNode) {
+            plot::WaveAnalysisMarker marker;
+            marker.id = entry["id"].as<std::uint64_t>(0);
+            marker.label = entry["label"].as<std::string>("");
+            marker.note = entry["note"].as<std::string>("");
+            marker.startTime = entry["start_time"].as<double>(0.0);
+            marker.endTime = entry["end_time"].as<double>(marker.startTime);
+            marker.channelIndex = entry["channel_index"].as<std::size_t>(0);
+            wave.analysisMarkers.push_back(std::move(marker));
+        }
+    }
+
 } // namespace
 
 YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave)
@@ -621,6 +659,7 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave)
     node["hidden_channel_labels"] = encodeHiddenChannelLabels(wave);
     node["cursors"] = encodeWaveCursorState(view);
     node["channel_overrides"] = encodeWaveChannelOverrides(wave);
+    node["analysis_markers"] = encodeWaveAnalysisMarkers(wave);
     return node;
 }
 
@@ -640,7 +679,7 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave)
     decodeHiddenChannelLabels(node, wave);
     decodeWaveCursorState(node, wave.view);
     decodeWaveChannelOverrides(node, wave);
-
+    decodeWaveAnalysisMarkers(node, wave);
     applyChannelOverrides(wave);
 }
 
@@ -651,7 +690,17 @@ void storeWaveProtocolState(YAML::Node& root, std::string_view protocolKey, cons
 
 void restoreWaveProtocolState(const YAML::Node& root, std::string_view protocolKey, plot::WaveDockState& wave)
 {
-    decodeWaveProtocolState(root["protocols"][std::string(protocolKey)]["wave"], wave);
+    const auto protocolsNode = root["protocols"];
+    if (!protocolsNode || !protocolsNode.IsMap()) {
+        decodeWaveProtocolState(YAML::Node{}, wave);
+        return;
+    }
+    const auto protocolNode = protocolsNode[std::string(protocolKey)];
+    if (!protocolNode || !protocolNode.IsMap()) {
+        decodeWaveProtocolState(YAML::Node{}, wave);
+        return;
+    }
+    decodeWaveProtocolState(protocolNode["wave"], wave);
 }
 
 YAML::Node encodeElfStaticAddressState(std::string_view path)
