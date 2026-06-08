@@ -723,6 +723,46 @@ bool parseStreamFieldCount(const sol::object& countObject,
     return true;
 }
 
+bool parseStreamFieldName(const sol::table& fieldTable, StreamFieldDefinition& field, std::string& error)
+{
+    field.name = fieldTable.get_or("name", std::string());
+    if (field.name.empty()) {
+        error = "field.name 不能为空";
+        return false;
+    }
+    return true;
+}
+
+bool parseStreamFieldType(const sol::table& fieldTable, StreamFieldDefinition& field, std::string& error)
+{
+    const auto typeText = luaStringField(fieldTable, "type");
+    if (!typeText.has_value()) {
+        error = "field.type 不能为空";
+        return false;
+    }
+    const auto type = parseStreamValueType(*typeText);
+    if (!type.has_value()) {
+        error = "未知字段类型: " + *typeText;
+        return false;
+    }
+    field.type = *type;
+    return true;
+}
+
+bool parseStreamFieldOffset(const sol::table& fieldTable, StreamFieldDefinition& field, std::string& error)
+{
+    const auto offset = luaIntegerValue(fieldTable["offset"]);
+    if (!offset.has_value()) {
+        return true;
+    }
+    if (*offset <= 0) {
+        error = "field.offset 必须是从 1 开始的正整数";
+        return false;
+    }
+    field.offset = static_cast<std::size_t>(*offset - 1);
+    return true;
+}
+
 std::optional<StreamFieldDefinition> parseStreamFieldDefinition(const sol::object& fieldObject,
                                                                 const std::size_t frameIndex,
                                                                 const std::size_t fieldIndex,
@@ -734,32 +774,15 @@ std::optional<StreamFieldDefinition> parseStreamFieldDefinition(const sol::objec
     }
     const auto fieldTable = fieldObject.as<sol::table>();
     StreamFieldDefinition field;
-    field.name = fieldTable.get_or("name", std::string());
-    if (field.name.empty()) {
-        error = "field.name 不能为空";
+    if (!parseStreamFieldName(fieldTable, field, error)) {
         return std::nullopt;
     }
-
-    const auto typeText = luaStringField(fieldTable, "type");
-    if (!typeText.has_value()) {
-        error = "field.type 不能为空";
+    if (!parseStreamFieldType(fieldTable, field, error)) {
         return std::nullopt;
     }
-    const auto type = parseStreamValueType(*typeText);
-    if (!type.has_value()) {
-        error = "未知字段类型: " + *typeText;
+    if (!parseStreamFieldOffset(fieldTable, field, error)) {
         return std::nullopt;
     }
-    field.type = *type;
-
-    if (const auto offset = luaIntegerValue(fieldTable["offset"]); offset.has_value()) {
-        if (*offset <= 0) {
-            error = "field.offset 必须是从 1 开始的正整数";
-            return std::nullopt;
-        }
-        field.offset = static_cast<std::size_t>(*offset - 1);
-    }
-
     if (!parseStreamFieldCount(fieldTable["count"], frameIndex, fieldIndex, field, error)) {
         return std::nullopt;
     }
