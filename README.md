@@ -134,7 +134,9 @@ protocols/
 当前默认脚本使用 `ui()` 返回 Dock 数组；若只需单面板，也可继续返回 `controls()`。
 
 `ui()` 下的 dock 现在也支持显式 Layout Tree。默认 demo 使用 `type + children`
-递归节点声明控件在 dock 内的排布。
+递归节点声明控件在 dock 内的排布；`column` / `flow` 也可用 `controls = { "id1", "id2" }`
+简写连续控件。控件宽度约束写在 layout 的 `{ type = "control", id = "..." }` 节点上，例如
+`min_width = 180, max_width = 260`。详细规则见 `protocols/README.md`。
 
 `ui()` + `table layout node` 示例：
 

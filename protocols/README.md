@@ -38,15 +38,17 @@ function ui()
       },
       layout = {
         type = "flow",
-        children = {
-          { type = "control", id = "device_id" },
-          { type = "control", id = "hex_send" },
-          { type = "control", id = "send_once" },
-        },
+        controls = { "device_id", "hex_send", "send_once" },
       },
     },
   }
 end
+```
+
+控件宽度约束写在 layout 的 `control` 节点上，不写在顶层控件定义里：
+
+```lua
+{ type = "control", id = "device_id", min_width = 180, max_width = 260 }
 ```
 
 ### `ui()` 返回值
@@ -82,15 +84,16 @@ end
 ### Layout Tree
 
 显式布局统一使用 `type + children` 的递归树，不再兼容旧的 `layout.kind`、`form.items`、`table.rows` control-only 写法。
+`column` 和 `flow` 可用 `controls = { "id1", "id2" }` 简写连续控件；同一个 layout 节点上 `children` 与 `controls` 互斥，不能同时填写。
 
 通用规则：
 
-- `{ type = "column", children = { ... } }`：纵向块级布局。
-- `{ type = "flow", spacing = 6, run_spacing = 5, children = { ... } }`：横向流式布局，空间不足时自动换行。
+- `{ type = "column", children = { ... } }` 或 `{ type = "column", controls = { "id1", "id2" } }`：纵向块级布局。
+- `{ type = "flow", spacing = 6, run_spacing = 5, children = { ... } }` 或 `{ type = "flow", controls = { "id1", "id2" } }`：横向流式布局，空间不足时自动换行。
 - `{ type = "table", columns = 2, rows = { ... } }`：表格布局，单元格可以放任意 layout node。
 - `{ type = "group", title = "...", children = { ... } }`：标题分组。
 - `{ type = "collapse", title = "...", default_open = true, children = { ... } }`：折叠分组。
-- `{ type = "control", id = "xxx" }`：引用一个已声明控件。
+- `{ type = "control", id = "xxx" }`：引用一个已声明控件。可选 `min_width` / `max_width` 约束控件宽度，值必须是正数；可以只写其中一个，同时填写时要求 `min_width <= max_width`。
 - `{ type = "text", text = "..." }`：说明文字。
 - `{ type = "separator" }`：分割线。
 - `{ type = "spacer" }`：占位空白。
