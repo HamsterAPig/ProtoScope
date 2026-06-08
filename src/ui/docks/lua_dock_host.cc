@@ -2,6 +2,8 @@
 
 #include "protoscope/ui/gui_runtime.hpp"
 
+#include <algorithm>
+
 namespace protoscope::ui {
 
 namespace {
@@ -35,6 +37,48 @@ namespace {
         return node.kind == scripting::LayoutNodeKind::Control || node.kind == scripting::LayoutNodeKind::Text;
     }
 
+    float applyLuaLayoutWidthConstraints(const scripting::LayoutNodeDescriptor& node, float naturalWidth)
+    {
+        float width = naturalWidth;
+        if (node.minWidth.has_value()) {
+            width = std::max(width, *node.minWidth);
+        }
+        if (node.maxWidth.has_value()) {
+            width = std::min(width, *node.maxWidth);
+        }
+        return std::max(1.0F, width);
+    }
+
+    float luaLayoutControlLabelPartWidth(const scripting::ControlDescriptor& descriptor)
+    {
+        if (descriptor.label.empty()) {
+            return 0.0F;
+        }
+        return ImGui::CalcTextSize(descriptor.label.c_str()).x + ImGui::GetStyle().ItemInnerSpacing.x;
+    }
+
+    float luaLayoutControlNaturalWidth(const scripting::ControlDescriptor& descriptor)
+    {
+        if (descriptor.type == scripting::ControlType::Button) {
+            return ImGui::CalcTextSize(descriptor.label.c_str()).x + 24.0F;
+        }
+        if (descriptor.type == scripting::ControlType::Checkbox) {
+            return ImGui::GetFrameHeight() + luaLayoutControlLabelPartWidth(descriptor);
+        }
+        return 140.0F + luaLayoutControlLabelPartWidth(descriptor);
+    }
+
+    float luaLayoutControlWidth(const scripting::LayoutNodeDescriptor& node,
+                                const scripting::ControlDescriptor& descriptor)
+    {
+        const float naturalWidth = luaLayoutControlNaturalWidth(descriptor);
+        if (descriptor.type == scripting::ControlType::Checkbox) {
+            // Checkbox 不裁剪文字；max_width 不压缩自然宽度，只允许 min_width 扩展占位。
+            return node.minWidth.has_value() ? std::max(naturalWidth, *node.minWidth) : naturalWidth;
+        }
+        return applyLuaLayoutWidthConstraints(node, naturalWidth);
+    }
+
     float estimateLuaFlowNodeWidth(const scripting::LayoutNodeDescriptor& node,
                                    const std::vector<scripting::ControlSnapshot>& controls)
     {
@@ -43,9 +87,7 @@ namespace {
         }
         if (node.kind == scripting::LayoutNodeKind::Control && node.controlIndex < controls.size()) {
             const auto& descriptor = controls[node.controlIndex].descriptor;
-            const float labelWidth = ImGui::CalcTextSize(descriptor.label.c_str()).x;
-            const float frameWidth = descriptor.type == scripting::ControlType::Button ? labelWidth + 24.0F : 140.0F;
-            return labelWidth + frameWidth + ImGui::GetStyle().ItemInnerSpacing.x;
+            return luaLayoutControlWidth(node, descriptor);
         }
         return ImGui::GetFrameHeight();
     }
@@ -73,7 +115,8 @@ bool GuiRuntime::drawLuaLayoutNode(const scripting::LayoutNodeDescriptor& node,
             if (node.controlIndex >= controls.size()) {
                 return false;
             }
-            return drawDynamicControl(controls[node.controlIndex]);
+            return drawDynamicLayoutControl(controls[node.controlIndex],
+                                            luaLayoutControlWidth(node, controls[node.controlIndex].descriptor));
         case scripting::LayoutNodeKind::Text:
             ImGui::TextWrapped("%s", node.text.c_str());
             return false;
@@ -112,7 +155,12 @@ bool GuiRuntime::drawLuaFlowLayoutNode(const scripting::LayoutNodeDescriptor& no
     bool updated = false;
     for (std::size_t index = 0; index < node.children.size(); ++index) {
         const auto& child = node.children[index];
-        updated = drawLuaLayoutNode(child, controls, stableId, widgetIndex, earlyExit) || updated;
+        if (child.kind == scripting::LayoutNodeKind::Text) {
+            // flow 内文本按未换行宽度绘制，保持与换行估算一致。
+            ImGui::TextUnformatted(child.text.c_str());
+        } else {
+            updated = drawLuaLayoutNode(child, controls, stableId, widgetIndex, earlyExit) || updated;
+        }
         if (earlyExit && updated) {
             return true;
         }

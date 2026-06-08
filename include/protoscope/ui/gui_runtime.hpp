@@ -168,7 +168,11 @@ private:
                                    std::size_t& widgetIndex,
                                    bool earlyExit);
     bool drawDynamicControl(const scripting::ControlSnapshot& control);
-    bool drawDynamicButtonControl(const scripting::ControlSnapshot& control, const std::string& imguiLabel);
+    bool drawDynamicLayoutControl(const scripting::ControlSnapshot& control, float layoutWidth);
+    bool drawDynamicControl(const scripting::ControlSnapshot& control, std::optional<float> layoutWidth);
+    bool drawDynamicButtonControl(const scripting::ControlSnapshot& control,
+                                  const std::string& imguiLabel,
+                                  std::optional<float> layoutWidth = std::nullopt);
     bool drawDynamicCheckboxControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
     bool drawDynamicTextControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
     bool drawDynamicComboControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);

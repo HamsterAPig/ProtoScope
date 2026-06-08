@@ -15,16 +15,16 @@
 #include <initializer_list>
 #include <sstream>
 #include <stdexcept>
-#include <system_error>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
 namespace {
 
-using protoscope::tests::ScopedTempPath;
 using protoscope::tests::makeUniqueTempDir;
 using protoscope::tests::require;
+using protoscope::tests::ScopedTempPath;
 
 std::string readTextFile(const std::filesystem::path& path)
 {
@@ -274,8 +274,7 @@ void test_script_load_directory_rejected_before_lua_dofile()
     protoscope::scripting::ScriptHost host;
 
     require(!host.loadScriptFile(scriptDir.path().generic_string()), "目录路径不应作为 Lua 脚本加载");
-    require(host.lastError().find("不是普通文件") != std::string::npos,
-            "目录路径应在文件探测阶段给出明确错误");
+    require(host.lastError().find("不是普通文件") != std::string::npos, "目录路径应在文件探测阶段给出明确错误");
 }
 
 void test_script_optional_labels_allowed_for_compact_controls()
@@ -551,6 +550,39 @@ void test_script_flow_layout_snapshot()
             "label_position 缺省应为 left");
     require(controls[2].labelPosition == protoscope::scripting::ControlLabelPosition::Right,
             "label_position 显式 right 应解析");
+}
+
+void test_script_layout_width_controls_shorthand_snapshot()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("layout_width_controls_shorthand").generic_string()),
+            "layout_width_controls_shorthand 协议应可加载");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 1, "layout_width_controls_shorthand 协议应只产出一个 dock");
+    require(docks[0].descriptor.layout.has_value(), "layout_width_controls_shorthand 应解析 layout");
+
+    const auto& root = docks[0].descriptor.layout->root;
+    require(root.kind == protoscope::scripting::LayoutNodeKind::Column, "根节点应为 column");
+    require(root.children.size() == 3, "根节点应包含 flow、column 和 control 三项");
+
+    const auto& flow = root.children[0];
+    require(flow.kind == protoscope::scripting::LayoutNodeKind::Flow, "第一项应为 flow");
+    require(flow.children.size() == 2, "flow.controls 应展开为两个 control 子节点");
+    require(flow.children[0].controlId == "read_version", "flow.controls 第一个控件顺序错误");
+    require(flow.children[1].controlId == "device_id", "flow.controls 第二个控件顺序错误");
+
+    const auto& column = root.children[1];
+    require(column.kind == protoscope::scripting::LayoutNodeKind::Column, "第二项应为 column");
+    require(column.children.size() == 2, "column.controls 应展开为两个 control 子节点");
+    require(column.children[0].controlId == "timeout_ms", "column.controls 第一个控件顺序错误");
+    require(column.children[1].controlId == "scale", "column.controls 第二个控件顺序错误");
+
+    const auto& constrained = root.children[2];
+    require(constrained.kind == protoscope::scripting::LayoutNodeKind::Control, "第三项应为 control");
+    require(constrained.controlId == "mode", "第三项应绑定 mode");
+    require(constrained.minWidth.has_value() && *constrained.minWidth == 120.0F, "control min_width 应解析");
+    require(constrained.maxWidth.has_value() && *constrained.maxWidth == 240.0F, "control max_width 应解析");
 }
 
 void test_script_duplicate_label_controls_allowed()
@@ -1401,13 +1433,71 @@ void test_script_layout_unknown_type_fail()
     require(host.lastError().find("type 不支持") != std::string::npos, "未知 layout type 错误应包含 type 提示");
 }
 
+void test_script_layout_width_range_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_width_range").generic_string()),
+            "min_width 大于 max_width 的 layout control 应加载失败");
+    require(host.lastError().find("min_width 不能大于 max_width") != std::string::npos,
+            "宽度范围错误应包含 min_width 与 max_width 提示");
+}
+
+void test_script_layout_width_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_width_type").generic_string()),
+            "非数字 layout control 宽度应加载失败");
+    require(host.lastError().find("min_width 必须是 number") != std::string::npos, "宽度类型错误应包含 number 提示");
+}
+
+void test_script_layout_width_non_positive_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_width_non_positive").generic_string()),
+            "非正 layout control 宽度应加载失败");
+    require(host.lastError().find("min_width 必须是正数") != std::string::npos, "非正宽度错误应包含正数提示");
+}
+
+void test_script_layout_children_controls_conflict_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_children_controls").generic_string()),
+            "同时声明 children 和 controls 的 layout 容器应加载失败");
+    require(host.lastError().find("不能同时声明 children 和 controls") != std::string::npos,
+            "children/controls 混用错误应包含互斥提示");
+}
+
+void test_script_layout_shortcut_unknown_control_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_shortcut_unknown_control").generic_string()),
+            "controls 简写引用未知控件应加载失败");
+    require(host.lastError().find("未声明控件") != std::string::npos, "简写未知控件错误应包含未声明控件提示");
+}
+
+void test_script_layout_shortcut_duplicate_control_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(
+        !host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_shortcut_duplicate_control").generic_string()),
+        "controls 简写重复引用控件应加载失败");
+    require(host.lastError().find("重复引用控件") != std::string::npos, "简写重复控件错误应包含重复控件提示");
+}
+
+void test_script_layout_shortcut_missing_control_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_shortcut_missing_control").generic_string()),
+            "controls 简写遗漏控件应加载失败");
+    require(host.lastError().find("缺少控件") != std::string::npos, "简写遗漏控件错误应包含缺少控件提示");
+}
+
 void test_script_invalid_label_position_fail()
 {
     protoscope::scripting::ScriptHost host;
     require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_label_position").generic_string()),
             "非法 label_position 应加载失败");
-    require(host.lastError().find("label_position") != std::string::npos,
-            "非法 label_position 错误应包含字段名");
+    require(host.lastError().find("label_position") != std::string::npos, "非法 label_position 错误应包含字段名");
 }
 
 void test_script_runtime_error_logged()
@@ -1892,10 +1982,10 @@ void test_config_wave_mode_invalid_fallback()
            "    control_mode: weird\n"
            "    display_formula: wrong\n"
            "    channel_card_width_mode: weird\n"
-            "    channel_double_click_action: weird\n"
-            "    x_axis_double_click_action: weird\n"
-            "    fullscreen_mode: weird\n"
-            "    channel_card_fixed_width: 0\n"
+           "    channel_double_click_action: weird\n"
+           "    x_axis_double_click_action: weird\n"
+           "    fullscreen_mode: weird\n"
+           "    channel_card_fixed_width: 0\n"
            "    channel_card_adaptive_ratio: -0.5\n"
            "    vertical_auto_fit_multiplier: 0\n";
     out.close();
@@ -2684,6 +2774,7 @@ static const TestCase kAllTests[] = {
     {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
     {"script_form_layout_snapshot", &test_script_form_layout_snapshot},
     {"script_flow_layout_snapshot", &test_script_flow_layout_snapshot},
+    {"script_layout_width_controls_shorthand_snapshot", &test_script_layout_width_controls_shorthand_snapshot},
     {"script_duplicate_label_controls_allowed", &test_script_duplicate_label_controls_allowed},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
@@ -2745,6 +2836,13 @@ static const TestCase kAllTests[] = {
     {"script_form_layout_duplicate_control_fail", &test_script_form_layout_duplicate_control_fail},
     {"script_form_layout_missing_control_fail", &test_script_form_layout_missing_control_fail},
     {"script_layout_unknown_type_fail", &test_script_layout_unknown_type_fail},
+    {"script_layout_width_range_fail", &test_script_layout_width_range_fail},
+    {"script_layout_width_type_fail", &test_script_layout_width_type_fail},
+    {"script_layout_width_non_positive_fail", &test_script_layout_width_non_positive_fail},
+    {"script_layout_children_controls_conflict_fail", &test_script_layout_children_controls_conflict_fail},
+    {"script_layout_shortcut_unknown_control_fail", &test_script_layout_shortcut_unknown_control_fail},
+    {"script_layout_shortcut_duplicate_control_fail", &test_script_layout_shortcut_duplicate_control_fail},
+    {"script_layout_shortcut_missing_control_fail", &test_script_layout_shortcut_missing_control_fail},
     {"script_invalid_label_position_fail", &test_script_invalid_label_position_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"script_reload_invalid_types_fail_without_throw", &test_script_reload_invalid_types_fail_without_throw},
@@ -2993,7 +3091,8 @@ static const TestCase kAllTests[] = {
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_display_data_uses_visible_window_only", &test_wave_display_data_uses_visible_window_only},
     {"wave_main_render_data_uses_viewport_window", &test_wave_main_render_data_uses_viewport_window},
-    {"wave_main_render_data_uses_sample_frequency_viewport", &test_wave_main_render_data_uses_sample_frequency_viewport},
+    {"wave_main_render_data_uses_sample_frequency_viewport",
+     &test_wave_main_render_data_uses_sample_frequency_viewport},
     {"wave_overview_display_data_is_budgeted", &test_wave_overview_display_data_is_budgeted},
     {"wave_overview_bounds_use_full_history_window", &test_wave_overview_bounds_use_full_history_window},
     {"wave_x_axis_double_click_bounds_selects_full_history",

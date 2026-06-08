@@ -3,6 +3,7 @@
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/ui_theme.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 namespace protoscope::ui {
@@ -34,6 +35,60 @@ namespace {
         }
         ImGui::TextUnformatted(descriptor.label.c_str());
         ImGui::SameLine();
+    }
+
+    class ScopedImGuiItemWidth final {
+    public:
+        explicit ScopedImGuiItemWidth(std::optional<float> width) : active_(width.has_value())
+        {
+            if (active_) {
+                ImGui::PushItemWidth(*width);
+            }
+        }
+
+        ~ScopedImGuiItemWidth()
+        {
+            if (active_) {
+                ImGui::PopItemWidth();
+            }
+        }
+
+    private:
+        bool active_{false};
+    };
+
+    bool isLuaDynamicInputControl(scripting::ControlType type)
+    {
+        return type == scripting::ControlType::InputText || type == scripting::ControlType::InputInt ||
+               type == scripting::ControlType::InputFloat || type == scripting::ControlType::Combo ||
+               type == scripting::ControlType::ElfSymbolCombo;
+    }
+
+    float luaDynamicControlLabelPartWidth(const scripting::ControlDescriptor& descriptor)
+    {
+        if (descriptor.label.empty()) {
+            return 0.0F;
+        }
+        return ImGui::CalcTextSize(descriptor.label.c_str()).x + ImGui::GetStyle().ItemInnerSpacing.x;
+    }
+
+    std::optional<float> luaDynamicControlItemWidth(const scripting::ControlDescriptor& descriptor,
+                                                    std::optional<float> layoutWidth)
+    {
+        if (!layoutWidth.has_value() || !isLuaDynamicInputControl(descriptor.type)) {
+            return std::nullopt;
+        }
+        return std::max(1.0F, *layoutWidth - luaDynamicControlLabelPartWidth(descriptor));
+    }
+
+    void reserveLuaDynamicControlWidth(float startX, float layoutWidth)
+    {
+        const float drawnWidth = ImGui::GetItemRectMax().x - startX;
+        if (layoutWidth <= drawnWidth) {
+            return;
+        }
+        ImGui::SameLine(0.0F, 0.0F);
+        ImGui::Dummy(ImVec2(layoutWidth - drawnWidth, 0.0F));
     }
 
     float compactLogToolbarHeight()
@@ -892,31 +947,57 @@ void GuiRuntime::drawScriptDock()
 
 bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control)
 {
+    return drawDynamicControl(control, std::nullopt);
+}
+
+bool GuiRuntime::drawDynamicLayoutControl(const scripting::ControlSnapshot& control, float layoutWidth)
+{
+    return drawDynamicControl(control, layoutWidth);
+}
+
+bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, std::optional<float> layoutWidth)
+{
     const auto& descriptor = control.descriptor;
     const std::string imguiLabel = luaControlImGuiLabel(descriptor);
     const std::string inputLabel = luaControlInputLabel(descriptor);
+    const float startX = ImGui::GetCursorScreenPos().x;
+    const ScopedImGuiItemWidth itemWidth(luaDynamicControlItemWidth(descriptor, layoutWidth));
+    bool updated = false;
     switch (descriptor.type) {
         case scripting::ControlType::Button:
-            return drawDynamicButtonControl(control, imguiLabel);
+            updated = drawDynamicButtonControl(control, imguiLabel, layoutWidth);
+            break;
         case scripting::ControlType::Checkbox:
-            return drawDynamicCheckboxControl(control, inputLabel);
+            updated = drawDynamicCheckboxControl(control, inputLabel);
+            break;
         case scripting::ControlType::InputText:
-            return drawDynamicTextControl(control, inputLabel);
+            updated = drawDynamicTextControl(control, inputLabel);
+            break;
         case scripting::ControlType::Combo:
-            return drawDynamicComboControl(control, inputLabel);
+            updated = drawDynamicComboControl(control, inputLabel);
+            break;
         case scripting::ControlType::ElfSymbolCombo:
-            return drawDynamicElfSymbolComboControl(control, inputLabel);
+            updated = drawDynamicElfSymbolComboControl(control, inputLabel);
+            break;
         case scripting::ControlType::InputInt:
-            return drawDynamicIntControl(control, inputLabel);
+            updated = drawDynamicIntControl(control, inputLabel);
+            break;
         case scripting::ControlType::InputFloat:
-            return drawDynamicFloatControl(control, inputLabel);
+            updated = drawDynamicFloatControl(control, inputLabel);
+            break;
     }
-    return false;
+    if (layoutWidth.has_value()) {
+        reserveLuaDynamicControlWidth(startX, *layoutWidth);
+    }
+    return updated;
 }
 
-bool GuiRuntime::drawDynamicButtonControl(const scripting::ControlSnapshot& control, const std::string& imguiLabel)
+bool GuiRuntime::drawDynamicButtonControl(const scripting::ControlSnapshot& control,
+                                          const std::string& imguiLabel,
+                                          std::optional<float> layoutWidth)
 {
-    if (ImGui::Button(imguiLabel.c_str())) {
+    const ImVec2 size(layoutWidth.value_or(0.0F), 0.0F);
+    if (ImGui::Button(imguiLabel.c_str(), size)) {
         application_.updateControlValue(control.descriptor.id, true);
         return true;
     }

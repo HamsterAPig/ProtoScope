@@ -691,6 +691,51 @@ std::optional<float> readOptionalFloatField(
     return static_cast<float>(number);
 }
 
+bool hasLuaTableField(const sol::table& table, std::string_view field)
+{
+    const sol::object value = table[std::string(field)];
+    return value.valid() && value.get_type() != sol::type::lua_nil;
+}
+
+bool readOptionalPositiveFloatField(const sol::table& table,
+                                    std::string_view field,
+                                    const std::string& path,
+                                    std::optional<float>& result,
+                                    std::string& error)
+{
+    const sol::object value = table[std::string(field)];
+    if (!value.valid() || value.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!value.is<double>() && !value.is<int>()) {
+        error = path + "." + std::string(field) + " 必须是 number";
+        return false;
+    }
+    const double number = value.is<double>() ? value.as<double>() : static_cast<double>(value.as<int>());
+    if (!std::isfinite(number) || number <= 0.0) {
+        error = path + "." + std::string(field) + " 必须是正数";
+        return false;
+    }
+    result = static_cast<float>(number);
+    return true;
+}
+
+bool readLayoutControlWidthFields(const sol::table& table,
+                                  const std::string& path,
+                                  LayoutNodeDescriptor& node,
+                                  std::string& error)
+{
+    if (!readOptionalPositiveFloatField(table, "min_width", path, node.minWidth, error) ||
+        !readOptionalPositiveFloatField(table, "max_width", path, node.maxWidth, error)) {
+        return false;
+    }
+    if (node.minWidth.has_value() && node.maxWidth.has_value() && *node.minWidth > *node.maxWidth) {
+        error = path + ".min_width 不能大于 max_width";
+        return false;
+    }
+    return true;
+}
+
 bool registerLayoutControlUse(const DockDescriptor& dock,
                               const std::unordered_map<std::string, std::size_t>& controlsById,
                               std::unordered_set<std::string>& usedControls,
@@ -759,6 +804,68 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
         children.push_back(std::move(*child));
     }
     return children;
+}
+
+std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutControlShortcutChildren(
+    const DockDescriptor& dock,
+    const sol::table& table,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    const std::string& path,
+    std::string& error)
+{
+    const sol::object controlsObject = table["controls"];
+    if (!controlsObject.valid() || controlsObject.get_type() == sol::type::lua_nil ||
+        !controlsObject.is<sol::table>()) {
+        error = path + ".controls 必须是非空字符串数组";
+        return std::nullopt;
+    }
+    const auto controlsTable = controlsObject.as<sol::table>();
+    if (controlsTable.size() == 0) {
+        error = path + ".controls 必须是非空字符串数组";
+        return std::nullopt;
+    }
+
+    std::vector<LayoutNodeDescriptor> children;
+    children.reserve(controlsTable.size());
+    for (std::size_t index = 1; index <= controlsTable.size(); ++index) {
+        const sol::object controlObject = controlsTable[index];
+        const std::string controlPath = path + ".controls[" + std::to_string(index) + "]";
+        if (!controlObject.is<std::string>()) {
+            error = controlPath + " 必须是字符串";
+            return std::nullopt;
+        }
+
+        LayoutNodeDescriptor child;
+        child.kind = LayoutNodeKind::Control;
+        // controls 简写只展开成 control 子节点，仍复用统一的控件引用校验。
+        if (!registerLayoutControlUse(
+                dock, controlsById, usedControls, controlObject.as<std::string>(), controlPath, child, error)) {
+            return std::nullopt;
+        }
+        children.push_back(std::move(child));
+    }
+    return children;
+}
+
+std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutContainerChildren(
+    const DockDescriptor& dock,
+    const sol::table& table,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    const std::string& path,
+    std::string& error)
+{
+    const bool hasChildren = hasLuaTableField(table, "children");
+    const bool hasControls = hasLuaTableField(table, "controls");
+    if (hasChildren && hasControls) {
+        error = path + " 不能同时声明 children 和 controls";
+        return std::nullopt;
+    }
+    if (hasControls) {
+        return parseLayoutControlShortcutChildren(dock, table, controlsById, usedControls, path, error);
+    }
+    return parseLayoutChildren(dock, table, controlsById, usedControls, path, error);
 }
 
 std::optional<std::size_t> readLayoutTableColumnCount(const sol::table& table,
@@ -898,7 +1005,7 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
             node.spacing = *spacing;
             node.runSpacing = *runSpacing;
         }
-        auto children = parseLayoutChildren(dock, table, controlsById, usedControls, path, error);
+        auto children = parseLayoutContainerChildren(dock, table, controlsById, usedControls, path, error);
         if (!children.has_value()) {
             return std::nullopt;
         }
@@ -939,6 +1046,9 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
         }
         if (!registerLayoutControlUse(
                 dock, controlsById, usedControls, idObject.as<std::string>(), path, node, error)) {
+            return std::nullopt;
+        }
+        if (!readLayoutControlWidthFields(table, path, node, error)) {
             return std::nullopt;
         }
         return node;
