@@ -1258,7 +1258,7 @@ ByteRingBuffer::LinearReadView FrameStreamParser::ensureLinearWindow(std::size_t
     return buffer_.linearRead(0, count, linearScratch_);
 }
 
-void FrameStreamParser::buildCompiledFrames()
+void FrameStreamParser::resetCompiledFrameIndexes()
 {
     compiledFrames_.clear();
     compiledFrames_.reserve(frames_.size());
@@ -1269,55 +1269,93 @@ void FrameStreamParser::buildCompiledFrames()
     for (auto& bucket : sortedHeaderFirstByteIndex_) {
         bucket.clear();
     }
+}
 
-    for (std::size_t index = 0; index < frames_.size(); ++index) {
-        const auto& frame = frames_[index];
-        CompiledFrame compiled;
-        compiled.index = index;
-        compiled.hasHeader = !frame.header.empty();
-        compiled.firstHeaderByte = compiled.hasHeader ? frame.header.front() : 0;
-        compiled.minFrameLength = frame.header.size();
-        if (frame.size.has_value()) {
-            compiled.minFrameLength = *frame.size;
-        } else if (frame.len.has_value()) {
-            std::size_t lengthFieldEnd = 0;
-            if (checkedAddSize(frame.len->offset, streamValueWidth(frame.len->type), lengthFieldEnd)) {
-                compiled.minFrameLength = std::max(compiled.minFrameLength, lengthFieldEnd);
-            } else {
-                compiled.minFrameLength = (std::numeric_limits<std::size_t>::max)();
-            }
-        }
+FrameStreamParser::CompiledFrame
+FrameStreamParser::compileFrameMetadata(std::size_t index, const StreamFrameDefinition& frame) const
+{
+    CompiledFrame compiled;
+    compiled.index = index;
+    compiled.hasHeader = !frame.header.empty();
+    compiled.firstHeaderByte = compiled.hasHeader ? frame.header.front() : 0;
+    compiled.minFrameLength = frame.header.size();
 
-        for (const auto& field : frame.fields) {
-            if (field.count.fixed.has_value()) {
-                std::size_t fieldBytes = 0;
-                if (!checkedMultiplySize(*field.count.fixed, streamValueWidth(field.type), fieldBytes) ||
-                    !checkedAddSize(compiled.fixedFieldBytes, fieldBytes, compiled.fixedFieldBytes)) {
-                    compiled.fixedFieldBytes = (std::numeric_limits<std::size_t>::max)();
-                    break;
-                }
-            }
-        }
+    applyDeclaredFrameLengthMinimum(frame, compiled);
+    accumulateFixedFieldBytes(frame, compiled);
+    applyFixedFieldMinimum(frame, compiled);
+    return compiled;
+}
 
-        std::size_t fixedMinimum = 0;
-        if (checkedAddSize(frame.header.size(), compiled.fixedFieldBytes, fixedMinimum)) {
-            compiled.minFrameLength = std::max(compiled.minFrameLength, fixedMinimum);
+void FrameStreamParser::applyDeclaredFrameLengthMinimum(const StreamFrameDefinition& frame,
+                                                        CompiledFrame& compiled) const
+{
+    if (frame.size.has_value()) {
+        compiled.minFrameLength = *frame.size;
+        return;
+    }
+
+    if (frame.len.has_value()) {
+        std::size_t lengthFieldEnd = 0;
+        if (checkedAddSize(frame.len->offset, streamValueWidth(frame.len->type), lengthFieldEnd)) {
+            compiled.minFrameLength = std::max(compiled.minFrameLength, lengthFieldEnd);
         } else {
             compiled.minFrameLength = (std::numeric_limits<std::size_t>::max)();
         }
-        maxHeaderLength_ = std::max(maxHeaderLength_, frame.header.size());
-        compiledFrames_.push_back(compiled);
-        if (compiled.hasHeader) {
-            headerFirstByteIndex_[compiled.firstHeaderByte].push_back(index);
-            sortedHeaderFirstByteIndex_[compiled.firstHeaderByte].push_back(index);
+    }
+}
+
+void FrameStreamParser::accumulateFixedFieldBytes(const StreamFrameDefinition& frame,
+                                                  CompiledFrame& compiled) const
+{
+    for (const auto& field : frame.fields) {
+        if (field.count.fixed.has_value()) {
+            std::size_t fieldBytes = 0;
+            if (!checkedMultiplySize(*field.count.fixed, streamValueWidth(field.type), fieldBytes) ||
+                !checkedAddSize(compiled.fixedFieldBytes, fieldBytes, compiled.fixedFieldBytes)) {
+                compiled.fixedFieldBytes = (std::numeric_limits<std::size_t>::max)();
+                break;
+            }
         }
     }
+}
 
+void FrameStreamParser::applyFixedFieldMinimum(const StreamFrameDefinition& frame, CompiledFrame& compiled) const
+{
+    std::size_t fixedMinimum = 0;
+    if (checkedAddSize(frame.header.size(), compiled.fixedFieldBytes, fixedMinimum)) {
+        compiled.minFrameLength = std::max(compiled.minFrameLength, fixedMinimum);
+    } else {
+        compiled.minFrameLength = (std::numeric_limits<std::size_t>::max)();
+    }
+}
+
+void FrameStreamParser::registerCompiledFrame(const StreamFrameDefinition& frame, const CompiledFrame& compiled)
+{
+    maxHeaderLength_ = std::max(maxHeaderLength_, frame.header.size());
+    compiledFrames_.push_back(compiled);
+    if (compiled.hasHeader) {
+        headerFirstByteIndex_[compiled.firstHeaderByte].push_back(compiled.index);
+        sortedHeaderFirstByteIndex_[compiled.firstHeaderByte].push_back(compiled.index);
+    }
+}
+
+void FrameStreamParser::sortCompiledFrameHeaderBuckets()
+{
     for (auto& bucket : sortedHeaderFirstByteIndex_) {
         std::stable_sort(bucket.begin(), bucket.end(), [this](std::size_t left, std::size_t right) {
             return compiledFrames_[left].minFrameLength > compiledFrames_[right].minFrameLength;
         });
     }
+}
+
+void FrameStreamParser::buildCompiledFrames()
+{
+    resetCompiledFrameIndexes();
+    for (std::size_t index = 0; index < frames_.size(); ++index) {
+        const auto& frame = frames_[index];
+        registerCompiledFrame(frame, compileFrameMetadata(index, frame));
+    }
+    sortCompiledFrameHeaderBuckets();
 }
 
 std::optional<std::size_t> FrameStreamParser::resolveFieldCount(const StreamFieldDefinition& field,

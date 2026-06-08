@@ -328,6 +328,13 @@ private:
                           std::size_t frameLength,
                           const FieldDecodePlan& plan,
                           StreamFieldMap& parsedFields) const;
+    void resetCompiledFrameIndexes();
+    [[nodiscard]] CompiledFrame compileFrameMetadata(std::size_t index, const StreamFrameDefinition& frame) const;
+    void applyDeclaredFrameLengthMinimum(const StreamFrameDefinition& frame, CompiledFrame& compiled) const;
+    void accumulateFixedFieldBytes(const StreamFrameDefinition& frame, CompiledFrame& compiled) const;
+    void applyFixedFieldMinimum(const StreamFrameDefinition& frame, CompiledFrame& compiled) const;
+    void registerCompiledFrame(const StreamFrameDefinition& frame, const CompiledFrame& compiled);
+    void sortCompiledFrameHeaderBuckets();
     [[nodiscard]] std::size_t maxHeaderLength() const;
     [[nodiscard]] std::optional<CandidateMatch> findCandidate() const;
     AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
