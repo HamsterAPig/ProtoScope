@@ -751,12 +751,17 @@ void GuiRuntime::renderFrame()
 
     drawStatusBar();
     drawRegisteredDocks();
-    waveDockRenderer_.draw(showWaveDock_,
-                           waveFullscreenActive_,
-                           &waveFullscreenToggleRequested_,
-                           waveFullscreenActive_ &&
-                               waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus);
-    if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay) {
+    const bool waveOverlayFullscreen =
+        waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay;
+    if (!waveOverlayFullscreen) {
+        waveDockRenderer_.draw(showWaveDock_,
+                               waveFullscreenActive_,
+                               &waveFullscreenToggleRequested_,
+                               waveFullscreenActive_ &&
+                                   waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus);
+    }
+    if (waveOverlayFullscreen) {
+        // Overlay 已完整绘制波形，跳过底层 Dock 可避免同一滚轮输入被处理两次。
         waveDockRenderer_.drawOverlay(waveFullscreenActive_, &waveFullscreenToggleRequested_);
     }
     drawRegisteredDialogs();
