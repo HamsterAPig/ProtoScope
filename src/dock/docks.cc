@@ -78,6 +78,34 @@ namespace {
         return flattened;
     }
 
+    std::string csvEscape(std::string_view text)
+    {
+        std::string escaped;
+        escaped.reserve(text.size() + 2U);
+        escaped.push_back('"');
+        for (const char ch : text) {
+            if (ch == '"') {
+                escaped.push_back('"');
+            }
+            escaped.push_back(ch);
+        }
+        escaped.push_back('"');
+        return escaped;
+    }
+
+    void appendCsvField(std::string& line, std::string_view text)
+    {
+        if (!line.empty()) {
+            line.push_back(',');
+        }
+        line.append(csvEscape(text));
+    }
+
+    std::string textOrDash(std::string_view text)
+    {
+        return text.empty() ? std::string("-") : std::string(text);
+    }
+
     std::string uppercaseAscii(std::string text)
     {
         for (auto& ch : text) {
@@ -310,6 +338,64 @@ std::vector<const RequestTraceRow*> filteredRequestTraceRows(const std::deque<Re
         }
     }
     return filtered;
+}
+
+std::string formatRequestTraceDuration(const RequestTraceRow& row)
+{
+    if (row.durationMs == 0U && row.state == RequestTraceState::Queued) {
+        return "-";
+    }
+    return std::to_string(row.durationMs) + " ms";
+}
+
+std::string formatRequestTraceDetail(const RequestTraceRow& row)
+{
+    if (!row.error.empty()) {
+        return row.error;
+    }
+    return row.guardState;
+}
+
+std::string formatRequestTraceRowCsv(const RequestTraceRow& row, bool showTimestamps)
+{
+    std::string line;
+    if (showTimestamps) {
+        appendCsvField(line, formatTimestampText(row.timestampMs));
+    }
+    appendCsvField(line, row.id == 0U ? std::string("-") : std::to_string(row.id));
+    appendCsvField(line, requestTraceKindLabel(row.kind));
+    appendCsvField(line, requestTraceStateLabel(row.state));
+    appendCsvField(line, textOrDash(row.tag));
+    appendCsvField(line, textOrDash(row.endpoint));
+    appendCsvField(line, std::to_string(row.attempt) + "/" + std::to_string(row.maxAttempts));
+    appendCsvField(line, std::to_string(row.bytes));
+    appendCsvField(line, formatRequestTraceDuration(row));
+    appendCsvField(line, textOrDash(formatRequestTraceDetail(row)));
+    return line;
+}
+
+std::string formatRequestTraceRowsCsv(std::span<const RequestTraceRow> rows, bool showTimestamps)
+{
+    std::string csv;
+    if (showTimestamps) {
+        appendCsvField(csv, "时间");
+    }
+    appendCsvField(csv, "ID");
+    appendCsvField(csv, "类型");
+    appendCsvField(csv, "状态");
+    appendCsvField(csv, "Tag");
+    appendCsvField(csv, "端点");
+    appendCsvField(csv, "尝试");
+    appendCsvField(csv, "字节");
+    appendCsvField(csv, "耗时");
+    appendCsvField(csv, "详情");
+    csv.push_back('\n');
+
+    for (const auto& row : rows) {
+        csv.append(formatRequestTraceRowCsv(row, showTimestamps));
+        csv.push_back('\n');
+    }
+    return csv;
 }
 
 std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex)

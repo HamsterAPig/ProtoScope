@@ -134,6 +134,10 @@ bool isRequestTraceFailure(RequestTraceState state);
 bool matchesRequestTraceFilter(const RequestTraceRow& row, const RequestTraceFilterState& filter);
 std::vector<const RequestTraceRow*> filteredRequestTraceRows(const std::deque<RequestTraceRow>& rows,
                                                             const RequestTraceFilterState& filter);
+std::string formatRequestTraceDuration(const RequestTraceRow& row);
+std::string formatRequestTraceDetail(const RequestTraceRow& row);
+std::string formatRequestTraceRowCsv(const RequestTraceRow& row, bool showTimestamps);
+std::string formatRequestTraceRowsCsv(std::span<const RequestTraceRow> rows, bool showTimestamps);
 
 struct CommDockState {
     transport::TransportKind kind{transport::TransportKind::TcpClient};

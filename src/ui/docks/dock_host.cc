@@ -155,14 +155,6 @@ namespace {
         drawIconTooltip("按请求 ID、类型、状态、tag、端点、guard 状态和错误筛选");
     }
 
-    std::string requestTraceDurationText(const dock::RequestTraceRow& row)
-    {
-        if (row.durationMs == 0U && row.state == dock::RequestTraceState::Queued) {
-            return "-";
-        }
-        return std::to_string(row.durationMs) + " ms";
-    }
-
 } // namespace
 
 void GuiRuntime::drawStatusBar()
@@ -856,7 +848,8 @@ void GuiRuntime::drawRequestTraceDock()
     }
 
     auto& trace = application_.docks().requestTraceState();
-    if (beginToolbarGroup("request_trace_toolbar", nullptr, ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.y)) {
+    const float toolbarHeight = compactLogToolbarHeight();
+    if (beginToolbarGroup("request_trace_toolbar", nullptr, toolbarHeight)) {
         ImGui::TextUnformatted(PROTOSCOPE_ICON_EXCHANGE " 请求时间线");
         ImGui::SameLine();
         drawRequestTraceKeywordFilterInput("关键字##request_trace_keyword", trace.filter, 180.0F);
@@ -874,6 +867,10 @@ void GuiRuntime::drawRequestTraceDock()
         ImGui::SameLine();
         drawTransferToolbarToggleButton(PROTOSCOPE_ICON_PAUSE " 暂停", trace.pauseScroll, "暂停自动滚动");
         ImGui::SameLine();
+        if (drawTransferToolbarButton("导出", "导出当前筛选后的请求追踪 CSV", false)) {
+            openRequestTraceExportDialog();
+        }
+        ImGui::SameLine();
         if (drawTransferToolbarDangerButton(PROTOSCOPE_ICON_TRASH " 清空", "清空请求追踪时间线")) {
             application_.docks().clearRequestTraceRows();
         }
@@ -881,67 +878,90 @@ void GuiRuntime::drawRequestTraceDock()
     }
 
     const auto rows = dock::filteredRequestTraceRows(trace.rows, trace.filter);
-    if (ImGui::BeginChild("##request_trace_rows", ImVec2(0.0F, 0.0F), true)) {
-        if (rows.empty()) {
-            ImGui::TextDisabled("暂无请求事件");
-        } else if (ImGui::BeginTable("##request_trace_table",
-                                     trace.showTimestamps ? 10 : 9,
-                                     ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                                         ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
-                                         ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp)) {
-            if (trace.showTimestamps) {
-                ImGui::TableSetupColumn("时间", ImGuiTableColumnFlags_WidthFixed, 96.0F);
-            }
-            ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 64.0F);
-            ImGui::TableSetupColumn("类型", ImGuiTableColumnFlags_WidthFixed, 72.0F);
-            ImGui::TableSetupColumn("状态", ImGuiTableColumnFlags_WidthFixed, 86.0F);
-            ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_WidthStretch, 1.0F);
-            ImGui::TableSetupColumn("端点", ImGuiTableColumnFlags_WidthStretch, 1.2F);
-            ImGui::TableSetupColumn("尝试", ImGuiTableColumnFlags_WidthFixed, 70.0F);
-            ImGui::TableSetupColumn("字节", ImGuiTableColumnFlags_WidthFixed, 64.0F);
-            ImGui::TableSetupColumn("耗时", ImGuiTableColumnFlags_WidthFixed, 82.0F);
-            ImGui::TableSetupColumn("详情", ImGuiTableColumnFlags_WidthStretch, 1.6F);
-            ImGui::TableHeadersRow();
-
-            for (const auto* row : rows) {
-                ImGui::TableNextRow();
-                int column = 0;
-                if (trace.showTimestamps) {
-                    ImGui::TableSetColumnIndex(column++);
-                    ImGui::TextUnformatted(formatTimestamp(row->timestampMs).c_str());
-                }
-                ImGui::TableSetColumnIndex(column++);
-                if (row->id == 0U) {
-                    ImGui::TextUnformatted("-");
-                } else {
-                    ImGui::Text("%llu", static_cast<unsigned long long>(row->id));
-                }
-                ImGui::TableSetColumnIndex(column++);
-                ImGui::TextUnformatted(dock::requestTraceKindLabel(row->kind));
-                ImGui::TableSetColumnIndex(column++);
-                ImGui::TextUnformatted(dock::requestTraceStateLabel(row->state));
-                ImGui::TableSetColumnIndex(column++);
-                ImGui::TextUnformatted(row->tag.empty() ? "-" : row->tag.c_str());
-                ImGui::TableSetColumnIndex(column++);
-                ImGui::TextUnformatted(row->endpoint.empty() ? "-" : row->endpoint.c_str());
-                ImGui::TableSetColumnIndex(column++);
-                ImGui::Text("%u/%u", row->attempt, row->maxAttempts);
-                ImGui::TableSetColumnIndex(column++);
-                ImGui::Text("%zu", row->bytes);
-                ImGui::TableSetColumnIndex(column++);
-                const auto duration = requestTraceDurationText(*row);
-                ImGui::TextUnformatted(duration.c_str());
-                ImGui::TableSetColumnIndex(column++);
-                const std::string detail = !row->error.empty() ? row->error : row->guardState;
-                ImGui::TextUnformatted(detail.empty() ? "-" : detail.c_str());
-            }
-            ImGui::EndTable();
-            if (!trace.pauseScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2.0F) {
-                ImGui::SetScrollHereY(1.0F);
-            }
+    if (rows.empty()) {
+        ImGui::TextDisabled("暂无请求事件");
+    } else if (ImGui::BeginTable("##request_trace_table",
+                                 trace.showTimestamps ? 10 : 9,
+                                 ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                     ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+                                     ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp,
+                                 ImVec2(0.0F, 0.0F))) {
+        if (trace.showTimestamps) {
+            ImGui::TableSetupColumn("时间", ImGuiTableColumnFlags_WidthFixed, 96.0F);
         }
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 64.0F);
+        ImGui::TableSetupColumn("类型", ImGuiTableColumnFlags_WidthFixed, 72.0F);
+        ImGui::TableSetupColumn("状态", ImGuiTableColumnFlags_WidthFixed, 86.0F);
+        ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+        ImGui::TableSetupColumn("端点", ImGuiTableColumnFlags_WidthStretch, 1.2F);
+        ImGui::TableSetupColumn("尝试", ImGuiTableColumnFlags_WidthFixed, 70.0F);
+        ImGui::TableSetupColumn("字节", ImGuiTableColumnFlags_WidthFixed, 64.0F);
+        ImGui::TableSetupColumn("耗时", ImGuiTableColumnFlags_WidthFixed, 82.0F);
+        ImGui::TableSetupColumn("详情", ImGuiTableColumnFlags_WidthStretch, 1.6F);
+        ImGui::TableHeadersRow();
+
+        std::size_t rowIndex = 0;
+        for (const auto* row : rows) {
+            ImGui::TableNextRow();
+            const float rowMinY = ImGui::GetCursorScreenPos().y;
+            int column = 0;
+            if (trace.showTimestamps) {
+                ImGui::TableSetColumnIndex(column++);
+                ImGui::TextUnformatted(formatTimestamp(row->timestampMs).c_str());
+            }
+            ImGui::TableSetColumnIndex(column++);
+            if (row->id == 0U) {
+                ImGui::TextUnformatted("-");
+            } else {
+                ImGui::Text("%llu", static_cast<unsigned long long>(row->id));
+            }
+            ImGui::TableSetColumnIndex(column++);
+            ImGui::TextUnformatted(dock::requestTraceKindLabel(row->kind));
+            ImGui::TableSetColumnIndex(column++);
+            ImGui::TextUnformatted(dock::requestTraceStateLabel(row->state));
+            ImGui::TableSetColumnIndex(column++);
+            ImGui::TextUnformatted(row->tag.empty() ? "-" : row->tag.c_str());
+            ImGui::TableSetColumnIndex(column++);
+            ImGui::TextUnformatted(row->endpoint.empty() ? "-" : row->endpoint.c_str());
+            ImGui::TableSetColumnIndex(column++);
+            ImGui::Text("%u/%u", row->attempt, row->maxAttempts);
+            ImGui::TableSetColumnIndex(column++);
+            ImGui::Text("%zu", row->bytes);
+            ImGui::TableSetColumnIndex(column++);
+            const auto duration = dock::formatRequestTraceDuration(*row);
+            ImGui::TextUnformatted(duration.c_str());
+            ImGui::TableSetColumnIndex(column++);
+            std::string detail = dock::formatRequestTraceDetail(*row);
+            if (detail.empty()) {
+                detail = "-";
+            }
+            ImGui::TextUnformatted(detail.c_str());
+
+            // 右键菜单不改表格形态，只在整行热区内打开复制操作。
+            ImGui::PushID(static_cast<int>(rowIndex++));
+            const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
+            const ImVec2 rowMin(ImGui::GetWindowPos().x, rowMinY);
+            const ImVec2 rowMax(ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), rowMinY + rowHeight);
+            if (ImGui::IsMouseHoveringRect(rowMin, rowMax) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                ImGui::OpenPopup("##request_trace_row_menu");
+            }
+            if (ImGui::BeginPopup("##request_trace_row_menu")) {
+                const auto copyLine = dock::formatRequestTraceRowCsv(*row, trace.showTimestamps);
+                if (ImGui::MenuItem("复制本行")) {
+                    ImGui::SetClipboardText(copyLine.c_str());
+                }
+                if (ImGui::MenuItem("复制详情")) {
+                    ImGui::SetClipboardText(detail.c_str());
+                }
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
+        if (!trace.pauseScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2.0F) {
+            ImGui::SetScrollHereY(1.0F);
+        }
+        ImGui::EndTable();
     }
-    ImGui::EndChild();
     ImGui::End();
 }
 

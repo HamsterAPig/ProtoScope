@@ -223,6 +223,7 @@ private:
     void openTransferLogExportDialog();
     void openHostLogExportDialog();
     void openScriptLogExportDialog();
+    void openRequestTraceExportDialog();
     void openLogExportDialog(LogExportTarget target);
     void openElfStaticAddressDialog();
     void importRawCaptureFromPath(const std::filesystem::path& path);
@@ -233,6 +234,7 @@ private:
     void exportSessionPackageToPath(const std::filesystem::path& path);
     void exportWaveAnalysisReportToPath(const std::filesystem::path& path);
     void drawLogExportFileDialog();
+    void drawRequestTraceExportFileDialog();
     std::vector<dock::ReceiveRow> logExportRows(LogExportTarget target);
     bool exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path);
     bool exportLogRowsToPath(const std::filesystem::path& path,
@@ -240,6 +242,11 @@ private:
                              bool showTimestamps,
                              bool showHex,
                              std::string_view title);
+    std::vector<dock::RequestTraceRow> requestTraceExportRows();
+    bool exportRequestTraceToPath(const std::filesystem::path& path);
+    bool exportRequestTraceRowsToPath(const std::filesystem::path& path,
+                                      std::span<const dock::RequestTraceRow> rows,
+                                      bool showTimestamps);
     const FilteredLogRowsCache& filteredLogRowsCached(FilteredLogRowsCache& cache,
                                                       const std::deque<dock::ReceiveRow>& rows,
                                                       std::uint64_t version,
@@ -370,6 +377,10 @@ private:
     std::string logExportPath_;
     std::string logExportError_;
     std::string logExportDialogTitle_;
+    bool requestTraceExportDialogOpen_{false};
+    bool requestTraceExportDialogOpened_{false};
+    std::string requestTraceExportPath_;
+    std::string requestTraceExportError_;
     bool elfStaticAddressDialogOpen_{false};
     bool elfStaticAddressDialogOpened_{false};
     std::string elfStaticAddressPath_;

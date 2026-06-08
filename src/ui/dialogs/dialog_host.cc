@@ -517,6 +517,33 @@ void GuiRuntime::openScriptLogExportDialog()
     openLogExportDialog(LogExportTarget::Script);
 }
 
+void GuiRuntime::openRequestTraceExportDialog()
+{
+    const auto defaultPath = requestTraceExportPath_.empty() ? executableDir_ / "logs" / "request-trace.csv"
+                                                            : std::filesystem::path(requestTraceExportPath_);
+#if defined(_WIN32)
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"导出请求追踪",
+                                       L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       true,
+                                       L"csv",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        exportRequestTraceToPath(*path);
+    }
+#else
+    requestTraceExportPath_ = defaultPath.generic_string();
+    requestTraceExportError_.clear();
+    requestTraceExportDialogOpen_ = true;
+    requestTraceExportDialogOpened_ = false;
+#endif
+}
+
 void GuiRuntime::openLogExportDialog(LogExportTarget target)
 {
     const char* title = "收发数据日志";
@@ -903,6 +930,80 @@ bool GuiRuntime::exportLogRowsToPath(const std::filesystem::path& path,
     }
 }
 
+std::vector<dock::RequestTraceRow> GuiRuntime::requestTraceExportRows()
+{
+    const auto& trace = application_.docks().requestTraceState();
+    const auto filteredRows = dock::filteredRequestTraceRows(trace.rows, trace.filter);
+    std::vector<dock::RequestTraceRow> rows;
+    rows.reserve(filteredRows.size());
+    for (const auto* row : filteredRows) {
+        rows.push_back(*row);
+    }
+    return rows;
+}
+
+bool GuiRuntime::exportRequestTraceToPath(const std::filesystem::path& path)
+{
+    const auto& trace = application_.docks().requestTraceState();
+    const auto rows = requestTraceExportRows();
+    const bool exported = exportRequestTraceRowsToPath(path, rows, trace.showTimestamps);
+    if (exported) {
+        requestTraceExportPath_ = path.generic_string();
+        requestTraceExportDialogOpen_ = false;
+        requestTraceExportDialogOpened_ = false;
+    }
+    return exported;
+}
+
+bool GuiRuntime::exportRequestTraceRowsToPath(const std::filesystem::path& path,
+                                              std::span<const dock::RequestTraceRow> rows,
+                                              bool showTimestamps)
+{
+    auto fail = [&](std::string message) {
+        requestTraceExportError_ = "请求追踪导出失败: " + message;
+        application_.setStatusMessage(requestTraceExportError_);
+        return false;
+    };
+
+    if (path.empty()) {
+        return fail("导出路径为空");
+    }
+
+    try {
+        const auto parent = path.parent_path();
+        if (!parent.empty()) {
+            std::error_code directoryError;
+            std::filesystem::create_directories(parent, directoryError);
+            if (directoryError) {
+                return fail("创建目录失败: " + directoryError.message());
+            }
+        }
+
+        std::ofstream output(path, std::ios::binary);
+        if (!output.is_open()) {
+            return fail("无法打开文件");
+        }
+
+        output << dock::formatRequestTraceRowsCsv(rows, showTimestamps);
+        if (!output.good()) {
+            return fail("写入文件失败");
+        }
+
+        std::error_code absoluteError;
+        const auto savedPath = std::filesystem::absolute(path, absoluteError);
+        const auto displayPath = absoluteError ? path.generic_string() : savedPath.generic_string();
+        if (rows.empty()) {
+            application_.setStatusMessage("已导出空请求追踪: " + displayPath);
+        } else {
+            application_.setStatusMessage("请求追踪已导出: " + displayPath);
+        }
+        requestTraceExportError_.clear();
+        return true;
+    } catch (const std::exception& exception) {
+        return fail(exception.what());
+    }
+}
+
 void GuiRuntime::loadElfStaticAddressFromPath(const std::filesystem::path& path)
 {
     static_cast<void>(loadElfStaticAddressFromPath(path, false, true));
@@ -1277,6 +1378,47 @@ void GuiRuntime::drawLogExportFileDialog()
             logExportDialogOpen_ = false;
             logExportDialogOpened_ = false;
             logExportError_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void GuiRuntime::drawRequestTraceExportFileDialog()
+{
+    if (!requestTraceExportDialogOpen_) {
+        return;
+    }
+
+    const char* popupId = "导出请求追踪##request_trace_export";
+    if (!requestTraceExportDialogOpened_) {
+        ImGui::OpenPopup(popupId);
+        requestTraceExportDialogOpened_ = true;
+    }
+
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+        ImGui::TextUnformatted("请输入请求追踪 CSV 导出路径");
+        char buffer[1024]{};
+        std::snprintf(buffer, sizeof(buffer), "%s", requestTraceExportPath_.c_str());
+        if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+            requestTraceExportPath_ = buffer;
+        }
+        if (!requestTraceExportError_.empty()) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", requestTraceExportError_.c_str());
+        }
+        ImGui::Spacing();
+        if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
+            if (exportRequestTraceToPath(requestTraceExportPath_)) {
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+            requestTraceExportDialogOpen_ = false;
+            requestTraceExportDialogOpened_ = false;
+            requestTraceExportError_.clear();
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

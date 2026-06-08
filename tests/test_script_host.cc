@@ -2859,6 +2859,7 @@ static const TestCase kAllTests[] = {
     {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
     {"config_external_reload_state", &test_config_external_reload_state},
     {"request_trace_filter_and_clear", &test_request_trace_filter_and_clear},
+    {"request_trace_csv_export_format", &test_request_trace_csv_export_format},
     {"script_controls_snapshot", &test_script_controls_snapshot},
     {"script_load_directory_rejected_before_lua_dofile", &test_script_load_directory_rejected_before_lua_dofile},
     {"script_optional_labels_allowed_for_compact_controls", &test_script_optional_labels_allowed_for_compact_controls},

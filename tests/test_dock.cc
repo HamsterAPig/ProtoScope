@@ -213,15 +213,88 @@ void test_request_trace_filter_and_clear()
     require(filtered.size() == 2, "请求追踪关键字应匹配 tag");
 
     trace.filter.keyword.clear();
+    trace.filter.status = protoscope::dock::RequestTraceStatusFilter::All;
+    filtered = protoscope::dock::filteredRequestTraceRows(trace.rows, trace.filter);
+    require(filtered.size() == 3, "全部筛选应保留所有请求追踪记录");
+
+    trace.filter.status = protoscope::dock::RequestTraceStatusFilter::Active;
+    filtered = protoscope::dock::filteredRequestTraceRows(trace.rows, trace.filter);
+    require(filtered.size() == 1, "进行中筛选应只保留排队和已发送记录");
+    require(filtered[0]->state == protoscope::dock::RequestTraceState::Queued, "进行中筛选应保留排队记录");
+
+    trace.filter.status = protoscope::dock::RequestTraceStatusFilter::Success;
+    filtered = protoscope::dock::filteredRequestTraceRows(trace.rows, trace.filter);
+    require(filtered.size() == 1, "成功筛选应只保留成功终态");
+    require(filtered[0]->state == protoscope::dock::RequestTraceState::Completed, "成功筛选应保留完成记录");
+
     trace.filter.status = protoscope::dock::RequestTraceStatusFilter::Failure;
     filtered = protoscope::dock::filteredRequestTraceRows(trace.rows, trace.filter);
     require(filtered.size() == 1, "请求追踪失败筛选应只保留失败终态");
     require(filtered[0]->state == protoscope::dock::RequestTraceState::Timeout, "失败筛选应保留超时记录");
 
+    std::vector<protoscope::dock::RequestTraceRow> exportRows;
+    for (const auto* row : filtered) {
+        exportRows.push_back(*row);
+    }
+    const auto filteredCsv = protoscope::dock::formatRequestTraceRowsCsv(exportRows, false);
+    require(filteredCsv.find("read_status") != std::string::npos, "当前筛选导出数据应包含筛选后的请求");
+    require(filteredCsv.find("read_version") == std::string::npos, "当前筛选导出数据不应包含被过滤的请求");
+
     const auto versionBeforeClear = trace.rowsVersion;
     store.clearRequestTraceRows();
     require(trace.rows.empty(), "请求追踪应可清空");
     require(trace.rowsVersion == versionBeforeClear + 1, "清空请求追踪应递增版本号");
+}
+
+void test_request_trace_csv_export_format()
+{
+    const std::vector<protoscope::dock::RequestTraceRow> rows{
+        protoscope::dock::RequestTraceRow{
+            .timestampMs = 0,
+            .id = 0,
+            .kind = protoscope::dock::RequestTraceKind::Send,
+            .state = protoscope::dock::RequestTraceState::Queued,
+            .endpoint = {},
+            .tag = "tag, \"alpha\"",
+            .bytes = 0,
+            .durationMs = 0,
+            .guardState = "guard\nstate",
+            .error = {},
+        },
+        protoscope::dock::RequestTraceRow{
+            .timestampMs = 1,
+            .id = 42,
+            .kind = protoscope::dock::RequestTraceKind::Request,
+            .state = protoscope::dock::RequestTraceState::Failed,
+            .endpoint = "tcp://device",
+            .tag = {},
+            .bytes = 7,
+            .durationMs = 15,
+            .attempt = 2,
+            .maxAttempts = 3,
+            .guardState = "ignored guard",
+            .error = "error \"quoted\"\nnext",
+        },
+    };
+
+    const auto headerOnly = protoscope::dock::formatRequestTraceRowsCsv({}, false);
+    require(headerOnly == "\"ID\",\"类型\",\"状态\",\"Tag\",\"端点\",\"尝试\",\"字节\",\"耗时\",\"详情\"\n",
+            "请求追踪空导出仍应写入 CSV 表头");
+
+    const auto csv = protoscope::dock::formatRequestTraceRowsCsv(rows, false);
+    require(csv.find("\"时间\"") == std::string::npos, "关闭时间列时 CSV 不应包含时间表头");
+    require(csv.find("\"-\",\"send\",\"排队\",\"tag, \"\"alpha\"\"\",\"-\",\"1/1\",\"0\",\"-\",\"guard\nstate\"") !=
+                std::string::npos,
+            "CSV 应按表格显示值写入空 ID、空端点、排队耗时和转义后的 tag/详情");
+    require(csv.find("ignored guard") == std::string::npos, "详情应优先使用 error 而不是 guardState");
+
+    const auto rowCsv = protoscope::dock::formatRequestTraceRowCsv(rows[1], false);
+    require(rowCsv == "\"42\",\"request\",\"失败\",\"-\",\"tcp://device\",\"2/3\",\"7\",\"15 ms\","
+                      "\"error \"\"quoted\"\"\nnext\"",
+            "单行 CSV 应复用导出字段顺序、耗时显示和引号/换行转义");
+
+    const auto withTime = protoscope::dock::formatRequestTraceRowsCsv(rows, true);
+    require(withTime.find("\"时间\",\"ID\",\"类型\"") == 0, "开启时间列时 CSV 表头应以时间列开头");
 }
 
 void test_dock_receive_row_single_line_hex_and_ascii()

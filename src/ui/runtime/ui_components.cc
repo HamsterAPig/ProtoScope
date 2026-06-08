@@ -31,6 +31,7 @@ public:
         runtime_.drawDialogs();
         runtime_.drawRawCaptureFileDialogs();
         runtime_.drawLogExportFileDialog();
+        runtime_.drawRequestTraceExportFileDialog();
         runtime_.drawElfStaticAddressDialog();
     }
 
