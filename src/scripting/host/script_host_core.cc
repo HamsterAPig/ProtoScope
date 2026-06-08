@@ -761,6 +761,111 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     return children;
 }
 
+std::optional<std::size_t> readLayoutTableColumnCount(const sol::table& table,
+                                                      const std::string& path,
+                                                      std::string& error)
+{
+    const sol::object columnsObject = table["columns"];
+    if (!columnsObject.valid() || columnsObject.get_type() == sol::type::lua_nil || !columnsObject.is<double>()) {
+        error = path + ".columns 必须是 >= 1 的整数";
+        return std::nullopt;
+    }
+    const auto columnsValue = columnsObject.as<double>();
+    if (!std::isfinite(columnsValue) || columnsValue < 1.0 || std::floor(columnsValue) != columnsValue) {
+        error = path + ".columns 必须是 >= 1 的整数";
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(columnsValue);
+}
+
+std::optional<std::vector<std::vector<LayoutNodeDescriptor>>> parseLayoutTableRows(
+    const DockDescriptor& dock,
+    const sol::table& table,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    std::size_t columns,
+    const std::string& path,
+    std::string& error)
+{
+    const sol::object rowsObject = table["rows"];
+    if (!rowsObject.valid() || rowsObject.get_type() == sol::type::lua_nil || !rowsObject.is<sol::table>()) {
+        error = path + ".rows 必须是非空数组";
+        return std::nullopt;
+    }
+    const auto rowsTable = rowsObject.as<sol::table>();
+    if (rowsTable.size() == 0) {
+        error = path + ".rows 必须是非空数组";
+        return std::nullopt;
+    }
+
+    std::vector<std::vector<LayoutNodeDescriptor>> rows;
+    rows.reserve(rowsTable.size());
+    for (std::size_t rowIndex = 1; rowIndex <= rowsTable.size(); ++rowIndex) {
+        const sol::object rowObject = rowsTable[rowIndex];
+        if (!rowObject.is<sol::table>()) {
+            error = path + ".rows[" + std::to_string(rowIndex) + "] 必须是 table";
+            return std::nullopt;
+        }
+        const auto rowTable = rowObject.as<sol::table>();
+        if (rowTable.size() > columns) {
+            error = path + ".rows[" + std::to_string(rowIndex) + "] 的单元格数量不能超过 columns";
+            return std::nullopt;
+        }
+        std::vector<LayoutNodeDescriptor> row;
+        row.reserve(rowTable.size());
+        for (std::size_t cellIndex = 1; cellIndex <= rowTable.size(); ++cellIndex) {
+            auto cell =
+                parseLayoutNode(dock,
+                                rowTable[cellIndex],
+                                controlsById,
+                                usedControls,
+                                path + ".rows[" + std::to_string(rowIndex) + "][" + std::to_string(cellIndex) + "]",
+                                error);
+            if (!cell.has_value()) {
+                return std::nullopt;
+            }
+            row.push_back(std::move(*cell));
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+std::optional<LayoutNodeDescriptor> parseLayoutTableNode(const DockDescriptor& dock,
+                                                         const sol::table& table,
+                                                         const std::unordered_map<std::string, std::size_t>& controlsById,
+                                                         std::unordered_set<std::string>& usedControls,
+                                                         const std::string& path,
+                                                         std::string& error)
+{
+    LayoutNodeDescriptor node;
+    node.kind = LayoutNodeKind::Table;
+
+    const auto columns = readLayoutTableColumnCount(table, path, error);
+    if (!columns.has_value()) {
+        return std::nullopt;
+    }
+    node.columns = *columns;
+    node.borders = readOptionalBoolField(table, "borders", false, path, error);
+    node.resizable = readOptionalBoolField(table, "resizable", true, path, error);
+    node.rowBg = readOptionalBoolField(table, "row_bg", false, path, error);
+    if (!error.empty()) {
+        return std::nullopt;
+    }
+    node.sizing = table.get_or("sizing", std::string("stretch"));
+    if (node.sizing != "stretch") {
+        error = path + ".sizing 目前仅支持 'stretch'";
+        return std::nullopt;
+    }
+
+    auto rows = parseLayoutTableRows(dock, table, controlsById, usedControls, node.columns, path, error);
+    if (!rows.has_value()) {
+        return std::nullopt;
+    }
+    node.rows = std::move(*rows);
+    return node;
+}
+
 std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
                                                     const sol::object& object,
                                                     const std::unordered_map<std::string, std::size_t>& controlsById,
@@ -857,70 +962,7 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
         return node;
     }
     if (type == "table") {
-        node.kind = LayoutNodeKind::Table;
-        const sol::object columnsObject = table["columns"];
-        if (!columnsObject.valid() || columnsObject.get_type() == sol::type::lua_nil || !columnsObject.is<double>()) {
-            error = path + ".columns 必须是 >= 1 的整数";
-            return std::nullopt;
-        }
-        const auto columnsValue = columnsObject.as<double>();
-        if (!std::isfinite(columnsValue) || columnsValue < 1.0 || std::floor(columnsValue) != columnsValue) {
-            error = path + ".columns 必须是 >= 1 的整数";
-            return std::nullopt;
-        }
-        node.columns = static_cast<std::size_t>(columnsValue);
-        node.borders = readOptionalBoolField(table, "borders", false, path, error);
-        node.resizable = readOptionalBoolField(table, "resizable", true, path, error);
-        node.rowBg = readOptionalBoolField(table, "row_bg", false, path, error);
-        if (!error.empty()) {
-            return std::nullopt;
-        }
-        node.sizing = table.get_or("sizing", std::string("stretch"));
-        if (node.sizing != "stretch") {
-            error = path + ".sizing 目前仅支持 'stretch'";
-            return std::nullopt;
-        }
-
-        const sol::object rowsObject = table["rows"];
-        if (!rowsObject.valid() || rowsObject.get_type() == sol::type::lua_nil || !rowsObject.is<sol::table>()) {
-            error = path + ".rows 必须是非空数组";
-            return std::nullopt;
-        }
-        const auto rowsTable = rowsObject.as<sol::table>();
-        if (rowsTable.size() == 0) {
-            error = path + ".rows 必须是非空数组";
-            return std::nullopt;
-        }
-        node.rows.reserve(rowsTable.size());
-        for (std::size_t rowIndex = 1; rowIndex <= rowsTable.size(); ++rowIndex) {
-            const sol::object rowObject = rowsTable[rowIndex];
-            if (!rowObject.is<sol::table>()) {
-                error = path + ".rows[" + std::to_string(rowIndex) + "] 必须是 table";
-                return std::nullopt;
-            }
-            const auto rowTable = rowObject.as<sol::table>();
-            if (rowTable.size() > node.columns) {
-                error = path + ".rows[" + std::to_string(rowIndex) + "] 的单元格数量不能超过 columns";
-                return std::nullopt;
-            }
-            std::vector<LayoutNodeDescriptor> row;
-            row.reserve(rowTable.size());
-            for (std::size_t cellIndex = 1; cellIndex <= rowTable.size(); ++cellIndex) {
-                auto cell =
-                    parseLayoutNode(dock,
-                                    rowTable[cellIndex],
-                                    controlsById,
-                                    usedControls,
-                                    path + ".rows[" + std::to_string(rowIndex) + "][" + std::to_string(cellIndex) + "]",
-                                    error);
-                if (!cell.has_value()) {
-                    return std::nullopt;
-                }
-                row.push_back(std::move(*cell));
-            }
-            node.rows.push_back(std::move(row));
-        }
-        return node;
+        return parseLayoutTableNode(dock, table, controlsById, usedControls, path, error);
     }
 
     error = path + ".type 不支持: " + type;
