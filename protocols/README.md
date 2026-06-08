@@ -14,8 +14,11 @@
 - `protocols/stream_types.lua`：`stream()` schema 的类型注解。
 - `protocols/templates/README.md`：内置协议模板列表和复制使用说明。
 
-默认协议模板位于 `protocols/templates`。每个协议目录只要求存在 `main.lua`，
-例如 `protocols/templates/default_protocol/main.lua`。
+源码中的默认示例位于 `protocols/default_protocol`、`protocols/lua_waveform_demo`、
+`protocols/half_duplex_modbus_master` 和 `protocols/half_duplex_modbus_slave`。
+`protocols/templates` 只放可复制的操作模板，例如 `file_dialog`、`request_guarded` 和 `send_file`。
+每个协议目录只要求存在 `main.lua`，例如 `protocols/default_protocol/main.lua`。
+打包运行时会把内嵌默认协议释放到可执行目录下的协议目录，供用户直接选择和复制。
 
 ## UI 布局
 
@@ -363,8 +366,8 @@ end
 - `channel_map` 用 Lua 侧 1-based 通道号声明；宿主内部会转换为 0-based。
 - profile 一旦设置会持续生效，直到 `proto.stream.clear_profile("upload_dynamic")` 或 `proto.stream.clear_profile()`。
 - `runtime_profile = true` 的帧如果回放时缺少对应 profile 事件，宿主会给出明确错误，而不是静默套旧长度。
-- “导出当前可见 raw”只保存当前波形窗口可见的原始字节，并会补齐这段字节回放所依赖的活动 `profile_set` / `profile_clear` 和最后一次 `plot_setup` 快照。
-- “开始完整原始数据录制”保存完整事件流、完整 RX 历史和录制开始时的波形配置快照；需要完整复现长时间采集时，应优先使用完整录制，而不是普通导出。
+- “导出当前缓存快照”只保存当前可回放窗口里的原始字节，并会补齐这段字节回放所依赖的活动 `profile_set` / `profile_clear` 和最后一次 `plot_setup` 快照。
+- “开始完整原始数据录制”保存完整事件流、完整 RX 历史和录制开始时的波形配置快照；需要完整复现长时间采集时，应优先使用完整录制或现场会话包，而不是普通导出。
 
 字段类型、`crc.order`、`len.means` 的可选值请直接参考 `protocols/stream_types.lua`。
 
@@ -462,10 +465,10 @@ proto.plot.push(1, {
 
 ## 半双工 Modbus Schema Demo
 
-仓库内置两个半双工 Modbus 模板：
+仓库内置两个半双工 Modbus 示例：
 
-- `protocols/templates/half_duplex_modbus_master`
-- `protocols/templates/half_duplex_modbus_slave`
+- `protocols/half_duplex_modbus_master`
+- `protocols/half_duplex_modbus_slave`
 
 它们表达的是同一类协议约束：主机请求、从机 ACK、以及 `0x26` 上传帧。
 

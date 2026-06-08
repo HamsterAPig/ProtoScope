@@ -30,15 +30,24 @@ ProtoScope 当前支持 4 种通讯方式：
 
 协议脚本是一个目录，入口文件固定为 `main.lua`。程序加载协议后，会向 Lua 注入全局 `proto` API，脚本可以声明界面控件、发送数据、处理接收字节、启动定时器、弹出对话框、读写文件和推送波形。
 
-默认协议资源位于：
+源码中的默认协议资源位于 `protocols/` 顶层；打包运行时会把内嵌默认协议释放到可执行目录下供程序加载。
 
 ```text
 protocols/
 ├── protoscope_api.lua
 ├── stream_types.lua
+├── default_protocol/
+│   └── main.lua
+├── lua_waveform_demo/
+│   └── main.lua
+├── half_duplex_modbus_master/
+│   └── main.lua
+├── half_duplex_modbus_slave/
+│   └── main.lua
 └── templates/
-    └── default_protocol/
-        └── main.lua
+    ├── file_dialog/
+    ├── request_guarded/
+    └── send_file/
 ```
 
 ### Dock 面板
@@ -61,7 +70,7 @@ protocols/
 - `Ctrl+R`：重新加载配置。
 - `F5`：重新加载当前协议。
 - `Ctrl+O`：打开 ELF/ElfStaticView 数据文件。
-- `Ctrl+I` / `Ctrl+E`：导入 / 导出原始波形。
+- `Ctrl+I` / `Ctrl+E`：导入原始波形 / 导出当前缓存快照。
 - `Ctrl+Shift+R`：开始或停止完整原始数据录制。
 - `Ctrl+1` 到 `Ctrl+6`：切换通讯配置、协议脚本、收发数据、日志、脚本、波形 Dock。
 - 波形 Dock 聚焦时，`Space` 暂停或恢复自动跟随，`A` 适配可见波形，`Z` 切换框选放大，`F` 切换 FFT，`Ctrl+Shift+C` 清空波形历史。
@@ -119,7 +128,7 @@ UDP Peer 需要填写：
 
 打开 `协议脚本 / 动态控件` 面板：
 
-1. 设置 `协议根目录`，默认是 `protocols/templates`。
+1. 设置 `协议根目录`。运行时默认指向可执行目录下的 `protocols/templates`；源码示例位于 `protocols/default_protocol` 等顶层目录。
 2. 在 `协议目录` 中选择一个包含 `main.lua` 的协议目录。
 3. 点击 `重新扫描协议目录` 更新列表。
 4. 点击 `重新加载协议` 应用当前脚本。
@@ -162,10 +171,10 @@ Lua 脚本通过 `proto.plot.setup()` 创建通道，再通过 `proto.plot.push(
 - 启用 FFT 频谱模式查看当前可视区频谱。
 - 通过 `文件 -> 导入原始波形...` 一次性导入 `.psraw` 文件，立即重建波形结果。
 - 通过 `文件 -> 载入原始回放时间轴...` 载入 `.psraw` 事件流，再使用 `回放` 菜单继续、暂停、单步、倍速或定位。
-- 通过 `文件 -> 导出原始波形...` 保存当前波形原始数据。
+- 通过 `文件 -> 导出当前缓存快照...` 保存当前可回放窗口里的原始数据。
 - 通过 `文件 -> 开始完整原始数据录制...` 录制完整原始字节历史。
 
-`导入原始波形` 适合快速查看离线结果；`载入原始回放时间轴` 适合按原始事件时间轴复现现场串口输入。实时接收时，界面只保留配置允许的最近一段原始字节；普通导出可能只包含这段实时缓存。需要完整现场复现时，应使用 `开始完整原始数据录制` 生成完整 `.psraw`。
+`导入原始波形` 适合快速查看离线结果；`载入原始回放时间轴` 适合按原始事件时间轴复现现场串口输入。实时接收时，界面只保留配置允许的最近一段原始字节；普通导出明确是当前缓存快照，也就是当前可回放窗口，不代表全历史。需要完整现场复现时，应使用 `开始完整原始数据录制` 生成完整 `.psraw`，或导出现场会话包。
 
 ### 6. 保存和重新加载配置
 
@@ -207,14 +216,20 @@ scripting:
 
 ## 内置协议模板
 
-内置模板位于 `protocols/templates`：
+内置示例位于 `protocols` 顶层：
 
 - `default_protocol`：最小可运行协议，演示控件、发送、定时器、事件输出和基础波形。
 - `lua_waveform_demo`：纯 Lua 生成多通道波形，不依赖外部设备，适合验证波形视图。
 - `half_duplex_modbus_master`：半双工主机示例，演示 `proto.request()`、ACK 完成、逐帧解析和波形上传。
 - `half_duplex_modbus_slave`：半双工从机示例，演示请求解析、ACK 或异常帧返回和批量波形上传。
 
-创建自己的协议时，建议复制一个模板目录并改名，然后保留 `main.lua` 作为入口。
+可复制操作模板位于 `protocols/templates`：
+
+- `file_dialog`：文件/目录对话框示例。
+- `request_guarded`：受保护请求示例。
+- `send_file`：文件分块发送示例。
+
+创建自己的协议时，建议复制一个示例或模板目录并改名，然后保留 `main.lua` 作为入口。
 
 ## Lua 脚本能力速览
 
@@ -276,7 +291,7 @@ scripting:
 - `重新加载协议`
 - `打开 ELF/ElfStaticView 数据文件...`
 - `导入原始波形...`
-- `导出原始波形...`
+- `导出当前缓存快照...`
 - `开始完整原始数据录制...`
 - `停止完整原始数据录制`
 
