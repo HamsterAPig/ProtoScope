@@ -394,7 +394,7 @@ void GuiRuntime::openRawCaptureExportDialog()
 #if defined(_WIN32)
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
-                                       L"导出原始波形",
+                                       L"导出当前缓存快照",
                                        L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
                                        defaultPath,
                                        true,
@@ -647,12 +647,12 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path)
     std::string error;
     if (!application_.exportWaveRawCapture(path, error)) {
         rawCaptureExportError_ = error;
-        application_.setStatusMessage("原始波形导出失败: " + error);
+        application_.setStatusMessage("当前缓存快照导出失败: " + error);
         return;
     }
     const auto& rawCapture = application_.docks().waveState().rawCapture;
-    application_.setStatusMessage(rawCapture.truncated ? "原始波形导出成功（实时缓存已截断，仅包含最近原始字节）"
-                                                       : "原始波形导出成功");
+    application_.setStatusMessage(rawCapture.truncated ? "当前缓存快照导出成功（实时缓存已截断，仅包含最近原始字节）"
+                                                       : "当前缓存快照导出成功");
     rawCaptureExportDialogOpen_ = false;
     rawCaptureExportDialogOpened_ = false;
     rawCaptureExportError_.clear();
@@ -1098,7 +1098,7 @@ void GuiRuntime::drawRawCaptureFileDialogs()
     }
 
     if (rawCaptureExportDialogOpen_) {
-        const char* popupId = "导出原始波形##psraw_export";
+        const char* popupId = "导出当前缓存快照##psraw_export";
         if (!rawCaptureExportDialogOpened_) {
             ImGui::OpenPopup(popupId);
             rawCaptureExportDialogOpened_ = true;

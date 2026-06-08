@@ -367,6 +367,16 @@ std::size_t countScriptEvents(const protoscope::dock::ScriptDockState& scriptSta
     }));
 }
 
+void writeTextFile(const std::filesystem::path& path, std::string_view text)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.good()) {
+        throw std::runtime_error("无法写入测试文件: " + path.generic_string());
+    }
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
 } // namespace
 
 void test_application_tcp_lua_read_version_roundtrip()
@@ -1531,6 +1541,136 @@ void test_application_session_package_export_contains_replay_assets()
     require(importedMarkers.front().label == "startup edge", "导入现场包后分析标记 label 应保留");
     require(importedMarkers.front().channelIndex == 1, "导入现场包后分析标记通道应保留");
     importedApplication.shutdown();
+}
+
+void test_application_session_package_exports_protocol_directory_and_import_requires_helper()
+{
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    transportState->queuedRxBytes = {'H', 'E', 'L', 'P'};
+
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-session-package-protocol-dir"));
+    const auto protocolRoot = tempRoot.path() / "protocols";
+    const auto protocolDir = protocolRoot / "custom_protocol";
+    writeTextFile(protocolDir / "helper.lua",
+                  R"(local M = {}
+
+function M.value()
+  return "loaded"
+end
+
+return M
+)");
+    writeTextFile(protocolDir / "assets" / "info.txt", "nested resource\n");
+    writeTextFile(protocolDir / "main.lua",
+                  R"(local helper = require("helper")
+
+function ui()
+  return {}
+end
+
+function on_bytes(ctx, bytes)
+  proto.emit("helper", {
+    value = helper.value(),
+    size = #bytes,
+  })
+end
+)");
+
+    protoscope::app::Application exporter;
+    exporter.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+    require(exporter.initialize(), "导出应用初始化失败");
+    auto config = exporter.captureConfig();
+    config.protocol.rootDir = protocolRoot.generic_string();
+    config.protocol.selectedDir = protocolDir.generic_string();
+    require(exporter.applyConfig(config), "导出应用应可切换到测试协议目录");
+    require(exporter.reloadProtocolDirectory(protocolDir.generic_string(), true), "测试协议目录应可加载");
+    exporter.openTransport();
+    for (int i = 0; i < 4; ++i) {
+        exporter.pumpOnce();
+    }
+    require(exporter.docks().waveState().rawCapture.payload == transportState->queuedRxBytes,
+            "导出现场包前应已有测试协议的原始字节");
+
+    const auto packagePath = tempRoot.path() / "with-protocol-dir.pssession";
+    std::string error;
+    require(exporter.exportSessionPackage(packagePath, error), "导出包含完整协议目录的现场包应成功");
+    exporter.shutdown();
+
+    const auto package = protoscope::session::readSessionPackage(packagePath, error);
+    if (!package.has_value()) {
+        throw std::runtime_error("包含协议目录的现场包应可读取: " + error);
+    }
+    const auto* helperEntry = protoscope::session::findSessionPackageEntry(*package, "protocol/helper.lua");
+    const auto* assetEntry = protoscope::session::findSessionPackageEntry(*package, "protocol/assets/info.txt");
+    const auto* manifestEntry = protoscope::session::findSessionPackageEntry(*package, "manifest.yaml");
+    require(helperEntry != nullptr, "现场包应包含协议目录下的 helper.lua");
+    require(assetEntry != nullptr, "现场包应包含协议子目录资源文件");
+    require(manifestEntry != nullptr, "现场包应包含 manifest.yaml");
+    const std::string manifestText(manifestEntry->bytes.begin(), manifestEntry->bytes.end());
+    require(manifestText.find("protocol/helper.lua") != std::string::npos, "manifest 应列出 helper.lua");
+    require(manifestText.find("protocol/assets/info.txt") != std::string::npos, "manifest 应列出子目录资源文件");
+
+    protoscope::app::Application importer;
+    require(importer.initialize(), "导入应用初始化失败");
+    require(importer.importSessionPackage(packagePath, error), "包含 helper.lua 的现场包应可导入");
+    const auto& importedLua = importer.docks().luaState();
+    require(importedLua.protocolDir.find("ProtoScope-session-protocol-") != std::string::npos,
+            "导入现场包应释放到临时协议目录");
+    require(std::filesystem::exists(std::filesystem::path(importedLua.protocolDir) / "helper.lua"),
+            "导入现场包后临时协议目录应包含 helper.lua");
+    require(std::filesystem::exists(std::filesystem::path(importedLua.protocolDir) / "assets" / "info.txt"),
+            "导入现场包后临时协议目录应包含子目录资源文件");
+    require(importer.docks().waveState().rawCapture.payload == transportState->queuedRxBytes,
+            "导入现场包后应回放包内 raw payload");
+    importer.shutdown();
+}
+
+void test_application_session_package_import_rejects_unsafe_entries()
+{
+    protoscope::app::Application exporter;
+    require(exporter.initialize(), "导出应用初始化失败");
+
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-session-package-unsafe"));
+    const auto basePackagePath = tempRoot.path() / "base.pssession";
+    std::string error;
+    require(exporter.exportSessionPackage(basePackagePath, error), "导出基础现场包应成功");
+    exporter.shutdown();
+
+    const auto basePackage = protoscope::session::readSessionPackage(basePackagePath, error);
+    if (!basePackage.has_value()) {
+        throw std::runtime_error("基础现场包应可读取: " + error);
+    }
+
+    const auto writeInvalidPackage = [&](std::string entryName, const std::filesystem::path& outputPath) {
+        auto invalidPackage = *basePackage;
+        invalidPackage.entries.push_back(protoscope::session::SessionPackageEntry{
+            .name = std::move(entryName),
+            .bytes = std::vector<std::uint8_t>{'x'},
+        });
+        require(protoscope::session::writeSessionPackage(outputPath, invalidPackage, error), "无效现场包应可写入");
+    };
+
+    const auto parentEscapePath = tempRoot.path() / "parent-escape.pssession";
+    writeInvalidPackage("protocol/../escape.lua", parentEscapePath);
+    protoscope::app::Application parentEscapeImporter;
+    require(parentEscapeImporter.initialize(), "父目录逃逸导入应用初始化失败");
+    error.clear();
+    require(!parentEscapeImporter.importSessionPackage(parentEscapePath, error),
+            "包含 protocol/../x 的现场包应被拒绝");
+    require(error.find("不安全条目") != std::string::npos, "父目录逃逸错误应说明不安全条目");
+    parentEscapeImporter.shutdown();
+
+    const auto absolutePath = tempRoot.path() / "absolute.pssession";
+    writeInvalidPackage("C:/escape.lua", absolutePath);
+    protoscope::app::Application absoluteImporter;
+    require(absoluteImporter.initialize(), "绝对路径导入应用初始化失败");
+    error.clear();
+    require(!absoluteImporter.importSessionPackage(absolutePath, error), "包含绝对路径 entry 的现场包应被拒绝");
+    require(error.find("不安全条目") != std::string::npos, "绝对路径错误应说明不安全条目");
+    absoluteImporter.shutdown();
 }
 
 void test_application_wave_analysis_report_exports_summary_and_markers()

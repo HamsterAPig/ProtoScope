@@ -66,7 +66,7 @@ void GuiRuntime::drawMainMenu()
         if (ImGui::MenuItem("载入原始回放时间轴...")) {
             openRawCaptureReplayTimelineDialog();
         }
-        if (ImGui::MenuItem("导出原始波形...", shortcutLabel(ShortcutAction::ExportRawWave).data())) {
+        if (ImGui::MenuItem("导出当前缓存快照...", shortcutLabel(ShortcutAction::ExportRawWave).data())) {
             openRawCaptureExportDialog();
         }
         if (ImGui::MenuItem("导出波形分析报告...")) {

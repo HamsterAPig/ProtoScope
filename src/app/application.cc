@@ -31,6 +31,7 @@ namespace {
     constexpr std::size_t kTransportEventsPerPump = 256;
     constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
     constexpr std::uint64_t kCommPressureDebugLogIntervalMs = 2000;
+    constexpr std::string_view kSessionProtocolEntryPrefix = "protocol/";
 
     std::uint64_t nowMs()
     {
@@ -200,6 +201,116 @@ namespace {
             error = "写入文件失败: " + path.generic_string();
             return false;
         }
+        return true;
+    }
+
+    bool isSafeSessionPackageEntryName(std::string_view name)
+    {
+        if (name.empty() || name.front() == '/' || name.front() == '\\') {
+            return false;
+        }
+        if (name.size() >= 2 && name[1] == ':' &&
+            ((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z'))) {
+            return false;
+        }
+
+        std::size_t segmentStart = 0;
+        for (std::size_t index = 0; index <= name.size(); ++index) {
+            const bool atEnd = index == name.size();
+            const bool separator = !atEnd && (name[index] == '/' || name[index] == '\\');
+            if (!atEnd && name[index] == ':') {
+                return false;
+            }
+            if (!atEnd && !separator) {
+                continue;
+            }
+
+            const auto segment = name.substr(segmentStart, index - segmentStart);
+            if (segment.empty() || segment == "." || segment == "..") {
+                return false;
+            }
+            segmentStart = index + 1;
+        }
+        return true;
+    }
+
+    bool validateSessionPackageEntries(const session::SessionPackageData& package, std::string& error)
+    {
+        for (const auto& entry : package.entries) {
+            if (!isSafeSessionPackageEntryName(entry.name)) {
+                error = "现场包包含不安全条目: " + entry.name;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool collectProtocolDirectoryEntries(const std::filesystem::path& protocolDir,
+                                         std::vector<session::SessionPackageEntry>& entries,
+                                         std::string& error)
+    {
+        std::error_code pathError;
+        if (!std::filesystem::is_directory(protocolDir, pathError) || pathError) {
+            error = "当前协议目录不可读取: " + protocolDir.generic_string();
+            if (pathError) {
+                error += ", " + pathError.message();
+            }
+            return false;
+        }
+
+        pathError = {};
+        const auto mainLuaPath = protocolDir / "main.lua";
+        if (!std::filesystem::is_regular_file(mainLuaPath, pathError) || pathError) {
+            error = "当前协议目录缺少 main.lua: " + mainLuaPath.generic_string();
+            if (pathError) {
+                error += ", " + pathError.message();
+            }
+            return false;
+        }
+
+        std::error_code walkError;
+        for (std::filesystem::recursive_directory_iterator it(
+                 protocolDir, std::filesystem::directory_options::skip_permission_denied, walkError),
+             end;
+             it != end;
+             it.increment(walkError)) {
+            if (walkError) {
+                error = "遍历当前协议目录失败: " + walkError.message();
+                return false;
+            }
+
+            std::error_code typeError;
+            if (!it->is_regular_file(typeError)) {
+                if (typeError) {
+                    error = "检查协议文件类型失败: " + typeError.message();
+                    return false;
+                }
+                continue;
+            }
+
+            const auto relativePath = it->path().lexically_relative(protocolDir);
+            const auto relativeName = relativePath.generic_string();
+            if (relativeName.empty()) {
+                error = "协议目录包含无法打包的空相对路径";
+                return false;
+            }
+
+            std::string readError;
+            auto bytes = readFileBytes(it->path(), readError);
+            if (!readError.empty()) {
+                error = "读取当前协议目录文件失败: " + readError;
+                return false;
+            }
+            // 核心流程：现场包必须保留协议目录结构，导入后 Lua 的 require 同目录模块才能继续生效。
+            entries.push_back(session::SessionPackageEntry{
+                .name = std::string(kSessionProtocolEntryPrefix) + relativeName,
+                .bytes = std::move(bytes),
+            });
+        }
+
+        std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.name < rhs.name;
+        });
         return true;
     }
 
@@ -1439,12 +1550,19 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
     logSummary << "raw_capture_bytes: " << capture.payload.size() << '\n';
     const auto analysisMarkersYaml = encodeAnalysisMarkersYaml(wave.analysisMarkers);
 
-    std::string scriptReadError;
-    auto protocolScriptBytes = readFileBytes(configStore_.mainLuaPath(lua.protocolDir), scriptReadError);
-    if (!scriptReadError.empty()) {
-        error = "读取当前协议脚本失败: " + scriptReadError;
+    std::vector<session::SessionPackageEntry> protocolEntries;
+    if (!collectProtocolDirectoryEntries(lua.protocolDir, protocolEntries, error)) {
         return false;
     }
+
+    std::vector<session::SessionPackageEntry> entries;
+    entries.push_back({.name = "config.yaml", .bytes = stringBytes(configYaml)});
+    entries.push_back({.name = "raw_capture.psraw", .bytes = std::move(rawCaptureBytes)});
+    entries.insert(entries.end(),
+                   std::make_move_iterator(protocolEntries.begin()),
+                   std::make_move_iterator(protocolEntries.end()));
+    entries.push_back({.name = "analysis/markers.yaml", .bytes = stringBytes(analysisMarkersYaml)});
+    entries.push_back({.name = "logs/summary.txt", .bytes = stringBytes(logSummary.str())});
 
     std::ostringstream manifest;
     manifest << "format: protoscope_session_package\n";
@@ -1455,22 +1573,14 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
     manifest << "sample_frequency_hz: " << capture.sampleFrequencyHz << '\n';
     manifest << "entries:\n";
     manifest << "- manifest.yaml\n";
-    manifest << "- config.yaml\n";
-    manifest << "- raw_capture.psraw\n";
-    manifest << "- protocol/main.lua\n";
-    manifest << "- analysis/markers.yaml\n";
-    manifest << "- logs/summary.txt\n";
+    for (const auto& entry : entries) {
+        manifest << "- " << entry.name << '\n';
+    }
+    entries.insert(entries.begin(), {.name = "manifest.yaml", .bytes = stringBytes(manifest.str())});
 
     session::SessionPackageData package{
         .createdAtMs = createdAtMs,
-        .entries = {
-            {.name = "manifest.yaml", .bytes = stringBytes(manifest.str())},
-            {.name = "config.yaml", .bytes = stringBytes(configYaml)},
-            {.name = "raw_capture.psraw", .bytes = std::move(rawCaptureBytes)},
-            {.name = "protocol/main.lua", .bytes = std::move(protocolScriptBytes)},
-            {.name = "analysis/markers.yaml", .bytes = stringBytes(analysisMarkersYaml)},
-            {.name = "logs/summary.txt", .bytes = stringBytes(logSummary.str())},
-        },
+        .entries = std::move(entries),
     };
     return session::writeSessionPackage(path, package, error);
 }
@@ -1496,6 +1606,9 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     if (!package.has_value()) {
         return false;
     }
+    if (!validateSessionPackageEntries(*package, error)) {
+        return false;
+    }
 
     const auto* configEntry = session::findSessionPackageEntry(*package, "config.yaml");
     if (configEntry == nullptr) {
@@ -1512,15 +1625,33 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
 
     std::optional<config::ProtocolConfig> persistentProtocolConfig;
     std::optional<std::string> importedProtocolDir;
-    const auto* protocolEntry = session::findSessionPackageEntry(*package, "protocol/main.lua");
-    if (protocolEntry != nullptr && !protocolEntry->bytes.empty()) {
+    std::vector<const session::SessionPackageEntry*> protocolEntries;
+    for (const auto& entry : package->entries) {
+        if (entry.name.starts_with(kSessionProtocolEntryPrefix)) {
+            protocolEntries.push_back(&entry);
+        }
+    }
+    if (!protocolEntries.empty()) {
         persistentProtocolConfig = loaded.config.protocol;
         const auto protocolDir =
             std::filesystem::temp_directory_path() / ("ProtoScope-session-protocol-" + std::to_string(nowUs()));
+        for (const auto* entry : protocolEntries) {
+            const auto relativeName = entry->name.substr(kSessionProtocolEntryPrefix.size());
+            const auto outputPath = protocolDir / std::filesystem::path(relativeName);
+            if (!writeFileBytes(outputPath, entry->bytes, error)) {
+                const auto writeError = error;
+                error = "释放现场包协议目录失败: " + writeError;
+                return false;
+            }
+        }
+
+        std::error_code protocolEntryError;
         const auto mainLuaPath = protocolDir / "main.lua";
-        if (!writeFileBytes(mainLuaPath, protocolEntry->bytes, error)) {
-            const auto writeError = error;
-            error = "释放现场包协议脚本失败: " + writeError;
+        if (!std::filesystem::is_regular_file(mainLuaPath, protocolEntryError) || protocolEntryError) {
+            error = "现场包缺少 protocol/main.lua";
+            if (protocolEntryError) {
+                error += ": " + protocolEntryError.message();
+            }
             return false;
         }
         scripting::ScriptHost probeHost;

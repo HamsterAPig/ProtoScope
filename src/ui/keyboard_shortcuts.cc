@@ -36,7 +36,7 @@ constexpr std::array<ShortcutDescriptor, 20> kShortcutDescriptors{{
      ShortcutScope::Global,
      {.key = ShortcutKey::E, .ctrl = true},
      "Ctrl+E",
-     "导出原始波形"},
+     "导出当前缓存快照"},
     {ShortcutAction::ToggleRawRecording,
      ShortcutScope::Global,
      {.key = ShortcutKey::R, .ctrl = true, .shift = true},
