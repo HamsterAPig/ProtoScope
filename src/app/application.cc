@@ -1698,7 +1698,22 @@ void Application::syncDockState()
 
 bool Application::handleTransportEvents()
 {
-    bool changed = false;
+    resetTransportPumpMetrics();
+    pullTransportEventsFromTransport();
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    std::size_t processed = 0;
+    std::size_t processedRxBytes = 0;
+    const auto maxRxBytes = rxBytesPerPump();
+    const bool changed = drainTransportEventQueues(startedAt, maxRxBytes, processed, processedRxBytes);
+    auto& comm = dockStore_.commState();
+    comm.lastPumpEvents = processed;
+    comm.lastPumpTransportMs = elapsedMilliseconds(startedAt, std::chrono::steady_clock::now());
+    return changed || !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty();
+}
+
+void Application::resetTransportPumpMetrics()
+{
     auto& comm = dockStore_.commState();
     comm.lastPumpEvents = 0;
     comm.lastPumpRxBytes = 0;
@@ -1708,18 +1723,26 @@ bool Application::handleTransportEvents()
     comm.lastPumpParserMs = 0.0;
     comm.lastPumpCallbackMs = 0.0;
     comm.lastPumpScriptMs = 0.0;
-    if (transport_) {
-        auto events = transport_->takeEvents();
-        pendingTransportEvents_.insert(pendingTransportEvents_.end(),
-                                       std::make_move_iterator(events.begin()),
-                                       std::make_move_iterator(events.end()));
-    }
+}
 
-    const auto startedAt = std::chrono::steady_clock::now();
-    std::size_t processed = 0;
-    std::size_t processedRxBytes = 0;
-    const auto maxRxBytes = rxBytesPerPump();
-    while (processed < kTransportEventsPerPump) {
+void Application::pullTransportEventsFromTransport()
+{
+    if (!transport_) {
+        return;
+    }
+    auto events = transport_->takeEvents();
+    pendingTransportEvents_.insert(pendingTransportEvents_.end(),
+                                   std::make_move_iterator(events.begin()),
+                                   std::make_move_iterator(events.end()));
+}
+
+bool Application::drainTransportEventQueues(const std::chrono::steady_clock::time_point& startedAt,
+                                            const std::size_t maxRxBytes,
+                                            std::size_t& processedEvents,
+                                            std::size_t& processedRxBytes)
+{
+    bool changed = false;
+    while (processedEvents < kTransportEventsPerPump) {
         if (!pendingRxByteChunks_.empty()) {
             const auto remainingRxBudget = maxRxBytes > processedRxBytes ? maxRxBytes - processedRxBytes : 0U;
             if (remainingRxBudget == 0U) {
@@ -1729,7 +1752,7 @@ bool Application::handleTransportEvents()
             changed = processPendingRxBytes(remainingRxBudget) || changed;
             const auto after = pendingRxByteCount();
             processedRxBytes += before >= after ? before - after : 0U;
-            ++processed;
+            ++processedEvents;
             if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) {
                 break;
             }
@@ -1744,17 +1767,15 @@ bool Application::handleTransportEvents()
         pendingTransportEvents_.pop_front();
 
         changed = processTransportEvent(event) || changed;
-        ++processed;
-        if (processed >= kTransportEventsPerPump) {
+        ++processedEvents;
+        if (processedEvents >= kTransportEventsPerPump) {
             break;
         }
         if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) {
             break;
         }
     }
-    comm.lastPumpEvents = processed;
-    comm.lastPumpTransportMs = elapsedMilliseconds(startedAt, std::chrono::steady_clock::now());
-    return changed || !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty();
+    return changed;
 }
 
 bool Application::processPendingRxBytes(const std::size_t maxBytes)

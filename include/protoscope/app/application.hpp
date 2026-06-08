@@ -9,6 +9,7 @@
 #include "protoscope/transport/transport.hpp"
 
 #include <cstdint>
+#include <chrono>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -118,6 +119,12 @@ private:
                                  const scripting::ScriptRuntimeLoadResult& loadResult);
     void refreshTransferFrameDisplayAfterProtocolReload();
     bool handleTransportEvents();
+    void resetTransportPumpMetrics();
+    void pullTransportEventsFromTransport();
+    bool drainTransportEventQueues(const std::chrono::steady_clock::time_point& startedAt,
+                                   std::size_t maxRxBytes,
+                                   std::size_t& processedEvents,
+                                   std::size_t& processedRxBytes);
     bool processTransportEvent(const transport::TransportEvent& event);
     bool processTransportOpenEvent(const transport::TransportOpenEvent& event);
     bool processTransportCloseEvent(const transport::TransportCloseEvent& event);
