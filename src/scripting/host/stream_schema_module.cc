@@ -227,6 +227,39 @@ std::optional<StreamCountExpressionOp> parseArithmeticCountOp(const std::string&
     return std::nullopt;
 }
 
+struct ArithmeticCountArgument {
+    std::optional<std::int64_t> value;
+    std::shared_ptr<StreamCountExpression> expression;
+};
+
+std::optional<ArithmeticCountArgument> parseArithmeticCountArgument(const sol::table& table,
+                                                                    const std::string& op,
+                                                                    std::string& error)
+{
+    ArithmeticCountArgument argument;
+    if (op == "sub") {
+        argument.value = luaIntegerValue(table["value"]);
+        if (!argument.value.has_value()) {
+            argument.value = luaIntegerValue(table["by"]);
+        }
+    } else {
+        argument.value = luaIntegerValue(table["by"]);
+        const sol::object byObject = table["by"];
+        if (!argument.value.has_value() && byObject.valid() && byObject.get_type() != sol::type::lua_nil) {
+            argument.expression = parseStreamCountExpressionObject(byObject, error);
+            if (!argument.expression) {
+                return std::nullopt;
+            }
+        }
+    }
+
+    if (!argument.value.has_value() && !argument.expression) {
+        error = op + std::string(" count 表达式缺少整数参数");
+        return std::nullopt;
+    }
+    return argument;
+}
+
 std::shared_ptr<StreamCountExpression> parseArithmeticCountExpressionTable(const sol::table& table,
                                                                            const std::string& op,
                                                                            std::string& error)
@@ -236,33 +269,16 @@ std::shared_ptr<StreamCountExpression> parseArithmeticCountExpressionTable(const
         return nullptr;
     }
 
-    std::optional<std::int64_t> argument;
-    std::shared_ptr<StreamCountExpression> argumentExpression;
-    if (op == "sub") {
-        argument = luaIntegerValue(table["value"]);
-        if (!argument.has_value()) {
-            argument = luaIntegerValue(table["by"]);
-        }
-    } else {
-        argument = luaIntegerValue(table["by"]);
-        const sol::object byObject = table["by"];
-        if (!argument.has_value() && byObject.valid() && byObject.get_type() != sol::type::lua_nil) {
-            argumentExpression = parseStreamCountExpressionObject(byObject, error);
-            if (!argumentExpression) {
-                return nullptr;
-            }
-        }
-    }
-    if (!argument.has_value() && !argumentExpression) {
-        error = op + std::string(" count 表达式缺少整数参数");
+    auto argument = parseArithmeticCountArgument(table, op, error);
+    if (!argument.has_value()) {
         return nullptr;
     }
 
     auto expression = std::make_shared<StreamCountExpression>();
     expression->op = *parseArithmeticCountOp(op);
     expression->operand = std::move(operand);
-    expression->argument = argument.value_or(0);
-    expression->argumentExpression = std::move(argumentExpression);
+    expression->argument = argument->value.value_or(0);
+    expression->argumentExpression = std::move(argument->expression);
     return expression;
 }
 
