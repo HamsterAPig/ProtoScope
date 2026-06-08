@@ -335,6 +335,10 @@ private:
     bool rawCaptureImportDialogOpened_{false};
     std::string rawCaptureImportPath_;
     std::string rawCaptureImportError_;
+    bool rawCaptureReplayTimelineDialogOpen_{false};
+    bool rawCaptureReplayTimelineDialogOpened_{false};
+    std::string rawCaptureReplayTimelinePath_;
+    std::string rawCaptureReplayTimelineError_;
     bool rawCaptureExportDialogOpen_{false};
     bool rawCaptureExportDialogOpened_{false};
     std::string rawCaptureExportPath_;

@@ -1667,10 +1667,20 @@ void test_application_raw_capture_replay_timeline_steps_events()
         .protocolDir = lua.protocolDir,
         .sampleFrequencyHz = 1000.0,
         .capturedAtMs = 123,
-        .payload = {0x11, 0x22},
+        .payload = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66},
         .events = {{.type = protoscope::plot::RawCaptureEventType::RxBytes,
                     .timestampMs = 223,
                     .bytes = {0x11, 0x22},
+                    .profile = {},
+                    .plotSetup = {}},
+                   {.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                    .timestampMs = 243,
+                    .bytes = {0x33, 0x44},
+                    .profile = {},
+                    .plotSetup = {}},
+                   {.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                    .timestampMs = 263,
+                    .bytes = {0x55, 0x66},
                     .profile = {},
                     .plotSetup = {}}},
     };
@@ -1679,7 +1689,8 @@ void test_application_raw_capture_replay_timeline_steps_events()
     require(application.loadRawCaptureReplayTimeline(capture, error), "载入原始回放时间轴应成功");
     auto status = application.rawCaptureReplayStatus();
     require(status.loaded && !status.playing, "载入后应处于已载入且暂停状态");
-    require(status.eventIndex == 0 && status.eventCount == 1, "载入后时间轴应指向首个事件");
+    require(status.eventIndex == 0 && status.eventCount == 3, "载入后时间轴应指向首个事件");
+    require(status.progress == 0.0, "载入后进度应为 0");
 
     require(application.playRawCaptureReplay(error), "继续回放应成功");
     application.pumpOnce();
@@ -1691,17 +1702,38 @@ void test_application_raw_capture_replay_timeline_steps_events()
     require(application.stepRawCaptureReplay(error), "单步回放首个事件应成功");
     status = application.rawCaptureReplayStatus();
     require(status.loaded && !status.playing, "单步后仍应保留时间轴上下文");
-    require(status.eventIndex == 1 && status.eventCount == 1, "单步后事件索引应前进");
+    require(status.eventIndex == 1 && status.eventCount == 3, "单步后事件索引应前进");
+    require(status.progress > 0.3 && status.progress < 0.4, "单步后进度应反映当前事件位置");
     require(application.docks().waveState().rawCapture.payload == capture.payload, "单步后应保留原始回放 payload");
+
+    require(application.seekRawCaptureReplay(2, error), "回放时间轴应可定位到中间事件");
+    status = application.rawCaptureReplayStatus();
+    require(status.loaded && !status.playing, "暂停状态定位到中间事件后仍应暂停");
+    require(status.eventIndex == 2 && status.eventCount == 3, "定位到中间事件后事件索引应正确");
+
+    require(application.playRawCaptureReplay(error), "中间位置继续播放应成功");
+    require(application.seekRawCaptureReplay(1, error), "播放中定位应成功并恢复播放状态");
+    status = application.rawCaptureReplayStatus();
+    require(status.loaded && status.playing, "播放中定位到未结束位置后应恢复播放状态");
+    require(status.eventIndex == 1, "播放中定位后事件索引应正确");
+    application.pauseRawCaptureReplay();
+
+    require(application.seekRawCaptureReplay(status.eventCount, error), "回放时间轴应可定位到末尾");
+    status = application.rawCaptureReplayStatus();
+    require(status.loaded && !status.playing, "定位到末尾后应停止播放");
+    require(status.eventIndex == status.eventCount && status.progress == 1.0, "定位到末尾后进度应为 100%");
 
     require(application.seekRawCaptureReplay(0, error), "回放时间轴应可重新定位到开头");
     require(application.playRawCaptureReplay(error), "回放时间轴继续播放应成功");
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    std::this_thread::sleep_for(std::chrono::milliseconds(180));
     application.pumpOnce();
     status = application.rawCaptureReplayStatus();
     require(status.loaded && !status.playing, "自动播放到末尾后应保留时间轴且停止播放");
-    require(status.eventIndex == 1 && status.eventCount == 1, "自动播放到末尾后应保留末尾位置");
+    require(status.eventIndex == 3 && status.eventCount == 3, "自动播放到末尾后应保留末尾位置");
     require(application.seekRawCaptureReplay(0, error), "自动播放结束后仍应可重新定位");
+    application.unloadRawCaptureReplayTimeline();
+    status = application.rawCaptureReplayStatus();
+    require(!status.loaded && !status.playing && status.eventCount == 0, "卸载后应清空回放时间轴状态");
 
     application.shutdown();
 }
@@ -2243,6 +2275,9 @@ void test_application_transfer_log_frame_view_waits_for_rx_full_frame()
     });
     require(application.initialize(), "应用初始化失败");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+    auto config = application.captureConfig();
+    config.gui.replayRawHistoryOnSchemaSwitch = true;
+    require(application.applyConfig(config), "旧 raw 历史回放配置应可应用");
 
     application.openTransport();
     require(waitUntil([&application] {
@@ -2288,6 +2323,9 @@ void test_application_transfer_log_frame_view_keeps_unmatched_tx_raw()
     });
     require(application.initialize(), "应用初始化失败");
     require(application.reloadProtocolDirectory(protocolDir, true), "stream 协议应可加载");
+    auto config = application.captureConfig();
+    config.gui.replayRawHistoryOnSchemaSwitch = true;
+    require(application.applyConfig(config), "旧 raw 历史回放配置应可应用");
     application.openTransport();
     application.pumpOnce();
 
@@ -2331,15 +2369,19 @@ void test_application_switching_to_parsed_view_defaults_to_new_stream_only()
     require(hasReceiveBytes(application.docks().receiveState(), {0xAA, 0x55, 0x00, 0x20}),
             "raw 模式下应先记录旧 chunk");
 
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
     require(application.docks().receiveState().frameRows.empty(), "旧 raw 历史只有半帧时不应凭空生成逐帧行");
 
-    transportState->pendingEvents.push_back(
-        protoscope::transport::TransportBytesEvent{ctx, makeRawImportStreamFrame(0x34)});
+    const auto frame = makeRawImportStreamFrame(0x34);
+    transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, frame});
     application.pumpOnce();
 
     const auto& receive = application.docks().receiveState();
-    require(receive.frameRows.empty(), "回放旧半帧后，新完整帧不应绕过同一 parser 顺序约束");
+    require(receive.frameRows.size() == 1, "默认不回放旧 raw 历史时，新完整帧应可独立解析");
+    require(receive.frameRows.front().bytes == frame, "默认不回放旧 raw 历史时，逐帧行应来自切换后的新数据");
+    require(receive.frameRows.front().message.find("value=52") != std::string::npos,
+            "默认不回放旧 raw 历史时，逐帧行应包含新帧字段值");
 }
 
 void test_application_switching_to_parsed_view_can_replay_old_raw_history()
@@ -2371,6 +2413,7 @@ void test_application_switching_to_parsed_view_can_replay_old_raw_history()
     transportState->pendingEvents.push_back(protoscope::transport::TransportBytesEvent{ctx, {0xAA, 0x55, 0x00, 0x20}});
     application.pumpOnce();
 
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
     require(application.docks().receiveState().frameRows.empty(), "旧 raw 历史只有半帧时不应凭空生成逐帧行");
 

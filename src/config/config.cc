@@ -1156,11 +1156,13 @@ std::vector<std::string> ConfigStore::scanProtocolDirectories(const std::filesys
         return results;
     }
 
-    for (const auto& entry : std::filesystem::directory_iterator(rootDir, ec)) {
+    for (const auto& entry :
+         std::filesystem::directory_iterator(rootDir, std::filesystem::directory_options::skip_permission_denied, ec)) {
         if (ec) {
             break;
         }
-        if (!entry.is_directory()) {
+        std::error_code entryError;
+        if (!entry.is_directory(entryError) || entryError) {
             continue;
         }
         if (!protocolEntryExists(entry.path())) {

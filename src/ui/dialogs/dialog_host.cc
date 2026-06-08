@@ -3,6 +3,7 @@
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/keyboard_shortcuts.hpp"
 
+#include <cstdio>
 #include <optional>
 #include <string_view>
 #include <system_error>
@@ -357,8 +358,9 @@ void GuiRuntime::openRawCaptureImportDialog()
 void GuiRuntime::openRawCaptureReplayTimelineDialog()
 {
 #if defined(_WIN32)
-    const auto defaultPath = rawCaptureImportPath_.empty() ? executableDir_ / "captures" / "capture.psraw"
-                                                           : std::filesystem::path(rawCaptureImportPath_);
+    const auto defaultPath =
+        rawCaptureReplayTimelinePath_.empty() ? executableDir_ / "captures" / "capture.psraw"
+                                              : std::filesystem::path(rawCaptureReplayTimelinePath_);
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
                                        L"载入原始回放时间轴",
@@ -374,7 +376,12 @@ void GuiRuntime::openRawCaptureReplayTimelineDialog()
         loadRawCaptureReplayTimelineFromPath(*path);
     }
 #else
-    application_.setStatusMessage("当前平台暂未实现原始回放时间轴文件对话框");
+    rawCaptureReplayTimelineDialogOpen_ = true;
+    rawCaptureReplayTimelineDialogOpened_ = false;
+    rawCaptureReplayTimelineError_.clear();
+    if (rawCaptureReplayTimelinePath_.empty()) {
+        rawCaptureReplayTimelinePath_ = (executableDir_ / "captures" / "capture.psraw").generic_string();
+    }
 #endif
 }
 
@@ -653,34 +660,36 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path)
 
 void GuiRuntime::loadRawCaptureReplayTimelineFromPath(const std::filesystem::path& path)
 {
-    rawCaptureImportPath_ = path.generic_string();
+    rawCaptureReplayTimelinePath_ = path.generic_string();
     std::string error;
     const auto capture = plot::readRawCaptureFile(path, error);
     if (!capture.has_value()) {
-        rawCaptureImportError_ = error;
+        rawCaptureReplayTimelineError_ = error;
         application_.setStatusMessage("原始回放时间轴载入失败: " + error);
         return;
     }
     std::error_code protocolEntryError;
     if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
-        rawCaptureImportError_ = "回放文件引用的协议目录不存在: " + capture->protocolDir;
+        rawCaptureReplayTimelineError_ = "回放文件引用的协议目录不存在: " + capture->protocolDir;
         if (protocolEntryError) {
-            rawCaptureImportError_ += " (" + protocolEntryError.message() + ")";
+            rawCaptureReplayTimelineError_ += " (" + protocolEntryError.message() + ")";
         }
-        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureImportError_);
+        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
         return;
     }
 
     const auto& currentLua = application_.docks().luaState();
     if (currentLua.protocolDir != capture->protocolDir && !switchProtocolWorkspace(capture->protocolDir, false)) {
-        rawCaptureImportError_ = "切换回放协议失败";
-        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureImportError_);
+        rawCaptureReplayTimelineError_ = "切换回放协议失败";
+        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
     } else if (!application_.loadRawCaptureReplayTimeline(*capture, error)) {
-        rawCaptureImportError_ = error;
+        rawCaptureReplayTimelineError_ = error;
         application_.setStatusMessage("原始回放时间轴载入失败: " + error);
     } else {
         application_.setStatusMessage("原始回放时间轴已载入");
-        rawCaptureImportError_.clear();
+        rawCaptureReplayTimelineDialogOpen_ = false;
+        rawCaptureReplayTimelineDialogOpened_ = false;
+        rawCaptureReplayTimelineError_.clear();
     }
 }
 
@@ -1045,6 +1054,43 @@ void GuiRuntime::drawRawCaptureFileDialogs()
                 rawCaptureImportDialogOpen_ = false;
                 rawCaptureImportDialogOpened_ = false;
                 rawCaptureImportError_.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    if (rawCaptureReplayTimelineDialogOpen_) {
+        const char* popupId = "载入原始回放时间轴##psraw_replay_timeline";
+        if (!rawCaptureReplayTimelineDialogOpened_) {
+            ImGui::OpenPopup(popupId);
+            rawCaptureReplayTimelineDialogOpened_ = true;
+        }
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+            ImGui::TextUnformatted("请输入 .psraw 文件路径");
+            char buffer[1024]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", rawCaptureReplayTimelinePath_.c_str());
+            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+                rawCaptureReplayTimelinePath_ = buffer;
+            }
+            if (!rawCaptureReplayTimelineError_.empty()) {
+                ImGui::Spacing();
+                ImGui::TextColored(
+                    ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureReplayTimelineError_.c_str());
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("载入", ImVec2(90.0F, 0.0F))) {
+                loadRawCaptureReplayTimelineFromPath(rawCaptureReplayTimelinePath_);
+                if (!rawCaptureReplayTimelineDialogOpen_) {
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+                rawCaptureReplayTimelineDialogOpen_ = false;
+                rawCaptureReplayTimelineDialogOpened_ = false;
+                rawCaptureReplayTimelineError_.clear();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();

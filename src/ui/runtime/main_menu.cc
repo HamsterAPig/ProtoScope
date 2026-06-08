@@ -91,10 +91,16 @@ void GuiRuntime::drawMainMenu()
 
     if (ImGui::BeginMenu("回放")) {
         const auto status = application_.rawCaptureReplayStatus();
-        ImGui::Text("事件 %zu / %zu", status.eventIndex, status.eventCount);
+        const bool canAdvance = status.loaded && status.eventIndex < status.eventCount;
+        const char* replayState = "未载入";
+        if (status.loaded) {
+            replayState = status.playing ? "播放中" : (status.eventIndex >= status.eventCount ? "已结束" : "已暂停");
+        }
+        ImGui::Text("状态 %s", replayState);
+        ImGui::Text("位置 %zu / %zu (%.1f%%)", status.eventIndex, status.eventCount, status.progress * 100.0);
         ImGui::Text("倍速 %.1fx", status.speed);
         std::string error;
-        if (ImGui::MenuItem("继续", nullptr, false, status.loaded && !status.playing)) {
+        if (ImGui::MenuItem("继续", nullptr, false, canAdvance && !status.playing)) {
             if (!application_.playRawCaptureReplay(error)) {
                 application_.setStatusMessage("原始回放继续失败: " + error);
             }
@@ -102,10 +108,13 @@ void GuiRuntime::drawMainMenu()
         if (ImGui::MenuItem("暂停", nullptr, false, status.loaded && status.playing)) {
             application_.pauseRawCaptureReplay();
         }
-        if (ImGui::MenuItem("单步", nullptr, false, status.loaded)) {
+        if (ImGui::MenuItem("单步", nullptr, false, canAdvance)) {
             if (!application_.stepRawCaptureReplay(error)) {
                 application_.setStatusMessage("原始回放单步失败: " + error);
             }
+        }
+        if (ImGui::MenuItem("停止并卸载时间轴", nullptr, false, status.loaded)) {
+            application_.unloadRawCaptureReplayTimeline();
         }
         if (ImGui::BeginMenu("倍速", status.loaded)) {
             for (const double speed : {0.5, 1.0, 2.0, 4.0, 8.0}) {
@@ -124,6 +133,11 @@ void GuiRuntime::drawMainMenu()
         }
         if (ImGui::MenuItem("定位到中点", nullptr, false, status.loaded && status.eventCount > 0)) {
             if (!application_.seekRawCaptureReplay(status.eventCount / 2, error)) {
+                application_.setStatusMessage("原始回放定位失败: " + error);
+            }
+        }
+        if (ImGui::MenuItem("定位到末尾", nullptr, false, status.loaded && status.eventCount > 0)) {
+            if (!application_.seekRawCaptureReplay(status.eventCount, error)) {
                 application_.setStatusMessage("原始回放定位失败: " + error);
             }
         }

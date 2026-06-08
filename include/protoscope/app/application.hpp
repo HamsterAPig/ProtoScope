@@ -55,9 +55,11 @@ public:
         bool playing{false};
         std::size_t eventIndex{0};
         std::size_t eventCount{0};
+        double progress{0.0};
         double speed{1.0};
     };
     bool loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture, std::string& error);
+    void unloadRawCaptureReplayTimeline();
     bool playRawCaptureReplay(std::string& error);
     void pauseRawCaptureReplay();
     bool stepRawCaptureReplay(std::string& error);

@@ -27,6 +27,7 @@ namespace protoscope::app {
 namespace {
 
     constexpr std::size_t kRawCaptureReplayChunkBytes = 1024;
+    constexpr std::size_t kRawCaptureReplaySeekNoticeEvents = 4096;
     constexpr std::size_t kTransportEventsPerPump = 256;
     constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
 
@@ -1229,8 +1230,11 @@ void Application::rebuildTransferFrameRows()
 
 void Application::activateParsedTransferLogView()
 {
-    // 核心流程：RawChunks 不实时生成逐帧行；用户切到 ParsedFrames 时再按原始历史完整回放。
+    // 核心流程：默认只解析切换后的新 raw 行；开启兼容开关时才重放旧 RawChunks 历史。
     resetTransferFrameDisplayState();
+    if (!runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch) {
+        return;
+    }
     for (const auto& row : dockStore_.receiveState().rows) {
         appendTransferFrameRows(row);
     }
@@ -1938,6 +1942,16 @@ bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& c
     return true;
 }
 
+void Application::unloadRawCaptureReplayTimeline()
+{
+    if (!rawCaptureReplay_.loaded) {
+        return;
+    }
+    cancelRawCaptureImportReplay();
+    rawCaptureReplay_ = RawCaptureReplayState{};
+    dockStore_.waveState().statusMessage = "原始回放时间轴已卸载";
+}
+
 bool Application::playRawCaptureReplay(std::string& error)
 {
     if (!rawCaptureReplay_.loaded) {
@@ -1975,6 +1989,9 @@ bool Application::seekRawCaptureReplay(const std::size_t eventIndex, std::string
     const auto speed = rawCaptureReplay_.speed;
     const bool wasPlaying = rawCaptureReplay_.playing;
     const auto targetIndex = (std::min)(eventIndex, capture.events.empty() ? std::size_t{1} : capture.events.size());
+    if (targetIndex >= kRawCaptureReplaySeekNoticeEvents) {
+        dockStore_.waveState().statusMessage = "正在从头重放原始回放时间轴以完成定位...";
+    }
     prepareRawCaptureImportReplay(capture);
     rawCaptureReplay_ = RawCaptureReplayState{};
     rawCaptureReplay_.loaded = true;
@@ -1997,6 +2014,9 @@ bool Application::seekRawCaptureReplay(const std::size_t eventIndex, std::string
         rawCaptureReplay_.playing = wasPlaying;
         rawCaptureReplay_.lastPumpMs = nowMs();
     }
+    if (targetIndex >= kRawCaptureReplaySeekNoticeEvents) {
+        dockStore_.waveState().statusMessage = "原始回放定位完成";
+    }
     return true;
 }
 
@@ -2007,12 +2027,20 @@ void Application::setRawCaptureReplaySpeed(const double speed)
 
 Application::RawCaptureReplayStatus Application::rawCaptureReplayStatus() const
 {
+    const auto eventCount =
+        rawCaptureReplay_.capture.events.empty() ? (rawCaptureReplay_.capture.payload.empty() ? 0U : 1U)
+                                                : rawCaptureReplay_.capture.events.size();
+    const double progress = eventCount == 0U
+                                ? 0.0
+                                : (std::min)(1.0,
+                                             static_cast<double>(rawCaptureReplay_.eventIndex) /
+                                                 static_cast<double>(eventCount));
     return RawCaptureReplayStatus{
         .loaded = rawCaptureReplay_.loaded,
         .playing = rawCaptureReplay_.playing,
         .eventIndex = rawCaptureReplay_.eventIndex,
-        .eventCount = rawCaptureReplay_.capture.events.empty() ? (rawCaptureReplay_.capture.payload.empty() ? 0U : 1U)
-                                                               : rawCaptureReplay_.capture.events.size(),
+        .eventCount = eventCount,
+        .progress = progress,
         .speed = rawCaptureReplay_.speed,
     };
 }
