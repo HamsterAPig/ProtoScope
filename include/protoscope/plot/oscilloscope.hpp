@@ -135,6 +135,7 @@ struct ChannelView {
     std::optional<std::array<float, 4>> color{};
     std::optional<float> lineWidth{};
     std::size_t totalSamples{0};
+    std::size_t sampleIndexOffset{0};
     std::size_t visibleBegin{0};
     std::size_t visibleEnd{0};
     const WaveSample* samples{nullptr};
@@ -200,6 +201,7 @@ private:
     struct ChannelBuffer {
         ChannelSpec spec{};
         std::vector<WaveSample> samples;
+        std::size_t sampleIndexOffset{0};
     };
 
     ChannelBuffer& ensureChannel(std::size_t channelIndex);

@@ -260,17 +260,19 @@ void resolveDisplayTimeAxis(const WaveSnapshot& snapshot, double sampleFrequency
 }
 
 double resolveDisplaySampleTime(const WaveSample& source,
+                                std::size_t sampleIndexOffset,
                                 std::size_t sampleIndex,
                                 double sampleFrequencyHz,
                                 WaveTimeAxisSource axisSource)
 {
+    const std::size_t globalSampleIndex = sampleIndexOffset + sampleIndex;
     if (axisSource == WaveTimeAxisSource::SampleFrequency) {
-        return static_cast<double>(sampleIndex) / sampleFrequencyHz;
+        return static_cast<double>(globalSampleIndex) / sampleFrequencyHz;
     }
     if (axisSource == WaveTimeAxisSource::ScriptTime) {
         return source.time;
     }
-    return static_cast<double>(sampleIndex);
+    return static_cast<double>(globalSampleIndex);
 }
 
 void fillDisplayChannel(const ChannelView& channel,
@@ -297,7 +299,12 @@ void fillDisplayChannel(const ChannelView& channel,
                             : actualValue * channel.scale + channel.offset;
         const auto outputIndex = sampleIndex - begin;
         display[outputIndex] = {
-            .time = resolveDisplaySampleTime(source, sampleIndex, sampleFrequencyHz, axisSource),
+            .time =
+                resolveDisplaySampleTime(source,
+                                         channel.sampleIndexOffset,
+                                         sampleIndex,
+                                         sampleFrequencyHz,
+                                         axisSource),
             .value = displayValue,
         };
         displayChannel.actualValues[outputIndex] = actualValue;
@@ -340,8 +347,10 @@ void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, do
     const auto beginIndex = static_cast<std::size_t>((std::ceil)(clampedMinTime * sampleFrequencyHz));
     const auto endIndex = static_cast<std::size_t>((std::floor)(clampedMaxTime * sampleFrequencyHz)) + 1U;
     for (auto& channel : snapshot.channels) {
-        channel.visibleBegin = (std::min)(beginIndex, channel.totalSamples);
-        channel.visibleEnd = (std::min)(endIndex, channel.totalSamples);
+        const std::size_t begin = beginIndex <= channel.sampleIndexOffset ? 0 : beginIndex - channel.sampleIndexOffset;
+        const std::size_t end = endIndex <= channel.sampleIndexOffset ? 0 : endIndex - channel.sampleIndexOffset;
+        channel.visibleBegin = (std::min)(begin, channel.totalSamples);
+        channel.visibleEnd = (std::min)(end, channel.totalSamples);
     }
 }
 
