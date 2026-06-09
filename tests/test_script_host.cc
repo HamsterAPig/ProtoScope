@@ -3546,6 +3546,8 @@ static const TestCase kAllTests[] = {
     {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
     {"wave_visible_channel_bounds_ignore_hidden_channels", &test_wave_visible_channel_bounds_ignore_hidden_channels},
     {"wave_hidden_channel_policy_defaults_to_visible_only", &test_wave_hidden_channel_policy_defaults_to_visible_only},
+    {"wave_status_overlay_items_only_show_non_default_states",
+     &test_wave_status_overlay_items_only_show_non_default_states},
     {"wave_channel_reset_all_uses_protocol_default", &test_wave_channel_reset_all_uses_protocol_default},
     {"wave_channel_reset_scale_offset_preserves_label_and_ratio",
      &test_wave_channel_reset_scale_offset_preserves_label_and_ratio},

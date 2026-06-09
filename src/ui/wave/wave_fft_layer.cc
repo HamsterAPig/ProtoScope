@@ -775,6 +775,7 @@ namespace {
                 if (view.showMeasurementOverlay) {
                     drawCursorOverlay(cursorReadouts);
                 }
+                drawWaveStatusOverlay(view);
                 const bool axisResetConsumed = handleFftAxisDoubleClick(view, *fftFrame, false);
                 const bool panConsumed =
                     !axisResetConsumed && handleFftPan(view, *fftFrame, false, minFrequencyWidth, cursorHeld);

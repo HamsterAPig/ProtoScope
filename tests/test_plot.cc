@@ -20,6 +20,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -1763,6 +1764,33 @@ void test_wave_hidden_channel_policy_defaults_to_visible_only()
             "配置默认隐藏 CH 策略应只让可见通道参与派生视图");
     require(view.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "运行态默认隐藏 CH 策略应只让可见通道参与派生视图");
+}
+
+void test_wave_status_overlay_items_only_show_non_default_states()
+{
+    protoscope::plot::WaveViewState view;
+    require(protoscope::ui::buildWaveStatusOverlayItems(view).empty(), "默认波形状态不应显示图内状态标签");
+
+    view.autoFollowLatest = false;
+    view.fft.enabled = true;
+    view.zoomSelectionActive = true;
+    view.lockVerticalRange = true;
+    view.showCursors = false;
+    view.showHoverReadout = false;
+
+    const auto items = protoscope::ui::buildWaveStatusOverlayItems(view);
+    require(items.size() == 6, "非默认波形状态应生成对应图内状态标签");
+    require(items[0].label == std::string_view("暂停跟随"), "暂停跟随状态应排在第一位");
+    require(items[1].label == std::string_view("FFT"), "FFT 状态应排在第二位");
+    require(items[2].label == std::string_view("框选"), "框选状态应排在第三位");
+    require(items[3].label == std::string_view("纵轴锁定"), "纵轴锁定状态应排在第四位");
+    require(items[4].label == std::string_view("游标隐藏"), "游标隐藏状态应排在第五位");
+    require(items[5].label == std::string_view("读数隐藏"), "悬停读数隐藏状态应排在第六位");
+
+    view.zoomSelectionActive = false;
+    view.zoomSelectionDragging = true;
+    const auto draggingItems = protoscope::ui::buildWaveStatusOverlayItems(view);
+    require(draggingItems[2].label == std::string_view("框选"), "框选拖动中也应保留框选状态标签");
 }
 
 void test_wave_channel_reset_all_uses_protocol_default()

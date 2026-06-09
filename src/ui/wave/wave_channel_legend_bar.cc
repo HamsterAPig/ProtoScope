@@ -24,14 +24,62 @@ namespace {
         return cardStyle;
     }
 
+    void drawActiveChannelHeaderSummary(const plot::WaveDockState& wave, float reservedRightWidth)
+    {
+        const auto& view = wave.view;
+        const auto spec = wave.buffer.channelSpec(view.measurementChannelIndex);
+        if (!spec.has_value()) {
+            return;
+        }
+
+        ImGui::SameLine();
+        const auto& style = ImGui::GetStyle();
+        const float contentRight = ImGui::GetContentRegionMax().x - reservedRightWidth - style.ItemSpacing.x;
+        const float summaryStartX = ImGui::GetCursorPosX();
+        const float swatchSize = ImGui::GetTextLineHeight() * 0.72F;
+        if (contentRight - summaryStartX <= swatchSize + style.ItemSpacing.x) {
+            return;
+        }
+
+        const ImVec2 cursorScreenPos = ImGui::GetCursorScreenPos();
+        const float swatchOffsetY = (ImGui::GetTextLineHeight() - swatchSize) * 0.5F;
+        const ImVec2 swatchMin(cursorScreenPos.x, cursorScreenPos.y + swatchOffsetY);
+        const ImVec2 swatchMax(swatchMin.x + swatchSize, swatchMin.y + swatchSize);
+        auto* drawList = ImGui::GetWindowDrawList();
+        drawList->AddRectFilled(
+            swatchMin, swatchMax, ImGui::ColorConvertFloat4ToU32(channelColor(*spec, view.measurementChannelIndex)), 2.0F);
+        ImGui::Dummy(ImVec2(swatchSize, ImGui::GetTextLineHeight()));
+        const bool swatchHovered = ImGui::IsItemHovered();
+
+        const std::string shortText = "CH" + std::to_string(view.measurementChannelIndex + 1);
+        const std::string fullText = "当前 " + shortText + " · " + spec->label;
+        const float textStartX = summaryStartX + swatchSize + style.ItemInnerSpacing.x;
+        const float textWidth = contentRight - textStartX;
+        const std::string& visibleText =
+            ImGui::CalcTextSize(fullText.c_str()).x <= textWidth ? fullText : shortText;
+        if (ImGui::CalcTextSize(visibleText.c_str()).x > textWidth) {
+            if (swatchHovered) {
+                ImGui::SetTooltip("当前通道：%s", fullText.c_str());
+            }
+            return;
+        }
+
+        ImGui::SameLine(0.0F, style.ItemInnerSpacing.x);
+        ImGui::TextDisabled("%s", visibleText.c_str());
+        if (swatchHovered || ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("当前通道：%s", fullText.c_str());
+        }
+    }
+
     void drawChannelLegendHeader(plot::WaveDockState& wave)
     {
         const auto& view = wave.view;
         ImGui::AlignTextToFramePadding();
         ImGui::Text("图例 / 吸附范围：%s", snapScopeName(view.cursorSnapScope));
-        ImGui::SameLine();
         const float buttonWidth =
             ImGui::CalcTextSize(wave.legendCollapsed ? "v" : "^").x + ImGui::GetStyle().FramePadding.x * 2.0F;
+        drawActiveChannelHeaderSummary(wave, buttonWidth);
+        ImGui::SameLine();
         ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - buttonWidth));
         if (ImGui::SmallButton(wave.legendCollapsed ? "v##wave_channel_legend_collapse"
                                                     : "^##wave_channel_legend_collapse")) {
