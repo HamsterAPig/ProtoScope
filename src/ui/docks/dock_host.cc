@@ -1316,23 +1316,28 @@ bool GuiRuntime::drawValueTableControl(const scripting::ControlSnapshot& control
     ImGui::TableSetupColumn("value");
     ImGui::TableSetupColumn("unit");
     ImGui::TableHeadersRow();
-    for (std::size_t index = 0; index < descriptor.valueRows.size(); ++index) {
-        const auto& row = descriptor.valueRows[index];
-        const char* rowValue = "";
-        if (index < value->rows.size() && value->rows[index].set) {
-            rowValue = value->rows[index].value.c_str();
-        }
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(descriptor.valueRows.size()));
+    while (clipper.Step()) {
+        for (int visibleIndex = clipper.DisplayStart; visibleIndex < clipper.DisplayEnd; ++visibleIndex) {
+            const auto index = static_cast<std::size_t>(visibleIndex);
+            const auto& row = descriptor.valueRows[index];
+            const char* rowValue = "";
+            if (index < value->rows.size() && value->rows[index].set) {
+                rowValue = value->rows[index].value.c_str();
+            }
 
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted(row.label.c_str());
-        if (!row.note.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
-            ImGui::SetTooltip("%s", row.note.c_str());
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(row.label.c_str());
+            if (!row.note.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                ImGui::SetTooltip("%s", row.note.c_str());
+            }
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(rowValue);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(row.unit.c_str());
         }
-        ImGui::TableSetColumnIndex(1);
-        ImGui::TextUnformatted(rowValue);
-        ImGui::TableSetColumnIndex(2);
-        ImGui::TextUnformatted(row.unit.c_str());
     }
     ImGui::EndTable();
     return false;

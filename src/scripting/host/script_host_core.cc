@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -339,15 +340,57 @@ ValueTableValue defaultValueTableFor(const ControlDescriptor& descriptor)
     return value;
 }
 
+struct ValueTableBitSource {
+    std::optional<std::uint64_t> integer;
+    std::vector<std::uint8_t> bytes;
+
+    [[nodiscard]] bool bit(std::uint32_t index) const
+    {
+        if (integer.has_value()) {
+            return index < 64U && (((*integer >> index) & 0x1ULL) != 0ULL);
+        }
+
+        const auto byteIndex = static_cast<std::size_t>(index / 8U);
+        if (byteIndex >= bytes.size()) {
+            return false;
+        }
+        const auto bitIndex = index % 8U;
+        return ((bytes[byteIndex] >> bitIndex) & 0x1U) != 0U;
+    }
+};
+
+ValueTableBitSource valueTableBitSourceFromInteger(std::uint64_t value)
+{
+    ValueTableBitSource source;
+    source.integer = value;
+    return source;
+}
+
+ValueTableBitSource valueTableBitSourceFromBytes(std::vector<std::uint8_t> bytes)
+{
+    ValueTableBitSource source;
+    source.bytes = std::move(bytes);
+    return source;
+}
+
 std::optional<std::uint32_t> readLuaU32(const sol::object& object, std::string_view fieldName, std::string& error)
 {
     if (!object.valid() || object.get_type() == sol::type::lua_nil) {
         error = std::string(fieldName) + " 必须是整数";
         return std::nullopt;
     }
-    if (!object.is<int>() && !object.is<double>()) {
+    if (!object.is<int>() && !object.is<lua_Integer>() && !object.is<double>()) {
         error = std::string(fieldName) + " 必须是整数";
         return std::nullopt;
+    }
+
+    if (object.is<int>() || object.is<lua_Integer>()) {
+        const auto integer = object.as<lua_Integer>();
+        if (integer < 0 || integer > static_cast<lua_Integer>(std::numeric_limits<std::uint32_t>::max())) {
+            error = std::string(fieldName) + " 必须是 0..4294967295 范围内的整数";
+            return std::nullopt;
+        }
+        return static_cast<std::uint32_t>(integer);
     }
 
     const auto number = object.as<double>();
@@ -359,17 +402,111 @@ std::optional<std::uint32_t> readLuaU32(const sol::object& object, std::string_v
     return static_cast<std::uint32_t>(number);
 }
 
-std::optional<std::uint8_t> readLuaBitIndex(const sol::object& object, std::string& error)
+std::optional<std::uint32_t> readLuaBitIndex(const sol::object& object, std::string& error)
 {
-    const auto value = readLuaU32(object, "value_table bit", error);
-    if (!value.has_value()) {
+    return readLuaU32(object, "value_table bit", error);
+}
+
+std::string_view trimAsciiWhitespace(std::string_view value)
+{
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
+        value.remove_suffix(1);
+    }
+    return value;
+}
+
+std::optional<std::uint64_t> parseUnsignedIntegerString(std::string_view value, bool& integerLike)
+{
+    value = trimAsciiWhitespace(value);
+    integerLike = false;
+    if (value.empty()) {
         return std::nullopt;
     }
-    if (*value > 15U) {
-        error = "value_table bit 仅支持 0..15";
+
+    int base = 10;
+    if (value.size() > 2 && value[0] == '0' && (value[1] == 'x' || value[1] == 'X')) {
+        integerLike = true;
+        value.remove_prefix(2);
+        base = 16;
+        if (value.empty()) {
+            return std::nullopt;
+        }
+    } else {
+        for (const char ch : value) {
+            if (std::isdigit(static_cast<unsigned char>(ch)) == 0) {
+                return std::nullopt;
+            }
+        }
+        integerLike = true;
+    }
+
+    std::uint64_t parsed = 0;
+    const auto* begin = value.data();
+    const auto* end = value.data() + value.size();
+    const auto result = std::from_chars(begin, end, parsed, base);
+    if (result.ec != std::errc{} || result.ptr != end) {
         return std::nullopt;
     }
-    return static_cast<std::uint8_t>(*value);
+    return parsed;
+}
+
+std::optional<ValueTableBitSource> readLuaBitSourceValue(const sol::object& object, std::string& error)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        error = "value_table bit 源值不能为空";
+        return std::nullopt;
+    }
+
+    if (object.is<std::string>()) {
+        const auto text = object.as<std::string>();
+        bool integerLike = false;
+        const auto integer = parseUnsignedIntegerString(text, integerLike);
+        if (integerLike) {
+            if (!integer.has_value()) {
+                error = "value_table bit 源值字符串必须是非负整数";
+                return std::nullopt;
+            }
+            return valueTableBitSourceFromInteger(*integer);
+        }
+
+        auto bytes = bytesFromLuaObject(object, error);
+        if (!bytes.has_value()) {
+            return std::nullopt;
+        }
+        return valueTableBitSourceFromBytes(std::move(*bytes));
+    }
+
+    if (object.is<int>() || object.is<lua_Integer>()) {
+        const auto integer = object.as<lua_Integer>();
+        if (integer < 0) {
+            error = "value_table bit 源值必须是非负整数";
+            return std::nullopt;
+        }
+        return valueTableBitSourceFromInteger(static_cast<std::uint64_t>(integer));
+    }
+
+    if (object.is<double>()) {
+        const auto number = object.as<double>();
+        if (!std::isfinite(number) || number < 0.0 ||
+            number > static_cast<double>(std::numeric_limits<std::uint64_t>::max()) || std::floor(number) != number) {
+            error = "value_table bit 源值必须是非负整数";
+            return std::nullopt;
+        }
+        return valueTableBitSourceFromInteger(static_cast<std::uint64_t>(number));
+    }
+
+    auto bytes = bytesFromLuaObject(object, error);
+    if (bytes.has_value()) {
+        return valueTableBitSourceFromBytes(std::move(*bytes));
+    }
+
+    if (error.empty()) {
+        error = "value_table bit 源值仅支持非负整数、整数字符串、HEX 字符串、ProtoBuffer 或 number[]";
+    }
+    return std::nullopt;
 }
 
 std::string scalarLuaValueToDisplayString(const sol::object& object)
@@ -394,19 +531,6 @@ std::string scalarLuaValueToDisplayString(const sol::object& object)
     return serializeLuaObject(object, 0);
 }
 
-std::optional<std::uint16_t> luaU16Value(const sol::object& object, std::string& error)
-{
-    const auto value = readLuaU32(object, "value_table bit 源值", error);
-    if (!value.has_value()) {
-        return std::nullopt;
-    }
-    if (*value > 0xFFFFU) {
-        error = "value_table bit 源值必须是 U16";
-        return std::nullopt;
-    }
-    return static_cast<std::uint16_t>(*value);
-}
-
 void ensureValueTableSize(const ControlDescriptor& descriptor, ValueTableValue& value)
 {
     value.rows.resize(descriptor.valueRows.size());
@@ -428,7 +552,7 @@ void setValueTableCell(const ControlDescriptor& descriptor,
 void applyValueTableBitRows(const ControlDescriptor& descriptor,
                             ValueTableValue& value,
                             const std::uint32_t sourceId,
-                            const std::uint16_t sourceValue)
+                            const ValueTableBitSource& sourceValue)
 {
     const auto bitRows = descriptor.valueBitRowsBySourceId.find(sourceId);
     if (bitRows == descriptor.valueBitRowsBySourceId.end()) {
@@ -443,7 +567,7 @@ void applyValueTableBitRows(const ControlDescriptor& descriptor,
         if (!row.bit.has_value()) {
             continue;
         }
-        const auto bitValue = ((sourceValue >> *row.bit) & 0x1U) == 0U ? 0 : 1;
+        const auto bitValue = sourceValue.bit(*row.bit) ? 1 : 0;
         setValueTableCell(descriptor, value, rowIndex, bitValue == 0 ? row.bitValues.zero : row.bitValues.one);
     }
 }
@@ -460,7 +584,7 @@ bool applyValueTableLuaRegisterValue(const ControlDescriptor& descriptor,
     }
 
     if (descriptor.valueBitRowsBySourceId.find(id) != descriptor.valueBitRowsBySourceId.end()) {
-        const auto sourceValue = luaU16Value(object, error);
+        const auto sourceValue = readLuaBitSourceValue(object, error);
         if (!sourceValue.has_value()) {
             return false;
         }
@@ -555,10 +679,10 @@ bool applyValueTableIntegerRegisterValue(const ControlDescriptor& descriptor,
     if (descriptor.valueBitRowsBySourceId.find(id) == descriptor.valueBitRowsBySourceId.end()) {
         return true;
     }
-    if (stored < 0 || stored > 0xFFFF) {
+    if (stored < 0 || stored > static_cast<std::int64_t>(std::numeric_limits<lua_Integer>::max())) {
         return false;
     }
-    applyValueTableBitRows(descriptor, value, id, static_cast<std::uint16_t>(stored));
+    applyValueTableBitRows(descriptor, value, id, valueTableBitSourceFromInteger(static_cast<std::uint64_t>(stored)));
     return true;
 }
 
@@ -574,10 +698,28 @@ bool applyValueTableDoubleRegisterValue(const ControlDescriptor& descriptor,
     if (descriptor.valueBitRowsBySourceId.find(id) == descriptor.valueBitRowsBySourceId.end()) {
         return true;
     }
-    if (!std::isfinite(stored) || stored < 0.0 || stored > 65535.0 || std::floor(stored) != stored) {
+    if (!std::isfinite(stored) || stored < 0.0 || stored > static_cast<double>(std::numeric_limits<lua_Integer>::max()) ||
+        std::floor(stored) != stored) {
         return false;
     }
-    applyValueTableBitRows(descriptor, value, id, static_cast<std::uint16_t>(stored));
+    applyValueTableBitRows(descriptor, value, id, valueTableBitSourceFromInteger(static_cast<std::uint64_t>(stored)));
+    return true;
+}
+
+bool applyValueTableBytesRegisterValue(const ControlDescriptor& descriptor,
+                                       ValueTableValue& value,
+                                       const std::uint32_t id,
+                                       const std::vector<std::uint8_t>& stored)
+{
+    const auto rowIter = descriptor.valueRowById.find(id);
+    if (rowIter != descriptor.valueRowById.end()) {
+        setValueTableCell(descriptor, value, rowIter->second, protocol_utils::bytesToHex(stored));
+    }
+    if (descriptor.valueBitRowsBySourceId.find(id) == descriptor.valueBitRowsBySourceId.end()) {
+        return rowIter != descriptor.valueRowById.end();
+    }
+    // stream 的 bytes 字段整体视为一个 bit 源：bit0 是第 1 个字节最低位，bit8 是第 2 个字节最低位。
+    applyValueTableBitRows(descriptor, value, id, valueTableBitSourceFromBytes(stored));
     return true;
 }
 
@@ -596,6 +738,9 @@ bool applyStreamValueTargetValues(const ControlDescriptor& descriptor,
                                   const std::uint32_t startId,
                                   const StreamFieldValue& values)
 {
+    if (const auto* bytes = std::get_if<std::vector<std::uint8_t>>(&values.value); bytes != nullptr) {
+        return applyValueTableBytesRegisterValue(descriptor, patch, startId, *bytes);
+    }
     if (const auto* integers = std::get_if<std::vector<std::int64_t>>(&values.value); integers != nullptr) {
         for (std::size_t index = 0; index < integers->size(); ++index) {
             if (startId > std::numeric_limits<std::uint32_t>::max() - static_cast<std::uint32_t>(index)) {
