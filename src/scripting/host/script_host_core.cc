@@ -739,6 +739,39 @@ bool applyControlLabelPosition(ControlDescriptor& descriptor, const sol::table& 
     return true;
 }
 
+bool applyControlCompactLabelConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    const sol::object shortLabelObject = table["short_label"];
+    if (shortLabelObject.valid() && shortLabelObject.get_type() != sol::type::lua_nil) {
+        if (!shortLabelObject.is<std::string>()) {
+            error = "控件 short_label 必须是非空字符串";
+            return false;
+        }
+        descriptor.shortLabel = shortLabelObject.as<std::string>();
+        if (descriptor.shortLabel.empty()) {
+            error = "控件 short_label 必须是非空字符串";
+            return false;
+        }
+    }
+
+    const sol::object compactBelowObject = table["compact_label_below"];
+    if (!compactBelowObject.valid() || compactBelowObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!compactBelowObject.is<double>() && !compactBelowObject.is<int>()) {
+        error = "控件 compact_label_below 必须是 number";
+        return false;
+    }
+    const double number =
+        compactBelowObject.is<double>() ? compactBelowObject.as<double>() : static_cast<double>(compactBelowObject.as<int>());
+    if (!std::isfinite(number) || number <= 0.0) {
+        error = "控件 compact_label_below 必须是正数";
+        return false;
+    }
+    descriptor.compactLabelBelow = static_cast<float>(number);
+    return true;
+}
+
 bool validateControlIdentity(const ControlDescriptor& descriptor, std::string& error)
 {
     if (descriptor.id.empty()) {
@@ -1167,6 +1200,7 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     descriptor.id = readStringField(table, "id");
     descriptor.label = readStringField(table, "label");
     if (!applyControlLabelPosition(descriptor, table, error) || !validateControlIdentity(descriptor, error) ||
+        !applyControlCompactLabelConfig(descriptor, table, error) ||
         !applyControlTypeConfig(descriptor, table, error)) {
         return std::nullopt;
     }
@@ -1404,6 +1438,18 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutContainerChildren(
     return parseLayoutChildren(dock, table, controlsById, usedControls, path, error);
 }
 
+bool validateInlineGroupChildren(const std::vector<LayoutNodeDescriptor>& children, const std::string& path, std::string& error)
+{
+    for (const auto& child : children) {
+        if (child.kind == LayoutNodeKind::Control || child.kind == LayoutNodeKind::Text) {
+            continue;
+        }
+        error = path + " inline_group 只允许 control 或 text 子节点";
+        return false;
+    }
+    return true;
+}
+
 std::optional<std::size_t> readLayoutTableColumnCount(const sol::table& table,
                                                       const std::string& path,
                                                       std::string& error)
@@ -1543,6 +1589,30 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
         }
         auto children = parseLayoutContainerChildren(dock, table, controlsById, usedControls, path, error);
         if (!children.has_value()) {
+            return std::nullopt;
+        }
+        node.children = std::move(*children);
+        return node;
+    }
+    if (type == "inline_group") {
+        node.kind = LayoutNodeKind::InlineGroup;
+        const auto spacing = readOptionalFloatField(table, "spacing", node.spacing, path, error);
+        if (!spacing.has_value()) {
+            return std::nullopt;
+        }
+        node.spacing = *spacing;
+        if (!readOptionalPositiveFloatField(table, "min_width", path, node.minWidth, error)) {
+            return std::nullopt;
+        }
+        if (hasLuaTableField(table, "max_width")) {
+            error = path + ".max_width 不支持 inline_group";
+            return std::nullopt;
+        }
+        auto children = parseLayoutContainerChildren(dock, table, controlsById, usedControls, path, error);
+        if (!children.has_value()) {
+            return std::nullopt;
+        }
+        if (!validateInlineGroupChildren(*children, path, error)) {
             return std::nullopt;
         }
         node.children = std::move(*children);

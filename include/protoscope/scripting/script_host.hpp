@@ -86,6 +86,8 @@ struct ControlDescriptor {
     ControlLabelPosition labelPosition{ControlLabelPosition::Left};
     std::string id;
     std::string label;
+    std::string shortLabel;
+    std::optional<float> compactLabelBelow;
     std::string textDefault;
     int intDefault{0};
     float floatDefault{0.0F};
@@ -111,6 +113,7 @@ struct ControlSnapshot {
 enum class LayoutNodeKind {
     Column,
     Flow,
+    InlineGroup,
     Table,
     Group,
     Collapse,

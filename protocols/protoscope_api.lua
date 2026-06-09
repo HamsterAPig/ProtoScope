@@ -48,17 +48,27 @@ function ProtoBuffer:bytes(max_bytes) end
 
 -- Layout Tree：所有显式布局都使用 type + children/rows 递归节点。
 ---@alias ProtoControlLabelPosition 'left'|'right'
----@alias ProtoLayoutNode ProtoColumnLayoutNode|ProtoFlowLayoutNode|ProtoTableLayoutNode|ProtoGroupLayoutNode|ProtoCollapseLayoutNode|ProtoControlLayoutNode|ProtoTextLayoutNode|ProtoSeparatorLayoutNode|ProtoSpacerLayoutNode
+---@alias ProtoLayoutNode ProtoColumnLayoutNode|ProtoFlowLayoutNode|ProtoInlineGroupLayoutNode|ProtoTableLayoutNode|ProtoGroupLayoutNode|ProtoCollapseLayoutNode|ProtoControlLayoutNode|ProtoTextLayoutNode|ProtoSeparatorLayoutNode|ProtoSpacerLayoutNode
+---@alias ProtoInlineGroupChildNode ProtoControlLayoutNode|ProtoTextLayoutNode
 
 ---@class ProtoColumnLayoutNode
 ---@field type 'column'
----@field children ProtoLayoutNode[]
+---@field children? ProtoLayoutNode[]
+---@field controls? string[]
 
 ---@class ProtoFlowLayoutNode
 ---@field type 'flow'
 ---@field spacing? number
 ---@field run_spacing? number
----@field children ProtoLayoutNode[]
+---@field children? ProtoLayoutNode[]
+---@field controls? string[]
+
+---@class ProtoInlineGroupLayoutNode
+---@field type 'inline_group'
+---@field spacing? number
+---@field min_width? number @组最小宽度约束，必须为正数；不压缩组内控件。
+---@field children? ProtoInlineGroupChildNode[]
+---@field controls? string[]
 
 ---@class ProtoTableLayoutNode
 ---@field type 'table'
@@ -112,6 +122,8 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field id string
 ---@field label string
 ---@field label_position? ProtoControlLabelPosition @标签相对控件的位置，默认 left；button 始终使用 label 作为按钮文本。
+---@field short_label? string @紧凑布局下显示的显式短标签；悬浮时显示完整 label。
+---@field compact_label_below? number @布局宽度低于该正数阈值且 short_label 存在时显示短标签。
 ---@field default? ProtoControlValue
 ---@field options? string[]
 ---@field rows? ProtoValueTableRow[] @value_table 行定义；普通行用 id，bit 行用 id+bits，range 行用 start_id+len。

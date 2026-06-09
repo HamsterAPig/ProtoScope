@@ -77,6 +77,7 @@ end
 - `id`：稳定控件 ID，回调和布局节点都通过它引用控件。
 - `label`：展示文案。`checkbox`、`input_text`、`input_int`、`input_float` 允许省略可见 label。
 - `label_position`：可选，`"left"` 或 `"right"`，默认 `"left"`；`button` 始终把 `label` 当按钮文本。
+- `short_label` / `compact_label_below`：可选紧凑标签。布局宽度低于 `compact_label_below` 且显式提供 `short_label` 时显示短标签，悬浮显示完整 `label`。
 
 当前控件类型：
 
@@ -117,12 +118,13 @@ controls = {
 ### Layout Tree
 
 显式布局统一使用 `type + children` 的递归树，不再兼容旧的 `layout.kind`、`form.items`、`table.rows` control-only 写法。
-`column` 和 `flow` 可用 `controls = { "id1", "id2" }` 简写连续控件；同一个 layout 节点上 `children` 与 `controls` 互斥，不能同时填写。
+`column`、`flow` 和 `inline_group` 可用 `controls = { "id1", "id2" }` 简写连续控件；同一个 layout 节点上 `children` 与 `controls` 互斥，不能同时填写。
 
 通用规则：
 
 - `{ type = "column", children = { ... } }` 或 `{ type = "column", controls = { "id1", "id2" } }`：纵向块级布局。
 - `{ type = "flow", spacing = 6, run_spacing = 5, children = { ... } }` 或 `{ type = "flow", controls = { "id1", "id2" } }`：横向流式布局，空间不足时自动换行。
+- `{ type = "inline_group", spacing = 4, min_width = 160, children = { ... } }` 或 `{ type = "inline_group", controls = { "id1", "id2" } }`：在外层 `flow` 中作为整体参与换行；组内只允许 `control` / `text`，始终横向排列，不做比例缩放。
 - `{ type = "table", columns = 2, rows = { ... } }`：表格布局，单元格可以放任意 layout node。
 - `{ type = "group", title = "...", children = { ... } }`：标题分组。
 - `{ type = "collapse", title = "...", default_open = true, children = { ... } }`：折叠分组。
@@ -145,8 +147,12 @@ layout = {
       spacing = 6,
       run_spacing = 5,
       children = {
-        { type = "control", id = "send_once" },
-        { type = "control", id = "device_id" },
+        {
+          type = "inline_group",
+          spacing = 4,
+          controls = { "send_once", "device_id" },
+        },
+        { type = "control", id = "hex_send" },
       }
     },
     {

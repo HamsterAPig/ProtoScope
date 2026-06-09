@@ -585,6 +585,50 @@ void test_script_layout_width_controls_shorthand_snapshot()
     require(constrained.maxWidth.has_value() && *constrained.maxWidth == 240.0F, "control max_width 应解析");
 }
 
+void test_script_inline_group_layout_snapshot()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("inline_group_layout").generic_string()),
+            "inline_group_layout 协议应可加载");
+
+    const auto controls = host.controlsSnapshot();
+    require(controls.size() == 4, "inline_group_layout 应解析 4 个控件");
+    require(controls[0].shortLabel == "读", "button short_label 应解析");
+    require(controls[0].compactLabelBelow.has_value() && *controls[0].compactLabelBelow == 80.0F,
+            "button compact_label_below 应解析");
+    require(controls[1].shortLabel == "ID", "input_text short_label 应解析");
+    require(controls[1].compactLabelBelow.has_value() && *controls[1].compactLabelBelow == 180.0F,
+            "input_text compact_label_below 应解析");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 1, "inline_group_layout 协议应只产出一个 dock");
+    require(docks[0].descriptor.layout.has_value(), "inline_group_layout 应解析 layout");
+
+    const auto& flow = docks[0].descriptor.layout->root;
+    require(flow.kind == protoscope::scripting::LayoutNodeKind::Flow, "根节点应为 flow");
+    require(flow.spacing == 4.0F, "flow spacing 应解析");
+    require(flow.runSpacing == 7.0F, "flow run_spacing 应解析");
+    require(flow.children.size() == 3, "flow 应包含两个 inline_group 和一个 control");
+
+    const auto& shortcutGroup = flow.children[0];
+    require(shortcutGroup.kind == protoscope::scripting::LayoutNodeKind::InlineGroup, "第一项应为 inline_group");
+    require(shortcutGroup.spacing == 3.0F, "inline_group spacing 应解析");
+    require(shortcutGroup.minWidth.has_value() && *shortcutGroup.minWidth == 200.0F,
+            "inline_group min_width 应解析");
+    require(!shortcutGroup.maxWidth.has_value(), "inline_group 不应解析 max_width");
+    require(shortcutGroup.children.size() == 2, "inline_group.controls 应展开两个 control 子节点");
+    require(shortcutGroup.children[0].controlId == "read_version", "inline_group.controls 第一个控件顺序错误");
+    require(shortcutGroup.children[1].controlId == "device_id", "inline_group.controls 第二个控件顺序错误");
+
+    const auto& mixedGroup = flow.children[1];
+    require(mixedGroup.kind == protoscope::scripting::LayoutNodeKind::InlineGroup, "第二项应为 inline_group");
+    require(mixedGroup.children.size() == 2, "inline_group.children 应解析 text 与 control");
+    require(mixedGroup.children[0].kind == protoscope::scripting::LayoutNodeKind::Text, "inline_group 第一个子项应为 text");
+    require(mixedGroup.children[0].text == "发送选项", "inline_group text 内容应保留");
+    require(mixedGroup.children[1].controlId == "hex_send", "inline_group 第二个子项应绑定 hex_send");
+    require(flow.children[2].controlId == "timeout_ms", "flow 第三个子项应绑定 timeout_ms");
+}
+
 void test_script_duplicate_label_controls_allowed()
 {
     protoscope::scripting::ScriptHost host;
@@ -1492,6 +1536,76 @@ void test_script_layout_shortcut_missing_control_fail()
     require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_shortcut_missing_control").generic_string()),
             "controls 简写遗漏控件应加载失败");
     require(host.lastError().find("缺少控件") != std::string::npos, "简写遗漏控件错误应包含缺少控件提示");
+}
+
+void test_script_inline_group_children_controls_conflict_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_children_controls").generic_string()),
+            "inline_group 同时声明 children 和 controls 时应加载失败");
+    require(host.lastError().find("不能同时声明 children 和 controls") != std::string::npos,
+            "inline_group children/controls 混用错误应包含互斥提示");
+}
+
+void test_script_inline_group_unknown_control_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_unknown_control").generic_string()),
+            "inline_group.controls 引用未知控件应加载失败");
+    require(host.lastError().find("未声明控件") != std::string::npos,
+            "inline_group 未知控件错误应包含未声明控件提示");
+}
+
+void test_script_inline_group_child_layout_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_child_layout").generic_string()),
+            "inline_group 嵌套 flow 时应加载失败");
+    require(host.lastError().find("inline_group 只允许 control 或 text 子节点") != std::string::npos,
+            "inline_group 非法子布局错误应说明允许的子节点类型");
+}
+
+void test_script_inline_group_min_width_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_min_width").generic_string()),
+            "inline_group 非正 min_width 应加载失败");
+    require(host.lastError().find("min_width 必须是正数") != std::string::npos,
+            "inline_group min_width 错误应包含正数提示");
+}
+
+void test_script_short_label_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_short_label_type").generic_string()),
+            "short_label 非字符串时应加载失败");
+    require(host.lastError().find("short_label") != std::string::npos, "short_label 类型错误应包含字段名");
+}
+
+void test_script_short_label_empty_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_short_label_empty").generic_string()),
+            "short_label 为空时应加载失败");
+    require(host.lastError().find("short_label") != std::string::npos, "short_label 空值错误应包含字段名");
+}
+
+void test_script_compact_label_below_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_compact_label_below_type").generic_string()),
+            "compact_label_below 非数字时应加载失败");
+    require(host.lastError().find("compact_label_below 必须是 number") != std::string::npos,
+            "compact_label_below 类型错误应包含 number 提示");
+}
+
+void test_script_compact_label_below_non_positive_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_compact_label_below_non_positive").generic_string()),
+            "compact_label_below 非正数时应加载失败");
+    require(host.lastError().find("compact_label_below 必须是正数") != std::string::npos,
+            "compact_label_below 非正数错误应包含正数提示");
 }
 
 void test_script_invalid_label_position_fail()
@@ -2878,6 +2992,7 @@ static const TestCase kAllTests[] = {
     {"script_form_layout_snapshot", &test_script_form_layout_snapshot},
     {"script_flow_layout_snapshot", &test_script_flow_layout_snapshot},
     {"script_layout_width_controls_shorthand_snapshot", &test_script_layout_width_controls_shorthand_snapshot},
+    {"script_inline_group_layout_snapshot", &test_script_inline_group_layout_snapshot},
     {"script_duplicate_label_controls_allowed", &test_script_duplicate_label_controls_allowed},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
@@ -2946,6 +3061,14 @@ static const TestCase kAllTests[] = {
     {"script_layout_shortcut_unknown_control_fail", &test_script_layout_shortcut_unknown_control_fail},
     {"script_layout_shortcut_duplicate_control_fail", &test_script_layout_shortcut_duplicate_control_fail},
     {"script_layout_shortcut_missing_control_fail", &test_script_layout_shortcut_missing_control_fail},
+    {"script_inline_group_children_controls_conflict_fail", &test_script_inline_group_children_controls_conflict_fail},
+    {"script_inline_group_unknown_control_fail", &test_script_inline_group_unknown_control_fail},
+    {"script_inline_group_child_layout_fail", &test_script_inline_group_child_layout_fail},
+    {"script_inline_group_min_width_fail", &test_script_inline_group_min_width_fail},
+    {"script_short_label_type_fail", &test_script_short_label_type_fail},
+    {"script_short_label_empty_fail", &test_script_short_label_empty_fail},
+    {"script_compact_label_below_type_fail", &test_script_compact_label_below_type_fail},
+    {"script_compact_label_below_non_positive_fail", &test_script_compact_label_below_non_positive_fail},
     {"script_invalid_label_position_fail", &test_script_invalid_label_position_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"script_reload_invalid_types_fail_without_throw", &test_script_reload_invalid_types_fail_without_throw},
