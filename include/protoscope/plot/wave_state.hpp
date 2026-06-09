@@ -162,6 +162,15 @@ struct WaveViewState {
     std::array<WaveCursorState, 2> cursors{};
 };
 
+struct WaveAnalysisMarker {
+    std::uint64_t id{0};
+    std::string label;
+    std::string note;
+    double startTime{0.0};
+    double endTime{0.0};
+    std::size_t channelIndex{0};
+};
+
 struct WaveDockState {
     struct ChannelTransformOverride {
         bool labelOverridden{false};
@@ -177,6 +186,7 @@ struct WaveDockState {
     OscilloscopeBuffer buffer{};
     RawCaptureFileData rawCapture{};
     WaveViewState view{};
+    std::vector<WaveAnalysisMarker> analysisMarkers;
     std::string statusMessage;
     std::vector<std::string> channelSummaries;
     std::vector<ChannelSpec> defaultChannelSpecs;

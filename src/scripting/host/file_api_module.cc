@@ -1,14 +1,13 @@
 #include "protoscope/scripting/script_host.hpp"
 
 #include "script_host_api_module.hpp"
+#include "script_host_lua_helpers.hpp"
 
 namespace protoscope::scripting {
 
-class FileScriptHostApiModule final : public IScriptHostApiModule {
+class FileScriptHostApiModule final : public ScriptHostApiModuleBase {
 public:
-    explicit FileScriptHostApiModule(ScriptHost& host) : host_(host) {}
-
-    std::string_view id() const override { return "file_api_module"; }
+    explicit FileScriptHostApiModule(ScriptHost& host) : ScriptHostApiModuleBase(host, "file_api_module") {}
 
     void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
     {
@@ -19,17 +18,17 @@ public:
             std::string error;
             const auto request = host->protoFileDialog(FileDialogKind::OpenFile, opts, error);
             if (!request.has_value()) {
-                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+                return script_host_lua::luaNilError(lua, error);
             }
-            return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
+            return script_host_lua::luaValueOk(lua, request->id);
         });
         fsApi.set_function("open_dir_dialog", [host, lua](const sol::object& opts) {
             std::string error;
             const auto request = host->protoFileDialog(FileDialogKind::OpenDir, opts, error);
             if (!request.has_value()) {
-                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+                return script_host_lua::luaNilError(lua, error);
             }
-            return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
+            return script_host_lua::luaValueOk(lua, request->id);
         });
         fsApi.set_function("open", [host, lua](const std::string& path, const sol::object& opts) {
             return host->protoFsOpen(lua, path, opts);
@@ -47,14 +46,11 @@ public:
         });
         proto["fs"] = fsApi;
     }
-
-private:
-    ScriptHost& host_;
 };
 
 std::unique_ptr<IScriptHostApiModule> makeFileApiModule(ScriptHost& host)
 {
-    return std::make_unique<FileScriptHostApiModule>(host);
+    return makeScriptHostApiModule<FileScriptHostApiModule>(host);
 }
 
 } // namespace protoscope::scripting

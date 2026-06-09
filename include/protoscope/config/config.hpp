@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace protoscope::config {
 
@@ -92,7 +93,7 @@ struct GuiWaveConfig {
     bool showAxisLabels{false};
     bool showChannelLegend{true};
     bool showFftLegend{true};
-    GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Focus};
+    GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Overlay};
 };
 
 struct GuiLogHistoryConfig {
@@ -100,6 +101,7 @@ struct GuiLogHistoryConfig {
     std::size_t transferFrameLimit{120000};
     std::size_t hostLimit{5000};
     std::size_t scriptLimit{5000};
+    std::size_t requestTraceLimit{5000};
 };
 
 struct GuiRawCaptureConfig {
@@ -125,9 +127,19 @@ struct GuiElfSymbolComboConfig {
     bool autoRefreshEmitOnControl{false};
 };
 
+enum class GuiFontChineseGlyphRange {
+    SimplifiedCommon,
+    Full,
+};
+
+struct GuiFontConfig {
+    GuiFontChineseGlyphRange chineseGlyphRange{GuiFontChineseGlyphRange::SimplifiedCommon};
+};
+
 struct GuiConfig {
     GuiWindowConfig window{};
     GuiWaveConfig wave{};
+    GuiFontConfig font{};
     GuiLogHistoryConfig logHistory{};
     GuiRawCaptureConfig rawCapture{};
     GuiRealtimeBacklogConfig realtimeBacklog{};
@@ -214,7 +226,9 @@ public:
     ConfigStore();
 
     ConfigLoadResult load(const std::filesystem::path& path) const;
+    ConfigLoadResult loadText(std::string_view yamlText, const std::filesystem::path& sourcePath = {}) const;
     bool save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const;
+    bool saveText(const AppConfig& config, std::string& yamlText, std::string& error) const;
 
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& dir) const;
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& rootDir,

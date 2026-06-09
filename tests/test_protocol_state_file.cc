@@ -1,6 +1,7 @@
 #include "protoscope/ui/protocol_state_file.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 
+#include "test_helpers.hpp"
 #include "test_registry.hpp"
 
 #include <chrono>
@@ -13,36 +14,14 @@
 
 namespace {
 
-void require(bool condition, const char* message)
-{
-    if (!condition) {
-        throw std::runtime_error(message);
-    }
-}
+using protoscope::tests::ScopedTempPath;
+using protoscope::tests::makeUniqueTempDir;
+using protoscope::tests::require;
 
 std::filesystem::path makeTempRoot(std::string_view name)
 {
-    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    auto root =
-        std::filesystem::temp_directory_path() / ("protoscope-" + std::string(name) + "-" + std::to_string(stamp));
-    std::filesystem::create_directories(root);
-    return root;
+    return makeUniqueTempDir("protoscope-" + std::string(name));
 }
-
-struct ScopedTempRoot {
-    explicit ScopedTempRoot(std::filesystem::path path) : path_(std::move(path)) {}
-
-    ~ScopedTempRoot()
-    {
-        std::error_code ec;
-        std::filesystem::remove_all(path_, ec);
-    }
-
-    const std::filesystem::path& path() const { return path_; }
-
-private:
-    std::filesystem::path path_;
-};
 
 void writeText(const std::filesystem::path& path, std::string_view text)
 {
@@ -55,7 +34,7 @@ void writeText(const std::filesystem::path& path, std::string_view text)
 
 void test_protocol_state_file_backs_up_corrupt_yaml()
 {
-    const ScopedTempRoot root(makeTempRoot("protocol-state-corrupt"));
+    const ScopedTempPath root(makeTempRoot("protocol-state-corrupt"));
     const auto statePath = root.path() / "config" / "ui" / "protocol-control-state.yaml";
     writeText(statePath, "protocols:\n  proto_a:\n    send:\n      history: []es: ~\n");
 
@@ -70,7 +49,7 @@ void test_protocol_state_file_backs_up_corrupt_yaml()
 
 void test_protocol_state_file_atomic_write_replaces_valid_yaml()
 {
-    const ScopedTempRoot root(makeTempRoot("protocol-state-atomic"));
+    const ScopedTempPath root(makeTempRoot("protocol-state-atomic"));
     const auto statePath = root.path() / "config" / "ui" / "protocol-control-state.yaml";
 
     YAML::Node stateRoot;
@@ -87,7 +66,7 @@ void test_protocol_state_file_atomic_write_replaces_valid_yaml()
 
 void test_protocol_state_file_preserves_other_protocol_nodes()
 {
-    const ScopedTempRoot root(makeTempRoot("protocol-state-merge"));
+    const ScopedTempPath root(makeTempRoot("protocol-state-merge"));
     const auto statePath = root.path() / "config" / "ui" / "protocol-control-state.yaml";
 
     YAML::Node initialRoot;
@@ -132,7 +111,7 @@ void test_protocol_state_file_roundtrips_elf_path_per_protocol()
 
 void test_protocol_state_file_replace_failure_keeps_target()
 {
-    const ScopedTempRoot root(makeTempRoot("protocol-state-replace-failure"));
+    const ScopedTempPath root(makeTempRoot("protocol-state-replace-failure"));
     const auto statePath = root.path() / "config" / "ui" / "protocol-control-state.yaml";
     std::filesystem::create_directories(statePath);
 

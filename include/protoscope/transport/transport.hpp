@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -11,6 +12,8 @@
 #include <string_view>
 #include <variant>
 #include <vector>
+
+#include <asio/io_context.hpp>
 
 namespace protoscope::transport {
 
@@ -169,6 +172,11 @@ protected:
     void addTx(std::size_t size);
     void addRx(std::size_t size);
     static std::uint64_t nowMs();
+    bool enqueueSendCommon(TransportTxTask task,
+                           std::optional<ConnectionContext>& context,
+                           asio::io_context& ioContext,
+                           std::atomic<bool>& stopping,
+                           std::function<std::pair<bool, std::string>(const std::vector<std::uint8_t>&)> writeBytes);
 
 private:
     mutable std::mutex eventsMutex_;

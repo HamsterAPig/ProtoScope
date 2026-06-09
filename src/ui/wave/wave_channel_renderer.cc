@@ -50,18 +50,19 @@ RenderBudget makeRenderBudget(const plot::WaveViewState& view,
     return RenderBudget{.pointsPerChannel = pointsPerChannel, .estimatedVerticesPerPoint = estimatedVerticesPerPoint};
 }
 
-void renderEnvelopeAsBars(const std::vector<plot::EnvelopePoint>& points, const ImVec4& color)
+void renderEnvelopeAsBars(const std::vector<plot::EnvelopePoint>& points, const ImVec4& color, float lineWidth)
 {
     if (points.empty()) {
         return;
     }
+    const float coreLineWidth = plot::sanitizeChannelLineWidth(lineWidth);
     auto* drawList = ImPlot::GetPlotDrawList();
     ImPlot::PushPlotClipRect();
     const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(color);
     for (const auto& point : points) {
         const ImVec2 minPos = ImPlot::PlotToPixels(point.time, point.minValue);
         const ImVec2 maxPos = ImPlot::PlotToPixels(point.time, point.maxValue);
-        drawList->AddLine(ImVec2(minPos.x, minPos.y), ImVec2(maxPos.x, maxPos.y), lineColor, 1.0F);
+        drawList->AddLine(ImVec2(minPos.x, minPos.y), ImVec2(maxPos.x, maxPos.y), lineColor, coreLineWidth);
     }
     ImPlot::PopPlotClipRect();
 }
@@ -116,12 +117,18 @@ void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
                             const ImVec4& color,
                             double latestTime,
                             double persistenceWindow,
-                            double glowIntensity)
+                            double glowIntensity,
+                            float lineWidth)
 {
     if (points.empty()) {
         return;
     }
 
+    const float coreLineWidth = plot::sanitizeChannelLineWidth(lineWidth);
+    const float innerGlowWidth = (std::min)(coreLineWidth + 2.0F, 4.5F);
+    const float outerGlowWidth = (std::min)(coreLineWidth + 4.0F, 7.0F);
+    const float connectorCoreWidth = (std::max)(coreLineWidth, 1.2F);
+    const float connectorGlowWidth = (std::min)(coreLineWidth + 3.5F, 5.0F);
     auto* drawList = ImPlot::GetPlotDrawList();
     ImPlot::PushPlotClipRect();
 
@@ -140,24 +147,28 @@ void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
         drawList->AddLine(ImVec2(minPos.x, minPos.y),
                           ImVec2(maxPos.x, maxPos.y),
                           ImGui::ColorConvertFloat4ToU32(withAlpha(color, alpha * 0.12F)),
-                          7.0F);
+                          outerGlowWidth);
         drawList->AddLine(ImVec2(minPos.x, minPos.y),
                           ImVec2(maxPos.x, maxPos.y),
                           ImGui::ColorConvertFloat4ToU32(withAlpha(color, alpha * 0.28F)),
-                          3.0F);
+                          innerGlowWidth);
         drawList->AddLine(ImVec2(minPos.x, minPos.y),
                           ImVec2(maxPos.x, maxPos.y),
                           ImGui::ColorConvertFloat4ToU32(withAlpha(color, alpha * 0.9F)),
-                          1.0F);
+                          coreLineWidth);
         drawList->AddCircleFilled(
             midPos, 1.5F + 1.5F * alpha, ImGui::ColorConvertFloat4ToU32(withAlpha(color, alpha * 0.85F)));
 
         if (hasPrevMid) {
             const float lineAlpha = (std::min)(prevAlpha, alpha);
-            drawList->AddLine(
-                prevMid, midPos, ImGui::ColorConvertFloat4ToU32(withAlpha(color, lineAlpha * 0.18F)), 5.0F);
-            drawList->AddLine(
-                prevMid, midPos, ImGui::ColorConvertFloat4ToU32(withAlpha(color, lineAlpha * 0.75F)), 1.2F);
+            drawList->AddLine(prevMid,
+                              midPos,
+                              ImGui::ColorConvertFloat4ToU32(withAlpha(color, lineAlpha * 0.18F)),
+                              connectorGlowWidth);
+            drawList->AddLine(prevMid,
+                              midPos,
+                              ImGui::ColorConvertFloat4ToU32(withAlpha(color, lineAlpha * 0.75F)),
+                              connectorCoreWidth);
         }
         hasPrevMid = true;
         prevMid = midPos;

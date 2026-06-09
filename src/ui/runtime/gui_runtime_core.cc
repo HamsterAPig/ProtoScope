@@ -57,12 +57,24 @@ CMRC_DECLARE(ui_resources);
 #include <system_error>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 
 namespace protoscope::ui {
 
 namespace {
     constexpr float kAppHeaderHeight = 58.0F;
     constexpr float kStatusBarHeight = 44.0F;
+
+    const ImWchar* chineseGlyphRangesForConfig(ImFontAtlas& fonts, config::GuiFontChineseGlyphRange range)
+    {
+        switch (range) {
+            case config::GuiFontChineseGlyphRange::Full:
+                return fonts.GetGlyphRangesChineseFull();
+            case config::GuiFontChineseGlyphRange::SimplifiedCommon:
+                return fonts.GetGlyphRangesChineseSimplifiedCommon();
+        }
+        return fonts.GetGlyphRangesChineseSimplifiedCommon();
+    }
 } // namespace
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
@@ -293,8 +305,11 @@ void GuiRuntime::ensureChineseFont()
     for (const auto& candidate : candidateChineseFonts()) {
         std::error_code fontPathError;
         if (std::filesystem::exists(candidate, fontPathError) && !fontPathError) {
+            // 核心流程：默认只构建常用简中字符，避免启动首帧前烘焙全量 CJK 字体图集导致白屏和 CPU 峰值。
+            const auto* chineseRanges =
+                chineseGlyphRangesForConfig(*io.Fonts, application_.runtimeConfig().gui.font.chineseGlyphRange);
             io.Fonts->AddFontFromFileTTF(
-                candidate.string().c_str(), 18.0F, nullptr, io.Fonts->GetGlyphRangesChineseFull());
+                candidate.string().c_str(), 18.0F, nullptr, chineseRanges);
             break;
         }
     }
@@ -349,6 +364,8 @@ void GuiRuntime::syncRuntimeState()
         {"comm", showCommDock_},
         {"protocol", showProtocolDock_},
         {"transfer", showTransferDock_},
+        {"request_trace", showRequestTraceDock_},
+        {"offline_replay", showOfflineReplayDock_},
         {"log", showLogDock_},
         {"script", showScriptDock_},
         {"wave", showWaveDock_},
@@ -382,9 +399,10 @@ void GuiRuntime::enterWaveFullscreen()
     }
 
     waveFullscreenActiveMode_ = application_.runtimeConfig().gui.wave.fullscreenMode;
+    captureWaveFullscreenDockSnapshot();
     waveFullscreenActive_ = true;
-    showWaveDock_ = true;
     if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
+        showWaveDock_ = true;
         applyWaveFocusFullscreen();
     }
 }
@@ -397,29 +415,58 @@ void GuiRuntime::exitWaveFullscreen()
 
     if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus) {
         restoreWaveFocusFullscreen();
+    } else if (waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay) {
+        restoreWaveFullscreenDockIniSnapshot();
     }
     waveFullscreenActive_ = false;
     waveFullscreenSnapshot_.reset();
 }
 
-void GuiRuntime::applyWaveFocusFullscreen()
+void GuiRuntime::captureWaveFullscreenDockSnapshot()
 {
-    if (!waveFullscreenSnapshot_) {
-        waveFullscreenSnapshot_ = WaveFullscreenDockSnapshot{
-            .showCommDock = showCommDock_,
-            .showProtocolDock = showProtocolDock_,
-            .showTransferDock = showTransferDock_,
-            .showLogDock = showLogDock_,
-            .showScriptDock = showScriptDock_,
-            .showWaveDock = showWaveDock_,
-            .luaDockVisibility = luaDockVisibility_,
-        };
+    if (waveFullscreenSnapshot_) {
+        return;
     }
 
+    std::size_t dockIniSize = 0;
+    const char* dockIniData = ImGui::SaveIniSettingsToMemory(&dockIniSize);
+    std::string dockIniSnapshot;
+    if (dockIniData != nullptr && dockIniSize > 0U) {
+        dockIniSnapshot.assign(dockIniData, dockIniSize);
+    }
+    waveFullscreenSnapshot_ = WaveFullscreenDockSnapshot{
+        .showCommDock = showCommDock_,
+        .showProtocolDock = showProtocolDock_,
+        .showTransferDock = showTransferDock_,
+        .showRequestTraceDock = showRequestTraceDock_,
+        .showOfflineReplayDock = showOfflineReplayDock_,
+        .showLogDock = showLogDock_,
+        .showScriptDock = showScriptDock_,
+        .showWaveDock = showWaveDock_,
+        .luaDockVisibility = luaDockVisibility_,
+        .dockIniSnapshot = std::move(dockIniSnapshot),
+    };
+}
+
+void GuiRuntime::restoreWaveFullscreenDockIniSnapshot()
+{
+    if (!waveFullscreenSnapshot_ || waveFullscreenSnapshot_->dockIniSnapshot.empty()) {
+        return;
+    }
+
+    ImGui::LoadIniSettingsFromMemory(waveFullscreenSnapshot_->dockIniSnapshot.data(),
+                                     waveFullscreenSnapshot_->dockIniSnapshot.size());
+    ImGui::GetIO().WantSaveIniSettings = false;
+}
+
+void GuiRuntime::applyWaveFocusFullscreen()
+{
     // 核心流程：专注全屏只改运行期可见性快照，不触碰协议工作区保存标记。
     showCommDock_ = false;
     showProtocolDock_ = false;
     showTransferDock_ = false;
+    showRequestTraceDock_ = false;
+    showOfflineReplayDock_ = false;
     showLogDock_ = false;
     showScriptDock_ = false;
     showWaveDock_ = true;
@@ -438,10 +485,14 @@ void GuiRuntime::restoreWaveFocusFullscreen()
     showCommDock_ = waveFullscreenSnapshot_->showCommDock;
     showProtocolDock_ = waveFullscreenSnapshot_->showProtocolDock;
     showTransferDock_ = waveFullscreenSnapshot_->showTransferDock;
+    showRequestTraceDock_ = waveFullscreenSnapshot_->showRequestTraceDock;
+    showOfflineReplayDock_ = waveFullscreenSnapshot_->showOfflineReplayDock;
     showLogDock_ = waveFullscreenSnapshot_->showLogDock;
     showScriptDock_ = waveFullscreenSnapshot_->showScriptDock;
     showWaveDock_ = waveFullscreenSnapshot_->showWaveDock;
     luaDockVisibility_ = waveFullscreenSnapshot_->luaDockVisibility;
+    // Focus 全屏只临时改运行期 Dock，退出时恢复进入前的 ImGui 布局内存快照，避免 tab 顺序被临时布局覆盖。
+    restoreWaveFullscreenDockIniSnapshot();
 }
 
 void GuiRuntime::attachUiComponents()
@@ -567,17 +618,23 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
             const bool previousShowCommDock = showCommDock_;
             const bool previousShowProtocolDock = showProtocolDock_;
             const bool previousShowTransferDock = showTransferDock_;
+            const bool previousShowRequestTraceDock = showRequestTraceDock_;
+            const bool previousShowOfflineReplayDock = showOfflineReplayDock_;
             const bool previousShowLogDock = showLogDock_;
             const bool previousShowScriptDock = showScriptDock_;
             const bool previousShowWaveDock = showWaveDock_;
             ImGui::MenuItem("通讯配置", nullptr, &showCommDock_);
             ImGui::MenuItem("协议脚本 / 动态控件", nullptr, &showProtocolDock_);
             ImGui::MenuItem("收发数据", nullptr, &showTransferDock_);
+            ImGui::MenuItem("请求追踪", nullptr, &showRequestTraceDock_);
+            ImGui::MenuItem("离线复现", nullptr, &showOfflineReplayDock_);
             ImGui::MenuItem("日志", nullptr, &showLogDock_);
             ImGui::MenuItem("脚本", nullptr, &showScriptDock_);
             ImGui::MenuItem("波形", nullptr, &showWaveDock_);
             if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
-                previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
+                previousShowTransferDock != showTransferDock_ ||
+                previousShowRequestTraceDock != showRequestTraceDock_ ||
+                previousShowOfflineReplayDock != showOfflineReplayDock_ || previousShowLogDock != showLogDock_ ||
                 previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
                 pendingProtocolWorkspaceSave_ = true;
             }
@@ -639,6 +696,8 @@ void GuiRuntime::buildModernDefaultLayout(ImGuiID dockspaceId)
     ImGui::DockBuilderDockWindow("协议脚本 / 动态控件", leftBottom);
     ImGui::DockBuilderDockWindow("波形", rightPane);
     ImGui::DockBuilderDockWindow("收发数据", rightPane);
+    ImGui::DockBuilderDockWindow("请求追踪", rightPane);
+    ImGui::DockBuilderDockWindow("离线复现", rightPane);
     ImGui::DockBuilderDockWindow("脚本", rightPane);
     ImGui::DockBuilderDockWindow("日志", rightPane);
     ImGui::DockBuilderFinish(dockspaceId);
@@ -702,18 +761,25 @@ void GuiRuntime::renderFrame()
     const bool previousShowCommDock = showCommDock_;
     const bool previousShowProtocolDock = showProtocolDock_;
     const bool previousShowTransferDock = showTransferDock_;
+    const bool previousShowRequestTraceDock = showRequestTraceDock_;
+    const bool previousShowOfflineReplayDock = showOfflineReplayDock_;
     const bool previousShowLogDock = showLogDock_;
     const bool previousShowScriptDock = showScriptDock_;
     const bool previousShowWaveDock = showWaveDock_;
 
     drawStatusBar();
     drawRegisteredDocks();
-    waveDockRenderer_.draw(showWaveDock_,
-                           waveFullscreenActive_,
-                           &waveFullscreenToggleRequested_,
-                           waveFullscreenActive_ &&
-                               waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus);
-    if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay) {
+    const bool waveOverlayFullscreen =
+        waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay;
+    if (!waveOverlayFullscreen) {
+        waveDockRenderer_.draw(showWaveDock_,
+                               waveFullscreenActive_,
+                               &waveFullscreenToggleRequested_,
+                               waveFullscreenActive_ &&
+                                   waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus);
+    }
+    if (waveOverlayFullscreen) {
+        // Overlay 已完整绘制波形，跳过底层 Dock 可避免同一滚轮输入被处理两次。
         waveDockRenderer_.drawOverlay(waveFullscreenActive_, &waveFullscreenToggleRequested_);
     }
     drawRegisteredDialogs();
@@ -721,8 +787,10 @@ void GuiRuntime::renderFrame()
         waveFullscreenToggleRequested_ = true;
     }
     if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
-        previousShowTransferDock != showTransferDock_ || previousShowLogDock != showLogDock_ ||
-        previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
+        previousShowTransferDock != showTransferDock_ || previousShowRequestTraceDock != showRequestTraceDock_ ||
+        previousShowOfflineReplayDock != showOfflineReplayDock_ || previousShowLogDock != showLogDock_ ||
+        previousShowScriptDock != showScriptDock_ ||
+        previousShowWaveDock != showWaveDock_) {
         if (!waveFullscreenActive_ && !waveFullscreenToggleRequested_) {
             pendingProtocolWorkspaceSave_ = true;
         }

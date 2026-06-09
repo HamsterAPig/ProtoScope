@@ -342,7 +342,7 @@ Application <-> ScriptHost
 - `WaveDockState` / `WaveViewState`：波形 Dock 视图状态、游标、通道配置和缓存。
 - `WaveViewport`、`WaveDisplayData`、`WaveLayoutMetrics`：视图计算结果。
 - `WaveFftConfig`、`WaveFftFrame`、`WaveFftCache`：FFT 配置和缓存。
-- `RawCaptureFileData`、`RawCaptureStreamWriter`：`.psraw` 文件读写和流式录制。
+- `RawCaptureFileData`、`RawCaptureStreamWriter`：`.psraw` 文件读写、事件流保存和流式录制。
 
 ### 实现职责
 
@@ -357,12 +357,13 @@ Application <-> ScriptHost
 
 ### 设计风格
 
-数据处理、视图状态和绘制适配分离。`plot` 保持可测试的纯逻辑：采样追加、降采样/包络、游标测量、FFT、文件编码和解码。
+数据处理、视图状态和绘制适配分离。`plot` 保持可测试的纯逻辑：采样追加、降采样/包络、游标测量、FFT、文件编码和解码。`.psraw` 的 v3 event stream 负责保存原始 RX 字节、运行配置事件和绘图 setup 事件；Application 负责把事件流按时间轴重放到脚本/波形链路，UI 只提供载入、继续、暂停、单步、倍速、定位和卸载控制。
 
 ### 维护注意点
 
 - 不要把 `scale/offset` 写回原始采样；它们属于显示变换。
-- 原始数据导入应保留用户显式导入的完整历史，不应被实时历史上限立即裁掉。
+- 原始数据一次性导入和原始回放时间轴是两个入口：前者立即重建波形，后者按 `.psraw` 事件顺序复现现场输入。
+- 原始数据导入和时间轴回放应保留用户显式导入/录制的完整历史，不应被实时历史上限立即裁掉。
 - FFT 基于当前可视区输入，改动时要确认频域视图和时域视图状态不会互相污染。
 - `.psraw` 文件格式变更要考虑向后兼容和错误提示。
 

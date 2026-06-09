@@ -29,6 +29,7 @@ struct DockHistoryLimits {
     std::size_t transferFrameRows{120000};
     std::size_t hostLogRows{5000};
     std::size_t scriptLogRows{5000};
+    std::size_t requestTraceRows{5000};
 };
 
 enum class TransferLogDisplayMode {
@@ -78,6 +79,65 @@ std::vector<const ReceiveRow*> filteredLogRows(const std::deque<ReceiveRow>& row
 std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& rows,
                                                const LogFilterState& filter,
                                                bool includeBytePreview);
+
+enum class RequestTraceKind {
+    Send,
+    Request,
+};
+
+enum class RequestTraceState {
+    Queued,
+    Sent,
+    Completed,
+    Failed,
+    Timeout,
+    Rejected,
+    Dropped,
+    Canceled,
+    GuardReset,
+};
+
+enum class RequestTraceStatusFilter {
+    All,
+    Active,
+    Success,
+    Failure,
+};
+
+struct RequestTraceFilterState {
+    std::string keyword;
+    RequestTraceStatusFilter status{RequestTraceStatusFilter::All};
+};
+
+struct RequestTraceRow {
+    std::uint64_t timestampMs{0};
+    std::uint64_t id{0};
+    RequestTraceKind kind{RequestTraceKind::Send};
+    RequestTraceState state{RequestTraceState::Queued};
+    std::string endpoint;
+    std::string tag;
+    std::size_t bytes{0};
+    std::uint64_t queuedMs{0};
+    std::uint64_t finishedMs{0};
+    std::uint64_t timeoutMs{0};
+    std::uint64_t durationMs{0};
+    bool guarded{false};
+    std::uint32_t attempt{1};
+    std::uint32_t maxAttempts{1};
+    std::string guardState;
+    std::string error;
+};
+
+const char* requestTraceKindLabel(RequestTraceKind kind);
+const char* requestTraceStateLabel(RequestTraceState state);
+bool isRequestTraceFailure(RequestTraceState state);
+bool matchesRequestTraceFilter(const RequestTraceRow& row, const RequestTraceFilterState& filter);
+std::vector<const RequestTraceRow*> filteredRequestTraceRows(const std::deque<RequestTraceRow>& rows,
+                                                            const RequestTraceFilterState& filter);
+std::string formatRequestTraceDuration(const RequestTraceRow& row);
+std::string formatRequestTraceDetail(const RequestTraceRow& row);
+std::string formatRequestTraceRowCsv(const RequestTraceRow& row, bool showTimestamps);
+std::string formatRequestTraceRowsCsv(std::span<const RequestTraceRow> rows, bool showTimestamps);
 
 struct CommDockState {
     transport::TransportKind kind{transport::TransportKind::TcpClient};
@@ -137,6 +197,14 @@ struct ScriptDockState {
     bool showTimestamps{true};
     LogFilterState filter{};
     std::deque<ReceiveRow> rows;
+    std::uint64_t rowsVersion{0};
+};
+
+struct RequestTraceDockState {
+    bool pauseScroll{false};
+    bool showTimestamps{true};
+    RequestTraceFilterState filter{};
+    std::deque<RequestTraceRow> rows;
     std::uint64_t rowsVersion{0};
 };
 
@@ -216,6 +284,7 @@ public:
     void clearReceiveRows();
     void appendReceiveRow(ReceiveRow row);
     void appendLuaEvent(const scripting::ScriptEvent& event);
+    void appendRequestTraceRow(RequestTraceRow row);
     void appendRawReceive(const transport::ConnectionContext& ctx, const std::string& text);
     void appendRawSend(const transport::ConnectionContext& ctx, const std::string& text);
 
@@ -223,6 +292,7 @@ public:
     ReceiveDockState& receiveState();
     LogDockState& logState();
     ScriptDockState& scriptState();
+    RequestTraceDockState& requestTraceState();
     SendDockState& sendState();
     LuaDockState& luaState();
     plot::WaveDockState& waveState();
@@ -232,6 +302,7 @@ public:
     const ReceiveDockState& receiveState() const;
     const LogDockState& logState() const;
     const ScriptDockState& scriptState() const;
+    const RequestTraceDockState& requestTraceState() const;
     const SendDockState& sendState() const;
     const LuaDockState& luaState() const;
     const plot::WaveDockState& waveState() const;
@@ -247,6 +318,7 @@ public:
     void appendScriptRow(ReceiveRow row);
     void clearLogRows();
     void clearScriptRows();
+    void clearRequestTraceRows();
     void appendTransferFrameRows(std::vector<ReceiveRow> rows);
     void clearTransferFrameRows();
     void setHistoryLimits(DockHistoryLimits limits);
@@ -256,6 +328,7 @@ private:
     ReceiveDockState receive_{};
     LogDockState log_{};
     ScriptDockState script_{};
+    RequestTraceDockState requestTrace_{};
     SendDockState send_{};
     LuaDockState lua_{};
     plot::WaveDockState wave_{};

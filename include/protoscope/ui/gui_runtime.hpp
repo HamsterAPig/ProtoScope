@@ -4,6 +4,8 @@
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/elf_static_address_file_watch.hpp"
+#include "protoscope/ui/protocol_state_file.hpp"
+#include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/ui_component.hpp"
 #include "protoscope/ui/ui_host_context.hpp"
 #include "protoscope/ui/update_check.hpp"
@@ -48,6 +50,8 @@ private:
     friend class CommDockComponent;
     friend class ProtocolDockComponent;
     friend class LuaDockComponent;
+    friend class RequestTraceDockComponent;
+    friend class OfflineReplayDockComponent;
     friend class LogDockComponent;
     friend class WorkspaceController;
 
@@ -72,10 +76,13 @@ private:
         bool showCommDock{true};
         bool showProtocolDock{true};
         bool showTransferDock{true};
+        bool showRequestTraceDock{true};
+        bool showOfflineReplayDock{true};
         bool showLogDock{true};
         bool showScriptDock{true};
         bool showWaveDock{true};
         std::unordered_map<std::string, bool> luaDockVisibility;
+        std::string dockIniSnapshot;
     };
 
     bool initializeWindow();
@@ -103,6 +110,8 @@ private:
     void processWaveFullscreenInput();
     void enterWaveFullscreen();
     void exitWaveFullscreen();
+    void captureWaveFullscreenDockSnapshot();
+    void restoreWaveFullscreenDockIniSnapshot();
     void applyWaveFocusFullscreen();
     void restoreWaveFocusFullscreen();
     bool saveCurrentConfigToDisk();
@@ -115,9 +124,22 @@ private:
     void drawHelpMenu();
     void drawLuaViewMenu();
     void drawCommDock();
+    void drawCommTransportModeSelector(dock::CommDockState& comm);
+    void drawCommTransportConfig(dock::CommDockState& comm);
+    void drawTcpClientCommConfig(dock::CommDockState& comm);
+    void drawTcpServerCommConfig(dock::CommDockState& comm);
+    void drawSerialCommConfig(dock::CommDockState& comm);
+    void drawUdpPeerCommConfig(dock::CommDockState& comm);
+    void drawCommStatus(const dock::CommDockState& comm);
+    void drawCommActions(dock::ConfigDockState& configState);
+    void drawCommParserStatus(const dock::CommDockState& comm);
     void drawProtocolDock();
     void drawLuaDockWindows();
     void drawTransferDock();
+    void drawTransferLogSection(float logHeight);
+    void drawTransferSendSection(float minPayloadHeight, const ImGuiStyle& style);
+    void drawRequestTraceDock();
+    void drawOfflineReplayDock();
     void drawLogDock();
     void drawScriptDock();
     bool drawLuaDockFlow(const std::vector<scripting::ControlSnapshot>& controls, bool earlyExit = true);
@@ -126,16 +148,67 @@ private:
                            std::string_view stableId,
                            std::size_t& widgetIndex,
                            bool earlyExit = true);
+    bool drawLuaLayoutChildren(const std::vector<scripting::LayoutNodeDescriptor>& children,
+                               const std::vector<scripting::ControlSnapshot>& controls,
+                               std::string_view stableId,
+                               std::size_t& widgetIndex,
+                               bool earlyExit);
+    bool drawLuaFlowLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                               const std::vector<scripting::ControlSnapshot>& controls,
+                               std::string_view stableId,
+                               std::size_t& widgetIndex,
+                               bool earlyExit);
+    bool drawLuaTableLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                                const std::vector<scripting::ControlSnapshot>& controls,
+                                std::string_view stableId,
+                                std::size_t& widgetIndex,
+                                bool earlyExit);
+    bool drawLuaGroupLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                                const std::vector<scripting::ControlSnapshot>& controls,
+                                std::string_view stableId,
+                                std::size_t& widgetIndex,
+                                bool earlyExit);
+    bool drawLuaCollapseLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                                   const std::vector<scripting::ControlSnapshot>& controls,
+                                   std::string_view stableId,
+                                   std::size_t& widgetIndex,
+                                   bool earlyExit);
     bool drawDynamicControl(const scripting::ControlSnapshot& control);
+    bool drawDynamicLayoutControl(const scripting::ControlSnapshot& control, float layoutWidth);
+    bool drawDynamicControl(const scripting::ControlSnapshot& control, std::optional<float> layoutWidth);
+    bool drawDynamicButtonControl(const scripting::ControlSnapshot& control,
+                                  const std::string& imguiLabel,
+                                  std::optional<float> layoutWidth = std::nullopt);
+    bool drawDynamicCheckboxControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicTextControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicComboControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicElfSymbolComboControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicIntControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawDynamicFloatControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
+    bool drawValueTableControl(const scripting::ControlSnapshot& control);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
     void processPendingProtocolWorkspaceSwitch();
     bool switchProtocolWorkspace(const std::string& protocolDir, bool forceReload);
+    [[nodiscard]] bool isSameProtocolWorkspace(const std::string& requestedDir) const;
+    void resetLuaDefaultDockStateForProtocolSwitch();
+    bool reloadProtocolWorkspace(const std::string& protocolDir, bool forceReload, bool sameProtocol);
+    void loadProtocolWorkspaceAfterReload(bool sameProtocol);
     void loadCurrentProtocolWorkspace();
+    void beginProtocolWorkspaceLoad(const LuaDockLayoutPaths& layoutPaths);
+    void loadProtocolWorkspaceLayoutIni(const LuaDockLayoutPaths& layoutPaths);
     void saveCurrentProtocolWorkspace();
     void resetCurrentProtocolWorkspaceLayout();
     void loadCurrentProtocolControlState();
+    void resetProtocolControlLoadDefaults();
+    void useDefaultProtocolControlState();
+    void reportRecoveredProtocolStateBackup(const ProtocolStateFileRecovery& recovery, std::string_view messagePrefix);
+    void restoreProtocolWorkspaceState(const YAML::Node& root, const YAML::Node& protocolNode);
+    void restorePersistedControlValues(const YAML::Node& controlsNode);
     void saveCurrentProtocolControlState();
+    ProtocolDockVisibilityState captureCurrentDockVisibilityState() const;
+    YAML::Node buildPersistedControlState() const;
+    void storeCurrentProtocolState(YAML::Node& root, YAML::Node& protocolNode);
     void pruneCurrentLuaDockSettings();
     bool isLuaDockVisible(std::string_view stableId) const;
     bool setLuaDockVisible(std::string_view stableId, bool visible);
@@ -143,15 +216,25 @@ private:
     void openRawCaptureImportDialog();
     void openRawCaptureExportDialog();
     void openRawCaptureRecordingDialog();
+    void openRawCaptureReplayTimelineDialog();
+    void openSessionPackageImportDialog();
+    void openSessionPackageExportDialog();
+    void openWaveAnalysisExportDialog();
     void openTransferLogExportDialog();
     void openHostLogExportDialog();
     void openScriptLogExportDialog();
+    void openRequestTraceExportDialog();
     void openLogExportDialog(LogExportTarget target);
     void openElfStaticAddressDialog();
     void importRawCaptureFromPath(const std::filesystem::path& path);
     void exportRawCaptureToPath(const std::filesystem::path& path);
+    void loadRawCaptureReplayTimelineFromPath(const std::filesystem::path& path);
     void startRawCaptureRecordingToPath(const std::filesystem::path& path);
+    void importSessionPackageFromPath(const std::filesystem::path& path);
+    void exportSessionPackageToPath(const std::filesystem::path& path);
+    void exportWaveAnalysisReportToPath(const std::filesystem::path& path);
     void drawLogExportFileDialog();
+    void drawRequestTraceExportFileDialog();
     std::vector<dock::ReceiveRow> logExportRows(LogExportTarget target);
     bool exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path);
     bool exportLogRowsToPath(const std::filesystem::path& path,
@@ -159,6 +242,11 @@ private:
                              bool showTimestamps,
                              bool showHex,
                              std::string_view title);
+    std::vector<dock::RequestTraceRow> requestTraceExportRows();
+    bool exportRequestTraceToPath(const std::filesystem::path& path);
+    bool exportRequestTraceRowsToPath(const std::filesystem::path& path,
+                                      std::span<const dock::RequestTraceRow> rows,
+                                      bool showTimestamps);
     const FilteredLogRowsCache& filteredLogRowsCached(FilteredLogRowsCache& cache,
                                                       const std::deque<dock::ReceiveRow>& rows,
                                                       std::uint64_t version,
@@ -181,6 +269,15 @@ private:
     std::filesystem::path currentProtocolLayoutPath() const;
     std::filesystem::path legacyProtocolLayoutPath() const;
     std::filesystem::path protocolControlStatePath() const;
+    struct ElfSymbolComboUiState;
+    void seedElfSymbolComboDraft(ElfSymbolComboUiState& state, const scripting::ElfSymbolValue& current) const;
+    void refreshElfSymbolComboOptionsIfNeeded(const scripting::ControlDescriptor& descriptor,
+                                              ElfSymbolComboUiState& state,
+                                              std::uint64_t currentMs);
+    std::vector<std::string> elfSymbolComboLabels(const ElfSymbolComboUiState& state) const;
+    bool commitElfSymbolComboSelection(const scripting::ControlDescriptor& descriptor,
+                                       const ElfSymbolComboUiState& state,
+                                       const std::string& selectedLabel);
 
     bool reloadConfigFromDisk();
     bool pollConfigFileChanges();
@@ -220,12 +317,14 @@ private:
     bool showCommDock_{true};
     bool showProtocolDock_{true};
     bool showTransferDock_{true};
+    bool showRequestTraceDock_{true};
+    bool showOfflineReplayDock_{true};
     bool showLogDock_{true};
     bool showScriptDock_{true};
     bool showWaveDock_{true};
     bool waveFullscreenActive_{false};
     bool waveFullscreenToggleRequested_{false};
-    config::GuiWaveFullscreenMode waveFullscreenActiveMode_{config::GuiWaveFullscreenMode::Focus};
+    config::GuiWaveFullscreenMode waveFullscreenActiveMode_{config::GuiWaveFullscreenMode::Overlay};
     std::optional<WaveFullscreenDockSnapshot> waveFullscreenSnapshot_;
     FilteredLogRowsCache transferLogRowsCache_;
     FilteredLogRowsCache hostLogRowsCache_;
@@ -252,6 +351,10 @@ private:
     bool rawCaptureImportDialogOpened_{false};
     std::string rawCaptureImportPath_;
     std::string rawCaptureImportError_;
+    bool rawCaptureReplayTimelineDialogOpen_{false};
+    bool rawCaptureReplayTimelineDialogOpened_{false};
+    std::string rawCaptureReplayTimelinePath_;
+    std::string rawCaptureReplayTimelineError_;
     bool rawCaptureExportDialogOpen_{false};
     bool rawCaptureExportDialogOpened_{false};
     std::string rawCaptureExportPath_;
@@ -260,12 +363,24 @@ private:
     bool rawCaptureRecordingDialogOpened_{false};
     std::string rawCaptureRecordingPath_;
     std::string rawCaptureRecordingError_;
+    bool sessionPackageImportDialogOpen_{false};
+    bool sessionPackageImportDialogOpened_{false};
+    std::string sessionPackageImportPath_;
+    std::string sessionPackageImportError_;
+    bool sessionPackageExportDialogOpen_{false};
+    bool sessionPackageExportDialogOpened_{false};
+    std::string sessionPackageExportPath_;
+    std::string sessionPackageExportError_;
     bool logExportDialogOpen_{false};
     bool logExportDialogOpened_{false};
     LogExportTarget logExportTarget_{LogExportTarget::Transfer};
     std::string logExportPath_;
     std::string logExportError_;
     std::string logExportDialogTitle_;
+    bool requestTraceExportDialogOpen_{false};
+    bool requestTraceExportDialogOpened_{false};
+    std::string requestTraceExportPath_;
+    std::string requestTraceExportError_;
     bool elfStaticAddressDialogOpen_{false};
     bool elfStaticAddressDialogOpened_{false};
     std::string elfStaticAddressPath_;

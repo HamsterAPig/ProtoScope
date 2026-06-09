@@ -1,14 +1,13 @@
 #include "protoscope/scripting/script_host.hpp"
 
 #include "script_host_api_module.hpp"
+#include "script_host_lua_helpers.hpp"
 
 namespace protoscope::scripting {
 
-class UiScriptHostApiModule final : public IScriptHostApiModule {
+class UiScriptHostApiModule final : public ScriptHostApiModuleBase {
 public:
-    explicit UiScriptHostApiModule(ScriptHost& host) : host_(host) {}
-
-    std::string_view id() const override { return "ui_api_module"; }
+    explicit UiScriptHostApiModule(ScriptHost& host) : ScriptHostApiModuleBase(host, "ui_api_module") {}
 
     void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
     {
@@ -19,28 +18,25 @@ public:
             std::string error;
             const auto dialog = host->protoDialog(DialogKind::Alert, opts, error);
             if (!dialog.has_value()) {
-                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+                return script_host_lua::luaNilError(lua, error);
             }
-            return std::make_tuple(sol::make_object(lua, dialog->id), sol::make_object(lua, sol::lua_nil));
+            return script_host_lua::luaValueOk(lua, dialog->id);
         });
         uiApi.set_function("confirm", [host, lua](const sol::object& opts) {
             std::string error;
             const auto dialog = host->protoDialog(DialogKind::Confirm, opts, error);
             if (!dialog.has_value()) {
-                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+                return script_host_lua::luaNilError(lua, error);
             }
-            return std::make_tuple(sol::make_object(lua, dialog->id), sol::make_object(lua, sol::lua_nil));
+            return script_host_lua::luaValueOk(lua, dialog->id);
         });
         proto["ui"] = uiApi;
     }
-
-private:
-    ScriptHost& host_;
 };
 
 std::unique_ptr<IScriptHostApiModule> makeUiApiModule(ScriptHost& host)
 {
-    return std::make_unique<UiScriptHostApiModule>(host);
+    return makeScriptHostApiModule<UiScriptHostApiModule>(host);
 }
 
 } // namespace protoscope::scripting

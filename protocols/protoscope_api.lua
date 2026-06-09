@@ -9,9 +9,9 @@ ProtoScope 脚本 API 定义文件。
 
 -- 基础枚举：覆盖日志、控件、停靠、传输和弹窗状态。
 ---@alias ProtoLogLevel 'debug'|'info'|'warn'|'error'
----@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'
+---@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'|'value_table'
 ---@alias ProtoDockAnchor 'left'|'left_bottom'|'right_top'|'right_mid'|'right_bottom'|'main_bottom'
----@alias ProtoControlValue boolean|integer|number|string|ProtoElfSymbolValue|nil
+---@alias ProtoControlValue boolean|integer|number|string|ProtoElfSymbolValue|ProtoValueTableUpdate|ProtoValueTableSnapshot|nil
 ---@alias ProtoBytes integer[]
 ---@alias ProtoPayload string|ProtoBytes|ProtoBuffer
 ---@alias ProtoTransportKind 'tcp_client'|'tcp_server'|'serial'|'udp_peer'
@@ -83,6 +83,8 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@class ProtoControlLayoutNode
 ---@field type 'control'
 ---@field id string
+---@field min_width? number @控件最小宽度约束，必须为正数；只在 layout control 节点上生效。
+---@field max_width? number @控件最大宽度约束，必须为正数；同时设置时要求 min_width <= max_width。
 
 ---@class ProtoTextLayoutNode
 ---@field type 'text'
@@ -112,6 +114,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field label_position? ProtoControlLabelPosition @标签相对控件的位置，默认 left；button 始终使用 label 作为按钮文本。
 ---@field default? ProtoControlValue
 ---@field options? string[]
+---@field rows? ProtoValueTableRow[] @value_table 行定义；普通行用 id，bit 行用 id+bits，range 行用 start_id+len。
 ---@field debounce_ms? integer @elf_symbol_combo 输入消抖毫秒数；未设置时使用 gui.elf_symbol_combo.debounce_ms，默认 300。
 ---@field limit? integer @elf_symbol_combo 候选结果上限；未设置时使用 gui.elf_symbol_combo.limit，默认 10。
 
@@ -120,6 +123,37 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field label string
 ---@field value string
 ---@field type string
+
+-- value_table 显示表：row id 只用于内部匹配，界面只显示 label/value/unit，note 通过悬浮提示展示。
+---@class ProtoValueTableBitRow
+---@field bit integer @U16 bit 下标，0 表示最低位，范围 0..15。
+---@field label string
+---@field values? table<integer,string> @[0]/[1] 显示映射；未提供时显示 "0"/"1"。
+---@field unit? string
+---@field note? string
+
+---@class ProtoValueTableRow
+---@field id? integer @普通行 row id，或 bit 源 U16 id。
+---@field label? string @普通行 label；bit 源行本身不显示时可只写 bits。
+---@field unit? string
+---@field note? string
+---@field bits? ProtoValueTableBitRow[] @声明后仅展开这些 bit 行，未声明 bit 不显示。
+---@field start_id? integer @range 行起始 id。
+---@field len? integer @range 行长度。
+---@field labels? string[] @range 行 label 数组，数量不少于 len。
+---@field units? string[] @range 行 unit 数组。
+
+---@class ProtoValueTableUpdate
+---@field start_id? integer @range 更新起始 id；与 values 一起使用。
+---@field values? any[] @range 更新原始值数组；也可用 table 数字键直接按 row id 更新。
+
+---@class ProtoValueTableSnapshotRow
+---@field label string
+---@field value string
+---@field unit string
+---@field note? string
+
+---@alias ProtoValueTableSnapshot ProtoValueTableSnapshotRow[]
 
 -- 停靠面板描述：定义一个脚本 UI 面板的标题、锚点和控件布局。
 ---@class ProtoDockDescriptor
@@ -138,6 +172,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field scale? number
 ---@field offset? number
 ---@field color? string @支持 '#RRGGBB' 或 '#RRGGBBAA'。
+---@field line_width? number @主波形区线宽，范围 0.5 到 8.0；省略时使用默认线宽。
 
 -- 波形初始化参数：用于一次性配置波形来源、通道和视图范围。
 ---@class ProtoPlotSetup
@@ -287,6 +322,17 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field fields table<string, any>
 ---@field crc_ok boolean
 ---@field channel_map? integer[]
+
+---@class ProtoStreamValueTargetControl
+---@field id? string @目标 value_table 控件 id；也可使用 control 或 control_id。
+---@field control? string
+---@field control_id? string
+---@field start_field? string @起始 row id 字段名；与 start_id 二选一。
+---@field start_id? integer @固定起始 row id；与 start_field 二选一。
+---@field values_field string @寄存器数组字段名。
+
+---@class ProtoStreamValueTargets
+---@field controls ProtoStreamValueTargetControl[]
 
 ---@class ProtoStreamSchema
 ---@field raw_output? ProtoStreamRawOutputMode
@@ -461,7 +507,7 @@ function proto.plot.push(channel_index, payload) end
 ---@return ProtoControlValue
 function proto.get_control(id) end
 
--- 设置某个控件的值，适合脚本根据协议结果反向驱动界面状态。
+-- 设置某个控件的值，适合脚本根据协议结果反向驱动界面状态；value_table 可传数字 row id 映射或 { start_id, values }。
 ---@param id string
 ---@param value ProtoControlValue
 function proto.set_control(id, value) end

@@ -9,6 +9,7 @@
 #include "protoscope/transport/transport.hpp"
 
 #include <cstdint>
+#include <chrono>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -46,13 +47,32 @@ public:
     void setLogLevel(config::LogLevel level);
     bool setSendHexMode(bool enabled);
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
+    bool exportSessionPackage(const std::filesystem::path& path, std::string& error) const;
+    bool importSessionPackage(const std::filesystem::path& path, std::string& error);
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
+    struct RawCaptureReplayStatus {
+        bool loaded{false};
+        bool playing{false};
+        std::size_t eventIndex{0};
+        std::size_t eventCount{0};
+        double progress{0.0};
+        double speed{1.0};
+    };
+    bool loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture, std::string& error);
+    void unloadRawCaptureReplayTimeline();
+    bool playRawCaptureReplay(std::string& error);
+    void pauseRawCaptureReplay();
+    bool stepRawCaptureReplay(std::string& error);
+    bool seekRawCaptureReplay(std::size_t eventIndex, std::string& error);
+    void setRawCaptureReplaySpeed(double speed);
+    [[nodiscard]] RawCaptureReplayStatus rawCaptureReplayStatus() const;
     bool startRawCaptureRecording(const std::filesystem::path& path, std::string& error);
     bool stopRawCaptureRecording(std::string& error);
     [[nodiscard]] bool isRawCaptureRecording() const;
     [[nodiscard]] const std::filesystem::path& rawCaptureRecordingPath() const;
     [[nodiscard]] std::uint64_t rawCaptureRecordingBytes() const;
     void resetWaveHistory();
+    bool exportWaveAnalysisReport(const std::filesystem::path& path, std::string& error) const;
     bool loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error);
     void clearElfStaticAddressFile();
     [[nodiscard]] std::uint64_t elfStaticAddressRevision() const;
@@ -105,12 +125,72 @@ private:
         std::size_t scriptEvents{0};
     };
 
+    struct CommPressureDebugSnapshot {
+        std::size_t pendingRxBytes{0};
+        std::size_t pendingTransferFrameRows{0};
+        std::size_t pendingPlotAppends{0};
+        std::size_t rxInputQueueBytes{0};
+        std::size_t parserPendingBytes{0};
+        std::size_t postprocessPendingBatches{0};
+        std::size_t luaPendingItems{0};
+        std::size_t uiPendingItems{0};
+        std::size_t postprocessWorkerThreads{0};
+        std::string backlogWarning;
+        std::size_t lastPumpEvents{0};
+        std::size_t lastPumpRxBytes{0};
+        std::size_t lastPumpStreamFrames{0};
+        std::size_t lastPumpStreamErrors{0};
+        double lastPumpTransportMs{0.0};
+        double lastPumpParserMs{0.0};
+        double lastPumpCallbackMs{0.0};
+        double lastPumpScriptMs{0.0};
+
+        bool operator==(const CommPressureDebugSnapshot&) const = default;
+    };
+
+    struct CommPressureDebugLogState {
+        bool hasSnapshot{false};
+        CommPressureDebugSnapshot lastSnapshot{};
+        std::uint64_t lastLogMs{0};
+    };
+
+    struct RawCaptureReplayState {
+        bool loaded{false};
+        bool playing{false};
+        plot::RawCaptureFileData capture{};
+        transport::ConnectionContext context{};
+        std::size_t eventIndex{0};
+        double speed{1.0};
+        double accumulatedMs{0.0};
+        std::uint64_t lastPumpMs{0};
+    };
+
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
+    void maybeLogCommPressureDebug(const dock::CommDockState& comm);
     bool applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch);
+    void applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot& snapshot);
+    bool probeProtocolDirectory(const std::string& resolvedDirText);
+    void prepareProtocolRuntimeReload();
+    bool applyProtocolLoadResult(const std::string& resolvedDirText,
+                                 const std::string& protocolName,
+                                 const std::string& scriptPath,
+                                 const scripting::ScriptRuntimeLoadResult& loadResult);
+    void refreshTransferFrameDisplayAfterProtocolReload();
     bool handleTransportEvents();
+    void resetTransportPumpMetrics();
+    void pullTransportEventsFromTransport();
+    bool drainTransportEventQueues(const std::chrono::steady_clock::time_point& startedAt,
+                                   std::size_t maxRxBytes,
+                                   std::size_t& processedEvents,
+                                   std::size_t& processedRxBytes);
     bool processTransportEvent(const transport::TransportEvent& event);
+    bool processTransportOpenEvent(const transport::TransportOpenEvent& event);
+    bool processTransportCloseEvent(const transport::TransportCloseEvent& event);
+    bool processTransportErrorEvent(const transport::TransportErrorEvent& event);
+    bool processTransportBytesEvent(const transport::TransportBytesEvent& event);
+    bool processTransportTxEvent(const transport::TransportTxEvent& event);
     bool processPendingRxBytes(std::size_t maxBytes);
     void enqueuePendingRxBytes(transport::TransportBytesEvent event);
     void detachPendingRealtimeBacklogFromConnection();
@@ -133,6 +213,16 @@ private:
     bool processRequestTimeouts();
     bool driveTxScheduler();
     bool enqueueTxRequest(scripting::TxRequest request);
+    bool applyScriptTransportStats(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptRuntimeProfileEvents(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups);
+    void enqueueScriptPlotAppends(const std::vector<std::pair<std::size_t, plot::WaveAppendRequest>>& appends);
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> drainScriptPlotAppendsForPump(
+        std::size_t maxPlotAppends);
+    bool appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests);
     void finishTxRequest(const scripting::TxRequest& request,
                          scripting::TxEventState state,
                          std::optional<std::string> error,
@@ -149,6 +239,21 @@ private:
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
     void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
     void appendRawCaptureEvent(const plot::RawCaptureEvent& event);
+    bool validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const;
+    void prepareRawCaptureImportReplay(const plot::RawCaptureFileData& capture);
+    [[nodiscard]] transport::ConnectionContext makeRawCaptureReplayContext(
+        const plot::RawCaptureFileData& capture) const;
+    bool replayRawCaptureEvents(const plot::RawCaptureFileData& capture, std::string& error);
+    bool pumpRawCaptureReplay(std::string& error);
+    bool replayRawCaptureEventAt(std::size_t eventIndex, std::string& error);
+    bool replayRawCaptureEvent(const plot::RawCaptureEvent& event,
+                               transport::ConnectionContext& replayContext,
+                               std::string& error);
+    bool applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent& event, bool cleared, std::string& error);
+    void replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
+                               const std::vector<std::uint8_t>& bytes);
+    void finishRawCaptureImportReplay();
+    void cancelRawCaptureImportReplay();
     bool applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup);
     void recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventData& setup, std::uint64_t timestampMs);
     void resetTransferFrameParser();
@@ -164,6 +269,7 @@ private:
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
     config::AppConfig runtimeConfig_{};
+    std::optional<config::ProtocolConfig> captureProtocolConfigOverride_;
     logging::LoggingFacade loggingFacade_{};
     scripting::ScriptRuntimeWorker scriptWorker_;
     plugin::ElfStaticViewBridge elfStaticView_;
@@ -184,10 +290,12 @@ private:
     StreamBufferAlertState streamBufferAlertState_{};
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
+    RawCaptureReplayState rawCaptureReplay_;
     std::deque<transport::TransportEvent> pendingTransportEvents_;
     std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;
     std::optional<std::uint64_t> cachedWaveSummaryRevision_;
+    CommPressureDebugLogState commPressureDebugLog_{};
     bool suppressRawCaptureProfileEvents_{false};
     bool suppressRawCapturePlotSetupEvents_{false};
 };

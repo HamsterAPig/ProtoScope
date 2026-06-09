@@ -78,6 +78,34 @@ namespace {
         return flattened;
     }
 
+    std::string csvEscape(std::string_view text)
+    {
+        std::string escaped;
+        escaped.reserve(text.size() + 2U);
+        escaped.push_back('"');
+        for (const char ch : text) {
+            if (ch == '"') {
+                escaped.push_back('"');
+            }
+            escaped.push_back(ch);
+        }
+        escaped.push_back('"');
+        return escaped;
+    }
+
+    void appendCsvField(std::string& line, std::string_view text)
+    {
+        if (!line.empty()) {
+            line.push_back(',');
+        }
+        line.append(csvEscape(text));
+    }
+
+    std::string textOrDash(std::string_view text)
+    {
+        return text.empty() ? std::string("-") : std::string(text);
+    }
+
     std::string uppercaseAscii(std::string text)
     {
         for (auto& ch : text) {
@@ -153,6 +181,17 @@ namespace {
         return containsIgnoreCase(protocol_utils::bytesToHex(row.bytes, true), keyword) ||
                containsIgnoreCase(bytesToAsciiPreview(row.bytes), keyword);
     }
+
+    bool matchesRequestTraceKeyword(const RequestTraceRow& row, std::string_view keyword)
+    {
+        if (keyword.empty()) {
+            return true;
+        }
+        return containsIgnoreCase(std::to_string(row.id), keyword) || containsIgnoreCase(row.endpoint, keyword) ||
+               containsIgnoreCase(row.tag, keyword) || containsIgnoreCase(requestTraceKindLabel(row.kind), keyword) ||
+               containsIgnoreCase(requestTraceStateLabel(row.state), keyword) ||
+               containsIgnoreCase(row.guardState, keyword) || containsIgnoreCase(row.error, keyword);
+    }
 } // namespace
 
 ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row)
@@ -219,6 +258,146 @@ std::vector<const ReceiveRow*> filteredLogRows(const std::vector<ReceiveRow>& ro
     return filteredLogRowsImpl(rows, filter, includeBytePreview);
 }
 
+const char* requestTraceKindLabel(RequestTraceKind kind)
+{
+    switch (kind) {
+        case RequestTraceKind::Send:
+            return "send";
+        case RequestTraceKind::Request:
+            return "request";
+    }
+    return "send";
+}
+
+const char* requestTraceStateLabel(RequestTraceState state)
+{
+    switch (state) {
+        case RequestTraceState::Queued:
+            return "排队";
+        case RequestTraceState::Sent:
+            return "已发送";
+        case RequestTraceState::Completed:
+            return "完成";
+        case RequestTraceState::Failed:
+            return "失败";
+        case RequestTraceState::Timeout:
+            return "超时";
+        case RequestTraceState::Rejected:
+            return "拒绝";
+        case RequestTraceState::Dropped:
+            return "丢弃";
+        case RequestTraceState::Canceled:
+            return "取消";
+        case RequestTraceState::GuardReset:
+            return "熔断重置";
+    }
+    return "未知";
+}
+
+bool isRequestTraceFailure(RequestTraceState state)
+{
+    switch (state) {
+        case RequestTraceState::Failed:
+        case RequestTraceState::Timeout:
+        case RequestTraceState::Rejected:
+        case RequestTraceState::Dropped:
+        case RequestTraceState::Canceled:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool matchesRequestTraceFilter(const RequestTraceRow& row, const RequestTraceFilterState& filter)
+{
+    if (!matchesRequestTraceKeyword(row, filter.keyword)) {
+        return false;
+    }
+
+    switch (filter.status) {
+        case RequestTraceStatusFilter::All:
+            return true;
+        case RequestTraceStatusFilter::Active:
+            return row.state == RequestTraceState::Queued || row.state == RequestTraceState::Sent;
+        case RequestTraceStatusFilter::Success:
+            return row.state == RequestTraceState::Completed || row.state == RequestTraceState::GuardReset;
+        case RequestTraceStatusFilter::Failure:
+            return isRequestTraceFailure(row.state);
+    }
+    return true;
+}
+
+std::vector<const RequestTraceRow*> filteredRequestTraceRows(const std::deque<RequestTraceRow>& rows,
+                                                            const RequestTraceFilterState& filter)
+{
+    std::vector<const RequestTraceRow*> filtered;
+    filtered.reserve(rows.size());
+    for (const auto& row : rows) {
+        if (matchesRequestTraceFilter(row, filter)) {
+            filtered.push_back(&row);
+        }
+    }
+    return filtered;
+}
+
+std::string formatRequestTraceDuration(const RequestTraceRow& row)
+{
+    if (row.durationMs == 0U && row.state == RequestTraceState::Queued) {
+        return "-";
+    }
+    return std::to_string(row.durationMs) + " ms";
+}
+
+std::string formatRequestTraceDetail(const RequestTraceRow& row)
+{
+    if (!row.error.empty()) {
+        return row.error;
+    }
+    return row.guardState;
+}
+
+std::string formatRequestTraceRowCsv(const RequestTraceRow& row, bool showTimestamps)
+{
+    std::string line;
+    if (showTimestamps) {
+        appendCsvField(line, formatTimestampText(row.timestampMs));
+    }
+    appendCsvField(line, row.id == 0U ? std::string("-") : std::to_string(row.id));
+    appendCsvField(line, requestTraceKindLabel(row.kind));
+    appendCsvField(line, requestTraceStateLabel(row.state));
+    appendCsvField(line, textOrDash(row.tag));
+    appendCsvField(line, textOrDash(row.endpoint));
+    appendCsvField(line, std::to_string(row.attempt) + "/" + std::to_string(row.maxAttempts));
+    appendCsvField(line, std::to_string(row.bytes));
+    appendCsvField(line, formatRequestTraceDuration(row));
+    appendCsvField(line, textOrDash(formatRequestTraceDetail(row)));
+    return line;
+}
+
+std::string formatRequestTraceRowsCsv(std::span<const RequestTraceRow> rows, bool showTimestamps)
+{
+    std::string csv;
+    if (showTimestamps) {
+        appendCsvField(csv, "时间");
+    }
+    appendCsvField(csv, "ID");
+    appendCsvField(csv, "类型");
+    appendCsvField(csv, "状态");
+    appendCsvField(csv, "Tag");
+    appendCsvField(csv, "端点");
+    appendCsvField(csv, "尝试");
+    appendCsvField(csv, "字节");
+    appendCsvField(csv, "耗时");
+    appendCsvField(csv, "详情");
+    csv.push_back('\n');
+
+    for (const auto& row : rows) {
+        csv.append(formatRequestTraceRowCsv(row, showTimestamps));
+        csv.push_back('\n');
+    }
+    return csv;
+}
+
 std::string formatReceiveRowContent(const ReceiveRow& row, bool showHex)
 {
     if (!row.message.empty()) {
@@ -274,8 +453,21 @@ void trimSendHistory(SendDockState& sendState, std::size_t limit)
         sendState.history.clear();
         return;
     }
-    while (sendState.history.size() > limit) {
-        sendState.history.pop_back();
+    if (sendState.history.size() > limit) {
+        // 核心流程：发送历史按“最新在前”保存，一次性裁掉末尾旧记录，避免逐条弹出。
+        sendState.history.resize(limit);
+    }
+}
+
+void trimRequestTraceRows(RequestTraceDockState& traceState, std::size_t limit)
+{
+    if (limit == 0U) {
+        traceState.rows.clear();
+        return;
+    }
+    // 核心流程：请求追踪按时间线追加，只保留最新记录，避免长期联调时 UI 历史无限增长。
+    while (traceState.rows.size() > limit) {
+        traceState.rows.pop_front();
     }
 }
 
@@ -323,6 +515,13 @@ void DockStore::appendScriptRow(ReceiveRow row)
     ++script_.rowsVersion;
 }
 
+void DockStore::appendRequestTraceRow(RequestTraceRow row)
+{
+    requestTrace_.rows.push_back(std::move(row));
+    trimRequestTraceRows(requestTrace_, historyLimits_.requestTraceRows);
+    ++requestTrace_.rowsVersion;
+}
+
 void DockStore::clearLogRows()
 {
     log_.rows.clear();
@@ -333,6 +532,12 @@ void DockStore::clearScriptRows()
 {
     script_.rows.clear();
     ++script_.rowsVersion;
+}
+
+void DockStore::clearRequestTraceRows()
+{
+    requestTrace_.rows.clear();
+    ++requestTrace_.rowsVersion;
 }
 
 void DockStore::appendTransferFrameRows(std::vector<ReceiveRow> rows)
@@ -368,6 +573,11 @@ void DockStore::setHistoryLimits(DockHistoryLimits limits)
     }
     if (historyLimiter_->trimRows(script_.rows, historyLimits_.scriptLogRows)) {
         ++script_.rowsVersion;
+    }
+    const auto beforeRequestTraceRows = requestTrace_.rows.size();
+    trimRequestTraceRows(requestTrace_, historyLimits_.requestTraceRows);
+    if (requestTrace_.rows.size() != beforeRequestTraceRows) {
+        ++requestTrace_.rowsVersion;
     }
 }
 
@@ -428,6 +638,11 @@ ScriptDockState& DockStore::scriptState()
     return script_;
 }
 
+RequestTraceDockState& DockStore::requestTraceState()
+{
+    return requestTrace_;
+}
+
 SendDockState& DockStore::sendState()
 {
     return send_;
@@ -466,6 +681,11 @@ const LogDockState& DockStore::logState() const
 const ScriptDockState& DockStore::scriptState() const
 {
     return script_;
+}
+
+const RequestTraceDockState& DockStore::requestTraceState() const
+{
+    return requestTrace_;
 }
 
 const SendDockState& DockStore::sendState() const

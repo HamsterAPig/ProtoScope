@@ -14,8 +14,11 @@
 - `protocols/stream_types.lua`：`stream()` schema 的类型注解。
 - `protocols/templates/README.md`：内置协议模板列表和复制使用说明。
 
-默认协议模板位于 `protocols/templates`。每个协议目录只要求存在 `main.lua`，
-例如 `protocols/templates/default_protocol/main.lua`。
+源码中的默认示例位于 `protocols/default_protocol`、`protocols/lua_waveform_demo`、
+`protocols/half_duplex_modbus_master` 和 `protocols/half_duplex_modbus_slave`。
+`protocols/templates` 只放可复制的操作模板，例如 `file_dialog`、`request_guarded` 和 `send_file`。
+每个协议目录只要求存在 `main.lua`，例如 `protocols/default_protocol/main.lua`。
+打包运行时会把内嵌默认协议释放到可执行目录下的协议目录，供用户直接选择和复制。
 
 ## UI 布局
 
@@ -38,16 +41,20 @@ function ui()
       },
       layout = {
         type = "flow",
-        children = {
-          { type = "control", id = "device_id" },
-          { type = "control", id = "hex_send" },
-          { type = "control", id = "send_once" },
-        },
+        controls = { "device_id", "hex_send", "send_once" },
       },
     },
   }
 end
 ```
+
+控件宽度约束写在 layout 的 `control` 节点上，不写在顶层控件定义里：
+
+```lua
+{ type = "control", id = "device_id", min_width = 180, max_width = 260 }
+```
+
+宽度约束只属于 layout 的 `control` 节点。顶层控件描述只声明控件类型、标签、默认值和选项，不声明布局宽度。
 
 ### `ui()` 返回值
 
@@ -59,6 +66,8 @@ end
 - `tab_group`：分组名，可选。相同 `tab_group` 的 dock 会落到同一个 tab 组里。
 - `controls`：控件列表，必填。
 - `layout`：新 Layout Tree，可选。省略时宿主会按 `controls` 的声明顺序逐个渲染。
+
+可用 `anchor`：`left`、`left_bottom`、`right_top`、`right_mid`、`right_bottom`、`main_bottom`。
 
 ### 控件类型
 
@@ -77,20 +86,47 @@ end
 - `input_float`：浮点输入，`default` 是数字。
 - `checkbox`：布尔开关，`default` 是 boolean。
 - `combo`：下拉选择，必须提供 `options = { ... }`，`default` 是 1 基索引。
-- `elf_symbol_combo`：ELF 静态地址候选输入框。
+- `elf_symbol_combo`：ELF 静态地址候选输入框，值是 `{ label, value, type }` 结构；可选 `debounce_ms` 和 `limit`，未写时使用 `gui.elf_symbol_combo.debounce_ms` 与 `gui.elf_symbol_combo.limit`。
+- `value_table`：只读寄存器显示表。`rows` 支持普通行（`id + label + unit? + note?`）、bit 展开行（在一个源 `id` 下声明 `bits = { ... }`）、批量行（`start_id + len + labels + units`）。row id 只用于内部匹配，不显示到界面；`note` 字段在悬浮时作为 tooltip 展示。
+
+```lua
+controls = {
+  { type = "value_table", id = "holding_values", label = "保持寄存器",
+    rows = {
+      { id = 0x1010, label = "电压", unit = "V", note = "母线电压" },
+
+      { id = 0x1020, label = "状态字",
+        bits = {
+          { bit = 0, label = "运行", values = { [0] = "停止", [1] = "运行" } },
+          { bit = 1, label = "告警", values = { [0] = "正常", [1] = "告警" }, note = "设备告警位" },
+          { bit = 5, label = "远程模式" },
+        },
+      },
+
+      { start_id = 0x1030, len = 3,
+        labels = { "温度", "湿度", "压力" },
+        units = { "C", "%", "kPa" },
+      },
+    },
+  },
+}
+```
+
+`proto.set_control("holding_values", { [0x1010] = "220.1", [0x1020] = 0x0023 })` 按 row id 更新。对于 U16 bit 源行，收到整数后自动展开 bit。也可以传 `{ start_id = ..., values = { ... } }` 做范围更新。schema 自动化流填充使用 `value_targets.controls` 映射，解析帧后自动写入目标 value_table 控件，再调用 on_batch/on_frame，handler 覆盖优先。
 
 ### Layout Tree
 
 显式布局统一使用 `type + children` 的递归树，不再兼容旧的 `layout.kind`、`form.items`、`table.rows` control-only 写法。
+`column` 和 `flow` 可用 `controls = { "id1", "id2" }` 简写连续控件；同一个 layout 节点上 `children` 与 `controls` 互斥，不能同时填写。
 
 通用规则：
 
-- `{ type = "column", children = { ... } }`：纵向块级布局。
-- `{ type = "flow", spacing = 6, run_spacing = 5, children = { ... } }`：横向流式布局，空间不足时自动换行。
+- `{ type = "column", children = { ... } }` 或 `{ type = "column", controls = { "id1", "id2" } }`：纵向块级布局。
+- `{ type = "flow", spacing = 6, run_spacing = 5, children = { ... } }` 或 `{ type = "flow", controls = { "id1", "id2" } }`：横向流式布局，空间不足时自动换行。
 - `{ type = "table", columns = 2, rows = { ... } }`：表格布局，单元格可以放任意 layout node。
 - `{ type = "group", title = "...", children = { ... } }`：标题分组。
 - `{ type = "collapse", title = "...", default_open = true, children = { ... } }`：折叠分组。
-- `{ type = "control", id = "xxx" }`：引用一个已声明控件。
+- `{ type = "control", id = "xxx" }`：引用一个已声明控件。可选 `min_width` / `max_width` 约束控件宽度，值必须是正数；可以只写其中一个，同时填写时要求 `min_width <= max_width`。
 - `{ type = "text", text = "..." }`：说明文字。
 - `{ type = "separator" }`：分割线。
 - `{ type = "spacer" }`：占位空白。
@@ -296,6 +332,17 @@ return schema
 - `raw_output`：默认 `full` 会向 Lua 暴露 `frame.raw`；高速连续采样建议写 `omit`，避免逐字节展开 raw。
 - `low_overhead`：默认 `false` 保持调试快照兼容；高速场景可与 `raw_output = "omit"` 配合，成功帧不保留到 `lastStreamParseBatch()`。
 - `field_output`：默认 `compat` 同时写 `frame.fields.xxx` 和 `frame.xxx`；高频回调可写 `fields_only`，只保留 `frame.fields`。
+- `value_targets`：声明解析帧后自动填充 value_table 控件。`controls` 里每项指定目标控件 id、`values_field` 和注册起始 `start_field` 或 `start_id`。
+
+```lua
+value_targets = {
+  controls = {
+    { id = "holding_values", start_field = "start_addr", values_field = "registers" },
+  },
+},
+```
+
+自动填充发生在 `on_batch/on_frame` 之前，Lua handler 里再次 `set_control` 同一行会覆盖自动值。
 
 补充约定：
 
@@ -360,8 +407,8 @@ end
 - `channel_map` 用 Lua 侧 1-based 通道号声明；宿主内部会转换为 0-based。
 - profile 一旦设置会持续生效，直到 `proto.stream.clear_profile("upload_dynamic")` 或 `proto.stream.clear_profile()`。
 - `runtime_profile = true` 的帧如果回放时缺少对应 profile 事件，宿主会给出明确错误，而不是静默套旧长度。
-- “导出当前可见 raw”只保存当前波形窗口可见的原始字节，并会补齐这段字节回放所依赖的活动 `profile_set` / `profile_clear` 和最后一次 `plot_setup` 快照。
-- “开始完整原始数据录制”保存完整事件流、完整 RX 历史和录制开始时的波形配置快照；需要完整复现长时间采集时，应优先使用完整录制，而不是普通导出。
+- “导出当前缓存快照”只保存当前可回放窗口里的原始字节，并会补齐这段字节回放所依赖的活动 `profile_set` / `profile_clear` 和最后一次 `plot_setup` 快照。
+- “开始完整原始数据录制”保存完整事件流、完整 RX 历史和录制开始时的波形配置快照；需要完整复现长时间采集时，应优先使用完整录制或现场会话包，而不是普通导出。
 
 字段类型、`crc.order`、`len.means` 的可选值请直接参考 `protocols/stream_types.lua`。
 
@@ -422,6 +469,7 @@ count = {
 - `proto.status.set(text, { level = "info"|"warn"|"error" })`
 - `proto.status.clear()`
 - `proto.ui.alert({ title = "...", message = "...", level = "warn", window = { width = 520, height = 260, x = 120, y = 80, resizable = true, movable = true, auto_resize = false } })`
+- `proto.ui.confirm({ title = "...", message = "...", tag = "confirm_send", dedupe_key = "confirm_send" })`
 - `proto.plot.setup({ source = "...", reset_history = true, channels = { ... } })`
 - `proto.plot.push(channel_index, { source = "...", samples = { { t = 0.0, y = 1.23 } } })`
 
@@ -433,8 +481,42 @@ count = {
 - `auto_resize`：是否使用 ImGui 自动尺寸
 
 如果不传 `window`，ProtoScope 会继续沿用原有自动尺寸弹窗行为；标题只保留在窗口标题栏，不会在正文重复显示。
+`dedupe_key` 可用于同类弹窗去重；未设置时每次调用都按独立弹窗请求处理。
 
 `proto.fs.*` 仍使用系统原生文件对话框，不支持用同一套 `window` 参数控制宽高、位置或拖动开关。
+
+文件 IO 常用调用：
+
+```lua
+proto.fs.open_file_dialog({
+  title = "选择样本",
+  mode = "open",
+  filters = {
+    { name = "Binary", pattern = "*.bin" },
+    { name = "All", pattern = "*" },
+  },
+})
+
+local handle, err = proto.fs.open(path, {
+  mode = "read",
+  binary = true,
+  create_dirs = false,
+  overwrite = false,
+})
+
+local chunk, read_err = proto.fs.read(handle, { size = 4096 })
+proto.fs.close(handle)
+
+local job_id, send_err = proto.fs.send_file(path, {
+  kind = "send",
+  chunk_size = 256,
+  tag = "firmware",
+})
+```
+
+- `open_file_dialog.mode` 支持 `open` 和 `save`，结果通过 `on_file_dialog(ctx, evt)` 异步返回。
+- `proto.fs.open()` 的 `mode` 支持 `read`、`write`、`append`；写入模式可配合 `create_dirs` 和 `overwrite`。
+- `proto.fs.send_file()` 会分块读取文件并通过宿主 TX 队列发送，`kind` 可选择 `send` 或 `request`，进度与结果通过 `on_tx(ctx, evt)` 返回。
 
 最小波形示例：
 
@@ -443,7 +525,7 @@ proto.plot.setup({
   source = "demo",
   reset_history = true,
   channels = {
-    { label = "CH1", unit = "V", color = "#4FC3F7" },
+    { label = "CH1", unit = "V", color = "#4FC3F7", line_width = 2.5 },
     { label = "CH2", unit = "V", color = "#81C784" },
   },
 })
@@ -459,10 +541,10 @@ proto.plot.push(1, {
 
 ## 半双工 Modbus Schema Demo
 
-仓库内置两个半双工 Modbus 模板：
+仓库内置两个半双工 Modbus 示例：
 
-- `protocols/templates/half_duplex_modbus_master`
-- `protocols/templates/half_duplex_modbus_slave`
+- `protocols/half_duplex_modbus_master`
+- `protocols/half_duplex_modbus_slave`
 
 它们表达的是同一类协议约束：主机请求、从机 ACK、以及 `0x26` 上传帧。
 

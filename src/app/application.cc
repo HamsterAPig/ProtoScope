@@ -2,26 +2,36 @@
 
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/pipeline_threading.hpp"
+#include "protoscope/session/session_package.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <exception>
+#include <fstream>
 #include <iomanip>
 #include <iterator>
 #include <limits>
 #include <sstream>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+
+#include <yaml-cpp/yaml.h>
 
 namespace protoscope::app {
 
 namespace {
 
     constexpr std::size_t kRawCaptureReplayChunkBytes = 1024;
+    constexpr std::size_t kRawCaptureReplaySeekNoticeEvents = 4096;
     constexpr std::size_t kTransportEventsPerPump = 256;
     constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
+    constexpr std::uint64_t kCommPressureDebugLogIntervalMs = 2000;
+    constexpr std::string_view kSessionProtocolEntryPrefix = "protocol/";
 
     std::uint64_t nowMs()
     {
@@ -73,6 +83,17 @@ namespace {
         return true;
     }
 
+    bool sameLineWidth(const std::optional<float>& left, const std::optional<float>& right)
+    {
+        if (left.has_value() != right.has_value()) {
+            return false;
+        }
+        if (!left.has_value()) {
+            return true;
+        }
+        return std::abs(*left - *right) <= 1e-6F;
+    }
+
     bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer)
     {
         if (setupChannels.size() != buffer.channelCount()) {
@@ -85,7 +106,7 @@ namespace {
             }
             const auto& setup = setupChannels[i];
             if (current->label != setup.label || current->unit != setup.unit ||
-                !sameColor(current->color, setup.color)) {
+                !sameColor(current->color, setup.color) || !sameLineWidth(current->lineWidth, setup.lineWidth)) {
                 return false;
             }
         }
@@ -139,6 +160,212 @@ namespace {
         return total;
     }
 
+    std::vector<std::uint8_t> stringBytes(std::string_view text)
+    {
+        return {text.begin(), text.end()};
+    }
+
+    std::string stringFromBytes(const std::vector<std::uint8_t>& bytes)
+    {
+        return {bytes.begin(), bytes.end()};
+    }
+
+    std::vector<std::uint8_t> readFileBytes(const std::filesystem::path& path, std::string& error)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.good()) {
+            error = "无法读取文件: " + path.generic_string();
+            return {};
+        }
+        return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    }
+
+    bool writeFileBytes(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes, std::string& error)
+    {
+        std::error_code directoryError;
+        const auto parent = path.parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent, directoryError);
+            if (directoryError) {
+                error = "创建目录失败: " + directoryError.message();
+                return false;
+            }
+        }
+        std::ofstream out(path, std::ios::binary);
+        if (!out.good()) {
+            error = "无法写入文件: " + path.generic_string();
+            return false;
+        }
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!out.good()) {
+            error = "写入文件失败: " + path.generic_string();
+            return false;
+        }
+        return true;
+    }
+
+    bool isSafeSessionPackageEntryName(std::string_view name)
+    {
+        if (name.empty() || name.front() == '/' || name.front() == '\\') {
+            return false;
+        }
+        if (name.size() >= 2 && name[1] == ':' &&
+            ((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z'))) {
+            return false;
+        }
+
+        std::size_t segmentStart = 0;
+        for (std::size_t index = 0; index <= name.size(); ++index) {
+            const bool atEnd = index == name.size();
+            const bool separator = !atEnd && (name[index] == '/' || name[index] == '\\');
+            if (!atEnd && name[index] == ':') {
+                return false;
+            }
+            if (!atEnd && !separator) {
+                continue;
+            }
+
+            const auto segment = name.substr(segmentStart, index - segmentStart);
+            if (segment.empty() || segment == "." || segment == "..") {
+                return false;
+            }
+            segmentStart = index + 1;
+        }
+        return true;
+    }
+
+    bool validateSessionPackageEntries(const session::SessionPackageData& package, std::string& error)
+    {
+        for (const auto& entry : package.entries) {
+            if (!isSafeSessionPackageEntryName(entry.name)) {
+                error = "现场包包含不安全条目: " + entry.name;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool collectProtocolDirectoryEntries(const std::filesystem::path& protocolDir,
+                                         std::vector<session::SessionPackageEntry>& entries,
+                                         std::string& error)
+    {
+        std::error_code pathError;
+        if (!std::filesystem::is_directory(protocolDir, pathError) || pathError) {
+            error = "当前协议目录不可读取: " + protocolDir.generic_string();
+            if (pathError) {
+                error += ", " + pathError.message();
+            }
+            return false;
+        }
+
+        pathError = {};
+        const auto mainLuaPath = protocolDir / "main.lua";
+        if (!std::filesystem::is_regular_file(mainLuaPath, pathError) || pathError) {
+            error = "当前协议目录缺少 main.lua: " + mainLuaPath.generic_string();
+            if (pathError) {
+                error += ", " + pathError.message();
+            }
+            return false;
+        }
+
+        std::error_code walkError;
+        for (std::filesystem::recursive_directory_iterator it(
+                 protocolDir, std::filesystem::directory_options::skip_permission_denied, walkError),
+             end;
+             it != end;
+             it.increment(walkError)) {
+            if (walkError) {
+                error = "遍历当前协议目录失败: " + walkError.message();
+                return false;
+            }
+
+            std::error_code typeError;
+            if (!it->is_regular_file(typeError)) {
+                if (typeError) {
+                    error = "检查协议文件类型失败: " + typeError.message();
+                    return false;
+                }
+                continue;
+            }
+
+            const auto relativePath = it->path().lexically_relative(protocolDir);
+            const auto relativeName = relativePath.generic_string();
+            if (relativeName.empty()) {
+                error = "协议目录包含无法打包的空相对路径";
+                return false;
+            }
+
+            std::string readError;
+            auto bytes = readFileBytes(it->path(), readError);
+            if (!readError.empty()) {
+                error = "读取当前协议目录文件失败: " + readError;
+                return false;
+            }
+            // 核心流程：现场包必须保留协议目录结构，导入后 Lua 的 require 同目录模块才能继续生效。
+            entries.push_back(session::SessionPackageEntry{
+                .name = std::string(kSessionProtocolEntryPrefix) + relativeName,
+                .bytes = std::move(bytes),
+            });
+        }
+
+        std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.name < rhs.name;
+        });
+        return true;
+    }
+
+    std::string csvEscape(std::string_view text)
+    {
+        std::string escaped;
+        escaped.reserve(text.size() + 2);
+        escaped.push_back('"');
+        for (const char ch : text) {
+            if (ch == '"') {
+                escaped.push_back('"');
+            }
+            escaped.push_back(ch);
+        }
+        escaped.push_back('"');
+        return escaped;
+    }
+
+    std::string encodeAnalysisMarkersYaml(const std::vector<plot::WaveAnalysisMarker>& markers)
+    {
+        YAML::Node root;
+        for (const auto& marker : markers) {
+            YAML::Node item;
+            item["id"] = marker.id;
+            item["label"] = marker.label;
+            item["note"] = marker.note;
+            item["start_time"] = marker.startTime;
+            item["end_time"] = marker.endTime;
+            item["channel_index"] = marker.channelIndex;
+            root["markers"].push_back(item);
+        }
+        return YAML::Dump(root);
+    }
+
+    std::vector<plot::WaveAnalysisMarker> decodeAnalysisMarkersYaml(std::string_view yamlText)
+    {
+        std::vector<plot::WaveAnalysisMarker> markers;
+        const auto root = YAML::Load(std::string(yamlText));
+        const auto node = root["markers"];
+        if (!node || !node.IsSequence()) {
+            return markers;
+        }
+        for (const auto& item : node) {
+            plot::WaveAnalysisMarker marker;
+            marker.id = item["id"].as<std::uint64_t>(0);
+            marker.label = item["label"].as<std::string>("");
+            marker.note = item["note"].as<std::string>("");
+            marker.startTime = item["start_time"].as<double>(0.0);
+            marker.endTime = item["end_time"].as<double>(marker.startTime);
+            marker.channelIndex = item["channel_index"].as<std::size_t>(0);
+            markers.push_back(std::move(marker));
+        }
+        return markers;
+    }
+
     void applyActiveRawProfileEvent(std::vector<plot::RawCaptureEvent>& activeProfiles,
                                     const plot::RawCaptureEvent& event)
     {
@@ -172,9 +399,105 @@ namespace {
                 .scale = channel.scale,
                 .offset = channel.offset,
                 .color = channel.color,
+                .lineWidth = channel.lineWidth,
             });
         }
         return rawSetup;
+    }
+
+    using ScriptPlotAppendRequest = std::pair<std::size_t, plot::WaveAppendRequest>;
+
+    struct ScriptPlotAppendDrainState {
+        std::vector<ScriptPlotAppendRequest> selected;
+        std::vector<ScriptPlotAppendRequest> deferred;
+        std::unordered_map<std::string, std::size_t> selectedIndexes;
+        std::size_t maxSelectedKeys{0};
+    };
+
+    std::string scriptPlotAppendKey(std::size_t channelIndex, const std::string& source)
+    {
+        auto key = std::to_string(channelIndex);
+        key.push_back('\x1F');
+        key.append(source);
+        return key;
+    }
+
+    ScriptPlotAppendRequest takePendingScriptPlotAppend(std::deque<ScriptPlotAppendRequest>& pending)
+    {
+        auto append = std::move(pending.front());
+        pending.pop_front();
+        return append;
+    }
+
+    void mergePlotAppendSamples(plot::WaveAppendRequest& target, plot::WaveAppendRequest& source)
+    {
+        target.samples.insert(target.samples.end(),
+                              std::make_move_iterator(source.samples.begin()),
+                              std::make_move_iterator(source.samples.end()));
+    }
+
+    bool shouldDeferNewScriptPlotAppend(const ScriptPlotAppendDrainState& state, const std::string& key)
+    {
+        return !state.selectedIndexes.contains(key) && state.selectedIndexes.size() >= state.maxSelectedKeys;
+    }
+
+    void deferScriptPlotAppend(ScriptPlotAppendDrainState& state, ScriptPlotAppendRequest& append)
+    {
+        auto& [channelIndex, request] = append;
+        state.deferred.emplace_back(channelIndex, std::move(request));
+    }
+
+    void selectOrMergeScriptPlotAppend(ScriptPlotAppendDrainState& state,
+                                       ScriptPlotAppendRequest& append,
+                                       std::string key)
+    {
+        auto& [channelIndex, request] = append;
+        const auto [position, inserted] = state.selectedIndexes.emplace(std::move(key), state.selected.size());
+        if (inserted) {
+            state.selected.emplace_back(channelIndex, std::move(request));
+            return;
+        }
+        mergePlotAppendSamples(state.selected[position->second].second, request);
+    }
+
+    void drainScriptPlotAppendCandidate(ScriptPlotAppendDrainState& state, ScriptPlotAppendRequest append)
+    {
+        auto& [channelIndex, request] = append;
+        const auto key = scriptPlotAppendKey(channelIndex, request.source);
+        if (shouldDeferNewScriptPlotAppend(state, key)) {
+            deferScriptPlotAppend(state, append);
+            return;
+        }
+        selectOrMergeScriptPlotAppend(state, append, key);
+    }
+
+    void restoreDeferredScriptPlotAppends(std::deque<ScriptPlotAppendRequest>& pending,
+                                          std::vector<ScriptPlotAppendRequest>& deferred)
+    {
+        for (auto& append : deferred) {
+            pending.push_back(std::move(append));
+        }
+    }
+
+    std::vector<ScriptPlotAppendRequest> mergeNonEmptyScriptPlotAppends(std::vector<ScriptPlotAppendRequest> requests)
+    {
+        std::vector<ScriptPlotAppendRequest> mergedRequests;
+        std::unordered_map<std::string, std::size_t> mergedIndexes;
+        mergedRequests.reserve(requests.size());
+        for (auto append : requests) {
+            auto& [channelIndex, request] = append;
+            if (request.samples.empty()) {
+                continue;
+            }
+            const auto key = scriptPlotAppendKey(channelIndex, request.source);
+            const auto [position, inserted] = mergedIndexes.emplace(key, mergedRequests.size());
+            if (inserted) {
+                mergedRequests.emplace_back(channelIndex, std::move(request));
+                continue;
+            }
+            mergePlotAppendSamples(mergedRequests[position->second].second, request);
+        }
+        return mergedRequests;
     }
 
     bool nearlyEqual(double left, double right);
@@ -368,6 +691,98 @@ namespace {
         return std::string("active");
     }
 
+    dock::RequestTraceKind toRequestTraceKind(scripting::TxRequestKind kind)
+    {
+        switch (kind) {
+            case scripting::TxRequestKind::Send:
+                return dock::RequestTraceKind::Send;
+            case scripting::TxRequestKind::Request:
+                return dock::RequestTraceKind::Request;
+        }
+        return dock::RequestTraceKind::Send;
+    }
+
+    dock::RequestTraceState toRequestTraceState(scripting::TxEventState state)
+    {
+        switch (state) {
+            case scripting::TxEventState::Sent:
+                return dock::RequestTraceState::Sent;
+            case scripting::TxEventState::Completed:
+                return dock::RequestTraceState::Completed;
+            case scripting::TxEventState::Failed:
+                return dock::RequestTraceState::Failed;
+            case scripting::TxEventState::Timeout:
+                return dock::RequestTraceState::Timeout;
+            case scripting::TxEventState::Rejected:
+                return dock::RequestTraceState::Rejected;
+            case scripting::TxEventState::Dropped:
+                return dock::RequestTraceState::Dropped;
+            case scripting::TxEventState::Canceled:
+                return dock::RequestTraceState::Canceled;
+        }
+        return dock::RequestTraceState::Rejected;
+    }
+
+    std::string guardStateForTrace(const scripting::TxRequest& request, dock::RequestTraceState state)
+    {
+        if (!request.guarded) {
+            return {};
+        }
+        if (state == dock::RequestTraceState::Queued) {
+            return "queued";
+        }
+        const auto txState = [&]() -> std::optional<scripting::TxEventState> {
+            switch (state) {
+                case dock::RequestTraceState::Sent:
+                    return scripting::TxEventState::Sent;
+                case dock::RequestTraceState::Completed:
+                    return scripting::TxEventState::Completed;
+                case dock::RequestTraceState::Failed:
+                    return scripting::TxEventState::Failed;
+                case dock::RequestTraceState::Timeout:
+                    return scripting::TxEventState::Timeout;
+                case dock::RequestTraceState::Rejected:
+                    return scripting::TxEventState::Rejected;
+                case dock::RequestTraceState::Dropped:
+                    return scripting::TxEventState::Dropped;
+                case dock::RequestTraceState::Canceled:
+                    return scripting::TxEventState::Canceled;
+                default:
+                    return std::nullopt;
+            }
+        }();
+        if (!txState.has_value()) {
+            return {};
+        }
+        const auto guardState = guardStateForEvent(request, *txState);
+        return guardState.value_or(std::string{});
+    }
+
+    dock::RequestTraceRow makeRequestTraceRow(const scripting::TxRequest& request,
+                                             dock::RequestTraceState state,
+                                             const std::optional<std::string>& error,
+                                             std::uint64_t timestampMs)
+    {
+        return dock::RequestTraceRow{
+            .timestampMs = timestampMs,
+            .id = request.id,
+            .kind = toRequestTraceKind(request.kind),
+            .state = state,
+            .endpoint = request.connection.endpoint,
+            .tag = request.tag,
+            .bytes = request.payload.size(),
+            .queuedMs = request.createdAtMs,
+            .finishedMs = timestampMs,
+            .timeoutMs = request.timeoutMs,
+            .durationMs = timestampMs >= request.createdAtMs ? timestampMs - request.createdAtMs : 0,
+            .guarded = request.guarded,
+            .attempt = request.attempt,
+            .maxAttempts = request.maxAttempts,
+            .guardState = guardStateForTrace(request, state),
+            .error = error.value_or(std::string{}),
+        };
+    }
+
     bool nearlyEqual(double left, double right)
     {
         return std::abs(left - right) <= 1e-12;
@@ -440,6 +855,7 @@ bool Application::initialize()
 
 bool Application::applyConfig(const config::AppConfig& config)
 {
+    captureProtocolConfigOverride_.reset();
     runtimeConfig_ = config;
     resetStreamBufferAlertState();
     const auto postprocessWorkerThreads = scripting::resolvePipelineWorkerThreads(
@@ -477,6 +893,10 @@ void Application::setLogLevel(const config::LogLevel level)
 config::AppConfig Application::captureConfig() const
 {
     auto captured = configStore_.captureFromDock(dockStore_);
+    if (captureProtocolConfigOverride_.has_value()) {
+        captured.protocol.rootDir = captureProtocolConfigOverride_->rootDir;
+        captured.protocol.selectedDir = captureProtocolConfigOverride_->selectedDir;
+    }
     captured.performance = runtimeConfig_.performance;
     captured.gui.window = runtimeConfig_.gui.window;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
@@ -514,69 +934,21 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
         // 核心流程：配置热加载只在协议目录真正变化时重载脚本，避免窗口刷新阶段重复刷加载日志。
         if (!forceReload && unchanged) {
             lua.lastError.clear();
-            const auto snapshot = scriptWorker_.snapshot();
-            lua.docks = snapshot.docks;
-            lua.controls = snapshot.controls;
-            lua.controlStates = snapshot.controlStates;
+            applyLuaScriptSnapshot(scriptWorker_.snapshot());
             return true;
         }
 
-        scripting::ScriptHost probeHost;
-        probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
-        if (!probeHost.loadProtocolDirectory(resolvedDirText)) {
-            lua.lastError = probeHost.lastError();
-            loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
-            const auto snapshot = scriptWorker_.snapshot();
-            lua.docks = snapshot.docks;
-            lua.controls = snapshot.controls;
-            lua.controlStates = snapshot.controlStates;
+        if (!probeProtocolDirectory(resolvedDirText)) {
             return false;
         }
 
-        try {
-            cancelAllTxRequests("协议已重新加载");
-        } catch (const std::exception& ex) {
-            loggingFacade_.warn("protocol", std::string("协议重载前取消旧请求失败: ") + ex.what());
-        } catch (...) {
-            loggingFacade_.warn("protocol", "协议重载前取消旧请求失败: 未知异常");
-        }
-        try {
-            // 核心流程：取消旧 request 可能触发旧脚本 on_tx；替换宿主前丢弃旧输出，
-            // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
-            static_cast<void>(scriptWorker_.drainOutputs());
-        } catch (const std::exception& ex) {
-            loggingFacade_.warn("protocol", std::string("协议重载前清理旧脚本输出失败: ") + ex.what());
-        } catch (...) {
-            loggingFacade_.warn("protocol", "协议重载前清理旧脚本输出失败: 未知异常");
-        }
-
+        prepareProtocolRuntimeReload();
         scriptWorker_.setFileIoConfig(runtimeConfig_.scripting.fileIo);
         const auto loadResult = scriptWorker_.loadProtocolDirectory(resolvedDirText);
-        if (!loadResult.ok) {
-            lua.lastError = loadResult.lastError;
-            loggingFacade_.error("protocol", "协议加载失败: " + lua.lastError);
-            lua.docks = loadResult.snapshot.docks;
-            lua.controls = loadResult.snapshot.controls;
-            lua.controlStates = loadResult.snapshot.controlStates;
+        if (!applyProtocolLoadResult(resolvedDirText, protocolName, scriptPath, loadResult)) {
             return false;
         }
-
-        lua.protocolDir = resolvedDirText;
-        lua.protocolName = protocolName;
-        lua.scriptPath = scriptPath;
-        lua.loaded = true;
-        lua.docks = loadResult.snapshot.docks;
-        lua.controls = loadResult.snapshot.controls;
-        lua.controlStates = loadResult.snapshot.controlStates;
-        lua.lastError.clear();
-        if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
-            rebuildTransferFrameRows();
-        } else {
-            resetTransferFrameDisplayState();
-        }
-        loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
-        flushScriptOutputs();
-        syncDockState();
+        captureProtocolConfigOverride_.reset();
         return true;
     } catch (const std::exception& ex) {
         lua.lastError = std::string("协议重载异常: ") + ex.what();
@@ -585,11 +957,86 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
     }
 
     loggingFacade_.error("protocol", lua.lastError);
-    const auto snapshot = scriptWorker_.snapshot();
+    applyLuaScriptSnapshot(scriptWorker_.snapshot());
+    return false;
+}
+
+void Application::applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot& snapshot)
+{
+    auto& lua = dockStore_.luaState();
     lua.docks = snapshot.docks;
     lua.controls = snapshot.controls;
     lua.controlStates = snapshot.controlStates;
+}
+
+bool Application::probeProtocolDirectory(const std::string& resolvedDirText)
+{
+    scripting::ScriptHost probeHost;
+    probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
+    if (probeHost.loadProtocolDirectory(resolvedDirText)) {
+        return true;
+    }
+
+    auto& lua = dockStore_.luaState();
+    lua.lastError = probeHost.lastError();
+    loggingFacade_.error("protocol", "协议加载探测失败: " + lua.lastError);
+    applyLuaScriptSnapshot(scriptWorker_.snapshot());
     return false;
+}
+
+void Application::prepareProtocolRuntimeReload()
+{
+    try {
+        cancelAllTxRequests("协议已重新加载");
+    } catch (const std::exception& ex) {
+        loggingFacade_.warn("protocol", std::string("协议重载前取消旧请求失败: ") + ex.what());
+    } catch (...) {
+        loggingFacade_.warn("protocol", "协议重载前取消旧请求失败: 未知异常");
+    }
+    try {
+        // 核心流程：取消旧 request 可能触发旧脚本 on_tx；替换宿主前丢弃旧输出，
+        // 避免旧回调追加的新请求、状态或弹窗污染新协议运行态。
+        static_cast<void>(scriptWorker_.drainOutputs());
+    } catch (const std::exception& ex) {
+        loggingFacade_.warn("protocol", std::string("协议重载前清理旧脚本输出失败: ") + ex.what());
+    } catch (...) {
+        loggingFacade_.warn("protocol", "协议重载前清理旧脚本输出失败: 未知异常");
+    }
+}
+
+bool Application::applyProtocolLoadResult(const std::string& resolvedDirText,
+                                          const std::string& protocolName,
+                                          const std::string& scriptPath,
+                                          const scripting::ScriptRuntimeLoadResult& loadResult)
+{
+    auto& lua = dockStore_.luaState();
+    if (!loadResult.ok) {
+        lua.lastError = loadResult.lastError;
+        loggingFacade_.error("protocol", "协议加载失败: " + lua.lastError);
+        applyLuaScriptSnapshot(loadResult.snapshot);
+        return false;
+    }
+
+    lua.protocolDir = resolvedDirText;
+    lua.protocolName = protocolName;
+    lua.scriptPath = scriptPath;
+    lua.loaded = true;
+    applyLuaScriptSnapshot(loadResult.snapshot);
+    lua.lastError.clear();
+    refreshTransferFrameDisplayAfterProtocolReload();
+    loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
+    flushScriptOutputs();
+    syncDockState();
+    return true;
+}
+
+void Application::refreshTransferFrameDisplayAfterProtocolReload()
+{
+    if (dockStore_.receiveState().displayMode == dock::TransferLogDisplayMode::ParsedFrames) {
+        rebuildTransferFrameRows();
+    } else {
+        resetTransferFrameDisplayState();
+    }
 }
 
 bool Application::pumpOnce()
@@ -597,6 +1044,13 @@ bool Application::pumpOnce()
     bool changed = false;
     const bool hadPendingScriptPlotAppends = !pendingScriptPlotAppends_.empty();
     changed = handleTransportEvents() || changed;
+    std::string replayError;
+    const bool replayChanged = pumpRawCaptureReplay(replayError);
+    changed = replayChanged || changed;
+    if (!replayChanged && !replayError.empty()) {
+        loggingFacade_.error("wave", replayError);
+        dockStore_.waveState().statusMessage = replayError;
+    }
     scriptWorker_.postTick(nowMs());
     changed = flushScriptOutputs() || changed;
     changed = processRequestTimeouts() || changed;
@@ -611,6 +1065,10 @@ bool Application::pumpOnce()
 
 void Application::shutdown()
 {
+    if (rawCaptureReplay_.loaded) {
+        cancelRawCaptureImportReplay();
+        rawCaptureReplay_ = RawCaptureReplayState{};
+    }
     closeTransport();
     scriptWorker_.stop();
 }
@@ -988,8 +1446,11 @@ void Application::rebuildTransferFrameRows()
 
 void Application::activateParsedTransferLogView()
 {
-    // 核心流程：RawChunks 不实时生成逐帧行；用户切到 ParsedFrames 时再按原始历史完整回放。
+    // 核心流程：默认只解析切换后的新 raw 行；开启兼容开关时才重放旧 RawChunks 历史。
     resetTransferFrameDisplayState();
+    if (!runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch) {
+        return;
+    }
     for (const auto& row : dockStore_.receiveState().rows) {
         appendTransferFrameRows(row);
     }
@@ -1003,6 +1464,7 @@ void Application::applyHistoryLimits(const config::GuiLogHistoryConfig& config)
         .transferFrameRows = config.transferFrameLimit,
         .hostLogRows = config.hostLimit,
         .scriptLogRows = config.scriptLimit,
+        .requestTraceRows = config.requestTraceLimit,
     });
     trimPendingTransferFrameRowsToLimit();
 }
@@ -1125,6 +1587,228 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
     return plot::writeRawCaptureFile(path, capture, error);
 }
 
+bool Application::exportSessionPackage(const std::filesystem::path& path, std::string& error) const
+{
+    const auto createdAtMs = nowMs();
+
+    std::string configYaml;
+    if (!configStore_.saveText(captureConfig(), configYaml, error)) {
+        return false;
+    }
+
+    const auto& lua = dockStore_.luaState();
+    const auto& wave = dockStore_.waveState();
+    plot::RawCaptureFileData capture = wave.rawCapture;
+    capture.protocolName = lua.protocolName.empty() ? capture.protocolName : lua.protocolName;
+    capture.protocolDir = lua.protocolDir.empty() ? capture.protocolDir : lua.protocolDir;
+    capture.sampleFrequencyHz = wave.view.sampleFrequencyHz;
+    if (capture.capturedAtMs == 0) {
+        capture.capturedAtMs = createdAtMs;
+    }
+    if (capture.protocolName.empty() || capture.protocolDir.empty()) {
+        error = "当前协议元数据不完整，无法导出现场包";
+        return false;
+    }
+    const auto eventRxBytes = rawCaptureEventRxBytes(capture.events);
+    if (!capture.events.empty() && eventRxBytes >= capture.payload.size()) {
+        const auto keepStart = eventRxBytes - static_cast<std::uint64_t>(capture.payload.size());
+        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, keepStart);
+    } else if (!capture.payload.empty()) {
+        capture.events.clear();
+        capture.events.push_back(plot::RawCaptureEvent{
+            .type = plot::RawCaptureEventType::RxBytes,
+            .timestampMs = capture.capturedAtMs,
+            .bytes = capture.payload,
+            .profile = {},
+            .plotSetup = {},
+        });
+    } else {
+        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, eventRxBytes);
+    }
+
+    std::vector<std::uint8_t> rawCaptureBytes;
+    if (!plot::encodeRawCaptureFile(capture, rawCaptureBytes, error)) {
+        return false;
+    }
+
+    std::ostringstream logSummary;
+    const auto& transfer = dockStore_.receiveState();
+    const auto& hostLog = dockStore_.logState();
+    const auto& scriptLog = dockStore_.scriptState();
+    logSummary << "transfer_rows: " << transfer.rows.size() << '\n';
+    logSummary << "transfer_frame_rows: " << transfer.frameRows.size() << '\n';
+    logSummary << "host_log_rows: " << hostLog.rows.size() << '\n';
+    logSummary << "script_log_rows: " << scriptLog.rows.size() << '\n';
+    logSummary << "raw_capture_events: " << capture.events.size() << '\n';
+    logSummary << "raw_capture_bytes: " << capture.payload.size() << '\n';
+    const auto analysisMarkersYaml = encodeAnalysisMarkersYaml(wave.analysisMarkers);
+
+    std::vector<session::SessionPackageEntry> protocolEntries;
+    if (!collectProtocolDirectoryEntries(lua.protocolDir, protocolEntries, error)) {
+        return false;
+    }
+
+    std::vector<session::SessionPackageEntry> entries;
+    entries.push_back({.name = "config.yaml", .bytes = stringBytes(configYaml)});
+    entries.push_back({.name = "raw_capture.psraw", .bytes = std::move(rawCaptureBytes)});
+    entries.insert(entries.end(),
+                   std::make_move_iterator(protocolEntries.begin()),
+                   std::make_move_iterator(protocolEntries.end()));
+    entries.push_back({.name = "analysis/markers.yaml", .bytes = stringBytes(analysisMarkersYaml)});
+    entries.push_back({.name = "logs/summary.txt", .bytes = stringBytes(logSummary.str())});
+
+    std::ostringstream manifest;
+    manifest << "format: protoscope_session_package\n";
+    manifest << "version: 1\n";
+    manifest << "created_at_ms: " << createdAtMs << '\n';
+    manifest << "protocol_name: " << lua.protocolName << '\n';
+    manifest << "protocol_dir: " << lua.protocolDir << '\n';
+    manifest << "sample_frequency_hz: " << capture.sampleFrequencyHz << '\n';
+    manifest << "entries:\n";
+    manifest << "- manifest.yaml\n";
+    for (const auto& entry : entries) {
+        manifest << "- " << entry.name << '\n';
+    }
+    entries.insert(entries.begin(), {.name = "manifest.yaml", .bytes = stringBytes(manifest.str())});
+
+    session::SessionPackageData package{
+        .createdAtMs = createdAtMs,
+        .entries = std::move(entries),
+    };
+    return session::writeSessionPackage(path, package, error);
+}
+
+bool Application::importSessionPackage(const std::filesystem::path& path, std::string& error)
+{
+    const auto previousConfig = runtimeConfig_;
+    const auto previousWave = dockStore_.waveState();
+    const auto previousCaptureProtocolOverride = captureProtocolConfigOverride_;
+    auto rollbackImport = [&]() {
+        std::string rollbackError;
+        if (!applyConfig(previousConfig)) {
+            rollbackError = "恢复导入前配置失败";
+        }
+        dockStore_.waveState() = previousWave;
+        captureProtocolConfigOverride_ = previousCaptureProtocolOverride;
+        if (!rollbackError.empty()) {
+            error += "; " + rollbackError;
+        }
+    };
+
+    const auto package = session::readSessionPackage(path, error);
+    if (!package.has_value()) {
+        return false;
+    }
+    if (!validateSessionPackageEntries(*package, error)) {
+        return false;
+    }
+
+    const auto* configEntry = session::findSessionPackageEntry(*package, "config.yaml");
+    if (configEntry == nullptr) {
+        error = "现场包缺少 config.yaml";
+        return false;
+    }
+
+    auto loaded = configStore_.loadText(stringFromBytes(configEntry->bytes));
+    if (!loaded.error.empty()) {
+        error = loaded.error;
+        return false;
+    }
+    loaded.config.configPath = runtimeConfig_.configPath;
+
+    std::optional<config::ProtocolConfig> persistentProtocolConfig;
+    std::optional<std::string> importedProtocolDir;
+    std::vector<const session::SessionPackageEntry*> protocolEntries;
+    for (const auto& entry : package->entries) {
+        if (entry.name.starts_with(kSessionProtocolEntryPrefix)) {
+            protocolEntries.push_back(&entry);
+        }
+    }
+    if (!protocolEntries.empty()) {
+        persistentProtocolConfig = loaded.config.protocol;
+        const auto protocolDir =
+            std::filesystem::temp_directory_path() / ("ProtoScope-session-protocol-" + std::to_string(nowUs()));
+        for (const auto* entry : protocolEntries) {
+            const auto relativeName = entry->name.substr(kSessionProtocolEntryPrefix.size());
+            const auto outputPath = protocolDir / std::filesystem::path(relativeName);
+            if (!writeFileBytes(outputPath, entry->bytes, error)) {
+                const auto writeError = error;
+                error = "释放现场包协议目录失败: " + writeError;
+                return false;
+            }
+        }
+
+        std::error_code protocolEntryError;
+        const auto mainLuaPath = protocolDir / "main.lua";
+        if (!std::filesystem::is_regular_file(mainLuaPath, protocolEntryError) || protocolEntryError) {
+            error = "现场包缺少 protocol/main.lua";
+            if (protocolEntryError) {
+                error += ": " + protocolEntryError.message();
+            }
+            return false;
+        }
+        scripting::ScriptHost probeHost;
+        probeHost.setFileIoConfig(loaded.config.scripting.fileIo);
+        if (!probeHost.loadProtocolDirectory(protocolDir.generic_string())) {
+            error = "现场包协议脚本无效: " + probeHost.lastError();
+            return false;
+        }
+        loaded.config.protocol.rootDir = protocolDir.parent_path().generic_string();
+        loaded.config.protocol.selectedDir = protocolDir.generic_string();
+        importedProtocolDir = loaded.config.protocol.selectedDir;
+    }
+
+    std::optional<plot::RawCaptureFileData> rawCapture;
+    const auto* rawEntry = session::findSessionPackageEntry(*package, "raw_capture.psraw");
+    if (rawEntry != nullptr && !rawEntry->bytes.empty()) {
+        const auto rawText = std::string_view(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
+        auto capture = plot::decodeRawCaptureFile(rawText, error);
+        if (!capture.has_value()) {
+            return false;
+        }
+        if (importedProtocolDir.has_value()) {
+            capture->protocolDir = *importedProtocolDir;
+        }
+        rawCapture = std::move(*capture);
+    }
+
+    std::vector<plot::WaveAnalysisMarker> importedMarkers;
+    const auto* markerEntry = session::findSessionPackageEntry(*package, "analysis/markers.yaml");
+    if (markerEntry != nullptr) {
+        try {
+            const auto markerText =
+                std::string_view(reinterpret_cast<const char*>(markerEntry->bytes.data()), markerEntry->bytes.size());
+            importedMarkers = decodeAnalysisMarkersYaml(markerText);
+        } catch (const std::exception& ex) {
+            error = std::string("解析现场包分析标记失败: ") + ex.what();
+            return false;
+        }
+    }
+
+    if (!applyConfig(loaded.config)) {
+        error = "应用现场包配置失败";
+        rollbackImport();
+        return false;
+    }
+    if (persistentProtocolConfig.has_value()) {
+        captureProtocolConfigOverride_ = *persistentProtocolConfig;
+    }
+
+    if (rawCapture.has_value()) {
+        if (!importWaveRawCapture(*rawCapture, error)) {
+            rollbackImport();
+            return false;
+        }
+    }
+
+    auto& wave = dockStore_.waveState();
+    wave.analysisMarkers.clear();
+    wave.analysisMarkers = std::move(importedMarkers);
+
+    setStatusMessage("现场包已导入: " + path.generic_string());
+    return true;
+}
+
 bool Application::startRawCaptureRecording(const std::filesystem::path& path, std::string& error)
 {
     if (rawCaptureRecording_.isOpen()) {
@@ -1203,9 +1887,9 @@ std::uint64_t Application::rawCaptureRecordingBytes() const
     return rawCaptureRecording_.bytesWritten();
 }
 
-bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error)
+bool Application::validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const
 {
-    auto& lua = dockStore_.luaState();
+    const auto& lua = dockStore_.luaState();
     if (!lua.loaded) {
         error = "当前协议尚未加载";
         return false;
@@ -1214,7 +1898,11 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
         error = "导入文件协议目录与当前工作区不一致";
         return false;
     }
+    return true;
+}
 
+void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& capture)
+{
     // 核心流程：导入回放必须先清空旧波形与旧原始缓冲，再走一次 on_bytes -> flushScriptPlots，
     // 避免导入样本与现场采集样本混在同一份波形/原始容器里。
     scriptWorker_.waitIdle();
@@ -1228,106 +1916,199 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
     wave.view.sampleFrequencyError.clear();
     wave.buffer.setHistoryTrimSuspended(true);
+}
 
-    if (!capture.events.empty()) {
-        transport::ConnectionContext replayContext;
-        replayContext.endpoint = "psraw-import";
-        replayContext.connectionId = 0;
-        replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
-        replayContext.readyForIo = false;
-        suppressRawCaptureProfileEvents_ = true;
-        suppressRawCapturePlotSetupEvents_ = true;
-        for (const auto& recordedEvent : capture.events) {
-            replayContext.timestampMs =
-                recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
-            if (recordedEvent.type == plot::RawCaptureEventType::ProfileSet) {
-                std::string profileError;
-                if (!scriptWorker_.applyStreamRuntimeProfileEvent(
-                        scripting::StreamRuntimeProfileEvent{
-                            .cleared = false,
-                            .frameName = recordedEvent.profile.frameName,
-                            .length = recordedEvent.profile.length,
-                            .channelMap = recordedEvent.profile.channelMap,
-                        },
-                        profileError)) {
-                    suppressRawCaptureProfileEvents_ = false;
-                    suppressRawCapturePlotSetupEvents_ = false;
-                    error = "导入 profile_set 失败: " + profileError;
-                    wave.buffer.setHistoryTrimSuspended(false);
-                    return false;
-                }
-                scriptWorker_.waitIdle();
-                flushScriptOutputs();
-            } else if (recordedEvent.type == plot::RawCaptureEventType::ProfileClear) {
-                std::string clearError;
-                if (!scriptWorker_.applyStreamRuntimeProfileEvent(
-                        scripting::StreamRuntimeProfileEvent{
-                            .cleared = true,
-                            .frameName = recordedEvent.profile.frameName,
-                            .length = 0,
-                            .channelMap = {},
-                        },
-                        clearError)) {
-                    suppressRawCaptureProfileEvents_ = false;
-                    suppressRawCapturePlotSetupEvents_ = false;
-                    error = "导入 profile_clear 失败: " + clearError;
-                    wave.buffer.setHistoryTrimSuspended(false);
-                    return false;
-                }
-                scriptWorker_.waitIdle();
-                flushScriptOutputs();
-            } else if (recordedEvent.type == plot::RawCaptureEventType::PlotSetup) {
-                // 核心流程：raw 回放可能先由 Lua on_open/on_bytes 产生同一 setup；完全一致时跳过，避免 reset_history
-                // 二次清空样本。
-                if (!sameAppliedPlotSetup(wave, recordedEvent.plotSetup)) {
-                    applyPlotSetup(recordedEvent.plotSetup);
-                }
-            } else if (!recordedEvent.bytes.empty()) {
-                std::size_t cursor = 0;
-                while (cursor < recordedEvent.bytes.size()) {
-                    const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, recordedEvent.bytes.size() - cursor);
-                    std::vector<std::uint8_t> chunk(
-                        recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
-                        recordedEvent.bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
-                    scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-                    if (runtimeConfig_.scripting.workerEnabled) {
-                        // 核心流程：异步 worker 需要显式等到队列排空后再 flush，禁用 worker 时
-                        // postTransportBytes 内部已经同步等待完成，避免重复阻塞。
-                        scriptWorker_.waitIdle();
-                    }
-                    flushScriptOutputs();
-                    cursor += chunkSize;
-                }
-            }
-        }
-        flushScriptOutputs();
-        suppressRawCaptureProfileEvents_ = false;
-        suppressRawCapturePlotSetupEvents_ = false;
-    } else if (!capture.payload.empty()) {
-        transport::ConnectionContext replayContext;
-        replayContext.endpoint = "psraw-import";
-        replayContext.connectionId = 0;
-        replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
-        replayContext.readyForIo = false;
-        std::size_t cursor = 0;
-        while (cursor < capture.payload.size()) {
-            const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, capture.payload.size() - cursor);
-            std::vector<std::uint8_t> chunk(capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor),
-                                            capture.payload.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
-            scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-            if (runtimeConfig_.scripting.workerEnabled) {
-                // 核心流程：异步 worker 需要先等到脚本消费完当前 chunk，再把输出合并到回放结果。
-                scriptWorker_.waitIdle();
-            }
-            flushScriptOutputs();
-            cursor += chunkSize;
+transport::ConnectionContext Application::makeRawCaptureReplayContext(const plot::RawCaptureFileData& capture) const
+{
+    transport::ConnectionContext replayContext;
+    replayContext.endpoint = "psraw-import";
+    replayContext.connectionId = 0;
+    replayContext.timestampMs = capture.capturedAtMs == 0 ? nowMs() : capture.capturedAtMs;
+    replayContext.readyForIo = false;
+    return replayContext;
+}
+
+bool Application::replayRawCaptureEvents(const plot::RawCaptureFileData& capture, std::string& error)
+{
+    auto replayContext = makeRawCaptureReplayContext(capture);
+    suppressRawCaptureProfileEvents_ = true;
+    suppressRawCapturePlotSetupEvents_ = true;
+
+    for (const auto& recordedEvent : capture.events) {
+        replayContext.timestampMs =
+            recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
+        if (!replayRawCaptureEvent(recordedEvent, replayContext, error)) {
+            cancelRawCaptureImportReplay();
+            return false;
         }
     }
 
     flushScriptOutputs();
+    suppressRawCaptureProfileEvents_ = false;
+    suppressRawCapturePlotSetupEvents_ = false;
+    return true;
+}
+
+bool Application::pumpRawCaptureReplay(std::string& error)
+{
+    if (!rawCaptureReplay_.loaded || !rawCaptureReplay_.playing) {
+        return false;
+    }
+    if (rawCaptureReplay_.capture.events.empty()) {
+        replayRawCaptureBytes(rawCaptureReplay_.context, rawCaptureReplay_.capture.payload);
+        finishRawCaptureImportReplay();
+        rawCaptureReplay_.playing = false;
+        rawCaptureReplay_.eventIndex = rawCaptureReplay_.capture.payload.empty() ? 0U : 1U;
+        rawCaptureReplay_.lastPumpMs = 0;
+        rawCaptureReplay_.accumulatedMs = 0.0;
+        return true;
+    }
+
+    const auto now = nowMs();
+    if (rawCaptureReplay_.lastPumpMs == 0) {
+        rawCaptureReplay_.lastPumpMs = now;
+    }
+    rawCaptureReplay_.accumulatedMs +=
+        static_cast<double>(now - rawCaptureReplay_.lastPumpMs) * rawCaptureReplay_.speed;
+    rawCaptureReplay_.lastPumpMs = now;
+
+    bool changed = false;
+    while (rawCaptureReplay_.eventIndex < rawCaptureReplay_.capture.events.size()) {
+        double waitMs = 0.0;
+        if (rawCaptureReplay_.eventIndex == 0) {
+            const auto& current = rawCaptureReplay_.capture.events[0];
+            if (current.timestampMs > rawCaptureReplay_.capture.capturedAtMs) {
+                waitMs = static_cast<double>(current.timestampMs - rawCaptureReplay_.capture.capturedAtMs);
+            }
+        } else {
+            const auto& previous = rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex - 1];
+            const auto& current = rawCaptureReplay_.capture.events[rawCaptureReplay_.eventIndex];
+            if (current.timestampMs > previous.timestampMs) {
+                waitMs = static_cast<double>(current.timestampMs - previous.timestampMs);
+            }
+        }
+        if (waitMs > rawCaptureReplay_.accumulatedMs) {
+            break;
+        }
+        rawCaptureReplay_.accumulatedMs -= waitMs;
+        if (!replayRawCaptureEventAt(rawCaptureReplay_.eventIndex, error)) {
+            rawCaptureReplay_.playing = false;
+            cancelRawCaptureImportReplay();
+            rawCaptureReplay_ = RawCaptureReplayState{};
+            dockStore_.waveState().statusMessage = "原始回放时间轴已卸载: " + error;
+            return false;
+        }
+        changed = true;
+    }
+
+    if (rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size()) {
+        finishRawCaptureImportReplay();
+        rawCaptureReplay_.playing = false;
+        rawCaptureReplay_.lastPumpMs = 0;
+        rawCaptureReplay_.accumulatedMs = 0.0;
+        return true;
+    }
+    return changed;
+}
+
+bool Application::replayRawCaptureEventAt(const std::size_t eventIndex, std::string& error)
+{
+    if (!rawCaptureReplay_.loaded) {
+        error = "尚未载入原始回放时间轴";
+        return false;
+    }
+    if (eventIndex >= rawCaptureReplay_.capture.events.size()) {
+        return true;
+    }
+
+    const auto& event = rawCaptureReplay_.capture.events[eventIndex];
+    rawCaptureReplay_.context.timestampMs =
+        event.timestampMs == 0 ? rawCaptureReplay_.context.timestampMs : event.timestampMs;
+    suppressRawCaptureProfileEvents_ = true;
+    suppressRawCapturePlotSetupEvents_ = true;
+    if (!replayRawCaptureEvent(event, rawCaptureReplay_.context, error)) {
+        suppressRawCaptureProfileEvents_ = false;
+        suppressRawCapturePlotSetupEvents_ = false;
+        return false;
+    }
+    suppressRawCaptureProfileEvents_ = false;
+    suppressRawCapturePlotSetupEvents_ = false;
+    flushScriptOutputs();
+    rawCaptureReplay_.eventIndex = eventIndex + 1;
+    return true;
+}
+
+bool Application::replayRawCaptureEvent(const plot::RawCaptureEvent& event,
+                                        transport::ConnectionContext& replayContext,
+                                        std::string& error)
+{
+    if (event.type == plot::RawCaptureEventType::ProfileSet) {
+        return applyRawCaptureRuntimeProfileEvent(event, false, error);
+    }
+    if (event.type == plot::RawCaptureEventType::ProfileClear) {
+        return applyRawCaptureRuntimeProfileEvent(event, true, error);
+    }
+    if (event.type == plot::RawCaptureEventType::PlotSetup) {
+        auto& wave = dockStore_.waveState();
+        // 核心流程：raw 回放可能先由 Lua on_open/on_bytes 产生同一 setup；完全一致时跳过，避免 reset_history
+        // 二次清空样本。
+        if (!sameAppliedPlotSetup(wave, event.plotSetup)) {
+            applyPlotSetup(event.plotSetup);
+        }
+        return true;
+    }
+    if (!event.bytes.empty()) {
+        replayRawCaptureBytes(replayContext, event.bytes);
+    }
+    return true;
+}
+
+bool Application::applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent& event,
+                                                     bool cleared,
+                                                     std::string& error)
+{
+    std::string profileError;
+    if (!scriptWorker_.applyStreamRuntimeProfileEvent(
+            scripting::StreamRuntimeProfileEvent{
+                .cleared = cleared,
+                .frameName = event.profile.frameName,
+                .length = cleared ? 0 : event.profile.length,
+                .channelMap = cleared ? std::vector<std::size_t>{} : event.profile.channelMap,
+            },
+            profileError)) {
+        error = cleared ? "导入 profile_clear 失败: " + profileError : "导入 profile_set 失败: " + profileError;
+        return false;
+    }
+
+    scriptWorker_.waitIdle();
+    flushScriptOutputs();
+    return true;
+}
+
+void Application::replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
+                                        const std::vector<std::uint8_t>& bytes)
+{
+    std::size_t cursor = 0;
+    while (cursor < bytes.size()) {
+        const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, bytes.size() - cursor);
+        std::vector<std::uint8_t> chunk(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+                                        bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
+        scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
+        if (runtimeConfig_.scripting.workerEnabled) {
+            // 核心流程：异步 worker 需要先等到脚本消费完当前 chunk，再把输出合并到回放结果。
+            scriptWorker_.waitIdle();
+        }
+        flushScriptOutputs();
+        cursor += chunkSize;
+    }
+}
+
+void Application::finishRawCaptureImportReplay()
+{
+    auto& wave = dockStore_.waveState();
+    flushScriptOutputs();
     const auto importedSnapshot =
-        wave.buffer.snapshot(
-            -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
+        wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
     std::size_t importedHistoryLimit = 0;
     for (const auto& channel : importedSnapshot.channels) {
         importedHistoryLimit = (std::max)(importedHistoryLimit, channel.totalSamples);
@@ -1336,7 +2117,169 @@ bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, 
     wave.buffer.preserveHistoryLimitAtLeast(importedHistoryLimit);
     syncDockState();
     wave.statusMessage = "原始波形已导入";
+}
+
+void Application::cancelRawCaptureImportReplay()
+{
+    suppressRawCaptureProfileEvents_ = false;
+    suppressRawCapturePlotSetupEvents_ = false;
+    dockStore_.waveState().buffer.setHistoryTrimSuspended(false);
+}
+
+bool Application::importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error)
+{
+    if (!validateRawCaptureImport(capture, error)) {
+        return false;
+    }
+
+    prepareRawCaptureImportReplay(capture);
+    if (!capture.events.empty()) {
+        if (!replayRawCaptureEvents(capture, error)) {
+            return false;
+        }
+    } else if (!capture.payload.empty()) {
+        replayRawCaptureBytes(makeRawCaptureReplayContext(capture), capture.payload);
+    }
+
+    finishRawCaptureImportReplay();
     return true;
+}
+
+bool Application::loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture, std::string& error)
+{
+    if (!validateRawCaptureImport(capture, error)) {
+        return false;
+    }
+    if (capture.events.empty() && capture.payload.empty()) {
+        error = "原始波形没有可回放事件";
+        return false;
+    }
+
+    if (rawCaptureReplay_.loaded) {
+        cancelRawCaptureImportReplay();
+    }
+    auto replayCapture = capture;
+    if (replayCapture.events.empty() && !replayCapture.payload.empty()) {
+        replayCapture.events.push_back(plot::RawCaptureEvent{
+            .type = plot::RawCaptureEventType::RxBytes,
+            .timestampMs = replayCapture.capturedAtMs,
+            .bytes = replayCapture.payload,
+            .profile = {},
+            .plotSetup = {},
+        });
+    }
+    prepareRawCaptureImportReplay(replayCapture);
+    rawCaptureReplay_ = RawCaptureReplayState{};
+    rawCaptureReplay_.loaded = true;
+    rawCaptureReplay_.playing = false;
+    rawCaptureReplay_.capture = std::move(replayCapture);
+    rawCaptureReplay_.context = makeRawCaptureReplayContext(rawCaptureReplay_.capture);
+    rawCaptureReplay_.speed = 1.0;
+    dockStore_.waveState().statusMessage = "原始回放时间轴已载入";
+    return true;
+}
+
+void Application::unloadRawCaptureReplayTimeline()
+{
+    if (!rawCaptureReplay_.loaded) {
+        return;
+    }
+    cancelRawCaptureImportReplay();
+    rawCaptureReplay_ = RawCaptureReplayState{};
+    dockStore_.waveState().statusMessage = "原始回放时间轴已卸载";
+}
+
+bool Application::playRawCaptureReplay(std::string& error)
+{
+    if (!rawCaptureReplay_.loaded) {
+        error = "尚未载入原始回放时间轴";
+        return false;
+    }
+    rawCaptureReplay_.playing = true;
+    rawCaptureReplay_.lastPumpMs = nowMs();
+    return true;
+}
+
+void Application::pauseRawCaptureReplay()
+{
+    rawCaptureReplay_.playing = false;
+}
+
+bool Application::stepRawCaptureReplay(std::string& error)
+{
+    if (!rawCaptureReplay_.loaded) {
+        error = "尚未载入原始回放时间轴";
+        return false;
+    }
+    rawCaptureReplay_.playing = false;
+    return replayRawCaptureEventAt(rawCaptureReplay_.eventIndex, error);
+}
+
+bool Application::seekRawCaptureReplay(const std::size_t eventIndex, std::string& error)
+{
+    if (!rawCaptureReplay_.loaded) {
+        error = "尚未载入原始回放时间轴";
+        return false;
+    }
+
+    const auto capture = rawCaptureReplay_.capture;
+    const auto speed = rawCaptureReplay_.speed;
+    const bool wasPlaying = rawCaptureReplay_.playing;
+    const auto targetIndex = (std::min)(eventIndex, capture.events.empty() ? std::size_t{1} : capture.events.size());
+    if (targetIndex >= kRawCaptureReplaySeekNoticeEvents) {
+        dockStore_.waveState().statusMessage = "正在从头重放原始回放时间轴以完成定位...";
+    }
+    prepareRawCaptureImportReplay(capture);
+    rawCaptureReplay_ = RawCaptureReplayState{};
+    rawCaptureReplay_.loaded = true;
+    rawCaptureReplay_.playing = false;
+    rawCaptureReplay_.capture = capture;
+    rawCaptureReplay_.context = makeRawCaptureReplayContext(capture);
+    rawCaptureReplay_.speed = speed;
+    for (std::size_t index = 0; index < targetIndex; ++index) {
+        if (!replayRawCaptureEventAt(index, error)) {
+            cancelRawCaptureImportReplay();
+            rawCaptureReplay_ = RawCaptureReplayState{};
+            dockStore_.waveState().statusMessage = "原始回放定位失败，时间轴已卸载";
+            return false;
+        }
+    }
+    if (rawCaptureReplay_.eventIndex >= rawCaptureReplay_.capture.events.size()) {
+        finishRawCaptureImportReplay();
+        rawCaptureReplay_.playing = false;
+    } else {
+        rawCaptureReplay_.playing = wasPlaying;
+        rawCaptureReplay_.lastPumpMs = nowMs();
+    }
+    if (targetIndex >= kRawCaptureReplaySeekNoticeEvents) {
+        dockStore_.waveState().statusMessage = "原始回放定位完成";
+    }
+    return true;
+}
+
+void Application::setRawCaptureReplaySpeed(const double speed)
+{
+    rawCaptureReplay_.speed = (std::max)(0.1, (std::min)(speed, 16.0));
+}
+
+Application::RawCaptureReplayStatus Application::rawCaptureReplayStatus() const
+{
+    const auto eventCount =
+        rawCaptureReplay_.capture.events.empty() ? (rawCaptureReplay_.capture.payload.empty() ? 0U : 1U)
+                                                : rawCaptureReplay_.capture.events.size();
+    const double progress = eventCount == 0U
+                                ? 0.0
+                                : (std::min)(1.0,
+                                             static_cast<double>(rawCaptureReplay_.eventIndex) /
+                                                 static_cast<double>(eventCount));
+    return RawCaptureReplayStatus{
+        .loaded = rawCaptureReplay_.loaded,
+        .playing = rawCaptureReplay_.playing,
+        .eventIndex = rawCaptureReplay_.eventIndex,
+        .eventCount = eventCount,
+        .progress = progress,
+        .speed = rawCaptureReplay_.speed,
+    };
 }
 
 bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error)
@@ -1420,6 +2363,7 @@ void Application::resetWaveHistory()
     auto& wave = dockStore_.waveState();
     wave.buffer.clear();
     wave.rawCapture = {};
+    wave.analysisMarkers.clear();
     wave.channelSummaries.clear();
     wave.view.initialized = false;
     wave.view.centerTime = 0.0;
@@ -1430,9 +2374,58 @@ void Application::resetWaveHistory()
     wave.statusMessage = "波形历史已清空";
 }
 
+bool Application::exportWaveAnalysisReport(const std::filesystem::path& path, std::string& error) const
+{
+    const auto& wave = dockStore_.waveState();
+    try {
+        if (path.has_parent_path()) {
+            std::error_code directoryError;
+            std::filesystem::create_directories(path.parent_path(), directoryError);
+            if (directoryError) {
+                error = "创建分析报告目录失败: " + directoryError.message();
+                return false;
+            }
+        }
+
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (!out.good()) {
+            error = "无法写入波形分析报告";
+            return false;
+        }
+
+        const auto& view = wave.view;
+        out << "section,key,value\n";
+        out << "summary,protocol," << csvEscape(dockStore_.luaState().protocolName) << '\n';
+        out << "summary,protocol_dir," << csvEscape(dockStore_.luaState().protocolDir) << '\n';
+        out << "summary,sample_frequency_hz," << view.sampleFrequencyHz << '\n';
+        out << "summary,view_min_time," << view.viewMinTime << '\n';
+        out << "summary,view_max_time," << view.viewMaxTime << '\n';
+        out << "summary,raw_capture_bytes," << wave.rawCapture.payload.size() << '\n';
+        out << "summary,raw_capture_events," << wave.rawCapture.events.size() << '\n';
+        out << "summary,markers," << wave.analysisMarkers.size() << '\n';
+        out << '\n';
+        out << "marker,id,label,note,channel_index,start_time,end_time\n";
+        for (const auto& marker : wave.analysisMarkers) {
+            out << "marker," << marker.id << ',' << csvEscape(marker.label) << ',' << csvEscape(marker.note) << ','
+                << marker.channelIndex << ',' << marker.startTime << ',' << marker.endTime << '\n';
+        }
+        if (!out.good()) {
+            error = "写入波形分析报告失败";
+            return false;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return false;
+    }
+}
+
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const
 {
     const auto scriptSnapshot = scriptWorker_.snapshot();
+    if (rawCaptureReplay_.loaded && rawCaptureReplay_.playing) {
+        return nowMs();
+    }
     if (!pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || !pendingTransferFrameRows_.empty() ||
         scriptSnapshot.pendingPlotAppends > 0U || scriptSnapshot.pendingWorkerRxBytes > 0U) {
         return nowMs();
@@ -1525,6 +2518,7 @@ void Application::syncDockState()
         comm.backlogWarning = "派生 UI backlog 已超过单轮预算；transfer rows / plot append 将分批追赶";
     }
     comm.lastErrorSummary = scriptSnapshot.lastTransportStats.lastErrorSummary;
+    maybeLogCommPressureDebug(comm);
 
     auto& lua = dockStore_.luaState();
     lua.docks = scriptSnapshot.docks;
@@ -1544,9 +2538,113 @@ void Application::syncDockState()
     }
 }
 
+void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
+{
+    if (loggingFacade_.currentConfig().level != config::LogLevel::Debug) {
+        return;
+    }
+
+    CommPressureDebugSnapshot snapshot{
+        .pendingRxBytes = comm.pendingRxBytes,
+        .pendingTransferFrameRows = comm.pendingTransferFrameRows,
+        .pendingPlotAppends = comm.pendingPlotAppends,
+        .rxInputQueueBytes = comm.rxInputQueueBytes,
+        .parserPendingBytes = comm.parserPendingBytes,
+        .postprocessPendingBatches = comm.postprocessPendingBatches,
+        .luaPendingItems = comm.luaPendingItems,
+        .uiPendingItems = comm.uiPendingItems,
+        .postprocessWorkerThreads = comm.postprocessWorkerThreads,
+        .backlogWarning = comm.backlogWarning,
+        .lastPumpEvents = comm.lastPumpEvents,
+        .lastPumpRxBytes = comm.lastPumpRxBytes,
+        .lastPumpStreamFrames = comm.lastPumpStreamFrames,
+        .lastPumpStreamErrors = comm.lastPumpStreamErrors,
+        .lastPumpTransportMs = comm.lastPumpTransportMs,
+        .lastPumpParserMs = comm.lastPumpParserMs,
+        .lastPumpCallbackMs = comm.lastPumpCallbackMs,
+        .lastPumpScriptMs = comm.lastPumpScriptMs,
+    };
+
+    const auto hasPressure = [](const CommPressureDebugSnapshot& value) {
+        return value.pendingRxBytes > 0U || value.pendingTransferFrameRows > 0U || value.pendingPlotAppends > 0U ||
+               value.rxInputQueueBytes > 0U || value.parserPendingBytes > 0U ||
+               value.postprocessPendingBatches > 0U || value.luaPendingItems > 0U || value.uiPendingItems > 0U ||
+               !value.backlogWarning.empty();
+    };
+    const auto pressureValuesChanged = [](const CommPressureDebugSnapshot& current,
+                                          const CommPressureDebugSnapshot& previous) {
+        return current.pendingRxBytes != previous.pendingRxBytes ||
+               current.pendingTransferFrameRows != previous.pendingTransferFrameRows ||
+               current.pendingPlotAppends != previous.pendingPlotAppends ||
+               current.rxInputQueueBytes != previous.rxInputQueueBytes ||
+               current.parserPendingBytes != previous.parserPendingBytes ||
+               current.postprocessPendingBatches != previous.postprocessPendingBatches ||
+               current.luaPendingItems != previous.luaPendingItems || current.uiPendingItems != previous.uiPendingItems ||
+               current.postprocessWorkerThreads != previous.postprocessWorkerThreads ||
+               current.backlogWarning != previous.backlogWarning;
+    };
+
+    const bool active = hasPressure(snapshot);
+    const bool previousActive = commPressureDebugLog_.hasSnapshot && hasPressure(commPressureDebugLog_.lastSnapshot);
+    if (!active && !previousActive) {
+        return;
+    }
+
+    const auto now = nowMs();
+    const bool changed =
+        !commPressureDebugLog_.hasSnapshot || pressureValuesChanged(snapshot, commPressureDebugLog_.lastSnapshot);
+    const bool intervalElapsed =
+        commPressureDebugLog_.lastLogMs == 0U || now - commPressureDebugLog_.lastLogMs >= kCommPressureDebugLogIntervalMs;
+    if (!changed && !intervalElapsed) {
+        return;
+    }
+
+    // 调试日志节流：压力指标仍保留在状态结构中，但默认不再直接占用主界面。
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(2);
+    message << "通讯压力: rx_backlog=" << snapshot.pendingRxBytes << " bytes"
+            << ", parser_backlog=" << snapshot.parserPendingBytes << " bytes"
+            << ", frame_rows=" << snapshot.pendingTransferFrameRows
+            << ", plot_appends=" << snapshot.pendingPlotAppends
+            << ", rx_input=" << snapshot.rxInputQueueBytes << " bytes"
+            << ", post_batches=" << snapshot.postprocessPendingBatches
+            << ", lua_pending=" << snapshot.luaPendingItems
+            << ", ui_pending=" << snapshot.uiPendingItems
+            << ", post_threads=" << snapshot.postprocessWorkerThreads
+            << ", last_pump_events=" << snapshot.lastPumpEvents
+            << ", last_pump_rx=" << snapshot.lastPumpRxBytes << " bytes"
+            << ", last_stream_frames=" << snapshot.lastPumpStreamFrames
+            << ", last_stream_errors=" << snapshot.lastPumpStreamErrors
+            << ", pump_ms=" << snapshot.lastPumpTransportMs
+            << ", parser_ms=" << snapshot.lastPumpParserMs
+            << ", lua_callback_ms=" << snapshot.lastPumpCallbackMs
+            << ", script_ms=" << snapshot.lastPumpScriptMs
+            << ", warning=" << (snapshot.backlogWarning.empty() ? "none" : snapshot.backlogWarning);
+    loggingFacade_.debug("comm_pressure", message.str());
+
+    commPressureDebugLog_.hasSnapshot = true;
+    commPressureDebugLog_.lastSnapshot = std::move(snapshot);
+    commPressureDebugLog_.lastLogMs = now;
+}
+
 bool Application::handleTransportEvents()
 {
-    bool changed = false;
+    resetTransportPumpMetrics();
+    pullTransportEventsFromTransport();
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    std::size_t processed = 0;
+    std::size_t processedRxBytes = 0;
+    const auto maxRxBytes = rxBytesPerPump();
+    const bool changed = drainTransportEventQueues(startedAt, maxRxBytes, processed, processedRxBytes);
+    auto& comm = dockStore_.commState();
+    comm.lastPumpEvents = processed;
+    comm.lastPumpTransportMs = elapsedMilliseconds(startedAt, std::chrono::steady_clock::now());
+    return changed || !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty();
+}
+
+void Application::resetTransportPumpMetrics()
+{
     auto& comm = dockStore_.commState();
     comm.lastPumpEvents = 0;
     comm.lastPumpRxBytes = 0;
@@ -1556,18 +2654,26 @@ bool Application::handleTransportEvents()
     comm.lastPumpParserMs = 0.0;
     comm.lastPumpCallbackMs = 0.0;
     comm.lastPumpScriptMs = 0.0;
-    if (transport_) {
-        auto events = transport_->takeEvents();
-        pendingTransportEvents_.insert(pendingTransportEvents_.end(),
-                                       std::make_move_iterator(events.begin()),
-                                       std::make_move_iterator(events.end()));
-    }
+}
 
-    const auto startedAt = std::chrono::steady_clock::now();
-    std::size_t processed = 0;
-    std::size_t processedRxBytes = 0;
-    const auto maxRxBytes = rxBytesPerPump();
-    while (processed < kTransportEventsPerPump) {
+void Application::pullTransportEventsFromTransport()
+{
+    if (!transport_) {
+        return;
+    }
+    auto events = transport_->takeEvents();
+    pendingTransportEvents_.insert(pendingTransportEvents_.end(),
+                                   std::make_move_iterator(events.begin()),
+                                   std::make_move_iterator(events.end()));
+}
+
+bool Application::drainTransportEventQueues(const std::chrono::steady_clock::time_point& startedAt,
+                                            const std::size_t maxRxBytes,
+                                            std::size_t& processedEvents,
+                                            std::size_t& processedRxBytes)
+{
+    bool changed = false;
+    while (processedEvents < kTransportEventsPerPump) {
         if (!pendingRxByteChunks_.empty()) {
             const auto remainingRxBudget = maxRxBytes > processedRxBytes ? maxRxBytes - processedRxBytes : 0U;
             if (remainingRxBudget == 0U) {
@@ -1577,7 +2683,7 @@ bool Application::handleTransportEvents()
             changed = processPendingRxBytes(remainingRxBudget) || changed;
             const auto after = pendingRxByteCount();
             processedRxBytes += before >= after ? before - after : 0U;
-            ++processed;
+            ++processedEvents;
             if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) {
                 break;
             }
@@ -1592,17 +2698,15 @@ bool Application::handleTransportEvents()
         pendingTransportEvents_.pop_front();
 
         changed = processTransportEvent(event) || changed;
-        ++processed;
-        if (processed >= kTransportEventsPerPump) {
+        ++processedEvents;
+        if (processedEvents >= kTransportEventsPerPump) {
             break;
         }
         if (std::chrono::steady_clock::now() - startedAt >= kTransportEventBudget) {
             break;
         }
     }
-    comm.lastPumpEvents = processed;
-    comm.lastPumpTransportMs = elapsedMilliseconds(startedAt, std::chrono::steady_clock::now());
-    return changed || !pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty();
+    return changed;
 }
 
 bool Application::processPendingRxBytes(const std::size_t maxBytes)
@@ -1759,126 +2863,152 @@ bool Application::drainRequestTimeoutBacklog()
 
 bool Application::processTransportEvent(const transport::TransportEvent& event)
 {
-    bool changed = false;
-    std::visit(
-        [this, &changed]<typename T0>(const T0& evt) {
+    return std::visit(
+        [this]<typename T0>(const T0& evt) {
             using T = std::decay_t<T0>;
             if constexpr (std::is_same_v<T, transport::TransportOpenEvent>) {
-                if (evt.context.readyForIo) {
-                    activeConnection_ = evt.context;
-                    scriptWorker_.postTransportOpen(evt);
-                    scriptWorker_.waitIdle();
-                }
-                loggingFacade_.host(config::LogLevel::Info,
-                                    "OPEN",
-                                    evt.context.endpoint,
-                                    stateMessage(dockStore_.commState().state),
-                                    evt.context.timestampMs);
-                changed = true;
+                return processTransportOpenEvent(evt);
             } else if constexpr (std::is_same_v<T, transport::TransportCloseEvent>) {
-                if (evt.context.readyForIo) {
-                    scriptWorker_.postTransportClose(evt);
-                    scriptWorker_.waitIdle();
-                }
-                loggingFacade_.host(
-                    config::LogLevel::Info, "CLOSE", evt.context.endpoint, evt.reason, evt.context.timestampMs);
-                resetStreamBufferAlertState(evt.context.connectionId);
-                if (activeConnection_.has_value() && activeConnection_->connectionId == evt.context.connectionId) {
-                    activeConnection_.reset();
-                }
-                cancelAllTxRequests(evt.reason.empty() ? "连接已关闭" : evt.reason);
-                std::string recordingError;
-                if (rawCaptureRecording_.isOpen() && !stopRawCaptureRecording(recordingError)) {
-                    loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
-                }
-                changed = true;
+                return processTransportCloseEvent(evt);
             } else if constexpr (std::is_same_v<T, transport::TransportErrorEvent>) {
-                if (evt.context.readyForIo) {
-                    scriptWorker_.postTransportError(evt);
-                    scriptWorker_.waitIdle();
-                }
-                loggingFacade_.host(
-                    config::LogLevel::Error, "ERROR", evt.context.endpoint, evt.message, evt.context.timestampMs);
-                dockStore_.commState().lastError = evt.message;
-                changed = true;
+                return processTransportErrorEvent(evt);
             } else if constexpr (std::is_same_v<T, transport::TransportBytesEvent>) {
-                if (!evt.bytes.empty()) {
-                    // 核心流程：只消费当前活动连接的字节事件，旧连接的迟到回包直接忽略，
-                    // 避免双窗口接管场景下脚本状态与 UI 日志被过期连接污染。
-                    if (activeConnection_.has_value() && evt.context.readyForIo &&
-                        activeConnection_->connectionId != evt.context.connectionId) {
-                        return;
-                    }
-                    appendRawCaptureRecording(evt);
-                    appendLiveRawCapture(evt);
-                    scriptWorker_.postTransportBytes(evt);
-                    if (evt.context.readyForIo) {
-                        activeConnection_ = evt.context;
-                    }
-                    appendTransferRow(dock::ReceiveRow{
-                        .timestampMs = evt.context.timestampMs,
-                        .direction = "RX",
-                        .endpoint = evt.context.endpoint,
-                        .bytes = evt.bytes,
-                        .message = {},
-                    });
-                    changed = true;
-                }
+                return processTransportBytesEvent(evt);
             } else if constexpr (std::is_same_v<T, transport::TransportTxEvent>) {
-                if (!activeWrite_.has_value() || activeWrite_->request.id != evt.requestId) {
-                    return;
-                }
-
-                auto activeWrite = *activeWrite_;
-                activeWrite_.reset();
-                const auto state = toScriptTxState(evt.state);
-                const std::optional<std::string> error =
-                    evt.error.empty() ? std::nullopt : std::optional<std::string>{evt.error};
-                if (state == scripting::TxEventState::Sent &&
-                    activeWrite.request.kind == scripting::TxRequestKind::Request) {
-                    activeWrite.sentAtMs = evt.finishedAtMs;
-                    activeWrite.waitDeadlineMs = evt.finishedAtMs + activeWrite.request.timeoutMs;
-                    activeHalfDuplexRequest_ = activeWrite;
-                    scriptWorker_.postRequestAwaitingCompletion(true);
-                    // 核心流程：先进入等待 ACK 状态再回调 on_tx，允许脚本在 sent 事件中立即调用 proto.request_done。
-                    scriptWorker_.postTxEvent(activeWrite.request.connection,
-                                              scripting::TxEvent{
-                                                  .id = activeWrite.request.id,
-                                                  .kind = activeWrite.request.kind,
-                                                  .state = scripting::TxEventState::Sent,
-                                                  .tag = activeWrite.request.tag,
-                                                  .bytes = evt.bytes,
-                                                  .queuedMs = activeWrite.request.createdAtMs,
-                                                  .finishedMs = evt.finishedAtMs,
-                                                  .guarded = activeWrite.request.guarded,
-                                                  .attempt = activeWrite.request.attempt,
-                                                  .maxAttempts = activeWrite.request.maxAttempts,
-                                                  .guardState = guardStateForEvent(activeWrite.request,
-                                                                                   scripting::TxEventState::Sent),
-                                                  .error = error,
-                                              });
-                    scriptWorker_.waitIdle();
-                    appendTransferRow(dock::ReceiveRow{
-                        .timestampMs = evt.finishedAtMs,
-                        .direction = "TX",
-                        .endpoint = activeWrite.request.connection.endpoint,
-                        .bytes = activeWrite.request.payload,
-                        .message = {},
-                    });
-                    changed = true;
-                    return;
-                }
-
-                finishTxRequest(activeWrite.request, state, error, evt.finishedAtMs);
-                changed = true;
-                changed = driveTxScheduler() || changed;
+                return processTransportTxEvent(evt);
             }
+            return false;
         },
         event);
+}
+
+bool Application::processTransportOpenEvent(const transport::TransportOpenEvent& event)
+{
+    if (event.context.readyForIo) {
+        activeConnection_ = event.context;
+        scriptWorker_.postTransportOpen(event);
+        scriptWorker_.waitIdle();
+    }
+    loggingFacade_.host(config::LogLevel::Info,
+                        "OPEN",
+                        event.context.endpoint,
+                        stateMessage(dockStore_.commState().state),
+                        event.context.timestampMs);
+    return true;
+}
+
+bool Application::processTransportCloseEvent(const transport::TransportCloseEvent& event)
+{
+    if (event.context.readyForIo) {
+        scriptWorker_.postTransportClose(event);
+        scriptWorker_.waitIdle();
+    }
+    loggingFacade_.host(
+        config::LogLevel::Info, "CLOSE", event.context.endpoint, event.reason, event.context.timestampMs);
+    resetStreamBufferAlertState(event.context.connectionId);
+    if (activeConnection_.has_value() && activeConnection_->connectionId == event.context.connectionId) {
+        activeConnection_.reset();
+    }
+    cancelAllTxRequests(event.reason.empty() ? "连接已关闭" : event.reason);
+    std::string recordingError;
+    if (rawCaptureRecording_.isOpen() && !stopRawCaptureRecording(recordingError)) {
+        loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
+    }
+    return true;
+}
+
+bool Application::processTransportErrorEvent(const transport::TransportErrorEvent& event)
+{
+    if (event.context.readyForIo) {
+        scriptWorker_.postTransportError(event);
+        scriptWorker_.waitIdle();
+    }
+    loggingFacade_.host(
+        config::LogLevel::Error, "ERROR", event.context.endpoint, event.message, event.context.timestampMs);
+    dockStore_.commState().lastError = event.message;
+    return true;
+}
+
+bool Application::processTransportBytesEvent(const transport::TransportBytesEvent& event)
+{
+    if (event.bytes.empty()) {
+        return false;
+    }
+    // 核心流程：只消费当前活动连接的字节事件，旧连接的迟到回包直接忽略，
+    // 避免双窗口接管场景下脚本状态与 UI 日志被过期连接污染。
+    if (activeConnection_.has_value() && event.context.readyForIo &&
+        activeConnection_->connectionId != event.context.connectionId) {
+        return false;
+    }
+    appendRawCaptureRecording(event);
+    appendLiveRawCapture(event);
+    scriptWorker_.postTransportBytes(event);
+    if (event.context.readyForIo) {
+        activeConnection_ = event.context;
+    }
+    appendTransferRow(dock::ReceiveRow{
+        .timestampMs = event.context.timestampMs,
+        .direction = "RX",
+        .endpoint = event.context.endpoint,
+        .bytes = event.bytes,
+        .message = {},
+    });
+    return true;
+}
+
+bool Application::processTransportTxEvent(const transport::TransportTxEvent& event)
+{
+    if (!activeWrite_.has_value() || activeWrite_->request.id != event.requestId) {
+        return false;
+    }
+
+    auto activeWrite = *activeWrite_;
+    activeWrite_.reset();
+    const auto state = toScriptTxState(event.state);
+    const std::optional<std::string> error =
+        event.error.empty() ? std::nullopt : std::optional<std::string>{event.error};
+    if (state == scripting::TxEventState::Sent && activeWrite.request.kind == scripting::TxRequestKind::Request) {
+        activeWrite.sentAtMs = event.finishedAtMs;
+        activeWrite.waitDeadlineMs = event.finishedAtMs + activeWrite.request.timeoutMs;
+        activeHalfDuplexRequest_ = activeWrite;
+        scriptWorker_.postRequestAwaitingCompletion(true);
+        // 核心流程：先进入等待 ACK 状态再回调 on_tx，允许脚本在 sent 事件中立即调用 proto.request_done。
+        scriptWorker_.postTxEvent(
+            activeWrite.request.connection,
+            scripting::TxEvent{
+                .id = activeWrite.request.id,
+                .kind = activeWrite.request.kind,
+                .state = scripting::TxEventState::Sent,
+                .tag = activeWrite.request.tag,
+                .bytes = event.bytes,
+                .queuedMs = activeWrite.request.createdAtMs,
+                .finishedMs = event.finishedAtMs,
+                .guarded = activeWrite.request.guarded,
+                .attempt = activeWrite.request.attempt,
+                .maxAttempts = activeWrite.request.maxAttempts,
+                .guardState = guardStateForEvent(activeWrite.request, scripting::TxEventState::Sent),
+                .error = error,
+            });
+        scriptWorker_.waitIdle();
+        dockStore_.appendRequestTraceRow(
+            makeRequestTraceRow(activeWrite.request, dock::RequestTraceState::Sent, error, event.finishedAtMs));
+        appendTransferRow(dock::ReceiveRow{
+            .timestampMs = event.finishedAtMs,
+            .direction = "TX",
+            .endpoint = activeWrite.request.connection.endpoint,
+            .bytes = activeWrite.request.payload,
+            .message = {},
+        });
+        return true;
+    }
+
+    finishTxRequest(activeWrite.request, state, error, event.finishedAtMs);
+    bool changed = true;
+    changed = driveTxScheduler() || changed;
     return changed;
 }
 
-bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch)
+bool Application::applyScriptTransportStats(const scripting::ScriptRuntimeOutputBatch& batch)
 {
     bool changed = false;
     if (batch.transportStats.has_value()) {
@@ -1892,22 +3022,39 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         comm.lastPumpScriptMs += stats.totalMs;
         changed = true;
     }
+    return changed;
+}
 
+bool Application::applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
     for (const auto& connection : batch.requestGuardResets) {
         txRequestGuardHalted_ = false;
         const auto resetAtMs = nowMs();
-        scriptWorker_.postTxEvent(
-            connection,
-            scripting::TxEvent{
-                .id = 0,
-                .kind = scripting::TxRequestKind::Request,
-                .state = scripting::TxEventState::Completed,
-                .tag = "request_guard",
-                .queuedMs = resetAtMs,
-                .finishedMs = resetAtMs,
-                .guarded = true,
-                .guardState = std::string("reset"),
-            });
+        dockStore_.appendRequestTraceRow(dock::RequestTraceRow{
+            .timestampMs = resetAtMs,
+            .id = 0,
+            .kind = dock::RequestTraceKind::Request,
+            .state = dock::RequestTraceState::GuardReset,
+            .endpoint = connection.endpoint,
+            .tag = "request_guard",
+            .queuedMs = resetAtMs,
+            .finishedMs = resetAtMs,
+            .guarded = true,
+            .guardState = "reset",
+            .error = {},
+        });
+        scriptWorker_.postTxEvent(connection,
+                                  scripting::TxEvent{
+                                      .id = 0,
+                                      .kind = scripting::TxRequestKind::Request,
+                                      .state = scripting::TxEventState::Completed,
+                                      .tag = "request_guard",
+                                      .queuedMs = resetAtMs,
+                                      .finishedMs = resetAtMs,
+                                      .guarded = true,
+                                      .guardState = std::string("reset"),
+                                  });
         scriptWorker_.waitIdle();
         changed = true;
     }
@@ -1943,7 +3090,12 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         completionConsumed = true;
         changed = true;
     }
+    return changed;
+}
 
+bool Application::applyScriptRuntimeProfileEvents(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
     for (const auto& profileEvent : batch.streamRuntimeProfiles) {
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         const plot::RawCaptureEvent event{
@@ -1970,7 +3122,12 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         }
         changed = true;
     }
+    return changed;
+}
 
+bool Application::applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
     for (const auto& update : batch.statusUpdates) {
         setStatusMessage(update.clear ? std::string{} : update.text, false);
         changed = true;
@@ -1993,78 +3150,72 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
         loggingFacade_.script(log.level, log.message, log.timestampMs);
         changed = true;
     }
+    return changed;
+}
 
-    auto& wave = dockStore_.waveState();
-    for (const auto& setup : batch.plotSetups) {
+bool Application::applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    const bool setupChanged = applyScriptPlotSetups(batch.plotSetups);
+    enqueueScriptPlotAppends(batch.plotAppends);
+    auto appendRequests = drainScriptPlotAppendsForPump(plotAppendsPerPump());
+    return appendScriptPlotRequestsToWave(std::move(appendRequests)) || setupChanged;
+}
+
+bool Application::applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups)
+{
+    bool changed = false;
+    for (const auto& setup : setups) {
         auto rawSetup = toRawPlotSetup(setup);
         applyPlotSetup(rawSetup);
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         recordPlotSetupSnapshot(rawSetup, timestampMs);
         changed = true;
     }
+    return changed;
+}
 
-    for (auto append : batch.plotAppends) {
+void Application::enqueueScriptPlotAppends(const std::vector<std::pair<std::size_t, plot::WaveAppendRequest>>& appends)
+{
+    for (auto append : appends) {
         pendingScriptPlotAppends_.push_back(std::move(append));
     }
+}
 
-    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> appendRequests;
-    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> deferred;
-    std::unordered_map<std::string, std::size_t> selectedIndexes;
-    const auto maxPlotAppends = plotAppendsPerPump();
+std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> Application::drainScriptPlotAppendsForPump(
+    const std::size_t maxPlotAppends)
+{
+    ScriptPlotAppendDrainState drainState{.maxSelectedKeys = maxPlotAppends};
     while (!pendingScriptPlotAppends_.empty()) {
-        auto append = std::move(pendingScriptPlotAppends_.front());
-        pendingScriptPlotAppends_.pop_front();
-        auto& [channelIndex, request] = append;
-        auto key = std::to_string(channelIndex);
-        key.push_back('\x1F');
-        key.append(request.source);
-        if (!selectedIndexes.contains(key) && selectedIndexes.size() >= maxPlotAppends) {
-            deferred.emplace_back(channelIndex, std::move(request));
-            continue;
-        }
-        const auto [position, inserted] = selectedIndexes.emplace(key, appendRequests.size());
-        if (inserted) {
-            appendRequests.emplace_back(channelIndex, std::move(request));
-            continue;
-        }
-        auto& targetSamples = appendRequests[position->second].second.samples;
-        targetSamples.insert(targetSamples.end(),
-                             std::make_move_iterator(request.samples.begin()),
-                             std::make_move_iterator(request.samples.end()));
+        auto append = takePendingScriptPlotAppend(pendingScriptPlotAppends_);
+        drainScriptPlotAppendCandidate(drainState, std::move(append));
     }
 
-    for (auto& append : deferred) {
-        pendingScriptPlotAppends_.push_back(std::move(append));
-    }
+    // 保持预算外的不同源 append 原始顺序，留到后续 pump 继续处理。
+    restoreDeferredScriptPlotAppends(pendingScriptPlotAppends_, drainState.deferred);
+    return std::move(drainState.selected);
+}
 
-    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> mergedRequests;
-    std::unordered_map<std::string, std::size_t> mergedIndexes;
-    mergedRequests.reserve(appendRequests.size());
-    for (auto append : appendRequests) {
-        auto& [channelIndex, request] = append;
-        if (request.samples.empty()) {
-            continue;
-        }
-        auto key = std::to_string(channelIndex);
-        key.push_back('\x1F');
-        key.append(request.source);
-        const auto [position, inserted] = mergedIndexes.emplace(key, mergedRequests.size());
-        if (inserted) {
-            mergedRequests.emplace_back(channelIndex, std::move(request));
-            continue;
-        }
-        auto& targetSamples = mergedRequests[position->second].second.samples;
-        targetSamples.insert(targetSamples.end(),
-                             std::make_move_iterator(request.samples.begin()),
-                             std::make_move_iterator(request.samples.end()));
-    }
-
+bool Application::appendScriptPlotRequestsToWave(std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> requests)
+{
+    bool changed = false;
+    auto mergedRequests = mergeNonEmptyScriptPlotAppends(std::move(requests));
+    auto& wave = dockStore_.waveState();
     for (auto& [channelIndex, request] : mergedRequests) {
         if (wave.buffer.append(channelIndex, std::move(request))) {
             changed = true;
         }
     }
+    return changed;
+}
 
+bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
+    changed = applyScriptTransportStats(batch) || changed;
+    changed = applyScriptTxOutputs(batch) || changed;
+    changed = applyScriptRuntimeProfileEvents(batch) || changed;
+    changed = applyScriptUiAndLogOutputs(batch) || changed;
+    changed = applyScriptPlotOutputs(batch) || changed;
     changed = driveTxScheduler() || changed;
     return changed;
 }
@@ -2145,6 +3296,8 @@ bool Application::processRequestTimeouts()
         // 核心流程：guarded request 的重试只属于当前请求；
         // 超时后把下一次 attempt 放回队首，避免后续请求抢在重试前发送。
         ++request.attempt;
+        dockStore_.appendRequestTraceRow(
+            makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, currentMs));
         pendingTxQueue_.push_front(std::move(request));
     }
     driveTxScheduler();
@@ -2215,6 +3368,8 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     const std::size_t activeCount = pendingTxQueue_.size() + (activeWrite_.has_value() ? 1U : 0U) +
                                     (activeHalfDuplexRequest_.has_value() ? 1U : 0U);
     if (activeCount < runtimeConfig_.protocol.tx.maxPending) {
+        dockStore_.appendRequestTraceRow(
+            makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, nowMs()));
         pendingTxQueue_.push_back(std::move(request));
         return true;
     }
@@ -2224,6 +3379,8 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
         auto dropped = std::move(pendingTxQueue_.front());
         pendingTxQueue_.pop_front();
         finishTxRequest(dropped, scripting::TxEventState::Dropped, overflowMessage, nowMs());
+        dockStore_.appendRequestTraceRow(
+            makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, nowMs()));
         pendingTxQueue_.push_back(std::move(request));
         notifyTxOverflow(overflowMessage);
         return true;
@@ -2262,6 +3419,8 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
         activeHalfDuplexRequest_->request.id == request.id) {
         scriptWorker_.postRequestAwaitingCompletion(false);
     }
+
+    dockStore_.appendRequestTraceRow(makeRequestTraceRow(request, toRequestTraceState(state), error, finishedAtMs));
 
     if (state == scripting::TxEventState::Sent) {
         appendTransferRow(dock::ReceiveRow{

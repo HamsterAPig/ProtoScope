@@ -20,8 +20,11 @@ gui:
     width: 1600
     height: 900
     maximized: false
+  font:
+    # simplified_common 启动更快；full 会加载完整 CJK 字形范围，适合需要显示生僻字时手动开启。
+    chinese_glyph_range: simplified_common
   wave:
-    fullscreen_mode: focus
+    fullscreen_mode: overlay
     control_mode: oscilloscope
     display_formula: offset_then_scale
     channel_card_width_mode: fixed
@@ -45,6 +48,7 @@ gui:
     transfer_frame_limit: 120000
     host_limit: 5000
     script_limit: 5000
+    request_trace_limit: 5000
   raw_capture:
     live_limit_bytes: 67108864
   transfer_log:

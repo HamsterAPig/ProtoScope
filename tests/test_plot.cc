@@ -6,12 +6,14 @@
 #include "protoscope/plot/wave_fft.hpp"
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_state.hpp"
+#include "protoscope/session/session_package.hpp"
 
 #include "test_registry.hpp"
 
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -110,6 +112,18 @@ void test_plot_history_trim_and_envelope()
     buffer.configureChannels(1);
     buffer.setChannelSpec(0, {.label = "CH1", .unit = "V"});
     require(buffer.dataRevision() > initialRevision, "配置变更应推进波形数据版本");
+    const auto baseSpecRevision = buffer.dataRevision();
+    buffer.setChannelSpec(0,
+                          {.label = "CH1",
+                           .unit = "V",
+                           .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F},
+                           .lineWidth = std::optional<float>{2.5F}});
+    const auto styledSpec = buffer.channelSpec(0);
+    require(styledSpec.has_value(), "样式更新后通道配置仍应存在");
+    require(styledSpec->color.has_value(), "仅修改颜色也应更新通道配置");
+    require(styledSpec->lineWidth.has_value(), "仅修改 line_width 也应更新通道配置");
+    require(std::abs(*styledSpec->lineWidth - 2.5F) < 1e-6F, "通道 line_width 应保存到 buffer");
+    require(buffer.dataRevision() > baseSpecRevision, "样式变更应推进波形数据版本");
 
     protoscope::plot::WaveAppendRequest request{.source = "test"};
     for (int i = 0; i < 8; ++i) {
@@ -120,6 +134,8 @@ void test_plot_history_trim_and_envelope()
 
     const auto snapshot = buffer.snapshot(0.0, 10.0);
     require(snapshot.channels.size() == 1, "应存在 1 个通道");
+    require(snapshot.channels[0].lineWidth.has_value(), "快照应携带通道 line_width");
+    require(std::abs(*snapshot.channels[0].lineWidth - 2.5F) < 1e-6F, "快照 line_width 应匹配通道配置");
     require(snapshot.channels[0].totalSamples == 5, "历史长度应裁剪到 5");
     const auto latest = buffer.latestTime();
     require(latest.has_value() && std::abs(*latest - 7.0) < 1e-12, "最新时间应来自裁剪后的尾部样本");
@@ -1747,7 +1763,8 @@ void test_raw_capture_file_plot_setup_roundtrip()
          .ratio = 0.5,
          .scale = 2.0,
          .offset = -1.0,
-         .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F}},
+         .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F},
+         .lineWidth = std::optional<float>{2.75F}},
         {.label = "压力B", .unit = "kPa", .ratio = 1.5, .scale = 3.0, .offset = 4.0},
     };
     setupEvent.plotSetup.view.timeScale = 0.25;
@@ -1778,6 +1795,10 @@ void test_raw_capture_file_plot_setup_roundtrip()
     in.close();
     require(bytes.find("version: 3\n") != std::string::npos, "新 psraw 应写出 v3");
     require(bytes.find("event: plot_setup\n") != std::string::npos, "psraw 应包含 plot_setup 事件");
+    require(bytes.find("channel.0.line_width: 2.75\n") != std::string::npos,
+            "psraw 应写出显式 line_width");
+    require(bytes.find("channel.1.line_width: none\n") != std::string::npos,
+            "psraw 应写出默认 line_width 标记");
 
     const auto loaded = protoscope::plot::readRawCaptureFile(tempPath, error);
     if (!loaded.has_value()) {
@@ -1796,6 +1817,9 @@ void test_raw_capture_file_plot_setup_roundtrip()
     require(std::abs(loadedSetup.channels[0].offset + 1.0) < 1e-12, "plot_setup 应保留 offset");
     require(loadedSetup.channels[0].color.has_value(), "plot_setup 应保留颜色");
     require(std::abs((*loadedSetup.channels[0].color)[1] - 0.25F) < 1e-6F, "plot_setup 应保留 RGBA 分量");
+    require(loadedSetup.channels[0].lineWidth.has_value(), "plot_setup 应保留 line_width");
+    require(std::abs(*loadedSetup.channels[0].lineWidth - 2.75F) < 1e-6F, "plot_setup line_width 数值错误");
+    require(!loadedSetup.channels[1].lineWidth.has_value(), "plot_setup 应保留默认 line_width 为空");
     require(std::abs(loadedSetup.view.timeScale - 0.25) < 1e-12, "plot_setup 应保留 time_scale");
     require(loadedSetup.view.timeUnit == "ms", "plot_setup 应保留 time_unit");
     require(std::abs(loadedSetup.view.verticalMin + 10.0) < 1e-12, "plot_setup 应保留 vertical_min");
@@ -1828,6 +1852,22 @@ void test_raw_capture_file_plot_setup_rejects_bad_fields()
     std::ifstream in(tempPath, std::ios::binary);
     const std::string validBytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     in.close();
+    const auto rebuildRawCaptureBytes = [](const std::string& eventStream) {
+        std::string header = std::string("ProtoScopeRawCapture\n"
+                                         "version: 3\n"
+                                         "protocol_name: plot_setup_protocol\n"
+                                         "protocol_dir: tests/fixtures/protocols/plot_setup_protocol\n"
+                                         "sample_frequency_hz: 1000\n"
+                                         "captured_at_ms: 100\n"
+                                         "truncated: false\n"
+                                         "payload_size: ") +
+                             std::to_string(eventStream.size()) +
+                             "\n"
+                             "event_stream: true\n"
+                             "\n";
+        header.resize(4096, '\0');
+        return header + eventStream;
+    };
 
     auto broken = validBytes;
     const auto channelCountPos = broken.find("channel_count: 1\n");
@@ -1848,6 +1888,27 @@ void test_raw_capture_file_plot_setup_rejects_bad_fields()
     const auto ratioEnd = broken.find('\n', ratioPos);
     broken.replace(ratioPos, ratioEnd - ratioPos, "channel.0.ratio: nope");
     require(!protoscope::plot::decodeRawCaptureFile(broken, error).has_value(), "坏数值 ratio 应拒绝解析");
+
+    broken = validBytes;
+    const auto lineWidthPos = broken.find("channel.0.line_width: ");
+    require(lineWidthPos != std::string::npos, "测试文件应包含 channel line_width");
+    auto eventStream = validBytes.substr(4096);
+    const auto eventLineWidthPos = eventStream.find("channel.0.line_width: ");
+    require(eventLineWidthPos != std::string::npos, "测试事件流应包含 channel line_width");
+    const auto eventLineWidthEnd = eventStream.find('\n', eventLineWidthPos);
+    eventStream.erase(eventLineWidthPos, eventLineWidthEnd - eventLineWidthPos + 1);
+    const auto missingLineWidth = protoscope::plot::decodeRawCaptureFile(rebuildRawCaptureBytes(eventStream), error);
+    require(missingLineWidth.has_value(), "旧 psraw 缺少 line_width 字段时应兼容读取");
+    require(!missingLineWidth->events.front().plotSetup.channels.front().lineWidth.has_value(),
+            "缺少 line_width 字段时应保留默认样式");
+
+    broken = validBytes;
+    const auto badLineWidthPos = broken.find("channel.0.line_width: ");
+    require(badLineWidthPos != std::string::npos, "测试文件应包含 channel line_width");
+    const auto badLineWidthEnd = broken.find('\n', badLineWidthPos);
+    broken.replace(badLineWidthPos, badLineWidthEnd - badLineWidthPos, "channel.0.line_width: nope");
+    require(!protoscope::plot::decodeRawCaptureFile(broken, error).has_value(),
+            "坏数值 line_width 应拒绝解析");
 
 }
 
@@ -1965,4 +2026,58 @@ void test_raw_capture_file_rejects_profile_set_without_length()
     bytes.replace(pos, std::string("length: 8\n").size(), "leng_x: 8\n");
     const auto parsed = protoscope::plot::decodeRawCaptureFile(bytes, error);
     require(!parsed.has_value(), "profile_set 缺少 length 时应拒绝解析");
+}
+
+void test_session_package_roundtrip_preserves_binary_entries()
+{
+    protoscope::session::SessionPackageData package{
+        .createdAtMs = 123456,
+        .entries = {
+            {.name = "manifest.txt", .bytes = {'o', 'k', '\n'}},
+            {.name = "capture.psraw", .bytes = {0x00, 0x01, static_cast<std::uint8_t>(0xFF), '\n'}},
+        },
+    };
+
+    std::string error;
+    const auto encoded = protoscope::session::encodeSessionPackage(package);
+    const auto decoded = protoscope::session::decodeSessionPackage(encoded, error);
+    if (!decoded.has_value()) {
+        throw std::runtime_error("会话包 roundtrip 应成功: " + error);
+    }
+
+    require(decoded->createdAtMs == package.createdAtMs, "会话包 created_at_ms 应保留");
+    const auto* manifest = protoscope::session::findSessionPackageEntry(*decoded, "manifest.txt");
+    const auto* capture = protoscope::session::findSessionPackageEntry(*decoded, "capture.psraw");
+    require(manifest != nullptr && manifest->bytes == package.entries[0].bytes, "manifest 条目应保留");
+    require(capture != nullptr && capture->bytes == package.entries[1].bytes, "二进制 capture 条目应保留");
+}
+
+void test_session_package_rejects_truncated_entry()
+{
+    protoscope::session::SessionPackageData package{
+        .createdAtMs = 1,
+        .entries = {{.name = "capture.psraw", .bytes = {0x01, 0x02, 0x03}}},
+    };
+
+    auto encoded = protoscope::session::encodeSessionPackage(package);
+    encoded.resize(encoded.size() - std::string("\nendentry\n").size());
+
+    std::string error;
+    const auto decoded = protoscope::session::decodeSessionPackage(encoded, error);
+    require(!decoded.has_value(), "截断会话包应拒绝解析");
+    require(!error.empty(), "截断会话包应给出错误信息");
+}
+
+void test_session_package_rejects_excessive_entry_count()
+{
+    const std::string bytes =
+        "ProtoScopeSessionPackage\n"
+        "version: 1\n"
+        "created_at_ms: 1\n"
+        "entries: 999999999\n";
+
+    std::string error;
+    const auto decoded = protoscope::session::decodeSessionPackage(bytes, error);
+    require(!decoded.has_value(), "entries 过大的会话包应拒绝解析");
+    require(error.find("entries") != std::string::npos, "entries 过大错误应指向 entries 字段");
 }

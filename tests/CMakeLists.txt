@@ -30,6 +30,7 @@ target_link_libraries(protoscope_tests
         protoscope_elf_static_view
         protoscope_protocol_utils
         protoscope_plot
+        protoscope_session
         protoscope_scripting
         protoscope_transport
         protoscope_ui
@@ -39,7 +40,11 @@ target_compile_features(protoscope_tests PRIVATE cxx_std_20)
 protoscope_enable_warnings(protoscope_tests)
 
 add_test(NAME protoscope_unit_tests COMMAND protoscope_tests)
-set_tests_properties(protoscope_unit_tests PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+set_tests_properties(protoscope_unit_tests PROPERTIES
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    # Windows Debug 全量单测包含应用层调度等待，显式放宽 CTest 级超时避免误报。
+    TIMEOUT 900
+)
 
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)

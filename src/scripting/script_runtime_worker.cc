@@ -515,12 +515,13 @@ struct ScriptRuntimeWorker::Impl {
         }
     }
 
-    void run()
-    {
-        ScriptHost host;
-        std::optional<std::uint64_t> activeConnectionId;
-        publishSnapshot(host);
+    struct CommandExecutionResult {
+        bool includeTransportStats{false};
+        std::shared_ptr<std::promise<void>> idlePromise;
+    };
 
+    std::optional<WorkerCommand> popCommandOrWait()
+    {
         for (;;) {
 #ifdef __MINGW32__
             const auto observedWake = wakeGeneration.load(std::memory_order_acquire);
@@ -532,7 +533,7 @@ struct ScriptRuntimeWorker::Impl {
                 std::lock_guard lock(mutex);
                 if (commands.empty()) {
                     if (stopping) {
-                        break;
+                        return std::nullopt;
                     }
                     shouldWait = true;
                 } else {
@@ -541,113 +542,259 @@ struct ScriptRuntimeWorker::Impl {
                     hasCommand = true;
                 }
             }
-            if (!hasCommand) {
-#ifndef __MINGW32__
-                std::unique_lock waitLock(waitMutex);
-                commandAvailable.wait(waitLock, [this]() { return wakeRequested; });
-                wakeRequested = false;
-#else
-                if (shouldWait) {
-                    wakeGeneration.wait(observedWake, std::memory_order_acquire);
-                }
-#endif
-                continue;
+            if (hasCommand) {
+                return std::move(command);
             }
 
-            bool includeTransportStats = false;
-            std::shared_ptr<std::promise<void>> idlePromise;
+#ifndef __MINGW32__
+            std::unique_lock waitLock(waitMutex);
+            commandAvailable.wait(waitLock, [this]() { return wakeRequested; });
+            wakeRequested = false;
+#else
+            if (shouldWait) {
+                wakeGeneration.wait(observedWake, std::memory_order_acquire);
+            }
+#endif
+        }
+    }
 
-            std::visit(
-                [&](auto& item) {
-                    using T = std::decay_t<decltype(item)>;
-                    if constexpr (std::is_same_v<T, ConfigureCommand>) {
-                        std::lock_guard lock(mutex);
-                        config = item.config;
-                    } else if constexpr (std::is_same_v<T, SetFileIoConfigCommand>) {
-                        host.setFileIoConfig(std::move(item.config));
-                    } else if constexpr (std::is_same_v<T, ReloadProtocolCommand>) {
-                        {
-                            std::lock_guard lock(mutex);
-                            clearQueuedRxLocked();
-                        }
-                        host.clearPendingRealtimeOutputs();
-                        const bool ok = host.loadProtocolDirectory(item.directory);
-                        activeConnectionId.reset();
-                        ScriptRuntimeSnapshot resultSnapshot;
-                        {
-                            std::lock_guard lock(mutex);
-                            resultSnapshot = makeSnapshot(
-                                host, pendingRxBytes, commands.size(), outputs.size(), config.postprocessWorkerThreads);
-                        }
-                        item.result->set_value(ScriptRuntimeLoadResult{
-                            .ok = ok,
-                            .lastError = host.lastError(),
-                            .snapshot = resultSnapshot,
-                        });
-                    } else if constexpr (std::is_same_v<T, SetControlValueCommand>) {
-                        item.result->set_value(host.setControlValue(item.id, item.value));
-                    } else if constexpr (std::is_same_v<T, ClearRealtimeOutputsCommand>) {
-                        auto counts = host.clearPendingRealtimeOutputs();
-                        {
-                            std::lock_guard lock(mutex);
-                            for (const auto& batch : outputs) {
-                                counts.logs += batch.logs.size();
-                                counts.events += batch.events.size();
-                                counts.plotAppends += batch.plotAppends.size();
-                            }
-                            outputs.clear();
-                        }
-                        item.result->set_value(counts);
-                    } else if constexpr (std::is_same_v<T, ApplyStreamRuntimeProfileCommand>) {
-                        std::string error;
-                        const bool ok = host.applyStreamRuntimeProfileEvent(item.event, error);
-                        item.result->set_value(std::pair<bool, std::string>{ok, std::move(error)});
-                    } else if constexpr (std::is_same_v<T, OpenCommand>) {
-                        if (item.event.context.readyForIo) {
-                            activeConnectionId = item.event.context.connectionId;
-                        }
-                        host.onTransportOpen(item.event);
-                    } else if constexpr (std::is_same_v<T, CloseCommand>) {
-                        host.onTransportClose(item.event);
-                        if (activeConnectionId.has_value() && *activeConnectionId == item.event.context.connectionId) {
-                            activeConnectionId.reset();
-                        }
-                        std::lock_guard lock(mutex);
-                        clearQueuedRxLocked();
-                    } else if constexpr (std::is_same_v<T, ErrorCommand>) {
-                        host.onTransportError(item.event);
-                    } else if constexpr (std::is_same_v<T, BytesCommand>) {
-                        subtractPendingRxBytes(item.event.bytes.size());
-                        if (!activeConnectionId.has_value() || !item.event.context.readyForIo ||
-                            *activeConnectionId == item.event.context.connectionId) {
-                            host.onTransportBytes(item.event);
-                            if (item.event.context.readyForIo) {
-                                activeConnectionId = item.event.context.connectionId;
-                            }
-                            includeTransportStats = true;
-                        }
-                    } else if constexpr (std::is_same_v<T, ControlCommand>) {
-                        host.onControl(item.context, item.id, item.value);
-                    } else if constexpr (std::is_same_v<T, TickCommand>) {
-                        host.tick(item.currentMs);
-                    } else if constexpr (std::is_same_v<T, TxEventCommand>) {
-                        host.onTxEvent(item.context, item.event);
-                    } else if constexpr (std::is_same_v<T, DialogEventCommand>) {
-                        host.onDialogEvent(item.context, item.event);
-                    } else if constexpr (std::is_same_v<T, FileDialogEventCommand>) {
-                        host.onFileDialogEvent(item.context, item.event);
-                    } else if constexpr (std::is_same_v<T, RequestAwaitingCompletionCommand>) {
-                        host.setRequestAwaitingCompletion(item.active);
-                    } else if constexpr (std::is_same_v<T, IdleCommand>) {
-                        idlePromise = item.result;
-                    }
-                },
-                command);
+    ScriptRuntimeLoadResult reloadHostProtocol(ScriptHost& host,
+                                               std::optional<std::uint64_t>& activeConnectionId,
+                                               const std::string& directory)
+    {
+        {
+            std::lock_guard lock(mutex);
+            clearQueuedRxLocked();
+        }
+        host.clearPendingRealtimeOutputs();
+        const bool ok = host.loadProtocolDirectory(directory);
+        activeConnectionId.reset();
+        ScriptRuntimeSnapshot resultSnapshot;
+        {
+            std::lock_guard lock(mutex);
+            resultSnapshot =
+                makeSnapshot(host, pendingRxBytes, commands.size(), outputs.size(), config.postprocessWorkerThreads);
+        }
+        return ScriptRuntimeLoadResult{
+            .ok = ok,
+            .lastError = host.lastError(),
+            .snapshot = resultSnapshot,
+        };
+    }
 
-            publishOutputs(drainHostOutputs(host, includeTransportStats));
+    RealtimeOutputDiscardCounts clearHostRealtimeOutputs(ScriptHost& host)
+    {
+        auto counts = host.clearPendingRealtimeOutputs();
+        {
+            std::lock_guard lock(mutex);
+            for (const auto& batch : outputs) {
+                counts.logs += batch.logs.size();
+                counts.events += batch.events.size();
+                counts.plotAppends += batch.plotAppends.size();
+            }
+            outputs.clear();
+        }
+        return counts;
+    }
+
+    bool handleHostBytesCommand(ScriptHost& host,
+                                std::optional<std::uint64_t>& activeConnectionId,
+                                const BytesCommand& command)
+    {
+        const auto& event = command.event;
+        subtractPendingRxBytes(event.bytes.size());
+        if (activeConnectionId.has_value() && event.context.readyForIo &&
+            *activeConnectionId != event.context.connectionId) {
+            return false;
+        }
+
+        host.onTransportBytes(event);
+        if (event.context.readyForIo) {
+            activeConnectionId = event.context.connectionId;
+        }
+        return true;
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost&,
+                                              std::optional<std::uint64_t>&,
+                                              ConfigureCommand& command)
+    {
+        std::lock_guard lock(mutex);
+        config = command.config;
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              SetFileIoConfigCommand& command)
+    {
+        host.setFileIoConfig(std::move(command.config));
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>& activeConnectionId,
+                                              ReloadProtocolCommand& command)
+    {
+        command.result->set_value(reloadHostProtocol(host, activeConnectionId, command.directory));
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              SetControlValueCommand& command)
+    {
+        command.result->set_value(host.setControlValue(command.id, command.value));
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              ClearRealtimeOutputsCommand& command)
+    {
+        command.result->set_value(clearHostRealtimeOutputs(host));
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              ApplyStreamRuntimeProfileCommand& command)
+    {
+        std::string error;
+        const bool ok = host.applyStreamRuntimeProfileEvent(command.event, error);
+        command.result->set_value(std::pair<bool, std::string>{ok, std::move(error)});
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>& activeConnectionId,
+                                              OpenCommand& command)
+    {
+        if (command.event.context.readyForIo) {
+            activeConnectionId = command.event.context.connectionId;
+        }
+        host.onTransportOpen(command.event);
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>& activeConnectionId,
+                                              CloseCommand& command)
+    {
+        host.onTransportClose(command.event);
+        if (activeConnectionId.has_value() && *activeConnectionId == command.event.context.connectionId) {
+            activeConnectionId.reset();
+        }
+        std::lock_guard lock(mutex);
+        clearQueuedRxLocked();
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              ErrorCommand& command)
+    {
+        host.onTransportError(command.event);
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>& activeConnectionId,
+                                              BytesCommand& command)
+    {
+        CommandExecutionResult result;
+        result.includeTransportStats = handleHostBytesCommand(host, activeConnectionId, command);
+        return result;
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              ControlCommand& command)
+    {
+        host.onControl(command.context, command.id, command.value);
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              TickCommand& command)
+    {
+        host.tick(command.currentMs);
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              TxEventCommand& command)
+    {
+        host.onTxEvent(command.context, command.event);
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              DialogEventCommand& command)
+    {
+        host.onDialogEvent(command.context, command.event);
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              FileDialogEventCommand& command)
+    {
+        host.onFileDialogEvent(command.context, command.event);
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              RequestAwaitingCompletionCommand& command)
+    {
+        host.setRequestAwaitingCompletion(command.active);
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost&, std::optional<std::uint64_t>&, IdleCommand& command)
+    {
+        CommandExecutionResult result;
+        result.idlePromise = command.result;
+        return result;
+    }
+
+    CommandExecutionResult executeCommand(ScriptHost& host,
+                                          std::optional<std::uint64_t>& activeConnectionId,
+                                          WorkerCommand& command)
+    {
+        CommandExecutionResult result;
+
+        // 核心流程：命令副作用按命令类型下沉到具名 helper，run 只负责取命令和发布执行后的状态。
+        std::visit(
+            [&](auto& item) {
+                result = executeCommandItem(host, activeConnectionId, item);
+            },
+            command);
+
+        return result;
+    }
+
+    void run()
+    {
+        ScriptHost host;
+        std::optional<std::uint64_t> activeConnectionId;
+        publishSnapshot(host);
+
+        for (;;) {
+            auto command = popCommandOrWait();
+            if (!command.has_value()) {
+                break;
+            }
+
+            const auto execution = executeCommand(host, activeConnectionId, *command);
+            publishOutputs(drainHostOutputs(host, execution.includeTransportStats));
             publishSnapshot(host);
-            if (idlePromise) {
-                idlePromise->set_value();
+            if (execution.idlePromise) {
+                execution.idlePromise->set_value();
             }
         }
     }

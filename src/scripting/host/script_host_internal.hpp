@@ -3,6 +3,7 @@
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/scripting/script_host.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -16,6 +17,13 @@
 
 namespace protoscope::scripting {
 
+struct StreamValueTargetControl {
+    std::string controlId;
+    std::optional<std::uint32_t> startId;
+    std::optional<std::string> startField;
+    std::string valuesField;
+};
+
 struct LoadedStreamSchema {
     explicit LoadedStreamSchema(StreamBufferDefinition buffer, std::vector<StreamFrameDefinition> frames)
         : parser(std::move(buffer), std::move(frames))
@@ -25,6 +33,7 @@ struct LoadedStreamSchema {
     FrameStreamParser parser;
     std::optional<StreamParseBatch> lastBatch;
     std::unordered_map<std::string, std::string> frameCallbackKeys;
+    std::unordered_map<std::string, std::vector<StreamValueTargetControl>> valueTargetsByFrame;
     std::optional<std::string> onBatchCallbackKey;
     std::optional<std::string> onErrorCallbackKey;
     bool includeRawFrames{true};
@@ -37,6 +46,11 @@ struct ScriptHost::Runtime {
     std::unique_ptr<LoadedStreamSchema> stream;
     std::unordered_map<std::string, sol::protected_function> streamCallbacks;
     std::unordered_map<std::string, StreamRuntimeProfile> streamRuntimeProfiles;
+};
+
+struct ScriptHost::LoadedScript {
+    std::unique_ptr<LoadedStreamSchema> streamSchema;
+    std::vector<DockDescriptor> docks;
 };
 
 struct ScriptHost::FileHandle {
@@ -65,6 +79,29 @@ struct ScriptHost::FileSendJob {
     std::uint64_t nextOffset{0};
     std::size_t inflight{0};
     bool eof{false};
+};
+
+struct ScriptHost::LoadSnapshot {
+    bool scriptLoaded{false};
+    std::string scriptPath;
+    std::string protocolDirectory;
+    std::unordered_map<std::string, ControlValue> controlValues;
+    std::vector<ScriptEvent> events;
+    std::vector<ScriptLog> logs;
+    std::vector<TxRequest> txRequests;
+    std::vector<transport::ConnectionContext> requestGuardResets;
+    std::vector<PlotSetup> plotSetups;
+    std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends;
+    std::vector<RequestDoneResult> requestDoneResults;
+    std::vector<StatusUpdate> statusUpdates;
+    std::vector<DialogRequest> dialogRequests;
+    std::vector<FileDialogRequest> fileDialogRequests;
+    std::unordered_map<std::string, TimerState> timers;
+    std::unordered_map<std::uint64_t, std::unique_ptr<FileHandle>> fileHandles;
+    std::unordered_map<std::uint64_t, FileSendJob> fileSendJobs;
+    std::vector<AuthorizedPath> dialogAuthorizedPaths;
+    std::optional<transport::ConnectionContext> activeConnection;
+    bool requestAwaitingCompletion{false};
 };
 
 ControlValue defaultValueFor(const ControlDescriptor& descriptor);

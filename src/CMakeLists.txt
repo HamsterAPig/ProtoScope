@@ -17,6 +17,15 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(protoscope_plot PRIVATE -Wno-maybe-uninitialized)
 endif()
 
+add_library(protoscope_session STATIC
+    session/session_package.cc
+)
+target_include_directories(protoscope_session
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/include
+)
+target_compile_features(protoscope_session PUBLIC cxx_std_20)
+
 add_library(protoscope_protocol_utils STATIC
     protocol_utils/codec.cc
 )
@@ -179,6 +188,7 @@ target_link_libraries(protoscope_app
         protoscope_config
         protoscope_logging
         protoscope_plot
+        protoscope_session
         protoscope_scripting
         protoscope_elf_static_view
         protoscope_transport
@@ -216,6 +226,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/runtime/lua_view_menu.cc
         ui/runtime/help_menu.cc
         ui/docks/dock_host.cc
+        ui/docks/offline_replay_dock.cc
         ui/docks/lua_dock_host.cc
         ui/dialogs/dialog_host.cc
         ui/wave/wave_channel_legend.cc
@@ -283,6 +294,7 @@ foreach(target_name IN ITEMS
     protoscope_elf_static_view
     protoscope_dock
     protoscope_plot
+    protoscope_session
     protoscope_config
     protoscope_app
     protoscope_update_check

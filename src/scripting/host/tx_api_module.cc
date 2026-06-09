@@ -1,14 +1,13 @@
 #include "protoscope/scripting/script_host.hpp"
 
 #include "script_host_api_module.hpp"
+#include "script_host_lua_helpers.hpp"
 
 namespace protoscope::scripting {
 
-class TxScriptHostApiModule final : public IScriptHostApiModule {
+class TxScriptHostApiModule final : public ScriptHostApiModuleBase {
 public:
-    explicit TxScriptHostApiModule(ScriptHost& host) : host_(host) {}
-
-    std::string_view id() const override { return "tx_api_module"; }
+    explicit TxScriptHostApiModule(ScriptHost& host) : ScriptHostApiModuleBase(host, "tx_api_module") {}
 
     void registerApi(ScriptHostContextInternal& ctx, sol::table& proto) override
     {
@@ -18,25 +17,25 @@ public:
             std::string error;
             const auto request = host->protoSendLike(TxRequestKind::Send, payload, opts, error);
             if (!request.has_value()) {
-                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+                return script_host_lua::luaNilError(lua, error);
             }
-            return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
+            return script_host_lua::luaValueOk(lua, request->id);
         });
         proto.set_function("request", [host, lua](const sol::object& payload, const sol::object& opts) {
             std::string error;
             const auto request = host->protoSendLike(TxRequestKind::Request, payload, opts, error);
             if (!request.has_value()) {
-                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+                return script_host_lua::luaNilError(lua, error);
             }
-            return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
+            return script_host_lua::luaValueOk(lua, request->id);
         });
         proto.set_function("request_guarded", [host, lua](const sol::object& payload, const sol::object& opts) {
             std::string error;
             const auto request = host->protoSendLike(TxRequestKind::Request, payload, opts, error, true);
             if (!request.has_value()) {
-                return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
+                return script_host_lua::luaNilError(lua, error);
             }
-            return std::make_tuple(sol::make_object(lua, request->id), sol::make_object(lua, sol::lua_nil));
+            return script_host_lua::luaValueOk(lua, request->id);
         });
         proto.set_function("reset_request_guard", [host]() {
             host->protoResetRequestGuard();
@@ -44,20 +43,14 @@ public:
         });
         proto.set_function("request_done", [host, lua](const sol::object& result) {
             std::string error;
-            if (host->protoRequestDone(result, error)) {
-                return std::make_tuple(sol::make_object(lua, true), sol::make_object(lua, sol::lua_nil));
-            }
-            return std::make_tuple(sol::make_object(lua, false), sol::make_object(lua, error));
+            return script_host_lua::luaOkResult(lua, host->protoRequestDone(result, error), error);
         });
     }
-
-private:
-    ScriptHost& host_;
 };
 
 std::unique_ptr<IScriptHostApiModule> makeTxApiModule(ScriptHost& host)
 {
-    return std::make_unique<TxScriptHostApiModule>(host);
+    return makeScriptHostApiModule<TxScriptHostApiModule>(host);
 }
 
 } // namespace protoscope::scripting

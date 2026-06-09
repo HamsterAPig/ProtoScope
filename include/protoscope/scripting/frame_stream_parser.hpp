@@ -252,11 +252,115 @@ private:
         std::size_t frameLength{0};
     };
 
+    struct CandidateParseResult {
+        enum class Action {
+            NeedMore,
+            Parsed,
+            RecoverableError,
+        };
+
+        Action action{Action::NeedMore};
+        std::optional<StreamParsedFrame> frame;
+        std::optional<StreamParseError> error;
+        std::size_t frameLength{0};
+    };
+
+    struct FieldDecodePlan {
+        std::size_t start{0};
+        std::size_t count{0};
+        std::size_t width{0};
+        std::size_t end{0};
+    };
+
+    enum class FieldDecodeBoundsAction {
+        Decode,
+        Skip,
+        Error,
+    };
+
+    void ensureAppendCapacity(std::size_t incomingSize);
+    [[nodiscard]] StreamParseBatch appendIncomingBytes(const std::vector<std::uint8_t>& bytes);
+    void updateNearOverflowStatus(StreamParseBatch& batch) const;
+    void discardUnmatchedPrefix(StreamParseBatch& batch);
+    [[nodiscard]] bool discardCandidatePrefix(const CandidateMatch& candidate, StreamParseBatch& batch);
+    CandidateParseResult analyzeCandidateFrames(const CandidateMatch& candidate,
+                                                const StreamParseOptions& options) const;
+    void setInvalidLengthError(const StreamFrameDefinition& frame,
+                               std::string_view message,
+                               AnalyzeResult& result) const;
+    [[nodiscard]] bool resolveRuntimeProfileFrameLength(const StreamFrameDefinition& frame,
+                                                        std::size_t& frameLength,
+                                                        AnalyzeResult& result) const;
+    [[nodiscard]] bool resolveLengthFieldFrameLength(const StreamFrameDefinition& frame,
+                                                     const ByteRingBuffer::LinearReadView& window,
+                                                     std::size_t& frameLength,
+                                                     AnalyzeResult& result) const;
+    [[nodiscard]] bool validateResolvedFrameLength(const StreamFrameDefinition& frame,
+                                                   std::size_t frameLength,
+                                                   AnalyzeResult& result) const;
+    void setCountResolveError(const StreamFrameDefinition& frame,
+                              const std::uint8_t* frameBytes,
+                              std::size_t frameLength,
+                              const std::string& countError,
+                              AnalyzeResult& result) const;
+    void setFieldDecodeError(const StreamFrameDefinition& frame,
+                             const std::uint8_t* frameBytes,
+                             std::size_t frameLength,
+                             std::string_view message,
+                             AnalyzeResult& result) const;
+    [[nodiscard]] bool resolveFieldDecodePlan(const StreamFrameDefinition& frame,
+                                              const StreamFieldDefinition& field,
+                                              const std::uint8_t* frameBytes,
+                                              std::size_t frameLength,
+                                              std::size_t readableLimit,
+                                              std::size_t cursor,
+                                              const StreamFieldMap& parsedFields,
+                                              FieldDecodePlan& plan,
+                                              AnalyzeResult& result) const;
+    [[nodiscard]] FieldDecodeBoundsAction validateFieldDecodeBounds(const StreamFrameDefinition& frame,
+                                                                    const std::uint8_t* frameBytes,
+                                                                    std::size_t frameLength,
+                                                                    std::size_t readableLimit,
+                                                                    const FieldDecodePlan& plan,
+                                                                    AnalyzeResult& result) const;
+    void decodeFieldValue(const StreamFieldDefinition& field,
+                          const std::uint8_t* frameBytes,
+                          std::size_t frameLength,
+                          const FieldDecodePlan& plan,
+                          StreamFieldMap& parsedFields) const;
+    void resetCompiledFrameIndexes();
+    [[nodiscard]] CompiledFrame compileFrameMetadata(std::size_t index, const StreamFrameDefinition& frame) const;
+    void applyDeclaredFrameLengthMinimum(const StreamFrameDefinition& frame, CompiledFrame& compiled) const;
+    void accumulateFixedFieldBytes(const StreamFrameDefinition& frame, CompiledFrame& compiled) const;
+    void applyFixedFieldMinimum(const StreamFrameDefinition& frame, CompiledFrame& compiled) const;
+    void registerCompiledFrame(const StreamFrameDefinition& frame, const CompiledFrame& compiled);
+    void sortCompiledFrameHeaderBuckets();
     [[nodiscard]] std::size_t maxHeaderLength() const;
     [[nodiscard]] std::optional<CandidateMatch> findCandidate() const;
     AnalyzeResult analyzeFrame(const CompiledFrame& compiled,
                                const ByteRingBuffer::LinearReadView& window,
                                const StreamParseOptions& options) const;
+    [[nodiscard]] bool resolveFrameLength(const StreamFrameDefinition& frame,
+                                          const ByteRingBuffer::LinearReadView& window,
+                                          std::size_t& frameLength,
+                                          AnalyzeResult& result) const;
+    [[nodiscard]] bool validateFrameBounds(const StreamFrameDefinition& frame,
+                                           const std::uint8_t* frameBytes,
+                                           const ByteRingBuffer::LinearReadView& window,
+                                           std::size_t frameLength,
+                                           std::size_t crcWidth,
+                                           AnalyzeResult& result) const;
+    [[nodiscard]] bool validateFrameCrc(const StreamFrameDefinition& frame,
+                                        const std::uint8_t* frameBytes,
+                                        std::size_t frameLength,
+                                        std::size_t crcWidth,
+                                        AnalyzeResult& result) const;
+    [[nodiscard]] bool decodeFrameFields(const StreamFrameDefinition& frame,
+                                         const std::uint8_t* frameBytes,
+                                         std::size_t frameLength,
+                                         std::size_t crcWidth,
+                                         StreamFieldMap& parsedFields,
+                                         AnalyzeResult& result) const;
     [[nodiscard]] bool applyRuntimeChannelMap(const StreamFrameDefinition& definition,
                                               StreamParsedFrame& frame,
                                               std::string& error) const;
@@ -283,6 +387,8 @@ private:
 };
 
 std::string_view streamParseErrorCodeName(StreamParseErrorCode code);
+std::optional<StreamValueType> streamValueTypeFromName(std::string_view name);
+std::string_view streamValueTypeName(StreamValueType type);
 std::size_t streamValueWidth(StreamValueType type);
 bool streamValueTypeIsFloat(StreamValueType type);
 bool streamValueTypeIsSigned(StreamValueType type);

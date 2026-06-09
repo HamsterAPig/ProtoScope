@@ -7,6 +7,7 @@
 #include "protoscope/transport/transport.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -42,6 +43,7 @@ enum class ControlType {
     Checkbox,
     Combo,
     ElfSymbolCombo,
+    ValueTable,
 };
 
 enum class ControlLabelPosition {
@@ -53,6 +55,30 @@ struct ElfSymbolValue {
     std::string label;
     std::string value;
     std::string type;
+};
+
+struct ValueTableBitValueLabels {
+    std::string zero{"0"};
+    std::string one{"1"};
+};
+
+struct ValueTableRowDescriptor {
+    std::uint32_t id{0};
+    std::uint32_t sourceId{0};
+    std::optional<std::uint8_t> bit;
+    std::string label;
+    std::string unit;
+    std::string note;
+    ValueTableBitValueLabels bitValues;
+};
+
+struct ValueTableCellValue {
+    std::string value;
+    bool set{false};
+};
+
+struct ValueTableValue {
+    std::vector<ValueTableCellValue> rows;
 };
 
 struct ControlDescriptor {
@@ -70,9 +96,12 @@ struct ControlDescriptor {
     std::size_t limit{64};
     bool debounceMsConfigured{false};
     bool limitConfigured{false};
+    std::vector<ValueTableRowDescriptor> valueRows;
+    std::unordered_map<std::uint32_t, std::size_t> valueRowById;
+    std::unordered_map<std::uint32_t, std::vector<std::size_t>> valueBitRowsBySourceId;
 };
 
-using ControlValue = std::variant<bool, int, float, std::string, ElfSymbolValue>;
+using ControlValue = std::variant<bool, int, float, std::string, ElfSymbolValue, ValueTableValue>;
 
 struct ControlSnapshot {
     ControlDescriptor descriptor;
@@ -101,6 +130,8 @@ struct LayoutNodeDescriptor {
     std::string title;
     bool defaultOpen{true};
     std::size_t columns{1};
+    std::optional<float> minWidth;
+    std::optional<float> maxWidth;
     bool borders{false};
     bool resizable{true};
     bool rowBg{false};
@@ -146,6 +177,7 @@ struct PlotChannelDescriptor {
     double scale{1.0};
     double offset{0.0};
     std::optional<std::array<float, 4>> color;
+    std::optional<float> lineWidth;
 };
 
 struct PlotSetup {
@@ -383,6 +415,13 @@ public:
     void setRequestAwaitingCompletion(bool active);
 
 private:
+    struct Runtime;
+    struct FileHandle;
+    struct AuthorizedPath;
+    struct FileSendJob;
+    struct LoadSnapshot;
+    struct LoadedScript;
+
     sol::state& luaState();
     sol::state_view luaView();
     const std::vector<ControlDescriptor>& controlDescriptors() const;
@@ -403,8 +442,38 @@ private:
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
     std::optional<sol::protected_function> resolveGlobalCallback(const char* name);
 
-    void registerLuaApi(sol::state_view lua, sol::table& proto);
+    void beginTransportBytesEvent(const transport::TransportBytesEvent& event);
+    void handleStreamTransportBytes(const transport::TransportBytesEvent& event,
+                                    std::chrono::steady_clock::time_point startedAt);
+    void handleRawTransportBytes(const transport::TransportBytesEvent& event,
+                                 std::chrono::steady_clock::time_point startedAt);
+    StreamParseBatch parseTransportStreamBytes(const std::vector<std::uint8_t>& bytes,
+                                               std::chrono::steady_clock::time_point& parserFinishedAt);
+    void dispatchStreamParseErrors(const transport::ConnectionContext& context, const StreamParseBatch& batch);
+    void updateStreamParseErrorSummary(const StreamParseBatch& batch);
+    void applyStreamValueTargets(const std::vector<StreamParsedFrame>& frames);
+    void dispatchStreamFrames(const transport::ConnectionContext& context,
+                              const std::vector<StreamParsedFrame>& frames);
 
+    void registerLuaApi(sol::state_view lua, sol::table& proto);
+    LoadSnapshot captureLoadSnapshot();
+    void restoreLoadSnapshot(LoadSnapshot&& snapshot, std::string message);
+    void resetForScriptLoad(const std::string& path, const std::string& protocolDirectory);
+    void configureLuaRuntimeForScriptLoad(Runtime& runtime, const std::string& protocolDirectory);
+    std::unique_ptr<LoadedScript> loadScriptIntoRuntime(Runtime& runtime, const std::string& path, std::string& error);
+    void commitLoadedScript(std::unique_ptr<Runtime> runtime,
+                            std::unique_ptr<LoadedScript> loadedScript,
+                            const std::unordered_map<std::string, ControlValue>& previousControlValues,
+                            const std::string& path,
+                            const std::string& protocolDirectory);
+
+    TxRequest createTxRequest(TxRequestKind kind, std::vector<std::uint8_t> payload, bool guarded);
+    void applyTxRequestConnection(TxRequest& request) const;
+    bool applyTxRequestOptions(TxRequest& request,
+                               const sol::object& opts,
+                               const std::string& apiName,
+                               std::string& error,
+                               bool guarded);
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
                                            const sol::object& opts,
@@ -454,11 +523,6 @@ private:
     friend class StatusScriptHostApiModule;
     friend class TxScriptHostApiModule;
     friend class UiScriptHostApiModule;
-
-    struct Runtime;
-    struct FileHandle;
-    struct AuthorizedPath;
-    struct FileSendJob;
 
 private:
     struct TimerState {

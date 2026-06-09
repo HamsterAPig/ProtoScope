@@ -3,6 +3,7 @@
 #include "protoscope/scripting/script_host.hpp"
 #include "protoscope/transport/transport.hpp"
 
+#include "test_helpers.hpp"
 #include "test_registry.hpp"
 
 #include <algorithm>
@@ -14,19 +15,16 @@
 #include <initializer_list>
 #include <sstream>
 #include <stdexcept>
-#include <system_error>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
 namespace {
 
-void require(bool condition, const char* message)
-{
-    if (!condition) {
-        throw std::runtime_error(message);
-    }
-}
+using protoscope::tests::makeUniqueTempDir;
+using protoscope::tests::require;
+using protoscope::tests::ScopedTempPath;
 
 std::string readTextFile(const std::filesystem::path& path)
 {
@@ -68,28 +66,6 @@ struct ScopedCurrentPath {
 
     std::filesystem::path original_;
 };
-
-struct ScopedTempPath {
-    explicit ScopedTempPath(std::filesystem::path path) : path_(std::move(path)) {}
-
-    ~ScopedTempPath()
-    {
-        std::error_code ec;
-        std::filesystem::remove_all(path_, ec);
-    }
-
-    const std::filesystem::path& path() const { return path_; }
-
-private:
-    std::filesystem::path path_;
-};
-
-std::filesystem::path makeUniqueTempDir(const char* prefix)
-{
-    const auto path = std::filesystem::temp_directory_path() / (std::string(prefix) + "-" + std::to_string(nowMs()));
-    std::filesystem::create_directories(path);
-    return path;
-}
 
 std::uint16_t readBe16(const std::vector<std::uint8_t>& bytes, std::size_t offset)
 {
@@ -290,6 +266,15 @@ void test_script_controls_snapshot()
         }
     }
     require(foundElfSymbolCombo, "默认协议应示范 elf_symbol_combo 控件");
+}
+
+void test_script_load_directory_rejected_before_lua_dofile()
+{
+    const ScopedTempPath scriptDir(makeUniqueTempDir("protoscope-script-load-directory"));
+    protoscope::scripting::ScriptHost host;
+
+    require(!host.loadScriptFile(scriptDir.path().generic_string()), "目录路径不应作为 Lua 脚本加载");
+    require(host.lastError().find("不是普通文件") != std::string::npos, "目录路径应在文件探测阶段给出明确错误");
 }
 
 void test_script_optional_labels_allowed_for_compact_controls()
@@ -565,6 +550,39 @@ void test_script_flow_layout_snapshot()
             "label_position 缺省应为 left");
     require(controls[2].labelPosition == protoscope::scripting::ControlLabelPosition::Right,
             "label_position 显式 right 应解析");
+}
+
+void test_script_layout_width_controls_shorthand_snapshot()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("layout_width_controls_shorthand").generic_string()),
+            "layout_width_controls_shorthand 协议应可加载");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 1, "layout_width_controls_shorthand 协议应只产出一个 dock");
+    require(docks[0].descriptor.layout.has_value(), "layout_width_controls_shorthand 应解析 layout");
+
+    const auto& root = docks[0].descriptor.layout->root;
+    require(root.kind == protoscope::scripting::LayoutNodeKind::Column, "根节点应为 column");
+    require(root.children.size() == 3, "根节点应包含 flow、column 和 control 三项");
+
+    const auto& flow = root.children[0];
+    require(flow.kind == protoscope::scripting::LayoutNodeKind::Flow, "第一项应为 flow");
+    require(flow.children.size() == 2, "flow.controls 应展开为两个 control 子节点");
+    require(flow.children[0].controlId == "read_version", "flow.controls 第一个控件顺序错误");
+    require(flow.children[1].controlId == "device_id", "flow.controls 第二个控件顺序错误");
+
+    const auto& column = root.children[1];
+    require(column.kind == protoscope::scripting::LayoutNodeKind::Column, "第二项应为 column");
+    require(column.children.size() == 2, "column.controls 应展开为两个 control 子节点");
+    require(column.children[0].controlId == "timeout_ms", "column.controls 第一个控件顺序错误");
+    require(column.children[1].controlId == "scale", "column.controls 第二个控件顺序错误");
+
+    const auto& constrained = root.children[2];
+    require(constrained.kind == protoscope::scripting::LayoutNodeKind::Control, "第三项应为 control");
+    require(constrained.controlId == "mode", "第三项应绑定 mode");
+    require(constrained.minWidth.has_value() && *constrained.minWidth == 120.0F, "control min_width 应解析");
+    require(constrained.maxWidth.has_value() && *constrained.maxWidth == 240.0F, "control max_width 应解析");
 }
 
 void test_script_duplicate_label_controls_allowed()
@@ -1314,6 +1332,8 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
     require(text.find("function on_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_dialog");
     require(text.find("function on_file_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_file_dialog");
     require(text.find("@field color? string") != std::string::npos, "LuaLS API 应声明 ProtoPlotChannel.color");
+    require(text.find("@field line_width? number") != std::string::npos,
+            "LuaLS API 应声明 ProtoPlotChannel.line_width");
 }
 
 void test_script_missing_callbacks_allowed()
@@ -1415,13 +1435,71 @@ void test_script_layout_unknown_type_fail()
     require(host.lastError().find("type 不支持") != std::string::npos, "未知 layout type 错误应包含 type 提示");
 }
 
+void test_script_layout_width_range_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_width_range").generic_string()),
+            "min_width 大于 max_width 的 layout control 应加载失败");
+    require(host.lastError().find("min_width 不能大于 max_width") != std::string::npos,
+            "宽度范围错误应包含 min_width 与 max_width 提示");
+}
+
+void test_script_layout_width_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_width_type").generic_string()),
+            "非数字 layout control 宽度应加载失败");
+    require(host.lastError().find("min_width 必须是 number") != std::string::npos, "宽度类型错误应包含 number 提示");
+}
+
+void test_script_layout_width_non_positive_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_width_non_positive").generic_string()),
+            "非正 layout control 宽度应加载失败");
+    require(host.lastError().find("min_width 必须是正数") != std::string::npos, "非正宽度错误应包含正数提示");
+}
+
+void test_script_layout_children_controls_conflict_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_children_controls").generic_string()),
+            "同时声明 children 和 controls 的 layout 容器应加载失败");
+    require(host.lastError().find("不能同时声明 children 和 controls") != std::string::npos,
+            "children/controls 混用错误应包含互斥提示");
+}
+
+void test_script_layout_shortcut_unknown_control_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_shortcut_unknown_control").generic_string()),
+            "controls 简写引用未知控件应加载失败");
+    require(host.lastError().find("未声明控件") != std::string::npos, "简写未知控件错误应包含未声明控件提示");
+}
+
+void test_script_layout_shortcut_duplicate_control_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(
+        !host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_shortcut_duplicate_control").generic_string()),
+        "controls 简写重复引用控件应加载失败");
+    require(host.lastError().find("重复引用控件") != std::string::npos, "简写重复控件错误应包含重复控件提示");
+}
+
+void test_script_layout_shortcut_missing_control_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_shortcut_missing_control").generic_string()),
+            "controls 简写遗漏控件应加载失败");
+    require(host.lastError().find("缺少控件") != std::string::npos, "简写遗漏控件错误应包含缺少控件提示");
+}
+
 void test_script_invalid_label_position_fail()
 {
     protoscope::scripting::ScriptHost host;
     require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_label_position").generic_string()),
             "非法 label_position 应加载失败");
-    require(host.lastError().find("label_position") != std::string::npos,
-            "非法 label_position 错误应包含字段名");
+    require(host.lastError().find("label_position") != std::string::npos, "非法 label_position 错误应包含字段名");
 }
 
 void test_script_runtime_error_logged()
@@ -1596,12 +1674,15 @@ void test_config_default_roundtrip()
             "游标极值吸附策略默认应为 nearest_waveform");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
-    require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Focus,
-            "波形全屏模式默认应为 focus");
+    require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
+            "波形全屏模式默认应为 overlay");
+    require(config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
+            "中文字体默认应只加载常用简中字形");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
     require(config.gui.logHistory.transferFrameLimit == 120000, "逐帧收发历史默认上限应为 120000");
     require(config.gui.logHistory.hostLimit == 5000, "宿主日志默认上限应为 5000");
     require(config.gui.logHistory.scriptLimit == 5000, "脚本日志默认上限应为 5000");
+    require(config.gui.logHistory.requestTraceLimit == 5000, "请求追踪默认上限应为 5000");
     require(config.gui.rawCapture.liveLimitBytes == 64U * 1024U * 1024U, "实时原始缓存默认上限应为 64MiB");
     require(config.gui.rawCapture.recordingQueueLimitBytes == 256U * 1024U * 1024U,
             "完整原始录制队列默认硬上限应为 256MiB");
@@ -1646,10 +1727,12 @@ void test_config_default_roundtrip()
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
     config.gui.wave.fullscreenMode = protoscope::config::GuiWaveFullscreenMode::Overlay;
+    config.gui.font.chineseGlyphRange = protoscope::config::GuiFontChineseGlyphRange::Full;
     config.gui.logHistory.transferRawLimit = 11;
     config.gui.logHistory.transferFrameLimit = 22;
     config.gui.logHistory.hostLimit = 33;
     config.gui.logHistory.scriptLimit = 44;
+    config.gui.logHistory.requestTraceLimit = 55;
     config.gui.rawCapture.liveLimitBytes = 123;
     config.gui.rawCapture.recordingQueueLimitBytes = 456;
     config.gui.wave.resetHistoryOnTimeReset = false;
@@ -1713,6 +1796,8 @@ void test_config_default_roundtrip()
     require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
     require(reloaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式 roundtrip 失败");
+    require(reloaded.config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::Full,
+            "中文字体字形范围 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderVertices == 4096, "波形顶点预算 roundtrip 失败");
     require(reloaded.config.gui.wave.overviewMaxSamples == 128, "波形概览点数 roundtrip 失败");
@@ -1721,6 +1806,7 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.logHistory.transferFrameLimit == 22, "逐帧收发历史上限 roundtrip 失败");
     require(reloaded.config.gui.logHistory.hostLimit == 33, "宿主日志历史上限 roundtrip 失败");
     require(reloaded.config.gui.logHistory.scriptLimit == 44, "脚本日志历史上限 roundtrip 失败");
+    require(reloaded.config.gui.logHistory.requestTraceLimit == 55, "请求追踪历史上限 roundtrip 失败");
     require(reloaded.config.gui.rawCapture.liveLimitBytes == 123, "实时原始缓存上限 roundtrip 失败");
     require(reloaded.config.gui.rawCapture.recordingQueueLimitBytes == 456, "完整原始录制队列上限 roundtrip 失败");
     require(!reloaded.config.gui.wave.resetHistoryOnTimeReset, "波形时间回绕策略 roundtrip 失败");
@@ -1742,6 +1828,15 @@ void test_config_default_roundtrip()
     require(reloaded.config.scripting.fileIo.extraAllowedRoots.size() == 1 &&
                 reloaded.config.scripting.fileIo.extraAllowedRoots[0] == "firmware",
             "Lua 文件 IO 额外授权根 roundtrip 失败");
+
+    const auto blockedParent = tempRoot.path() / "blocked-parent";
+    {
+        std::ofstream blocker(blockedParent, std::ios::binary | std::ios::trunc);
+        blocker << "not a directory";
+    }
+    error.clear();
+    require(!store.save(blockedParent / "protoscope.yaml", config, error), "父路径为文件时配置写回应失败");
+    require(error.find("创建配置目录失败") != std::string::npos, "配置目录创建失败应返回明确错误");
 }
 
 void test_config_repo_default_yaml_loads()
@@ -1760,6 +1855,8 @@ void test_config_repo_default_yaml_loads()
             "默认配置应读取 worker 高水位");
     require(std::abs(loaded.config.scripting.workerBackpressureLowWatermark - 0.3) < 1e-12,
             "默认配置应读取 worker 低水位");
+    require(loaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
+            "源码默认配置应读取 overlay 波形全屏模式");
 }
 
 void test_script_file_io_proto_buffer_roundtrip()
@@ -1884,14 +1981,16 @@ void test_config_wave_mode_invalid_fallback()
     const auto tempPath = tempRoot.path() / "config.yaml";
     std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
     out << "gui:\n"
+           "  font:\n"
+           "    chinese_glyph_range: weird\n"
            "  wave:\n"
            "    control_mode: weird\n"
            "    display_formula: wrong\n"
            "    channel_card_width_mode: weird\n"
-            "    channel_double_click_action: weird\n"
-            "    x_axis_double_click_action: weird\n"
-            "    fullscreen_mode: weird\n"
-            "    channel_card_fixed_width: 0\n"
+           "    channel_double_click_action: weird\n"
+           "    x_axis_double_click_action: weird\n"
+           "    fullscreen_mode: weird\n"
+           "    channel_card_fixed_width: 0\n"
            "    channel_card_adaptive_ratio: -0.5\n"
            "    vertical_auto_fit_multiplier: 0\n";
     out.close();
@@ -1908,8 +2007,10 @@ void test_config_wave_mode_invalid_fallback()
         "非法 channel_double_click_action 应回退到 reset_scale_offset");
     require(loaded.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
             "非法 x_axis_double_click_action 应回退到 fit_full_history");
-    require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Focus,
-            "非法 fullscreen_mode 应回退到 focus");
+    require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
+            "非法 fullscreen_mode 应回退到 overlay");
+    require(loaded.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
+            "非法 chinese_glyph_range 应回退到 simplified_common");
     require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
     require(std::abs(loaded.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "非正自适应比例应回退到 0.22");
     require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "非正 Auto Fit 系数应回退到 1.2");
@@ -1957,6 +2058,9 @@ void test_config_default_protocol_workspace_initializes_half_duplex_demos()
             "半双工主机模板脚本应生成");
     require(std::filesystem::exists(templateRoot / "half_duplex_modbus_slave" / "main.lua"),
             "半双工从机模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "file_dialog" / "main.lua"), "文件对话框模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "send_file" / "main.lua"), "文件发送模板脚本应生成");
+    require(std::filesystem::exists(templateRoot / "request_guarded" / "main.lua"), "受保护请求模板脚本应生成");
     require(std::filesystem::exists(templateRoot / "README.md"), "模板 README 应生成");
     require(std::filesystem::exists(protocolRoot / "stream_types.lua"), "stream schema 类型提示文件应生成");
     require(std::filesystem::exists(protocolRoot / "README.md"), "protocols README 应生成");
@@ -2006,6 +2110,12 @@ void test_config_default_protocol_workspace_fills_missing_resources()
     }
     require(std::filesystem::exists(protocolRoot / "templates" / "lua_waveform_demo" / "main.lua"),
             "已有 protocols 根目录时也应补齐波形模板");
+    require(std::filesystem::exists(protocolRoot / "templates" / "file_dialog" / "main.lua"),
+            "已有 protocols 根目录时也应补齐文件对话框模板");
+    require(std::filesystem::exists(protocolRoot / "templates" / "send_file" / "main.lua"),
+            "已有 protocols 根目录时也应补齐文件发送模板");
+    require(std::filesystem::exists(protocolRoot / "templates" / "request_guarded" / "main.lua"),
+            "已有 protocols 根目录时也应补齐受保护请求模板");
     require(std::filesystem::exists(protocolRoot / "README.md"), "已有 protocols 根目录时应补齐 README");
     require(std::filesystem::exists(protocolRoot / "protoscope_api.lua"),
             "已有 protocols 根目录时应补齐 LuaLS API 提示文件");
@@ -2071,6 +2181,9 @@ void test_script_plot_api_snapshot()
     require(std::abs(setups[0].channels[1].scale - 1.0) < 1e-12, "CH2 scale 默认值错误");
     require(std::abs(setups[0].channels[0].offset - 0.0) < 1e-12, "CH1 offset 解析错误");
     require(std::abs(setups[0].channels[1].offset - 1.0) < 1e-12, "CH2 offset 解析错误");
+    require(setups[0].channels[0].lineWidth.has_value(), "CH1 line_width 应解析为显式线宽");
+    require(std::abs(*setups[0].channels[0].lineWidth - 2.5F) < 1e-6F, "CH1 line_width 解析错误");
+    require(!setups[0].channels[1].lineWidth.has_value(), "CH2 未配置 line_width 时应保留默认样式");
     require(appends.size() == 2, "打开连接后应推送 2 组通道数据");
     require(appends[0].second.samples.size() == 3, "通道采样点数量不正确");
 }
@@ -2642,6 +2755,98 @@ void test_half_duplex_modbus_multi_schema_candidates()
     require(foundBeta, "应按第二个候选 schema 解析 beta_frame");
 }
 
+void test_script_value_table_parse_and_update()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-value-table-parse"));
+    {
+        std::ofstream out(protocolDir.path() / "main.lua");
+        require(out.good(), "value_table 测试脚本应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"safe\", title = \"Safe\", controls = {\n";
+        out << "    { type = \"value_table\", id = \"regs\", label = \"寄存器\", rows = {\n";
+        out << "      { id = 0x1010, label = \"电压\", unit = \"V\", note = \"母线\" },\n";
+        out << "      { id = 0x1020, label = \"状态字\",\n";
+        out << "        bits = {\n";
+        out << "          { bit = 0, label = \"运行\", values = { [0] = \"停\", [1] = \"转\" } },\n";
+        out << "          { bit = 5, label = \"远程\" },\n";
+        out << "        },\n";
+        out << "      },\n";
+        out << "      { start_id = 0x1030, len = 2, labels = { \"温度\", \"湿度\" }, units = { \"C\", \"%\" } },\n";
+        out << "    } },\n";
+        out << "  } } }\n";
+        out << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "value_table 协议应可加载");
+
+    auto controls = host.controlsSnapshot();
+    const protoscope::scripting::ControlDescriptor* desc = nullptr;
+    for (const auto& c : controls) {
+        if (c.id == "regs") {
+            desc = &c;
+            break;
+        }
+    }
+    require(desc != nullptr, "应能找到 regs 控件");
+    require(desc->type == protoscope::scripting::ControlType::ValueTable, "regs 应为 value_table 类型");
+    require(desc->valueRows.size() == 5, "应展开为 5 行: 1 普通 + 2 bit + 2 range");
+    require(desc->valueRows[0].id == 0x1010U, "第一行 id 应为 0x1010");
+    require(desc->valueRows[0].label == "电压", "第一行 label 应为 电压");
+    require(desc->valueRows[0].note == "母线", "第一行 note 应为 母线");
+    require(desc->valueRows[1].bit.has_value() && *desc->valueRows[1].bit == 0, "bit0 行");
+    require(desc->valueRows[2].bit.has_value() && *desc->valueRows[2].bit == 5, "bit5 行");
+    require(desc->valueRows[3].id == 0x1030U, "range 首行 id 应为 0x1030");
+    require(desc->valueRows[4].id == 0x1031U, "range 第二行 id 应为 0x1031");
+    require(desc->valueRowById.size() == 3, "普通+range 行共计 3 个 row id 索引");
+    require(desc->valueBitRowsBySourceId.size() == 1, "应有一个 bit 源 id 索引");
+
+    {
+        using namespace protoscope::scripting;
+        ValueTableValue patch;
+        patch.rows.resize(desc->valueRows.size());
+        patch.rows[0].value = "220.1";
+        patch.rows[0].set = true;
+        host.onControl(sampleCtx(), "regs", patch);
+    }
+
+    const auto snapshot = host.controlStatesSnapshot();
+    const protoscope::scripting::ControlSnapshot* cs = nullptr;
+    for (const auto& s : snapshot) {
+        if (s.descriptor.id == "regs") {
+            cs = &s;
+        }
+    }
+    require(cs != nullptr, "regs 应在快照中");
+    const auto* tv = std::get_if<protoscope::scripting::ValueTableValue>(&cs->value);
+    require(tv != nullptr, "值应为 ValueTableValue");
+    require(tv->rows[0].set && tv->rows[0].value == "220.1", "电压应为 220.1");
+
+    {
+        using namespace protoscope::scripting;
+        ValueTableValue patch;
+        patch.rows.resize(desc->valueRows.size());
+        patch.rows[3].value = "25.3";
+        patch.rows[3].set = true;
+        patch.rows[4].value = "68.1";
+        patch.rows[4].set = true;
+        host.onControl(sampleCtx(), "regs", patch);
+    }
+
+    const auto snapshot2 = host.controlStatesSnapshot();
+    const protoscope::scripting::ControlSnapshot* cs2 = nullptr;
+    for (const auto& s : snapshot2) {
+        if (s.descriptor.id == "regs") {
+            cs2 = &s;
+        }
+    }
+    require(cs2 != nullptr, "regs 应在快照中");
+    const auto* tvFinal = std::get_if<protoscope::scripting::ValueTableValue>(&cs2->value);
+    require(tvFinal != nullptr && tvFinal->rows[3].value == "25.3" && tvFinal->rows[4].value == "68.1",
+        "range 更新应正确写入");
+    require(tvFinal->rows[0].value == "220.1", "之前的普通行更新应保留");
+}
+
 namespace {
 
 static const TestCase kAllTests[] = {
@@ -2653,13 +2858,17 @@ static const TestCase kAllTests[] = {
     {"keyboard_shortcut_table_has_no_scope_duplicates", &test_keyboard_shortcut_table_has_no_scope_duplicates},
     {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
     {"config_external_reload_state", &test_config_external_reload_state},
+    {"request_trace_filter_and_clear", &test_request_trace_filter_and_clear},
+    {"request_trace_csv_export_format", &test_request_trace_csv_export_format},
     {"script_controls_snapshot", &test_script_controls_snapshot},
+    {"script_load_directory_rejected_before_lua_dofile", &test_script_load_directory_rejected_before_lua_dofile},
     {"script_optional_labels_allowed_for_compact_controls", &test_script_optional_labels_allowed_for_compact_controls},
     {"script_required_labels_still_reject_visual_controls", &test_script_required_labels_still_reject_visual_controls},
     {"default_protocol_logs_elf_symbol_info", &test_default_protocol_logs_elf_symbol_info},
     {"script_elf_symbol_combo_descriptor_defaults", &test_script_elf_symbol_combo_descriptor_defaults},
     {"script_elf_symbol_combo_invalid_config_fails", &test_script_elf_symbol_combo_invalid_config_fails},
     {"script_elf_symbol_combo_get_control_returns_table", &test_script_elf_symbol_combo_get_control_returns_table},
+    {"script_value_table_parse_and_update", &test_script_value_table_parse_and_update},
     {"script_on_open_log", &test_script_on_open_log},
     {"script_on_close_log", &test_script_on_close_log},
     {"script_on_error_log", &test_script_on_error_log},
@@ -2668,6 +2877,7 @@ static const TestCase kAllTests[] = {
     {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
     {"script_form_layout_snapshot", &test_script_form_layout_snapshot},
     {"script_flow_layout_snapshot", &test_script_flow_layout_snapshot},
+    {"script_layout_width_controls_shorthand_snapshot", &test_script_layout_width_controls_shorthand_snapshot},
     {"script_duplicate_label_controls_allowed", &test_script_duplicate_label_controls_allowed},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
@@ -2729,6 +2939,13 @@ static const TestCase kAllTests[] = {
     {"script_form_layout_duplicate_control_fail", &test_script_form_layout_duplicate_control_fail},
     {"script_form_layout_missing_control_fail", &test_script_form_layout_missing_control_fail},
     {"script_layout_unknown_type_fail", &test_script_layout_unknown_type_fail},
+    {"script_layout_width_range_fail", &test_script_layout_width_range_fail},
+    {"script_layout_width_type_fail", &test_script_layout_width_type_fail},
+    {"script_layout_width_non_positive_fail", &test_script_layout_width_non_positive_fail},
+    {"script_layout_children_controls_conflict_fail", &test_script_layout_children_controls_conflict_fail},
+    {"script_layout_shortcut_unknown_control_fail", &test_script_layout_shortcut_unknown_control_fail},
+    {"script_layout_shortcut_duplicate_control_fail", &test_script_layout_shortcut_duplicate_control_fail},
+    {"script_layout_shortcut_missing_control_fail", &test_script_layout_shortcut_missing_control_fail},
     {"script_invalid_label_position_fail", &test_script_invalid_label_position_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"script_reload_invalid_types_fail_without_throw", &test_script_reload_invalid_types_fail_without_throw},
@@ -2785,6 +3002,8 @@ static const TestCase kAllTests[] = {
     {"log_filter_keyword_matches_metadata_and_bytes", &test_log_filter_keyword_matches_metadata_and_bytes},
     {"log_filter_combines_status_and_keyword", &test_log_filter_combines_status_and_keyword},
     {"wave_protocol_state_isolated_by_protocol_key", &test_wave_protocol_state_isolated_by_protocol_key},
+    {"wave_protocol_state_missing_wave_node_clears_analysis_markers",
+     &test_wave_protocol_state_missing_wave_node_clears_analysis_markers},
     {"wave_protocol_state_cursor_extreme_snap_policy", &test_wave_protocol_state_cursor_extreme_snap_policy},
     {"dock_visibility_state_isolated_by_protocol_key", &test_dock_visibility_state_isolated_by_protocol_key},
     {"dock_visibility_state_decode_missing_fields_defaults",
@@ -2897,6 +3116,21 @@ static const TestCase kAllTests[] = {
      &test_application_clear_elf_static_address_file_resets_queries},
     {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
     {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
+    {"application_session_package_export_contains_replay_assets",
+     &test_application_session_package_export_contains_replay_assets},
+    {"application_session_package_exports_protocol_directory_and_import_requires_helper",
+     &test_application_session_package_exports_protocol_directory_and_import_requires_helper},
+    {"application_session_package_import_rejects_unsafe_entries",
+     &test_application_session_package_import_rejects_unsafe_entries},
+    {"application_wave_analysis_report_exports_summary_and_markers",
+     &test_application_wave_analysis_report_exports_summary_and_markers},
+    {"application_session_package_import_without_markers_clears_existing_state",
+     &test_application_session_package_import_without_markers_clears_existing_state},
+    {"application_session_package_import_invalid_protocol_rolls_back_runtime",
+     &test_application_session_package_import_invalid_protocol_rolls_back_runtime},
+    {"application_raw_capture_replay_timeline_steps_events",
+     &test_application_raw_capture_replay_timeline_steps_events},
+    {"application_loads_protocol_action_templates", &test_application_loads_protocol_action_templates},
     {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
     {"application_live_raw_capture_trim_keeps_runtime_profile_event",
      &test_application_live_raw_capture_trim_keeps_runtime_profile_event},
@@ -2924,6 +3158,8 @@ static const TestCase kAllTests[] = {
      &test_application_switching_to_parsed_view_can_replay_old_raw_history},
     {"application_rx_events_are_processed_with_budget", &test_application_rx_events_are_processed_with_budget},
     {"application_large_rx_event_drains_by_byte_budget", &test_application_large_rx_event_drains_by_byte_budget},
+    {"application_comm_pressure_debug_log_respects_log_level",
+     &test_application_comm_pressure_debug_log_respects_log_level},
     {"application_responsive_disconnect_discards_realtime_backlog",
      &test_application_responsive_disconnect_discards_realtime_backlog},
     {"application_complete_disconnect_keeps_realtime_backlog",
@@ -2964,7 +3200,8 @@ static const TestCase kAllTests[] = {
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_display_data_uses_visible_window_only", &test_wave_display_data_uses_visible_window_only},
     {"wave_main_render_data_uses_viewport_window", &test_wave_main_render_data_uses_viewport_window},
-    {"wave_main_render_data_uses_sample_frequency_viewport", &test_wave_main_render_data_uses_sample_frequency_viewport},
+    {"wave_main_render_data_uses_sample_frequency_viewport",
+     &test_wave_main_render_data_uses_sample_frequency_viewport},
     {"wave_overview_display_data_is_budgeted", &test_wave_overview_display_data_is_budgeted},
     {"wave_overview_bounds_use_full_history_window", &test_wave_overview_bounds_use_full_history_window},
     {"wave_x_axis_double_click_bounds_selects_full_history",
@@ -2999,6 +3236,9 @@ static const TestCase kAllTests[] = {
      &test_application_raw_capture_import_updates_last_pump_diagnostics},
     {"raw_capture_file_rejects_trailing_bytes", &test_raw_capture_file_rejects_trailing_bytes},
     {"raw_capture_file_rejects_profile_set_without_length", &test_raw_capture_file_rejects_profile_set_without_length},
+    {"session_package_roundtrip_preserves_binary_entries", &test_session_package_roundtrip_preserves_binary_entries},
+    {"session_package_rejects_truncated_entry", &test_session_package_rejects_truncated_entry},
+    {"session_package_rejects_excessive_entry_count", &test_session_package_rejects_excessive_entry_count},
     {"elf_static_view_bridge_loads_dump_json_and_queries_symbols",
      &test_elf_static_view_bridge_loads_dump_json_and_queries_symbols},
     {"elf_static_view_bridge_finds_exact_label_only", &test_elf_static_view_bridge_finds_exact_label_only},

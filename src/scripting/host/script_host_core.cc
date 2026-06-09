@@ -115,6 +115,14 @@ std::string txKindName(TxRequestKind kind)
     return "send";
 }
 
+std::string txRequestApiName(TxRequestKind kind, bool guarded)
+{
+    if (guarded) {
+        return "proto.request_guarded";
+    }
+    return kind == TxRequestKind::Request ? "proto.request" : "proto.send";
+}
+
 std::string txEventStateName(TxEventState state)
 {
     switch (state) {
@@ -189,6 +197,8 @@ std::optional<std::array<float, 4>> parseColorText(std::string_view text)
     return std::array<float, 4>{*red, *green, *blue, *alpha};
 }
 
+ValueTableValue defaultValueTableFor(const ControlDescriptor& descriptor);
+
 ControlValue defaultValueFor(const ControlDescriptor& descriptor)
 {
     switch (descriptor.type) {
@@ -206,6 +216,8 @@ ControlValue defaultValueFor(const ControlDescriptor& descriptor)
             return descriptor.comboDefaultIndex;
         case ControlType::ElfSymbolCombo:
             return ElfSymbolValue{};
+        case ControlType::ValueTable:
+            return defaultValueTableFor(descriptor);
     }
     return false;
 }
@@ -297,6 +309,9 @@ std::optional<ControlType> parseControlType(std::string_view value)
     if (value == "elf_symbol_combo") {
         return ControlType::ElfSymbolCombo;
     }
+    if (value == "value_table") {
+        return ControlType::ValueTable;
+    }
     return std::nullopt;
 }
 
@@ -315,6 +330,300 @@ bool controlAllowsEmptyLabel(ControlType type)
 {
     return type == ControlType::Checkbox || type == ControlType::InputText || type == ControlType::InputInt ||
            type == ControlType::InputFloat;
+}
+
+ValueTableValue defaultValueTableFor(const ControlDescriptor& descriptor)
+{
+    ValueTableValue value;
+    value.rows.resize(descriptor.valueRows.size());
+    return value;
+}
+
+std::optional<std::uint32_t> readLuaU32(const sol::object& object, std::string_view fieldName, std::string& error)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        error = std::string(fieldName) + " 必须是整数";
+        return std::nullopt;
+    }
+    if (!object.is<int>() && !object.is<double>()) {
+        error = std::string(fieldName) + " 必须是整数";
+        return std::nullopt;
+    }
+
+    const auto number = object.as<double>();
+    if (!std::isfinite(number) || number < 0.0 ||
+        number > static_cast<double>(std::numeric_limits<std::uint32_t>::max()) || std::floor(number) != number) {
+        error = std::string(fieldName) + " 必须是 0..4294967295 范围内的整数";
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(number);
+}
+
+std::optional<std::uint8_t> readLuaBitIndex(const sol::object& object, std::string& error)
+{
+    const auto value = readLuaU32(object, "value_table bit", error);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    if (*value > 15U) {
+        error = "value_table bit 仅支持 0..15";
+        return std::nullopt;
+    }
+    return static_cast<std::uint8_t>(*value);
+}
+
+std::string scalarLuaValueToDisplayString(const sol::object& object)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return {};
+    }
+    if (object.is<std::string>()) {
+        return object.as<std::string>();
+    }
+    if (object.is<bool>()) {
+        return object.as<bool>() ? "true" : "false";
+    }
+    if (object.is<int>()) {
+        return std::to_string(object.as<int>());
+    }
+    if (object.is<double>()) {
+        std::ostringstream builder;
+        builder << object.as<double>();
+        return builder.str();
+    }
+    return serializeLuaObject(object, 0);
+}
+
+std::optional<std::uint16_t> luaU16Value(const sol::object& object, std::string& error)
+{
+    const auto value = readLuaU32(object, "value_table bit 源值", error);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    if (*value > 0xFFFFU) {
+        error = "value_table bit 源值必须是 U16";
+        return std::nullopt;
+    }
+    return static_cast<std::uint16_t>(*value);
+}
+
+void ensureValueTableSize(const ControlDescriptor& descriptor, ValueTableValue& value)
+{
+    value.rows.resize(descriptor.valueRows.size());
+}
+
+void setValueTableCell(const ControlDescriptor& descriptor,
+                       ValueTableValue& value,
+                       const std::size_t rowIndex,
+                       std::string text)
+{
+    if (rowIndex >= descriptor.valueRows.size()) {
+        return;
+    }
+    ensureValueTableSize(descriptor, value);
+    value.rows[rowIndex].value = std::move(text);
+    value.rows[rowIndex].set = true;
+}
+
+void applyValueTableBitRows(const ControlDescriptor& descriptor,
+                            ValueTableValue& value,
+                            const std::uint32_t sourceId,
+                            const std::uint16_t sourceValue)
+{
+    const auto bitRows = descriptor.valueBitRowsBySourceId.find(sourceId);
+    if (bitRows == descriptor.valueBitRowsBySourceId.end()) {
+        return;
+    }
+
+    for (const auto rowIndex : bitRows->second) {
+        if (rowIndex >= descriptor.valueRows.size()) {
+            continue;
+        }
+        const auto& row = descriptor.valueRows[rowIndex];
+        if (!row.bit.has_value()) {
+            continue;
+        }
+        const auto bitValue = ((sourceValue >> *row.bit) & 0x1U) == 0U ? 0 : 1;
+        setValueTableCell(descriptor, value, rowIndex, bitValue == 0 ? row.bitValues.zero : row.bitValues.one);
+    }
+}
+
+bool applyValueTableLuaRegisterValue(const ControlDescriptor& descriptor,
+                                     ValueTableValue& value,
+                                     const std::uint32_t id,
+                                     const sol::object& object,
+                                     std::string& error)
+{
+    const auto rowIter = descriptor.valueRowById.find(id);
+    if (rowIter != descriptor.valueRowById.end()) {
+        setValueTableCell(descriptor, value, rowIter->second, scalarLuaValueToDisplayString(object));
+    }
+
+    if (descriptor.valueBitRowsBySourceId.find(id) != descriptor.valueBitRowsBySourceId.end()) {
+        const auto sourceValue = luaU16Value(object, error);
+        if (!sourceValue.has_value()) {
+            return false;
+        }
+        applyValueTableBitRows(descriptor, value, id, *sourceValue);
+    }
+    return true;
+}
+
+std::optional<ValueTableValue> valueTableValueFromLuaPatch(const ControlDescriptor& descriptor,
+                                                           const sol::object& object,
+                                                           std::string& error)
+{
+    ValueTableValue patch = defaultValueTableFor(descriptor);
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return patch;
+    }
+    if (!object.is<sol::table>()) {
+        error = "value_table 控件仅支持 table";
+        return std::nullopt;
+    }
+
+    const auto table = object.as<sol::table>();
+    const sol::object startIdObject = table["start_id"];
+    const sol::object valuesObject = table["values"];
+    if (startIdObject.valid() && startIdObject.get_type() != sol::type::lua_nil) {
+        const auto startId = readLuaU32(startIdObject, "value_table start_id", error);
+        if (!startId.has_value()) {
+            return std::nullopt;
+        }
+        if (!valuesObject.valid() || !valuesObject.is<sol::table>()) {
+            error = "value_table range 更新必须提供 values 数组";
+            return std::nullopt;
+        }
+        const auto values = valuesObject.as<sol::table>();
+        for (std::size_t index = 1; index <= values.size(); ++index) {
+            if (*startId > std::numeric_limits<std::uint32_t>::max() - static_cast<std::uint32_t>(index - 1U)) {
+                error = "value_table range 更新 id 超出 U32";
+                return std::nullopt;
+            }
+            const auto id = *startId + static_cast<std::uint32_t>(index - 1U);
+            if (!applyValueTableLuaRegisterValue(descriptor, patch, id, values[index], error)) {
+                return std::nullopt;
+            }
+        }
+        return patch;
+    }
+
+    for (const auto& pair : table) {
+        const auto id = readLuaU32(pair.first, "value_table row id", error);
+        if (!id.has_value()) {
+            return std::nullopt;
+        }
+        if (!applyValueTableLuaRegisterValue(descriptor, patch, *id, pair.second, error)) {
+            return std::nullopt;
+        }
+    }
+    return patch;
+}
+
+void mergeValueTableValue(const ControlDescriptor& descriptor, ValueTableValue& target, const ValueTableValue& patch)
+{
+    ensureValueTableSize(descriptor, target);
+    for (std::size_t index = 0; index < patch.rows.size() && index < target.rows.size(); ++index) {
+        if (!patch.rows[index].set) {
+            continue;
+        }
+        target.rows[index] = patch.rows[index];
+    }
+}
+
+std::string streamIntegerToDisplayString(std::int64_t value)
+{
+    return std::to_string(value);
+}
+
+std::string streamDoubleToDisplayString(double value)
+{
+    std::ostringstream builder;
+    builder << value;
+    return builder.str();
+}
+
+bool applyValueTableIntegerRegisterValue(const ControlDescriptor& descriptor,
+                                         ValueTableValue& value,
+                                         const std::uint32_t id,
+                                         const std::int64_t stored)
+{
+    const auto rowIter = descriptor.valueRowById.find(id);
+    if (rowIter != descriptor.valueRowById.end()) {
+        setValueTableCell(descriptor, value, rowIter->second, streamIntegerToDisplayString(stored));
+    }
+    if (descriptor.valueBitRowsBySourceId.find(id) == descriptor.valueBitRowsBySourceId.end()) {
+        return true;
+    }
+    if (stored < 0 || stored > 0xFFFF) {
+        return false;
+    }
+    applyValueTableBitRows(descriptor, value, id, static_cast<std::uint16_t>(stored));
+    return true;
+}
+
+bool applyValueTableDoubleRegisterValue(const ControlDescriptor& descriptor,
+                                        ValueTableValue& value,
+                                        const std::uint32_t id,
+                                        const double stored)
+{
+    const auto rowIter = descriptor.valueRowById.find(id);
+    if (rowIter != descriptor.valueRowById.end()) {
+        setValueTableCell(descriptor, value, rowIter->second, streamDoubleToDisplayString(stored));
+    }
+    if (descriptor.valueBitRowsBySourceId.find(id) == descriptor.valueBitRowsBySourceId.end()) {
+        return true;
+    }
+    if (!std::isfinite(stored) || stored < 0.0 || stored > 65535.0 || std::floor(stored) != stored) {
+        return false;
+    }
+    applyValueTableBitRows(descriptor, value, id, static_cast<std::uint16_t>(stored));
+    return true;
+}
+
+std::optional<std::uint32_t> streamFieldU32(const StreamFieldValue& field)
+{
+    const auto value = field.integerScalar();
+    if (!value.has_value() || *value < 0 ||
+        *value > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(*value);
+}
+
+bool applyStreamValueTargetValues(const ControlDescriptor& descriptor,
+                                  ValueTableValue& patch,
+                                  const std::uint32_t startId,
+                                  const StreamFieldValue& values)
+{
+    if (const auto* integers = std::get_if<std::vector<std::int64_t>>(&values.value); integers != nullptr) {
+        for (std::size_t index = 0; index < integers->size(); ++index) {
+            if (startId > std::numeric_limits<std::uint32_t>::max() - static_cast<std::uint32_t>(index)) {
+                return false;
+            }
+            if (!applyValueTableIntegerRegisterValue(
+                    descriptor, patch, startId + static_cast<std::uint32_t>(index), (*integers)[index])) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (const auto* doubles = std::get_if<std::vector<double>>(&values.value); doubles != nullptr) {
+        for (std::size_t index = 0; index < doubles->size(); ++index) {
+            if (startId > std::numeric_limits<std::uint32_t>::max() - static_cast<std::uint32_t>(index)) {
+                return false;
+            }
+            if (!applyValueTableDoubleRegisterValue(
+                    descriptor, patch, startId + static_cast<std::uint32_t>(index), (*doubles)[index])) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (const auto integer = values.integerScalar(); integer.has_value()) {
+        return applyValueTableIntegerRegisterValue(descriptor, patch, startId, *integer);
+    }
+    return false;
 }
 
 bool isValidDockAnchor(std::string_view value)
@@ -403,10 +712,345 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
             }
             return symbol;
         }
+        case ControlType::ValueTable:
+            return valueTableValueFromLuaPatch(descriptor, object, error);
     }
 
     error = "控件 " + descriptor.id + " 类型不匹配，实际收到 " + luaTypeName(object.get_type());
     return std::nullopt;
+}
+
+bool applyControlLabelPosition(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    const sol::object labelPositionObject = table["label_position"];
+    if (!labelPositionObject.valid() || labelPositionObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!labelPositionObject.is<std::string>()) {
+        error = "控件 label_position 必须是字符串 'left' 或 'right'";
+        return false;
+    }
+    const auto labelPosition = parseControlLabelPosition(labelPositionObject.as<std::string>());
+    if (!labelPosition.has_value()) {
+        error = "控件 label_position 仅支持 'left' 或 'right'";
+        return false;
+    }
+    descriptor.labelPosition = *labelPosition;
+    return true;
+}
+
+bool validateControlIdentity(const ControlDescriptor& descriptor, std::string& error)
+{
+    if (descriptor.id.empty()) {
+        error = "控件必须提供 id";
+        return false;
+    }
+    if (descriptor.label.empty() && !controlAllowsEmptyLabel(descriptor.type)) {
+        // 核心流程：只有可用控件自身形态表达含义的紧凑型控件允许隐藏可见 label。
+        error = "控件必须提供 label";
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::vector<std::string>> parseComboOptions(const sol::table& table, std::string& error)
+{
+    const sol::object optionsObject = table["options"];
+    if (!optionsObject.valid() || !optionsObject.is<sol::table>()) {
+        error = "combo 控件必须提供 options";
+        return std::nullopt;
+    }
+
+    std::vector<std::string> optionsList;
+    const auto options = optionsObject.as<sol::table>();
+    for (std::size_t index = 1; index <= options.size(); ++index) {
+        const sol::object option = options[index];
+        if (!option.is<std::string>()) {
+            error = "combo options 必须全部是 string";
+            return std::nullopt;
+        }
+        optionsList.push_back(option.as<std::string>());
+    }
+
+    if (optionsList.empty()) {
+        error = "combo options 不能为空";
+        return std::nullopt;
+    }
+    return optionsList;
+}
+
+bool applyComboControlConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    auto options = parseComboOptions(table, error);
+    if (!options.has_value()) {
+        return false;
+    }
+    descriptor.comboOptions = std::move(*options);
+
+    const int defaultIndex = table.get_or("default", 1);
+    descriptor.comboDefaultIndex = std::clamp(defaultIndex, 1, static_cast<int>(descriptor.comboOptions.size())) - 1;
+    return true;
+}
+
+bool applyElfSymbolComboConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    const sol::object debounceObject = table["debounce_ms"];
+    if (debounceObject.valid() && debounceObject.get_type() != sol::type::lua_nil) {
+        descriptor.debounceMs = debounceObject.as<int>();
+        descriptor.debounceMsConfigured = true;
+    }
+    const sol::object limitObject = table["limit"];
+    int limit = static_cast<int>(descriptor.limit);
+    if (limitObject.valid() && limitObject.get_type() != sol::type::lua_nil) {
+        limit = limitObject.as<int>();
+        descriptor.limitConfigured = true;
+    }
+    if (descriptor.debounceMs <= 0) {
+        error = "elf_symbol_combo debounce_ms 必须大于 0";
+        return false;
+    }
+    if (limit <= 0) {
+        error = "elf_symbol_combo limit 必须大于 0";
+        return false;
+    }
+    descriptor.limit = static_cast<std::size_t>(limit);
+    return true;
+}
+
+bool appendValueTableRow(ControlDescriptor& descriptor, ValueTableRowDescriptor row, std::string& error)
+{
+    if (row.label.empty()) {
+        error = "value_table 行必须提供 label";
+        return false;
+    }
+
+    const auto rowIndex = descriptor.valueRows.size();
+    if (row.bit.has_value()) {
+        descriptor.valueBitRowsBySourceId[row.sourceId].push_back(rowIndex);
+    } else {
+        if (descriptor.valueRowById.find(row.id) != descriptor.valueRowById.end()) {
+            error = "value_table row id 不能重复: " + std::to_string(row.id);
+            return false;
+        }
+        descriptor.valueRowById.emplace(row.id, rowIndex);
+    }
+    descriptor.valueRows.push_back(std::move(row));
+    return true;
+}
+
+std::vector<std::string> readValueTableStringArray(const sol::object& object, const char* fieldName, std::string& error)
+{
+    std::vector<std::string> values;
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return values;
+    }
+    if (!object.is<sol::table>()) {
+        error = std::string("value_table ") + fieldName + " 必须是 string 数组";
+        return {};
+    }
+
+    const auto table = object.as<sol::table>();
+    values.reserve(table.size());
+    for (std::size_t index = 1; index <= table.size(); ++index) {
+        const sol::object value = table[index];
+        if (!value.is<std::string>()) {
+            error = std::string("value_table ") + fieldName + " 必须全部是 string";
+            return {};
+        }
+        values.push_back(value.as<std::string>());
+    }
+    return values;
+}
+
+bool applyValueTableBitValueLabels(ValueTableRowDescriptor& row, const sol::object& valuesObject, std::string& error)
+{
+    if (!valuesObject.valid() || valuesObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!valuesObject.is<sol::table>()) {
+        error = "value_table bit values 必须是 table";
+        return false;
+    }
+
+    for (const auto& pair : valuesObject.as<sol::table>()) {
+        const auto key = readLuaU32(pair.first, "value_table bit values key", error);
+        if (!key.has_value()) {
+            return false;
+        }
+        if (*key > 1U || !pair.second.is<std::string>()) {
+            error = "value_table bit values 仅支持 [0]/[1] = string";
+            return false;
+        }
+        if (*key == 0U) {
+            row.bitValues.zero = pair.second.as<std::string>();
+        } else {
+            row.bitValues.one = pair.second.as<std::string>();
+        }
+    }
+    return true;
+}
+
+bool applyValueTableRangeRows(ControlDescriptor& descriptor, const sol::table& rowTable, std::string& error)
+{
+    const auto startId = readLuaU32(rowTable["start_id"], "value_table start_id", error);
+    if (!startId.has_value()) {
+        return false;
+    }
+    const auto len = readLuaU32(rowTable["len"], "value_table len", error);
+    if (!len.has_value() || *len == 0U) {
+        error = "value_table range len 必须大于 0";
+        return false;
+    }
+    if (*startId > std::numeric_limits<std::uint32_t>::max() - (*len - 1U)) {
+        error = "value_table range id 超出 U32";
+        return false;
+    }
+
+    auto labels = readValueTableStringArray(rowTable["labels"], "labels", error);
+    if (!error.empty()) {
+        return false;
+    }
+    auto units = readValueTableStringArray(rowTable["units"], "units", error);
+    if (!error.empty()) {
+        return false;
+    }
+    if (labels.size() < *len) {
+        error = "value_table range labels 数量必须不少于 len";
+        return false;
+    }
+
+    for (std::uint32_t offset = 0; offset < *len; ++offset) {
+        ValueTableRowDescriptor row;
+        row.id = *startId + offset;
+        row.sourceId = row.id;
+        row.label = labels[offset];
+        if (offset < units.size()) {
+            row.unit = units[offset];
+        }
+        if (!appendValueTableRow(descriptor, std::move(row), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool applyValueTableBitRows(ControlDescriptor& descriptor,
+                            const sol::table& rowTable,
+                            const std::uint32_t sourceId,
+                            std::string& error)
+{
+    const sol::object bitsObject = rowTable["bits"];
+    if (!bitsObject.valid() || !bitsObject.is<sol::table>()) {
+        error = "value_table bits 必须是 table";
+        return false;
+    }
+
+    const auto bits = bitsObject.as<sol::table>();
+    for (std::size_t index = 1; index <= bits.size(); ++index) {
+        const sol::object bitObject = bits[index];
+        if (!bitObject.is<sol::table>()) {
+            error = "value_table bits 元素必须是 table";
+            return false;
+        }
+        const auto bitTable = bitObject.as<sol::table>();
+        ValueTableRowDescriptor row;
+        row.id = sourceId;
+        row.sourceId = sourceId;
+        row.bit = readLuaBitIndex(bitTable["bit"], error);
+        if (!row.bit.has_value()) {
+            return false;
+        }
+        row.label = readStringField(bitTable, "label");
+        row.unit = readStringField(bitTable, "unit");
+        row.note = readStringField(bitTable, "note");
+        if (!applyValueTableBitValueLabels(row, bitTable["values"], error)) {
+            return false;
+        }
+        if (!appendValueTableRow(descriptor, std::move(row), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool applyValueTableControlConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    const sol::object rowsObject = table["rows"];
+    if (!rowsObject.valid() || !rowsObject.is<sol::table>()) {
+        error = "value_table 控件必须提供 rows";
+        return false;
+    }
+
+    const auto rows = rowsObject.as<sol::table>();
+    for (std::size_t index = 1; index <= rows.size(); ++index) {
+        const sol::object rowObject = rows[index];
+        if (!rowObject.is<sol::table>()) {
+            error = "value_table rows 元素必须是 table";
+            return false;
+        }
+        const auto rowTable = rowObject.as<sol::table>();
+        const sol::object startIdObject = rowTable["start_id"];
+        if (startIdObject.valid() && startIdObject.get_type() != sol::type::lua_nil) {
+            if (!applyValueTableRangeRows(descriptor, rowTable, error)) {
+                return false;
+            }
+            continue;
+        }
+
+        const auto id = readLuaU32(rowTable["id"], "value_table row id", error);
+        if (!id.has_value()) {
+            return false;
+        }
+        const sol::object bitsObject = rowTable["bits"];
+        if (bitsObject.valid() && bitsObject.get_type() != sol::type::lua_nil) {
+            if (!applyValueTableBitRows(descriptor, rowTable, *id, error)) {
+                return false;
+            }
+            continue;
+        }
+
+        ValueTableRowDescriptor row;
+        row.id = *id;
+        row.sourceId = *id;
+        row.label = readStringField(rowTable, "label");
+        row.unit = readStringField(rowTable, "unit");
+        row.note = readStringField(rowTable, "note");
+        if (!appendValueTableRow(descriptor, std::move(row), error)) {
+            return false;
+        }
+    }
+    if (descriptor.valueRows.empty()) {
+        error = "value_table rows 不能为空";
+        return false;
+    }
+    return true;
+}
+
+bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    switch (descriptor.type) {
+        case ControlType::Button:
+            return true;
+        case ControlType::InputText:
+            descriptor.textDefault = readStringField(table, "default");
+            return true;
+        case ControlType::InputInt:
+            descriptor.intDefault = table.get_or("default", 0);
+            return true;
+        case ControlType::InputFloat:
+            descriptor.floatDefault = table.get_or("default", 0.0F);
+            return true;
+        case ControlType::Checkbox:
+            descriptor.boolDefault = table.get_or("default", false);
+            return true;
+        case ControlType::Combo:
+            return applyComboControlConfig(descriptor, table, error);
+        case ControlType::ElfSymbolCombo:
+            return applyElfSymbolComboConfig(descriptor, table, error);
+        case ControlType::ValueTable:
+            return applyValueTableControlConfig(descriptor, table, error);
+    }
+    return true;
 }
 
 sol::object controlValueToLua(sol::state_view lua, const ControlDescriptor* descriptor, const ControlValue& value)
@@ -427,10 +1071,32 @@ sol::object controlValueToLua(sol::state_view lua, const ControlDescriptor* desc
         return sol::make_object(lua, table);
     }
 
+    if (descriptor->type == ControlType::ValueTable) {
+        const auto* tableValue = std::get_if<ValueTableValue>(&value);
+        if (tableValue == nullptr) {
+            return sol::make_object(lua, sol::lua_nil);
+        }
+        sol::table rows = lua.create_table();
+        for (std::size_t index = 0; index < descriptor->valueRows.size(); ++index) {
+            const auto& row = descriptor->valueRows[index];
+            sol::table item = lua.create_table();
+            item["label"] = row.label;
+            item["value"] = index < tableValue->rows.size() && tableValue->rows[index].set
+                                ? tableValue->rows[index].value
+                                : std::string();
+            item["unit"] = row.unit;
+            if (!row.note.empty()) {
+                item["note"] = row.note;
+            }
+            rows[index + 1] = item;
+        }
+        return sol::make_object(lua, rows);
+    }
+
     return std::visit(
         [&lua](const auto& current) -> sol::object {
             using ValueType = std::decay_t<decltype(current)>;
-            if constexpr (std::is_same_v<ValueType, ElfSymbolValue>) {
+            if constexpr (std::is_same_v<ValueType, ElfSymbolValue> || std::is_same_v<ValueType, ValueTableValue>) {
                 return sol::make_object(lua, sol::lua_nil);
             } else {
                 return sol::make_object(lua, current);
@@ -500,94 +1166,9 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     descriptor.type = *controlType;
     descriptor.id = readStringField(table, "id");
     descriptor.label = readStringField(table, "label");
-    const sol::object labelPositionObject = table["label_position"];
-    if (labelPositionObject.valid() && labelPositionObject.get_type() != sol::type::lua_nil) {
-        if (!labelPositionObject.is<std::string>()) {
-            error = "控件 label_position 必须是字符串 'left' 或 'right'";
-            return std::nullopt;
-        }
-        const auto labelPosition = parseControlLabelPosition(labelPositionObject.as<std::string>());
-        if (!labelPosition.has_value()) {
-            error = "控件 label_position 仅支持 'left' 或 'right'";
-            return std::nullopt;
-        }
-        descriptor.labelPosition = *labelPosition;
-    }
-    if (descriptor.id.empty()) {
-        error = "控件必须提供 id";
+    if (!applyControlLabelPosition(descriptor, table, error) || !validateControlIdentity(descriptor, error) ||
+        !applyControlTypeConfig(descriptor, table, error)) {
         return std::nullopt;
-    }
-    if (descriptor.label.empty() && !controlAllowsEmptyLabel(descriptor.type)) {
-        // 核心流程：只有可用控件自身形态表达含义的紧凑型控件允许隐藏可见 label。
-        error = "控件必须提供 label";
-        return std::nullopt;
-    }
-
-    switch (descriptor.type) {
-        case ControlType::Button:
-            break;
-        case ControlType::InputText:
-            descriptor.textDefault = readStringField(table, "default");
-            break;
-        case ControlType::InputInt:
-            descriptor.intDefault = table.get_or("default", 0);
-            break;
-        case ControlType::InputFloat:
-            descriptor.floatDefault = table.get_or("default", 0.0F);
-            break;
-        case ControlType::Checkbox:
-            descriptor.boolDefault = table.get_or("default", false);
-            break;
-        case ControlType::Combo: {
-            const sol::object optionsObject = table["options"];
-            if (!optionsObject.valid() || !optionsObject.is<sol::table>()) {
-                error = "combo 控件必须提供 options";
-                return std::nullopt;
-            }
-
-            const auto options = optionsObject.as<sol::table>();
-            for (std::size_t index = 1; index <= options.size(); ++index) {
-                const sol::object option = options[index];
-                if (!option.is<std::string>()) {
-                    error = "combo options 必须全部是 string";
-                    return std::nullopt;
-                }
-                descriptor.comboOptions.push_back(option.as<std::string>());
-            }
-
-            if (descriptor.comboOptions.empty()) {
-                error = "combo options 不能为空";
-                return std::nullopt;
-            }
-
-            const int defaultIndex = table.get_or("default", 1);
-            descriptor.comboDefaultIndex =
-                std::clamp(defaultIndex, 1, static_cast<int>(descriptor.comboOptions.size())) - 1;
-            break;
-        }
-        case ControlType::ElfSymbolCombo: {
-            const sol::object debounceObject = table["debounce_ms"];
-            if (debounceObject.valid() && debounceObject.get_type() != sol::type::lua_nil) {
-                descriptor.debounceMs = debounceObject.as<int>();
-                descriptor.debounceMsConfigured = true;
-            }
-            const sol::object limitObject = table["limit"];
-            int limit = static_cast<int>(descriptor.limit);
-            if (limitObject.valid() && limitObject.get_type() != sol::type::lua_nil) {
-                limit = limitObject.as<int>();
-                descriptor.limitConfigured = true;
-            }
-            if (descriptor.debounceMs <= 0) {
-                error = "elf_symbol_combo debounce_ms 必须大于 0";
-                return std::nullopt;
-            }
-            if (limit <= 0) {
-                error = "elf_symbol_combo limit 必须大于 0";
-                return std::nullopt;
-            }
-            descriptor.limit = static_cast<std::size_t>(limit);
-            break;
-        }
     }
 
     return descriptor;
@@ -613,11 +1194,8 @@ std::optional<std::vector<ControlDescriptor>> parseControlList(const sol::object
     return controls;
 }
 
-bool readOptionalBoolField(const sol::table& table,
-                           std::string_view field,
-                           bool defaultValue,
-                           const std::string& path,
-                           std::string& error)
+bool readOptionalBoolField(
+    const sol::table& table, std::string_view field, bool defaultValue, const std::string& path, std::string& error)
 {
     const sol::object value = table[std::string(field)];
     if (!value.valid() || value.get_type() == sol::type::lua_nil) {
@@ -630,11 +1208,8 @@ bool readOptionalBoolField(const sol::table& table,
     return value.as<bool>();
 }
 
-std::optional<float> readOptionalFloatField(const sol::table& table,
-                                            std::string_view field,
-                                            float defaultValue,
-                                            const std::string& path,
-                                            std::string& error)
+std::optional<float> readOptionalFloatField(
+    const sol::table& table, std::string_view field, float defaultValue, const std::string& path, std::string& error)
 {
     const sol::object value = table[std::string(field)];
     if (!value.valid() || value.get_type() == sol::type::lua_nil) {
@@ -650,6 +1225,51 @@ std::optional<float> readOptionalFloatField(const sol::table& table,
         return std::nullopt;
     }
     return static_cast<float>(number);
+}
+
+bool hasLuaTableField(const sol::table& table, std::string_view field)
+{
+    const sol::object value = table[std::string(field)];
+    return value.valid() && value.get_type() != sol::type::lua_nil;
+}
+
+bool readOptionalPositiveFloatField(const sol::table& table,
+                                    std::string_view field,
+                                    const std::string& path,
+                                    std::optional<float>& result,
+                                    std::string& error)
+{
+    const sol::object value = table[std::string(field)];
+    if (!value.valid() || value.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!value.is<double>() && !value.is<int>()) {
+        error = path + "." + std::string(field) + " 必须是 number";
+        return false;
+    }
+    const double number = value.is<double>() ? value.as<double>() : static_cast<double>(value.as<int>());
+    if (!std::isfinite(number) || number <= 0.0) {
+        error = path + "." + std::string(field) + " 必须是正数";
+        return false;
+    }
+    result = static_cast<float>(number);
+    return true;
+}
+
+bool readLayoutControlWidthFields(const sol::table& table,
+                                  const std::string& path,
+                                  LayoutNodeDescriptor& node,
+                                  std::string& error)
+{
+    if (!readOptionalPositiveFloatField(table, "min_width", path, node.minWidth, error) ||
+        !readOptionalPositiveFloatField(table, "max_width", path, node.maxWidth, error)) {
+        return false;
+    }
+    if (node.minWidth.has_value() && node.maxWidth.has_value() && *node.minWidth > *node.maxWidth) {
+        error = path + ".min_width 不能大于 max_width";
+        return false;
+    }
+    return true;
 }
 
 bool registerLayoutControlUse(const DockDescriptor& dock,
@@ -678,13 +1298,12 @@ bool registerLayoutControlUse(const DockDescriptor& dock,
     return true;
 }
 
-std::optional<LayoutNodeDescriptor> parseLayoutNode(
-    const DockDescriptor& dock,
-    const sol::object& object,
-    const std::unordered_map<std::string, std::size_t>& controlsById,
-    std::unordered_set<std::string>& usedControls,
-    const std::string& path,
-    std::string& error);
+std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
+                                                    const sol::object& object,
+                                                    const std::unordered_map<std::string, std::size_t>& controlsById,
+                                                    std::unordered_set<std::string>& usedControls,
+                                                    const std::string& path,
+                                                    std::string& error);
 
 std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     const DockDescriptor& dock,
@@ -695,7 +1314,8 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     std::string& error)
 {
     const sol::object childrenObject = table["children"];
-    if (!childrenObject.valid() || childrenObject.get_type() == sol::type::lua_nil || !childrenObject.is<sol::table>()) {
+    if (!childrenObject.valid() || childrenObject.get_type() == sol::type::lua_nil ||
+        !childrenObject.is<sol::table>()) {
         error = path + ".children 必须是非空数组";
         return std::nullopt;
     }
@@ -708,8 +1328,12 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     std::vector<LayoutNodeDescriptor> children;
     children.reserve(childrenTable.size());
     for (std::size_t index = 1; index <= childrenTable.size(); ++index) {
-        auto child = parseLayoutNode(
-            dock, childrenTable[index], controlsById, usedControls, path + ".children[" + std::to_string(index) + "]", error);
+        auto child = parseLayoutNode(dock,
+                                     childrenTable[index],
+                                     controlsById,
+                                     usedControls,
+                                     path + ".children[" + std::to_string(index) + "]",
+                                     error);
         if (!child.has_value()) {
             return std::nullopt;
         }
@@ -718,13 +1342,179 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     return children;
 }
 
-std::optional<LayoutNodeDescriptor> parseLayoutNode(
+std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutControlShortcutChildren(
     const DockDescriptor& dock,
-    const sol::object& object,
+    const sol::table& table,
     const std::unordered_map<std::string, std::size_t>& controlsById,
     std::unordered_set<std::string>& usedControls,
     const std::string& path,
     std::string& error)
+{
+    const sol::object controlsObject = table["controls"];
+    if (!controlsObject.valid() || controlsObject.get_type() == sol::type::lua_nil ||
+        !controlsObject.is<sol::table>()) {
+        error = path + ".controls 必须是非空字符串数组";
+        return std::nullopt;
+    }
+    const auto controlsTable = controlsObject.as<sol::table>();
+    if (controlsTable.size() == 0) {
+        error = path + ".controls 必须是非空字符串数组";
+        return std::nullopt;
+    }
+
+    std::vector<LayoutNodeDescriptor> children;
+    children.reserve(controlsTable.size());
+    for (std::size_t index = 1; index <= controlsTable.size(); ++index) {
+        const sol::object controlObject = controlsTable[index];
+        const std::string controlPath = path + ".controls[" + std::to_string(index) + "]";
+        if (!controlObject.is<std::string>()) {
+            error = controlPath + " 必须是字符串";
+            return std::nullopt;
+        }
+
+        LayoutNodeDescriptor child;
+        child.kind = LayoutNodeKind::Control;
+        // controls 简写只展开成 control 子节点，仍复用统一的控件引用校验。
+        if (!registerLayoutControlUse(
+                dock, controlsById, usedControls, controlObject.as<std::string>(), controlPath, child, error)) {
+            return std::nullopt;
+        }
+        children.push_back(std::move(child));
+    }
+    return children;
+}
+
+std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutContainerChildren(
+    const DockDescriptor& dock,
+    const sol::table& table,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    const std::string& path,
+    std::string& error)
+{
+    const bool hasChildren = hasLuaTableField(table, "children");
+    const bool hasControls = hasLuaTableField(table, "controls");
+    if (hasChildren && hasControls) {
+        error = path + " 不能同时声明 children 和 controls";
+        return std::nullopt;
+    }
+    if (hasControls) {
+        return parseLayoutControlShortcutChildren(dock, table, controlsById, usedControls, path, error);
+    }
+    return parseLayoutChildren(dock, table, controlsById, usedControls, path, error);
+}
+
+std::optional<std::size_t> readLayoutTableColumnCount(const sol::table& table,
+                                                      const std::string& path,
+                                                      std::string& error)
+{
+    const sol::object columnsObject = table["columns"];
+    if (!columnsObject.valid() || columnsObject.get_type() == sol::type::lua_nil || !columnsObject.is<double>()) {
+        error = path + ".columns 必须是 >= 1 的整数";
+        return std::nullopt;
+    }
+    const auto columnsValue = columnsObject.as<double>();
+    if (!std::isfinite(columnsValue) || columnsValue < 1.0 || std::floor(columnsValue) != columnsValue) {
+        error = path + ".columns 必须是 >= 1 的整数";
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(columnsValue);
+}
+
+std::optional<std::vector<std::vector<LayoutNodeDescriptor>>> parseLayoutTableRows(
+    const DockDescriptor& dock,
+    const sol::table& table,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    std::size_t columns,
+    const std::string& path,
+    std::string& error)
+{
+    const sol::object rowsObject = table["rows"];
+    if (!rowsObject.valid() || rowsObject.get_type() == sol::type::lua_nil || !rowsObject.is<sol::table>()) {
+        error = path + ".rows 必须是非空数组";
+        return std::nullopt;
+    }
+    const auto rowsTable = rowsObject.as<sol::table>();
+    if (rowsTable.size() == 0) {
+        error = path + ".rows 必须是非空数组";
+        return std::nullopt;
+    }
+
+    std::vector<std::vector<LayoutNodeDescriptor>> rows;
+    rows.reserve(rowsTable.size());
+    for (std::size_t rowIndex = 1; rowIndex <= rowsTable.size(); ++rowIndex) {
+        const sol::object rowObject = rowsTable[rowIndex];
+        if (!rowObject.is<sol::table>()) {
+            error = path + ".rows[" + std::to_string(rowIndex) + "] 必须是 table";
+            return std::nullopt;
+        }
+        const auto rowTable = rowObject.as<sol::table>();
+        if (rowTable.size() > columns) {
+            error = path + ".rows[" + std::to_string(rowIndex) + "] 的单元格数量不能超过 columns";
+            return std::nullopt;
+        }
+        std::vector<LayoutNodeDescriptor> row;
+        row.reserve(rowTable.size());
+        for (std::size_t cellIndex = 1; cellIndex <= rowTable.size(); ++cellIndex) {
+            auto cell =
+                parseLayoutNode(dock,
+                                rowTable[cellIndex],
+                                controlsById,
+                                usedControls,
+                                path + ".rows[" + std::to_string(rowIndex) + "][" + std::to_string(cellIndex) + "]",
+                                error);
+            if (!cell.has_value()) {
+                return std::nullopt;
+            }
+            row.push_back(std::move(*cell));
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+std::optional<LayoutNodeDescriptor> parseLayoutTableNode(const DockDescriptor& dock,
+                                                         const sol::table& table,
+                                                         const std::unordered_map<std::string, std::size_t>& controlsById,
+                                                         std::unordered_set<std::string>& usedControls,
+                                                         const std::string& path,
+                                                         std::string& error)
+{
+    LayoutNodeDescriptor node;
+    node.kind = LayoutNodeKind::Table;
+
+    const auto columns = readLayoutTableColumnCount(table, path, error);
+    if (!columns.has_value()) {
+        return std::nullopt;
+    }
+    node.columns = *columns;
+    node.borders = readOptionalBoolField(table, "borders", false, path, error);
+    node.resizable = readOptionalBoolField(table, "resizable", true, path, error);
+    node.rowBg = readOptionalBoolField(table, "row_bg", false, path, error);
+    if (!error.empty()) {
+        return std::nullopt;
+    }
+    node.sizing = table.get_or("sizing", std::string("stretch"));
+    if (node.sizing != "stretch") {
+        error = path + ".sizing 目前仅支持 'stretch'";
+        return std::nullopt;
+    }
+
+    auto rows = parseLayoutTableRows(dock, table, controlsById, usedControls, node.columns, path, error);
+    if (!rows.has_value()) {
+        return std::nullopt;
+    }
+    node.rows = std::move(*rows);
+    return node;
+}
+
+std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
+                                                    const sol::object& object,
+                                                    const std::unordered_map<std::string, std::size_t>& controlsById,
+                                                    std::unordered_set<std::string>& usedControls,
+                                                    const std::string& path,
+                                                    std::string& error)
 {
     if (!object.is<sol::table>()) {
         error = path + " 必须是 table";
@@ -751,7 +1541,7 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(
             node.spacing = *spacing;
             node.runSpacing = *runSpacing;
         }
-        auto children = parseLayoutChildren(dock, table, controlsById, usedControls, path, error);
+        auto children = parseLayoutContainerChildren(dock, table, controlsById, usedControls, path, error);
         if (!children.has_value()) {
             return std::nullopt;
         }
@@ -790,7 +1580,11 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(
             error = path + ".id 必须是字符串";
             return std::nullopt;
         }
-        if (!registerLayoutControlUse(dock, controlsById, usedControls, idObject.as<std::string>(), path, node, error)) {
+        if (!registerLayoutControlUse(
+                dock, controlsById, usedControls, idObject.as<std::string>(), path, node, error)) {
+            return std::nullopt;
+        }
+        if (!readLayoutControlWidthFields(table, path, node, error)) {
             return std::nullopt;
         }
         return node;
@@ -814,70 +1608,7 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(
         return node;
     }
     if (type == "table") {
-        node.kind = LayoutNodeKind::Table;
-        const sol::object columnsObject = table["columns"];
-        if (!columnsObject.valid() || columnsObject.get_type() == sol::type::lua_nil || !columnsObject.is<double>()) {
-            error = path + ".columns 必须是 >= 1 的整数";
-            return std::nullopt;
-        }
-        const auto columnsValue = columnsObject.as<double>();
-        if (!std::isfinite(columnsValue) || columnsValue < 1.0 || std::floor(columnsValue) != columnsValue) {
-            error = path + ".columns 必须是 >= 1 的整数";
-            return std::nullopt;
-        }
-        node.columns = static_cast<std::size_t>(columnsValue);
-        node.borders = readOptionalBoolField(table, "borders", false, path, error);
-        node.resizable = readOptionalBoolField(table, "resizable", true, path, error);
-        node.rowBg = readOptionalBoolField(table, "row_bg", false, path, error);
-        if (!error.empty()) {
-            return std::nullopt;
-        }
-        node.sizing = table.get_or("sizing", std::string("stretch"));
-        if (node.sizing != "stretch") {
-            error = path + ".sizing 目前仅支持 'stretch'";
-            return std::nullopt;
-        }
-
-        const sol::object rowsObject = table["rows"];
-        if (!rowsObject.valid() || rowsObject.get_type() == sol::type::lua_nil || !rowsObject.is<sol::table>()) {
-            error = path + ".rows 必须是非空数组";
-            return std::nullopt;
-        }
-        const auto rowsTable = rowsObject.as<sol::table>();
-        if (rowsTable.size() == 0) {
-            error = path + ".rows 必须是非空数组";
-            return std::nullopt;
-        }
-        node.rows.reserve(rowsTable.size());
-        for (std::size_t rowIndex = 1; rowIndex <= rowsTable.size(); ++rowIndex) {
-            const sol::object rowObject = rowsTable[rowIndex];
-            if (!rowObject.is<sol::table>()) {
-                error = path + ".rows[" + std::to_string(rowIndex) + "] 必须是 table";
-                return std::nullopt;
-            }
-            const auto rowTable = rowObject.as<sol::table>();
-            if (rowTable.size() > node.columns) {
-                error = path + ".rows[" + std::to_string(rowIndex) + "] 的单元格数量不能超过 columns";
-                return std::nullopt;
-            }
-            std::vector<LayoutNodeDescriptor> row;
-            row.reserve(rowTable.size());
-            for (std::size_t cellIndex = 1; cellIndex <= rowTable.size(); ++cellIndex) {
-                auto cell = parseLayoutNode(dock,
-                                            rowTable[cellIndex],
-                                            controlsById,
-                                            usedControls,
-                                            path + ".rows[" + std::to_string(rowIndex) + "][" +
-                                                std::to_string(cellIndex) + "]",
-                                            error);
-                if (!cell.has_value()) {
-                    return std::nullopt;
-                }
-                row.push_back(std::move(*cell));
-            }
-            node.rows.push_back(std::move(row));
-        }
-        return node;
+        return parseLayoutTableNode(dock, table, controlsById, usedControls, path, error);
     }
 
     error = path + ".type 不支持: " + type;
@@ -931,75 +1662,87 @@ std::optional<DockLayoutDescriptor> parseDockLayout(const DockDescriptor& dock,
     return layout;
 }
 
-
-
-std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view lua, std::string& error)
+std::optional<DockDescriptor> parseSingleDockDescriptor(const sol::object& object, std::string& error)
 {
-    const sol::object uiObject = lua["ui"];
-    if (uiObject.valid() && uiObject.get_type() != sol::type::lua_nil) {
-        if (!uiObject.is<sol::protected_function>()) {
-            error = "ui 必须是 function";
-            return std::nullopt;
-        }
-
-        auto uiFunction = uiObject.as<sol::protected_function>();
-        auto uiResult = uiFunction();
-        if (!uiResult.valid()) {
-            error = "ui() 执行失败";
-            return std::nullopt;
-        }
-
-        const sol::object docksObject = uiResult.get<sol::object>();
-        if (!docksObject.is<sol::table>()) {
-            error = "ui() 必须返回 table";
-            return std::nullopt;
-        }
-
-        const auto dockTable = docksObject.as<sol::table>();
-        std::vector<DockDescriptor> docks;
-        docks.reserve(dockTable.size());
-        for (std::size_t index = 1; index <= dockTable.size(); ++index) {
-            const sol::object dockObject = dockTable[index];
-            if (!dockObject.is<sol::table>()) {
-                error = "ui() 每个 dock 都必须是 table";
-                return std::nullopt;
-            }
-
-            const auto dockEntry = dockObject.as<sol::table>();
-            DockDescriptor dock;
-            dock.id = readStringField(dockEntry, "id");
-            dock.title = readStringField(dockEntry, "title");
-            dock.anchor = readStringField(dockEntry, "anchor", "left_bottom");
-            dock.tabGroup = readStringField(dockEntry, "tab_group");
-            if (dock.id.empty() || dock.title.empty()) {
-                error = "dock 必须提供 id 和 title";
-                return std::nullopt;
-            }
-            if (!isValidDockAnchor(dock.anchor)) {
-                error = "dock anchor 不支持: " + dock.anchor;
-                return std::nullopt;
-            }
-
-            const sol::object controlsObject = dockEntry["controls"];
-            auto controls = parseControlList(controlsObject, error);
-            if (!controls.has_value()) {
-                return std::nullopt;
-            }
-            dock.controls = std::move(*controls);
-            const sol::object layoutObject = dockEntry["layout"];
-            if (layoutObject.valid() && layoutObject.get_type() != sol::type::lua_nil) {
-                auto layout = parseDockLayout(dock, layoutObject, error);
-                if (!layout.has_value()) {
-                    return std::nullopt;
-                }
-                dock.layout = std::move(*layout);
-            }
-            docks.push_back(std::move(dock));
-        }
-        return docks;
+    if (!object.is<sol::table>()) {
+        error = "ui() 每个 dock 都必须是 table";
+        return std::nullopt;
     }
 
-    const sol::object controlsObject = lua["controls"];
+    const auto dockEntry = object.as<sol::table>();
+    DockDescriptor dock;
+    dock.id = readStringField(dockEntry, "id");
+    dock.title = readStringField(dockEntry, "title");
+    dock.anchor = readStringField(dockEntry, "anchor", "left_bottom");
+    dock.tabGroup = readStringField(dockEntry, "tab_group");
+    if (dock.id.empty() || dock.title.empty()) {
+        error = "dock 必须提供 id 和 title";
+        return std::nullopt;
+    }
+    if (!isValidDockAnchor(dock.anchor)) {
+        error = "dock anchor 不支持: " + dock.anchor;
+        return std::nullopt;
+    }
+
+    const sol::object controlsObject = dockEntry["controls"];
+    auto controls = parseControlList(controlsObject, error);
+    if (!controls.has_value()) {
+        return std::nullopt;
+    }
+    dock.controls = std::move(*controls);
+
+    const sol::object layoutObject = dockEntry["layout"];
+    if (layoutObject.valid() && layoutObject.get_type() != sol::type::lua_nil) {
+        auto layout = parseDockLayout(dock, layoutObject, error);
+        if (!layout.has_value()) {
+            return std::nullopt;
+        }
+        dock.layout = std::move(*layout);
+    }
+    return dock;
+}
+
+std::optional<std::vector<DockDescriptor>> parseDockDescriptorList(const sol::object& object, std::string& error)
+{
+    if (!object.is<sol::table>()) {
+        error = "ui() 必须返回 table";
+        return std::nullopt;
+    }
+
+    const auto dockTable = object.as<sol::table>();
+    std::vector<DockDescriptor> docks;
+    docks.reserve(dockTable.size());
+    for (std::size_t index = 1; index <= dockTable.size(); ++index) {
+        auto dock = parseSingleDockDescriptor(dockTable[index], error);
+        if (!dock.has_value()) {
+            return std::nullopt;
+        }
+        docks.push_back(std::move(*dock));
+    }
+    return docks;
+}
+
+std::optional<std::vector<DockDescriptor>> parseUiDockDescriptors(const sol::object& uiObject, std::string& error)
+{
+    if (!uiObject.is<sol::protected_function>()) {
+        error = "ui 必须是 function";
+        return std::nullopt;
+    }
+
+    auto uiFunction = uiObject.as<sol::protected_function>();
+    auto uiResult = uiFunction();
+    if (!uiResult.valid()) {
+        error = "ui() 执行失败";
+        return std::nullopt;
+    }
+
+    const sol::object docksObject = uiResult.get<sol::object>();
+    return parseDockDescriptorList(docksObject, error);
+}
+
+std::optional<std::vector<DockDescriptor>> parseDefaultDockDescriptors(const sol::object& controlsObject,
+                                                                       std::string& error)
+{
     if (!controlsObject.valid() || controlsObject.get_type() == sol::type::lua_nil) {
         return std::vector<DockDescriptor>{};
     }
@@ -1026,6 +1769,16 @@ std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view 
     dock.title = kDefaultDockTitle;
     dock.controls = std::move(*controls);
     return std::vector<DockDescriptor>{std::move(dock)};
+}
+
+std::optional<std::vector<DockDescriptor>> parseDockDescriptors(sol::state_view lua, std::string& error)
+{
+    const sol::object uiObject = lua["ui"];
+    if (uiObject.valid() && uiObject.get_type() != sol::type::lua_nil) {
+        return parseUiDockDescriptors(uiObject, error);
+    }
+
+    return parseDefaultDockDescriptors(lua["controls"], error);
 }
 
 sol::table makeContextTable(sol::state_view lua, const transport::ConnectionContext& connection)
@@ -1234,6 +1987,97 @@ std::optional<DialogWindowOptions> luaDialogWindowOptions(const sol::table& tabl
     return options;
 }
 
+std::optional<FileDialogKind> resolveFileDialogKind(FileDialogKind kind, const sol::table& table, std::string& error)
+{
+    if (kind != FileDialogKind::OpenFile) {
+        return kind;
+    }
+
+    const auto mode = luaStringField(table, "mode").value_or("open");
+    if (mode == "save") {
+        return FileDialogKind::SaveFile;
+    }
+    if (mode == "open") {
+        return FileDialogKind::OpenFile;
+    }
+
+    error = "mode 必须是 open 或 save";
+    return std::nullopt;
+}
+
+transport::ConnectionContext fileDialogConnectionContext(
+    const std::optional<transport::ConnectionContext>& activeConnection, std::uint64_t createdAtMs)
+{
+    if (activeConnection.has_value()) {
+        return *activeConnection;
+    }
+
+    transport::ConnectionContext connection{};
+    connection.timestampMs = createdAtMs;
+    connection.endpoint = "detached";
+    return connection;
+}
+
+FileDialogFilter parseFileDialogFilter(const sol::table& filterTable)
+{
+    FileDialogFilter filter;
+    filter.name = luaStringField(filterTable, "name").value_or("Files");
+
+    const sol::object patternsObject = filterTable["patterns"];
+    if (patternsObject.is<sol::table>()) {
+        const auto patterns = patternsObject.as<sol::table>();
+        for (std::size_t patternIndex = 1; patternIndex <= patterns.size(); ++patternIndex) {
+            const sol::object pattern = patterns[patternIndex];
+            if (pattern.is<std::string>()) {
+                filter.patterns.push_back(pattern.as<std::string>());
+            }
+        }
+    }
+    return filter;
+}
+
+std::optional<std::vector<FileDialogFilter>> parseFileDialogFilters(const sol::table& table, std::string& error)
+{
+    std::vector<FileDialogFilter> parsed;
+    const sol::object filtersObject = table["filters"];
+    if (!filtersObject.valid() || filtersObject.get_type() == sol::type::lua_nil) {
+        return parsed;
+    }
+    if (!filtersObject.is<sol::table>()) {
+        error = "filters 必须是数组";
+        return std::nullopt;
+    }
+
+    const auto filters = filtersObject.as<sol::table>();
+    for (std::size_t index = 1; index <= filters.size(); ++index) {
+        const sol::object filterObject = filters[index];
+        if (!filterObject.is<sol::table>()) {
+            error = "filters 元素必须是 table";
+            return std::nullopt;
+        }
+        parsed.push_back(parseFileDialogFilter(filterObject.as<sol::table>()));
+    }
+    return parsed;
+}
+
+FileDialogRequest makeFileDialogRequest(std::uint64_t id,
+                                        FileDialogKind kind,
+                                        transport::ConnectionContext connection,
+                                        const sol::table& table,
+                                        std::vector<FileDialogFilter> filters,
+                                        std::uint64_t createdAtMs)
+{
+    return FileDialogRequest{
+        .id = id,
+        .kind = kind,
+        .connection = std::move(connection),
+        .title = luaStringField(table, "title").value_or(kind == FileDialogKind::OpenDir ? "选择目录" : "选择文件"),
+        .defaultPath = luaStringField(table, "default_path").value_or("."),
+        .filters = std::move(filters),
+        .createdAtMs = createdAtMs,
+    };
+}
+
 std::optional<std::int64_t> luaIntegerValue(const sol::object& object)
 {
     if (!object.valid() || object.get_type() == sol::type::lua_nil) {
@@ -1248,6 +2092,119 @@ std::optional<std::int64_t> luaIntegerValue(const sol::object& object)
     return std::nullopt;
 }
 
+PlotChannelDescriptor makePlotChannelDescriptor(const sol::table& channelTable, std::size_t index)
+{
+    PlotChannelDescriptor descriptor{};
+    descriptor.label = luaStringField(channelTable, "label").value_or("CH" + std::to_string(index));
+    descriptor.unit = luaStringField(channelTable, "unit").value_or("");
+    descriptor.ratio = finiteOrDefault(luaNumberField(channelTable, "ratio").value_or(1.0), 1.0);
+    descriptor.scale = finiteOrDefault(luaNumberField(channelTable, "scale").value_or(1.0), 1.0);
+    descriptor.offset = finiteOrDefault(luaNumberField(channelTable, "offset").value_or(0.0), 0.0);
+    return descriptor;
+}
+
+bool applyPlotChannelColor(PlotChannelDescriptor& descriptor,
+                           const sol::table& channelTable,
+                           std::size_t index,
+                           std::string& error)
+{
+    const auto colorText = luaStringField(channelTable, "color");
+    if (!colorText.has_value()) {
+        return true;
+    }
+
+    descriptor.color = parseColorText(*colorText);
+    if (descriptor.color.has_value()) {
+        return true;
+    }
+
+    error = "plot.setup.channels[" + std::to_string(index) + "].color 必须是 #RRGGBB 或 #RRGGBBAA";
+    return false;
+}
+
+bool applyPlotChannelLineWidth(PlotChannelDescriptor& descriptor,
+                               const sol::table& channelTable,
+                               std::size_t index,
+                               std::string& error)
+{
+    const sol::object lineWidthObject = channelTable["line_width"];
+    if (!lineWidthObject.valid() || lineWidthObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+
+    std::optional<double> lineWidth;
+    if (lineWidthObject.is<double>()) {
+        lineWidth = lineWidthObject.as<double>();
+    } else if (lineWidthObject.is<int>()) {
+        lineWidth = static_cast<double>(lineWidthObject.as<int>());
+    }
+    if (!lineWidth.has_value() || !std::isfinite(*lineWidth)) {
+        error = "plot.setup.channels[" + std::to_string(index) + "].line_width 必须是有限数字";
+        return false;
+    }
+
+    descriptor.lineWidth = plot::sanitizeChannelLineWidth(*lineWidth);
+    return true;
+}
+
+std::optional<PlotChannelDescriptor> parsePlotChannelDescriptor(const sol::object& channelObject,
+                                                                std::size_t index,
+                                                                std::string& error)
+{
+    if (!channelObject.is<sol::table>()) {
+        error = "plot.setup.channels[" + std::to_string(index) + "] 必须是 table";
+        return std::nullopt;
+    }
+
+    const sol::table channelTable = channelObject.as<sol::table>();
+    auto descriptor = makePlotChannelDescriptor(channelTable, index);
+    if (!applyPlotChannelColor(descriptor, channelTable, index, error)) {
+        return std::nullopt;
+    }
+    if (!applyPlotChannelLineWidth(descriptor, channelTable, index, error)) {
+        return std::nullopt;
+    }
+    return descriptor;
+}
+
+std::optional<std::vector<PlotChannelDescriptor>> parsePlotSetupChannels(const sol::table& table, std::string& error)
+{
+    const sol::object channelsObject = table["channels"];
+    if (!channelsObject.is<sol::table>()) {
+        error = "plot.setup.channels 必须是 table";
+        return std::nullopt;
+    }
+
+    std::vector<PlotChannelDescriptor> channels;
+    const sol::table channelsTable = channelsObject.as<sol::table>();
+    channels.reserve(channelsTable.size());
+    for (std::size_t index = 1; index <= channelsTable.size(); ++index) {
+        auto descriptor = parsePlotChannelDescriptor(channelsTable[index], index, error);
+        if (!descriptor.has_value()) {
+            return std::nullopt;
+        }
+        channels.push_back(std::move(*descriptor));
+    }
+    if (channels.empty()) {
+        error = "plot.setup.channels 不能为空";
+        return std::nullopt;
+    }
+    return channels;
+}
+
+plot::ViewConfig parsePlotSetupViewConfig(const sol::table& table)
+{
+    plot::ViewConfig view{};
+    view.timeScale = luaNumberField(table, "time_scale").value_or(1.0);
+    view.timeUnit = luaStringField(table, "time_unit").value_or("s");
+    view.verticalMin = luaNumberField(table, "vertical_min").value_or(-1.0);
+    view.verticalMax = luaNumberField(table, "vertical_max").value_or(1.0);
+    view.verticalUnit = luaStringField(table, "vertical_unit").value_or("V");
+    const double historyLimit = luaNumberField(table, "history_limit").value_or(0.0);
+    view.historyLimit = historyLimit <= 0.0 ? 0U : static_cast<std::size_t>(historyLimit);
+    return view;
+}
+
 std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& error)
 {
     if (!object.is<sol::table>()) {
@@ -1255,52 +2212,102 @@ std::optional<PlotSetup> parsePlotSetup(const sol::object& object, std::string& 
         return std::nullopt;
     }
     const sol::table table = object.as<sol::table>();
+    auto channels = parsePlotSetupChannels(table, error);
+    if (!channels.has_value()) {
+        return std::nullopt;
+    }
 
+    // 顶层解析只负责编排字段，channel 与 view 的细节由 helper 保持内聚。
     PlotSetup setup{};
     setup.source = luaStringField(table, "source").value_or("");
     setup.resetHistory = luaBoolField(table, "reset_history").value_or(false);
+    setup.channels = std::move(*channels);
+    setup.view = parsePlotSetupViewConfig(table);
+    return setup;
+}
 
-    const sol::object channelsObject = table["channels"];
-    if (!channelsObject.is<sol::table>()) {
-        error = "plot.setup.channels 必须是 table";
+std::optional<plot::WaveSample> parseExpandedPlotSample(const sol::table& sampleTable,
+                                                        std::size_t index,
+                                                        std::string& error)
+{
+    const auto time = luaNumberField(sampleTable, "t");
+    const auto value = luaNumberField(sampleTable, "y");
+    if (!time.has_value() || !value.has_value()) {
+        error = "plot.push.samples[" + std::to_string(index) + "] 必须包含数字字段 t / y";
         return std::nullopt;
     }
-    const sol::table channelsTable = channelsObject.as<sol::table>();
-    for (std::size_t index = 1; index <= channelsTable.size(); ++index) {
-        const sol::object channelObject = channelsTable[index];
-        if (!channelObject.is<sol::table>()) {
-            error = "plot.setup.channels[" + std::to_string(index) + "] 必须是 table";
+    return plot::WaveSample{.time = *time, .value = *value};
+}
+
+std::optional<std::vector<plot::WaveSample>> parseExpandedPlotSamples(const sol::table& samplesTable,
+                                                                      std::string& error)
+{
+    std::vector<plot::WaveSample> samples;
+    samples.reserve(samplesTable.size());
+    for (std::size_t index = 1; index <= samplesTable.size(); ++index) {
+        const sol::object sampleObject = samplesTable[index];
+        if (!sampleObject.is<sol::table>()) {
+            error = "plot.push.samples[" + std::to_string(index) + "] 必须是 table";
             return std::nullopt;
         }
-        const sol::table channelTable = channelObject.as<sol::table>();
-        PlotChannelDescriptor descriptor{};
-        descriptor.label = luaStringField(channelTable, "label").value_or("CH" + std::to_string(index));
-        descriptor.unit = luaStringField(channelTable, "unit").value_or("");
-        descriptor.ratio = finiteOrDefault(luaNumberField(channelTable, "ratio").value_or(1.0), 1.0);
-        descriptor.scale = finiteOrDefault(luaNumberField(channelTable, "scale").value_or(1.0), 1.0);
-        descriptor.offset = finiteOrDefault(luaNumberField(channelTable, "offset").value_or(0.0), 0.0);
-        if (const auto colorText = luaStringField(channelTable, "color"); colorText.has_value()) {
-            descriptor.color = parseColorText(*colorText);
-            if (!descriptor.color.has_value()) {
-                error = "plot.setup.channels[" + std::to_string(index) + "].color 必须是 #RRGGBB 或 #RRGGBBAA";
-                return std::nullopt;
-            }
+
+        const auto sample = parseExpandedPlotSample(sampleObject.as<sol::table>(), index, error);
+        if (!sample.has_value()) {
+            return std::nullopt;
         }
-        setup.channels.push_back(std::move(descriptor));
+        samples.push_back(*sample);
     }
-    if (setup.channels.empty()) {
-        error = "plot.setup.channels 不能为空";
+    return samples;
+}
+
+std::optional<plot::WaveSample> parseCompactPlotSample(
+    const sol::object& valueObject, double t0, double dt, std::size_t index, std::string& error)
+{
+    if (!valueObject.is<double>() && !valueObject.is<int>()) {
+        error = "plot.push.values[" + std::to_string(index) + "] 必须是 number";
         return std::nullopt;
     }
 
-    setup.view.timeScale = luaNumberField(table, "time_scale").value_or(1.0);
-    setup.view.timeUnit = luaStringField(table, "time_unit").value_or("s");
-    setup.view.verticalMin = luaNumberField(table, "vertical_min").value_or(-1.0);
-    setup.view.verticalMax = luaNumberField(table, "vertical_max").value_or(1.0);
-    setup.view.verticalUnit = luaStringField(table, "vertical_unit").value_or("V");
-    const double historyLimit = luaNumberField(table, "history_limit").value_or(0.0);
-    setup.view.historyLimit = historyLimit <= 0.0 ? 0U : static_cast<std::size_t>(historyLimit);
-    return setup;
+    const double time = t0 + dt * static_cast<double>(index - 1);
+    return plot::WaveSample{.time = time, .value = valueObject.as<double>()};
+}
+
+std::optional<std::vector<plot::WaveSample>> parseCompactPlotSamples(const sol::table& table, std::string& error)
+{
+    const sol::object valuesObject = table["values"];
+    if (!valuesObject.is<sol::table>()) {
+        error = "plot.push.samples 或 compact plot.push.values 必须是 table";
+        return std::nullopt;
+    }
+
+    const auto t0 = luaNumberField(table, "t0");
+    const auto dt = luaNumberField(table, "dt");
+    if (!t0.has_value() || !dt.has_value()) {
+        error = "compact plot.push 必须包含数字字段 t0 / dt";
+        return std::nullopt;
+    }
+
+    std::vector<plot::WaveSample> samples;
+    const sol::table valuesTable = valuesObject.as<sol::table>();
+    samples.reserve(valuesTable.size());
+    for (std::size_t index = 1; index <= valuesTable.size(); ++index) {
+        const auto sample = parseCompactPlotSample(valuesTable[index], *t0, *dt, index, error);
+        if (!sample.has_value()) {
+            return std::nullopt;
+        }
+        samples.push_back(*sample);
+    }
+    return samples;
+}
+
+std::optional<std::vector<plot::WaveSample>> parsePlotAppendSamples(const sol::table& table, std::string& error)
+{
+    // Lua API 同时支持逐点 samples 与紧凑 values，两条路径在这里统一成 WaveSample 列表。
+    const sol::object samplesObject = table["samples"];
+    if (samplesObject.is<sol::table>()) {
+        return parseExpandedPlotSamples(samplesObject.as<sol::table>(), error);
+    }
+    return parseCompactPlotSamples(table, error);
 }
 
 std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object, std::string& error)
@@ -1310,55 +2317,18 @@ std::optional<plot::WaveAppendRequest> parsePlotAppend(const sol::object& object
         return std::nullopt;
     }
     const sol::table table = object.as<sol::table>();
-    plot::WaveAppendRequest request{};
-    request.source = luaStringField(table, "source").value_or("");
-
-    const sol::object samplesObject = table["samples"];
-    if (samplesObject.is<sol::table>()) {
-        const sol::table samplesTable = samplesObject.as<sol::table>();
-        for (std::size_t index = 1; index <= samplesTable.size(); ++index) {
-            const sol::object sampleObject = samplesTable[index];
-            if (!sampleObject.is<sol::table>()) {
-                error = "plot.push.samples[" + std::to_string(index) + "] 必须是 table";
-                return std::nullopt;
-            }
-            const sol::table sampleTable = sampleObject.as<sol::table>();
-            const auto time = luaNumberField(sampleTable, "t");
-            const auto value = luaNumberField(sampleTable, "y");
-            if (!time.has_value() || !value.has_value()) {
-                error = "plot.push.samples[" + std::to_string(index) + "] 必须包含数字字段 t / y";
-                return std::nullopt;
-            }
-            request.samples.push_back(plot::WaveSample{.time = *time, .value = *value});
-        }
-    } else {
-        const sol::object valuesObject = table["values"];
-        if (!valuesObject.is<sol::table>()) {
-            error = "plot.push.samples 或 compact plot.push.values 必须是 table";
-            return std::nullopt;
-        }
-        const auto t0 = luaNumberField(table, "t0");
-        const auto dt = luaNumberField(table, "dt");
-        if (!t0.has_value() || !dt.has_value()) {
-            error = "compact plot.push 必须包含数字字段 t0 / dt";
-            return std::nullopt;
-        }
-        const sol::table valuesTable = valuesObject.as<sol::table>();
-        request.samples.reserve(valuesTable.size());
-        for (std::size_t index = 1; index <= valuesTable.size(); ++index) {
-            const sol::object valueObject = valuesTable[index];
-            if (!valueObject.is<double>() && !valueObject.is<int>()) {
-                error = "plot.push.values[" + std::to_string(index) + "] 必须是 number";
-                return std::nullopt;
-            }
-            const double time = *t0 + *dt * static_cast<double>(index - 1);
-            request.samples.push_back(plot::WaveSample{.time = time, .value = valueObject.as<double>()});
-        }
+    auto samples = parsePlotAppendSamples(table, error);
+    if (!samples.has_value()) {
+        return std::nullopt;
     }
-    if (request.samples.empty()) {
+    if (samples->empty()) {
         error = "plot.push 采样不能为空";
         return std::nullopt;
     }
+
+    plot::WaveAppendRequest request{};
+    request.source = luaStringField(table, "source").value_or("");
+    request.samples = std::move(*samples);
     return request;
 }
 
@@ -1636,9 +2606,8 @@ void ScriptHost::onTransportError(const transport::TransportErrorEvent& event)
     callbackOnError(ScriptHostContext{event.context}, event.message);
 }
 
-void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
+void ScriptHost::beginTransportBytesEvent(const transport::TransportBytesEvent& event)
 {
-    const auto startedAt = std::chrono::steady_clock::now();
     lastTransportStats_ = ScriptHostTransportStats{
         .bytes = event.bytes.size(),
         .streamMode = runtime_ && runtime_->stream,
@@ -1647,68 +2616,152 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
     if (event.context.readyForIo) {
         activeConnection_ = event.context;
     }
-    if (runtime_->stream) {
-        const auto parserStartedAt = std::chrono::steady_clock::now();
-        const StreamParseOptions parseOptions{
-            .includeFrameRaw = runtime_->stream->includeRawFrames || !runtime_->stream->lowOverhead,
-        };
-        const auto batch = runtime_->stream->parser.pushBytes(event.bytes, parseOptions);
-        runtime_->stream->lastBatch = makeStreamParseBatchSnapshot(batch, runtime_->stream->lowOverhead);
-        const auto parserFinishedAt = std::chrono::steady_clock::now();
-        lastTransportStats_.streamFrames = batch.frames.size();
-        lastTransportStats_.streamErrors = batch.errors.size();
-        lastTransportStats_.parserMs = elapsedMilliseconds(parserStartedAt, parserFinishedAt);
-        const auto callbackStartedAt = parserFinishedAt;
-        for (const auto& error : batch.errors) {
-            callbackOnStreamError(ScriptHostContext{event.context}, error);
-        }
-        // 错误汇总：按 code 分组计数，生成诊断日志
-        if (!batch.errors.empty()) {
-            std::unordered_map<StreamParseErrorCode, std::size_t> errorCounts;
-            std::string crcFrameNames;
-            std::size_t overflowDroppedBytes = 0;
-            for (const auto& error : batch.errors) {
-                errorCounts[error.code]++;
-                if (error.code == StreamParseErrorCode::CrcMismatch && error.frameName.has_value()) {
-                    if (!crcFrameNames.empty()) {
-                        crcFrameNames += ", ";
-                    }
-                    crcFrameNames += *error.frameName;
-                }
-                if (error.code == StreamParseErrorCode::Overflow) {
-                    overflowDroppedBytes += error.droppedBytes;
-                }
-            }
-            std::string summary;
-            for (const auto& [code, count] : errorCounts) {
-                if (!summary.empty()) {
-                    summary += ", ";
-                }
-                summary += std::string(streamParseErrorCodeName(code)) + " \xc3\x97 " + std::to_string(count);
-                if (code == StreamParseErrorCode::Overflow) {
-                    summary += " (dropped=" + std::to_string(overflowDroppedBytes) +
-                               " bytes, capacity=" + std::to_string(batch.bufferCapacity) + " bytes)";
-                }
-            }
-            protoLog("warn", "stream parse errors: " + summary);
-            if (!crcFrameNames.empty()) {
-                protoLog("warn", "  crc_mismatch frames: " + crcFrameNames);
-            }
-            lastTransportStats_.lastErrorSummary = std::move(summary);
-        } else {
-            lastTransportStats_.lastErrorSummary.clear();
-        }
-        // 核心流程：同一 parser 链顺序产出完整帧；若脚本支持 on_batch，则只批量调用一次，避免重复 on_frame。
-        if (!batch.frames.empty() && !callbackOnStreamBatch(ScriptHostContext{event.context}, batch.frames)) {
-            for (const auto& frame : batch.frames) {
-                callbackOnStreamFrame(ScriptHostContext{event.context}, frame);
-            }
-        }
-        const auto finishedAt = std::chrono::steady_clock::now();
-        lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
-        lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);
+}
+
+StreamParseBatch ScriptHost::parseTransportStreamBytes(const std::vector<std::uint8_t>& bytes,
+                                                       std::chrono::steady_clock::time_point& parserFinishedAt)
+{
+    const auto parserStartedAt = std::chrono::steady_clock::now();
+    const StreamParseOptions parseOptions{
+        .includeFrameRaw = runtime_->stream->includeRawFrames || !runtime_->stream->lowOverhead,
+    };
+    const auto batch = runtime_->stream->parser.pushBytes(bytes, parseOptions);
+    runtime_->stream->lastBatch = makeStreamParseBatchSnapshot(batch, runtime_->stream->lowOverhead);
+    parserFinishedAt = std::chrono::steady_clock::now();
+    lastTransportStats_.streamFrames = batch.frames.size();
+    lastTransportStats_.streamErrors = batch.errors.size();
+    lastTransportStats_.parserMs = elapsedMilliseconds(parserStartedAt, parserFinishedAt);
+    return batch;
+}
+
+void ScriptHost::dispatchStreamParseErrors(const transport::ConnectionContext& context, const StreamParseBatch& batch)
+{
+    for (const auto& error : batch.errors) {
+        callbackOnStreamError(ScriptHostContext{context}, error);
+    }
+}
+
+void ScriptHost::updateStreamParseErrorSummary(const StreamParseBatch& batch)
+{
+    if (batch.errors.empty()) {
+        lastTransportStats_.lastErrorSummary.clear();
         return;
     }
+
+    std::unordered_map<StreamParseErrorCode, std::size_t> errorCounts;
+    std::string crcFrameNames;
+    std::size_t overflowDroppedBytes = 0;
+    for (const auto& error : batch.errors) {
+        errorCounts[error.code]++;
+        if (error.code == StreamParseErrorCode::CrcMismatch && error.frameName.has_value()) {
+            if (!crcFrameNames.empty()) {
+                crcFrameNames += ", ";
+            }
+            crcFrameNames += *error.frameName;
+        }
+        if (error.code == StreamParseErrorCode::Overflow) {
+            overflowDroppedBytes += error.droppedBytes;
+        }
+    }
+
+    std::string summary;
+    for (const auto& [code, count] : errorCounts) {
+        if (!summary.empty()) {
+            summary += ", ";
+        }
+        summary += std::string(streamParseErrorCodeName(code)) + " × " + std::to_string(count);
+        if (code == StreamParseErrorCode::Overflow) {
+            summary += " (dropped=" + std::to_string(overflowDroppedBytes) +
+                       " bytes, capacity=" + std::to_string(batch.bufferCapacity) + " bytes)";
+        }
+    }
+    protoLog("warn", "stream parse errors: " + summary);
+    if (!crcFrameNames.empty()) {
+        protoLog("warn", "  crc_mismatch frames: " + crcFrameNames);
+    }
+    lastTransportStats_.lastErrorSummary = std::move(summary);
+}
+
+void ScriptHost::applyStreamValueTargets(const std::vector<StreamParsedFrame>& frames)
+{
+    if (!runtime_ || !runtime_->stream || runtime_->stream->valueTargetsByFrame.empty()) {
+        return;
+    }
+
+    for (const auto& frame : frames) {
+        const auto targetsIter = runtime_->stream->valueTargetsByFrame.find(frame.name);
+        if (targetsIter == runtime_->stream->valueTargetsByFrame.end()) {
+            continue;
+        }
+        for (const auto& target : targetsIter->second) {
+            const auto* descriptor = findControlDescriptor(controls_, target.controlId);
+            if (descriptor == nullptr || descriptor->type != ControlType::ValueTable) {
+                continue;
+            }
+
+            std::optional<std::uint32_t> startId = target.startId;
+            if (!startId.has_value() && target.startField.has_value()) {
+                const auto startIter = frame.fields.find(*target.startField);
+                if (startIter == frame.fields.end()) {
+                    continue;
+                }
+                startId = streamFieldU32(startIter->second);
+            }
+            if (!startId.has_value()) {
+                continue;
+            }
+
+            const auto valuesIter = frame.fields.find(target.valuesField);
+            if (valuesIter == frame.fields.end()) {
+                continue;
+            }
+
+            auto current = defaultValueTableFor(*descriptor);
+            if (const auto currentIter = controlValues_.find(target.controlId); currentIter != controlValues_.end()) {
+                if (const auto* tableValue = std::get_if<ValueTableValue>(&currentIter->second); tableValue != nullptr) {
+                    current = *tableValue;
+                }
+            }
+
+            auto patch = defaultValueTableFor(*descriptor);
+            if (!applyStreamValueTargetValues(*descriptor, patch, *startId, valuesIter->second)) {
+                continue;
+            }
+            mergeValueTableValue(*descriptor, current, patch);
+            controlValues_[target.controlId] = std::move(current);
+        }
+    }
+}
+
+void ScriptHost::dispatchStreamFrames(const transport::ConnectionContext& context,
+                                      const std::vector<StreamParsedFrame>& frames)
+{
+    // 核心流程：同一 parser 链顺序产出完整帧；若脚本支持 on_batch，则只批量调用一次，避免重复 on_frame。
+    if (!frames.empty() && !callbackOnStreamBatch(ScriptHostContext{context}, frames)) {
+        for (const auto& frame : frames) {
+            callbackOnStreamFrame(ScriptHostContext{context}, frame);
+        }
+    }
+}
+
+void ScriptHost::handleStreamTransportBytes(const transport::TransportBytesEvent& event,
+                                            std::chrono::steady_clock::time_point startedAt)
+{
+    std::chrono::steady_clock::time_point parserFinishedAt;
+    const auto batch = parseTransportStreamBytes(event.bytes, parserFinishedAt);
+    const auto callbackStartedAt = parserFinishedAt;
+    dispatchStreamParseErrors(event.context, batch);
+    updateStreamParseErrorSummary(batch);
+    applyStreamValueTargets(batch.frames);
+    dispatchStreamFrames(event.context, batch.frames);
+    const auto finishedAt = std::chrono::steady_clock::now();
+    lastTransportStats_.callbackMs = elapsedMilliseconds(callbackStartedAt, finishedAt);
+    lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);
+}
+
+void ScriptHost::handleRawTransportBytes(const transport::TransportBytesEvent& event,
+                                         std::chrono::steady_clock::time_point startedAt)
+{
     const auto callbackStartedAt = std::chrono::steady_clock::now();
     callbackOnBytes(ScriptHostContext{event.context}, event.bytes);
     const auto finishedAt = std::chrono::steady_clock::now();
@@ -1716,10 +2769,35 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
     lastTransportStats_.totalMs = elapsedMilliseconds(startedAt, finishedAt);
 }
 
+void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
+{
+    const auto startedAt = std::chrono::steady_clock::now();
+    beginTransportBytesEvent(event);
+    if (runtime_->stream) {
+        handleStreamTransportBytes(event, startedAt);
+        return;
+    }
+    handleRawTransportBytes(event, startedAt);
+}
+
 void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);
     if (descriptor == nullptr) {
+        return;
+    }
+    if (descriptor->type == ControlType::ValueTable) {
+        auto current = defaultValueTableFor(*descriptor);
+        if (const auto iter = controlValues_.find(id); iter != controlValues_.end()) {
+            if (const auto* tableValue = std::get_if<ValueTableValue>(&iter->second); tableValue != nullptr) {
+                current = *tableValue;
+            }
+        }
+        if (const auto* patch = std::get_if<ValueTableValue>(&value); patch != nullptr) {
+            mergeValueTableValue(*descriptor, current, *patch);
+        }
+        controlValues_[id] = std::move(current);
+        callbackOnControl(ScriptHostContext{ctx}, id, value);
         return;
     }
     controlValues_[id] = value;
@@ -1731,6 +2809,14 @@ bool ScriptHost::setControlValue(const std::string& id, const ControlValue& valu
     const auto* descriptor = findControlDescriptor(controls_, id);
     if (descriptor == nullptr) {
         return false;
+    }
+    if (descriptor->type == ControlType::ValueTable) {
+        auto next = defaultValueTableFor(*descriptor);
+        if (const auto* tableValue = std::get_if<ValueTableValue>(&value); tableValue != nullptr) {
+            mergeValueTableValue(*descriptor, next, *tableValue);
+        }
+        controlValues_[id] = std::move(next);
+        return true;
     }
     controlValues_[id] = value;
     return true;
@@ -2067,32 +3153,40 @@ const ControlValue* ScriptHost::findControlValue(const std::string& id) const
 
 void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
 {
+    const auto* descriptor = findControlDescriptor(controls_, id);
+    if (descriptor != nullptr && descriptor->type == ControlType::ValueTable) {
+        auto current = defaultValueTableFor(*descriptor);
+        if (const auto iter = controlValues_.find(id); iter != controlValues_.end()) {
+            if (const auto* tableValue = std::get_if<ValueTableValue>(&iter->second); tableValue != nullptr) {
+                current = *tableValue;
+            }
+        }
+        if (const auto* patch = std::get_if<ValueTableValue>(&value); patch != nullptr) {
+            mergeValueTableValue(*descriptor, current, *patch);
+        }
+        controlValues_[id] = std::move(current);
+        return;
+    }
     controlValues_[id] = std::move(value);
 }
 
-std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
-                                                   const sol::object& payload,
-                                                   const sol::object& opts,
-                                                   std::string& error,
-                                                   bool guarded)
+TxRequest ScriptHost::createTxRequest(TxRequestKind kind, std::vector<std::uint8_t> payload, bool guarded)
 {
-    const std::string apiName = guarded ? "proto.request_guarded"
-                                        : std::string(kind == TxRequestKind::Request ? "proto.request" : "proto.send");
-    const auto maybeBytes = bytesFromLuaObject(payload, error);
-    if (!maybeBytes.has_value()) {
-        protoLog("error", apiName + " 调用失败: " + error);
-        return std::nullopt;
-    }
-
     TxRequest request{};
     request.id = nextTxRequestId();
     request.kind = kind;
-    request.payload = *maybeBytes;
+    request.payload = std::move(payload);
     request.timeoutMs = 0;
     request.guarded = guarded;
     request.attempt = 1;
     request.maxAttempts = 1;
     request.createdAtMs = nowMs();
+    applyTxRequestConnection(request);
+    return request;
+}
+
+void ScriptHost::applyTxRequestConnection(TxRequest& request) const
+{
     if (activeConnection_.has_value()) {
         request.connection = *activeConnection_;
     } else {
@@ -2101,12 +3195,16 @@ std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
         request.connection.timestampMs = request.createdAtMs;
         request.connection.readyForIo = false;
     }
+}
 
+bool ScriptHost::applyTxRequestOptions(
+    TxRequest& request, const sol::object& opts, const std::string& apiName, std::string& error, bool guarded)
+{
     if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
         if (!opts.is<sol::table>()) {
             error = "opts 必须是 table";
             protoLog("error", apiName + " 调用失败: " + error);
-            return std::nullopt;
+            return false;
         }
         const sol::table options = opts.as<sol::table>();
         if (const auto timeoutMs = luaNumberField(options, "timeout_ms"); timeoutMs.has_value()) {
@@ -2118,6 +3216,23 @@ std::optional<TxRequest> ScriptHost::protoSendLike(TxRequestKind kind,
                 request.maxAttempts = static_cast<std::uint32_t>(std::max(1.0, *maxAttempts));
             }
         }
+    }
+    return true;
+}
+
+std::optional<TxRequest> ScriptHost::protoSendLike(
+    TxRequestKind kind, const sol::object& payload, const sol::object& opts, std::string& error, bool guarded)
+{
+    const std::string apiName = txRequestApiName(kind, guarded);
+    auto maybeBytes = bytesFromLuaObject(payload, error);
+    if (!maybeBytes.has_value()) {
+        protoLog("error", apiName + " 调用失败: " + error);
+        return std::nullopt;
+    }
+
+    TxRequest request = createTxRequest(kind, std::move(*maybeBytes), guarded);
+    if (!applyTxRequestOptions(request, opts, apiName, error, guarded)) {
+        return std::nullopt;
     }
 
     txRequests_.push_back(request);
@@ -2253,64 +3368,24 @@ std::optional<FileDialogRequest> ScriptHost::protoFileDialog(FileDialogKind kind
     }
 
     const auto table = opts.as<sol::table>();
-    if (kind == FileDialogKind::OpenFile) {
-        const auto mode = luaStringField(table, "mode").value_or("open");
-        if (mode == "save") {
-            kind = FileDialogKind::SaveFile;
-        } else if (mode != "open") {
-            error = "mode 必须是 open 或 save";
-            return std::nullopt;
-        }
+    const auto resolvedKind = resolveFileDialogKind(kind, table, error);
+    if (!resolvedKind.has_value()) {
+        return std::nullopt;
     }
 
     const auto createdAtMs = nowMs();
-    transport::ConnectionContext connection{};
-    if (activeConnection_.has_value()) {
-        connection = *activeConnection_;
-    } else {
-        connection.timestampMs = createdAtMs;
-        connection.endpoint = "detached";
-    }
-    FileDialogRequest request{
-        .id = nextFileDialogId(),
-        .kind = kind,
-        .connection = connection,
-        .title = luaStringField(table, "title").value_or(kind == FileDialogKind::OpenDir ? "选择目录" : "选择文件"),
-        .defaultPath = luaStringField(table, "default_path").value_or("."),
-        .filters = {},
-        .createdAtMs = createdAtMs,
-    };
-
-    const sol::object filtersObject = table["filters"];
-    if (filtersObject.valid() && filtersObject.get_type() != sol::type::lua_nil) {
-        if (!filtersObject.is<sol::table>()) {
-            error = "filters 必须是数组";
-            return std::nullopt;
-        }
-        const auto filters = filtersObject.as<sol::table>();
-        for (std::size_t index = 1; index <= filters.size(); ++index) {
-            const sol::object filterObject = filters[index];
-            if (!filterObject.is<sol::table>()) {
-                error = "filters 元素必须是 table";
-                return std::nullopt;
-            }
-            const auto filterTable = filterObject.as<sol::table>();
-            FileDialogFilter filter;
-            filter.name = luaStringField(filterTable, "name").value_or("Files");
-            const sol::object patternsObject = filterTable["patterns"];
-            if (patternsObject.is<sol::table>()) {
-                const auto patterns = patternsObject.as<sol::table>();
-                for (std::size_t patternIndex = 1; patternIndex <= patterns.size(); ++patternIndex) {
-                    const sol::object pattern = patterns[patternIndex];
-                    if (pattern.is<std::string>()) {
-                        filter.patterns.push_back(pattern.as<std::string>());
-                    }
-                }
-            }
-            request.filters.push_back(std::move(filter));
-        }
+    auto filters = parseFileDialogFilters(table, error);
+    if (!filters.has_value()) {
+        return std::nullopt;
     }
 
+    // 成员函数只补齐宿主状态，Lua 参数解析保持在无状态 helper 中。
+    const FileDialogRequest request = makeFileDialogRequest(nextFileDialogId(),
+                                                            *resolvedKind,
+                                                            fileDialogConnectionContext(activeConnection_, createdAtMs),
+                                                            table,
+                                                            std::move(*filters),
+                                                            createdAtMs);
     fileDialogRequests_.push_back(request);
     return request;
 }
@@ -2395,6 +3470,14 @@ std::string ScriptHost::valueToString(const ControlValue& value)
                     return std::string("nil");
                 }
                 return current.label + "=" + current.value + " (" + current.type + ")";
+            } else if constexpr (std::is_same_v<ValueType, ValueTableValue>) {
+                std::size_t setCount = 0;
+                for (const auto& row : current.rows) {
+                    if (row.set) {
+                        ++setCount;
+                    }
+                }
+                return "value_table rows=" + std::to_string(setCount);
             } else {
                 std::ostringstream builder;
                 builder << current;

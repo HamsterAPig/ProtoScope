@@ -33,6 +33,10 @@ void test_keyboard_shortcut_labels_match_plan()
     require(protoscope::ui::shortcutLabel(ShortcutAction::ReloadProtocol) == "F5", "重载协议快捷键应为 F5");
     require(protoscope::ui::shortcutLabel(ShortcutAction::ToggleWaveDock) == "Ctrl+6",
             "波形 Dock 快捷键应为 Ctrl+6");
+    require(protoscope::ui::shortcutLabel(ShortcutAction::ToggleRequestTraceDock) == "Ctrl+7",
+            "请求追踪 Dock 快捷键应为 Ctrl+7");
+    require(protoscope::ui::shortcutLabel(ShortcutAction::ToggleOfflineReplayDock) == "Ctrl+8",
+            "离线复现 Dock 快捷键应为 Ctrl+8");
     require(protoscope::ui::shortcutLabel(ShortcutAction::WaveToggleFullscreen) == "F11",
             "波形主视图全屏快捷键应为 F11");
     const auto* fullscreenShortcut = protoscope::ui::findShortcut(ShortcutAction::WaveToggleFullscreen);

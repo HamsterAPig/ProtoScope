@@ -70,6 +70,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
         const auto& channel = snapshot.channels[channelIndex];
         const auto& channelSamples = displayData.channels[channelIndex].samples;
         const ImVec4 color = channelColor(channel, channelIndex);
+        const float lineWidth = plot::resolveChannelLineWidth(channel);
         const double downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
         const std::size_t downsampleThreshold = static_cast<std::size_t>(
             std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
@@ -110,7 +111,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             WaveSampleGetterPayload payload{.samples = &(*begin)};
             ImPlotSpec spec{};
             spec.LineColor = color;
-            spec.LineWeight = 1.5F;
+            spec.LineWeight = lineWidth;
             applySavedLegendVisibility(wave, channel.label);
             ImPlot::PlotLineG(
                 channel.label.c_str(), &waveSampleGetter, &payload, static_cast<int>(rawVisibleCount), spec);
@@ -137,7 +138,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
 
         ImPlotSpec legendSpec{};
         legendSpec.LineColor = color;
-        legendSpec.LineWeight = 1.5F;
+        legendSpec.LineWeight = lineWidth;
         legendSpec.Flags = ImPlotItemFlags_NoFit;
         applySavedLegendVisibility(wave, channel.label);
         ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
@@ -161,9 +162,9 @@ void renderWaveChannels(plot::WaveDockState& wave,
         }
         view.lastRenderPointCount += envelope.size();
         if (view.phosphorGlowEnabled) {
-            renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity);
+            renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity, lineWidth);
         } else {
-            renderEnvelopeAsBars(envelope, color);
+            renderEnvelopeAsBars(envelope, color, lineWidth);
         }
     }
 }

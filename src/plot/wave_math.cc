@@ -223,68 +223,100 @@ bool scriptTimeUsable(const ChannelView& channel, std::size_t begin, std::size_t
     return true;
 }
 
-void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data)
+namespace {
+
+void resetDisplayDataChannels(WaveDisplayData& data, std::size_t channelCount)
 {
-    data.channels.resize(snapshot.channels.size());
+    data.channels.resize(channelCount);
     for (auto& channel : data.channels) {
         channel.samples.clear();
         channel.actualValues.clear();
     }
+}
 
-    bool hasScriptTime = false;
-    if (sampleFrequencyHz <= 0.0 || !std::isfinite(sampleFrequencyHz)) {
-        for (const auto& channel : snapshot.channels) {
-            const auto [begin, end] = displaySampleRange(channel);
-            if (scriptTimeUsable(channel, begin, end)) {
-                hasScriptTime = true;
-                break;
-            }
+bool hasUsableScriptTime(const WaveSnapshot& snapshot)
+{
+    for (const auto& channel : snapshot.channels) {
+        const auto [begin, end] = displaySampleRange(channel);
+        if (scriptTimeUsable(channel, begin, end)) {
+            return true;
         }
     }
+    return false;
+}
 
+void resolveDisplayTimeAxis(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data)
+{
     if (sampleFrequencyHz > 0.0 && std::isfinite(sampleFrequencyHz)) {
         data.axisSource = WaveTimeAxisSource::SampleFrequency;
         data.timeUnit = "s";
-    } else if (hasScriptTime) {
+    } else if (hasUsableScriptTime(snapshot)) {
         data.axisSource = WaveTimeAxisSource::ScriptTime;
         data.timeUnit = snapshot.config.timeUnit.empty() ? "s" : snapshot.config.timeUnit;
     } else {
         data.axisSource = WaveTimeAxisSource::SampleIndex;
         data.timeUnit = "sample";
     }
+}
+
+double resolveDisplaySampleTime(const WaveSample& source,
+                                std::size_t sampleIndex,
+                                double sampleFrequencyHz,
+                                WaveTimeAxisSource axisSource)
+{
+    if (axisSource == WaveTimeAxisSource::SampleFrequency) {
+        return static_cast<double>(sampleIndex) / sampleFrequencyHz;
+    }
+    if (axisSource == WaveTimeAxisSource::ScriptTime) {
+        return source.time;
+    }
+    return static_cast<double>(sampleIndex);
+}
+
+void fillDisplayChannel(const ChannelView& channel,
+                        const ViewConfig& config,
+                        double sampleFrequencyHz,
+                        WaveTimeAxisSource axisSource,
+                        WaveDisplayChannel& displayChannel)
+{
+    const auto [begin, end] = displaySampleRange(channel);
+    if (begin >= end) {
+        return;
+    }
+
+    const std::size_t visibleSamples = end - begin;
+    auto& display = displayChannel.samples;
+    display.resize(visibleSamples);
+    displayChannel.actualValues.resize(visibleSamples);
+    const bool offsetThenScale = config.displayFormula == WaveDisplayFormula::OffsetThenScale;
+    for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
+        const auto& source = channel.samples[sampleIndex];
+        const double actualValue = source.value * channel.ratio;
+        const double displayValue =
+            offsetThenScale ? (actualValue + channel.offset) * channel.scale
+                            : actualValue * channel.scale + channel.offset;
+        const auto outputIndex = sampleIndex - begin;
+        display[outputIndex] = {
+            .time = resolveDisplaySampleTime(source, sampleIndex, sampleFrequencyHz, axisSource),
+            .value = displayValue,
+        };
+        displayChannel.actualValues[outputIndex] = actualValue;
+    }
+}
+
+} // namespace
+
+void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data)
+{
+    resetDisplayDataChannels(data, snapshot.channels.size());
+    resolveDisplayTimeAxis(snapshot, sampleFrequencyHz, data);
 
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
-        const auto& channel = snapshot.channels[channelIndex];
-        auto& displayChannel = data.channels[channelIndex];
-        auto& display = displayChannel.samples;
-        const auto [begin, end] = displaySampleRange(channel);
-        if (begin >= end) {
-            continue;
-        }
-        const std::size_t visibleSamples = end - begin;
-        display.resize(visibleSamples);
-        displayChannel.actualValues.resize(visibleSamples);
-        const double ratio = channel.ratio;
-        const double scale = channel.scale;
-        const double offset = channel.offset;
-        const bool offsetThenScale = snapshot.config.displayFormula == WaveDisplayFormula::OffsetThenScale;
-        for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
-            const auto& source = channel.samples[sampleIndex];
-            double time = static_cast<double>(sampleIndex);
-            if (data.axisSource == WaveTimeAxisSource::SampleFrequency) {
-                time = static_cast<double>(sampleIndex) / sampleFrequencyHz;
-            } else if (data.axisSource == WaveTimeAxisSource::ScriptTime) {
-                time = source.time;
-            }
-            const double actualValue = source.value * ratio;
-            const double displayValue = offsetThenScale ? (actualValue + offset) * scale : actualValue * scale + offset;
-            const auto outputIndex = sampleIndex - begin;
-            display[outputIndex] = {
-                .time = time,
-                .value = displayValue,
-            };
-            displayChannel.actualValues[outputIndex] = actualValue;
-        }
+        fillDisplayChannel(snapshot.channels[channelIndex],
+                           snapshot.config,
+                           sampleFrequencyHz,
+                           data.axisSource,
+                           data.channels[channelIndex]);
     }
 }
 

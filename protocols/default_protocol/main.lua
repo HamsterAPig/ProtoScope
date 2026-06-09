@@ -26,10 +26,7 @@ function ui()
             children = {
               {
                 type = "flow",
-                children = {
-                  { type = "control", id = "read_version" },
-                  { type = "control", id = "device_id" },
-                }
+                controls = { "read_version", "device_id" },
               }
             }
           },
@@ -57,7 +54,7 @@ function ui()
               {
                 type = "flow",
                 children = {
-                  { type = "control", id = "target_symbol" },
+                  { type = "control", id = "target_symbol", min_width = 220, max_width = 360 },
                 }
               }
             }

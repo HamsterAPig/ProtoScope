@@ -31,6 +31,7 @@ public:
         runtime_.drawDialogs();
         runtime_.drawRawCaptureFileDialogs();
         runtime_.drawLogExportFileDialog();
+        runtime_.drawRequestTraceExportFileDialog();
         runtime_.drawElfStaticAddressDialog();
     }
 
@@ -90,6 +91,38 @@ private:
     GuiRuntime& runtime_;
 };
 
+class RequestTraceDockComponent final : public IDockComponent {
+public:
+    explicit RequestTraceDockComponent(GuiRuntime& runtime) : runtime_(runtime) {}
+
+    std::string_view id() const override { return "dock.request_trace"; }
+
+    std::string_view title() const override { return "请求追踪"; }
+
+    bool defaultVisible() const override { return true; }
+
+    void drawDock(RuntimeUiContext&) override { runtime_.drawRequestTraceDock(); }
+
+private:
+    GuiRuntime& runtime_;
+};
+
+class OfflineReplayDockComponent final : public IDockComponent {
+public:
+    explicit OfflineReplayDockComponent(GuiRuntime& runtime) : runtime_(runtime) {}
+
+    std::string_view id() const override { return "dock.offline_replay"; }
+
+    std::string_view title() const override { return "离线复现"; }
+
+    bool defaultVisible() const override { return true; }
+
+    void drawDock(RuntimeUiContext&) override { runtime_.drawOfflineReplayDock(); }
+
+private:
+    GuiRuntime& runtime_;
+};
+
 class LogDockComponent final : public IDockComponent {
 public:
     explicit LogDockComponent(GuiRuntime& runtime) : runtime_(runtime) {}
@@ -118,6 +151,8 @@ UiComponentRegistry::ComponentList UiComponentRegistry::createRuntimeComponents(
     components.emplace_back(std::make_unique<CommDockComponent>(runtime));
     components.emplace_back(std::make_unique<ProtocolDockComponent>(runtime));
     components.emplace_back(std::make_unique<LuaDockComponent>(runtime));
+    components.emplace_back(std::make_unique<RequestTraceDockComponent>(runtime));
+    components.emplace_back(std::make_unique<OfflineReplayDockComponent>(runtime));
     components.emplace_back(std::make_unique<LogDockComponent>(runtime));
     return components;
 }
