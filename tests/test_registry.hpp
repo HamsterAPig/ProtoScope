@@ -262,6 +262,7 @@ void test_application_raw_capture_replay_timeline_steps_events();
 void test_application_loads_protocol_action_templates();
 void test_application_live_raw_capture_trims_to_limit();
 void test_application_live_raw_capture_trim_keeps_runtime_profile_event();
+void test_application_session_package_export_trims_raw_capture_window();
 void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims();
 void test_application_raw_capture_import_preserves_full_history();
 void test_application_raw_capture_import_replays_runtime_profile_events();

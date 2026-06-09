@@ -3626,6 +3626,8 @@ static const TestCase kAllTests[] = {
     {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
     {"application_live_raw_capture_trim_keeps_runtime_profile_event",
      &test_application_live_raw_capture_trim_keeps_runtime_profile_event},
+    {"application_session_package_export_trims_raw_capture_window",
+     &test_application_session_package_export_trims_raw_capture_window},
     {"application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims",
      &test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims},
     {"application_raw_capture_import_preserves_full_history",

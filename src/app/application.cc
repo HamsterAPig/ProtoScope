@@ -581,6 +581,231 @@ namespace {
         return activeEvents;
     }
 
+    void normalizeRawCaptureExportWindow(plot::RawCaptureFileData& capture)
+    {
+        // 核心流程：普通导出只保存当前 raw 窗口，但必须保留回放所依赖的运行时 profile/plot setup 事件。
+        const auto eventRxBytes = rawCaptureEventRxBytes(capture.events);
+        if (!capture.events.empty() && eventRxBytes >= capture.payload.size()) {
+            const auto keepStart = eventRxBytes - static_cast<std::uint64_t>(capture.payload.size());
+            capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, keepStart);
+            return;
+        }
+
+        if (!capture.payload.empty()) {
+            capture.events.clear();
+            capture.events.push_back(plot::RawCaptureEvent{
+                .type = plot::RawCaptureEventType::RxBytes,
+                .timestampMs = capture.capturedAtMs,
+                .bytes = capture.payload,
+                .profile = {},
+                .plotSetup = {},
+            });
+            return;
+        }
+
+        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, eventRxBytes);
+    }
+
+    bool prepareRawCaptureForExport(plot::RawCaptureFileData& capture,
+                                    const std::string& protocolName,
+                                    const std::string& protocolDir,
+                                    double sampleFrequencyHz,
+                                    std::uint64_t capturedAtMs,
+                                    std::string_view metadataError,
+                                    std::string& error)
+    {
+        capture.protocolName = protocolName.empty() ? capture.protocolName : protocolName;
+        capture.protocolDir = protocolDir.empty() ? capture.protocolDir : protocolDir;
+        capture.sampleFrequencyHz = sampleFrequencyHz;
+        if (capture.capturedAtMs == 0) {
+            capture.capturedAtMs = capturedAtMs;
+        }
+
+        if (capture.protocolName.empty() || capture.protocolDir.empty()) {
+            error = std::string(metadataError);
+            return false;
+        }
+
+        normalizeRawCaptureExportWindow(capture);
+        return true;
+    }
+
+    struct SessionLogSummaryCounts {
+        std::size_t transferRows{0};
+        std::size_t transferFrameRows{0};
+        std::size_t hostLogRows{0};
+        std::size_t scriptLogRows{0};
+        std::size_t rawCaptureEvents{0};
+        std::size_t rawCaptureBytes{0};
+    };
+
+    std::string buildSessionLogSummary(const SessionLogSummaryCounts& counts)
+    {
+        std::ostringstream logSummary;
+        logSummary << "transfer_rows: " << counts.transferRows << '\n';
+        logSummary << "transfer_frame_rows: " << counts.transferFrameRows << '\n';
+        logSummary << "host_log_rows: " << counts.hostLogRows << '\n';
+        logSummary << "script_log_rows: " << counts.scriptLogRows << '\n';
+        logSummary << "raw_capture_events: " << counts.rawCaptureEvents << '\n';
+        logSummary << "raw_capture_bytes: " << counts.rawCaptureBytes << '\n';
+        return logSummary.str();
+    }
+
+    std::string buildSessionManifest(std::uint64_t createdAtMs,
+                                     const std::string& protocolName,
+                                     const std::string& protocolDir,
+                                     double sampleFrequencyHz,
+                                     const std::vector<session::SessionPackageEntry>& entries)
+    {
+        std::ostringstream manifest;
+        manifest << "format: protoscope_session_package\n";
+        manifest << "version: 1\n";
+        manifest << "created_at_ms: " << createdAtMs << '\n';
+        manifest << "protocol_name: " << protocolName << '\n';
+        manifest << "protocol_dir: " << protocolDir << '\n';
+        manifest << "sample_frequency_hz: " << sampleFrequencyHz << '\n';
+        manifest << "entries:\n";
+        manifest << "- manifest.yaml\n";
+        for (const auto& entry : entries) {
+            manifest << "- " << entry.name << '\n';
+        }
+        return manifest.str();
+    }
+
+    session::SessionPackageData buildSessionPackage(std::uint64_t createdAtMs,
+                                                    std::string configYaml,
+                                                    std::vector<std::uint8_t> rawCaptureBytes,
+                                                    std::vector<session::SessionPackageEntry> protocolEntries,
+                                                    std::string analysisMarkersYaml,
+                                                    std::string logSummary,
+                                                    const std::string& manifestProtocolName,
+                                                    const std::string& manifestProtocolDir,
+                                                    double sampleFrequencyHz)
+    {
+        std::vector<session::SessionPackageEntry> entries;
+        entries.push_back({.name = "config.yaml", .bytes = stringBytes(configYaml)});
+        entries.push_back({.name = "raw_capture.psraw", .bytes = std::move(rawCaptureBytes)});
+        entries.insert(entries.end(),
+                       std::make_move_iterator(protocolEntries.begin()),
+                       std::make_move_iterator(protocolEntries.end()));
+        entries.push_back({.name = "analysis/markers.yaml", .bytes = stringBytes(analysisMarkersYaml)});
+        entries.push_back({.name = "logs/summary.txt", .bytes = stringBytes(logSummary)});
+
+        const auto manifest =
+            buildSessionManifest(createdAtMs, manifestProtocolName, manifestProtocolDir, sampleFrequencyHz, entries);
+        entries.insert(entries.begin(), {.name = "manifest.yaml", .bytes = stringBytes(manifest)});
+
+        return session::SessionPackageData{
+            .createdAtMs = createdAtMs,
+            .entries = std::move(entries),
+        };
+    }
+
+    std::vector<const session::SessionPackageEntry*> collectSessionProtocolEntries(
+        const session::SessionPackageData& package)
+    {
+        std::vector<const session::SessionPackageEntry*> protocolEntries;
+        for (const auto& entry : package.entries) {
+            if (entry.name.starts_with(kSessionProtocolEntryPrefix)) {
+                protocolEntries.push_back(&entry);
+            }
+        }
+        return protocolEntries;
+    }
+
+    bool releaseSessionProtocolEntries(const std::vector<const session::SessionPackageEntry*>& protocolEntries,
+                                       const std::filesystem::path& protocolDir,
+                                       std::string& error)
+    {
+        for (const auto* entry : protocolEntries) {
+            const auto relativeName = entry->name.substr(kSessionProtocolEntryPrefix.size());
+            const auto outputPath = protocolDir / std::filesystem::path(relativeName);
+            if (!writeFileBytes(outputPath, entry->bytes, error)) {
+                const auto writeError = error;
+                error = "释放现场包协议目录失败: " + writeError;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool validateReleasedProtocolDirectory(const std::filesystem::path& protocolDir,
+                                           const scripting::FileIoConfig& fileIoConfig,
+                                           std::string& error)
+    {
+        std::error_code protocolEntryError;
+        const auto mainLuaPath = protocolDir / "main.lua";
+        if (!std::filesystem::is_regular_file(mainLuaPath, protocolEntryError) || protocolEntryError) {
+            error = "现场包缺少 protocol/main.lua";
+            if (protocolEntryError) {
+                error += ": " + protocolEntryError.message();
+            }
+            return false;
+        }
+
+        scripting::ScriptHost probeHost;
+        probeHost.setFileIoConfig(fileIoConfig);
+        if (!probeHost.loadProtocolDirectory(protocolDir.generic_string())) {
+            error = "现场包协议脚本无效: " + probeHost.lastError();
+            return false;
+        }
+        return true;
+    }
+
+    bool decodeSessionRawCaptureEntry(const session::SessionPackageData& package,
+                                      const std::optional<std::string>& importedProtocolDir,
+                                      std::optional<plot::RawCaptureFileData>& rawCapture,
+                                      std::string& error)
+    {
+        const auto* rawEntry = session::findSessionPackageEntry(package, "raw_capture.psraw");
+        if (rawEntry == nullptr || rawEntry->bytes.empty()) {
+            return true;
+        }
+
+        const auto rawText = std::string_view(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
+        auto capture = plot::decodeRawCaptureFile(rawText, error);
+        if (!capture.has_value()) {
+            return false;
+        }
+        if (importedProtocolDir.has_value()) {
+            capture->protocolDir = *importedProtocolDir;
+        }
+        rawCapture = std::move(*capture);
+        return true;
+    }
+
+    bool decodeSessionAnalysisMarkers(const session::SessionPackageData& package,
+                                      std::vector<plot::WaveAnalysisMarker>& markers,
+                                      std::string& error)
+    {
+        const auto* markerEntry = session::findSessionPackageEntry(package, "analysis/markers.yaml");
+        if (markerEntry == nullptr) {
+            return true;
+        }
+
+        try {
+            const auto markerText =
+                std::string_view(reinterpret_cast<const char*>(markerEntry->bytes.data()), markerEntry->bytes.size());
+            markers = decodeAnalysisMarkersYaml(markerText);
+            return true;
+        } catch (const std::exception& ex) {
+            error = std::string("解析现场包分析标记失败: ") + ex.what();
+            return false;
+        }
+    }
+
+    plot::RawCaptureEvent makeRawCapturePlotSetupEvent(std::uint64_t timestampMs,
+                                                       plot::RawCapturePlotSetupEventData setup)
+    {
+        return plot::RawCaptureEvent{
+            .type = plot::RawCaptureEventType::PlotSetup,
+            .timestampMs = timestampMs,
+            .bytes = {},
+            .profile = {},
+            .plotSetup = std::move(setup),
+        };
+    }
+
     std::string transferFrameFieldValueText(const scripting::StreamFieldValue& value)
     {
         return std::visit(
@@ -1554,35 +1779,15 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
 {
     const auto& lua = dockStore_.luaState();
     const auto& wave = dockStore_.waveState();
-
     plot::RawCaptureFileData capture = wave.rawCapture;
-    capture.protocolName = lua.protocolName.empty() ? capture.protocolName : lua.protocolName;
-    capture.protocolDir = lua.protocolDir.empty() ? capture.protocolDir : lua.protocolDir;
-    capture.sampleFrequencyHz = wave.view.sampleFrequencyHz;
-    if (capture.capturedAtMs == 0) {
-        capture.capturedAtMs = nowMs();
-    }
-
-    if (capture.protocolName.empty() || capture.protocolDir.empty()) {
-        error = "当前协议元数据不完整，无法导出";
+    if (!prepareRawCaptureForExport(capture,
+                                    lua.protocolName,
+                                    lua.protocolDir,
+                                    wave.view.sampleFrequencyHz,
+                                    nowMs(),
+                                    "当前协议元数据不完整，无法导出",
+                                    error)) {
         return false;
-    }
-    // 核心流程：普通导出只保存当前可见 raw，但必须保留这段 raw 回放所依赖的 runtime profile 事件。
-    const auto eventRxBytes = rawCaptureEventRxBytes(capture.events);
-    if (!capture.events.empty() && eventRxBytes >= capture.payload.size()) {
-        const auto keepStart = eventRxBytes - static_cast<std::uint64_t>(capture.payload.size());
-        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, keepStart);
-    } else if (!capture.payload.empty()) {
-        capture.events.clear();
-        capture.events.push_back(plot::RawCaptureEvent{
-            .type = plot::RawCaptureEventType::RxBytes,
-            .timestampMs = capture.capturedAtMs,
-            .bytes = capture.payload,
-            .profile = {},
-            .plotSetup = {},
-        });
-    } else {
-        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, eventRxBytes);
     }
     return plot::writeRawCaptureFile(path, capture, error);
 }
@@ -1599,31 +1804,14 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
     const auto& lua = dockStore_.luaState();
     const auto& wave = dockStore_.waveState();
     plot::RawCaptureFileData capture = wave.rawCapture;
-    capture.protocolName = lua.protocolName.empty() ? capture.protocolName : lua.protocolName;
-    capture.protocolDir = lua.protocolDir.empty() ? capture.protocolDir : lua.protocolDir;
-    capture.sampleFrequencyHz = wave.view.sampleFrequencyHz;
-    if (capture.capturedAtMs == 0) {
-        capture.capturedAtMs = createdAtMs;
-    }
-    if (capture.protocolName.empty() || capture.protocolDir.empty()) {
-        error = "当前协议元数据不完整，无法导出现场包";
+    if (!prepareRawCaptureForExport(capture,
+                                    lua.protocolName,
+                                    lua.protocolDir,
+                                    wave.view.sampleFrequencyHz,
+                                    createdAtMs,
+                                    "当前协议元数据不完整，无法导出现场包",
+                                    error)) {
         return false;
-    }
-    const auto eventRxBytes = rawCaptureEventRxBytes(capture.events);
-    if (!capture.events.empty() && eventRxBytes >= capture.payload.size()) {
-        const auto keepStart = eventRxBytes - static_cast<std::uint64_t>(capture.payload.size());
-        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, keepStart);
-    } else if (!capture.payload.empty()) {
-        capture.events.clear();
-        capture.events.push_back(plot::RawCaptureEvent{
-            .type = plot::RawCaptureEventType::RxBytes,
-            .timestampMs = capture.capturedAtMs,
-            .bytes = capture.payload,
-            .profile = {},
-            .plotSetup = {},
-        });
-    } else {
-        capture.events = trimRawCaptureEventsToPayloadWindow(capture.events, eventRxBytes);
     }
 
     std::vector<std::uint8_t> rawCaptureBytes;
@@ -1631,16 +1819,17 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
         return false;
     }
 
-    std::ostringstream logSummary;
     const auto& transfer = dockStore_.receiveState();
     const auto& hostLog = dockStore_.logState();
     const auto& scriptLog = dockStore_.scriptState();
-    logSummary << "transfer_rows: " << transfer.rows.size() << '\n';
-    logSummary << "transfer_frame_rows: " << transfer.frameRows.size() << '\n';
-    logSummary << "host_log_rows: " << hostLog.rows.size() << '\n';
-    logSummary << "script_log_rows: " << scriptLog.rows.size() << '\n';
-    logSummary << "raw_capture_events: " << capture.events.size() << '\n';
-    logSummary << "raw_capture_bytes: " << capture.payload.size() << '\n';
+    const auto logSummary = buildSessionLogSummary(SessionLogSummaryCounts{
+        .transferRows = transfer.rows.size(),
+        .transferFrameRows = transfer.frameRows.size(),
+        .hostLogRows = hostLog.rows.size(),
+        .scriptLogRows = scriptLog.rows.size(),
+        .rawCaptureEvents = capture.events.size(),
+        .rawCaptureBytes = capture.payload.size(),
+    });
     const auto analysisMarkersYaml = encodeAnalysisMarkersYaml(wave.analysisMarkers);
 
     std::vector<session::SessionPackageEntry> protocolEntries;
@@ -1648,33 +1837,15 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
         return false;
     }
 
-    std::vector<session::SessionPackageEntry> entries;
-    entries.push_back({.name = "config.yaml", .bytes = stringBytes(configYaml)});
-    entries.push_back({.name = "raw_capture.psraw", .bytes = std::move(rawCaptureBytes)});
-    entries.insert(entries.end(),
-                   std::make_move_iterator(protocolEntries.begin()),
-                   std::make_move_iterator(protocolEntries.end()));
-    entries.push_back({.name = "analysis/markers.yaml", .bytes = stringBytes(analysisMarkersYaml)});
-    entries.push_back({.name = "logs/summary.txt", .bytes = stringBytes(logSummary.str())});
-
-    std::ostringstream manifest;
-    manifest << "format: protoscope_session_package\n";
-    manifest << "version: 1\n";
-    manifest << "created_at_ms: " << createdAtMs << '\n';
-    manifest << "protocol_name: " << lua.protocolName << '\n';
-    manifest << "protocol_dir: " << lua.protocolDir << '\n';
-    manifest << "sample_frequency_hz: " << capture.sampleFrequencyHz << '\n';
-    manifest << "entries:\n";
-    manifest << "- manifest.yaml\n";
-    for (const auto& entry : entries) {
-        manifest << "- " << entry.name << '\n';
-    }
-    entries.insert(entries.begin(), {.name = "manifest.yaml", .bytes = stringBytes(manifest.str())});
-
-    session::SessionPackageData package{
-        .createdAtMs = createdAtMs,
-        .entries = std::move(entries),
-    };
+    auto package = buildSessionPackage(createdAtMs,
+                                       std::move(configYaml),
+                                       std::move(rawCaptureBytes),
+                                       std::move(protocolEntries),
+                                       analysisMarkersYaml,
+                                       logSummary,
+                                       lua.protocolName,
+                                       lua.protocolDir,
+                                       capture.sampleFrequencyHz);
     return session::writeSessionPackage(path, package, error);
 }
 
@@ -1718,39 +1889,15 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
 
     std::optional<config::ProtocolConfig> persistentProtocolConfig;
     std::optional<std::string> importedProtocolDir;
-    std::vector<const session::SessionPackageEntry*> protocolEntries;
-    for (const auto& entry : package->entries) {
-        if (entry.name.starts_with(kSessionProtocolEntryPrefix)) {
-            protocolEntries.push_back(&entry);
-        }
-    }
+    const auto protocolEntries = collectSessionProtocolEntries(*package);
     if (!protocolEntries.empty()) {
         persistentProtocolConfig = loaded.config.protocol;
         const auto protocolDir =
             std::filesystem::temp_directory_path() / ("ProtoScope-session-protocol-" + std::to_string(nowUs()));
-        for (const auto* entry : protocolEntries) {
-            const auto relativeName = entry->name.substr(kSessionProtocolEntryPrefix.size());
-            const auto outputPath = protocolDir / std::filesystem::path(relativeName);
-            if (!writeFileBytes(outputPath, entry->bytes, error)) {
-                const auto writeError = error;
-                error = "释放现场包协议目录失败: " + writeError;
-                return false;
-            }
-        }
-
-        std::error_code protocolEntryError;
-        const auto mainLuaPath = protocolDir / "main.lua";
-        if (!std::filesystem::is_regular_file(mainLuaPath, protocolEntryError) || protocolEntryError) {
-            error = "现场包缺少 protocol/main.lua";
-            if (protocolEntryError) {
-                error += ": " + protocolEntryError.message();
-            }
+        if (!releaseSessionProtocolEntries(protocolEntries, protocolDir, error)) {
             return false;
         }
-        scripting::ScriptHost probeHost;
-        probeHost.setFileIoConfig(loaded.config.scripting.fileIo);
-        if (!probeHost.loadProtocolDirectory(protocolDir.generic_string())) {
-            error = "现场包协议脚本无效: " + probeHost.lastError();
+        if (!validateReleasedProtocolDirectory(protocolDir, loaded.config.scripting.fileIo, error)) {
             return false;
         }
         loaded.config.protocol.rootDir = protocolDir.parent_path().generic_string();
@@ -1759,30 +1906,13 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     }
 
     std::optional<plot::RawCaptureFileData> rawCapture;
-    const auto* rawEntry = session::findSessionPackageEntry(*package, "raw_capture.psraw");
-    if (rawEntry != nullptr && !rawEntry->bytes.empty()) {
-        const auto rawText = std::string_view(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
-        auto capture = plot::decodeRawCaptureFile(rawText, error);
-        if (!capture.has_value()) {
-            return false;
-        }
-        if (importedProtocolDir.has_value()) {
-            capture->protocolDir = *importedProtocolDir;
-        }
-        rawCapture = std::move(*capture);
+    if (!decodeSessionRawCaptureEntry(*package, importedProtocolDir, rawCapture, error)) {
+        return false;
     }
 
     std::vector<plot::WaveAnalysisMarker> importedMarkers;
-    const auto* markerEntry = session::findSessionPackageEntry(*package, "analysis/markers.yaml");
-    if (markerEntry != nullptr) {
-        try {
-            const auto markerText =
-                std::string_view(reinterpret_cast<const char*>(markerEntry->bytes.data()), markerEntry->bytes.size());
-            importedMarkers = decodeAnalysisMarkersYaml(markerText);
-        } catch (const std::exception& ex) {
-            error = std::string("解析现场包分析标记失败: ") + ex.what();
-            return false;
-        }
+    if (!decodeSessionAnalysisMarkers(*package, importedMarkers, error)) {
+        return false;
     }
 
     if (!applyConfig(loaded.config)) {
@@ -1836,13 +1966,7 @@ bool Application::startRawCaptureRecording(const std::filesystem::path& path, st
         return false;
     }
     if (const auto setup = currentPlotSetupSnapshot(wave, "recording_start"); setup.has_value()) {
-        const plot::RawCaptureEvent event{
-            .type = plot::RawCaptureEventType::PlotSetup,
-            .timestampMs = metadata.capturedAtMs,
-            .bytes = {},
-            .profile = {},
-            .plotSetup = *setup,
-        };
+        const auto event = makeRawCapturePlotSetupEvent(metadata.capturedAtMs, *setup);
         if (!rawCaptureRecording_.appendEvent(event, error)) {
             std::string closeError;
             static_cast<void>(rawCaptureRecording_.close(closeError));
