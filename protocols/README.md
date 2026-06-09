@@ -114,7 +114,7 @@ end
 - `checkbox`：布尔开关，`default` 是 boolean。
 - `combo`：下拉选择，必须提供 `options = { ... }`，`default` 是 1 基索引。
 - `elf_symbol_combo`：ELF 静态地址候选输入框，值是 `{ label, value, type }` 结构；可选 `debounce_ms` 和 `limit`，未写时使用 `gui.elf_symbol_combo.debounce_ms` 与 `gui.elf_symbol_combo.limit`。
-- `value_table`：只读寄存器显示表。`rows` 支持普通行（`id + label + unit? + note?`）、bit 展开行（在一个源 `id` 下声明 `bits = { ... }`）、批量行（`start_id + len + labels + units`）。row id 只用于内部匹配，不显示到界面；`note` 字段在悬浮时作为 tooltip 展示。
+- `value_table`：只读寄存器显示表。`rows` 支持普通行（`id + label + unit? + note?`）、bit 展开行（在一个源 `id` 下声明 `bits = { ... }`，`bit` 使用 U32 下标）、批量行（`start_id + len + labels + units`）。row id 只用于内部匹配，不显示到界面；`note` 字段在悬浮时作为 tooltip 展示。
 
 ```lua
 controls = {
@@ -139,7 +139,7 @@ controls = {
 }
 ```
 
-`proto.set_control("holding_values", { [0x1010] = "220.1", [0x1020] = 0x0023 })` 按 row id 更新。对于 U16 bit 源行，收到整数后自动展开 bit。也可以传 `{ start_id = ..., values = { ... } }` 做范围更新。schema 自动化流填充使用 `value_targets.controls` 映射，解析帧后自动写入目标 value_table 控件，再调用 on_batch/on_frame，handler 覆盖优先。
+`proto.set_control("holding_values", { [0x1010] = "220.1", [0x1020] = 0x0023 })` 按 row id 更新。对于 bit 源行，收到非负整数、整数字符串、HEX 字符串、ProtoBuffer 或 number[] 后自动展开 bit：整数源按 64 位读取，字节源按 `bit0 = 第 1 个字节最低位`、`bit8 = 第 2 个字节最低位` 读取。也可以传 `{ start_id = ..., values = { ... } }` 做范围更新。schema 自动化流填充使用 `value_targets.controls` 映射，解析帧后自动写入目标 value_table 控件，再调用 on_batch/on_frame，handler 覆盖优先。
 
 ### 控件状态读写
 
@@ -429,7 +429,7 @@ return schema
 - `raw_output`：默认 `full` 会向 Lua 暴露 `frame.raw`；高速连续采样建议写 `omit`，避免逐字节展开 raw。
 - `low_overhead`：默认 `false` 保持调试快照兼容；高速场景可与 `raw_output = "omit"` 配合，成功帧不保留到 `lastStreamParseBatch()`。
 - `field_output`：默认 `compat` 同时写 `frame.fields.xxx` 和 `frame.xxx`；高频回调可写 `fields_only`，只保留 `frame.fields`。
-- `value_targets`：声明解析帧后自动填充 value_table 控件。`controls` 里每项指定目标控件 id、`values_field` 和注册起始 `start_field` 或 `start_id`。
+- `value_targets`：声明解析帧后自动填充 value_table 控件。`controls` 里每项指定目标控件 id、`values_field` 和注册起始 `start_field` 或 `start_id`；当 `values_field` 是 `bytes` 字段时，会把整段 bytes 作为一个 bit 源更新对应 `start_id` 的 bit 行，不按字节拆成连续 row。
 
 ```lua
 value_targets = {
