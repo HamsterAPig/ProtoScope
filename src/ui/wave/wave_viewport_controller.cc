@@ -25,7 +25,7 @@ namespace {
             if (channel.totalSamples == 0) {
                 continue;
             }
-            const auto candidate = channel.totalSamples - 1;
+            const auto candidate = channel.sampleIndexOffset + channel.totalSamples - 1;
             if (!latestSampleIndex.has_value() || candidate > *latestSampleIndex) {
                 latestSampleIndex = candidate;
             }
@@ -50,6 +50,7 @@ namespace {
             hashCombine(rangeHash, channel.visibleBegin);
             hashCombine(rangeHash, channel.visibleEnd);
             hashCombine(rangeHash, channel.totalSamples);
+            hashCombine(rangeHash, channel.sampleIndexOffset);
         }
         return {
             .dataRevision = dataRevision,
@@ -126,17 +127,19 @@ namespace {
     }
 
     double overviewSampleTime(const plot::WaveSample& sample,
+                              std::size_t sampleIndexOffset,
                               std::size_t sampleIndex,
                               plot::WaveTimeAxisSource axisSource,
                               double sampleFrequencyHz)
     {
+        const std::size_t globalSampleIndex = sampleIndexOffset + sampleIndex;
         if (axisSource == plot::WaveTimeAxisSource::SampleFrequency) {
-            return static_cast<double>(sampleIndex) / sampleFrequencyHz;
+            return static_cast<double>(globalSampleIndex) / sampleFrequencyHz;
         }
         if (axisSource == plot::WaveTimeAxisSource::ScriptTime) {
             return sample.time;
         }
-        return static_cast<double>(sampleIndex);
+        return static_cast<double>(globalSampleIndex);
     }
 
     void buildOverviewDisplayDataInto(const plot::WaveSnapshot& snapshot,
@@ -191,7 +194,12 @@ namespace {
                     maxValue = (std::max)(maxValue, displayValue);
                     minActualValue = (std::min)(minActualValue, actualValue);
                     maxActualValue = (std::max)(maxActualValue, actualValue);
-                    timeSum += overviewSampleTime(sample, sampleIndex, axisSource, sampleFrequencyHz);
+                    timeSum +=
+                        overviewSampleTime(sample,
+                                           channel.sampleIndexOffset,
+                                           sampleIndex,
+                                           axisSource,
+                                           sampleFrequencyHz);
                     ++count;
                 }
                 if (count == 0) {
