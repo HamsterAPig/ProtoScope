@@ -9,34 +9,21 @@ end
 
 function ui()
   return {
-    {
-      id = "ui_basic",
-      title = "UI 快速入门",
-      anchor = "left_bottom",
-      tab_group = "protocol_tools",
-      controls = {
-        { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
-        { type = "checkbox", id = "hex_send", label = "HEX 发送", label_position = "right", default = true },
-        { type = "button", id = "send_once", label = "模拟发送" },
-        { type = "button", id = "show_state", label = "查看状态" },
-        { type = "input_text", id = "last_action", label = "最近动作", default = "待操作" },
-      },
-      layout = {
-        type = "column",
-        children = {
-          { type = "text", text = "修改控件后点击按钮，观察 on_control 如何读写控件状态。" },
-          {
-            type = "flow",
-            children = {
-              { type = "control", id = "device_id", min_width = 160, max_width = 260 },
-              { type = "control", id = "hex_send" },
-              { type = "control", id = "send_once" },
-              { type = "control", id = "show_state" },
-            },
-          },
-          { type = "control", id = "last_action", min_width = 280 },
-        },
-      },
+    id = "ui_basic",
+    title = "UI 快速入门",
+    anchor = "left_bottom",
+    tab_group = "protocol_tools",
+    controls = {
+      { "text", "device_id", "设备 ID", default = "01" },
+      { "check", "hex_send", "HEX 发送", label_position = "right", default = true },
+      { "btn", "send_once", "模拟发送" },
+      { "btn", "show_state", "查看状态" },
+      { "text", "last_action", "最近动作", default = "待操作" },
+    },
+    layout = {
+      { text = "修改控件后点击按钮，观察 on_control 如何读写控件状态。" },
+      { "device_id", "hex_send", "send_once", "show_state" },
+      { id = "last_action", min_width = 280 },
     },
   }
 end

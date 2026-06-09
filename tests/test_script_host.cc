@@ -34,6 +34,13 @@ std::string readTextFile(const std::filesystem::path& path)
     return buffer.str();
 }
 
+void writeMainLua(const std::filesystem::path& protocolDir, const char* script)
+{
+    std::ofstream out(protocolDir / "main.lua");
+    require(out.good(), "测试协议 main.lua 应可写入");
+    out << script;
+}
+
 std::uint64_t nowMs()
 {
     return static_cast<std::uint64_t>(
@@ -494,6 +501,173 @@ void test_script_table_layout_snapshot()
     require(table.rows[0][0].controlIndex == 0, "第一行第一列应固化 controlIndex");
     require(table.rows[1][1].kind == protoscope::scripting::LayoutNodeKind::Spacer, "第二行第二列应为 spacer");
     require(table.rows[2][0].controlId == "read_version", "第三行第一列应绑定 read_version");
+}
+
+void test_script_ui_descriptor_sugar_snapshot()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-ui-descriptor-sugar"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function ui()
+  return {
+    id = "tools",
+    title = "协议工具",
+    controls = {
+      { "btn", "send_once", "发送一次" },
+      { "text", "device_id", "设备 ID", default = "01" },
+      { "int", "count", "次数", default = 3 },
+      { "float", "scale", "比例", default = 1.5 },
+      { "check", "hex_send", "HEX", label_position = "right", default = true },
+      { "select", "mode", "模式", options = { "轮询", "单次" }, default = 1 },
+      { "symbol", "target", "ELF 变量" },
+      {
+        "values",
+        "status",
+        "状态",
+        rows = {
+          { 0x1010, "电压", "V", note = "母线电压" },
+        },
+      },
+    },
+    layout = {
+      { "device_id", "hex_send", "send_once" },
+      "count",
+      { id = "scale", min_width = 120 },
+      { text = "说明文字" },
+      { separator = true },
+      { spacer = true },
+      { "mode", "target", "status" },
+    },
+  }
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    if (!host.loadProtocolDirectory(protocolDir.path().generic_string())) {
+        throw std::runtime_error("语法糖协议应可加载: " + host.lastError());
+    }
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 1, "单 dock 返回糖应产出一个 dock");
+    const auto& dock = docks[0].descriptor;
+    require(dock.id == "tools" && dock.title == "协议工具", "单 dock 字段应正确解析");
+    require(dock.controls.size() == 8, "语法糖控件数量不正确");
+    require(dock.controls[0].type == protoscope::scripting::ControlType::Button, "btn 应映射为 button");
+    require(dock.controls[1].type == protoscope::scripting::ControlType::InputText, "text 应映射为 input_text");
+    require(dock.controls[2].type == protoscope::scripting::ControlType::InputInt, "int 应映射为 input_int");
+    require(dock.controls[3].type == protoscope::scripting::ControlType::InputFloat, "float 应映射为 input_float");
+    require(dock.controls[4].type == protoscope::scripting::ControlType::Checkbox, "check 应映射为 checkbox");
+    require(dock.controls[5].type == protoscope::scripting::ControlType::Combo, "select 应映射为 combo");
+    require(dock.controls[6].type == protoscope::scripting::ControlType::ElfSymbolCombo,
+            "symbol 应映射为 elf_symbol_combo");
+    require(dock.controls[7].type == protoscope::scripting::ControlType::ValueTable,
+            "values 应映射为 value_table");
+    require(dock.controls[1].id == "device_id" && dock.controls[1].label == "设备 ID",
+            "控件位置参数应展开 id/label");
+    require(dock.controls[1].textDefault == "01", "input_text default 应保持可用");
+    require(dock.controls[4].boolDefault, "checkbox default 应保持可用");
+    require(dock.controls[4].labelPosition == protoscope::scripting::ControlLabelPosition::Right,
+            "checkbox label_position 应保持可用");
+    require(dock.controls[7].valueRows.size() == 1, "value_table 普通行位置参数应展开一行");
+    require(dock.controls[7].valueRows[0].id == 0x1010U, "value_table 行 id 应来自第 1 位置参数");
+    require(dock.controls[7].valueRows[0].label == "电压", "value_table 行 label 应来自第 2 位置参数");
+    require(dock.controls[7].valueRows[0].unit == "V", "value_table 行 unit 应来自第 3 位置参数");
+    require(dock.controls[7].valueRows[0].note == "母线电压", "value_table 行 note 应保持命名字段");
+
+    require(dock.layout.has_value(), "语法糖 layout 应生成显式布局描述");
+    const auto& root = dock.layout->root;
+    require(root.kind == protoscope::scripting::LayoutNodeKind::Column, "无 type layout root 应默认 column");
+    require(root.children.size() == 7, "root column 应包含七个子节点");
+    require(root.children[0].kind == protoscope::scripting::LayoutNodeKind::Flow, "字符串数组应展开为 flow");
+    require(root.children[0].children.size() == 3, "flow 应包含三个 control 子节点");
+    require(root.children[0].children[0].controlId == "device_id", "flow 第一个 control id 不正确");
+    require(root.children[1].kind == protoscope::scripting::LayoutNodeKind::Control &&
+                root.children[1].controlId == "count",
+            "字符串 layout 子项应展开为 control");
+    require(root.children[2].kind == protoscope::scripting::LayoutNodeKind::Control &&
+                root.children[2].controlId == "scale" && root.children[2].minWidth == 120.0F,
+            "id + min_width 糖应展开为 control 节点");
+    require(root.children[3].kind == protoscope::scripting::LayoutNodeKind::Text &&
+                root.children[3].text == "说明文字",
+            "text 糖应展开为 text 节点");
+    require(root.children[4].kind == protoscope::scripting::LayoutNodeKind::Separator,
+            "separator 糖应展开为 separator 节点");
+    require(root.children[5].kind == protoscope::scripting::LayoutNodeKind::Spacer,
+            "spacer 糖应展开为 spacer 节点");
+}
+
+void test_script_ui_descriptor_sugar_layout_validation_failures()
+{
+    {
+        const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-ui-sugar-unknown"));
+        writeMainLua(protocolDir.path(),
+                     R"lua(
+function ui()
+  return {
+    id = "tools",
+    title = "Tools",
+    controls = {
+      { "text", "device_id", "Device" },
+    },
+    layout = {
+      "missing_control",
+    },
+  }
+end
+)lua");
+        protoscope::scripting::ScriptHost host;
+        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()),
+                "语法糖 layout 引用未知控件应加载失败");
+        require(host.lastError().find("未声明控件") != std::string::npos, "未知控件错误应复用 layout 校验");
+    }
+
+    {
+        const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-ui-sugar-duplicate"));
+        writeMainLua(protocolDir.path(),
+                     R"lua(
+function ui()
+  return {
+    id = "tools",
+    title = "Tools",
+    controls = {
+      { "text", "device_id", "Device" },
+      { "btn", "send_once", "Send" },
+    },
+    layout = {
+      { "device_id", "device_id", "send_once" },
+    },
+  }
+end
+)lua");
+        protoscope::scripting::ScriptHost host;
+        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()),
+                "语法糖 layout 重复引用控件应加载失败");
+        require(host.lastError().find("重复引用控件") != std::string::npos, "重复引用错误应复用 layout 校验");
+    }
+
+    {
+        const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-ui-sugar-missing"));
+        writeMainLua(protocolDir.path(),
+                     R"lua(
+function ui()
+  return {
+    id = "tools",
+    title = "Tools",
+    controls = {
+      { "text", "device_id", "Device" },
+      { "btn", "send_once", "Send" },
+    },
+    layout = {
+      "device_id",
+    },
+  }
+end
+)lua");
+        protoscope::scripting::ScriptHost host;
+        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()),
+                "语法糖 layout 漏布局控件应加载失败");
+        require(host.lastError().find("缺少控件") != std::string::npos, "漏布局错误应复用 layout 校验");
+    }
 }
 
 void test_script_form_layout_snapshot()
@@ -3180,6 +3354,9 @@ static const TestCase kAllTests[] = {
     {"script_multi_dock_snapshot", &test_script_multi_dock_snapshot},
     {"script_dock_layout_fields", &test_script_dock_layout_fields},
     {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
+    {"script_ui_descriptor_sugar_snapshot", &test_script_ui_descriptor_sugar_snapshot},
+    {"script_ui_descriptor_sugar_layout_validation_failures",
+     &test_script_ui_descriptor_sugar_layout_validation_failures},
     {"script_form_layout_snapshot", &test_script_form_layout_snapshot},
     {"script_flow_layout_snapshot", &test_script_flow_layout_snapshot},
     {"script_layout_width_controls_shorthand_snapshot", &test_script_layout_width_controls_shorthand_snapshot},

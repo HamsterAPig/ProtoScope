@@ -22,7 +22,7 @@
 
 ## Lua UI 最短路径
 
-脚本通过 `ui()` 声明停靠面板。宿主会在加载脚本时调用它，要求返回 `ProtoDockDescriptor[]`。最短路径是：先在 `controls` 里声明控件，再用 `layout` 排列控件，最后用 `on_control(ctx, id, value)` 响应用户操作。
+脚本通过 `ui()` 声明停靠面板。宿主会在加载脚本时调用它，允许直接返回单个 `ProtoDockDescriptor`，也允许返回 `ProtoDockDescriptor[]`。最短路径是：先在 `controls` 里声明控件，再用 `layout` 排列控件，最后用 `on_control(ctx, id, value)` 响应用户操作。
 
 下面是一个可以直接保存为 `main.lua` 的完整闭环：
 
@@ -31,31 +31,19 @@ local click_count = 0
 
 function ui()
   return {
-    {
-      id = "protocol_tools",
-      title = "协议工具",
-      anchor = "left_bottom",
-      tab_group = "protocol_tools",
-      controls = {
-        { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
-        { type = "checkbox", id = "hex_send", label = "HEX 发送", label_position = "right", default = true },
-        { type = "button", id = "send_once", label = "发送一次" },
-        { type = "input_text", id = "last_action", label = "最近动作", default = "待操作" },
-      },
-      layout = {
-        type = "column",
-        children = {
-          {
-            type = "flow",
-            children = {
-              { type = "control", id = "device_id", min_width = 160, max_width = 260 },
-              { type = "control", id = "hex_send" },
-              { type = "control", id = "send_once" },
-            },
-          },
-          { type = "control", id = "last_action", min_width = 260 },
-        },
-      },
+    id = "protocol_tools",
+    title = "协议工具",
+    anchor = "left_bottom",
+    tab_group = "protocol_tools",
+    controls = {
+      { "text", "device_id", "设备 ID", default = "01" },
+      { "check", "hex_send", "HEX 发送", label_position = "right", default = true },
+      { "btn", "send_once", "发送一次" },
+      { "text", "last_action", "最近动作", default = "待操作" },
+    },
+    layout = {
+      { "device_id", "hex_send", "send_once" },
+      { id = "last_action", min_width = 260 },
     },
   }
 end
@@ -116,11 +104,13 @@ end
 - `elf_symbol_combo`：ELF 静态地址候选输入框，值是 `{ label, value, type }` 结构；可选 `debounce_ms` 和 `limit`，未写时使用 `gui.elf_symbol_combo.debounce_ms` 与 `gui.elf_symbol_combo.limit`。
 - `value_table`：只读寄存器显示表。`rows` 支持普通行（`id + label + unit? + note?`）、bit 展开行（在一个源 `id` 下声明 `bits = { ... }`，`bit` 使用 U32 下标）、批量行（`start_id + len + labels + units`）。row id 只用于内部匹配，不显示到界面；`note` 字段在悬浮时作为 tooltip 展示。
 
+控件支持短类型和位置参数糖：`{ "text", "device_id", "设备 ID", default = "01" }` 等价于 `{ type = "input_text", id = "device_id", label = "设备 ID", default = "01" }`。短类型映射为：`btn -> button`、`text -> input_text`、`int -> input_int`、`float -> input_float`、`check -> checkbox`、`select -> combo`、`symbol -> elf_symbol_combo`、`values -> value_table`。
+
 ```lua
 controls = {
-  { type = "value_table", id = "holding_values", label = "保持寄存器",
+  { "values", "holding_values", "保持寄存器",
     rows = {
-      { id = 0x1010, label = "电压", unit = "V", note = "母线电压" },
+      { 0x1010, "电压", "V", note = "母线电压" },
 
       { id = 0x1020, label = "状态字",
         bits = {
@@ -185,6 +175,14 @@ proto.set_control("holding_values", {
 显式布局统一使用 `type + children` 的递归树，不再兼容旧的 `layout.kind`、`form.items`、`table.rows` control-only 写法。
 `column`、`flow` 和 `inline_group` 可用 `controls = { "id1", "id2" }` 简写连续控件；同一个 layout 节点上 `children` 与 `controls` 互斥，不能同时填写。
 需要约束宽度时使用显式 `control` 节点，例如 `{ type = "control", id = "device_id", min_width = 180, max_width = 260 }`。宽度约束只属于 layout 的 `control` 节点；顶层控件描述只声明控件类型、标签、默认值和选项。
+
+语法糖写法会在加载时展开为同一套 Layout Tree，因此校验规则不变：
+
+- `layout = { ... }` 且未写 `type` 时默认是 `column`。
+- `"device_id"` 等价于 `{ type = "control", id = "device_id" }`。
+- `{ "device_id", "hex_send", "send_once" }` 等价于一个 `flow`，内部按顺序引用这些控件。
+- `{ id = "last_action", min_width = 280 }` 等价于 `control` 节点，并保留宽度约束。
+- `{ text = "说明文字" }`、`{ separator = true }`、`{ spacer = true }` 分别等价于 `text`、`separator`、`spacer` 节点。
 
 通用规则：
 

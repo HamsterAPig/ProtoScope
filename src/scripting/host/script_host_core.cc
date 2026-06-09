@@ -289,6 +289,24 @@ std::string serializeLuaObject(const sol::object& object, int depth)
 
 std::optional<ControlType> parseControlType(std::string_view value)
 {
+    if (value == "btn") {
+        value = "button";
+    } else if (value == "text") {
+        value = "input_text";
+    } else if (value == "int") {
+        value = "input_int";
+    } else if (value == "float") {
+        value = "input_float";
+    } else if (value == "check") {
+        value = "checkbox";
+    } else if (value == "select") {
+        value = "combo";
+    } else if (value == "symbol") {
+        value = "elf_symbol_combo";
+    } else if (value == "values") {
+        value = "value_table";
+    }
+
     if (value == "button") {
         return ControlType::Button;
     }
@@ -314,6 +332,23 @@ std::optional<ControlType> parseControlType(std::string_view value)
         return ControlType::ValueTable;
     }
     return std::nullopt;
+}
+
+std::string readStringFieldOrPosition(const sol::table& table,
+                                      const char* key,
+                                      std::size_t index,
+                                      std::string fallback = {})
+{
+    const sol::object namedValue = table[key];
+    if (namedValue.valid() && namedValue.get_type() != sol::type::lua_nil && namedValue.is<std::string>()) {
+        return namedValue.as<std::string>();
+    }
+    const sol::object positionalValue = table[index];
+    if (!positionalValue.valid() || positionalValue.get_type() == sol::type::lua_nil ||
+        !positionalValue.is<std::string>()) {
+        return fallback;
+    }
+    return positionalValue.as<std::string>();
 }
 
 std::optional<ControlLabelPosition> parseControlLabelPosition(std::string_view value)
@@ -1175,11 +1210,25 @@ bool applyValueTableControlConfig(ControlDescriptor& descriptor, const sol::tabl
             continue;
         }
 
-        const auto id = readLuaU32(rowTable["id"], "value_table row id", error);
-        if (!id.has_value()) {
-            return false;
-        }
         const sol::object bitsObject = rowTable["bits"];
+        const sol::object idObject = rowTable["id"];
+        std::optional<std::uint32_t> id;
+        if (idObject.valid() && idObject.get_type() != sol::type::lua_nil) {
+            id = readLuaU32(idObject, "value_table row id", error);
+            if (!id.has_value()) {
+                return false;
+            }
+        } else {
+            // 只有普通 value_table 行支持位置参数；bit 行保持显式 id + bits 写法。
+            if (bitsObject.valid() && bitsObject.get_type() != sol::type::lua_nil) {
+                error = "value_table row id 必须是整数";
+                return false;
+            }
+            id = readLuaU32(rowTable[1], "value_table row id", error);
+            if (!id.has_value()) {
+                return false;
+            }
+        }
         if (bitsObject.valid() && bitsObject.get_type() != sol::type::lua_nil) {
             if (!applyValueTableBitRows(descriptor, rowTable, *id, error)) {
                 return false;
@@ -1190,8 +1239,8 @@ bool applyValueTableControlConfig(ControlDescriptor& descriptor, const sol::tabl
         ValueTableRowDescriptor row;
         row.id = *id;
         row.sourceId = *id;
-        row.label = readStringField(rowTable, "label");
-        row.unit = readStringField(rowTable, "unit");
+        row.label = readStringFieldOrPosition(rowTable, "label", 2);
+        row.unit = readStringFieldOrPosition(rowTable, "unit", 3);
         row.note = readStringField(rowTable, "note");
         if (!appendValueTableRow(descriptor, std::move(row), error)) {
             return false;
@@ -1333,7 +1382,7 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     }
 
     const auto table = object.as<sol::table>();
-    const std::string typeText = readStringField(table, "type");
+    const std::string typeText = readStringFieldOrPosition(table, "type", 1);
     const auto controlType = parseControlType(typeText);
     if (!controlType.has_value()) {
         error = "未知控件类型: " + typeText;
@@ -1342,8 +1391,8 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
 
     ControlDescriptor descriptor;
     descriptor.type = *controlType;
-    descriptor.id = readStringField(table, "id");
-    descriptor.label = readStringField(table, "label");
+    descriptor.id = readStringFieldOrPosition(table, "id", 2);
+    descriptor.label = readStringFieldOrPosition(table, "label", 3);
     if (!applyControlLabelPosition(descriptor, table, error) || !validateControlIdentity(descriptor, error) ||
         !applyControlCompactLabelConfig(descriptor, table, error) ||
         !applyControlTypeConfig(descriptor, table, error)) {
@@ -1477,12 +1526,100 @@ bool registerLayoutControlUse(const DockDescriptor& dock,
     return true;
 }
 
+std::optional<LayoutNodeDescriptor> parseLayoutControlShortcutNode(
+    const DockDescriptor& dock,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    const std::string& controlId,
+    const sol::table* table,
+    const std::string& path,
+    std::string& error)
+{
+    LayoutNodeDescriptor node;
+    node.kind = LayoutNodeKind::Control;
+    if (!registerLayoutControlUse(dock, controlsById, usedControls, controlId, path, node, error)) {
+        return std::nullopt;
+    }
+    if (table != nullptr && !readLayoutControlWidthFields(*table, path, node, error)) {
+        return std::nullopt;
+    }
+    return node;
+}
+
+bool isLuaStringArray(const sol::table& table)
+{
+    if (table.size() == 0) {
+        return false;
+    }
+    for (std::size_t index = 1; index <= table.size(); ++index) {
+        const sol::object item = table[index];
+        if (!item.is<std::string>()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<LayoutNodeDescriptor> parseLayoutStringArrayFlow(
+    const DockDescriptor& dock,
+    const sol::table& table,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    const std::string& path,
+    std::string& error)
+{
+    LayoutNodeDescriptor node;
+    node.kind = LayoutNodeKind::Flow;
+    node.children.reserve(table.size());
+    for (std::size_t index = 1; index <= table.size(); ++index) {
+        const sol::object item = table[index];
+        auto child = parseLayoutControlShortcutNode(dock,
+                                                    controlsById,
+                                                    usedControls,
+                                                    item.as<std::string>(),
+                                                    nullptr,
+                                                    path + "[" + std::to_string(index) + "]",
+                                                    error);
+        if (!child.has_value()) {
+            return std::nullopt;
+        }
+        node.children.push_back(std::move(*child));
+    }
+    return node;
+}
+
 std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
                                                     const sol::object& object,
                                                     const std::unordered_map<std::string, std::size_t>& controlsById,
                                                     std::unordered_set<std::string>& usedControls,
                                                     const std::string& path,
                                                     std::string& error);
+
+std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutSequenceChildren(
+    const DockDescriptor& dock,
+    const sol::table& table,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    const std::string& path,
+    std::string& error)
+{
+    if (table.size() == 0) {
+        error = path + " 必须声明 children、controls 或数组子节点";
+        return std::nullopt;
+    }
+
+    std::vector<LayoutNodeDescriptor> children;
+    children.reserve(table.size());
+    for (std::size_t index = 1; index <= table.size(); ++index) {
+        auto child = parseLayoutNode(
+            dock, table[index], controlsById, usedControls, path + "[" + std::to_string(index) + "]", error);
+        if (!child.has_value()) {
+            return std::nullopt;
+        }
+        children.push_back(std::move(*child));
+    }
+    return children;
+}
 
 std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutChildren(
     const DockDescriptor& dock,
@@ -1707,6 +1844,10 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
                                                     const std::string& path,
                                                     std::string& error)
 {
+    if (object.is<std::string>()) {
+        return parseLayoutControlShortcutNode(
+            dock, controlsById, usedControls, object.as<std::string>(), nullptr, path, error);
+    }
     if (!object.is<sol::table>()) {
         error = path + " 必须是 table";
         return std::nullopt;
@@ -1714,9 +1855,69 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
 
     const auto table = object.as<sol::table>();
     const sol::object typeObject = table["type"];
-    if (!typeObject.valid() || typeObject.get_type() == sol::type::lua_nil || !typeObject.is<std::string>()) {
+    if (typeObject.valid() && typeObject.get_type() != sol::type::lua_nil && !typeObject.is<std::string>()) {
         error = path + ".type 必须是字符串";
         return std::nullopt;
+    }
+    if (!typeObject.valid() || typeObject.get_type() == sol::type::lua_nil) {
+        if (const sol::object idObject = table["id"];
+            idObject.valid() && idObject.get_type() != sol::type::lua_nil) {
+            if (!idObject.is<std::string>()) {
+                error = path + ".id 必须是字符串";
+                return std::nullopt;
+            }
+            return parseLayoutControlShortcutNode(
+                dock, controlsById, usedControls, idObject.as<std::string>(), &table, path, error);
+        }
+        if (const sol::object textObject = table["text"];
+            textObject.valid() && textObject.get_type() != sol::type::lua_nil) {
+            if (!textObject.is<std::string>()) {
+                error = path + ".text 必须是字符串";
+                return std::nullopt;
+            }
+            LayoutNodeDescriptor node;
+            node.kind = LayoutNodeKind::Text;
+            node.text = textObject.as<std::string>();
+            return node;
+        }
+        if (const sol::object separatorObject = table["separator"];
+            separatorObject.valid() && separatorObject.get_type() != sol::type::lua_nil) {
+            if (!separatorObject.is<bool>() || !separatorObject.as<bool>()) {
+                error = path + ".separator 必须是 true";
+                return std::nullopt;
+            }
+            LayoutNodeDescriptor node;
+            node.kind = LayoutNodeKind::Separator;
+            return node;
+        }
+        if (const sol::object spacerObject = table["spacer"];
+            spacerObject.valid() && spacerObject.get_type() != sol::type::lua_nil) {
+            if (!spacerObject.is<bool>() || !spacerObject.as<bool>()) {
+                error = path + ".spacer 必须是 true";
+                return std::nullopt;
+            }
+            LayoutNodeDescriptor node;
+            node.kind = LayoutNodeKind::Spacer;
+            return node;
+        }
+        if (isLuaStringArray(table)) {
+            return parseLayoutStringArrayFlow(dock, table, controlsById, usedControls, path, error);
+        }
+
+        LayoutNodeDescriptor node;
+        node.kind = LayoutNodeKind::Column;
+        std::optional<std::vector<LayoutNodeDescriptor>> children;
+        if (hasLuaTableField(table, "children") || hasLuaTableField(table, "controls")) {
+            children = parseLayoutContainerChildren(dock, table, controlsById, usedControls, path, error);
+        } else {
+            // 无 type 的 layout 容器默认按 column 处理，保持严格全覆盖校验不变。
+            children = parseLayoutSequenceChildren(dock, table, controlsById, usedControls, path, error);
+        }
+        if (!children.has_value()) {
+            return std::nullopt;
+        }
+        node.children = std::move(*children);
+        return node;
     }
 
     const std::string type = typeObject.as<std::string>();
@@ -1925,6 +2126,15 @@ std::optional<std::vector<DockDescriptor>> parseDockDescriptorList(const sol::ob
     }
 
     const auto dockTable = object.as<sol::table>();
+    if (hasLuaTableField(dockTable, "id") || hasLuaTableField(dockTable, "title") ||
+        hasLuaTableField(dockTable, "controls") || hasLuaTableField(dockTable, "layout")) {
+        auto dock = parseSingleDockDescriptor(object, error);
+        if (!dock.has_value()) {
+            return std::nullopt;
+        }
+        return std::vector<DockDescriptor>{std::move(*dock)};
+    }
+
     std::vector<DockDescriptor> docks;
     docks.reserve(dockTable.size());
     for (std::size_t index = 1; index <= dockTable.size(); ++index) {
