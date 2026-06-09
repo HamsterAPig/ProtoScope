@@ -17,9 +17,12 @@
 - `version_utils.hpp` 承接语义版本解析和比较，解决版本判断逻辑只能藏在 GUI 实现文件内、难以复用和单测的问题。
 - `update_check.hpp/.cpp` 承接 GitHub tags 响应解析、当前构建版本评估和联网检查。`evaluateUpdateCheckTags` 不访问网络，便于覆盖失败、新版本、最新版本、开发构建等分支。
 - `wave_dock_renderer.hpp` 原本只保存 `app::Application&` 却包含完整 `application.hpp`，改为前置声明后减少公开头文件依赖扩散。
+- `Application` 的现场包导入/导出和 raw capture 导出流程已拆出内部 helper，主流程只保留编排；普通 psraw 与现场包导出共享 raw 窗口归一化逻辑。
+- `raw_capture_file.cc` 已把内存编码和文件写入的公共编码准备、事件流写入逻辑收口，减少 `.psraw` 格式规则重复实现。
+- `gui_runtime.hpp` 只保存 `app::Application&`，改为前置声明后减少 UI 公开头对应用宿主头文件的扩散。
 
 ## 当前优先级
 
 1. 保持本轮重构行为等价，不改变 Lua、配置文件、传输或波形数据契约。
 2. 优先拆纯逻辑和头文件依赖，不做大规模模块迁移。
-3. 后续若继续治理巨型文件，可按同一标准从 `script_host.cpp` 的纯 Lua 描述解析逻辑和 `wave_dock_renderer.cpp` 的视图状态计算逻辑开始。
+3. 下一批候选按优先级处理：`script_host_core.cc` 的 Lua 值解析/profile 解析、`wave_dock_renderer.cc` 的视图状态计算、`dock_host.cc` 的表格工具栏/空态绘制拆分。

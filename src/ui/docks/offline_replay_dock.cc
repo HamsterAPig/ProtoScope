@@ -1,3 +1,4 @@
+#include "protoscope/app/application.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/ui_theme.hpp"
 

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/elf_static_address_file_watch.hpp"
@@ -26,6 +25,10 @@
 #include <vector>
 
 struct GLFWwindow;
+
+namespace protoscope::app {
+class Application;
+}
 
 namespace protoscope::ui {
 
