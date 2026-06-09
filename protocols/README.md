@@ -16,17 +16,19 @@
 
 源码中的默认示例位于 `protocols/default_protocol`、`protocols/lua_waveform_demo`、
 `protocols/half_duplex_modbus_master` 和 `protocols/half_duplex_modbus_slave`。
-`protocols/templates` 只放可复制的操作模板，例如 `file_dialog`、`request_guarded` 和 `send_file`。
+`protocols/templates` 只放可复制的操作模板，例如 `file_dialog`、`request_guarded`、`send_file`、`ui_basic`、`ui_layouts` 和 `ui_dialogs`。
 每个协议目录只要求存在 `main.lua`，例如 `protocols/default_protocol/main.lua`。
 打包运行时会把内嵌默认协议释放到可执行目录下的协议目录，供用户直接选择和复制。
 
-## UI 布局
+## Lua UI 最短路径
 
-脚本通过 `ui()` 声明停靠面板。宿主会在加载脚本时调用它，要求返回 `ProtoDockDescriptor[]`。
+脚本通过 `ui()` 声明停靠面板。宿主会在加载脚本时调用它，要求返回 `ProtoDockDescriptor[]`。最短路径是：先在 `controls` 里声明控件，再用 `layout` 排列控件，最后用 `on_control(ctx, id, value)` 响应用户操作。
 
-最小骨架：
+下面是一个可以直接保存为 `main.lua` 的完整闭环：
 
 ```lua
+local click_count = 0
+
 function ui()
   return {
     {
@@ -38,23 +40,47 @@ function ui()
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
         { type = "checkbox", id = "hex_send", label = "HEX 发送", label_position = "right", default = true },
         { type = "button", id = "send_once", label = "发送一次" },
+        { type = "input_text", id = "last_action", label = "最近动作", default = "待操作" },
       },
       layout = {
-        type = "flow",
-        controls = { "device_id", "hex_send", "send_once" },
+        type = "column",
+        children = {
+          {
+            type = "flow",
+            children = {
+              { type = "control", id = "device_id", min_width = 160, max_width = 260 },
+              { type = "control", id = "hex_send" },
+              { type = "control", id = "send_once" },
+            },
+          },
+          { type = "control", id = "last_action", min_width = 260 },
+        },
       },
     },
   }
 end
+
+function on_control(ctx, id, value)
+  if id ~= "send_once" then
+    return
+  end
+
+  -- 按钮点击后读取当前 UI 状态，并把处理结果写回控件。
+  click_count = click_count + 1
+  local device_id = proto.get_control("device_id") or "01"
+  local hex_send = proto.get_control("hex_send") == true
+  local summary = string.format("第 %d 次发送：设备 %s，HEX=%s", click_count, device_id, tostring(hex_send))
+
+  proto.set_control("last_action", summary)
+  proto.ui.alert({
+    title = "发送动作",
+    message = summary,
+    level = "info",
+  })
+end
 ```
 
-控件宽度约束写在 layout 的 `control` 节点上，不写在顶层控件定义里：
-
-```lua
-{ type = "control", id = "device_id", min_width = 180, max_width = 260 }
-```
-
-宽度约束只属于 layout 的 `control` 节点。顶层控件描述只声明控件类型、标签、默认值和选项，不声明布局宽度。
+可复制模板位于 `protocols/templates/ui_basic`、`ui_layouts` 和 `ui_dialogs`。如果需要完整布局组合或弹窗回调示例，优先复制这些模板目录。
 
 ### `ui()` 返回值
 
@@ -115,10 +141,50 @@ controls = {
 
 `proto.set_control("holding_values", { [0x1010] = "220.1", [0x1020] = 0x0023 })` 按 row id 更新。对于 U16 bit 源行，收到整数后自动展开 bit。也可以传 `{ start_id = ..., values = { ... } }` 做范围更新。schema 自动化流填充使用 `value_targets.controls` 映射，解析帧后自动写入目标 value_table 控件，再调用 on_batch/on_frame，handler 覆盖优先。
 
+### 控件状态读写
+
+`on_control(ctx, id, value)` 的 `value` 是当前触发控件的新值；如果按钮点击时需要读取其他控件状态，使用 `proto.get_control(id)`：
+
+```lua
+function on_control(ctx, id, value)
+  if id == "send_once" then
+    local device_id = proto.get_control("device_id") or "01"
+    local hex_send = proto.get_control("hex_send") == true
+    proto.emit("send_once", { device_id = device_id, hex_send = hex_send })
+  end
+end
+```
+
+`proto.set_control(id, value)` 用于脚本反向更新 UI，常见场景是把协议解析结果、最近操作或只读表格值写回控件：
+
+```lua
+proto.set_control("last_action", "已发送读取版本命令")
+proto.set_control("holding_values", {
+  [0x1010] = "220.1",
+  [0x1020] = 0x0023,
+})
+proto.set_control("holding_values", {
+  start_id = 0x1030,
+  values = { "36.5", "42", "101.3" },
+})
+```
+
+找不到控件时，`proto.get_control()` 返回 `nil`；`proto.set_control()` 会写入 Lua 警告日志并忽略本次更新。`elf_symbol_combo` 的值可能是字符串，也可能是 `{ label = "...", value = 123, type = "FUNC" }` 这样的表，脚本处理时应先判断 `type(value) == "table"`。
+
+### UI 事件回调
+
+动态 UI 常用两个回调：
+
+- `on_control(ctx, id, value)`：用户操作控件时触发。按钮的 `value` 固定为 `true`；输入框、数字框、开关、下拉框会传当前值；`elf_symbol_combo` 可能传字符串或符号表。
+- `on_dialog(ctx, evt)`：`proto.ui.confirm()` 或 `proto.ui.alert()` 关闭后触发。常用字段是 `evt.tag`、`evt.dialog_id` 和 `evt.result`。
+
+如果只需要处理当前控件，直接使用 `value`；如果一次按钮点击需要组装多个控件值，再用 `proto.get_control()` 读取其他控件。
+
 ### Layout Tree
 
 显式布局统一使用 `type + children` 的递归树，不再兼容旧的 `layout.kind`、`form.items`、`table.rows` control-only 写法。
 `column`、`flow` 和 `inline_group` 可用 `controls = { "id1", "id2" }` 简写连续控件；同一个 layout 节点上 `children` 与 `controls` 互斥，不能同时填写。
+需要约束宽度时使用显式 `control` 节点，例如 `{ type = "control", id = "device_id", min_width = 180, max_width = 260 }`。宽度约束只属于 layout 的 `control` 节点；顶层控件描述只声明控件类型、标签、默认值和选项。
 
 通用规则：
 
@@ -192,6 +258,31 @@ layout = {
   }
 }
 ```
+
+### 脚本弹窗
+
+`proto.ui.alert()` 适合提示结果，`proto.ui.confirm()` 适合让用户确认下一步。它们通常从 `on_control()` 里发起，关闭结果由 `on_dialog()` 接收：
+
+```lua
+function on_control(ctx, id, value)
+  if id == "confirm_send" then
+    proto.ui.confirm({
+      title = "确认发送",
+      message = "是否发送当前命令？",
+      tag = "confirm_send",
+      dedupe_key = "confirm_send",
+    })
+  end
+end
+
+function on_dialog(ctx, evt)
+  if evt.tag == "confirm_send" and evt.result == "yes" then
+    proto.emit("confirmed_send", { dialog_id = evt.dialog_id })
+  end
+end
+```
+
+弹窗初始尺寸、位置和拖动缩放开关写在可选的 `window` 子表里；完整参数见本文后面的“状态、弹窗和波形”，维护宿主绑定时再看 `docs/lua-host-integration.md`。
 
 ## 发送模型
 

@@ -56,6 +56,11 @@ std::filesystem::path fixtureProtocolDir(const char* name)
     return std::filesystem::path("tests/fixtures/protocols") / name;
 }
 
+std::filesystem::path templateProtocolDir(const char* name)
+{
+    return std::filesystem::path("protocols/templates") / name;
+}
+
 struct ScopedCurrentPath {
     explicit ScopedCurrentPath(const std::filesystem::path& path) : original_(std::filesystem::current_path())
     {
@@ -1756,6 +1761,20 @@ void test_protocol_directory_reload()
     require(host.scriptPath().find("main.lua") != std::string::npos, "协议入口应固定为 main.lua");
 }
 
+void test_protocol_ui_templates_load()
+{
+    const std::array<const char*, 3> templates{"ui_basic", "ui_layouts", "ui_dialogs"};
+
+    for (const auto* name : templates) {
+        protoscope::scripting::ScriptHost host;
+        const auto directory = templateProtocolDir(name).generic_string();
+
+        requireProtocolLoaded(host, directory.c_str());
+        const auto message = std::string(name) + " 模板应声明可见控件";
+        require(!host.controlsSnapshot().empty(), message.c_str());
+    }
+}
+
 void test_config_default_roundtrip()
 {
     protoscope::config::ConfigStore store;
@@ -3080,6 +3099,7 @@ static const TestCase kAllTests[] = {
     {"update_check_reports_development_build", &test_update_check_reports_development_build},
     {"update_check_rejects_response_without_semantic_tags", &test_update_check_rejects_response_without_semantic_tags},
     {"protocol_directory_reload", &test_protocol_directory_reload},
+    {"protocol_ui_templates_load", &test_protocol_ui_templates_load},
     {"config_default_roundtrip", &test_config_default_roundtrip},
     {"config_repo_default_yaml_loads", &test_config_repo_default_yaml_loads},
     {"config_performance_scale_applies_default_budgets", &test_config_performance_scale_applies_default_budgets},
