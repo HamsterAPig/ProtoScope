@@ -65,7 +65,7 @@ struct ValueTableBitValueLabels {
 struct ValueTableRowDescriptor {
     std::uint32_t id{0};
     std::uint32_t sourceId{0};
-    std::optional<std::uint8_t> bit;
+    std::optional<std::uint32_t> bit; // bit 展开行的位下标；整数源按 64 位读取，字节源按字节低位优先读取。
     std::string label;
     std::string unit;
     std::string note;
@@ -86,6 +86,8 @@ struct ControlDescriptor {
     ControlLabelPosition labelPosition{ControlLabelPosition::Left};
     std::string id;
     std::string label;
+    std::string shortLabel;
+    std::optional<float> compactLabelBelow;
     std::string textDefault;
     int intDefault{0};
     float floatDefault{0.0F};
@@ -111,6 +113,7 @@ struct ControlSnapshot {
 enum class LayoutNodeKind {
     Column,
     Flow,
+    InlineGroup,
     Table,
     Group,
     Collapse,

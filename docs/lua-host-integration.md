@@ -2,6 +2,8 @@
 
 Lua 脚本通过宿主注入的全局 `proto` 与 C++ 交互。脚本不直接操作串口、TCP、UDP、ImGui 或底层文件句柄，所有能力都由 C++ API 模块挂到 `proto.*`。
 
+面向协议脚本作者的 Lua UI 入门示例见 `docs/user-manual.md` 的“写第一个 Lua UI 脚本”和 `protocols/README.md` 的“Lua UI 最短路径”；本文只记录宿主 API 接入与维护边界。
+
 ## 注册模型
 
 `ScriptHost::loadScriptFile()` 只负责创建 Lua runtime、设置 `package.path`、创建 `proto` 表并调用 `registerLuaApi()`。

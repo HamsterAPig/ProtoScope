@@ -56,6 +56,11 @@ std::filesystem::path fixtureProtocolDir(const char* name)
     return std::filesystem::path("tests/fixtures/protocols") / name;
 }
 
+std::filesystem::path templateProtocolDir(const char* name)
+{
+    return std::filesystem::path("protocols/templates") / name;
+}
+
 struct ScopedCurrentPath {
     explicit ScopedCurrentPath(const std::filesystem::path& path) : original_(std::filesystem::current_path())
     {
@@ -583,6 +588,50 @@ void test_script_layout_width_controls_shorthand_snapshot()
     require(constrained.controlId == "mode", "第三项应绑定 mode");
     require(constrained.minWidth.has_value() && *constrained.minWidth == 120.0F, "control min_width 应解析");
     require(constrained.maxWidth.has_value() && *constrained.maxWidth == 240.0F, "control max_width 应解析");
+}
+
+void test_script_inline_group_layout_snapshot()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("inline_group_layout").generic_string()),
+            "inline_group_layout 协议应可加载");
+
+    const auto controls = host.controlsSnapshot();
+    require(controls.size() == 4, "inline_group_layout 应解析 4 个控件");
+    require(controls[0].shortLabel == "读", "button short_label 应解析");
+    require(controls[0].compactLabelBelow.has_value() && *controls[0].compactLabelBelow == 80.0F,
+            "button compact_label_below 应解析");
+    require(controls[1].shortLabel == "ID", "input_text short_label 应解析");
+    require(controls[1].compactLabelBelow.has_value() && *controls[1].compactLabelBelow == 180.0F,
+            "input_text compact_label_below 应解析");
+
+    const auto docks = host.dockSnapshots();
+    require(docks.size() == 1, "inline_group_layout 协议应只产出一个 dock");
+    require(docks[0].descriptor.layout.has_value(), "inline_group_layout 应解析 layout");
+
+    const auto& flow = docks[0].descriptor.layout->root;
+    require(flow.kind == protoscope::scripting::LayoutNodeKind::Flow, "根节点应为 flow");
+    require(flow.spacing == 4.0F, "flow spacing 应解析");
+    require(flow.runSpacing == 7.0F, "flow run_spacing 应解析");
+    require(flow.children.size() == 3, "flow 应包含两个 inline_group 和一个 control");
+
+    const auto& shortcutGroup = flow.children[0];
+    require(shortcutGroup.kind == protoscope::scripting::LayoutNodeKind::InlineGroup, "第一项应为 inline_group");
+    require(shortcutGroup.spacing == 3.0F, "inline_group spacing 应解析");
+    require(shortcutGroup.minWidth.has_value() && *shortcutGroup.minWidth == 200.0F,
+            "inline_group min_width 应解析");
+    require(!shortcutGroup.maxWidth.has_value(), "inline_group 不应解析 max_width");
+    require(shortcutGroup.children.size() == 2, "inline_group.controls 应展开两个 control 子节点");
+    require(shortcutGroup.children[0].controlId == "read_version", "inline_group.controls 第一个控件顺序错误");
+    require(shortcutGroup.children[1].controlId == "device_id", "inline_group.controls 第二个控件顺序错误");
+
+    const auto& mixedGroup = flow.children[1];
+    require(mixedGroup.kind == protoscope::scripting::LayoutNodeKind::InlineGroup, "第二项应为 inline_group");
+    require(mixedGroup.children.size() == 2, "inline_group.children 应解析 text 与 control");
+    require(mixedGroup.children[0].kind == protoscope::scripting::LayoutNodeKind::Text, "inline_group 第一个子项应为 text");
+    require(mixedGroup.children[0].text == "发送选项", "inline_group text 内容应保留");
+    require(mixedGroup.children[1].controlId == "hex_send", "inline_group 第二个子项应绑定 hex_send");
+    require(flow.children[2].controlId == "timeout_ms", "flow 第三个子项应绑定 timeout_ms");
 }
 
 void test_script_duplicate_label_controls_allowed()
@@ -1494,6 +1543,76 @@ void test_script_layout_shortcut_missing_control_fail()
     require(host.lastError().find("缺少控件") != std::string::npos, "简写遗漏控件错误应包含缺少控件提示");
 }
 
+void test_script_inline_group_children_controls_conflict_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_children_controls").generic_string()),
+            "inline_group 同时声明 children 和 controls 时应加载失败");
+    require(host.lastError().find("不能同时声明 children 和 controls") != std::string::npos,
+            "inline_group children/controls 混用错误应包含互斥提示");
+}
+
+void test_script_inline_group_unknown_control_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_unknown_control").generic_string()),
+            "inline_group.controls 引用未知控件应加载失败");
+    require(host.lastError().find("未声明控件") != std::string::npos,
+            "inline_group 未知控件错误应包含未声明控件提示");
+}
+
+void test_script_inline_group_child_layout_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_child_layout").generic_string()),
+            "inline_group 嵌套 flow 时应加载失败");
+    require(host.lastError().find("inline_group 只允许 control 或 text 子节点") != std::string::npos,
+            "inline_group 非法子布局错误应说明允许的子节点类型");
+}
+
+void test_script_inline_group_min_width_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_min_width").generic_string()),
+            "inline_group 非正 min_width 应加载失败");
+    require(host.lastError().find("min_width 必须是正数") != std::string::npos,
+            "inline_group min_width 错误应包含正数提示");
+}
+
+void test_script_short_label_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_short_label_type").generic_string()),
+            "short_label 非字符串时应加载失败");
+    require(host.lastError().find("short_label") != std::string::npos, "short_label 类型错误应包含字段名");
+}
+
+void test_script_short_label_empty_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_short_label_empty").generic_string()),
+            "short_label 为空时应加载失败");
+    require(host.lastError().find("short_label") != std::string::npos, "short_label 空值错误应包含字段名");
+}
+
+void test_script_compact_label_below_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_compact_label_below_type").generic_string()),
+            "compact_label_below 非数字时应加载失败");
+    require(host.lastError().find("compact_label_below 必须是 number") != std::string::npos,
+            "compact_label_below 类型错误应包含 number 提示");
+}
+
+void test_script_compact_label_below_non_positive_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_compact_label_below_non_positive").generic_string()),
+            "compact_label_below 非正数时应加载失败");
+    require(host.lastError().find("compact_label_below 必须是正数") != std::string::npos,
+            "compact_label_below 非正数错误应包含正数提示");
+}
+
 void test_script_invalid_label_position_fail()
 {
     protoscope::scripting::ScriptHost host;
@@ -1640,6 +1759,20 @@ void test_protocol_directory_reload()
     require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议目录应可加载");
     require(host.protocolDirectory() == "protocols/default_protocol", "协议目录应被记录");
     require(host.scriptPath().find("main.lua") != std::string::npos, "协议入口应固定为 main.lua");
+}
+
+void test_protocol_ui_templates_load()
+{
+    const std::array<const char*, 3> templates{"ui_basic", "ui_layouts", "ui_dialogs"};
+
+    for (const auto* name : templates) {
+        protoscope::scripting::ScriptHost host;
+        const auto directory = templateProtocolDir(name).generic_string();
+
+        requireProtocolLoaded(host, directory.c_str());
+        const auto message = std::string(name) + " 模板应声明可见控件";
+        require(!host.controlsSnapshot().empty(), message.c_str());
+    }
 }
 
 void test_config_default_roundtrip()
@@ -2768,12 +2901,15 @@ void test_script_value_table_parse_and_update()
         out << "      { id = 0x1020, label = \"状态字\",\n";
         out << "        bits = {\n";
         out << "          { bit = 0, label = \"运行\", values = { [0] = \"停\", [1] = \"转\" } },\n";
-        out << "          { bit = 5, label = \"远程\" },\n";
+        out << "          { bit = 31, label = \"高位\", values = { [0] = \"低\", [1] = \"高\" } },\n";
         out << "        },\n";
         out << "      },\n";
         out << "      { start_id = 0x1030, len = 2, labels = { \"温度\", \"湿度\" }, units = { \"C\", \"%\" } },\n";
         out << "    } },\n";
         out << "  } } }\n";
+        out << "end\n";
+        out << "function on_open(ctx)\n";
+        out << "  proto.set_control(\"regs\", { [0x1020] = 0x80000000 })\n";
         out << "end\n";
     }
 
@@ -2795,11 +2931,26 @@ void test_script_value_table_parse_and_update()
     require(desc->valueRows[0].label == "电压", "第一行 label 应为 电压");
     require(desc->valueRows[0].note == "母线", "第一行 note 应为 母线");
     require(desc->valueRows[1].bit.has_value() && *desc->valueRows[1].bit == 0, "bit0 行");
-    require(desc->valueRows[2].bit.has_value() && *desc->valueRows[2].bit == 5, "bit5 行");
+    require(desc->valueRows[2].bit.has_value() && *desc->valueRows[2].bit == 31, "bit31 行");
     require(desc->valueRows[3].id == 0x1030U, "range 首行 id 应为 0x1030");
     require(desc->valueRows[4].id == 0x1031U, "range 第二行 id 应为 0x1031");
     require(desc->valueRowById.size() == 3, "普通+range 行共计 3 个 row id 索引");
     require(desc->valueBitRowsBySourceId.size() == 1, "应有一个 bit 源 id 索引");
+
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+
+    auto controlsAfterOpen = host.controlStatesSnapshot();
+    const protoscope::scripting::ControlSnapshot* opened = nullptr;
+    for (const auto& s : controlsAfterOpen) {
+        if (s.descriptor.id == "regs") {
+            opened = &s;
+        }
+    }
+    require(opened != nullptr, "regs 应在打开后快照中");
+    const auto* openedTable = std::get_if<protoscope::scripting::ValueTableValue>(&opened->value);
+    require(openedTable != nullptr, "打开后值应为 ValueTableValue");
+    require(openedTable->rows[1].set && openedTable->rows[1].value == "停", "bit0 应展开为 停");
+    require(openedTable->rows[2].set && openedTable->rows[2].value == "高", "bit31 应展开为 高");
 
     {
         using namespace protoscope::scripting;
@@ -2845,6 +2996,158 @@ void test_script_value_table_parse_and_update()
     require(tvFinal != nullptr && tvFinal->rows[3].value == "25.3" && tvFinal->rows[4].value == "68.1",
         "range 更新应正确写入");
     require(tvFinal->rows[0].value == "220.1", "之前的普通行更新应保留");
+    require(tvFinal->rows[1].value == "停", "bit0 更新应保留");
+    require(tvFinal->rows[2].value == "高", "bit31 更新应保留");
+}
+
+void test_script_value_table_bit_integer_and_bytes_sources()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-value-table-bit-sources"));
+    {
+        std::ofstream out(protocolDir.path() / "main.lua");
+        require(out.good(), "value_table bit source 测试脚本应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"safe\", title = \"Safe\", controls = {\n";
+        out << "    { type = \"value_table\", id = \"regs\", label = \"寄存器\", rows = {\n";
+        out << "      { id = 0x2000, label = \"大整数\",\n";
+        out << "        bits = {\n";
+        out << "          { bit = 32, label = \"bit32\" },\n";
+        out << "          { bit = 63, label = \"bit63\" },\n";
+        out << "          { bit = 64, label = \"bit64\" },\n";
+        out << "        },\n";
+        out << "      },\n";
+        out << "      { id = 0x2001, label = \"字节数组\",\n";
+        out << "        bits = {\n";
+        out << "          { bit = 0, label = \"arr_bit0\" },\n";
+        out << "          { bit = 7, label = \"arr_bit7\" },\n";
+        out << "          { bit = 8, label = \"arr_bit8\" },\n";
+        out << "          { bit = 15, label = \"arr_bit15\" },\n";
+        out << "        },\n";
+        out << "      },\n";
+        out << "      { id = 0x2002, label = \"HEX 字符串\",\n";
+        out << "        bits = {\n";
+        out << "          { bit = 0, label = \"hex_bit0\" },\n";
+        out << "          { bit = 7, label = \"hex_bit7\" },\n";
+        out << "          { bit = 8, label = \"hex_bit8\" },\n";
+        out << "          { bit = 15, label = \"hex_bit15\" },\n";
+        out << "        },\n";
+        out << "      },\n";
+        out << "    } },\n";
+        out << "  } } }\n";
+        out << "end\n";
+        out << "function on_open(ctx)\n";
+        out << "  proto.set_control(\"regs\", {\n";
+        out << "    [0x2000] = \"0x8000000100000000\",\n";
+        out << "    [0x2001] = { 0x81, 0x80 },\n";
+        out << "    [0x2002] = \"81 80\",\n";
+        out << "  })\n";
+        out << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "value_table bit source 协议应可加载");
+
+    const auto controls = host.controlsSnapshot();
+    const protoscope::scripting::ControlDescriptor* desc = nullptr;
+    for (const auto& c : controls) {
+        if (c.id == "regs") {
+            desc = &c;
+            break;
+        }
+    }
+    require(desc != nullptr, "应能找到 regs 控件");
+    require(desc->valueRows.size() == 11, "应展开 11 个 bit 行");
+    require(desc->valueRows[0].bit.has_value() && *desc->valueRows[0].bit == 32U, "bit32 不应被配置拒绝");
+    require(desc->valueRows[1].bit.has_value() && *desc->valueRows[1].bit == 63U, "bit63 不应被配置拒绝");
+    require(desc->valueRows[2].bit.has_value() && *desc->valueRows[2].bit == 64U, "bit64 不应被配置拒绝");
+
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+
+    const auto snapshot = host.controlStatesSnapshot();
+    const protoscope::scripting::ControlSnapshot* control = nullptr;
+    for (const auto& item : snapshot) {
+        if (item.descriptor.id == "regs") {
+            control = &item;
+            break;
+        }
+    }
+    require(control != nullptr, "regs 应在打开后快照中");
+    const auto* table = std::get_if<protoscope::scripting::ValueTableValue>(&control->value);
+    require(table != nullptr, "打开后值应为 ValueTableValue");
+    require(table->rows[0].set && table->rows[0].value == "1", "0x 字符串整数应展开 bit32");
+    require(table->rows[1].set && table->rows[1].value == "1", "0x 字符串整数应展开 bit63");
+    require(table->rows[2].set && table->rows[2].value == "0", "整数源超过 bit63 时应按 0 展开");
+    require(table->rows[3].value == "1" && table->rows[4].value == "1", "number[] 应展开第 1 字节 bit0/bit7");
+    require(table->rows[5].value == "0" && table->rows[6].value == "1", "number[] 应按第 2 字节低位优先展开");
+    require(table->rows[7].value == table->rows[3].value && table->rows[8].value == table->rows[4].value &&
+                table->rows[9].value == table->rows[5].value && table->rows[10].value == table->rows[6].value,
+            "HEX 字符串 bytes 应与 number[] 展开结果一致");
+}
+
+void test_script_value_table_stream_value_targets_bit_sources()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-value-table-stream-targets"));
+    {
+        std::ofstream out(protocolDir.path() / "main.lua");
+        require(out.good(), "value_table stream target 测试脚本应可写入");
+        out << "function ui()\n";
+        out << "  return { { id = \"safe\", title = \"Safe\", controls = {\n";
+        out << "    { type = \"value_table\", id = \"regs\", label = \"寄存器\", rows = {\n";
+        out << "      { id = 0x3000, label = \"状态值\", bits = {\n";
+        out << "        { bit = 31, label = \"u32_bit31\" },\n";
+        out << "        { bit = 32, label = \"u32_bit32\" },\n";
+        out << "      } },\n";
+        out << "      { id = 0x3001, label = \"字节位\", bits = {\n";
+        out << "        { bit = 0, label = \"byte_bit0\" },\n";
+        out << "        { bit = 7, label = \"byte_bit7\" },\n";
+        out << "        { bit = 8, label = \"byte_bit8\" },\n";
+        out << "        { bit = 15, label = \"byte_bit15\" },\n";
+        out << "      } },\n";
+        out << "    } },\n";
+        out << "  } } }\n";
+        out << "end\n";
+        out << "local function on_stream_frame(ctx, frame)\n";
+        out << "  proto.emit(\"stream_value_targets\", \"ok\")\n";
+        out << "end\n";
+        out << "function stream()\n";
+        out << "  return { frames = { {\n";
+        out << "    name = \"sample\",\n";
+        out << "    header = { 0xAA, 0x55 },\n";
+        out << "    size = 8,\n";
+        out << "    fields = {\n";
+        out << "      { name = \"status\", type = \"u32_le\", offset = 3 },\n";
+        out << "      { name = \"flags\", type = \"bytes\", offset = 7, count = 2 },\n";
+        out << "    },\n";
+        out << "    value_targets = { controls = {\n";
+        out << "      { id = \"regs\", start_id = 0x3000, values_field = \"status\" },\n";
+        out << "      { id = \"regs\", start_id = 0x3001, values_field = \"flags\" },\n";
+        out << "    } },\n";
+        out << "    on_frame = on_stream_frame,\n";
+        out << "  } } }\n";
+        out << "end\n";
+    }
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "value_table stream target 协议应可加载");
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{
+        sampleCtx(), std::vector<std::uint8_t>{0xAA, 0x55, 0x00, 0x00, 0x00, 0x80, 0x81, 0x80}});
+
+    const auto snapshot = host.controlStatesSnapshot();
+    const protoscope::scripting::ControlSnapshot* control = nullptr;
+    for (const auto& item : snapshot) {
+        if (item.descriptor.id == "regs") {
+            control = &item;
+            break;
+        }
+    }
+    require(control != nullptr, "regs 应在 stream 后快照中");
+    const auto* table = std::get_if<protoscope::scripting::ValueTableValue>(&control->value);
+    require(table != nullptr, "stream 后值应为 ValueTableValue");
+    require(table->rows[0].set && table->rows[0].value == "1", "u32 value_targets 应展开 bit31");
+    require(table->rows[1].set && table->rows[1].value == "0", "u32 value_targets 应允许声明 bit32 并展开为 0");
+    require(table->rows[2].value == "1" && table->rows[3].value == "1", "bytes value_targets 应展开第 1 字节");
+    require(table->rows[4].value == "0" && table->rows[5].value == "1",
+            "bytes value_targets 不应按 range 拆分，应作为单个低位优先 bit 源");
 }
 
 namespace {
@@ -2869,6 +3172,8 @@ static const TestCase kAllTests[] = {
     {"script_elf_symbol_combo_invalid_config_fails", &test_script_elf_symbol_combo_invalid_config_fails},
     {"script_elf_symbol_combo_get_control_returns_table", &test_script_elf_symbol_combo_get_control_returns_table},
     {"script_value_table_parse_and_update", &test_script_value_table_parse_and_update},
+    {"script_value_table_bit_integer_and_bytes_sources", &test_script_value_table_bit_integer_and_bytes_sources},
+    {"script_value_table_stream_value_targets_bit_sources", &test_script_value_table_stream_value_targets_bit_sources},
     {"script_on_open_log", &test_script_on_open_log},
     {"script_on_close_log", &test_script_on_close_log},
     {"script_on_error_log", &test_script_on_error_log},
@@ -2878,6 +3183,7 @@ static const TestCase kAllTests[] = {
     {"script_form_layout_snapshot", &test_script_form_layout_snapshot},
     {"script_flow_layout_snapshot", &test_script_flow_layout_snapshot},
     {"script_layout_width_controls_shorthand_snapshot", &test_script_layout_width_controls_shorthand_snapshot},
+    {"script_inline_group_layout_snapshot", &test_script_inline_group_layout_snapshot},
     {"script_duplicate_label_controls_allowed", &test_script_duplicate_label_controls_allowed},
     {"script_crc_bridge", &test_script_crc_bridge},
     {"script_read_version_flow", &test_script_read_version_flow},
@@ -2946,6 +3252,14 @@ static const TestCase kAllTests[] = {
     {"script_layout_shortcut_unknown_control_fail", &test_script_layout_shortcut_unknown_control_fail},
     {"script_layout_shortcut_duplicate_control_fail", &test_script_layout_shortcut_duplicate_control_fail},
     {"script_layout_shortcut_missing_control_fail", &test_script_layout_shortcut_missing_control_fail},
+    {"script_inline_group_children_controls_conflict_fail", &test_script_inline_group_children_controls_conflict_fail},
+    {"script_inline_group_unknown_control_fail", &test_script_inline_group_unknown_control_fail},
+    {"script_inline_group_child_layout_fail", &test_script_inline_group_child_layout_fail},
+    {"script_inline_group_min_width_fail", &test_script_inline_group_min_width_fail},
+    {"script_short_label_type_fail", &test_script_short_label_type_fail},
+    {"script_short_label_empty_fail", &test_script_short_label_empty_fail},
+    {"script_compact_label_below_type_fail", &test_script_compact_label_below_type_fail},
+    {"script_compact_label_below_non_positive_fail", &test_script_compact_label_below_non_positive_fail},
     {"script_invalid_label_position_fail", &test_script_invalid_label_position_fail},
     {"script_runtime_error_logged", &test_script_runtime_error_logged},
     {"script_reload_invalid_types_fail_without_throw", &test_script_reload_invalid_types_fail_without_throw},
@@ -2957,6 +3271,7 @@ static const TestCase kAllTests[] = {
     {"update_check_reports_development_build", &test_update_check_reports_development_build},
     {"update_check_rejects_response_without_semantic_tags", &test_update_check_rejects_response_without_semantic_tags},
     {"protocol_directory_reload", &test_protocol_directory_reload},
+    {"protocol_ui_templates_load", &test_protocol_ui_templates_load},
     {"config_default_roundtrip", &test_config_default_roundtrip},
     {"config_repo_default_yaml_loads", &test_config_repo_default_yaml_loads},
     {"config_performance_scale_applies_default_budgets", &test_config_performance_scale_applies_default_budgets},
