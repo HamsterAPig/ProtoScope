@@ -1192,6 +1192,68 @@ void test_wave_sample_frequency_auto_follow_preserves_trimmed_offset()
             "自动跟随显示终点应使用最新全局样本时间");
 }
 
+void test_wave_max_total_samples_trim_refreshes_cached_frame()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    protoscope::plot::WaveAppendRequest request{.source = "max-total-cache"};
+    for (int i = 0; i < 10; ++i) {
+        request.samples.push_back({.time = static_cast<double>(i), .value = static_cast<double>(i)});
+    }
+    require(wave.buffer.append(0, request), "max_total_samples 场景样本应追加成功");
+
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.sampleFrequencyHz = 10.0;
+    wave.view.viewMinTime = 0.0;
+    wave.view.viewMaxTime = 0.9;
+    wave.view.visibleDuration = 0.9;
+    wave.view.centerTime = 0.45;
+
+    const auto firstFrame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+    require(firstFrame.fullSnapshot != nullptr, "初始全量快照不能为空");
+    require(firstFrame.fullSnapshot->channels.front().totalSamples == 10, "初始缓存应包含 10 个样本");
+
+    const auto previousRevision = wave.buffer.dataRevision();
+    wave.buffer.setMaxTotalSamples(4);
+    require(wave.buffer.dataRevision() == previousRevision + 1, "max_total_samples 真实裁剪后应推进数据版本");
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+    require(frame.fullSnapshot != nullptr, "裁剪后全量快照不能为空");
+    require(frame.fullSnapshot->channels.size() == 1, "裁剪后应保留通道");
+    require(frame.fullSnapshot->channels.front().totalSamples == 4, "全量快照缓存应刷新为尾部 4 个样本");
+    require(frame.fullSnapshot->channels.front().sampleIndexOffset == 6, "全量快照应记录已裁剪的全局样本偏移");
+    require(frame.displayData != nullptr, "裁剪后显示数据不能为空");
+    require(frame.displayData->channels.front().samples.size() == 4, "显示缓存应随裁剪刷新为 4 个样本");
+    require(std::abs(frame.displayData->channels.front().samples.front().time - 0.6) < 1e-12,
+            "采样频率时间轴起点应保留全局样本序号");
+    require(std::abs(frame.displayData->channels.front().samples.back().time - 0.9) < 1e-12,
+            "采样频率时间轴终点应保留最新全局样本序号");
+}
+
+void test_wave_max_total_samples_noop_preserves_revision()
+{
+    protoscope::plot::OscilloscopeBuffer buffer;
+    protoscope::plot::WaveAppendRequest request{.source = "max-total-noop"};
+    for (int i = 0; i < 3; ++i) {
+        request.samples.push_back({.time = static_cast<double>(i), .value = static_cast<double>(i)});
+    }
+    require(buffer.append(0, request), "边界场景样本应追加成功");
+
+    const auto revisionBeforeLargeLimit = buffer.dataRevision();
+    buffer.setMaxTotalSamples(10);
+    require(buffer.dataRevision() == revisionBeforeLargeLimit, "未超出 max_total_samples 时不应推进数据版本");
+    auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(snapshot.channels.front().totalSamples == 3, "未超限时样本数不应变化");
+    require(snapshot.channels.front().sampleIndexOffset == 0, "未超限时全局样本偏移不应变化");
+
+    buffer.setMaxTotalSamples(0);
+    require(buffer.dataRevision() == revisionBeforeLargeLimit, "max_total_samples=0 不应裁剪或推进数据版本");
+    snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(snapshot.channels.front().totalSamples == 3, "max_total_samples=0 应保留全部样本");
+    require(snapshot.channels.front().sampleIndexOffset == 0, "max_total_samples=0 不应改变全局样本偏移");
+}
+
 void test_wave_overview_display_data_is_budgeted()
 {
     protoscope::plot::WaveDockState wave;

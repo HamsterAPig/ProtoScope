@@ -211,7 +211,7 @@ private:
     std::size_t lowerBoundByTime(const std::vector<WaveSample>& samples, double time) const;
     std::size_t upperBoundByTime(const std::vector<WaveSample>& samples, double time) const;
     std::size_t effectiveHistoryLimit() const;
-    void trimHistory(ChannelBuffer& channel);
+    bool trimHistory(ChannelBuffer& channel);
     WaveStats makeStats(const std::vector<WaveSample>& samples,
                         std::size_t begin,
                         std::size_t end,

@@ -350,12 +350,14 @@ void OscilloscopeBuffer::setMaxTotalSamples(std::size_t maxTotalSamples)
 {
     maxTotalSamples_ = maxTotalSamples;
     // 核心流程：若上限减小，立即对所有通道执行裁剪
+    bool trimmedAnyChannel = false;
     if (maxTotalSamples > 0) {
         for (auto& channel : channels_) {
-            if (channel.samples.size() > maxTotalSamples) {
-                trimHistory(channel);
-            }
+            trimmedAnyChannel = trimHistory(channel) || trimmedAnyChannel;
         }
+    }
+    if (trimmedAnyChannel) {
+        ++dataRevision_;
     }
 }
 
@@ -775,27 +777,27 @@ std::size_t OscilloscopeBuffer::upperBoundByTime(const std::vector<WaveSample>& 
         })));
 }
 
-void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel)
+bool OscilloscopeBuffer::trimHistory(ChannelBuffer& channel)
 {
     if (historyTrimSuspended_) {
-        return;
+        return false;
     }
     const std::size_t historyLimit = effectiveHistoryLimit();
     const bool hasHistoryLimit = historyLimit > 0;
     const bool hasMaxTotalSamples = maxTotalSamples_ > 0;
     if (!hasHistoryLimit && !hasMaxTotalSamples) {
-        return;
+        return false;
     }
     const std::size_t effectiveLimit = hasHistoryLimit && hasMaxTotalSamples
                                            ? (std::min)(historyLimit, maxTotalSamples_)
                                            : (hasHistoryLimit ? historyLimit : maxTotalSamples_);
     if (channel.samples.size() <= effectiveLimit) {
-        return;
+        return false;
     }
     if (effectiveLimit == 0) {
         channel.sampleIndexOffset += channel.samples.size();
         channel.samples.clear();
-        return;
+        return true;
     }
     const std::size_t keepOffset = channel.samples.size() - effectiveLimit;
     channel.sampleIndexOffset += keepOffset;
@@ -804,6 +806,7 @@ void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel)
               channel.samples.end(),
               channel.samples.begin());
     channel.samples.resize(effectiveLimit);
+    return true;
 }
 
 std::size_t OscilloscopeBuffer::effectiveHistoryLimit() const
