@@ -632,49 +632,52 @@ void drawCollapsedWaveToolbar(app::Application& application,
     const ImVec2 collapsedButtonSize(28.0F, 0.0F);
     if (drawToolbarToggleButton(view.autoFollowLatest ? "跟" : "停",
                                 view.autoFollowLatest,
-                                "切换自动跟随最新数据。关闭后当前视口会停留在手动浏览位置。",
+                                view.autoFollowLatest
+                                    ? "跟随最新数据：开启。点击后暂停跟随，当前视口停留在手动浏览位置。"
+                                    : "暂停跟随：当前视口不会被新数据拉回末尾。点击后恢复跟随最新数据。",
                                 collapsedButtonSize)) {
         view.autoFollowLatest = !view.autoFollowLatest;
     }
     if (drawToolbarToggleButton(view.lockVerticalRange ? "锁" : "轴",
                                 view.lockVerticalRange,
-                                "锁定或释放纵轴范围。锁定后使用手动纵轴最小/最大值。",
+                                view.lockVerticalRange ? "纵轴锁定：当前使用手动纵轴范围。点击后恢复纵轴自动范围。"
+                                                       : "纵轴自动：点击后锁定当前纵轴范围。",
                                 collapsedButtonSize)) {
         view.lockVerticalRange = !view.lockVerticalRange;
     }
-    if (drawToolbarToggleButton(view.showCursors ? "游" : "标",
+    if (drawToolbarToggleButton("游",
                                 view.showCursors,
-                                "显示或隐藏测量游标。游标隐藏时不会显示游标读数。",
+                                view.showCursors ? "游标：已显示 C1/C2 测量游标。点击后隐藏游标和游标读数。"
+                                                 : "游标：当前隐藏。点击后显示 C1/C2 测量游标。",
                                 collapsedButtonSize)) {
         view.showCursors = !view.showCursors;
     }
-    if (drawToolbarToggleButton(view.showHoverReadout ? "读" : "点",
+    if (drawToolbarToggleButton("读",
                                 view.showHoverReadout,
-                                "显示或隐藏鼠标悬停读数。开启后鼠标靠近曲线会显示最近采样点。",
+                                view.showHoverReadout
+                                    ? "悬停读数：已开启。鼠标靠近曲线时显示最近采样点。点击后关闭。"
+                                    : "悬停读数：当前关闭。点击后恢复鼠标悬停采样读数。",
                                 collapsedButtonSize)) {
         view.showHoverReadout = !view.showHoverReadout;
     }
-    if (drawToolbarToggleButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS,
-                                view.zoomSelectionActive,
-                                zoomSelectionHelpText(view),
-                                collapsedButtonSize)) {
+    if (drawToolbarToggleButton("框", view.zoomSelectionActive, zoomSelectionHelpText(view), collapsedButtonSize)) {
         view.zoomSelectionActive = !view.zoomSelectionActive;
         view.zoomSelectionDragging = false;
     }
-    if (drawToolbarActionButton(PROTOSCOPE_ICON_EXPAND, "适配当前可见波形到完整视图。", collapsedButtonSize)) {
+    if (drawToolbarActionButton("适", "适配：将当前可见波形完整放入主视图。", collapsedButtonSize)) {
         view.fitVisibleWaveformsRequested = true;
     }
-    if (drawToolbarActionButton("清", "清空当前波形历史缓存；不会修改协议脚本或串口连接状态。", collapsedButtonSize)) {
+    if (drawToolbarActionButton("清", "清空：清空当前波形历史缓存；不会修改协议脚本或串口连接状态。", collapsedButtonSize)) {
         application.resetWaveHistory();
     }
     if (fullscreenToggleRequested != nullptr &&
         drawToolbarActionButton(fullscreenActive ? "退" : "全",
-                                fullscreenActive ? "退出波形全屏。也可按 Esc 退出。"
-                                                 : "进入波形全屏；具体模式由 gui.wave.fullscreen_mode 控制。",
+                                fullscreenActive ? "全屏：退出波形全屏，也可按 Esc 退出。"
+                                                 : "全屏：进入波形全屏；具体模式由 gui.wave.fullscreen_mode 控制。",
                                 collapsedButtonSize)) {
         *fullscreenToggleRequested = true;
     }
-    if (drawToolbarActionButton(">", "展开右侧工具栏。", collapsedButtonSize)) {
+    if (drawToolbarActionButton("展", "展开工具栏：显示 FFT、渲染、游标和测量等高级设置。", collapsedButtonSize)) {
         wave.toolsCollapsed = false;
     }
 }

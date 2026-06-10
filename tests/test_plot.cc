@@ -20,6 +20,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -167,6 +168,29 @@ void test_plot_history_limit_zero_keeps_all_samples()
             "保留点应覆盖完整输入顺序");
 }
 
+void test_plot_set_view_config_applies_history_limit_immediately()
+{
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(1);
+    protoscope::plot::WaveAppendRequest request{.source = "reload-limit"};
+    for (int i = 0; i < 10; ++i) {
+        request.samples.push_back({.time = static_cast<double>(i), .value = static_cast<double>(i)});
+    }
+    require(buffer.append(0, request), "无上限历史样本应追加成功");
+
+    buffer.setViewConfig(protoscope::plot::ViewConfig{.historyLimit = 4});
+
+    const auto snapshot =
+        buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(snapshot.channels.size() == 1, "即时裁剪后仍应保留通道");
+    const auto& channel = snapshot.channels.front();
+    require(channel.totalSamples == 4, "setViewConfig 应立即应用新的 historyLimit");
+    require(channel.sampleIndexOffset == 6, "即时裁剪应记录已丢弃的全局样本偏移");
+    require(channel.samples != nullptr, "即时裁剪后的样本指针不能为空");
+    require(std::abs(channel.samples[0].time - 6.0) < 1e-12, "即时裁剪应保留尾部窗口起点");
+    require(std::abs(channel.samples[3].time - 9.0) < 1e-12, "即时裁剪应保留尾部窗口终点");
+}
+
 void test_plot_time_reset_clears_history_by_default()
 {
     protoscope::plot::OscilloscopeBuffer buffer;
@@ -246,6 +270,31 @@ void test_wave_sample_frequency_visible_range_filters_by_sample_index()
             "Fs 显示窗口起点应使用 sampleIndex/Fs");
     require(std::abs(displayData.channels.front().samples.back().time - 0.4) < 1e-12,
             "Fs 显示窗口终点应使用 sampleIndex/Fs");
+}
+
+void test_wave_sample_frequency_preserves_trimmed_sample_offset()
+{
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.setViewConfig(protoscope::plot::ViewConfig{.historyLimit = 5});
+    protoscope::plot::WaveAppendRequest request{.source = "trimmed-fs"};
+    for (int i = 0; i < 10; ++i) {
+        request.samples.push_back({.time = static_cast<double>(i), .value = static_cast<double>(i)});
+    }
+    require(buffer.append(0, request), "historyLimit 场景样本应追加成功");
+
+    auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(snapshot.channels.size() == 1, "裁剪后应保留通道");
+    require(snapshot.channels.front().totalSamples == 5, "historyLimit 应只保留尾部 5 个样本");
+    require(snapshot.channels.front().sampleIndexOffset == 5, "裁剪后应记录前 5 个样本已丢弃");
+
+    protoscope::plot::applySampleFrequencyVisibleRange(snapshot, 0.5, 0.9, 10.0);
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, 10.0);
+    require(displayData.channels.size() == 1, "采样频率显示数据应保留通道");
+    require(displayData.channels.front().samples.size() == 5, "采样频率窗口应使用全局样本序号筛选");
+    require(std::abs(displayData.channels.front().samples.front().time - 0.5) < 1e-12,
+            "裁剪后采样频率时间轴起点不应归零");
+    require(std::abs(displayData.channels.front().samples.back().time - 0.9) < 1e-12,
+            "裁剪后采样频率时间轴终点应保持全局样本时间");
 }
 
 void test_plot_limited_envelope_preserves_spikes()
@@ -1113,6 +1162,99 @@ void test_wave_main_render_data_uses_sample_frequency_viewport()
             "概览数据终点应按全局样本序号换算");
 }
 
+void test_wave_sample_frequency_auto_follow_preserves_trimmed_offset()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.setViewConfig(protoscope::plot::ViewConfig{.historyLimit = 5});
+    wave.buffer.configureChannels(1);
+    protoscope::plot::WaveAppendRequest request{.source = "trimmed-autofollow"};
+    for (int i = 0; i < 10; ++i) {
+        request.samples.push_back({.time = static_cast<double>(i), .value = static_cast<double>(i)});
+    }
+    require(wave.buffer.append(0, request), "自动跟随场景样本应追加成功");
+
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = true;
+    wave.view.sampleFrequencyHz = 10.0;
+    wave.view.visibleDuration = 0.2;
+    wave.view.viewMinTime = 0.0;
+    wave.view.viewMaxTime = 0.2;
+    wave.view.centerTime = 0.1;
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+
+    require(frame.displayData != nullptr, "裁剪后采样频率自动跟随数据源不能为空");
+    require(std::abs(wave.view.viewMaxTime - 0.9) < 1e-12, "自动跟随应对齐最新全局样本时间");
+    require(std::abs(wave.view.viewMinTime - 0.7) < 1e-12, "自动跟随窗口起点应保留全局样本偏移");
+    require(frame.displayData->channels.front().samples.size() == 3, "自动跟随窗口应显示最新全局时间窗口");
+    require(std::abs(frame.displayData->channels.front().samples.front().time - 0.7) < 1e-12,
+            "自动跟随显示起点不应因裁剪归零");
+    require(std::abs(frame.displayData->channels.front().samples.back().time - 0.9) < 1e-12,
+            "自动跟随显示终点应使用最新全局样本时间");
+}
+
+void test_wave_max_total_samples_trim_refreshes_cached_frame()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    protoscope::plot::WaveAppendRequest request{.source = "max-total-cache"};
+    for (int i = 0; i < 10; ++i) {
+        request.samples.push_back({.time = static_cast<double>(i), .value = static_cast<double>(i)});
+    }
+    require(wave.buffer.append(0, request), "max_total_samples 场景样本应追加成功");
+
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.sampleFrequencyHz = 10.0;
+    wave.view.viewMinTime = 0.0;
+    wave.view.viewMaxTime = 0.9;
+    wave.view.visibleDuration = 0.9;
+    wave.view.centerTime = 0.45;
+
+    const auto firstFrame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+    require(firstFrame.fullSnapshot != nullptr, "初始全量快照不能为空");
+    require(firstFrame.fullSnapshot->channels.front().totalSamples == 10, "初始缓存应包含 10 个样本");
+
+    const auto previousRevision = wave.buffer.dataRevision();
+    wave.buffer.setMaxTotalSamples(4);
+    require(wave.buffer.dataRevision() == previousRevision + 1, "max_total_samples 真实裁剪后应推进数据版本");
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+    require(frame.fullSnapshot != nullptr, "裁剪后全量快照不能为空");
+    require(frame.fullSnapshot->channels.size() == 1, "裁剪后应保留通道");
+    require(frame.fullSnapshot->channels.front().totalSamples == 4, "全量快照缓存应刷新为尾部 4 个样本");
+    require(frame.fullSnapshot->channels.front().sampleIndexOffset == 6, "全量快照应记录已裁剪的全局样本偏移");
+    require(frame.displayData != nullptr, "裁剪后显示数据不能为空");
+    require(frame.displayData->channels.front().samples.size() == 4, "显示缓存应随裁剪刷新为 4 个样本");
+    require(std::abs(frame.displayData->channels.front().samples.front().time - 0.6) < 1e-12,
+            "采样频率时间轴起点应保留全局样本序号");
+    require(std::abs(frame.displayData->channels.front().samples.back().time - 0.9) < 1e-12,
+            "采样频率时间轴终点应保留最新全局样本序号");
+}
+
+void test_wave_max_total_samples_noop_preserves_revision()
+{
+    protoscope::plot::OscilloscopeBuffer buffer;
+    protoscope::plot::WaveAppendRequest request{.source = "max-total-noop"};
+    for (int i = 0; i < 3; ++i) {
+        request.samples.push_back({.time = static_cast<double>(i), .value = static_cast<double>(i)});
+    }
+    require(buffer.append(0, request), "边界场景样本应追加成功");
+
+    const auto revisionBeforeLargeLimit = buffer.dataRevision();
+    buffer.setMaxTotalSamples(10);
+    require(buffer.dataRevision() == revisionBeforeLargeLimit, "未超出 max_total_samples 时不应推进数据版本");
+    auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(snapshot.channels.front().totalSamples == 3, "未超限时样本数不应变化");
+    require(snapshot.channels.front().sampleIndexOffset == 0, "未超限时全局样本偏移不应变化");
+
+    buffer.setMaxTotalSamples(0);
+    require(buffer.dataRevision() == revisionBeforeLargeLimit, "max_total_samples=0 不应裁剪或推进数据版本");
+    snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(snapshot.channels.front().totalSamples == 3, "max_total_samples=0 应保留全部样本");
+    require(snapshot.channels.front().sampleIndexOffset == 0, "max_total_samples=0 不应改变全局样本偏移");
+}
+
 void test_wave_overview_display_data_is_budgeted()
 {
     protoscope::plot::WaveDockState wave;
@@ -1622,6 +1764,33 @@ void test_wave_hidden_channel_policy_defaults_to_visible_only()
             "配置默认隐藏 CH 策略应只让可见通道参与派生视图");
     require(view.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "运行态默认隐藏 CH 策略应只让可见通道参与派生视图");
+}
+
+void test_wave_status_overlay_items_only_show_non_default_states()
+{
+    protoscope::plot::WaveViewState view;
+    require(protoscope::ui::buildWaveStatusOverlayItems(view).empty(), "默认波形状态不应显示图内状态标签");
+
+    view.autoFollowLatest = false;
+    view.fft.enabled = true;
+    view.zoomSelectionActive = true;
+    view.lockVerticalRange = true;
+    view.showCursors = false;
+    view.showHoverReadout = false;
+
+    const auto items = protoscope::ui::buildWaveStatusOverlayItems(view);
+    require(items.size() == 6, "非默认波形状态应生成对应图内状态标签");
+    require(items[0].label == std::string_view("暂停跟随"), "暂停跟随状态应排在第一位");
+    require(items[1].label == std::string_view("FFT"), "FFT 状态应排在第二位");
+    require(items[2].label == std::string_view("框选"), "框选状态应排在第三位");
+    require(items[3].label == std::string_view("纵轴锁定"), "纵轴锁定状态应排在第四位");
+    require(items[4].label == std::string_view("游标隐藏"), "游标隐藏状态应排在第五位");
+    require(items[5].label == std::string_view("读数隐藏"), "悬停读数隐藏状态应排在第六位");
+
+    view.zoomSelectionActive = false;
+    view.zoomSelectionDragging = true;
+    const auto draggingItems = protoscope::ui::buildWaveStatusOverlayItems(view);
+    require(draggingItems[2].label == std::string_view("框选"), "框选拖动中也应保留框选状态标签");
 }
 
 void test_wave_channel_reset_all_uses_protocol_default()

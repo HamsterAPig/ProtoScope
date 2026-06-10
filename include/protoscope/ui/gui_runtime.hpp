@@ -1,6 +1,5 @@
 #pragma once
 
-#include "protoscope/app/application.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/elf_static_address_file_watch.hpp"
@@ -26,6 +25,10 @@
 #include <vector>
 
 struct GLFWwindow;
+
+namespace protoscope::app {
+class Application;
+}
 
 namespace protoscope::ui {
 
@@ -158,6 +161,11 @@ private:
                                std::string_view stableId,
                                std::size_t& widgetIndex,
                                bool earlyExit);
+    bool drawLuaInlineGroupLayoutNode(const scripting::LayoutNodeDescriptor& node,
+                                      const std::vector<scripting::ControlSnapshot>& controls,
+                                      std::string_view stableId,
+                                      std::size_t& widgetIndex,
+                                      bool earlyExit);
     bool drawLuaTableLayoutNode(const scripting::LayoutNodeDescriptor& node,
                                 const std::vector<scripting::ControlSnapshot>& controls,
                                 std::string_view stableId,
@@ -179,13 +187,25 @@ private:
     bool drawDynamicButtonControl(const scripting::ControlSnapshot& control,
                                   const std::string& imguiLabel,
                                   std::optional<float> layoutWidth = std::nullopt);
-    bool drawDynamicCheckboxControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
-    bool drawDynamicTextControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
-    bool drawDynamicComboControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
-    bool drawDynamicElfSymbolComboControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
-    bool drawDynamicIntControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
-    bool drawDynamicFloatControl(const scripting::ControlSnapshot& control, const std::string& inputLabel);
-    bool drawValueTableControl(const scripting::ControlSnapshot& control);
+    bool drawDynamicCheckboxControl(const scripting::ControlSnapshot& control,
+                                    const std::string& inputLabel,
+                                    std::string_view visibleLabel);
+    bool drawDynamicTextControl(const scripting::ControlSnapshot& control,
+                                const std::string& inputLabel,
+                                std::string_view visibleLabel);
+    bool drawDynamicComboControl(const scripting::ControlSnapshot& control,
+                                 const std::string& inputLabel,
+                                 std::string_view visibleLabel);
+    bool drawDynamicElfSymbolComboControl(const scripting::ControlSnapshot& control,
+                                          const std::string& inputLabel,
+                                          std::string_view visibleLabel);
+    bool drawDynamicIntControl(const scripting::ControlSnapshot& control,
+                               const std::string& inputLabel,
+                               std::string_view visibleLabel);
+    bool drawDynamicFloatControl(const scripting::ControlSnapshot& control,
+                                 const std::string& inputLabel,
+                                 std::string_view visibleLabel);
+    bool drawValueTableControl(const scripting::ControlSnapshot& control, std::string_view visibleLabel);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
     void processPendingProtocolWorkspaceSwitch();

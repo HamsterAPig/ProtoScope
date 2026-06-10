@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <imgui.h>
@@ -63,8 +64,16 @@ struct SmartCursorSnap {
     std::string_view label;
 };
 
+struct WaveStatusOverlayItem {
+    std::string_view label;
+};
+
 std::string formatMetricText(double value, const char* baseUnit);
 bool plotInteractionActive(bool toolHeld);
+std::vector<WaveStatusOverlayItem> buildWaveStatusOverlayItems(const plot::WaveViewState& view);
+void drawWaveStatusOverlay(const plot::WaveViewState& view,
+                           const plot::WaveDisplayData* displayData = nullptr,
+                           const std::vector<std::size_t>* channelIndices = nullptr);
 bool drawRightPanelSplitter(
     const char* id, float& rightWidth, float minRightWidth, float minLeftWidth, float totalWidth, float thickness);
 bool drawHorizontalSplitter(

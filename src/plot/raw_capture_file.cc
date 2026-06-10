@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <ostream>
 #include <sstream>
 #include <system_error>
 #include <utility>
@@ -872,6 +873,45 @@ namespace {
         }
     }
 
+    struct PreparedRawCaptureEncoding {
+        RawCaptureFileData normalized;
+        std::string header;
+        std::uint64_t rawSize{0};
+    };
+
+    bool prepareRawCaptureEncoding(const RawCaptureFileData& capture,
+                                   PreparedRawCaptureEncoding& prepared,
+                                   std::string& error)
+    {
+        prepared.normalized = capture;
+        prepared.normalized.events = normalizedEvents(capture);
+        prepared.rawSize = totalEventBytes(prepared.normalized);
+        return encodeFixedRawCaptureHeader(prepared.normalized, prepared.rawSize, true, prepared.header, error);
+    }
+
+    void appendEncodedEventStream(const std::vector<RawCaptureEvent>& events, std::vector<std::uint8_t>& bytes)
+    {
+        for (const auto& event : events) {
+            const auto record = encodeEventRecord(event);
+            bytes.insert(bytes.end(), record.begin(), record.end());
+            if (event.type == RawCaptureEventType::RxBytes && !event.bytes.empty()) {
+                bytes.insert(bytes.end(), event.bytes.begin(), event.bytes.end());
+            }
+        }
+    }
+
+    void writeEncodedEventStream(std::ostream& out, const std::vector<RawCaptureEvent>& events)
+    {
+        for (const auto& event : events) {
+            const auto record = encodeEventRecord(event);
+            out.write(record.data(), static_cast<std::streamsize>(record.size()));
+            if (event.type == RawCaptureEventType::RxBytes && !event.bytes.empty()) {
+                out.write(reinterpret_cast<const char*>(event.bytes.data()),
+                          static_cast<std::streamsize>(event.bytes.size()));
+            }
+        }
+    }
+
 } // namespace
 
 std::string encodeRawCaptureHeader(const RawCaptureFileData& capture)
@@ -884,24 +924,15 @@ std::string encodeRawCaptureHeader(const RawCaptureFileData& capture)
 
 bool encodeRawCaptureFile(const RawCaptureFileData& capture, std::vector<std::uint8_t>& bytes, std::string& error)
 {
-    RawCaptureFileData normalized = capture;
-    normalized.events = normalizedEvents(capture);
-    const auto rawSize = totalEventBytes(normalized);
-    std::string header;
-    if (!encodeFixedRawCaptureHeader(normalized, rawSize, true, header, error)) {
+    PreparedRawCaptureEncoding prepared;
+    if (!prepareRawCaptureEncoding(capture, prepared, error)) {
         return false;
     }
 
     bytes.clear();
-    bytes.reserve(header.size() + static_cast<std::size_t>(rawSize));
-    bytes.insert(bytes.end(), header.begin(), header.end());
-    for (const auto& event : normalized.events) {
-        const auto record = encodeEventRecord(event);
-        bytes.insert(bytes.end(), record.begin(), record.end());
-        if (event.type == RawCaptureEventType::RxBytes && !event.bytes.empty()) {
-            bytes.insert(bytes.end(), event.bytes.begin(), event.bytes.end());
-        }
-    }
+    bytes.reserve(prepared.header.size() + static_cast<std::size_t>(prepared.rawSize));
+    bytes.insert(bytes.end(), prepared.header.begin(), prepared.header.end());
+    appendEncodedEventStream(prepared.normalized.events, bytes);
     return true;
 }
 
@@ -932,11 +963,8 @@ std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, s
 
 bool writeRawCaptureFile(const std::filesystem::path& path, const RawCaptureFileData& capture, std::string& error)
 {
-    RawCaptureFileData normalized = capture;
-    normalized.events = normalizedEvents(capture);
-    const auto rawSize = totalEventBytes(normalized);
-    std::string header;
-    if (!encodeFixedRawCaptureHeader(normalized, rawSize, true, header, error)) {
+    PreparedRawCaptureEncoding prepared;
+    if (!prepareRawCaptureEncoding(capture, prepared, error)) {
         return false;
     }
 
@@ -954,15 +982,8 @@ bool writeRawCaptureFile(const std::filesystem::path& path, const RawCaptureFile
             error = "无法打开 psraw 文件";
             return false;
         }
-        out.write(header.data(), static_cast<std::streamsize>(header.size()));
-        for (const auto& event : normalized.events) {
-            const auto record = encodeEventRecord(event);
-            out.write(record.data(), static_cast<std::streamsize>(record.size()));
-            if (event.type == RawCaptureEventType::RxBytes && !event.bytes.empty()) {
-                out.write(reinterpret_cast<const char*>(event.bytes.data()),
-                          static_cast<std::streamsize>(event.bytes.size()));
-            }
-        }
+        out.write(prepared.header.data(), static_cast<std::streamsize>(prepared.header.size()));
+        writeEncodedEventStream(out, prepared.normalized.events);
         if (!out.good()) {
             error = "写入 psraw 文件失败";
             return false;

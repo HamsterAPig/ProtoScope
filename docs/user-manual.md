@@ -47,7 +47,10 @@ protocols/
 └── templates/
     ├── file_dialog/
     ├── request_guarded/
-    └── send_file/
+    ├── send_file/
+    ├── ui_basic/
+    ├── ui_layouts/
+    └── ui_dialogs/
 ```
 
 ### Dock 面板
@@ -135,7 +138,74 @@ UDP Peer 需要填写：
 
 协议加载成功后，面板会显示入口脚本路径。如果脚本声明了动态 Dock 或控件，它们会出现在主界面中，也会出现在顶部菜单的 `Lua视图` 下。
 
-### 3. 手动发送数据
+### 3. 写第一个 Lua UI 脚本
+
+如果只想先确认动态 UI 怎么工作，可以新建一个协议目录，只放一个 `main.lua`。下面这段脚本覆盖了最常用闭环：
+
+- `ui()` 返回一个 Dock 面板。
+- `controls` 声明输入框、开关和按钮。
+- `layout` 决定控件显示顺序。
+- `on_control(ctx, id, value)` 响应按钮点击。
+- `proto.get_control()` / `proto.set_control()` 读写控件状态。
+- `proto.ui.alert()` 弹出脚本提示。
+
+```lua
+local click_count = 0
+
+function ui()
+  return {
+    {
+      id = "quick_ui",
+      title = "快速 UI",
+      anchor = "left_bottom",
+      tab_group = "protocol_tools",
+      controls = {
+        { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
+        { type = "checkbox", id = "hex_send", label = "HEX 发送", label_position = "right", default = true },
+        { type = "button", id = "send_once", label = "模拟发送" },
+        { type = "input_text", id = "last_action", label = "最近动作", default = "待操作" },
+      },
+      layout = {
+        type = "column",
+        children = {
+          {
+            type = "flow",
+            children = {
+              { type = "control", id = "device_id", min_width = 160, max_width = 260 },
+              { type = "control", id = "hex_send" },
+              { type = "control", id = "send_once" },
+            },
+          },
+          { type = "control", id = "last_action", min_width = 260 },
+        },
+      },
+    },
+  }
+end
+
+function on_control(ctx, id, value)
+  if id ~= "send_once" then
+    return
+  end
+
+  -- 用户点击按钮后，读取当前控件值，再把结果写回界面。
+  click_count = click_count + 1
+  local device_id = proto.get_control("device_id") or "01"
+  local hex_send = proto.get_control("hex_send") == true
+  local summary = string.format("第 %d 次：设备 %s，HEX=%s", click_count, device_id, tostring(hex_send))
+
+  proto.set_control("last_action", summary)
+  proto.ui.alert({
+    title = "Lua UI 已响应",
+    message = summary,
+    level = "info",
+  })
+end
+```
+
+把这段保存为 `main.lua` 后，在 `协议脚本 / 动态控件` 面板把 `协议根目录` 指向它的父目录，选择该协议目录并点击 `重新加载协议`。想继续看布局、弹窗和控件状态读写的完整模板，可以复制 `protocols/templates/ui_basic`、`ui_layouts` 或 `ui_dialogs`。
+
+### 4. 手动发送数据
 
 打开 `收发数据` 面板底部的发送区域：
 
@@ -146,7 +216,7 @@ UDP Peer 需要填写：
 
 发送和接收记录会显示在上方列表中。可以使用关键字过滤、RX/TX 状态过滤，也可以切换 `原始` 和 `逐帧` 显示模式。
 
-### 4. 查看日志
+### 5. 查看日志
 
 ProtoScope 将日志分为三类：
 
@@ -156,7 +226,7 @@ ProtoScope 将日志分为三类：
 
 日志面板支持关键字过滤、等级过滤、导出和清空。顶部菜单 `设置 -> 日志等级` 可以切换调试、信息、警告和错误等级。
 
-### 5. 查看波形
+### 6. 查看波形
 
 Lua 脚本通过 `proto.plot.setup()` 创建通道，再通过 `proto.plot.push()` 推送采样点。`波形` 面板会显示这些通道。
 
@@ -228,6 +298,9 @@ scripting:
 - `file_dialog`：文件/目录对话框示例。
 - `request_guarded`：受保护请求示例。
 - `send_file`：文件分块发送示例。
+- `ui_basic`：最小 Lua UI 闭环，演示 `ui()`、`controls`、`layout`、`on_control()`、控件读写和弹窗提示。
+- `ui_layouts`：常见布局组合示例，演示 `column`、`flow`、`inline_group`、`table`、`group`、`collapse` 和控件宽度约束。
+- `ui_dialogs`：脚本弹窗示例，演示 `proto.ui.alert()`、`proto.ui.confirm()`、`window` 参数和 `on_dialog()`。
 
 使用模板时，复制整个模板目录并改名为自己的协议名，保留入口文件 `main.lua`。然后在协议面板选择协议根目录和新协议目录，点击重新扫描或重新加载。不要直接修改 `protocols/protoscope_api.lua`；它只给 LuaLS 提供提示，不参与运行。
 
@@ -247,7 +320,7 @@ scripting:
 - `combo`
 - `elf_symbol_combo`
 
-布局支持普通顺序渲染，也支持 `table` 和 `form`。多个 Dock 可以通过 `tab_group` 合并到同一组选项卡。
+布局可以省略，省略时按 `controls` 声明顺序显示；也可以使用 Layout Tree 组合 `column`、`flow`、`inline_group`、`table`、`group`、`collapse` 等节点。多个 Dock 可以通过 `tab_group` 合并到同一组选项卡。完整语法见 `protocols/README.md`。
 
 ### 常用回调
 
@@ -271,6 +344,8 @@ scripting:
 - `proto.emit(name, payload)`：输出脚本事件。
 - `proto.set_timer(name, interval_ms)` / `proto.cancel_timer(name)`：管理定时器。
 - `proto.status.set(text, opts?)` / `proto.status.clear()`：更新状态提示。
+- `proto.get_control(id)`：读取动态控件当前值，常用于按钮点击时取回输入框、开关或下拉框状态。
+- `proto.set_control(id, value)`：把协议结果或脚本状态写回控件，常用于刷新只读状态、回填最近操作或更新 `value_table`。
 - `proto.ui.alert(opts)` / `proto.ui.confirm(opts)`：弹出脚本对话框，支持可选 `window` 子表配置初始宽高、位置、是否可拖动和是否自动尺寸。
 - `proto.fs.*`：打开文件对话框、读写文件、查询文件状态和分块发送文件；文件对话框仍使用系统原生窗口，不支持 Lua 控制宽高、位置或拖动能力。
 - `proto.plot.setup(config)` / `proto.plot.push(channel, data)`：声明并推送波形。

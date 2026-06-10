@@ -334,6 +334,10 @@ void OscilloscopeBuffer::setViewConfig(const ViewConfig& config)
     if (std::abs(config_.timeScale) <= kEpsilon) {
         config_.timeScale = 1.0;
     }
+    // 核心流程：协议重载可能只改变 history_limit，停止采集时也要立即约束当前保留窗口。
+    for (auto& channel : channels_) {
+        trimHistory(channel);
+    }
     ++dataRevision_;
 }
 
@@ -346,12 +350,14 @@ void OscilloscopeBuffer::setMaxTotalSamples(std::size_t maxTotalSamples)
 {
     maxTotalSamples_ = maxTotalSamples;
     // 核心流程：若上限减小，立即对所有通道执行裁剪
+    bool trimmedAnyChannel = false;
     if (maxTotalSamples > 0) {
         for (auto& channel : channels_) {
-            if (channel.samples.size() > maxTotalSamples) {
-                trimHistory(channel);
-            }
+            trimmedAnyChannel = trimHistory(channel) || trimmedAnyChannel;
         }
+    }
+    if (trimmedAnyChannel) {
+        ++dataRevision_;
     }
 }
 
@@ -447,6 +453,7 @@ bool OscilloscopeBuffer::appendAfterHistoryReset(std::size_t channelIndex, const
     // 核心流程：脚本二次运行常从 t=0 重新输出，默认把它视为新一轮采集，避免旧历史挡住新样本。
     for (auto& existingChannel : channels_) {
         existingChannel.samples.clear();
+        existingChannel.sampleIndexOffset = 0;
     }
     preservedHistoryLimit_ = 0;
     auto& resetChannel = ensureChannel(channelIndex);
@@ -485,6 +492,7 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
         view.color = channel.spec.color;
         view.lineWidth = channel.spec.lineWidth;
         view.totalSamples = channel.samples.size();
+        view.sampleIndexOffset = channel.sampleIndexOffset;
         view.samples = channel.samples.data();
         view.visibleBegin = lowerBoundByTime(channel.samples, visibleMinTime);
         view.visibleEnd = upperBoundByTime(channel.samples, visibleMaxTime);
@@ -769,33 +777,36 @@ std::size_t OscilloscopeBuffer::upperBoundByTime(const std::vector<WaveSample>& 
         })));
 }
 
-void OscilloscopeBuffer::trimHistory(ChannelBuffer& channel)
+bool OscilloscopeBuffer::trimHistory(ChannelBuffer& channel)
 {
     if (historyTrimSuspended_) {
-        return;
+        return false;
     }
     const std::size_t historyLimit = effectiveHistoryLimit();
     const bool hasHistoryLimit = historyLimit > 0;
     const bool hasMaxTotalSamples = maxTotalSamples_ > 0;
     if (!hasHistoryLimit && !hasMaxTotalSamples) {
-        return;
+        return false;
     }
     const std::size_t effectiveLimit = hasHistoryLimit && hasMaxTotalSamples
                                            ? (std::min)(historyLimit, maxTotalSamples_)
                                            : (hasHistoryLimit ? historyLimit : maxTotalSamples_);
     if (channel.samples.size() <= effectiveLimit) {
-        return;
+        return false;
     }
     if (effectiveLimit == 0) {
+        channel.sampleIndexOffset += channel.samples.size();
         channel.samples.clear();
-        return;
+        return true;
     }
     const std::size_t keepOffset = channel.samples.size() - effectiveLimit;
+    channel.sampleIndexOffset += keepOffset;
     // 核心流程：大历史裁剪只把保留窗口搬到前部一次，避免 vector::erase 对尾部做额外析构搬移。
     std::move(channel.samples.begin() + static_cast<std::ptrdiff_t>(keepOffset),
               channel.samples.end(),
               channel.samples.begin());
     channel.samples.resize(effectiveLimit);
+    return true;
 }
 
 std::size_t OscilloscopeBuffer::effectiveHistoryLimit() const
