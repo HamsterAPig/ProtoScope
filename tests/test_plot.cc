@@ -261,15 +261,77 @@ void test_wave_sample_frequency_visible_range_filters_by_sample_index()
             "非零脚本时间样本应追加成功");
 
     auto snapshot = buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
-    protoscope::plot::applySampleFrequencyVisibleRange(snapshot, 0.2, 0.4, 10.0);
+    protoscope::plot::applySampleFrequencyVisibleRange(snapshot, 0.3, 0.3, 10.0);
     const auto displayData = protoscope::plot::buildDisplayData(snapshot, 10.0);
     require(displayData.axisSource == protoscope::plot::WaveTimeAxisSource::SampleFrequency, "应使用采样频率时间轴");
     require(displayData.channels.size() == 1, "应保留通道显示数据");
-    require(displayData.channels.front().samples.size() == 3, "Fs 视口应按样本序号筛选 0.2s 到 0.4s");
+    require(displayData.channels.front().samples.size() == 3, "Fs 单点视口应保留左右邻接样本");
     require(std::abs(displayData.channels.front().samples.front().time - 0.2) < 1e-12,
-            "Fs 显示窗口起点应使用 sampleIndex/Fs");
+            "Fs 单点视口应从左侧邻接样本开始");
     require(std::abs(displayData.channels.front().samples.back().time - 0.4) < 1e-12,
-            "Fs 显示窗口终点应使用 sampleIndex/Fs");
+            "Fs 单点视口应保留右侧邻接样本");
+}
+
+void test_wave_snapshot_visible_range_keeps_adjacent_samples()
+{
+    protoscope::plot::OscilloscopeBuffer buffer;
+    require(buffer.append(0,
+                          protoscope::plot::WaveAppendRequest{
+                              .samples =
+                                  {
+                                      {.time = 1.0, .value = 1.0},
+                                      {.time = 2.0, .value = 2.0},
+                                      {.time = 3.0, .value = 3.0},
+                                      {.time = 4.0, .value = 4.0},
+                                      {.time = 5.0, .value = 5.0},
+                                  },
+                          }),
+            "脚本时间样本应追加成功");
+
+    const auto snapshot = buffer.snapshot(3.0, 3.0);
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, 0.0);
+    require(displayData.axisSource == protoscope::plot::WaveTimeAxisSource::ScriptTime, "应使用脚本时间轴");
+    require(displayData.channels.size() == 1, "应保留通道显示数据");
+    require(displayData.channels.front().samples.size() == 3, "脚本时间单点视口应保留左右邻接样本");
+    require(std::abs(displayData.channels.front().samples.front().time - 2.0) < 1e-12,
+            "脚本时间单点视口应从左侧邻接样本开始");
+    require(std::abs(displayData.channels.front().samples[1].time - 3.0) < 1e-12,
+            "脚本时间单点视口应包含可见样本");
+    require(std::abs(displayData.channels.front().samples.back().time - 4.0) < 1e-12,
+            "脚本时间单点视口应保留右侧邻接样本");
+}
+
+void test_wave_visible_range_adjacent_samples_clamp_at_edges()
+{
+    protoscope::plot::OscilloscopeBuffer buffer;
+    require(buffer.append(0,
+                          protoscope::plot::WaveAppendRequest{
+                              .samples =
+                                  {
+                                      {.time = 1.0, .value = 1.0},
+                                      {.time = 2.0, .value = 2.0},
+                                      {.time = 3.0, .value = 3.0},
+                                  },
+                          }),
+            "边界样本应追加成功");
+
+    const auto firstSnapshot = buffer.snapshot(1.0, 1.0);
+    const auto firstDisplayData = protoscope::plot::buildDisplayData(firstSnapshot, 0.0);
+    require(firstDisplayData.channels.size() == 1, "首样本视口应保留通道显示数据");
+    require(firstDisplayData.channels.front().samples.size() == 2, "首样本视口只应保留存在的右侧邻接样本");
+    require(std::abs(firstDisplayData.channels.front().samples.front().time - 1.0) < 1e-12,
+            "首样本视口不应向左越界");
+    require(std::abs(firstDisplayData.channels.front().samples.back().time - 2.0) < 1e-12,
+            "首样本视口应保留右侧邻接样本");
+
+    const auto lastSnapshot = buffer.snapshot(3.0, 3.0);
+    const auto lastDisplayData = protoscope::plot::buildDisplayData(lastSnapshot, 0.0);
+    require(lastDisplayData.channels.size() == 1, "末样本视口应保留通道显示数据");
+    require(lastDisplayData.channels.front().samples.size() == 2, "末样本视口只应保留存在的左侧邻接样本");
+    require(std::abs(lastDisplayData.channels.front().samples.front().time - 2.0) < 1e-12,
+            "末样本视口应保留左侧邻接样本");
+    require(std::abs(lastDisplayData.channels.front().samples.back().time - 3.0) < 1e-12,
+            "末样本视口不应向右越界");
 }
 
 void test_wave_sample_frequency_preserves_trimmed_sample_offset()
@@ -1106,9 +1168,9 @@ void test_wave_main_render_data_uses_viewport_window()
 
     require(frame.displayData != nullptr, "主视图交互数据源不能为空");
     require(frame.renderDisplayData != nullptr, "主视图渲染数据源不能为空");
-    require(frame.displayData->channels.front().samples.size() == 1, "交互数据仍应只保留视口内样本");
+    require(frame.displayData->channels.front().samples.size() == 3, "主视图数据应保留视口样本及左右邻接样本");
     require(frame.renderDisplayData == frame.displayData, "主图渲染应复用当前视口显示缓存");
-    require(frame.renderDisplayData->channels.front().samples.size() == 1, "渲染数据不应再携带完整历史样本");
+    require(frame.renderDisplayData->channels.front().samples.size() == 3, "渲染数据应携带当前视口的邻接样本");
     require(frame.overviewDisplayData != nullptr, "概览数据源不能为空");
     require(frame.overviewDisplayData->channels.front().samples.size() >= 3, "概览仍应保留完整历史的降采样视图");
 
@@ -1119,8 +1181,10 @@ void test_wave_main_render_data_uses_viewport_window()
                                                                 32,
                                                                 &sourceSampleCount);
     require(sourceSampleCount == 1, "包络统计仍应只统计视口内样本");
-    require(envelope.size() == 1, "主图包络应只基于当前视口缓存构建");
-    require(std::abs(envelope.front().time - 10.0) < 1e-12, "主图包络应落在当前视口样本上");
+    require(envelope.size() == 3, "主图包络应基于当前视口缓存及邻接样本构建");
+    require(std::abs(envelope.front().time - 0.0) < 1e-12, "主图包络应保留左侧邻接样本");
+    require(std::abs(envelope[1].time - 10.0) < 1e-12, "主图包络应包含当前视口样本");
+    require(std::abs(envelope.back().time - 20.0) < 1e-12, "主图包络应保留右侧邻接样本");
 }
 
 void test_wave_main_render_data_uses_sample_frequency_viewport()
@@ -1150,11 +1214,16 @@ void test_wave_main_render_data_uses_sample_frequency_viewport()
 
     require(frame.displayData != nullptr, "采样频率模式交互数据源不能为空");
     require(frame.renderDisplayData != nullptr, "采样频率模式渲染数据源不能为空");
-    require(frame.displayData->channels.front().samples.size() == 1, "采样频率交互数据应只保留视口内样本");
-    require(std::abs(frame.displayData->channels.front().samples.front().time - 0.1) < 1e-12,
+    require(frame.displayData->channels.front().samples.size() == 3,
+            "采样频率交互数据应保留视口样本及左右邻接样本");
+    require(std::abs(frame.displayData->channels.front().samples.front().time - 0.0) < 1e-12,
+            "采样频率交互数据应保留左侧邻接样本");
+    require(std::abs(frame.displayData->channels.front().samples[1].time - 0.1) < 1e-12,
             "采样频率交互时间应按全局样本序号换算");
+    require(std::abs(frame.displayData->channels.front().samples.back().time - 0.2) < 1e-12,
+            "采样频率交互数据应保留右侧邻接样本");
     require(frame.renderDisplayData == frame.displayData, "采样频率主图渲染应复用当前视口显示缓存");
-    require(frame.renderDisplayData->channels.front().samples.size() == 1, "采样频率渲染数据不应携带完整历史");
+    require(frame.renderDisplayData->channels.front().samples.size() == 3, "采样频率渲染数据应携带邻接样本");
     require(frame.overviewDisplayData != nullptr, "采样频率概览数据源不能为空");
     require(std::abs(frame.overviewDisplayData->channels.front().samples.front().time - 0.0) < 1e-12,
             "概览数据起点应按全局样本序号换算");
@@ -1186,9 +1255,9 @@ void test_wave_sample_frequency_auto_follow_preserves_trimmed_offset()
     require(frame.displayData != nullptr, "裁剪后采样频率自动跟随数据源不能为空");
     require(std::abs(wave.view.viewMaxTime - 0.9) < 1e-12, "自动跟随应对齐最新全局样本时间");
     require(std::abs(wave.view.viewMinTime - 0.7) < 1e-12, "自动跟随窗口起点应保留全局样本偏移");
-    require(frame.displayData->channels.front().samples.size() == 3, "自动跟随窗口应显示最新全局时间窗口");
-    require(std::abs(frame.displayData->channels.front().samples.front().time - 0.7) < 1e-12,
-            "自动跟随显示起点不应因裁剪归零");
+    require(frame.displayData->channels.front().samples.size() == 4, "自动跟随窗口应显示最新全局时间窗口及左邻接样本");
+    require(std::abs(frame.displayData->channels.front().samples.front().time - 0.6) < 1e-12,
+            "自动跟随显示起点应保留左侧邻接全局样本");
     require(std::abs(frame.displayData->channels.front().samples.back().time - 0.9) < 1e-12,
             "自动跟随显示终点应使用最新全局样本时间");
 }
@@ -1340,7 +1409,7 @@ void test_wave_overview_bounds_use_full_history_window()
         protoscope::plot::computeDisplayBoundsForChannels(frequencyMainDisplay, {0}, 0.001);
     const auto frequencyOverviewBounds =
         protoscope::plot::computeDisplayBoundsForChannels(frequencyOverviewDisplay, {0}, 0.001);
-    require(std::abs(frequencyMainBounds.minTime - 1.5) < 1e-12, "Fs 主视图应按当前窗口换算起点");
+    require(std::abs(frequencyMainBounds.minTime - 1.4) < 1e-12, "Fs 主视图 bounds 应包含左侧邻接样本");
     require(std::abs(frequencyMainBounds.maxTime - 1.9) < 1e-12, "Fs 主视图应按当前窗口换算终点");
     require(std::abs(frequencyOverviewBounds.minTime - 0.0) < 1e-12, "Fs 概览应按全样本序号换算起点");
     require(std::abs(frequencyOverviewBounds.maxTime - 1.9) < 1e-12, "Fs 概览应按全样本序号换算终点");
