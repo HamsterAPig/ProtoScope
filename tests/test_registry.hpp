@@ -144,6 +144,8 @@ void test_plot_set_view_config_applies_history_limit_immediately();
 void test_plot_time_reset_clears_history_by_default();
 void test_plot_time_reset_can_continue_history();
 void test_wave_sample_frequency_visible_range_filters_by_sample_index();
+void test_wave_snapshot_visible_range_keeps_adjacent_samples();
+void test_wave_visible_range_adjacent_samples_clamp_at_edges();
 void test_wave_sample_frequency_preserves_trimmed_sample_offset();
 void test_wave_max_total_samples_trim_refreshes_cached_frame();
 void test_wave_max_total_samples_noop_preserves_revision();

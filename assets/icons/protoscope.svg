@@ -1,0 +1,83 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="ProtoScope app icon">
+  <defs>
+    <linearGradient id="bg" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F1B2D"/>
+      <stop offset="0.55" stop-color="#08111E"/>
+      <stop offset="1" stop-color="#030812"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="210" y1="195" x2="735" y2="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B2033"/>
+      <stop offset="1" stop-color="#04101C"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="180" y1="240" x2="760" y2="665" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38F7D0"/>
+      <stop offset="1" stop-color="#2EA8FF"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="250" y1="785" x2="785" y2="785" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F5F8FF"/>
+      <stop offset="0.52" stop-color="#F5F8FF"/>
+      <stop offset="0.53" stop-color="#38F7D0"/>
+      <stop offset="1" stop-color="#22D6C5"/>
+    </linearGradient>
+    <filter id="softGlow" x="120" y="130" width="720" height="600" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.10 0 0 0 0 0.95 0 0 0 0 0.80 0 0 0 0.55 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="screenClip">
+      <rect x="170" y="190" width="610" height="520" rx="58"/>
+    </clipPath>
+  </defs>
+
+  <!-- app tile -->
+  <rect x="64" y="64" width="896" height="896" rx="190" fill="url(#bg)"/>
+  <rect x="80" y="80" width="864" height="864" rx="176" stroke="#1C3350" stroke-opacity="0.55" stroke-width="2"/>
+
+  <!-- oscilloscope screen -->
+  <rect x="170" y="190" width="610" height="520" rx="58" fill="url(#screen)" stroke="url(#cyan)" stroke-width="18"/>
+  <g clip-path="url(#screenClip)" opacity="0.42">
+    <!-- grid -->
+    <g stroke="#2EA8FF" stroke-width="3" stroke-dasharray="14 18">
+      <path d="M250 190V710"/>
+      <path d="M330 190V710"/>
+      <path d="M410 190V710"/>
+      <path d="M490 190V710"/>
+      <path d="M570 190V710"/>
+      <path d="M650 190V710"/>
+      <path d="M730 190V710"/>
+      <path d="M170 270H780"/>
+      <path d="M170 350H780"/>
+      <path d="M170 430H780"/>
+      <path d="M170 510H780"/>
+      <path d="M170 590H780"/>
+      <path d="M170 670H780"/>
+    </g>
+    <!-- center axes -->
+    <path d="M475 190V710" stroke="#73E9FF" stroke-opacity="0.5" stroke-width="4" stroke-dasharray="10 14"/>
+    <path d="M170 445H780" stroke="#73E9FF" stroke-opacity="0.45" stroke-width="4" stroke-dasharray="10 14"/>
+    <g stroke="#73E9FF" stroke-opacity="0.55" stroke-width="4">
+      <path d="M462 230H488M462 270H488M462 310H488M462 350H488M462 390H488M462 430H488M462 470H488M462 510H488M462 550H488M462 590H488M462 630H488M462 670H488"/>
+      <path d="M210 432V458M250 432V458M290 432V458M330 432V458M370 432V458M410 432V458M450 432V458M490 432V458M530 432V458M570 432V458M610 432V458M650 432V458M690 432V458M730 432V458"/>
+    </g>
+  </g>
+
+  <!-- waveform -->
+  <path filter="url(#softGlow)" d="M178 445 C215 445 232 445 250 414 C274 372 278 285 315 285 C358 285 356 411 385 511 C402 568 430 571 452 517 C472 468 477 411 510 411 C544 411 552 495 575 573 C595 641 632 647 657 583 C688 504 688 333 730 333 C759 333 762 438 780 445" stroke="url(#cyan)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- right controls -->
+  <rect x="830" y="250" width="90" height="26" rx="13" fill="#38F7D0"/>
+  <rect x="820" y="320" width="105" height="48" rx="24" fill="#26384D" stroke="#4A6685" stroke-width="2"/>
+  <rect x="820" y="410" width="105" height="48" rx="24" fill="#26384D" stroke="#4A6685" stroke-width="2"/>
+  <rect x="820" y="500" width="105" height="48" rx="24" fill="#26384D" stroke="#4A6685" stroke-width="2"/>
+  <circle cx="872" cy="645" r="58" fill="#111D2C" stroke="#3E8DEB" stroke-width="14"/>
+  <rect x="866" y="596" width="12" height="34" rx="6" fill="#38F7D0"/>
+  <g stroke="#7F97B5" stroke-width="7" stroke-linecap="round" opacity="0.85">
+    <path d="M872 548V535"/><path d="M906 555L912 543"/><path d="M932 580L944 573"/><path d="M940 645H954"/><path d="M932 710L944 717"/><path d="M906 735L912 747"/><path d="M872 742V755"/><path d="M838 735L832 747"/><path d="M812 710L800 717"/><path d="M804 645H790"/><path d="M812 580L800 573"/><path d="M838 555L832 543"/>
+  </g>
+
+  <!-- product name -->
+  <text x="512" y="855" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="116" font-weight="700" letter-spacing="-5" fill="url(#textGrad)">ProtoScope</text>
+</svg>

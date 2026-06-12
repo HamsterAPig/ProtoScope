@@ -351,6 +351,16 @@ void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, do
         const std::size_t end = endIndex <= channel.sampleIndexOffset ? 0 : endIndex - channel.sampleIndexOffset;
         channel.visibleBegin = (std::min)(begin, channel.totalSamples);
         channel.visibleEnd = (std::min)(end, channel.totalSamples);
+        if (channel.visibleEnd < channel.visibleBegin) {
+            channel.visibleEnd = channel.visibleBegin;
+        }
+        // 核心流程：采样频率时间轴也保留左右邻接样本，避免单点视口里折线被上游裁成孤点。
+        if (channel.visibleBegin > 0) {
+            --channel.visibleBegin;
+        }
+        if (channel.visibleEnd < channel.totalSamples) {
+            ++channel.visibleEnd;
+        }
     }
 }
 

@@ -496,6 +496,13 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
         view.samples = channel.samples.data();
         view.visibleBegin = lowerBoundByTime(channel.samples, visibleMinTime);
         view.visibleEnd = upperBoundByTime(channel.samples, visibleMaxTime);
+        // 核心流程：主视图极限放大时仍要保留可视窗口两侧的真实邻接样本，让折线能被 ImPlot 裁剪到视口边界。
+        if (view.visibleBegin > 0) {
+            --view.visibleBegin;
+        }
+        if (view.visibleEnd < view.totalSamples) {
+            ++view.visibleEnd;
+        }
         if (computeStats) {
             view.stats = makeStats(channel.samples, view.visibleBegin, view.visibleEnd, channel.spec);
         } else {
