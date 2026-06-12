@@ -75,6 +75,7 @@ protoscope::plot::WaveDockState makeChannelResetWave()
         .ratio = 2.0,
         .scale = 1.5,
         .offset = -0.25,
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 4, .yOffset = 1.0},
     });
     wave.buffer.setChannelSpec(0,
                                {
@@ -83,16 +84,19 @@ protoscope::plot::WaveDockState makeChannelResetWave()
                                    .ratio = 3.0,
                                    .scale = 4.0,
                                    .offset = 10.0,
+                                   .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 4, .yOffset = 3.0},
                                });
     wave.channelOverrides.resize(1);
     wave.channelOverrides[0].labelOverridden = true;
     wave.channelOverrides[0].ratioOverridden = true;
     wave.channelOverrides[0].scaleOverridden = true;
     wave.channelOverrides[0].offsetOverridden = true;
+    wave.channelOverrides[0].bitYOffsetOverridden = true;
     wave.channelOverrides[0].label = "Renamed";
     wave.channelOverrides[0].ratio = 3.0;
     wave.channelOverrides[0].scale = 4.0;
     wave.channelOverrides[0].offset = 10.0;
+    wave.channelOverrides[0].bitYOffset = 3.0;
     return wave;
 }
 
@@ -824,6 +828,64 @@ void test_plot_channel_scale_and_offset_apply_to_display_only()
     require(std::abs(zeroMeasurement.minValue + 10.0) < 1e-9, "scale=0 时最小值仍应保持真实值");
     require(std::abs(zeroMeasurement.maxValue - 9.0) < 1e-9, "scale=0 时最大值仍应保持真实值");
     require(std::abs(zeroMeasurement.rmsValue - std::sqrt(206.0 / 3.0)) < 1e-9, "scale=0 时 RMS 仍应按真实值计算");
+}
+
+void test_plot_channel_bit_display_reaches_snapshot()
+{
+    protoscope::plot::OscilloscopeBuffer buffer;
+    buffer.configureChannels(1);
+    buffer.setChannelSpec(0,
+                          {.label = "CH1",
+                           .unit = "raw",
+                           .bitDisplay = {.enabled = true, .firstBit = 2, .bitCount = 4, .yOffset = 1.5}});
+    buffer.append(0,
+                  protoscope::plot::WaveAppendRequest{
+                      .source = "bit",
+                      .samples = {{.time = 0.0, .value = 0.0}, {.time = 1.0, .value = 15.0}},
+                  });
+
+    const auto spec = buffer.channelSpec(0);
+    require(spec.has_value(), "buffer 应保存 bit_display 通道配置");
+    require(spec->bitDisplay.enabled, "ChannelSpec 应保留 bit_display.enabled");
+    require(spec->bitDisplay.firstBit == 2, "ChannelSpec 应保留 bit_display.firstBit");
+    require(spec->bitDisplay.bitCount == 4, "ChannelSpec 应保留 bit_display.bitCount");
+    require(std::abs(spec->bitDisplay.yOffset - 1.5) < 1e-12, "ChannelSpec 应保留 bit_display.yOffset");
+
+    const auto snapshot = buffer.snapshot(0.0, 1.0);
+    require(snapshot.channels.size() == 1, "snapshot 应包含 bit_display 通道");
+    require(snapshot.channels[0].bitDisplay.enabled, "snapshot 应保留 bit_display.enabled");
+    require(snapshot.channels[0].bitDisplay.firstBit == 2, "snapshot 应保留 bit_display.firstBit");
+    require(snapshot.channels[0].bitDisplay.bitCount == 4, "snapshot 应保留 bit_display.bitCount");
+    require(std::abs(snapshot.channels[0].bitDisplay.yOffset - 1.5) < 1e-12, "snapshot 应保留 bit_display.yOffset");
+}
+
+void test_wave_bit_display_bounds_and_hidden_policy()
+{
+    protoscope::plot::WaveDockState wave;
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 2.0},
+    });
+
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 0.0, .value = 1000.0}, {.time = 1.0, .value = 2000.0}},
+        .actualValues = {1000.0, 2000.0},
+    });
+
+    const auto bounds = protoscope::ui::boundsForDerivedViews(wave, snapshot, displayData, {0});
+    require(bounds.valid, "bit_display bounds 应有效");
+    require(std::abs(bounds.minValue - 2.0) < 1e-12, "bit_display bounds 不应使用原始模拟最小值");
+    const double expectedMax = 2.0 + protoscope::ui::bitDisplayLanePitch() + protoscope::ui::bitDisplayLaneHeight();
+    require(std::abs(bounds.maxValue - expectedMax) < 1e-12, "bit_display bounds 应覆盖所有 bit lane");
+
+    wave.hiddenChannelLabels.push_back("CH1");
+    const auto visibleIndices = protoscope::ui::channelIndicesForDerivedViews(wave, snapshot);
+    require(visibleIndices.empty(), "父通道隐藏后整组 bit 不应参与 derived views");
+    const auto hiddenBounds = protoscope::ui::boundsForDerivedViews(wave, snapshot, displayData, visibleIndices);
+    require(!hiddenBounds.valid, "隐藏 bit 父通道后 derived bounds 应为空");
 }
 
 void test_plot_snapshot_without_stats_keeps_ranges_and_samples()
@@ -1875,10 +1937,12 @@ void test_wave_channel_reset_all_uses_protocol_default()
     require(std::abs(spec->ratio - 2.0) < 1e-12, "恢复全部默认应恢复 ratio");
     require(std::abs(spec->scale - 1.5) < 1e-12, "恢复全部默认应恢复 scale");
     require(std::abs(spec->offset + 0.25) < 1e-12, "恢复全部默认应恢复 offset");
+    require(std::abs(spec->bitDisplay.yOffset - 1.0) < 1e-12, "恢复全部默认应恢复 bit y_offset");
     require(!wave.channelOverrides[0].labelOverridden, "恢复全部默认应清除 label override");
     require(!wave.channelOverrides[0].ratioOverridden, "恢复全部默认应清除 ratio override");
     require(!wave.channelOverrides[0].scaleOverridden, "恢复全部默认应清除 scale override");
     require(!wave.channelOverrides[0].offsetOverridden, "恢复全部默认应清除 offset override");
+    require(!wave.channelOverrides[0].bitYOffsetOverridden, "恢复全部默认应清除 bit y_offset override");
 }
 
 void test_wave_channel_reset_scale_offset_preserves_label_and_ratio()
@@ -1894,10 +1958,12 @@ void test_wave_channel_reset_scale_offset_preserves_label_and_ratio()
     require(std::abs(spec->ratio - 3.0) < 1e-12, "恢复 scale/offset 不应修改 ratio");
     require(std::abs(spec->scale - 1.5) < 1e-12, "恢复 scale/offset 应恢复 scale");
     require(std::abs(spec->offset + 0.25) < 1e-12, "恢复 scale/offset 应恢复 offset");
+    require(std::abs(spec->bitDisplay.yOffset - 3.0) < 1e-12, "恢复 scale/offset 不应修改 bit y_offset");
     require(wave.channelOverrides[0].labelOverridden, "恢复 scale/offset 应保留 label override");
     require(wave.channelOverrides[0].ratioOverridden, "恢复 scale/offset 应保留 ratio override");
     require(!wave.channelOverrides[0].scaleOverridden, "恢复 scale/offset 应清除 scale override");
     require(!wave.channelOverrides[0].offsetOverridden, "恢复 scale/offset 应清除 offset override");
+    require(wave.channelOverrides[0].bitYOffsetOverridden, "恢复 scale/offset 应保留 bit y_offset override");
 }
 
 void test_wave_channel_reset_scale_preserves_offset()
@@ -1911,8 +1977,10 @@ void test_wave_channel_reset_scale_preserves_offset()
     require(spec.has_value(), "恢复 scale 后通道配置仍应存在");
     require(std::abs(spec->scale - 1.5) < 1e-12, "恢复 scale 应恢复 scale");
     require(std::abs(spec->offset - 10.0) < 1e-12, "恢复 scale 不应修改 offset");
+    require(std::abs(spec->bitDisplay.yOffset - 3.0) < 1e-12, "恢复 scale 不应修改 bit y_offset");
     require(!wave.channelOverrides[0].scaleOverridden, "恢复 scale 应清除 scale override");
     require(wave.channelOverrides[0].offsetOverridden, "恢复 scale 应保留 offset override");
+    require(wave.channelOverrides[0].bitYOffsetOverridden, "恢复 scale 应保留 bit y_offset override");
 }
 
 void test_wave_offset_reset_uses_protocol_default_only()
@@ -2000,9 +2068,10 @@ void test_raw_capture_file_plot_setup_roundtrip()
          .unit = "℃",
          .ratio = 0.5,
          .scale = 2.0,
-         .offset = -1.0,
-         .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F},
-         .lineWidth = std::optional<float>{2.75F}},
+          .offset = -1.0,
+          .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F},
+          .lineWidth = std::optional<float>{2.75F},
+          .bitDisplay = {.enabled = true, .firstBit = 4, .bitCount = 8, .yOffset = 1.25}},
         {.label = "压力B", .unit = "kPa", .ratio = 1.5, .scale = 3.0, .offset = 4.0},
     };
     setupEvent.plotSetup.view.timeScale = 0.25;
@@ -2037,6 +2106,14 @@ void test_raw_capture_file_plot_setup_roundtrip()
             "psraw 应写出显式 line_width");
     require(bytes.find("channel.1.line_width: none\n") != std::string::npos,
             "psraw 应写出默认 line_width 标记");
+    require(bytes.find("channel.0.bit_display.enabled: true\n") != std::string::npos,
+            "psraw 应写出 bit_display.enabled");
+    require(bytes.find("channel.0.bit_display.first_bit: 4\n") != std::string::npos,
+            "psraw 应写出 bit_display.first_bit");
+    require(bytes.find("channel.0.bit_display.bit_count: 8\n") != std::string::npos,
+            "psraw 应写出 bit_display.bit_count");
+    require(bytes.find("channel.0.bit_display.y_offset: 1.25\n") != std::string::npos,
+            "psraw 应写出 bit_display.y_offset");
 
     const auto loaded = protoscope::plot::readRawCaptureFile(tempPath, error);
     if (!loaded.has_value()) {
@@ -2058,6 +2135,12 @@ void test_raw_capture_file_plot_setup_roundtrip()
     require(loadedSetup.channels[0].lineWidth.has_value(), "plot_setup 应保留 line_width");
     require(std::abs(*loadedSetup.channels[0].lineWidth - 2.75F) < 1e-6F, "plot_setup line_width 数值错误");
     require(!loadedSetup.channels[1].lineWidth.has_value(), "plot_setup 应保留默认 line_width 为空");
+    require(loadedSetup.channels[0].bitDisplay.enabled, "plot_setup 应保留 bit_display.enabled");
+    require(loadedSetup.channels[0].bitDisplay.firstBit == 4, "plot_setup 应保留 bit_display.first_bit");
+    require(loadedSetup.channels[0].bitDisplay.bitCount == 8, "plot_setup 应保留 bit_display.bit_count");
+    require(std::abs(loadedSetup.channels[0].bitDisplay.yOffset - 1.25) < 1e-12,
+            "plot_setup 应保留 bit_display.y_offset");
+    require(!loadedSetup.channels[1].bitDisplay.enabled, "缺省 bit_display 应按 disabled 处理");
     require(std::abs(loadedSetup.view.timeScale - 0.25) < 1e-12, "plot_setup 应保留 time_scale");
     require(loadedSetup.view.timeUnit == "ms", "plot_setup 应保留 time_unit");
     require(std::abs(loadedSetup.view.verticalMin + 10.0) < 1e-12, "plot_setup 应保留 vertical_min");

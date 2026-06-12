@@ -127,6 +127,17 @@ ImVec4 withAlpha(ImVec4 color, float alphaScale);
 ImVec4 fallbackChannelColor(std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelSpec& spec, std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelView& channel, std::size_t channelIndex);
+bool bitDisplayEnabled(const plot::BitDisplaySpec& spec);
+double bitDisplayLanePitch();
+double bitDisplayLaneHeight();
+double bitDisplayGroupBase(const plot::WaveSnapshot& snapshot, std::size_t channelIndex);
+plot::WaveValueRange bitDisplayValueRange(const plot::WaveSnapshot& snapshot,
+                                          std::size_t channelIndex,
+                                          const plot::BitDisplaySpec& spec);
+std::optional<std::size_t> findBitDisplayChannelAtValue(const plot::WaveDockState& wave,
+                                                        const plot::WaveSnapshot& snapshot,
+                                                        double value,
+                                                        double maxDistance);
 void drawWaveChannel(const plot::ChannelView& channel,
                      const std::vector<plot::EnvelopePoint>& envelope,
                      const ImVec4& color,
@@ -149,6 +160,7 @@ void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& sn
 bool updateActiveChannelScale(plot::WaveDockState& wave, double factor);
 bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta);
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
+                                           const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
                                            const ImPlotPoint& mousePos,
                                            double timeSnapDistance,
@@ -159,6 +171,7 @@ bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::stri
 std::vector<std::size_t> channelIndicesForDerivedViews(const plot::WaveDockState& wave,
                                                        const plot::WaveSnapshot& snapshot);
 plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
+                                           const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
                                            const std::vector<std::size_t>& channelIndices);
 void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::string& label);

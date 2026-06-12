@@ -94,6 +94,16 @@ namespace {
         return std::abs(*left - *right) <= 1e-6F;
     }
 
+    bool sameBitDisplayIdentity(const plot::BitDisplaySpec& left, const plot::BitDisplaySpec& right)
+    {
+        return left.enabled == right.enabled && left.firstBit == right.firstBit && left.bitCount == right.bitCount;
+    }
+
+    bool sameBitDisplaySpec(const plot::BitDisplaySpec& left, const plot::BitDisplaySpec& right)
+    {
+        return sameBitDisplayIdentity(left, right) && std::abs(left.yOffset - right.yOffset) <= 1e-12;
+    }
+
     bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer)
     {
         if (setupChannels.size() != buffer.channelCount()) {
@@ -106,7 +116,8 @@ namespace {
             }
             const auto& setup = setupChannels[i];
             if (current->label != setup.label || current->unit != setup.unit ||
-                !sameColor(current->color, setup.color) || !sameLineWidth(current->lineWidth, setup.lineWidth)) {
+                !sameColor(current->color, setup.color) || !sameLineWidth(current->lineWidth, setup.lineWidth) ||
+                !sameBitDisplayIdentity(current->bitDisplay, setup.bitDisplay)) {
                 return false;
             }
         }
@@ -123,7 +134,9 @@ namespace {
             const auto current = buffer.channelSpec(index);
             const auto& setup = setupChannels[index];
             if (!current.has_value() || std::abs(current->ratio - setup.ratio) > 1e-12 ||
-                std::abs(current->scale - setup.scale) > 1e-12 || std::abs(current->offset - setup.offset) > 1e-12) {
+                std::abs(current->scale - setup.scale) > 1e-12 ||
+                std::abs(current->offset - setup.offset) > 1e-12 ||
+                !sameBitDisplaySpec(current->bitDisplay, setup.bitDisplay)) {
                 return false;
             }
         }
@@ -142,7 +155,8 @@ namespace {
                 return false;
             }
             const auto& setup = setupChannels[i];
-            if (current->label != setup.label || current->unit != setup.unit) {
+            if (current->label != setup.label || current->unit != setup.unit ||
+                !sameBitDisplayIdentity(current->bitDisplay, setup.bitDisplay)) {
                 return false;
             }
         }
@@ -400,6 +414,7 @@ namespace {
                 .offset = channel.offset,
                 .color = channel.color,
                 .lineWidth = channel.lineWidth,
+                .bitDisplay = channel.bitDisplay,
             });
         }
         return rawSetup;
@@ -1510,6 +1525,9 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
             }
             if (overrideState.offsetOverridden) {
                 effectiveSpec.offset = overrideState.offset;
+            }
+            if (overrideState.bitYOffsetOverridden) {
+                effectiveSpec.bitDisplay.yOffset = overrideState.bitYOffset;
             }
         }
         wave.defaultChannelSpecs.push_back(defaultSpec);

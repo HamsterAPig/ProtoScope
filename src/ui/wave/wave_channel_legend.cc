@@ -40,6 +40,12 @@ void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active)
     ImGui::Text("Ratio：%.6g", spec.ratio);
     ImGui::Text("Scale：%.6g", spec.scale);
     ImGui::Text("Offset：%.6g", spec.offset);
+    if (bitDisplayEnabled(spec.bitDisplay)) {
+        ImGui::Text("Bits：%zu..%zu",
+                    spec.bitDisplay.firstBit,
+                    spec.bitDisplay.firstBit + spec.bitDisplay.bitCount - 1U);
+        ImGui::Text("Bit Y Offset：%.6g", spec.bitDisplay.yOffset);
+    }
     ImGui::TextUnformatted(active ? "状态：激活" : "状态：未激活");
     ImGui::EndTooltip();
 }
@@ -74,6 +80,19 @@ void drawChannelLegendPopup(plot::WaveDockState& wave,
     }
     if (ImGui::InputDouble("偏移", &updated.offset, 0.1, 1.0, "%.6g")) {
         applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+    }
+    if (bitDisplayEnabled(updated.bitDisplay)) {
+        ImGui::Separator();
+        ImGui::Text("Bits：%zu..%zu",
+                    updated.bitDisplay.firstBit,
+                    updated.bitDisplay.firstBit + updated.bitDisplay.bitCount - 1U);
+        if (ImGui::InputDouble("bit y_offset", &updated.bitDisplay.yOffset, 0.1, 1.0, "%.6g")) {
+            applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+        }
+        if (ImGui::Button("恢复 bit 偏移默认值")) {
+            updated.bitDisplay.yOffset = defaultSpec.bitDisplay.yOffset;
+            applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+        }
     }
     if (ImGui::Button(active ? "激活中" : "设为激活")) {
         wave.view.measurementChannelIndex = channelIndex;

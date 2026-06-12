@@ -181,6 +181,7 @@ struct PlotChannelDescriptor {
     double offset{0.0};
     std::optional<std::array<float, 4>> color;
     std::optional<float> lineWidth;
+    plot::BitDisplaySpec bitDisplay;
 };
 
 struct PlotSetup {

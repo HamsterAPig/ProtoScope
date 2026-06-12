@@ -4,7 +4,9 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace protoscope::ui {
 
@@ -403,6 +405,40 @@ void placeCursorInViewport(plot::WaveViewState& view,
     cursor.channelIndex = best->channelIndex;
 }
 
+bool allChannelsUseBitDisplay(const plot::WaveSnapshot& snapshot)
+{
+    if (snapshot.channels.empty()) {
+        return false;
+    }
+    return std::all_of(snapshot.channels.begin(), snapshot.channels.end(), [](const plot::ChannelView& channel) {
+        return bitDisplayEnabled(channel.bitDisplay);
+    });
+}
+
+void setupBitDisplayAxisTicks(const plot::WaveSnapshot& snapshot)
+{
+    std::vector<double> ticks;
+    std::vector<std::string> labels;
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        const auto& channel = snapshot.channels[channelIndex];
+        for (std::size_t laneIndex = 0; laneIndex < channel.bitDisplay.bitCount; ++laneIndex) {
+            const double laneBase = bitDisplayGroupBase(snapshot, channelIndex) + channel.bitDisplay.yOffset +
+                                    static_cast<double>(laneIndex) * bitDisplayLanePitch();
+            ticks.push_back(laneBase + bitDisplayLaneHeight() * 0.5);
+            labels.push_back(channel.label + "." + std::to_string(channel.bitDisplay.firstBit + laneIndex));
+        }
+    }
+
+    std::vector<const char*> labelPointers;
+    labelPointers.reserve(labels.size());
+    for (const auto& label : labels) {
+        labelPointers.push_back(label.c_str());
+    }
+    if (!ticks.empty()) {
+        ImPlot::SetupAxisTicks(ImAxis_Y1, ticks.data(), static_cast<int>(ticks.size()), labelPointers.data(), false);
+    }
+}
+
 void placeCursorPairInViewport(plot::WaveViewState& view,
                                const plot::ViewConfig& config,
                                const plot::WaveDisplayData& displayData)
@@ -426,6 +462,9 @@ void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
     }
     ImPlot::SetupAxis(ImAxis_X1, xAxisLabel, axisFlags);
     ImPlot::SetupAxis(ImAxis_Y1, yAxisLabel, axisFlags);
+    if (allChannelsUseBitDisplay(snapshot)) {
+        setupBitDisplayAxisTicks(snapshot);
+    }
     const bool forceMainPlotLimits = view.forceNextMainPlotLimits;
     ImPlot::SetupAxisLimits(ImAxis_X1,
                             view.viewMinTime,

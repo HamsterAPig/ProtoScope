@@ -99,6 +99,7 @@ struct WaveViewState {
     bool forceNextMainPlotLimits{false};
     bool activeChannelOffsetDrag{false};
     bool activeChannelScaleDrag{false};
+    bool activeBitYOffsetDrag{false};
     bool zoomSelectionActive{false};
     bool zoomSelectionDragging{false};
     bool zoomSelectionAutoExit{false};
@@ -177,10 +178,12 @@ struct WaveDockState {
         bool ratioOverridden{false};
         bool scaleOverridden{false};
         bool offsetOverridden{false};
+        bool bitYOffsetOverridden{false};
         std::string label;
         double ratio{1.0};
         double scale{1.0};
         double offset{0.0};
+        double bitYOffset{0.0};
     };
 
     OscilloscopeBuffer buffer{};
@@ -275,6 +278,28 @@ struct WaveDockState {
         std::size_t sourceSampleCount{0};
     };
 
+    struct BitRenderCacheKey {
+        std::uint64_t dataRevision{0};
+        std::size_t channelIndex{0};
+        double visibleMinTime{0.0};
+        double visibleMaxTime{0.0};
+        double sampleFrequencyHz{0.0};
+        std::size_t firstBit{0};
+        std::size_t bitCount{0};
+        double yOffset{0.0};
+        std::size_t plotPixelWidth{0};
+        std::size_t vertexBudget{0};
+
+        bool operator==(const BitRenderCacheKey&) const = default;
+    };
+
+    struct BitRenderCacheEntry {
+        bool valid{false};
+        BitRenderCacheKey key{};
+        std::vector<std::vector<WaveSample>> lanes;
+        std::size_t sourceSampleCount{0};
+    };
+
     bool cachedDisplayKeyValid{false};
     DisplayDataCacheKey cachedDisplayKey{};
     bool cachedOverviewKeyValid{false};
@@ -284,6 +309,7 @@ struct WaveDockState {
     WaveDisplayData cachedOverviewDisplayData{};
     WaveDataBounds cachedDisplayBounds{};
     std::vector<RenderEnvelopeCacheEntry> renderEnvelopeCache;
+    std::vector<BitRenderCacheEntry> bitRenderCache;
     bool cachedFftKeyValid{false};
     WaveFftCacheKey cachedFftKey{};
     WaveFftFrame cachedFftFrame{};

@@ -2572,6 +2572,125 @@ bool applyPlotChannelLineWidth(PlotChannelDescriptor& descriptor,
     return true;
 }
 
+std::optional<std::uint64_t> luaUnsignedIntegerValue(const sol::object& object)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return std::nullopt;
+    }
+    if (object.is<int>()) {
+        const int value = object.as<int>();
+        if (value < 0) {
+            return std::nullopt;
+        }
+        return static_cast<std::uint64_t>(value);
+    }
+    if (!object.is<double>()) {
+        return std::nullopt;
+    }
+    const double value = object.as<double>();
+    if (!std::isfinite(value) || value < 0.0 || std::trunc(value) != value ||
+        value > static_cast<double>((std::numeric_limits<std::uint64_t>::max)())) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(value);
+}
+
+std::optional<double> luaFiniteNumberValue(const sol::object& object)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return std::nullopt;
+    }
+    std::optional<double> value;
+    if (object.is<double>()) {
+        value = object.as<double>();
+    } else if (object.is<int>()) {
+        value = static_cast<double>(object.as<int>());
+    }
+    if (!value.has_value() || !std::isfinite(*value)) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+bool applyPlotBitDisplayUnsignedField(const sol::table& bitTable,
+                                      const char* fieldName,
+                                      std::size_t channelIndex,
+                                      std::uint64_t minValue,
+                                      std::uint64_t maxValue,
+                                      std::size_t& target,
+                                      std::string& error)
+{
+    const sol::object object = bitTable[fieldName];
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    const auto parsed = luaUnsignedIntegerValue(object);
+    if (!parsed.has_value() || *parsed < minValue || *parsed > maxValue) {
+        error = "plot.setup.channels[" + std::to_string(channelIndex) + "].bit_display." + fieldName +
+                " 必须是 " + std::to_string(minValue) + ".." + std::to_string(maxValue) + " 的整数";
+        return false;
+    }
+    target = static_cast<std::size_t>(*parsed);
+    return true;
+}
+
+bool applyPlotChannelBitDisplay(PlotChannelDescriptor& descriptor,
+                                const sol::table& channelTable,
+                                std::size_t index,
+                                std::string& error)
+{
+    const sol::object bitDisplayObject = channelTable["bit_display"];
+    if (!bitDisplayObject.valid() || bitDisplayObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+
+    plot::BitDisplaySpec spec{};
+    if (bitDisplayObject.is<bool>()) {
+        spec.enabled = bitDisplayObject.as<bool>();
+        descriptor.bitDisplay = plot::sanitizeBitDisplaySpec(spec);
+        return true;
+    }
+    if (!bitDisplayObject.is<sol::table>()) {
+        error = "plot.setup.channels[" + std::to_string(index) + "].bit_display 必须是 boolean 或 table";
+        return false;
+    }
+
+    const sol::table bitTable = bitDisplayObject.as<sol::table>();
+    spec.enabled = true;
+    const sol::object enabledObject = bitTable["enabled"];
+    if (enabledObject.valid() && enabledObject.get_type() != sol::type::lua_nil) {
+        if (!enabledObject.is<bool>()) {
+            error = "plot.setup.channels[" + std::to_string(index) + "].bit_display.enabled 必须是 boolean";
+            return false;
+        }
+        spec.enabled = enabledObject.as<bool>();
+    }
+    if (!applyPlotBitDisplayUnsignedField(bitTable, "first_bit", index, 0, plot::kMaxBitDisplayCount - 1, spec.firstBit, error)) {
+        return false;
+    }
+    if (!applyPlotBitDisplayUnsignedField(bitTable, "bit_count", index, 1, plot::kMaxBitDisplayCount, spec.bitCount, error)) {
+        return false;
+    }
+    if (spec.firstBit + spec.bitCount > plot::kMaxBitDisplayCount) {
+        error = "plot.setup.channels[" + std::to_string(index) +
+                "].bit_display.first_bit + bit_count 不允许超过 64";
+        return false;
+    }
+
+    const sol::object yOffsetObject = bitTable["y_offset"];
+    if (yOffsetObject.valid() && yOffsetObject.get_type() != sol::type::lua_nil) {
+        const auto yOffset = luaFiniteNumberValue(yOffsetObject);
+        if (!yOffset.has_value()) {
+            error = "plot.setup.channels[" + std::to_string(index) + "].bit_display.y_offset 必须是有限数字";
+            return false;
+        }
+        spec.yOffset = *yOffset;
+    }
+
+    descriptor.bitDisplay = plot::sanitizeBitDisplaySpec(spec);
+    return true;
+}
+
 std::optional<PlotChannelDescriptor> parsePlotChannelDescriptor(const sol::object& channelObject,
                                                                 std::size_t index,
                                                                 std::string& error)
@@ -2587,6 +2706,9 @@ std::optional<PlotChannelDescriptor> parsePlotChannelDescriptor(const sol::objec
         return std::nullopt;
     }
     if (!applyPlotChannelLineWidth(descriptor, channelTable, index, error)) {
+        return std::nullopt;
+    }
+    if (!applyPlotChannelBitDisplay(descriptor, channelTable, index, error)) {
         return std::nullopt;
     }
     return descriptor;

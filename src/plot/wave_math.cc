@@ -907,10 +907,12 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > kEpsilon;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > kEpsilon;
     overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > kEpsilon;
+    overrideState.bitYOffsetOverridden = std::abs(updated.bitDisplay.yOffset - defaultSpec.bitDisplay.yOffset) > kEpsilon;
     overrideState.label = updated.label;
     overrideState.ratio = updated.ratio;
     overrideState.scale = updated.scale;
     overrideState.offset = updated.offset;
+    overrideState.bitYOffset = updated.bitDisplay.yOffset;
     wave.buffer.setChannelSpec(channelIndex, std::move(updated));
     return true;
 }

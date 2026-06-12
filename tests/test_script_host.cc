@@ -1557,6 +1557,9 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
     require(text.find("@field color? string") != std::string::npos, "LuaLS API 应声明 ProtoPlotChannel.color");
     require(text.find("@field line_width? number") != std::string::npos,
             "LuaLS API 应声明 ProtoPlotChannel.line_width");
+    require(text.find("@class ProtoPlotBitDisplay") != std::string::npos, "LuaLS API 应声明 ProtoPlotBitDisplay");
+    require(text.find("@field bit_display? boolean|ProtoPlotBitDisplay") != std::string::npos,
+            "LuaLS API 应声明 ProtoPlotChannel.bit_display");
 }
 
 void test_script_missing_callbacks_allowed()
@@ -2493,6 +2496,68 @@ void test_script_plot_api_snapshot()
     require(!setups[0].channels[1].lineWidth.has_value(), "CH2 未配置 line_width 时应保留默认样式");
     require(appends.size() == 2, "打开连接后应推送 2 组通道数据");
     require(appends[0].second.samples.size() == 3, "通道采样点数量不正确");
+}
+
+void test_script_plot_bit_display_config()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-bit-plot"));
+    writeMainLua(protocolDir.path(), R"lua(
+function on_open(ctx)
+  proto.plot.setup({
+    channels = {
+      { label = "CH1", unit = "raw", bit_display = true },
+      { label = "CH2", unit = "raw", bit_display = { first_bit = 4, bit_count = 12, y_offset = 2.5 } },
+      { label = "CH3", unit = "raw", bit_display = { enabled = false, first_bit = 2, bit_count = 3 } },
+    }
+  })
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "bit_display 协议应可加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{.context = sampleCtx()});
+
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "bit_display setup 应生成 1 次配置");
+    require(setups[0].channels.size() == 3, "bit_display setup 应保留所有通道");
+    require(setups[0].channels[0].bitDisplay.enabled, "bit_display=true 应启用 bit 显示");
+    require(setups[0].channels[0].bitDisplay.firstBit == 0, "bit_display=true first_bit 默认值错误");
+    require(setups[0].channels[0].bitDisplay.bitCount == 8, "bit_display=true bit_count 默认值错误");
+    require(std::abs(setups[0].channels[0].bitDisplay.yOffset) < 1e-12, "bit_display=true y_offset 默认值错误");
+    require(setups[0].channels[1].bitDisplay.enabled, "bit_display table 省略 enabled 时应默认启用");
+    require(setups[0].channels[1].bitDisplay.firstBit == 4, "bit_display first_bit 解析错误");
+    require(setups[0].channels[1].bitDisplay.bitCount == 12, "bit_display bit_count 解析错误");
+    require(std::abs(setups[0].channels[1].bitDisplay.yOffset - 2.5) < 1e-12, "bit_display y_offset 解析错误");
+    require(!setups[0].channels[2].bitDisplay.enabled, "bit_display.enabled=false 应关闭 bit 显示");
+    require(setups[0].channels[2].bitDisplay.firstBit == 2, "关闭状态仍应保留 first_bit 配置");
+    require(setups[0].channels[2].bitDisplay.bitCount == 3, "关闭状态仍应保留 bit_count 配置");
+}
+
+void test_script_plot_bit_display_rejects_invalid_config()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-bit-plot-invalid"));
+    writeMainLua(protocolDir.path(), R"lua(
+function on_open(ctx)
+  proto.plot.setup({
+    channels = {
+      { label = "CH1", bit_display = { first_bit = 60, bit_count = 8 } },
+    }
+  })
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "非法 bit_display 脚本本身应可加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{.context = sampleCtx()});
+    require(host.drainPlotSetups().empty(), "非法 bit_display 不应生成 plot.setup");
+
+    bool hasBitDisplayError = false;
+    for (const auto& log : host.drainLogs()) {
+        if (log.message.find("bit_display.first_bit + bit_count 不允许超过 64") != std::string::npos) {
+            hasBitDisplayError = true;
+        }
+    }
+    require(hasBitDisplayError, "非法 bit_display 应记录明确字段错误");
 }
 
 void test_script_plot_push_accepts_compact_series()
@@ -3470,6 +3535,8 @@ static const TestCase kAllTests[] = {
      &test_protocol_state_file_roundtrips_elf_path_per_protocol},
     {"protocol_state_file_replace_failure_keeps_target", &test_protocol_state_file_replace_failure_keeps_target},
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
+    {"script_plot_bit_display_config", &test_script_plot_bit_display_config},
+    {"script_plot_bit_display_rejects_invalid_config", &test_script_plot_bit_display_rejects_invalid_config},
     {"script_plot_push_accepts_compact_series", &test_script_plot_push_accepts_compact_series},
     {"half_duplex_modbus_request_batches", &test_half_duplex_modbus_request_batches},
     {"half_duplex_modbus_ack_and_plot_flow", &test_half_duplex_modbus_ack_and_plot_flow},
@@ -3694,6 +3761,8 @@ static const TestCase kAllTests[] = {
     {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
+    {"plot_channel_bit_display_reaches_snapshot", &test_plot_channel_bit_display_reaches_snapshot},
+    {"wave_bit_display_bounds_and_hidden_policy", &test_wave_bit_display_bounds_and_hidden_policy},
     {"plot_snapshot_without_stats_keeps_ranges_and_samples",
      &test_plot_snapshot_without_stats_keeps_ranges_and_samples},
     {"plot_build_display_data_into_reuses_storage_and_matches_output",

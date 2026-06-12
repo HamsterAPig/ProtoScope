@@ -35,6 +35,11 @@ namespace {
         return std::isfinite(offset) ? offset : 0.0;
     }
 
+    double sanitizeBitDisplayYOffset(double yOffset)
+    {
+        return std::isfinite(yOffset) ? yOffset : 0.0;
+    }
+
     double estimateTimeStep(const std::vector<WaveSample>& samples)
     {
         for (std::size_t index = 1; index < samples.size(); ++index) {
@@ -151,6 +156,22 @@ float resolveChannelLineWidth(const std::optional<float>& lineWidth)
 float resolveChannelLineWidth(const ChannelSpec& spec)
 {
     return resolveChannelLineWidth(spec.lineWidth);
+}
+
+BitDisplaySpec sanitizeBitDisplaySpec(BitDisplaySpec spec)
+{
+    spec.yOffset = sanitizeBitDisplayYOffset(spec.yOffset);
+    if (spec.firstBit >= kMaxBitDisplayCount) {
+        spec.firstBit = 0;
+    }
+    if (spec.bitCount == 0) {
+        spec.bitCount = 8;
+    }
+    spec.bitCount = (std::min)(spec.bitCount, kMaxBitDisplayCount);
+    if (spec.firstBit + spec.bitCount > kMaxBitDisplayCount) {
+        spec.bitCount = kMaxBitDisplayCount - spec.firstBit;
+    }
+    return spec;
 }
 
 float resolveChannelLineWidth(const ChannelView& channel)
@@ -319,10 +340,11 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
     if (spec.lineWidth.has_value()) {
         spec.lineWidth = sanitizeChannelLineWidth(*spec.lineWidth);
     }
+    spec.bitDisplay = sanitizeBitDisplaySpec(spec.bitDisplay);
     auto& channelSpec = channels_[channelIndex].spec;
     if (channelSpec.label != spec.label || channelSpec.unit != spec.unit || channelSpec.ratio != spec.ratio ||
         channelSpec.scale != spec.scale || channelSpec.offset != spec.offset || channelSpec.color != spec.color ||
-        channelSpec.lineWidth != spec.lineWidth) {
+        channelSpec.lineWidth != spec.lineWidth || channelSpec.bitDisplay != spec.bitDisplay) {
         channelSpec = std::move(spec);
         ++dataRevision_;
     }
@@ -491,6 +513,7 @@ WaveSnapshot OscilloscopeBuffer::snapshot(double visibleMinTime, double visibleM
         view.offset = channel.spec.offset;
         view.color = channel.spec.color;
         view.lineWidth = channel.spec.lineWidth;
+        view.bitDisplay = channel.spec.bitDisplay;
         view.totalSamples = channel.samples.size();
         view.sampleIndexOffset = channel.sampleIndexOffset;
         view.samples = channel.samples.data();

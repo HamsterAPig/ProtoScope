@@ -517,6 +517,7 @@ plot::ChannelSpec fallbackChannelDefaultSpec(const plot::ChannelSpec& spec)
         .offset = 0.0,
         .color = spec.color,
         .lineWidth = spec.lineWidth,
+        .bitDisplay = spec.bitDisplay,
     };
 }
 
@@ -543,10 +544,13 @@ void applyChannelTransformOverride(plot::WaveDockState& wave,
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > 1e-12;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > 1e-12;
     overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > 1e-12;
+    overrideState.bitYOffsetOverridden =
+        std::abs(updated.bitDisplay.yOffset - defaultSpec.bitDisplay.yOffset) > 1e-12;
     overrideState.label = updated.label;
     overrideState.ratio = updated.ratio;
     overrideState.scale = updated.scale;
     overrideState.offset = updated.offset;
+    overrideState.bitYOffset = updated.bitDisplay.yOffset;
     wave.buffer.setChannelSpec(channelIndex, updated);
 }
 

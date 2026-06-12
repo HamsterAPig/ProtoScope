@@ -113,6 +113,67 @@ ImVec4 channelColor(const plot::ChannelView& channel, std::size_t channelIndex)
     return ImVec4((*channel.color)[0], (*channel.color)[1], (*channel.color)[2], (*channel.color)[3]);
 }
 
+bool bitDisplayEnabled(const plot::BitDisplaySpec& spec)
+{
+    return spec.enabled && spec.bitCount > 0 && spec.firstBit + spec.bitCount <= plot::kMaxBitDisplayCount;
+}
+
+double bitDisplayLanePitch()
+{
+    return 1.25;
+}
+
+double bitDisplayLaneHeight()
+{
+    return 0.75;
+}
+
+double bitDisplayGroupBase(const plot::WaveSnapshot& snapshot, std::size_t channelIndex)
+{
+    constexpr double kGroupGap = 0.75;
+    double base = 0.0;
+    const std::size_t limit = (std::min)(channelIndex, snapshot.channels.size());
+    for (std::size_t index = 0; index < limit; ++index) {
+        const auto& bitDisplay = snapshot.channels[index].bitDisplay;
+        if (!bitDisplayEnabled(bitDisplay)) {
+            continue;
+        }
+        base += static_cast<double>(bitDisplay.bitCount) * bitDisplayLanePitch() + kGroupGap;
+    }
+    return base;
+}
+
+plot::WaveValueRange bitDisplayValueRange(const plot::WaveSnapshot& snapshot,
+                                          std::size_t channelIndex,
+                                          const plot::BitDisplaySpec& spec)
+{
+    if (!bitDisplayEnabled(spec)) {
+        return {};
+    }
+    const double minValue = bitDisplayGroupBase(snapshot, channelIndex) + spec.yOffset;
+    const double maxValue = minValue + static_cast<double>(spec.bitCount - 1U) * bitDisplayLanePitch() +
+                            bitDisplayLaneHeight();
+    return {.minValue = minValue, .maxValue = maxValue};
+}
+
+std::optional<std::size_t> findBitDisplayChannelAtValue(const plot::WaveDockState& wave,
+                                                        const plot::WaveSnapshot& snapshot,
+                                                        double value,
+                                                        double maxDistance)
+{
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        const auto& channel = snapshot.channels[channelIndex];
+        if (!bitDisplayEnabled(channel.bitDisplay) || channelHiddenByLegendState(wave, channel.label)) {
+            continue;
+        }
+        const auto range = bitDisplayValueRange(snapshot, channelIndex, channel.bitDisplay);
+        if (value >= range.minValue - maxDistance && value <= range.maxValue + maxDistance) {
+            return channelIndex;
+        }
+    }
+    return std::nullopt;
+}
+
 void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
                             const ImVec4& color,
                             double latestTime,

@@ -143,9 +143,13 @@ namespace {
         const ImVec2 summaryMin(textMin.x, titleMax.y + cardStyle.textSpacingY);
         const ImVec2 summaryMax(textMax.x, summaryMin.y + lineHeight);
         drawChannelCardText(textMin, titleMax, spec.label, ImGui::GetColorU32(ImGuiCol_Text));
-        const std::string summary = "R " + formatMetricText(spec.ratio, nullptr) + "  S " +
-                                    formatMetricText(spec.scale, nullptr) + "  O " +
-                                    formatMetricText(spec.offset, nullptr);
+        std::string summary = "R " + formatMetricText(spec.ratio, nullptr) + "  S " +
+                              formatMetricText(spec.scale, nullptr) + "  O " + formatMetricText(spec.offset, nullptr);
+        if (bitDisplayEnabled(spec.bitDisplay)) {
+            summary = "Bits " + std::to_string(spec.bitDisplay.firstBit) + ".." +
+                      std::to_string(spec.bitDisplay.firstBit + spec.bitDisplay.bitCount - 1U) + "  Y " +
+                      formatMetricText(spec.bitDisplay.yOffset, nullptr);
+        }
         drawChannelCardText(summaryMin, summaryMax, summary, ImGui::GetColorU32(ImGuiCol_TextDisabled));
     }
 

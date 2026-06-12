@@ -236,7 +236,13 @@ namespace {
                 << "channel." << index << ".scale: " << std::setprecision(17) << channel.scale << '\n'
                 << "channel." << index << ".offset: " << std::setprecision(17) << channel.offset << '\n'
                 << "channel." << index << ".color: " << serializeColor(channel.color) << '\n'
-                << "channel." << index << ".line_width: " << serializeLineWidth(channel.lineWidth) << '\n';
+                << "channel." << index << ".line_width: " << serializeLineWidth(channel.lineWidth) << '\n'
+                << "channel." << index << ".bit_display.enabled: "
+                << (channel.bitDisplay.enabled ? "true" : "false") << '\n'
+                << "channel." << index << ".bit_display.first_bit: " << channel.bitDisplay.firstBit << '\n'
+                << "channel." << index << ".bit_display.bit_count: " << channel.bitDisplay.bitCount << '\n'
+                << "channel." << index << ".bit_display.y_offset: " << std::setprecision(17)
+                << channel.bitDisplay.yOffset << '\n';
         }
         out << "view.time_scale: " << std::setprecision(17) << event.plotSetup.view.timeScale << '\n'
             << "view.time_unit: " << encodeStringHex(event.plotSetup.view.timeUnit) << '\n'
@@ -543,6 +549,39 @@ namespace {
                 return EventFieldParseResult::Failed;
             }
             return EventFieldParseResult::Handled;
+        } else if (field == "bit_display.enabled") {
+            if (!parseBool(value, channel.bitDisplay.enabled)) {
+                error = "psraw plot_setup channel bit_display.enabled 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        } else if (field == "bit_display.first_bit") {
+            std::uint64_t firstBit = 0;
+            if (!parseUnsigned(value, firstBit) || firstBit >= kMaxBitDisplayCount) {
+                error = "psraw plot_setup channel bit_display.first_bit 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            channel.bitDisplay.firstBit = static_cast<std::size_t>(firstBit);
+            if (channel.bitDisplay.firstBit + channel.bitDisplay.bitCount > kMaxBitDisplayCount) {
+                error = "psraw plot_setup channel bit_display 范围超过 64 bit";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        } else if (field == "bit_display.bit_count") {
+            std::uint64_t bitCount = 0;
+            if (!parseUnsigned(value, bitCount) || bitCount == 0 || bitCount > kMaxBitDisplayCount) {
+                error = "psraw plot_setup channel bit_display.bit_count 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            channel.bitDisplay.bitCount = static_cast<std::size_t>(bitCount);
+            if (channel.bitDisplay.firstBit + channel.bitDisplay.bitCount > kMaxBitDisplayCount) {
+                error = "psraw plot_setup channel bit_display 范围超过 64 bit";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        } else if (field == "bit_display.y_offset") {
+            return parseFiniteDoubleField(
+                value, channel.bitDisplay.yOffset, "psraw plot_setup channel bit_display.y_offset 格式错误", error);
         }
         return EventFieldParseResult::Handled;
     }
