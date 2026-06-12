@@ -13,6 +13,10 @@
 #include "protoscope/ui/ui_component.hpp"
 #include "protoscope/ui/ui_theme.hpp"
 
+#if defined(_WIN32)
+#include "protoscope_windows_resource.h"
+#endif
+
 #include "workspace_controller.hpp"
 
 #if defined(_WIN32)
@@ -75,6 +79,36 @@ namespace {
         }
         return fonts.GetGlyphRangesChineseSimplifiedCommon();
     }
+
+#if defined(_WIN32)
+    void applyWindowIcon(GLFWwindow* window)
+    {
+        const HWND nativeWindow = window == nullptr ? nullptr : glfwGetWin32Window(window);
+        if (nativeWindow == nullptr) {
+            return;
+        }
+
+        const HINSTANCE instance = GetModuleHandleW(nullptr);
+        const auto loadIcon = [instance](int width, int height) -> HICON {
+            return static_cast<HICON>(LoadImageW(instance,
+                                                 MAKEINTRESOURCEW(PROTOSCOPE_APP_ICON),
+                                                 IMAGE_ICON,
+                                                 width,
+                                                 height,
+                                                 LR_DEFAULTCOLOR | LR_SHARED));
+        };
+
+        // Win32 图标资源同时服务任务栏、Alt-Tab 和窗口标题栏。
+        const HICON largeIcon = loadIcon(GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+        const HICON smallIcon = loadIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+        if (largeIcon != nullptr) {
+            SendMessageW(nativeWindow, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(largeIcon));
+        }
+        if (smallIcon != nullptr) {
+            SendMessageW(nativeWindow, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon));
+        }
+    }
+#endif
 } // namespace
 
 GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
@@ -241,6 +275,9 @@ bool GuiRuntime::initializeWindow()
         glfwTerminate();
         return false;
     }
+#if defined(_WIN32)
+    applyWindowIcon(window_);
+#endif
     glfwMakeContextCurrent(window_);
     glfwSwapInterval(1);
     if (window.maximized) {
