@@ -63,6 +63,8 @@ bool updateActiveBitYOffset(plot::WaveDockState& wave, double displayDelta)
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
+                                           const std::vector<std::size_t>& visibleChannelIndices,
+                                           const ImPlotRect& limits,
                                            const ImPlotPoint& mousePos,
                                            double timeSnapDistance,
                                            double valueSnapDistance)
@@ -72,6 +74,7 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
         view.activeChannelOffsetDrag = false;
         view.activeChannelScaleDrag = false;
         view.activeBitYOffsetDrag = false;
+        view.activeBitLane = {};
         return false;
     }
 
@@ -99,9 +102,16 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     }
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        if (const auto bitChannel = findBitDisplayChannelAtValue(wave, snapshot, mousePos.y, valueSnapDistance);
-            bitChannel.has_value()) {
-            view.measurementChannelIndex = *bitChannel;
+        const auto bitLayout =
+            buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
+        if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
+            view.measurementChannelIndex = bitLane->lane.parentChannelIndex;
+            view.activeBitLane = {
+                .active = true,
+                .parentChannelIndex = bitLane->lane.parentChannelIndex,
+                .bitIndex = bitLane->lane.bitIndex,
+                .laneIndex = bitLane->lane.laneIndex,
+            };
             view.activeBitYOffsetDrag = true;
             view.activeChannelOffsetDrag = false;
         } else if (const auto activePoint =
@@ -109,6 +119,7 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                    activePoint.has_value() && std::abs(activePoint->displayValue - mousePos.y) <= valueSnapDistance) {
             view.activeChannelOffsetDrag = true;
             view.activeBitYOffsetDrag = false;
+            view.activeBitLane = {};
         }
     }
 
@@ -130,7 +141,12 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     changed = true;
 
     if (view.activeBitYOffsetDrag) {
-        changed = updateActiveBitYOffset(wave, currentPlot.y - previousPlot.y) || changed;
+        const auto bitLayout =
+            buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
+        const auto activeLane =
+            findBitLaneAtPlotValue(bitLayout, currentPlot.y, std::abs(limits.Y.Max - limits.Y.Min));
+        const double lanePixelPitch = activeLane.has_value() ? (std::max)(activeLane->lane.lanePixelPitch, 1.0F) : 1.0F;
+        changed = updateActiveBitYOffset(wave, static_cast<double>(io.MouseDelta.y) / lanePixelPitch) || changed;
     } else if (view.activeChannelOffsetDrag) {
         changed = updateActiveChannelOffset(wave, currentPlot.y - previousPlot.y) || changed;
     }
@@ -417,6 +433,21 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
         return plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, time, maxTimeDistance);
     }
     return plot::findNearestDisplayByTimeAcrossChannels(displayData, time, maxTimeDistance);
+}
+
+std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnapshot& snapshot,
+                                                            const plot::WaveDisplayData& displayData,
+                                                            const plot::WaveViewState& view,
+                                                            const BitLaneLayout& bitLayout,
+                                                            double time,
+                                                            double plotY,
+                                                            double maxTimeDistance,
+                                                            double maxValueDistance)
+{
+    if (activeBitLaneVisible(view, bitLayout)) {
+        return findNearestBitTransition(snapshot, bitLayout, time, plotY, maxTimeDistance, maxValueDistance);
+    }
+    return findNearestDisplayByScope(displayData, view, time, maxTimeDistance);
 }
 
 bool currentPlotItemVisible(const std::string& label)

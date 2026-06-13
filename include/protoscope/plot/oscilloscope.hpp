@@ -81,6 +81,14 @@ struct WaveStats {
     double maxValue{0.0};
 };
 
+struct BitLaneReadout {
+    std::size_t parentChannelIndex{0};
+    std::size_t bitIndex{0};
+    std::size_t laneIndex{0};
+    bool value{false};
+    double y{0.0};
+};
+
 struct CursorReadout {
     bool valid{false};
     std::size_t channelIndex{0};
@@ -88,6 +96,7 @@ struct CursorReadout {
     double time{0.0};
     double value{0.0};
     double displayValue{0.0};
+    std::optional<BitLaneReadout> bit{};
 };
 
 struct DeltaReadout {

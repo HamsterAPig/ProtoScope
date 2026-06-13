@@ -35,6 +35,7 @@ struct WaveFrameData {
 
 struct PlotRenderResult {
     bool plotRendered{false};
+    bool bitMeasurementActive{false};
     std::array<std::optional<plot::CursorReadout>, 2> cursorReadouts{};
     std::optional<plot::MeasurementReadout> measurement;
 };
@@ -62,6 +63,28 @@ struct WaveSampleGetterPayload {
 struct SmartCursorSnap {
     plot::CursorReadout readout;
     std::string_view label;
+};
+
+struct BitLaneLayoutEntry {
+    std::size_t parentChannelIndex{0};
+    std::size_t bitIndex{0};
+    std::size_t laneIndex{0};
+    double lowY{0.0};
+    double highY{0.0};
+    double centerY{0.0};
+    float lowPixelY{0.0F};
+    float highPixelY{0.0F};
+    float centerPixelY{0.0F};
+    float lanePixelPitch{1.0F};
+};
+
+struct BitLaneLayout {
+    std::vector<BitLaneLayoutEntry> lanes;
+};
+
+struct BitLaneHit {
+    BitLaneLayoutEntry lane;
+    double distance{0.0};
 };
 
 struct WaveStatusOverlayItem {
@@ -134,6 +157,23 @@ double bitDisplayGroupBase(const plot::WaveSnapshot& snapshot, std::size_t chann
 plot::WaveValueRange bitDisplayValueRange(const plot::WaveSnapshot& snapshot,
                                           std::size_t channelIndex,
                                           const plot::BitDisplaySpec& spec);
+BitLaneLayout buildBitLaneLayout(const plot::WaveSnapshot& snapshot,
+                                 const std::vector<std::size_t>& visibleChannelIndices,
+                                 const ImPlotRect& limits,
+                                 const ImVec2& plotPos,
+                                 const ImVec2& plotSize);
+std::optional<BitLaneHit> findBitLaneAtPlotValue(const BitLaneLayout& layout, double plotY, double maxDistance);
+std::optional<plot::CursorReadout> findNearestBitTransition(const plot::WaveSnapshot& snapshot,
+                                                           const BitLaneLayout& layout,
+                                                           double time,
+                                                           double plotY,
+                                                           double maxTimeDistance,
+                                                           double maxValueDistance);
+bool bitLaneMeasurementActive(const plot::WaveViewState& view);
+bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout);
+bool cursorPairUsesBitLanes(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);
+plot::MeasurementReadout makeBitIntervalMeasurement(const plot::CursorReadout& left,
+                                                    const plot::CursorReadout& right);
 std::optional<std::size_t> findBitDisplayChannelAtValue(const plot::WaveDockState& wave,
                                                         const plot::WaveSnapshot& snapshot,
                                                         double value,
@@ -162,6 +202,8 @@ bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta);
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
+                                           const std::vector<std::size_t>& visibleChannelIndices,
+                                           const ImPlotRect& limits,
                                            const ImPlotPoint& mousePos,
                                            double timeSnapDistance,
                                            double valueSnapDistance);
@@ -183,10 +225,26 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
                                                              const plot::WaveViewState& view,
                                                              double time,
                                                              double maxTimeDistance);
+std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnapshot& snapshot,
+                                                            const plot::WaveDisplayData& displayData,
+                                                            const plot::WaveViewState& view,
+                                                            const BitLaneLayout& bitLayout,
+                                                            double time,
+                                                            double plotY,
+                                                            double maxTimeDistance,
+                                                            double maxValueDistance);
 std::vector<std::size_t> visibleChannelIndicesForFit(const plot::WaveSnapshot& snapshot);
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io);
 std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDisplayData& displayData,
                                                           const plot::WaveViewState& view,
+                                                          double time,
+                                                          double mouseValue,
+                                                          const ImPlotRect& limits,
+                                                          double maxTimeDistance);
+std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveSnapshot& snapshot,
+                                                          const plot::WaveDisplayData& displayData,
+                                                          const plot::WaveViewState& view,
+                                                          const BitLaneLayout& bitLayout,
                                                           double time,
                                                           double mouseValue,
                                                           const ImPlotRect& limits,
@@ -238,7 +296,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
                         const plot::WaveDisplayData& displayData,
                         const RenderBudget& renderBudget,
                         const ImPlotRect& limits,
-                        std::vector<std::size_t>& visibleChannelIndices);
+                        std::vector<std::size_t>& visibleChannelIndices,
+                        BitLaneLayout& outBitLayout);
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame);
 void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveSnapshot& snapshot,

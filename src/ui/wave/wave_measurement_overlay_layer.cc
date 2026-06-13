@@ -158,6 +158,7 @@ namespace {
                            const PlotRenderResult& result)
     {
         const auto& selection = view.measurement;
+        const bool bitMode = result.bitMeasurementActive;
 
         if (!view.showCursors) {
             return;
@@ -168,7 +169,11 @@ namespace {
             const auto& channel = snapshot.channels[cursor.channelIndex];
 
             addChip(chips, "A·t", formatMetricText(cursor.time, displayData.timeUnit.c_str()));
-            addChip(chips, "A·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
+            if (bitMode && cursor.bit.has_value()) {
+                addChip(chips, "A·val", cursor.bit->value ? "1" : "0");
+            } else {
+                addChip(chips, "A·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
+            }
         }
 
         if (selection.cursorB && result.cursorReadouts[1].has_value()) {
@@ -176,7 +181,11 @@ namespace {
             const auto& channel = snapshot.channels[cursor.channelIndex];
 
             addChip(chips, "B·t", formatMetricText(cursor.time, displayData.timeUnit.c_str()));
-            addChip(chips, "B·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
+            if (bitMode && cursor.bit.has_value()) {
+                addChip(chips, "B·val", cursor.bit->value ? "1" : "0");
+            } else {
+                addChip(chips, "B·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
+            }
         }
 
         if (!result.cursorReadouts[0].has_value() || !result.cursorReadouts[1].has_value()) {
@@ -201,7 +210,9 @@ namespace {
         }
 
         if (selection.deltaValue) {
-            addChip(chips, "Δy", formatMetricText(delta.deltaValue, nullptr));
+            if (!bitMode) {
+                addChip(chips, "Δy", formatMetricText(delta.deltaValue, nullptr));
+            }
         }
 
         if (selection.frequency && intervalText.showFrequency) {
@@ -315,7 +326,10 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     MetricChips chips;
     appendCursorChips(chips, view, snapshot, displayData, result);
 
-    const std::string measuredChannel = appendMeasurementChips(chips, view, snapshot, displayData, result);
+    std::string measuredChannel;
+    if (!result.bitMeasurementActive) {
+        measuredChannel = appendMeasurementChips(chips, view, snapshot, displayData, result);
+    }
 
     if (chips.empty()) {
         return;
@@ -340,6 +354,9 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     const ImVec2 gridSize = calcChipGridSize(chips, gridMaxWidth, chipGapX, chipGapY, chipPadX, chipPadY);
 
     std::string title = "测量";
+    if (result.bitMeasurementActive) {
+        title = "周期测量";
+    }
     if (!measuredChannel.empty()) {
         title += " · " + measuredChannel;
     }

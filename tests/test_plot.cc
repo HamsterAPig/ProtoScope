@@ -888,6 +888,278 @@ void test_wave_bit_display_bounds_and_hidden_policy()
     require(!hiddenBounds.valid, "隐藏 bit 父通道后 derived bounds 应为空");
 }
 
+void test_bit_cursor_only_snaps_to_transitions()
+{
+    std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 1.0},
+        {.time = 2.0, .value = 1.0},
+        {.time = 3.0, .value = 0.0},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = 4,
+        .visibleBegin = 0,
+        .visibleEnd = 4,
+        .samples = samples.data(),
+    });
+
+    const ImPlotRect limits(0.0, 4.0, -1.0, 2.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 200.0F);
+    const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
+    require(!layout.lanes.empty(), "应至少生成一条 bit lane");
+
+    const auto snapAtTransition = protoscope::ui::findNearestBitTransition(
+        snapshot, layout, 1.05, 0.5, 0.2, 10.0);
+    require(snapAtTransition.has_value(), "鼠标靠近跳变点时应有吸附");
+    require(std::abs(snapAtTransition->time - 1.0) < 0.01, "应吸附到跳变时间而不是稳定电平采样点");
+
+    const auto snapAtSteadyState = protoscope::ui::findNearestBitTransition(
+        snapshot, layout, 2.0, 0.5, 0.1, 10.0);
+    require(!snapAtSteadyState.has_value(), "稳定电平采样点不应被吸附");
+}
+
+void test_hidden_bit_lane_excluded_from_layout_hit_and_snap()
+{
+    std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 1.0},
+        {.time = 2.0, .value = 0.0},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+
+    const ImPlotRect limits(0.0, 2.0, -1.0, 2.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 200.0F);
+    const auto hiddenLayout = protoscope::ui::buildBitLaneLayout(snapshot, {}, limits, plotPos, plotSize);
+    require(hiddenLayout.lanes.empty(), "隐藏 bit_display 通道不应生成 lane");
+    require(!protoscope::ui::findBitLaneAtPlotValue(hiddenLayout, 0.5, 10.0).has_value(),
+            "隐藏 bit_display 通道不应参与 hit test");
+    require(!protoscope::ui::findNearestBitTransition(snapshot, hiddenLayout, 1.0, 0.5, 0.5, 10.0).has_value(),
+            "隐藏 bit_display 通道不应参与 bit snap");
+
+    const auto visibleLayout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
+    require(visibleLayout.lanes.size() == 1, "可见 bit_display 通道应生成 lane");
+    require(protoscope::ui::findNearestBitTransition(
+                snapshot, visibleLayout, 1.0, visibleLayout.lanes[0].highY, 0.5, 10.0)
+                .has_value(),
+            "可见 bit_display 通道应允许吸附跳变");
+}
+
+void test_bit_measurement_cross_lane_still_outputs_dt_f()
+{
+    std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 1.0},
+        {.time = 2.0, .value = 3.0},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 0.0},
+        .totalSamples = 3,
+        .visibleBegin = 0,
+        .visibleEnd = 3,
+        .samples = samples.data(),
+    });
+
+    protoscope::plot::CursorReadout left{
+        .valid = true,
+        .channelIndex = 0,
+        .sampleIndex = 1,
+        .time = 1.0,
+        .value = 1.0,
+        .displayValue = 0.5,
+        .bit = protoscope::plot::BitLaneReadout{
+            .parentChannelIndex = 0,
+            .bitIndex = 0,
+            .laneIndex = 0,
+            .value = true,
+            .y = 0.5,
+        },
+    };
+    protoscope::plot::CursorReadout right{
+        .valid = true,
+        .channelIndex = 0,
+        .sampleIndex = 2,
+        .time = 2.0,
+        .value = 1.0,
+        .displayValue = 1.5,
+        .bit = protoscope::plot::BitLaneReadout{
+            .parentChannelIndex = 0,
+            .bitIndex = 1,
+            .laneIndex = 1,
+            .value = true,
+            .y = 1.5,
+        },
+    };
+
+    require(protoscope::ui::cursorPairUsesBitLanes({{left, right}}),
+            "两个游标都带 bit 信息时应返回 true");
+    require(left.bit->bitIndex != right.bit->bitIndex,
+            "应允许 A/B 游标分别命中不同 bit lane");
+
+    const auto measurement = protoscope::ui::makeBitIntervalMeasurement(left, right);
+    require(measurement.valid, "bit 模式跨 lane 测量应有效");
+    require(std::abs(measurement.duration - 1.0) < 0.01, "时间差应为 1.0 s");
+}
+
+void test_bit_cursor_cross_lane_refresh_uses_own_y_anchor()
+{
+    std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 1.0},
+        {.time = 2.0, .value = 3.0},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 0.0},
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({});
+    protoscope::plot::WaveViewState view;
+    view.activeBitLane = {.active = true, .parentChannelIndex = 0, .bitIndex = 0, .laneIndex = 0};
+
+    const ImPlotRect limits(0.0, 2.0, -1.0, 2.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 200.0F);
+    const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
+    require(layout.lanes.size() == 2, "两条 bit lane 应同时存在");
+
+    const auto bit0 = protoscope::ui::findNearestCursorByScope(
+        snapshot, displayData, view, layout, 1.0, layout.lanes[0].highY, 0.2, 10.0);
+    const auto bit1 = protoscope::ui::findNearestCursorByScope(
+        snapshot, displayData, view, layout, 2.0, layout.lanes[1].highY, 0.2, 10.0);
+    require(bit0.has_value() && bit0->bit.has_value(), "bit0 游标刷新应保留 bit readout");
+    require(bit1.has_value() && bit1->bit.has_value(), "bit1 游标刷新应保留 bit readout");
+    require(bit0->bit->laneIndex == 0 && bit1->bit->laneIndex == 1,
+            "A/B 游标使用各自 Y 锚点时应停留在不同 bit lane");
+    require(protoscope::ui::cursorPairUsesBitLanes({{bit0, bit1}}),
+            "跨 lane 刷新后应继续触发 bit interval measurement");
+    const auto measurement = protoscope::ui::makeBitIntervalMeasurement(*bit0, *bit1);
+    require(measurement.valid && std::abs(measurement.duration - 1.0) < 0.01,
+            "跨 lane bit interval 应继续输出 dt/T/f 所需 duration");
+}
+
+void test_bit_active_switches_measurement_mode()
+{
+    protoscope::plot::WaveViewState view;
+    view.activeBitLane = {.active = true, .parentChannelIndex = 0, .bitIndex = 0, .laneIndex = 0};
+    require(protoscope::ui::bitLaneMeasurementActive(view), "激活 bit lane 后应为 bit 测量模式");
+
+    view.activeBitLane = {};
+    require(!protoscope::ui::bitLaneMeasurementActive(view), "清空 bit lane 后应回到普通测量模式");
+
+    protoscope::plot::CursorReadout left{.valid = true, .channelIndex = 0, .time = 0.0, .value = 1.0};
+    protoscope::plot::CursorReadout right{.valid = true, .channelIndex = 0, .time = 1.0, .value = 2.0};
+    require(!protoscope::ui::cursorPairUsesBitLanes({{left, right}}),
+            "普通波形游标不应触发 bit 测量判断");
+}
+
+void test_invisible_active_bit_lane_falls_back_to_waveform_cursor()
+{
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+    });
+    const auto displayData = makeDisplayData(
+        {
+            {.time = 0.0, .value = 10.0},
+            {.time = 1.0, .value = 20.0},
+        },
+        {10.0, 20.0});
+    protoscope::plot::WaveViewState view;
+    view.activeBitLane = {.active = true, .parentChannelIndex = 0, .bitIndex = 0, .laneIndex = 0};
+
+    const protoscope::ui::BitLaneLayout emptyLayout;
+    require(!protoscope::ui::activeBitLaneVisible(view, emptyLayout),
+            "active bit lane 不在当前 layout 中时应判定失效");
+    const auto fallback = protoscope::ui::findNearestCursorByScope(
+        snapshot, displayData, view, emptyLayout, 1.0, 0.0, 0.2, 10.0);
+    require(fallback.has_value(), "active bit lane 失效后应允许普通波形游标刷新");
+    require(!fallback->bit.has_value(), "回退普通路径后不应带 bit readout");
+    require(std::abs(fallback->displayValue - 20.0) < 1e-9, "普通波形刷新应返回显示值");
+}
+
+void test_bit_layout_independent_of_axis_range()
+{
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 0.0},
+    });
+
+    const ImPlotRect limits1(0.0, 1.0, -10.0, 10.0);
+    const ImPlotRect limits2(0.0, 1.0, -100.0, 100.0);
+    const ImVec2 plotPos(40.0F, 30.0F);
+    const ImVec2 plotSize(800.0F, 600.0F);
+
+    const auto layout1 = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits1, plotPos, plotSize);
+    const auto layout2 = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits2, plotPos, plotSize);
+
+    require(layout1.lanes.size() == layout2.lanes.size(), "变化 Y 轴范围不应改变 bit lane 数量");
+    for (std::size_t i = 0; i < layout1.lanes.size(); ++i) {
+        require(std::abs(layout1.lanes[i].lowPixelY - layout2.lanes[i].lowPixelY) < 0.01F,
+                "变化 Y 轴范围不应改变 bit lane 像素位置");
+        require(std::abs(layout1.lanes[i].highPixelY - layout2.lanes[i].highPixelY) < 0.01F,
+                "变化 Y 轴范围不应改变 bit lane 像素位置");
+    }
+}
+
+void test_bit_layout_multiple_channels_with_y_offset()
+{
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 0.0},
+    });
+    snapshot.channels.push_back({
+        .label = "CH2",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 2.0},
+    });
+
+    const ImPlotRect limits(0.0, 1.0, -1.0, 1.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 400.0F);
+
+    const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0, 1}, limits, plotPos, plotSize);
+    require(layout.lanes.size() == 4, "两个父通道各 2 bit 应生成 4 条 lane");
+
+    require(layout.lanes[0].parentChannelIndex == 0, "第 0 条 lane 应属于 CH1");
+    require(layout.lanes[2].parentChannelIndex == 1, "第 2 条 lane 应属于 CH2");
+
+    for (std::size_t i = 0; i < 2; ++i) {
+        for (std::size_t j = i + 1; j < 4; ++j) {
+            if (layout.lanes[i].parentChannelIndex == layout.lanes[j].parentChannelIndex) {
+                require(!(std::abs(layout.lanes[i].centerPixelY - layout.lanes[j].centerPixelY) < 0.5F),
+                        "同一父通道内不同 bit lane 的 Y 不应重合");
+            }
+        }
+    }
+
+    require(layout.lanes[2].lowPixelY > layout.lanes[1].lowPixelY,
+            "CH2 的 y_offset=2.0 应使其 lane 位于 CH1 下方（像素 Y 更大）");
+}
 void test_plot_snapshot_without_stats_keeps_ranges_and_samples()
 {
     protoscope::plot::OscilloscopeBuffer buffer;

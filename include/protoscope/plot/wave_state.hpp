@@ -81,6 +81,13 @@ struct WaveMeasurementSelection {
     bool bias{false};
 };
 
+struct ActiveBitLaneState {
+    bool active{false};
+    std::size_t parentChannelIndex{0};
+    std::size_t bitIndex{0};
+    std::size_t laneIndex{0};
+};
+
 struct WaveViewState {
     bool autoFollowLatest{true};
     bool pauseAutoFollowOnInteraction{true};
@@ -110,6 +117,7 @@ struct WaveViewState {
     std::size_t lastRenderPointCount{0};
     std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};
+    ActiveBitLaneState activeBitLane{};
     std::size_t referenceChannelIndex{0};
     WaveMeasurementReferenceMode referenceMode{WaveMeasurementReferenceMode::Channel};
     WaveMeasurementSelection measurement{};
@@ -288,6 +296,7 @@ struct WaveDockState {
         std::size_t bitCount{0};
         double yOffset{0.0};
         std::size_t plotPixelWidth{0};
+        std::size_t plotPixelHeight{0};
         std::size_t vertexBudget{0};
 
         bool operator==(const BitRenderCacheKey&) const = default;

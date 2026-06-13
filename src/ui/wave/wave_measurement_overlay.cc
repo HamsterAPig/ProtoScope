@@ -2,10 +2,39 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
 namespace protoscope::ui {
+
+namespace {
+
+std::uint64_t rawBitsFromSampleValue(double value)
+{
+    if (!std::isfinite(value)) {
+        return 0;
+    }
+    const double truncated = std::trunc(value);
+    if (truncated <= 0.0) {
+        return 0;
+    }
+    const double maxValue = static_cast<double>((std::numeric_limits<std::uint64_t>::max)());
+    if (truncated >= maxValue) {
+        return (std::numeric_limits<std::uint64_t>::max)();
+    }
+    return static_cast<std::uint64_t>(truncated);
+}
+
+bool rawBitEnabled(double value, std::size_t bitIndex)
+{
+    if (bitIndex >= plot::kMaxBitDisplayCount) {
+        return false;
+    }
+    return ((rawBitsFromSampleValue(value) >> bitIndex) & 1ULL) != 0ULL;
+}
+
+} // namespace
 
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io)
 {
@@ -20,6 +49,113 @@ double normalizedSnapScore(
     const double valueScore =
         maxValueDistance > 0.0 ? std::abs(readout.displayValue - mouseValue) / maxValueDistance : 0.0;
     return timeScore * timeScore + valueScore * valueScore;
+}
+
+std::optional<plot::CursorReadout> findNearestBitTransition(const plot::WaveSnapshot& snapshot,
+                                                            const BitLaneLayout& layout,
+                                                            double time,
+                                                            double plotY,
+                                                            double maxTimeDistance,
+                                                            double maxValueDistance)
+{
+    if (!std::isfinite(time) || !std::isfinite(plotY) || !std::isfinite(maxTimeDistance) ||
+        !std::isfinite(maxValueDistance) || maxTimeDistance < 0.0 || maxValueDistance < 0.0) {
+        return std::nullopt;
+    }
+
+    std::optional<plot::CursorReadout> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (const auto& lane : layout.lanes) {
+        if (lane.parentChannelIndex >= snapshot.channels.size()) {
+            continue;
+        }
+        const auto& channel = snapshot.channels[lane.parentChannelIndex];
+        if (channel.samples == nullptr) {
+            continue;
+        }
+        const std::size_t begin = (std::min)(channel.visibleBegin, channel.totalSamples);
+        const std::size_t end = (std::min)(channel.visibleEnd, channel.totalSamples);
+        if (end <= begin + 1U) {
+            continue;
+        }
+
+        bool previousState = rawBitEnabled(channel.samples[begin].value, lane.bitIndex);
+        for (std::size_t sampleIndex = begin + 1U; sampleIndex < end; ++sampleIndex) {
+            const bool currentState = rawBitEnabled(channel.samples[sampleIndex].value, lane.bitIndex);
+            if (currentState == previousState) {
+                continue;
+            }
+            previousState = currentState;
+
+            const auto& sample = channel.samples[sampleIndex];
+            const double displayY = currentState ? lane.highY : lane.lowY;
+            const double timeDistance = std::abs(sample.time - time);
+            const double valueDistance = std::abs(displayY - plotY);
+            if (timeDistance > maxTimeDistance || valueDistance > maxValueDistance) {
+                continue;
+            }
+            const double score = timeDistance * timeDistance + valueDistance * valueDistance;
+            if (best.has_value() && score >= bestScore) {
+                continue;
+            }
+            bestScore = score;
+            best = plot::CursorReadout{
+                .valid = true,
+                .channelIndex = lane.parentChannelIndex,
+                .sampleIndex = sampleIndex,
+                .time = sample.time,
+                .value = currentState ? 1.0 : 0.0,
+                .displayValue = displayY,
+                .bit = plot::BitLaneReadout{
+                    .parentChannelIndex = lane.parentChannelIndex,
+                    .bitIndex = lane.bitIndex,
+                    .laneIndex = lane.laneIndex,
+                    .value = currentState,
+                    .y = displayY,
+                },
+            };
+        }
+    }
+    return best;
+}
+
+bool bitLaneMeasurementActive(const plot::WaveViewState& view)
+{
+    return view.activeBitLane.active;
+}
+
+bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout)
+{
+    if (!view.activeBitLane.active) {
+        return false;
+    }
+    for (const auto& lane : layout.lanes) {
+        if (lane.parentChannelIndex == view.activeBitLane.parentChannelIndex &&
+            lane.bitIndex == view.activeBitLane.bitIndex && lane.laneIndex == view.activeBitLane.laneIndex) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool cursorPairUsesBitLanes(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts)
+{
+    return cursorReadouts[0].has_value() && cursorReadouts[1].has_value() && cursorReadouts[0]->bit.has_value() &&
+           cursorReadouts[1]->bit.has_value();
+}
+
+plot::MeasurementReadout makeBitIntervalMeasurement(const plot::CursorReadout& left,
+                                                    const plot::CursorReadout& right)
+{
+    if (!left.valid || !right.valid || !left.bit.has_value() || !right.bit.has_value()) {
+        return {};
+    }
+    return plot::MeasurementReadout{
+        .valid = true,
+        .channelIndex = left.channelIndex,
+        .sampleCount = 0,
+        .duration = std::abs(right.time - left.time),
+    };
 }
 
 std::optional<SmartCursorSnap> findNearestWaveformExtreme(const plot::WaveDisplayData& displayData,
@@ -138,6 +274,26 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
         }
     }
     return best;
+}
+
+std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveSnapshot& snapshot,
+                                                          const plot::WaveDisplayData& displayData,
+                                                          const plot::WaveViewState& view,
+                                                          const BitLaneLayout& bitLayout,
+                                                          double time,
+                                                          double mouseValue,
+                                                          const ImPlotRect& limits,
+                                                          double maxTimeDistance)
+{
+    if (activeBitLaneVisible(view, bitLayout)) {
+        const double maxValueDistance = std::abs(limits.Y.Max - limits.Y.Min) / 30.0;
+        if (const auto transition =
+                findNearestBitTransition(snapshot, bitLayout, time, mouseValue, maxTimeDistance, maxValueDistance)) {
+            return SmartCursorSnap{.readout = *transition, .label = "Bit Edge"};
+        }
+        return std::nullopt;
+    }
+    return findSmartCursorSnapByScope(displayData, view, time, mouseValue, limits, maxTimeDistance);
 }
 
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
