@@ -119,6 +119,125 @@ std::optional<plot::CursorReadout> findNearestBitTransition(const plot::WaveSnap
     return best;
 }
 
+namespace {
+
+std::optional<plot::CursorReadout> findCurrentBitLaneReadout(const plot::WaveSnapshot& snapshot,
+                                                             const plot::WaveDisplayData& displayData,
+                                                             const BitLaneLayoutEntry& lane,
+                                                             double time,
+                                                             double maxTimeDistance)
+{
+    if (!std::isfinite(time) || !std::isfinite(maxTimeDistance) || maxTimeDistance < 0.0 ||
+        lane.parentChannelIndex >= snapshot.channels.size() || lane.parentChannelIndex >= displayData.channels.size()) {
+        return std::nullopt;
+    }
+
+    const auto& sourceChannel = snapshot.channels[lane.parentChannelIndex];
+    const auto& displayChannel = displayData.channels[lane.parentChannelIndex];
+    const auto& samples = displayChannel.samples;
+    if (samples.empty()) {
+        return std::nullopt;
+    }
+    if (time < samples.front().time - maxTimeDistance || time > samples.back().time + maxTimeDistance) {
+        return std::nullopt;
+    }
+
+    const auto upper = std::upper_bound(samples.begin(), samples.end(), time, [](double value, const auto& sample) {
+        return value < sample.time;
+    });
+    const auto sampleIt = upper == samples.begin() ? samples.begin() : std::prev(upper);
+    const std::size_t displaySampleIndex = static_cast<std::size_t>(std::distance(samples.begin(), sampleIt));
+
+    double rawValue = sampleIt->value;
+    std::size_t sourceSampleIndex = displaySampleIndex;
+    if (sourceChannel.samples != nullptr) {
+        const std::size_t begin = (std::min)(sourceChannel.visibleBegin, sourceChannel.totalSamples);
+        const std::size_t mappedSourceIndex = begin + displaySampleIndex;
+        if (mappedSourceIndex < sourceChannel.totalSamples) {
+            sourceSampleIndex = mappedSourceIndex;
+            rawValue = sourceChannel.samples[mappedSourceIndex].value;
+        }
+    } else if (displaySampleIndex < displayChannel.actualValues.size()) {
+        rawValue = displayChannel.actualValues[displaySampleIndex];
+    }
+
+    const bool value = rawBitEnabled(rawValue, lane.bitIndex);
+    const double displayY = value ? lane.highY : lane.lowY;
+    return plot::CursorReadout{
+        .valid = true,
+        .channelIndex = lane.parentChannelIndex,
+        .sampleIndex = sourceSampleIndex,
+        .time = time,
+        .value = value ? 1.0 : 0.0,
+        .displayValue = displayY,
+        .bit = plot::BitLaneReadout{
+            .parentChannelIndex = lane.parentChannelIndex,
+            .bitIndex = lane.bitIndex,
+            .laneIndex = lane.laneIndex,
+            .value = value,
+            .y = displayY,
+        },
+    };
+}
+
+std::vector<std::size_t> waveformHoverChannels(const plot::WaveSnapshot& snapshot,
+                                               const plot::WaveDisplayData& displayData,
+                                               const std::vector<std::size_t>& visibleChannelIndices)
+{
+    std::vector<std::size_t> channels;
+    channels.reserve(visibleChannelIndices.size());
+    for (const std::size_t channelIndex : visibleChannelIndices) {
+        if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
+            continue;
+        }
+        if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            continue;
+        }
+        channels.push_back(channelIndex);
+    }
+    return channels;
+}
+
+bool visibleChannelContains(const std::vector<std::size_t>& visibleChannelIndices, std::size_t channelIndex)
+{
+    return std::find(visibleChannelIndices.begin(), visibleChannelIndices.end(), channelIndex) !=
+           visibleChannelIndices.end();
+}
+
+} // namespace
+
+std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
+                                             const plot::WaveDisplayData& displayData,
+                                             const std::vector<std::size_t>& visibleChannelIndices,
+                                             const BitLaneLayout& bitLayout,
+                                             double time,
+                                             double plotY,
+                                             double maxTimeDistance,
+                                             double maxValueDistance)
+{
+    if (visibleChannelIndices.empty()) {
+        return std::nullopt;
+    }
+
+    if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance)) {
+        if (!visibleChannelContains(visibleChannelIndices, bitLane->lane.parentChannelIndex)) {
+            return std::nullopt;
+        }
+        if (const auto readout = findCurrentBitLaneReadout(snapshot, displayData, bitLane->lane, time, maxTimeDistance)) {
+            return HoverReadout{.kind = HoverReadoutKind::BitLane, .readout = *readout};
+        }
+        return std::nullopt;
+    }
+
+    const auto waveformChannels = waveformHoverChannels(snapshot, displayData, visibleChannelIndices);
+    const auto readout =
+        plot::findNearestDisplayPointInChannels(displayData, waveformChannels, time, plotY, maxTimeDistance, maxValueDistance);
+    if (!readout.has_value()) {
+        return std::nullopt;
+    }
+    return HoverReadout{.kind = HoverReadoutKind::Waveform, .readout = *readout};
+}
+
 bool bitLaneMeasurementActive(const plot::WaveViewState& view)
 {
     return view.activeBitLane.active;

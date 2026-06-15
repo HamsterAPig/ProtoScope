@@ -1385,6 +1385,142 @@ void test_plot_hover_readout_ignores_hidden_channels()
     require(!allHidden.has_value(), "所有候选通道隐藏时悬停吸附应为空");
 }
 
+void test_bit_hover_readout_tracks_steady_level()
+{
+    std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 1.0},
+        {.time = 2.0, .value = 1.0},
+        {.time = 3.0, .value = 0.0},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH2",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = samples,
+        .actualValues = {0.0, 1.0, 1.0, 0.0},
+    });
+
+    const ImPlotRect limits(0.0, 4.0, -1.0, 2.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 200.0F);
+    const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
+    require(!layout.lanes.empty(), "应生成 bit hover lane");
+
+    const auto high = protoscope::ui::findHoverReadout(
+        snapshot, displayData, {0}, layout, 2.4, layout.lanes[0].centerY, 0.2, 10.0);
+    require(high.has_value(), "高电平平台区间应有 bit hover 读数");
+    require(high->kind == protoscope::ui::HoverReadoutKind::BitLane, "平台区间 hover 应识别为 bit lane");
+    require(high->readout.bit.has_value() && high->readout.bit->value, "高电平平台应读取为 1");
+    require(std::abs(high->readout.time - 2.4) < 1e-12, "bit hover annotation 应锚定鼠标当前时间");
+    require(std::abs(high->readout.displayValue - layout.lanes[0].highY) < 1e-12, "bit hover 高电平应锚定 highY");
+
+    const auto low = protoscope::ui::findHoverReadout(
+        snapshot, displayData, {0}, layout, 0.5, layout.lanes[0].centerY, 0.2, 10.0);
+    require(low.has_value(), "低电平平台区间应有 bit hover 读数");
+    require(low->readout.bit.has_value() && !low->readout.bit->value, "低电平平台应读取为 0");
+    require(std::abs(low->readout.displayValue - layout.lanes[0].lowY) < 1e-12, "bit hover 低电平应锚定 lowY");
+}
+
+void test_bit_hover_readout_uses_sample_frequency_time_axis()
+{
+    std::vector<protoscope::plot::WaveSample> sourceSamples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 0.0},
+        {.time = 2.0, .value = 4.0},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 2, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = sourceSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = sourceSamples.size(),
+        .samples = sourceSamples.data(),
+    });
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.axisSource = protoscope::plot::WaveTimeAxisSource::SampleFrequency;
+    displayData.timeUnit = "s";
+    displayData.channels.push_back({
+        .samples =
+            {
+                {.time = 0.0, .value = 0.0},
+                {.time = 0.001, .value = 0.0},
+                {.time = 0.002, .value = 4.0},
+            },
+        .actualValues = {0.0, 0.0, 4.0},
+    });
+
+    const ImPlotRect limits(0.0, 0.003, -1.0, 2.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 200.0F);
+    const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
+    require(!layout.lanes.empty(), "采样频率时间轴应生成 bit lane");
+
+    const auto readout = protoscope::ui::findHoverReadout(
+        snapshot, displayData, {0}, layout, 0.0024, layout.lanes[0].centerY, 0.001, 10.0);
+    require(readout.has_value(), "采样频率时间轴平台区间应有 bit hover 读数");
+    require(readout->readout.bit.has_value() && readout->readout.bit->value, "应按显示时间轴映射到源样本 bit 值");
+    require(readout->readout.sampleIndex == 2, "bit hover 应映射回对应源样本索引");
+}
+
+void test_bit_hover_readout_falls_back_to_waveform_outside_lane()
+{
+    std::vector<protoscope::plot::WaveSample> bitSamples{
+        {.time = 1.0, .value = 15.0},
+    };
+    std::vector<protoscope::plot::WaveSample> waveSamples{
+        {.time = 1.0, .value = 10.2},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = bitSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = bitSamples.size(),
+        .samples = bitSamples.data(),
+    });
+    snapshot.channels.push_back({
+        .label = "CH2",
+        .unit = "V",
+        .totalSamples = waveSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = waveSamples.size(),
+        .samples = waveSamples.data(),
+    });
+
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 10.05}},
+        .actualValues = {15.0},
+    });
+    displayData.channels.push_back({
+        .samples = waveSamples,
+        .actualValues = {10.2},
+    });
+
+    const ImPlotRect limits(0.0, 2.0, -1.0, 2.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 200.0F);
+    const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0, 1}, limits, plotPos, plotSize);
+
+    const auto readout = protoscope::ui::findHoverReadout(snapshot, displayData, {0, 1}, layout, 1.0, 10.05, 0.2, 1.0);
+    require(readout.has_value(), "鼠标不在 bit lane 内时应回退普通波形 hover");
+    require(readout->kind == protoscope::ui::HoverReadoutKind::Waveform, "回退读数应是普通波形");
+    require(readout->readout.channelIndex == 1, "bit-display 通道不应以原始 y 值抢占普通 hover");
+}
+
 void test_plot_limited_envelope_edges()
 {
     protoscope::plot::OscilloscopeBuffer buffer;

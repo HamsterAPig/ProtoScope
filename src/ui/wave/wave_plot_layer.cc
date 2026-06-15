@@ -616,26 +616,24 @@ void handleHoverReadout(plot::WaveViewState& view,
     if (!ImPlot::IsPlotHovered() || !view.showHoverReadout || visibleChannelIndices.empty()) {
         return;
     }
-    if (bitLaneMeasurementActive(view)) {
-        auto hovered =
-            findNearestBitTransition(snapshot, bitLayout, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
-        if (!hovered.has_value() || !hovered->bit.has_value()) {
-            return;
-        }
-        const auto& laneInfo = *hovered->bit;
-        if (laneInfo.parentChannelIndex >= snapshot.channels.size()) {
-            return;
-        }
-        const auto& channel = snapshot.channels[laneInfo.parentChannelIndex];
-        ImPlot::Annotation(hovered->time,
-                           hovered->displayValue,
+    const auto hovered = findHoverReadout(
+        snapshot, displayData, visibleChannelIndices, bitLayout, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
+    if (!hovered.has_value() || hovered->readout.channelIndex >= snapshot.channels.size()) {
+        return;
+    }
+
+    const auto& readout = hovered->readout;
+    const auto& hoveredChannel = snapshot.channels[readout.channelIndex];
+    if (hovered->kind == HoverReadoutKind::BitLane && readout.bit.has_value()) {
+        const auto& laneInfo = *readout.bit;
+        ImPlot::Annotation(readout.time,
+                           readout.displayValue,
                            ImVec4(1.0F, 1.0F, 0.2F, 1.0F),
                            ImVec2(12.0F, -12.0F),
                            true,
-                           "%s.%zu t=%s %s",
-                           channel.label.c_str(),
+                           "%s.%zu = %s",
+                           hoveredChannel.label.c_str(),
                            laneInfo.bitIndex,
-                           formatMetricText(hovered->time, displayData.timeUnit.c_str()).c_str(),
                            laneInfo.value ? "1" : "0");
         if (view.showCursors && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             view.measurementChannelIndex = laneInfo.parentChannelIndex;
@@ -648,24 +646,19 @@ void handleHoverReadout(plot::WaveViewState& view,
         }
         return;
     }
-    auto hovered = plot::findNearestDisplayPointInChannels(
-        displayData, visibleChannelIndices, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
-    if (!hovered.has_value() || hovered->channelIndex >= snapshot.channels.size()) {
-        return;
-    }
-    const auto& hoveredChannel = snapshot.channels[hovered->channelIndex];
-    ImPlot::Annotation(hovered->time,
-                       hovered->displayValue,
+
+    ImPlot::Annotation(readout.time,
+                       readout.displayValue,
                        ImVec4(1.0F, 1.0F, 0.2F, 1.0F),
                        ImVec2(12.0F, -12.0F),
                        true,
                        "%s t=%s y=%.6g %s",
                        hoveredChannel.label.c_str(),
-                       formatMetricText(hovered->time, displayData.timeUnit.c_str()).c_str(),
-                       hovered->value,
+                       formatMetricText(readout.time, displayData.timeUnit.c_str()).c_str(),
+                       readout.value,
                        hoveredChannel.unit.c_str());
     if (view.showCursors && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        view.measurementChannelIndex = hovered->channelIndex;
+        view.measurementChannelIndex = readout.channelIndex;
         view.activeBitLane = {};
     }
 }
