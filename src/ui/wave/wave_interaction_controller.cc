@@ -60,6 +60,18 @@ bool updateActiveBitYOffset(plot::WaveDockState& wave, double displayDelta)
     return true;
 }
 
+bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channelIndex)
+{
+    const auto spec = wave.buffer.channelSpec(channelIndex);
+    if (!spec.has_value() || !bitDisplayEnabled(spec->bitDisplay)) {
+        return false;
+    }
+    auto updated = *spec;
+    updated.bitDisplay.yOffset = 0.0;
+    applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
+    return true;
+}
+
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
@@ -114,8 +126,8 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
             };
             view.activeBitYOffsetDrag = true;
             view.activeChannelOffsetDrag = false;
-        } else if (const auto activePoint =
-                       plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, mousePos.x, timeSnapDistance);
+        } else if (const auto activePoint = plot::findNearestDisplayByTime(
+                       displayData, view.measurementChannelIndex, mousePos.x, timeSnapDistance);
                    activePoint.has_value() && std::abs(activePoint->displayValue - mousePos.y) <= valueSnapDistance) {
             view.activeChannelOffsetDrag = true;
             view.activeBitYOffsetDrag = false;
@@ -143,8 +155,7 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     if (view.activeBitYOffsetDrag) {
         const auto bitLayout =
             buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
-        const auto activeLane =
-            findBitLaneAtPlotValue(bitLayout, currentPlot.y, std::abs(limits.Y.Max - limits.Y.Min));
+        const auto activeLane = findBitLaneAtPlotValue(bitLayout, currentPlot.y, std::abs(limits.Y.Max - limits.Y.Min));
         const double lanePixelPitch = activeLane.has_value() ? (std::max)(activeLane->lane.lanePixelPitch, 1.0F) : 1.0F;
         changed = updateActiveBitYOffset(wave, static_cast<double>(io.MouseDelta.y) / lanePixelPitch) || changed;
     } else if (view.activeChannelOffsetDrag) {
@@ -196,7 +207,10 @@ bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::stri
            wave.hiddenChannelLabels.end();
 }
 
-void includeDerivedBoundsPoint(plot::WaveDataBounds& bounds, double time, double value, std::optional<double> previousTime)
+void includeDerivedBoundsPoint(plot::WaveDataBounds& bounds,
+                               double time,
+                               double value,
+                               std::optional<double> previousTime)
 {
     if (!std::isfinite(time) || !std::isfinite(value)) {
         return;
@@ -242,6 +256,32 @@ bool hasBitDisplayChannel(const plot::WaveSnapshot& snapshot, const std::vector<
     return false;
 }
 
+plot::WaveValueRange bitDisplayValueRangeForRows(const std::vector<std::size_t>& bitRows,
+                                                 const plot::BitDisplaySpec& spec)
+{
+    plot::WaveValueRange range{};
+    range.minValue = std::numeric_limits<double>::infinity();
+    range.maxValue = -std::numeric_limits<double>::infinity();
+    if (!bitDisplayEnabled(spec)) {
+        return range;
+    }
+    for (std::size_t laneIndex = 0; laneIndex < spec.bitCount; ++laneIndex) {
+        const std::size_t bitIndex = spec.firstBit + laneIndex;
+        const auto row = std::lower_bound(bitRows.begin(), bitRows.end(), bitIndex);
+        if (row == bitRows.end() || *row != bitIndex) {
+            continue;
+        }
+        const double laneBase =
+            (static_cast<double>(std::distance(bitRows.begin(), row)) + spec.yOffset) * bitDisplayLanePitch();
+        range.minValue = (std::min)(range.minValue, laneBase);
+        range.maxValue = (std::max)(range.maxValue, laneBase + bitDisplayLaneHeight());
+    }
+    if (!std::isfinite(range.minValue) || !std::isfinite(range.maxValue)) {
+        return {};
+    }
+    return range;
+}
+
 plot::WaveDataBounds computeBitAwareDerivedBounds(const plot::WaveSnapshot& snapshot,
                                                   const plot::WaveDisplayData& displayData,
                                                   const std::vector<std::size_t>& channelIndices,
@@ -254,6 +294,7 @@ plot::WaveDataBounds computeBitAwareDerivedBounds(const plot::WaveSnapshot& snap
     bounds.maxValue = -std::numeric_limits<double>::infinity();
     bounds.minStep = (std::max)(fallbackStep, 1e-12);
 
+    const auto bitRows = bitDisplayRowsForChannels(snapshot, channelIndices);
     for (const std::size_t channelIndex : channelIndices) {
         if (channelIndex >= displayData.channels.size() || channelIndex >= snapshot.channels.size()) {
             continue;
@@ -264,8 +305,7 @@ plot::WaveDataBounds computeBitAwareDerivedBounds(const plot::WaveSnapshot& snap
         }
         std::optional<double> previousTime;
         if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
-            const auto range =
-                bitDisplayValueRange(snapshot, channelIndex, snapshot.channels[channelIndex].bitDisplay);
+            const auto range = bitDisplayValueRangeForRows(bitRows, snapshot.channels[channelIndex].bitDisplay);
             for (const auto& sample : displayChannel.samples) {
                 includeDerivedBoundsPoint(bounds, sample.time, range.minValue, previousTime);
                 includeDerivedBoundsPoint(bounds, sample.time, range.maxValue, previousTime);
@@ -273,6 +313,37 @@ plot::WaveDataBounds computeBitAwareDerivedBounds(const plot::WaveSnapshot& snap
             }
             continue;
         }
+        for (const auto& sample : displayChannel.samples) {
+            includeDerivedBoundsPoint(bounds, sample.time, sample.value, previousTime);
+            previousTime = sample.time;
+        }
+    }
+
+    finalizeDerivedBounds(bounds);
+    return bounds;
+}
+
+plot::WaveDataBounds computeAnalogDerivedBounds(const plot::WaveSnapshot& snapshot,
+                                                const plot::WaveDisplayData& displayData,
+                                                const std::vector<std::size_t>& channelIndices,
+                                                double fallbackStep)
+{
+    plot::WaveDataBounds bounds{};
+    bounds.minTime = std::numeric_limits<double>::infinity();
+    bounds.maxTime = -std::numeric_limits<double>::infinity();
+    bounds.minValue = std::numeric_limits<double>::infinity();
+    bounds.maxValue = -std::numeric_limits<double>::infinity();
+    bounds.minStep = (std::max)(fallbackStep, 1e-12);
+
+    for (const std::size_t channelIndex : channelIndices) {
+        if (channelIndex >= displayData.channels.size() || channelIndex >= snapshot.channels.size()) {
+            continue;
+        }
+        if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            continue;
+        }
+        const auto& displayChannel = displayData.channels[channelIndex];
+        std::optional<double> previousTime;
         for (const auto& sample : displayChannel.samples) {
             includeDerivedBoundsPoint(bounds, sample.time, sample.value, previousTime);
             previousTime = sample.time;
@@ -311,6 +382,15 @@ plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
         return plot::computeDisplayBoundsForChannels(displayData, channelIndices, fallbackStep);
     }
     return wave.cachedDisplayBounds;
+}
+
+plot::WaveDataBounds boundsForYAxisAutoFit(const plot::WaveDockState& wave,
+                                           const plot::WaveSnapshot& snapshot,
+                                           const plot::WaveDisplayData& displayData,
+                                           const std::vector<std::size_t>& channelIndices)
+{
+    return computeAnalogDerivedBounds(
+        snapshot, displayData, channelIndices, (std::max)(wave.view.minVisibleTimeSpan, 1e-6));
 }
 
 void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::string& label)

@@ -159,8 +159,7 @@ void drawWaveStatusOverlay(const plot::WaveViewState& view,
         return;
     }
 
-    ImVec2 origin((std::max)(plotPos.x + margin, plotPos.x + plotSize.x - margin - layout.size.x),
-                  plotPos.y + margin);
+    ImVec2 origin((std::max)(plotPos.x + margin, plotPos.x + plotSize.x - margin - layout.size.x), plotPos.y + margin);
     if (displayData != nullptr && channelIndices != nullptr && !channelIndices->empty()) {
         origin = chooseStatusOverlayPosition(*displayData, *channelIndices, plotPos, plotSize, layout.size, margin);
     }
@@ -184,13 +183,12 @@ void drawWaveStatusOverlay(const plot::WaveViewState& view,
 
 namespace {
 
-    plot::WaveDockState::RenderEnvelopeCacheKey makeRenderEnvelopeCacheKey(
-        const plot::WaveDockState& wave,
-        const plot::ChannelView& channel,
-        std::size_t channelIndex,
-        const std::vector<plot::WaveSample>& samples,
-        const ImPlotRect& limits,
-        std::size_t pointLimit)
+    plot::WaveDockState::RenderEnvelopeCacheKey makeRenderEnvelopeCacheKey(const plot::WaveDockState& wave,
+                                                                           const plot::ChannelView& channel,
+                                                                           std::size_t channelIndex,
+                                                                           const std::vector<plot::WaveSample>& samples,
+                                                                           const ImPlotRect& limits,
+                                                                           std::size_t pointLimit)
     {
         return {
             .dataRevision = wave.displayDataRevision,
@@ -222,7 +220,8 @@ namespace {
         const auto key = makeRenderEnvelopeCacheKey(wave, channel, channelIndex, samples, limits, pointLimit);
         if (!entry.valid || !(entry.key == key)) {
             // 核心流程：视口、数据和显示变换都没变时复用上一帧包络，避免 UI 空转反复扫样本。
-            entry.envelope = buildDisplayEnvelope(samples, limits.X.Min, limits.X.Max, pointLimit, &entry.sourceSampleCount);
+            entry.envelope =
+                buildDisplayEnvelope(samples, limits.X.Min, limits.X.Max, pointLimit, &entry.sourceSampleCount);
             entry.key = key;
             entry.valid = true;
         }
@@ -253,12 +252,12 @@ namespace {
         if (bitIndex >= plot::kMaxBitDisplayCount) {
             return false;
         }
-    return ((rawBitsFromSampleValue(value) >> bitIndex) & 1ULL) != 0ULL;
-}
+        return ((rawBitsFromSampleValue(value) >> bitIndex) & 1ULL) != 0ULL;
+    }
 
-plot::WaveDockState::BitRenderCacheKey makeBitRenderCacheKey(const plot::WaveDockState& wave,
-                                                              std::size_t channelIndex,
-                                                              const ImPlotRect& limits,
+    plot::WaveDockState::BitRenderCacheKey makeBitRenderCacheKey(const plot::WaveDockState& wave,
+                                                                 std::size_t channelIndex,
+                                                                 const ImPlotRect& limits,
                                                                  const plot::BitDisplaySpec& spec,
                                                                  std::size_t plotPixelWidth,
                                                                  std::size_t vertexBudget)
@@ -268,19 +267,19 @@ plot::WaveDockState::BitRenderCacheKey makeBitRenderCacheKey(const plot::WaveDoc
             .channelIndex = channelIndex,
             .visibleMinTime = limits.X.Min,
             .visibleMaxTime = limits.X.Max,
+            .visibleMinValue = limits.Y.Min,
+            .visibleMaxValue = limits.Y.Max,
             .sampleFrequencyHz = wave.view.sampleFrequencyHz,
             .firstBit = spec.firstBit,
             .bitCount = spec.bitCount,
-        .yOffset = spec.yOffset,
-        .plotPixelWidth = plotPixelWidth,
-        .plotPixelHeight = static_cast<std::size_t>((std::max)(ImPlot::GetPlotSize().y, 1.0F)),
-        .vertexBudget = vertexBudget,
-    };
-}
+            .yOffset = spec.yOffset,
+            .plotPixelWidth = plotPixelWidth,
+            .plotPixelHeight = static_cast<std::size_t>((std::max)(ImPlot::GetPlotSize().y, 1.0F)),
+            .vertexBudget = vertexBudget,
+        };
+    }
 
-    void appendBitRenderPoint(std::vector<plot::WaveSample>& lane,
-                              plot::WaveSample point,
-                              std::size_t maxPointsPerLane)
+    void appendBitRenderPoint(std::vector<plot::WaveSample>& lane, plot::WaveSample point, std::size_t maxPointsPerLane)
     {
         if (lane.size() < maxPointsPerLane) {
             lane.push_back(point);
@@ -292,13 +291,13 @@ plot::WaveDockState::BitRenderCacheKey makeBitRenderCacheKey(const plot::WaveDoc
         }
     }
 
-void buildBitRenderCacheEntry(plot::WaveDockState::BitRenderCacheEntry& entry,
-                              const plot::ChannelView& channel,
-                              const plot::WaveDisplayChannel& displayChannel,
-                              const BitLaneLayout& bitLayout,
-                              std::size_t channelIndex,
-                              const ImPlotRect& limits,
-                              std::size_t vertexBudget)
+    void buildBitRenderCacheEntry(plot::WaveDockState::BitRenderCacheEntry& entry,
+                                  const plot::ChannelView& channel,
+                                  const plot::WaveDisplayChannel& displayChannel,
+                                  const BitLaneLayout& bitLayout,
+                                  std::size_t channelIndex,
+                                  const ImPlotRect& limits,
+                                  std::size_t vertexBudget)
     {
         entry.lanes.assign(channel.bitDisplay.bitCount, {});
         entry.sourceSampleCount = 0;
@@ -316,24 +315,24 @@ void buildBitRenderCacheEntry(plot::WaveDockState::BitRenderCacheEntry& entry,
         }
 
         const std::size_t maxPointsPerLane =
-            (std::max<std::size_t>)(2, vertexBudget / (std::max<std::size_t>)(channel.bitDisplay.bitCount, 1));
+            (std::max<std::size_t>) (2, vertexBudget / (std::max<std::size_t>) (channel.bitDisplay.bitCount, 1));
         for (std::size_t laneIndex = 0; laneIndex < channel.bitDisplay.bitCount; ++laneIndex) {
-        const std::size_t bitIndex = channel.bitDisplay.firstBit + laneIndex;
-        auto& lane = entry.lanes[laneIndex];
-        lane.reserve((std::min<std::size_t>)(sampleCount * 2U, maxPointsPerLane));
+            const std::size_t bitIndex = channel.bitDisplay.firstBit + laneIndex;
+            auto& lane = entry.lanes[laneIndex];
+            lane.reserve((std::min<std::size_t>) (sampleCount * 2U, maxPointsPerLane));
 
-        double lowY = 0.0;
-        double highY = 1.0;
-        for (const auto& layoutLane : bitLayout.lanes) {
-            if (layoutLane.parentChannelIndex == channelIndex && layoutLane.laneIndex == laneIndex) {
-                lowY = layoutLane.lowY;
-                highY = layoutLane.highY;
-                break;
+            double lowY = 0.0;
+            double highY = 1.0;
+            for (const auto& layoutLane : bitLayout.lanes) {
+                if (layoutLane.parentChannelIndex == channelIndex && layoutLane.laneIndex == laneIndex) {
+                    lowY = layoutLane.lowY;
+                    highY = layoutLane.highY;
+                    break;
+                }
             }
-        }
-        bool previousState = rawBitEnabled(channel.samples[begin].value, bitIndex);
-        double previousY = previousState ? highY : lowY;
-        const double firstTime = displayChannel.samples.front().time;
+            bool previousState = rawBitEnabled(channel.samples[begin].value, bitIndex);
+            double previousY = previousState ? highY : lowY;
+            const double firstTime = displayChannel.samples.front().time;
             double lastTime = firstTime;
             appendBitRenderPoint(lane, {.time = firstTime, .value = previousY}, maxPointsPerLane);
 
@@ -359,15 +358,14 @@ void buildBitRenderCacheEntry(plot::WaveDockState::BitRenderCacheEntry& entry,
         }
     }
 
-    const plot::WaveDockState::BitRenderCacheEntry& cachedBitRenderEntry(
-        plot::WaveDockState& wave,
-        const plot::ChannelView& channel,
-        const plot::WaveDisplayChannel& displayChannel,
-        const BitLaneLayout& bitLayout,
-        std::size_t channelIndex,
-        const ImPlotRect& limits,
-        std::size_t plotPixelWidth,
-        std::size_t vertexBudget)
+    const plot::WaveDockState::BitRenderCacheEntry& cachedBitRenderEntry(plot::WaveDockState& wave,
+                                                                         const plot::ChannelView& channel,
+                                                                         const plot::WaveDisplayChannel& displayChannel,
+                                                                         const BitLaneLayout& bitLayout,
+                                                                         std::size_t channelIndex,
+                                                                         const ImPlotRect& limits,
+                                                                         std::size_t plotPixelWidth,
+                                                                         std::size_t vertexBudget)
     {
         if (wave.bitRenderCache.size() <= channelIndex) {
             wave.bitRenderCache.resize(channelIndex + 1);
@@ -405,9 +403,8 @@ void buildBitRenderCacheEntry(plot::WaveDockState::BitRenderCacheEntry& entry,
             }
             const ImVec2 lanePixel = ImPlot::PlotToPixels(limits.X.Min, centerValue);
             const std::string label = channel.label + "." + std::to_string(bitIndex);
-            drawList->AddText(ImVec2(plotPos.x + 6.0F, lanePixel.y - ImGui::GetTextLineHeight() * 0.5F),
-                              textColor,
-                              label.c_str());
+            drawList->AddText(
+                ImVec2(plotPos.x + 6.0F, lanePixel.y - ImGui::GetTextLineHeight() * 0.5F), textColor, label.c_str());
         }
     }
 
@@ -473,7 +470,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
         }
     }
     if (!bitChannelIndices.empty()) {
-        outBitLayout = buildBitLaneLayout(snapshot, bitChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
+        outBitLayout =
+            buildBitLaneLayout(snapshot, bitChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
     }
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
@@ -509,7 +507,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             const ImVec2 plotSize = ImPlot::GetPlotSize();
             const auto plotPixelWidth = static_cast<std::size_t>((std::max)(plotSize.x, 1.0F));
             const std::size_t vertexBudget =
-                (std::max<std::size_t>)(channel.bitDisplay.bitCount * 2U, renderBudget.pointsPerChannel * 2U);
+                (std::max<std::size_t>) (channel.bitDisplay.bitCount * 2U, renderBudget.pointsPerChannel * 2U);
             const auto& entry = cachedBitRenderEntry(wave,
                                                      channel,
                                                      displayData.channels[channelIndex],
@@ -598,7 +596,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
         }
         view.lastRenderPointCount += envelope.size();
         if (view.phosphorGlowEnabled) {
-            renderPhosphorEnvelope(envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity, lineWidth);
+            renderPhosphorEnvelope(
+                envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity, lineWidth);
         } else {
             renderEnvelopeAsBars(envelope, color, lineWidth);
         }
@@ -618,8 +617,8 @@ void handleHoverReadout(plot::WaveViewState& view,
         return;
     }
     if (bitLaneMeasurementActive(view)) {
-        auto hovered = findNearestBitTransition(
-            snapshot, bitLayout, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
+        auto hovered =
+            findNearestBitTransition(snapshot, bitLayout, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
         if (!hovered.has_value() || !hovered->bit.has_value()) {
             return;
         }
@@ -673,24 +672,24 @@ void handleHoverReadout(plot::WaveViewState& view,
 
 namespace {
 
-double cursorSearchAnchorY(const plot::WaveCursorState& cursor,
-                           const std::optional<plot::CursorReadout>& previousReadout,
-                           double mouseY,
-                           bool held)
-{
-    if (held) {
-        return mouseY;
-    }
-    if (previousReadout.has_value()) {
-        if (previousReadout->bit.has_value() && std::isfinite(previousReadout->bit->y)) {
-            return previousReadout->bit->y;
+    double cursorSearchAnchorY(const plot::WaveCursorState& cursor,
+                               const std::optional<plot::CursorReadout>& previousReadout,
+                               double mouseY,
+                               bool held)
+    {
+        if (held) {
+            return mouseY;
         }
-        if (std::isfinite(previousReadout->displayValue)) {
-            return previousReadout->displayValue;
+        if (previousReadout.has_value()) {
+            if (previousReadout->bit.has_value() && std::isfinite(previousReadout->bit->y)) {
+                return previousReadout->bit->y;
+            }
+            if (std::isfinite(previousReadout->displayValue)) {
+                return previousReadout->displayValue;
+            }
         }
+        return cursor.value;
     }
-    return cursor.value;
-}
 
 } // namespace
 
@@ -742,8 +741,8 @@ bool handlePlotCursors(plot::WaveViewState& view,
         anyCursorHeld = anyCursorHeld || held;
         if (held && smartSnapActive) {
             // 核心流程：先用 DragLineX 写入的鼠标时间查吸附，再回写游标时间，配合 Delayed 让绘制使用受约束位置。
-            auto smartSnapTarget =
-                findSmartCursorSnapByScope(snapshot, displayData, view, bitLayout, dragTime, mousePos.y, limits, smartSnapDistance);
+            auto smartSnapTarget = findSmartCursorSnapByScope(
+                snapshot, displayData, view, bitLayout, dragTime, mousePos.y, limits, smartSnapDistance);
             if (smartSnapTarget.has_value()) {
                 smartSnap = smartSnapTarget->readout;
                 snapLabel = smartSnapTarget->label;
@@ -847,6 +846,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     const auto& renderDisplayData = frame.renderDisplayData != nullptr ? *frame.renderDisplayData : displayData;
     const auto derivedChannelIndices = channelIndicesForDerivedViews(wave, frame.snapshot);
     const auto derivedBounds = boundsForDerivedViews(wave, frame.snapshot, displayData, derivedChannelIndices);
+    const auto yAutoFitBounds = boundsForYAxisAutoFit(wave, frame.snapshot, displayData, derivedChannelIndices);
     auto fullHistoryBounds = derivedBounds;
     if (frame.fullSnapshot != nullptr && frame.overviewDisplayData != nullptr) {
         const auto fullHistoryChannelIndices = channelIndicesForDerivedViews(wave, *frame.fullSnapshot);
@@ -868,14 +868,17 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
 
     const bool zoomSelectionMode = view.zoomSelectionActive || view.zoomSelectionDragging;
     bool viewportChangedThisFrame = false;
+    bool axisDoubleClickConsumed = false;
     if (!zoomSelectionMode) {
-        viewportChangedThisFrame =
-            handleMainPlotAxisDoubleClick(view, derivedBounds, fullHistoryBounds) || handleMainPlotZoom(view, mousePos);
+        axisDoubleClickConsumed =
+            handleMainPlotAxisDoubleClick(view, frame.snapshot, derivedBounds, fullHistoryBounds, yAutoFitBounds);
+        viewportChangedThisFrame = axisDoubleClickConsumed || handleMainPlotZoom(view, mousePos);
     }
     // 悬停读数必须跟随 ImPlot 图例隐藏状态，只对真实可见波形做吸附。
     std::vector<std::size_t> visibleChannelIndices;
     BitLaneLayout bitLayout;
-    renderWaveChannels(wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
+    renderWaveChannels(
+        wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
     if (view.activeBitLane.active && !activeBitLaneVisible(view, bitLayout)) {
         view.activeBitLane = {};
     }
@@ -887,18 +890,33 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
         applyFitVisibleWaveforms(view, displayData, fitChannelIndices) || viewportChangedThisFrame;
     const auto zoomSelectionResult = handleMainPlotZoomSelection(view, wave.suppressZoomSelectionEscapeThisFrame);
     viewportChangedThisFrame = zoomSelectionResult.viewportChanged || viewportChangedThisFrame;
-    viewportChangedThisFrame = applyPendingVerticalAutoFitOverride(view, derivedBounds) || viewportChangedThisFrame;
+    if (!axisDoubleClickConsumed) {
+        viewportChangedThisFrame =
+            applyPendingVerticalAutoFitOverride(view, yAutoFitBounds) || viewportChangedThisFrame;
+    }
     const bool offsetReset =
         !zoomSelectionResult.consumed &&
-        handleActiveWaveformDoubleClickOffsetReset(wave, displayData, mousePos, timeSnapDistance, valueSnapDistance);
+        handleActiveWaveformDoubleClickOffsetReset(
+            wave, frame.snapshot, bitLayout, displayData, mousePos, timeSnapDistance, valueSnapDistance);
     const bool blockPlotInteractions = zoomSelectionResult.consumed || offsetReset;
     if (!blockPlotInteractions) {
-        handleHoverReadout(
-            view, frame.snapshot, displayData, visibleChannelIndices, bitLayout, mousePos, timeSnapDistance, valueSnapDistance);
-        viewportChangedThisFrame =
-            handleOscilloscopeChannelInteractions(
-                wave, frame.snapshot, displayData, visibleChannelIndices, limits, mousePos, timeSnapDistance, valueSnapDistance) ||
-            viewportChangedThisFrame;
+        handleHoverReadout(view,
+                           frame.snapshot,
+                           displayData,
+                           visibleChannelIndices,
+                           bitLayout,
+                           mousePos,
+                           timeSnapDistance,
+                           valueSnapDistance);
+        viewportChangedThisFrame = handleOscilloscopeChannelInteractions(wave,
+                                                                         frame.snapshot,
+                                                                         displayData,
+                                                                         visibleChannelIndices,
+                                                                         limits,
+                                                                         mousePos,
+                                                                         timeSnapDistance,
+                                                                         valueSnapDistance) ||
+                                   viewportChangedThisFrame;
     }
 
     const bool anyCursorHeld = blockPlotInteractions ? false
@@ -931,10 +949,10 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     }
 
     if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {
-        result.bitMeasurementActive = cursorPairUsesBitLanes(result.cursorReadouts) && activeBitLaneVisible(view, bitLayout);
+        result.bitMeasurementActive =
+            cursorPairUsesBitLanes(result.cursorReadouts) && activeBitLaneVisible(view, bitLayout);
         if (result.bitMeasurementActive) {
-            result.measurement =
-                makeBitIntervalMeasurement(*result.cursorReadouts[0], *result.cursorReadouts[1]);
+            result.measurement = makeBitIntervalMeasurement(*result.cursorReadouts[0], *result.cursorReadouts[1]);
         } else {
             const auto referenceChannelIndex = view.referenceMode == plot::WaveMeasurementReferenceMode::Channel
                                                    ? std::optional<std::size_t>(view.referenceChannelIndex)

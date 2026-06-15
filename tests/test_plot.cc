@@ -38,8 +38,7 @@ struct ScopedTempFile {
     explicit ScopedTempFile(const char* stem)
     {
         const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-        path_ = std::filesystem::temp_directory_path() /
-                (std::string(stem) + "-" + std::to_string(ticks) + ".psraw");
+        path_ = std::filesystem::temp_directory_path() / (std::string(stem) + "-" + std::to_string(ticks) + ".psraw");
     }
 
     ~ScopedTempFile()
@@ -272,8 +271,7 @@ void test_wave_sample_frequency_visible_range_filters_by_sample_index()
     require(displayData.channels.front().samples.size() == 3, "Fs 单点视口应保留左右邻接样本");
     require(std::abs(displayData.channels.front().samples.front().time - 0.2) < 1e-12,
             "Fs 单点视口应从左侧邻接样本开始");
-    require(std::abs(displayData.channels.front().samples.back().time - 0.4) < 1e-12,
-            "Fs 单点视口应保留右侧邻接样本");
+    require(std::abs(displayData.channels.front().samples.back().time - 0.4) < 1e-12, "Fs 单点视口应保留右侧邻接样本");
 }
 
 void test_wave_snapshot_visible_range_keeps_adjacent_samples()
@@ -299,8 +297,7 @@ void test_wave_snapshot_visible_range_keeps_adjacent_samples()
     require(displayData.channels.front().samples.size() == 3, "脚本时间单点视口应保留左右邻接样本");
     require(std::abs(displayData.channels.front().samples.front().time - 2.0) < 1e-12,
             "脚本时间单点视口应从左侧邻接样本开始");
-    require(std::abs(displayData.channels.front().samples[1].time - 3.0) < 1e-12,
-            "脚本时间单点视口应包含可见样本");
+    require(std::abs(displayData.channels.front().samples[1].time - 3.0) < 1e-12, "脚本时间单点视口应包含可见样本");
     require(std::abs(displayData.channels.front().samples.back().time - 4.0) < 1e-12,
             "脚本时间单点视口应保留右侧邻接样本");
 }
@@ -323,8 +320,7 @@ void test_wave_visible_range_adjacent_samples_clamp_at_edges()
     const auto firstDisplayData = protoscope::plot::buildDisplayData(firstSnapshot, 0.0);
     require(firstDisplayData.channels.size() == 1, "首样本视口应保留通道显示数据");
     require(firstDisplayData.channels.front().samples.size() == 2, "首样本视口只应保留存在的右侧邻接样本");
-    require(std::abs(firstDisplayData.channels.front().samples.front().time - 1.0) < 1e-12,
-            "首样本视口不应向左越界");
+    require(std::abs(firstDisplayData.channels.front().samples.front().time - 1.0) < 1e-12, "首样本视口不应向左越界");
     require(std::abs(firstDisplayData.channels.front().samples.back().time - 2.0) < 1e-12,
             "首样本视口应保留右侧邻接样本");
 
@@ -334,8 +330,7 @@ void test_wave_visible_range_adjacent_samples_clamp_at_edges()
     require(lastDisplayData.channels.front().samples.size() == 2, "末样本视口只应保留存在的左侧邻接样本");
     require(std::abs(lastDisplayData.channels.front().samples.front().time - 2.0) < 1e-12,
             "末样本视口应保留左侧邻接样本");
-    require(std::abs(lastDisplayData.channels.front().samples.back().time - 3.0) < 1e-12,
-            "末样本视口不应向右越界");
+    require(std::abs(lastDisplayData.channels.front().samples.back().time - 3.0) < 1e-12, "末样本视口不应向右越界");
 }
 
 void test_wave_sample_frequency_preserves_trimmed_sample_offset()
@@ -834,10 +829,9 @@ void test_plot_channel_bit_display_reaches_snapshot()
 {
     protoscope::plot::OscilloscopeBuffer buffer;
     buffer.configureChannels(1);
-    buffer.setChannelSpec(0,
-                          {.label = "CH1",
-                           .unit = "raw",
-                           .bitDisplay = {.enabled = true, .firstBit = 2, .bitCount = 4, .yOffset = 1.5}});
+    buffer.setChannelSpec(
+        0,
+        {.label = "CH1", .unit = "raw", .bitDisplay = {.enabled = true, .firstBit = 2, .bitCount = 4, .yOffset = 1.5}});
     buffer.append(0,
                   protoscope::plot::WaveAppendRequest{
                       .source = "bit",
@@ -857,6 +851,16 @@ void test_plot_channel_bit_display_reaches_snapshot()
     require(snapshot.channels[0].bitDisplay.firstBit == 2, "snapshot 应保留 bit_display.firstBit");
     require(snapshot.channels[0].bitDisplay.bitCount == 4, "snapshot 应保留 bit_display.bitCount");
     require(std::abs(snapshot.channels[0].bitDisplay.yOffset - 1.5) < 1e-12, "snapshot 应保留 bit_display.yOffset");
+
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.buffer.setChannelSpec(
+        0,
+        {.label = "CH1", .unit = "raw", .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 3.0}});
+    require(protoscope::ui::resetChannelBitYOffsetToZero(wave, 0), "双击 bit CH 应可将 y_offset 复位为 0");
+    const auto resetSpec = wave.buffer.channelSpec(0);
+    require(resetSpec.has_value(), "复位后 bit_display 通道配置应存在");
+    require(std::abs(resetSpec->bitDisplay.yOffset) < 1e-12, "bit_display y_offset 应复位为 0");
 }
 
 void test_wave_bit_display_bounds_and_hidden_policy()
@@ -877,8 +881,9 @@ void test_wave_bit_display_bounds_and_hidden_policy()
 
     const auto bounds = protoscope::ui::boundsForDerivedViews(wave, snapshot, displayData, {0});
     require(bounds.valid, "bit_display bounds 应有效");
-    require(std::abs(bounds.minValue - 2.0) < 1e-12, "bit_display bounds 不应使用原始模拟最小值");
-    const double expectedMax = 2.0 + protoscope::ui::bitDisplayLanePitch() + protoscope::ui::bitDisplayLaneHeight();
+    const double expectedMin = 2.0 * protoscope::ui::bitDisplayLanePitch();
+    require(std::abs(bounds.minValue - expectedMin) < 1e-12, "bit_display bounds 不应使用原始模拟最小值");
+    const double expectedMax = 3.0 * protoscope::ui::bitDisplayLanePitch() + protoscope::ui::bitDisplayLaneHeight();
     require(std::abs(bounds.maxValue - expectedMax) < 1e-12, "bit_display bounds 应覆盖所有 bit lane");
 
     wave.hiddenChannelLabels.push_back("CH1");
@@ -886,6 +891,32 @@ void test_wave_bit_display_bounds_and_hidden_policy()
     require(visibleIndices.empty(), "父通道隐藏后整组 bit 不应参与 derived views");
     const auto hiddenBounds = protoscope::ui::boundsForDerivedViews(wave, snapshot, displayData, visibleIndices);
     require(!hiddenBounds.valid, "隐藏 bit 父通道后 derived bounds 应为空");
+
+    protoscope::plot::WaveDockState mixedWave;
+    protoscope::plot::WaveSnapshot mixedSnapshot;
+    mixedSnapshot.channels.push_back({
+        .label = "BIT",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 0.0},
+    });
+    mixedSnapshot.channels.push_back({
+        .label = "CH2",
+        .unit = "V",
+    });
+    protoscope::plot::WaveDisplayData mixedDisplayData;
+    mixedDisplayData.channels.push_back({
+        .samples = {{.time = 0.0, .value = 1000.0}, {.time = 1.0, .value = 2000.0}},
+        .actualValues = {1000.0, 2000.0},
+    });
+    mixedDisplayData.channels.push_back({
+        .samples = {{.time = 0.0, .value = -3.0}, {.time = 1.0, .value = 4.0}},
+        .actualValues = {-3.0, 4.0},
+    });
+    const auto yAutoFitBounds =
+        protoscope::ui::boundsForYAxisAutoFit(mixedWave, mixedSnapshot, mixedDisplayData, {0, 1});
+    require(yAutoFitBounds.valid, "普通 Y fit bounds 应在存在普通通道时有效");
+    require(std::abs(yAutoFitBounds.minValue + 3.0) < 1e-12, "普通 Y fit 不应受 bit 原始值影响");
+    require(std::abs(yAutoFitBounds.maxValue - 4.0) < 1e-12, "普通 Y fit 不应受 bit 原始值影响");
 }
 
 void test_bit_cursor_only_snaps_to_transitions()
@@ -913,13 +944,11 @@ void test_bit_cursor_only_snaps_to_transitions()
     const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
     require(!layout.lanes.empty(), "应至少生成一条 bit lane");
 
-    const auto snapAtTransition = protoscope::ui::findNearestBitTransition(
-        snapshot, layout, 1.05, 0.5, 0.2, 10.0);
+    const auto snapAtTransition = protoscope::ui::findNearestBitTransition(snapshot, layout, 1.05, 0.5, 0.2, 10.0);
     require(snapAtTransition.has_value(), "鼠标靠近跳变点时应有吸附");
     require(std::abs(snapAtTransition->time - 1.0) < 0.01, "应吸附到跳变时间而不是稳定电平采样点");
 
-    const auto snapAtSteadyState = protoscope::ui::findNearestBitTransition(
-        snapshot, layout, 2.0, 0.5, 0.1, 10.0);
+    const auto snapAtSteadyState = protoscope::ui::findNearestBitTransition(snapshot, layout, 2.0, 0.5, 0.1, 10.0);
     require(!snapAtSteadyState.has_value(), "稳定电平采样点不应被吸附");
 }
 
@@ -952,10 +981,10 @@ void test_hidden_bit_lane_excluded_from_layout_hit_and_snap()
 
     const auto visibleLayout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
     require(visibleLayout.lanes.size() == 1, "可见 bit_display 通道应生成 lane");
-    require(protoscope::ui::findNearestBitTransition(
-                snapshot, visibleLayout, 1.0, visibleLayout.lanes[0].highY, 0.5, 10.0)
-                .has_value(),
-            "可见 bit_display 通道应允许吸附跳变");
+    require(
+        protoscope::ui::findNearestBitTransition(snapshot, visibleLayout, 1.0, visibleLayout.lanes[0].highY, 0.5, 10.0)
+            .has_value(),
+        "可见 bit_display 通道应允许吸附跳变");
 }
 
 void test_bit_measurement_cross_lane_still_outputs_dt_f()
@@ -983,13 +1012,14 @@ void test_bit_measurement_cross_lane_still_outputs_dt_f()
         .time = 1.0,
         .value = 1.0,
         .displayValue = 0.5,
-        .bit = protoscope::plot::BitLaneReadout{
-            .parentChannelIndex = 0,
-            .bitIndex = 0,
-            .laneIndex = 0,
-            .value = true,
-            .y = 0.5,
-        },
+        .bit =
+            protoscope::plot::BitLaneReadout{
+                .parentChannelIndex = 0,
+                .bitIndex = 0,
+                .laneIndex = 0,
+                .value = true,
+                .y = 0.5,
+            },
     };
     protoscope::plot::CursorReadout right{
         .valid = true,
@@ -998,19 +1028,18 @@ void test_bit_measurement_cross_lane_still_outputs_dt_f()
         .time = 2.0,
         .value = 1.0,
         .displayValue = 1.5,
-        .bit = protoscope::plot::BitLaneReadout{
-            .parentChannelIndex = 0,
-            .bitIndex = 1,
-            .laneIndex = 1,
-            .value = true,
-            .y = 1.5,
-        },
+        .bit =
+            protoscope::plot::BitLaneReadout{
+                .parentChannelIndex = 0,
+                .bitIndex = 1,
+                .laneIndex = 1,
+                .value = true,
+                .y = 1.5,
+            },
     };
 
-    require(protoscope::ui::cursorPairUsesBitLanes({{left, right}}),
-            "两个游标都带 bit 信息时应返回 true");
-    require(left.bit->bitIndex != right.bit->bitIndex,
-            "应允许 A/B 游标分别命中不同 bit lane");
+    require(protoscope::ui::cursorPairUsesBitLanes({{left, right}}), "两个游标都带 bit 信息时应返回 true");
+    require(left.bit->bitIndex != right.bit->bitIndex, "应允许 A/B 游标分别命中不同 bit lane");
 
     const auto measurement = protoscope::ui::makeBitIntervalMeasurement(left, right);
     require(measurement.valid, "bit 模式跨 lane 测量应有效");
@@ -1050,8 +1079,7 @@ void test_bit_cursor_cross_lane_refresh_uses_own_y_anchor()
         snapshot, displayData, view, layout, 2.0, layout.lanes[1].highY, 0.2, 10.0);
     require(bit0.has_value() && bit0->bit.has_value(), "bit0 游标刷新应保留 bit readout");
     require(bit1.has_value() && bit1->bit.has_value(), "bit1 游标刷新应保留 bit readout");
-    require(bit0->bit->laneIndex == 0 && bit1->bit->laneIndex == 1,
-            "A/B 游标使用各自 Y 锚点时应停留在不同 bit lane");
+    require(bit0->bit->laneIndex == 0 && bit1->bit->laneIndex == 1, "A/B 游标使用各自 Y 锚点时应停留在不同 bit lane");
     require(protoscope::ui::cursorPairUsesBitLanes({{bit0, bit1}}),
             "跨 lane 刷新后应继续触发 bit interval measurement");
     const auto measurement = protoscope::ui::makeBitIntervalMeasurement(*bit0, *bit1);
@@ -1070,8 +1098,7 @@ void test_bit_active_switches_measurement_mode()
 
     protoscope::plot::CursorReadout left{.valid = true, .channelIndex = 0, .time = 0.0, .value = 1.0};
     protoscope::plot::CursorReadout right{.valid = true, .channelIndex = 0, .time = 1.0, .value = 2.0};
-    require(!protoscope::ui::cursorPairUsesBitLanes({{left, right}}),
-            "普通波形游标不应触发 bit 测量判断");
+    require(!protoscope::ui::cursorPairUsesBitLanes({{left, right}}), "普通波形游标不应触发 bit 测量判断");
 }
 
 void test_invisible_active_bit_lane_falls_back_to_waveform_cursor()
@@ -1091,10 +1118,9 @@ void test_invisible_active_bit_lane_falls_back_to_waveform_cursor()
     view.activeBitLane = {.active = true, .parentChannelIndex = 0, .bitIndex = 0, .laneIndex = 0};
 
     const protoscope::ui::BitLaneLayout emptyLayout;
-    require(!protoscope::ui::activeBitLaneVisible(view, emptyLayout),
-            "active bit lane 不在当前 layout 中时应判定失效");
-    const auto fallback = protoscope::ui::findNearestCursorByScope(
-        snapshot, displayData, view, emptyLayout, 1.0, 0.0, 0.2, 10.0);
+    require(!protoscope::ui::activeBitLaneVisible(view, emptyLayout), "active bit lane 不在当前 layout 中时应判定失效");
+    const auto fallback =
+        protoscope::ui::findNearestCursorByScope(snapshot, displayData, view, emptyLayout, 1.0, 0.0, 0.2, 10.0);
     require(fallback.has_value(), "active bit lane 失效后应允许普通波形游标刷新");
     require(!fallback->bit.has_value(), "回退普通路径后不应带 bit readout");
     require(std::abs(fallback->displayValue - 20.0) < 1e-9, "普通波形刷新应返回显示值");
@@ -1135,7 +1161,7 @@ void test_bit_layout_multiple_channels_with_y_offset()
     });
     snapshot.channels.push_back({
         .label = "CH2",
-        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 2.0},
+        .bitDisplay = {.enabled = true, .firstBit = 1, .bitCount = 2, .yOffset = 0.0},
     });
 
     const ImPlotRect limits(0.0, 1.0, -1.0, 1.0);
@@ -1147,9 +1173,12 @@ void test_bit_layout_multiple_channels_with_y_offset()
 
     require(layout.lanes[0].parentChannelIndex == 0, "第 0 条 lane 应属于 CH1");
     require(layout.lanes[2].parentChannelIndex == 1, "第 2 条 lane 应属于 CH2");
+    require(layout.lanes[1].bitIndex == 1 && layout.lanes[2].bitIndex == 1, "两个 CH 应按绝对 bit index 对齐");
+    require(std::abs(layout.lanes[1].centerPixelY - layout.lanes[2].centerPixelY) < 0.5F,
+            "相同 bit index 的不同 CH lane 应叠加");
 
     for (std::size_t i = 0; i < 2; ++i) {
-        for (std::size_t j = i + 1; j < 4; ++j) {
+        for (std::size_t j = i + 1; j < 2; ++j) {
             if (layout.lanes[i].parentChannelIndex == layout.lanes[j].parentChannelIndex) {
                 require(!(std::abs(layout.lanes[i].centerPixelY - layout.lanes[j].centerPixelY) < 0.5F),
                         "同一父通道内不同 bit lane 的 Y 不应重合");
@@ -1157,9 +1186,14 @@ void test_bit_layout_multiple_channels_with_y_offset()
         }
     }
 
-    require(layout.lanes[2].lowPixelY > layout.lanes[1].lowPixelY,
-            "CH2 的 y_offset=2.0 应使其 lane 位于 CH1 下方（像素 Y 更大）");
+    snapshot.channels[1].bitDisplay.yOffset = 1.0;
+    const auto offsetLayout = protoscope::ui::buildBitLaneLayout(snapshot, {0, 1}, limits, plotPos, plotSize);
+    require(offsetLayout.lanes.size() == 4, "y_offset 不应改变 lane 数量");
+    const double offsetDelta = offsetLayout.lanes[2].centerPixelY - offsetLayout.lanes[1].centerPixelY;
+    require(std::abs(offsetDelta - static_cast<double>(offsetLayout.lanes[1].lanePixelPitch)) < 0.5,
+            "bit_display y_offset 应保留为叠加 lane 的手动像素偏移");
 }
+
 void test_plot_snapshot_without_stats_keeps_ranges_and_samples()
 {
     protoscope::plot::OscilloscopeBuffer buffer;
@@ -1189,8 +1223,7 @@ void test_plot_snapshot_without_stats_keeps_ranges_and_samples()
 
     const auto display = protoscope::plot::buildDisplayData(lightweight, 0.0);
     require(display.channels.size() == 1, "轻量快照仍应可构建显示数据");
-    require(std::abs(display.channels[0].samples[1].value - 9.0) < 1e-12,
-            "轻量快照构建显示数据时仍应应用通道变换");
+    require(std::abs(display.channels[0].samples[1].value - 9.0) < 1e-12, "轻量快照构建显示数据时仍应应用通道变换");
 
     const auto full = buffer.snapshot(0.0, 1.0);
     require(std::abs(full.channels[0].stats.minValue - 3.0) < 1e-12, "默认快照仍应计算 min 统计");
@@ -1512,8 +1545,8 @@ void test_wave_main_render_data_uses_viewport_window()
     const auto envelope = protoscope::ui::buildDisplayEnvelope(frame.renderDisplayData->channels.front().samples,
                                                                wave.view.viewMinTime,
                                                                wave.view.viewMaxTime,
-                                                                32,
-                                                                &sourceSampleCount);
+                                                               32,
+                                                               &sourceSampleCount);
     require(sourceSampleCount == 1, "包络统计仍应只统计视口内样本");
     require(envelope.size() == 3, "主图包络应基于当前视口缓存及邻接样本构建");
     require(std::abs(envelope.front().time - 0.0) < 1e-12, "主图包络应保留左侧邻接样本");
@@ -1548,8 +1581,7 @@ void test_wave_main_render_data_uses_sample_frequency_viewport()
 
     require(frame.displayData != nullptr, "采样频率模式交互数据源不能为空");
     require(frame.renderDisplayData != nullptr, "采样频率模式渲染数据源不能为空");
-    require(frame.displayData->channels.front().samples.size() == 3,
-            "采样频率交互数据应保留视口样本及左右邻接样本");
+    require(frame.displayData->channels.front().samples.size() == 3, "采样频率交互数据应保留视口样本及左右邻接样本");
     require(std::abs(frame.displayData->channels.front().samples.front().time - 0.0) < 1e-12,
             "采样频率交互数据应保留左侧邻接样本");
     require(std::abs(frame.displayData->channels.front().samples[1].time - 0.1) < 1e-12,
@@ -2322,7 +2354,6 @@ void test_raw_capture_file_roundtrip()
     require(loaded->sampleFrequencyHz == capture.sampleFrequencyHz, "psraw 应保留采样频率");
     require(loaded->capturedAtMs == capture.capturedAtMs, "psraw 应保留采集时间");
     require(loaded->payload == capture.payload, "psraw 应保留原始 payload");
-
 }
 
 void test_raw_capture_file_plot_setup_roundtrip()
@@ -2340,10 +2371,10 @@ void test_raw_capture_file_plot_setup_roundtrip()
          .unit = "℃",
          .ratio = 0.5,
          .scale = 2.0,
-          .offset = -1.0,
-          .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F},
-          .lineWidth = std::optional<float>{2.75F},
-          .bitDisplay = {.enabled = true, .firstBit = 4, .bitCount = 8, .yOffset = 1.25}},
+         .offset = -1.0,
+         .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F},
+         .lineWidth = std::optional<float>{2.75F},
+         .bitDisplay = {.enabled = true, .firstBit = 4, .bitCount = 8, .yOffset = 1.25}},
         {.label = "压力B", .unit = "kPa", .ratio = 1.5, .scale = 3.0, .offset = 4.0},
     };
     setupEvent.plotSetup.view.timeScale = 0.25;
@@ -2374,10 +2405,8 @@ void test_raw_capture_file_plot_setup_roundtrip()
     in.close();
     require(bytes.find("version: 3\n") != std::string::npos, "新 psraw 应写出 v3");
     require(bytes.find("event: plot_setup\n") != std::string::npos, "psraw 应包含 plot_setup 事件");
-    require(bytes.find("channel.0.line_width: 2.75\n") != std::string::npos,
-            "psraw 应写出显式 line_width");
-    require(bytes.find("channel.1.line_width: none\n") != std::string::npos,
-            "psraw 应写出默认 line_width 标记");
+    require(bytes.find("channel.0.line_width: 2.75\n") != std::string::npos, "psraw 应写出显式 line_width");
+    require(bytes.find("channel.1.line_width: none\n") != std::string::npos, "psraw 应写出默认 line_width 标记");
     require(bytes.find("channel.0.bit_display.enabled: true\n") != std::string::npos,
             "psraw 应写出 bit_display.enabled");
     require(bytes.find("channel.0.bit_display.first_bit: 4\n") != std::string::npos,
@@ -2419,7 +2448,6 @@ void test_raw_capture_file_plot_setup_roundtrip()
     require(std::abs(loadedSetup.view.verticalMax - 80.0) < 1e-12, "plot_setup 应保留 vertical_max");
     require(loadedSetup.view.verticalUnit == "℃", "plot_setup 应保留 vertical_unit");
     require(loadedSetup.view.historyLimit == 4096U, "plot_setup 应保留 history_limit");
-
 }
 
 void test_raw_capture_file_plot_setup_rejects_bad_fields()
@@ -2500,9 +2528,7 @@ void test_raw_capture_file_plot_setup_rejects_bad_fields()
     require(badLineWidthPos != std::string::npos, "测试文件应包含 channel line_width");
     const auto badLineWidthEnd = broken.find('\n', badLineWidthPos);
     broken.replace(badLineWidthPos, badLineWidthEnd - badLineWidthPos, "channel.0.line_width: nope");
-    require(!protoscope::plot::decodeRawCaptureFile(broken, error).has_value(),
-            "坏数值 line_width 应拒绝解析");
-
+    require(!protoscope::plot::decodeRawCaptureFile(broken, error).has_value(), "坏数值 line_width 应拒绝解析");
 }
 
 void test_raw_capture_file_v2_event_stream_still_reads()
@@ -2625,10 +2651,11 @@ void test_session_package_roundtrip_preserves_binary_entries()
 {
     protoscope::session::SessionPackageData package{
         .createdAtMs = 123456,
-        .entries = {
-            {.name = "manifest.txt", .bytes = {'o', 'k', '\n'}},
-            {.name = "capture.psraw", .bytes = {0x00, 0x01, static_cast<std::uint8_t>(0xFF), '\n'}},
-        },
+        .entries =
+            {
+                {.name = "manifest.txt", .bytes = {'o', 'k', '\n'}},
+                {.name = "capture.psraw", .bytes = {0x00, 0x01, static_cast<std::uint8_t>(0xFF), '\n'}},
+            },
     };
 
     std::string error;
@@ -2663,11 +2690,10 @@ void test_session_package_rejects_truncated_entry()
 
 void test_session_package_rejects_excessive_entry_count()
 {
-    const std::string bytes =
-        "ProtoScopeSessionPackage\n"
-        "version: 1\n"
-        "created_at_ms: 1\n"
-        "entries: 999999999\n";
+    const std::string bytes = "ProtoScopeSessionPackage\n"
+                              "version: 1\n"
+                              "created_at_ms: 1\n"
+                              "entries: 999999999\n";
 
     std::string error;
     const auto decoded = protoscope::session::decodeSessionPackage(bytes, error);

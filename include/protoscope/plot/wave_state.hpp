@@ -274,8 +274,8 @@ struct WaveDockState {
             return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
                    visibleMinTime == other.visibleMinTime && visibleMaxTime == other.visibleMaxTime &&
                    channelIndex == other.channelIndex && pointLimit == other.pointLimit &&
-                   sampleCount == other.sampleCount && displayFormula == other.displayFormula &&
-                   ratio == other.ratio && scale == other.scale && offset == other.offset;
+                   sampleCount == other.sampleCount && displayFormula == other.displayFormula && ratio == other.ratio &&
+                   scale == other.scale && offset == other.offset;
         }
     };
 
@@ -291,6 +291,8 @@ struct WaveDockState {
         std::size_t channelIndex{0};
         double visibleMinTime{0.0};
         double visibleMaxTime{0.0};
+        double visibleMinValue{0.0};
+        double visibleMaxValue{0.0};
         double sampleFrequencyHz{0.0};
         std::size_t firstBit{0};
         std::size_t bitCount{0};

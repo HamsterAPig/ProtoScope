@@ -129,19 +129,45 @@ double bitDisplayLaneHeight()
     return 0.75;
 }
 
-double bitDisplayGroupBase(const plot::WaveSnapshot& snapshot, std::size_t channelIndex)
+std::vector<std::size_t> bitDisplayRowsForChannels(const plot::WaveSnapshot& snapshot,
+                                                   const std::vector<std::size_t>& channelIndices)
 {
-    constexpr double kGroupGap = 0.75;
-    double base = 0.0;
-    const std::size_t limit = (std::min)(channelIndex, snapshot.channels.size());
-    for (std::size_t index = 0; index < limit; ++index) {
-        const auto& bitDisplay = snapshot.channels[index].bitDisplay;
+    std::vector<std::size_t> rows;
+    for (const std::size_t channelIndex : channelIndices) {
+        if (channelIndex >= snapshot.channels.size()) {
+            continue;
+        }
+        const auto& bitDisplay = snapshot.channels[channelIndex].bitDisplay;
         if (!bitDisplayEnabled(bitDisplay)) {
             continue;
         }
-        base += static_cast<double>(bitDisplay.bitCount) * bitDisplayLanePitch() + kGroupGap;
+        rows.reserve(rows.size() + bitDisplay.bitCount);
+        for (std::size_t laneIndex = 0; laneIndex < bitDisplay.bitCount; ++laneIndex) {
+            rows.push_back(bitDisplay.firstBit + laneIndex);
+        }
     }
-    return base;
+    std::sort(rows.begin(), rows.end());
+    rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+    return rows;
+}
+
+double bitDisplayGroupBase(const plot::WaveSnapshot& snapshot, std::size_t channelIndex)
+{
+    if (channelIndex >= snapshot.channels.size()) {
+        return 0.0;
+    }
+    std::vector<std::size_t> channelIndices;
+    channelIndices.reserve(snapshot.channels.size());
+    for (std::size_t index = 0; index < snapshot.channels.size(); ++index) {
+        channelIndices.push_back(index);
+    }
+    const auto rows = bitDisplayRowsForChannels(snapshot, channelIndices);
+    const auto bitIndex = snapshot.channels[channelIndex].bitDisplay.firstBit;
+    const auto row = std::lower_bound(rows.begin(), rows.end(), bitIndex);
+    if (row == rows.end() || *row != bitIndex) {
+        return 0.0;
+    }
+    return static_cast<double>(std::distance(rows.begin(), row)) * bitDisplayLanePitch();
 }
 
 plot::WaveValueRange bitDisplayValueRange(const plot::WaveSnapshot& snapshot,
@@ -151,22 +177,42 @@ plot::WaveValueRange bitDisplayValueRange(const plot::WaveSnapshot& snapshot,
     if (!bitDisplayEnabled(spec)) {
         return {};
     }
-    const double minValue = bitDisplayGroupBase(snapshot, channelIndex) + spec.yOffset;
-    const double maxValue = minValue + static_cast<double>(spec.bitCount - 1U) * bitDisplayLanePitch() +
-                            bitDisplayLaneHeight();
+    static_cast<void>(channelIndex);
+    std::vector<std::size_t> channelIndices;
+    channelIndices.reserve(snapshot.channels.size());
+    for (std::size_t index = 0; index < snapshot.channels.size(); ++index) {
+        channelIndices.push_back(index);
+    }
+    const auto rows = bitDisplayRowsForChannels(snapshot, channelIndices);
+    double minValue = std::numeric_limits<double>::infinity();
+    double maxValue = -std::numeric_limits<double>::infinity();
+    for (std::size_t laneIndex = 0; laneIndex < spec.bitCount; ++laneIndex) {
+        const std::size_t bitIndex = spec.firstBit + laneIndex;
+        const auto row = std::lower_bound(rows.begin(), rows.end(), bitIndex);
+        if (row == rows.end() || *row != bitIndex) {
+            continue;
+        }
+        const double laneBase =
+            (static_cast<double>(std::distance(rows.begin(), row)) + spec.yOffset) * bitDisplayLanePitch();
+        minValue = (std::min)(minValue, laneBase);
+        maxValue = (std::max)(maxValue, laneBase + bitDisplayLaneHeight());
+    }
+    if (!std::isfinite(minValue) || !std::isfinite(maxValue)) {
+        return {};
+    }
     return {.minValue = minValue, .maxValue = maxValue};
 }
 
 namespace {
 
-double plotYFromPixel(const ImPlotRect& limits, const ImVec2& plotPos, const ImVec2& plotSize, float pixelY)
-{
-    if (plotSize.y <= 1.0F) {
-        return 0.5 * (limits.Y.Min + limits.Y.Max);
+    double plotYFromPixel(const ImPlotRect& limits, const ImVec2& plotPos, const ImVec2& plotSize, float pixelY)
+    {
+        if (plotSize.y <= 1.0F) {
+            return 0.5 * (limits.Y.Min + limits.Y.Max);
+        }
+        const double normalized = static_cast<double>((pixelY - plotPos.y) / plotSize.y);
+        return limits.Y.Max - normalized * (limits.Y.Max - limits.Y.Min);
     }
-    const double normalized = static_cast<double>((pixelY - plotPos.y) / plotSize.y);
-    return limits.Y.Max - normalized * (limits.Y.Max - limits.Y.Min);
-}
 
 } // namespace
 
@@ -179,7 +225,6 @@ BitLaneLayout buildBitLaneLayout(const plot::WaveSnapshot& snapshot,
     BitLaneLayout layout;
     std::vector<std::size_t> bitChannels;
     bitChannels.reserve(visibleChannelIndices.size());
-    std::size_t totalLaneCount = 0;
     for (const std::size_t channelIndex : visibleChannelIndices) {
         if (channelIndex >= snapshot.channels.size()) {
             continue;
@@ -189,27 +234,32 @@ BitLaneLayout buildBitLaneLayout(const plot::WaveSnapshot& snapshot,
             continue;
         }
         bitChannels.push_back(channelIndex);
-        totalLaneCount += channel.bitDisplay.bitCount;
     }
-    if (bitChannels.empty() || totalLaneCount == 0 || plotSize.y <= 1.0F) {
+    const auto bitRows = bitDisplayRowsForChannels(snapshot, bitChannels);
+    if (bitChannels.empty() || bitRows.empty() || plotSize.y <= 1.0F) {
         return layout;
     }
 
-    constexpr float kGroupGapRatio = 0.35F;
     constexpr float kLowHighMarginRatio = 0.18F;
-    const float groupGap = bitChannels.size() > 1 ? (plotSize.y * kGroupGapRatio) / static_cast<float>(totalLaneCount) : 0.0F;
-    const float availableHeight = (std::max)(plotSize.y - groupGap * static_cast<float>(bitChannels.size() - 1U), 1.0F);
-    const float lanePitch = availableHeight / static_cast<float>(totalLaneCount);
+    const float lanePitch = plotSize.y / static_cast<float>(bitRows.size());
     const float lanePadding = lanePitch * kLowHighMarginRatio;
 
+    std::size_t totalLaneCount = 0;
+    for (const std::size_t channelIndex : bitChannels) {
+        totalLaneCount += snapshot.channels[channelIndex].bitDisplay.bitCount;
+    }
     layout.lanes.reserve(totalLaneCount);
-    float cursorTop = plotPos.y;
-    for (std::size_t groupIndex = 0; groupIndex < bitChannels.size(); ++groupIndex) {
-        const std::size_t channelIndex = bitChannels[groupIndex];
+    for (const std::size_t channelIndex : bitChannels) {
         const auto& channel = snapshot.channels[channelIndex];
         const float yOffsetPixels = static_cast<float>(channel.bitDisplay.yOffset) * lanePitch;
         for (std::size_t laneIndex = 0; laneIndex < channel.bitDisplay.bitCount; ++laneIndex) {
-            const float laneTop = cursorTop + static_cast<float>(laneIndex) * lanePitch + yOffsetPixels;
+            const std::size_t bitIndex = channel.bitDisplay.firstBit + laneIndex;
+            const auto row = std::lower_bound(bitRows.begin(), bitRows.end(), bitIndex);
+            if (row == bitRows.end() || *row != bitIndex) {
+                continue;
+            }
+            const auto rowIndex = static_cast<std::size_t>(std::distance(bitRows.begin(), row));
+            const float laneTop = plotPos.y + static_cast<float>(rowIndex) * lanePitch + yOffsetPixels;
             const float lowPixel = laneTop + lanePitch - lanePadding;
             const float highPixel = laneTop + lanePadding;
             const float centerPixel = 0.5F * (lowPixel + highPixel);
@@ -217,8 +267,9 @@ BitLaneLayout buildBitLaneLayout(const plot::WaveSnapshot& snapshot,
             const double highY = plotYFromPixel(limits, plotPos, plotSize, highPixel);
             layout.lanes.push_back({
                 .parentChannelIndex = channelIndex,
-                .bitIndex = channel.bitDisplay.firstBit + laneIndex,
+                .bitIndex = bitIndex,
                 .laneIndex = laneIndex,
+                .rowIndex = rowIndex,
                 .lowY = lowY,
                 .highY = highY,
                 .centerY = 0.5 * (lowY + highY),
@@ -228,7 +279,6 @@ BitLaneLayout buildBitLaneLayout(const plot::WaveSnapshot& snapshot,
                 .lanePixelPitch = lanePitch,
             });
         }
-        cursorTop += static_cast<float>(channel.bitDisplay.bitCount) * lanePitch + groupGap;
     }
     return layout;
 }

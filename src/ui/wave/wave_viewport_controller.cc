@@ -65,11 +65,10 @@ namespace {
         };
     }
 
-    plot::WaveDockState::OverviewDisplayDataCacheKey makeOverviewDisplayDataCacheKey(
-        const plot::WaveSnapshot& snapshot,
-        const plot::WaveViewState& view,
-        std::uint64_t dataRevision,
-        std::size_t pointLimit)
+    plot::WaveDockState::OverviewDisplayDataCacheKey makeOverviewDisplayDataCacheKey(const plot::WaveSnapshot& snapshot,
+                                                                                     const plot::WaveViewState& view,
+                                                                                     std::uint64_t dataRevision,
+                                                                                     std::size_t pointLimit)
     {
         const auto displayKey = makeDisplayDataCacheKey(snapshot, view, dataRevision);
         return {
@@ -189,19 +188,14 @@ namespace {
                 for (std::size_t sampleIndex = bucketBegin; sampleIndex < bucketEnd; ++sampleIndex) {
                     const auto& sample = channel.samples[sampleIndex];
                     const double actualValue = sample.value * channel.ratio;
-                    const double displayValue =
-                        offsetThenScale ? (actualValue + channel.offset) * channel.scale
-                                        : actualValue * channel.scale + channel.offset;
+                    const double displayValue = offsetThenScale ? (actualValue + channel.offset) * channel.scale
+                                                                : actualValue * channel.scale + channel.offset;
                     minValue = (std::min)(minValue, displayValue);
                     maxValue = (std::max)(maxValue, displayValue);
                     minActualValue = (std::min)(minActualValue, actualValue);
                     maxActualValue = (std::max)(maxActualValue, actualValue);
-                    timeSum +=
-                        overviewSampleTime(sample,
-                                           channel.sampleIndexOffset,
-                                           sampleIndex,
-                                           axisSource,
-                                           sampleFrequencyHz);
+                    timeSum += overviewSampleTime(
+                        sample, channel.sampleIndexOffset, sampleIndex, axisSource, sampleFrequencyHz);
                     ++count;
                 }
                 if (count == 0) {
@@ -254,9 +248,8 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
     const auto dataRevision = wave.buffer.dataRevision();
     if (wave.displayDataRevision != dataRevision || wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) {
         // 核心流程：全量快照只保留通道元数据和原始样本指针，显示缓存按当前窗口单独构建，避免高速采样时反复复制全历史。
-        wave.cachedFullSnapshot =
-            wave.buffer.snapshot(
-                -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
+        wave.cachedFullSnapshot = wave.buffer.snapshot(
+            -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
         wave.displayDataRevision = dataRevision;
         wave.displayDataSampleFrequencyHz = view.sampleFrequencyHz;
         wave.cachedDisplayKeyValid = false;
@@ -312,10 +305,8 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.cachedFullSnapshot, view, dataRevision, (std::max)(overviewPointLimit, std::size_t{1}));
     if (!wave.cachedOverviewKeyValid || !(wave.cachedOverviewKey == overviewKey)) {
         // 核心流程：概览只保留按像素预算压缩后的完整历史包络点，避免每次数据变更复制全历史显示样本。
-        buildOverviewDisplayDataInto(wave.cachedFullSnapshot,
-                                     view.sampleFrequencyHz,
-                                     overviewKey.pointLimit,
-                                     wave.cachedOverviewDisplayData);
+        buildOverviewDisplayDataInto(
+            wave.cachedFullSnapshot, view.sampleFrequencyHz, overviewKey.pointLimit, wave.cachedOverviewDisplayData);
         wave.cachedOverviewKey = overviewKey;
         wave.cachedOverviewKeyValid = true;
     }
@@ -419,13 +410,25 @@ void setupBitDisplayAxisTicks(const plot::WaveSnapshot& snapshot)
 {
     std::vector<double> ticks;
     std::vector<std::string> labels;
+    std::vector<std::size_t> channelIndices;
+    channelIndices.reserve(snapshot.channels.size());
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        channelIndices.push_back(channelIndex);
+    }
+    const auto bitRows = bitDisplayRowsForChannels(snapshot, channelIndices);
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
         for (std::size_t laneIndex = 0; laneIndex < channel.bitDisplay.bitCount; ++laneIndex) {
-            const double laneBase = bitDisplayGroupBase(snapshot, channelIndex) + channel.bitDisplay.yOffset +
-                                    static_cast<double>(laneIndex) * bitDisplayLanePitch();
+            const std::size_t bitIndex = channel.bitDisplay.firstBit + laneIndex;
+            const auto row = std::lower_bound(bitRows.begin(), bitRows.end(), bitIndex);
+            if (row == bitRows.end() || *row != bitIndex) {
+                continue;
+            }
+            const double laneBase =
+                (static_cast<double>(std::distance(bitRows.begin(), row)) + channel.bitDisplay.yOffset) *
+                bitDisplayLanePitch();
             ticks.push_back(laneBase + bitDisplayLaneHeight() * 0.5);
-            labels.push_back(channel.label + "." + std::to_string(channel.bitDisplay.firstBit + laneIndex));
+            labels.push_back(channel.label + "." + std::to_string(bitIndex));
         }
     }
 

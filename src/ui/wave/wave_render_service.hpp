@@ -69,6 +69,7 @@ struct BitLaneLayoutEntry {
     std::size_t parentChannelIndex{0};
     std::size_t bitIndex{0};
     std::size_t laneIndex{0};
+    std::size_t rowIndex{0};
     double lowY{0.0};
     double highY{0.0};
     double centerY{0.0};
@@ -104,14 +105,18 @@ bool drawHorizontalSplitter(
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits);
 bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits);
 bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
+                                   const plot::WaveSnapshot& snapshot,
                                    const plot::WaveDataBounds& visibleWindowBounds,
-                                   const plot::WaveDataBounds& fullHistoryBounds);
+                                   const plot::WaveDataBounds& fullHistoryBounds,
+                                   const plot::WaveDataBounds& yAutoFitBounds);
 bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveDisplayData& displayData,
                               const std::vector<std::size_t>& channelIndices);
 ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool suppressEscapeCancel = false);
 bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
+                                                const plot::WaveSnapshot& snapshot,
+                                                const BitLaneLayout& bitLayout,
                                                 const plot::WaveDisplayData& displayData,
                                                 const ImPlotPoint& mousePos,
                                                 double timeSnapDistance,
@@ -153,6 +158,8 @@ ImVec4 channelColor(const plot::ChannelView& channel, std::size_t channelIndex);
 bool bitDisplayEnabled(const plot::BitDisplaySpec& spec);
 double bitDisplayLanePitch();
 double bitDisplayLaneHeight();
+std::vector<std::size_t> bitDisplayRowsForChannels(const plot::WaveSnapshot& snapshot,
+                                                   const std::vector<std::size_t>& channelIndices);
 double bitDisplayGroupBase(const plot::WaveSnapshot& snapshot, std::size_t channelIndex);
 plot::WaveValueRange bitDisplayValueRange(const plot::WaveSnapshot& snapshot,
                                           std::size_t channelIndex,
@@ -164,16 +171,15 @@ BitLaneLayout buildBitLaneLayout(const plot::WaveSnapshot& snapshot,
                                  const ImVec2& plotSize);
 std::optional<BitLaneHit> findBitLaneAtPlotValue(const BitLaneLayout& layout, double plotY, double maxDistance);
 std::optional<plot::CursorReadout> findNearestBitTransition(const plot::WaveSnapshot& snapshot,
-                                                           const BitLaneLayout& layout,
-                                                           double time,
-                                                           double plotY,
-                                                           double maxTimeDistance,
-                                                           double maxValueDistance);
+                                                            const BitLaneLayout& layout,
+                                                            double time,
+                                                            double plotY,
+                                                            double maxTimeDistance,
+                                                            double maxValueDistance);
 bool bitLaneMeasurementActive(const plot::WaveViewState& view);
 bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout);
 bool cursorPairUsesBitLanes(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);
-plot::MeasurementReadout makeBitIntervalMeasurement(const plot::CursorReadout& left,
-                                                    const plot::CursorReadout& right);
+plot::MeasurementReadout makeBitIntervalMeasurement(const plot::CursorReadout& left, const plot::CursorReadout& right);
 std::optional<std::size_t> findBitDisplayChannelAtValue(const plot::WaveDockState& wave,
                                                         const plot::WaveSnapshot& snapshot,
                                                         double value,
@@ -208,11 +214,16 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            double timeSnapDistance,
                                            double valueSnapDistance);
 bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::WaveDataBounds& bounds);
+bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channelIndex);
 bool excludesLegendHiddenChannels(const plot::WaveViewState& view);
 bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::string& label);
 std::vector<std::size_t> channelIndicesForDerivedViews(const plot::WaveDockState& wave,
                                                        const plot::WaveSnapshot& snapshot);
 plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
+                                           const plot::WaveSnapshot& snapshot,
+                                           const plot::WaveDisplayData& displayData,
+                                           const std::vector<std::size_t>& channelIndices);
+plot::WaveDataBounds boundsForYAxisAutoFit(const plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
                                            const std::vector<std::size_t>& channelIndices);

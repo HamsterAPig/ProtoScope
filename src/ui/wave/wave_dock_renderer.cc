@@ -29,40 +29,40 @@ namespace protoscope::ui {
 
 namespace {
 
-ImGuiKey toImGuiKey(const ShortcutKey key)
-{
-    switch (key) {
-        case ShortcutKey::A:
-            return ImGuiKey_A;
-        case ShortcutKey::C:
-            return ImGuiKey_C;
-        case ShortcutKey::F:
-            return ImGuiKey_F;
-        case ShortcutKey::Z:
-            return ImGuiKey_Z;
-        case ShortcutKey::Space:
-            return ImGuiKey_Space;
-        case ShortcutKey::F11:
-            return ImGuiKey_F11;
-        default:
-            return ImGuiKey_None;
+    ImGuiKey toImGuiKey(const ShortcutKey key)
+    {
+        switch (key) {
+            case ShortcutKey::A:
+                return ImGuiKey_A;
+            case ShortcutKey::C:
+                return ImGuiKey_C;
+            case ShortcutKey::F:
+                return ImGuiKey_F;
+            case ShortcutKey::Z:
+                return ImGuiKey_Z;
+            case ShortcutKey::Space:
+                return ImGuiKey_Space;
+            case ShortcutKey::F11:
+                return ImGuiKey_F11;
+            default:
+                return ImGuiKey_None;
+        }
     }
-}
 
-bool chordPressed(const ShortcutChord& chord)
-{
-    const auto& io = ImGui::GetIO();
-    if (io.KeyCtrl != chord.ctrl || io.KeyShift != chord.shift || io.KeyAlt != chord.alt) {
-        return false;
+    bool chordPressed(const ShortcutChord& chord)
+    {
+        const auto& io = ImGui::GetIO();
+        if (io.KeyCtrl != chord.ctrl || io.KeyShift != chord.shift || io.KeyAlt != chord.alt) {
+            return false;
+        }
+        return ImGui::IsKeyPressed(toImGuiKey(chord.key), false);
     }
-    return ImGui::IsKeyPressed(toImGuiKey(chord.key), false);
-}
 
-bool waveShortcutPressed(const ShortcutAction action)
-{
-    const auto* descriptor = findShortcut(action);
-    return descriptor != nullptr && chordPressed(descriptor->chord);
-}
+    bool waveShortcutPressed(const ShortcutAction action)
+    {
+        const auto* descriptor = findShortcut(action);
+        return descriptor != nullptr && chordPressed(descriptor->chord);
+    }
 
 } // namespace
 
@@ -194,9 +194,17 @@ bool isFitDoubleClicked()
     return ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) || fitButtonDoubleClicked;
 }
 
+bool selectedChannelUsesBitDisplay(const plot::WaveViewState& view, const plot::WaveSnapshot& snapshot)
+{
+    return view.measurementChannelIndex < snapshot.channels.size() &&
+           bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay);
+}
+
 bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
+                                   const plot::WaveSnapshot& snapshot,
                                    const plot::WaveDataBounds& visibleWindowBounds,
-                                   const plot::WaveDataBounds& fullHistoryBounds)
+                                   const plot::WaveDataBounds& fullHistoryBounds,
+                                   const plot::WaveDataBounds& yAutoFitBounds)
 {
     if (!isFitDoubleClicked()) {
         return false;
@@ -218,11 +226,14 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
         view.autoFollowLatest = false;
         changed = true;
     }
-    if (ImPlot::IsAxisHovered(ImAxis_Y1) && !view.lockVerticalRange && visibleWindowBounds.valid) {
+    if (ImPlot::IsAxisHovered(ImAxis_Y1) && selectedChannelUsesBitDisplay(view, snapshot)) {
+        // Bit lanes are laid out in plot pixels. Consume the fit gesture so ImPlot does not persist a normal Y fit.
+        changed = true;
+    } else if (ImPlot::IsAxisHovered(ImAxis_Y1) && !view.lockVerticalRange && yAutoFitBounds.valid) {
         // 核心流程：Y 轴双击 auto fit 在所有控制模式下都统一走倍率逻辑，避免默认 oscilloscope 模式退回 ImPlot 的 1x
         // 紧贴范围。
         const auto range = plot::makeVerticalAutoFitRange(
-            visibleWindowBounds.minValue, visibleWindowBounds.maxValue, view.verticalAutoFitMultiplier);
+            yAutoFitBounds.minValue, yAutoFitBounds.maxValue, view.verticalAutoFitMultiplier);
         view.viewMinValue = range.minValue;
         view.viewMaxValue = range.maxValue;
         changed = true;
@@ -389,7 +400,8 @@ ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool 
     result.consumed = true;
 
     const bool cancelByEscape = ImGui::IsKeyPressed(ImGuiKey_Escape) && !suppressEscapeCancel;
-    if (cancelByEscape || ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+    if (cancelByEscape || ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+        ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
         cancelZoomSelection(view);
         return result;
     }
@@ -451,6 +463,8 @@ ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool 
 }
 
 bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
+                                                const plot::WaveSnapshot& snapshot,
+                                                const BitLaneLayout& bitLayout,
                                                 const plot::WaveDisplayData& displayData,
                                                 const ImPlotPoint& mousePos,
                                                 double timeSnapDistance,
@@ -460,6 +474,25 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
     if (!ImPlot::IsPlotHovered() || !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         return false;
     }
+
+    auto bitLaneContainsValue = [](const BitLaneLayoutEntry& lane, double plotY, double maxDistance) {
+        const double minY = (std::min)(lane.lowY, lane.highY);
+        const double maxY = (std::max)(lane.lowY, lane.highY);
+        return plotY >= minY - maxDistance && plotY <= maxY + maxDistance;
+    };
+    if (view.measurementChannelIndex < snapshot.channels.size() &&
+        bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay)) {
+        for (const auto& lane : bitLayout.lanes) {
+            if (lane.parentChannelIndex == view.measurementChannelIndex &&
+                bitLaneContainsValue(lane, mousePos.y, valueSnapDistance)) {
+                return resetChannelBitYOffsetToZero(wave, view.measurementChannelIndex);
+            }
+        }
+    }
+    if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
+        return resetChannelBitYOffsetToZero(wave, bitLane->lane.parentChannelIndex);
+    }
+
     const auto activePoint =
         plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, mousePos.x, timeSnapDistance);
     if (!activePoint.has_value() || std::abs(activePoint->displayValue - mousePos.y) > valueSnapDistance) {
@@ -544,8 +577,7 @@ void applyChannelTransformOverride(plot::WaveDockState& wave,
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > 1e-12;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > 1e-12;
     overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > 1e-12;
-    overrideState.bitYOffsetOverridden =
-        std::abs(updated.bitDisplay.yOffset - defaultSpec.bitDisplay.yOffset) > 1e-12;
+    overrideState.bitYOffsetOverridden = std::abs(updated.bitDisplay.yOffset - defaultSpec.bitDisplay.yOffset) > 1e-12;
     overrideState.label = updated.label;
     overrideState.ratio = updated.ratio;
     overrideState.scale = updated.scale;
@@ -661,13 +693,21 @@ public:
         }
         if (!wave.toolsCollapsed) {
             ImGui::Separator();
-            drawWaveToolbar(
-                context.application, wave, config, displayData, context.fullscreenActive, context.fullscreenToggleRequested);
+            drawWaveToolbar(context.application,
+                            wave,
+                            config,
+                            displayData,
+                            context.fullscreenActive,
+                            context.fullscreenToggleRequested);
             ImGui::Separator();
             drawCursorToolbar(view, config, displayData);
         } else {
-            drawWaveToolbar(
-                context.application, wave, config, displayData, context.fullscreenActive, context.fullscreenToggleRequested);
+            drawWaveToolbar(context.application,
+                            wave,
+                            config,
+                            displayData,
+                            context.fullscreenActive,
+                            context.fullscreenToggleRequested);
         }
         drawChannelControls(wave, *context.renderFrame->fullSnapshot);
         ImGui::EndChild();
