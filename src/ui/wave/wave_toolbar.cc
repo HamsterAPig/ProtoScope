@@ -26,6 +26,58 @@ const char* zoomSelectionHelpText(const plot::WaveViewState& view)
                                       : "框选主视图局部放大；框选完成后保留框选模式，需手动退出。";
 }
 
+const char* mouseYOffsetDragModeLabel(plot::WaveMouseYOffsetDragMode mode)
+{
+    switch (mode) {
+    case plot::WaveMouseYOffsetDragMode::Direct:
+        return "Y 偏移直接拖动";
+    case plot::WaveMouseYOffsetDragMode::Shift:
+        return "Y 偏移 Shift 拖动";
+    case plot::WaveMouseYOffsetDragMode::Disabled:
+        return "Y 偏移禁用拖动";
+    }
+    return "Y 偏移直接拖动";
+}
+
+const char* mouseYOffsetDragModeShortLabel(plot::WaveMouseYOffsetDragMode mode)
+{
+    switch (mode) {
+    case plot::WaveMouseYOffsetDragMode::Direct:
+        return "Y直";
+    case plot::WaveMouseYOffsetDragMode::Shift:
+        return "Y键";
+    case plot::WaveMouseYOffsetDragMode::Disabled:
+        return "Y关";
+    }
+    return "Y直";
+}
+
+const char* mouseYOffsetDragModeHelp(plot::WaveMouseYOffsetDragMode mode)
+{
+    switch (mode) {
+    case plot::WaveMouseYOffsetDragMode::Direct:
+        return "当前为 direct：左键命中波形或 bit lane 后拖动可修改 Y 偏移；点击循环到 Shift 拖动。";
+    case plot::WaveMouseYOffsetDragMode::Shift:
+        return "当前为 shift：只有按住 Shift 并命中波形或 bit lane 时才修改 Y 偏移；点击循环到禁用拖动。";
+    case plot::WaveMouseYOffsetDragMode::Disabled:
+        return "当前为 disabled：鼠标拖动不修改 Y 偏移；通道弹窗手动输入仍可修改；点击循环到直接拖动。";
+    }
+    return "切换 gui.wave.mouse_y_offset_drag_mode。";
+}
+
+plot::WaveMouseYOffsetDragMode nextMouseYOffsetDragMode(plot::WaveMouseYOffsetDragMode mode)
+{
+    switch (mode) {
+    case plot::WaveMouseYOffsetDragMode::Direct:
+        return plot::WaveMouseYOffsetDragMode::Shift;
+    case plot::WaveMouseYOffsetDragMode::Shift:
+        return plot::WaveMouseYOffsetDragMode::Disabled;
+    case plot::WaveMouseYOffsetDragMode::Disabled:
+        return plot::WaveMouseYOffsetDragMode::Direct;
+    }
+    return plot::WaveMouseYOffsetDragMode::Direct;
+}
+
 void wave_detail::applyFrequencyInput(plot::WaveViewState& view)
 {
     const auto parsed = plot::parseSampleFrequencyText(view.sampleFrequencyInput);
@@ -926,6 +978,13 @@ void drawWaveToolbar(app::Application& application,
     if (drawAdaptiveToolbarButton(
             "C1+C2 到视窗", "C1+C2", "仅移动双游标到当前主视窗，不改变当前视窗范围。", false, true)) {
         placeCursorPairInViewport(view, config, displayData);
+    }
+    if (drawAdaptiveToolbarButton(mouseYOffsetDragModeLabel(view.mouseYOffsetDragMode),
+                                  mouseYOffsetDragModeShortLabel(view.mouseYOffsetDragMode),
+                                  mouseYOffsetDragModeHelp(view.mouseYOffsetDragMode),
+                                  view.mouseYOffsetDragMode != plot::WaveMouseYOffsetDragMode::Disabled,
+                                  true)) {
+        view.mouseYOffsetDragMode = nextMouseYOffsetDragMode(view.mouseYOffsetDragMode);
     }
     if (drawAdaptiveToolbarButton(view.showHoverReadout ? "显示悬停读数" : "隐藏悬停读数",
                                   "读",

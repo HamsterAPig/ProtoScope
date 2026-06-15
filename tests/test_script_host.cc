@@ -1982,6 +1982,8 @@ void test_config_default_roundtrip()
             "隐藏 CH 策略默认应只让可见通道参与派生视图");
     require(config.gui.wave.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform,
             "游标极值吸附策略默认应为 nearest_waveform");
+    require(config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
+            "鼠标 Y 偏移拖动模式默认应为 direct");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
     require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
@@ -2030,6 +2032,7 @@ void test_config_default_roundtrip()
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
+    config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
@@ -2096,6 +2099,8 @@ void test_config_default_roundtrip()
     require(
         reloaded.config.gui.wave.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone,
         "游标极值吸附策略 roundtrip 失败");
+    require(reloaded.config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Shift,
+            "鼠标 Y 偏移拖动模式 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12,
             "CH 卡片自适应比例 roundtrip 失败");
@@ -2147,6 +2152,23 @@ void test_config_default_roundtrip()
     error.clear();
     require(!store.save(blockedParent / "protoscope.yaml", config, error), "父路径为文件时配置写回应失败");
     require(error.find("创建配置目录失败") != std::string::npos, "配置目录创建失败应返回明确错误");
+}
+
+void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
+{
+    protoscope::config::ConfigStore store;
+    protoscope::config::AppConfig config;
+    config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
+
+    protoscope::dock::DockStore dockStore;
+    store.applyToDock(config, dockStore);
+    require(dockStore.waveState().view.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Shift,
+            "applyToDock 应写入鼠标 Y 偏移拖动模式");
+
+    dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
+    const auto captured = store.captureFromDock(dockStore);
+    require(captured.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Disabled,
+            "captureFromDock 应捕获鼠标 Y 偏移拖动模式");
 }
 
 void test_config_repo_default_yaml_loads()
@@ -2299,6 +2321,7 @@ void test_config_wave_mode_invalid_fallback()
            "    channel_card_width_mode: weird\n"
            "    channel_double_click_action: weird\n"
            "    x_axis_double_click_action: weird\n"
+           "    mouse_y_offset_drag_mode: weird\n"
            "    fullscreen_mode: weird\n"
            "    channel_card_fixed_width: 0\n"
            "    channel_card_adaptive_ratio: -0.5\n"
@@ -2319,6 +2342,8 @@ void test_config_wave_mode_invalid_fallback()
             "非法 x_axis_double_click_action 应回退到 fit_full_history");
     require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "非法 fullscreen_mode 应回退到 overlay");
+    require(loaded.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
+            "非法 mouse_y_offset_drag_mode 应回退到 direct");
     require(loaded.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
             "非法 chinese_glyph_range 应回退到 simplified_common");
     require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
@@ -3515,6 +3540,7 @@ static const TestCase kAllTests[] = {
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"protocol_ui_templates_load", &test_protocol_ui_templates_load},
     {"config_default_roundtrip", &test_config_default_roundtrip},
+    {"config_wave_mouse_y_offset_drag_mode_apply_capture", &test_config_wave_mouse_y_offset_drag_mode_apply_capture},
     {"config_repo_default_yaml_loads", &test_config_repo_default_yaml_loads},
     {"config_performance_scale_applies_default_budgets", &test_config_performance_scale_applies_default_budgets},
     {"config_performance_save_keeps_scaled_defaults_compact",
@@ -3814,6 +3840,7 @@ static const TestCase kAllTests[] = {
      &test_wave_channel_reset_scale_offset_preserves_label_and_ratio},
     {"wave_channel_reset_scale_preserves_offset", &test_wave_channel_reset_scale_preserves_offset},
     {"wave_offset_reset_uses_protocol_default_only", &test_wave_offset_reset_uses_protocol_default_only},
+    {"wave_mouse_y_offset_drag_mode_gate", &test_wave_mouse_y_offset_drag_mode_gate},
     {"raw_capture_file_roundtrip", &test_raw_capture_file_roundtrip},
     {"raw_capture_file_plot_setup_roundtrip", &test_raw_capture_file_plot_setup_roundtrip},
     {"raw_capture_file_plot_setup_rejects_bad_fields", &test_raw_capture_file_plot_setup_rejects_bad_fields},

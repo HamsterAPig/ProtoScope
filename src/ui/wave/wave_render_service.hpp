@@ -205,6 +205,7 @@ void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& sn
 
 bool updateActiveChannelScale(plot::WaveDockState& wave, double factor);
 bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta);
+bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown);
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,

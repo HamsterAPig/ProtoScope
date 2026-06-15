@@ -2329,6 +2329,24 @@ void test_wave_offset_reset_uses_protocol_default_only()
     require(wave.channelOverrides[0].labelOverridden, "label override 应保留");
 }
 
+void test_wave_mouse_y_offset_drag_mode_gate()
+{
+    using protoscope::plot::WaveMouseYOffsetDragMode;
+
+    require(protoscope::ui::allowsMouseYOffsetDrag(WaveMouseYOffsetDragMode::Direct, false),
+            "direct 模式不按 Shift 也应允许鼠标写回 Y 偏移");
+    require(protoscope::ui::allowsMouseYOffsetDrag(WaveMouseYOffsetDragMode::Direct, true),
+            "direct 模式按住 Shift 仍应允许鼠标写回 Y 偏移");
+    require(!protoscope::ui::allowsMouseYOffsetDrag(WaveMouseYOffsetDragMode::Shift, false),
+            "shift 模式不按 Shift 不应允许鼠标写回 Y 偏移");
+    require(protoscope::ui::allowsMouseYOffsetDrag(WaveMouseYOffsetDragMode::Shift, true),
+            "shift 模式按住 Shift 应允许鼠标写回 Y 偏移");
+    require(!protoscope::ui::allowsMouseYOffsetDrag(WaveMouseYOffsetDragMode::Disabled, false),
+            "disabled 模式不按 Shift 不应允许鼠标写回 Y 偏移");
+    require(!protoscope::ui::allowsMouseYOffsetDrag(WaveMouseYOffsetDragMode::Disabled, true),
+            "disabled 模式按住 Shift 也不应允许鼠标写回 Y 偏移");
+}
+
 void test_raw_capture_file_roundtrip()
 {
     const ScopedTempFile tempFile("protoscope-roundtrip");

@@ -217,6 +217,12 @@ namespace {
         {plot::WaveCursorExtremeSnapPolicy::ViewportZone, "viewport_zone"},
     }};
 
+    constexpr std::array<EnumNamePair<plot::WaveMouseYOffsetDragMode>, 3> kWaveMouseYOffsetDragModeNames{{
+        {plot::WaveMouseYOffsetDragMode::Direct, "direct"},
+        {plot::WaveMouseYOffsetDragMode::Shift, "shift"},
+        {plot::WaveMouseYOffsetDragMode::Disabled, "disabled"},
+    }};
+
     constexpr std::array<EnumNamePair<GuiWaveFullscreenMode>, 2> kWaveFullscreenModeNames{{
         {GuiWaveFullscreenMode::Focus, "focus"},
         {GuiWaveFullscreenMode::Overlay, "overlay"},
@@ -313,6 +319,17 @@ namespace {
     const char* toWaveCursorExtremeSnapPolicyText(const plot::WaveCursorExtremeSnapPolicy policy)
     {
         return enumToText(policy, kWaveCursorExtremeSnapPolicyNames, "nearest_waveform");
+    }
+
+    plot::WaveMouseYOffsetDragMode parseWaveMouseYOffsetDragMode(const std::string& value,
+                                                                 plot::WaveMouseYOffsetDragMode fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveMouseYOffsetDragModeNames, fallback);
+    }
+
+    const char* toWaveMouseYOffsetDragModeText(const plot::WaveMouseYOffsetDragMode mode)
+    {
+        return enumToText(mode, kWaveMouseYOffsetDragModeNames, "direct");
     }
 
     GuiWaveFullscreenMode parseWaveFullscreenMode(const std::string& value, GuiWaveFullscreenMode fallback)
@@ -430,6 +447,11 @@ namespace {
                                     "cursor_extreme_snap_policy",
                                     toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy)),
             config.gui.wave.cursorExtremeSnapPolicy);
+        config.gui.wave.mouseYOffsetDragMode = parseWaveMouseYOffsetDragMode(
+            readScalar<std::string>(wave,
+                                    "mouse_y_offset_drag_mode",
+                                    toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode)),
+            config.gui.wave.mouseYOffsetDragMode);
         config.gui.wave.zoomSelectionAutoExit =
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
         config.gui.wave.maxRenderPointsPerChannel =
@@ -757,6 +779,8 @@ namespace {
         gui["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
         gui["wave"]["cursor_extreme_snap_policy"] =
             toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
+        gui["wave"]["mouse_y_offset_drag_mode"] =
+            toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode);
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
         gui["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
@@ -1245,6 +1269,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.channelCardWidthMode = config.gui.wave.channelCardWidthMode;
     wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
     wave.xAxisDoubleClickAction = config.gui.wave.xAxisDoubleClickAction;
+    wave.mouseYOffsetDragMode = config.gui.wave.mouseYOffsetDragMode;
     wave.zoomSelectionAutoExit = config.gui.wave.zoomSelectionAutoExit;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
@@ -1283,6 +1308,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
     config.gui.wave.xAxisDoubleClickAction = dockStore.waveState().view.xAxisDoubleClickAction;
+    config.gui.wave.mouseYOffsetDragMode = dockStore.waveState().view.mouseYOffsetDragMode;
     config.gui.wave.zoomSelectionAutoExit = dockStore.waveState().view.zoomSelectionAutoExit;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;

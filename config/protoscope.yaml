@@ -32,6 +32,7 @@ gui:
     x_axis_double_click_action: fit_full_history
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
+    mouse_y_offset_drag_mode: direct
     zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22

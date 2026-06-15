@@ -88,6 +88,12 @@ struct ActiveBitLaneState {
     std::size_t laneIndex{0};
 };
 
+enum class WaveMouseYOffsetDragMode {
+    Direct,
+    Shift,
+    Disabled,
+};
+
 struct WaveViewState {
     bool autoFollowLatest{true};
     bool pauseAutoFollowOnInteraction{true};
@@ -121,6 +127,7 @@ struct WaveViewState {
     std::size_t referenceChannelIndex{0};
     WaveMeasurementReferenceMode referenceMode{WaveMeasurementReferenceMode::Channel};
     WaveMeasurementSelection measurement{};
+    WaveMouseYOffsetDragMode mouseYOffsetDragMode{WaveMouseYOffsetDragMode::Direct};
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};

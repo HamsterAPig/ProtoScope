@@ -72,6 +72,19 @@ bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channel
     return true;
 }
 
+bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown)
+{
+    switch (mode) {
+    case plot::WaveMouseYOffsetDragMode::Direct:
+        return true;
+    case plot::WaveMouseYOffsetDragMode::Shift:
+        return shiftDown;
+    case plot::WaveMouseYOffsetDragMode::Disabled:
+        return false;
+    }
+    return true;
+}
+
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
@@ -113,7 +126,8 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
         return changed;
     }
 
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    const bool canDragYOffset = allowsMouseYOffsetDrag(view.mouseYOffsetDragMode, io.KeyShift);
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && canDragYOffset) {
         const auto bitLayout =
             buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
         if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
@@ -152,13 +166,13 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     applyViewport(view, viewport);
     changed = true;
 
-    if (view.activeBitYOffsetDrag) {
+    if (canDragYOffset && view.activeBitYOffsetDrag) {
         const auto bitLayout =
             buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
         const auto activeLane = findBitLaneAtPlotValue(bitLayout, currentPlot.y, std::abs(limits.Y.Max - limits.Y.Min));
         const double lanePixelPitch = activeLane.has_value() ? (std::max)(activeLane->lane.lanePixelPitch, 1.0F) : 1.0F;
         changed = updateActiveBitYOffset(wave, static_cast<double>(io.MouseDelta.y) / lanePixelPitch) || changed;
-    } else if (view.activeChannelOffsetDrag) {
+    } else if (canDragYOffset && view.activeChannelOffsetDrag) {
         changed = updateActiveChannelOffset(wave, currentPlot.y - previousPlot.y) || changed;
     }
     return changed;
