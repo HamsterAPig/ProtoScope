@@ -23,6 +23,7 @@ protocols:
       show_points_when_sparse: true
       show_axis_labels: false
       show_hover_readout: true
+      prefer_waveform_hover_readout: true
       show_cursors: true
       show_measurement_overlay: true
       phosphor_glow_enabled: true

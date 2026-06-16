@@ -1416,7 +1416,7 @@ void test_bit_hover_readout_tracks_steady_level()
     require(!layout.lanes.empty(), "应生成 bit hover lane");
 
     const auto high = protoscope::ui::findHoverReadout(
-        snapshot, displayData, {0}, layout, 2.4, layout.lanes[0].centerY, 0.2, 10.0);
+        snapshot, displayData, {0}, layout, 2.4, layout.lanes[0].centerY, 0.2, 0.2, true);
     require(high.has_value(), "高电平平台区间应有 bit hover 读数");
     require(high->kind == protoscope::ui::HoverReadoutKind::BitLane, "平台区间 hover 应识别为 bit lane");
     require(high->readout.bit.has_value() && high->readout.bit->value, "高电平平台应读取为 1");
@@ -1424,7 +1424,7 @@ void test_bit_hover_readout_tracks_steady_level()
     require(std::abs(high->readout.displayValue - layout.lanes[0].highY) < 1e-12, "bit hover 高电平应锚定 highY");
 
     const auto low = protoscope::ui::findHoverReadout(
-        snapshot, displayData, {0}, layout, 0.5, layout.lanes[0].centerY, 0.2, 10.0);
+        snapshot, displayData, {0}, layout, 0.5, layout.lanes[0].centerY, 0.2, 0.2, true);
     require(low.has_value(), "低电平平台区间应有 bit hover 读数");
     require(low->readout.bit.has_value() && !low->readout.bit->value, "低电平平台应读取为 0");
     require(std::abs(low->readout.displayValue - layout.lanes[0].lowY) < 1e-12, "bit hover 低电平应锚定 lowY");
@@ -1467,10 +1467,99 @@ void test_bit_hover_readout_uses_sample_frequency_time_axis()
     require(!layout.lanes.empty(), "采样频率时间轴应生成 bit lane");
 
     const auto readout = protoscope::ui::findHoverReadout(
-        snapshot, displayData, {0}, layout, 0.0024, layout.lanes[0].centerY, 0.001, 10.0);
+        snapshot, displayData, {0}, layout, 0.0024, layout.lanes[0].centerY, 0.001, 0.2, true);
     require(readout.has_value(), "采样频率时间轴平台区间应有 bit hover 读数");
     require(readout->readout.bit.has_value() && readout->readout.bit->value, "应按显示时间轴映射到源样本 bit 值");
     require(readout->readout.sampleIndex == 2, "bit hover 应映射回对应源样本索引");
+}
+
+void test_bit_hover_readout_prefers_same_channel_waveform_when_enabled()
+{
+    std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 1.0, .value = 15.0},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 10.05}},
+        .actualValues = {15.0},
+    });
+
+    const ImPlotRect limits(0.0, 2.0, -1.0, 2.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 200.0F);
+    const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
+
+    const auto readout = protoscope::ui::findHoverReadout(snapshot, displayData, {0}, layout, 1.0, 10.05, 0.2, 0.2, true);
+    require(readout.has_value(), "开启 waveform 优先时 bit-display 通道也应能命中普通波形 hover");
+    require(readout->kind == protoscope::ui::HoverReadoutKind::Waveform, "同通道普通波形应优先于 bit hover");
+    require(readout->readout.channelIndex == 0, "同一 bit-display 通道的普通波形读数不应被排除");
+}
+
+void test_bit_hover_readout_prefers_waveform_in_mixed_view_when_enabled()
+{
+    std::vector<protoscope::plot::WaveSample> bitSamples{
+        {.time = 1.0, .value = 15.0},
+    };
+    std::vector<protoscope::plot::WaveSample> waveSamples{
+        {.time = 1.0, .value = 0.0},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "BITS",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = bitSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = bitSamples.size(),
+        .samples = bitSamples.data(),
+    });
+    snapshot.channels.push_back({
+        .label = "WAVE",
+        .unit = "V",
+        .totalSamples = waveSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = waveSamples.size(),
+        .samples = waveSamples.data(),
+    });
+
+    const ImPlotRect limits(0.0, 2.0, -1.0, 2.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 200.0F);
+    const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0, 1}, limits, plotPos, plotSize);
+    require(!layout.lanes.empty(), "混合场景应生成 bit lane");
+
+    waveSamples[0].value = layout.lanes[0].centerY;
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 15.0}},
+        .actualValues = {15.0},
+    });
+    displayData.channels.push_back({
+        .samples = waveSamples,
+        .actualValues = {waveSamples[0].value},
+    });
+
+    const auto preferred = protoscope::ui::findHoverReadout(
+        snapshot, displayData, {0, 1}, layout, 1.0, layout.lanes[0].centerY, 0.2, 0.2, true);
+    require(preferred.has_value(), "开启 waveform 优先时混合场景应有普通波形 hover");
+    require(preferred->kind == protoscope::ui::HoverReadoutKind::Waveform, "混合场景开启配置后 bit 不应抢占读数");
+    require(preferred->readout.channelIndex == 1, "混合场景应命中普通波形通道");
+
+    const auto bitFirst = protoscope::ui::findHoverReadout(
+        snapshot, displayData, {0, 1}, layout, 1.0, layout.lanes[0].centerY, 0.2, 0.2, false);
+    require(bitFirst.has_value(), "关闭 waveform 优先时应恢复 bit-first 行为");
+    require(bitFirst->kind == protoscope::ui::HoverReadoutKind::BitLane, "关闭配置后 bit lane 应优先");
 }
 
 void test_bit_hover_readout_falls_back_to_waveform_outside_lane()
@@ -1515,7 +1604,8 @@ void test_bit_hover_readout_falls_back_to_waveform_outside_lane()
     const ImVec2 plotSize(400.0F, 200.0F);
     const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0, 1}, limits, plotPos, plotSize);
 
-    const auto readout = protoscope::ui::findHoverReadout(snapshot, displayData, {0, 1}, layout, 1.0, 10.05, 0.2, 1.0);
+    const auto readout =
+        protoscope::ui::findHoverReadout(snapshot, displayData, {0, 1}, layout, 1.0, 10.05, 0.2, 1.0, false);
     require(readout.has_value(), "鼠标不在 bit lane 内时应回退普通波形 hover");
     require(readout->kind == protoscope::ui::HoverReadoutKind::Waveform, "回退读数应是普通波形");
     require(readout->readout.channelIndex == 1, "bit-display 通道不应以原始 y 值抢占普通 hover");

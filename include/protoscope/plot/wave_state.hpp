@@ -103,6 +103,7 @@ struct WaveViewState {
     bool showChannelLegend{true};
     bool showFftLegend{true};
     bool showHoverReadout{true};
+    bool preferWaveformHoverReadout{true};
     bool showCursors{true};
     bool showMeasurementOverlay{true};
     bool phosphorGlowEnabled{true};

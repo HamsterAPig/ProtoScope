@@ -617,7 +617,15 @@ void handleHoverReadout(plot::WaveViewState& view,
         return;
     }
     const auto hovered = findHoverReadout(
-        snapshot, displayData, visibleChannelIndices, bitLayout, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
+        snapshot,
+        displayData,
+        visibleChannelIndices,
+        bitLayout,
+        mousePos.x,
+        mousePos.y,
+        timeSnapDistance,
+        valueSnapDistance,
+        view.preferWaveformHoverReadout);
     if (!hovered.has_value() || hovered->readout.channelIndex >= snapshot.channels.size()) {
         return;
     }

@@ -324,6 +324,7 @@ namespace {
         node["show_channel_legend"] = view.showChannelLegend;
         node["show_fft_legend"] = view.showFftLegend;
         node["show_hover_readout"] = view.showHoverReadout;
+        node["prefer_waveform_hover_readout"] = view.preferWaveformHoverReadout;
         node["show_cursors"] = view.showCursors;
         node["show_measurement_overlay"] = view.showMeasurementOverlay;
         node["phosphor_glow_enabled"] = view.phosphorGlowEnabled;
@@ -482,6 +483,8 @@ namespace {
         view.showChannelLegend = node["show_channel_legend"].as<bool>(view.showChannelLegend);
         view.showFftLegend = node["show_fft_legend"].as<bool>(view.showFftLegend);
         view.showHoverReadout = node["show_hover_readout"].as<bool>(view.showHoverReadout);
+        view.preferWaveformHoverReadout =
+            node["prefer_waveform_hover_readout"].as<bool>(view.preferWaveformHoverReadout);
         view.showCursors = node["show_cursors"].as<bool>(view.showCursors);
         view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);
         view.phosphorGlowEnabled = node["phosphor_glow_enabled"].as<bool>(view.phosphorGlowEnabled);

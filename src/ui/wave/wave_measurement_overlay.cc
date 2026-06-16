@@ -182,7 +182,8 @@ std::optional<plot::CursorReadout> findCurrentBitLaneReadout(const plot::WaveSna
 
 std::vector<std::size_t> waveformHoverChannels(const plot::WaveSnapshot& snapshot,
                                                const plot::WaveDisplayData& displayData,
-                                               const std::vector<std::size_t>& visibleChannelIndices)
+                                               const std::vector<std::size_t>& visibleChannelIndices,
+                                               bool includeBitDisplayChannels)
 {
     std::vector<std::size_t> channels;
     channels.reserve(visibleChannelIndices.size());
@@ -190,12 +191,38 @@ std::vector<std::size_t> waveformHoverChannels(const plot::WaveSnapshot& snapsho
         if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
             continue;
         }
-        if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+        if (!includeBitDisplayChannels && bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
             continue;
         }
         channels.push_back(channelIndex);
     }
     return channels;
+}
+
+bool hasVisibleBitLane(const BitLaneLayout& bitLayout, const std::vector<std::size_t>& visibleChannelIndices)
+{
+    for (const auto& lane : bitLayout.lanes) {
+        if (std::find(visibleChannelIndices.begin(), visibleChannelIndices.end(), lane.parentChannelIndex) !=
+            visibleChannelIndices.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool hasVisibleNonBitWaveformChannel(const plot::WaveSnapshot& snapshot,
+                                     const plot::WaveDisplayData& displayData,
+                                     const std::vector<std::size_t>& visibleChannelIndices)
+{
+    for (const std::size_t channelIndex : visibleChannelIndices) {
+        if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
+            continue;
+        }
+        if (!bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool visibleChannelContains(const std::vector<std::size_t>& visibleChannelIndices, std::size_t channelIndex)
@@ -213,13 +240,18 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
                                              double time,
                                              double plotY,
                                              double maxTimeDistance,
-                                             double maxValueDistance)
+                                             double maxValueDistance,
+                                             bool preferWaveformHoverReadout)
 {
     if (visibleChannelIndices.empty()) {
         return std::nullopt;
     }
 
-    if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance)) {
+    const auto findBitLaneReadout = [&]() -> std::optional<HoverReadout> {
+        const auto bitLane = findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance);
+        if (!bitLane.has_value()) {
+            return std::nullopt;
+        }
         if (!visibleChannelContains(visibleChannelIndices, bitLane->lane.parentChannelIndex)) {
             return std::nullopt;
         }
@@ -227,15 +259,35 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
             return HoverReadout{.kind = HoverReadoutKind::BitLane, .readout = *readout};
         }
         return std::nullopt;
+    };
+
+    const auto findWaveformReadout = [&](bool includeBitDisplayChannels) -> std::optional<HoverReadout> {
+        const auto waveformChannels =
+            waveformHoverChannels(snapshot, displayData, visibleChannelIndices, includeBitDisplayChannels);
+        const auto readout = plot::findNearestDisplayPointInChannels(
+            displayData, waveformChannels, time, plotY, maxTimeDistance, maxValueDistance);
+        if (!readout.has_value()) {
+            return std::nullopt;
+        }
+        return HoverReadout{.kind = HoverReadoutKind::Waveform, .readout = *readout};
+    };
+
+    if (preferWaveformHoverReadout && hasVisibleBitLane(bitLayout, visibleChannelIndices)) {
+        // 核心流程：混合视图下先让普通波形读数仲裁，关闭配置后才恢复 bit-first 旧行为。
+        const bool hasSeparateWaveformChannel =
+            hasVisibleNonBitWaveformChannel(snapshot, displayData, visibleChannelIndices);
+        const auto waveformReadout = findWaveformReadout(true);
+        if (hasSeparateWaveformChannel || waveformReadout.has_value()) {
+            return waveformReadout;
+        }
+        return findBitLaneReadout();
     }
 
-    const auto waveformChannels = waveformHoverChannels(snapshot, displayData, visibleChannelIndices);
-    const auto readout =
-        plot::findNearestDisplayPointInChannels(displayData, waveformChannels, time, plotY, maxTimeDistance, maxValueDistance);
-    if (!readout.has_value()) {
-        return std::nullopt;
+    if (const auto bitLaneReadout = findBitLaneReadout()) {
+        return bitLaneReadout;
     }
-    return HoverReadout{.kind = HoverReadoutKind::Waveform, .readout = *readout};
+
+    return findWaveformReadout(false);
 }
 
 bool bitLaneMeasurementActive(const plot::WaveViewState& view)

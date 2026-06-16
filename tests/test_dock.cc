@@ -490,6 +490,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.buffer.configureChannels(1);
     waveA.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 1.0, .offset = 0.0});
     waveA.view.showHoverReadout = false;
+    waveA.view.preferWaveformHoverReadout = false;
     waveA.view.sampleFrequencyHz = 2048.0;
     waveA.view.sampleFrequencyInput = "2048";
     waveA.view.fft.enabled = true;
@@ -591,6 +592,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
     require(restoredA.legendCollapsed, "proto_a 应恢复自己的图例折叠状态");
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
+    require(!restoredA.view.preferWaveformHoverReadout, "proto_a 应恢复自己的悬浮读数优先级策略");
     require(restoredA.analysisMarkers.size() == 1 && restoredA.analysisMarkers[0].label == "标记A",
             "proto_a 应恢复自己的分析标记");
 
@@ -654,6 +656,26 @@ void test_wave_protocol_state_cursor_extreme_snap_policy()
     require(
         legacyRestored.view.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform,
         "缺失游标极值吸附策略时应使用 nearest_waveform 默认值");
+}
+
+void test_wave_protocol_state_prefer_waveform_hover_readout_defaults_true()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.view.preferWaveformHoverReadout = false;
+
+    const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
+    require(!encoded["prefer_waveform_hover_readout"].as<bool>(),
+            "协议 UI 状态应写出 waveform hover 优先级策略");
+
+    protoscope::plot::WaveDockState restored;
+    protoscope::ui::decodeWaveProtocolState(encoded, restored);
+    require(!restored.view.preferWaveformHoverReadout, "协议 UI 状态应恢复 false 策略");
+
+    const auto legacy = YAML::Load("show_hover_readout: true\n");
+    protoscope::plot::WaveDockState legacyRestored;
+    legacyRestored.view.preferWaveformHoverReadout = true;
+    protoscope::ui::decodeWaveProtocolState(legacy, legacyRestored);
+    require(legacyRestored.view.preferWaveformHoverReadout, "旧状态缺字段时应保持默认 true");
 }
 
 void test_dock_visibility_state_isolated_by_protocol_key()
