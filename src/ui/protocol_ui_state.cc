@@ -84,6 +84,23 @@ namespace {
                                         : plot::WaveCursorExtremeSnapPolicy::NearestWaveform;
     }
 
+    std::string bitDisplayReadoutPolicyName(plot::WaveBitDisplayReadoutPolicy policy)
+    {
+        switch (policy) {
+            case plot::WaveBitDisplayReadoutPolicy::MixedNearest:
+                return "mixed_nearest";
+            case plot::WaveBitDisplayReadoutPolicy::ExplicitActivation:
+                return "explicit_activation";
+        }
+        return "mixed_nearest";
+    }
+
+    plot::WaveBitDisplayReadoutPolicy parseBitDisplayReadoutPolicy(const std::string& value)
+    {
+        return value == "explicit_activation" ? plot::WaveBitDisplayReadoutPolicy::ExplicitActivation
+                                              : plot::WaveBitDisplayReadoutPolicy::MixedNearest;
+    }
+
     std::string measurementReferenceModeName(plot::WaveMeasurementReferenceMode mode)
     {
         return mode == plot::WaveMeasurementReferenceMode::ManualValue ? "manual_value" : "channel";
@@ -325,6 +342,7 @@ namespace {
         node["show_fft_legend"] = view.showFftLegend;
         node["show_hover_readout"] = view.showHoverReadout;
         node["prefer_waveform_hover_readout"] = view.preferWaveformHoverReadout;
+        node["bit_display_readout_policy"] = bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy);
         node["show_cursors"] = view.showCursors;
         node["show_measurement_overlay"] = view.showMeasurementOverlay;
         node["phosphor_glow_enabled"] = view.phosphorGlowEnabled;
@@ -485,6 +503,8 @@ namespace {
         view.showHoverReadout = node["show_hover_readout"].as<bool>(view.showHoverReadout);
         view.preferWaveformHoverReadout =
             node["prefer_waveform_hover_readout"].as<bool>(view.preferWaveformHoverReadout);
+        view.bitDisplayReadoutPolicy = parseBitDisplayReadoutPolicy(
+            node["bit_display_readout_policy"].as<std::string>(bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy)));
         view.showCursors = node["show_cursors"].as<bool>(view.showCursors);
         view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);
         view.phosphorGlowEnabled = node["phosphor_glow_enabled"].as<bool>(view.phosphorGlowEnabled);

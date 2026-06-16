@@ -625,7 +625,9 @@ void handleHoverReadout(plot::WaveViewState& view,
         mousePos.y,
         timeSnapDistance,
         valueSnapDistance,
-        view.preferWaveformHoverReadout);
+        view.preferWaveformHoverReadout,
+        view.bitDisplayReadoutPolicy,
+        activeBitLaneVisible(view, bitLayout));
     if (!hovered.has_value() || hovered->readout.channelIndex >= snapshot.channels.size()) {
         return;
     }

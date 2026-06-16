@@ -28,6 +28,11 @@ enum class WaveCursorExtremeSnapPolicy {
     ViewportZone,
 };
 
+enum class WaveBitDisplayReadoutPolicy {
+    MixedNearest,
+    ExplicitActivation,
+};
+
 enum class WaveMeasurementReferenceMode {
     Channel,
     ManualValue,
@@ -104,6 +109,7 @@ struct WaveViewState {
     bool showFftLegend{true};
     bool showHoverReadout{true};
     bool preferWaveformHoverReadout{true};
+    WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy{WaveBitDisplayReadoutPolicy::MixedNearest};
     bool showCursors{true};
     bool showMeasurementOverlay{true};
     bool phosphorGlowEnabled{true};

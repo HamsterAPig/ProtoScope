@@ -662,20 +662,27 @@ void test_wave_protocol_state_prefer_waveform_hover_readout_defaults_true()
 {
     protoscope::plot::WaveDockState wave;
     wave.view.preferWaveformHoverReadout = false;
+    wave.view.bitDisplayReadoutPolicy = protoscope::plot::WaveBitDisplayReadoutPolicy::ExplicitActivation;
 
     const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
     require(!encoded["prefer_waveform_hover_readout"].as<bool>(),
             "协议 UI 状态应写出 waveform hover 优先级策略");
+    require(encoded["bit_display_readout_policy"].as<std::string>() == "explicit_activation",
+            "协议 UI 状态应写出 bit display 读数策略");
 
     protoscope::plot::WaveDockState restored;
     protoscope::ui::decodeWaveProtocolState(encoded, restored);
     require(!restored.view.preferWaveformHoverReadout, "协议 UI 状态应恢复 false 策略");
+    require(restored.view.bitDisplayReadoutPolicy == protoscope::plot::WaveBitDisplayReadoutPolicy::ExplicitActivation,
+            "协议 UI 状态应恢复 bit display 读数策略");
 
     const auto legacy = YAML::Load("show_hover_readout: true\n");
     protoscope::plot::WaveDockState legacyRestored;
     legacyRestored.view.preferWaveformHoverReadout = true;
     protoscope::ui::decodeWaveProtocolState(legacy, legacyRestored);
     require(legacyRestored.view.preferWaveformHoverReadout, "旧状态缺字段时应保持默认 true");
+    require(legacyRestored.view.bitDisplayReadoutPolicy == protoscope::plot::WaveBitDisplayReadoutPolicy::MixedNearest,
+            "旧状态缺 bit display 读数策略时应保持 mixed_nearest 默认值");
 }
 
 void test_dock_visibility_state_isolated_by_protocol_key()

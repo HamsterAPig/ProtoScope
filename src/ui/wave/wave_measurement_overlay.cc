@@ -182,8 +182,7 @@ std::optional<plot::CursorReadout> findCurrentBitLaneReadout(const plot::WaveSna
 
 std::vector<std::size_t> waveformHoverChannels(const plot::WaveSnapshot& snapshot,
                                                const plot::WaveDisplayData& displayData,
-                                               const std::vector<std::size_t>& visibleChannelIndices,
-                                               bool includeBitDisplayChannels)
+                                               const std::vector<std::size_t>& visibleChannelIndices)
 {
     std::vector<std::size_t> channels;
     channels.reserve(visibleChannelIndices.size());
@@ -191,7 +190,7 @@ std::vector<std::size_t> waveformHoverChannels(const plot::WaveSnapshot& snapsho
         if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
             continue;
         }
-        if (!includeBitDisplayChannels && bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+        if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
             continue;
         }
         channels.push_back(channelIndex);
@@ -210,25 +209,22 @@ bool hasVisibleBitLane(const BitLaneLayout& bitLayout, const std::vector<std::si
     return false;
 }
 
-bool hasVisibleNonBitWaveformChannel(const plot::WaveSnapshot& snapshot,
-                                     const plot::WaveDisplayData& displayData,
-                                     const std::vector<std::size_t>& visibleChannelIndices)
-{
-    for (const std::size_t channelIndex : visibleChannelIndices) {
-        if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
-            continue;
-        }
-        if (!bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool visibleChannelContains(const std::vector<std::size_t>& visibleChannelIndices, std::size_t channelIndex)
 {
     return std::find(visibleChannelIndices.begin(), visibleChannelIndices.end(), channelIndex) !=
            visibleChannelIndices.end();
+}
+
+bool bitReadoutCandidateAllowed(plot::WaveBitDisplayReadoutPolicy policy,
+                                const BitLaneLayout& bitLayout,
+                                double plotY,
+                                double maxValueDistance,
+                                bool activeBitLaneVisibleForReadout)
+{
+    if (policy == plot::WaveBitDisplayReadoutPolicy::MixedNearest) {
+        return true;
+    }
+    return activeBitLaneVisibleForReadout || findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
 }
 
 } // namespace
@@ -241,7 +237,9 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
                                              double plotY,
                                              double maxTimeDistance,
                                              double maxValueDistance,
-                                             bool preferWaveformHoverReadout)
+                                             bool preferWaveformHoverReadout,
+                                             plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy,
+                                             bool activeBitLaneVisibleForReadout)
 {
     if (visibleChannelIndices.empty()) {
         return std::nullopt;
@@ -261,9 +259,8 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
         return std::nullopt;
     };
 
-    const auto findWaveformReadout = [&](bool includeBitDisplayChannels) -> std::optional<HoverReadout> {
-        const auto waveformChannels =
-            waveformHoverChannels(snapshot, displayData, visibleChannelIndices, includeBitDisplayChannels);
+    const auto findWaveformReadout = [&]() -> std::optional<HoverReadout> {
+        const auto waveformChannels = waveformHoverChannels(snapshot, displayData, visibleChannelIndices);
         const auto readout = plot::findNearestDisplayPointInChannels(
             displayData, waveformChannels, time, plotY, maxTimeDistance, maxValueDistance);
         if (!readout.has_value()) {
@@ -272,22 +269,29 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
         return HoverReadout{.kind = HoverReadoutKind::Waveform, .readout = *readout};
     };
 
-    if (preferWaveformHoverReadout && hasVisibleBitLane(bitLayout, visibleChannelIndices)) {
-        // 核心流程：混合视图下先让普通波形读数仲裁，关闭配置后才恢复 bit-first 旧行为。
-        const bool hasSeparateWaveformChannel =
-            hasVisibleNonBitWaveformChannel(snapshot, displayData, visibleChannelIndices);
-        const auto waveformReadout = findWaveformReadout(true);
-        if (hasSeparateWaveformChannel || waveformReadout.has_value()) {
-            return waveformReadout;
-        }
-        return findBitLaneReadout();
+    const auto waveformReadout = findWaveformReadout();
+    std::optional<HoverReadout> bitLaneReadout;
+    if (hasVisibleBitLane(bitLayout, visibleChannelIndices) &&
+        bitReadoutCandidateAllowed(
+            bitDisplayReadoutPolicy, bitLayout, plotY, maxValueDistance, activeBitLaneVisibleForReadout)) {
+        bitLaneReadout = findBitLaneReadout();
     }
 
-    if (const auto bitLaneReadout = findBitLaneReadout()) {
+    if (waveformReadout.has_value() && bitLaneReadout.has_value()) {
+        const double waveformScore = normalizedSnapScore(
+            waveformReadout->readout, time, plotY, maxTimeDistance, maxValueDistance);
+        const double bitScore = normalizedSnapScore(bitLaneReadout->readout, time, plotY, maxTimeDistance, maxValueDistance);
+        if (bitScore < waveformScore || (!preferWaveformHoverReadout && bitScore <= waveformScore)) {
+            return bitLaneReadout;
+        }
+        return waveformReadout;
+    }
+
+    if (bitLaneReadout.has_value()) {
         return bitLaneReadout;
     }
 
-    return findWaveformReadout(false);
+    return waveformReadout;
 }
 
 bool bitLaneMeasurementActive(const plot::WaveViewState& view)
@@ -410,6 +414,51 @@ std::optional<SmartCursorSnap> findSmartCursorSnapForChannel(const plot::WaveDis
     return std::nullopt;
 }
 
+std::optional<SmartCursorSnap> findSmartCursorSnapByWaveformScope(const plot::WaveSnapshot& snapshot,
+                                                                  const plot::WaveDisplayData& displayData,
+                                                                  const plot::WaveViewState& view,
+                                                                  double time,
+                                                                  double mouseValue,
+                                                                  const ImPlotRect& limits,
+                                                                  double maxTimeDistance)
+{
+    if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
+        if (view.measurementChannelIndex >= snapshot.channels.size() ||
+            bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay)) {
+            return std::nullopt;
+        }
+        return findSmartCursorSnapForChannel(displayData,
+                                             view.measurementChannelIndex,
+                                             time,
+                                             mouseValue,
+                                             limits,
+                                             maxTimeDistance,
+                                             view.cursorExtremeSnapPolicy);
+    }
+
+    std::optional<SmartCursorSnap> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
+        if (channelIndex >= snapshot.channels.size() || bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            continue;
+        }
+        const auto candidate = findSmartCursorSnapForChannel(
+            displayData, channelIndex, time, mouseValue, limits, maxTimeDistance, view.cursorExtremeSnapPolicy);
+        if (!candidate.has_value()) {
+            continue;
+        }
+        const double timeDistance = std::abs(candidate->readout.time - time);
+        const double valueDistance =
+            std::isfinite(mouseValue) ? std::abs(candidate->readout.displayValue - mouseValue) : 0.0;
+        const double score = timeDistance * timeDistance + valueDistance * valueDistance;
+        if (!best.has_value() || score < bestScore) {
+            bestScore = score;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
 std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDisplayData& displayData,
                                                           const plot::WaveViewState& view,
                                                           double time,
@@ -456,15 +505,26 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveSnapsh
                                                           const ImPlotRect& limits,
                                                           double maxTimeDistance)
 {
-    if (activeBitLaneVisible(view, bitLayout)) {
-        const double maxValueDistance = std::abs(limits.Y.Max - limits.Y.Min) / 30.0;
+    const double maxValueDistance = std::abs(limits.Y.Max - limits.Y.Min) / 30.0;
+    const auto waveformSnap =
+        findSmartCursorSnapByWaveformScope(snapshot, displayData, view, time, mouseValue, limits, maxTimeDistance);
+    std::optional<SmartCursorSnap> bitSnap;
+    if (bitReadoutCandidateAllowed(
+            view.bitDisplayReadoutPolicy, bitLayout, mouseValue, maxValueDistance, activeBitLaneVisible(view, bitLayout))) {
         if (const auto transition =
                 findNearestBitTransition(snapshot, bitLayout, time, mouseValue, maxTimeDistance, maxValueDistance)) {
-            return SmartCursorSnap{.readout = *transition, .label = "Bit Edge"};
+            bitSnap = SmartCursorSnap{.readout = *transition, .label = "Bit Edge"};
         }
-        return std::nullopt;
     }
-    return findSmartCursorSnapByScope(displayData, view, time, mouseValue, limits, maxTimeDistance);
+
+    if (waveformSnap.has_value() && bitSnap.has_value()) {
+        const double waveformScore =
+            normalizedSnapScore(waveformSnap->readout, time, mouseValue, maxTimeDistance, maxValueDistance);
+        const double bitScore = normalizedSnapScore(bitSnap->readout, time, mouseValue, maxTimeDistance, maxValueDistance);
+        return bitScore < waveformScore ? bitSnap : waveformSnap;
+    }
+
+    return bitSnap.has_value() ? bitSnap : waveformSnap;
 }
 
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,

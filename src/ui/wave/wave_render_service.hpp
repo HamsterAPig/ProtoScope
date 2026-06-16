@@ -194,7 +194,10 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
                                              double plotY,
                                              double maxTimeDistance,
                                              double maxValueDistance,
-                                             bool preferWaveformHoverReadout = true);
+                                             bool preferWaveformHoverReadout = true,
+                                             plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy =
+                                                 plot::WaveBitDisplayReadoutPolicy::MixedNearest,
+                                             bool activeBitLaneVisibleForReadout = false);
 bool bitLaneMeasurementActive(const plot::WaveViewState& view);
 bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout);
 bool cursorPairUsesBitLanes(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);

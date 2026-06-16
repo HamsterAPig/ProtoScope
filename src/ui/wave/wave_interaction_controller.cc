@@ -529,6 +529,52 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
     return plot::findNearestDisplayByTimeAcrossChannels(displayData, time, maxTimeDistance);
 }
 
+std::vector<std::size_t> waveformCursorChannelsByScope(const plot::WaveSnapshot& snapshot,
+                                                       const plot::WaveDisplayData& displayData,
+                                                       const plot::WaveViewState& view)
+{
+    std::vector<std::size_t> channels;
+    if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
+        const std::size_t channelIndex = view.measurementChannelIndex;
+        if (channelIndex < snapshot.channels.size() && channelIndex < displayData.channels.size() &&
+            !bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            channels.push_back(channelIndex);
+        }
+        return channels;
+    }
+
+    channels.reserve(displayData.channels.size());
+    for (std::size_t channelIndex = 0; channelIndex < displayData.channels.size(); ++channelIndex) {
+        if (channelIndex >= snapshot.channels.size() || bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            continue;
+        }
+        channels.push_back(channelIndex);
+    }
+    return channels;
+}
+
+double cursorCandidateScore(const plot::CursorReadout& readout,
+                            double time,
+                            double plotY,
+                            double maxTimeDistance,
+                            double maxValueDistance)
+{
+    const double timeScore = maxTimeDistance > 0.0 ? std::abs(readout.time - time) / maxTimeDistance : 0.0;
+    const double valueScore = maxValueDistance > 0.0 ? std::abs(readout.displayValue - plotY) / maxValueDistance : 0.0;
+    return timeScore * timeScore + valueScore * valueScore;
+}
+
+bool bitCursorCandidateAllowed(const plot::WaveViewState& view,
+                               const BitLaneLayout& bitLayout,
+                               double plotY,
+                               double maxValueDistance)
+{
+    if (view.bitDisplayReadoutPolicy == plot::WaveBitDisplayReadoutPolicy::MixedNearest) {
+        return true;
+    }
+    return activeBitLaneVisible(view, bitLayout) || findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
+}
+
 std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnapshot& snapshot,
                                                             const plot::WaveDisplayData& displayData,
                                                             const plot::WaveViewState& view,
@@ -538,10 +584,28 @@ std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnap
                                                             double maxTimeDistance,
                                                             double maxValueDistance)
 {
-    if (activeBitLaneVisible(view, bitLayout)) {
-        return findNearestBitTransition(snapshot, bitLayout, time, plotY, maxTimeDistance, maxValueDistance);
+    std::optional<plot::CursorReadout> best;
+    double bestScore = std::numeric_limits<double>::infinity();
+
+    const auto waveformChannels = waveformCursorChannelsByScope(snapshot, displayData, view);
+    if (const auto waveform = plot::findNearestDisplayPointInChannels(
+            displayData, waveformChannels, time, plotY, maxTimeDistance, maxValueDistance)) {
+        best = waveform;
+        bestScore = cursorCandidateScore(*waveform, time, plotY, maxTimeDistance, maxValueDistance);
     }
-    return findNearestDisplayByScope(displayData, view, time, maxTimeDistance);
+
+    if (bitCursorCandidateAllowed(view, bitLayout, plotY, maxValueDistance)) {
+        if (const auto bitTransition =
+                findNearestBitTransition(snapshot, bitLayout, time, plotY, maxTimeDistance, maxValueDistance)) {
+            const double bitScore =
+                cursorCandidateScore(*bitTransition, time, plotY, maxTimeDistance, maxValueDistance);
+            if (!best.has_value() || bitScore < bestScore) {
+                best = bitTransition;
+            }
+        }
+    }
+
+    return best;
 }
 
 bool currentPlotItemVisible(const std::string& label)
