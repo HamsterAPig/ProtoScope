@@ -548,7 +548,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             spec.LineWeight = lineWidth;
             applySavedLegendVisibility(wave, channel.label);
             ImPlot::PlotLineG(
-                channel.label.c_str(), &waveSampleGetter, &payload, static_cast<int>(rawVisibleCount), spec);
+                channel.label.c_str(), reinterpret_cast<ImPlotGetter>(&waveSampleGetter), &payload, static_cast<int>(rawVisibleCount), spec);
             if (!currentPlotItemVisible(channel.label)) {
                 continue;
             }
@@ -562,7 +562,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
                 pointSpec.MarkerLineColor = color;
                 pointSpec.LineWeight = 0.0F;
                 ImPlot::PlotScatterG((channel.label + " samples").c_str(),
-                                     &waveSampleGetter,
+                                     reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
                                      &payload,
                                      static_cast<int>(rawVisibleCount),
                                      pointSpec);

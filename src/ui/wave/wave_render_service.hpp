@@ -146,9 +146,9 @@ RenderBudget makeRenderBudget(const plot::WaveViewState& view,
                               std::size_t channelCount,
                               std::size_t pixelWidth,
                               bool phosphorGlowEnabled);
-ImPlotPoint envelopeLineMinGetter(int index, void* data);
-ImPlotPoint envelopeLineMaxGetter(int index, void* data);
-ImPlotPoint waveSampleGetter(int index, void* data);
+ImPlotPoint envelopeLineMinGetter(int index, const void* data);
+ImPlotPoint envelopeLineMaxGetter(int index, const void* data);
+ImPlotPoint waveSampleGetter(int index, const void* data);
 std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::WaveSample>& samples,
                                                       double minTime,
                                                       double maxTime,

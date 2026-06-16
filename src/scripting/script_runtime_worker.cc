@@ -543,7 +543,7 @@ struct ScriptRuntimeWorker::Impl {
                 }
             }
             if (hasCommand) {
-                return std::move(command);
+                return command;
             }
 
 #ifndef __MINGW32__

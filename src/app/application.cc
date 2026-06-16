@@ -3326,7 +3326,8 @@ void Application::enqueueScriptPlotAppends(const std::vector<std::pair<std::size
 std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> Application::drainScriptPlotAppendsForPump(
     const std::size_t maxPlotAppends)
 {
-    ScriptPlotAppendDrainState drainState{.maxSelectedKeys = maxPlotAppends};
+    ScriptPlotAppendDrainState drainState{};
+    drainState.maxSelectedKeys = maxPlotAppends;
     while (!pendingScriptPlotAppends_.empty()) {
         auto append = takePendingScriptPlotAppend(pendingScriptPlotAppends_);
         drainScriptPlotAppendCandidate(drainState, std::move(append));

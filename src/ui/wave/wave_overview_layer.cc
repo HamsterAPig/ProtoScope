@@ -84,12 +84,12 @@ void drawOverviewWindow(plot::WaveViewState& view,
             spec.LineColor = color;
             spec.LineWeight = 1.0F;
             ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview min").c_str(),
-                              &envelopeLineMinGetter,
+                              reinterpret_cast<ImPlotGetter>(&envelopeLineMinGetter),
                               &payload,
                               static_cast<int>(overview.size()),
                               spec);
             ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview max").c_str(),
-                              &envelopeLineMaxGetter,
+                              reinterpret_cast<ImPlotGetter>(&envelopeLineMaxGetter),
                               &payload,
                               static_cast<int>(overview.size()),
                               spec);

@@ -749,7 +749,7 @@ FrameStreamParser::analyzeCandidateFrames(const CandidateMatch& candidate, const
     }
 
     if (needMore) {
-        return CandidateParseResult{.action = CandidateParseResult::Action::NeedMore};
+        return CandidateParseResult{};
     }
     return CandidateParseResult{
         .action = CandidateParseResult::Action::RecoverableError,
@@ -763,7 +763,10 @@ StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& b
                                               const StreamParseOptions& options)
 {
     if (bytes.empty()) {
-        return StreamParseBatch{.bufferSize = buffer_.size(), .bufferCapacity = buffer_.capacity()};
+        StreamParseBatch batch{};
+        batch.bufferSize = buffer_.size();
+        batch.bufferCapacity = buffer_.capacity();
+        return batch;
     }
 
     auto batch = appendIncomingBytes(bytes);
