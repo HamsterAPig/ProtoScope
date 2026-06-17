@@ -10,6 +10,7 @@
 
 #include "test_registry.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -1337,6 +1338,58 @@ void test_bit_layout_multiple_channels_with_y_offset()
     const double offsetDelta = offsetLayout.lanes[2].centerPixelY - offsetLayout.lanes[1].centerPixelY;
     require(std::abs(offsetDelta - static_cast<double>(offsetLayout.lanes[1].lanePixelPitch)) < 0.5,
             "bit_display y_offset 应保留为叠加 lane 的手动像素偏移");
+}
+
+void test_bit_lane_display_label_uses_simplified_bit_text()
+{
+    require(protoscope::ui::bitLaneDisplayLabel(0) == "bit 0", "bit lane 标签 0 应使用简化文本");
+    require(protoscope::ui::bitLaneDisplayLabel(15) == "bit 15", "bit lane 标签 15 应使用简化文本");
+}
+
+void test_bit_layout_16_and_8_bit_channels_share_absolute_rows()
+{
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "CH16",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 16, .yOffset = 0.0},
+    });
+    snapshot.channels.push_back({
+        .label = "CH8",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 8, .yOffset = 0.0},
+    });
+
+    const ImPlotRect limits(0.0, 1.0, -1.0, 1.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 400.0F);
+
+    const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0, 1}, limits, plotPos, plotSize);
+    require(layout.lanes.size() == 24, "16-bit CH + 8-bit CH 应保留每个父通道的 lane entry");
+
+    std::vector<bool> rowSeen(16, false);
+    std::vector<std::size_t> bitCounts(16, 0);
+    for (const auto& lane : layout.lanes) {
+        require(lane.bitIndex < 16, "混合 bit display 不应生成超过 16 的 bit index");
+        require(lane.rowIndex < 16, "混合 bit display 应只占用 16 个唯一行");
+        require(lane.rowIndex == lane.bitIndex, "first_bit=0 时 rowIndex 应与 bitIndex 对齐");
+        rowSeen[lane.rowIndex] = true;
+        ++bitCounts[lane.bitIndex];
+    }
+    for (std::size_t bitIndex = 0; bitIndex < 16; ++bitIndex) {
+        require(rowSeen[bitIndex], "16-bit CH 应覆盖 bit 0..15 的唯一行");
+        require(bitCounts[bitIndex] == (bitIndex < 8 ? 2U : 1U), "重叠 bit 应共享行但保留各自 lane entry");
+    }
+
+    for (std::size_t bitIndex = 0; bitIndex < 8; ++bitIndex) {
+        const auto first = std::ranges::find_if(layout.lanes, [bitIndex](const protoscope::ui::BitLaneLayoutEntry& lane) {
+            return lane.parentChannelIndex == 0 && lane.bitIndex == bitIndex;
+        });
+        const auto second = std::ranges::find_if(layout.lanes, [bitIndex](const protoscope::ui::BitLaneLayoutEntry& lane) {
+            return lane.parentChannelIndex == 1 && lane.bitIndex == bitIndex;
+        });
+        require(first != layout.lanes.end() && second != layout.lanes.end(), "bit 0..7 应同时包含两个父通道 lane");
+        require(first->rowIndex == second->rowIndex, "bit 0..7 的两个父通道 lane 应共享 rowIndex");
+        require(std::abs(first->centerPixelY - second->centerPixelY) < 0.5F, "bit 0..7 的两个父通道 lane 应纵向重叠");
+    }
 }
 
 void test_plot_snapshot_without_stats_keeps_ranges_and_samples()

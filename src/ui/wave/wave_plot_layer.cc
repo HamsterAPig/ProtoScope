@@ -381,40 +381,30 @@ namespace {
         return entry;
     }
 
-    void drawBitLaneLabels(const plot::ChannelView& channel,
-                           std::size_t channelIndex,
-                           const BitLaneLayout& bitLayout,
-                           const ImPlotRect& limits,
-                           ImU32 textColor)
+    void drawBitLaneLabels(const BitLaneLayout& bitLayout, const ImPlotRect& limits, ImU32 textColor)
     {
         auto* drawList = ImPlot::GetPlotDrawList();
         if (drawList == nullptr) {
             return;
         }
         const ImVec2 plotPos = ImPlot::GetPlotPos();
-        for (std::size_t laneIndex = 0; laneIndex < channel.bitDisplay.bitCount; ++laneIndex) {
-            const std::size_t bitIndex = channel.bitDisplay.firstBit + laneIndex;
-            double centerValue = 0.0;
-            for (const auto& layoutLane : bitLayout.lanes) {
-                if (layoutLane.parentChannelIndex == channelIndex && layoutLane.laneIndex == laneIndex) {
-                    centerValue = layoutLane.centerY;
-                    break;
-                }
+        std::vector<std::size_t> labeledRows;
+        labeledRows.reserve(bitLayout.lanes.size());
+        for (const auto& layoutLane : bitLayout.lanes) {
+            if (std::ranges::find(labeledRows, layoutLane.rowIndex) != labeledRows.end()) {
+                continue;
             }
-            const ImVec2 lanePixel = ImPlot::PlotToPixels(limits.X.Min, centerValue);
-            const std::string label = channel.label + "." + std::to_string(bitIndex);
+            labeledRows.push_back(layoutLane.rowIndex);
+            const ImVec2 lanePixel = ImPlot::PlotToPixels(limits.X.Min, layoutLane.centerY);
+            const std::string label = bitLaneDisplayLabel(layoutLane.bitIndex);
             drawList->AddText(
                 ImVec2(plotPos.x + 6.0F, lanePixel.y - ImGui::GetTextLineHeight() * 0.5F), textColor, label.c_str());
         }
     }
 
-    void drawBitRenderLanes(const plot::ChannelView& channel,
-                            std::size_t channelIndex,
-                            const plot::WaveDockState::BitRenderCacheEntry& entry,
-                            const BitLaneLayout& bitLayout,
+    void drawBitRenderLanes(const plot::WaveDockState::BitRenderCacheEntry& entry,
                             const ImVec4& color,
-                            float lineWidth,
-                            const ImPlotRect& limits)
+                            float lineWidth)
     {
         auto* drawList = ImPlot::GetPlotDrawList();
         if (drawList == nullptr) {
@@ -432,7 +422,6 @@ namespace {
                 drawList->AddLine(from, to, lineColor, lineWidth);
             }
         }
-        drawBitLaneLabels(channel, channelIndex, bitLayout, limits, labelColor);
     }
 
 } // namespace
@@ -522,7 +511,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             }
             view.lastRenderSourceSampleCount += entry.sourceSampleCount;
             view.lastRenderPointCount += renderedPoints;
-            drawBitRenderLanes(channel, channelIndex, entry, outBitLayout, color, lineWidth, limits);
+            drawBitRenderLanes(entry, color, lineWidth);
             continue;
         }
 
@@ -601,6 +590,10 @@ void renderWaveChannels(plot::WaveDockState& wave,
         } else {
             renderEnvelopeAsBars(envelope, color, lineWidth);
         }
+    }
+    if (!outBitLayout.lanes.empty()) {
+        const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.88F, 0.92F, 0.72F));
+        drawBitLaneLabels(outBitLayout, limits, labelColor);
     }
 }
 

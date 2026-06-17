@@ -416,20 +416,23 @@ void setupBitDisplayAxisTicks(const plot::WaveSnapshot& snapshot)
         channelIndices.push_back(channelIndex);
     }
     const auto bitRows = bitDisplayRowsForChannels(snapshot, channelIndices);
-    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
-        const auto& channel = snapshot.channels[channelIndex];
-        for (std::size_t laneIndex = 0; laneIndex < channel.bitDisplay.bitCount; ++laneIndex) {
-            const std::size_t bitIndex = channel.bitDisplay.firstBit + laneIndex;
-            const auto row = std::lower_bound(bitRows.begin(), bitRows.end(), bitIndex);
-            if (row == bitRows.end() || *row != bitIndex) {
+    for (std::size_t rowIndex = 0; rowIndex < bitRows.size(); ++rowIndex) {
+        const std::size_t bitIndex = bitRows[rowIndex];
+        std::optional<double> yOffset;
+        for (const auto& channel : snapshot.channels) {
+            if (bitIndex < channel.bitDisplay.firstBit ||
+                bitIndex >= channel.bitDisplay.firstBit + channel.bitDisplay.bitCount) {
                 continue;
             }
-            const double laneBase =
-                (static_cast<double>(std::distance(bitRows.begin(), row)) + channel.bitDisplay.yOffset) *
-                bitDisplayLanePitch();
-            ticks.push_back(laneBase + bitDisplayLaneHeight() * 0.5);
-            labels.push_back(channel.label + "." + std::to_string(bitIndex));
+            yOffset = channel.bitDisplay.yOffset;
+            break;
         }
+        if (!yOffset.has_value()) {
+            continue;
+        }
+        const double laneBase = (static_cast<double>(rowIndex) + *yOffset) * bitDisplayLanePitch();
+        ticks.push_back(laneBase + bitDisplayLaneHeight() * 0.5);
+        labels.push_back(bitLaneDisplayLabel(bitIndex));
     }
 
     std::vector<const char*> labelPointers;

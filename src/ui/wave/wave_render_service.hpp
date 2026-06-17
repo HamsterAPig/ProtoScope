@@ -166,6 +166,7 @@ ImVec4 fallbackChannelColor(std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelSpec& spec, std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelView& channel, std::size_t channelIndex);
 bool bitDisplayEnabled(const plot::BitDisplaySpec& spec);
+std::string bitLaneDisplayLabel(std::size_t bitIndex);
 double bitDisplayLanePitch();
 double bitDisplayLaneHeight();
 std::vector<std::size_t> bitDisplayRowsForChannels(const plot::WaveSnapshot& snapshot,

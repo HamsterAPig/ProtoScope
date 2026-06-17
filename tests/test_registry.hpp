@@ -180,6 +180,8 @@ void test_bit_display_cursor_excludes_same_channel_raw_waveform();
 void test_explicit_bit_readout_policy_keeps_waveform_when_bit_not_active();
 void test_bit_layout_independent_of_axis_range();
 void test_bit_layout_multiple_channels_with_y_offset();
+void test_bit_lane_display_label_uses_simplified_bit_text();
+void test_bit_layout_16_and_8_bit_channels_share_absolute_rows();
 void test_plot_snapshot_without_stats_keeps_ranges_and_samples();
 void test_plot_build_display_data_into_reuses_storage_and_matches_output();
 void test_plot_channel_ratio_and_formula_modes();

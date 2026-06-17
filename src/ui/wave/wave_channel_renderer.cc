@@ -113,6 +113,9 @@ ImVec4 channelColor(const plot::ChannelView& channel, const std::size_t channelI
 bool bitDisplayEnabled(const plot::BitDisplaySpec& spec)
 { return spec.enabled && spec.bitCount > 0 && spec.firstBit + spec.bitCount <= plot::kMaxBitDisplayCount; }
 
+std::string bitLaneDisplayLabel(const std::size_t bitIndex)
+{ return "bit " + std::to_string(bitIndex); }
+
 double bitDisplayLanePitch()
 { return 1.25; }
 
