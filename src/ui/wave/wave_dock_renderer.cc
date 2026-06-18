@@ -31,6 +31,11 @@ namespace protoscope::ui {
 namespace {
 
     constexpr float kTopToolbarHeight = 44.0F;
+    constexpr float kWaveToolsRailButtonWidth = 28.0F;
+    constexpr float kWaveToolsRailButtonHeight = 30.0F;
+    constexpr float kWaveToolsRailTopPadding = 8.0F;
+    constexpr float kWaveToolsRailButtonGap = 8.0F;
+    constexpr float kWaveToolsRailButtonRadius = 8.0F;
 
     ImGuiKey toImGuiKey(const ShortcutKey key)
     {
@@ -98,28 +103,128 @@ namespace {
         wave.toolsCollapsed = false;
     }
 
+    [[nodiscard]] float centeredItemXInCurrentWindow(float itemWidth)
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+
+        const float windowWidth = ImGui::GetWindowSize().x;
+        const float border = style.ChildBorderSize;
+
+        const float innerWidth = (std::max)(0.0F, windowWidth - border * 2.0F);
+        const float x = border + (std::max)(0.0F, (innerWidth - itemWidth) * 0.5F);
+
+        return std::floor(x);
+    }
+
+    void setNextRailItemCentered(float itemWidth)
+    {
+        ImGui::SetCursorPosX(centeredItemXInCurrentWindow(itemWidth));
+    }
+
+    void addRailVerticalSpace(float height)
+    {
+        if (height > 0.0F) {
+            ImGui::Dummy(ImVec2(1.0F, height));
+        }
+    }
+
+    [[nodiscard]] ImVec2 centeredTextPos(const ImVec2& itemMin, const ImVec2& itemMax, const char* label)
+    {
+        const ImVec2 textSize = ImGui::CalcTextSize(label, nullptr, true);
+
+        const ImVec2 itemSize(itemMax.x - itemMin.x, itemMax.y - itemMin.y);
+
+        return ImVec2(std::floor(itemMin.x + (std::max)(0.0F, itemSize.x - textSize.x) * 0.5F),
+                      std::floor(itemMin.y + (std::max)(0.0F, itemSize.y - textSize.y) * 0.5F));
+    }
+
+    bool drawRailToggleButton(const char* label, bool active, const char* tooltip, const ImVec2& size)
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+
+        ImGui::InvisibleButton("##rail_toggle_button", size);
+
+        const bool hovered = ImGui::IsItemHovered();
+        const bool held = ImGui::IsItemActive();
+        const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+
+        const ImVec2 itemMin = ImGui::GetItemRectMin();
+        const ImVec2 itemMax = ImGui::GetItemRectMax();
+
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+        ImU32 bgColor = ImGui::GetColorU32(ImGuiCol_Button);
+        ImU32 borderColor = ImGui::GetColorU32(ImGuiCol_Border);
+        ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+
+        if (active) {
+            bgColor = ImGui::GetColorU32(ImGuiCol_ButtonActive);
+            borderColor = ImGui::GetColorU32(ImGuiCol_HeaderActive);
+        } else if (held) {
+            bgColor = ImGui::GetColorU32(ImGuiCol_ButtonActive);
+        } else if (hovered) {
+            bgColor = ImGui::GetColorU32(ImGuiCol_ButtonHovered);
+        }
+
+        drawList->AddRectFilled(itemMin, itemMax, bgColor, kWaveToolsRailButtonRadius);
+
+        drawList->AddRect(itemMin, itemMax, borderColor, kWaveToolsRailButtonRadius);
+
+        const ImVec2 textPos = centeredTextPos(itemMin, itemMax, label);
+
+        drawList->AddText(textPos, textColor, label);
+
+        if (tooltip != nullptr && tooltip[0] != '\0' && hovered && ImGui::IsMouseHoveringRect(itemMin, itemMax) &&
+            ImGui::GetIO().MouseDelta.x == ImGui::GetIO().MouseDelta.x) {
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                ImGui::SetTooltip("%s", tooltip);
+            }
+        }
+
+        return clicked;
+    }
+
     bool drawToolsRailButton(plot::WaveDockState& wave,
                              plot::WaveToolsDrawer drawer,
                              const char* label,
                              const char* tooltip)
     {
         const bool active = !wave.toolsCollapsed && wave.activeToolsDrawer == drawer;
-        const float buttonWidth = (std::max)(24.0F, ImGui::GetContentRegionAvail().x);
+
+        constexpr ImVec2 buttonSize(kWaveToolsRailButtonWidth, kWaveToolsRailButtonHeight);
+
+        setNextRailItemCentered(buttonSize.x);
+
         ImGui::PushID(static_cast<int>(drawer));
-        const bool clicked = drawToolbarToggleButton(label, active, tooltip, ImVec2(buttonWidth, 30.0F));
+
+        const bool clicked = drawRailToggleButton(label, active, tooltip, buttonSize);
+
         ImGui::PopID();
+
         if (clicked) {
             openToolsDrawer(wave, drawer);
         }
+
         return clicked;
     }
 
     void drawToolsRail(plot::WaveDockState& wave)
     {
+        const ImGuiStyle& style = ImGui::GetStyle();
+
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x, kWaveToolsRailButtonGap));
+
+        addRailVerticalSpace(kWaveToolsRailTopPadding);
+
         drawToolsRailButton(wave, plot::WaveToolsDrawer::Main, "...", "主视图、FFT 与渲染设置。");
+
         drawToolsRailButton(wave, plot::WaveToolsDrawer::Cursor, "A", "游标吸附、锁定与定位设置。");
+
         drawToolsRailButton(wave, plot::WaveToolsDrawer::Measure, "dt", "双游标测量项与误差参考设置。");
+
         drawToolsRailButton(wave, plot::WaveToolsDrawer::View, PROTOSCOPE_ICON_EXPAND, "概览、图例与显示策略。");
+
+        ImGui::PopStyleVar();
     }
 
     void drawToolsDrawerResizeHandle(
@@ -926,15 +1031,26 @@ public:
         auto& wave = context.wave;
         const auto& config = *context.config;
         const auto& displayData = *context.renderFrame->displayData;
+        const auto& style = ImGui::GetStyle();
 
         ImGui::SameLine();
+
         const ImVec2 railPos = ImGui::GetCursorScreenPos();
+
+        ScopedStyleVars railStyle;
+        railStyle.push(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, style.WindowPadding.y));
+        railStyle.push(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, style.ItemSpacing.y));
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, style.WindowPadding.y));
+
         ImGui::BeginChild("##wave_tools_rail",
                           ImVec2(context.toolsWidth, context.availableHeight),
                           true,
-                          ImGuiWindowFlags_NoScrollbar);
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
         drawToolsRail(wave);
         ImGui::EndChild();
+        ImGui::PopStyleVar();
 
         if (!wave.toolsCollapsed && ImGui::IsKeyPressed(ImGuiKey_Escape) && !context.io.WantTextInput) {
             wave.toolsCollapsed = true;
@@ -944,26 +1060,32 @@ public:
             return;
         }
 
-        const auto& style = ImGui::GetStyle();
         wave.toolsExpandedWidth =
             (std::clamp)(wave.toolsExpandedWidth, wave.minToolsExpandedWidth, wave.maxToolsExpandedWidth);
-        const float contentLeft = railPos.x - style.ItemSpacing.x - context.contentWidth;
-        const float drawerRight = railPos.x - style.ItemSpacing.x;
-        const float drawerWidth = (std::min)(wave.toolsExpandedWidth, (std::max)(0.0F, context.contentWidth));
-        if (drawerWidth <= 0.0F || context.availableHeight <= 0.0F) {
+
+        const ToolsDrawerGeometry drawerGeometry = calculateToolsDrawerGeometry(
+            railPos, context.contentWidth, context.availableHeight, wave.toolsExpandedWidth, style.ItemSpacing.x);
+
+        if (!drawerGeometry.valid) {
             return;
         }
-        const ImVec2 drawerPos((std::max)(contentLeft, drawerRight - drawerWidth), railPos.y);
-        drawToolsDrawerResizeHandle(
-            wave, drawerPos, context.availableHeight, contentLeft, wave.contentToolsSplitterWidth);
+
+        drawToolsDrawerResizeHandle(wave,
+                                    drawerGeometry.pos,
+                                    context.availableHeight,
+                                    drawerGeometry.contentLeft,
+                                    wave.contentToolsSplitterWidth);
 
         bool drawerOpen = true;
-        std::string title = std::string(toolsDrawerTitle(wave.activeToolsDrawer)) + "##wave_tools_drawer";
-        ImGui::SetNextWindowPos(drawerPos, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(drawerWidth, context.availableHeight), ImGuiCond_Always);
-        const ImGuiWindowFlags drawerFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
-                                             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
-                                             ImGuiWindowFlags_NoCollapse;
+        const std::string title = std::string(toolsDrawerTitle(wave.activeToolsDrawer)) + "##wave_tools_drawer";
+
+        ImGui::SetNextWindowPos(drawerGeometry.pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(drawerGeometry.width, context.availableHeight), ImGuiCond_Always);
+
+        constexpr ImGuiWindowFlags drawerFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
+                                                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                                                 ImGuiWindowFlags_NoCollapse;
+
         if (ImGui::Begin(title.c_str(), &drawerOpen, drawerFlags)) {
             drawWaveToolsDrawer(context.application,
                                 wave,
@@ -973,11 +1095,100 @@ public:
                                 context.fullscreenActive,
                                 context.fullscreenToggleRequested);
         }
+
         ImGui::End();
 
         if (!drawerOpen) {
             wave.toolsCollapsed = true;
         }
+    }
+
+private:
+    static constexpr float kToolsRailButtonWidth = 28.0F;
+
+    class ScopedStyleVars final {
+    public:
+        ScopedStyleVars() = default;
+
+        ScopedStyleVars(const ScopedStyleVars&) = delete;
+        ScopedStyleVars& operator=(const ScopedStyleVars&) = delete;
+
+        ~ScopedStyleVars()
+        {
+            if (count_ > 0) {
+                ImGui::PopStyleVar(count_);
+            }
+        }
+
+        void push(ImGuiStyleVar idx, const ImVec2& value)
+        {
+            ImGui::PushStyleVar(idx, value);
+            ++count_;
+        }
+
+        void push(ImGuiStyleVar idx, float value)
+        {
+            ImGui::PushStyleVar(idx, value);
+            ++count_;
+        }
+
+    private:
+        int count_ = 0;
+    };
+
+    struct ToolsDrawerGeometry final {
+        ImVec2 pos{};
+        float width = 0.0F;
+        float contentLeft = 0.0F;
+        float right = 0.0F;
+        bool valid = false;
+    };
+
+    static float centeredOffset(float containerWidth, float itemWidth)
+    {
+        return std::floor((std::max)(0.0F, containerWidth - itemWidth) * 0.5F);
+    }
+
+    static void drawToolsRailCentered(plot::WaveDockState& wave)
+    {
+        const float railContentWidth = ImGui::GetContentRegionAvail().x;
+        const float indentX = centeredOffset(railContentWidth, kToolsRailButtonWidth);
+
+        if (indentX > 0.0F) {
+            ImGui::Indent(indentX);
+        }
+
+        drawToolsRail(wave);
+
+        if (indentX > 0.0F) {
+            ImGui::Unindent(indentX);
+        }
+    }
+
+    static ToolsDrawerGeometry calculateToolsDrawerGeometry(const ImVec2& railPos,
+                                                            float contentWidth,
+                                                            float availableHeight,
+                                                            float requestedDrawerWidth,
+                                                            float itemSpacingX)
+    {
+        ToolsDrawerGeometry geometry{};
+
+        if (contentWidth <= 0.0F || availableHeight <= 0.0F) {
+            return geometry;
+        }
+
+        geometry.contentLeft = railPos.x - itemSpacingX - contentWidth;
+        geometry.right = railPos.x - itemSpacingX;
+        geometry.width = (std::min)(requestedDrawerWidth, (std::max)(0.0F, contentWidth));
+
+        if (geometry.width <= 0.0F) {
+            return geometry;
+        }
+
+        geometry.pos = ImVec2((std::max)(geometry.contentLeft, geometry.right - geometry.width), railPos.y);
+
+        geometry.valid = true;
+        return geometry;
     }
 };
 
