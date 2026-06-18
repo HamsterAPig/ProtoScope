@@ -37,7 +37,6 @@ public:
             host->updateControlValue(id, *converted);
         });
     }
-
 };
 
 std::unique_ptr<IScriptHostApiModule> makeControlApiModule(ScriptHost& host)

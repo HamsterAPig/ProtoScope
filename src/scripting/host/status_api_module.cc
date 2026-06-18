@@ -17,7 +17,6 @@ public:
         statusApi.set_function("clear", [host]() { host->protoStatusClear(); });
         proto["status"] = statusApi;
     }
-
 };
 
 std::unique_ptr<IScriptHostApiModule> makeStatusApiModule(ScriptHost& host)

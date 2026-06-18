@@ -293,8 +293,8 @@ namespace {
         return enumToText(formula, kWaveDisplayFormulaNames, "offset_then_scale");
     }
 
-    plot::WaveGridDivisionReadoutMode
-    parseWaveGridDivisionReadoutMode(const std::string& value, plot::WaveGridDivisionReadoutMode fallback)
+    plot::WaveGridDivisionReadoutMode parseWaveGridDivisionReadoutMode(const std::string& value,
+                                                                       plot::WaveGridDivisionReadoutMode fallback)
     {
         return lookupEnum(std::string_view{value}, kWaveGridDivisionReadoutModeNames, fallback);
     }
@@ -491,9 +491,8 @@ namespace {
                                     toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy)),
             config.gui.wave.cursorExtremeSnapPolicy);
         config.gui.wave.mouseYOffsetDragMode = parseWaveMouseYOffsetDragMode(
-            readScalar<std::string>(wave,
-                                    "mouse_y_offset_drag_mode",
-                                    toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode)),
+            readScalar<std::string>(
+                wave, "mouse_y_offset_drag_mode", toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode)),
             config.gui.wave.mouseYOffsetDragMode);
         config.gui.wave.zoomSelectionAutoExit =
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
@@ -826,8 +825,7 @@ namespace {
         gui["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
         gui["wave"]["cursor_extreme_snap_policy"] =
             toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
-        gui["wave"]["mouse_y_offset_drag_mode"] =
-            toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode);
+        gui["wave"]["mouse_y_offset_drag_mode"] = toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode);
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
         gui["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;

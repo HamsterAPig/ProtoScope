@@ -134,8 +134,7 @@ namespace {
             const auto current = buffer.channelSpec(index);
             const auto& setup = setupChannels[index];
             if (!current.has_value() || std::abs(current->ratio - setup.ratio) > 1e-12 ||
-                std::abs(current->scale - setup.scale) > 1e-12 ||
-                std::abs(current->offset - setup.offset) > 1e-12 ||
+                std::abs(current->scale - setup.scale) > 1e-12 || std::abs(current->offset - setup.offset) > 1e-12 ||
                 !sameBitDisplaySpec(current->bitDisplay, setup.bitDisplay)) {
                 return false;
             }
@@ -283,8 +282,8 @@ namespace {
         }
 
         std::error_code walkError;
-        for (std::filesystem::recursive_directory_iterator it(
-                 protocolDir, std::filesystem::directory_options::skip_permission_denied, walkError),
+        for (std::filesystem::recursive_directory_iterator
+                 it(protocolDir, std::filesystem::directory_options::skip_permission_denied, walkError),
              end;
              it != end;
              it.increment(walkError)) {
@@ -322,9 +321,7 @@ namespace {
             });
         }
 
-        std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
-            return lhs.name < rhs.name;
-        });
+        std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) { return lhs.name < rhs.name; });
         return true;
     }
 
@@ -777,7 +774,8 @@ namespace {
             return true;
         }
 
-        const auto rawText = std::string_view(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
+        const auto rawText =
+            std::string_view(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
         auto capture = plot::decodeRawCaptureFile(rawText, error);
         if (!capture.has_value()) {
             return false;
@@ -999,9 +997,9 @@ namespace {
     }
 
     dock::RequestTraceRow makeRequestTraceRow(const scripting::TxRequest& request,
-                                             dock::RequestTraceState state,
-                                             const std::optional<std::string>& error,
-                                             std::uint64_t timestampMs)
+                                              dock::RequestTraceState state,
+                                              const std::optional<std::string>& error,
+                                              std::uint64_t timestampMs)
     {
         return dock::RequestTraceRow{
             .timestampMs = timestampMs,
@@ -2406,14 +2404,13 @@ void Application::setRawCaptureReplaySpeed(const double speed)
 
 Application::RawCaptureReplayStatus Application::rawCaptureReplayStatus() const
 {
-    const auto eventCount =
-        rawCaptureReplay_.capture.events.empty() ? (rawCaptureReplay_.capture.payload.empty() ? 0U : 1U)
-                                                : rawCaptureReplay_.capture.events.size();
-    const double progress = eventCount == 0U
-                                ? 0.0
-                                : (std::min)(1.0,
-                                             static_cast<double>(rawCaptureReplay_.eventIndex) /
-                                                 static_cast<double>(eventCount));
+    const auto eventCount = rawCaptureReplay_.capture.events.empty()
+                                ? (rawCaptureReplay_.capture.payload.empty() ? 0U : 1U)
+                                : rawCaptureReplay_.capture.events.size();
+    const double progress =
+        eventCount == 0U
+            ? 0.0
+            : (std::min)(1.0, static_cast<double>(rawCaptureReplay_.eventIndex) / static_cast<double>(eventCount));
     return RawCaptureReplayStatus{
         .loaded = rawCaptureReplay_.loaded,
         .playing = rawCaptureReplay_.playing,
@@ -2709,9 +2706,8 @@ void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
 
     const auto hasPressure = [](const CommPressureDebugSnapshot& value) {
         return value.pendingRxBytes > 0U || value.pendingTransferFrameRows > 0U || value.pendingPlotAppends > 0U ||
-               value.rxInputQueueBytes > 0U || value.parserPendingBytes > 0U ||
-               value.postprocessPendingBatches > 0U || value.luaPendingItems > 0U || value.uiPendingItems > 0U ||
-               !value.backlogWarning.empty();
+               value.rxInputQueueBytes > 0U || value.parserPendingBytes > 0U || value.postprocessPendingBatches > 0U ||
+               value.luaPendingItems > 0U || value.uiPendingItems > 0U || !value.backlogWarning.empty();
     };
     const auto pressureValuesChanged = [](const CommPressureDebugSnapshot& current,
                                           const CommPressureDebugSnapshot& previous) {
@@ -2721,7 +2717,8 @@ void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
                current.rxInputQueueBytes != previous.rxInputQueueBytes ||
                current.parserPendingBytes != previous.parserPendingBytes ||
                current.postprocessPendingBatches != previous.postprocessPendingBatches ||
-               current.luaPendingItems != previous.luaPendingItems || current.uiPendingItems != previous.uiPendingItems ||
+               current.luaPendingItems != previous.luaPendingItems ||
+               current.uiPendingItems != previous.uiPendingItems ||
                current.postprocessWorkerThreads != previous.postprocessWorkerThreads ||
                current.backlogWarning != previous.backlogWarning;
     };
@@ -2735,8 +2732,8 @@ void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
     const auto now = nowMs();
     const bool changed =
         !commPressureDebugLog_.hasSnapshot || pressureValuesChanged(snapshot, commPressureDebugLog_.lastSnapshot);
-    const bool intervalElapsed =
-        commPressureDebugLog_.lastLogMs == 0U || now - commPressureDebugLog_.lastLogMs >= kCommPressureDebugLogIntervalMs;
+    const bool intervalElapsed = commPressureDebugLog_.lastLogMs == 0U ||
+                                 now - commPressureDebugLog_.lastLogMs >= kCommPressureDebugLogIntervalMs;
     if (!changed && !intervalElapsed) {
         return;
     }
@@ -2746,20 +2743,14 @@ void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
     message << std::fixed << std::setprecision(2);
     message << "通讯压力: rx_backlog=" << snapshot.pendingRxBytes << " bytes"
             << ", parser_backlog=" << snapshot.parserPendingBytes << " bytes"
-            << ", frame_rows=" << snapshot.pendingTransferFrameRows
-            << ", plot_appends=" << snapshot.pendingPlotAppends
+            << ", frame_rows=" << snapshot.pendingTransferFrameRows << ", plot_appends=" << snapshot.pendingPlotAppends
             << ", rx_input=" << snapshot.rxInputQueueBytes << " bytes"
-            << ", post_batches=" << snapshot.postprocessPendingBatches
-            << ", lua_pending=" << snapshot.luaPendingItems
-            << ", ui_pending=" << snapshot.uiPendingItems
-            << ", post_threads=" << snapshot.postprocessWorkerThreads
-            << ", last_pump_events=" << snapshot.lastPumpEvents
-            << ", last_pump_rx=" << snapshot.lastPumpRxBytes << " bytes"
-            << ", last_stream_frames=" << snapshot.lastPumpStreamFrames
-            << ", last_stream_errors=" << snapshot.lastPumpStreamErrors
-            << ", pump_ms=" << snapshot.lastPumpTransportMs
-            << ", parser_ms=" << snapshot.lastPumpParserMs
-            << ", lua_callback_ms=" << snapshot.lastPumpCallbackMs
+            << ", post_batches=" << snapshot.postprocessPendingBatches << ", lua_pending=" << snapshot.luaPendingItems
+            << ", ui_pending=" << snapshot.uiPendingItems << ", post_threads=" << snapshot.postprocessWorkerThreads
+            << ", last_pump_events=" << snapshot.lastPumpEvents << ", last_pump_rx=" << snapshot.lastPumpRxBytes
+            << " bytes" << ", last_stream_frames=" << snapshot.lastPumpStreamFrames
+            << ", last_stream_errors=" << snapshot.lastPumpStreamErrors << ", pump_ms=" << snapshot.lastPumpTransportMs
+            << ", parser_ms=" << snapshot.lastPumpParserMs << ", lua_callback_ms=" << snapshot.lastPumpCallbackMs
             << ", script_ms=" << snapshot.lastPumpScriptMs
             << ", warning=" << (snapshot.backlogWarning.empty() ? "none" : snapshot.backlogWarning);
     loggingFacade_.debug("comm_pressure", message.str());
@@ -2804,9 +2795,8 @@ void Application::pullTransportEventsFromTransport()
         return;
     }
     auto events = transport_->takeEvents();
-    pendingTransportEvents_.insert(pendingTransportEvents_.end(),
-                                   std::make_move_iterator(events.begin()),
-                                   std::make_move_iterator(events.end()));
+    pendingTransportEvents_.insert(
+        pendingTransportEvents_.end(), std::make_move_iterator(events.begin()), std::make_move_iterator(events.end()));
 }
 
 bool Application::drainTransportEventQueues(const std::chrono::steady_clock::time_point& startedAt,

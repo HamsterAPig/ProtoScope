@@ -237,8 +237,8 @@ namespace {
                 << "channel." << index << ".offset: " << std::setprecision(17) << channel.offset << '\n'
                 << "channel." << index << ".color: " << serializeColor(channel.color) << '\n'
                 << "channel." << index << ".line_width: " << serializeLineWidth(channel.lineWidth) << '\n'
-                << "channel." << index << ".bit_display.enabled: "
-                << (channel.bitDisplay.enabled ? "true" : "false") << '\n'
+                << "channel." << index << ".bit_display.enabled: " << (channel.bitDisplay.enabled ? "true" : "false")
+                << '\n'
                 << "channel." << index << ".bit_display.first_bit: " << channel.bitDisplay.firstBit << '\n'
                 << "channel." << index << ".bit_display.bit_count: " << channel.bitDisplay.bitCount << '\n'
                 << "channel." << index << ".bit_display.y_offset: " << std::setprecision(17)

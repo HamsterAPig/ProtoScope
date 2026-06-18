@@ -328,7 +328,7 @@ bool matchesRequestTraceFilter(const RequestTraceRow& row, const RequestTraceFil
 }
 
 std::vector<const RequestTraceRow*> filteredRequestTraceRows(const std::deque<RequestTraceRow>& rows,
-                                                            const RequestTraceFilterState& filter)
+                                                             const RequestTraceFilterState& filter)
 {
     std::vector<const RequestTraceRow*> filtered;
     filtered.reserve(rows.size());

@@ -143,9 +143,8 @@ float sanitizeChannelLineWidth(double lineWidth)
     if (!std::isfinite(lineWidth)) {
         return kDefaultChannelLineWidth;
     }
-    return static_cast<float>((std::clamp)(lineWidth,
-                                           static_cast<double>(kMinChannelLineWidth),
-                                           static_cast<double>(kMaxChannelLineWidth)));
+    return static_cast<float>(
+        (std::clamp)(lineWidth, static_cast<double>(kMinChannelLineWidth), static_cast<double>(kMaxChannelLineWidth)));
 }
 
 float resolveChannelLineWidth(const std::optional<float>& lineWidth)

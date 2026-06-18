@@ -188,18 +188,18 @@ std::optional<plot::CursorReadout> findNearestBitTransition(const plot::WaveSnap
                                                             double plotY,
                                                             double maxTimeDistance,
                                                             double maxValueDistance);
-std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
-                                             const plot::WaveDisplayData& displayData,
-                                             const std::vector<std::size_t>& visibleChannelIndices,
-                                             const BitLaneLayout& bitLayout,
-                                             double time,
-                                             double plotY,
-                                             double maxTimeDistance,
-                                             double maxValueDistance,
-                                             bool preferWaveformHoverReadout = true,
-                                             plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy =
-                                                 plot::WaveBitDisplayReadoutPolicy::MixedNearest,
-                                             bool activeBitLaneVisibleForReadout = false);
+std::optional<HoverReadout> findHoverReadout(
+    const plot::WaveSnapshot& snapshot,
+    const plot::WaveDisplayData& displayData,
+    const std::vector<std::size_t>& visibleChannelIndices,
+    const BitLaneLayout& bitLayout,
+    double time,
+    double plotY,
+    double maxTimeDistance,
+    double maxValueDistance,
+    bool preferWaveformHoverReadout = true,
+    plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy = plot::WaveBitDisplayReadoutPolicy::MixedNearest,
+    bool activeBitLaneVisibleForReadout = false);
 bool bitLaneMeasurementActive(const plot::WaveViewState& view);
 bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout);
 bool cursorPairUsesBitLanes(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);

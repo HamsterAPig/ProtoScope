@@ -1,5 +1,4 @@
 #include "../runtime/gui_runtime_detail.hpp"
-
 #include "lua_control_label.hpp"
 
 #include "protoscope/ui/gui_runtime.hpp"
@@ -116,7 +115,8 @@ float GuiRuntime::elfSymbolComboLayoutNaturalWidth(const scripting::ControlSnaps
     if (const auto* current = std::get_if<scripting::ElfSymbolValue>(&control.value)) {
         measureText(current->label);
     }
-    if (const auto stateIter = elfSymbolComboStates_.find(control.descriptor.id); stateIter != elfSymbolComboStates_.end()) {
+    if (const auto stateIter = elfSymbolComboStates_.find(control.descriptor.id);
+        stateIter != elfSymbolComboStates_.end()) {
         // 核心流程：按上一帧已加载候选和当前编辑草稿估算宽度，后端刷新后下一帧自然扩展。
         measureText(stateIter->second.draft);
         for (const auto& option : stateIter->second.options) {
@@ -195,7 +195,8 @@ bool GuiRuntime::drawLuaLayoutNode(const scripting::LayoutNodeDescriptor& node,
             if (node.controlIndex >= controls.size()) {
                 return false;
             }
-            return drawDynamicLayoutControl(controls[node.controlIndex], luaLayoutControlWidth(node, controls[node.controlIndex]));
+            return drawDynamicLayoutControl(controls[node.controlIndex],
+                                            luaLayoutControlWidth(node, controls[node.controlIndex]));
         case scripting::LayoutNodeKind::Text:
             ImGui::TextWrapped("%s", node.text.c_str());
             return false;
@@ -393,11 +394,8 @@ void GuiRuntime::drawLuaDockWindows()
             if (windowVisible) {
                 if (dockSnapshot.descriptor.layout.has_value()) {
                     std::size_t widgetIndex = 0;
-                    drawLuaLayoutNode(dockSnapshot.descriptor.layout->root,
-                                      dockSnapshot.controls,
-                                      stableId,
-                                      widgetIndex,
-                                      false);
+                    drawLuaLayoutNode(
+                        dockSnapshot.descriptor.layout->root, dockSnapshot.controls, stableId, widgetIndex, false);
                 } else {
                     drawLuaDockFlow(dockSnapshot.controls, false);
                 }

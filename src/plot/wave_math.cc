@@ -225,91 +225,86 @@ bool scriptTimeUsable(const ChannelView& channel, std::size_t begin, std::size_t
 
 namespace {
 
-void resetDisplayDataChannels(WaveDisplayData& data, std::size_t channelCount)
-{
-    data.channels.resize(channelCount);
-    for (auto& channel : data.channels) {
-        channel.samples.clear();
-        channel.actualValues.clear();
-    }
-}
-
-bool hasUsableScriptTime(const WaveSnapshot& snapshot)
-{
-    for (const auto& channel : snapshot.channels) {
-        const auto [begin, end] = displaySampleRange(channel);
-        if (scriptTimeUsable(channel, begin, end)) {
-            return true;
+    void resetDisplayDataChannels(WaveDisplayData& data, std::size_t channelCount)
+    {
+        data.channels.resize(channelCount);
+        for (auto& channel : data.channels) {
+            channel.samples.clear();
+            channel.actualValues.clear();
         }
     }
-    return false;
-}
 
-void resolveDisplayTimeAxis(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data)
-{
-    if (sampleFrequencyHz > 0.0 && std::isfinite(sampleFrequencyHz)) {
-        data.axisSource = WaveTimeAxisSource::SampleFrequency;
-        data.timeUnit = "s";
-    } else if (hasUsableScriptTime(snapshot)) {
-        data.axisSource = WaveTimeAxisSource::ScriptTime;
-        data.timeUnit = snapshot.config.timeUnit.empty() ? "s" : snapshot.config.timeUnit;
-    } else {
-        data.axisSource = WaveTimeAxisSource::SampleIndex;
-        data.timeUnit = "sample";
-    }
-}
-
-double resolveDisplaySampleTime(const WaveSample& source,
-                                std::size_t sampleIndexOffset,
-                                std::size_t sampleIndex,
-                                double sampleFrequencyHz,
-                                WaveTimeAxisSource axisSource)
-{
-    const std::size_t globalSampleIndex = sampleIndexOffset + sampleIndex;
-    if (axisSource == WaveTimeAxisSource::SampleFrequency) {
-        return static_cast<double>(globalSampleIndex) / sampleFrequencyHz;
-    }
-    if (axisSource == WaveTimeAxisSource::ScriptTime) {
-        return source.time;
-    }
-    return static_cast<double>(globalSampleIndex);
-}
-
-void fillDisplayChannel(const ChannelView& channel,
-                        const ViewConfig& config,
-                        double sampleFrequencyHz,
-                        WaveTimeAxisSource axisSource,
-                        WaveDisplayChannel& displayChannel)
-{
-    const auto [begin, end] = displaySampleRange(channel);
-    if (begin >= end) {
-        return;
+    bool hasUsableScriptTime(const WaveSnapshot& snapshot)
+    {
+        for (const auto& channel : snapshot.channels) {
+            const auto [begin, end] = displaySampleRange(channel);
+            if (scriptTimeUsable(channel, begin, end)) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    const std::size_t visibleSamples = end - begin;
-    auto& display = displayChannel.samples;
-    display.resize(visibleSamples);
-    displayChannel.actualValues.resize(visibleSamples);
-    const bool offsetThenScale = config.displayFormula == WaveDisplayFormula::OffsetThenScale;
-    for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
-        const auto& source = channel.samples[sampleIndex];
-        const double actualValue = source.value * channel.ratio;
-        const double displayValue =
-            offsetThenScale ? (actualValue + channel.offset) * channel.scale
-                            : actualValue * channel.scale + channel.offset;
-        const auto outputIndex = sampleIndex - begin;
-        display[outputIndex] = {
-            .time =
-                resolveDisplaySampleTime(source,
-                                         channel.sampleIndexOffset,
-                                         sampleIndex,
-                                         sampleFrequencyHz,
-                                         axisSource),
-            .value = displayValue,
-        };
-        displayChannel.actualValues[outputIndex] = actualValue;
+    void resolveDisplayTimeAxis(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data)
+    {
+        if (sampleFrequencyHz > 0.0 && std::isfinite(sampleFrequencyHz)) {
+            data.axisSource = WaveTimeAxisSource::SampleFrequency;
+            data.timeUnit = "s";
+        } else if (hasUsableScriptTime(snapshot)) {
+            data.axisSource = WaveTimeAxisSource::ScriptTime;
+            data.timeUnit = snapshot.config.timeUnit.empty() ? "s" : snapshot.config.timeUnit;
+        } else {
+            data.axisSource = WaveTimeAxisSource::SampleIndex;
+            data.timeUnit = "sample";
+        }
     }
-}
+
+    double resolveDisplaySampleTime(const WaveSample& source,
+                                    std::size_t sampleIndexOffset,
+                                    std::size_t sampleIndex,
+                                    double sampleFrequencyHz,
+                                    WaveTimeAxisSource axisSource)
+    {
+        const std::size_t globalSampleIndex = sampleIndexOffset + sampleIndex;
+        if (axisSource == WaveTimeAxisSource::SampleFrequency) {
+            return static_cast<double>(globalSampleIndex) / sampleFrequencyHz;
+        }
+        if (axisSource == WaveTimeAxisSource::ScriptTime) {
+            return source.time;
+        }
+        return static_cast<double>(globalSampleIndex);
+    }
+
+    void fillDisplayChannel(const ChannelView& channel,
+                            const ViewConfig& config,
+                            double sampleFrequencyHz,
+                            WaveTimeAxisSource axisSource,
+                            WaveDisplayChannel& displayChannel)
+    {
+        const auto [begin, end] = displaySampleRange(channel);
+        if (begin >= end) {
+            return;
+        }
+
+        const std::size_t visibleSamples = end - begin;
+        auto& display = displayChannel.samples;
+        display.resize(visibleSamples);
+        displayChannel.actualValues.resize(visibleSamples);
+        const bool offsetThenScale = config.displayFormula == WaveDisplayFormula::OffsetThenScale;
+        for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
+            const auto& source = channel.samples[sampleIndex];
+            const double actualValue = source.value * channel.ratio;
+            const double displayValue = offsetThenScale ? (actualValue + channel.offset) * channel.scale
+                                                        : actualValue * channel.scale + channel.offset;
+            const auto outputIndex = sampleIndex - begin;
+            display[outputIndex] = {
+                .time = resolveDisplaySampleTime(
+                    source, channel.sampleIndexOffset, sampleIndex, sampleFrequencyHz, axisSource),
+                .value = displayValue,
+            };
+            displayChannel.actualValues[outputIndex] = actualValue;
+        }
+    }
 
 } // namespace
 
@@ -939,7 +934,8 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > kEpsilon;
     overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > kEpsilon;
     overrideState.colorOverridden = updated.color != defaultSpec.color;
-    overrideState.bitYOffsetOverridden = std::abs(updated.bitDisplay.yOffset - defaultSpec.bitDisplay.yOffset) > kEpsilon;
+    overrideState.bitYOffsetOverridden =
+        std::abs(updated.bitDisplay.yOffset - defaultSpec.bitDisplay.yOffset) > kEpsilon;
     overrideState.label = updated.label;
     overrideState.ratio = updated.ratio;
     overrideState.scale = updated.scale;
@@ -978,7 +974,8 @@ bool resetOneChannelViewSettings(WaveDockState& wave, std::size_t channelIndex)
         eraseHiddenLabel(currentSpec->label);
     }
     eraseHiddenLabel(wave.defaultChannelSpecs[channelIndex].label);
-    if (!resetChannelConfigToDefault(wave, channelIndex, wave.defaultChannelSpecs[channelIndex], WaveChannelDoubleClickAction::ResetAll)) {
+    if (!resetChannelConfigToDefault(
+            wave, channelIndex, wave.defaultChannelSpecs[channelIndex], WaveChannelDoubleClickAction::ResetAll)) {
         return false;
     }
     if (channelIndex < wave.channelOverrides.size()) {

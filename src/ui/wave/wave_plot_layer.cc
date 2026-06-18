@@ -402,9 +402,7 @@ namespace {
         }
     }
 
-    void drawBitRenderLanes(const plot::WaveDockState::BitRenderCacheEntry& entry,
-                            const ImVec4& color,
-                            float lineWidth)
+    void drawBitRenderLanes(const plot::WaveDockState::BitRenderCacheEntry& entry, const ImVec4& color, float lineWidth)
     {
         auto* drawList = ImPlot::GetPlotDrawList();
         if (drawList == nullptr) {
@@ -444,7 +442,8 @@ namespace {
         result.bounds.minStep = (std::max)(wave.view.minVisibleTimeSpan, 1e-6);
 
         std::size_t visibleRow = 0;
-        for (std::size_t channelIndex = 0; channelIndex < source.channels.size() && channelIndex < snapshot.channels.size();
+        for (std::size_t channelIndex = 0;
+             channelIndex < source.channels.size() && channelIndex < snapshot.channels.size();
              ++channelIndex) {
             auto& channel = result.data.channels[channelIndex];
             if (channel.samples.empty() || channelHiddenByLegendState(wave, snapshot.channels[channelIndex].label)) {
@@ -495,7 +494,8 @@ namespace {
         const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.16F, 0.24F, 0.31F, 0.70F));
         const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.89F, 0.94F, 0.76F));
         const ImVec2 plotPos = ImPlot::GetPlotPos();
-        for (std::size_t channelIndex = 0; channelIndex < channelBaseY.size() && channelIndex < snapshot.channels.size();
+        for (std::size_t channelIndex = 0;
+             channelIndex < channelBaseY.size() && channelIndex < snapshot.channels.size();
              ++channelIndex) {
             const double baseY = channelBaseY[channelIndex];
             if (!std::isfinite(baseY)) {
@@ -507,9 +507,8 @@ namespace {
                               1.0F);
             const ImVec2 labelPos = ImPlot::PlotToPixels(limits.X.Min, baseY);
             const std::string label = "CH" + std::to_string(channelIndex + 1U);
-            drawList->AddText(ImVec2(plotPos.x + 8.0F, labelPos.y - ImGui::GetTextLineHeight() * 0.5F),
-                              textColor,
-                              label.c_str());
+            drawList->AddText(
+                ImVec2(plotPos.x + 8.0F, labelPos.y - ImGui::GetTextLineHeight() * 0.5F), textColor, label.c_str());
         }
     }
 
@@ -625,8 +624,11 @@ void renderWaveChannels(plot::WaveDockState& wave,
             spec.LineColor = color;
             spec.LineWeight = lineWidth;
             applySavedLegendVisibility(wave, channel.label);
-            ImPlot::PlotLineG(
-                channel.label.c_str(), reinterpret_cast<ImPlotGetter>(&waveSampleGetter), &payload, static_cast<int>(rawVisibleCount), spec);
+            ImPlot::PlotLineG(channel.label.c_str(),
+                              reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
+                              &payload,
+                              static_cast<int>(rawVisibleCount),
+                              spec);
             if (!currentPlotItemVisible(channel.label)) {
                 continue;
             }
@@ -698,18 +700,17 @@ void handleHoverReadout(plot::WaveViewState& view,
     if (!ImPlot::IsPlotHovered() || !view.showHoverReadout || visibleChannelIndices.empty()) {
         return;
     }
-    const auto hovered = findHoverReadout(
-        snapshot,
-        displayData,
-        visibleChannelIndices,
-        bitLayout,
-        mousePos.x,
-        mousePos.y,
-        timeSnapDistance,
-        valueSnapDistance,
-        view.preferWaveformHoverReadout,
-        view.bitDisplayReadoutPolicy,
-        activeBitLaneVisible(view, bitLayout));
+    const auto hovered = findHoverReadout(snapshot,
+                                          displayData,
+                                          visibleChannelIndices,
+                                          bitLayout,
+                                          mousePos.x,
+                                          mousePos.y,
+                                          timeSnapDistance,
+                                          valueSnapDistance,
+                                          view.preferWaveformHoverReadout,
+                                          view.bitDisplayReadoutPolicy,
+                                          activeBitLaneVisible(view, bitLayout));
     if (!hovered.has_value() || hovered->readout.channelIndex >= snapshot.channels.size()) {
         return;
     }
@@ -1029,8 +1030,9 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
     }
 
     ImGui::BeginChild("##wave_split_scroll", ImVec2(-1.0F, -1.0F), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-    const float plotHeight = (std::max)(120.0F, (ImGui::GetContentRegionAvail().y - 8.0F) /
-                                                    static_cast<float>((std::min<std::size_t>)(visibleChannels.size(), 4U)));
+    const float plotHeight = (std::max)(120.0F,
+                                        (ImGui::GetContentRegionAvail().y - 8.0F) /
+                                            static_cast<float>((std::min<std::size_t>) (visibleChannels.size(), 4U)));
     for (std::size_t rowIndex = 0; rowIndex < visibleChannels.size(); ++rowIndex) {
         const std::size_t channelIndex = visibleChannels[rowIndex];
         if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
@@ -1049,14 +1051,16 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
             constexpr ImPlotAxisFlags yFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoLabel |
                                                ImPlotAxisFlags_NoGridLines | ImPlotAxisFlags_NoTickMarks |
                                                ImPlotAxisFlags_NoTickLabels;
-            ImPlot::SetupAxis(ImAxis_X1, rowIndex + 1U == visibleChannels.size() ? "Time" : nullptr,
-                              rowIndex + 1U == visibleChannels.size() ? xFlags : (xFlags | ImPlotAxisFlags_NoTickLabels));
+            ImPlot::SetupAxis(
+                ImAxis_X1,
+                rowIndex + 1U == visibleChannels.size() ? "Time" : nullptr,
+                rowIndex + 1U == visibleChannels.size() ? xFlags : (xFlags | ImPlotAxisFlags_NoTickLabels));
             ImPlot::SetupAxis(ImAxis_Y1, nullptr, yFlags);
-            ImPlot::SetupAxisLimits(ImAxis_X1,
-                                    view.viewMinTime,
-                                    view.viewMaxTime,
-                                    (view.autoFollowLatest || view.forceNextMainPlotLimits) ? ImPlotCond_Always
-                                                                                             : ImPlotCond_Once);
+            ImPlot::SetupAxisLimits(
+                ImAxis_X1,
+                view.viewMinTime,
+                view.viewMaxTime,
+                (view.autoFollowLatest || view.forceNextMainPlotLimits) ? ImPlotCond_Always : ImPlotCond_Once);
 
             double minValue = std::numeric_limits<double>::infinity();
             double maxValue = -std::numeric_limits<double>::infinity();
@@ -1193,12 +1197,14 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     const auto& plotDisplayData = stackedDisplay.has_value() ? stackedDisplay->data : displayData;
     const auto& renderDisplayData = stackedDisplay.has_value() ? stackedDisplay->data : baseRenderDisplayData;
     const auto derivedChannelIndices = channelIndicesForDerivedViews(wave, frame.snapshot);
-    const auto derivedBounds = stackedDisplay.has_value()
-                                   ? stackedDisplay->bounds
-                                   : boundsForDerivedViews(wave, frame.snapshot, plotDisplayData, derivedChannelIndices);
-    const auto yAutoFitBounds = stackedDisplay.has_value()
-                                    ? stackedDisplay->bounds
-                                    : boundsForYAxisAutoFit(wave, frame.snapshot, plotDisplayData, derivedChannelIndices);
+    const auto derivedBounds =
+        stackedDisplay.has_value()
+            ? stackedDisplay->bounds
+            : boundsForDerivedViews(wave, frame.snapshot, plotDisplayData, derivedChannelIndices);
+    const auto yAutoFitBounds =
+        stackedDisplay.has_value()
+            ? stackedDisplay->bounds
+            : boundsForYAxisAutoFit(wave, frame.snapshot, plotDisplayData, derivedChannelIndices);
     auto fullHistoryBounds = derivedBounds;
     if (frame.fullSnapshot != nullptr && frame.overviewDisplayData != nullptr) {
         const auto fullHistoryChannelIndices = channelIndicesForDerivedViews(wave, *frame.fullSnapshot);
@@ -1226,11 +1232,10 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
             const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3]));
             const ImVec2 pixelA = ImPlot::PlotToPixels(minTime, limits.Y.Min);
             const ImVec2 pixelB = ImPlot::PlotToPixels(maxTime, limits.Y.Max);
-            ImPlot::GetPlotDrawList()->AddRectFilled(ImVec2((std::min)(pixelA.x, pixelB.x),
-                                                            (std::min)(pixelA.y, pixelB.y)),
-                                                     ImVec2((std::max)(pixelA.x, pixelB.x),
-                                                            (std::max)(pixelA.y, pixelB.y)),
-                                                     fillColor);
+            ImPlot::GetPlotDrawList()->AddRectFilled(
+                ImVec2((std::min)(pixelA.x, pixelB.x), (std::min)(pixelA.y, pixelB.y)),
+                ImVec2((std::max)(pixelA.x, pixelB.x), (std::max)(pixelA.y, pixelB.y)),
+                fillColor);
         }
     }
     const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
@@ -1280,7 +1285,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     if (!blockPlotInteractions) {
         handleHoverReadout(view,
                            frame.snapshot,
-            plotDisplayData,
+                           plotDisplayData,
                            visibleChannelIndices,
                            bitLayout,
                            mousePos,

@@ -15,9 +15,9 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
-#include <system_error>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -26,9 +26,9 @@
 
 namespace {
 
-using protoscope::tests::ScopedTempPath;
 using protoscope::tests::makeUniqueTempDir;
 using protoscope::tests::require;
+using protoscope::tests::ScopedTempPath;
 
 std::uint64_t currentTimeMs();
 
@@ -253,7 +253,8 @@ void writeRuntimeProfileProtocol(const std::filesystem::path& protocolDir)
     out << "  return { buffer = { capacity = 64, overflow = 'drop_oldest' }, frames = { {\n";
     out << "    name = 'dynamic_profile', header = { 0xFF, 0x26 }, runtime_profile = true,\n";
     out << "    crc = { type = 'crc16_modbus', order = 'hi_lo' },\n";
-    out << "    fields = { { name = 'values', type = 'i16_be', offset = 3, count = { op = 'remaining', unit = 2 } } },\n";
+    out << "    fields = { { name = 'values', type = 'i16_be', offset = 3, count = { op = 'remaining', unit = 2 } } "
+           "},\n";
     out << "    on_frame = on_frame,\n";
     out << "  } } }\n";
     out << "end\n";
@@ -380,9 +381,8 @@ const protoscope::scripting::ElfSymbolValue* findElfSymbolControl(const protosco
                                                                   const std::string& id)
 {
     const auto& controls = application.docks().luaState().controlStates;
-    const auto iter = std::find_if(controls.begin(), controls.end(), [&](const auto& control) {
-        return control.descriptor.id == id;
-    });
+    const auto iter = std::find_if(
+        controls.begin(), controls.end(), [&](const auto& control) { return control.descriptor.id == id; });
     if (iter == controls.end()) {
         return nullptr;
     }
@@ -391,9 +391,10 @@ const protoscope::scripting::ElfSymbolValue* findElfSymbolControl(const protosco
 
 std::size_t countScriptEvents(const protoscope::dock::ScriptDockState& scriptState, const std::string& name)
 {
-    return static_cast<std::size_t>(std::count_if(scriptState.rows.begin(), scriptState.rows.end(), [&](const auto& row) {
-        return row.direction == "EVENT" && row.message.find(name + ":") != std::string::npos;
-    }));
+    return static_cast<std::size_t>(
+        std::count_if(scriptState.rows.begin(), scriptState.rows.end(), [&](const auto& row) {
+            return row.direction == "EVENT" && row.message.find(name + ":") != std::string::npos;
+        }));
 }
 
 void writeTextFile(const std::filesystem::path& path, std::string_view text)
@@ -728,12 +729,14 @@ void test_application_same_protocol_reload_without_force_preserves_runtime_state
 
     protoscope::app::Application application;
     require(application.initialize(), "应用应可初始化默认 Lua 工作区");
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "非强制 reload 测试协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "非强制 reload 测试协议应可加载");
 
     application.updateControlValue("tick", true);
     require(application.docks().configState().statusMessage == "count:1", "首次触发应把计数写入状态栏");
 
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), false), "同协议非强制 reload 应成功");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), false),
+            "同协议非强制 reload 应成功");
     const auto& lua = application.docks().luaState();
     require(lua.loaded, "同协议非强制 reload 后协议仍应处于已加载状态");
     require(lua.protocolDir == protocolDir.path().generic_string(), "同协议非强制 reload 后协议目录应保持不变");
@@ -777,7 +780,8 @@ void test_application_failed_reload_keeps_old_callbacks_alive()
     require(application.reloadProtocolDirectory(validProtocolDir.path().generic_string(), true), "有效协议应可加载");
 
     const auto before = application.docks().luaState();
-    require(!application.reloadProtocolDirectory(invalidProtocolDir.path().generic_string(), true), "非法协议 reload 应失败");
+    require(!application.reloadProtocolDirectory(invalidProtocolDir.path().generic_string(), true),
+            "非法协议 reload 应失败");
     const auto& after = application.docks().luaState();
     require(after.protocolDir == before.protocolDir, "失败 reload 后旧协议目录应保留");
     require(after.docks.size() == before.docks.size(), "失败 reload 后旧 Dock 快照应保留");
@@ -987,8 +991,10 @@ void test_application_guarded_request_timeout_retry_then_success_keeps_guard_act
     application.pumpOnce();
 
     require(transportState->sentTasks.size() == 2, "同一个 guarded request 应先超时再重发一次");
-    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01}, "第 1 次 attempt payload 应保持不变");
-    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01}, "第 2 次 attempt payload 应保持不变");
+    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01},
+            "第 1 次 attempt payload 应保持不变");
+    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01},
+            "第 2 次 attempt payload 应保持不变");
 
     application.updateControlValue("follow", true);
     application.pumpOnce();
@@ -1089,10 +1095,14 @@ void test_application_guarded_requests_count_attempts_independently()
     }
 
     require(transportState->sentTasks.size() == 4, "两个 guarded request 应各自独立重试到第 2 次");
-    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01}, "first 第 1 次 attempt 应发送 0x01");
-    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01}, "first 第 2 次 attempt 应仍发送 0x01");
-    require(transportState->sentTasks[2].payload == std::vector<std::uint8_t>{0x02}, "second 第 1 次 attempt 应发送 0x02");
-    require(transportState->sentTasks[3].payload == std::vector<std::uint8_t>{0x02}, "second 第 2 次 attempt 应仍发送 0x02");
+    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01},
+            "first 第 1 次 attempt 应发送 0x01");
+    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01},
+            "first 第 2 次 attempt 应仍发送 0x01");
+    require(transportState->sentTasks[2].payload == std::vector<std::uint8_t>{0x02},
+            "second 第 1 次 attempt 应发送 0x02");
+    require(transportState->sentTasks[3].payload == std::vector<std::uint8_t>{0x02},
+            "second 第 2 次 attempt 应仍发送 0x02");
     application.shutdown();
 }
 
@@ -1133,7 +1143,8 @@ void test_application_guarded_request_reset_allows_new_attempts()
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "guarded reset 测试协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "guarded reset 测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
 
@@ -1706,8 +1717,7 @@ void test_application_session_package_import_rejects_unsafe_entries()
     protoscope::app::Application parentEscapeImporter;
     require(parentEscapeImporter.initialize(), "父目录逃逸导入应用初始化失败");
     error.clear();
-    require(!parentEscapeImporter.importSessionPackage(parentEscapePath, error),
-            "包含 protocol/../x 的现场包应被拒绝");
+    require(!parentEscapeImporter.importSessionPackage(parentEscapePath, error), "包含 protocol/../x 的现场包应被拒绝");
     require(error.find("不安全条目") != std::string::npos, "父目录逃逸错误应说明不安全条目");
     parentEscapeImporter.shutdown();
 
@@ -1791,13 +1801,12 @@ void test_application_session_package_import_without_markers_clears_existing_sta
     if (!package.has_value()) {
         throw std::runtime_error("完整现场包应可读取: " + error);
     }
-    package->entries.erase(
-        std::remove_if(package->entries.begin(),
-                       package->entries.end(),
-                       [](const protoscope::session::SessionPackageEntry& entry) {
-                           return entry.name == "analysis/markers.yaml";
-                       }),
-        package->entries.end());
+    package->entries.erase(std::remove_if(package->entries.begin(),
+                                          package->entries.end(),
+                                          [](const protoscope::session::SessionPackageEntry& entry) {
+                                              return entry.name == "analysis/markers.yaml";
+                                          }),
+                           package->entries.end());
     require(protoscope::session::writeSessionPackage(legacyPackagePath, *package, error), "旧现场包应可重新写入");
 
     protoscope::app::Application importer;
@@ -1944,12 +1953,9 @@ void test_application_loads_protocol_action_templates()
     protoscope::app::Application application;
     require(application.initialize(), "应用初始化失败");
 
-    require(application.reloadProtocolDirectory("protocols/templates/file_dialog", true),
-            "文件对话框模板应可加载");
-    require(application.reloadProtocolDirectory("protocols/templates/send_file", true),
-            "文件发送模板应可加载");
-    require(application.reloadProtocolDirectory("protocols/templates/request_guarded", true),
-            "受保护请求模板应可加载");
+    require(application.reloadProtocolDirectory("protocols/templates/file_dialog", true), "文件对话框模板应可加载");
+    require(application.reloadProtocolDirectory("protocols/templates/send_file", true), "文件发送模板应可加载");
+    require(application.reloadProtocolDirectory("protocols/templates/request_guarded", true), "受保护请求模板应可加载");
 
     application.shutdown();
 }
@@ -2060,7 +2066,8 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
 
     protoscope::app::Application importedApplication;
     require(importedApplication.initialize(), "导入验证应用初始化失败");
-    require(importedApplication.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "导入验证协议应可加载");
+    require(importedApplication.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "导入验证协议应可加载");
     require(importedApplication.importWaveRawCapture(*exported, error), "导出的 runtime profile raw 应可重新导入");
 }
 
@@ -2117,12 +2124,12 @@ void test_application_session_package_export_trims_raw_capture_window()
 
     if (capture->payload != secondFrame) {
         throw std::runtime_error("现场包内 psraw 应只包含当前可见 raw 窗口: actual=" +
-                                 protoscope::protocol_utils::bytesToHex(capture->payload, true) + " expected=" +
-                                 protoscope::protocol_utils::bytesToHex(secondFrame, true));
+                                 protoscope::protocol_utils::bytesToHex(capture->payload, true) +
+                                 " expected=" + protoscope::protocol_utils::bytesToHex(secondFrame, true));
     }
-    require(!capture->events.empty() &&
-                capture->events.front().type == protoscope::plot::RawCaptureEventType::ProfileSet,
-            "现场包导出应保留当前 raw 依赖的 profile_set");
+    require(
+        !capture->events.empty() && capture->events.front().type == protoscope::plot::RawCaptureEventType::ProfileSet,
+        "现场包导出应保留当前 raw 依赖的 profile_set");
 }
 
 void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims()
@@ -2287,7 +2294,8 @@ void test_application_raw_capture_import_replays_plot_setup_snapshot()
 
     protoscope::app::Application application;
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "plot_setup 导入协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "plot_setup 导入协议应可加载");
     std::string error;
     require(application.importWaveRawCapture(capture, error), "带 plot_setup 的 psraw 导入应成功");
 
@@ -2308,8 +2316,7 @@ void test_application_raw_capture_import_replays_plot_setup_snapshot()
                                                                           std::numeric_limits<double>::infinity());
     require(!snapshot.channels.empty(), "导入 plot_setup 后应有波形通道");
     require(snapshot.channels.front().lineWidth.has_value(), "导入 plot_setup 后快照应携带 line_width");
-    require(std::abs(*snapshot.channels.front().lineWidth - 3.25F) < 1e-6F,
-            "导入 plot_setup 后快照 line_width 错误");
+    require(std::abs(*snapshot.channels.front().lineWidth - 3.25F) < 1e-6F, "导入 plot_setup 后快照 line_width 错误");
     require(snapshot.channels.front().totalSamples == 3U, "导入 plot_setup 后应回放 raw 样本");
     application.shutdown();
 }
@@ -2792,8 +2799,7 @@ void test_application_comm_pressure_debug_log_respects_log_level()
         require(application.pumpOnce(), "第一轮 pump 应生成实时 backlog 压力");
         const auto& comm = application.docks().commState();
         ScenarioResult result{
-            .pressureLogVisible =
-                hasHostLogMessage(application.docks().logState(), "comm_pressure", "派生 UI backlog"),
+            .pressureLogVisible = hasHostLogMessage(application.docks().logState(), "comm_pressure", "派生 UI backlog"),
             .pendingTransferFrameRows = comm.pendingTransferFrameRows,
             .backlogWarning = comm.backlogWarning,
         };

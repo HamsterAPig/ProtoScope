@@ -646,8 +646,8 @@ void FrameStreamParser::ensureAppendCapacity(std::size_t incomingSize)
     }
 
     const auto availableCapacity = (std::numeric_limits<std::size_t>::max)() - buffer_.size();
-    const auto requiredCapacity = incomingSize > availableCapacity ? (std::numeric_limits<std::size_t>::max)()
-                                                                   : buffer_.size() + incomingSize;
+    const auto requiredCapacity =
+        incomingSize > availableCapacity ? (std::numeric_limits<std::size_t>::max)() : buffer_.size() + incomingSize;
     if (requiredCapacity > buffer_.capacity() && bufferDefinition_.maxCapacity > buffer_.capacity()) {
         // 核心流程：默认无损模式下先按宿主预算扩容，避免小 Lua schema 容量直接触发丢帧。
         buffer_.ensureCapacity((std::min)(requiredCapacity, bufferDefinition_.maxCapacity));
@@ -722,8 +722,8 @@ bool FrameStreamParser::discardCandidatePrefix(const CandidateMatch& candidate, 
     return true;
 }
 
-FrameStreamParser::CandidateParseResult
-FrameStreamParser::analyzeCandidateFrames(const CandidateMatch& candidate, const StreamParseOptions& options) const
+FrameStreamParser::CandidateParseResult FrameStreamParser::analyzeCandidateFrames(
+    const CandidateMatch& candidate, const StreamParseOptions& options) const
 {
     bool needMore = false;
     std::optional<StreamParseError> firstError;
@@ -759,8 +759,7 @@ FrameStreamParser::analyzeCandidateFrames(const CandidateMatch& candidate, const
     };
 }
 
-StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes,
-                                              const StreamParseOptions& options)
+StreamParseBatch FrameStreamParser::pushBytes(const std::vector<std::uint8_t>& bytes, const StreamParseOptions& options)
 {
     if (bytes.empty()) {
         StreamParseBatch batch{};
@@ -1079,21 +1078,20 @@ bool FrameStreamParser::resolveFieldDecodePlan(const StreamFrameDefinition& fram
 
     plan.count = *count;
     std::size_t fieldBytes = 0;
-    if (!checkedMultiplySize(plan.count, plan.width, fieldBytes) ||
-        !checkedAddSize(plan.start, fieldBytes, plan.end)) {
+    if (!checkedMultiplySize(plan.count, plan.width, fieldBytes) || !checkedAddSize(plan.start, fieldBytes, plan.end)) {
         setFieldDecodeError(frame, frameBytes, frameLength, "字段大小溢出", result);
         return false;
     }
     return true;
 }
 
-FrameStreamParser::FieldDecodeBoundsAction
-FrameStreamParser::validateFieldDecodeBounds(const StreamFrameDefinition& frame,
-                                             const std::uint8_t* frameBytes,
-                                             std::size_t frameLength,
-                                             std::size_t readableLimit,
-                                             const FieldDecodePlan& plan,
-                                             AnalyzeResult& result) const
+FrameStreamParser::FieldDecodeBoundsAction FrameStreamParser::validateFieldDecodeBounds(
+    const StreamFrameDefinition& frame,
+    const std::uint8_t* frameBytes,
+    std::size_t frameLength,
+    std::size_t readableLimit,
+    const FieldDecodePlan& plan,
+    AnalyzeResult& result) const
 {
     if (plan.start <= readableLimit && plan.end <= readableLimit) {
         return FieldDecodeBoundsAction::Decode;
@@ -1169,7 +1167,8 @@ bool FrameStreamParser::decodeFrameFields(const StreamFrameDefinition& frame,
             return false;
         }
 
-        const auto boundsAction = validateFieldDecodeBounds(frame, frameBytes, frameLength, readableLimit, plan, result);
+        const auto boundsAction =
+            validateFieldDecodeBounds(frame, frameBytes, frameLength, readableLimit, plan, result);
         if (boundsAction == FieldDecodeBoundsAction::Error) {
             return false;
         }
@@ -1252,7 +1251,7 @@ bool FrameStreamParser::applyRuntimeChannelMap(const StreamFrameDefinition& defi
         return false;
     }
     frame.channelMap = profileIter->second.channelMap;
-    (void)error;
+    (void) error;
     return true;
 }
 
@@ -1274,8 +1273,8 @@ void FrameStreamParser::resetCompiledFrameIndexes()
     }
 }
 
-FrameStreamParser::CompiledFrame
-FrameStreamParser::compileFrameMetadata(std::size_t index, const StreamFrameDefinition& frame) const
+FrameStreamParser::CompiledFrame FrameStreamParser::compileFrameMetadata(std::size_t index,
+                                                                         const StreamFrameDefinition& frame) const
 {
     CompiledFrame compiled;
     compiled.index = index;
@@ -1307,8 +1306,7 @@ void FrameStreamParser::applyDeclaredFrameLengthMinimum(const StreamFrameDefinit
     }
 }
 
-void FrameStreamParser::accumulateFixedFieldBytes(const StreamFrameDefinition& frame,
-                                                  CompiledFrame& compiled) const
+void FrameStreamParser::accumulateFixedFieldBytes(const StreamFrameDefinition& frame, CompiledFrame& compiled) const
 {
     for (const auto& field : frame.fields) {
         if (field.count.fixed.has_value()) {

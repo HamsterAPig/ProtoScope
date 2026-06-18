@@ -674,8 +674,7 @@ void test_wave_protocol_state_prefer_waveform_hover_readout_defaults_true()
     wave.view.bitDisplayReadoutPolicy = protoscope::plot::WaveBitDisplayReadoutPolicy::ExplicitActivation;
 
     const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
-    require(!encoded["prefer_waveform_hover_readout"].as<bool>(),
-            "协议 UI 状态应写出 waveform hover 优先级策略");
+    require(!encoded["prefer_waveform_hover_readout"].as<bool>(), "协议 UI 状态应写出 waveform hover 优先级策略");
     require(encoded["bit_display_readout_policy"].as<std::string>() == "explicit_activation",
             "协议 UI 状态应写出 bit display 读数策略");
 
@@ -698,10 +697,7 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
 {
     protoscope::plot::WaveDockState wave;
     wave.buffer.configureChannels(1);
-    wave.buffer.setChannelSpec(0,
-                               {.label = "CH1",
-                                .unit = "V",
-                                .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}});
+    wave.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}});
     wave.view.viewMode = protoscope::plot::WaveViewMode::Split;
     wave.activeToolsDrawer = protoscope::plot::WaveToolsDrawer::View;
     wave.legendOverlay.expanded = true;
@@ -721,10 +717,8 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
 
     protoscope::plot::WaveDockState restored;
     restored.buffer.configureChannels(1);
-    restored.buffer.setChannelSpec(0,
-                                   {.label = "CH1",
-                                    .unit = "V",
-                                    .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}});
+    restored.buffer.setChannelSpec(
+        0, {.label = "CH1", .unit = "V", .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}});
     protoscope::ui::decodeWaveProtocolState(encoded, restored);
     const auto restoredSpec = restored.buffer.channelSpec(0);
     require(restored.view.viewMode == protoscope::plot::WaveViewMode::Split, "协议 UI 状态应恢复分屏模式");
@@ -739,8 +733,7 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
     const auto legacy = YAML::Load("view_mode: unknown\n");
     protoscope::plot::WaveDockState legacyRestored;
     protoscope::ui::decodeWaveProtocolState(legacy, legacyRestored);
-    require(legacyRestored.view.viewMode == protoscope::plot::WaveViewMode::Overlay,
-            "非法视图模式应回退 overlay");
+    require(legacyRestored.view.viewMode == protoscope::plot::WaveViewMode::Overlay, "非法视图模式应回退 overlay");
     require(legacyRestored.activeToolsDrawer == protoscope::plot::WaveToolsDrawer::Main,
             "旧状态缺抽屉类型时应使用 main 默认值");
     require(legacyRestored.legendOverlay.offsetX == 8.0F && legacyRestored.legendOverlay.offsetY == 8.0F,

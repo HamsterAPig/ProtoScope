@@ -104,7 +104,7 @@ namespace {
                              const char* tooltip)
     {
         const bool active = !wave.toolsCollapsed && wave.activeToolsDrawer == drawer;
-        const float buttonWidth = (std::max) (24.0F, ImGui::GetContentRegionAvail().x);
+        const float buttonWidth = (std::max)(24.0F, ImGui::GetContentRegionAvail().x);
         ImGui::PushID(static_cast<int>(drawer));
         const bool clicked = drawToolbarToggleButton(label, active, tooltip, ImVec2(buttonWidth, 30.0F));
         ImGui::PopID();
@@ -125,14 +125,14 @@ namespace {
     void drawToolsDrawerResizeHandle(
         plot::WaveDockState& wave, const ImVec2& drawerPos, float height, float contentLeft, float thickness)
     {
-        const float safeThickness = (std::max) (thickness, 4.0F);
-        const ImVec2 handlePos((std::max) (contentLeft, drawerPos.x - safeThickness), drawerPos.y);
+        const float safeThickness = (std::max)(thickness, 4.0F);
+        const ImVec2 handlePos((std::max)(contentLeft, drawerPos.x - safeThickness), drawerPos.y);
         ImGui::SetCursorScreenPos(handlePos);
         ImGui::InvisibleButton("##wave_tools_drawer_splitter", ImVec2(safeThickness, height));
         if (ImGui::IsItemActive()) {
-            wave.toolsExpandedWidth = (std::clamp) (wave.toolsExpandedWidth - ImGui::GetIO().MouseDelta.x,
-                                                    wave.minToolsExpandedWidth,
-                                                    wave.maxToolsExpandedWidth);
+            wave.toolsExpandedWidth = (std::clamp)(wave.toolsExpandedWidth - ImGui::GetIO().MouseDelta.x,
+                                                   wave.minToolsExpandedWidth,
+                                                   wave.maxToolsExpandedWidth);
         }
         const ImU32 color = ImGui::IsItemActive() || ImGui::IsItemHovered()
                                 ? ImGui::GetColorU32(ImGuiCol_SliderGrabActive)
@@ -151,8 +151,8 @@ namespace {
 
     void zoomTimeAroundCenter(plot::WaveViewState& view, double factor)
     {
-        const double span = (std::max) (view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan);
-        const double nextSpan = (std::max) (span * factor, view.minVisibleTimeSpan);
+        const double span = (std::max)(view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan);
+        const double nextSpan = (std::max)(span * factor, view.minVisibleTimeSpan);
         const double center = 0.5 * (view.viewMinTime + view.viewMaxTime);
         view.viewMinTime = center - nextSpan * 0.5;
         view.viewMaxTime = center + nextSpan * 0.5;
@@ -184,7 +184,7 @@ namespace {
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
         const float rowHeight = ImGui::GetFrameHeight();
-        const float offsetY = (std::max) (0.0F, std::floor((kTopToolbarHeight - rowHeight) * 0.5F));
+        const float offsetY = (std::max)(0.0F, std::floor((kTopToolbarHeight - rowHeight) * 0.5F));
         ImGui::SetCursorPosY(offsetY);
         ImGui::AlignTextToFramePadding();
 
@@ -347,7 +347,7 @@ bool plotInteractionActive(bool toolHeld)
 bool drawHorizontalSplitter(
     const char* id, float& topHeight, float minTopHeight, float minBottomHeight, float totalHeight, float thickness)
 {
-    const float safeThickness = (std::max) (thickness, 4.0F);
+    const float safeThickness = (std::max)(thickness, 4.0F);
     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
@@ -355,9 +355,8 @@ bool drawHorizontalSplitter(
     ImGui::PopStyleColor(3);
     if (ImGui::IsItemActive()) {
         topHeight += ImGui::GetIO().MouseDelta.y;
-        topHeight = (std::clamp) (topHeight,
-                                  minTopHeight,
-                                  (std::max) (minTopHeight, totalHeight - minBottomHeight - safeThickness));
+        topHeight = (std::clamp)(
+            topHeight, minTopHeight, (std::max)(minTopHeight, totalHeight - minBottomHeight - safeThickness));
         return true;
     }
     if (ImGui::IsItemHovered()) {
@@ -368,10 +367,10 @@ bool drawHorizontalSplitter(
 
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits)
 {
-    const double minVisibleTimeSpan = (std::max) (view.minVisibleTimeSpan, 1e-6);
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     view.viewMinTime = limits.X.Min;
     view.viewMaxTime = limits.X.Max;
-    view.visibleDuration = (std::max) (view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
+    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
     view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
     if (!view.lockVerticalRange) {
         view.viewMinValue = limits.Y.Min;
@@ -433,7 +432,7 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
         view.viewMinTime = xBounds.minTime;
         view.viewMaxTime = xBounds.maxTime;
         view.visibleDuration =
-            (std::max) (view.viewMaxTime - view.viewMinTime, (std::max) (view.minVisibleTimeSpan, 1e-6));
+            (std::max)(view.viewMaxTime - view.viewMinTime, (std::max)(view.minVisibleTimeSpan, 1e-6));
         view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
         view.autoFollowLatest = false;
         changed = true;
@@ -517,11 +516,11 @@ bool applyZoomSelectionViewport(plot::WaveViewState& view,
                                 const ImPlotPoint& plotStart,
                                 const ImPlotPoint& plotEnd)
 {
-    const double minVisibleTimeSpan = (std::max) (view.minVisibleTimeSpan, 1e-6);
-    const double minTime = (std::min) (plotStart.x, plotEnd.x);
-    const double maxTime = (std::max) (plotStart.x, plotEnd.x);
-    const double minValue = (std::min) (plotStart.y, plotEnd.y);
-    const double maxValue = (std::max) (plotStart.y, plotEnd.y);
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    const double minTime = (std::min)(plotStart.x, plotEnd.x);
+    const double maxTime = (std::max)(plotStart.x, plotEnd.x);
+    const double minValue = (std::min)(plotStart.y, plotEnd.y);
+    const double maxValue = (std::max)(plotStart.y, plotEnd.y);
 
     switch (mode) {
         case ZoomSelectionAxisMode::XOnly:
@@ -531,7 +530,7 @@ bool applyZoomSelectionViewport(plot::WaveViewState& view,
             // 核心流程：水平框选只写回时间轴视口，垂直轴保持当前范围不变，避免轻微竖向抖动影响缩放结果。
             view.viewMinTime = minTime;
             view.viewMaxTime = maxTime;
-            view.visibleDuration = (std::max) (view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
+            view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
             view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
             view.autoFollowLatest = false;
             view.forceNextMainPlotLimits = true;
@@ -559,7 +558,7 @@ bool applyZoomSelectionViewport(plot::WaveViewState& view,
 
 bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue)
 {
-    const double minVisibleTimeSpan = (std::max) (view.minVisibleTimeSpan, 1e-6);
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     if (!std::isfinite(minTime) || !std::isfinite(maxTime) || maxTime - minTime < minVisibleTimeSpan) {
         return false;
     }
@@ -569,7 +568,7 @@ bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime
 
     view.viewMinTime = minTime;
     view.viewMaxTime = maxTime;
-    view.visibleDuration = (std::max) (view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
+    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
     view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
     view.viewMinValue = minValue;
     view.viewMaxValue = maxValue;
@@ -593,7 +592,7 @@ bool applyFitVisibleWaveforms(plot::WaveViewState& view,
 
     // 核心流程：显示全部只根据图例当前可见通道计算显示范围，不读取或修改原始采样与游标状态。
     const auto bounds = plot::computeDisplayBoundsForChannels(
-        displayData, visibleChannelIndices, (std::max) (view.minVisibleTimeSpan, 1e-6));
+        displayData, visibleChannelIndices, (std::max)(view.minVisibleTimeSpan, 1e-6));
     if (!bounds.valid) {
         return false;
     }
@@ -634,10 +633,10 @@ ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool 
 
     view.zoomSelectionCurrentX = mouse.x;
     view.zoomSelectionCurrentY = mouse.y;
-    const ImVec2 rectMin(static_cast<float>((std::min) (view.zoomSelectionStartX, view.zoomSelectionCurrentX)),
-                         static_cast<float>((std::min) (view.zoomSelectionStartY, view.zoomSelectionCurrentY)));
-    const ImVec2 rectMax(static_cast<float>((std::max) (view.zoomSelectionStartX, view.zoomSelectionCurrentX)),
-                         static_cast<float>((std::max) (view.zoomSelectionStartY, view.zoomSelectionCurrentY)));
+    const ImVec2 rectMin(static_cast<float>((std::min)(view.zoomSelectionStartX, view.zoomSelectionCurrentX)),
+                         static_cast<float>((std::min)(view.zoomSelectionStartY, view.zoomSelectionCurrentY)));
+    const ImVec2 rectMax(static_cast<float>((std::max)(view.zoomSelectionStartX, view.zoomSelectionCurrentX)),
+                         static_cast<float>((std::max)(view.zoomSelectionStartY, view.zoomSelectionCurrentY)));
     const float pixelWidth = rectMax.x - rectMin.x;
     const float pixelHeight = rectMax.y - rectMin.y;
     const ZoomSelectionAxisMode mode = resolveZoomSelectionAxisMode(pixelWidth, pixelHeight);
@@ -688,8 +687,8 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
     }
 
     auto bitLaneContainsValue = [](const BitLaneLayoutEntry& lane, double plotY, double maxDistance) {
-        const double minY = (std::min) (lane.lowY, lane.highY);
-        const double maxY = (std::max) (lane.lowY, lane.highY);
+        const double minY = (std::min)(lane.lowY, lane.highY);
+        const double maxY = (std::max)(lane.lowY, lane.highY);
         return plotY >= minY - maxDistance && plotY <= maxY + maxDistance;
     };
     if (view.measurementChannelIndex < snapshot.channels.size() &&
@@ -733,10 +732,10 @@ const char* axisSourceName(plot::WaveTimeAxisSource source)
 
 void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport)
 {
-    const double minVisibleTimeSpan = (std::max) (view.minVisibleTimeSpan, 1e-6);
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     view.viewMinTime = viewport.minTime;
     view.viewMaxTime = viewport.maxTime;
-    view.visibleDuration = (std::max) (view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
+    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
     view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
     if (!view.lockVerticalRange) {
         view.viewMinValue = viewport.minValue;
@@ -832,7 +831,7 @@ public:
         if (!wave.overviewCollapsed) {
             // 核心流程：概览图必须基于完整历史数据，而不是主图当前视口，否则它会退化成“缩小版主图”。
             const auto derivedChannelIndices = channelIndicesForDerivedViews(wave, *frame.fullSnapshot);
-            const double minVisibleTimeSpan = (std::max) (view.minVisibleTimeSpan, 1e-6);
+            const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
             const auto overviewBounds =
                 excludesLegendHiddenChannels(view)
                     ? plot::computeDisplayBoundsForChannels(
@@ -900,8 +899,8 @@ public:
     void draw(WaveContext& context) override
     {
         const float gap = ImGui::GetStyle().ItemSpacing.y;
-        const float totalHeight = (std::max) (context.layout->mainHeight, context.wave.minMainPanelHeight);
-        const float panelHeight = (std::max) (80.0F, (totalHeight - gap) * 0.5F);
+        const float totalHeight = (std::max)(context.layout->mainHeight, context.wave.minMainPanelHeight);
+        const float panelHeight = (std::max)(80.0F, (totalHeight - gap) * 0.5F);
 
         ImGui::BeginChild("##wave_cursor_split_time", ImVec2(0.0F, panelHeight), false, ImGuiWindowFlags_NoScrollbar);
         drawOscilloscopePlot(context.wave, *context.renderFrame);
@@ -947,14 +946,14 @@ public:
 
         const auto& style = ImGui::GetStyle();
         wave.toolsExpandedWidth =
-            (std::clamp) (wave.toolsExpandedWidth, wave.minToolsExpandedWidth, wave.maxToolsExpandedWidth);
+            (std::clamp)(wave.toolsExpandedWidth, wave.minToolsExpandedWidth, wave.maxToolsExpandedWidth);
         const float contentLeft = railPos.x - style.ItemSpacing.x - context.contentWidth;
         const float drawerRight = railPos.x - style.ItemSpacing.x;
-        const float drawerWidth = (std::min) (wave.toolsExpandedWidth, (std::max) (0.0F, context.contentWidth));
+        const float drawerWidth = (std::min)(wave.toolsExpandedWidth, (std::max)(0.0F, context.contentWidth));
         if (drawerWidth <= 0.0F || context.availableHeight <= 0.0F) {
             return;
         }
-        const ImVec2 drawerPos((std::max) (contentLeft, drawerRight - drawerWidth), railPos.y);
+        const ImVec2 drawerPos((std::max)(contentLeft, drawerRight - drawerWidth), railPos.y);
         drawToolsDrawerResizeHandle(
             wave, drawerPos, context.availableHeight, contentLeft, wave.contentToolsSplitterWidth);
 
@@ -1004,7 +1003,9 @@ struct WaveComponentSet {
 };
 
 bool isCursorSplitFftMode(const plot::WaveViewState& view)
-{ return view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit; }
+{
+    return view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit;
+}
 
 WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewState& view, const ImVec2& available)
 {
@@ -1036,9 +1037,9 @@ WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewSt
                               wave.maxToolsExpandedWidth,
                               fixedContentHeight);
     wave.toolsExpandedWidth =
-        (std::clamp) (wave.toolsExpandedWidth, wave.minToolsExpandedWidth, wave.maxToolsExpandedWidth);
+        (std::clamp)(wave.toolsExpandedWidth, wave.minToolsExpandedWidth, wave.maxToolsExpandedWidth);
     plan.toolsWidth = plan.layout.toolsWidth;
-    plan.contentWidth = (std::max) (0.0F, available.x - plan.toolsWidth - spacingWidth);
+    plan.contentWidth = (std::max)(0.0F, available.x - plan.toolsWidth - spacingWidth);
     plan.frame = prepareWaveFrame(wave, plan.contentWidth);
     return plan;
 }
@@ -1105,7 +1106,9 @@ void commitWaveComponents(WaveComponentSet& components, WaveContext& context)
 WaveDockRenderer::WaveDockRenderer(app::Application& application) : application_(application) {}
 
 std::string WaveDockRenderer::formatMetric(double value, const char* baseUnit)
-{ return formatMetricText(value, baseUnit); }
+{
+    return formatMetricText(value, baseUnit);
+}
 
 void WaveDockRenderer::draw(bool& showWaveDock,
                             bool fullscreenActive,

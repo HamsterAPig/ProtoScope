@@ -13,9 +13,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua
                                                              const std::string& pathText,
                                                              const sol::object& opts)
 {
-    auto fail = [lua](const std::string& error) {
-        return script_host_lua::luaNilError(lua, error);
-    };
+    auto fail = [lua](const std::string& error) { return script_host_lua::luaNilError(lua, error); };
     if (!fileIoConfig_.enabled) {
         return fail("scripting.file_io 已禁用");
     }
@@ -119,9 +117,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsRead(sol::state_view lua
                                                              std::uint64_t handleId,
                                                              const sol::object& opts)
 {
-    auto fail = [lua](const std::string& error) {
-        return script_host_lua::luaNilError(lua, error);
-    };
+    auto fail = [lua](const std::string& error) { return script_host_lua::luaNilError(lua, error); };
     const auto iter = fileHandles_.find(handleId);
     if (iter == fileHandles_.end() || !iter->second->readable) {
         return fail("文件句柄不可读或已关闭");
@@ -155,9 +151,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsWrite(sol::state_view lu
                                                               std::uint64_t handleId,
                                                               const sol::object& payload)
 {
-    auto fail = [lua](const std::string& error) {
-        return script_host_lua::luaOkResult(lua, false, error);
-    };
+    auto fail = [lua](const std::string& error) { return script_host_lua::luaOkResult(lua, false, error); };
     const auto iter = fileHandles_.find(handleId);
     if (iter == fileHandles_.end() || !iter->second->writable) {
         return fail("文件句柄不可写或已关闭");
@@ -191,9 +185,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsClose(sol::state_view lu
 
 std::tuple<sol::object, sol::object> ScriptHost::protoFsStat(sol::state_view lua, const std::string& pathText)
 {
-    auto fail = [lua](const std::string& error) {
-        return script_host_lua::luaNilError(lua, error);
-    };
+    auto fail = [lua](const std::string& error) { return script_host_lua::luaNilError(lua, error); };
     if (!fileIoConfig_.enabled) {
         return fail("scripting.file_io 已禁用");
     }
@@ -253,9 +245,7 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsSendFile(sol::state_view
                                                                  const std::string& pathText,
                                                                  const sol::object& opts)
 {
-    auto fail = [lua](const std::string& error) {
-        return script_host_lua::luaNilError(lua, error);
-    };
+    auto fail = [lua](const std::string& error) { return script_host_lua::luaNilError(lua, error); };
     std::string kind = "send";
     std::string tag = "file";
     std::size_t chunkSize = fileIoConfig_.sendFile.defaultChunkBytes;

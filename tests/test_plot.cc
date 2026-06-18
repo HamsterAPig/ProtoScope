@@ -1384,12 +1384,14 @@ void test_bit_layout_16_and_8_bit_channels_share_absolute_rows()
     }
 
     for (std::size_t bitIndex = 0; bitIndex < 8; ++bitIndex) {
-        const auto first = std::ranges::find_if(layout.lanes, [bitIndex](const protoscope::ui::BitLaneLayoutEntry& lane) {
-            return lane.parentChannelIndex == 0 && lane.bitIndex == bitIndex;
-        });
-        const auto second = std::ranges::find_if(layout.lanes, [bitIndex](const protoscope::ui::BitLaneLayoutEntry& lane) {
-            return lane.parentChannelIndex == 1 && lane.bitIndex == bitIndex;
-        });
+        const auto first =
+            std::ranges::find_if(layout.lanes, [bitIndex](const protoscope::ui::BitLaneLayoutEntry& lane) {
+                return lane.parentChannelIndex == 0 && lane.bitIndex == bitIndex;
+            });
+        const auto second =
+            std::ranges::find_if(layout.lanes, [bitIndex](const protoscope::ui::BitLaneLayoutEntry& lane) {
+                return lane.parentChannelIndex == 1 && lane.bitIndex == bitIndex;
+            });
         require(first != layout.lanes.end() && second != layout.lanes.end(), "bit 0..7 应同时包含两个父通道 lane");
         require(first->rowIndex == second->rowIndex, "bit 0..7 的两个父通道 lane 应共享 rowIndex");
         require(std::abs(first->centerPixelY - second->centerPixelY) < 0.5F, "bit 0..7 的两个父通道 lane 应纵向重叠");
@@ -1702,7 +1704,8 @@ void test_bit_hover_readout_excludes_same_channel_raw_waveform()
     const ImVec2 plotSize(400.0F, 200.0F);
     const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
 
-    const auto readout = protoscope::ui::findHoverReadout(snapshot, displayData, {0}, layout, 1.0, 10.05, 0.2, 0.2, true);
+    const auto readout =
+        protoscope::ui::findHoverReadout(snapshot, displayData, {0}, layout, 1.0, 10.05, 0.2, 0.2, true);
     require(!readout.has_value(), "bit display 通道不应以原始 waveform 参与 hover 候选");
 }
 
@@ -2677,25 +2680,25 @@ void test_wave_grid_division_readout_conversions()
     const double displayPerDiv = protoscope::plot::waveDisplayValuePerDivision(-2.0, 6.0);
     require(std::abs(displayPerDiv - 1.0) < 1e-12, "显示值每格应等于 Y 范围除以 8");
 
-    const auto display = protoscope::plot::waveChannelValuePerDivision(
-        displayPerDiv,
-        spec,
-        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
-        protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue);
+    const auto display =
+        protoscope::plot::waveChannelValuePerDivision(displayPerDiv,
+                                                      spec,
+                                                      protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+                                                      protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue);
     require(display.has_value() && std::abs(*display - 1.0) < 1e-12, "display_value 应直接使用显示值每格");
 
-    const auto actual = protoscope::plot::waveChannelValuePerDivision(
-        displayPerDiv,
-        spec,
-        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
-        protoscope::plot::WaveGridDivisionReadoutMode::ActualValue);
+    const auto actual =
+        protoscope::plot::waveChannelValuePerDivision(displayPerDiv,
+                                                      spec,
+                                                      protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+                                                      protoscope::plot::WaveGridDivisionReadoutMode::ActualValue);
     require(actual.has_value() && std::abs(*actual - 0.5) < 1e-12, "actual_value 应除以 abs(scale)");
 
-    const auto raw = protoscope::plot::waveChannelValuePerDivision(
-        displayPerDiv,
-        spec,
-        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
-        protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
+    const auto raw =
+        protoscope::plot::waveChannelValuePerDivision(displayPerDiv,
+                                                      spec,
+                                                      protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+                                                      protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
     require(raw.has_value() && std::abs(*raw - 1.0) < 1e-12, "raw_value 应除以 abs(scale * ratio)");
 }
 
@@ -2707,34 +2710,34 @@ void test_wave_grid_division_readout_formula_offset_cancels()
         .offset = -999.0,
     };
     const double displayPerDiv = 2.0;
-    const auto offsetThenScale = protoscope::plot::waveChannelValuePerDivision(
-        displayPerDiv,
-        spec,
-        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
-        protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
-    const auto scaleThenOffset = protoscope::plot::waveChannelValuePerDivision(
-        displayPerDiv,
-        spec,
-        protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
-        protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
+    const auto offsetThenScale =
+        protoscope::plot::waveChannelValuePerDivision(displayPerDiv,
+                                                      spec,
+                                                      protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+                                                      protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
+    const auto scaleThenOffset =
+        protoscope::plot::waveChannelValuePerDivision(displayPerDiv,
+                                                      spec,
+                                                      protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
+                                                      protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
     require(offsetThenScale.has_value() && scaleThenOffset.has_value(), "两种公式都应可计算 raw 每格");
     require(std::abs(*offsetThenScale - *scaleThenOffset) < 1e-12, "offset 不应污染每格差值换算");
 
     spec.scale = 0.0;
-    const auto actualNa = protoscope::plot::waveChannelValuePerDivision(
-        displayPerDiv,
-        spec,
-        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
-        protoscope::plot::WaveGridDivisionReadoutMode::ActualValue);
+    const auto actualNa =
+        protoscope::plot::waveChannelValuePerDivision(displayPerDiv,
+                                                      spec,
+                                                      protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+                                                      protoscope::plot::WaveGridDivisionReadoutMode::ActualValue);
     require(!actualNa.has_value(), "scale 为 0 时 actual_value 每格应为 n/a");
 
     spec.scale = 1.0;
     spec.ratio = 0.0;
-    const auto rawNa = protoscope::plot::waveChannelValuePerDivision(
-        displayPerDiv,
-        spec,
-        protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
-        protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
+    const auto rawNa =
+        protoscope::plot::waveChannelValuePerDivision(displayPerDiv,
+                                                      spec,
+                                                      protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
+                                                      protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
     require(!rawNa.has_value(), "ratio 为 0 时 raw_value 每格应为 n/a");
 }
 

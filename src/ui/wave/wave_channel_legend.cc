@@ -41,9 +41,8 @@ void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active)
     ImGui::Text("Scale：%.6g", spec.scale);
     ImGui::Text("Offset：%.6g", spec.offset);
     if (bitDisplayEnabled(spec.bitDisplay)) {
-        ImGui::Text("Bits：%zu..%zu",
-                    spec.bitDisplay.firstBit,
-                    spec.bitDisplay.firstBit + spec.bitDisplay.bitCount - 1U);
+        ImGui::Text(
+            "Bits：%zu..%zu", spec.bitDisplay.firstBit, spec.bitDisplay.firstBit + spec.bitDisplay.bitCount - 1U);
         ImGui::Text("Bit Y Offset：%.6g", spec.bitDisplay.yOffset);
     }
     ImGui::TextUnformatted(active ? "状态：激活" : "状态：未激活");

@@ -133,7 +133,7 @@ const char* requestTraceStateLabel(RequestTraceState state);
 bool isRequestTraceFailure(RequestTraceState state);
 bool matchesRequestTraceFilter(const RequestTraceRow& row, const RequestTraceFilterState& filter);
 std::vector<const RequestTraceRow*> filteredRequestTraceRows(const std::deque<RequestTraceRow>& rows,
-                                                            const RequestTraceFilterState& filter);
+                                                             const RequestTraceFilterState& filter);
 std::string formatRequestTraceDuration(const RequestTraceRow& row);
 std::string formatRequestTraceDetail(const RequestTraceRow& row);
 std::string formatRequestTraceRowCsv(const RequestTraceRow& row, bool showTimestamps);

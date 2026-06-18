@@ -158,7 +158,9 @@ namespace {
                });
     }
 
-    void inspectCentralDockNode(DockLayoutIniInspectionState& state, const std::string& nodeId, std::string_view trimmed)
+    void inspectCentralDockNode(DockLayoutIniInspectionState& state,
+                                const std::string& nodeId,
+                                std::string_view trimmed)
     {
         if (trimmed.find("CentralNode=1") == std::string_view::npos) {
             return;
@@ -170,9 +172,7 @@ namespace {
             state.health.centralNodeInLegacyLeftPane || dockNodeIsInsideLegacyLeftPane(state, nodeId);
     }
 
-    void inspectDockLayoutNodeLine(DockLayoutIniInspectionState& state,
-                                   std::string_view line,
-                                   std::string_view trimmed)
+    void inspectDockLayoutNodeLine(DockLayoutIniInspectionState& state, std::string_view line, std::string_view trimmed)
     {
         const auto indent = dockLayoutLineIndent(line);
         pruneClosedDockTreeNodes(state.stack, indent);

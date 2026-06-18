@@ -538,6 +538,7 @@ namespace {
         }
         return cursorsNode;
     }
+
     YAML::Node encodeWaveChannelOverrides(const plot::WaveDockState& wave)
     {
         YAML::Node overridesNode;
@@ -605,8 +606,8 @@ namespace {
         view.showHoverReadout = node["show_hover_readout"].as<bool>(view.showHoverReadout);
         view.preferWaveformHoverReadout =
             node["prefer_waveform_hover_readout"].as<bool>(view.preferWaveformHoverReadout);
-        view.bitDisplayReadoutPolicy = parseBitDisplayReadoutPolicy(
-            node["bit_display_readout_policy"].as<std::string>(bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy)));
+        view.bitDisplayReadoutPolicy = parseBitDisplayReadoutPolicy(node["bit_display_readout_policy"].as<std::string>(
+            bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy)));
         view.showCursors = node["show_cursors"].as<bool>(view.showCursors);
         view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);
         view.phosphorGlowEnabled = node["phosphor_glow_enabled"].as<bool>(view.phosphorGlowEnabled);
@@ -621,7 +622,8 @@ namespace {
         view.sampleFrequencyInput = node["sample_frequency_input"].as<std::string>(view.sampleFrequencyInput);
         view.timeAxisSource =
             parseAxisSource(node["time_axis_source"].as<std::string>(axisSourceName(view.timeAxisSource)));
-        view.cursorSnapMode = parseSnapMode(node["cursor_snap_mode"].as<std::string>(snapModeName(view.cursorSnapMode)));
+        view.cursorSnapMode =
+            parseSnapMode(node["cursor_snap_mode"].as<std::string>(snapModeName(view.cursorSnapMode)));
         view.cursorSnapScope =
             parseSnapScope(node["cursor_snap_scope"].as<std::string>(snapScopeName(view.cursorSnapScope)));
         view.cursorExtremeSnapPolicy = parseExtremeSnapPolicy(
@@ -716,8 +718,9 @@ namespace {
         if (hiddenChannelsNode && hiddenChannelsNode.IsSequence()) {
             for (const auto& entry : hiddenChannelsNode) {
                 const auto label = entry.as<std::string>("");
-                if (label.empty() || std::find(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label) !=
-                                         wave.hiddenChannelLabels.end()) {
+                if (label.empty() ||
+                    std::find(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label) !=
+                        wave.hiddenChannelLabels.end()) {
                     continue;
                 }
                 wave.hiddenChannelLabels.push_back(label);

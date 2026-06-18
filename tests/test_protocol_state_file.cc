@@ -8,15 +8,15 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
-#include <system_error>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace {
 
-using protoscope::tests::ScopedTempPath;
 using protoscope::tests::makeUniqueTempDir;
 using protoscope::tests::require;
+using protoscope::tests::ScopedTempPath;
 
 std::filesystem::path makeTempRoot(std::string_view name)
 {
@@ -99,8 +99,7 @@ void test_protocol_state_file_roundtrips_elf_path_per_protocol()
             "proto_a 应恢复自己的 ELF 路径");
     require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_b") == "D:/symbols/b.elf",
             "proto_b 应恢复自己的 ELF 路径");
-    require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_c").empty(),
-            "没有保存路径的协议应返回空路径");
+    require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_c").empty(), "没有保存路径的协议应返回空路径");
 
     protoscope::ui::storeElfStaticAddressPath(root, "proto_a", "");
     require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_a").empty(),

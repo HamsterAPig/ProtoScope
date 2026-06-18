@@ -151,8 +151,8 @@ namespace {
     {
         return !batch.events.empty() || !batch.logs.empty() || !batch.txRequests.empty() ||
                !batch.requestGuardResets.empty() || !batch.plotSetups.empty() || !batch.plotAppends.empty() ||
-               !batch.requestDoneResults.empty() || !batch.statusUpdates.empty() || !batch.streamRuntimeProfiles.empty() ||
-               !batch.dialogRequests.empty() ||
+               !batch.requestDoneResults.empty() || !batch.statusUpdates.empty() ||
+               !batch.streamRuntimeProfiles.empty() || !batch.dialogRequests.empty() ||
                !batch.fileDialogRequests.empty() || batch.transportStats.has_value();
     }
 
@@ -615,9 +615,7 @@ struct ScriptRuntimeWorker::Impl {
         return true;
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost&,
-                                              std::optional<std::uint64_t>&,
-                                              ConfigureCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost&, std::optional<std::uint64_t>&, ConfigureCommand& command)
     {
         std::lock_guard lock(mutex);
         config = command.config;
@@ -690,9 +688,7 @@ struct ScriptRuntimeWorker::Impl {
         return {};
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost& host,
-                                              std::optional<std::uint64_t>&,
-                                              ErrorCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, ErrorCommand& command)
     {
         host.onTransportError(command.event);
         return {};
@@ -707,25 +703,19 @@ struct ScriptRuntimeWorker::Impl {
         return result;
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost& host,
-                                              std::optional<std::uint64_t>&,
-                                              ControlCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, ControlCommand& command)
     {
         host.onControl(command.context, command.id, command.value);
         return {};
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost& host,
-                                              std::optional<std::uint64_t>&,
-                                              TickCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, TickCommand& command)
     {
         host.tick(command.currentMs);
         return {};
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost& host,
-                                              std::optional<std::uint64_t>&,
-                                              TxEventCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, TxEventCommand& command)
     {
         host.onTxEvent(command.context, command.event);
         return {};
@@ -769,11 +759,7 @@ struct ScriptRuntimeWorker::Impl {
         CommandExecutionResult result;
 
         // 核心流程：命令副作用按命令类型下沉到具名 helper，run 只负责取命令和发布执行后的状态。
-        std::visit(
-            [&](auto& item) {
-                result = executeCommandItem(host, activeConnectionId, item);
-            },
-            command);
+        std::visit([&](auto& item) { result = executeCommandItem(host, activeConnectionId, item); }, command);
 
         return result;
     }

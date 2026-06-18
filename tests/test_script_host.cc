@@ -560,10 +560,8 @@ end
     require(dock.controls[5].type == protoscope::scripting::ControlType::Combo, "select 应映射为 combo");
     require(dock.controls[6].type == protoscope::scripting::ControlType::ElfSymbolCombo,
             "symbol 应映射为 elf_symbol_combo");
-    require(dock.controls[7].type == protoscope::scripting::ControlType::ValueTable,
-            "values 应映射为 value_table");
-    require(dock.controls[1].id == "device_id" && dock.controls[1].label == "设备 ID",
-            "控件位置参数应展开 id/label");
+    require(dock.controls[7].type == protoscope::scripting::ControlType::ValueTable, "values 应映射为 value_table");
+    require(dock.controls[1].id == "device_id" && dock.controls[1].label == "设备 ID", "控件位置参数应展开 id/label");
     require(dock.controls[1].textDefault == "01", "input_text default 应保持可用");
     require(dock.controls[4].boolDefault, "checkbox default 应保持可用");
     require(dock.controls[4].labelPosition == protoscope::scripting::ControlLabelPosition::Right,
@@ -587,13 +585,11 @@ end
     require(root.children[2].kind == protoscope::scripting::LayoutNodeKind::Control &&
                 root.children[2].controlId == "scale" && root.children[2].minWidth == 120.0F,
             "id + min_width 糖应展开为 control 节点");
-    require(root.children[3].kind == protoscope::scripting::LayoutNodeKind::Text &&
-                root.children[3].text == "说明文字",
+    require(root.children[3].kind == protoscope::scripting::LayoutNodeKind::Text && root.children[3].text == "说明文字",
             "text 糖应展开为 text 节点");
     require(root.children[4].kind == protoscope::scripting::LayoutNodeKind::Separator,
             "separator 糖应展开为 separator 节点");
-    require(root.children[5].kind == protoscope::scripting::LayoutNodeKind::Spacer,
-            "spacer 糖应展开为 spacer 节点");
+    require(root.children[5].kind == protoscope::scripting::LayoutNodeKind::Spacer, "spacer 糖应展开为 spacer 节点");
 }
 
 void test_script_ui_descriptor_sugar_layout_validation_failures()
@@ -664,8 +660,7 @@ function ui()
 end
 )lua");
         protoscope::scripting::ScriptHost host;
-        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()),
-                "语法糖 layout 漏布局控件应加载失败");
+        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "语法糖 layout 漏布局控件应加载失败");
         require(host.lastError().find("缺少控件") != std::string::npos, "漏布局错误应复用 layout 校验");
     }
 }
@@ -792,8 +787,7 @@ void test_script_inline_group_layout_snapshot()
     const auto& shortcutGroup = flow.children[0];
     require(shortcutGroup.kind == protoscope::scripting::LayoutNodeKind::InlineGroup, "第一项应为 inline_group");
     require(shortcutGroup.spacing == 3.0F, "inline_group spacing 应解析");
-    require(shortcutGroup.minWidth.has_value() && *shortcutGroup.minWidth == 200.0F,
-            "inline_group min_width 应解析");
+    require(shortcutGroup.minWidth.has_value() && *shortcutGroup.minWidth == 200.0F, "inline_group min_width 应解析");
     require(!shortcutGroup.maxWidth.has_value(), "inline_group 不应解析 max_width");
     require(shortcutGroup.children.size() == 2, "inline_group.controls 应展开两个 control 子节点");
     require(shortcutGroup.children[0].controlId == "read_version", "inline_group.controls 第一个控件顺序错误");
@@ -802,7 +796,8 @@ void test_script_inline_group_layout_snapshot()
     const auto& mixedGroup = flow.children[1];
     require(mixedGroup.kind == protoscope::scripting::LayoutNodeKind::InlineGroup, "第二项应为 inline_group");
     require(mixedGroup.children.size() == 2, "inline_group.children 应解析 text 与 control");
-    require(mixedGroup.children[0].kind == protoscope::scripting::LayoutNodeKind::Text, "inline_group 第一个子项应为 text");
+    require(mixedGroup.children[0].kind == protoscope::scripting::LayoutNodeKind::Text,
+            "inline_group 第一个子项应为 text");
     require(mixedGroup.children[0].text == "发送选项", "inline_group text 内容应保留");
     require(mixedGroup.children[1].controlId == "hex_send", "inline_group 第二个子项应绑定 hex_send");
     require(flow.children[2].controlId == "timeout_ms", "flow 第三个子项应绑定 timeout_ms");
@@ -1734,8 +1729,7 @@ void test_script_inline_group_unknown_control_fail()
     protoscope::scripting::ScriptHost host;
     require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_unknown_control").generic_string()),
             "inline_group.controls 引用未知控件应加载失败");
-    require(host.lastError().find("未声明控件") != std::string::npos,
-            "inline_group 未知控件错误应包含未声明控件提示");
+    require(host.lastError().find("未声明控件") != std::string::npos, "inline_group 未知控件错误应包含未声明控件提示");
 }
 
 void test_script_inline_group_child_layout_fail()
@@ -1784,8 +1778,9 @@ void test_script_compact_label_below_type_fail()
 void test_script_compact_label_below_non_positive_fail()
 {
     protoscope::scripting::ScriptHost host;
-    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_compact_label_below_non_positive").generic_string()),
-            "compact_label_below 非正数时应加载失败");
+    require(
+        !host.loadProtocolDirectory(fixtureProtocolDir("invalid_compact_label_below_non_positive").generic_string()),
+        "compact_label_below 非正数时应加载失败");
     require(host.lastError().find("compact_label_below 必须是正数") != std::string::npos,
             "compact_label_below 非正数错误应包含正数提示");
 }
@@ -3291,7 +3286,7 @@ void test_script_value_table_parse_and_update()
     require(cs2 != nullptr, "regs 应在快照中");
     const auto* tvFinal = std::get_if<protoscope::scripting::ValueTableValue>(&cs2->value);
     require(tvFinal != nullptr && tvFinal->rows[3].value == "25.3" && tvFinal->rows[4].value == "68.1",
-        "range 更新应正确写入");
+            "range 更新应正确写入");
     require(tvFinal->rows[0].value == "220.1", "之前的普通行更新应保留");
     require(tvFinal->rows[1].value == "停", "bit0 更新应保留");
     require(tvFinal->rows[2].value == "高", "bit31 更新应保留");
@@ -3809,16 +3804,12 @@ static const TestCase kAllTests[] = {
     {"plot_time_reset_can_continue_history", &test_plot_time_reset_can_continue_history},
     {"wave_sample_frequency_visible_range_filters_by_sample_index",
      &test_wave_sample_frequency_visible_range_filters_by_sample_index},
-    {"wave_snapshot_visible_range_keeps_adjacent_samples",
-     &test_wave_snapshot_visible_range_keeps_adjacent_samples},
-    {"wave_visible_range_adjacent_samples_clamp_at_edges",
-     &test_wave_visible_range_adjacent_samples_clamp_at_edges},
+    {"wave_snapshot_visible_range_keeps_adjacent_samples", &test_wave_snapshot_visible_range_keeps_adjacent_samples},
+    {"wave_visible_range_adjacent_samples_clamp_at_edges", &test_wave_visible_range_adjacent_samples_clamp_at_edges},
     {"wave_sample_frequency_preserves_trimmed_sample_offset",
      &test_wave_sample_frequency_preserves_trimmed_sample_offset},
-    {"wave_max_total_samples_trim_refreshes_cached_frame",
-     &test_wave_max_total_samples_trim_refreshes_cached_frame},
-    {"wave_max_total_samples_noop_preserves_revision",
-     &test_wave_max_total_samples_noop_preserves_revision},
+    {"wave_max_total_samples_trim_refreshes_cached_frame", &test_wave_max_total_samples_trim_refreshes_cached_frame},
+    {"wave_max_total_samples_noop_preserves_revision", &test_wave_max_total_samples_noop_preserves_revision},
     {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
     {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
@@ -3833,8 +3824,7 @@ static const TestCase kAllTests[] = {
     {"bit_active_switches_measurement_mode", &test_bit_active_switches_measurement_mode},
     {"invisible_active_bit_lane_falls_back_to_waveform_cursor",
      &test_invisible_active_bit_lane_falls_back_to_waveform_cursor},
-    {"active_bit_lane_cursor_can_return_nearby_waveform",
-     &test_active_bit_lane_cursor_can_return_nearby_waveform},
+    {"active_bit_lane_cursor_can_return_nearby_waveform", &test_active_bit_lane_cursor_can_return_nearby_waveform},
     {"bit_display_cursor_excludes_same_channel_raw_waveform",
      &test_bit_display_cursor_excludes_same_channel_raw_waveform},
     {"explicit_bit_readout_policy_keeps_waveform_when_bit_not_active",

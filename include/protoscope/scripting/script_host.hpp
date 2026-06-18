@@ -473,11 +473,8 @@ private:
 
     TxRequest createTxRequest(TxRequestKind kind, std::vector<std::uint8_t> payload, bool guarded);
     void applyTxRequestConnection(TxRequest& request) const;
-    bool applyTxRequestOptions(TxRequest& request,
-                               const sol::object& opts,
-                               const std::string& apiName,
-                               std::string& error,
-                               bool guarded);
+    bool applyTxRequestOptions(
+        TxRequest& request, const sol::object& opts, const std::string& apiName, std::string& error, bool guarded);
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
                                            const sol::object& opts,

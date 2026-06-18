@@ -8,8 +8,8 @@
 #include "protoscope/scripting/script_runtime_worker.hpp"
 #include "protoscope/transport/transport.hpp"
 
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -50,6 +50,7 @@ public:
     bool exportSessionPackage(const std::filesystem::path& path, std::string& error) const;
     bool importSessionPackage(const std::filesystem::path& path, std::string& error);
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
+
     struct RawCaptureReplayStatus {
         bool loaded{false};
         bool playing{false};
@@ -58,6 +59,7 @@ public:
         double progress{0.0};
         double speed{1.0};
     };
+
     bool loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture, std::string& error);
     void unloadRawCaptureReplayTimeline();
     bool playRawCaptureReplay(std::string& error);

@@ -75,12 +75,12 @@ bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channel
 bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown)
 {
     switch (mode) {
-    case plot::WaveMouseYOffsetDragMode::Direct:
-        return true;
-    case plot::WaveMouseYOffsetDragMode::Shift:
-        return shiftDown;
-    case plot::WaveMouseYOffsetDragMode::Disabled:
-        return false;
+        case plot::WaveMouseYOffsetDragMode::Direct:
+            return true;
+        case plot::WaveMouseYOffsetDragMode::Shift:
+            return shiftDown;
+        case plot::WaveMouseYOffsetDragMode::Disabled:
+            return false;
     }
     return true;
 }
@@ -95,8 +95,8 @@ bool isYAxisScaleHotZoneHovered()
     const ImVec2 plotPos = ImPlot::GetPlotPos();
     const ImVec2 plotSize = ImPlot::GetPlotSize();
     const ImVec2 mousePos = ImGui::GetMousePos();
-    return mousePos.x >= plotPos.x && mousePos.x <= plotPos.x + kPlotLeftEdgeHotZonePx &&
-           mousePos.y >= plotPos.y && mousePos.y <= plotPos.y + plotSize.y;
+    return mousePos.x >= plotPos.x && mousePos.x <= plotPos.x + kPlotLeftEdgeHotZonePx && mousePos.y >= plotPos.y &&
+           mousePos.y <= plotPos.y + plotSize.y;
 }
 
 std::vector<std::size_t> selectableWaveformChannels(const plot::WaveSnapshot& snapshot,
@@ -148,8 +148,7 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     if (yAxisScaleHotZoneHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         view.activeChannelScaleDrag = true;
     }
-    if (view.activeChannelScaleDrag && ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
-        yAxisScaleHotZoneHovered) {
+    if (view.activeChannelScaleDrag && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && yAxisScaleHotZoneHovered) {
         changed = updateActiveChannelScale(wave, std::exp(-static_cast<double>(io.MouseDelta.y) * 0.01)) || changed;
     }
     if (view.activeChannelScaleDrag) {
@@ -601,11 +600,8 @@ std::vector<std::size_t> waveformCursorChannelsByScope(const plot::WaveSnapshot&
     return channels;
 }
 
-double cursorCandidateScore(const plot::CursorReadout& readout,
-                            double time,
-                            double plotY,
-                            double maxTimeDistance,
-                            double maxValueDistance)
+double cursorCandidateScore(
+    const plot::CursorReadout& readout, double time, double plotY, double maxTimeDistance, double maxValueDistance)
 {
     const double timeScore = maxTimeDistance > 0.0 ? std::abs(readout.time - time) / maxTimeDistance : 0.0;
     const double valueScore = maxValueDistance > 0.0 ? std::abs(readout.displayValue - plotY) / maxValueDistance : 0.0;
@@ -620,7 +616,8 @@ bool bitCursorCandidateAllowed(const plot::WaveViewState& view,
     if (view.bitDisplayReadoutPolicy == plot::WaveBitDisplayReadoutPolicy::MixedNearest) {
         return true;
     }
-    return activeBitLaneVisible(view, bitLayout) || findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
+    return activeBitLaneVisible(view, bitLayout) ||
+           findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
 }
 
 std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnapshot& snapshot,

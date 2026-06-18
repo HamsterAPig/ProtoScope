@@ -29,12 +29,12 @@ const char* zoomSelectionHelpText(const plot::WaveViewState& view)
 const char* mouseYOffsetDragModeLabel(plot::WaveMouseYOffsetDragMode mode)
 {
     switch (mode) {
-    case plot::WaveMouseYOffsetDragMode::Direct:
-        return "Y 偏移直接拖动";
-    case plot::WaveMouseYOffsetDragMode::Shift:
-        return "Y 偏移 Shift 拖动";
-    case plot::WaveMouseYOffsetDragMode::Disabled:
-        return "Y 偏移禁用拖动";
+        case plot::WaveMouseYOffsetDragMode::Direct:
+            return "Y 偏移直接拖动";
+        case plot::WaveMouseYOffsetDragMode::Shift:
+            return "Y 偏移 Shift 拖动";
+        case plot::WaveMouseYOffsetDragMode::Disabled:
+            return "Y 偏移禁用拖动";
     }
     return "Y 偏移直接拖动";
 }
@@ -42,12 +42,12 @@ const char* mouseYOffsetDragModeLabel(plot::WaveMouseYOffsetDragMode mode)
 const char* mouseYOffsetDragModeShortLabel(plot::WaveMouseYOffsetDragMode mode)
 {
     switch (mode) {
-    case plot::WaveMouseYOffsetDragMode::Direct:
-        return "Y直";
-    case plot::WaveMouseYOffsetDragMode::Shift:
-        return "Y键";
-    case plot::WaveMouseYOffsetDragMode::Disabled:
-        return "Y关";
+        case plot::WaveMouseYOffsetDragMode::Direct:
+            return "Y直";
+        case plot::WaveMouseYOffsetDragMode::Shift:
+            return "Y键";
+        case plot::WaveMouseYOffsetDragMode::Disabled:
+            return "Y关";
     }
     return "Y直";
 }
@@ -55,12 +55,12 @@ const char* mouseYOffsetDragModeShortLabel(plot::WaveMouseYOffsetDragMode mode)
 const char* mouseYOffsetDragModeHelp(plot::WaveMouseYOffsetDragMode mode)
 {
     switch (mode) {
-    case plot::WaveMouseYOffsetDragMode::Direct:
-        return "当前为 direct：左键命中波形或 bit lane 后拖动可修改 Y 偏移；点击循环到 Shift 拖动。";
-    case plot::WaveMouseYOffsetDragMode::Shift:
-        return "当前为 shift：只有按住 Shift 并命中波形或 bit lane 时才修改 Y 偏移；点击循环到禁用拖动。";
-    case plot::WaveMouseYOffsetDragMode::Disabled:
-        return "当前为 disabled：鼠标拖动不修改 Y 偏移；通道弹窗手动输入仍可修改；点击循环到直接拖动。";
+        case plot::WaveMouseYOffsetDragMode::Direct:
+            return "当前为 direct：左键命中波形或 bit lane 后拖动可修改 Y 偏移；点击循环到 Shift 拖动。";
+        case plot::WaveMouseYOffsetDragMode::Shift:
+            return "当前为 shift：只有按住 Shift 并命中波形或 bit lane 时才修改 Y 偏移；点击循环到禁用拖动。";
+        case plot::WaveMouseYOffsetDragMode::Disabled:
+            return "当前为 disabled：鼠标拖动不修改 Y 偏移；通道弹窗手动输入仍可修改；点击循环到直接拖动。";
     }
     return "切换 gui.wave.mouse_y_offset_drag_mode。";
 }
@@ -68,12 +68,12 @@ const char* mouseYOffsetDragModeHelp(plot::WaveMouseYOffsetDragMode mode)
 plot::WaveMouseYOffsetDragMode nextMouseYOffsetDragMode(plot::WaveMouseYOffsetDragMode mode)
 {
     switch (mode) {
-    case plot::WaveMouseYOffsetDragMode::Direct:
-        return plot::WaveMouseYOffsetDragMode::Shift;
-    case plot::WaveMouseYOffsetDragMode::Shift:
-        return plot::WaveMouseYOffsetDragMode::Disabled;
-    case plot::WaveMouseYOffsetDragMode::Disabled:
-        return plot::WaveMouseYOffsetDragMode::Direct;
+        case plot::WaveMouseYOffsetDragMode::Direct:
+            return plot::WaveMouseYOffsetDragMode::Shift;
+        case plot::WaveMouseYOffsetDragMode::Shift:
+            return plot::WaveMouseYOffsetDragMode::Disabled;
+        case plot::WaveMouseYOffsetDragMode::Disabled:
+            return plot::WaveMouseYOffsetDragMode::Direct;
     }
     return plot::WaveMouseYOffsetDragMode::Direct;
 }
@@ -99,10 +99,14 @@ void addItemHelp(const char* text)
 }
 
 bool drawToolbarActionButton(const char* label, const char* help, const ImVec2& size)
-{ return drawToolbarSectionButton(label, help, false, size); }
+{
+    return drawToolbarSectionButton(label, help, false, size);
+}
 
 bool drawToolbarToggleButton(const char* label, bool active, const char* help, const ImVec2& size)
-{ return drawToolbarSectionButton(label, help, active, size); }
+{
+    return drawToolbarSectionButton(label, help, active, size);
+}
 
 float calcToolbarButtonWidth(const char* label)
 {
@@ -451,7 +455,7 @@ void ensureFftChannelState(plot::WaveDockState& wave)
         const auto oldSize = wave.fftChannelEnabled.size();
         wave.fftChannelEnabled.resize(channelCount, 0);
         if (oldSize == 0 && channelCount > 0) {
-            const auto preferredChannel = (std::min) (wave.view.measurementChannelIndex, channelCount - 1);
+            const auto preferredChannel = (std::min)(wave.view.measurementChannelIndex, channelCount - 1);
             wave.fftChannelEnabled[preferredChannel] = 1;
         }
     }
@@ -509,14 +513,14 @@ void drawFftPointCountControls(plot::WaveDockState& wave)
     if (view.fft.pointCount == plot::WaveFftPointCount::Manual &&
         ImGui::InputInt("手动点数", &manualPointCount, 128, 1024)) {
         // 核心流程：手动 N 强制使用用户输入的点数，样本不足时由 FFT 计算层给出不足提示，不做隐式补零。
-        view.fft.manualPointCount = static_cast<std::size_t>((std::clamp) (manualPointCount, 16, 16384));
+        view.fft.manualPointCount = static_cast<std::size_t>((std::clamp)(manualPointCount, 16, 16384));
         wave.cachedFftKeyValid = false;
     }
 
     int autoMaxPointCount = static_cast<int>(view.fft.autoMaxPointCount);
     if (view.fft.pointCount == plot::WaveFftPointCount::Auto &&
         ImGui::InputInt("Auto 上限", &autoMaxPointCount, 256, 1024)) {
-        view.fft.autoMaxPointCount = static_cast<std::size_t>((std::clamp) (autoMaxPointCount, 256, 16384));
+        view.fft.autoMaxPointCount = static_cast<std::size_t>((std::clamp)(autoMaxPointCount, 256, 16384));
         wave.cachedFftKeyValid = false;
     }
 }
@@ -565,7 +569,7 @@ void drawFftSpectrumOptions(plot::WaveDockState& wave)
     }
     if (view.fft.fundamentalMode == plot::WaveFftFundamentalMode::Manual &&
         ImGui::InputDouble("手动基波 Hz", &view.fft.manualFundamentalHz, 1.0, 10.0, "%.6g")) {
-        view.fft.manualFundamentalHz = (std::max) (0.0, view.fft.manualFundamentalHz);
+        view.fft.manualFundamentalHz = (std::max)(0.0, view.fft.manualFundamentalHz);
         wave.cachedFftKeyValid = false;
     }
 }
@@ -596,7 +600,7 @@ void drawFftChannelSelectionControls(plot::WaveDockState& wave)
         if (ImGui::Button("仅当前测量通道")) {
             std::fill(wave.fftChannelEnabled.begin(), wave.fftChannelEnabled.end(), 0);
             if (!wave.fftChannelEnabled.empty()) {
-                const auto channelIndex = (std::min) (view.measurementChannelIndex, wave.fftChannelEnabled.size() - 1);
+                const auto channelIndex = (std::min)(view.measurementChannelIndex, wave.fftChannelEnabled.size() - 1);
                 wave.fftChannelEnabled[channelIndex] = 1;
             }
             wave.cachedFftKeyValid = false;
@@ -728,8 +732,7 @@ void drawWaveMainControlSection(app::Application& application,
     if (drawAdaptiveToolbarButton("B 到视窗", "B", "仅移动 B 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
         placeCursorInViewport(view, config, displayData, 1, 0.5);
     }
-    if (drawAdaptiveToolbarButton(
-            "A+B 到视窗", "A+B", "仅移动双游标到当前主视窗，不改变当前视窗范围。", false, true)) {
+    if (drawAdaptiveToolbarButton("A+B 到视窗", "A+B", "仅移动双游标到当前主视窗，不改变当前视窗范围。", false, true)) {
         placeCursorPairInViewport(view, config, displayData);
     }
     if (drawAdaptiveToolbarButton(mouseYOffsetDragModeLabel(view.mouseYOffsetDragMode),
@@ -807,9 +810,8 @@ void drawCollapsedWaveToolbar(app::Application& application,
     }
     if (drawToolbarToggleButton("读",
                                 view.showHoverReadout,
-                                view.showHoverReadout
-                                    ? "悬停读数：已开启。鼠标靠近曲线时显示最近采样点。点击后关闭。"
-                                    : "悬停读数：当前关闭。点击后恢复鼠标悬停采样读数。",
+                                view.showHoverReadout ? "悬停读数：已开启。鼠标靠近曲线时显示最近采样点。点击后关闭。"
+                                                      : "悬停读数：当前关闭。点击后恢复鼠标悬停采样读数。",
                                 collapsedButtonSize)) {
         view.showHoverReadout = !view.showHoverReadout;
     }
@@ -820,7 +822,8 @@ void drawCollapsedWaveToolbar(app::Application& application,
     if (drawToolbarActionButton("适", "适配：将当前可见波形完整放入主视图。", collapsedButtonSize)) {
         view.fitVisibleWaveformsRequested = true;
     }
-    if (drawToolbarActionButton("清", "清空：清空当前波形历史缓存；不会修改协议脚本或串口连接状态。", collapsedButtonSize)) {
+    if (drawToolbarActionButton(
+            "清", "清空：清空当前波形历史缓存；不会修改协议脚本或串口连接状态。", collapsedButtonSize)) {
         application.resetWaveHistory();
     }
     if (fullscreenToggleRequested != nullptr &&
@@ -857,10 +860,8 @@ void drawWaveViewSection(plot::WaveViewState& view, double minVisibleTimeSpan)
             "显示坐标轴标签", "轴", "显示或隐藏主波形图的时间轴/数值轴标签。", view.showAxisLabels, true)) {
         view.showAxisLabels = !view.showAxisLabels;
     }
-    if (drawAdaptiveToolbarButton("显示图例",
-                                  "例",
-                                  "显示或隐藏图内通道图例；每个通道的显隐状态会按协议保存。",
-                                  view.showChannelLegend)) {
+    if (drawAdaptiveToolbarButton(
+            "显示图例", "例", "显示或隐藏图内通道图例；每个通道的显隐状态会按协议保存。", view.showChannelLegend)) {
         view.showChannelLegend = !view.showChannelLegend;
     }
     ImGui::TextUnformatted("隐藏 CH 策略");
@@ -1048,8 +1049,7 @@ void drawWaveToolbar(app::Application& application,
         return;
     }
 
-    drawWaveMainControlSection(
-        application, wave, config, displayData, fullscreenActive, fullscreenToggleRequested);
+    drawWaveMainControlSection(application, wave, config, displayData, fullscreenActive, fullscreenToggleRequested);
 
     ImGui::Spacing();
     WaveFftToolbarSection fftToolbarSection;

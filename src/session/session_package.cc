@@ -9,65 +9,65 @@
 namespace protoscope::session {
 namespace {
 
-constexpr std::string_view kMagic = "ProtoScopeSessionPackage";
-constexpr std::string_view kVersion = "1";
-constexpr std::size_t kMaxSessionPackageEntries = 10000;
+    constexpr std::string_view kMagic = "ProtoScopeSessionPackage";
+    constexpr std::string_view kVersion = "1";
+    constexpr std::size_t kMaxSessionPackageEntries = 10000;
 
-bool parseUnsigned(std::string_view text, std::uint64_t& value)
-{
-    const auto* begin = text.data();
-    const auto* end = text.data() + text.size();
-    const auto [ptr, ec] = std::from_chars(begin, end, value);
-    return ec == std::errc{} && ptr == end;
-}
+    bool parseUnsigned(std::string_view text, std::uint64_t& value)
+    {
+        const auto* begin = text.data();
+        const auto* end = text.data() + text.size();
+        const auto [ptr, ec] = std::from_chars(begin, end, value);
+        return ec == std::errc{} && ptr == end;
+    }
 
-bool parseSize(std::string_view text, std::size_t& value)
-{
-    std::uint64_t parsed = 0;
-    if (!parseUnsigned(text, parsed)) {
-        return false;
+    bool parseSize(std::string_view text, std::size_t& value)
+    {
+        std::uint64_t parsed = 0;
+        if (!parseUnsigned(text, parsed)) {
+            return false;
+        }
+        value = static_cast<std::size_t>(parsed);
+        return static_cast<std::uint64_t>(value) == parsed;
     }
-    value = static_cast<std::size_t>(parsed);
-    return static_cast<std::uint64_t>(value) == parsed;
-}
 
-bool consumeLine(std::string_view bytes, std::size_t& cursor, std::string_view& line)
-{
-    if (cursor > bytes.size()) {
-        return false;
+    bool consumeLine(std::string_view bytes, std::size_t& cursor, std::string_view& line)
+    {
+        if (cursor > bytes.size()) {
+            return false;
+        }
+        const auto next = bytes.find('\n', cursor);
+        if (next == std::string_view::npos) {
+            return false;
+        }
+        line = bytes.substr(cursor, next - cursor);
+        cursor = next + 1;
+        return true;
     }
-    const auto next = bytes.find('\n', cursor);
-    if (next == std::string_view::npos) {
-        return false;
-    }
-    line = bytes.substr(cursor, next - cursor);
-    cursor = next + 1;
-    return true;
-}
 
-bool consumePrefixedLine(std::string_view bytes,
-                         std::size_t& cursor,
-                         std::string_view prefix,
-                         std::string_view& value,
-                         std::string& error)
-{
-    std::string_view line;
-    if (!consumeLine(bytes, cursor, line)) {
-        error = "会话包头部不完整";
-        return false;
+    bool consumePrefixedLine(std::string_view bytes,
+                             std::size_t& cursor,
+                             std::string_view prefix,
+                             std::string_view& value,
+                             std::string& error)
+    {
+        std::string_view line;
+        if (!consumeLine(bytes, cursor, line)) {
+            error = "会话包头部不完整";
+            return false;
+        }
+        if (!line.starts_with(prefix)) {
+            error = "会话包字段缺失: " + std::string(prefix);
+            return false;
+        }
+        value = line.substr(prefix.size());
+        return true;
     }
-    if (!line.starts_with(prefix)) {
-        error = "会话包字段缺失: " + std::string(prefix);
-        return false;
-    }
-    value = line.substr(prefix.size());
-    return true;
-}
 
-std::vector<std::uint8_t> toBytes(std::string_view text)
-{
-    return {text.begin(), text.end()};
-}
+    std::vector<std::uint8_t> toBytes(std::string_view text)
+    {
+        return {text.begin(), text.end()};
+    }
 
 } // namespace
 

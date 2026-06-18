@@ -55,7 +55,8 @@ namespace {
         return measurementChannel;
     }
 
-    std::size_t fftReferenceVisibleSampleCount(const plot::WaveDockState& wave, const plot::WaveDisplayData& displayData)
+    std::size_t fftReferenceVisibleSampleCount(const plot::WaveDockState& wave,
+                                               const plot::WaveDisplayData& displayData)
     {
         if (displayData.channels.empty()) {
             return 0;
@@ -74,10 +75,8 @@ namespace {
             return;
         }
 
-        const auto window = plot::resolveWaveFftCursorWindow(view.fft,
-                                                             fftReferenceVisibleSampleCount(wave, displayData),
-                                                             view.sampleFrequencyHz,
-                                                             view.cursors[1].time);
+        const auto window = plot::resolveWaveFftCursorWindow(
+            view.fft, fftReferenceVisibleSampleCount(wave, displayData), view.sampleFrequencyHz, view.cursors[1].time);
         if (!window.has_value()) {
             return;
         }
@@ -501,12 +500,8 @@ void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
                             view.viewMinTime,
                             view.viewMaxTime,
                             (view.autoFollowLatest || forceMainPlotLimits) ? ImPlotCond_Always : ImPlotCond_Once);
-    ImPlot::SetupAxisTicks(ImAxis_X1,
-                           view.viewMinTime,
-                           view.viewMaxTime,
-                           plot::kWaveGridMajorXDivisions + 1,
-                           nullptr,
-                           false);
+    ImPlot::SetupAxisTicks(
+        ImAxis_X1, view.viewMinTime, view.viewMaxTime, plot::kWaveGridMajorXDivisions + 1, nullptr, false);
     view.forceNextMainPlotLimits = false;
     if (view.lockVerticalRange) {
         ImPlot::SetupAxisLimits(ImAxis_Y1, view.manualVerticalMin, view.manualVerticalMax, ImPlotCond_Always);

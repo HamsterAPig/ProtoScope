@@ -358,9 +358,9 @@ void GuiRuntime::openRawCaptureImportDialog()
 void GuiRuntime::openRawCaptureReplayTimelineDialog()
 {
 #if defined(_WIN32)
-    const auto defaultPath =
-        rawCaptureReplayTimelinePath_.empty() ? executableDir_ / "captures" / "capture.psraw"
-                                              : std::filesystem::path(rawCaptureReplayTimelinePath_);
+    const auto defaultPath = rawCaptureReplayTimelinePath_.empty()
+                                 ? executableDir_ / "captures" / "capture.psraw"
+                                 : std::filesystem::path(rawCaptureReplayTimelinePath_);
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
                                        L"载入原始回放时间轴",
@@ -520,7 +520,7 @@ void GuiRuntime::openScriptLogExportDialog()
 void GuiRuntime::openRequestTraceExportDialog()
 {
     const auto defaultPath = requestTraceExportPath_.empty() ? executableDir_ / "logs" / "request-trace.csv"
-                                                            : std::filesystem::path(requestTraceExportPath_);
+                                                             : std::filesystem::path(requestTraceExportPath_);
 #if defined(_WIN32)
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
@@ -769,7 +769,8 @@ void GuiRuntime::openWaveAnalysisExportDialog()
 {
 #if defined(_WIN32)
     const auto& lua = application_.docks().luaState();
-    const std::string baseName = lua.protocolName.empty() ? std::string("wave-analysis") : lua.protocolName + "-analysis";
+    const std::string baseName =
+        lua.protocolName.empty() ? std::string("wave-analysis") : lua.protocolName + "-analysis";
     const auto defaultPath = executableDir_ / "captures" / (baseName + ".csv");
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
@@ -1177,8 +1178,7 @@ void GuiRuntime::drawRawCaptureFileDialogs()
             }
             if (!rawCaptureReplayTimelineError_.empty()) {
                 ImGui::Spacing();
-                ImGui::TextColored(
-                    ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureReplayTimelineError_.c_str());
+                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureReplayTimelineError_.c_str());
             }
             ImGui::Spacing();
             if (ImGui::Button("载入", ImVec2(90.0F, 0.0F))) {

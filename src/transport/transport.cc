@@ -210,16 +210,19 @@ std::uint64_t TransportBase::nowMs()
     return currentTimeMs();
 }
 
-bool TransportBase::enqueueSendCommon(TransportTxTask task,
-                                      std::optional<ConnectionContext>& context,
-                                      asio::io_context& ioContext,
-                                      std::atomic<bool>& stopping,
-                                      std::function<std::pair<bool, std::string>(const std::vector<std::uint8_t>&)> writeBytes)
+bool TransportBase::enqueueSendCommon(
+    TransportTxTask task,
+    std::optional<ConnectionContext>& context,
+    asio::io_context& ioContext,
+    std::atomic<bool>& stopping,
+    std::function<std::pair<bool, std::string>(const std::vector<std::uint8_t>&)> writeBytes)
 {
     if (state() != TransportState::Open || !context.has_value()) {
         return false;
     }
-    return enqueueWrite(ioContext, stopping, std::move(task),
+    return enqueueWrite(ioContext,
+                        stopping,
+                        std::move(task),
                         [this, &context, writeBytes = std::move(writeBytes)](TransportTxTask txTask) mutable {
                             const auto writeStartedAtMs = nowMs();
                             const auto [ok, error] = writeBytes(txTask.payload);
@@ -505,7 +508,10 @@ bool TcpClientTransport::send(std::vector<std::uint8_t> bytes)
 
 bool TcpClientTransport::enqueueSend(TransportTxTask task)
 {
-    return enqueueSendCommon(std::move(task), context_, runtime_->ioContext, runtime_->stopping,
+    return enqueueSendCommon(std::move(task),
+                             context_,
+                             runtime_->ioContext,
+                             runtime_->stopping,
                              [this](const std::vector<std::uint8_t>& payload) {
                                  return writeBytes(runtime_->socket, runtime_->socketMutex, payload);
                              });
@@ -689,7 +695,10 @@ bool TcpServerTransport::send(std::vector<std::uint8_t> bytes)
 
 bool TcpServerTransport::enqueueSend(TransportTxTask task)
 {
-    return enqueueSendCommon(std::move(task), clientContext_, runtime_->ioContext, runtime_->stopping,
+    return enqueueSendCommon(std::move(task),
+                             clientContext_,
+                             runtime_->ioContext,
+                             runtime_->stopping,
                              [this](const std::vector<std::uint8_t>& payload) {
                                  return writeBytes(runtime_->clientSocket, runtime_->socketMutex, payload);
                              });
@@ -821,7 +830,10 @@ bool SerialTransport::send(std::vector<std::uint8_t> bytes)
 
 bool SerialTransport::enqueueSend(TransportTxTask task)
 {
-    return enqueueSendCommon(std::move(task), context_, runtime_->ioContext, runtime_->stopping,
+    return enqueueSendCommon(std::move(task),
+                             context_,
+                             runtime_->ioContext,
+                             runtime_->stopping,
                              [this](const std::vector<std::uint8_t>& payload) {
                                  return writeBytes(runtime_->serialPort, runtime_->portMutex, payload);
                              });

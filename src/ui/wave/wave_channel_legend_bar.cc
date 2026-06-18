@@ -68,7 +68,8 @@ namespace {
         const double xPerDiv =
             std::abs(view.viewMaxTime - view.viewMinTime) / static_cast<double>(plot::kWaveGridMajorXDivisions);
         const double yPerDiv = plot::waveDisplayValuePerDivision(view.viewMinValue, view.viewMaxValue);
-        const char* timeUnit = wave.cachedDisplayData.timeUnit.empty() ? nullptr : wave.cachedDisplayData.timeUnit.c_str();
+        const char* timeUnit =
+            wave.cachedDisplayData.timeUnit.empty() ? nullptr : wave.cachedDisplayData.timeUnit.c_str();
         return "网格 10x8 · X " + trimMetricText(formatMetricText(xPerDiv, timeUnit)) + "/格 · Y " +
                trimMetricText(formatMetricText(yPerDiv, nullptr)) + " 显示值/格";
     }
@@ -95,8 +96,10 @@ namespace {
         const ImVec2 swatchMin(cursorScreenPos.x, cursorScreenPos.y + swatchOffsetY);
         const ImVec2 swatchMax(swatchMin.x + swatchSize, swatchMin.y + swatchSize);
         auto* drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(
-            swatchMin, swatchMax, ImGui::ColorConvertFloat4ToU32(channelColor(*spec, view.measurementChannelIndex)), 2.0F);
+        drawList->AddRectFilled(swatchMin,
+                                swatchMax,
+                                ImGui::ColorConvertFloat4ToU32(channelColor(*spec, view.measurementChannelIndex)),
+                                2.0F);
         ImGui::Dummy(ImVec2(swatchSize, ImGui::GetTextLineHeight()));
         const bool swatchHovered = ImGui::IsItemHovered();
 
@@ -104,8 +107,7 @@ namespace {
         const std::string fullText = "当前 " + shortText + " · " + spec->label;
         const float textStartX = summaryStartX + swatchSize + style.ItemInnerSpacing.x;
         const float textWidth = contentRight - textStartX;
-        const std::string& visibleText =
-            ImGui::CalcTextSize(fullText.c_str()).x <= textWidth ? fullText : shortText;
+        const std::string& visibleText = ImGui::CalcTextSize(fullText.c_str()).x <= textWidth ? fullText : shortText;
         if (ImGui::CalcTextSize(visibleText.c_str()).x > textWidth) {
             if (swatchHovered) {
                 ImGui::SetTooltip("当前通道：%s", fullText.c_str());
@@ -124,8 +126,8 @@ namespace {
     {
         const auto& view = wave.view;
         ImGui::AlignTextToFramePadding();
-        const std::string headerText =
-            std::string("图例 / 吸附范围：") + snapScopeName(view.cursorSnapScope) + " · " + formatLegendGridSummary(wave);
+        const std::string headerText = std::string("图例 / 吸附范围：") + snapScopeName(view.cursorSnapScope) + " · " +
+                                       formatLegendGridSummary(wave);
         ImGui::Text("%s", headerText.c_str());
         const float buttonWidth =
             ImGui::CalcTextSize(wave.legendCollapsed ? "v" : "^").x + ImGui::GetStyle().FramePadding.x * 2.0F;
@@ -322,7 +324,7 @@ namespace {
     void drawCompactLegendRows(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)
     {
         const float swatchSize = 11.0F;
-        const std::size_t maxCompactRows = (std::min<std::size_t>)(snapshot.channels.size(), 6U);
+        const std::size_t maxCompactRows = (std::min<std::size_t>) (snapshot.channels.size(), 6U);
         for (std::size_t channelIndex = 0; channelIndex < maxCompactRows; ++channelIndex) {
             const auto spec = wave.buffer.channelSpec(channelIndex);
             if (!spec.has_value()) {
@@ -345,7 +347,9 @@ namespace {
         }
     }
 
-    void drawExpandedLegendChannelRow(plot::WaveDockState& wave, std::size_t channelIndex, const plot::ChannelSpec& spec)
+    void drawExpandedLegendChannelRow(plot::WaveDockState& wave,
+                                      std::size_t channelIndex,
+                                      const plot::ChannelSpec& spec)
     {
         ImGui::PushID(static_cast<int>(channelIndex));
         const plot::ChannelSpec defaultSpec = channelDefaultSpec(wave, channelIndex, spec);
@@ -449,8 +453,8 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
 
     ImGui::SetNextWindowPos(ImVec2(plotPos.x + clampedX, plotPos.y + clampedY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, expanded ? ImVec4(0.051F, 0.075F, 0.106F, 0.96F)
-                                                      : ImVec4(0.051F, 0.075F, 0.106F, 0.78F));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          expanded ? ImVec4(0.051F, 0.075F, 0.106F, 0.96F) : ImVec4(0.051F, 0.075F, 0.106F, 0.78F));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.30F, 0.42F, 0.54F, 0.55F));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                                    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove;

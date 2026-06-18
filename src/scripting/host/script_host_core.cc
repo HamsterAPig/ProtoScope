@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -733,8 +733,8 @@ bool applyValueTableDoubleRegisterValue(const ControlDescriptor& descriptor,
     if (descriptor.valueBitRowsBySourceId.find(id) == descriptor.valueBitRowsBySourceId.end()) {
         return true;
     }
-    if (!std::isfinite(stored) || stored < 0.0 || stored > static_cast<double>(std::numeric_limits<lua_Integer>::max()) ||
-        std::floor(stored) != stored) {
+    if (!std::isfinite(stored) || stored < 0.0 ||
+        stored > static_cast<double>(std::numeric_limits<lua_Integer>::max()) || std::floor(stored) != stored) {
         return false;
     }
     applyValueTableBitRows(descriptor, value, id, valueTableBitSourceFromInteger(static_cast<std::uint64_t>(stored)));
@@ -942,8 +942,8 @@ bool applyControlCompactLabelConfig(ControlDescriptor& descriptor, const sol::ta
         error = "控件 compact_label_below 必须是 number";
         return false;
     }
-    const double number =
-        compactBelowObject.is<double>() ? compactBelowObject.as<double>() : static_cast<double>(compactBelowObject.as<int>());
+    const double number = compactBelowObject.is<double>() ? compactBelowObject.as<double>()
+                                                          : static_cast<double>(compactBelowObject.as<int>());
     if (!std::isfinite(number) || number <= 0.0) {
         error = "控件 compact_label_below 必须是正数";
         return false;
@@ -1720,7 +1720,9 @@ std::optional<std::vector<LayoutNodeDescriptor>> parseLayoutContainerChildren(
     return parseLayoutChildren(dock, table, controlsById, usedControls, path, error);
 }
 
-bool validateInlineGroupChildren(const std::vector<LayoutNodeDescriptor>& children, const std::string& path, std::string& error)
+bool validateInlineGroupChildren(const std::vector<LayoutNodeDescriptor>& children,
+                                 const std::string& path,
+                                 std::string& error)
 {
     for (const auto& child : children) {
         if (child.kind == LayoutNodeKind::Control || child.kind == LayoutNodeKind::Text) {
@@ -1802,12 +1804,13 @@ std::optional<std::vector<std::vector<LayoutNodeDescriptor>>> parseLayoutTableRo
     return rows;
 }
 
-std::optional<LayoutNodeDescriptor> parseLayoutTableNode(const DockDescriptor& dock,
-                                                         const sol::table& table,
-                                                         const std::unordered_map<std::string, std::size_t>& controlsById,
-                                                         std::unordered_set<std::string>& usedControls,
-                                                         const std::string& path,
-                                                         std::string& error)
+std::optional<LayoutNodeDescriptor> parseLayoutTableNode(
+    const DockDescriptor& dock,
+    const sol::table& table,
+    const std::unordered_map<std::string, std::size_t>& controlsById,
+    std::unordered_set<std::string>& usedControls,
+    const std::string& path,
+    std::string& error)
 {
     LayoutNodeDescriptor node;
     node.kind = LayoutNodeKind::Table;
@@ -1860,8 +1863,7 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
         return std::nullopt;
     }
     if (!typeObject.valid() || typeObject.get_type() == sol::type::lua_nil) {
-        if (const sol::object idObject = table["id"];
-            idObject.valid() && idObject.get_type() != sol::type::lua_nil) {
+        if (const sol::object idObject = table["id"]; idObject.valid() && idObject.get_type() != sol::type::lua_nil) {
             if (!idObject.is<std::string>()) {
                 error = path + ".id 必须是字符串";
                 return std::nullopt;
@@ -2626,8 +2628,8 @@ bool applyPlotBitDisplayUnsignedField(const sol::table& bitTable,
     }
     const auto parsed = luaUnsignedIntegerValue(object);
     if (!parsed.has_value() || *parsed < minValue || *parsed > maxValue) {
-        error = "plot.setup.channels[" + std::to_string(channelIndex) + "].bit_display." + fieldName +
-                " 必须是 " + std::to_string(minValue) + ".." + std::to_string(maxValue) + " 的整数";
+        error = "plot.setup.channels[" + std::to_string(channelIndex) + "].bit_display." + fieldName + " 必须是 " +
+                std::to_string(minValue) + ".." + std::to_string(maxValue) + " 的整数";
         return false;
     }
     target = static_cast<std::size_t>(*parsed);
@@ -2665,15 +2667,16 @@ bool applyPlotChannelBitDisplay(PlotChannelDescriptor& descriptor,
         }
         spec.enabled = enabledObject.as<bool>();
     }
-    if (!applyPlotBitDisplayUnsignedField(bitTable, "first_bit", index, 0, plot::kMaxBitDisplayCount - 1, spec.firstBit, error)) {
+    if (!applyPlotBitDisplayUnsignedField(
+            bitTable, "first_bit", index, 0, plot::kMaxBitDisplayCount - 1, spec.firstBit, error)) {
         return false;
     }
-    if (!applyPlotBitDisplayUnsignedField(bitTable, "bit_count", index, 1, plot::kMaxBitDisplayCount, spec.bitCount, error)) {
+    if (!applyPlotBitDisplayUnsignedField(
+            bitTable, "bit_count", index, 1, plot::kMaxBitDisplayCount, spec.bitCount, error)) {
         return false;
     }
     if (spec.firstBit + spec.bitCount > plot::kMaxBitDisplayCount) {
-        error = "plot.setup.channels[" + std::to_string(index) +
-                "].bit_display.first_bit + bit_count 不允许超过 64";
+        error = "plot.setup.channels[" + std::to_string(index) + "].bit_display.first_bit + bit_count 不允许超过 64";
         return false;
     }
 
@@ -3265,7 +3268,8 @@ void ScriptHost::applyStreamValueTargets(const std::vector<StreamParsedFrame>& f
 
             auto current = defaultValueTableFor(*descriptor);
             if (const auto currentIter = controlValues_.find(target.controlId); currentIter != controlValues_.end()) {
-                if (const auto* tableValue = std::get_if<ValueTableValue>(&currentIter->second); tableValue != nullptr) {
+                if (const auto* tableValue = std::get_if<ValueTableValue>(&currentIter->second);
+                    tableValue != nullptr) {
                     current = *tableValue;
                 }
             }

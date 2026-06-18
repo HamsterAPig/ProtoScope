@@ -28,8 +28,7 @@ inline std::uint64_t nowMs()
 
 inline std::filesystem::path makeUniqueTempDir(std::string_view prefix)
 {
-    const auto path =
-        std::filesystem::temp_directory_path() / (std::string(prefix) + "-" + std::to_string(nowMs()));
+    const auto path = std::filesystem::temp_directory_path() / (std::string(prefix) + "-" + std::to_string(nowMs()));
     std::filesystem::create_directories(path);
     return path;
 }
@@ -57,7 +56,9 @@ private:
 };
 
 template <typename Predicate>
-bool waitUntil(Predicate predicate, int attempts = 50, std::chrono::milliseconds interval = std::chrono::milliseconds(10))
+bool waitUntil(Predicate predicate,
+               int attempts = 50,
+               std::chrono::milliseconds interval = std::chrono::milliseconds(10))
 {
     for (int i = 0; i < attempts; ++i) {
         if (predicate()) {

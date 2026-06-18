@@ -25,16 +25,22 @@ namespace {
     }
 
     void addMetricChip(MetricChips& chips, const char* label, double value, const char* unit = nullptr)
-    { addChip(chips, label, formatMetricText(value, unit)); }
+    {
+        addChip(chips, label, formatMetricText(value, unit));
+    }
 
     void addOptionalMetricChip(MetricChips& chips,
                                const char* label,
                                const std::optional<double>& value,
                                const char* unit = nullptr)
-    { addChip(chips, label, value.has_value() ? formatMetricText(*value, unit) : "N/A"); }
+    {
+        addChip(chips, label, value.has_value() ? formatMetricText(*value, unit) : "N/A");
+    }
 
     const char* safeUnit(const std::string& unit)
-    { return unit.empty() ? nullptr : unit.c_str(); }
+    {
+        return unit.empty() ? nullptr : unit.c_str();
+    }
 
     ImVec2 calcChipSize(const MetricChip& chip, float padX, float padY)
     {
@@ -57,7 +63,7 @@ namespace {
             const ImVec2 chipSize = calcChipSize(chip, padX, padY);
 
             if (rowWidth > 0.0F && rowWidth + gapX + chipSize.x > maxWidth) {
-                size.x = (std::max) (size.x, rowWidth);
+                size.x = (std::max)(size.x, rowWidth);
                 size.y += rowHeight + gapY;
 
                 rowWidth = 0.0F;
@@ -69,10 +75,10 @@ namespace {
             }
 
             rowWidth += chipSize.x;
-            rowHeight = (std::max) (rowHeight, chipSize.y);
+            rowHeight = (std::max)(rowHeight, chipSize.y);
         }
 
-        size.x = (std::max) (size.x, rowWidth);
+        size.x = (std::max)(size.x, rowWidth);
         size.y += rowHeight;
 
         return size;
@@ -147,7 +153,7 @@ namespace {
                            rounding);
 
             x += chipSize.x + gapX;
-            rowHeight = (std::max) (rowHeight, chipSize.y);
+            rowHeight = (std::max)(rowHeight, chipSize.y);
         }
     }
 
@@ -349,7 +355,7 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     constexpr float chipPadX = 8.0F;
     constexpr float chipPadY = 4.0F;
 
-    const float gridMaxWidth = (std::min) (maxOverlayWidth, plotSize.x * 0.52F) - padding * 2.0F;
+    const float gridMaxWidth = (std::min)(maxOverlayWidth, plotSize.x * 0.52F) - padding * 2.0F;
 
     const ImVec2 gridSize = calcChipGridSize(chips, gridMaxWidth, chipGapX, chipGapY, chipPadX, chipPadY);
 
@@ -362,7 +368,7 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     }
 
     const float titleWidth = ImGui::CalcTextSize(title.c_str()).x;
-    const float contentWidth = (std::max) (gridSize.x, titleWidth);
+    const float contentWidth = (std::max)(gridSize.x, titleWidth);
 
     const float overlayWidth = contentWidth + padding * 2.0F;
     const float overlayHeight = padding * 2.0F + ImGui::GetTextLineHeight() + headerGap + gridSize.y;

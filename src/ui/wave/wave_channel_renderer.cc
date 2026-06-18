@@ -26,25 +26,29 @@ ImPlotPoint waveSampleGetter(const int index, const void* data)
 }
 
 std::size_t clampRenderConfig(const std::size_t value, const std::size_t fallback)
-{ return value == 0 ? fallback : value; }
+{
+    return value == 0 ? fallback : value;
+}
 
 std::size_t estimateVerticesPerPoint(const bool phosphorGlowEnabled)
-{ return phosphorGlowEnabled ? 16 : 6; }
+{
+    return phosphorGlowEnabled ? 16 : 6;
+}
 
 RenderBudget makeRenderBudget(const plot::WaveViewState& view,
                               const std::size_t channelCount,
                               std::size_t pixelWidth,
                               const bool phosphorGlowEnabled)
 {
-    const std::size_t safeChannelCount = (std::max) (std::size_t{1}, channelCount);
+    const std::size_t safeChannelCount = (std::max)(std::size_t{1}, channelCount);
     const std::size_t estimatedVerticesPerPoint = estimateVerticesPerPoint(phosphorGlowEnabled);
     const std::size_t configuredPointLimit = clampRenderConfig(view.maxRenderPointsPerChannel, 1200);
     const std::size_t configuredVertexLimit = clampRenderConfig(view.maxRenderVertices, 60000);
     const std::size_t pointsByVertexBudget =
-        (std::max) (std::size_t{1}, configuredVertexLimit / (safeChannelCount * estimatedVerticesPerPoint));
+        (std::max)(std::size_t{1}, configuredVertexLimit / (safeChannelCount * estimatedVerticesPerPoint));
     // 核心流程：每通道最终点数同时受像素宽度、用户配置和 16-bit 顶点预算约束，避免单帧 DrawList 溢出。
     const std::size_t pointsPerChannel =
-        (std::max) (std::size_t{1}, (std::min) ({pixelWidth, configuredPointLimit, pointsByVertexBudget}));
+        (std::max)(std::size_t{1}, (std::min)({pixelWidth, configuredPointLimit, pointsByVertexBudget}));
     return RenderBudget{.pointsPerChannel = pointsPerChannel, .estimatedVerticesPerPoint = estimatedVerticesPerPoint};
 }
 
@@ -76,15 +80,15 @@ float phosphorFade(const double latestTime, const double pointTime, const double
     if (persistenceWindow <= 1e-12) {
         return 1.0F;
     }
-    const double age = (std::max) (0.0, latestTime - pointTime);
+    const double age = (std::max)(0.0, latestTime - pointTime);
     const double fade = 1.0 - age / persistenceWindow;
-    return static_cast<float>((std::clamp) (fade, 0.08, 1.0));
+    return static_cast<float>((std::clamp)(fade, 0.08, 1.0));
 }
 
 float densityStrength(const std::size_t sampleCount)
 {
     const double strength = std::log2(static_cast<double>(sampleCount) + 1.0) / 4.0;
-    return static_cast<float>((std::clamp) (0.35 + strength, 0.35, 1.0));
+    return static_cast<float>((std::clamp)(0.35 + strength, 0.35, 1.0));
 }
 
 ImVec4 fallbackChannelColor(const std::size_t channelIndex)
@@ -119,16 +123,24 @@ ImVec4 channelColor(const plot::ChannelView& channel, const std::size_t channelI
 }
 
 bool bitDisplayEnabled(const plot::BitDisplaySpec& spec)
-{ return spec.enabled && spec.bitCount > 0 && spec.firstBit + spec.bitCount <= plot::kMaxBitDisplayCount; }
+{
+    return spec.enabled && spec.bitCount > 0 && spec.firstBit + spec.bitCount <= plot::kMaxBitDisplayCount;
+}
 
 std::string bitLaneDisplayLabel(const std::size_t bitIndex)
-{ return "bit " + std::to_string(bitIndex); }
+{
+    return "bit " + std::to_string(bitIndex);
+}
 
 double bitDisplayLanePitch()
-{ return 1.25; }
+{
+    return 1.25;
+}
 
 double bitDisplayLaneHeight()
-{ return 0.75; }
+{
+    return 0.75;
+}
 
 std::vector<std::size_t> bitDisplayRowsForChannels(const plot::WaveSnapshot& snapshot,
                                                    const std::vector<std::size_t>& channelIndices)
@@ -195,8 +207,8 @@ plot::WaveValueRange bitDisplayValueRange(const plot::WaveSnapshot& snapshot,
         }
         const double laneBase =
             (static_cast<double>(std::distance(rows.begin(), row)) + spec.yOffset) * bitDisplayLanePitch();
-        minValue = (std::min) (minValue, laneBase);
-        maxValue = (std::max) (maxValue, laneBase + bitDisplayLaneHeight());
+        minValue = (std::min)(minValue, laneBase);
+        maxValue = (std::max)(maxValue, laneBase + bitDisplayLaneHeight());
     }
     if (!std::isfinite(minValue) || !std::isfinite(maxValue)) {
         return {};
@@ -293,8 +305,8 @@ std::optional<BitLaneHit> findBitLaneAtPlotValue(const BitLaneLayout& layout,
         return std::nullopt;
     }
     for (const auto& lane : layout.lanes) {
-        const double minY = (std::min) (lane.lowY, lane.highY);
-        const double maxY = (std::max) (lane.lowY, lane.highY);
+        const double minY = (std::min)(lane.lowY, lane.highY);
+        const double maxY = (std::max)(lane.lowY, lane.highY);
         double distance = 0.0;
         if (plotY < minY) {
             distance = minY - plotY;
@@ -344,10 +356,10 @@ void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
     }
 
     const float coreLineWidth = plot::sanitizeChannelLineWidth(lineWidth);
-    const float innerGlowWidth = (std::min) (coreLineWidth + 2.0F, 4.5F);
-    const float outerGlowWidth = (std::min) (coreLineWidth + 4.0F, 7.0F);
-    const float connectorCoreWidth = (std::max) (coreLineWidth, 1.2F);
-    const float connectorGlowWidth = (std::min) (coreLineWidth + 3.5F, 5.0F);
+    const float innerGlowWidth = (std::min)(coreLineWidth + 2.0F, 4.5F);
+    const float outerGlowWidth = (std::min)(coreLineWidth + 4.0F, 7.0F);
+    const float connectorCoreWidth = (std::max)(coreLineWidth, 1.2F);
+    const float connectorGlowWidth = (std::min)(coreLineWidth + 3.5F, 5.0F);
     auto* drawList = ImPlot::GetPlotDrawList();
     ImPlot::PushPlotClipRect();
 
@@ -357,7 +369,7 @@ void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
     for (const auto& [time, minValue, maxValue, sampleCount] : points) {
         const float fade = phosphorFade(latestTime, time, persistenceWindow);
         const float density = densityStrength(sampleCount);
-        const float alpha = static_cast<float>((std::clamp) (fade * density * glowIntensity, 0.05, 1.0));
+        const float alpha = static_cast<float>((std::clamp)(fade * density * glowIntensity, 0.05, 1.0));
 
         const ImVec2 minPos = ImPlot::PlotToPixels(time, minValue);
         const ImVec2 maxPos = ImPlot::PlotToPixels(time, maxValue);
@@ -379,7 +391,7 @@ void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
             midPos, 1.5F + 1.5F * alpha, ImGui::ColorConvertFloat4ToU32(withAlpha(color, alpha * 0.85F)));
 
         if (hasPrevMid) {
-            const float lineAlpha = (std::min) (prevAlpha, alpha);
+            const float lineAlpha = (std::min)(prevAlpha, alpha);
             drawList->AddLine(prevMid,
                               midPos,
                               ImGui::ColorConvertFloat4ToU32(withAlpha(color, lineAlpha * 0.18F)),
