@@ -2374,6 +2374,45 @@ void test_wave_fft_manual_point_count_supports_non_power_of_two()
     require(frame.channels[0].bins[30].magnitude > 0.9, "60Hz 峰值应保留");
 }
 
+void test_wave_fft_cursor_window_resolves_point_counts_and_duration()
+{
+    using protoscope::plot::WaveFftPointCount;
+
+    protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = WaveFftPointCount::N1024,
+    };
+    auto window = protoscope::plot::resolveWaveFftCursorWindow(config, 4096, 2048.0, 10.0);
+    require(window.has_value(), "固定 N 和有效 Fs 应生成游标 FFT 输入窗口");
+    require(window->pointCount == 1024, "固定 N1024 应解析为 1024 点");
+    require(std::abs(window->durationSeconds - 0.5) < 1e-12, "固定 N 游标间隔应等于 N/Fs");
+    require(std::abs(window->minTime - 9.5) < 1e-12 && std::abs(window->maxTime - 10.0) < 1e-12,
+            "固定 N 游标窗口应以右游标为锚回退 N/Fs");
+
+    config.pointCount = WaveFftPointCount::Manual;
+    config.manualPointCount = 750;
+    window = protoscope::plot::resolveWaveFftCursorWindow(config, 1000, 1500.0, 3.0);
+    require(window.has_value(), "Manual 点数应生成游标 FFT 输入窗口");
+    require(window->pointCount == 750, "Manual 应保留用户指定点数");
+    require(std::abs(window->durationSeconds - 0.5) < 1e-12, "Manual 游标间隔应等于 N/Fs");
+
+    config.pointCount = WaveFftPointCount::Auto;
+    config.autoMaxPointCount = 4096;
+    window = protoscope::plot::resolveWaveFftCursorWindow(config, 3000, 1000.0, 8.0);
+    require(window.has_value(), "Auto 点数应按当前可见样本解析窗口");
+    require(window->pointCount == 2048, "Auto 应选择不超过可见样本和上限的最大 2^n");
+    require(std::abs(window->durationSeconds - 2.048) < 1e-12, "Auto 游标间隔应跟随解析出的 N");
+
+    config.pointCount = WaveFftPointCount::VisibleSamples;
+    window = protoscope::plot::resolveWaveFftCursorWindow(config, 1000, 1000.0, 2.0);
+    require(window.has_value(), "VisibleSamples 应使用当前可见样本数生成窗口");
+    require(window->pointCount == 1000, "VisibleSamples 应保留非 2^n 可见样本数");
+    require(std::abs(window->durationSeconds - 1.0) < 1e-12, "VisibleSamples 游标间隔应等于可见样本数/Fs");
+
+    require(!protoscope::plot::resolveWaveFftCursorWindow(config, 1000, 0.0, 2.0).has_value(),
+            "采样频率无效时不应强制移动游标窗口");
+}
+
 void test_wave_fft_fit_viewport_resets_frequency_and_value_ranges()
 {
     constexpr double sampleFrequencyHz = 1000.0;

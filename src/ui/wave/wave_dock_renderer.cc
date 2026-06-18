@@ -677,6 +677,26 @@ public:
     }
 };
 
+class WaveCursorSplitComponent final : public IWaveComponent {
+public:
+    std::string_view id() const override { return "wave_cursor_split"; }
+
+    void draw(WaveContext& context) override
+    {
+        const float gap = ImGui::GetStyle().ItemSpacing.y;
+        const float totalHeight = (std::max)(context.layout->mainHeight, context.wave.minMainPanelHeight);
+        const float panelHeight = (std::max)(80.0F, (totalHeight - gap) * 0.5F);
+
+        ImGui::BeginChild("##wave_cursor_split_time", ImVec2(0.0F, panelHeight), false, ImGuiWindowFlags_NoScrollbar);
+        drawOscilloscopePlot(context.wave, *context.renderFrame);
+        ImGui::EndChild();
+
+        ImGui::BeginChild("##wave_cursor_split_fft", ImVec2(0.0F, panelHeight), false, ImGuiWindowFlags_NoScrollbar);
+        drawWaveFftPlot(context.wave, *context.renderFrame, false);
+        ImGui::EndChild();
+    }
+};
+
 class WaveMeasurementOverlayComponent final : public IWaveComponent {
 public:
     std::string_view id() const override { return "wave_measurement_overlay"; }
@@ -740,23 +760,31 @@ struct WaveComponentSet {
     WaveOverviewComponent overview;
     WaveLegendComponent legend;
     WavePlotComponent plot;
+    WaveCursorSplitComponent cursorSplit;
     WaveFftComponent fft;
     WaveMeasurementOverlayComponent measurementOverlay;
     WaveToolbarComponent toolbar;
-    std::array<IWaveComponent*, 6> all;
+    std::array<IWaveComponent*, 7> all;
 
-    WaveComponentSet() : all{&overview, &legend, &plot, &fft, &measurementOverlay, &toolbar} {}
+    WaveComponentSet() : all{&overview, &legend, &plot, &cursorSplit, &fft, &measurementOverlay, &toolbar} {}
 };
+
+bool isCursorSplitFftMode(const plot::WaveViewState& view)
+{
+    return view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit;
+}
 
 WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewState& view, const ImVec2& available)
 {
     const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
     const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
+    const bool cursorSplitMode = isCursorSplitFftMode(view);
     const float legendHeight =
-        view.showChannelLegend ? measureChannelLegendHeight(wave.cachedFullSnapshot, wave) : 0.0F;
+        !cursorSplitMode && view.showChannelLegend ? measureChannelLegendHeight(wave.cachedFullSnapshot, wave) : 0.0F;
     const float overviewRequestedHeight =
-        wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.overviewPanelHeight;
-    const float overviewMinHeight = wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.minOverviewPanelHeight;
+        cursorSplitMode ? 0.0F : (wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.overviewPanelHeight);
+    const float overviewMinHeight =
+        cursorSplitMode ? 0.0F : (wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.minOverviewPanelHeight);
     const float mainPlotAxisReserve = ImGui::GetTextLineHeightWithSpacing() + spacingHeight;
     const float fixedContentHeight = legendHeight + spacingHeight * 2.0F + mainPlotAxisReserve;
 
@@ -768,7 +796,7 @@ WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewSt
                                         wave.toolsCollapsedWidth,
                                         wave.toolsCollapsed,
                                         wave.contentToolsSplitterWidth + spacingWidth * 2.0F,
-                                        wave.overviewCollapsed ? 0.0F : wave.overviewMainSplitterHeight,
+                                        cursorSplitMode || wave.overviewCollapsed ? 0.0F : wave.overviewMainSplitterHeight,
                                         overviewMinHeight,
                                         wave.minMainPanelHeight,
                                         wave.minToolsExpandedWidth,
@@ -815,9 +843,14 @@ void drawWaveContentComponents(WaveComponentSet& components, WaveContext& contex
 {
     ImGui::BeginChild(
         "##wave_content", ImVec2(context.contentWidth, context.availableHeight), false, ImGuiWindowFlags_NoScrollbar);
-    components.overview.draw(context);
-    components.legend.draw(context);
-    if (context.view.fft.enabled) {
+    const bool cursorSplitMode = isCursorSplitFftMode(context.view);
+    if (!cursorSplitMode) {
+        components.overview.draw(context);
+        components.legend.draw(context);
+    }
+    if (cursorSplitMode) {
+        components.cursorSplit.draw(context);
+    } else if (context.view.fft.enabled) {
         components.fft.draw(context);
     } else {
         components.plot.draw(context);

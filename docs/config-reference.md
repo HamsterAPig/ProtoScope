@@ -91,6 +91,7 @@ gui:
     show_axis_labels: false
     show_channel_legend: true
     show_fft_legend: true
+    cursor_fft_highlight_rgba: [0.20, 0.55, 1.00, 0.16]
 ```
 
 - `fullscreen_mode`：`focus` 或 `overlay`。
@@ -112,6 +113,7 @@ gui:
 - `min_visible_time_span`：X 轴最小可见时间跨度。
 - `reset_history_on_time_reset`：时间轴重置时是否清空历史。
 - `show_axis_labels` / `show_channel_legend` / `show_fft_legend`：波形轴标签、通道图例、FFT 图例显示开关。
+- `cursor_fft_highlight_rgba`：游标分屏模式下主波形 C1~C2 FFT 输入窗口高亮色，按 `[r, g, b, a]` 写入。
 
 ### gui 运行态预算
 

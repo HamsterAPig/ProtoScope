@@ -494,6 +494,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.view.sampleFrequencyHz = 2048.0;
     waveA.view.sampleFrequencyInput = "2048";
     waveA.view.fft.enabled = true;
+    waveA.view.fft.displayMode = protoscope::plot::WaveFftDisplayMode::CursorSplit;
     waveA.view.fft.pointCount = protoscope::plot::WaveFftPointCount::N1024;
     waveA.view.fft.window = protoscope::plot::WaveFftWindow::BlackmanHarris;
     waveA.view.fft.magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::Decibel;
@@ -562,6 +563,8 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredASpec->offset == -0.25, "proto_a 应恢复自己的偏移覆盖");
     require(restoredA.view.sampleFrequencyHz == 2048.0, "proto_a 应恢复自己的采样频率");
     require(restoredA.view.fft.enabled, "proto_a 应恢复 FFT 开关");
+    require(restoredA.view.fft.displayMode == protoscope::plot::WaveFftDisplayMode::CursorSplit,
+            "proto_a 应恢复 FFT 显示模式");
     require(restoredA.view.fft.pointCount == protoscope::plot::WaveFftPointCount::N1024, "proto_a 应恢复 FFT 点数");
     require(restoredA.view.fft.window == protoscope::plot::WaveFftWindow::BlackmanHarris, "proto_a 应恢复 FFT 窗函数");
     require(restoredA.view.fft.magnitudeMode == protoscope::plot::WaveFftMagnitudeMode::Decibel,
@@ -609,6 +612,8 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
     require(!restoredB.view.fft.enabled, "不同协议不应串用 proto_a FFT 开关");
+    require(restoredB.view.fft.displayMode == protoscope::plot::WaveFftDisplayMode::FullSpectrum,
+            "不同协议应保留默认完整频谱显示模式");
     require(restoredB.analysisMarkers.empty(), "不同协议不应串用 proto_a 分析标记");
     require(restoredB.view.measurement.stddev && !restoredB.view.measurement.variance,
             "老状态或其他协议应保留默认测量项");

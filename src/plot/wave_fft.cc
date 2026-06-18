@@ -43,25 +43,6 @@ namespace {
         return 1.0;
     }
 
-    std::size_t resolvePointCount(const WaveFftConfig& config, std::size_t visibleSampleCount)
-    {
-        if (visibleSampleCount < kMinFftPointCount) {
-            return 0;
-        }
-        if (config.pointCount == WaveFftPointCount::VisibleSamples) {
-            return visibleSampleCount;
-        }
-        if (config.pointCount == WaveFftPointCount::Manual) {
-            return config.manualPointCount;
-        }
-        if (config.pointCount != WaveFftPointCount::Auto) {
-            return fftPointCountValue(config.pointCount);
-        }
-        const std::size_t maxAuto = (std::max)(kMinFftPointCount, largestPowerOfTwoAtMost(config.autoMaxPointCount));
-        const std::size_t usable = (std::min)(visibleSampleCount, maxAuto);
-        return largestPowerOfTwoAtMost(usable);
-    }
-
     double displayMagnitude(double magnitude, WaveFftMagnitudeMode mode)
     {
         if (mode == WaveFftMagnitudeMode::Decibel) {
@@ -254,10 +235,10 @@ namespace {
 
 bool operator==(const WaveFftConfig& lhs, const WaveFftConfig& rhs)
 {
-    return lhs.enabled == rhs.enabled && lhs.pointCount == rhs.pointCount && lhs.window == rhs.window &&
-           lhs.magnitudeMode == rhs.magnitudeMode && lhs.fundamentalMode == rhs.fundamentalMode &&
-           lhs.manualFundamentalHz == rhs.manualFundamentalHz && lhs.manualPointCount == rhs.manualPointCount &&
-           lhs.autoMaxPointCount == rhs.autoMaxPointCount;
+    return lhs.enabled == rhs.enabled && lhs.displayMode == rhs.displayMode && lhs.pointCount == rhs.pointCount &&
+           lhs.window == rhs.window && lhs.magnitudeMode == rhs.magnitudeMode &&
+           lhs.fundamentalMode == rhs.fundamentalMode && lhs.manualFundamentalHz == rhs.manualFundamentalHz &&
+           lhs.manualPointCount == rhs.manualPointCount && lhs.autoMaxPointCount == rhs.autoMaxPointCount;
 }
 
 bool operator==(const WaveFftCacheKey& lhs, const WaveFftCacheKey& rhs)
@@ -356,6 +337,60 @@ const char* fftFundamentalModeName(WaveFftFundamentalMode mode)
     return "Auto";
 }
 
+const char* fftDisplayModeName(WaveFftDisplayMode mode)
+{
+    switch (mode) {
+        case WaveFftDisplayMode::FullSpectrum:
+            return "Full spectrum";
+        case WaveFftDisplayMode::CursorSplit:
+            return "Cursor split";
+    }
+    return "Full spectrum";
+}
+
+std::size_t resolveWaveFftPointCount(const WaveFftConfig& config, std::size_t visibleSampleCount)
+{
+    if (config.pointCount == WaveFftPointCount::VisibleSamples) {
+        return visibleSampleCount >= kMinFftPointCount ? visibleSampleCount : 0;
+    }
+    if (config.pointCount == WaveFftPointCount::Manual) {
+        return config.manualPointCount;
+    }
+    if (config.pointCount != WaveFftPointCount::Auto) {
+        return fftPointCountValue(config.pointCount);
+    }
+    if (visibleSampleCount < kMinFftPointCount) {
+        return 0;
+    }
+    const std::size_t maxAuto = (std::max)(kMinFftPointCount, largestPowerOfTwoAtMost(config.autoMaxPointCount));
+    const std::size_t usable = (std::min)(visibleSampleCount, maxAuto);
+    return largestPowerOfTwoAtMost(usable);
+}
+
+std::optional<WaveFftCursorWindow> resolveWaveFftCursorWindow(const WaveFftConfig& config,
+                                                              std::size_t visibleSampleCount,
+                                                              double sampleFrequencyHz,
+                                                              double rightCursorTime)
+{
+    if (sampleFrequencyHz <= 0.0 || !std::isfinite(sampleFrequencyHz) || !std::isfinite(rightCursorTime)) {
+        return std::nullopt;
+    }
+    const std::size_t pointCount = resolveWaveFftPointCount(config, visibleSampleCount);
+    if (pointCount < kMinFftPointCount) {
+        return std::nullopt;
+    }
+    const double durationSeconds = static_cast<double>(pointCount) / sampleFrequencyHz;
+    if (durationSeconds <= 0.0 || !std::isfinite(durationSeconds)) {
+        return std::nullopt;
+    }
+    return WaveFftCursorWindow{
+        .minTime = rightCursorTime - durationSeconds,
+        .maxTime = rightCursorTime,
+        .pointCount = pointCount,
+        .durationSeconds = durationSeconds,
+    };
+}
+
 WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
                                const WaveDisplayData& displayData,
                                const WaveFftConfig& config,
@@ -398,7 +433,7 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
         result.visibleSampleCount = values.size();
         frame.visibleSampleCount = (std::max)(frame.visibleSampleCount, result.visibleSampleCount);
 
-        const std::size_t pointCount = resolvePointCount(config, values.size());
+        const std::size_t pointCount = resolveWaveFftPointCount(config, values.size());
         if (pointCount < kMinFftPointCount || values.size() < pointCount) {
             result.message = "当前可视区样本不足";
             frame.channels.push_back(std::move(result));

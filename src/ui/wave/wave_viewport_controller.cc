@@ -38,6 +38,72 @@ namespace {
         return static_cast<double>(*latestSampleIndex) / sampleFrequencyHz;
     }
 
+    std::size_t fftReferenceChannelIndex(const plot::WaveDockState& wave, std::size_t channelCount)
+    {
+        if (channelCount == 0) {
+            return 0;
+        }
+        const auto measurementChannel = (std::min)(wave.view.measurementChannelIndex, channelCount - 1);
+        if (measurementChannel < wave.fftChannelEnabled.size() && wave.fftChannelEnabled[measurementChannel] != 0) {
+            return measurementChannel;
+        }
+        for (std::size_t channelIndex = 0; channelIndex < wave.fftChannelEnabled.size(); ++channelIndex) {
+            if (wave.fftChannelEnabled[channelIndex] != 0 && channelIndex < channelCount) {
+                return channelIndex;
+            }
+        }
+        return measurementChannel;
+    }
+
+    std::size_t fftReferenceVisibleSampleCount(const plot::WaveDockState& wave, const plot::WaveDisplayData& displayData)
+    {
+        if (displayData.channels.empty()) {
+            return 0;
+        }
+        const std::size_t channelIndex = fftReferenceChannelIndex(wave, displayData.channels.size());
+        const auto& channel = displayData.channels[channelIndex];
+        return (std::min)(channel.samples.size(), channel.actualValues.size());
+    }
+
+    void syncCursorSplitFftWindow(plot::WaveDockState& wave,
+                                  const plot::WaveDisplayData& displayData,
+                                  std::optional<double> latestTime)
+    {
+        auto& view = wave.view;
+        if (!view.fft.enabled || view.fft.displayMode != plot::WaveFftDisplayMode::CursorSplit) {
+            return;
+        }
+
+        const auto window = plot::resolveWaveFftCursorWindow(view.fft,
+                                                             fftReferenceVisibleSampleCount(wave, displayData),
+                                                             view.sampleFrequencyHz,
+                                                             view.cursors[1].time);
+        if (!window.has_value()) {
+            return;
+        }
+
+        double leftTime = view.cursors[0].time;
+        double rightTime = view.cursors[1].time;
+        if (view.autoFollowLatest && latestTime.has_value()) {
+            rightTime = *latestTime;
+            leftTime = rightTime - window->durationSeconds;
+            view.lastCursorFftAnchorIndex = 1;
+        } else if (view.lastCursorFftAnchorIndex == 0) {
+            leftTime = view.cursors[0].time;
+            rightTime = leftTime + window->durationSeconds;
+        } else {
+            rightTime = view.cursors[1].time;
+            leftTime = rightTime - window->durationSeconds;
+        }
+
+        view.cursors[0].time = leftTime;
+        view.cursors[1].time = rightTime;
+        view.lockedCursorInterval = window->durationSeconds;
+        view.fftSourceMinTime = (std::min)(leftTime, rightTime);
+        view.fftSourceMaxTime = (std::max)(leftTime, rightTime);
+        view.fftSourceWindowValid = true;
+    }
+
     void hashCombine(std::size_t& seed, std::size_t value)
     {
         seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
@@ -313,13 +379,6 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
     frame.overviewDisplayData = &wave.cachedOverviewDisplayData;
 
     if (view.fft.enabled) {
-        if (!view.fftSourceWindowValid) {
-            view.fftSourceMinTime = view.viewMinTime;
-            view.fftSourceMaxTime = view.viewMaxTime;
-            view.fftSourceWindowValid = true;
-            view.fftViewportInitialized = false;
-            wave.cachedFftKeyValid = false;
-        }
         if (wave.fftChannelEnabled.size() < wave.cachedFullSnapshot.channels.size()) {
             const auto oldSize = wave.fftChannelEnabled.size();
             wave.fftChannelEnabled.resize(wave.cachedFullSnapshot.channels.size(), 0);
@@ -328,6 +387,14 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
                     (std::min)(view.measurementChannelIndex, wave.fftChannelEnabled.size() - 1);
                 wave.fftChannelEnabled[preferredChannel] = 1;
             }
+        }
+        syncCursorSplitFftWindow(wave, *frame.displayData, latestTime);
+        if (!view.fftSourceWindowValid) {
+            view.fftSourceMinTime = view.viewMinTime;
+            view.fftSourceMaxTime = view.viewMaxTime;
+            view.fftSourceWindowValid = true;
+            view.fftViewportInitialized = false;
+            wave.cachedFftKeyValid = false;
         }
         const plot::WaveFftCacheKey key{
             .dataRevision = dataRevision,
@@ -339,8 +406,16 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         };
         if (!wave.cachedFftKeyValid || !(wave.cachedFftKey == key)) {
             // 核心流程：FFT 输入窗口与频域视口分离，频域缩放不会反向改变待分析的时域样本。
-            wave.cachedFftFrame = plot::buildWaveFftFrame(wave.cachedFullSnapshot,
-                                                          wave.cachedDisplayData,
+            auto fftSnapshot = hasSampleFrequencyTimebase(view)
+                                   ? wave.cachedFullSnapshot
+                                   : wave.buffer.snapshot(view.fftSourceMinTime, view.fftSourceMaxTime);
+            if (hasSampleFrequencyTimebase(view)) {
+                plot::applySampleFrequencyVisibleRange(
+                    fftSnapshot, view.fftSourceMinTime, view.fftSourceMaxTime, view.sampleFrequencyHz);
+            }
+            const auto fftDisplayData = plot::buildDisplayData(fftSnapshot, view.sampleFrequencyHz);
+            wave.cachedFftFrame = plot::buildWaveFftFrame(fftSnapshot,
+                                                          fftDisplayData,
                                                           view.fft,
                                                           wave.fftChannelEnabled,
                                                           view.fftSourceMinTime,

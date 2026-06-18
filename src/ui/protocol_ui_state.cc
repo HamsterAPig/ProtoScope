@@ -201,6 +201,16 @@ namespace {
         return value == "manual" ? plot::WaveFftFundamentalMode::Manual : plot::WaveFftFundamentalMode::Auto;
     }
 
+    std::string fftDisplayModeStateName(plot::WaveFftDisplayMode value)
+    {
+        return value == plot::WaveFftDisplayMode::CursorSplit ? "cursor_split" : "full_spectrum";
+    }
+
+    plot::WaveFftDisplayMode parseFftDisplayMode(const std::string& value)
+    {
+        return value == "cursor_split" ? plot::WaveFftDisplayMode::CursorSplit : plot::WaveFftDisplayMode::FullSpectrum;
+    }
+
     YAML::Node encodeMeasurementSelection(const plot::WaveMeasurementSelection& selection)
     {
         YAML::Node node;
@@ -386,6 +396,7 @@ namespace {
         const auto& view = wave.view;
         YAML::Node fftNode;
         fftNode["enabled"] = view.fft.enabled;
+        fftNode["display_mode"] = fftDisplayModeStateName(view.fft.displayMode);
         fftNode["point_count"] = fftPointCountStateName(view.fft.pointCount);
         fftNode["window"] = fftWindowStateName(view.fft.window);
         fftNode["magnitude_mode"] = fftMagnitudeModeStateName(view.fft.magnitudeMode);
@@ -559,6 +570,8 @@ namespace {
 
         auto& view = wave.view;
         view.fft.enabled = fftNode["enabled"].as<bool>(view.fft.enabled);
+        view.fft.displayMode =
+            parseFftDisplayMode(fftNode["display_mode"].as<std::string>(fftDisplayModeStateName(view.fft.displayMode)));
         view.fft.pointCount =
             parseFftPointCount(fftNode["point_count"].as<std::string>(fftPointCountStateName(view.fft.pointCount)));
         view.fft.window = parseFftWindow(fftNode["window"].as<std::string>(fftWindowStateName(view.fft.window)));

@@ -1988,6 +1988,11 @@ void test_config_default_roundtrip()
             "鼠标 Y 偏移拖动模式默认应为 direct");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
+    require(std::abs(config.gui.wave.cursorFftHighlightRgba[0] - 0.20F) < 1e-6F &&
+                std::abs(config.gui.wave.cursorFftHighlightRgba[1] - 0.55F) < 1e-6F &&
+                std::abs(config.gui.wave.cursorFftHighlightRgba[2] - 1.00F) < 1e-6F &&
+                std::abs(config.gui.wave.cursorFftHighlightRgba[3] - 0.16F) < 1e-6F,
+            "游标 FFT 高亮色默认值应为建议 RGBA");
     require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式默认应为 overlay");
     require(config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
@@ -2042,6 +2047,7 @@ void test_config_default_roundtrip()
     config.gui.wave.zoomSelectionAutoExit = true;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
+    config.gui.wave.cursorFftHighlightRgba = {0.10F, 0.20F, 0.30F, 0.40F};
     config.gui.wave.fullscreenMode = protoscope::config::GuiWaveFullscreenMode::Overlay;
     config.gui.font.chineseGlyphRange = protoscope::config::GuiFontChineseGlyphRange::Full;
     config.gui.logHistory.transferRawLimit = 11;
@@ -2114,6 +2120,11 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.wave.zoomSelectionAutoExit, "框选放大自动退出开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showChannelLegend, "波形图例显示开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
+    require(std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[0] - 0.10F) < 1e-6F &&
+                std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[1] - 0.20F) < 1e-6F &&
+                std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[2] - 0.30F) < 1e-6F &&
+                std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
+            "游标 FFT 高亮色 roundtrip 失败");
     require(reloaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式 roundtrip 失败");
     require(reloaded.config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::Full,
@@ -2165,6 +2176,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     protoscope::config::AppConfig config;
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
     config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::ActualValue;
+    config.gui.wave.cursorFftHighlightRgba = {0.30F, 0.40F, 0.50F, 0.60F};
 
     protoscope::dock::DockStore dockStore;
     store.applyToDock(config, dockStore);
@@ -2173,14 +2185,20 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     require(dockStore.waveState().view.gridDivisionReadoutMode ==
                 protoscope::plot::WaveGridDivisionReadoutMode::ActualValue,
             "applyToDock 应写入网格每格读数模式");
+    require(std::abs(dockStore.waveState().view.cursorFftHighlightRgba[3] - 0.60F) < 1e-6F,
+            "applyToDock 应写入游标 FFT 高亮色");
 
     dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
     dockStore.waveState().view.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
+    dockStore.waveState().view.cursorFftHighlightRgba = {0.70F, 0.60F, 0.50F, 0.40F};
     const auto captured = store.captureFromDock(dockStore);
     require(captured.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Disabled,
             "captureFromDock 应捕获鼠标 Y 偏移拖动模式");
     require(captured.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::RawValue,
             "captureFromDock 应捕获网格每格读数模式");
+    require(std::abs(captured.gui.wave.cursorFftHighlightRgba[0] - 0.70F) < 1e-6F &&
+                std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
+            "captureFromDock 应捕获游标 FFT 高亮色");
 }
 
 void test_config_repo_default_yaml_loads()
@@ -3856,8 +3874,12 @@ static const TestCase kAllTests[] = {
     {"wave_fft_visible_samples_supports_non_power_of_two", &test_wave_fft_visible_samples_supports_non_power_of_two},
     {"wave_fft_manual_point_count_supports_non_power_of_two",
      &test_wave_fft_manual_point_count_supports_non_power_of_two},
+    {"wave_fft_cursor_window_resolves_point_counts_and_duration",
+     &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
     {"wave_fft_fit_viewport_resets_frequency_and_value_ranges",
      &test_wave_fft_fit_viewport_resets_frequency_and_value_ranges},
+    {"wave_fft_cursor_window_resolves_point_counts_and_duration",
+     &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
     {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
     {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},

@@ -130,6 +130,7 @@ struct WaveViewState {
     std::size_t lastRenderPointCount{0};
     std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};
+    std::size_t lastCursorFftAnchorIndex{1};
     ActiveBitLaneState activeBitLane{};
     std::size_t referenceChannelIndex{0};
     WaveMeasurementReferenceMode referenceMode{WaveMeasurementReferenceMode::Channel};
@@ -177,6 +178,7 @@ struct WaveViewState {
     double zoomSelectionStartY{0.0};
     double zoomSelectionCurrentX{0.0};
     double zoomSelectionCurrentY{0.0};
+    std::array<float, 4> cursorFftHighlightRgba{0.20F, 0.55F, 1.00F, 0.16F};
     std::string sampleFrequencyInput;
     std::string sampleFrequencyError;
     WaveTimeAxisSource timeAxisSource{WaveTimeAxisSource::SampleIndex};

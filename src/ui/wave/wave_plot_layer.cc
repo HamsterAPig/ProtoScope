@@ -668,7 +668,7 @@ void handleHoverReadout(plot::WaveViewState& view,
 
 namespace {
 
-    double cursorDisplayAnchorFromActualValue(const plot::ChannelSpec& spec,
+    double cursorDisplayAnchorFromActualValue(const plot::ChannelView& spec,
                                               plot::WaveDisplayFormula formula,
                                               double actualValue)
     {
@@ -752,6 +752,9 @@ bool handlePlotCursors(plot::WaveViewState& view,
                           &hovered,
                           &held);
         anyCursorHeld = anyCursorHeld || held;
+        if (held && view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit) {
+            view.lastCursorFftAnchorIndex = cursorIndex;
+        }
         if (held && smartSnapActive) {
             // 核心流程：先用 DragLineX 写入的鼠标时间查吸附，再回写游标时间，配合 Delayed 让绘制使用受约束位置。
             auto smartSnapTarget = findSmartCursorSnapByScope(
@@ -965,6 +968,22 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
     const ImPlotRect limits = ImPlot::GetPlotLimits();
     drawOscilloscopeGrid(limits);
+    if (view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit && view.showCursors &&
+        view.cursors[0].enabled && view.cursors[1].enabled) {
+        const double minTime = (std::min)(view.cursors[0].time, view.cursors[1].time);
+        const double maxTime = (std::max)(view.cursors[0].time, view.cursors[1].time);
+        if (maxTime > minTime) {
+            const auto& rgba = view.cursorFftHighlightRgba;
+            const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3]));
+            const ImVec2 pixelA = ImPlot::PlotToPixels(minTime, limits.Y.Min);
+            const ImVec2 pixelB = ImPlot::PlotToPixels(maxTime, limits.Y.Max);
+            ImPlot::GetPlotDrawList()->AddRectFilled(ImVec2((std::min)(pixelA.x, pixelB.x),
+                                                            (std::min)(pixelA.y, pixelB.y)),
+                                                     ImVec2((std::max)(pixelA.x, pixelB.x),
+                                                            (std::max)(pixelA.y, pixelB.y)),
+                                                     fillColor);
+        }
+    }
     const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
     const double timeSnapDistance = visibleTimeWidth / 80.0;
     double smartSnapDistance = (std::max)(timeSnapDistance, visibleTimeWidth * 0.02);

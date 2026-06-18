@@ -3,6 +3,7 @@
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -95,6 +96,7 @@ struct GuiWaveConfig {
     bool showAxisLabels{false};
     bool showChannelLegend{true};
     bool showFftLegend{true};
+    std::array<float, 4> cursorFftHighlightRgba{0.20F, 0.55F, 1.00F, 0.16F};
     GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Overlay};
 };
 

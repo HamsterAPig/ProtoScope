@@ -476,6 +476,21 @@ void drawFftModeToggle(plot::WaveDockState& wave)
         }
         wave.cachedFftKeyValid = false;
     }
+
+    const char* displayModeItems[] = {"完整频谱", "游标分屏"};
+    int displayModeIndex = view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit ? 1 : 0;
+    if (ImGui::Combo("显示模式", &displayModeIndex, displayModeItems, IM_ARRAYSIZE(displayModeItems))) {
+        view.fft.displayMode =
+            displayModeIndex == 1 ? plot::WaveFftDisplayMode::CursorSplit : plot::WaveFftDisplayMode::FullSpectrum;
+        if (view.fft.displayMode == plot::WaveFftDisplayMode::FullSpectrum) {
+            view.fftSourceMinTime = view.viewMinTime;
+            view.fftSourceMaxTime = view.viewMaxTime;
+            view.fftSourceWindowValid = true;
+        }
+        view.fftViewportInitialized = false;
+        wave.cachedFftKeyValid = false;
+    }
+    addItemHelp("完整频谱保留原有幅值/相位频域视图；游标分屏使用 C1~C2 时间窗口计算 FFT。");
 }
 
 void drawFftPointCountControls(plot::WaveDockState& wave)

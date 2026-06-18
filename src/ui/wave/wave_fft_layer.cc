@@ -726,7 +726,7 @@ namespace {
 
 namespace {
 
-    PlotRenderResult drawWaveFftPlotContent(plot::WaveDockState& wave, const WaveFrameData& frame)
+    PlotRenderResult drawWaveFftPlotContent(plot::WaveDockState& wave, const WaveFrameData& frame, bool includePhase)
     {
         PlotRenderResult result{};
         const auto* fftFrame = frame.fftFrame;
@@ -746,8 +746,9 @@ namespace {
         const float summaryHeight = view.showCursors && !view.showMeasurementOverlay ? 58.0F : 8.0F;
         const float plotGap = ImGui::GetStyle().ItemSpacing.y;
         const float plotAreaHeight = (std::max)(120.0F, available.y - summaryHeight - plotGap);
-        const float magnitudeHeight = (std::max)(90.0F, plotAreaHeight * 0.58F);
-        const float phaseHeight = (std::max)(80.0F, plotAreaHeight - magnitudeHeight - plotGap);
+        const float magnitudeHeight =
+            includePhase ? (std::max)(90.0F, plotAreaHeight * 0.58F) : (std::max)(90.0F, plotAreaHeight);
+        const float phaseHeight = includePhase ? (std::max)(80.0F, plotAreaHeight - magnitudeHeight - plotGap) : 0.0F;
         std::array<std::optional<plot::WaveFftReadout>, 2> cursorReadouts{};
 
         auto& inputMap = ImPlot::GetInputMap();
@@ -788,7 +789,7 @@ namespace {
             ImPlot::EndPlot();
         }
 
-        if (ImPlot::BeginPlot("##wave_fft_phase", ImVec2(-1.0F, phaseHeight), plotFlags)) {
+        if (includePhase && ImPlot::BeginPlot("##wave_fft_phase", ImVec2(-1.0F, phaseHeight), plotFlags)) {
             result.plotRendered = true;
             ImPlot::SetupAxes("频率 (Hz)", "相位 (deg)");
             ImPlot::SetupAxisLimits(ImAxis_X1, view.fftFrequencyMin, view.fftFrequencyMax, ImGuiCond_Always);
@@ -829,8 +830,13 @@ void WaveFftComponent::draw(WaveContext& context)
 {
     ImGui::BeginChild(
         "##wave_main_panel", ImVec2(0.0F, context.layout->mainHeight), false, ImGuiWindowFlags_NoScrollbar);
-    drawWaveFftPlotContent(context.wave, *context.renderFrame);
+    drawWaveFftPlot(context.wave, *context.renderFrame, true);
     ImGui::EndChild();
+}
+
+PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData& frame, bool includePhase)
+{
+    return drawWaveFftPlotContent(wave, frame, includePhase);
 }
 
 } // namespace protoscope::ui
