@@ -141,6 +141,7 @@ void applyChannelTransformOverride(plot::WaveDockState& wave,
                                    std::size_t channelIndex,
                                    const plot::ChannelSpec& updated,
                                    const plot::ChannelSpec& defaultSpec);
+void invalidateWaveDisplayCaches(plot::WaveDockState& wave);
 
 RenderBudget makeRenderBudget(const plot::WaveViewState& view,
                               std::size_t channelCount,

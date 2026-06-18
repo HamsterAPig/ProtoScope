@@ -668,8 +668,19 @@ void handleHoverReadout(plot::WaveViewState& view,
 
 namespace {
 
+    double cursorDisplayAnchorFromActualValue(const plot::ChannelSpec& spec,
+                                              plot::WaveDisplayFormula formula,
+                                              double actualValue)
+    {
+        if (formula == plot::WaveDisplayFormula::OffsetThenScale) {
+            return (actualValue + spec.offset) * spec.scale;
+        }
+        return actualValue * spec.scale + spec.offset;
+    }
+
     double cursorSearchAnchorY(const plot::WaveCursorState& cursor,
                                const std::optional<plot::CursorReadout>& previousReadout,
+                               const plot::WaveSnapshot& snapshot,
                                double mouseY,
                                bool held)
     {
@@ -683,6 +694,12 @@ namespace {
             if (std::isfinite(previousReadout->displayValue)) {
                 return previousReadout->displayValue;
             }
+        }
+        if (cursor.channelIndex < snapshot.channels.size() &&
+            !bitDisplayEnabled(snapshot.channels[cursor.channelIndex].bitDisplay)) {
+            // 核心流程：游标状态保存实际读数，重查波形点时必须换回当前显示坐标。
+            return cursorDisplayAnchorFromActualValue(
+                snapshot.channels[cursor.channelIndex], snapshot.config.displayFormula, cursor.value);
         }
         return cursor.value;
     }
@@ -749,7 +766,7 @@ bool handlePlotCursors(plot::WaveViewState& view,
             view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
         }
 
-        const double searchY = cursorSearchAnchorY(cursor, cursorReadouts[cursorIndex], mousePos.y, held);
+        const double searchY = cursorSearchAnchorY(cursor, cursorReadouts[cursorIndex], snapshot, mousePos.y, held);
         auto best = findNearestCursorByScope(
             snapshot, displayData, view, bitLayout, cursor.time, searchY, timeSnapDistance, valueSnapDistance);
         if (smartSnap.has_value()) {

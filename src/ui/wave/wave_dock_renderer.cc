@@ -499,7 +499,11 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
         return false;
     }
     // 核心流程：双击只复位当前激活通道 offset override，保留 label/ratio/scale 的用户覆盖。
-    return plot::resetChannelOffsetToDefault(wave, view.measurementChannelIndex);
+    if (!plot::resetChannelOffsetToDefault(wave, view.measurementChannelIndex)) {
+        return false;
+    }
+    invalidateWaveDisplayCaches(wave);
+    return true;
 }
 
 const char* axisSourceName(plot::WaveTimeAxisSource source)
@@ -584,6 +588,16 @@ void applyChannelTransformOverride(plot::WaveDockState& wave,
     overrideState.offset = updated.offset;
     overrideState.bitYOffset = updated.bitDisplay.yOffset;
     wave.buffer.setChannelSpec(channelIndex, updated);
+    invalidateWaveDisplayCaches(wave);
+}
+
+void invalidateWaveDisplayCaches(plot::WaveDockState& wave)
+{
+    wave.cachedDisplayKeyValid = false;
+    wave.cachedOverviewKeyValid = false;
+    wave.renderEnvelopeCache.clear();
+    wave.bitRenderCache.clear();
+    wave.cachedFftKeyValid = false;
 }
 
 class WaveOverviewComponent final : public IWaveComponent {

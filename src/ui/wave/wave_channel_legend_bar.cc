@@ -158,7 +158,9 @@ namespace {
         // 核心流程：双击当前 CH 卡片按配置恢复默认值，不依赖激活通道。
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             const plot::ChannelSpec defaultSpec = channelDefaultSpec(wave, channelIndex, spec);
-            plot::resetChannelConfigToDefault(wave, channelIndex, defaultSpec, view.channelDoubleClickAction);
+            if (plot::resetChannelConfigToDefault(wave, channelIndex, defaultSpec, view.channelDoubleClickAction)) {
+                invalidateWaveDisplayCaches(wave);
+            }
         }
         return active;
     }
