@@ -692,7 +692,7 @@ public:
         ImGui::EndChild();
 
         ImGui::BeginChild("##wave_cursor_split_fft", ImVec2(0.0F, panelHeight), false, ImGuiWindowFlags_NoScrollbar);
-        drawWaveFftPlot(context.wave, *context.renderFrame, false);
+        drawWaveFftPlot(context.wave, *context.renderFrame, false, false);
         ImGui::EndChild();
     }
 };

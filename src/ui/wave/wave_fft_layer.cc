@@ -514,9 +514,11 @@ namespace {
     bool drawFftCursors(plot::WaveViewState& view,
                         const plot::WaveFftFrame& frame,
                         bool phasePlot,
+                        bool enableInteraction,
                         std::array<std::optional<plot::WaveFftReadout>, 2>& cursorReadouts)
     {
-        if (!view.showCursors) {
+        if (!view.showCursors || !enableInteraction) {
+            // 分屏 FFT 下方面板只做读数，不能把 Hz 写回复用的时域游标。
             return false;
         }
 
@@ -726,7 +728,10 @@ namespace {
 
 namespace {
 
-    PlotRenderResult drawWaveFftPlotContent(plot::WaveDockState& wave, const WaveFrameData& frame, bool includePhase)
+    PlotRenderResult drawWaveFftPlotContent(plot::WaveDockState& wave,
+                                            const WaveFrameData& frame,
+                                            bool includePhase,
+                                            bool enableCursorInteraction)
     {
         PlotRenderResult result{};
         const auto* fftFrame = frame.fftFrame;
@@ -743,7 +748,8 @@ namespace {
         ensureFftViewport(view, *fftFrame);
         const char* yLabel = view.fft.magnitudeMode == plot::WaveFftMagnitudeMode::Decibel ? "幅值 (dB)" : "幅值";
         const ImVec2 available = ImGui::GetContentRegionAvail();
-        const float summaryHeight = view.showCursors && !view.showMeasurementOverlay ? 58.0F : 8.0F;
+        const bool showFrequencyCursors = enableCursorInteraction && view.showCursors;
+        const float summaryHeight = showFrequencyCursors && !view.showMeasurementOverlay ? 58.0F : 8.0F;
         const float plotGap = ImGui::GetStyle().ItemSpacing.y;
         const float plotAreaHeight = (std::max)(120.0F, available.y - summaryHeight - plotGap);
         const float magnitudeHeight =
@@ -772,8 +778,8 @@ namespace {
             const auto limits = ImPlot::GetPlotLimits();
             if (!zoomSelectionConsumed) {
                 drawHoverReadout(view, *fftFrame, false, limits);
-                const bool cursorHeld = drawFftCursors(view, *fftFrame, false, cursorReadouts);
-                if (view.showMeasurementOverlay) {
+                const bool cursorHeld = drawFftCursors(view, *fftFrame, false, enableCursorInteraction, cursorReadouts);
+                if (showFrequencyCursors && view.showMeasurementOverlay) {
                     drawCursorOverlay(cursorReadouts);
                 }
                 drawWaveStatusOverlay(view);
@@ -801,7 +807,7 @@ namespace {
             const auto limits = ImPlot::GetPlotLimits();
             if (!zoomSelectionConsumed) {
                 drawHoverReadout(view, *fftFrame, true, limits);
-                const bool cursorHeld = drawFftCursors(view, *fftFrame, true, cursorReadouts);
+                const bool cursorHeld = drawFftCursors(view, *fftFrame, true, enableCursorInteraction, cursorReadouts);
                 const bool axisResetConsumed = handleFftAxisDoubleClick(view, *fftFrame, true);
                 const bool panConsumed =
                     !axisResetConsumed && handleFftPan(view, *fftFrame, true, minFrequencyWidth, cursorHeld);
@@ -816,7 +822,7 @@ namespace {
 
         inputMap = savedInputMap;
 
-        if (view.showCursors && !view.showMeasurementOverlay) {
+        if (showFrequencyCursors && !view.showMeasurementOverlay) {
             drawCursorSummary(cursorReadouts);
         }
         return result;
@@ -834,9 +840,12 @@ void WaveFftComponent::draw(WaveContext& context)
     ImGui::EndChild();
 }
 
-PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData& frame, bool includePhase)
+PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,
+                                 const WaveFrameData& frame,
+                                 bool includePhase,
+                                 bool enableCursorInteraction)
 {
-    return drawWaveFftPlotContent(wave, frame, includePhase);
+    return drawWaveFftPlotContent(wave, frame, includePhase, enableCursorInteraction);
 }
 
 } // namespace protoscope::ui

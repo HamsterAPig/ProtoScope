@@ -335,7 +335,10 @@ void renderWaveChannels(plot::WaveDockState& wave,
                         std::vector<std::size_t>& visibleChannelIndices,
                         BitLaneLayout& outBitLayout);
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame);
-PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave, const WaveFrameData& frame, bool includePhase);
+PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,
+                                 const WaveFrameData& frame,
+                                 bool includePhase,
+                                 bool enableCursorInteraction = true);
 void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveSnapshot& snapshot,
                             const plot::WaveDisplayData& displayData,
