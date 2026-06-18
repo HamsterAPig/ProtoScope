@@ -521,6 +521,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.fftChannelEnabled = {1};
     waveA.hiddenChannelLabels = {"CH1"};
     waveA.toolsCollapsed = true;
+    waveA.activeToolsDrawer = protoscope::plot::WaveToolsDrawer::Cursor;
     waveA.legendCollapsed = true;
     waveA.channelOverrides.resize(1);
     waveA.channelOverrides[0].labelOverridden = true;
@@ -594,6 +595,8 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredA.hiddenChannelLabels.size() == 1 && restoredA.hiddenChannelLabels[0] == "CH1",
             "proto_a 应恢复自己的主图 Legend 隐藏通道");
     require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
+    require(restoredA.activeToolsDrawer == protoscope::plot::WaveToolsDrawer::Cursor,
+            "proto_a 应恢复自己的右侧抽屉类型");
     require(restoredA.legendCollapsed, "proto_a 应恢复自己的图例折叠状态");
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
     require(!restoredA.view.preferWaveformHoverReadout, "proto_a 应恢复自己的悬浮读数优先级策略");
@@ -700,6 +703,7 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
                                 .unit = "V",
                                 .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}});
     wave.view.viewMode = protoscope::plot::WaveViewMode::Split;
+    wave.activeToolsDrawer = protoscope::plot::WaveToolsDrawer::View;
     wave.legendOverlay.expanded = true;
     wave.legendOverlay.offsetX = 24.0F;
     wave.legendOverlay.offsetY = 36.0F;
@@ -709,6 +713,7 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
 
     const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
     require(encoded["view_mode"].as<std::string>() == "split", "协议 UI 状态应写出分屏视图模式");
+    require(encoded["tools_drawer"].as<std::string>() == "view", "协议 UI 状态应写出当前右侧抽屉类型");
     require(encoded["legend_overlay"]["expanded"].as<bool>(), "协议 UI 状态应写出图例展开状态");
     require(encoded["legend_overlay"]["offset_x"].as<float>() == 24.0F, "协议 UI 状态应写出图例 X 偏移");
     require(encoded["channel_overrides"][0]["color_overridden"].as<bool>(), "协议 UI 状态应写出颜色覆盖标记");
@@ -723,6 +728,8 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
     protoscope::ui::decodeWaveProtocolState(encoded, restored);
     const auto restoredSpec = restored.buffer.channelSpec(0);
     require(restored.view.viewMode == protoscope::plot::WaveViewMode::Split, "协议 UI 状态应恢复分屏模式");
+    require(restored.activeToolsDrawer == protoscope::plot::WaveToolsDrawer::View,
+            "协议 UI 状态应恢复当前右侧抽屉类型");
     require(restored.legendOverlay.expanded && restored.legendOverlay.offsetX == 24.0F &&
                 restored.legendOverlay.offsetY == 36.0F,
             "协议 UI 状态应恢复图例 overlay 状态");
@@ -734,6 +741,8 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
     protoscope::ui::decodeWaveProtocolState(legacy, legacyRestored);
     require(legacyRestored.view.viewMode == protoscope::plot::WaveViewMode::Overlay,
             "非法视图模式应回退 overlay");
+    require(legacyRestored.activeToolsDrawer == protoscope::plot::WaveToolsDrawer::Main,
+            "旧状态缺抽屉类型时应使用 main 默认值");
     require(legacyRestored.legendOverlay.offsetX == 8.0F && legacyRestored.legendOverlay.offsetY == 8.0F,
             "旧状态缺图例 overlay 字段时应使用左上角默认值");
 }

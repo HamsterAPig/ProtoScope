@@ -136,6 +136,35 @@ namespace {
         return plot::WaveViewMode::Overlay;
     }
 
+    std::string toolsDrawerName(plot::WaveToolsDrawer drawer)
+    {
+        switch (drawer) {
+            case plot::WaveToolsDrawer::Main:
+                return "main";
+            case plot::WaveToolsDrawer::Cursor:
+                return "cursor";
+            case plot::WaveToolsDrawer::Measure:
+                return "measure";
+            case plot::WaveToolsDrawer::View:
+                return "view";
+        }
+        return "main";
+    }
+
+    plot::WaveToolsDrawer parseToolsDrawer(const std::string& value)
+    {
+        if (value == "cursor") {
+            return plot::WaveToolsDrawer::Cursor;
+        }
+        if (value == "measure") {
+            return plot::WaveToolsDrawer::Measure;
+        }
+        if (value == "view") {
+            return plot::WaveToolsDrawer::View;
+        }
+        return plot::WaveToolsDrawer::Main;
+    }
+
     YAML::Node encodeRgba(const std::array<float, 4>& color)
     {
         YAML::Node node;
@@ -470,6 +499,7 @@ namespace {
     void encodeWavePanelState(YAML::Node& node, const plot::WaveDockState& wave)
     {
         node["tools_collapsed"] = wave.toolsCollapsed;
+        node["tools_drawer"] = toolsDrawerName(wave.activeToolsDrawer);
         node["overview_collapsed"] = wave.overviewCollapsed;
         node["legend_collapsed"] = wave.legendCollapsed;
         node["tools_expanded_width"] = wave.toolsExpandedWidth;
@@ -663,6 +693,8 @@ namespace {
     void decodeWavePanelState(const YAML::Node& node, plot::WaveDockState& wave)
     {
         wave.toolsCollapsed = node["tools_collapsed"].as<bool>(wave.toolsCollapsed);
+        wave.activeToolsDrawer =
+            parseToolsDrawer(node["tools_drawer"].as<std::string>(toolsDrawerName(wave.activeToolsDrawer)));
         wave.overviewCollapsed = node["overview_collapsed"].as<bool>(wave.overviewCollapsed);
         wave.legendCollapsed = node["legend_collapsed"].as<bool>(wave.legendCollapsed);
         wave.toolsExpandedWidth = node["tools_expanded_width"].as<float>(wave.toolsExpandedWidth);

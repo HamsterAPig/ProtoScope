@@ -12,6 +12,7 @@ namespace protoscope::plot {
 struct ViewConfig;
 struct WaveDisplayData;
 struct WaveDockState;
+enum class WaveToolsDrawer;
 } // namespace protoscope::plot
 
 namespace protoscope::ui {
@@ -25,6 +26,13 @@ void drawWaveToolbar(app::Application& application,
                      const plot::WaveDisplayData& displayData,
                      bool fullscreenActive = false,
                      bool* fullscreenToggleRequested = nullptr);
+void drawWaveToolsDrawer(app::Application& application,
+                         plot::WaveDockState& wave,
+                         const plot::ViewConfig& config,
+                         const plot::WaveDisplayData& displayData,
+                         plot::WaveToolsDrawer drawer,
+                         bool fullscreenActive = false,
+                         bool* fullscreenToggleRequested = nullptr);
 
 class WaveDockRenderer {
 public:

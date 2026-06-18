@@ -30,7 +30,7 @@ namespace protoscope::ui {
 
 namespace {
 
-    constexpr float kTopToolbarHeight = 38.0F;
+    constexpr float kTopToolbarHeight = 44.0F;
 
     ImGuiKey toImGuiKey(const ShortcutKey key)
     {
@@ -71,6 +71,81 @@ namespace {
     {
         const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0F;
         return drawToolbarSectionButton(label, tooltip, active, ImVec2(width, 0.0F));
+    }
+
+    const char* toolsDrawerTitle(plot::WaveToolsDrawer drawer)
+    {
+        switch (drawer) {
+            case plot::WaveToolsDrawer::Main:
+                return "主视图控制";
+            case plot::WaveToolsDrawer::Cursor:
+                return "游标设置";
+            case plot::WaveToolsDrawer::Measure:
+                return "测量设置";
+            case plot::WaveToolsDrawer::View:
+                return "显示设置";
+        }
+        return "主视图控制";
+    }
+
+    void openToolsDrawer(plot::WaveDockState& wave, plot::WaveToolsDrawer drawer)
+    {
+        if (!wave.toolsCollapsed && wave.activeToolsDrawer == drawer) {
+            wave.toolsCollapsed = true;
+            return;
+        }
+        wave.activeToolsDrawer = drawer;
+        wave.toolsCollapsed = false;
+    }
+
+    bool drawToolsRailButton(plot::WaveDockState& wave,
+                             plot::WaveToolsDrawer drawer,
+                             const char* label,
+                             const char* tooltip)
+    {
+        const bool active = !wave.toolsCollapsed && wave.activeToolsDrawer == drawer;
+        const float buttonWidth = (std::max)(24.0F, ImGui::GetContentRegionAvail().x);
+        ImGui::PushID(static_cast<int>(drawer));
+        const bool clicked = drawToolbarToggleButton(label, active, tooltip, ImVec2(buttonWidth, 30.0F));
+        ImGui::PopID();
+        if (clicked) {
+            openToolsDrawer(wave, drawer);
+        }
+        return clicked;
+    }
+
+    void drawToolsRail(plot::WaveDockState& wave)
+    {
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::Main, "...", "主视图、FFT 与渲染设置。");
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::Cursor, "A", "游标吸附、锁定与定位设置。");
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::Measure, "dt", "双游标测量项与误差参考设置。");
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::View, PROTOSCOPE_ICON_EXPAND, "概览、图例与显示策略。");
+    }
+
+    void drawToolsDrawerResizeHandle(plot::WaveDockState& wave,
+                                     const ImVec2& drawerPos,
+                                     float height,
+                                     float contentLeft,
+                                     float thickness)
+    {
+        const float safeThickness = (std::max)(thickness, 4.0F);
+        const ImVec2 handlePos((std::max)(contentLeft, drawerPos.x - safeThickness), drawerPos.y);
+        ImGui::SetCursorScreenPos(handlePos);
+        ImGui::InvisibleButton("##wave_tools_drawer_splitter", ImVec2(safeThickness, height));
+        if (ImGui::IsItemActive()) {
+            wave.toolsExpandedWidth =
+                (std::clamp)(wave.toolsExpandedWidth - ImGui::GetIO().MouseDelta.x,
+                             wave.minToolsExpandedWidth,
+                             wave.maxToolsExpandedWidth);
+        }
+        const ImU32 color = ImGui::IsItemActive() || ImGui::IsItemHovered()
+                                ? ImGui::GetColorU32(ImGuiCol_SliderGrabActive)
+                                : ImGui::GetColorU32(ImGuiCol_Border);
+        ImGui::GetWindowDrawList()->AddRectFilled(handlePos,
+                                                  ImVec2(handlePos.x + safeThickness, handlePos.y + height),
+                                                  color,
+                                                  2.0F);
+        ImGui::SetItemTooltip("拖动调整右侧抽屉宽度");
     }
 
     void drawTopToolbarSeparator()
@@ -175,6 +250,7 @@ namespace {
         }
         ImGui::SameLine();
         if (drawTopToolbarButton("更多", !wave.toolsCollapsed, "展开右侧高级工具轨。")) {
+            wave.activeToolsDrawer = plot::WaveToolsDrawer::Main;
             wave.toolsCollapsed = false;
         }
 
@@ -252,28 +328,6 @@ bool plotInteractionActive(bool toolHeld)
     const bool interactionAreaHovered =
         ImPlot::IsPlotHovered() || ImPlot::IsAxisHovered(ImAxis_X1) || ImPlot::IsAxisHovered(ImAxis_Y1);
     return toolHeld || (mouseAction && interactionAreaHovered);
-}
-
-bool drawRightPanelSplitter(
-    const char* id, float& rightWidth, float minRightWidth, float minLeftWidth, float totalWidth, float thickness)
-{
-    const float safeThickness = (std::max)(thickness, 4.0F);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
-    ImGui::Button(id, ImVec2(safeThickness, ImGui::GetContentRegionAvail().y));
-    ImGui::PopStyleColor(3);
-    if (ImGui::IsItemActive()) {
-        // 右侧 splitter 位于工具栏左边界：手柄向左时右侧宽度变大，向右时变小。
-        rightWidth -= ImGui::GetIO().MouseDelta.x;
-        rightWidth = (std::clamp)(
-            rightWidth, minRightWidth, (std::max)(minRightWidth, totalWidth - minLeftWidth - safeThickness));
-        return true;
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    }
-    return false;
 }
 
 bool drawHorizontalSplitter(
@@ -856,42 +910,60 @@ public:
     void draw(WaveContext& context) override
     {
         auto& wave = context.wave;
-        auto& view = context.view;
         const auto& config = *context.config;
         const auto& displayData = *context.renderFrame->displayData;
 
         ImGui::SameLine();
-        drawRightPanelSplitter("##wave_tools_splitter",
-                               wave.toolsExpandedWidth,
-                               wave.minToolsExpandedWidth,
-                               (std::max)(240.0F, context.contentWidth * 0.35F),
-                               context.availableWidth,
-                               wave.contentToolsSplitterWidth);
-        ImGui::SameLine();
-        ImGui::BeginChild("##wave_tools", ImVec2(context.toolsWidth, context.availableHeight), true);
-        if (ImGui::Button(wave.toolsCollapsed ? "<" : ">")) {
-            wave.toolsCollapsed = !wave.toolsCollapsed;
-        }
-        if (!wave.toolsCollapsed) {
-            ImGui::Separator();
-            drawWaveToolbar(context.application,
-                            wave,
-                            config,
-                            displayData,
-                            context.fullscreenActive,
-                            context.fullscreenToggleRequested);
-            ImGui::Separator();
-            drawCursorToolbar(view, config, displayData);
-        } else {
-            drawWaveToolbar(context.application,
-                            wave,
-                            config,
-                            displayData,
-                            context.fullscreenActive,
-                            context.fullscreenToggleRequested);
-        }
-        drawChannelControls(wave, *context.renderFrame->fullSnapshot);
+        const ImVec2 railPos = ImGui::GetCursorScreenPos();
+        ImGui::BeginChild("##wave_tools_rail",
+                          ImVec2(context.toolsWidth, context.availableHeight),
+                          true,
+                          ImGuiWindowFlags_NoScrollbar);
+        drawToolsRail(wave);
         ImGui::EndChild();
+
+        if (!wave.toolsCollapsed && ImGui::IsKeyPressed(ImGuiKey_Escape) && !context.io.WantTextInput) {
+            wave.toolsCollapsed = true;
+        }
+
+        if (wave.toolsCollapsed) {
+            return;
+        }
+
+        const auto& style = ImGui::GetStyle();
+        wave.toolsExpandedWidth =
+            (std::clamp)(wave.toolsExpandedWidth, wave.minToolsExpandedWidth, wave.maxToolsExpandedWidth);
+        const float contentLeft = railPos.x - style.ItemSpacing.x - context.contentWidth;
+        const float drawerRight = railPos.x - style.ItemSpacing.x;
+        const float drawerWidth = (std::min)(wave.toolsExpandedWidth, (std::max)(0.0F, context.contentWidth));
+        if (drawerWidth <= 0.0F || context.availableHeight <= 0.0F) {
+            return;
+        }
+        const ImVec2 drawerPos((std::max)(contentLeft, drawerRight - drawerWidth), railPos.y);
+        drawToolsDrawerResizeHandle(
+            wave, drawerPos, context.availableHeight, contentLeft, wave.contentToolsSplitterWidth);
+
+        bool drawerOpen = true;
+        std::string title = std::string(toolsDrawerTitle(wave.activeToolsDrawer)) + "##wave_tools_drawer";
+        ImGui::SetNextWindowPos(drawerPos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(drawerWidth, context.availableHeight), ImGuiCond_Always);
+        const ImGuiWindowFlags drawerFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
+                                             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                                             ImGuiWindowFlags_NoCollapse;
+        if (ImGui::Begin(title.c_str(), &drawerOpen, drawerFlags)) {
+            drawWaveToolsDrawer(context.application,
+                                wave,
+                                config,
+                                displayData,
+                                wave.activeToolsDrawer,
+                                context.fullscreenActive,
+                                context.fullscreenToggleRequested);
+        }
+        ImGui::End();
+
+        if (!drawerOpen) {
+            wave.toolsCollapsed = true;
+        }
     }
 };
 
@@ -933,6 +1005,7 @@ WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewSt
         cursorSplitMode ? 0.0F : (wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.minOverviewPanelHeight);
     const float mainPlotAxisReserve = ImGui::GetTextLineHeightWithSpacing() + spacingHeight;
     const float fixedContentHeight = toolbarHeight + spacingHeight * 2.0F + mainPlotAxisReserve;
+    const bool toolsLayoutCollapsed = true;
 
     WaveContentPlan plan;
     plan.layout = plot::solveWaveLayout(available.x,
@@ -940,18 +1013,18 @@ WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewSt
                                         overviewRequestedHeight,
                                         wave.toolsExpandedWidth,
                                         wave.toolsCollapsedWidth,
-                                        wave.toolsCollapsed,
-                                        wave.contentToolsSplitterWidth + spacingWidth * 2.0F,
+                                        toolsLayoutCollapsed,
+                                        spacingWidth,
                                         cursorSplitMode || wave.overviewCollapsed ? 0.0F : wave.overviewMainSplitterHeight,
                                         overviewMinHeight,
                                         wave.minMainPanelHeight,
                                         wave.minToolsExpandedWidth,
                                         wave.maxToolsExpandedWidth,
                                         fixedContentHeight);
-    wave.toolsExpandedWidth = wave.toolsCollapsed ? wave.toolsExpandedWidth : plan.layout.toolsWidth;
+    wave.toolsExpandedWidth =
+        (std::clamp)(wave.toolsExpandedWidth, wave.minToolsExpandedWidth, wave.maxToolsExpandedWidth);
     plan.toolsWidth = plan.layout.toolsWidth;
-    plan.contentWidth =
-        (std::max)(0.0F, available.x - plan.toolsWidth - wave.contentToolsSplitterWidth - spacingWidth * 2.0F);
+    plan.contentWidth = (std::max)(0.0F, available.x - plan.toolsWidth - spacingWidth);
     plan.frame = prepareWaveFrame(wave, plan.contentWidth);
     return plan;
 }

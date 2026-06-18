@@ -214,6 +214,13 @@ struct WaveAnalysisMarker {
     std::size_t channelIndex{0};
 };
 
+enum class WaveToolsDrawer {
+    Main,
+    Cursor,
+    Measure,
+    View,
+};
+
 struct WaveDockState {
     struct ChannelTransformOverride {
         bool labelOverridden{false};
@@ -242,6 +249,7 @@ struct WaveDockState {
     std::vector<std::uint8_t> fftChannelEnabled;
     WaveLegendOverlayState legendOverlay{};
     bool toolsCollapsed{true};
+    WaveToolsDrawer activeToolsDrawer{WaveToolsDrawer::Main};
     bool overviewCollapsed{false};
     bool legendCollapsed{false};
     bool legendVisibilityRestorePending{false};

@@ -690,6 +690,92 @@ double normalizeWaveToolbarViewState(plot::WaveViewState& view)
     return minVisibleTimeSpan;
 }
 
+void drawWaveMainControlSection(app::Application& application,
+                                plot::WaveDockState& wave,
+                                const plot::ViewConfig& config,
+                                const plot::WaveDisplayData& displayData,
+                                bool fullscreenActive,
+                                bool* fullscreenToggleRequested)
+{
+    auto& view = wave.view;
+
+    ImGui::SeparatorText("主视图控制");
+    // 核心流程：快捷操作改为自适应流式按钮，避免 Child/Table 吃满纵向空间并引入额外作用域配对风险。
+    if (drawAdaptiveToolbarButton(view.autoFollowLatest ? "跟随最新数据" : "暂停跟随",
+                                  "跟/停",
+                                  "切换自动跟随最新数据。关闭后当前视口会停留在手动浏览位置。",
+                                  view.autoFollowLatest,
+                                  true)) {
+        view.autoFollowLatest = !view.autoFollowLatest;
+    }
+    if (drawAdaptiveToolbarButton(view.lockVerticalRange ? "纵轴锁定" : "纵轴自动",
+                                  "纵/自",
+                                  "锁定或释放纵轴范围。锁定后使用手动纵轴最小/最大值。",
+                                  view.lockVerticalRange,
+                                  true)) {
+        view.lockVerticalRange = !view.lockVerticalRange;
+    }
+    if (drawAdaptiveToolbarButton(view.showCursors ? "显示游标" : "隐藏游标",
+                                  "游",
+                                  "显示或隐藏测量游标。游标隐藏时不会显示游标读数。",
+                                  view.showCursors,
+                                  true)) {
+        view.showCursors = !view.showCursors;
+    }
+    if (drawAdaptiveToolbarButton("A 到视窗", "A", "仅移动 A 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
+        placeCursorInViewport(view, config, displayData, 0, 0.5);
+    }
+    if (drawAdaptiveToolbarButton("B 到视窗", "B", "仅移动 B 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
+        placeCursorInViewport(view, config, displayData, 1, 0.5);
+    }
+    if (drawAdaptiveToolbarButton(
+            "A+B 到视窗", "A+B", "仅移动双游标到当前主视窗，不改变当前视窗范围。", false, true)) {
+        placeCursorPairInViewport(view, config, displayData);
+    }
+    if (drawAdaptiveToolbarButton(mouseYOffsetDragModeLabel(view.mouseYOffsetDragMode),
+                                  mouseYOffsetDragModeShortLabel(view.mouseYOffsetDragMode),
+                                  mouseYOffsetDragModeHelp(view.mouseYOffsetDragMode),
+                                  view.mouseYOffsetDragMode != plot::WaveMouseYOffsetDragMode::Disabled,
+                                  true)) {
+        view.mouseYOffsetDragMode = nextMouseYOffsetDragMode(view.mouseYOffsetDragMode);
+    }
+    if (drawAdaptiveToolbarButton(view.showHoverReadout ? "显示悬停读数" : "隐藏悬停读数",
+                                  "读",
+                                  "显示或隐藏鼠标悬停读数。开启后鼠标靠近曲线会显示最近采样点。",
+                                  view.showHoverReadout,
+                                  true)) {
+        view.showHoverReadout = !view.showHoverReadout;
+    }
+    if (drawAdaptiveToolbarButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS " 框选放大",
+                                  "框",
+                                  zoomSelectionHelpText(view),
+                                  view.zoomSelectionActive,
+                                  true)) {
+        view.zoomSelectionActive = !view.zoomSelectionActive;
+        view.zoomSelectionDragging = false;
+    }
+    if (drawAdaptiveToolbarButton(
+            PROTOSCOPE_ICON_EXPAND " 显示全部", "全", "适配当前可见波形到完整视图。", false, true)) {
+        view.fitVisibleWaveformsRequested = true;
+    }
+    if (drawAdaptiveToolbarButton(
+            "清空历史", "清", "清空当前波形历史缓存；不会修改协议脚本或串口连接状态。", false, true)) {
+        application.resetWaveHistory();
+    }
+    if (fullscreenToggleRequested != nullptr &&
+        drawAdaptiveToolbarButton(fullscreenActive ? "退出全屏" : "全屏",
+                                  fullscreenActive ? "退" : "全",
+                                  fullscreenActive ? "退出波形全屏。也可按 Esc 退出。"
+                                                   : "进入波形全屏；具体模式由 gui.wave.fullscreen_mode 控制。",
+                                  fullscreenActive,
+                                  true)) {
+        *fullscreenToggleRequested = true;
+    }
+    if (drawAdaptiveToolbarButton("关闭抽屉", "关", "关闭右侧抽屉，保留窄按钮列入口。", false)) {
+        wave.toolsCollapsed = true;
+    }
+}
+
 void drawCollapsedWaveToolbar(app::Application& application,
                               plot::WaveDockState& wave,
                               plot::WaveViewState& view,
@@ -745,6 +831,7 @@ void drawCollapsedWaveToolbar(app::Application& application,
         *fullscreenToggleRequested = true;
     }
     if (drawToolbarActionButton("展", "展开工具栏：显示 FFT、渲染、游标和测量等高级设置。", collapsedButtonSize)) {
+        wave.activeToolsDrawer = plot::WaveToolsDrawer::Main;
         wave.toolsCollapsed = false;
     }
 }
@@ -961,81 +1048,8 @@ void drawWaveToolbar(app::Application& application,
         return;
     }
 
-    ImGui::SeparatorText("主视图控制");
-    // 核心流程：快捷操作改为自适应流式按钮，避免 Child/Table 吃满纵向空间并引入额外作用域配对风险。
-    if (drawAdaptiveToolbarButton(view.autoFollowLatest ? "跟随最新数据" : "暂停跟随",
-                                  "跟/停",
-                                  "切换自动跟随最新数据。关闭后当前视口会停留在手动浏览位置。",
-                                  view.autoFollowLatest,
-                                  true)) {
-        view.autoFollowLatest = !view.autoFollowLatest;
-    }
-    if (drawAdaptiveToolbarButton(view.lockVerticalRange ? "纵轴锁定" : "纵轴自动",
-                                  "纵/自",
-                                  "锁定或释放纵轴范围。锁定后使用手动纵轴最小/最大值。",
-                                  view.lockVerticalRange,
-                                  true)) {
-        view.lockVerticalRange = !view.lockVerticalRange;
-    }
-    if (drawAdaptiveToolbarButton(view.showCursors ? "显示游标" : "隐藏游标",
-                                  "游",
-                                  "显示或隐藏测量游标。游标隐藏时不会显示游标读数。",
-                                  view.showCursors,
-                                  true)) {
-        view.showCursors = !view.showCursors;
-    }
-    if (drawAdaptiveToolbarButton("A 到视窗", "A", "仅移动 A 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
-        placeCursorInViewport(view, config, displayData, 0, 0.5);
-    }
-    if (drawAdaptiveToolbarButton("B 到视窗", "B", "仅移动 B 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
-        placeCursorInViewport(view, config, displayData, 1, 0.5);
-    }
-    if (drawAdaptiveToolbarButton(
-            "A+B 到视窗", "A+B", "仅移动双游标到当前主视窗，不改变当前视窗范围。", false, true)) {
-        placeCursorPairInViewport(view, config, displayData);
-    }
-    if (drawAdaptiveToolbarButton(mouseYOffsetDragModeLabel(view.mouseYOffsetDragMode),
-                                  mouseYOffsetDragModeShortLabel(view.mouseYOffsetDragMode),
-                                  mouseYOffsetDragModeHelp(view.mouseYOffsetDragMode),
-                                  view.mouseYOffsetDragMode != plot::WaveMouseYOffsetDragMode::Disabled,
-                                  true)) {
-        view.mouseYOffsetDragMode = nextMouseYOffsetDragMode(view.mouseYOffsetDragMode);
-    }
-    if (drawAdaptiveToolbarButton(view.showHoverReadout ? "显示悬停读数" : "隐藏悬停读数",
-                                  "读",
-                                  "显示或隐藏鼠标悬停读数。开启后鼠标靠近曲线会显示最近采样点。",
-                                  view.showHoverReadout,
-                                  true)) {
-        view.showHoverReadout = !view.showHoverReadout;
-    }
-    if (drawAdaptiveToolbarButton(PROTOSCOPE_ICON_MAGNIFYING_GLASS " 框选放大",
-                                  "框",
-                                  zoomSelectionHelpText(view),
-                                  view.zoomSelectionActive,
-                                  true)) {
-        view.zoomSelectionActive = !view.zoomSelectionActive;
-        view.zoomSelectionDragging = false;
-    }
-    if (drawAdaptiveToolbarButton(
-            PROTOSCOPE_ICON_EXPAND " 显示全部", "全", "适配当前可见波形到完整视图。", false, true)) {
-        view.fitVisibleWaveformsRequested = true;
-    }
-    if (drawAdaptiveToolbarButton(
-            "清空历史", "清", "清空当前波形历史缓存；不会修改协议脚本或串口连接状态。", false, true)) {
-        application.resetWaveHistory();
-    }
-    if (fullscreenToggleRequested != nullptr &&
-        drawAdaptiveToolbarButton(fullscreenActive ? "退出全屏" : "全屏",
-                                  fullscreenActive ? "退" : "全",
-                                  fullscreenActive ? "退出波形全屏。也可按 Esc 退出。"
-                                                   : "进入波形全屏；具体模式由 gui.wave.fullscreen_mode 控制。",
-                                  fullscreenActive,
-                                  true)) {
-        *fullscreenToggleRequested = true;
-    }
-    if (drawAdaptiveToolbarButton("折叠工具栏", "收", "收起为窄按钮列，保留常用操作入口。", false)) {
-        wave.toolsCollapsed = true;
-    }
+    drawWaveMainControlSection(
+        application, wave, config, displayData, fullscreenActive, fullscreenToggleRequested);
 
     ImGui::Spacing();
     WaveFftToolbarSection fftToolbarSection;
@@ -1054,6 +1068,42 @@ void drawWaveToolbar(app::Application& application,
     drawWaveRenderSection(view, minVisibleTimeSpan);
 
     drawWaveOverviewSection(view);
+}
+
+void drawWaveToolsDrawer(app::Application& application,
+                         plot::WaveDockState& wave,
+                         const plot::ViewConfig& config,
+                         const plot::WaveDisplayData& displayData,
+                         plot::WaveToolsDrawer drawer,
+                         bool fullscreenActive,
+                         bool* fullscreenToggleRequested)
+{
+    auto& view = wave.view;
+    const double minVisibleTimeSpan = normalizeWaveToolbarViewState(view);
+
+    switch (drawer) {
+        case plot::WaveToolsDrawer::Main: {
+            drawWaveMainControlSection(
+                application, wave, config, displayData, fullscreenActive, fullscreenToggleRequested);
+            ImGui::Spacing();
+            drawFftToolbarSectionContent(wave);
+            ImGui::Spacing();
+            drawWaveRenderSection(view, minVisibleTimeSpan);
+            break;
+        }
+        case plot::WaveToolsDrawer::Cursor:
+            ImGui::SeparatorText("游标设置");
+            drawCursorToolbar(view, config, displayData);
+            drawWaveCursorSection(view);
+            break;
+        case plot::WaveToolsDrawer::Measure:
+            drawWaveMeasurementSection(view);
+            break;
+        case plot::WaveToolsDrawer::View:
+            drawWaveViewSection(view, minVisibleTimeSpan);
+            drawWaveOverviewSection(view);
+            break;
+    }
 }
 
 } // namespace protoscope::ui

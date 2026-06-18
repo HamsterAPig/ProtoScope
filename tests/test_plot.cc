@@ -418,6 +418,10 @@ void test_wave_layout_solver_clamps_without_overflow()
         320.0F, 120.0F, 160.0F, 300.0F, 34.0F, true, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 40.0F);
     require(compact.toolsWidth == 34.0F, "折叠工具栏应使用折叠宽度");
     require(compact.overviewHeight + compact.mainHeight + 6.0F + 40.0F <= 120.0F + 1e-3F, "紧凑布局也不应产生纵向溢出");
+
+    const auto drawerOverlayMode = protoscope::plot::solveWaveLayout(
+        900.0F, 420.0F, 120.0F, 360.0F, 38.0F, true, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 58.0F);
+    require(drawerOverlayMode.toolsWidth == 38.0F, "右侧抽屉打开时布局仍应只预留窄边栏宽度");
 }
 
 void test_plot_low_density_envelope_keeps_single_value_line()
