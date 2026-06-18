@@ -24,6 +24,53 @@ namespace {
         return cardStyle;
     }
 
+    std::string trimMetricText(std::string text)
+    {
+        while (!text.empty() && text.back() == ' ') {
+            text.pop_back();
+        }
+        return text;
+    }
+
+    const char* divisionReadoutLabel(plot::WaveGridDivisionReadoutMode mode)
+    {
+        switch (mode) {
+            case plot::WaveGridDivisionReadoutMode::DisplayValue:
+                return "显示";
+            case plot::WaveGridDivisionReadoutMode::ActualValue:
+                return "实际";
+            case plot::WaveGridDivisionReadoutMode::RawValue:
+                return "Raw";
+        }
+        return "显示";
+    }
+
+    std::string formatChannelDivisionSummary(const plot::WaveViewState& view, const plot::ChannelSpec& spec)
+    {
+        const double displayPerDiv = plot::waveDisplayValuePerDivision(view.viewMinValue, view.viewMaxValue);
+        const auto perDiv =
+            plot::waveChannelValuePerDivision(displayPerDiv, spec, view.displayFormula, view.gridDivisionReadoutMode);
+        const std::string label = divisionReadoutLabel(view.gridDivisionReadoutMode);
+        if (!perDiv.has_value()) {
+            return label + " n/a/格";
+        }
+        const char* unit = view.gridDivisionReadoutMode == plot::WaveGridDivisionReadoutMode::ActualValue
+                               ? (spec.unit.empty() ? nullptr : spec.unit.c_str())
+                               : nullptr;
+        return label + " " + trimMetricText(formatMetricText(*perDiv, unit)) + "/格";
+    }
+
+    std::string formatLegendGridSummary(const plot::WaveDockState& wave)
+    {
+        const auto& view = wave.view;
+        const double xPerDiv =
+            std::abs(view.viewMaxTime - view.viewMinTime) / static_cast<double>(plot::kWaveGridMajorXDivisions);
+        const double yPerDiv = plot::waveDisplayValuePerDivision(view.viewMinValue, view.viewMaxValue);
+        const char* timeUnit = wave.cachedDisplayData.timeUnit.empty() ? nullptr : wave.cachedDisplayData.timeUnit.c_str();
+        return "网格 10x8 · X " + trimMetricText(formatMetricText(xPerDiv, timeUnit)) + "/格 · Y " +
+               trimMetricText(formatMetricText(yPerDiv, nullptr)) + " 显示值/格";
+    }
+
     void drawActiveChannelHeaderSummary(const plot::WaveDockState& wave, float reservedRightWidth)
     {
         const auto& view = wave.view;
@@ -75,7 +122,9 @@ namespace {
     {
         const auto& view = wave.view;
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("图例 / 吸附范围：%s", snapScopeName(view.cursorSnapScope));
+        const std::string headerText =
+            std::string("图例 / 吸附范围：") + snapScopeName(view.cursorSnapScope) + " · " + formatLegendGridSummary(wave);
+        ImGui::Text("%s", headerText.c_str());
         const float buttonWidth =
             ImGui::CalcTextSize(wave.legendCollapsed ? "v" : "^").x + ImGui::GetStyle().FramePadding.x * 2.0F;
         drawActiveChannelHeaderSummary(wave, buttonWidth);
@@ -118,6 +167,7 @@ namespace {
                                    const ImVec2& cardSize,
                                    const ChannelLegendCardStyle& cardStyle,
                                    const plot::ChannelSpec& spec,
+                                   const plot::WaveViewState& view,
                                    std::size_t channelIndex,
                                    bool active)
     {
@@ -143,8 +193,7 @@ namespace {
         const ImVec2 summaryMin(textMin.x, titleMax.y + cardStyle.textSpacingY);
         const ImVec2 summaryMax(textMax.x, summaryMin.y + lineHeight);
         drawChannelCardText(textMin, titleMax, spec.label, ImGui::GetColorU32(ImGuiCol_Text));
-        std::string summary = "R " + formatMetricText(spec.ratio, nullptr) + "  S " +
-                              formatMetricText(spec.scale, nullptr) + "  O " + formatMetricText(spec.offset, nullptr);
+        std::string summary = formatChannelDivisionSummary(view, spec);
         if (bitDisplayEnabled(spec.bitDisplay)) {
             summary = "Bits " + std::to_string(spec.bitDisplay.firstBit) + ".." +
                       std::to_string(spec.bitDisplay.firstBit + spec.bitDisplay.bitCount - 1U) + "  Y " +
@@ -168,7 +217,7 @@ namespace {
 
         const bool active = updateChannelLegendCardSelection(wave, view, channelIndex, spec, scrollActiveIntoView);
         const bool hovered = ImGui::IsItemHovered();
-        drawChannelLegendCardBody(cardMin, cardSize, cardStyle, spec, channelIndex, active);
+        drawChannelLegendCardBody(cardMin, cardSize, cardStyle, spec, view, channelIndex, active);
         if (hovered) {
             drawChannelCardTooltip(spec, active);
         }

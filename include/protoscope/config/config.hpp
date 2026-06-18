@@ -74,6 +74,7 @@ enum class GuiWaveFullscreenMode {
 struct GuiWaveConfig {
     plot::WaveControlMode controlMode{plot::WaveControlMode::Oscilloscope};
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
+    plot::WaveGridDivisionReadoutMode gridDivisionReadoutMode{plot::WaveGridDivisionReadoutMode::DisplayValue};
     plot::WaveChannelCardWidthMode channelCardWidthMode{plot::WaveChannelCardWidthMode::Fixed};
     plot::WaveChannelDoubleClickAction channelDoubleClickAction{plot::WaveChannelDoubleClickAction::ResetScaleOffset};
     plot::WaveXAxisDoubleClickAction xAxisDoubleClickAction{plot::WaveXAxisDoubleClickAction::FitFullHistory};

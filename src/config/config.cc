@@ -190,6 +190,12 @@ namespace {
         {plot::WaveDisplayFormula::OffsetThenScale, "offset_then_scale"},
     }};
 
+    constexpr std::array<EnumNamePair<plot::WaveGridDivisionReadoutMode>, 3> kWaveGridDivisionReadoutModeNames{{
+        {plot::WaveGridDivisionReadoutMode::DisplayValue, "display_value"},
+        {plot::WaveGridDivisionReadoutMode::ActualValue, "actual_value"},
+        {plot::WaveGridDivisionReadoutMode::RawValue, "raw_value"},
+    }};
+
     constexpr std::array<EnumNamePair<plot::WaveChannelCardWidthMode>, 2> kWaveChannelCardWidthModeNames{{
         {plot::WaveChannelCardWidthMode::Fixed, "fixed"},
         {plot::WaveChannelCardWidthMode::Adaptive, "adaptive"},
@@ -264,6 +270,17 @@ namespace {
     const char* toWaveDisplayFormulaText(const plot::WaveDisplayFormula formula)
     {
         return enumToText(formula, kWaveDisplayFormulaNames, "offset_then_scale");
+    }
+
+    plot::WaveGridDivisionReadoutMode
+    parseWaveGridDivisionReadoutMode(const std::string& value, plot::WaveGridDivisionReadoutMode fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveGridDivisionReadoutModeNames, fallback);
+    }
+
+    const char* toWaveGridDivisionReadoutModeText(const plot::WaveGridDivisionReadoutMode mode)
+    {
+        return enumToText(mode, kWaveGridDivisionReadoutModeNames, "display_value");
     }
 
     plot::WaveChannelCardWidthMode parseWaveChannelCardWidthMode(const std::string& value)
@@ -426,6 +443,11 @@ namespace {
         config.gui.wave.displayFormula = parseWaveDisplayFormula(
             readScalar<std::string>(wave, "display_formula", toWaveDisplayFormulaText(config.gui.wave.displayFormula)),
             config.gui.wave.displayFormula);
+        config.gui.wave.gridDivisionReadoutMode = parseWaveGridDivisionReadoutMode(
+            readScalar<std::string>(wave,
+                                    "grid_division_readout_mode",
+                                    toWaveGridDivisionReadoutModeText(config.gui.wave.gridDivisionReadoutMode)),
+            config.gui.wave.gridDivisionReadoutMode);
         config.gui.wave.channelCardWidthMode =
             parseWaveChannelCardWidthMode(readScalar<std::string>(wave, "channel_card_width_mode", "fixed"));
         config.gui.wave.channelDoubleClickAction = parseWaveChannelDoubleClickAction(
@@ -771,6 +793,8 @@ namespace {
     {
         gui["wave"]["control_mode"] = toWaveControlModeText(config.gui.wave.controlMode);
         gui["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
+        gui["wave"]["grid_division_readout_mode"] =
+            toWaveGridDivisionReadoutModeText(config.gui.wave.gridDivisionReadoutMode);
         gui["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
         gui["wave"]["channel_double_click_action"] =
             toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
@@ -1266,6 +1290,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     auto& wave = waveState.view;
     wave.controlMode = config.gui.wave.controlMode;
     wave.displayFormula = config.gui.wave.displayFormula;
+    wave.gridDivisionReadoutMode = config.gui.wave.gridDivisionReadoutMode;
     wave.channelCardWidthMode = config.gui.wave.channelCardWidthMode;
     wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
     wave.xAxisDoubleClickAction = config.gui.wave.xAxisDoubleClickAction;
@@ -1305,6 +1330,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.luaDockRenderCopyMode = dockStore.configState().luaDockRenderCopyMode;
     config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
     config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
+    config.gui.wave.gridDivisionReadoutMode = dockStore.waveState().view.gridDivisionReadoutMode;
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
     config.gui.wave.xAxisDoubleClickAction = dockStore.waveState().view.xAxisDoubleClickAction;

@@ -576,6 +576,37 @@ const WaveDataBounds& selectXAxisDoubleClickBounds(const WaveXAxisDoubleClickAct
     return visibleWindowBounds;
 }
 
+double waveDisplayValuePerDivision(double minValue, double maxValue)
+{
+    return std::abs(maxValue - minValue) / static_cast<double>(kWaveGridMajorYDivisions);
+}
+
+std::optional<double> waveChannelValuePerDivision(double displayValuePerDivision,
+                                                  const ChannelSpec& spec,
+                                                  WaveDisplayFormula formula,
+                                                  WaveGridDivisionReadoutMode mode)
+{
+    // 核心逻辑：每格读数是差值换算，offset 在两种显示公式中都会抵消。
+    static_cast<void>(formula);
+    switch (mode) {
+        case WaveGridDivisionReadoutMode::DisplayValue:
+            return displayValuePerDivision;
+        case WaveGridDivisionReadoutMode::ActualValue:
+            if (std::abs(spec.scale) <= kEpsilon) {
+                return std::nullopt;
+            }
+            return displayValuePerDivision / std::abs(spec.scale);
+        case WaveGridDivisionReadoutMode::RawValue: {
+            const double displayPerRaw = spec.scale * spec.ratio;
+            if (std::abs(displayPerRaw) <= kEpsilon) {
+                return std::nullopt;
+            }
+            return displayValuePerDivision / std::abs(displayPerRaw);
+        }
+    }
+    return std::nullopt;
+}
+
 WaveViewport normalizeOverviewViewport(const WaveViewport& viewport, const WaveDataBounds& bounds, double minTimeWidth)
 {
     WaveViewport next = viewport;

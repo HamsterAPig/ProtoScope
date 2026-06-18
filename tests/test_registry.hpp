@@ -215,6 +215,8 @@ void test_wave_channel_card_width_modes();
 void test_wave_vertical_auto_fit_multiplier();
 void test_wave_visible_channel_bounds_ignore_hidden_channels();
 void test_wave_hidden_channel_policy_defaults_to_visible_only();
+void test_wave_grid_division_readout_conversions();
+void test_wave_grid_division_readout_formula_offset_cancels();
 void test_wave_status_overlay_items_only_show_non_default_states();
 void test_wave_channel_reset_all_uses_protocol_default();
 void test_wave_channel_reset_scale_offset_preserves_label_and_ratio();

@@ -2623,6 +2623,78 @@ void test_wave_hidden_channel_policy_defaults_to_visible_only()
             "运行态默认隐藏 CH 策略应只让可见通道参与派生视图");
 }
 
+void test_wave_grid_division_readout_conversions()
+{
+    const protoscope::plot::ChannelSpec spec{
+        .unit = "V",
+        .ratio = 0.5,
+        .scale = -2.0,
+        .offset = 100.0,
+    };
+    const double displayPerDiv = protoscope::plot::waveDisplayValuePerDivision(-2.0, 6.0);
+    require(std::abs(displayPerDiv - 1.0) < 1e-12, "显示值每格应等于 Y 范围除以 8");
+
+    const auto display = protoscope::plot::waveChannelValuePerDivision(
+        displayPerDiv,
+        spec,
+        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+        protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue);
+    require(display.has_value() && std::abs(*display - 1.0) < 1e-12, "display_value 应直接使用显示值每格");
+
+    const auto actual = protoscope::plot::waveChannelValuePerDivision(
+        displayPerDiv,
+        spec,
+        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+        protoscope::plot::WaveGridDivisionReadoutMode::ActualValue);
+    require(actual.has_value() && std::abs(*actual - 0.5) < 1e-12, "actual_value 应除以 abs(scale)");
+
+    const auto raw = protoscope::plot::waveChannelValuePerDivision(
+        displayPerDiv,
+        spec,
+        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+        protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
+    require(raw.has_value() && std::abs(*raw - 1.0) < 1e-12, "raw_value 应除以 abs(scale * ratio)");
+}
+
+void test_wave_grid_division_readout_formula_offset_cancels()
+{
+    protoscope::plot::ChannelSpec spec{
+        .ratio = 4.0,
+        .scale = 0.5,
+        .offset = -999.0,
+    };
+    const double displayPerDiv = 2.0;
+    const auto offsetThenScale = protoscope::plot::waveChannelValuePerDivision(
+        displayPerDiv,
+        spec,
+        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+        protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
+    const auto scaleThenOffset = protoscope::plot::waveChannelValuePerDivision(
+        displayPerDiv,
+        spec,
+        protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
+        protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
+    require(offsetThenScale.has_value() && scaleThenOffset.has_value(), "两种公式都应可计算 raw 每格");
+    require(std::abs(*offsetThenScale - *scaleThenOffset) < 1e-12, "offset 不应污染每格差值换算");
+
+    spec.scale = 0.0;
+    const auto actualNa = protoscope::plot::waveChannelValuePerDivision(
+        displayPerDiv,
+        spec,
+        protoscope::plot::WaveDisplayFormula::OffsetThenScale,
+        protoscope::plot::WaveGridDivisionReadoutMode::ActualValue);
+    require(!actualNa.has_value(), "scale 为 0 时 actual_value 每格应为 n/a");
+
+    spec.scale = 1.0;
+    spec.ratio = 0.0;
+    const auto rawNa = protoscope::plot::waveChannelValuePerDivision(
+        displayPerDiv,
+        spec,
+        protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
+        protoscope::plot::WaveGridDivisionReadoutMode::RawValue);
+    require(!rawNa.has_value(), "ratio 为 0 时 raw_value 每格应为 n/a");
+}
+
 void test_wave_status_overlay_items_only_show_non_default_states()
 {
     protoscope::plot::WaveViewState view;

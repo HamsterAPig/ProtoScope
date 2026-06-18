@@ -396,55 +396,6 @@ void placeCursorInViewport(plot::WaveViewState& view,
     cursor.channelIndex = best->channelIndex;
 }
 
-bool allChannelsUseBitDisplay(const plot::WaveSnapshot& snapshot)
-{
-    if (snapshot.channels.empty()) {
-        return false;
-    }
-    return std::all_of(snapshot.channels.begin(), snapshot.channels.end(), [](const plot::ChannelView& channel) {
-        return bitDisplayEnabled(channel.bitDisplay);
-    });
-}
-
-void setupBitDisplayAxisTicks(const plot::WaveSnapshot& snapshot)
-{
-    std::vector<double> ticks;
-    std::vector<std::string> labels;
-    std::vector<std::size_t> channelIndices;
-    channelIndices.reserve(snapshot.channels.size());
-    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
-        channelIndices.push_back(channelIndex);
-    }
-    const auto bitRows = bitDisplayRowsForChannels(snapshot, channelIndices);
-    for (std::size_t rowIndex = 0; rowIndex < bitRows.size(); ++rowIndex) {
-        const std::size_t bitIndex = bitRows[rowIndex];
-        std::optional<double> yOffset;
-        for (const auto& channel : snapshot.channels) {
-            if (bitIndex < channel.bitDisplay.firstBit ||
-                bitIndex >= channel.bitDisplay.firstBit + channel.bitDisplay.bitCount) {
-                continue;
-            }
-            yOffset = channel.bitDisplay.yOffset;
-            break;
-        }
-        if (!yOffset.has_value()) {
-            continue;
-        }
-        const double laneBase = (static_cast<double>(rowIndex) + *yOffset) * bitDisplayLanePitch();
-        ticks.push_back(laneBase + bitDisplayLaneHeight() * 0.5);
-        labels.push_back(bitLaneDisplayLabel(bitIndex));
-    }
-
-    std::vector<const char*> labelPointers;
-    labelPointers.reserve(labels.size());
-    for (const auto& label : labels) {
-        labelPointers.push_back(label.c_str());
-    }
-    if (!ticks.empty()) {
-        ImPlot::SetupAxisTicks(ImAxis_Y1, ticks.data(), static_cast<int>(ticks.size()), labelPointers.data(), false);
-    }
-}
-
 void placeCursorPairInViewport(plot::WaveViewState& view,
                                const plot::ViewConfig& config,
                                const plot::WaveDisplayData& displayData)
@@ -459,23 +410,28 @@ void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
                                 const plot::WaveSnapshot& snapshot,
                                 const plot::WaveDisplayData& displayData)
 {
-    constexpr ImPlotAxisFlags axisFlags = ImPlotAxisFlags_NoHighlight;
+    static_cast<void>(snapshot);
+    constexpr ImPlotAxisFlags xAxisFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoGridLines;
+    constexpr ImPlotAxisFlags yAxisFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoLabel |
+                                           ImPlotAxisFlags_NoGridLines | ImPlotAxisFlags_NoTickMarks |
+                                           ImPlotAxisFlags_NoTickLabels;
     const char* xAxisLabel = nullptr;
-    const char* yAxisLabel = nullptr;
     if (view.showAxisLabels) {
         xAxisLabel = displayData.timeUnit == "sample" ? "Sample" : "Time";
-        yAxisLabel = snapshot.config.verticalUnit.c_str();
     }
-    ImPlot::SetupAxis(ImAxis_X1, xAxisLabel, axisFlags);
-    ImPlot::SetupAxis(ImAxis_Y1, yAxisLabel, axisFlags);
-    if (allChannelsUseBitDisplay(snapshot)) {
-        setupBitDisplayAxisTicks(snapshot);
-    }
+    ImPlot::SetupAxis(ImAxis_X1, xAxisLabel, xAxisFlags);
+    ImPlot::SetupAxis(ImAxis_Y1, nullptr, yAxisFlags);
     const bool forceMainPlotLimits = view.forceNextMainPlotLimits;
     ImPlot::SetupAxisLimits(ImAxis_X1,
                             view.viewMinTime,
                             view.viewMaxTime,
                             (view.autoFollowLatest || forceMainPlotLimits) ? ImPlotCond_Always : ImPlotCond_Once);
+    ImPlot::SetupAxisTicks(ImAxis_X1,
+                           view.viewMinTime,
+                           view.viewMaxTime,
+                           plot::kWaveGridMajorXDivisions + 1,
+                           nullptr,
+                           false);
     view.forceNextMainPlotLimits = false;
     if (view.lockVerticalRange) {
         ImPlot::SetupAxisLimits(ImAxis_Y1, view.manualVerticalMin, view.manualVerticalMax, ImPlotCond_Always);

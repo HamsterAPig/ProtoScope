@@ -137,6 +137,7 @@ struct WaveViewState {
     WaveMouseYOffsetDragMode mouseYOffsetDragMode{WaveMouseYOffsetDragMode::Direct};
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
+    WaveGridDivisionReadoutMode gridDivisionReadoutMode{WaveGridDivisionReadoutMode::DisplayValue};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
     WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
     WaveXAxisDoubleClickAction xAxisDoubleClickAction{WaveXAxisDoubleClickAction::FitFullHistory};

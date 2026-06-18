@@ -44,10 +44,20 @@ enum class WaveHiddenChannelPolicy {
     ExcludeFromDerivedViews,
 };
 
+enum class WaveGridDivisionReadoutMode {
+    DisplayValue,
+    ActualValue,
+    RawValue,
+};
+
 enum class WaveExtremeKind {
     Maximum,
     Minimum,
 };
+
+inline constexpr int kWaveGridMajorXDivisions{10};
+inline constexpr int kWaveGridMajorYDivisions{8};
+inline constexpr int kWaveGridMinorDivisionsPerMajor{5};
 
 struct FrequencyParseResult {
     bool accepted{false};
@@ -126,6 +136,11 @@ WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
 const WaveDataBounds& selectXAxisDoubleClickBounds(WaveXAxisDoubleClickAction action,
                                                    const WaveDataBounds& visibleWindowBounds,
                                                    const WaveDataBounds& fullHistoryBounds);
+double waveDisplayValuePerDivision(double minValue, double maxValue);
+std::optional<double> waveChannelValuePerDivision(double displayValuePerDivision,
+                                                  const ChannelSpec& spec,
+                                                  WaveDisplayFormula formula,
+                                                  WaveGridDivisionReadoutMode mode);
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,

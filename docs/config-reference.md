@@ -71,6 +71,7 @@ gui:
     fullscreen_mode: overlay
     control_mode: oscilloscope
     display_formula: offset_then_scale
+    grid_division_readout_mode: display_value
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
     x_axis_double_click_action: fit_full_history
@@ -95,6 +96,7 @@ gui:
 - `fullscreen_mode`：`focus` 或 `overlay`。
 - `control_mode`：`legacy_global` 或 `oscilloscope`。
 - `display_formula`：`offset_then_scale` 或 `scale_then_offset`。
+- `grid_division_readout_mode`：`display_value`、`actual_value` 或 `raw_value`，控制通道卡片展示每格读数的换算口径。
 - `channel_card_width_mode`：`fixed` 或 `adaptive`。
 - `channel_double_click_action`：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset`。
 - `x_axis_double_click_action`：`fit_full_history` 或 `fit_visible_window`。

@@ -809,6 +809,97 @@ bool handlePlotCursors(plot::WaveViewState& view,
     return anyCursorHeld;
 }
 
+void drawDashedGridLine(ImDrawList* drawList,
+                        const ImVec2& from,
+                        const ImVec2& to,
+                        ImU32 color,
+                        float thickness,
+                        float dashLength,
+                        float gapLength)
+{
+    const ImVec2 delta(to.x - from.x, to.y - from.y);
+    const float length = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+    if (drawList == nullptr || length <= 0.0F) {
+        return;
+    }
+    const ImVec2 direction(delta.x / length, delta.y / length);
+    float cursor = 0.0F;
+    while (cursor < length) {
+        const float next = (std::min)(cursor + dashLength, length);
+        const ImVec2 segmentFrom(from.x + direction.x * cursor, from.y + direction.y * cursor);
+        const ImVec2 segmentTo(from.x + direction.x * next, from.y + direction.y * next);
+        drawList->AddLine(segmentFrom, segmentTo, color, thickness);
+        cursor = next + gapLength;
+    }
+}
+
+void drawOscilloscopeGrid(const ImPlotRect& limits)
+{
+    if (!std::isfinite(limits.X.Min) || !std::isfinite(limits.X.Max) || !std::isfinite(limits.Y.Min) ||
+        !std::isfinite(limits.Y.Max) || limits.X.Max == limits.X.Min || limits.Y.Max == limits.Y.Min) {
+        return;
+    }
+
+    auto* drawList = ImPlot::GetPlotDrawList();
+    if (drawList == nullptr) {
+        return;
+    }
+    const ImU32 minorColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.64F, 0.74F, 0.86F, 0.13F));
+    const ImU32 majorColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.70F, 0.82F, 0.96F, 0.28F));
+    const ImU32 centerColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.90F, 0.96F, 1.0F, 0.42F));
+    const double xStep = (limits.X.Max - limits.X.Min) / static_cast<double>(plot::kWaveGridMajorXDivisions);
+    const double yStep = (limits.Y.Max - limits.Y.Min) / static_cast<double>(plot::kWaveGridMajorYDivisions);
+    const int xMinorCount = plot::kWaveGridMajorXDivisions * plot::kWaveGridMinorDivisionsPerMajor;
+    const int yMinorCount = plot::kWaveGridMajorYDivisions * plot::kWaveGridMinorDivisionsPerMajor;
+
+    ImPlot::PushPlotClipRect();
+    for (int index = 1; index < xMinorCount; ++index) {
+        if (index % plot::kWaveGridMinorDivisionsPerMajor == 0) {
+            continue;
+        }
+        const double x = limits.X.Min +
+                         (limits.X.Max - limits.X.Min) * static_cast<double>(index) / static_cast<double>(xMinorCount);
+        drawDashedGridLine(drawList,
+                           ImPlot::PlotToPixels(x, limits.Y.Min),
+                           ImPlot::PlotToPixels(x, limits.Y.Max),
+                           minorColor,
+                           1.0F,
+                           3.0F,
+                           5.0F);
+    }
+    for (int index = 1; index < yMinorCount; ++index) {
+        if (index % plot::kWaveGridMinorDivisionsPerMajor == 0) {
+            continue;
+        }
+        const double y = limits.Y.Min +
+                         (limits.Y.Max - limits.Y.Min) * static_cast<double>(index) / static_cast<double>(yMinorCount);
+        drawDashedGridLine(drawList,
+                           ImPlot::PlotToPixels(limits.X.Min, y),
+                           ImPlot::PlotToPixels(limits.X.Max, y),
+                           minorColor,
+                           1.0F,
+                           3.0F,
+                           5.0F);
+    }
+    for (int index = 0; index <= plot::kWaveGridMajorXDivisions; ++index) {
+        const double x = limits.X.Min + xStep * static_cast<double>(index);
+        const bool center = index == plot::kWaveGridMajorXDivisions / 2;
+        drawList->AddLine(ImPlot::PlotToPixels(x, limits.Y.Min),
+                          ImPlot::PlotToPixels(x, limits.Y.Max),
+                          center ? centerColor : majorColor,
+                          center ? 1.4F : 1.0F);
+    }
+    for (int index = 0; index <= plot::kWaveGridMajorYDivisions; ++index) {
+        const double y = limits.Y.Min + yStep * static_cast<double>(index);
+        const bool center = index == plot::kWaveGridMajorYDivisions / 2;
+        drawList->AddLine(ImPlot::PlotToPixels(limits.X.Min, y),
+                          ImPlot::PlotToPixels(limits.X.Max, y),
+                          center ? centerColor : majorColor,
+                          center ? 1.4F : 1.0F);
+    }
+    ImPlot::PopPlotClipRect();
+}
+
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame)
 {
     PlotRenderResult result;
@@ -822,6 +913,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
         ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(10.0F, 10.0F));
         ImPlot::PushStyleVar(ImPlotStyleVar_LabelPadding, ImVec2(8.0F, 6.0F));
     }
+    ImPlot::PushStyleColor(ImPlotCol_PlotBg, ImVec4(0.035F, 0.045F, 0.060F, 1.0F));
     auto& inputMap = ImPlot::GetInputMap();
     const auto savedInputMap = inputMap;
     if (view.controlMode == plot::WaveControlMode::Oscilloscope) {
@@ -831,6 +923,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     }
     if (!ImPlot::BeginPlot("##oscilloscope", ImVec2(-1.0F, -1.0F), ImPlotFlags_NoLegend)) {
         inputMap = savedInputMap;
+        ImPlot::PopStyleColor();
         if (!view.showAxisLabels) {
             ImPlot::PopStyleVar(2);
         }
@@ -854,6 +947,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
 
     const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
     const ImPlotRect limits = ImPlot::GetPlotLimits();
+    drawOscilloscopeGrid(limits);
     const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
     const double timeSnapDistance = visibleTimeWidth / 80.0;
     double smartSnapDistance = (std::max)(timeSnapDistance, visibleTimeWidth * 0.02);
@@ -969,6 +1063,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
 
     ImPlot::EndPlot();
     inputMap = savedInputMap;
+    ImPlot::PopStyleColor();
     if (!view.showAxisLabels) {
         ImPlot::PopStyleVar(2);
     }
