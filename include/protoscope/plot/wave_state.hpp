@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,21 @@ enum class WaveBitDisplayReadoutPolicy {
 enum class WaveMeasurementReferenceMode {
     Channel,
     ManualValue,
+};
+
+enum class WaveViewMode {
+    Overlay,
+    Stacked,
+    Split,
+};
+
+struct WaveLegendOverlayState {
+    bool expanded{false};
+    bool hoverFloating{false};
+    float hoverCloseDelaySec{0.30F};
+    float hoverCloseRemainingSec{0.0F};
+    float offsetX{8.0F};
+    float offsetY{8.0F};
 };
 
 struct WaveCursorState {
@@ -144,6 +160,7 @@ struct WaveViewState {
     WaveXAxisDoubleClickAction xAxisDoubleClickAction{WaveXAxisDoubleClickAction::FitFullHistory};
     WaveHiddenChannelPolicy hiddenChannelPolicy{WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     WaveFftConfig fft{};
+    WaveViewMode viewMode{WaveViewMode::Overlay};
     bool fftSourceWindowValid{false};
     bool fftViewportInitialized{false};
     bool fftFitAllRequested{false};
@@ -203,11 +220,13 @@ struct WaveDockState {
         bool ratioOverridden{false};
         bool scaleOverridden{false};
         bool offsetOverridden{false};
+        bool colorOverridden{false};
         bool bitYOffsetOverridden{false};
         std::string label;
         double ratio{1.0};
         double scale{1.0};
         double offset{0.0};
+        std::optional<std::array<float, 4>> color{};
         double bitYOffset{0.0};
     };
 
@@ -221,12 +240,13 @@ struct WaveDockState {
     std::vector<ChannelTransformOverride> channelOverrides;
     std::vector<std::string> hiddenChannelLabels;
     std::vector<std::uint8_t> fftChannelEnabled;
-    bool toolsCollapsed{false};
+    WaveLegendOverlayState legendOverlay{};
+    bool toolsCollapsed{true};
     bool overviewCollapsed{false};
     bool legendCollapsed{false};
     bool legendVisibilityRestorePending{false};
     float toolsExpandedWidth{280.0F};
-    float toolsCollapsedWidth{34.0F};
+    float toolsCollapsedWidth{38.0F};
     float overviewPanelHeight{120.0F};
     float overviewCollapsedHeight{30.0F};
     float contentToolsSplitterWidth{6.0F};
@@ -350,5 +370,7 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
                                  WaveChannelDoubleClickAction action);
 bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, WaveChannelDoubleClickAction action);
 bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex);
+bool resetOneChannelViewSettings(WaveDockState& wave, std::size_t channelIndex);
+bool resetAllChannelViewSettings(WaveDockState& wave);
 
 } // namespace protoscope::plot

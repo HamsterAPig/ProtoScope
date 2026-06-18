@@ -112,6 +112,52 @@ namespace {
                                        : plot::WaveMeasurementReferenceMode::Channel;
     }
 
+    std::string viewModeName(plot::WaveViewMode mode)
+    {
+        switch (mode) {
+            case plot::WaveViewMode::Overlay:
+                return "overlay";
+            case plot::WaveViewMode::Stacked:
+                return "stacked";
+            case plot::WaveViewMode::Split:
+                return "split";
+        }
+        return "overlay";
+    }
+
+    plot::WaveViewMode parseViewMode(const std::string& value)
+    {
+        if (value == "stacked") {
+            return plot::WaveViewMode::Stacked;
+        }
+        if (value == "split") {
+            return plot::WaveViewMode::Split;
+        }
+        return plot::WaveViewMode::Overlay;
+    }
+
+    YAML::Node encodeRgba(const std::array<float, 4>& color)
+    {
+        YAML::Node node;
+        for (const float component : color) {
+            node.push_back(component);
+        }
+        return node;
+    }
+
+    std::optional<std::array<float, 4>> decodeRgba(const YAML::Node& node)
+    {
+        if (!node || !node.IsSequence() || node.size() != 4U) {
+            return std::nullopt;
+        }
+        return std::array<float, 4>{
+            node[0].as<float>(1.0F),
+            node[1].as<float>(1.0F),
+            node[2].as<float>(1.0F),
+            node[3].as<float>(1.0F),
+        };
+    }
+
     std::string fftPointCountStateName(plot::WaveFftPointCount value)
     {
         return plot::fftPointCountName(value);
@@ -321,6 +367,9 @@ namespace {
                 if (overrideState.offsetOverridden) {
                     updated.offset = overrideState.offset;
                 }
+                if (overrideState.colorOverridden) {
+                    updated.color = overrideState.color;
+                }
                 if (overrideState.bitYOffsetOverridden) {
                     updated.bitDisplay.yOffset = overrideState.bitYOffset;
                 }
@@ -357,6 +406,7 @@ namespace {
         node["show_measurement_overlay"] = view.showMeasurementOverlay;
         node["phosphor_glow_enabled"] = view.phosphorGlowEnabled;
         node["cursor_interval_locked"] = view.cursorIntervalLocked;
+        node["view_mode"] = viewModeName(view.viewMode);
     }
 
     void encodeWaveViewAxesAndCursors(YAML::Node& node, const plot::WaveViewState& view)
@@ -425,6 +475,12 @@ namespace {
         node["tools_expanded_width"] = wave.toolsExpandedWidth;
         node["overview_panel_height"] = wave.overviewPanelHeight;
         node["overview_collapsed_height"] = wave.overviewCollapsedHeight;
+
+        YAML::Node legendOverlayNode;
+        legendOverlayNode["expanded"] = wave.legendOverlay.expanded;
+        legendOverlayNode["offset_x"] = wave.legendOverlay.offsetX;
+        legendOverlayNode["offset_y"] = wave.legendOverlay.offsetY;
+        node["legend_overlay"] = legendOverlayNode;
     }
 
     YAML::Node encodeHiddenChannelLabels(const plot::WaveDockState& wave)
@@ -458,7 +514,8 @@ namespace {
         for (std::size_t channelIndex = 0; channelIndex < wave.channelOverrides.size(); ++channelIndex) {
             const auto& overrideState = wave.channelOverrides[channelIndex];
             if (!overrideState.labelOverridden && !overrideState.ratioOverridden && !overrideState.scaleOverridden &&
-                !overrideState.offsetOverridden && !overrideState.bitYOffsetOverridden) {
+                !overrideState.offsetOverridden && !overrideState.colorOverridden &&
+                !overrideState.bitYOffsetOverridden) {
                 continue;
             }
             YAML::Node entry;
@@ -467,11 +524,15 @@ namespace {
             entry["ratio_overridden"] = overrideState.ratioOverridden;
             entry["scale_overridden"] = overrideState.scaleOverridden;
             entry["offset_overridden"] = overrideState.offsetOverridden;
+            entry["color_overridden"] = overrideState.colorOverridden;
             entry["bit_y_offset_overridden"] = overrideState.bitYOffsetOverridden;
             entry["label"] = overrideState.label;
             entry["ratio"] = overrideState.ratio;
             entry["scale"] = overrideState.scale;
             entry["offset"] = overrideState.offset;
+            if (overrideState.color.has_value()) {
+                entry["color"] = encodeRgba(*overrideState.color);
+            }
             entry["bit_y_offset"] = overrideState.bitYOffset;
             overridesNode.push_back(entry);
         }
@@ -520,6 +581,7 @@ namespace {
         view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);
         view.phosphorGlowEnabled = node["phosphor_glow_enabled"].as<bool>(view.phosphorGlowEnabled);
         view.cursorIntervalLocked = node["cursor_interval_locked"].as<bool>(view.cursorIntervalLocked);
+        view.viewMode = parseViewMode(node["view_mode"].as<std::string>(viewModeName(view.viewMode)));
     }
 
     void decodeWaveViewAxesAndCursors(const YAML::Node& node, plot::WaveViewState& view)
@@ -606,6 +668,13 @@ namespace {
         wave.toolsExpandedWidth = node["tools_expanded_width"].as<float>(wave.toolsExpandedWidth);
         wave.overviewPanelHeight = node["overview_panel_height"].as<float>(wave.overviewPanelHeight);
         wave.overviewCollapsedHeight = node["overview_collapsed_height"].as<float>(wave.overviewCollapsedHeight);
+
+        const auto legendOverlayNode = node["legend_overlay"];
+        if (legendOverlayNode && legendOverlayNode.IsMap()) {
+            wave.legendOverlay.expanded = legendOverlayNode["expanded"].as<bool>(wave.legendOverlay.expanded);
+            wave.legendOverlay.offsetX = legendOverlayNode["offset_x"].as<float>(wave.legendOverlay.offsetX);
+            wave.legendOverlay.offsetY = legendOverlayNode["offset_y"].as<float>(wave.legendOverlay.offsetY);
+        }
     }
 
     void decodeHiddenChannelLabels(const YAML::Node& node, plot::WaveDockState& wave)
@@ -657,12 +726,14 @@ namespace {
                 overrideState.ratioOverridden = entry["ratio_overridden"].as<bool>(overrideState.ratioOverridden);
                 overrideState.scaleOverridden = entry["scale_overridden"].as<bool>(overrideState.scaleOverridden);
                 overrideState.offsetOverridden = entry["offset_overridden"].as<bool>(overrideState.offsetOverridden);
+                overrideState.colorOverridden = entry["color_overridden"].as<bool>(overrideState.colorOverridden);
                 overrideState.bitYOffsetOverridden =
                     entry["bit_y_offset_overridden"].as<bool>(overrideState.bitYOffsetOverridden);
                 overrideState.label = entry["label"].as<std::string>(overrideState.label);
                 overrideState.ratio = entry["ratio"].as<double>(overrideState.ratio);
                 overrideState.scale = entry["scale"].as<double>(overrideState.scale);
                 overrideState.offset = entry["offset"].as<double>(overrideState.offset);
+                overrideState.color = decodeRgba(entry["color"]);
                 overrideState.bitYOffset = entry["bit_y_offset"].as<double>(overrideState.bitYOffset);
             }
         }

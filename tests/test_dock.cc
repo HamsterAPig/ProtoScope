@@ -3,6 +3,7 @@
 
 #include "test_registry.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -688,6 +689,53 @@ void test_wave_protocol_state_prefer_waveform_hover_readout_defaults_true()
     require(legacyRestored.view.preferWaveformHoverReadout, "旧状态缺字段时应保持默认 true");
     require(legacyRestored.view.bitDisplayReadoutPolicy == protoscope::plot::WaveBitDisplayReadoutPolicy::MixedNearest,
             "旧状态缺 bit display 读数策略时应保持 mixed_nearest 默认值");
+}
+
+void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.buffer.setChannelSpec(0,
+                               {.label = "CH1",
+                                .unit = "V",
+                                .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}});
+    wave.view.viewMode = protoscope::plot::WaveViewMode::Split;
+    wave.legendOverlay.expanded = true;
+    wave.legendOverlay.offsetX = 24.0F;
+    wave.legendOverlay.offsetY = 36.0F;
+    wave.channelOverrides.resize(1);
+    wave.channelOverrides[0].colorOverridden = true;
+    wave.channelOverrides[0].color = std::array<float, 4>{0.8F, 0.7F, 0.6F, 1.0F};
+
+    const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
+    require(encoded["view_mode"].as<std::string>() == "split", "协议 UI 状态应写出分屏视图模式");
+    require(encoded["legend_overlay"]["expanded"].as<bool>(), "协议 UI 状态应写出图例展开状态");
+    require(encoded["legend_overlay"]["offset_x"].as<float>() == 24.0F, "协议 UI 状态应写出图例 X 偏移");
+    require(encoded["channel_overrides"][0]["color_overridden"].as<bool>(), "协议 UI 状态应写出颜色覆盖标记");
+    require(encoded["channel_overrides"][0]["color"].size() == 4U, "协议 UI 状态应写出 RGBA 颜色");
+
+    protoscope::plot::WaveDockState restored;
+    restored.buffer.configureChannels(1);
+    restored.buffer.setChannelSpec(0,
+                                   {.label = "CH1",
+                                    .unit = "V",
+                                    .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}});
+    protoscope::ui::decodeWaveProtocolState(encoded, restored);
+    const auto restoredSpec = restored.buffer.channelSpec(0);
+    require(restored.view.viewMode == protoscope::plot::WaveViewMode::Split, "协议 UI 状态应恢复分屏模式");
+    require(restored.legendOverlay.expanded && restored.legendOverlay.offsetX == 24.0F &&
+                restored.legendOverlay.offsetY == 36.0F,
+            "协议 UI 状态应恢复图例 overlay 状态");
+    require(restoredSpec.has_value() && restoredSpec->color.has_value() && (*restoredSpec->color)[0] == 0.8F,
+            "协议 UI 状态应把颜色覆盖应用到通道规格");
+
+    const auto legacy = YAML::Load("view_mode: unknown\n");
+    protoscope::plot::WaveDockState legacyRestored;
+    protoscope::ui::decodeWaveProtocolState(legacy, legacyRestored);
+    require(legacyRestored.view.viewMode == protoscope::plot::WaveViewMode::Overlay,
+            "非法视图模式应回退 overlay");
+    require(legacyRestored.legendOverlay.offsetX == 8.0F && legacyRestored.legendOverlay.offsetY == 8.0F,
+            "旧状态缺图例 overlay 字段时应使用左上角默认值");
 }
 
 void test_dock_visibility_state_isolated_by_protocol_key()

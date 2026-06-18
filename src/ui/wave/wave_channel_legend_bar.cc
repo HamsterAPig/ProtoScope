@@ -1,7 +1,9 @@
 #include "wave_render_service.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <string>
 
 namespace protoscope::ui {
@@ -290,6 +292,203 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
     drawChannelLegendHeader(wave);
     drawChannelLegendStrip(wave, snapshot, metrics, scrollActiveIntoView);
     wave.lastLegendMeasurementChannelIndex = view.measurementChannelIndex;
+}
+
+namespace {
+
+    void setChannelHidden(plot::WaveDockState& wave, const std::string& label, bool hidden)
+    {
+        auto& hiddenLabels = wave.hiddenChannelLabels;
+        const auto existing = std::find(hiddenLabels.begin(), hiddenLabels.end(), label);
+        if (hidden && existing == hiddenLabels.end()) {
+            hiddenLabels.push_back(label);
+            wave.legendVisibilityRestorePending = true;
+        } else if (!hidden && existing != hiddenLabels.end()) {
+            hiddenLabels.erase(existing);
+            wave.legendVisibilityRestorePending = true;
+        }
+    }
+
+    void drawLegendColorSwatch(const ImVec4& color, float size)
+    {
+        const ImVec2 min = ImGui::GetCursorScreenPos();
+        const ImVec2 max(min.x + size, min.y + size);
+        ImGui::Dummy(ImVec2(size, size));
+        auto* drawList = ImGui::GetWindowDrawList();
+        drawList->AddRectFilled(min, max, ImGui::ColorConvertFloat4ToU32(color), 3.0F);
+        drawList->AddRect(min, max, ImGui::GetColorU32(ImVec4(1.0F, 1.0F, 1.0F, 0.22F)), 3.0F);
+    }
+
+    void drawCompactLegendRows(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)
+    {
+        const float swatchSize = 11.0F;
+        const std::size_t maxCompactRows = (std::min<std::size_t>)(snapshot.channels.size(), 6U);
+        for (std::size_t channelIndex = 0; channelIndex < maxCompactRows; ++channelIndex) {
+            const auto spec = wave.buffer.channelSpec(channelIndex);
+            if (!spec.has_value()) {
+                continue;
+            }
+            const bool hidden = channelHiddenByLegendState(wave, spec->label);
+            ImGui::PushID(static_cast<int>(channelIndex));
+            drawLegendColorSwatch(withAlpha(channelColor(*spec, channelIndex), hidden ? 0.35F : 1.0F), swatchSize);
+            ImGui::SameLine();
+            ImGui::TextDisabled("CH%zu", channelIndex + 1U);
+            ImGui::SameLine();
+            ImGui::Text("%s%s", spec->label.c_str(), hidden ? " (隐藏)" : "");
+            if (ImGui::IsItemClicked()) {
+                setChannelHidden(wave, spec->label, !hidden);
+            }
+            ImGui::PopID();
+        }
+        if (snapshot.channels.size() > maxCompactRows) {
+            ImGui::TextDisabled("+ %zu 个通道", snapshot.channels.size() - maxCompactRows);
+        }
+    }
+
+    void drawExpandedLegendChannelRow(plot::WaveDockState& wave, std::size_t channelIndex, const plot::ChannelSpec& spec)
+    {
+        ImGui::PushID(static_cast<int>(channelIndex));
+        const plot::ChannelSpec defaultSpec = channelDefaultSpec(wave, channelIndex, spec);
+        auto updated = spec;
+        bool visible = !channelHiddenByLegendState(wave, spec.label);
+        if (ImGui::Checkbox("##visible", &visible)) {
+            setChannelHidden(wave, spec.label, !visible);
+        }
+        ImGui::SameLine();
+
+        std::array<float, 4> color = spec.color.value_or(std::array<float, 4>{
+            fallbackChannelColor(channelIndex).x,
+            fallbackChannelColor(channelIndex).y,
+            fallbackChannelColor(channelIndex).z,
+            fallbackChannelColor(channelIndex).w,
+        });
+        ImGui::SetNextItemWidth(92.0F);
+        if (ImGui::ColorEdit4("##color", color.data(), ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
+            updated.color = color;
+            applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+        }
+        ImGui::SameLine();
+
+        ImGui::Text("CH%zu", channelIndex + 1U);
+        ImGui::SameLine();
+        char labelBuffer[128]{};
+        std::snprintf(labelBuffer, sizeof(labelBuffer), "%s", updated.label.c_str());
+        ImGui::SetNextItemWidth(110.0F);
+        if (ImGui::InputText("##label", labelBuffer, sizeof(labelBuffer))) {
+            updated.label = labelBuffer;
+            applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(74.0F);
+        if (ImGui::InputDouble("##ratio", &updated.ratio, 0.0, 0.0, "%.4g")) {
+            applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(74.0F);
+        if (ImGui::InputDouble("##scale", &updated.scale, 0.0, 0.0, "%.4g")) {
+            applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(74.0F);
+        if (ImGui::InputDouble("##offset", &updated.offset, 0.0, 0.0, "%.4g")) {
+            applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", spec.unit.empty() ? "-" : spec.unit.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("恢复")) {
+            if (plot::resetOneChannelViewSettings(wave, channelIndex)) {
+                invalidateWaveDisplayCaches(wave);
+            }
+        }
+        ImGui::PopID();
+    }
+
+    void drawExpandedLegendRows(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)
+    {
+        ImGui::TextDisabled("显示  颜色       通道  名称          Ratio    Scale    Offset   单位");
+        ImGui::Separator();
+        const float rowHeight = ImGui::GetFrameHeightWithSpacing();
+        const float maxRowsHeight = rowHeight * 8.0F + ImGui::GetStyle().ScrollbarSize;
+        if (ImGui::BeginChild("##wave_legend_overlay_rows",
+                              ImVec2(0.0F, (std::min)(maxRowsHeight, rowHeight * snapshot.channels.size() + 6.0F)),
+                              false,
+                              ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
+            for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+                const auto spec = wave.buffer.channelSpec(channelIndex);
+                if (!spec.has_value()) {
+                    continue;
+                }
+                drawExpandedLegendChannelRow(wave, channelIndex, *spec);
+            }
+        }
+        ImGui::EndChild();
+    }
+
+} // namespace
+
+void drawChannelLegendOverlay(plot::WaveDockState& wave,
+                              const plot::WaveSnapshot& snapshot,
+                              const ImVec2& plotPos,
+                              const ImVec2& plotSize)
+{
+    if (snapshot.channels.empty() || !wave.view.showChannelLegend) {
+        return;
+    }
+
+    if (plotSize.x <= 80.0F || plotSize.y <= 60.0F) {
+        return;
+    }
+
+    const bool expanded = wave.legendOverlay.expanded;
+    const bool floating = expanded || wave.legendOverlay.hoverFloating;
+    const ImVec2 windowSize(expanded ? (std::min)(560.0F, plotSize.x - 16.0F) : (floating ? 360.0F : 220.0F),
+                            expanded ? 310.0F : (floating ? 160.0F : 118.0F));
+    const float clampedX = (std::clamp)(wave.legendOverlay.offsetX, 0.0F, (std::max)(0.0F, plotSize.x - windowSize.x));
+    const float clampedY = (std::clamp)(wave.legendOverlay.offsetY, 0.0F, (std::max)(0.0F, plotSize.y - windowSize.y));
+
+    ImGui::SetNextWindowPos(ImVec2(plotPos.x + clampedX, plotPos.y + clampedY), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, expanded ? ImVec4(0.051F, 0.075F, 0.106F, 0.96F)
+                                                      : ImVec4(0.051F, 0.075F, 0.106F, 0.78F));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.30F, 0.42F, 0.54F, 0.55F));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin("##wave_channel_overlay_legend", nullptr, flags)) {
+        const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        if (hovered) {
+            wave.legendOverlay.hoverFloating = true;
+            wave.legendOverlay.hoverCloseRemainingSec = wave.legendOverlay.hoverCloseDelaySec;
+        } else if (!expanded && wave.legendOverlay.hoverFloating) {
+            wave.legendOverlay.hoverCloseRemainingSec -= ImGui::GetIO().DeltaTime;
+            if (wave.legendOverlay.hoverCloseRemainingSec <= 0.0F) {
+                wave.legendOverlay.hoverFloating = false;
+            }
+        }
+
+        if (floating) {
+            ImGui::TextUnformatted("通道图例");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("全部恢复")) {
+                if (plot::resetAllChannelViewSettings(wave)) {
+                    invalidateWaveDisplayCaches(wave);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(expanded ? "收起" : "展开")) {
+                wave.legendOverlay.expanded = !wave.legendOverlay.expanded;
+            }
+            ImGui::Separator();
+        }
+
+        if (expanded) {
+            drawExpandedLegendRows(wave, snapshot);
+        } else {
+            drawCompactLegendRows(wave, snapshot);
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
 }
 
 void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)

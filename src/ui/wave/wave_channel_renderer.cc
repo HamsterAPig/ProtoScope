@@ -1,6 +1,7 @@
 #include "wave_render_service.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -88,10 +89,17 @@ float densityStrength(const std::size_t sampleCount)
 
 ImVec4 fallbackChannelColor(const std::size_t channelIndex)
 {
-    return {0.15F + 0.25F * static_cast<float>(channelIndex % 3),
-            0.75F,
-            0.35F + 0.2F * static_cast<float>((channelIndex + 1) % 3),
-            1.0F};
+    constexpr std::array<ImVec4, 8> kPalette{{
+        {0.216F, 0.886F, 0.478F, 1.0F},
+        {0.200F, 0.780F, 1.000F, 1.0F},
+        {1.000F, 0.761F, 0.278F, 1.0F},
+        {0.714F, 0.427F, 1.000F, 1.0F},
+        {1.000F, 0.365F, 0.365F, 1.0F},
+        {0.333F, 0.914F, 0.886F, 1.0F},
+        {1.000F, 0.561F, 0.220F, 1.0F},
+        {0.620F, 0.800F, 1.000F, 1.0F},
+    }};
+    return kPalette[channelIndex % kPalette.size()];
 }
 
 ImVec4 channelColor(const plot::ChannelSpec& spec, const std::size_t channelIndex)

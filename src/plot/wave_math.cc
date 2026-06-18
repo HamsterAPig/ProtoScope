@@ -938,11 +938,13 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > kEpsilon;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > kEpsilon;
     overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > kEpsilon;
+    overrideState.colorOverridden = updated.color != defaultSpec.color;
     overrideState.bitYOffsetOverridden = std::abs(updated.bitDisplay.yOffset - defaultSpec.bitDisplay.yOffset) > kEpsilon;
     overrideState.label = updated.label;
     overrideState.ratio = updated.ratio;
     overrideState.scale = updated.scale;
     overrideState.offset = updated.offset;
+    overrideState.color = updated.color;
     overrideState.bitYOffset = updated.bitDisplay.yOffset;
     wave.buffer.setChannelSpec(channelIndex, std::move(updated));
     return true;
@@ -959,6 +961,49 @@ bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, 
 bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex)
 {
     return resetChannelConfigToDefault(wave, channelIndex, WaveChannelDoubleClickAction::ResetOffset);
+}
+
+bool resetOneChannelViewSettings(WaveDockState& wave, std::size_t channelIndex)
+{
+    if (channelIndex >= wave.defaultChannelSpecs.size()) {
+        return false;
+    }
+    const auto currentSpec = wave.buffer.channelSpec(channelIndex);
+    const auto eraseHiddenLabel = [&](const std::string& label) {
+        wave.hiddenChannelLabels.erase(
+            std::remove(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label),
+            wave.hiddenChannelLabels.end());
+    };
+    if (currentSpec.has_value()) {
+        eraseHiddenLabel(currentSpec->label);
+    }
+    eraseHiddenLabel(wave.defaultChannelSpecs[channelIndex].label);
+    if (!resetChannelConfigToDefault(wave, channelIndex, wave.defaultChannelSpecs[channelIndex], WaveChannelDoubleClickAction::ResetAll)) {
+        return false;
+    }
+    if (channelIndex < wave.channelOverrides.size()) {
+        wave.channelOverrides[channelIndex] = {};
+    }
+    return true;
+}
+
+bool resetAllChannelViewSettings(WaveDockState& wave)
+{
+    bool changed = false;
+    const std::size_t channelCount = wave.buffer.channelCount();
+    for (std::size_t channelIndex = 0; channelIndex < channelCount; ++channelIndex) {
+        changed = resetOneChannelViewSettings(wave, channelIndex) || changed;
+    }
+
+    wave.hiddenChannelLabels.clear();
+    wave.channelOverrides.clear();
+    wave.legendOverlay.expanded = false;
+    wave.legendOverlay.hoverFloating = false;
+    wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+    wave.legendOverlay.offsetX = 8.0F;
+    wave.legendOverlay.offsetY = 8.0F;
+    wave.legendVisibilityRestorePending = true;
+    return changed || channelCount > 0;
 }
 
 } // namespace protoscope::plot

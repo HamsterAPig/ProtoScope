@@ -490,7 +490,7 @@ void drawFftModeToggle(plot::WaveDockState& wave)
         view.fftViewportInitialized = false;
         wave.cachedFftKeyValid = false;
     }
-    addItemHelp("完整频谱保留原有幅值/相位频域视图；游标分屏使用 C1~C2 时间窗口计算 FFT。");
+    addItemHelp("完整频谱保留原有幅值/相位频域视图；游标分屏使用 A~B 时间窗口计算 FFT。");
 }
 
 void drawFftPointCountControls(plot::WaveDockState& wave)
@@ -714,8 +714,8 @@ void drawCollapsedWaveToolbar(app::Application& application,
     }
     if (drawToolbarToggleButton("游",
                                 view.showCursors,
-                                view.showCursors ? "游标：已显示 C1/C2 测量游标。点击后隐藏游标和游标读数。"
-                                                 : "游标：当前隐藏。点击后显示 C1/C2 测量游标。",
+                                view.showCursors ? "游标：已显示 A/B 测量游标。点击后隐藏游标和游标读数。"
+                                                 : "游标：当前隐藏。点击后显示 A/B 测量游标。",
                                 collapsedButtonSize)) {
         view.showCursors = !view.showCursors;
     }
@@ -772,7 +772,7 @@ void drawWaveViewSection(plot::WaveViewState& view, double minVisibleTimeSpan)
     }
     if (drawAdaptiveToolbarButton("显示图例",
                                   "例",
-                                  "显示或隐藏顶部通道图例栏；每个通道的 Legend 勾选状态会按协议保存。",
+                                  "显示或隐藏图内通道图例；每个通道的显隐状态会按协议保存。",
                                   view.showChannelLegend)) {
         view.showChannelLegend = !view.showChannelLegend;
     }
@@ -984,14 +984,14 @@ void drawWaveToolbar(app::Application& application,
                                   true)) {
         view.showCursors = !view.showCursors;
     }
-    if (drawAdaptiveToolbarButton("C1 到视窗", "C1", "仅移动 C1 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
+    if (drawAdaptiveToolbarButton("A 到视窗", "A", "仅移动 A 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
         placeCursorInViewport(view, config, displayData, 0, 0.5);
     }
-    if (drawAdaptiveToolbarButton("C2 到视窗", "C2", "仅移动 C2 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
+    if (drawAdaptiveToolbarButton("B 到视窗", "B", "仅移动 B 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
         placeCursorInViewport(view, config, displayData, 1, 0.5);
     }
     if (drawAdaptiveToolbarButton(
-            "C1+C2 到视窗", "C1+C2", "仅移动双游标到当前主视窗，不改变当前视窗范围。", false, true)) {
+            "A+B 到视窗", "A+B", "仅移动双游标到当前主视窗，不改变当前视窗范围。", false, true)) {
         placeCursorPairInViewport(view, config, displayData);
     }
     if (drawAdaptiveToolbarButton(mouseYOffsetDragModeLabel(view.mouseYOffsetDragMode),

@@ -2862,6 +2862,64 @@ void test_wave_offset_reset_uses_protocol_default_only()
     require(wave.channelOverrides[0].labelOverridden, "label override 应保留");
 }
 
+void test_wave_reset_one_channel_view_settings_only_resets_target()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(2);
+    wave.defaultChannelSpecs = {
+        {.label = "CH1", .unit = "V", .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}},
+        {.label = "CH2", .unit = "A", .scale = 2.0, .color = std::array<float, 4>{0.4F, 0.5F, 0.6F, 1.0F}},
+    };
+    wave.buffer.setChannelSpec(0, {.label = "Renamed1", .unit = "V", .scale = 5.0});
+    wave.buffer.setChannelSpec(1, {.label = "Renamed2", .unit = "A", .scale = 6.0});
+    wave.channelOverrides.resize(2);
+    wave.channelOverrides[0].labelOverridden = true;
+    wave.channelOverrides[0].scaleOverridden = true;
+    wave.channelOverrides[0].colorOverridden = true;
+    wave.channelOverrides[0].color = std::array<float, 4>{0.9F, 0.8F, 0.7F, 1.0F};
+    wave.channelOverrides[1].labelOverridden = true;
+    wave.channelOverrides[1].scaleOverridden = true;
+    wave.hiddenChannelLabels = {"Renamed1", "Renamed2"};
+
+    require(protoscope::plot::resetOneChannelViewSettings(wave, 0), "恢复单通道显示设置应成功");
+    const auto spec0 = wave.buffer.channelSpec(0);
+    const auto spec1 = wave.buffer.channelSpec(1);
+    require(spec0.has_value() && spec0->label == "CH1" && spec0->scale == 1.0, "目标通道应恢复 Lua 默认值");
+    require(spec1.has_value() && spec1->label == "Renamed2" && spec1->scale == 6.0, "非目标通道不应被恢复");
+    require(!wave.channelOverrides[0].labelOverridden && !wave.channelOverrides[0].colorOverridden,
+            "目标通道覆盖项应清空");
+    require(wave.channelOverrides[1].labelOverridden && wave.channelOverrides[1].scaleOverridden,
+            "非目标通道覆盖项应保留");
+    require(wave.hiddenChannelLabels.size() == 1 && wave.hiddenChannelLabels[0] == "Renamed2",
+            "恢复单通道应只让目标通道重新可见");
+}
+
+void test_wave_reset_all_channel_view_settings_preserves_samples()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.defaultChannelSpecs = {{.label = "CH1", .unit = "V", .scale = 1.5}};
+    wave.buffer.setChannelSpec(0, {.label = "Renamed", .unit = "V", .scale = 6.0});
+    wave.buffer.append(0, {.samples = {{0.0, 1.0}, {1.0, 2.0}}});
+    wave.channelOverrides.resize(1);
+    wave.channelOverrides[0].labelOverridden = true;
+    wave.channelOverrides[0].scaleOverridden = true;
+    wave.hiddenChannelLabels = {"Renamed"};
+    wave.legendOverlay.expanded = true;
+    wave.legendOverlay.offsetX = 42.0F;
+    wave.legendOverlay.offsetY = 64.0F;
+
+    require(protoscope::plot::resetAllChannelViewSettings(wave), "恢复全部通道显示设置应成功");
+    const auto spec = wave.buffer.channelSpec(0);
+    const auto snapshot = wave.buffer.snapshot(0.0, 1.0);
+    require(spec.has_value() && spec->label == "CH1" && spec->scale == 1.5, "全部恢复应恢复通道规格");
+    require(snapshot.channels.size() == 1 && snapshot.channels[0].totalSamples == 2, "全部恢复不应清空波形数据");
+    require(wave.channelOverrides.empty(), "全部恢复应清空覆盖项");
+    require(wave.hiddenChannelLabels.empty(), "全部恢复应恢复所有通道可见");
+    require(!wave.legendOverlay.expanded && wave.legendOverlay.offsetX == 8.0F && wave.legendOverlay.offsetY == 8.0F,
+            "全部恢复应重置图例 overlay 状态");
+}
+
 void test_wave_mouse_y_offset_drag_mode_gate()
 {
     using protoscope::plot::WaveMouseYOffsetDragMode;

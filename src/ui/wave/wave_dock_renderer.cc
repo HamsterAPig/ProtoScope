@@ -3,6 +3,7 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/ui/icons.hpp"
 #include "protoscope/ui/keyboard_shortcuts.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 
 #include "wave_component.hpp"
 #include "wave_context.hpp"
@@ -28,6 +29,8 @@
 namespace protoscope::ui {
 
 namespace {
+
+    constexpr float kTopToolbarHeight = 38.0F;
 
     ImGuiKey toImGuiKey(const ShortcutKey key)
     {
@@ -62,6 +65,146 @@ namespace {
     {
         const auto* descriptor = findShortcut(action);
         return descriptor != nullptr && chordPressed(descriptor->chord);
+    }
+
+    bool drawTopToolbarButton(const char* label, bool active, const char* tooltip)
+    {
+        const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0F;
+        return drawToolbarSectionButton(label, tooltip, active, ImVec2(width, 0.0F));
+    }
+
+    void drawTopToolbarSeparator()
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+    }
+
+    void zoomTimeAroundCenter(plot::WaveViewState& view, double factor)
+    {
+        const double span = (std::max)(view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan);
+        const double nextSpan = (std::max)(span * factor, view.minVisibleTimeSpan);
+        const double center = 0.5 * (view.viewMinTime + view.viewMaxTime);
+        view.viewMinTime = center - nextSpan * 0.5;
+        view.viewMaxTime = center + nextSpan * 0.5;
+        view.visibleDuration = nextSpan;
+        view.centerTime = center;
+        view.autoFollowLatest = false;
+        view.forceNextMainPlotLimits = true;
+    }
+
+    void drawCompactMainToolbar(app::Application& application,
+                                plot::WaveDockState& wave,
+                                const plot::ViewConfig& config,
+                                const plot::WaveDisplayData& displayData,
+                                bool fullscreenActive,
+                                bool* fullscreenToggleRequested)
+    {
+        auto& view = wave.view;
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.059F, 0.086F, 0.125F, 1.0F));
+        ImGui::BeginChild("##wave_main_toolbar", ImVec2(0.0F, kTopToolbarHeight), true, ImGuiWindowFlags_NoScrollbar);
+        ImGui::AlignTextToFramePadding();
+
+        if (drawTopToolbarButton("叠加", view.viewMode == plot::WaveViewMode::Overlay, "多通道共用同一个波形区域。")) {
+            view.viewMode = plot::WaveViewMode::Overlay;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("堆叠", view.viewMode == plot::WaveViewMode::Stacked, "按通道纵向错开显示，不修改原始采样。")) {
+            view.viewMode = plot::WaveViewMode::Stacked;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("分屏", view.viewMode == plot::WaveViewMode::Split, "每个可见通道使用独立子图，共享时间轴。")) {
+            view.viewMode = plot::WaveViewMode::Split;
+        }
+
+        drawTopToolbarSeparator();
+        if (drawTopToolbarButton("-", false, "缩小时间轴。")) {
+            zoomTimeAroundCenter(view, 1.25);
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("+", false, "放大时间轴。")) {
+            zoomTimeAroundCenter(view, 0.80);
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("适配", false, "适配当前可见波形到完整视图。")) {
+            view.fitVisibleWaveformsRequested = true;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton(view.zoomSelectionActive ? "框选" : "平移", view.zoomSelectionActive, "切换框选放大模式。")) {
+            view.zoomSelectionActive = !view.zoomSelectionActive;
+            view.zoomSelectionDragging = false;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton(view.autoFollowLatest ? "跟随" : "停跟", view.autoFollowLatest, "切换自动跟随最新数据。")) {
+            view.autoFollowLatest = !view.autoFollowLatest;
+        }
+
+        drawTopToolbarSeparator();
+        if (drawTopToolbarButton("A", view.cursors[0].enabled, "显示或隐藏 A 游标。")) {
+            view.cursors[0].enabled = !view.cursors[0].enabled;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("B", view.cursors[1].enabled, "显示或隐藏 B 游标。")) {
+            view.cursors[1].enabled = !view.cursors[1].enabled;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton(view.cursorIntervalLocked ? "锁定" : "间隔", view.cursorIntervalLocked, "锁定 A/B 游标间隔。")) {
+            view.cursorIntervalLocked = !view.cursorIntervalLocked;
+            view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("同步", false, "把 A/B 游标移入当前视窗。")) {
+            placeCursorPairInViewport(view, config, displayData);
+        }
+
+        drawTopToolbarSeparator();
+        if (drawTopToolbarButton("dt", view.measurement.deltaTime, "切换时间差测量。")) {
+            view.measurement.deltaTime = !view.measurement.deltaTime;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("Hz", view.measurement.frequency, "切换等效频率测量。")) {
+            view.measurement.frequency = !view.measurement.frequency;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("峰峰", view.measurement.peakToPeak, "切换峰峰值测量。")) {
+            view.measurement.peakToPeak = !view.measurement.peakToPeak;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("均值", view.measurement.mean, "切换均值测量。")) {
+            view.measurement.mean = !view.measurement.mean;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("更多", !wave.toolsCollapsed, "展开右侧高级工具轨。")) {
+            wave.toolsCollapsed = false;
+        }
+
+        drawTopToolbarSeparator();
+        if (drawTopToolbarButton("概览", !wave.overviewCollapsed, "展开或折叠概览图。")) {
+            wave.overviewCollapsed = !wave.overviewCollapsed;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("图例", view.showChannelLegend, "显示或隐藏图内通道图例。")) {
+            view.showChannelLegend = !view.showChannelLegend;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("展开", wave.legendOverlay.expanded, "展开图内通道图例详情面板。")) {
+            wave.legendOverlay.expanded = !wave.legendOverlay.expanded;
+        }
+        ImGui::SameLine();
+        if (drawTopToolbarButton("恢复", false, "恢复所有通道显示设置，不清空波形数据。")) {
+            if (plot::resetAllChannelViewSettings(wave)) {
+                invalidateWaveDisplayCaches(wave);
+            }
+        }
+        ImGui::SameLine();
+        if (fullscreenToggleRequested != nullptr &&
+            drawTopToolbarButton(fullscreenActive ? "退全" : "全屏", fullscreenActive, "切换波形全屏显示。")) {
+            *fullscreenToggleRequested = true;
+            application.setStatusMessage(fullscreenActive ? "已请求退出波形全屏" : "已请求进入波形全屏", false);
+        }
+
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
     }
 
 } // namespace
@@ -581,11 +724,13 @@ void applyChannelTransformOverride(plot::WaveDockState& wave,
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > 1e-12;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > 1e-12;
     overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > 1e-12;
+    overrideState.colorOverridden = updated.color != defaultSpec.color;
     overrideState.bitYOffsetOverridden = std::abs(updated.bitDisplay.yOffset - defaultSpec.bitDisplay.yOffset) > 1e-12;
     overrideState.label = updated.label;
     overrideState.ratio = updated.ratio;
     overrideState.scale = updated.scale;
     overrideState.offset = updated.offset;
+    overrideState.color = updated.color;
     overrideState.bitYOffset = updated.bitDisplay.yOffset;
     wave.buffer.setChannelSpec(channelIndex, updated);
     invalidateWaveDisplayCaches(wave);
@@ -651,16 +796,18 @@ public:
     }
 };
 
-class WaveLegendComponent final : public IWaveComponent {
+class WaveMainToolbarComponent final : public IWaveComponent {
 public:
-    std::string_view id() const override { return "wave_legend"; }
+    std::string_view id() const override { return "wave_main_toolbar"; }
 
     void draw(WaveContext& context) override
     {
-        if (!context.view.showChannelLegend) {
-            return;
-        }
-        drawChannelLegendBar(context.wave, *context.renderFrame->fullSnapshot);
+        drawCompactMainToolbar(context.application,
+                               context.wave,
+                               *context.config,
+                               *context.renderFrame->displayData,
+                               context.fullscreenActive,
+                               context.fullscreenToggleRequested);
     }
 };
 
@@ -758,7 +905,7 @@ struct WaveContentPlan {
 
 struct WaveComponentSet {
     WaveOverviewComponent overview;
-    WaveLegendComponent legend;
+    WaveMainToolbarComponent mainToolbar;
     WavePlotComponent plot;
     WaveCursorSplitComponent cursorSplit;
     WaveFftComponent fft;
@@ -766,7 +913,7 @@ struct WaveComponentSet {
     WaveToolbarComponent toolbar;
     std::array<IWaveComponent*, 7> all;
 
-    WaveComponentSet() : all{&overview, &legend, &plot, &cursorSplit, &fft, &measurementOverlay, &toolbar} {}
+    WaveComponentSet() : all{&overview, &mainToolbar, &plot, &cursorSplit, &fft, &measurementOverlay, &toolbar} {}
 };
 
 bool isCursorSplitFftMode(const plot::WaveViewState& view)
@@ -779,14 +926,13 @@ WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewSt
     const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
     const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
     const bool cursorSplitMode = isCursorSplitFftMode(view);
-    const float legendHeight =
-        !cursorSplitMode && view.showChannelLegend ? measureChannelLegendHeight(wave.cachedFullSnapshot, wave) : 0.0F;
+    const float toolbarHeight = cursorSplitMode ? 0.0F : kTopToolbarHeight;
     const float overviewRequestedHeight =
         cursorSplitMode ? 0.0F : (wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.overviewPanelHeight);
     const float overviewMinHeight =
         cursorSplitMode ? 0.0F : (wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.minOverviewPanelHeight);
     const float mainPlotAxisReserve = ImGui::GetTextLineHeightWithSpacing() + spacingHeight;
-    const float fixedContentHeight = legendHeight + spacingHeight * 2.0F + mainPlotAxisReserve;
+    const float fixedContentHeight = toolbarHeight + spacingHeight * 2.0F + mainPlotAxisReserve;
 
     WaveContentPlan plan;
     plan.layout = plot::solveWaveLayout(available.x,
@@ -846,7 +992,7 @@ void drawWaveContentComponents(WaveComponentSet& components, WaveContext& contex
     const bool cursorSplitMode = isCursorSplitFftMode(context.view);
     if (!cursorSplitMode) {
         components.overview.draw(context);
-        components.legend.draw(context);
+        components.mainToolbar.draw(context);
     }
     if (cursorSplitMode) {
         components.cursorSplit.draw(context);
