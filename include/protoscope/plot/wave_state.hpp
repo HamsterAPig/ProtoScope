@@ -216,6 +216,8 @@ struct WaveAnalysisMarker {
 
 enum class WaveToolsDrawer {
     Main,
+    FFT,
+    Renderer,
     Cursor,
     Measure,
     View,
