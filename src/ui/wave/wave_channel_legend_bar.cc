@@ -104,13 +104,13 @@ namespace {
         const bool swatchHovered = ImGui::IsItemHovered();
 
         const std::string shortText = "CH" + std::to_string(view.measurementChannelIndex + 1);
-        const std::string fullText = "当前 " + shortText + " · " + spec->label;
+        const std::string fullText = "激活 " + shortText + " · " + spec->label;
         const float textStartX = summaryStartX + swatchSize + style.ItemInnerSpacing.x;
         const float textWidth = contentRight - textStartX;
         const std::string& visibleText = ImGui::CalcTextSize(fullText.c_str()).x <= textWidth ? fullText : shortText;
         if (ImGui::CalcTextSize(visibleText.c_str()).x > textWidth) {
             if (swatchHovered) {
-                ImGui::SetTooltip("当前通道：%s", fullText.c_str());
+                ImGui::SetTooltip("激活通道：%s", fullText.c_str());
             }
             return;
         }
@@ -118,7 +118,7 @@ namespace {
         ImGui::SameLine(0.0F, style.ItemInnerSpacing.x);
         ImGui::TextDisabled("%s", visibleText.c_str());
         if (swatchHovered || ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("当前通道：%s", fullText.c_str());
+            ImGui::SetTooltip("激活通道：%s", fullText.c_str());
         }
     }
 
@@ -178,16 +178,31 @@ namespace {
                                    bool active)
     {
         const ImVec2 cardMax(cardMin.x + cardSize.x, cardMin.y + cardSize.y);
+        const ImVec4 channelTint = channelColor(spec, channelIndex);
         const ImU32 fillColor =
-            ImGui::GetColorU32(active ? ImVec4(0.18F, 0.28F, 0.20F, 0.95F) : ImVec4(0.11F, 0.12F, 0.14F, 0.95F));
+            ImGui::GetColorU32(active ? ImVec4(0.16F, 0.34F, 0.22F, 0.98F) : ImVec4(0.11F, 0.12F, 0.14F, 0.95F));
         const ImU32 borderColor =
-            ImGui::GetColorU32(active ? ImVec4(0.50F, 0.82F, 0.56F, 1.0F) : ImVec4(1.0F, 1.0F, 1.0F, 0.14F));
+            ImGui::GetColorU32(active ? ImVec4(0.72F, 0.96F, 0.62F, 1.0F) : ImVec4(1.0F, 1.0F, 1.0F, 0.14F));
         auto* drawList = ImGui::GetWindowDrawList();
         drawList->AddRectFilled(cardMin, cardMax, fillColor, cardStyle.rounding);
-        drawList->AddRect(cardMin, cardMax, borderColor, cardStyle.rounding, 0, active ? 2.0F : 1.0F);
+        if (active) {
+            drawList->AddRectFilled(cardMin,
+                                    cardMax,
+                                    ImGui::GetColorU32(ImVec4(channelTint.x, channelTint.y, channelTint.z, 0.10F)),
+                                    cardStyle.rounding);
+        }
+        drawList->AddRect(cardMin, cardMax, borderColor, cardStyle.rounding, 0, active ? 2.4F : 1.0F);
+        if (active) {
+            drawList->AddRect(ImVec2(cardMin.x + 3.0F, cardMin.y + 3.0F),
+                              ImVec2(cardMax.x - 3.0F, cardMax.y - 3.0F),
+                              ImGui::GetColorU32(ImVec4(channelTint.x, channelTint.y, channelTint.z, 0.65F)),
+                              cardStyle.rounding - 2.0F,
+                              0,
+                              1.2F);
+        }
         drawList->AddRectFilled(cardMin,
                                 ImVec2(cardMin.x + cardStyle.colorBandWidth, cardMax.y),
-                                ImGui::ColorConvertFloat4ToU32(channelColor(spec, channelIndex)),
+                                ImGui::ColorConvertFloat4ToU32(channelTint),
                                 cardStyle.rounding,
                                 ImDrawFlags_RoundCornersLeft);
 

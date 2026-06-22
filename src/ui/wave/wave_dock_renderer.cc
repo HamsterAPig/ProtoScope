@@ -37,6 +37,18 @@ namespace {
     constexpr float kWaveToolsRailButtonGap = 8.0F;
     constexpr float kWaveToolsRailButtonRadius = 8.0F;
 
+    struct ToolsDrawerResizeState {
+        ImVec2 min{};
+        ImVec2 max{};
+        bool hovered{false};
+        bool active{false};
+    };
+
+    bool pointInRect(const ImVec2& point, const ImVec2& min, const ImVec2& max)
+    {
+        return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
+    }
+
     ImGuiKey toImGuiKey(const ShortcutKey key)
     {
         switch (key) {
@@ -234,24 +246,30 @@ namespace {
         ImGui::PopStyleVar();
     }
 
-    void drawToolsDrawerResizeHandle(
+    ToolsDrawerResizeState drawToolsDrawerResizeHandle(
         plot::WaveDockState& wave, const ImVec2& drawerPos, float height, float contentLeft, float thickness)
     {
         const float safeThickness = (std::max) (thickness, 4.0F);
         const ImVec2 handlePos((std::max) (contentLeft, drawerPos.x - safeThickness), drawerPos.y);
         ImGui::SetCursorScreenPos(handlePos);
         ImGui::InvisibleButton("##wave_tools_drawer_splitter", ImVec2(safeThickness, height));
-        if (ImGui::IsItemActive()) {
+        ToolsDrawerResizeState state{
+            .min = handlePos,
+            .max = ImVec2(handlePos.x + safeThickness, handlePos.y + height),
+            .hovered = ImGui::IsItemHovered(),
+            .active = ImGui::IsItemActive(),
+        };
+        if (state.active) {
             wave.toolsExpandedWidth = (std::clamp) (wave.toolsExpandedWidth - ImGui::GetIO().MouseDelta.x,
                                                     wave.minToolsExpandedWidth,
                                                     wave.maxToolsExpandedWidth);
         }
-        const ImU32 color = ImGui::IsItemActive() || ImGui::IsItemHovered()
-                                ? ImGui::GetColorU32(ImGuiCol_SliderGrabActive)
-                                : ImGui::GetColorU32(ImGuiCol_Border);
+        const ImU32 color = state.active || state.hovered ? ImGui::GetColorU32(ImGuiCol_SliderGrabActive)
+                                                          : ImGui::GetColorU32(ImGuiCol_Border);
         ImGui::GetWindowDrawList()->AddRectFilled(
             handlePos, ImVec2(handlePos.x + safeThickness, handlePos.y + height), color, 2.0F);
         ImGui::SetItemTooltip("拖动调整右侧抽屉宽度");
+        return state;
     }
 
     void drawTopToolbarSeparator()
@@ -524,6 +542,24 @@ bool selectedChannelUsesBitDisplay(const plot::WaveViewState& view, const plot::
            bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay);
 }
 
+std::vector<std::size_t> selectableAnalogWaveformChannels(const plot::WaveSnapshot& snapshot,
+                                                          const plot::WaveDisplayData& displayData,
+                                                          const std::vector<std::size_t>& visibleChannelIndices)
+{
+    std::vector<std::size_t> channels;
+    channels.reserve(visibleChannelIndices.size());
+    for (const std::size_t channelIndex : visibleChannelIndices) {
+        if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
+            continue;
+        }
+        if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            continue;
+        }
+        channels.push_back(channelIndex);
+    }
+    return channels;
+}
+
 bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
                                    const plot::WaveSnapshot& snapshot,
                                    const plot::WaveDataBounds& visibleWindowBounds,
@@ -695,6 +731,7 @@ bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime
 }
 
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
+                              const plot::WaveSnapshot& snapshot,
                               const plot::WaveDisplayData& displayData,
                               const std::vector<std::size_t>& visibleChannelIndices)
 {
@@ -703,9 +740,8 @@ bool applyFitVisibleWaveforms(plot::WaveViewState& view,
     }
     view.fitVisibleWaveformsRequested = false;
 
-    // 核心流程：显示全部只根据图例当前可见通道计算显示范围，不读取或修改原始采样与游标状态。
-    const auto bounds = plot::computeDisplayBoundsForChannels(
-        displayData, visibleChannelIndices, (std::max) (view.minVisibleTimeSpan, 1e-6));
+    // 核心流程：显示全部只根据图例当前可见通道计算显示范围，并让 bit lane 使用自己的显示边界。
+    const auto bounds = boundsForVisibleWaveforms(view, snapshot, displayData, visibleChannelIndices);
     if (!bounds.valid) {
         return false;
     }
@@ -790,6 +826,7 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
                                                 const plot::WaveSnapshot& snapshot,
                                                 const BitLaneLayout& bitLayout,
                                                 const plot::WaveDisplayData& displayData,
+                                                const std::vector<std::size_t>& visibleChannelIndices,
                                                 const ImPlotPoint& mousePos,
                                                 double timeSnapDistance,
                                                 double valueSnapDistance)
@@ -799,35 +836,45 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
         return false;
     }
 
-    auto bitLaneContainsValue = [](const BitLaneLayoutEntry& lane, double plotY, double maxDistance) {
-        const double minY = (std::min) (lane.lowY, lane.highY);
-        const double maxY = (std::max) (lane.lowY, lane.highY);
-        return plotY >= minY - maxDistance && plotY <= maxY + maxDistance;
-    };
-    if (view.measurementChannelIndex < snapshot.channels.size() &&
-        bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay)) {
-        for (const auto& lane : bitLayout.lanes) {
-            if (lane.parentChannelIndex == view.measurementChannelIndex &&
-                bitLaneContainsValue(lane, mousePos.y, valueSnapDistance)) {
-                return resetChannelBitYOffsetToZero(wave, view.measurementChannelIndex);
-            }
+    const auto waveformChannels = selectableAnalogWaveformChannels(snapshot, displayData, visibleChannelIndices);
+    if (const auto waveform = plot::findNearestDisplayPointInChannels(
+            displayData, waveformChannels, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance)) {
+        if (view.measurementChannelIndex != waveform->channelIndex) {
+            // 核心流程：双击非当前模拟波形只切换激活 CH，不顺手复位用户配置。
+            view.measurementChannelIndex = waveform->channelIndex;
+            view.activeBitLane = {};
+            return true;
         }
-    }
-    if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
-        return resetChannelBitYOffsetToZero(wave, bitLane->lane.parentChannelIndex);
+
+        // 核心流程：双击当前激活模拟波形才执行 offset 复位。
+        if (!plot::resetChannelOffsetToDefault(wave, view.measurementChannelIndex)) {
+            return false;
+        }
+        view.activeBitLane = {};
+        invalidateWaveDisplayCaches(wave);
+        return true;
     }
 
-    const auto activePoint =
-        plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, mousePos.x, timeSnapDistance);
-    if (!activePoint.has_value() || std::abs(activePoint->displayValue - mousePos.y) > valueSnapDistance) {
-        return false;
+    if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
+        const auto& lane = bitLane->lane;
+        const bool activeLane = view.activeBitLane.active &&
+                                view.activeBitLane.parentChannelIndex == lane.parentChannelIndex &&
+                                view.activeBitLane.bitIndex == lane.bitIndex &&
+                                view.activeBitLane.laneIndex == lane.laneIndex;
+        if (view.measurementChannelIndex != lane.parentChannelIndex || !activeLane) {
+            view.measurementChannelIndex = lane.parentChannelIndex;
+            view.activeBitLane = {
+                .active = true,
+                .parentChannelIndex = lane.parentChannelIndex,
+                .bitIndex = lane.bitIndex,
+                .laneIndex = lane.laneIndex,
+            };
+            return true;
+        }
+        return resetChannelBitYOffsetToZero(wave, lane.parentChannelIndex);
     }
-    // 核心流程：双击只复位当前激活通道 offset override，保留 label/ratio/scale 的用户覆盖。
-    if (!plot::resetChannelOffsetToDefault(wave, view.measurementChannelIndex)) {
-        return false;
-    }
-    invalidateWaveDisplayCaches(wave);
-    return true;
+
+    return false;
 }
 
 const char* axisSourceName(plot::WaveTimeAxisSource source)
@@ -1044,6 +1091,7 @@ public:
         ImGui::SameLine();
 
         const ImVec2 railPos = ImGui::GetCursorScreenPos();
+        const ImVec2 railMax(railPos.x + context.toolsWidth, railPos.y + context.availableHeight);
 
         ScopedStyleVars railStyle;
         railStyle.push(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, style.WindowPadding.y));
@@ -1059,6 +1107,7 @@ public:
         drawToolsRail(wave);
         ImGui::EndChild();
         ImGui::PopStyleVar();
+        const bool railHovered = pointInRect(context.io.MousePos, railPos, railMax);
 
         if (!wave.toolsCollapsed && ImGui::IsKeyPressed(ImGuiKey_Escape) && !context.io.WantTextInput) {
             wave.toolsCollapsed = true;
@@ -1078,11 +1127,11 @@ public:
             return;
         }
 
-        drawToolsDrawerResizeHandle(wave,
-                                    drawerGeometry.pos,
-                                    context.availableHeight,
-                                    drawerGeometry.contentLeft,
-                                    wave.contentToolsSplitterWidth);
+        const ToolsDrawerResizeState resizeState = drawToolsDrawerResizeHandle(wave,
+                                                                               drawerGeometry.pos,
+                                                                               context.availableHeight,
+                                                                               drawerGeometry.contentLeft,
+                                                                               wave.contentToolsSplitterWidth);
 
         bool drawerOpen = true;
         const std::string title = std::string(toolsDrawerTitle(wave.activeToolsDrawer)) + "##wave_tools_drawer";
@@ -1094,7 +1143,12 @@ public:
                                                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
                                                  ImGuiWindowFlags_NoCollapse;
 
+        bool drawerHovered = false;
+        bool drawerFocused = false;
         if (ImGui::Begin(title.c_str(), &drawerOpen, drawerFlags)) {
+            drawerHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
+                                                   ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            drawerFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             drawWaveToolsDrawer(context.application,
                                 wave,
                                 config,
@@ -1107,6 +1161,20 @@ public:
         ImGui::End();
 
         if (!drawerOpen) {
+            wave.toolsCollapsed = true;
+        }
+
+        const ImVec2 drawerMax(drawerGeometry.pos.x + drawerGeometry.width,
+                               drawerGeometry.pos.y + context.availableHeight);
+        const bool drawerContainsMouse = pointInRect(context.io.MousePos, drawerGeometry.pos, drawerMax);
+        const bool resizeContainsMouse = pointInRect(context.io.MousePos, resizeState.min, resizeState.max);
+        const bool popupOpen = ImGui::IsPopupOpen(nullptr,
+                                                  ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const bool drawerKeyboardActive = drawerFocused && context.io.WantTextInput;
+        const bool insideToolsArea = railHovered || drawerContainsMouse || resizeContainsMouse || drawerHovered ||
+                                     drawerKeyboardActive || resizeState.hovered || resizeState.active;
+        if (!wave.toolsCollapsed && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !insideToolsArea &&
+            !popupOpen && !context.io.WantTextInput) {
             wave.toolsCollapsed = true;
         }
     }

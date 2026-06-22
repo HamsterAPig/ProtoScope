@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
+#include <iterator>
 #include <limits>
 #include <optional>
 
@@ -231,34 +231,29 @@ namespace {
         return entry.envelope;
     }
 
-    std::uint64_t rawBitsFromSampleValue(double value)
+    std::size_t bitLaneLayoutFingerprint(const BitLaneLayout& bitLayout, const std::size_t channelIndex)
     {
-        if (!std::isfinite(value)) {
-            return 0;
+        std::size_t hash = static_cast<std::size_t>(1469598103934665603ULL);
+        const auto mix = [&hash](const std::size_t value) {
+            hash ^= value + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+        };
+        mix(bitLayout.lanes.size());
+        for (const auto& lane : bitLayout.lanes) {
+            if (lane.parentChannelIndex != channelIndex) {
+                continue;
+            }
+            mix(lane.bitIndex);
+            mix(lane.laneIndex);
+            mix(lane.rowIndex);
         }
-        const double truncated = std::trunc(value);
-        if (truncated <= 0.0) {
-            return 0;
-        }
-        const double maxValue = static_cast<double>((std::numeric_limits<std::uint64_t>::max)());
-        if (truncated >= maxValue) {
-            return (std::numeric_limits<std::uint64_t>::max)();
-        }
-        return static_cast<std::uint64_t>(truncated);
-    }
-
-    bool rawBitEnabled(double value, std::size_t bitIndex)
-    {
-        if (bitIndex >= plot::kMaxBitDisplayCount) {
-            return false;
-        }
-        return ((rawBitsFromSampleValue(value) >> bitIndex) & 1ULL) != 0ULL;
+        return hash;
     }
 
     plot::WaveDockState::BitRenderCacheKey makeBitRenderCacheKey(const plot::WaveDockState& wave,
                                                                  std::size_t channelIndex,
                                                                  const ImPlotRect& limits,
                                                                  const plot::BitDisplaySpec& spec,
+                                                                 const BitLaneLayout& bitLayout,
                                                                  std::size_t plotPixelWidth,
                                                                  std::size_t vertexBudget)
     {
@@ -275,6 +270,7 @@ namespace {
             .yOffset = spec.yOffset,
             .plotPixelWidth = plotPixelWidth,
             .plotPixelHeight = static_cast<std::size_t>((std::max)(ImPlot::GetPlotSize().y, 1.0F)),
+            .layoutFingerprint = bitLaneLayoutFingerprint(bitLayout, channelIndex),
             .vertexBudget = vertexBudget,
         };
     }
@@ -371,8 +367,8 @@ namespace {
             wave.bitRenderCache.resize(channelIndex + 1);
         }
         auto& entry = wave.bitRenderCache[channelIndex];
-        const auto key =
-            makeBitRenderCacheKey(wave, channelIndex, limits, channel.bitDisplay, plotPixelWidth, vertexBudget);
+        const auto key = makeBitRenderCacheKey(
+            wave, channelIndex, limits, channel.bitDisplay, bitLayout, plotPixelWidth, vertexBudget);
         if (!entry.valid || !(entry.key == key)) {
             entry.valid = true;
             entry.key = key;
@@ -447,6 +443,17 @@ namespace {
              ++channelIndex) {
             auto& channel = result.data.channels[channelIndex];
             if (channel.samples.empty() || channelHiddenByLegendState(wave, snapshot.channels[channelIndex].label)) {
+                continue;
+            }
+            if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+                const auto bitRange =
+                    bitDisplayValueRange(snapshot, channelIndex, snapshot.channels[channelIndex].bitDisplay);
+                for (const auto& sample : channel.samples) {
+                    result.bounds.minTime = (std::min)(result.bounds.minTime, sample.time);
+                    result.bounds.maxTime = (std::max)(result.bounds.maxTime, sample.time);
+                }
+                result.bounds.minValue = (std::min)(result.bounds.minValue, bitRange.minValue);
+                result.bounds.maxValue = (std::max)(result.bounds.maxValue, bitRange.maxValue);
                 continue;
             }
             double minValue = std::numeric_limits<double>::infinity();
@@ -551,6 +558,9 @@ void renderWaveChannels(plot::WaveDockState& wave,
             buildBitLaneLayout(snapshot, bitChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
     }
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        if (channelIndex >= displayData.channels.size()) {
+            continue;
+        }
         const auto& channel = snapshot.channels[channelIndex];
         const auto& channelSamples = displayData.channels[channelIndex].samples;
         const ImVec4 color = channelColor(channel, channelIndex);
@@ -1012,6 +1022,85 @@ void drawOscilloscopeGrid(const ImPlotRect& limits)
     ImPlot::PopPlotClipRect();
 }
 
+std::optional<plot::CursorReadout> findSplitBitCursorReadout(const plot::WaveSnapshot& snapshot,
+                                                             const plot::WaveDisplayData& displayData,
+                                                             const plot::WaveViewState& view,
+                                                             std::size_t channelIndex,
+                                                             double time,
+                                                             double maxTimeDistance)
+{
+    if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size() ||
+        !std::isfinite(time) || !std::isfinite(maxTimeDistance) || maxTimeDistance < 0.0) {
+        return std::nullopt;
+    }
+    const auto& sourceChannel = snapshot.channels[channelIndex];
+    if (!bitDisplayEnabled(sourceChannel.bitDisplay)) {
+        return std::nullopt;
+    }
+    const auto& displayChannel = displayData.channels[channelIndex];
+    const auto& samples = displayChannel.samples;
+    if (samples.empty()) {
+        return std::nullopt;
+    }
+
+    const auto lower = std::lower_bound(
+        samples.begin(), samples.end(), time, [](const plot::WaveSample& sample, double value) {
+            return sample.time < value;
+        });
+    auto best = samples.begin();
+    if (lower == samples.end()) {
+        best = std::prev(samples.end());
+    } else if (lower == samples.begin()) {
+        best = lower;
+    } else {
+        const auto previous = std::prev(lower);
+        best = std::abs(previous->time - time) <= std::abs(lower->time - time) ? previous : lower;
+    }
+    if (std::abs(best->time - time) > maxTimeDistance) {
+        return std::nullopt;
+    }
+
+    std::size_t laneIndex = 0;
+    std::size_t bitIndex = sourceChannel.bitDisplay.firstBit;
+    if (view.activeBitLane.active && view.activeBitLane.parentChannelIndex == channelIndex &&
+        view.activeBitLane.laneIndex < sourceChannel.bitDisplay.bitCount) {
+        laneIndex = view.activeBitLane.laneIndex;
+        bitIndex = sourceChannel.bitDisplay.firstBit + laneIndex;
+    }
+
+    double rawValue = best->value;
+    std::size_t sourceSampleIndex = static_cast<std::size_t>(std::distance(samples.begin(), best));
+    if (sourceChannel.samples != nullptr) {
+        const std::size_t begin = (std::min)(sourceChannel.visibleBegin, sourceChannel.totalSamples);
+        const std::size_t mappedSourceIndex = begin + sourceSampleIndex;
+        if (mappedSourceIndex < sourceChannel.totalSamples) {
+            sourceSampleIndex = mappedSourceIndex;
+            rawValue = sourceChannel.samples[mappedSourceIndex].value;
+        }
+    } else if (sourceSampleIndex < displayChannel.actualValues.size()) {
+        rawValue = displayChannel.actualValues[sourceSampleIndex];
+    }
+
+    const bool value = rawBitEnabled(rawValue, bitIndex);
+    const double displayY = value ? 1.0 : 0.0;
+    return plot::CursorReadout{
+        .valid = true,
+        .channelIndex = channelIndex,
+        .sampleIndex = sourceSampleIndex,
+        .time = best->time,
+        .value = value ? 1.0 : 0.0,
+        .displayValue = displayY,
+        .bit =
+            plot::BitLaneReadout{
+                .parentChannelIndex = channelIndex,
+                .bitIndex = bitIndex,
+                .laneIndex = laneIndex,
+                .value = value,
+                .y = displayY,
+            },
+    };
+}
+
 PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const WaveFrameData& frame)
 {
     PlotRenderResult result;
@@ -1062,34 +1151,67 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
                 view.viewMaxTime,
                 (view.autoFollowLatest || view.forceNextMainPlotLimits) ? ImPlotCond_Always : ImPlotCond_Once);
 
-            double minValue = std::numeric_limits<double>::infinity();
-            double maxValue = -std::numeric_limits<double>::infinity();
-            for (const auto& sample : samples) {
-                if (sample.time < view.viewMinTime || sample.time > view.viewMaxTime) {
-                    continue;
+            const bool bitChannel = bitDisplayEnabled(channel.bitDisplay);
+            if (bitChannel) {
+                ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
+            } else {
+                double minValue = std::numeric_limits<double>::infinity();
+                double maxValue = -std::numeric_limits<double>::infinity();
+                for (const auto& sample : samples) {
+                    if (sample.time < view.viewMinTime || sample.time > view.viewMaxTime) {
+                        continue;
+                    }
+                    minValue = (std::min)(minValue, sample.value);
+                    maxValue = (std::max)(maxValue, sample.value);
                 }
-                minValue = (std::min)(minValue, sample.value);
-                maxValue = (std::max)(maxValue, sample.value);
+                if (!std::isfinite(minValue) || !std::isfinite(maxValue) || std::abs(maxValue - minValue) <= 1e-12) {
+                    minValue = channel.stats.minValue - 1.0;
+                    maxValue = channel.stats.maxValue + 1.0;
+                }
+                const auto range = plot::makeVerticalAutoFitRange(minValue, maxValue, view.verticalAutoFitMultiplier);
+                ImPlot::SetupAxisLimits(ImAxis_Y1, range.minValue, range.maxValue, ImPlotCond_Always);
             }
-            if (!std::isfinite(minValue) || !std::isfinite(maxValue) || std::abs(maxValue - minValue) <= 1e-12) {
-                minValue = channel.stats.minValue - 1.0;
-                maxValue = channel.stats.maxValue + 1.0;
-            }
-            const auto range = plot::makeVerticalAutoFitRange(minValue, maxValue, view.verticalAutoFitMultiplier);
-            ImPlot::SetupAxisLimits(ImAxis_Y1, range.minValue, range.maxValue, ImPlotCond_Always);
 
             const ImPlotRect limits = ImPlot::GetPlotLimits();
             drawOscilloscopeGrid(limits);
             const ImVec4 color = channelColor(channel, channelIndex);
-            WaveSampleGetterPayload payload{.samples = samples.data()};
-            ImPlotSpec spec{};
-            spec.LineColor = color;
-            spec.LineWeight = plot::resolveChannelLineWidth(channel);
-            ImPlot::PlotLineG(channel.label.c_str(),
-                              reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
-                              &payload,
-                              static_cast<int>(samples.size()),
-                              spec);
+            BitLaneLayout bitLayout;
+            if (bitChannel) {
+                const std::vector<std::size_t> bitChannelIndices{channelIndex};
+                bitLayout =
+                    buildBitLaneLayout(snapshot, bitChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
+                const ImVec2 plotSize = ImPlot::GetPlotSize();
+                const auto plotPixelWidth = static_cast<std::size_t>((std::max)(plotSize.x, 1.0F));
+                const std::size_t vertexBudget = (std::max<std::size_t>)(
+                    channel.bitDisplay.bitCount * 2U, frame.renderBudget.pointsPerChannel * 2U);
+                const auto& entry = cachedBitRenderEntry(wave,
+                                                         channel,
+                                                         displayData.channels[channelIndex],
+                                                         bitLayout,
+                                                         channelIndex,
+                                                         limits,
+                                                         plotPixelWidth,
+                                                         vertexBudget);
+                std::size_t renderedPoints = 0;
+                for (const auto& lane : entry.lanes) {
+                    renderedPoints += lane.size();
+                }
+                view.lastRenderSourceSampleCount += entry.sourceSampleCount;
+                view.lastRenderPointCount += renderedPoints;
+                drawBitRenderLanes(entry, color, plot::resolveChannelLineWidth(channel));
+                const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.88F, 0.92F, 0.72F));
+                drawBitLaneLabels(bitLayout, limits, labelColor);
+            } else {
+                WaveSampleGetterPayload payload{.samples = samples.data()};
+                ImPlotSpec spec{};
+                spec.LineColor = color;
+                spec.LineWeight = plot::resolveChannelLineWidth(channel);
+                ImPlot::PlotLineG(channel.label.c_str(),
+                                  reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
+                                  &payload,
+                                  static_cast<int>(samples.size()),
+                                  spec);
+            }
 
             auto* drawList = ImPlot::GetPlotDrawList();
             const ImVec2 plotPos = ImPlot::GetPlotPos();
@@ -1120,6 +1242,17 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
                     if (held) {
                         cursor.time = dragTime;
                         cursor.channelIndex = channelIndex;
+                        if (bitChannel && !bitLayout.lanes.empty()) {
+                            const auto& lane = bitLayout.lanes.front();
+                            view.activeBitLane = {
+                                .active = true,
+                                .parentChannelIndex = lane.parentChannelIndex,
+                                .bitIndex = lane.bitIndex,
+                                .laneIndex = lane.laneIndex,
+                            };
+                        } else if (!bitChannel) {
+                            view.activeBitLane = {};
+                        }
                         if (view.cursorIntervalLocked && view.lockedCursorInterval > 0.0) {
                             auto& pairedCursor = view.cursors[cursorIndex == 0 ? 1 : 0];
                             plot::lockCursorInterval(
@@ -1146,8 +1279,20 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
             if (!view.cursors[cursorIndex].enabled) {
                 continue;
             }
-            result.cursorReadouts[cursorIndex] =
-                findNearestDisplayByScope(displayData, view, view.cursors[cursorIndex].time, maxDistance);
+            const auto channelIndex = view.cursors[cursorIndex].channelIndex;
+            if (channelIndex < snapshot.channels.size() &&
+                bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+                result.cursorReadouts[cursorIndex] = findSplitBitCursorReadout(
+                    snapshot, displayData, view, channelIndex, view.cursors[cursorIndex].time, maxDistance);
+            } else {
+                result.cursorReadouts[cursorIndex] =
+                    findNearestDisplayByScope(displayData, view, view.cursors[cursorIndex].time, maxDistance);
+            }
+        }
+        if (result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value() &&
+            cursorPairUsesBitLanes(result.cursorReadouts)) {
+            result.bitMeasurementActive = true;
+            result.measurement = makeBitIntervalMeasurement(*result.cursorReadouts[0], *result.cursorReadouts[1]);
         }
     }
     result.plotRendered = true;
@@ -1209,8 +1354,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     if (frame.fullSnapshot != nullptr && frame.overviewDisplayData != nullptr) {
         const auto fullHistoryChannelIndices = channelIndicesForDerivedViews(wave, *frame.fullSnapshot);
         // 核心流程：X 轴双击默认查看当前内存保留的完整历史，复用概览缓存避免额外复制全量样本。
-        fullHistoryBounds = plot::computeDisplayBoundsForChannels(
-            *frame.overviewDisplayData, fullHistoryChannelIndices, (std::max)(view.minVisibleTimeSpan, 1e-6));
+        fullHistoryBounds =
+            boundsForVisibleWaveforms(view, *frame.fullSnapshot, *frame.overviewDisplayData, fullHistoryChannelIndices);
     }
     if (stackedDisplay.has_value() && !view.lockVerticalRange) {
         view.viewMinValue = stackedDisplay->bounds.minValue;
@@ -1269,18 +1414,24 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     const auto fitChannelIndices = excludesLegendHiddenChannels(view)
                                        ? channelIndicesForDerivedViews(wave, frame.snapshot)
                                        : visibleChannelIndicesForFit(frame.snapshot);
+    const auto& fitDisplayData = stackedDisplay.has_value() ? renderDisplayData : displayData;
     viewportChangedThisFrame =
-        applyFitVisibleWaveforms(view, displayData, fitChannelIndices) || viewportChangedThisFrame;
+        applyFitVisibleWaveforms(view, frame.snapshot, fitDisplayData, fitChannelIndices) || viewportChangedThisFrame;
     const auto zoomSelectionResult = handleMainPlotZoomSelection(view, wave.suppressZoomSelectionEscapeThisFrame);
     viewportChangedThisFrame = zoomSelectionResult.viewportChanged || viewportChangedThisFrame;
     if (!axisDoubleClickConsumed) {
         viewportChangedThisFrame =
             applyPendingVerticalAutoFitOverride(view, yAutoFitBounds) || viewportChangedThisFrame;
     }
-    const bool offsetReset =
-        !zoomSelectionResult.consumed &&
-        handleActiveWaveformDoubleClickOffsetReset(
-            wave, frame.snapshot, bitLayout, plotDisplayData, mousePos, timeSnapDistance, valueSnapDistance);
+    const bool offsetReset = !axisDoubleClickConsumed && !zoomSelectionResult.consumed &&
+                             handleActiveWaveformDoubleClickOffsetReset(wave,
+                                                                        frame.snapshot,
+                                                                        bitLayout,
+                                                                        plotDisplayData,
+                                                                        visibleChannelIndices,
+                                                                        mousePos,
+                                                                        timeSnapDistance,
+                                                                        valueSnapDistance);
     const bool blockPlotInteractions = zoomSelectionResult.consumed || offsetReset;
     if (!blockPlotInteractions) {
         handleHoverReadout(view,

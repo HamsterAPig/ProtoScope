@@ -192,7 +192,9 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field controls ProtoControlDescriptorEntry[]
 ---@field layout? ProtoDockLayout|ProtoLayoutNode
 
--- 波形 bit 拆分显示配置：启用后该通道按固定数字轨道显示原始 y 值的 bit。
+-- 波形 bit 拆分显示配置：启用后该通道按固定数字轨道显示本通道原始 y 值的 bit。
+-- bit 取值来自 proto.plot.push(channel, { samples = { { y = <非负整数 bitfield> } } })，
+-- 不使用 ratio / scale / offset；负数、NaN 和无法表示的浮点值按 0 处理。
 ---@class ProtoPlotBitDisplay
 ---@field enabled? boolean @省略时 table 写法默认启用；设为 false 可保留配置但关闭 bit 显示。
 ---@field first_bit? integer @起始 bit，默认 0，范围 0..63。
@@ -208,7 +210,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field offset? number
 ---@field color? string @支持 '#RRGGBB' 或 '#RRGGBBAA'。
 ---@field line_width? number @主波形区线宽，范围 0.5 到 8.0；省略时使用默认线宽。
----@field bit_display? boolean|ProtoPlotBitDisplay @启用 bit 拆分显示；true 等价于默认 8-bit 配置。
+---@field bit_display? boolean|ProtoPlotBitDisplay @启用 bit 拆分显示；true 等价于默认 8-bit 配置；需要向同一通道 push 非负整数 bitfield。
 
 -- 波形初始化参数：用于一次性配置波形来源、通道和视图范围。
 ---@class ProtoPlotSetup

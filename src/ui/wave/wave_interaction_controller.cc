@@ -445,6 +445,18 @@ plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
     return wave.cachedDisplayBounds;
 }
 
+plot::WaveDataBounds boundsForVisibleWaveforms(const plot::WaveViewState& view,
+                                               const plot::WaveSnapshot& snapshot,
+                                               const plot::WaveDisplayData& displayData,
+                                               const std::vector<std::size_t>& channelIndices)
+{
+    const double fallbackStep = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    if (hasBitDisplayChannel(snapshot, channelIndices)) {
+        return computeBitAwareDerivedBounds(snapshot, displayData, channelIndices, fallbackStep);
+    }
+    return plot::computeDisplayBoundsForChannels(displayData, channelIndices, fallbackStep);
+}
+
 plot::WaveDataBounds boundsForYAxisAutoFit(const plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,

@@ -2,39 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
 #include <limits>
 #include <vector>
 
 namespace protoscope::ui {
-
-namespace {
-
-    std::uint64_t rawBitsFromSampleValue(double value)
-    {
-        if (!std::isfinite(value)) {
-            return 0;
-        }
-        const double truncated = std::trunc(value);
-        if (truncated <= 0.0) {
-            return 0;
-        }
-        const double maxValue = static_cast<double>((std::numeric_limits<std::uint64_t>::max)());
-        if (truncated >= maxValue) {
-            return (std::numeric_limits<std::uint64_t>::max)();
-        }
-        return static_cast<std::uint64_t>(truncated);
-    }
-
-    bool rawBitEnabled(double value, std::size_t bitIndex)
-    {
-        if (bitIndex >= plot::kMaxBitDisplayCount) {
-            return false;
-        }
-        return ((rawBitsFromSampleValue(value) >> bitIndex) & 1ULL) != 0ULL;
-    }
-
-} // namespace
 
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io)
 {

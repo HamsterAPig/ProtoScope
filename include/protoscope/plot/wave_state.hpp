@@ -346,6 +346,7 @@ struct WaveDockState {
         double yOffset{0.0};
         std::size_t plotPixelWidth{0};
         std::size_t plotPixelHeight{0};
+        std::size_t layoutFingerprint{0};
         std::size_t vertexBudget{0};
 
         bool operator==(const BitRenderCacheKey&) const = default;

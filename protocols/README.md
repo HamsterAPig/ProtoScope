@@ -632,7 +632,18 @@ proto.plot.push(1, {
     { t = 0.001, y = 1.3 },
   },
 })
+
+proto.plot.push(2, {
+  source = "demo",
+  samples = {
+    { t = 0.000, y = 0x55 },
+    { t = 0.001, y = 0xAA },
+  },
+})
 ```
+
+`bit_display` 读取同一通道 `push()` 的原始 `y` 作为非负整数 bitfield；
+这些 bit 不会套用 `ratio`、`scale` 或 `offset`。
 
 ## 半双工 Modbus Schema Demo
 

@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -121,6 +122,7 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
                                    const plot::WaveDataBounds& yAutoFitBounds);
 bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
+                              const plot::WaveSnapshot& snapshot,
                               const plot::WaveDisplayData& displayData,
                               const std::vector<std::size_t>& channelIndices);
 ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool suppressEscapeCancel = false);
@@ -128,6 +130,7 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
                                                 const plot::WaveSnapshot& snapshot,
                                                 const BitLaneLayout& bitLayout,
                                                 const plot::WaveDisplayData& displayData,
+                                                const std::vector<std::size_t>& visibleChannelIndices,
                                                 const ImPlotPoint& mousePos,
                                                 double timeSnapDistance,
                                                 double valueSnapDistance);
@@ -167,6 +170,8 @@ ImVec4 fallbackChannelColor(std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelSpec& spec, std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelView& channel, std::size_t channelIndex);
 bool bitDisplayEnabled(const plot::BitDisplaySpec& spec);
+std::uint64_t rawBitsFromSampleValue(double value);
+bool rawBitEnabled(double value, std::size_t bitIndex);
 std::string bitLaneDisplayLabel(std::size_t bitIndex);
 double bitDisplayLanePitch();
 double bitDisplayLaneHeight();
@@ -252,6 +257,10 @@ plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
                                            const std::vector<std::size_t>& channelIndices);
+plot::WaveDataBounds boundsForVisibleWaveforms(const plot::WaveViewState& view,
+                                               const plot::WaveSnapshot& snapshot,
+                                               const plot::WaveDisplayData& displayData,
+                                               const std::vector<std::size_t>& channelIndices);
 plot::WaveDataBounds boundsForYAxisAutoFit(const plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,

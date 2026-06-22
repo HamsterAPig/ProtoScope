@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 namespace protoscope::ui {
@@ -125,6 +126,30 @@ ImVec4 channelColor(const plot::ChannelView& channel, const std::size_t channelI
 bool bitDisplayEnabled(const plot::BitDisplaySpec& spec)
 {
     return spec.enabled && spec.bitCount > 0 && spec.firstBit + spec.bitCount <= plot::kMaxBitDisplayCount;
+}
+
+std::uint64_t rawBitsFromSampleValue(const double value)
+{
+    if (!std::isfinite(value)) {
+        return 0;
+    }
+    const double truncated = std::trunc(value);
+    if (truncated <= 0.0) {
+        return 0;
+    }
+    const double maxValue = static_cast<double>((std::numeric_limits<std::uint64_t>::max)());
+    if (truncated >= maxValue) {
+        return (std::numeric_limits<std::uint64_t>::max)();
+    }
+    return static_cast<std::uint64_t>(truncated);
+}
+
+bool rawBitEnabled(const double value, const std::size_t bitIndex)
+{
+    if (bitIndex >= plot::kMaxBitDisplayCount) {
+        return false;
+    }
+    return ((rawBitsFromSampleValue(value) >> bitIndex) & 1ULL) != 0ULL;
 }
 
 std::string bitLaneDisplayLabel(const std::size_t bitIndex)

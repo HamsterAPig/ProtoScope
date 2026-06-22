@@ -20,6 +20,15 @@
 
 namespace protoscope::ui {
 
+namespace {
+
+    constexpr float kWaveToolbarButtonGap = 6.0F;
+    constexpr float kWaveToolbarButtonVerticalGap = 5.0F;
+    constexpr float kWaveToolbarFramePaddingX = 7.0F;
+    constexpr float kWaveToolbarFramePaddingY = 3.0F;
+
+} // namespace
+
 const char* zoomSelectionHelpText(const plot::WaveViewState& view)
 {
     return view.zoomSelectionAutoExit ? "框选主视图局部放大；框选完成后自动退出。"
@@ -137,7 +146,7 @@ bool drawAdaptiveToolbarButton(
     const std::string tooltip = buildToolbarButtonHelp(fullLabel, help);
     const bool clicked = drawToolbarSectionButton(visibleLabel, tooltip.c_str(), active, ImVec2(buttonWidth, 0.0F));
     if (placeNextOnSameLine) {
-        ImGui::SameLine();
+        ImGui::SameLine(0.0F, kWaveToolbarButtonGap);
     }
     return clicked;
 }
@@ -234,23 +243,23 @@ void setMeasurementPreset(
 
 template <typename DrawFn> void drawFlowItem(DrawFn&& drawFn)
 {
-    const ImGuiStyle& style = ImGui::GetStyle();
-
     drawFn();
 
     const float itemRight = ImGui::GetItemRectMax().x;
-    const float nextItemRight = itemRight + style.ItemSpacing.x;
+    const float nextItemRight = itemRight + kWaveToolbarButtonGap;
     const float contentRight = ImGui::GetWindowPos().x + ImGui::GetContentRegionMax().x;
 
     if (nextItemRight < contentRight) {
-        ImGui::SameLine();
+        ImGui::SameLine(0.0F, kWaveToolbarButtonGap);
     }
 }
 
 template <typename Fn> void drawMeasurementFlowGroup(Fn&& drawContent)
 {
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 5.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f, 3.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                        ImVec2(kWaveToolbarButtonGap, kWaveToolbarButtonVerticalGap));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        ImVec2(kWaveToolbarFramePaddingX, kWaveToolbarFramePaddingY));
 
     drawContent();
 
@@ -523,19 +532,20 @@ void drawFftPointCountControls(plot::WaveDockState& wave)
 void drawFftInputWindowActions(plot::WaveDockState& wave)
 {
     auto& view = wave.view;
-    if (ImGui::Button("刷新输入窗口")) {
+    if (drawAdaptiveToolbarButton("刷新输入窗口",
+                                  "刷新",
+                                  "重新使用当前时域主视图范围作为 FFT 输入；频域缩放不会改变这个输入窗口。",
+                                  false,
+                                  true)) {
         view.fftSourceMinTime = view.viewMinTime;
         view.fftSourceMaxTime = view.viewMaxTime;
         view.fftSourceWindowValid = true;
         view.fftViewportInitialized = false;
         wave.cachedFftKeyValid = false;
     }
-    addItemHelp("重新使用当前时域主视图范围作为 FFT 输入；频域缩放不会改变这个输入窗口。");
-    ImGui::SameLine();
-    if (ImGui::Button("显示全部频谱")) {
+    if (drawAdaptiveToolbarButton("显示全部频谱", "全谱", "重置频率、幅值和相位轴范围，不改变 FFT 输入窗口。", false)) {
         view.fftFitAllRequested = true;
     }
-    addItemHelp("重置频率、幅值和相位轴范围，不改变 FFT 输入窗口。");
 }
 
 void drawFftSpectrumOptions(plot::WaveDockState& wave)
@@ -587,12 +597,11 @@ void drawFftChannelSelectionControls(plot::WaveDockState& wave)
 {
     auto& view = wave.view;
     if (ImGui::TreeNode("参与通道")) {
-        if (ImGui::Button("启用全部通道")) {
+        if (drawAdaptiveToolbarButton("启用全部通道", "全开", "让全部通道参与 FFT 计算。", false, true)) {
             std::fill(wave.fftChannelEnabled.begin(), wave.fftChannelEnabled.end(), 1);
             wave.cachedFftKeyValid = false;
         }
-        ImGui::SameLine();
-        if (ImGui::Button("仅当前测量通道")) {
+        if (drawAdaptiveToolbarButton("仅当前测量通道", "仅当前", "只保留当前激活通道参与 FFT 计算。", false)) {
             std::fill(wave.fftChannelEnabled.begin(), wave.fftChannelEnabled.end(), 0);
             if (!wave.fftChannelEnabled.empty()) {
                 const auto channelIndex = (std::min) (view.measurementChannelIndex, wave.fftChannelEnabled.size() - 1);
@@ -885,8 +894,10 @@ void drawWaveCursorSection(plot::WaveViewState& view)
         view.showMeasurementOverlay = !view.showMeasurementOverlay;
     }
     const bool smartSnapMode = view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap;
-    if (drawToolbarActionButton(smartSnapMode ? "智能吸附" : "按键吸附",
-                                "切换游标吸附触发方式：智能吸附会自动贴近边沿/极值，按键吸附需按住 Shift 或 Ctrl。")) {
+    if (drawAdaptiveToolbarButton(smartSnapMode ? "智能吸附" : "按键吸附",
+                                  smartSnapMode ? "智能" : "按键",
+                                  "切换游标吸附触发方式：智能吸附会自动贴近边沿/极值，按键吸附需按住 Shift 或 Ctrl。",
+                                  false)) {
         view.cursorSnapMode =
             smartSnapMode ? plot::WaveCursorSnapMode::ModifierSnap : plot::WaveCursorSnapMode::SmartSnap;
     }
@@ -975,10 +986,10 @@ void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
         ImGui::TextUnformatted("纵轴范围");
         const float verticalInputsWidth = ImGui::GetContentRegionAvail().x;
         if (verticalInputsWidth >= 240.0F) {
-            ImGui::SetNextItemWidth((verticalInputsWidth - ImGui::GetStyle().ItemSpacing.x) * 0.5F);
+            ImGui::SetNextItemWidth((verticalInputsWidth - kWaveToolbarButtonGap) * 0.5F);
             ImGui::InputDouble("##manual_vertical_min", &view.manualVerticalMin, 0.1, 1.0, "%.6f");
             addItemHelp("纵轴锁定时使用的显示下限。");
-            ImGui::SameLine();
+            ImGui::SameLine(0.0F, kWaveToolbarButtonGap);
             ImGui::SetNextItemWidth(-1.0F);
             ImGui::InputDouble("##manual_vertical_max", &view.manualVerticalMax, 0.1, 1.0, "%.6f");
             addItemHelp("纵轴锁定时使用的显示上限。");
