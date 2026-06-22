@@ -292,6 +292,45 @@ namespace {
         view.forceNextMainPlotLimits = true;
     }
 
+    plot::WaveLegendOverlayOpenMode nextLegendOverlayOpenMode(plot::WaveLegendOverlayOpenMode mode)
+    {
+        switch (mode) {
+            case plot::WaveLegendOverlayOpenMode::Hover:
+                return plot::WaveLegendOverlayOpenMode::DoubleClick;
+            case plot::WaveLegendOverlayOpenMode::DoubleClick:
+                return plot::WaveLegendOverlayOpenMode::Disabled;
+            case plot::WaveLegendOverlayOpenMode::Disabled:
+                return plot::WaveLegendOverlayOpenMode::Hover;
+        }
+        return plot::WaveLegendOverlayOpenMode::Hover;
+    }
+
+    const char* legendOverlayOpenModeButtonLabel(plot::WaveLegendOverlayOpenMode mode)
+    {
+        switch (mode) {
+            case plot::WaveLegendOverlayOpenMode::Hover:
+                return "悬浮";
+            case plot::WaveLegendOverlayOpenMode::DoubleClick:
+                return "双击";
+            case plot::WaveLegendOverlayOpenMode::Disabled:
+                return "禁展";
+        }
+        return "悬浮";
+    }
+
+    const char* legendOverlayOpenModeTooltipLabel(plot::WaveLegendOverlayOpenMode mode)
+    {
+        switch (mode) {
+            case plot::WaveLegendOverlayOpenMode::Hover:
+                return "悬浮展开";
+            case plot::WaveLegendOverlayOpenMode::DoubleClick:
+                return "双击展开";
+            case plot::WaveLegendOverlayOpenMode::Disabled:
+                return "禁用展开";
+        }
+        return "悬浮展开";
+    }
+
     void drawCompactMainToolbar(app::Application& application,
                                 plot::WaveDockState& wave,
                                 const plot::ViewConfig& config,
@@ -406,8 +445,20 @@ namespace {
             view.showChannelLegend = !view.showChannelLegend;
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("展开", wave.legendOverlay.expanded, "展开图内通道图例详情面板。")) {
-            wave.legendOverlay.expanded = !wave.legendOverlay.expanded;
+        const auto nextLegendMode = nextLegendOverlayOpenMode(wave.legendOverlay.openMode);
+        const std::string legendModeTooltip =
+            std::string("图内图例展开方式：当前 ") +
+            legendOverlayOpenModeTooltipLabel(wave.legendOverlay.openMode) + "，单击切换到 " +
+            legendOverlayOpenModeTooltipLabel(nextLegendMode) + "。";
+        if (drawTopToolbarButton(legendOverlayOpenModeButtonLabel(wave.legendOverlay.openMode),
+                                 wave.legendOverlay.openMode != plot::WaveLegendOverlayOpenMode::Disabled,
+                                 legendModeTooltip.c_str())) {
+            wave.legendOverlay.openMode = nextLegendMode;
+            if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
+                wave.legendOverlay.expanded = false;
+                wave.legendOverlay.hoverFloating = false;
+                wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+            }
         }
         ImGui::SameLine();
         if (drawTopToolbarButton("恢复", false, "恢复所有通道显示设置，不清空波形数据。")) {

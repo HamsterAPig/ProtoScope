@@ -250,6 +250,12 @@ namespace {
         {plot::WaveMouseYOffsetDragMode::Disabled, "disabled"},
     }};
 
+    constexpr std::array<EnumNamePair<plot::WaveLegendOverlayOpenMode>, 3> kWaveLegendOverlayOpenModeNames{{
+        {plot::WaveLegendOverlayOpenMode::Hover, "hover"},
+        {plot::WaveLegendOverlayOpenMode::DoubleClick, "double_click"},
+        {plot::WaveLegendOverlayOpenMode::Disabled, "disabled"},
+    }};
+
     constexpr std::array<EnumNamePair<GuiWaveFullscreenMode>, 2> kWaveFullscreenModeNames{{
         {GuiWaveFullscreenMode::Focus, "focus"},
         {GuiWaveFullscreenMode::Overlay, "overlay"},
@@ -368,6 +374,17 @@ namespace {
     const char* toWaveMouseYOffsetDragModeText(const plot::WaveMouseYOffsetDragMode mode)
     {
         return enumToText(mode, kWaveMouseYOffsetDragModeNames, "direct");
+    }
+
+    plot::WaveLegendOverlayOpenMode parseWaveLegendOverlayOpenMode(const std::string& value,
+                                                                   plot::WaveLegendOverlayOpenMode fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveLegendOverlayOpenModeNames, fallback);
+    }
+
+    const char* toWaveLegendOverlayOpenModeText(const plot::WaveLegendOverlayOpenMode mode)
+    {
+        return enumToText(mode, kWaveLegendOverlayOpenModeNames, "hover");
     }
 
     GuiWaveFullscreenMode parseWaveFullscreenMode(const std::string& value, GuiWaveFullscreenMode fallback)
@@ -494,6 +511,11 @@ namespace {
             readScalar<std::string>(
                 wave, "mouse_y_offset_drag_mode", toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode)),
             config.gui.wave.mouseYOffsetDragMode);
+        config.gui.wave.legendOverlayOpenMode = parseWaveLegendOverlayOpenMode(
+            readScalar<std::string>(wave,
+                                    "legend_overlay_open_mode",
+                                    toWaveLegendOverlayOpenModeText(config.gui.wave.legendOverlayOpenMode)),
+            config.gui.wave.legendOverlayOpenMode);
         config.gui.wave.zoomSelectionAutoExit =
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
         config.gui.wave.maxRenderPointsPerChannel =
@@ -826,6 +848,8 @@ namespace {
         gui["wave"]["cursor_extreme_snap_policy"] =
             toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
         gui["wave"]["mouse_y_offset_drag_mode"] = toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode);
+        gui["wave"]["legend_overlay_open_mode"] =
+            toWaveLegendOverlayOpenModeText(config.gui.wave.legendOverlayOpenMode);
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
         gui["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
@@ -1332,6 +1356,11 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;
     wave.cursorFftHighlightRgba = config.gui.wave.cursorFftHighlightRgba;
+    waveState.legendOverlay.openMode = config.gui.wave.legendOverlayOpenMode;
+    if (waveState.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
+        waveState.legendOverlay.expanded = false;
+        waveState.legendOverlay.hoverFloating = false;
+    }
     auto viewConfig = waveState.buffer.viewConfig();
     viewConfig.displayFormula = config.gui.wave.displayFormula;
     waveState.buffer.setViewConfig(viewConfig);
@@ -1373,6 +1402,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;
     config.gui.wave.cursorFftHighlightRgba = dockStore.waveState().view.cursorFftHighlightRgba;
+    config.gui.wave.legendOverlayOpenMode = dockStore.waveState().legendOverlay.openMode;
     config.configPath = dockStore.configState().loadedFromPath;
 
     return config;

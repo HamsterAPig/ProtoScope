@@ -82,6 +82,7 @@ struct GuiWaveConfig {
     plot::WaveHiddenChannelPolicy hiddenChannelPolicy{plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     plot::WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{plot::WaveCursorExtremeSnapPolicy::NearestWaveform};
     plot::WaveMouseYOffsetDragMode mouseYOffsetDragMode{plot::WaveMouseYOffsetDragMode::Direct};
+    plot::WaveLegendOverlayOpenMode legendOverlayOpenMode{plot::WaveLegendOverlayOpenMode::Hover};
     bool zoomSelectionAutoExit{false};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};

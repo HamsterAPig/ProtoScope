@@ -165,6 +165,30 @@ namespace {
         return plot::WaveToolsDrawer::Main;
     }
 
+    std::string legendOverlayOpenModeName(plot::WaveLegendOverlayOpenMode mode)
+    {
+        switch (mode) {
+            case plot::WaveLegendOverlayOpenMode::Hover:
+                return "hover";
+            case plot::WaveLegendOverlayOpenMode::DoubleClick:
+                return "double_click";
+            case plot::WaveLegendOverlayOpenMode::Disabled:
+                return "disabled";
+        }
+        return "hover";
+    }
+
+    plot::WaveLegendOverlayOpenMode parseLegendOverlayOpenMode(const std::string& value)
+    {
+        if (value == "double_click") {
+            return plot::WaveLegendOverlayOpenMode::DoubleClick;
+        }
+        if (value == "disabled") {
+            return plot::WaveLegendOverlayOpenMode::Disabled;
+        }
+        return plot::WaveLegendOverlayOpenMode::Hover;
+    }
+
     YAML::Node encodeRgba(const std::array<float, 4>& color)
     {
         YAML::Node node;
@@ -508,6 +532,7 @@ namespace {
 
         YAML::Node legendOverlayNode;
         legendOverlayNode["expanded"] = wave.legendOverlay.expanded;
+        legendOverlayNode["open_mode"] = legendOverlayOpenModeName(wave.legendOverlay.openMode);
         legendOverlayNode["offset_x"] = wave.legendOverlay.offsetX;
         legendOverlayNode["offset_y"] = wave.legendOverlay.offsetY;
         node["legend_overlay"] = legendOverlayNode;
@@ -706,8 +731,14 @@ namespace {
         const auto legendOverlayNode = node["legend_overlay"];
         if (legendOverlayNode && legendOverlayNode.IsMap()) {
             wave.legendOverlay.expanded = legendOverlayNode["expanded"].as<bool>(wave.legendOverlay.expanded);
+            wave.legendOverlay.openMode = parseLegendOverlayOpenMode(
+                legendOverlayNode["open_mode"].as<std::string>(legendOverlayOpenModeName(wave.legendOverlay.openMode)));
             wave.legendOverlay.offsetX = legendOverlayNode["offset_x"].as<float>(wave.legendOverlay.offsetX);
             wave.legendOverlay.offsetY = legendOverlayNode["offset_y"].as<float>(wave.legendOverlay.offsetY);
+            if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
+                wave.legendOverlay.expanded = false;
+                wave.legendOverlay.hoverFloating = false;
+            }
         }
     }
 

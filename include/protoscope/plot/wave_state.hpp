@@ -45,9 +45,16 @@ enum class WaveViewMode {
     Split,
 };
 
+enum class WaveLegendOverlayOpenMode {
+    Hover,
+    DoubleClick,
+    Disabled,
+};
+
 struct WaveLegendOverlayState {
     bool expanded{false};
     bool hoverFloating{false};
+    WaveLegendOverlayOpenMode openMode{WaveLegendOverlayOpenMode::Hover};
     float hoverCloseDelaySec{0.30F};
     float hoverCloseRemainingSec{0.0F};
     float offsetX{8.0F};
