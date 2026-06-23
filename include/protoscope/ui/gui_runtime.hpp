@@ -165,7 +165,8 @@ private:
                                       const std::vector<scripting::ControlSnapshot>& controls,
                                       std::string_view stableId,
                                       std::size_t& widgetIndex,
-                                      bool earlyExit);
+                                      bool earlyExit,
+                                      std::optional<float> layoutWidth = std::nullopt);
     bool drawLuaTableLayoutNode(const scripting::LayoutNodeDescriptor& node,
                                 const std::vector<scripting::ControlSnapshot>& controls,
                                 std::string_view stableId,
@@ -183,6 +184,9 @@ private:
                                    bool earlyExit);
     [[nodiscard]] float luaLayoutControlWidth(const scripting::LayoutNodeDescriptor& node,
                                               const scripting::ControlSnapshot& control) const;
+    [[nodiscard]] float luaLayoutControlFillWidth(const scripting::LayoutNodeDescriptor& node,
+                                                  const scripting::ControlSnapshot& control,
+                                                  float availableWidth) const;
     [[nodiscard]] float estimateLuaFlowNodeWidth(const scripting::LayoutNodeDescriptor& node,
                                                  const std::vector<scripting::ControlSnapshot>& controls) const;
     [[nodiscard]] float estimateLuaInlineGroupWidth(const scripting::LayoutNodeDescriptor& node,

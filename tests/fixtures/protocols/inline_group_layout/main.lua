@@ -18,6 +18,7 @@ function ui()
             type = "inline_group",
             spacing = 3,
             min_width = 200,
+            fill_width = true,
             controls = { "read_version", "device_id" },
           },
           {

@@ -757,6 +757,7 @@ void test_script_layout_width_controls_shorthand_snapshot()
     require(constrained.controlId == "mode", "第三项应绑定 mode");
     require(constrained.minWidth.has_value() && *constrained.minWidth == 120.0F, "control min_width 应解析");
     require(constrained.maxWidth.has_value() && *constrained.maxWidth == 240.0F, "control max_width 应解析");
+    require(constrained.fillWidth, "control fill_width 应解析");
 }
 
 void test_script_inline_group_layout_snapshot()
@@ -789,6 +790,7 @@ void test_script_inline_group_layout_snapshot()
     require(shortcutGroup.spacing == 3.0F, "inline_group spacing 应解析");
     require(shortcutGroup.minWidth.has_value() && *shortcutGroup.minWidth == 200.0F, "inline_group min_width 应解析");
     require(!shortcutGroup.maxWidth.has_value(), "inline_group 不应解析 max_width");
+    require(shortcutGroup.fillWidth, "inline_group fill_width 应解析");
     require(shortcutGroup.children.size() == 2, "inline_group.controls 应展开两个 control 子节点");
     require(shortcutGroup.children[0].controlId == "read_version", "inline_group.controls 第一个控件顺序错误");
     require(shortcutGroup.children[1].controlId == "device_id", "inline_group.controls 第二个控件顺序错误");
@@ -1671,6 +1673,24 @@ void test_script_layout_width_type_fail()
     require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_width_type").generic_string()),
             "非数字 layout control 宽度应加载失败");
     require(host.lastError().find("min_width 必须是 number") != std::string::npos, "宽度类型错误应包含 number 提示");
+}
+
+void test_script_layout_fill_width_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_fill_width_type").generic_string()),
+            "非 boolean fill_width 应加载失败");
+    require(host.lastError().find("fill_width 必须是 boolean") != std::string::npos,
+            "fill_width 类型错误应包含 boolean 提示");
+}
+
+void test_script_inline_group_fill_width_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_fill_width_type").generic_string()),
+            "非 boolean inline_group fill_width 应加载失败");
+    require(host.lastError().find("fill_width 必须是 boolean") != std::string::npos,
+            "inline_group fill_width 类型错误应包含 boolean 提示");
 }
 
 void test_script_layout_width_non_positive_fail()
@@ -3550,6 +3570,8 @@ static const TestCase kAllTests[] = {
     {"script_layout_unknown_type_fail", &test_script_layout_unknown_type_fail},
     {"script_layout_width_range_fail", &test_script_layout_width_range_fail},
     {"script_layout_width_type_fail", &test_script_layout_width_type_fail},
+    {"script_layout_fill_width_type_fail", &test_script_layout_fill_width_type_fail},
+    {"script_inline_group_fill_width_type_fail", &test_script_inline_group_fill_width_type_fail},
     {"script_layout_width_non_positive_fail", &test_script_layout_width_non_positive_fail},
     {"script_layout_children_controls_conflict_fail", &test_script_layout_children_controls_conflict_fail},
     {"script_layout_shortcut_unknown_control_fail", &test_script_layout_shortcut_unknown_control_fail},

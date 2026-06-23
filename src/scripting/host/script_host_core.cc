@@ -1497,6 +1497,10 @@ bool readLayoutControlWidthFields(const sol::table& table,
         error = path + ".min_width 不能大于 max_width";
         return false;
     }
+    node.fillWidth = readOptionalBoolField(table, "fill_width", false, path, error);
+    if (!error.empty()) {
+        return false;
+    }
     return true;
 }
 
@@ -1950,6 +1954,10 @@ std::optional<LayoutNodeDescriptor> parseLayoutNode(const DockDescriptor& dock,
         }
         node.spacing = *spacing;
         if (!readOptionalPositiveFloatField(table, "min_width", path, node.minWidth, error)) {
+            return std::nullopt;
+        }
+        node.fillWidth = readOptionalBoolField(table, "fill_width", false, path, error);
+        if (!error.empty()) {
             return std::nullopt;
         }
         if (hasLuaTableField(table, "max_width")) {

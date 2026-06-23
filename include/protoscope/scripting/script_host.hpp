@@ -135,6 +135,7 @@ struct LayoutNodeDescriptor {
     std::size_t columns{1};
     std::optional<float> minWidth;
     std::optional<float> maxWidth;
+    bool fillWidth{false};
     bool borders{false};
     bool resizable{true};
     bool rowBg{false};

@@ -21,9 +21,9 @@ function ui()
       {
         type = "flow",
         children = {
-          { id = "device_id", min_width = 180, max_width = 260 },
           "mode",
           { id = "read_version", min_width = 120 },
+          { id = "device_id", min_width = 180, fill_width = true },
         },
       },
       { separator = true },

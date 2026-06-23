@@ -26,6 +26,7 @@ function ui()
             id = "mode",
             min_width = 120,
             max_width = 240,
+            fill_width = true,
           },
         },
       },

@@ -69,6 +69,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field type 'inline_group'
 ---@field spacing? number
 ---@field min_width? number @组最小宽度约束，必须为正数；不压缩组内控件。
+---@field fill_width? boolean @在 flow 中吃掉当前行剩余宽度；组内可搭配一个 fill_width control。
 ---@field children? ProtoInlineGroupChildNode[]
 ---@field controls? string[]
 
@@ -97,6 +98,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field id string
 ---@field min_width? number @控件最小宽度约束，必须为正数；只在 layout control 节点上生效。
 ---@field max_width? number @控件最大宽度约束，必须为正数；同时设置时要求 min_width <= max_width。
+---@field fill_width? boolean @在 flow 中作为行尾填充项，吃掉当前行剩余宽度。
 
 ---@class ProtoTextLayoutNode
 ---@field type? 'text'
