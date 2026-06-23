@@ -176,6 +176,8 @@ void test_bit_measurement_cross_lane_still_outputs_dt_f();
 void test_bit_cursor_cross_lane_refresh_uses_own_y_anchor();
 void test_bit_active_switches_measurement_mode();
 void test_invisible_active_bit_lane_falls_back_to_waveform_cursor();
+void test_active_channel_cursor_time_fallback_rebinds_after_channel_switch();
+void test_active_channel_cursor_time_fallback_restores_pair_measurement();
 void test_active_bit_lane_cursor_can_return_nearby_waveform();
 void test_bit_display_cursor_excludes_same_channel_raw_waveform();
 void test_explicit_bit_readout_policy_keeps_waveform_when_bit_not_active();

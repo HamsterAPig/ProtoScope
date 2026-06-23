@@ -872,8 +872,21 @@ bool handlePlotCursors(plot::WaveViewState& view,
         }
 
         const double searchY = cursorSearchAnchorY(cursor, cursorReadouts[cursorIndex], snapshot, mousePos.y, held);
+        const bool allowActiveChannelTimeFallback =
+            view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel && !held &&
+            (cursor.channelIndex >= snapshot.channels.size() || cursor.channelIndex != view.measurementChannelIndex) &&
+            view.measurementChannelIndex < snapshot.channels.size() &&
+            !bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay);
         auto best = findNearestCursorByScope(
-            snapshot, displayData, view, bitLayout, cursor.time, searchY, timeSnapDistance, valueSnapDistance);
+            snapshot,
+            displayData,
+            view,
+            bitLayout,
+            cursor.time,
+            searchY,
+            timeSnapDistance,
+            valueSnapDistance,
+            allowActiveChannelTimeFallback);
         if (smartSnap.has_value()) {
             best = smartSnap;
         }

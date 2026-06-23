@@ -1138,6 +1138,73 @@ void test_invisible_active_bit_lane_falls_back_to_waveform_cursor()
     require(std::abs(fallback->displayValue) < 1e-9, "普通波形刷新应返回显示值");
 }
 
+void test_active_channel_cursor_time_fallback_rebinds_after_channel_switch()
+{
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "OLD"});
+    snapshot.channels.push_back({.label = "ACTIVE"});
+
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 0.0}},
+        .actualValues = {0.0},
+    });
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 100.0}},
+        .actualValues = {100.0},
+    });
+
+    protoscope::plot::WaveViewState view;
+    view.cursorSnapScope = protoscope::plot::WaveCursorSnapScope::ActiveChannel;
+    view.measurementChannelIndex = 1;
+
+    const protoscope::ui::BitLaneLayout emptyLayout;
+    const auto withoutFallback =
+        protoscope::ui::findNearestCursorByScope(snapshot, displayData, view, emptyLayout, 1.0, 0.0, 0.2, 0.2);
+    require(!withoutFallback.has_value(), "旧通道 Y 锚点离新激活通道过远时，普通 Y+time 吸附应失败");
+
+    const auto withFallback =
+        protoscope::ui::findNearestCursorByScope(snapshot, displayData, view, emptyLayout, 1.0, 0.0, 0.2, 0.2, true);
+    require(withFallback.has_value(), "允许时间兜底后应按原时间重绑定新激活通道");
+    require(withFallback->channelIndex == 1, "时间兜底应命中新激活通道");
+    require(std::abs(withFallback->value - 100.0) < 1e-9, "时间兜底应返回新激活通道读数");
+}
+
+void test_active_channel_cursor_time_fallback_restores_pair_measurement()
+{
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "OLD"});
+    snapshot.channels.push_back({.label = "ACTIVE"});
+
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 0.0}, {.time = 2.0, .value = 0.0}, {.time = 3.0, .value = 0.0}},
+        .actualValues = {0.0, 0.0, 0.0},
+    });
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 100.0}, {.time = 2.0, .value = 110.0}, {.time = 3.0, .value = 120.0}},
+        .actualValues = {100.0, 110.0, 120.0},
+    });
+
+    protoscope::plot::WaveViewState view;
+    view.cursorSnapScope = protoscope::plot::WaveCursorSnapScope::ActiveChannel;
+    view.measurementChannelIndex = 1;
+
+    const protoscope::ui::BitLaneLayout emptyLayout;
+    const auto left =
+        protoscope::ui::findNearestCursorByScope(snapshot, displayData, view, emptyLayout, 1.0, 0.0, 0.2, 0.2, true);
+    const auto right =
+        protoscope::ui::findNearestCursorByScope(snapshot, displayData, view, emptyLayout, 2.0, 0.0, 0.2, 0.2, true);
+
+    require(left.has_value() && right.has_value(), "A/B 游标都应按时间兜底重绑定到新激活通道");
+    require(left->channelIndex == 1 && right->channelIndex == 1, "A/B readout 都应属于新激活通道");
+
+    const auto measurement = protoscope::ui::measureDisplayWindow(displayData, 1, left->time, right->time);
+    require(measurement.valid, "A/B 重绑定后测量窗口应恢复有效统计");
+    require(measurement.sampleCount == 2, "测量窗口应覆盖新激活通道的 A/B 区间样本");
+    require(std::abs(measurement.peakToPeak - 10.0) < 1e-9, "测量统计应基于新激活通道数据");
+}
+
 void test_active_bit_lane_cursor_can_return_nearby_waveform()
 {
     std::vector<protoscope::plot::WaveSample> bitSamples{

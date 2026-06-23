@@ -639,7 +639,8 @@ std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnap
                                                             double time,
                                                             double plotY,
                                                             double maxTimeDistance,
-                                                            double maxValueDistance)
+                                                            double maxValueDistance,
+                                                            bool allowActiveChannelTimeFallback)
 {
     std::optional<plot::CursorReadout> best;
     double bestScore = std::numeric_limits<double>::infinity();
@@ -660,6 +661,15 @@ std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnap
                 best = bitTransition;
             }
         }
+    }
+
+    if (!best.has_value() && allowActiveChannelTimeFallback &&
+        view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel &&
+        view.measurementChannelIndex < snapshot.channels.size() &&
+        !bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay)) {
+        // 核心流程：激活通道切换后，旧通道的 Y 锚点可能离新通道太远。
+        // 非拖动刷新允许按原时间重绑定到新激活模拟通道，恢复 A/B 读数与测量浮窗。
+        best = plot::findNearestDisplayByTime(displayData, view.measurementChannelIndex, time, maxTimeDistance);
     }
 
     return best;

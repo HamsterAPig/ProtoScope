@@ -281,7 +281,8 @@ std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnap
                                                             double time,
                                                             double plotY,
                                                             double maxTimeDistance,
-                                                            double maxValueDistance);
+                                                            double maxValueDistance,
+                                                            bool allowActiveChannelTimeFallback = false);
 std::vector<std::size_t> visibleChannelIndicesForFit(const plot::WaveSnapshot& snapshot);
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io);
 std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDisplayData& displayData,
