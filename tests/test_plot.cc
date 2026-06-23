@@ -422,6 +422,29 @@ void test_wave_layout_solver_clamps_without_overflow()
     const auto drawerOverlayMode = protoscope::plot::solveWaveLayout(
         900.0F, 420.0F, 120.0F, 360.0F, 38.0F, true, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 58.0F);
     require(drawerOverlayMode.toolsWidth == 38.0F, "右侧抽屉打开时布局仍应只预留窄边栏宽度");
+
+    constexpr float splitAvailableHeight = 420.0F;
+    constexpr float splitRowSpacing = 6.0F;
+    constexpr float splitPreferredMinHeight = 120.0F;
+    constexpr std::size_t splitMaxRowsWithoutScroll = 4U;
+    for (std::size_t rowCount = 2; rowCount <= splitMaxRowsWithoutScroll; ++rowCount) {
+        const float rowHeight = protoscope::plot::solveSplitWavePlotHeight(
+            rowCount, splitAvailableHeight, splitRowSpacing, splitPreferredMinHeight, splitMaxRowsWithoutScroll);
+        const float totalHeight = rowHeight * static_cast<float>(rowCount) +
+                                  splitRowSpacing * static_cast<float>(rowCount - 1U);
+        require(totalHeight <= splitAvailableHeight + 1e-3F, "4 行以内分屏图不应撑出纵向滚动条");
+    }
+
+    const std::size_t overflowingRowCount = splitMaxRowsWithoutScroll + 1U;
+    const float overflowingRowHeight = protoscope::plot::solveSplitWavePlotHeight(overflowingRowCount,
+                                                                                  splitAvailableHeight,
+                                                                                  splitRowSpacing,
+                                                                                  splitPreferredMinHeight,
+                                                                                  splitMaxRowsWithoutScroll);
+    const float overflowingTotalHeight =
+        overflowingRowHeight * static_cast<float>(overflowingRowCount) +
+        splitRowSpacing * static_cast<float>(overflowingRowCount - 1U);
+    require(overflowingTotalHeight > splitAvailableHeight, "超过 4 行分屏图应允许内容溢出并交给滚动条处理");
 }
 
 void test_plot_low_density_envelope_keeps_single_value_line()

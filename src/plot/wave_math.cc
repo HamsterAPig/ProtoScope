@@ -172,6 +172,30 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
     return result;
 }
 
+float solveSplitWavePlotHeight(std::size_t visibleChannelCount,
+                               float availableHeight,
+                               float rowSpacingY,
+                               float preferredMinPlotHeight,
+                               std::size_t maxRowsWithoutScroll)
+{
+    if (visibleChannelCount == 0 || maxRowsWithoutScroll == 0) {
+        return 0.0F;
+    }
+
+    const std::size_t fittedRows = (std::min)(visibleChannelCount, maxRowsWithoutScroll);
+    const float safeAvailableHeight = (std::max)(availableHeight, 0.0F);
+    const float safeSpacing = (std::max)(rowSpacingY, 0.0F);
+    const float totalSpacing = safeSpacing * static_cast<float>(fittedRows - 1U);
+    const float fittedHeight =
+        (std::max)(0.0F, safeAvailableHeight - totalSpacing) / static_cast<float>(fittedRows);
+
+    // 分屏 4 行以内优先完整塞进当前 child，超过 4 行才保留首屏高度并交给滚动条处理。
+    if (visibleChannelCount <= maxRowsWithoutScroll) {
+        return fittedHeight;
+    }
+    return (std::max)(fittedHeight, (std::max)(preferredMinPlotHeight, 0.0F));
+}
+
 bool scriptTimeUsable(const std::vector<WaveSample>& samples)
 {
     if (samples.empty()) {

@@ -1362,10 +1362,13 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
     bool viewportChangedThisFrame = false;
     bool anyCursorHeld = false;
     bool userInteractingInAnySplitPlot = false;
-    ImGui::BeginChild("##wave_split_scroll", ImVec2(-1.0F, -1.0F), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-    const float plotHeight = (std::max)(120.0F,
-                                        (ImGui::GetContentRegionAvail().y - 8.0F) /
-                                            static_cast<float>((std::min<std::size_t>) (visibleChannels.size(), 4U)));
+    ImGui::BeginChild("##wave_split_scroll", ImVec2(-1.0F, -1.0F), false);
+    const float plotHeight = plot::solveSplitWavePlotHeight(visibleChannels.size(),
+                                                            ImGui::GetContentRegionAvail().y,
+                                                            ImGui::GetStyle().ItemSpacing.y,
+                                                            120.0F,
+                                                            4U);
+    ImPlot::PushStyleVar(ImPlotStyleVar_PlotMinSize, ImVec2(64.0F, 24.0F));
     for (std::size_t rowIndex = 0; rowIndex < visibleChannels.size(); ++rowIndex) {
         const std::size_t channelIndex = visibleChannels[rowIndex];
         if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
@@ -1384,10 +1387,15 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
             constexpr ImPlotAxisFlags yFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoLabel |
                                                ImPlotAxisFlags_NoGridLines | ImPlotAxisFlags_NoTickMarks |
                                                ImPlotAxisFlags_NoTickLabels;
+            const bool bottomRow = rowIndex + 1U == visibleChannels.size();
+            const char* xAxisLabel = nullptr;
+            if (bottomRow && view.showAxisLabels) {
+                xAxisLabel = displayData.timeUnit == "sample" ? "Sample" : "Time";
+            }
             ImPlot::SetupAxis(
                 ImAxis_X1,
-                rowIndex + 1U == visibleChannels.size() ? "Time" : nullptr,
-                rowIndex + 1U == visibleChannels.size() ? xFlags : (xFlags | ImPlotAxisFlags_NoTickLabels));
+                xAxisLabel,
+                bottomRow ? xFlags : (xFlags | ImPlotAxisFlags_NoTickLabels));
             ImPlot::SetupAxis(ImAxis_Y1, nullptr, yFlags);
             ImPlot::SetupAxisLimits(
                 ImAxis_X1,
@@ -1518,6 +1526,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
         }
         ImPlot::PopStyleColor();
     }
+    ImPlot::PopStyleVar();
     if (!viewportChangedThisFrame) {
         view.forceNextMainPlotLimits = false;
     }

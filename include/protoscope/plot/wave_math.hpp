@@ -125,6 +125,11 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
                                 float minToolsWidth,
                                 float maxToolsWidth,
                                 float fixedContentHeight);
+float solveSplitWavePlotHeight(std::size_t visibleChannelCount,
+                               float availableHeight,
+                               float rowSpacingY,
+                               float preferredMinPlotHeight,
+                               std::size_t maxRowsWithoutScroll);
 bool scriptTimeUsable(const std::vector<WaveSample>& samples);
 void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
