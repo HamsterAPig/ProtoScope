@@ -412,6 +412,11 @@ namespace {
         return value > 0.0 ? value : fallback;
     }
 
+    double positiveOrZero(double value)
+    {
+        return std::isfinite(value) && value > 0.0 ? value : 0.0;
+    }
+
     transport::TransportKind parseTransportKind(const std::string& value)
     {
         if (const auto kind = transport::transportKindFromId(value)) {
@@ -534,6 +539,9 @@ namespace {
             readScalar<double>(wave, "channel_card_fixed_width", config.gui.wave.channelCardFixedWidth), 128.0);
         config.gui.wave.channelCardAdaptiveRatio = positiveOrFallback(
             readScalar<double>(wave, "channel_card_adaptive_ratio", config.gui.wave.channelCardAdaptiveRatio), 0.22);
+        config.gui.wave.legendChannelNameMaxWidth =
+            positiveOrZero(readScalar<double>(
+                wave, "legend_channel_name_max_width", config.gui.wave.legendChannelNameMaxWidth));
         config.gui.wave.verticalAutoFitMultiplier = positiveOrFallback(
             readScalar<double>(wave, "vertical_auto_fit_multiplier", config.gui.wave.verticalAutoFitMultiplier), 1.2);
         config.gui.wave.resetHistoryOnTimeReset =
@@ -853,6 +861,7 @@ namespace {
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
         gui["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
+        gui["wave"]["legend_channel_name_max_width"] = config.gui.wave.legendChannelNameMaxWidth;
         gui["wave"]["vertical_auto_fit_multiplier"] = config.gui.wave.verticalAutoFitMultiplier;
         gui["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
         gui["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
@@ -1349,6 +1358,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
     wave.channelCardFixedWidth = positiveOrFallback(config.gui.wave.channelCardFixedWidth, 128.0);
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
+    wave.legendChannelNameMaxWidth = positiveOrZero(config.gui.wave.legendChannelNameMaxWidth);
     wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.2);
     wave.hiddenChannelPolicy = config.gui.wave.hiddenChannelPolicy;
     wave.cursorExtremeSnapPolicy = config.gui.wave.cursorExtremeSnapPolicy;
@@ -1397,6 +1407,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.minVisibleTimeSpan = dockStore.waveState().view.minVisibleTimeSpan;
     config.gui.wave.channelCardFixedWidth = dockStore.waveState().view.channelCardFixedWidth;
     config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;
+    config.gui.wave.legendChannelNameMaxWidth = positiveOrZero(dockStore.waveState().view.legendChannelNameMaxWidth);
     config.gui.wave.verticalAutoFitMultiplier = dockStore.waveState().view.verticalAutoFitMultiplier;
     config.gui.wave.hiddenChannelPolicy = dockStore.waveState().view.hiddenChannelPolicy;
     config.gui.wave.cursorExtremeSnapPolicy = dockStore.waveState().view.cursorExtremeSnapPolicy;

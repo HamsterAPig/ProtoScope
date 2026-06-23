@@ -177,6 +177,7 @@ struct WaveViewState {
     double downsampleStartMultiplier{2.0};
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
+    double legendChannelNameMaxWidth{0.0};
     double verticalAutoFitMultiplier{1.2};
     double persistenceWindow{0.25};
     double glowIntensity{1.0};

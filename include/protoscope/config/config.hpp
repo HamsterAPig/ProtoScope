@@ -92,6 +92,7 @@ struct GuiWaveConfig {
     std::size_t maxTotalSamples{0};
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
+    double legendChannelNameMaxWidth{0.0};
     double verticalAutoFitMultiplier{1.2};
     bool resetHistoryOnTimeReset{true};
     bool showAxisLabels{false};

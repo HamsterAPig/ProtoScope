@@ -80,6 +80,7 @@ gui:
     zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
+    legend_channel_name_max_width: 0.0
     vertical_auto_fit_multiplier: 1.2
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
@@ -105,6 +106,7 @@ gui:
 - `cursor_extreme_snap_policy`：`nearest_waveform` 或 `viewport_zone`。
 - `zoom_selection_auto_exit`：框选放大后是否自动退出框选模式。
 - `channel_card_fixed_width` / `channel_card_adaptive_ratio`：通道卡片宽度策略参数。
+- `legend_channel_name_max_width`：通道图例名称显示宽度上限，单位为 ImGui 逻辑像素；`0.0`、缺失或非正值表示不限制。作用于展开态表格、紧凑态浮窗和底部通道卡片，超长名称会裁剪并在悬浮时显示完整 tooltip。
 - `vertical_auto_fit_multiplier`：纵向自动适配余量倍数。
 - `max_render_points_per_channel` / `max_render_vertices`：单通道和总顶点渲染预算。
 - `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。

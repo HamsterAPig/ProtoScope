@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include <imgui_internal.h>
+
 namespace protoscope::ui {
 
 namespace {
@@ -25,6 +27,57 @@ namespace {
         ChannelLegendCardStyle cardStyle;
         cardStyle.spacing = ImGui::GetStyle().ItemSpacing.x;
         return cardStyle;
+    }
+
+    float configuredLegendNameMaxWidth(const plot::WaveViewState& view)
+    {
+        return std::isfinite(view.legendChannelNameMaxWidth) && view.legendChannelNameMaxWidth > 0.0
+                   ? static_cast<float>(view.legendChannelNameMaxWidth)
+                   : 0.0F;
+    }
+
+    float limitLegendNameWidth(float width, const plot::WaveViewState& view)
+    {
+        const float configuredMaxWidth = configuredLegendNameMaxWidth(view);
+        return configuredMaxWidth > 0.0F ? (std::min)(width, configuredMaxWidth) : width;
+    }
+
+    struct LegendRowBlankHitTest {
+        ImRect rowRect{};
+        bool hasRowRect{false};
+        std::vector<ImRect> occupiedRects;
+    };
+
+    void extendRowRect(LegendRowBlankHitTest& hitTest, const ImRect& rect)
+    {
+        if (!hitTest.hasRowRect) {
+            hitTest.rowRect = rect;
+            hitTest.hasRowRect = true;
+            return;
+        }
+        hitTest.rowRect.Add(rect);
+    }
+
+    void recordCurrentTableCell(LegendRowBlankHitTest& hitTest)
+    {
+        if (const ImGuiTable* table = ImGui::GetCurrentTable()) {
+            extendRowRect(hitTest, ImGui::TableGetCellBgRect(table, ImGui::TableGetColumnIndex()));
+        }
+    }
+
+    void recordLastItem(LegendRowBlankHitTest& hitTest)
+    {
+        hitTest.occupiedRects.emplace_back(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    }
+
+    bool pointInOccupiedLegendItem(const LegendRowBlankHitTest& hitTest, const ImVec2& point)
+    {
+        for (const ImRect& rect : hitTest.occupiedRects) {
+            if (rect.Contains(point)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     std::string trimMetricText(std::string text)
@@ -211,7 +264,7 @@ namespace {
                              cardMin.y + cardStyle.innerPaddingY);
         const ImVec2 textMax(cardMax.x - cardStyle.innerPaddingX, cardMax.y - cardStyle.innerPaddingY);
         const float lineHeight = ImGui::GetTextLineHeight();
-        const ImVec2 titleMax(textMax.x, textMin.y + lineHeight);
+        const ImVec2 titleMax(textMin.x + limitLegendNameWidth(textMax.x - textMin.x, view), textMin.y + lineHeight);
         const ImVec2 summaryMin(textMin.x, titleMax.y + cardStyle.textSpacingY);
         const ImVec2 summaryMax(textMax.x, summaryMin.y + lineHeight);
         drawChannelCardText(textMin, titleMax, spec.label, ImGui::GetColorU32(ImGuiCol_Text));
@@ -400,7 +453,8 @@ namespace {
             if (!spec.has_value()) {
                 continue;
             }
-            maxNameWidth = (std::max)(maxNameWidth, ImGui::CalcTextSize(spec->label.c_str()).x);
+            maxNameWidth =
+                (std::max)(maxNameWidth, limitLegendNameWidth(ImGui::CalcTextSize(spec->label.c_str()).x, wave.view));
             maxDivisionWidth = (std::max)(
                 maxDivisionWidth, ImGui::CalcTextSize(formatActualPerDivText(wave.view, *spec).c_str()).x);
         }
@@ -410,7 +464,8 @@ namespace {
         const float rightWidth = (std::min)(96.0F, maxDivisionWidth + 10.0F);
         const float maxWindowWidth = (std::max)(64.0F, plotSize.x - 16.0F);
         const float nameRoom = (std::max)(56.0F, maxWindowWidth - rightWidth - swatchAndChannelWidth - 34.0F);
-        const float nameWidth = (std::clamp)(maxNameWidth, 56.0F, nameRoom);
+        const float unclampedNameWidth = (std::clamp)(maxNameWidth, 56.0F, nameRoom);
+        const float nameWidth = limitLegendNameWidth(unclampedNameWidth, wave.view);
         const float minWindowWidth = (std::min)(220.0F, maxWindowWidth);
         const float width =
             (std::clamp)(swatchAndChannelWidth + nameWidth + rightWidth + 30.0F, minWindowWidth, maxWindowWidth);
@@ -431,9 +486,10 @@ namespace {
         const float channelWidth = ImGui::CalcTextSize("CH99").x + 4.0F;
         const float divisionWidth = 96.0F;
         const float contentWidth = windowWidth - style.WindowPadding.x * 2.0F;
-        const float nameWidth = (std::max)(0.0F,
-                                           contentWidth - swatchSize - channelWidth - divisionWidth -
-                                               style.ItemSpacing.x * 4.0F);
+        const float nameWidth = limitLegendNameWidth(
+            (std::max)(0.0F,
+                       contentWidth - swatchSize - channelWidth - divisionWidth - style.ItemSpacing.x * 4.0F),
+            view);
         const std::size_t maxCompactRows = (std::min<std::size_t>)(channels.size(), kCompactLegendMaxRows);
 
         if (maxCompactRows == 0U) {
@@ -508,13 +564,24 @@ namespace {
         }
     }
 
+    void setNextLegendNameInputWidth(const plot::WaveViewState& view)
+    {
+        const float configuredMaxWidth = configuredLegendNameMaxWidth(view);
+        if (configuredMaxWidth <= 0.0F) {
+            ImGui::SetNextItemWidth(-1.0F);
+            return;
+        }
+        ImGui::SetNextItemWidth((std::min)(configuredMaxWidth, ImGui::GetContentRegionAvail().x));
+    }
+
     void activateLegendRowFromBlankArea(plot::WaveDockState& wave,
-                                        const ImVec2& rowMin,
-                                        const ImVec2& rowMax,
+                                        const LegendRowBlankHitTest& hitTest,
                                         std::size_t channelIndex)
     {
-        if (ImGui::IsMouseHoveringRect(rowMin, rowMax) && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-            !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive()) {
+        const ImVec2 mousePos = ImGui::GetIO().MousePos;
+        if (hitTest.hasRowRect && ImGui::IsMouseHoveringRect(hitTest.rowRect.Min, hitTest.rowRect.Max) &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !pointInOccupiedLegendItem(hitTest, mousePos)) {
+            ImGui::ClearActiveID();
             wave.view.measurementChannelIndex = channelIndex;
         }
     }
@@ -526,17 +593,20 @@ namespace {
         auto updated = spec;
         bool visible = !channelHiddenByLegendState(wave, spec.label);
         const bool active = channelIndex == wave.view.measurementChannelIndex;
-        const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+        LegendRowBlankHitTest blankHitTest;
         if (active) {
             ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImVec4(0.20F, 0.38F, 0.22F, 0.42F)));
         }
 
         ImGui::TableNextColumn();
+        recordCurrentTableCell(blankHitTest);
         if (ImGui::Checkbox("##visible", &visible)) {
             setChannelHidden(wave, spec.label, !visible);
         }
+        recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
+        recordCurrentTableCell(blankHitTest);
         std::array<float, 4> color = spec.color.value_or(std::array<float, 4>{
             fallbackChannelColor(channelIndex).x,
             fallbackChannelColor(channelIndex).y,
@@ -548,56 +618,70 @@ namespace {
             updated.color = color;
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
+        recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
+        recordCurrentTableCell(blankHitTest);
         ImGui::Text("CH%zu", channelIndex + 1U);
+        recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
+        recordCurrentTableCell(blankHitTest);
         char labelBuffer[128]{};
         std::snprintf(labelBuffer, sizeof(labelBuffer), "%s", updated.label.c_str());
-        ImGui::SetNextItemWidth(-1.0F);
+        setNextLegendNameInputWidth(wave.view);
         if (ImGui::InputText("##label", labelBuffer, sizeof(labelBuffer))) {
             updated.label = labelBuffer;
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
+        recordLastItem(blankHitTest);
         if (ImGui::IsItemHovered() && ImGui::CalcTextSize(updated.label.c_str()).x > ImGui::GetItemRectSize().x) {
             ImGui::SetTooltip("%s", updated.label.c_str());
         }
 
         ImGui::TableNextColumn();
+        recordCurrentTableCell(blankHitTest);
         ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::InputDouble("##ratio", &updated.ratio, 0.0, 0.0, "%.4g")) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
+        recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
+        recordCurrentTableCell(blankHitTest);
         ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::InputDouble("##scale", &updated.scale, 0.0, 0.0, "%.4g")) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
+        recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
+        recordCurrentTableCell(blankHitTest);
         ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::InputDouble("##offset", &updated.offset, 0.0, 0.0, "%.4g")) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
+        recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
+        recordCurrentTableCell(blankHitTest);
         if (active) {
             ImGui::TextDisabled("激活");
+            recordLastItem(blankHitTest);
             ImGui::SameLine();
         }
         if (ImGui::SmallButton(visible ? "隐藏" : "显示")) {
             setChannelHidden(wave, spec.label, visible);
         }
+        recordLastItem(blankHitTest);
         ImGui::SameLine();
         if (ImGui::SmallButton("恢复")) {
             if (plot::resetOneChannelViewSettings(wave, channelIndex)) {
                 invalidateWaveDisplayCaches(wave);
             }
         }
-        const ImVec2 rowMax(ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), ImGui::GetCursorScreenPos().y);
-        activateLegendRowFromBlankArea(wave, rowMin, rowMax, channelIndex);
+        recordLastItem(blankHitTest);
+        activateLegendRowFromBlankArea(wave, blankHitTest, channelIndex);
         ImGui::PopID();
     }
 
@@ -615,7 +699,12 @@ namespace {
                 ImGui::TableSetupColumn("显示", ImGuiTableColumnFlags_WidthFixed, 38.0F);
                 ImGui::TableSetupColumn("颜色", ImGuiTableColumnFlags_WidthFixed, 90.0F);
                 ImGui::TableSetupColumn("通道", ImGuiTableColumnFlags_WidthFixed, 42.0F);
-                ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthStretch, 120.0F);
+                const float nameMaxWidth = configuredLegendNameMaxWidth(wave.view);
+                if (nameMaxWidth > 0.0F) {
+                    ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthFixed, nameMaxWidth);
+                } else {
+                    ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthStretch, 120.0F);
+                }
                 ImGui::TableSetupColumn("Ratio", ImGuiTableColumnFlags_WidthFixed, 68.0F);
                 ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 68.0F);
                 ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, 78.0F);

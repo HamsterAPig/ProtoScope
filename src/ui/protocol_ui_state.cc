@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -32,6 +33,11 @@ namespace {
             return plot::WaveTimeAxisSource::ScriptTime;
         }
         return plot::WaveTimeAxisSource::SampleIndex;
+    }
+
+    double positiveOrZero(double value)
+    {
+        return std::isfinite(value) && value > 0.0 ? value : 0.0;
     }
 
     std::string snapModeName(plot::WaveCursorSnapMode mode)
@@ -451,6 +457,7 @@ namespace {
         node["show_points_when_sparse"] = view.showPointsWhenSparse;
         node["show_axis_labels"] = view.showAxisLabels;
         node["show_channel_legend"] = view.showChannelLegend;
+        node["legend_channel_name_max_width"] = view.legendChannelNameMaxWidth;
         node["show_fft_legend"] = view.showFftLegend;
         node["show_hover_readout"] = view.showHoverReadout;
         node["prefer_waveform_hover_readout"] = view.preferWaveformHoverReadout;
@@ -628,6 +635,8 @@ namespace {
         view.showPointsWhenSparse = node["show_points_when_sparse"].as<bool>(view.showPointsWhenSparse);
         view.showAxisLabels = node["show_axis_labels"].as<bool>(view.showAxisLabels);
         view.showChannelLegend = node["show_channel_legend"].as<bool>(view.showChannelLegend);
+        view.legendChannelNameMaxWidth =
+            positiveOrZero(node["legend_channel_name_max_width"].as<double>(view.legendChannelNameMaxWidth));
         view.showFftLegend = node["show_fft_legend"].as<bool>(view.showFftLegend);
         view.showHoverReadout = node["show_hover_readout"].as<bool>(view.showHoverReadout);
         view.preferWaveformHoverReadout =
