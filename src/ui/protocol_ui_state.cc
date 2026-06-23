@@ -531,8 +531,9 @@ namespace {
         node["overview_collapsed_height"] = wave.overviewCollapsedHeight;
 
         YAML::Node legendOverlayNode;
-        legendOverlayNode["expanded"] = wave.legendOverlay.expanded;
         legendOverlayNode["open_mode"] = legendOverlayOpenModeName(wave.legendOverlay.openMode);
+        legendOverlayNode["expanded"] =
+            wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick && wave.legendOverlay.expanded;
         legendOverlayNode["offset_x"] = wave.legendOverlay.offsetX;
         legendOverlayNode["offset_y"] = wave.legendOverlay.offsetY;
         node["legend_overlay"] = legendOverlayNode;
@@ -730,15 +731,16 @@ namespace {
 
         const auto legendOverlayNode = node["legend_overlay"];
         if (legendOverlayNode && legendOverlayNode.IsMap()) {
-            wave.legendOverlay.expanded = legendOverlayNode["expanded"].as<bool>(wave.legendOverlay.expanded);
             wave.legendOverlay.openMode = parseLegendOverlayOpenMode(
                 legendOverlayNode["open_mode"].as<std::string>(legendOverlayOpenModeName(wave.legendOverlay.openMode)));
+            const bool savedExpanded = legendOverlayNode["expanded"].as<bool>(wave.legendOverlay.expanded);
+            wave.legendOverlay.expanded =
+                wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick && savedExpanded;
             wave.legendOverlay.offsetX = legendOverlayNode["offset_x"].as<float>(wave.legendOverlay.offsetX);
             wave.legendOverlay.offsetY = legendOverlayNode["offset_y"].as<float>(wave.legendOverlay.offsetY);
-            if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
-                wave.legendOverlay.expanded = false;
-                wave.legendOverlay.hoverFloating = false;
-            }
+            wave.legendOverlay.hoverFloating = false;
+            wave.legendOverlay.hoverInteractionLocked = false;
+            wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
         }
     }
 

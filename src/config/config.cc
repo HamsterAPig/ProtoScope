@@ -1357,10 +1357,12 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.showFftLegend = config.gui.wave.showFftLegend;
     wave.cursorFftHighlightRgba = config.gui.wave.cursorFftHighlightRgba;
     waveState.legendOverlay.openMode = config.gui.wave.legendOverlayOpenMode;
-    if (waveState.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
+    if (waveState.legendOverlay.openMode != plot::WaveLegendOverlayOpenMode::DoubleClick) {
         waveState.legendOverlay.expanded = false;
-        waveState.legendOverlay.hoverFloating = false;
     }
+    waveState.legendOverlay.hoverFloating = false;
+    waveState.legendOverlay.hoverInteractionLocked = false;
+    waveState.legendOverlay.hoverCloseRemainingSec = 0.0F;
     auto viewConfig = waveState.buffer.viewConfig();
     viewConfig.displayFormula = config.gui.wave.displayFormula;
     waveState.buffer.setViewConfig(viewConfig);

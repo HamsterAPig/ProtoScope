@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace protoscope::ui {
 
@@ -326,10 +327,38 @@ namespace {
         }
     }
 
-    std::string formatChannelOffsetSummary(const plot::ChannelSpec& spec)
+    constexpr float kLegendOverlayFontScale = 0.88F;
+    constexpr std::size_t kCompactLegendMaxRows = 8U;
+    constexpr std::size_t kExpandedLegendMaxVisibleRows = 10U;
+
+    std::vector<std::size_t> collectLegendAnalogChannels(const plot::WaveDockState& wave,
+                                                         const plot::WaveSnapshot& snapshot,
+                                                         bool includeHidden)
     {
-        const char* unit = spec.unit.empty() ? nullptr : spec.unit.c_str();
-        return trimMetricText(formatMetricText(spec.offset, unit));
+        std::vector<std::size_t> channels;
+        channels.reserve(snapshot.channels.size());
+        for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+            const auto spec = wave.buffer.channelSpec(channelIndex);
+            if (!spec.has_value() || bitDisplayEnabled(spec->bitDisplay)) {
+                continue;
+            }
+            if (!includeHidden && channelHiddenByLegendState(wave, spec->label)) {
+                continue;
+            }
+            channels.push_back(channelIndex);
+        }
+        return channels;
+    }
+
+    std::string formatActualPerDivText(const plot::WaveViewState& view, const plot::ChannelSpec& spec)
+    {
+        const double displayPerDiv = plot::waveDisplayValuePerDivision(view.viewMinValue, view.viewMaxValue);
+        const auto perDiv = plot::waveChannelValuePerDivision(
+            displayPerDiv, spec, view.displayFormula, plot::WaveGridDivisionReadoutMode::ActualValue);
+        if (!perDiv.has_value()) {
+            return "n/a/div";
+        }
+        return trimMetricText(formatMetricText(*perDiv, nullptr)) + "/div";
     }
 
     void drawClippedText(const ImVec2& min,
@@ -349,62 +378,76 @@ namespace {
         }
     }
 
-    ImVec2 compactLegendWindowSize(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot, const ImVec2& plotSize)
+    ImVec2 windowPositionForSize(const plot::WaveLegendOverlayState& overlay,
+                                 const ImVec2& plotPos,
+                                 const ImVec2& plotSize,
+                                 const ImVec2& windowSize)
+    {
+        const float clampedX = (std::clamp)(overlay.offsetX, 0.0F, (std::max)(0.0F, plotSize.x - windowSize.x));
+        const float clampedY = (std::clamp)(overlay.offsetY, 0.0F, (std::max)(0.0F, plotSize.y - windowSize.y));
+        return ImVec2(plotPos.x + clampedX, plotPos.y + clampedY);
+    }
+
+    ImVec2 compactLegendWindowSize(plot::WaveDockState& wave,
+                                   const std::vector<std::size_t>& channels,
+                                   const ImVec2& plotSize)
     {
         float maxNameWidth = 0.0F;
-        float maxDivisionWidth = ImGui::CalcTextSize("显示 n/a/格").x;
-        float maxOffsetWidth = ImGui::CalcTextSize("Offset").x;
-        const std::size_t rowCount = (std::min<std::size_t>) (snapshot.channels.size(), 6U);
+        float maxDivisionWidth = ImGui::CalcTextSize("n/a/div").x;
+        const std::size_t rowCount = (std::min<std::size_t>)(channels.size(), kCompactLegendMaxRows);
         for (std::size_t channelIndex = 0; channelIndex < rowCount; ++channelIndex) {
-            const auto spec = wave.buffer.channelSpec(channelIndex);
+            const auto spec = wave.buffer.channelSpec(channels[channelIndex]);
             if (!spec.has_value()) {
                 continue;
             }
             maxNameWidth = (std::max)(maxNameWidth, ImGui::CalcTextSize(spec->label.c_str()).x);
-            maxDivisionWidth =
-                (std::max)(maxDivisionWidth, ImGui::CalcTextSize(formatChannelDivisionSummary(wave.view, *spec).c_str()).x);
-            maxOffsetWidth =
-                (std::max)(maxOffsetWidth, ImGui::CalcTextSize(formatChannelOffsetSummary(*spec).c_str()).x);
+            maxDivisionWidth = (std::max)(
+                maxDivisionWidth, ImGui::CalcTextSize(formatActualPerDivText(wave.view, *spec).c_str()).x);
         }
 
         const auto& style = ImGui::GetStyle();
-        const float swatchAndChannelWidth = 12.0F + style.ItemSpacing.x + ImGui::CalcTextSize("CH99").x;
-        const float rightWidth = (std::min)(120.0F, maxDivisionWidth + 12.0F) +
-                                 (std::min)(96.0F, maxOffsetWidth + 12.0F);
+        const float swatchAndChannelWidth = 10.0F + style.ItemSpacing.x + ImGui::CalcTextSize("CH99").x;
+        const float rightWidth = (std::min)(96.0F, maxDivisionWidth + 10.0F);
         const float maxWindowWidth = (std::max)(64.0F, plotSize.x - 16.0F);
-        const float nameRoom = (std::max)(72.0F, maxWindowWidth - rightWidth - swatchAndChannelWidth - 42.0F);
-        const float nameWidth = (std::clamp)(maxNameWidth, 72.0F, nameRoom);
-        const float minWindowWidth = (std::min)(260.0F, maxWindowWidth);
+        const float nameRoom = (std::max)(56.0F, maxWindowWidth - rightWidth - swatchAndChannelWidth - 34.0F);
+        const float nameWidth = (std::clamp)(maxNameWidth, 56.0F, nameRoom);
+        const float minWindowWidth = (std::min)(220.0F, maxWindowWidth);
         const float width =
-            (std::clamp)(swatchAndChannelWidth + nameWidth + rightWidth + 38.0F, minWindowWidth, maxWindowWidth);
-        const float rowsHeight = static_cast<float>(rowCount) * ImGui::GetFrameHeightWithSpacing();
-        const float moreHeight = snapshot.channels.size() > rowCount ? ImGui::GetTextLineHeightWithSpacing() : 0.0F;
+            (std::clamp)(swatchAndChannelWidth + nameWidth + rightWidth + 30.0F, minWindowWidth, maxWindowWidth);
+        const float rowHeight = ImGui::GetTextLineHeight() + style.FramePadding.y * 2.0F;
+        const float effectiveRowCount = static_cast<float>((std::max<std::size_t>)(rowCount, 1U));
+        const float rowsHeight = effectiveRowCount * rowHeight;
+        const float moreHeight = channels.size() > rowCount ? ImGui::GetTextLineHeightWithSpacing() : 0.0F;
         const float height = (std::min)(plotSize.y - 16.0F, rowsHeight + moreHeight + style.WindowPadding.y * 2.0F);
-        return ImVec2(width, (std::max)(64.0F, height));
+        return ImVec2(width, (std::max)(44.0F, height));
     }
 
-    void drawCompactLegendRows(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot, float windowWidth)
+    void drawCompactLegendRows(plot::WaveDockState& wave, const std::vector<std::size_t>& channels, float windowWidth)
     {
         auto& view = wave.view;
         const auto& style = ImGui::GetStyle();
-        const float rowHeight = ImGui::GetFrameHeightWithSpacing();
-        const float swatchSize = 11.0F;
+        const float rowHeight = ImGui::GetTextLineHeight() + style.FramePadding.y * 2.0F;
+        const float swatchSize = 9.0F;
         const float channelWidth = ImGui::CalcTextSize("CH99").x + 4.0F;
-        const float divisionWidth = 112.0F;
-        const float offsetWidth = 92.0F;
+        const float divisionWidth = 96.0F;
         const float contentWidth = windowWidth - style.WindowPadding.x * 2.0F;
         const float nameWidth = (std::max)(0.0F,
-                                           contentWidth - swatchSize - channelWidth - divisionWidth - offsetWidth -
-                                               style.ItemSpacing.x * 5.0F);
-        const std::size_t maxCompactRows = (std::min<std::size_t>) (snapshot.channels.size(), 6U);
+                                           contentWidth - swatchSize - channelWidth - divisionWidth -
+                                               style.ItemSpacing.x * 4.0F);
+        const std::size_t maxCompactRows = (std::min<std::size_t>)(channels.size(), kCompactLegendMaxRows);
 
-        for (std::size_t channelIndex = 0; channelIndex < maxCompactRows; ++channelIndex) {
+        if (maxCompactRows == 0U) {
+            ImGui::TextDisabled("无可见 CH");
+            return;
+        }
+
+        for (std::size_t rowIndex = 0; rowIndex < maxCompactRows; ++rowIndex) {
+            const std::size_t channelIndex = channels[rowIndex];
             const auto spec = wave.buffer.channelSpec(channelIndex);
             if (!spec.has_value()) {
                 continue;
             }
 
-            const bool hidden = channelHiddenByLegendState(wave, spec->label);
             const bool active = channelIndex == view.measurementChannelIndex;
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             const ImVec2 rowSize(contentWidth, rowHeight);
@@ -415,8 +458,8 @@ namespace {
                 view.measurementChannelIndex = channelIndex;
             }
             if (ImGui::BeginPopupContextItem("##compact_legend_context")) {
-                if (ImGui::MenuItem(hidden ? "显示通道" : "隐藏通道")) {
-                    setChannelHidden(wave, spec->label, !hidden);
+                if (ImGui::MenuItem("隐藏通道")) {
+                    setChannelHidden(wave, spec->label, true);
                 }
                 ImGui::EndPopup();
             }
@@ -437,7 +480,7 @@ namespace {
             const float centerY = rowMin.y + (rowHeight - swatchSize) * 0.5F;
             drawList->AddRectFilled(ImVec2(x, centerY),
                                     ImVec2(x + swatchSize, centerY + swatchSize),
-                                    ImGui::ColorConvertFloat4ToU32(withAlpha(tint, hidden ? 0.35F : 1.0F)),
+                                    ImGui::ColorConvertFloat4ToU32(tint),
                                     3.0F);
             x += swatchSize + style.ItemSpacing.x;
 
@@ -449,28 +492,19 @@ namespace {
                             false);
             x += channelWidth + style.ItemSpacing.x;
 
-            const std::string nameText = spec->label + (hidden ? " (隐藏)" : "");
-            drawClippedText(ImVec2(x, rowMin.y),
-                            ImVec2(x + nameWidth, rowMax.y),
-                            nameText,
-                            ImGui::GetColorU32(ImGuiCol_Text));
+            drawClippedText(
+                ImVec2(x, rowMin.y), ImVec2(x + nameWidth, rowMax.y), spec->label, ImGui::GetColorU32(ImGuiCol_Text));
             x += nameWidth + style.ItemSpacing.x;
 
             drawClippedText(ImVec2(x, rowMin.y),
                             ImVec2(x + divisionWidth, rowMax.y),
-                            formatChannelDivisionSummary(view, *spec),
-                            ImGui::GetColorU32(ImGuiCol_TextDisabled));
-            x += divisionWidth + style.ItemSpacing.x;
-
-            drawClippedText(ImVec2(x, rowMin.y),
-                            ImVec2(x + offsetWidth, rowMax.y),
-                            formatChannelOffsetSummary(*spec),
+                            formatActualPerDivText(view, *spec),
                             ImGui::GetColorU32(ImGuiCol_TextDisabled));
 
             ImGui::PopID();
         }
-        if (snapshot.channels.size() > maxCompactRows) {
-            ImGui::TextDisabled("+ %zu 个通道", snapshot.channels.size() - maxCompactRows);
+        if (channels.size() > maxCompactRows) {
+            ImGui::TextDisabled("+ %zu 个 CH", channels.size() - maxCompactRows);
         }
     }
 
@@ -549,13 +583,14 @@ namespace {
         }
 
         ImGui::TableNextColumn();
-        ImGui::TextDisabled("%s", spec.unit.empty() ? "-" : spec.unit.c_str());
-
-        ImGui::TableNextColumn();
         if (active) {
             ImGui::TextDisabled("激活");
             ImGui::SameLine();
         }
+        if (ImGui::SmallButton(visible ? "隐藏" : "显示")) {
+            setChannelHidden(wave, spec.label, visible);
+        }
+        ImGui::SameLine();
         if (ImGui::SmallButton("恢复")) {
             if (plot::resetOneChannelViewSettings(wave, channelIndex)) {
                 invalidateWaveDisplayCaches(wave);
@@ -566,28 +601,27 @@ namespace {
         ImGui::PopID();
     }
 
-    void drawExpandedLegendRows(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)
+    void drawExpandedLegendRows(plot::WaveDockState& wave, const std::vector<std::size_t>& channels)
     {
-        const float rowHeight = ImGui::GetFrameHeightWithSpacing();
-        const float maxRowsHeight = rowHeight * 8.0F + ImGui::GetStyle().ScrollbarSize;
-        if (ImGui::BeginChild("##wave_legend_overlay_rows",
-                              ImVec2(0.0F, (std::min)(maxRowsHeight, rowHeight * snapshot.channels.size() + 6.0F)),
-                              false,
-                              ImGuiWindowFlags_None)) {
+        if (channels.empty()) {
+            ImGui::TextDisabled("没有普通 CH 可显示");
+            return;
+        }
+
+        if (ImGui::BeginChild("##wave_legend_overlay_rows", ImVec2(0.0F, 0.0F), false, ImGuiWindowFlags_None)) {
             const ImGuiTableFlags tableFlags =
                 ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
-            if (ImGui::BeginTable("##wave_legend_overlay_table", 9, tableFlags)) {
+            if (ImGui::BeginTable("##wave_legend_overlay_table", 8, tableFlags)) {
                 ImGui::TableSetupColumn("显示", ImGuiTableColumnFlags_WidthFixed, 38.0F);
-                ImGui::TableSetupColumn("颜色", ImGuiTableColumnFlags_WidthFixed, 98.0F);
+                ImGui::TableSetupColumn("颜色", ImGuiTableColumnFlags_WidthFixed, 90.0F);
                 ImGui::TableSetupColumn("通道", ImGuiTableColumnFlags_WidthFixed, 42.0F);
                 ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthStretch, 120.0F);
-                ImGui::TableSetupColumn("Ratio", ImGuiTableColumnFlags_WidthFixed, 72.0F);
-                ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 72.0F);
-                ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, 82.0F);
-                ImGui::TableSetupColumn("单位", ImGuiTableColumnFlags_WidthFixed, 48.0F);
-                ImGui::TableSetupColumn("操作", ImGuiTableColumnFlags_WidthFixed, 84.0F);
+                ImGui::TableSetupColumn("Ratio", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+                ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+                ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, 78.0F);
+                ImGui::TableSetupColumn("操作", ImGuiTableColumnFlags_WidthFixed, 118.0F);
                 ImGui::TableHeadersRow();
-                for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+                for (const std::size_t channelIndex : channels) {
                     const auto spec = wave.buffer.channelSpec(channelIndex);
                     if (!spec.has_value()) {
                         continue;
@@ -601,14 +635,21 @@ namespace {
         ImGui::EndChild();
     }
 
-    ImVec2 expandedLegendWindowSize(const ImVec2& plotSize)
+    ImVec2 expandedLegendWindowSize(const ImVec2& plotSize, std::size_t channelCount)
     {
         const float maxWidth = (std::max)(64.0F, plotSize.x - 16.0F);
-        const float minWidth = (std::min)(520.0F, maxWidth);
-        const float width = (std::clamp)(plotSize.x * 0.68F, minWidth, maxWidth);
+        const float minWidth = (std::min)(600.0F, maxWidth);
+        const float width = (std::clamp)(plotSize.x * 0.70F, minWidth, maxWidth);
         const float maxHeight = (std::max)(48.0F, plotSize.y - 16.0F);
-        const float minHeight = (std::min)(220.0F, maxHeight);
-        const float height = (std::clamp)(plotSize.y * 0.52F, minHeight, maxHeight);
+        const float visibleRows = static_cast<float>((std::min<std::size_t>)(channelCount, kExpandedLegendMaxVisibleRows));
+        const float rowHeight = ImGui::GetFrameHeightWithSpacing();
+        const float tableHeight =
+            rowHeight * (visibleRows + 1.0F) + (channelCount > kExpandedLegendMaxVisibleRows ? ImGui::GetStyle().ScrollbarSize : 0.0F);
+        const float chromeHeight = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() +
+                                   ImGui::GetStyle().WindowPadding.y * 2.0F + 8.0F;
+        const float wantedHeight = chromeHeight + (channelCount == 0U ? rowHeight : tableHeight);
+        const float minHeight = (std::min)(110.0F, maxHeight);
+        const float height = (std::clamp)(wantedHeight, minHeight, maxHeight);
         return ImVec2(width, height);
     }
 
@@ -619,6 +660,23 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                               const ImVec2& plotPos,
                               const ImVec2& plotSize)
 {
+    if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
+        wave.legendOverlay.expanded = false;
+        wave.legendOverlay.hoverFloating = false;
+        wave.legendOverlay.hoverInteractionLocked = false;
+        wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+        return;
+    }
+
+    // 固定展开只属于双击模式；悬浮模式每帧都回到瞬态展开语义。
+    if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Hover) {
+        wave.legendOverlay.expanded = false;
+    } else {
+        wave.legendOverlay.hoverFloating = false;
+        wave.legendOverlay.hoverInteractionLocked = false;
+        wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+    }
+
     if (snapshot.channels.empty() || !wave.view.showChannelLegend) {
         return;
     }
@@ -627,19 +685,23 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
         return;
     }
 
-    if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
-        wave.legendOverlay.expanded = false;
-        wave.legendOverlay.hoverFloating = false;
-        wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
-    }
-    const bool effectiveExpanded = wave.legendOverlay.openMode != plot::WaveLegendOverlayOpenMode::Disabled &&
-                                   (wave.legendOverlay.expanded || wave.legendOverlay.hoverFloating);
-    const ImVec2 windowSize =
-        effectiveExpanded ? expandedLegendWindowSize(plotSize) : compactLegendWindowSize(wave, snapshot, plotSize);
-    const float clampedX = (std::clamp)(wave.legendOverlay.offsetX, 0.0F, (std::max)(0.0F, plotSize.x - windowSize.x));
-    const float clampedY = (std::clamp)(wave.legendOverlay.offsetY, 0.0F, (std::max)(0.0F, plotSize.y - windowSize.y));
+    const std::vector<std::size_t> compactChannels = collectLegendAnalogChannels(wave, snapshot, false);
+    const std::vector<std::size_t> expandedChannels = collectLegendAnalogChannels(wave, snapshot, true);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0F, 6.0F));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0F, 2.0F));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0F, 3.0F));
 
-    ImGui::SetNextWindowPos(ImVec2(plotPos.x + clampedX, plotPos.y + clampedY), ImGuiCond_Always);
+    const bool effectiveExpanded = wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick
+                                       ? wave.legendOverlay.expanded
+                                       : wave.legendOverlay.hoverFloating;
+    const ImVec2 compactSize = compactLegendWindowSize(wave, compactChannels, plotSize);
+    const ImVec2 expandedSize = expandedLegendWindowSize(plotSize, expandedChannels.size());
+    const ImVec2 compactPos = windowPositionForSize(wave.legendOverlay, plotPos, plotSize, compactSize);
+    const ImVec2 expandedPos = windowPositionForSize(wave.legendOverlay, plotPos, plotSize, expandedSize);
+    const ImVec2 windowSize = effectiveExpanded ? expandedSize : compactSize;
+    const ImVec2 windowPos = effectiveExpanded ? expandedPos : compactPos;
+
+    ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           effectiveExpanded ? ImVec4(0.051F, 0.075F, 0.106F, 0.96F)
@@ -648,24 +710,14 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                                    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove;
     if (ImGui::Begin("##wave_channel_overlay_legend", nullptr, flags)) {
-        const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-        if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Hover && hovered) {
-            wave.legendOverlay.hoverFloating = true;
-            wave.legendOverlay.hoverCloseRemainingSec = wave.legendOverlay.hoverCloseDelaySec;
-        } else if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Hover &&
-                   !wave.legendOverlay.expanded && wave.legendOverlay.hoverFloating) {
-            if (ImGui::IsAnyItemActive()) {
-                wave.legendOverlay.hoverCloseRemainingSec = wave.legendOverlay.hoverCloseDelaySec;
-            } else {
-                wave.legendOverlay.hoverCloseRemainingSec -= ImGui::GetIO().DeltaTime;
-            }
-            if (wave.legendOverlay.hoverCloseRemainingSec <= 0.0F) {
-                wave.legendOverlay.hoverFloating = false;
-            }
-        } else if (wave.legendOverlay.openMode != plot::WaveLegendOverlayOpenMode::Hover) {
-            wave.legendOverlay.hoverFloating = false;
-            wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
-        }
+        ImGui::SetWindowFontScale(kLegendOverlayFontScale);
+        const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+                                                    ImGuiHoveredFlags_ChildWindows);
+        const ImVec2 actualWindowMin = ImGui::GetWindowPos();
+        const ImVec2 actualWindowMax(actualWindowMin.x + ImGui::GetWindowWidth(),
+                                     actualWindowMin.y + ImGui::GetWindowHeight());
+        const bool mouseInActualWindow = ImGui::IsMouseHoveringRect(actualWindowMin, actualWindowMax, false);
+        bool collapseRequested = false;
 
         if (effectiveExpanded) {
             ImGui::TextUnformatted("通道图例");
@@ -676,30 +728,61 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                 }
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton(wave.legendOverlay.expanded ? "收起" : "展开")) {
-                wave.legendOverlay.expanded = !wave.legendOverlay.expanded;
-                if (!wave.legendOverlay.expanded) {
-                    wave.legendOverlay.hoverFloating = false;
-                    wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
-                }
+            if (ImGui::SmallButton("收起")) {
+                wave.legendOverlay.expanded = false;
+                wave.legendOverlay.hoverFloating = false;
+                wave.legendOverlay.hoverInteractionLocked = false;
+                wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+                collapseRequested = true;
             }
             ImGui::Separator();
         }
 
         if (effectiveExpanded) {
-            drawExpandedLegendRows(wave, snapshot);
+            drawExpandedLegendRows(wave, expandedChannels);
         } else {
-            drawCompactLegendRows(wave, snapshot, windowSize.x);
+            drawCompactLegendRows(wave, compactChannels, windowSize.x);
         }
 
-        if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick && hovered &&
-            ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered() &&
-            !ImGui::IsAnyItemActive()) {
-            wave.legendOverlay.expanded = !wave.legendOverlay.expanded;
+        if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick && !effectiveExpanded &&
+            hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            wave.legendOverlay.expanded = true;
+        }
+
+        // 实际窗口矩形只用于保持已展开交互，不作为新的悬浮触发源。
+        const bool previousInteractionLocked = wave.legendOverlay.hoverInteractionLocked;
+        const bool mouseHeldInLegend = (ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+                                        ImGui::IsMouseDown(ImGuiMouseButton_Right)) &&
+                                       (hovered || previousInteractionLocked ||
+                                        (wave.legendOverlay.hoverFloating && mouseInActualWindow));
+        const bool activeLegendInteraction =
+            ImGui::IsAnyItemActive() &&
+            (hovered || previousInteractionLocked || (wave.legendOverlay.hoverFloating && mouseInActualWindow));
+        wave.legendOverlay.hoverInteractionLocked = mouseHeldInLegend || activeLegendInteraction;
+
+        if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Hover) {
+            if (collapseRequested) {
+                wave.legendOverlay.hoverFloating = false;
+                wave.legendOverlay.hoverInteractionLocked = false;
+                wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+            } else if (hovered || wave.legendOverlay.hoverInteractionLocked) {
+                wave.legendOverlay.hoverFloating = true;
+                wave.legendOverlay.hoverCloseRemainingSec = wave.legendOverlay.hoverCloseDelaySec;
+            } else if (!wave.legendOverlay.expanded && wave.legendOverlay.hoverFloating) {
+                wave.legendOverlay.hoverCloseRemainingSec -= ImGui::GetIO().DeltaTime;
+                if (wave.legendOverlay.hoverCloseRemainingSec <= 0.0F) {
+                    wave.legendOverlay.hoverFloating = false;
+                }
+            }
+        } else {
+            wave.legendOverlay.hoverFloating = false;
+            wave.legendOverlay.hoverInteractionLocked = false;
+            wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
         }
     }
     ImGui::End();
     ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(3);
 }
 
 void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)

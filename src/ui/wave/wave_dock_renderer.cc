@@ -454,11 +454,12 @@ namespace {
                                  wave.legendOverlay.openMode != plot::WaveLegendOverlayOpenMode::Disabled,
                                  legendModeTooltip.c_str())) {
             wave.legendOverlay.openMode = nextLegendMode;
-            if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
+            if (wave.legendOverlay.openMode != plot::WaveLegendOverlayOpenMode::DoubleClick) {
                 wave.legendOverlay.expanded = false;
-                wave.legendOverlay.hoverFloating = false;
-                wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
             }
+            wave.legendOverlay.hoverFloating = false;
+            wave.legendOverlay.hoverInteractionLocked = false;
+            wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
         }
         ImGui::SameLine();
         if (drawTopToolbarButton("恢复", false, "恢复所有通道显示设置，不清空波形数据。")) {

@@ -996,6 +996,7 @@ bool resetAllChannelViewSettings(WaveDockState& wave)
     wave.channelOverrides.clear();
     wave.legendOverlay.expanded = false;
     wave.legendOverlay.hoverFloating = false;
+    wave.legendOverlay.hoverInteractionLocked = false;
     wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
     wave.legendOverlay.offsetX = 8.0F;
     wave.legendOverlay.offsetY = 8.0F;
