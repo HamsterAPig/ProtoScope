@@ -2269,11 +2269,37 @@ void test_wave_render_mode_label_reports_each_path()
             "envelope 通道应显示包络降采样模式");
 
     stats = {};
+    stats.phosphorChannelCount = 1;
+    require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "余辉",
+            "phosphor 通道应显示余辉模式");
+
+    stats = {};
     stats.bitLaneChannelCount = 1;
     require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "Bit", "bit 通道应显示 Bit 模式");
 
-    stats.rawChannelCount = 1;
+    stats.phosphorChannelCount = 1;
     require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "混合", "多路径统计应显示混合模式");
+}
+
+void test_wave_phosphor_stroke_style_uses_channel_style()
+{
+    protoscope::plot::ChannelView styledChannel;
+    styledChannel.color = std::array<float, 4>{0.12F, 0.34F, 0.56F, 0.78F};
+    styledChannel.lineWidth = 2.75F;
+
+    const auto styled = protoscope::ui::wavePhosphorStrokeStyle(styledChannel, 3);
+    require(std::abs(styled.color.x - 0.12F) < 1e-6F, "余辉颜色应使用通道 R 分量");
+    require(std::abs(styled.color.y - 0.34F) < 1e-6F, "余辉颜色应使用通道 G 分量");
+    require(std::abs(styled.color.z - 0.56F) < 1e-6F, "余辉颜色应使用通道 B 分量");
+    require(std::abs(styled.color.w - 0.78F) < 1e-6F, "余辉颜色应使用通道 alpha 分量");
+    require(std::abs(styled.lineWidth - 2.75F) < 1e-6F, "余辉线宽应使用通道 line_width");
+
+    const protoscope::plot::ChannelView fallbackChannel;
+    const auto fallback = protoscope::ui::wavePhosphorStrokeStyle(fallbackChannel, 1);
+    const auto paletteColor = protoscope::ui::fallbackChannelColor(1);
+    require(std::abs(fallback.color.x - paletteColor.x) < 1e-6F, "未配置颜色时余辉应使用默认调色板");
+    require(std::abs(fallback.lineWidth - protoscope::plot::kDefaultChannelLineWidth) < 1e-6F,
+            "未配置线宽时余辉应使用默认通道线宽");
 }
 
 void test_wave_main_render_data_uses_sample_frequency_viewport()

@@ -107,6 +107,14 @@ ImVec4 channelColor(const plot::ChannelView& channel, const std::size_t channelI
     return {(*channel.color)[0], (*channel.color)[1], (*channel.color)[2], (*channel.color)[3]};
 }
 
+WavePhosphorStrokeStyle wavePhosphorStrokeStyle(const plot::ChannelView& channel, const std::size_t channelIndex)
+{
+    return {
+        .color = channelColor(channel, channelIndex),
+        .lineWidth = plot::resolveChannelLineWidth(channel),
+    };
+}
+
 bool bitDisplayEnabled(const plot::BitDisplaySpec& spec)
 {
     return spec.enabled && spec.bitCount > 0 && spec.firstBit + spec.bitCount <= plot::kMaxBitDisplayCount;

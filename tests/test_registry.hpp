@@ -236,6 +236,7 @@ void test_wave_hidden_channel_policy_defaults_to_visible_only();
 void test_wave_grid_division_readout_conversions();
 void test_wave_grid_division_readout_formula_offset_cancels();
 void test_wave_status_overlay_items_only_show_non_default_states();
+void test_wave_phosphor_stroke_style_uses_channel_style();
 void test_wave_phosphor_trigger_detection_interpolates_edges();
 void test_wave_phosphor_trigger_window_aligns_to_fixed_x();
 void test_wave_phosphor_non_follow_mode_freezes();

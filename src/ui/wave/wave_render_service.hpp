@@ -73,6 +73,11 @@ struct WavePhosphorTriggerWindow {
     double targetMaxTime{0.0};
 };
 
+struct WavePhosphorStrokeStyle {
+    ImVec4 color{1.0F, 1.0F, 1.0F, 1.0F};
+    float lineWidth{1.0F};
+};
+
 struct SmartCursorSnap {
     plot::CursorReadout readout;
     std::string_view label;
@@ -196,7 +201,7 @@ WavePhosphorTriggerWindow makeWavePhosphorTriggerWindow(double triggerTime,
                                                         double triggerPositionRatio);
 double alignWavePhosphorSampleTime(const WavePhosphorTriggerWindow& window, double sourceTime);
 bool wavePhosphorShouldAdvance(const plot::WaveViewState& view);
-void renderWavePhosphor(plot::WaveViewState& view,
+bool renderWavePhosphor(plot::WaveViewState& view,
                         const plot::WaveSnapshot& snapshot,
                         const plot::WaveDisplayData& displayData,
                         const std::vector<std::size_t>& visibleChannelIndices,
@@ -205,6 +210,7 @@ ImVec4 withAlpha(ImVec4 color, float alphaScale);
 ImVec4 fallbackChannelColor(std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelSpec& spec, std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelView& channel, std::size_t channelIndex);
+WavePhosphorStrokeStyle wavePhosphorStrokeStyle(const plot::ChannelView& channel, std::size_t channelIndex);
 bool bitDisplayEnabled(const plot::BitDisplaySpec& spec);
 std::uint64_t rawBitsFromSampleValue(double value);
 bool rawBitEnabled(double value, std::size_t bitIndex);

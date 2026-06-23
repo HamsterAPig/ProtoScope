@@ -3918,6 +3918,7 @@ static const TestCase kAllTests[] = {
     {"wave_grid_division_readout_formula_offset_cancels", &test_wave_grid_division_readout_formula_offset_cancels},
     {"wave_status_overlay_items_only_show_non_default_states",
      &test_wave_status_overlay_items_only_show_non_default_states},
+    {"wave_phosphor_stroke_style_uses_channel_style", &test_wave_phosphor_stroke_style_uses_channel_style},
     {"wave_phosphor_trigger_detection_interpolates_edges",
      &test_wave_phosphor_trigger_detection_interpolates_edges},
     {"wave_phosphor_trigger_window_aligns_to_fixed_x", &test_wave_phosphor_trigger_window_aligns_to_fixed_x},

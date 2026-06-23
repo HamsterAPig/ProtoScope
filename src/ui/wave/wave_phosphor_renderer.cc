@@ -185,7 +185,7 @@ void main()
 
     class WavePhosphorRenderer {
     public:
-        void render(plot::WaveViewState& view,
+        bool render(plot::WaveViewState& view,
                     const plot::WaveSnapshot& snapshot,
                     const plot::WaveDisplayData& displayData,
                     const std::vector<std::size_t>& visibleChannelIndices,
@@ -193,11 +193,15 @@ void main()
         {
             if (!view.phosphorEnabled) {
                 view.lastRenderStats.phosphorBackendStatus = "关闭";
-                return;
+                return false;
             }
             if (view.viewMode == plot::WaveViewMode::Split) {
                 view.lastRenderStats.phosphorBackendStatus = "Split 暂不支持";
-                return;
+                return false;
+            }
+            if (!hasVisiblePhosphorChannel(snapshot, visibleChannelIndices)) {
+                view.lastRenderStats.phosphorBackendStatus = "无可见模拟通道";
+                return false;
             }
 
             const int width = plotPixelWidth();
@@ -206,7 +210,7 @@ void main()
             if (!ensureBackend(view, width, height, advance)) {
                 view.lastRenderStats.phosphorBackendStatus =
                     advance ? "禁用: 后端不可用" : "冻结: 等待跟随模式";
-                return;
+                return false;
             }
 
             if (advance) {
@@ -232,9 +236,18 @@ void main()
                 std::string(state) +
                 (activeBackend_ == plot::WavePhosphorBackend::GpuFbo ? "GPU FBO" : "CPU Texture") +
                 std::string(fallback);
+            return true;
         }
 
     private:
+        static bool hasVisiblePhosphorChannel(const plot::WaveSnapshot& snapshot,
+                                              const std::vector<std::size_t>& visibleChannelIndices)
+        {
+            return std::any_of(visibleChannelIndices.begin(), visibleChannelIndices.end(), [&](std::size_t channelIndex) {
+                return channelCanEnterPhosphor(snapshot, channelIndex);
+            });
+        }
+
         bool ensureBackend(const plot::WaveViewState& view, const int width, const int height, const bool allowCreate)
         {
             if (texture_ == 0 && !allowCreate) {
@@ -506,6 +519,7 @@ void main()
                 fadeGpuTexture(decayFactor(persistenceWindow));
             }
             gpuVertices_.clear();
+            gpuLineWidth_ = 1.0F;
             gpuFrameActive_ = true;
             return true;
         }
@@ -584,7 +598,11 @@ void main()
                 if (samples == nullptr) {
                     continue;
                 }
-                accumulateSampleWindow(*samples, limits.X.Min, limits.X.Max, limits, channelColor(snapshot.channels[channelIndex], channelIndex));
+                accumulateSampleWindow(*samples,
+                                       limits.X.Min,
+                                       limits.X.Max,
+                                       limits,
+                                       wavePhosphorStrokeStyle(snapshot.channels[channelIndex], channelIndex));
             }
         }
 
@@ -620,7 +638,7 @@ void main()
                                            window.sourceMinTime,
                                            window.sourceMaxTime,
                                            limits,
-                                           channelColor(snapshot.channels[channelIndex], channelIndex),
+                                           wavePhosphorStrokeStyle(snapshot.channels[channelIndex], channelIndex),
                                            &window);
                 }
             }
@@ -630,7 +648,7 @@ void main()
                                     const double minTime,
                                     const double maxTime,
                                     const ImPlotRect& limits,
-                                    const ImVec4& color,
+                                    const WavePhosphorStrokeStyle& style,
                                     const WavePhosphorTriggerWindow* triggerWindow = nullptr)
         {
             if (samples.size() < 2 || maxTime <= minTime) {
@@ -668,40 +686,62 @@ void main()
                 const float y0 = pixelYForValue(limits, height_, previous->value);
                 const float x1 = pixelXForTime(limits, width_, currentTime);
                 const float y1 = pixelYForValue(limits, height_, current->value);
-                accumulateLine(x0, y0, x1, y1, color);
+                accumulateLine(x0, y0, x1, y1, style);
                 previous = current;
             }
         }
 
-        void accumulateLine(const float x0, const float y0, const float x1, const float y1, const ImVec4& color)
+        void accumulateLine(const float x0,
+                            const float y0,
+                            const float x1,
+                            const float y1,
+                            const WavePhosphorStrokeStyle& style)
         {
             if (activeBackend_ == plot::WavePhosphorBackend::GpuFbo && gpuFrameActive_) {
-                accumulateGpuLine(x0, y0, x1, y1, color);
+                accumulateGpuLine(x0, y0, x1, y1, style);
                 return;
             }
-            accumulateCpuLine(x0, y0, x1, y1, color);
+            accumulateCpuLine(x0, y0, x1, y1, style);
         }
 
-        void accumulateCpuLine(const float x0, const float y0, const float x1, const float y1, const ImVec4& color)
+        void accumulateCpuPixel(const int x, const int y, const ImVec4& color, const float amount)
+        {
+            if (x < 0 || y < 0 || x >= width_ || y >= height_) {
+                return;
+            }
+            const auto offset =
+                (static_cast<std::size_t>(y) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(x)) * 4U;
+            pixels_[offset + 0U] = (std::min)(1.0F, pixels_[offset + 0U] + color.x * amount);
+            pixels_[offset + 1U] = (std::min)(1.0F, pixels_[offset + 1U] + color.y * amount);
+            pixels_[offset + 2U] = (std::min)(1.0F, pixels_[offset + 2U] + color.z * amount);
+            pixels_[offset + 3U] = (std::min)(0.92F, pixels_[offset + 3U] + amount);
+        }
+
+        void accumulateCpuLine(const float x0,
+                               const float y0,
+                               const float x1,
+                               const float y1,
+                               const WavePhosphorStrokeStyle& style)
         {
             const float dx = x1 - x0;
             const float dy = y1 - y0;
             const int steps = (std::max)(1, static_cast<int>(std::ceil((std::max)(std::abs(dx), std::abs(dy)))));
+            const ImVec4 color = style.color;
             const float amount = 0.20F * (std::clamp)(color.w, 0.0F, 1.0F);
+            const float radius = (std::max)(0.5F, plot::sanitizeChannelLineWidth(style.lineWidth) * 0.5F);
+            const int pixelRadius = static_cast<int>(std::ceil(radius));
             for (int step = 0; step <= steps; ++step) {
                 const float ratio = static_cast<float>(step) / static_cast<float>(steps);
                 const int x = static_cast<int>(std::lround(x0 + dx * ratio));
                 const int y = static_cast<int>(std::lround(y0 + dy * ratio));
-                if (x < 0 || y < 0 || x >= width_ || y >= height_) {
-                    continue;
+                for (int yOffset = -pixelRadius; yOffset <= pixelRadius; ++yOffset) {
+                    for (int xOffset = -pixelRadius; xOffset <= pixelRadius; ++xOffset) {
+                        const float distance = std::hypot(static_cast<float>(xOffset), static_cast<float>(yOffset));
+                        if (distance <= radius) {
+                            accumulateCpuPixel(x + xOffset, y + yOffset, color, amount);
+                        }
+                    }
                 }
-                const auto offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(width_) +
-                                     static_cast<std::size_t>(x)) *
-                                    4U;
-                pixels_[offset + 0U] = (std::min)(1.0F, pixels_[offset + 0U] + color.x * amount);
-                pixels_[offset + 1U] = (std::min)(1.0F, pixels_[offset + 1U] + color.y * amount);
-                pixels_[offset + 2U] = (std::min)(1.0F, pixels_[offset + 2U] + color.z * amount);
-                pixels_[offset + 3U] = (std::min)(0.92F, pixels_[offset + 3U] + amount);
             }
         }
 
@@ -719,14 +759,24 @@ void main()
             gpuVertices_.push_back((std::clamp)(amount, 0.0F, 1.0F));
         }
 
-        void accumulateGpuLine(const float x0, const float y0, const float x1, const float y1, const ImVec4& color)
+        void accumulateGpuLine(const float x0,
+                               const float y0,
+                               const float x1,
+                               const float y1,
+                               const WavePhosphorStrokeStyle& style)
         {
+            const ImVec4 color = style.color;
             const float amount = 0.20F * (std::clamp)(color.w, 0.0F, 1.0F);
+            const float lineWidth = plot::sanitizeChannelLineWidth(style.lineWidth);
+            if (!gpuVertices_.empty() && std::abs(gpuLineWidth_ - lineWidth) > 1e-3F) {
+                flushGpuLines();
+            }
+            gpuLineWidth_ = lineWidth;
             appendGpuVertex(x0, y0, color, amount);
             appendGpuVertex(x1, y1, color, amount);
         }
 
-        void flushGpuLines() const
+        void flushGpuLines()
         {
             if (gpuVertices_.empty()) {
                 return;
@@ -734,8 +784,9 @@ void main()
             glEnable(GL_BLEND);
             glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
             glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ONE, GL_ONE);
-            fboApi().lineWidth(1.0F);
+            fboApi().lineWidth(gpuLineWidth_);
             drawGpuVertices(gpuVertices_.data(), gpuVertices_.size(), kGlLines);
+            gpuVertices_.clear();
         }
 
         void uploadTexture()
@@ -779,6 +830,7 @@ void main()
         plot::WavePhosphorBackend activeBackend_{plot::WavePhosphorBackend::CpuTexture};
         bool textureNeedsClear_{true};
         bool gpuFrameActive_{false};
+        float gpuLineWidth_{1.0F};
         SavedGlState savedGpuState_{};
         std::vector<float> pixels_;
         std::vector<float> gpuVertices_;
@@ -854,13 +906,13 @@ bool wavePhosphorShouldAdvance(const plot::WaveViewState& view)
     return view.phosphorEnabled && view.autoFollowLatest;
 }
 
-void renderWavePhosphor(plot::WaveViewState& view,
+bool renderWavePhosphor(plot::WaveViewState& view,
                         const plot::WaveSnapshot& snapshot,
                         const plot::WaveDisplayData& displayData,
                         const std::vector<std::size_t>& visibleChannelIndices,
                         const ImPlotRect& limits)
 {
-    phosphorRenderer().render(view, snapshot, displayData, visibleChannelIndices, limits);
+    return phosphorRenderer().render(view, snapshot, displayData, visibleChannelIndices, limits);
 }
 
 } // namespace protoscope::ui

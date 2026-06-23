@@ -40,6 +40,7 @@ const char* waveRenderModeLabel(const plot::WaveRenderStats& stats)
     const std::size_t activeModes = (stats.rawChannelCount > 0 ? 1U : 0U) +
                                     (stats.peakDownsampleChannelCount > 0 ? 1U : 0U) +
                                     (stats.envelopeDownsampleChannelCount > 0 ? 1U : 0U) +
+                                    (stats.phosphorChannelCount > 0 ? 1U : 0U) +
                                     (stats.bitLaneChannelCount > 0 ? 1U : 0U);
     if (activeModes > 1U) {
         return "混合";
@@ -52,6 +53,9 @@ const char* waveRenderModeLabel(const plot::WaveRenderStats& stats)
     }
     if (stats.envelopeDownsampleChannelCount > 0) {
         return "包络降采样";
+    }
+    if (stats.phosphorChannelCount > 0) {
+        return "余辉";
     }
     if (stats.bitLaneChannelCount > 0) {
         return "Bit";
@@ -980,10 +984,11 @@ void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
     }
     ImGui::Text("模式: %s", waveRenderModeLabel(view.lastRenderStats));
     ImGui::Text("余辉: %s", view.lastRenderStats.phosphorBackendStatus.c_str());
-    ImGui::Text("通道: raw %zu / peak %zu / envelope %zu / bit %zu",
+    ImGui::Text("通道: raw %zu / peak %zu / envelope %zu / phosphor %zu / bit %zu",
                 view.lastRenderStats.rawChannelCount,
                 view.lastRenderStats.peakDownsampleChannelCount,
                 view.lastRenderStats.envelopeDownsampleChannelCount,
+                view.lastRenderStats.phosphorChannelCount,
                 view.lastRenderStats.bitLaneChannelCount);
     ImGui::Text("点数: %zu / 源样本: %zu", view.lastRenderPointCount, view.lastRenderSourceSampleCount);
     ImGui::Text("预算: %zu", view.lastRenderStats.lastRenderPointBudget);

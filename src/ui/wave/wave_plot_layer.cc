@@ -5,6 +5,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <string>
 
 namespace protoscope::ui {
 
@@ -438,7 +439,6 @@ namespace {
             return;
         }
         const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(withAlpha(color, 0.9F));
-        const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.88F, 0.92F, 0.72F));
         for (const auto& lane : entry.lanes) {
             if (lane.size() < 2) {
                 continue;
@@ -554,23 +554,90 @@ namespace {
 
 } // namespace
 
-void renderWaveChannels(plot::WaveDockState& wave,
-                        const plot::WaveSnapshot& snapshot,
-                        const plot::WaveDisplayData& displayData,
-                        const RenderBudget& renderBudget,
-                        const ImPlotRect& limits,
-                        std::vector<std::size_t>& visibleChannelIndices,
-                        BitLaneLayout& outBitLayout)
+void resetWaveRenderStats(plot::WaveViewState& view, const RenderBudget& renderBudget)
 {
-    auto& view = wave.view;
-    visibleChannelIndices.clear();
-    outBitLayout = {};
     view.lastRenderStats = {};
     view.lastRenderStats.lastRenderPointBudget = renderBudget.pointsPerChannel;
     view.lastRenderStats.lastDownsampleThreshold = static_cast<std::size_t>(
         std::ceil(static_cast<double>(renderBudget.pointsPerChannel) *
                   (std::max)(view.downsampleStartMultiplier, 1.0)));
+}
 
+std::size_t visibleSampleCount(const std::vector<plot::WaveSample>& samples, const ImPlotRect& limits)
+{
+    const auto visibleBegin =
+        std::lower_bound(samples.begin(),
+                         samples.end(),
+                         limits.X.Min,
+                         [](const plot::WaveSample& sample, double value) { return sample.time < value; });
+    const auto visibleEnd =
+        std::upper_bound(samples.begin(),
+                         samples.end(),
+                         limits.X.Max,
+                         [](double value, const plot::WaveSample& sample) { return value < sample.time; });
+    return visibleBegin < visibleEnd ? static_cast<std::size_t>(std::distance(visibleBegin, visibleEnd)) : 0U;
+}
+
+std::vector<std::size_t> collectVisiblePhosphorAnalogChannels(const plot::WaveDockState& wave,
+                                                              const plot::WaveSnapshot& snapshot,
+                                                              const plot::WaveDisplayData& displayData,
+                                                              const ImPlotRect& limits)
+{
+    std::vector<std::size_t> visibleAnalogChannels;
+    visibleAnalogChannels.reserve(snapshot.channels.size());
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        if (channelIndex >= displayData.channels.size()) {
+            continue;
+        }
+        const auto& channel = snapshot.channels[channelIndex];
+        if (bitDisplayEnabled(channel.bitDisplay) || channelHiddenByLegendState(wave, channel.label)) {
+            continue;
+        }
+        if (visibleSampleCount(displayData.channels[channelIndex].samples, limits) > 0U) {
+            visibleAnalogChannels.push_back(channelIndex);
+        }
+    }
+    return visibleAnalogChannels;
+}
+
+void registerPhosphorAnalogChannels(plot::WaveDockState& wave,
+                                    const plot::WaveSnapshot& snapshot,
+                                    const plot::WaveDisplayData& displayData,
+                                    const ImPlotRect& limits,
+                                    const std::vector<std::size_t>& visibleAnalogChannels)
+{
+    auto& view = wave.view;
+    for (const auto channelIndex : visibleAnalogChannels) {
+        if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
+            continue;
+        }
+        const auto& channel = snapshot.channels[channelIndex];
+        const auto style = wavePhosphorStrokeStyle(channel, channelIndex);
+        ImPlotSpec legendSpec{};
+        legendSpec.LineColor = style.color;
+        legendSpec.LineWeight = style.lineWidth;
+        legendSpec.Flags = ImPlotItemFlags_NoFit;
+        applySavedLegendVisibility(wave, channel.label);
+        ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
+        if (!currentPlotItemVisible(channel.label)) {
+            continue;
+        }
+        const std::size_t sourceSampleCount = visibleSampleCount(displayData.channels[channelIndex].samples, limits);
+        view.lastRenderPointCount += sourceSampleCount;
+        view.lastRenderSourceSampleCount += sourceSampleCount;
+        ++view.lastRenderStats.phosphorChannelCount;
+    }
+}
+
+void renderBitWaveChannels(plot::WaveDockState& wave,
+                           const plot::WaveSnapshot& snapshot,
+                           const plot::WaveDisplayData& displayData,
+                           const RenderBudget& renderBudget,
+                           const ImPlotRect& limits,
+                           std::vector<std::size_t>& visibleChannelIndices,
+                           BitLaneLayout& outBitLayout)
+{
+    auto& view = wave.view;
     std::vector<std::size_t> bitChannelIndices;
     bitChannelIndices.reserve(snapshot.channels.size());
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
@@ -603,9 +670,6 @@ void renderWaveChannels(plot::WaveDockState& wave,
         const auto& channelSamples = displayData.channels[channelIndex].samples;
         const ImVec4 color = channelColor(channel, channelIndex);
         const float lineWidth = plot::resolveChannelLineWidth(channel);
-        const double downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
-        const std::size_t downsampleThreshold = static_cast<std::size_t>(
-            std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
         std::size_t sourceSampleCount = 0;
         const auto visibleBegin =
             std::lower_bound(channelSamples.begin(),
@@ -649,6 +713,61 @@ void renderWaveChannels(plot::WaveDockState& wave,
             view.lastRenderPointCount += renderedPoints;
             ++view.lastRenderStats.bitLaneChannelCount;
             drawBitRenderLanes(entry, color, lineWidth);
+            continue;
+        }
+    }
+}
+
+void drawBitLaneLabelsIfNeeded(const BitLaneLayout& bitLayout, const ImPlotRect& limits)
+{
+    if (!bitLayout.lanes.empty()) {
+        const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.88F, 0.92F, 0.72F));
+        drawBitLaneLabels(bitLayout, limits, labelColor);
+    }
+}
+
+void renderWaveChannels(plot::WaveDockState& wave,
+                        const plot::WaveSnapshot& snapshot,
+                        const plot::WaveDisplayData& displayData,
+                        const RenderBudget& renderBudget,
+                        const ImPlotRect& limits,
+                        std::vector<std::size_t>& visibleChannelIndices,
+                        BitLaneLayout& outBitLayout)
+{
+    auto& view = wave.view;
+    visibleChannelIndices.clear();
+    outBitLayout = {};
+    resetWaveRenderStats(view, renderBudget);
+    renderBitWaveChannels(wave, snapshot, displayData, renderBudget, limits, visibleChannelIndices, outBitLayout);
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        if (channelIndex >= displayData.channels.size()) {
+            continue;
+        }
+        const auto& channel = snapshot.channels[channelIndex];
+        if (bitDisplayEnabled(channel.bitDisplay)) {
+            continue;
+        }
+        const auto& channelSamples = displayData.channels[channelIndex].samples;
+        const ImVec4 color = channelColor(channel, channelIndex);
+        const float lineWidth = plot::resolveChannelLineWidth(channel);
+        const double downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
+        const std::size_t downsampleThreshold = static_cast<std::size_t>(
+            std::ceil(static_cast<double>(renderBudget.pointsPerChannel) * downsampleStartMultiplier));
+        std::size_t sourceSampleCount = 0;
+        const auto visibleBegin =
+            std::lower_bound(channelSamples.begin(),
+                             channelSamples.end(),
+                             limits.X.Min,
+                             [](const plot::WaveSample& sample, double value) { return sample.time < value; });
+        const auto visibleEnd =
+            std::upper_bound(channelSamples.begin(),
+                             channelSamples.end(),
+                             limits.X.Max,
+                             [](double value, const plot::WaveSample& sample) { return value < sample.time; });
+        if (visibleBegin < visibleEnd) {
+            sourceSampleCount = static_cast<std::size_t>(std::distance(visibleBegin, visibleEnd));
+        }
+        if (sourceSampleCount == 0) {
             continue;
         }
 
@@ -768,10 +887,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             renderEnvelopeAsBars(envelope, color, lineWidth);
         }
     }
-    if (!outBitLayout.lanes.empty()) {
-        const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.88F, 0.92F, 0.72F));
-        drawBitLaneLabels(outBitLayout, limits, labelColor);
-    }
+    drawBitLaneLabelsIfNeeded(outBitLayout, limits);
 }
 
 void handleHoverReadout(plot::WaveViewState& view,
@@ -1678,9 +1794,26 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     // 悬停读数必须跟随 ImPlot 图例隐藏状态，只对真实可见波形做吸附。
     std::vector<std::size_t> visibleChannelIndices;
     BitLaneLayout bitLayout;
-    renderWaveChannels(
-        wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
-    renderWavePhosphor(view, frame.snapshot, renderDisplayData, visibleChannelIndices, limits);
+    if (view.phosphorEnabled) {
+        resetWaveRenderStats(view, frame.renderBudget);
+        visibleChannelIndices = collectVisiblePhosphorAnalogChannels(wave, frame.snapshot, renderDisplayData, limits);
+        const bool phosphorRendered =
+            renderWavePhosphor(view, frame.snapshot, renderDisplayData, visibleChannelIndices, limits);
+        if (phosphorRendered) {
+            registerPhosphorAnalogChannels(wave, frame.snapshot, renderDisplayData, limits, visibleChannelIndices);
+            renderBitWaveChannels(
+                wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
+            drawBitLaneLabelsIfNeeded(bitLayout, limits);
+        } else {
+            const std::string phosphorStatus = view.lastRenderStats.phosphorBackendStatus;
+            renderWaveChannels(
+                wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
+            view.lastRenderStats.phosphorBackendStatus = phosphorStatus;
+        }
+    } else {
+        renderWaveChannels(
+            wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
+    }
     if (stackedDisplay.has_value()) {
         drawStackedChannelGuides(frame.snapshot, stackedDisplay->channelBaseY);
     }

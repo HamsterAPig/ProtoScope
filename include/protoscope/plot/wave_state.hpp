@@ -143,6 +143,7 @@ struct WaveRenderStats {
     std::size_t rawChannelCount{0};
     std::size_t peakDownsampleChannelCount{0};
     std::size_t envelopeDownsampleChannelCount{0};
+    std::size_t phosphorChannelCount{0};
     std::size_t bitLaneChannelCount{0};
     std::size_t lastRenderPointBudget{0};
     std::size_t lastDownsampleThreshold{0};
