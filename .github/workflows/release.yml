@@ -4,18 +4,14 @@ name: Release CI
   push:
     tags:
       - "v*.*.*"
+      - "!v*.*.*-*"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag, for example v0.1.0"
-        required: true
-        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-ci-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  group: release-ci-${{ github.event_name }}-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -25,23 +21,76 @@ jobs:
     timeout-minutes: 60
 
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       EXE_PATH: build/src/ProtoScope.exe
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.RELEASE_TAG }}
           submodules: recursive
           fetch-depth: 0
 
-      - name: Validate release tag
+      - name: Resolve release metadata
+        id: release_meta
         shell: pwsh
         run: |
-          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
-            throw "Release tag must match vX.Y.Z, got '$env:RELEASE_TAG'."
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            if ($env:GITHUB_REF_TYPE -ne "branch" -or $env:GITHUB_REF_NAME -ne "develop") {
+              throw "Manual release must run from develop, got '$env:GITHUB_REF_NAME'."
+            }
+
+            $headTags = @(
+              git tag --points-at HEAD --list "v*.*.*" |
+                Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+                Sort-Object { [version]($_ -replace '^v', '') } -Descending
+            )
+
+            if ($headTags.Count -gt 0) {
+              $releaseTag = $headTags[0]
+            } else {
+              $previousTags = @(
+                git tag --merged HEAD --list "v*.*.*" |
+                  Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+                  ForEach-Object {
+                    [pscustomobject]@{
+                      Name = $_
+                      Distance = [int](& git rev-list "$_..HEAD" --count)
+                      Version = [version]($_ -replace '^v', '')
+                    }
+                  } |
+                  Sort-Object -Property `
+                    @{ Expression = { $_.Distance }; Ascending = $true },
+                    @{ Expression = { $_.Version }; Descending = $true }
+              )
+
+              if ($previousTags.Count -eq 0) {
+                throw "No previous vX.Y.Z tag was found for manual develop release."
+              }
+
+              $shortSha = git rev-parse --short=7 HEAD
+              $releaseTag = "$($previousTags[0].Name)-$shortSha"
+            }
+          } else {
+            $releaseTag = $env:GITHUB_REF_NAME
+            if ($releaseTag -notmatch '^v\d+\.\d+\.\d+$') {
+              throw "Release tag must match vX.Y.Z, got '$releaseTag'."
+            }
           }
+
+          $packageTag = $releaseTag
+          $assetBase = "ProtoScope-windows-x64-$packageTag"
+
+          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          "package_tag=$packageTag" >> $env:GITHUB_OUTPUT
+          "asset_base=$assetBase" >> $env:GITHUB_OUTPUT
+
+          "RELEASE_TAG=$releaseTag" >> $env:GITHUB_ENV
+          "PACKAGE_TAG=$packageTag" >> $env:GITHUB_ENV
+          "ASSET_BASE=$assetBase" >> $env:GITHUB_ENV
+
+          "Release tag: $releaseTag"
+          "Package tag: $packageTag"
+          "Asset base: $assetBase"
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -126,23 +175,25 @@ jobs:
             throw "Expected executable was not found: $env:EXE_PATH"
           }
 
-          $exeAsset = Join-Path $assetDir "ProtoScope-windows-x64.exe"
-          $zipAsset = Join-Path $assetDir "ProtoScope-windows-x64.zip"
+          $exeAssetName = "$env:ASSET_BASE.exe"
+          $zipAssetName = "$env:ASSET_BASE.zip"
+          $exeAsset = Join-Path $assetDir $exeAssetName
+          $zipAsset = Join-Path $assetDir $zipAssetName
           Copy-Item -Path $env:EXE_PATH -Destination $exeAsset -Force
           Compress-Archive -Path $exeAsset -DestinationPath $zipAsset -Force
 
           Get-FileHash -Algorithm SHA256 $exeAsset |
             ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
-            Set-Content -Path (Join-Path $assetDir "ProtoScope-windows-x64.exe.sha256") -Encoding ASCII
+            Set-Content -Path (Join-Path $assetDir "$exeAssetName.sha256") -Encoding ASCII
 
           Get-FileHash -Algorithm SHA256 $zipAsset |
             ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
-            Set-Content -Path (Join-Path $assetDir "ProtoScope-windows-x64.zip.sha256") -Encoding ASCII
+            Set-Content -Path (Join-Path $assetDir "$zipAssetName.sha256") -Encoding ASCII
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: protoscope-windows-x64-${{ env.RELEASE_TAG }}
+          name: protoscope-windows-x64-${{ steps.release_meta.outputs.package_tag }}
           path: release-assets/*
           if-no-files-found: error
 
@@ -155,8 +206,8 @@ jobs:
           ProtoScope $env:RELEASE_TAG
 
           Assets:
-          - ProtoScope-windows-x64.exe
-          - ProtoScope-windows-x64.zip
+          - $env:ASSET_BASE.exe
+          - $env:ASSET_BASE.zip
           - SHA256 checksums
           "@
 
@@ -170,5 +221,6 @@ jobs:
               --repo $env:GITHUB_REPOSITORY `
               --title "ProtoScope $env:RELEASE_TAG" `
               --notes $notes `
+              --target $env:GITHUB_SHA `
               --draft
           }
