@@ -367,15 +367,17 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
 
 namespace {
 
-    void setChannelHidden(plot::WaveDockState& wave, const std::string& label, bool hidden)
+    void setChannelHidden(plot::WaveDockState& wave, std::size_t channelIndex, bool hidden)
     {
-        auto& hiddenLabels = wave.hiddenChannelLabels;
-        const auto existing = std::find(hiddenLabels.begin(), hiddenLabels.end(), label);
-        if (hidden && existing == hiddenLabels.end()) {
-            hiddenLabels.push_back(label);
+        auto& hiddenIndices = wave.hiddenChannelIndices;
+        const auto existing = std::find(hiddenIndices.begin(), hiddenIndices.end(), channelIndex);
+        if (hidden && existing == hiddenIndices.end()) {
+            hiddenIndices.push_back(channelIndex);
+            wave.hiddenChannelLabels.clear();
             wave.legendVisibilityRestorePending = true;
-        } else if (!hidden && existing != hiddenLabels.end()) {
-            hiddenLabels.erase(existing);
+        } else if (!hidden && existing != hiddenIndices.end()) {
+            hiddenIndices.erase(existing);
+            wave.hiddenChannelLabels.clear();
             wave.legendVisibilityRestorePending = true;
         }
     }
@@ -395,7 +397,7 @@ namespace {
             if (!spec.has_value() || bitDisplayEnabled(spec->bitDisplay)) {
                 continue;
             }
-            if (!includeHidden && channelHiddenByLegendState(wave, spec->label)) {
+            if (!includeHidden && channelHiddenByLegendState(wave, channelIndex)) {
                 continue;
             }
             channels.push_back(channelIndex);
@@ -529,7 +531,7 @@ namespace {
             }
             if (ImGui::BeginPopupContextItem("##compact_legend_context")) {
                 if (ImGui::MenuItem("隐藏通道")) {
-                    setChannelHidden(wave, spec->label, true);
+                    setChannelHidden(wave, channelIndex, true);
                 }
                 ImGui::EndPopup();
             }
@@ -605,7 +607,7 @@ namespace {
         ImGui::PushID(static_cast<int>(channelIndex));
         const plot::ChannelSpec defaultSpec = channelDefaultSpec(wave, channelIndex, spec);
         auto updated = spec;
-        bool visible = !channelHiddenByLegendState(wave, spec.label);
+        bool visible = !channelHiddenByLegendState(wave, channelIndex);
         const bool active = channelIndex == wave.view.measurementChannelIndex;
         LegendRowBlankHitTest blankHitTest;
         if (active) {
@@ -615,7 +617,7 @@ namespace {
         ImGui::TableNextColumn();
         recordCurrentTableCell(blankHitTest);
         if (ImGui::Checkbox("##visible", &visible)) {
-            setChannelHidden(wave, spec.label, !visible);
+            setChannelHidden(wave, channelIndex, !visible);
         }
         recordLastItem(blankHitTest);
 
@@ -685,7 +687,7 @@ namespace {
             ImGui::SameLine();
         }
         if (ImGui::SmallButton(visible ? "隐藏" : "显示")) {
-            setChannelHidden(wave, spec.label, visible);
+            setChannelHidden(wave, channelIndex, visible);
         }
         recordLastItem(blankHitTest);
         ImGui::SameLine();

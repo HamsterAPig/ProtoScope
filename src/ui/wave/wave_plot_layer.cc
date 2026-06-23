@@ -475,7 +475,7 @@ namespace {
              channelIndex < source.channels.size() && channelIndex < snapshot.channels.size();
              ++channelIndex) {
             auto& channel = result.data.channels[channelIndex];
-            if (channel.samples.empty() || channelHiddenByLegendState(wave, snapshot.channels[channelIndex].label)) {
+            if (channel.samples.empty() || channelHiddenByLegendState(wave, channelIndex)) {
                 continue;
             }
             if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
@@ -590,7 +590,7 @@ std::vector<std::size_t> collectVisiblePhosphorAnalogChannels(const plot::WaveDo
             continue;
         }
         const auto& channel = snapshot.channels[channelIndex];
-        if (bitDisplayEnabled(channel.bitDisplay) || channelHiddenByLegendState(wave, channel.label)) {
+        if (bitDisplayEnabled(channel.bitDisplay) || channelHiddenByLegendState(wave, channelIndex)) {
             continue;
         }
         if (visibleSampleCount(displayData.channels[channelIndex].samples, limits) > 0U) {
@@ -617,9 +617,10 @@ void registerPhosphorAnalogChannels(plot::WaveDockState& wave,
         legendSpec.LineColor = style.color;
         legendSpec.LineWeight = style.lineWidth;
         legendSpec.Flags = ImPlotItemFlags_NoFit;
-        applySavedLegendVisibility(wave, channel.label);
-        ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
-        if (!currentPlotItemVisible(channel.label)) {
+        const auto itemLabel = waveChannelItemLabel(channel.label, channelIndex);
+        applySavedLegendVisibility(wave, channelIndex);
+        ImPlot::PlotDummy(itemLabel.c_str(), legendSpec);
+        if (!currentPlotItemVisible(channel.label, channelIndex)) {
             continue;
         }
         const std::size_t sourceSampleCount = visibleSampleCount(displayData.channels[channelIndex].samples, limits);
@@ -651,9 +652,10 @@ void renderBitWaveChannels(plot::WaveDockState& wave,
         legendSpec.LineColor = color;
         legendSpec.LineWeight = lineWidth;
         legendSpec.Flags = ImPlotItemFlags_NoFit;
-        applySavedLegendVisibility(wave, channel.label);
-        ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
-        if (currentPlotItemVisible(channel.label)) {
+        const auto itemLabel = waveChannelItemLabel(channel.label, channelIndex);
+        applySavedLegendVisibility(wave, channelIndex);
+        ImPlot::PlotDummy(itemLabel.c_str(), legendSpec);
+        if (currentPlotItemVisible(channel.label, channelIndex)) {
             bitChannelIndices.push_back(channelIndex);
             visibleChannelIndices.push_back(channelIndex);
         }
@@ -689,7 +691,7 @@ void renderBitWaveChannels(plot::WaveDockState& wave,
         }
 
         if (bitDisplayEnabled(channel.bitDisplay)) {
-            if (!currentPlotItemVisible(channel.label)) {
+            if (!currentPlotItemVisible(channel.label, channelIndex)) {
                 continue;
             }
 
@@ -790,13 +792,14 @@ void renderWaveChannels(plot::WaveDockState& wave,
             ImPlotSpec spec{};
             spec.LineColor = color;
             spec.LineWeight = lineWidth;
-            applySavedLegendVisibility(wave, channel.label);
-            ImPlot::PlotLineG(channel.label.c_str(),
+            const auto itemLabel = waveChannelItemLabel(channel.label, channelIndex);
+            applySavedLegendVisibility(wave, channelIndex);
+            ImPlot::PlotLineG(itemLabel.c_str(),
                               reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
                               &payload,
                               static_cast<int>(rawVisibleCount),
                               spec);
-            if (!currentPlotItemVisible(channel.label)) {
+            if (!currentPlotItemVisible(channel.label, channelIndex)) {
                 continue;
             }
             visibleChannelIndices.push_back(channelIndex);
@@ -813,7 +816,10 @@ void renderWaveChannels(plot::WaveDockState& wave,
                 pointSpec.MarkerFillColor = color;
                 pointSpec.MarkerLineColor = color;
                 pointSpec.LineWeight = 0.0F;
-                ImPlot::PlotScatterG((channel.label + " samples").c_str(),
+                pointSpec.Flags = ImPlotItemFlags_NoLegend | ImPlotItemFlags_NoFit;
+                const auto samplesItemLabel =
+                    std::string(channel.label) + " samples##wave_channel_samples_" + std::to_string(channelIndex);
+                ImPlot::PlotScatterG(samplesItemLabel.c_str(),
                                      reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
                                      &payload,
                                      static_cast<int>(rawVisibleCount),
@@ -826,9 +832,10 @@ void renderWaveChannels(plot::WaveDockState& wave,
         legendSpec.LineColor = color;
         legendSpec.LineWeight = lineWidth;
         legendSpec.Flags = ImPlotItemFlags_NoFit;
-        applySavedLegendVisibility(wave, channel.label);
-        ImPlot::PlotDummy(channel.label.c_str(), legendSpec);
-        const bool legendVisible = currentPlotItemVisible(channel.label);
+        const auto itemLabel = waveChannelItemLabel(channel.label, channelIndex);
+        applySavedLegendVisibility(wave, channelIndex);
+        ImPlot::PlotDummy(itemLabel.c_str(), legendSpec);
+        const bool legendVisible = currentPlotItemVisible(channel.label, channelIndex);
         if (!legendVisible && excludesLegendHiddenChannels(view)) {
             continue;
         }
@@ -854,10 +861,13 @@ void renderWaveChannels(plot::WaveDockState& wave,
                 ImPlotSpec spec{};
                 spec.LineColor = color;
                 spec.LineWeight = lineWidth;
+                spec.Flags = ImPlotItemFlags_NoLegend | ImPlotItemFlags_NoFit;
                 if (view.glowEnabled) {
                     renderGlowSamples(trace.data(), trace.size(), color, view.glowIntensity, lineWidth);
                 }
-                ImPlot::PlotLineG((channel.label + " peak").c_str(),
+                const auto peakItemLabel =
+                    std::string(channel.label) + " peak##wave_channel_peak_" + std::to_string(channelIndex);
+                ImPlot::PlotLineG(peakItemLabel.c_str(),
                                   reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
                                   &payload,
                                   static_cast<int>(trace.size()),
@@ -1582,7 +1592,8 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
                 ImPlotSpec spec{};
                 spec.LineColor = color;
                 spec.LineWeight = plot::resolveChannelLineWidth(channel);
-                ImPlot::PlotLineG(channel.label.c_str(),
+                const auto itemLabel = waveChannelItemLabel(channel.label, channelIndex);
+                ImPlot::PlotLineG(itemLabel.c_str(),
                                   reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
                                   &payload,
                                   static_cast<int>(samples.size()),

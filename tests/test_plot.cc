@@ -832,7 +832,7 @@ void test_split_cursor_snap_forced_channel_ignores_other_rows()
 void test_split_cursor_smart_snap_forced_channel_ignores_hidden_row_candidate()
 {
     protoscope::plot::WaveDockState wave;
-    wave.hiddenChannelLabels.push_back("CH2");
+    wave.hiddenChannelIndices.push_back(1);
 
     protoscope::plot::WaveSnapshot snapshot;
     snapshot.channels.push_back({.label = "CH1", .unit = "V"});
@@ -1004,7 +1004,7 @@ void test_wave_bit_display_bounds_and_hidden_policy()
     const double expectedMax = 3.0 * protoscope::ui::bitDisplayLanePitch() + protoscope::ui::bitDisplayLaneHeight();
     require(std::abs(bounds.maxValue - expectedMax) < 1e-12, "bit_display bounds 应覆盖所有 bit lane");
 
-    wave.hiddenChannelLabels.push_back("CH1");
+    wave.hiddenChannelIndices.push_back(0);
     const auto visibleIndices = protoscope::ui::channelIndicesForDerivedViews(wave, snapshot);
     require(visibleIndices.empty(), "父通道隐藏后整组 bit 不应参与 derived views");
     const auto hiddenBounds = protoscope::ui::boundsForDerivedViews(wave, snapshot, displayData, visibleIndices);
@@ -3134,6 +3134,43 @@ void test_wave_hidden_channel_policy_defaults_to_visible_only()
             "运行态默认隐藏 CH 策略应只让可见通道参与派生视图");
 }
 
+void test_wave_hidden_channel_indices_allow_duplicate_labels()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.hiddenChannelIndices = {1};
+
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "DUP", .unit = "V"});
+    snapshot.channels.push_back({.label = "DUP", .unit = "V"});
+    snapshot.channels.push_back({.label = "CH3", .unit = "V"});
+
+    const auto item0 = protoscope::ui::waveChannelItemLabel(snapshot.channels[0].label, 0);
+    const auto item1 = protoscope::ui::waveChannelItemLabel(snapshot.channels[1].label, 1);
+    require(item0 == "DUP##wave_channel_0", "通道 ImPlot item 应保留原显示名并附加稳定下标 ID");
+    require(item0 != item1, "重复 label 的通道必须生成不同 ImPlot item ID");
+
+    const auto visibleChannels = protoscope::ui::channelIndicesForDerivedViews(wave, snapshot);
+    require(visibleChannels.size() == 2 && visibleChannels[0] == 0 && visibleChannels[1] == 2,
+            "隐藏重复 label 的第 2 个通道时，第 1 个同名通道仍应可见");
+}
+
+void test_wave_hidden_channel_indices_survive_duplicate_rename()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(2);
+    wave.buffer.setChannelSpec(0, {.label = "OldA", .unit = "V"});
+    wave.buffer.setChannelSpec(1, {.label = "OldB", .unit = "V"});
+    wave.hiddenChannelIndices = {1};
+
+    wave.buffer.setChannelSpec(0, {.label = "Renamed", .unit = "V"});
+    wave.buffer.setChannelSpec(1, {.label = "Renamed", .unit = "V"});
+
+    const auto snapshot = wave.buffer.snapshot(0.0, 1.0);
+    const auto visibleChannels = protoscope::ui::channelIndicesForDerivedViews(wave, snapshot);
+    require(visibleChannels.size() == 1 && visibleChannels.front() == 0,
+            "通道重命名成重复 label 后，隐藏状态仍应按 index 隔离");
+}
+
 void test_wave_grid_division_readout_conversions()
 {
     const protoscope::plot::ChannelSpec spec{
@@ -3401,7 +3438,7 @@ void test_wave_reset_one_channel_view_settings_only_resets_target()
     wave.channelOverrides[0].color = std::array<float, 4>{0.9F, 0.8F, 0.7F, 1.0F};
     wave.channelOverrides[1].labelOverridden = true;
     wave.channelOverrides[1].scaleOverridden = true;
-    wave.hiddenChannelLabels = {"Renamed1", "Renamed2"};
+    wave.hiddenChannelIndices = {0, 1};
 
     require(protoscope::plot::resetOneChannelViewSettings(wave, 0), "恢复单通道显示设置应成功");
     const auto spec0 = wave.buffer.channelSpec(0);
@@ -3412,7 +3449,7 @@ void test_wave_reset_one_channel_view_settings_only_resets_target()
             "目标通道覆盖项应清空");
     require(wave.channelOverrides[1].labelOverridden && wave.channelOverrides[1].scaleOverridden,
             "非目标通道覆盖项应保留");
-    require(wave.hiddenChannelLabels.size() == 1 && wave.hiddenChannelLabels[0] == "Renamed2",
+    require(wave.hiddenChannelIndices.size() == 1 && wave.hiddenChannelIndices[0] == 1,
             "恢复单通道应只让目标通道重新可见");
 }
 
@@ -3426,7 +3463,7 @@ void test_wave_reset_all_channel_view_settings_preserves_samples()
     wave.channelOverrides.resize(1);
     wave.channelOverrides[0].labelOverridden = true;
     wave.channelOverrides[0].scaleOverridden = true;
-    wave.hiddenChannelLabels = {"Renamed"};
+    wave.hiddenChannelIndices = {0};
     wave.legendOverlay.expanded = true;
     wave.legendOverlay.offsetX = 42.0F;
     wave.legendOverlay.offsetY = 64.0F;
@@ -3437,7 +3474,7 @@ void test_wave_reset_all_channel_view_settings_preserves_samples()
     require(spec.has_value() && spec->label == "CH1" && spec->scale == 1.5, "全部恢复应恢复通道规格");
     require(snapshot.channels.size() == 1 && snapshot.channels[0].totalSamples == 2, "全部恢复不应清空波形数据");
     require(wave.channelOverrides.empty(), "全部恢复应清空覆盖项");
-    require(wave.hiddenChannelLabels.empty(), "全部恢复应恢复所有通道可见");
+    require(wave.hiddenChannelIndices.empty(), "全部恢复应恢复所有通道可见");
     require(!wave.legendOverlay.expanded && wave.legendOverlay.offsetX == 8.0F && wave.legendOverlay.offsetY == 8.0F,
             "全部恢复应重置图例 overlay 状态");
 }

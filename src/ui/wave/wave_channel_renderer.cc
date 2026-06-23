@@ -350,7 +350,7 @@ std::optional<std::size_t> findBitDisplayChannelAtValue(const plot::WaveDockStat
 {
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
         const auto& channel = snapshot.channels[channelIndex];
-        if (!bitDisplayEnabled(channel.bitDisplay) || channelHiddenByLegendState(wave, channel.label)) {
+        if (!bitDisplayEnabled(channel.bitDisplay) || channelHiddenByLegendState(wave, channelIndex)) {
             continue;
         }
         if (const auto [minValue, maxValue] = bitDisplayValueRange(snapshot, channelIndex, channel.bitDisplay);

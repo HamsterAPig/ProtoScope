@@ -292,7 +292,8 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
 bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::WaveDataBounds& bounds);
 bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channelIndex);
 bool excludesLegendHiddenChannels(const plot::WaveViewState& view);
-bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::string& label);
+std::string waveChannelItemLabel(std::string_view label, std::size_t channelIndex);
+bool channelHiddenByLegendState(const plot::WaveDockState& wave, std::size_t channelIndex);
 std::vector<std::size_t> channelIndicesForDerivedViews(const plot::WaveDockState& wave,
                                                        const plot::WaveSnapshot& snapshot);
 plot::WaveDataBounds boundsForDerivedViews(const plot::WaveDockState& wave,
@@ -307,10 +308,10 @@ plot::WaveDataBounds boundsForYAxisAutoFit(const plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
                                            const std::vector<std::size_t>& channelIndices);
-void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::string& label);
+void applySavedLegendVisibility(const plot::WaveDockState& wave, std::size_t channelIndex);
 void syncLegendVisibilityState(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 void clampActiveChannel(plot::WaveViewState& view, std::size_t channelCount);
-bool currentPlotItemVisible(const std::string& label);
+bool currentPlotItemVisible(const std::string& label, std::size_t channelIndex);
 const char* snapScopeName(plot::WaveCursorSnapScope scope);
 std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDisplayData& displayData,
                                                              const plot::WaveViewState& view,

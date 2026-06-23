@@ -988,16 +988,14 @@ bool resetOneChannelViewSettings(WaveDockState& wave, std::size_t channelIndex)
     if (channelIndex >= wave.defaultChannelSpecs.size()) {
         return false;
     }
-    const auto currentSpec = wave.buffer.channelSpec(channelIndex);
-    const auto eraseHiddenLabel = [&](const std::string& label) {
-        wave.hiddenChannelLabels.erase(
-            std::remove(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label),
-            wave.hiddenChannelLabels.end());
-    };
-    if (currentSpec.has_value()) {
-        eraseHiddenLabel(currentSpec->label);
+    const auto hiddenEnd =
+        std::remove(wave.hiddenChannelIndices.begin(), wave.hiddenChannelIndices.end(), channelIndex);
+    const bool hiddenStateChanged = hiddenEnd != wave.hiddenChannelIndices.end();
+    wave.hiddenChannelIndices.erase(hiddenEnd, wave.hiddenChannelIndices.end());
+    wave.hiddenChannelLabels.clear();
+    if (hiddenStateChanged) {
+        wave.legendVisibilityRestorePending = true;
     }
-    eraseHiddenLabel(wave.defaultChannelSpecs[channelIndex].label);
     if (!resetChannelConfigToDefault(
             wave, channelIndex, wave.defaultChannelSpecs[channelIndex], WaveChannelDoubleClickAction::ResetAll)) {
         return false;
@@ -1016,6 +1014,7 @@ bool resetAllChannelViewSettings(WaveDockState& wave)
         changed = resetOneChannelViewSettings(wave, channelIndex) || changed;
     }
 
+    wave.hiddenChannelIndices.clear();
     wave.hiddenChannelLabels.clear();
     wave.channelOverrides.clear();
     wave.legendOverlay.expanded = false;

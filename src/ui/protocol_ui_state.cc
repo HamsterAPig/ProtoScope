@@ -613,13 +613,11 @@ namespace {
         node["legend_overlay"] = legendOverlayNode;
     }
 
-    YAML::Node encodeHiddenChannelLabels(const plot::WaveDockState& wave)
+    YAML::Node encodeHiddenChannelIndices(const plot::WaveDockState& wave)
     {
         YAML::Node hiddenChannelsNode;
-        for (const auto& label : wave.hiddenChannelLabels) {
-            if (!label.empty()) {
-                hiddenChannelsNode.push_back(label);
-            }
+        for (const auto channelIndex : wave.hiddenChannelIndices) {
+            hiddenChannelsNode.push_back(channelIndex);
         }
         return hiddenChannelsNode;
     }
@@ -688,6 +686,7 @@ namespace {
 
     void resetMissingWaveProtocolState(plot::WaveDockState& wave)
     {
+        wave.hiddenChannelIndices.clear();
         wave.hiddenChannelLabels.clear();
         wave.analysisMarkers.clear();
         wave.legendVisibilityRestorePending = true;
@@ -836,9 +835,17 @@ namespace {
         }
     }
 
-    void decodeHiddenChannelLabels(const YAML::Node& node, plot::WaveDockState& wave)
+    void pushUniqueHiddenChannelIndex(plot::WaveDockState& wave, std::size_t channelIndex)
     {
-        wave.hiddenChannelLabels.clear();
+        if (std::find(wave.hiddenChannelIndices.begin(), wave.hiddenChannelIndices.end(), channelIndex) !=
+            wave.hiddenChannelIndices.end()) {
+            return;
+        }
+        wave.hiddenChannelIndices.push_back(channelIndex);
+    }
+
+    void decodeLegacyHiddenChannelLabels(const YAML::Node& node, plot::WaveDockState& wave)
+    {
         const auto hiddenChannelsNode = node["hidden_channel_labels"];
         if (hiddenChannelsNode && hiddenChannelsNode.IsSequence()) {
             for (const auto& entry : hiddenChannelsNode) {
@@ -849,7 +856,28 @@ namespace {
                     continue;
                 }
                 wave.hiddenChannelLabels.push_back(label);
+                for (std::size_t channelIndex = 0; channelIndex < wave.buffer.channelCount(); ++channelIndex) {
+                    const auto spec = wave.buffer.channelSpec(channelIndex);
+                    if (spec.has_value() && spec->label == label) {
+                        pushUniqueHiddenChannelIndex(wave, channelIndex);
+                    }
+                }
             }
+        }
+    }
+
+    void decodeHiddenChannelVisibility(const YAML::Node& node, plot::WaveDockState& wave)
+    {
+        wave.hiddenChannelIndices.clear();
+        wave.hiddenChannelLabels.clear();
+        const auto hiddenIndicesNode = node["hidden_channel_indices"];
+        if (hiddenIndicesNode && hiddenIndicesNode.IsSequence()) {
+            for (const auto& entry : hiddenIndicesNode) {
+                pushUniqueHiddenChannelIndex(wave, entry.as<std::size_t>(0));
+            }
+        } else {
+            // 兼容旧协议状态：旧版本只能按 label 记隐藏项，解码时尽量迁移到当前通道下标。
+            decodeLegacyHiddenChannelLabels(node, wave);
         }
         wave.legendVisibilityRestorePending = true;
     }
@@ -931,7 +959,7 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave)
     encodeWaveMeasurementState(node, view);
     node["fft"] = encodeWaveFftState(wave);
     encodeWavePanelState(node, wave);
-    node["hidden_channel_labels"] = encodeHiddenChannelLabels(wave);
+    node["hidden_channel_indices"] = encodeHiddenChannelIndices(wave);
     node["cursors"] = encodeWaveCursorState(view);
     node["channel_overrides"] = encodeWaveChannelOverrides(wave);
     node["analysis_markers"] = encodeWaveAnalysisMarkers(wave);
@@ -951,7 +979,7 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave)
     decodeWaveMeasurementState(node, wave.view);
     decodeWaveFftState(node, wave);
     decodeWavePanelState(node, wave);
-    decodeHiddenChannelLabels(node, wave);
+    decodeHiddenChannelVisibility(node, wave);
     decodeWaveCursorState(node, wave.view);
     decodeWaveChannelOverrides(node, wave);
     decodeWaveAnalysisMarkers(node, wave);

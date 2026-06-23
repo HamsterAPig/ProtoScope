@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace protoscope::ui {
@@ -263,10 +264,18 @@ bool excludesLegendHiddenChannels(const plot::WaveViewState& view)
     return view.hiddenChannelPolicy == plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
 }
 
-bool channelHiddenByLegendState(const plot::WaveDockState& wave, const std::string& label)
+std::string waveChannelItemLabel(std::string_view label, std::size_t channelIndex)
 {
-    return std::find(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label) !=
-           wave.hiddenChannelLabels.end();
+    std::string itemLabel(label);
+    itemLabel += "##wave_channel_";
+    itemLabel += std::to_string(channelIndex);
+    return itemLabel;
+}
+
+bool channelHiddenByLegendState(const plot::WaveDockState& wave, std::size_t channelIndex)
+{
+    return std::find(wave.hiddenChannelIndices.begin(), wave.hiddenChannelIndices.end(), channelIndex) !=
+           wave.hiddenChannelIndices.end();
 }
 
 void includeDerivedBoundsPoint(plot::WaveDataBounds& bounds,
@@ -422,8 +431,7 @@ std::vector<std::size_t> channelIndicesForDerivedViews(const plot::WaveDockState
     std::vector<std::size_t> indices;
     indices.reserve(snapshot.channels.size());
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
-        const auto& label = snapshot.channels[channelIndex].label;
-        if (excludesLegendHiddenChannels(wave.view) && channelHiddenByLegendState(wave, label)) {
+        if (excludesLegendHiddenChannels(wave.view) && channelHiddenByLegendState(wave, channelIndex)) {
             continue;
         }
         indices.push_back(channelIndex);
@@ -467,9 +475,9 @@ plot::WaveDataBounds boundsForYAxisAutoFit(const plot::WaveDockState& wave,
         snapshot, displayData, channelIndices, (std::max)(wave.view.minVisibleTimeSpan, 1e-6));
 }
 
-void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::string& label)
+void applySavedLegendVisibility(const plot::WaveDockState& wave, std::size_t channelIndex)
 {
-    const bool hidden = channelHiddenByLegendState(wave, label);
+    const bool hidden = channelHiddenByLegendState(wave, channelIndex);
     if (hidden || wave.legendVisibilityRestorePending) {
         ImPlot::HideNextItem(hidden, wave.legendVisibilityRestorePending ? ImPlotCond_Always : ImPlotCond_Once);
     }
@@ -477,15 +485,17 @@ void applySavedLegendVisibility(const plot::WaveDockState& wave, const std::stri
 
 void syncLegendVisibilityState(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot)
 {
-    std::vector<std::string> hiddenLabels;
-    hiddenLabels.reserve(snapshot.channels.size());
-    for (const auto& channel : snapshot.channels) {
-        const ImPlotItem* item = ImPlot::GetItem(channel.label.c_str());
+    std::vector<std::size_t> hiddenIndices;
+    hiddenIndices.reserve(snapshot.channels.size());
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        const auto itemLabel = waveChannelItemLabel(snapshot.channels[channelIndex].label, channelIndex);
+        const ImPlotItem* item = ImPlot::GetItem(itemLabel.c_str());
         if (item != nullptr && !item->Show) {
-            hiddenLabels.push_back(channel.label);
+            hiddenIndices.push_back(channelIndex);
         }
     }
-    wave.hiddenChannelLabels = std::move(hiddenLabels);
+    wave.hiddenChannelIndices = std::move(hiddenIndices);
+    wave.hiddenChannelLabels.clear();
     wave.legendVisibilityRestorePending = false;
 }
 
@@ -781,9 +791,10 @@ std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnap
     return best;
 }
 
-bool currentPlotItemVisible(const std::string& label)
+bool currentPlotItemVisible(const std::string& label, std::size_t channelIndex)
 {
-    const ImPlotItem* item = ImPlot::GetItem(label.c_str());
+    const auto itemLabel = waveChannelItemLabel(label, channelIndex);
+    const ImPlotItem* item = ImPlot::GetItem(itemLabel.c_str());
     return item != nullptr && item->Show;
 }
 
@@ -792,8 +803,8 @@ std::vector<std::size_t> visibleChannelIndicesForFit(const plot::WaveSnapshot& s
     std::vector<std::size_t> indices;
     indices.reserve(snapshot.channels.size());
     for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
-        const auto& label = snapshot.channels[channelIndex].label;
-        const ImPlotItem* item = ImPlot::GetItem(label.c_str());
+        const auto itemLabel = waveChannelItemLabel(snapshot.channels[channelIndex].label, channelIndex);
+        const ImPlotItem* item = ImPlot::GetItem(itemLabel.c_str());
         if (item == nullptr || item->Show) {
             indices.push_back(channelIndex);
         }

@@ -587,10 +587,12 @@ namespace {
             const auto color = channelColor(snapshot.channels[channel.channelIndex], channel.channelIndex);
             FftGetterPayload payload{.bins = channel.bins.data(), .phase = phasePlot};
             const std::string label = channel.label + (phasePlot ? " 相位" : " 幅值");
+            const std::string itemLabel = label + "##wave_fft_channel_" + std::to_string(channel.channelIndex) +
+                                          (phasePlot ? "_phase" : "_magnitude");
             ImPlotSpec spec{};
             spec.LineColor = color;
             spec.LineWeight = 1.5F;
-            ImPlot::PlotLineG(label.c_str(), &fftBinGetter, &payload, static_cast<int>(channel.bins.size()), spec);
+            ImPlot::PlotLineG(itemLabel.c_str(), &fftBinGetter, &payload, static_cast<int>(channel.bins.size()), spec);
             if (!phasePlot && channel.fundamental.has_value() && std::isfinite(channel.fundamental->frequencyHz)) {
                 ImPlot::TagX(channel.fundamental->frequencyHz, color, "基波 %.4g Hz", channel.fundamental->frequencyHz);
             }

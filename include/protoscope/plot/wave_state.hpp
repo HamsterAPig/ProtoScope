@@ -293,6 +293,8 @@ struct WaveDockState {
     std::vector<std::string> channelSummaries;
     std::vector<ChannelSpec> defaultChannelSpecs;
     std::vector<ChannelTransformOverride> channelOverrides;
+    std::vector<std::size_t> hiddenChannelIndices;
+    // 仅用于兼容旧协议 UI 状态中的 hidden_channel_labels，新的隐藏状态以通道下标为准。
     std::vector<std::string> hiddenChannelLabels;
     std::vector<std::uint8_t> fftChannelEnabled;
     WaveLegendOverlayState legendOverlay{};
