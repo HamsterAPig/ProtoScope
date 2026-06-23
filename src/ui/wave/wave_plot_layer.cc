@@ -137,6 +137,11 @@ namespace {
 
 } // namespace
 
+int splitCursorDragId(const std::size_t channelIndex, const std::size_t cursorIndex)
+{
+    return static_cast<int>(300U + channelIndex * 8U + cursorIndex);
+}
+
 void drawWaveStatusOverlay(const plot::WaveViewState& view,
                            const plot::WaveDisplayData* displayData,
                            const std::vector<std::size_t>* channelIndices)
@@ -560,6 +565,11 @@ void renderWaveChannels(plot::WaveDockState& wave,
     auto& view = wave.view;
     visibleChannelIndices.clear();
     outBitLayout = {};
+    view.lastRenderStats = {};
+    view.lastRenderStats.lastRenderPointBudget = renderBudget.pointsPerChannel;
+    view.lastRenderStats.lastDownsampleThreshold = static_cast<std::size_t>(
+        std::ceil(static_cast<double>(renderBudget.pointsPerChannel) *
+                  (std::max)(view.downsampleStartMultiplier, 1.0)));
 
     std::vector<std::size_t> bitChannelIndices;
     bitChannelIndices.reserve(snapshot.channels.size());
@@ -637,6 +647,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             }
             view.lastRenderSourceSampleCount += entry.sourceSampleCount;
             view.lastRenderPointCount += renderedPoints;
+            ++view.lastRenderStats.bitLaneChannelCount;
             drawBitRenderLanes(entry, color, lineWidth);
             continue;
         }
@@ -654,7 +665,6 @@ void renderWaveChannels(plot::WaveDockState& wave,
                 continue;
             }
             const std::size_t rawVisibleCount = static_cast<std::size_t>(std::distance(begin, end));
-            view.lastRenderPointCount += rawVisibleCount;
 
             // 核心流程：低密度视图直接绘制原始点，避免桶包络把单条波形误画成双边界。
             WaveSampleGetterPayload payload{.samples = &(*begin)};
@@ -671,7 +681,9 @@ void renderWaveChannels(plot::WaveDockState& wave,
                 continue;
             }
             visibleChannelIndices.push_back(channelIndex);
+            view.lastRenderPointCount += rawVisibleCount;
             view.lastRenderSourceSampleCount += sourceSampleCount;
+            ++view.lastRenderStats.rawChannelCount;
             if (view.showPointsWhenSparse) {
                 ImPlotSpec pointSpec{};
                 pointSpec.Marker = ImPlotMarker_Circle;
@@ -701,7 +713,6 @@ void renderWaveChannels(plot::WaveDockState& wave,
         if (legendVisible) {
             visibleChannelIndices.push_back(channelIndex);
         }
-        view.lastRenderSourceSampleCount += sourceSampleCount;
         if (view.peakDetectDownsample) {
             const auto& trace = cachedPeakDetectTrace(wave,
                                                       channel,
@@ -713,8 +724,10 @@ void renderWaveChannels(plot::WaveDockState& wave,
             if (trace.empty()) {
                 continue;
             }
-            view.lastRenderPointCount += trace.size();
             if (legendVisible) {
+                view.lastRenderSourceSampleCount += sourceSampleCount;
+                view.lastRenderPointCount += trace.size();
+                ++view.lastRenderStats.peakDownsampleChannelCount;
                 WaveSampleGetterPayload payload{.samples = trace.data()};
                 ImPlotSpec spec{};
                 spec.LineColor = color;
@@ -738,7 +751,11 @@ void renderWaveChannels(plot::WaveDockState& wave,
         if (envelope.empty()) {
             continue;
         }
-        view.lastRenderPointCount += envelope.size();
+        if (legendVisible) {
+            view.lastRenderSourceSampleCount += sourceSampleCount;
+            view.lastRenderPointCount += envelope.size();
+            ++view.lastRenderStats.envelopeDownsampleChannelCount;
+        }
         if (view.phosphorGlowEnabled) {
             renderPhosphorEnvelope(
                 envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity, lineWidth);
@@ -822,6 +839,39 @@ void handleHoverReadout(plot::WaveViewState& view,
 
 namespace {
 
+    class ScopedImPlotInputMap {
+    public:
+        explicit ScopedImPlotInputMap(const plot::WaveControlMode controlMode)
+            : inputMap_(ImPlot::GetInputMap()), savedInputMap_(inputMap_)
+        {
+            if (controlMode == plot::WaveControlMode::Oscilloscope) {
+                inputMap_.PanMod = ImGuiMod_Ctrl;
+                inputMap_.Fit = ImGuiMouseButton_Middle;
+                inputMap_.ZoomMod = ImGuiMod_Ctrl;
+            }
+        }
+
+        ScopedImPlotInputMap(const ScopedImPlotInputMap&) = delete;
+        ScopedImPlotInputMap& operator=(const ScopedImPlotInputMap&) = delete;
+
+        ~ScopedImPlotInputMap() { inputMap_ = savedInputMap_; }
+
+    private:
+        ImPlotInputMap& inputMap_;
+        ImPlotInputMap savedInputMap_;
+    };
+
+    struct SplitPlotInteractionContext {
+        std::size_t channelIndex{0};
+        bool plotHovered{false};
+        ImPlotRect limits{};
+        ImPlotPoint mousePos{};
+        const BitLaneLayout* bitLayout{nullptr};
+        double timeSnapDistance{0.0};
+        double smartSnapDistance{0.0};
+        double valueSnapDistance{0.0};
+    };
+
     double cursorDisplayAnchorFromActualValue(const plot::ChannelView& spec,
                                               plot::WaveDisplayFormula formula,
                                               double actualValue)
@@ -860,16 +910,17 @@ namespace {
 
 } // namespace
 
-bool handlePlotCursors(plot::WaveViewState& view,
-                       const plot::WaveSnapshot& snapshot,
-                       const plot::WaveDisplayData& displayData,
-                       const BitLaneLayout& bitLayout,
-                       const ImPlotPoint& mousePos,
-                       const ImPlotRect& limits,
-                       double timeSnapDistance,
-                       double smartSnapDistance,
-                       double valueSnapDistance,
-                       std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts)
+bool handlePlotCursorsImpl(plot::WaveViewState& view,
+                           const plot::WaveSnapshot& snapshot,
+                           const plot::WaveDisplayData& displayData,
+                           const BitLaneLayout& bitLayout,
+                           const ImPlotPoint& mousePos,
+                           const ImPlotRect& limits,
+                           double timeSnapDistance,
+                           double smartSnapDistance,
+                           double valueSnapDistance,
+                           std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts,
+                           std::optional<std::size_t> splitChannelIndex)
 {
     if (!view.showCursors) {
         return false;
@@ -899,7 +950,10 @@ bool handlePlotCursors(plot::WaveViewState& view,
         }
         const ImVec4 cursorColor =
             cursorIndex == 0 ? ImVec4(1.0F, 0.761F, 0.278F, 1.0F) : ImVec4(0.0F, 0.722F, 1.0F, 1.0F);
-        ImPlot::DragLineX(static_cast<int>(100 + cursorIndex),
+        // 核心流程：分屏每行必须使用独立 DragLine ID，避免同帧多个子图共享 ImPlot 状态。
+        const int dragId = splitChannelIndex.has_value() ? splitCursorDragId(*splitChannelIndex, cursorIndex)
+                                                         : static_cast<int>(100 + cursorIndex);
+        ImPlot::DragLineX(dragId,
                           &dragTime,
                           cursorColor,
                           (hovered || held) ? 2.0F : 1.0F,
@@ -908,13 +962,25 @@ bool handlePlotCursors(plot::WaveViewState& view,
                           &hovered,
                           &held);
         anyCursorHeld = anyCursorHeld || held;
+        if (splitChannelIndex.has_value() && !held && !hovered && !ImPlot::IsPlotHovered() &&
+            (!cursor.pinned || cursor.channelIndex != *splitChannelIndex)) {
+            continue;
+        }
         if (held && view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit) {
             view.lastCursorFftAnchorIndex = cursorIndex;
         }
         if (held && smartSnapActive) {
             // 核心流程：先用 DragLineX 写入的鼠标时间查吸附，再回写游标时间，配合 Delayed 让绘制使用受约束位置。
             auto smartSnapTarget = findSmartCursorSnapByScope(
-                snapshot, displayData, view, bitLayout, dragTime, mousePos.y, limits, smartSnapDistance);
+                snapshot,
+                displayData,
+                view,
+                bitLayout,
+                dragTime,
+                mousePos.y,
+                limits,
+                smartSnapDistance,
+                splitChannelIndex);
             if (smartSnapTarget.has_value()) {
                 smartSnap = smartSnapTarget->readout;
                 snapLabel = smartSnapTarget->label;
@@ -940,7 +1006,8 @@ bool handlePlotCursors(plot::WaveViewState& view,
             searchY,
             timeSnapDistance,
             valueSnapDistance,
-            allowActiveChannelTimeFallback);
+            allowActiveChannelTimeFallback,
+            splitChannelIndex);
         if (smartSnap.has_value()) {
             best = smartSnap;
         }
@@ -996,6 +1063,52 @@ bool handlePlotCursors(plot::WaveViewState& view,
         }
     }
     return anyCursorHeld;
+}
+
+bool handlePlotCursors(plot::WaveViewState& view,
+                       const plot::WaveSnapshot& snapshot,
+                       const plot::WaveDisplayData& displayData,
+                       const BitLaneLayout& bitLayout,
+                       const ImPlotPoint& mousePos,
+                       const ImPlotRect& limits,
+                       double timeSnapDistance,
+                       double smartSnapDistance,
+                       double valueSnapDistance,
+                       std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts)
+{
+    return handlePlotCursorsImpl(view,
+                                 snapshot,
+                                 displayData,
+                                 bitLayout,
+                                 mousePos,
+                                 limits,
+                                 timeSnapDistance,
+                                 smartSnapDistance,
+                                 valueSnapDistance,
+                                 cursorReadouts,
+                                 std::nullopt);
+}
+
+bool handleSplitPlotCursors(plot::WaveViewState& view,
+                            const plot::WaveSnapshot& snapshot,
+                            const plot::WaveDisplayData& displayData,
+                            const SplitPlotInteractionContext& context,
+                            std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts)
+{
+    if (context.bitLayout == nullptr) {
+        return false;
+    }
+    return handlePlotCursorsImpl(view,
+                                 snapshot,
+                                 displayData,
+                                 *context.bitLayout,
+                                 context.mousePos,
+                                 context.limits,
+                                 context.timeSnapDistance,
+                                 context.smartSnapDistance,
+                                 context.valueSnapDistance,
+                                 cursorReadouts,
+                                 context.channelIndex);
 }
 
 void drawDashedGridLine(ImDrawList* drawList,
@@ -1168,6 +1281,61 @@ std::optional<plot::CursorReadout> findSplitBitCursorReadout(const plot::WaveSna
     };
 }
 
+void updateSplitMeasurementResult(const plot::WaveViewState& view,
+                                  const plot::WaveDisplayData& displayData,
+                                  PlotRenderResult& result,
+                                  std::optional<std::size_t> measurementChannelOverride = std::nullopt)
+{
+    result.bitMeasurementActive = false;
+    result.measurement.reset();
+    if (!view.showCursors || !result.cursorReadouts[0].has_value() || !result.cursorReadouts[1].has_value()) {
+        return;
+    }
+
+    if (cursorPairUsesBitLanes(result.cursorReadouts)) {
+        result.bitMeasurementActive = true;
+        result.measurement = makeBitIntervalMeasurement(*result.cursorReadouts[0], *result.cursorReadouts[1]);
+        return;
+    }
+
+    const auto referenceChannelIndex = view.referenceMode == plot::WaveMeasurementReferenceMode::Channel
+                                           ? std::optional<std::size_t>(view.referenceChannelIndex)
+                                           : std::nullopt;
+    const auto manualReferenceValue = view.referenceMode == plot::WaveMeasurementReferenceMode::ManualValue
+                                          ? std::optional<double>(view.manualReferenceValue)
+                                          : std::nullopt;
+    result.measurement = measureDisplayWindow(displayData,
+                                              measurementChannelOverride.value_or(view.measurementChannelIndex),
+                                              result.cursorReadouts[0]->time,
+                                              result.cursorReadouts[1]->time,
+                                              referenceChannelIndex,
+                                              manualReferenceValue);
+}
+
+void updateSplitCursorReadoutsForChannel(const plot::WaveSnapshot& snapshot,
+                                         const plot::WaveDisplayData& displayData,
+                                         const plot::WaveViewState& view,
+                                         std::size_t channelIndex,
+                                         double maxTimeDistance,
+                                         PlotRenderResult& result)
+{
+    for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
+        result.cursorReadouts[cursorIndex].reset();
+        if (!view.cursors[cursorIndex].enabled || channelIndex >= snapshot.channels.size() ||
+            channelIndex >= displayData.channels.size()) {
+            continue;
+        }
+        if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            result.cursorReadouts[cursorIndex] = findSplitBitCursorReadout(
+                snapshot, displayData, view, channelIndex, view.cursors[cursorIndex].time, maxTimeDistance);
+        } else {
+            result.cursorReadouts[cursorIndex] =
+                plot::findNearestDisplayByTime(
+                    displayData, channelIndex, view.cursors[cursorIndex].time, maxTimeDistance);
+        }
+    }
+}
+
 PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const WaveFrameData& frame)
 {
     PlotRenderResult result;
@@ -1185,6 +1353,15 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
         return result;
     }
 
+    const ImVec2 splitPos = ImGui::GetCursorScreenPos();
+    const ImVec2 splitSize = ImGui::GetContentRegionAvail();
+    const bool mouseInsideSplitRegion = ImGui::IsMouseHoveringRect(
+        splitPos, ImVec2(splitPos.x + splitSize.x, splitPos.y + splitSize.y), false);
+    ScopedImPlotInputMap inputMapGuard(view.controlMode);
+
+    bool viewportChangedThisFrame = false;
+    bool anyCursorHeld = false;
+    bool userInteractingInAnySplitPlot = false;
     ImGui::BeginChild("##wave_split_scroll", ImVec2(-1.0F, -1.0F), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
     const float plotHeight = (std::max)(120.0F,
                                         (ImGui::GetContentRegionAvail().y - 8.0F) /
@@ -1286,81 +1463,93 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
                               ImGui::ColorConvertFloat4ToU32(ImVec4(0.90F, 0.94F, 0.98F, 0.86F)),
                               ("CH" + std::to_string(channelIndex + 1U) + "  " + channel.label).c_str());
 
-            if (view.showCursors) {
-                for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
-                    auto& cursor = view.cursors[cursorIndex];
-                    if (!cursor.enabled) {
-                        continue;
-                    }
-                    bool clicked = false;
-                    bool hovered = false;
-                    bool held = false;
-                    double dragTime = cursor.time;
-                    const ImVec4 cursorColor =
-                        cursorIndex == 0 ? ImVec4(1.0F, 0.761F, 0.278F, 1.0F) : ImVec4(0.0F, 0.722F, 1.0F, 1.0F);
-                    ImPlot::DragLineX(static_cast<int>(300 + channelIndex * 8U + cursorIndex),
-                                      &dragTime,
-                                      cursorColor,
-                                      held ? 2.0F : 1.2F,
-                                      ImPlotDragToolFlags_NoFit,
-                                      &clicked,
-                                      &hovered,
-                                      &held);
-                    if (held) {
-                        cursor.time = dragTime;
-                        cursor.channelIndex = channelIndex;
-                        if (bitChannel && !bitLayout.lanes.empty()) {
-                            const auto& lane = bitLayout.lanes.front();
-                            view.activeBitLane = {
-                                .active = true,
-                                .parentChannelIndex = lane.parentChannelIndex,
-                                .bitIndex = lane.bitIndex,
-                                .laneIndex = lane.laneIndex,
-                            };
-                        } else if (!bitChannel) {
-                            view.activeBitLane = {};
-                        }
-                        if (view.cursorIntervalLocked && view.lockedCursorInterval > 0.0) {
-                            auto& pairedCursor = view.cursors[cursorIndex == 0 ? 1 : 0];
-                            plot::lockCursorInterval(
-                                cursor.time, pairedCursor.time, view.lockedCursorInterval, cursorIndex == 0);
-                        }
-                    }
-                }
+            const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
+            const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
+            const double timeSnapDistance = visibleTimeWidth / 80.0;
+            const double smartSnapDistance = (std::max)(timeSnapDistance, visibleTimeWidth * 0.02);
+            const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
+            const std::vector<std::size_t> splitChannelIndices{channelIndex};
+            const bool plotHovered = ImPlot::IsPlotHovered();
+            const bool splitZoomChanged = handleMainPlotZoom(view, mousePos);
+            viewportChangedThisFrame = splitZoomChanged || viewportChangedThisFrame;
+            if (splitZoomChanged) {
+                view.forceNextMainPlotLimits = true;
+            }
+            handleHoverReadout(view,
+                               snapshot,
+                               displayData,
+                               splitChannelIndices,
+                               bitLayout,
+                               mousePos,
+                               timeSnapDistance,
+                               valueSnapDistance);
+            const SplitPlotInteractionContext interactionContext{
+                .channelIndex = channelIndex,
+                .plotHovered = plotHovered,
+                .limits = limits,
+                .mousePos = mousePos,
+                .bitLayout = &bitLayout,
+                .timeSnapDistance = timeSnapDistance,
+                .smartSnapDistance = smartSnapDistance,
+                .valueSnapDistance = valueSnapDistance,
+            };
+            const bool rowCursorHeld = handleSplitPlotCursors(view,
+                                                              snapshot,
+                                                              displayData,
+                                                              interactionContext,
+                                                              result.cursorReadouts);
+            anyCursorHeld = rowCursorHeld || anyCursorHeld;
+            if (plotHovered || (!mouseInsideSplitRegion && channelIndex == view.measurementChannelIndex)) {
+                const double maxCursorReadoutDistance =
+                    (std::max)(view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan) / 80.0;
+                updateSplitCursorReadoutsForChannel(
+                    snapshot, displayData, view, channelIndex, maxCursorReadoutDistance, result);
+                updateSplitMeasurementResult(view, displayData, result, channelIndex);
+                drawMeasurementOverlay(view, snapshot, displayData, result);
             }
 
             const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
-            if (ImPlot::IsPlotHovered() || ImPlot::IsAxisHovered(ImAxis_X1)) {
+            if (!viewportChangedThisFrame && (ImPlot::IsPlotHovered() || ImPlot::IsAxisHovered(ImAxis_X1))) {
                 recordMainPlotLimits(view, updatedLimits);
             }
+            // 核心流程：ImPlot 交互查询必须在当前子图 EndPlot 前完成，避免分屏结束后访问空 active plot。
+            userInteractingInAnySplitPlot = plotInteractionActive(rowCursorHeld) || userInteractingInAnySplitPlot;
             ImPlot::EndPlot();
         }
         ImPlot::PopStyleColor();
     }
-    view.forceNextMainPlotLimits = false;
+    if (!viewportChangedThisFrame) {
+        view.forceNextMainPlotLimits = false;
+    }
     ImGui::EndChild();
+    drawChannelLegendOverlay(wave, snapshot, splitPos, splitSize);
+
+    if (userInteractingInAnySplitPlot && view.pauseAutoFollowOnInteraction) {
+        view.autoFollowLatest = false;
+    }
 
     if (view.showCursors) {
         const double maxDistance = (std::max)(view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan) / 80.0;
         for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
+            result.cursorReadouts[cursorIndex].reset();
             if (!view.cursors[cursorIndex].enabled) {
                 continue;
             }
             const auto channelIndex = view.cursors[cursorIndex].channelIndex;
+            if (std::ranges::find(visibleChannels, channelIndex) == visibleChannels.end()) {
+                continue;
+            }
             if (channelIndex < snapshot.channels.size() &&
                 bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
                 result.cursorReadouts[cursorIndex] = findSplitBitCursorReadout(
                     snapshot, displayData, view, channelIndex, view.cursors[cursorIndex].time, maxDistance);
-            } else {
+            } else if (channelIndex < displayData.channels.size()) {
                 result.cursorReadouts[cursorIndex] =
-                    findNearestDisplayByScope(displayData, view, view.cursors[cursorIndex].time, maxDistance);
+                    plot::findNearestDisplayByTime(
+                        displayData, channelIndex, view.cursors[cursorIndex].time, maxDistance);
             }
         }
-        if (result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value() &&
-            cursorPairUsesBitLanes(result.cursorReadouts)) {
-            result.bitMeasurementActive = true;
-            result.measurement = makeBitIntervalMeasurement(*result.cursorReadouts[0], *result.cursorReadouts[1]);
-        }
+        updateSplitMeasurementResult(view, displayData, result);
     }
     result.plotRendered = true;
     return result;

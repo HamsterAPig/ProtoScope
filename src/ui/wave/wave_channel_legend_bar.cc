@@ -477,7 +477,21 @@ namespace {
         return ImVec2(width, (std::max)(44.0F, height));
     }
 
-    void drawCompactLegendRows(plot::WaveDockState& wave, const std::vector<std::size_t>& channels, float windowWidth)
+    void drawCompactLegendEmptyState(plot::WaveDockState& wave, bool hasAnalogChannels)
+    {
+        ImGui::TextDisabled(hasAnalogChannels ? "所有 CH 已隐藏" : "无模拟 CH");
+        if (hasAnalogChannels) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("全部恢复") && plot::resetAllChannelViewSettings(wave)) {
+                invalidateWaveDisplayCaches(wave);
+            }
+        }
+    }
+
+    void drawCompactLegendRows(plot::WaveDockState& wave,
+                               const std::vector<std::size_t>& channels,
+                               bool hasAnalogChannels,
+                               float windowWidth)
     {
         auto& view = wave.view;
         const auto& style = ImGui::GetStyle();
@@ -493,7 +507,7 @@ namespace {
         const std::size_t maxCompactRows = (std::min<std::size_t>)(channels.size(), kCompactLegendMaxRows);
 
         if (maxCompactRows == 0U) {
-            ImGui::TextDisabled("无可见 CH");
+            drawCompactLegendEmptyState(wave, hasAnalogChannels);
             return;
         }
 
@@ -776,6 +790,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
 
     const std::vector<std::size_t> compactChannels = collectLegendAnalogChannels(wave, snapshot, false);
     const std::vector<std::size_t> expandedChannels = collectLegendAnalogChannels(wave, snapshot, true);
+    const bool hasAnalogChannels = !expandedChannels.empty();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0F, 6.0F));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0F, 2.0F));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0F, 3.0F));
@@ -790,6 +805,9 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
     const ImVec2 windowSize = effectiveExpanded ? expandedSize : compactSize;
     const ImVec2 windowPos = effectiveExpanded ? expandedPos : compactPos;
 
+    if (const ImGuiViewport* hostViewport = ImGui::GetWindowViewport()) {
+        ImGui::SetNextWindowViewport(hostViewport->ID);
+    }
     ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
@@ -830,7 +848,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
         if (effectiveExpanded) {
             drawExpandedLegendRows(wave, expandedChannels);
         } else {
-            drawCompactLegendRows(wave, compactChannels, windowSize.x);
+            drawCompactLegendRows(wave, compactChannels, hasAnalogChannels, windowSize.x);
         }
 
         if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick && !effectiveExpanded &&

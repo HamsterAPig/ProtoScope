@@ -35,6 +35,30 @@ const char* zoomSelectionHelpText(const plot::WaveViewState& view)
                                       : "框选主视图局部放大；框选完成后保留框选模式，需手动退出。";
 }
 
+const char* waveRenderModeLabel(const plot::WaveRenderStats& stats)
+{
+    const std::size_t activeModes = (stats.rawChannelCount > 0 ? 1U : 0U) +
+                                    (stats.peakDownsampleChannelCount > 0 ? 1U : 0U) +
+                                    (stats.envelopeDownsampleChannelCount > 0 ? 1U : 0U) +
+                                    (stats.bitLaneChannelCount > 0 ? 1U : 0U);
+    if (activeModes > 1U) {
+        return "混合";
+    }
+    if (stats.rawChannelCount > 0) {
+        return "原始";
+    }
+    if (stats.peakDownsampleChannelCount > 0) {
+        return "Peak降采样";
+    }
+    if (stats.envelopeDownsampleChannelCount > 0) {
+        return "包络降采样";
+    }
+    if (stats.bitLaneChannelCount > 0) {
+        return "Bit";
+    }
+    return "无";
+}
+
 const char* mouseYOffsetDragModeLabel(plot::WaveMouseYOffsetDragMode mode)
 {
     switch (mode) {
@@ -949,8 +973,16 @@ void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
             "磷光辉光", "辉", "开启后使用类似示波器余辉的曲线显示效果。", view.phosphorGlowEnabled)) {
         view.phosphorGlowEnabled = !view.phosphorGlowEnabled;
     }
-    ImGui::Text("渲染点: %zu / 源样本: %zu", view.lastRenderPointCount, view.lastRenderSourceSampleCount);
-    addItemHelp("本帧实际参与绘制的点数与原始显示样本数，用于判断降采样是否生效。");
+    ImGui::Text("模式: %s", waveRenderModeLabel(view.lastRenderStats));
+    ImGui::Text("通道: raw %zu / peak %zu / envelope %zu / bit %zu",
+                view.lastRenderStats.rawChannelCount,
+                view.lastRenderStats.peakDownsampleChannelCount,
+                view.lastRenderStats.envelopeDownsampleChannelCount,
+                view.lastRenderStats.bitLaneChannelCount);
+    ImGui::Text("点数: %zu / 源样本: %zu", view.lastRenderPointCount, view.lastRenderSourceSampleCount);
+    ImGui::Text("预算: %zu", view.lastRenderStats.lastRenderPointBudget);
+    ImGui::Text("阈值: %zu", view.lastRenderStats.lastDownsampleThreshold);
+    addItemHelp("本帧右侧统计显示实际渲染模式、通道路径、绘制点数、源样本数与降采样阈值。");
     char frequencyBuffer[64]{};
     std::strncpy(frequencyBuffer, view.sampleFrequencyInput.c_str(), sizeof(frequencyBuffer) - 1);
 

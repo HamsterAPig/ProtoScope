@@ -279,15 +279,18 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
                                                              const plot::WaveViewState& view,
                                                              double time,
                                                              double maxTimeDistance);
+int splitCursorDragId(std::size_t channelIndex, std::size_t cursorIndex);
 std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnapshot& snapshot,
-                                                            const plot::WaveDisplayData& displayData,
-                                                            const plot::WaveViewState& view,
-                                                            const BitLaneLayout& bitLayout,
-                                                            double time,
-                                                            double plotY,
-                                                            double maxTimeDistance,
-                                                            double maxValueDistance,
-                                                            bool allowActiveChannelTimeFallback = false);
+                                                             const plot::WaveDisplayData& displayData,
+                                                             const plot::WaveViewState& view,
+                                                             const BitLaneLayout& bitLayout,
+                                                             double time,
+                                                             double plotY,
+                                                             double maxTimeDistance,
+                                                             double maxValueDistance,
+                                                             bool allowActiveChannelTimeFallback = false,
+                                                             std::optional<std::size_t> forcedChannelIndex =
+                                                                 std::nullopt);
 std::vector<std::size_t> visibleChannelIndicesForFit(const plot::WaveSnapshot& snapshot);
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io);
 std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDisplayData& displayData,
@@ -295,7 +298,8 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
                                                           double time,
                                                           double mouseValue,
                                                           const ImPlotRect& limits,
-                                                          double maxTimeDistance);
+                                                          double maxTimeDistance,
+                                                          std::optional<std::size_t> forcedChannelIndex = std::nullopt);
 std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveSnapshot& snapshot,
                                                           const plot::WaveDisplayData& displayData,
                                                           const plot::WaveViewState& view,
@@ -303,7 +307,8 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveSnapsh
                                                           double time,
                                                           double mouseValue,
                                                           const ImPlotRect& limits,
-                                                          double maxTimeDistance);
+                                                          double maxTimeDistance,
+                                                          std::optional<std::size_t> forcedChannelIndex = std::nullopt);
 plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displayData,
                                               std::size_t channelIndex,
                                               double beginTime,
@@ -330,6 +335,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
 
 void initializeWaveViewIfNeeded(plot::WaveViewState& view);
 WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth);
+const char* waveRenderModeLabel(const plot::WaveRenderStats& stats);
 void drawCursorToolbar(plot::WaveViewState& view,
                        const plot::ViewConfig& config,
                        const plot::WaveDisplayData& displayData);

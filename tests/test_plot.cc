@@ -762,6 +762,96 @@ void test_wave_cursor_drag_time_uses_smart_snap()
     require(std::abs(fallbackTime - dragTime) < 1e-9, "无智能吸附结果时应保留拖动时间");
 }
 
+void test_split_cursor_drag_id_namespace_is_unique()
+{
+    std::vector<int> ids;
+    for (std::size_t channelIndex = 0; channelIndex < 16; ++channelIndex) {
+        for (std::size_t cursorIndex = 0; cursorIndex < 2; ++cursorIndex) {
+            const int id = protoscope::ui::splitCursorDragId(channelIndex, cursorIndex);
+            require(id != static_cast<int>(100 + cursorIndex), "分屏游标 ID 不应复用 overlay 命名空间");
+            require(std::find(ids.begin(), ids.end(), id) == ids.end(), "分屏多通道游标 ID 不应互相冲突");
+            ids.push_back(id);
+        }
+    }
+    require(protoscope::ui::splitCursorDragId(0, 0) == 300, "分屏游标 ID 起点应保持稳定");
+    require(protoscope::ui::splitCursorDragId(1, 1) == 309, "分屏游标 ID 应按通道预留固定步长");
+}
+
+void test_split_cursor_snap_forced_channel_ignores_other_rows()
+{
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "CH1", .unit = "V"});
+    snapshot.channels.push_back({.label = "CH2", .unit = "V"});
+
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 0.0}},
+        .actualValues = {0.0},
+    });
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 100.0}},
+        .actualValues = {100.0},
+    });
+
+    protoscope::plot::WaveViewState view;
+    view.cursorSnapScope = protoscope::plot::WaveCursorSnapScope::AllChannels;
+    const protoscope::ui::BitLaneLayout bitLayout;
+
+    const auto unscoped =
+        protoscope::ui::findNearestCursorByScope(snapshot, displayData, view, bitLayout, 1.0, 100.0, 0.2, 200.0);
+    require(unscoped.has_value() && unscoped->channelIndex == 1, "未限制时应命中离鼠标 Y 最近的其它行");
+
+    const auto scoped = protoscope::ui::findNearestCursorByScope(
+        snapshot, displayData, view, bitLayout, 1.0, 100.0, 0.2, 200.0, false, 0);
+    require(scoped.has_value() && scoped->channelIndex == 0, "分屏强制通道后不应跨行吸附");
+}
+
+void test_split_cursor_smart_snap_forced_channel_ignores_hidden_row_candidate()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.hiddenChannelLabels.push_back("CH2");
+
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "CH1", .unit = "V"});
+    snapshot.channels.push_back({.label = "CH2", .unit = "V"});
+
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples =
+            {
+                {.time = 0.0, .value = 0.0},
+                {.time = 1.0, .value = 0.0},
+                {.time = 1.1, .value = 10.0},
+            },
+        .actualValues = {0.0, 0.0, 10.0},
+    });
+    displayData.channels.push_back({
+        .samples =
+            {
+                {.time = 0.0, .value = 0.0},
+                {.time = 1.0, .value = 0.0},
+                {.time = 1.1, .value = 100.0},
+            },
+        .actualValues = {0.0, 0.0, 100.0},
+    });
+
+    const auto visibleChannels = protoscope::ui::channelIndicesForDerivedViews(wave, snapshot);
+    require(visibleChannels.size() == 1 && visibleChannels.front() == 0, "隐藏行不应进入分屏候选列表");
+
+    protoscope::plot::WaveViewState view;
+    view.cursorSnapScope = protoscope::plot::WaveCursorSnapScope::AllChannels;
+    const ImPlotRect limits(0.0, 2.0, -10.0, 120.0);
+    const protoscope::ui::BitLaneLayout bitLayout;
+
+    const auto unscoped =
+        protoscope::ui::findSmartCursorSnapByScope(snapshot, displayData, view, bitLayout, 1.02, 100.0, limits, 0.2);
+    require(unscoped.has_value() && unscoped->readout.channelIndex == 1, "未限制时隐藏行的强边沿会被选中");
+
+    const auto scoped = protoscope::ui::findSmartCursorSnapByScope(
+        snapshot, displayData, view, bitLayout, 1.02, 100.0, limits, 0.2, visibleChannels.front());
+    require(scoped.has_value() && scoped->readout.channelIndex == 0, "分屏强制当前可见行后不应选择隐藏行");
+}
+
 void test_plot_channel_scale_and_offset_apply_to_display_only()
 {
     protoscope::plot::OscilloscopeBuffer buffer;
@@ -990,6 +1080,46 @@ void test_hidden_bit_lane_excluded_from_layout_hit_and_snap()
         protoscope::ui::findNearestBitTransition(snapshot, visibleLayout, 1.0, visibleLayout.lanes[0].highY, 0.5, 10.0)
             .has_value(),
         "可见 bit_display 通道应允许吸附跳变");
+}
+
+void test_split_bit_cursor_forced_channel_still_snaps_to_transition()
+{
+    std::vector<protoscope::plot::WaveSample> bitSamples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 1.0},
+        {.time = 2.0, .value = 1.0},
+    };
+
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "ANALOG", .unit = "V"});
+    snapshot.channels.push_back({
+        .label = "BIT",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = bitSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = bitSamples.size(),
+        .samples = bitSamples.data(),
+    });
+
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 100.0}},
+        .actualValues = {100.0},
+    });
+    displayData.channels.push_back({});
+
+    protoscope::plot::WaveViewState view;
+    view.cursorSnapScope = protoscope::plot::WaveCursorSnapScope::AllChannels;
+    const ImPlotRect limits(0.0, 2.0, -1.0, 2.0);
+    const ImVec2 plotPos(0.0F, 0.0F);
+    const ImVec2 plotSize(400.0F, 200.0F);
+    const auto bitLayout = protoscope::ui::buildBitLaneLayout(snapshot, {1}, limits, plotPos, plotSize);
+
+    const auto snap = protoscope::ui::findNearestCursorByScope(
+        snapshot, displayData, view, bitLayout, 1.05, bitLayout.lanes.front().highY, 0.2, 10.0, false, 1);
+    require(snap.has_value() && snap->bit.has_value(), "分屏 bit 子图应继续使用 bit transition 吸附");
+    require(snap->channelIndex == 1 && std::abs(snap->time - 1.0) < 0.01, "bit 子图不应吸附到其它模拟行");
 }
 
 void test_bit_measurement_cross_lane_still_outputs_dt_f()
@@ -2022,6 +2152,7 @@ void test_wave_main_render_data_uses_viewport_window()
 
     wave.view.initialized = true;
     wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = false;
     wave.view.viewMinTime = 9.0;
     wave.view.viewMaxTime = 11.0;
     wave.view.visibleDuration = 2.0;
@@ -2096,6 +2227,32 @@ void test_wave_peak_detect_downsample_respects_point_budget()
     }
 }
 
+void test_wave_render_mode_label_reports_each_path()
+{
+    protoscope::plot::WaveRenderStats stats;
+    require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "无", "无渲染统计时模式应为空状态");
+
+    stats.rawChannelCount = 1;
+    require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "原始", "raw 通道应显示原始模式");
+
+    stats = {};
+    stats.peakDownsampleChannelCount = 1;
+    require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "Peak降采样",
+            "peak 通道应显示 Peak 降采样模式");
+
+    stats = {};
+    stats.envelopeDownsampleChannelCount = 1;
+    require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "包络降采样",
+            "envelope 通道应显示包络降采样模式");
+
+    stats = {};
+    stats.bitLaneChannelCount = 1;
+    require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "Bit", "bit 通道应显示 Bit 模式");
+
+    stats.rawChannelCount = 1;
+    require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "混合", "多路径统计应显示混合模式");
+}
+
 void test_wave_main_render_data_uses_sample_frequency_viewport()
 {
     protoscope::plot::WaveDockState wave;
@@ -2113,6 +2270,7 @@ void test_wave_main_render_data_uses_sample_frequency_viewport()
 
     wave.view.initialized = true;
     wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = false;
     wave.view.sampleFrequencyHz = 10.0;
     wave.view.viewMinTime = 0.09;
     wave.view.viewMaxTime = 0.11;
@@ -2139,6 +2297,148 @@ void test_wave_main_render_data_uses_sample_frequency_viewport()
             "概览数据终点应按全局样本序号换算");
 }
 
+void test_wave_default_viewport_without_frequency_uses_time_scale()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.buffer.append(0,
+                       protoscope::plot::WaveAppendRequest{
+                           .source = "first-fit",
+                           .samples =
+                               {
+                                   {.time = 10.0, .value = -2.0},
+                                   {.time = 20.0, .value = 4.0},
+                               },
+                       });
+
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = true;
+    wave.view.viewMinTime = 0.0;
+    wave.view.viewMaxTime = 1.0;
+    wave.view.visibleDuration = 2.5;
+    wave.view.centerTime = 0.5;
+    wave.view.viewMinValue = -3.0;
+    wave.view.viewMaxValue = 7.0;
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+
+    require(!wave.view.defaultViewportPending, "默认视口应用后应清除 pending 标记");
+    require(!wave.view.autoFollowLatest, "默认视口不应强制恢复自动跟随");
+    require(std::abs(wave.view.viewMinTime - 17.5) < 1e-12, "无采样频率时应沿用 time_scale 窗口长度");
+    require(std::abs(wave.view.viewMaxTime - 20.0) < 1e-12, "无采样频率时默认窗口应右对齐最新脚本时间");
+    require(std::abs(wave.view.viewMinValue + 3.0) < 1e-12, "默认视口不应按首批数据重算 Y 下限");
+    require(std::abs(wave.view.viewMaxValue - 7.0) < 1e-12, "默认视口不应按首批数据重算 Y 上限");
+    require(frame.displayData != nullptr, "默认视口后本帧显示数据指针不能为空");
+}
+
+void test_wave_default_viewport_uses_sample_frequency_budget()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    protoscope::plot::WaveAppendRequest request{.source = "default-frequency-budget"};
+    for (int index = 0; index < 2000; ++index) {
+        request.samples.push_back({.time = 100.0 + static_cast<double>(index), .value = static_cast<double>(index)});
+    }
+    require(wave.buffer.append(0, request), "采样频率默认视口样本应追加成功");
+
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = true;
+    wave.view.sampleFrequencyHz = 1000.0;
+    wave.view.viewMinTime = 10.0;
+    wave.view.viewMaxTime = 11.0;
+    wave.view.visibleDuration = 1.0;
+    wave.view.centerTime = 10.5;
+    wave.view.viewMinValue = -2.0;
+    wave.view.viewMaxValue = 2.0;
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+
+    require(!wave.view.defaultViewportPending, "采样频率默认视口应用后应清除 pending 标记");
+    require(!wave.view.autoFollowLatest, "采样频率默认视口后仍应保留暂停跟随");
+    require(std::abs(wave.view.visibleDuration - 0.8) < 1e-12,
+            "默认 X duration 应使用 pointsPerChannel / sample_frequency_hz");
+    require(std::abs(wave.view.viewMaxTime - 1.999) < 1e-12, "默认 X 右边界应对齐最新全局样本时间");
+    require(std::abs(wave.view.viewMinTime - 1.199) < 1e-12, "默认 X 左边界应按预算窗口回推");
+    require(std::abs(wave.view.viewMinValue + 2.0) < 1e-12, "采样频率默认视口不应覆盖 Y 下限");
+    require(std::abs(wave.view.viewMaxValue - 2.0) < 1e-12, "采样频率默认视口不应覆盖 Y 上限");
+    require(frame.displayData != nullptr, "采样频率默认视口后本帧显示数据不能为空");
+    require(std::abs(frame.displayData->channels.front().samples.back().time - 1.999) < 1e-12,
+            "采样频率默认视口后本帧显示时间应按 sampleIndex / Hz 换算");
+}
+
+void test_wave_default_viewport_duration_tracks_render_budget()
+{
+    const auto makeWave = [](std::size_t channelCount) {
+        protoscope::plot::WaveDockState wave;
+        wave.buffer.configureChannels(channelCount);
+        for (std::size_t channelIndex = 0; channelIndex < channelCount; ++channelIndex) {
+            protoscope::plot::WaveAppendRequest request{.source = "default-budget"};
+            for (int index = 0; index < 5000; ++index) {
+                request.samples.push_back(
+                    {.time = static_cast<double>(index), .value = static_cast<double>(index + channelIndex)});
+            }
+            require(wave.buffer.append(channelIndex, request), "预算测试样本应追加成功");
+        }
+        wave.view.initialized = true;
+        wave.view.autoFollowLatest = false;
+        wave.view.defaultViewportPending = true;
+        wave.view.sampleFrequencyHz = 100.0;
+        wave.view.visibleDuration = 1.0;
+        return wave;
+    };
+
+    auto widthLimited = makeWave(1);
+    static_cast<void>(protoscope::ui::prepareWaveFrame(widthLimited, 300.0F));
+    require(std::abs(widthLimited.view.visibleDuration - 3.0) < 1e-12, "可用宽度应限制默认 X duration");
+
+    auto pointConfigLimited = makeWave(1);
+    pointConfigLimited.view.maxRenderPointsPerChannel = 125;
+    static_cast<void>(protoscope::ui::prepareWaveFrame(pointConfigLimited, 800.0F));
+    require(std::abs(pointConfigLimited.view.visibleDuration - 1.25) < 1e-12,
+            "max_render_points_per_channel 应限制默认 X duration");
+
+    auto vertexLimited = makeWave(2);
+    vertexLimited.view.maxRenderPointsPerChannel = 1000;
+    vertexLimited.view.maxRenderVertices = 3200;
+    static_cast<void>(protoscope::ui::prepareWaveFrame(vertexLimited, 1000.0F));
+    require(std::abs(vertexLimited.view.visibleDuration - 1.0) < 1e-12,
+            "max_render_vertices 和通道数应限制默认 X duration");
+}
+
+void test_wave_default_viewport_preserves_configured_y_range()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.buffer.append(0,
+                       protoscope::plot::WaveAppendRequest{
+                           .source = "default-y-range",
+                           .samples =
+                               {
+                                   {.time = 0.0, .value = -100.0},
+                                   {.time = 1.0, .value = 100.0},
+                               },
+                       });
+
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = true;
+    wave.view.sampleFrequencyHz = 10.0;
+    wave.view.visibleDuration = 1.0;
+    wave.view.manualVerticalMin = -5.0;
+    wave.view.manualVerticalMax = 6.0;
+    wave.view.viewMinValue = -5.0;
+    wave.view.viewMaxValue = 6.0;
+
+    static_cast<void>(protoscope::ui::prepareWaveFrame(wave, 800.0F));
+
+    require(std::abs(wave.view.manualVerticalMin + 5.0) < 1e-12, "默认视口不应改写手动 Y 下限");
+    require(std::abs(wave.view.manualVerticalMax - 6.0) < 1e-12, "默认视口不应改写手动 Y 上限");
+    require(std::abs(wave.view.viewMinValue + 5.0) < 1e-12, "首批数据不应覆盖当前 Y 下限");
+    require(std::abs(wave.view.viewMaxValue - 6.0) < 1e-12, "首批数据不应覆盖当前 Y 上限");
+}
+
 void test_wave_sample_frequency_auto_follow_preserves_trimmed_offset()
 {
     protoscope::plot::WaveDockState wave;
@@ -2152,6 +2452,7 @@ void test_wave_sample_frequency_auto_follow_preserves_trimmed_offset()
 
     wave.view.initialized = true;
     wave.view.autoFollowLatest = true;
+    wave.view.defaultViewportPending = false;
     wave.view.sampleFrequencyHz = 10.0;
     wave.view.visibleDuration = 0.2;
     wave.view.viewMinTime = 0.0;
@@ -2182,6 +2483,7 @@ void test_wave_max_total_samples_trim_refreshes_cached_frame()
 
     wave.view.initialized = true;
     wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = false;
     wave.view.sampleFrequencyHz = 10.0;
     wave.view.viewMinTime = 0.0;
     wave.view.viewMaxTime = 0.9;
@@ -2245,6 +2547,7 @@ void test_wave_overview_display_data_is_budgeted()
     wave.buffer.append(1, protoscope::plot::WaveAppendRequest{.source = "perf", .samples = samples});
     wave.view.initialized = true;
     wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = false;
     wave.view.viewMinTime = 9000.0;
     wave.view.viewMaxTime = 9010.0;
     wave.view.visibleDuration = 10.0;

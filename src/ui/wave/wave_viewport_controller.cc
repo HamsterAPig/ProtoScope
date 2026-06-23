@@ -287,6 +287,39 @@ namespace {
         view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
     }
 
+    bool applyDefaultViewportIfPending(plot::WaveDockState& wave,
+                                       const RenderBudget& renderBudget,
+                                       std::optional<double> latestTime,
+                                       double minVisibleTimeSpan)
+    {
+        auto& view = wave.view;
+        if (!view.defaultViewportPending) {
+            return false;
+        }
+
+        // 核心流程：启动/reset 后默认只确定 X 窗口；Y 轴沿用配置或用户当前范围，不被首批数据覆盖。
+        if (hasSampleFrequencyTimebase(view)) {
+            const double budgetDuration = static_cast<double>(renderBudget.pointsPerChannel) / view.sampleFrequencyHz;
+            view.visibleDuration = (std::max)(budgetDuration, minVisibleTimeSpan);
+        } else {
+            view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
+        }
+
+        if (latestTime.has_value()) {
+            view.viewMaxTime = *latestTime;
+            view.viewMinTime = view.viewMaxTime - view.visibleDuration;
+            clampViewportLowerBoundToZero(view);
+        } else {
+            view.viewMinTime = 0.0;
+            view.viewMaxTime = view.visibleDuration;
+        }
+        view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+        view.forceNextMainPlotLimits = true;
+        view.defaultViewportPending = false;
+        wave.cachedDisplayKeyValid = false;
+        return true;
+    }
+
 } // namespace
 
 void initializeWaveViewIfNeeded(plot::WaveViewState& view)
@@ -326,42 +359,49 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
     frame.fullSnapshot = &wave.cachedFullSnapshot;
     view.lastRenderPointCount = 0;
     view.lastRenderSourceSampleCount = 0;
+    view.lastRenderStats = {};
     view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
+    const std::size_t contentPixelWidth = static_cast<std::size_t>((std::max)(availableWidth, 64.0F));
+    frame.renderBudget = makeRenderBudget(view,
+                                          wave.cachedFullSnapshot.channels.size(),
+                                          contentPixelWidth,
+                                          view.phosphorGlowEnabled);
     const auto latestTime = hasSampleFrequencyTimebase(view)
                                 ? latestDisplayTime(wave.cachedFullSnapshot, view.sampleFrequencyHz)
                                 : wave.buffer.latestTime();
-    if (latestTime.has_value() && view.autoFollowLatest) {
+    const bool defaultViewportApplied =
+        applyDefaultViewportIfPending(wave, frame.renderBudget, latestTime, minVisibleTimeSpan);
+    if (!defaultViewportApplied && latestTime.has_value() && view.autoFollowLatest) {
         view.viewMaxTime = *latestTime;
         view.viewMinTime = view.viewMaxTime - view.visibleDuration;
         clampViewportLowerBoundToZero(view);
         view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
     }
 
-    if (hasSampleFrequencyTimebase(view)) {
-        frame.snapshot = wave.cachedFullSnapshot;
-        plot::applySampleFrequencyVisibleRange(
-            frame.snapshot, view.viewMinTime, view.viewMaxTime, view.sampleFrequencyHz);
-    } else {
-        frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
-    }
-    const auto displayKey = makeDisplayDataCacheKey(frame.snapshot, view, dataRevision);
-    if (!wave.cachedDisplayKeyValid || !(wave.cachedDisplayKey == displayKey)) {
-        // 核心流程：主显示窗口完全未变时复用上一帧显示数据和边界，避免 UI 空转重复构建。
-        plot::buildDisplayDataInto(frame.snapshot, view.sampleFrequencyHz, wave.cachedDisplayData);
-        wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
-        wave.cachedDisplayKey = displayKey;
-        wave.cachedDisplayKeyValid = true;
-    }
-    frame.displayData = &wave.cachedDisplayData;
-    frame.renderDisplayData = &wave.cachedDisplayData;
-    frame.displayBounds = wave.cachedDisplayBounds;
-    view.timeAxisSource = frame.displayData->axisSource;
-    frame.renderBudget = makeRenderBudget(view,
-                                          frame.displayData->channels.size(),
-                                          static_cast<std::size_t>((std::max)(availableWidth, 64.0F)),
-                                          view.phosphorGlowEnabled);
+    const auto refreshMainDisplayFrame = [&]() {
+        if (hasSampleFrequencyTimebase(view)) {
+            frame.snapshot = wave.cachedFullSnapshot;
+            plot::applySampleFrequencyVisibleRange(
+                frame.snapshot, view.viewMinTime, view.viewMaxTime, view.sampleFrequencyHz);
+        } else {
+            frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
+        }
+        const auto displayKey = makeDisplayDataCacheKey(frame.snapshot, view, dataRevision);
+        if (!wave.cachedDisplayKeyValid || !(wave.cachedDisplayKey == displayKey)) {
+            // 核心流程：主显示窗口完全未变时复用上一帧显示数据和边界，避免 UI 空转重复构建。
+            plot::buildDisplayDataInto(frame.snapshot, view.sampleFrequencyHz, wave.cachedDisplayData);
+            wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
+            wave.cachedDisplayKey = displayKey;
+            wave.cachedDisplayKeyValid = true;
+        }
+        frame.displayData = &wave.cachedDisplayData;
+        frame.renderDisplayData = &wave.cachedDisplayData;
+        frame.displayBounds = wave.cachedDisplayBounds;
+        view.timeAxisSource = frame.displayData->axisSource;
+    };
+    refreshMainDisplayFrame();
 
-    const std::size_t overviewPixelBudget = static_cast<std::size_t>((std::max)(availableWidth, 64.0F));
+    const std::size_t overviewPixelBudget = contentPixelWidth;
     const std::size_t overviewPointLimit =
         view.overviewMaxSamples > 0
             ? (std::min)({overviewPixelBudget, frame.renderBudget.pointsPerChannel, view.overviewMaxSamples})

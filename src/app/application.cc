@@ -1047,10 +1047,6 @@ namespace {
             !nearlyEqual(view.manualVerticalMax, config.verticalMax)) {
             return false;
         }
-        if (!nearlyEqual(view.viewMinValue, config.verticalMin) ||
-            !nearlyEqual(view.viewMaxValue, config.verticalMax)) {
-            return false;
-        }
         return true;
     }
 
@@ -1531,16 +1527,23 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
         wave.defaultChannelSpecs.push_back(defaultSpec);
         wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
     }
-    const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
-    const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
+    const bool verticalDefaultsChanged = !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
+                                         !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax);
+    const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged;
     if (shouldResetView) {
         wave.view.visibleDuration =
             (std::max)(wave.view.minVisibleTimeSpan, (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
-        wave.view.manualVerticalMin = setup.view.verticalMin;
-        wave.view.manualVerticalMax = setup.view.verticalMax;
-        wave.view.viewMinValue = setup.view.verticalMin;
-        wave.view.viewMaxValue = setup.view.verticalMax;
+        if (setup.resetHistory || verticalDefaultsChanged) {
+            wave.view.manualVerticalMin = setup.view.verticalMin;
+            wave.view.manualVerticalMax = setup.view.verticalMax;
+            wave.view.viewMinValue = setup.view.verticalMin;
+            wave.view.viewMaxValue = setup.view.verticalMax;
+        }
         wave.view.initialized = false;
+        if (setup.resetHistory) {
+            wave.view.autoFollowLatest = true;
+        }
+        wave.view.defaultViewportPending = true;
         wave.statusMessage = "Lua 已更新波形通道配置";
     }
     return true;
@@ -2510,6 +2513,8 @@ void Application::resetWaveHistory()
     wave.view.viewMaxTime = wave.view.visibleDuration;
     wave.view.viewMinValue = wave.view.manualVerticalMin;
     wave.view.viewMaxValue = wave.view.manualVerticalMax;
+    wave.view.autoFollowLatest = true;
+    wave.view.defaultViewportPending = true;
     wave.statusMessage = "波形历史已清空";
 }
 

@@ -394,8 +394,23 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByWaveformScope(const plot::Wa
                                                                   double time,
                                                                   double mouseValue,
                                                                   const ImPlotRect& limits,
-                                                                  double maxTimeDistance)
+                                                                  double maxTimeDistance,
+                                                                  std::optional<std::size_t> forcedChannelIndex)
 {
+    if (forcedChannelIndex.has_value()) {
+        const std::size_t channelIndex = *forcedChannelIndex;
+        if (channelIndex >= snapshot.channels.size() || bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            return std::nullopt;
+        }
+        return findSmartCursorSnapForChannel(displayData,
+                                             channelIndex,
+                                             time,
+                                             mouseValue,
+                                             limits,
+                                             maxTimeDistance,
+                                             view.cursorExtremeSnapPolicy);
+    }
+
     if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
         if (view.measurementChannelIndex >= snapshot.channels.size() ||
             bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay)) {
@@ -438,8 +453,19 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
                                                           double time,
                                                           double mouseValue,
                                                           const ImPlotRect& limits,
-                                                          double maxTimeDistance)
+                                                          double maxTimeDistance,
+                                                          std::optional<std::size_t> forcedChannelIndex)
 {
+    if (forcedChannelIndex.has_value()) {
+        return findSmartCursorSnapForChannel(displayData,
+                                             *forcedChannelIndex,
+                                             time,
+                                             mouseValue,
+                                             limits,
+                                             maxTimeDistance,
+                                             view.cursorExtremeSnapPolicy);
+    }
+
     if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
         return findSmartCursorSnapForChannel(displayData,
                                              view.measurementChannelIndex,
@@ -477,11 +503,12 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveSnapsh
                                                           double time,
                                                           double mouseValue,
                                                           const ImPlotRect& limits,
-                                                          double maxTimeDistance)
+                                                          double maxTimeDistance,
+                                                          std::optional<std::size_t> forcedChannelIndex)
 {
     const double maxValueDistance = std::abs(limits.Y.Max - limits.Y.Min) / 30.0;
-    const auto waveformSnap =
-        findSmartCursorSnapByWaveformScope(snapshot, displayData, view, time, mouseValue, limits, maxTimeDistance);
+    const auto waveformSnap = findSmartCursorSnapByWaveformScope(
+        snapshot, displayData, view, time, mouseValue, limits, maxTimeDistance, forcedChannelIndex);
     std::optional<SmartCursorSnap> bitSnap;
     if (bitReadoutCandidateAllowed(view.bitDisplayReadoutPolicy,
                                    bitLayout,

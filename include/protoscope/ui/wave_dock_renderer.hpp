@@ -50,7 +50,7 @@ private:
                      bool* fullscreenToggleRequested,
                      bool shortcutFocusOverride = false);
     void syncWaveViewToLatest();
-    void handleWaveShortcuts(bool dockFocused, bool* fullscreenToggleRequested);
+    void handleWaveShortcuts(bool dockFocused, bool fullscreenActive, bool* fullscreenToggleRequested);
     static std::string formatMetric(double value, const char* baseUnit);
 
 private:

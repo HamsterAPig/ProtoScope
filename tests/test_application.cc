@@ -1394,6 +1394,30 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
     application.shutdown();
 }
 
+void test_application_reset_wave_history_restores_default_viewport()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto& wave = application.docks().waveState();
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = false;
+    wave.view.visibleDuration = 2.0;
+    wave.view.viewMinTime = 5.0;
+    wave.view.viewMaxTime = 7.0;
+
+    application.resetWaveHistory();
+
+    require(wave.view.autoFollowLatest, "清空历史后应恢复自动跟随");
+    require(wave.view.defaultViewportPending, "清空历史后应等待按真实宽度应用默认视口");
+    require(!wave.view.initialized, "清空历史后应重新初始化视口");
+    require(std::abs(wave.view.viewMinTime - 0.0) < 1e-12, "清空历史后 X 起点应回到 0");
+    require(std::abs(wave.view.viewMaxTime - 2.0) < 1e-12, "清空历史后 X 窗口应沿用当前 duration");
+
+    application.shutdown();
+}
+
 void test_application_logging_filters_script_and_host()
 {
     const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-logging-test"));

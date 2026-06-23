@@ -685,9 +685,19 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
 
 std::vector<std::size_t> waveformCursorChannelsByScope(const plot::WaveSnapshot& snapshot,
                                                        const plot::WaveDisplayData& displayData,
-                                                       const plot::WaveViewState& view)
+                                                       const plot::WaveViewState& view,
+                                                       std::optional<std::size_t> forcedChannelIndex)
 {
     std::vector<std::size_t> channels;
+    if (forcedChannelIndex.has_value()) {
+        const std::size_t channelIndex = *forcedChannelIndex;
+        if (channelIndex < snapshot.channels.size() && channelIndex < displayData.channels.size() &&
+            !bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+            channels.push_back(channelIndex);
+        }
+        return channels;
+    }
+
     if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
         const std::size_t channelIndex = view.measurementChannelIndex;
         if (channelIndex < snapshot.channels.size() && channelIndex < displayData.channels.size() &&
@@ -735,12 +745,13 @@ std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnap
                                                             double plotY,
                                                             double maxTimeDistance,
                                                             double maxValueDistance,
-                                                            bool allowActiveChannelTimeFallback)
+                                                            bool allowActiveChannelTimeFallback,
+                                                            std::optional<std::size_t> forcedChannelIndex)
 {
     std::optional<plot::CursorReadout> best;
     double bestScore = std::numeric_limits<double>::infinity();
 
-    const auto waveformChannels = waveformCursorChannelsByScope(snapshot, displayData, view);
+    const auto waveformChannels = waveformCursorChannelsByScope(snapshot, displayData, view, forcedChannelIndex);
     if (const auto waveform = plot::findNearestDisplayPointInChannels(
             displayData, waveformChannels, time, plotY, maxTimeDistance, maxValueDistance)) {
         best = waveform;
@@ -758,7 +769,7 @@ std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnap
         }
     }
 
-    if (!best.has_value() && allowActiveChannelTimeFallback &&
+    if (!best.has_value() && !forcedChannelIndex.has_value() && allowActiveChannelTimeFallback &&
         view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel &&
         view.measurementChannelIndex < snapshot.channels.size() &&
         !bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay)) {

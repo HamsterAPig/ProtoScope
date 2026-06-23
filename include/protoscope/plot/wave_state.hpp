@@ -123,6 +123,15 @@ enum class WaveMouseYOffsetDragMode {
     Disabled,
 };
 
+struct WaveRenderStats {
+    std::size_t rawChannelCount{0};
+    std::size_t peakDownsampleChannelCount{0};
+    std::size_t envelopeDownsampleChannelCount{0};
+    std::size_t bitLaneChannelCount{0};
+    std::size_t lastRenderPointBudget{0};
+    std::size_t lastDownsampleThreshold{0};
+};
+
 struct WaveViewState {
     bool autoFollowLatest{true};
     bool pauseAutoFollowOnInteraction{true};
@@ -149,6 +158,7 @@ struct WaveViewState {
     bool zoomSelectionAutoExit{false};
     bool peakDetectDownsample{true};
     bool fitVisibleWaveformsRequested{false};
+    bool defaultViewportPending{true};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     std::size_t overviewMaxSamples{20000};
@@ -212,6 +222,7 @@ struct WaveViewState {
     WaveCursorSnapMode cursorSnapMode{WaveCursorSnapMode::SmartSnap};
     WaveCursorSnapScope cursorSnapScope{WaveCursorSnapScope::AllChannels};
     WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{WaveCursorExtremeSnapPolicy::NearestWaveform};
+    WaveRenderStats lastRenderStats{};
     std::array<WaveCursorState, 2> cursors{};
 };
 

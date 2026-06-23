@@ -49,6 +49,54 @@ namespace {
         return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
     }
 
+    void resetLegendOverlayTransientForFullscreenEntry(plot::WaveDockState& wave)
+    {
+        auto& overlay = wave.legendOverlay;
+        overlay.hoverFloating = false;
+        overlay.hoverInteractionLocked = false;
+        overlay.hoverCloseRemainingSec = 0.0F;
+        wave.legendVisibilityRestorePending = true;
+    }
+
+    bool hasSampleFrequencyTimebase(const plot::WaveViewState& view)
+    {
+        return view.sampleFrequencyHz > 0.0 && std::isfinite(view.sampleFrequencyHz);
+    }
+
+    std::optional<double> latestWaveViewTime(const plot::WaveDockState& wave)
+    {
+        if (!hasSampleFrequencyTimebase(wave.view)) {
+            return wave.buffer.latestTime();
+        }
+
+        // 核心流程：采样频率时间轴以全局样本序号为准，避免跟随逻辑先落到脚本时间。
+        const auto snapshot = wave.buffer.snapshot(
+            -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
+        std::optional<std::size_t> latestSampleIndex;
+        for (const auto& channel : snapshot.channels) {
+            if (channel.totalSamples == 0) {
+                continue;
+            }
+            const auto candidate = channel.sampleIndexOffset + channel.totalSamples - 1;
+            if (!latestSampleIndex.has_value() || candidate > *latestSampleIndex) {
+                latestSampleIndex = candidate;
+            }
+        }
+        if (!latestSampleIndex.has_value()) {
+            return std::nullopt;
+        }
+        return static_cast<double>(*latestSampleIndex) / wave.view.sampleFrequencyHz;
+    }
+
+    void clampWaveViewLowerBoundToZero(plot::WaveViewState& view)
+    {
+        if (view.viewMinTime >= 0.0) {
+            return;
+        }
+        view.viewMinTime = 0.0;
+        view.viewMaxTime = (std::max)(view.viewMaxTime, view.visibleDuration);
+    }
+
     ImGuiKey toImGuiKey(const ShortcutKey key)
     {
         switch (key) {
@@ -470,6 +518,9 @@ namespace {
         ImGui::SameLine();
         if (fullscreenToggleRequested != nullptr &&
             drawTopToolbarButton(fullscreenActive ? "退全" : "全屏", fullscreenActive, "切换波形全屏显示。")) {
+            if (!fullscreenActive) {
+                resetLegendOverlayTransientForFullscreenEntry(wave);
+            }
             *fullscreenToggleRequested = true;
             application.setStatusMessage(fullscreenActive ? "已请求退出波形全屏" : "已请求进入波形全屏", false);
         }
@@ -1486,7 +1537,7 @@ void WaveDockRenderer::drawContent(const ImVec2& available,
     syncWaveViewToLatest();
     initializeWaveViewIfNeeded(view);
     const bool dockFocused = shortcutFocusOverride || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-    handleWaveShortcuts(dockFocused, fullscreenToggleRequested);
+    handleWaveShortcuts(dockFocused, fullscreenActive, fullscreenToggleRequested);
 
     auto plan = buildWaveContentPlan(wave, view, available);
     auto context =
@@ -1498,7 +1549,9 @@ void WaveDockRenderer::drawContent(const ImVec2& available,
     wave.suppressZoomSelectionEscapeThisFrame = false;
 }
 
-void WaveDockRenderer::handleWaveShortcuts(const bool dockFocused, bool* fullscreenToggleRequested)
+void WaveDockRenderer::handleWaveShortcuts(const bool dockFocused,
+                                           const bool fullscreenActive,
+                                           bool* fullscreenToggleRequested)
 {
     const auto& io = ImGui::GetIO();
     if (!dockFocused || io.WantTextInput ||
@@ -1510,6 +1563,9 @@ void WaveDockRenderer::handleWaveShortcuts(const bool dockFocused, bool* fullscr
     auto& view = wave.view;
     if (waveShortcutPressed(ShortcutAction::WaveToggleFullscreen)) {
         if (fullscreenToggleRequested != nullptr) {
+            if (!fullscreenActive) {
+                resetLegendOverlayTransientForFullscreenEntry(wave);
+            }
             *fullscreenToggleRequested = true;
             application_.setStatusMessage("已请求切换波形全屏", false);
         }
@@ -1560,9 +1616,10 @@ void WaveDockRenderer::syncWaveViewToLatest()
         return;
     }
 
-    if (const auto latestTime = wave.buffer.latestTime()) {
+    if (const auto latestTime = latestWaveViewTime(wave)) {
         wave.view.viewMaxTime = *latestTime;
         wave.view.viewMinTime = *latestTime - wave.view.visibleDuration;
+        clampWaveViewLowerBoundToZero(wave.view);
         wave.view.centerTime = 0.5 * (wave.view.viewMinTime + wave.view.viewMaxTime);
         if (!wave.view.lockVerticalRange && !wave.view.initialized) {
             wave.view.viewMinValue = wave.view.manualVerticalMin;
