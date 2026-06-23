@@ -84,6 +84,7 @@ struct GuiWaveConfig {
     plot::WaveMouseYOffsetDragMode mouseYOffsetDragMode{plot::WaveMouseYOffsetDragMode::Direct};
     plot::WaveLegendOverlayOpenMode legendOverlayOpenMode{plot::WaveLegendOverlayOpenMode::Hover};
     bool zoomSelectionAutoExit{false};
+    bool peakDetectDownsample{true};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     double downsampleStartMultiplier{2.0};

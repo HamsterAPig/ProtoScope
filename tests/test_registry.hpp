@@ -200,6 +200,8 @@ void test_plot_limited_envelope_edges();
 void test_wave_frequency_parse_and_axis_mapping();
 void test_wave_display_data_uses_visible_window_only();
 void test_wave_main_render_data_uses_viewport_window();
+void test_wave_peak_detect_downsample_orders_bucket_points();
+void test_wave_peak_detect_downsample_respects_point_budget();
 void test_wave_main_render_data_uses_sample_frequency_viewport();
 void test_wave_sample_frequency_auto_follow_preserves_trimmed_offset();
 void test_wave_overview_display_data_is_budgeted();

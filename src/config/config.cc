@@ -523,6 +523,8 @@ namespace {
             config.gui.wave.legendOverlayOpenMode);
         config.gui.wave.zoomSelectionAutoExit =
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
+        config.gui.wave.peakDetectDownsample =
+            readScalar<bool>(wave, "peak_detect_downsample", config.gui.wave.peakDetectDownsample);
         config.gui.wave.maxRenderPointsPerChannel =
             readScalar<std::size_t>(wave, "max_render_points_per_channel", config.gui.wave.maxRenderPointsPerChannel);
         config.gui.wave.maxRenderVertices =
@@ -859,6 +861,7 @@ namespace {
         gui["wave"]["legend_overlay_open_mode"] =
             toWaveLegendOverlayOpenModeText(config.gui.wave.legendOverlayOpenMode);
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
+        gui["wave"]["peak_detect_downsample"] = config.gui.wave.peakDetectDownsample;
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
         gui["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
         gui["wave"]["legend_channel_name_max_width"] = config.gui.wave.legendChannelNameMaxWidth;
@@ -1351,6 +1354,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.xAxisDoubleClickAction = config.gui.wave.xAxisDoubleClickAction;
     wave.mouseYOffsetDragMode = config.gui.wave.mouseYOffsetDragMode;
     wave.zoomSelectionAutoExit = config.gui.wave.zoomSelectionAutoExit;
+    wave.peakDetectDownsample = config.gui.wave.peakDetectDownsample;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
     wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
@@ -1400,6 +1404,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.xAxisDoubleClickAction = dockStore.waveState().view.xAxisDoubleClickAction;
     config.gui.wave.mouseYOffsetDragMode = dockStore.waveState().view.mouseYOffsetDragMode;
     config.gui.wave.zoomSelectionAutoExit = dockStore.waveState().view.zoomSelectionAutoExit;
+    config.gui.wave.peakDetectDownsample = dockStore.waveState().view.peakDetectDownsample;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;

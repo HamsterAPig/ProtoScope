@@ -2050,6 +2050,52 @@ void test_wave_main_render_data_uses_viewport_window()
     require(std::abs(envelope.back().time - 20.0) < 1e-12, "主图包络应保留右侧邻接样本");
 }
 
+void test_wave_peak_detect_downsample_orders_bucket_points()
+{
+    const std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 0.0, .value = 0.5},
+        {.time = 1.0, .value = 2.0},
+        {.time = 2.0, .value = -1.0},
+        {.time = 3.0, .value = 0.25},
+    };
+
+    std::size_t sourceSampleCount = 0;
+    const auto trace = protoscope::ui::buildPeakDetectDownsample(samples, 0.0, 3.0, 4, &sourceSampleCount);
+
+    require(sourceSampleCount == samples.size(), "peak-detect 应统计可视区内原始样本数");
+    require(trace.size() == 4, "单桶同时存在首点、极值和末点时应输出 4 个代表点");
+    require(std::abs(trace[0].time - 0.0) < 1e-12 && std::abs(trace[0].value - 0.5) < 1e-12,
+            "peak-detect 首点应保持真实样本位置");
+    require(std::abs(trace[1].time - 1.0) < 1e-12 && std::abs(trace[1].value - 2.0) < 1e-12,
+            "peak-detect 极大值应按真实样本顺序插入");
+    require(std::abs(trace[2].time - 2.0) < 1e-12 && std::abs(trace[2].value + 1.0) < 1e-12,
+            "peak-detect 极小值应按真实样本顺序插入");
+    require(std::abs(trace[3].time - 3.0) < 1e-12 && std::abs(trace[3].value - 0.25) < 1e-12,
+            "peak-detect 末点应保持真实样本位置");
+}
+
+void test_wave_peak_detect_downsample_respects_point_budget()
+{
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(100);
+    for (std::size_t index = 0; index < 100; ++index) {
+        samples.push_back({
+            .time = static_cast<double>(index),
+            .value = index % 2 == 0 ? -1.0 : 1.0,
+        });
+    }
+
+    std::size_t sourceSampleCount = 0;
+    const auto trace = protoscope::ui::buildPeakDetectDownsample(samples, 0.0, 99.0, 20, &sourceSampleCount);
+
+    require(sourceSampleCount == samples.size(), "peak-detect 预算测试应覆盖完整可视样本");
+    require(!trace.empty(), "peak-detect 预算内仍应输出代表点");
+    require(trace.size() <= 20, "peak-detect 输出点数不应超过渲染点预算");
+    for (std::size_t index = 1; index < trace.size(); ++index) {
+        require(trace[index - 1].time <= trace[index].time, "peak-detect 输出应保持原始时间顺序");
+    }
+}
+
 void test_wave_main_render_data_uses_sample_frequency_viewport()
 {
     protoscope::plot::WaveDockState wave;

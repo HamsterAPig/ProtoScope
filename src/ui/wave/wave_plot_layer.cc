@@ -188,7 +188,8 @@ namespace {
                                                                            std::size_t channelIndex,
                                                                            const std::vector<plot::WaveSample>& samples,
                                                                            const ImPlotRect& limits,
-                                                                           std::size_t pointLimit)
+                                                                           std::size_t pointLimit,
+                                                                           bool peakDetectDownsample)
     {
         return {
             .dataRevision = wave.displayDataRevision,
@@ -198,6 +199,7 @@ namespace {
             .channelIndex = channelIndex,
             .pointLimit = pointLimit,
             .sampleCount = samples.size(),
+            .peakDetectDownsample = peakDetectDownsample,
             .displayFormula = wave.cachedFullSnapshot.config.displayFormula,
             .ratio = channel.ratio,
             .scale = channel.scale,
@@ -217,7 +219,7 @@ namespace {
             wave.renderEnvelopeCache.resize(channelIndex + 1);
         }
         auto& entry = wave.renderEnvelopeCache[channelIndex];
-        const auto key = makeRenderEnvelopeCacheKey(wave, channel, channelIndex, samples, limits, pointLimit);
+        const auto key = makeRenderEnvelopeCacheKey(wave, channel, channelIndex, samples, limits, pointLimit, false);
         if (!entry.valid || !(entry.key == key)) {
             // 核心流程：视口、数据和显示变换都没变时复用上一帧包络，避免 UI 空转反复扫样本。
             entry.envelope =
@@ -229,6 +231,32 @@ namespace {
             *sourceSampleCount = entry.sourceSampleCount;
         }
         return entry.envelope;
+    }
+
+    const std::vector<plot::WaveSample>& cachedPeakDetectTrace(plot::WaveDockState& wave,
+                                                               const plot::ChannelView& channel,
+                                                               std::size_t channelIndex,
+                                                               const std::vector<plot::WaveSample>& samples,
+                                                               const ImPlotRect& limits,
+                                                               std::size_t pointLimit,
+                                                               std::size_t* sourceSampleCount)
+    {
+        if (wave.renderEnvelopeCache.size() <= channelIndex) {
+            wave.renderEnvelopeCache.resize(channelIndex + 1);
+        }
+        auto& entry = wave.renderEnvelopeCache[channelIndex];
+        const auto key = makeRenderEnvelopeCacheKey(wave, channel, channelIndex, samples, limits, pointLimit, true);
+        if (!entry.valid || !(entry.key == key)) {
+            // 核心流程：高密度主图默认改成示波器式 peak-detect 轨迹，保留极值但不再逐桶画竖线。
+            entry.peakDetectTrace =
+                buildPeakDetectDownsample(samples, limits.X.Min, limits.X.Max, pointLimit, &entry.sourceSampleCount);
+            entry.key = key;
+            entry.valid = true;
+        }
+        if (sourceSampleCount != nullptr) {
+            *sourceSampleCount = entry.sourceSampleCount;
+        }
+        return entry.peakDetectTrace;
     }
 
     std::size_t bitLaneLayoutFingerprint(const BitLaneLayout& bitLayout, const std::size_t channelIndex)
@@ -674,6 +702,32 @@ void renderWaveChannels(plot::WaveDockState& wave,
             visibleChannelIndices.push_back(channelIndex);
         }
         view.lastRenderSourceSampleCount += sourceSampleCount;
+        if (view.peakDetectDownsample) {
+            const auto& trace = cachedPeakDetectTrace(wave,
+                                                      channel,
+                                                      channelIndex,
+                                                      displayData.channels[channelIndex].samples,
+                                                      limits,
+                                                      renderBudget.pointsPerChannel,
+                                                      &sourceSampleCount);
+            if (trace.empty()) {
+                continue;
+            }
+            view.lastRenderPointCount += trace.size();
+            if (legendVisible) {
+                WaveSampleGetterPayload payload{.samples = trace.data()};
+                ImPlotSpec spec{};
+                spec.LineColor = color;
+                spec.LineWeight = lineWidth;
+                ImPlot::PlotLineG((channel.label + " peak").c_str(),
+                                  reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
+                                  &payload,
+                                  static_cast<int>(trace.size()),
+                                  spec);
+            }
+            continue;
+        }
+
         const auto& envelope = cachedRenderEnvelope(wave,
                                                     channel,
                                                     channelIndex,

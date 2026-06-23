@@ -158,6 +158,11 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
                                                       double maxTime,
                                                       std::size_t maxPoints,
                                                       std::size_t* sourceSampleCount = nullptr);
+std::vector<plot::WaveSample> buildPeakDetectDownsample(const std::vector<plot::WaveSample>& samples,
+                                                        double minTime,
+                                                        double maxTime,
+                                                        std::size_t maxPoints,
+                                                        std::size_t* sourceSampleCount = nullptr);
 void renderEnvelopeAsBars(const std::vector<plot::EnvelopePoint>& points, const ImVec4& color, float lineWidth);
 void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
                             const ImVec4& color,

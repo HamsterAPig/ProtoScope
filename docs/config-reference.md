@@ -84,6 +84,7 @@ gui:
     vertical_auto_fit_multiplier: 1.2
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
+    peak_detect_downsample: true
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
     max_total_samples: 0
@@ -109,6 +110,7 @@ gui:
 - `legend_channel_name_max_width`：通道图例名称显示宽度上限，单位为 ImGui 逻辑像素；`0.0`、缺失或非正值表示不限制。作用于展开态表格、紧凑态浮窗和底部通道卡片，超长名称会裁剪并在悬浮时显示完整 tooltip。
 - `vertical_auto_fit_multiplier`：纵向自动适配余量倍数。
 - `max_render_points_per_channel` / `max_render_vertices`：单通道和总顶点渲染预算。
+- `peak_detect_downsample`：高密度主图是否启用示波器式 peak-detect 降采样，默认 `true`。开启时每个桶保留首点、极小值、极大值和末点并连成单条轨迹；关闭时回退旧的 min/max 包络渲染，便于对比。
 - `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。
 - `overview_max_samples`：总览数据上限。
 - `max_total_samples`：每通道历史样本上限，`0` 表示不额外限制。

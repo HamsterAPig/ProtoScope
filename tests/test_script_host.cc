@@ -1981,6 +1981,7 @@ void test_config_default_roundtrip()
             "游标极值吸附策略默认应为 nearest_waveform");
     require(config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
             "鼠标 Y 偏移拖动模式默认应为 direct");
+    require(config.gui.wave.peakDetectDownsample, "peak-detect 降采样默认应开启");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
     require(std::abs(config.gui.wave.cursorFftHighlightRgba[0] - 0.20F) < 1e-6F &&
@@ -2040,6 +2041,7 @@ void test_config_default_roundtrip()
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
     config.gui.wave.zoomSelectionAutoExit = true;
+    config.gui.wave.peakDetectDownsample = false;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
     config.gui.wave.cursorFftHighlightRgba = {0.10F, 0.20F, 0.30F, 0.40F};
@@ -2113,6 +2115,7 @@ void test_config_default_roundtrip()
     require(std::abs(reloaded.config.gui.wave.verticalAutoFitMultiplier - 1.5) < 1e-12,
             "Y 轴 Auto Fit 系数 roundtrip 失败");
     require(reloaded.config.gui.wave.zoomSelectionAutoExit, "框选放大自动退出开关 roundtrip 失败");
+    require(!reloaded.config.gui.wave.peakDetectDownsample, "peak-detect 降采样开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showChannelLegend, "波形图例显示开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[0] - 0.10F) < 1e-6F &&
@@ -2172,6 +2175,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
     config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::ActualValue;
     config.gui.wave.cursorFftHighlightRgba = {0.30F, 0.40F, 0.50F, 0.60F};
+    config.gui.wave.peakDetectDownsample = false;
 
     protoscope::dock::DockStore dockStore;
     store.applyToDock(config, dockStore);
@@ -2182,10 +2186,12 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
             "applyToDock 应写入网格每格读数模式");
     require(std::abs(dockStore.waveState().view.cursorFftHighlightRgba[3] - 0.60F) < 1e-6F,
             "applyToDock 应写入游标 FFT 高亮色");
+    require(!dockStore.waveState().view.peakDetectDownsample, "applyToDock 应写入 peak-detect 降采样开关");
 
     dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
     dockStore.waveState().view.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
     dockStore.waveState().view.cursorFftHighlightRgba = {0.70F, 0.60F, 0.50F, 0.40F};
+    dockStore.waveState().view.peakDetectDownsample = true;
     const auto captured = store.captureFromDock(dockStore);
     require(captured.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Disabled,
             "captureFromDock 应捕获鼠标 Y 偏移拖动模式");
@@ -2194,6 +2200,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     require(std::abs(captured.gui.wave.cursorFftHighlightRgba[0] - 0.70F) < 1e-6F &&
                 std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
             "captureFromDock 应捕获游标 FFT 高亮色");
+    require(captured.gui.wave.peakDetectDownsample, "captureFromDock 应捕获 peak-detect 降采样开关");
 }
 
 void test_config_repo_default_yaml_loads()
@@ -2214,6 +2221,7 @@ void test_config_repo_default_yaml_loads()
             "默认配置应读取 worker 低水位");
     require(loaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "源码默认配置应读取 overlay 波形全屏模式");
+    require(loaded.config.gui.wave.peakDetectDownsample, "源码默认配置应开启 peak-detect 降采样");
 }
 
 void test_script_file_io_proto_buffer_roundtrip()
@@ -3858,6 +3866,8 @@ static const TestCase kAllTests[] = {
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_display_data_uses_visible_window_only", &test_wave_display_data_uses_visible_window_only},
     {"wave_main_render_data_uses_viewport_window", &test_wave_main_render_data_uses_viewport_window},
+    {"wave_peak_detect_downsample_orders_bucket_points", &test_wave_peak_detect_downsample_orders_bucket_points},
+    {"wave_peak_detect_downsample_respects_point_budget", &test_wave_peak_detect_downsample_respects_point_budget},
     {"wave_main_render_data_uses_sample_frequency_viewport",
      &test_wave_main_render_data_uses_sample_frequency_viewport},
     {"wave_sample_frequency_auto_follow_preserves_trimmed_offset",

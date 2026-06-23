@@ -1,6 +1,7 @@
 #include "wave_render_service.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -557,6 +558,100 @@ std::vector<plot::EnvelopePoint> buildDisplayEnvelope(const std::vector<plot::Wa
         }
     }
     return envelope;
+}
+
+std::vector<plot::WaveSample> buildPeakDetectDownsample(const std::vector<plot::WaveSample>& samples,
+                                                        double visibleMinTime,
+                                                        double visibleMaxTime,
+                                                        std::size_t pointLimit,
+                                                        std::size_t* sourceSampleCount)
+{
+    std::vector<plot::WaveSample> trace;
+    if (sourceSampleCount != nullptr) {
+        *sourceSampleCount = 0;
+    }
+    if (samples.empty() || pointLimit == 0) {
+        return trace;
+    }
+    if (visibleMaxTime < visibleMinTime) {
+        std::swap(visibleMinTime, visibleMaxTime);
+    }
+
+    auto begin = std::lower_bound(
+        samples.begin(), samples.end(), visibleMinTime, [](const plot::WaveSample& sample, double value) {
+            return sample.time < value;
+        });
+    auto end = std::upper_bound(
+        samples.begin(), samples.end(), visibleMaxTime, [](double value, const plot::WaveSample& sample) {
+            return value < sample.time;
+        });
+    const std::size_t visibleSampleCount = begin < end ? static_cast<std::size_t>(std::distance(begin, end)) : 0;
+    if (sourceSampleCount != nullptr) {
+        *sourceSampleCount = visibleSampleCount;
+    }
+
+    // 核心流程：与旧包络保持相同的邻接样本策略，让穿过视口边界的线段仍可被 ImPlot 裁剪绘制。
+    if (begin != samples.begin()) {
+        --begin;
+    }
+    if (end != samples.end()) {
+        ++end;
+    }
+    if (begin >= end) {
+        return trace;
+    }
+
+    const std::size_t sampleCount = static_cast<std::size_t>(std::distance(begin, end));
+    if (sampleCount <= pointLimit) {
+        trace.assign(begin, end);
+        return trace;
+    }
+
+    constexpr std::size_t maxRepresentativesPerBucket = 4;
+    const std::size_t bucketCount =
+        (std::min)(sampleCount, (std::max)(std::size_t{1}, pointLimit / maxRepresentativesPerBucket));
+    trace.reserve((std::min)(pointLimit, bucketCount * maxRepresentativesPerBucket));
+
+    for (std::size_t bucket = 0; bucket < bucketCount && trace.size() < pointLimit; ++bucket) {
+        const std::size_t bucketBegin = bucket * sampleCount / bucketCount;
+        const std::size_t bucketEnd = (bucket + 1) * sampleCount / bucketCount;
+        if (bucketBegin >= bucketEnd) {
+            continue;
+        }
+
+        std::size_t minIndex = bucketBegin;
+        std::size_t maxIndex = bucketBegin;
+        for (std::size_t offset = bucketBegin + 1; offset < bucketEnd; ++offset) {
+            const auto& sample = *(begin + static_cast<std::ptrdiff_t>(offset));
+            if (sample.value < (*(begin + static_cast<std::ptrdiff_t>(minIndex))).value) {
+                minIndex = offset;
+            }
+            if (sample.value > (*(begin + static_cast<std::ptrdiff_t>(maxIndex))).value) {
+                maxIndex = offset;
+            }
+        }
+
+        std::array<std::size_t, maxRepresentativesPerBucket> representatives{
+            bucketBegin,
+            minIndex,
+            maxIndex,
+            bucketEnd - 1,
+        };
+        std::sort(representatives.begin(), representatives.end());
+        std::size_t previousIndex = std::numeric_limits<std::size_t>::max();
+        for (const std::size_t index : representatives) {
+            if (index == previousIndex) {
+                continue;
+            }
+            if (trace.size() >= pointLimit) {
+                break;
+            }
+            trace.push_back(*(begin + static_cast<std::ptrdiff_t>(index)));
+            previousIndex = index;
+        }
+    }
+
+    return trace;
 }
 
 void clampActiveChannel(plot::WaveViewState& view, std::size_t channelCount)

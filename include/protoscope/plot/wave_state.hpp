@@ -147,6 +147,7 @@ struct WaveViewState {
     bool zoomSelectionActive{false};
     bool zoomSelectionDragging{false};
     bool zoomSelectionAutoExit{false};
+    bool peakDetectDownsample{true};
     bool fitVisibleWaveformsRequested{false};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
@@ -320,6 +321,7 @@ struct WaveDockState {
         std::size_t channelIndex{0};
         std::size_t pointLimit{0};
         std::size_t sampleCount{0};
+        bool peakDetectDownsample{false};
         WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
         double ratio{1.0};
         double scale{1.0};
@@ -330,7 +332,8 @@ struct WaveDockState {
             return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
                    visibleMinTime == other.visibleMinTime && visibleMaxTime == other.visibleMaxTime &&
                    channelIndex == other.channelIndex && pointLimit == other.pointLimit &&
-                   sampleCount == other.sampleCount && displayFormula == other.displayFormula && ratio == other.ratio &&
+                   sampleCount == other.sampleCount && peakDetectDownsample == other.peakDetectDownsample &&
+                   displayFormula == other.displayFormula && ratio == other.ratio &&
                    scale == other.scale && offset == other.offset;
         }
     };
@@ -339,6 +342,7 @@ struct WaveDockState {
         bool valid{false};
         RenderEnvelopeCacheKey key{};
         std::vector<EnvelopePoint> envelope;
+        std::vector<WaveSample> peakDetectTrace;
         std::size_t sourceSampleCount{0};
     };
 
