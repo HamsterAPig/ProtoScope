@@ -4,6 +4,7 @@
 #include "test_registry.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -738,6 +739,53 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
             "旧状态缺抽屉类型时应使用 main 默认值");
     require(legacyRestored.legendOverlay.offsetX == 8.0F && legacyRestored.legendOverlay.offsetY == 8.0F,
             "旧状态缺图例 overlay 字段时应使用左上角默认值");
+}
+
+void test_wave_protocol_state_glow_phosphor_roundtrip()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.view.glowEnabled = false;
+    wave.view.phosphorEnabled = true;
+    wave.view.phosphorBackend = protoscope::plot::WavePhosphorBackend::CpuTexture;
+    wave.view.phosphorMode = protoscope::plot::WavePhosphorMode::Triggered;
+    wave.view.triggerEdge = protoscope::plot::WavePhosphorTriggerEdge::Falling;
+    wave.view.triggerChannelIndex = 3;
+    wave.view.triggerThreshold = 1.25;
+    wave.view.triggerPositionRatio = 0.35;
+
+    const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
+    require(!encoded["glow_enabled"].as<bool>(), "协议 UI 状态应写出独立 Glow 开关");
+    require(encoded["phosphor_enabled"].as<bool>(), "协议 UI 状态应写出独立 Phosphor 开关");
+    require(encoded["phosphor_backend"].as<std::string>() == "cpu_texture", "协议 UI 状态应写出 Phosphor 后端");
+    require(encoded["phosphor_mode"].as<std::string>() == "triggered", "协议 UI 状态应写出 Phosphor 模式");
+    require(encoded["trigger_edge"].as<std::string>() == "falling", "协议 UI 状态应写出触发边沿");
+
+    protoscope::plot::WaveDockState restored;
+    protoscope::ui::decodeWaveProtocolState(encoded, restored);
+    require(!restored.view.glowEnabled, "协议 UI 状态应恢复 Glow 开关");
+    require(restored.view.phosphorEnabled, "协议 UI 状态应恢复 Phosphor 开关");
+    require(restored.view.phosphorBackend == protoscope::plot::WavePhosphorBackend::CpuTexture,
+            "协议 UI 状态应恢复 Phosphor 后端");
+    require(restored.view.phosphorMode == protoscope::plot::WavePhosphorMode::Triggered,
+            "协议 UI 状态应恢复 Phosphor 模式");
+    require(restored.view.triggerEdge == protoscope::plot::WavePhosphorTriggerEdge::Falling,
+            "协议 UI 状态应恢复触发边沿");
+    require(restored.view.triggerChannelIndex == 3, "协议 UI 状态应恢复触发通道");
+    require(std::abs(restored.view.triggerThreshold - 1.25) < 1e-12, "协议 UI 状态应恢复触发阈值");
+    require(std::abs(restored.view.triggerPositionRatio - 0.35) < 1e-12, "协议 UI 状态应恢复触发位置");
+}
+
+void test_wave_protocol_state_legacy_phosphor_glow_only_migrates_to_glow()
+{
+    const auto legacy = YAML::Load("phosphor_glow_enabled: true\n");
+    protoscope::plot::WaveDockState restored;
+    restored.view.glowEnabled = false;
+    restored.view.phosphorEnabled = false;
+
+    protoscope::ui::decodeWaveProtocolState(legacy, restored);
+
+    require(restored.view.glowEnabled, "旧 phosphor_glow_enabled 应迁移为 Glow 开关");
+    require(!restored.view.phosphorEnabled, "旧 phosphor_glow_enabled 不应默认开启新 Phosphor");
 }
 
 void test_dock_visibility_state_isolated_by_protocol_key()

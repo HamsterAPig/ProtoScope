@@ -40,6 +40,16 @@ namespace {
         return std::isfinite(value) && value > 0.0 ? value : 0.0;
     }
 
+    double finiteOrFallback(double value, double fallback)
+    {
+        return std::isfinite(value) ? value : fallback;
+    }
+
+    double normalizedRatioOrFallback(double value, double fallback)
+    {
+        return std::isfinite(value) ? (std::clamp)(value, 0.0, 1.0) : fallback;
+    }
+
     std::string snapModeName(plot::WaveCursorSnapMode mode)
     {
         switch (mode) {
@@ -140,6 +150,56 @@ namespace {
             return plot::WaveViewMode::Split;
         }
         return plot::WaveViewMode::Overlay;
+    }
+
+    std::string phosphorBackendName(plot::WavePhosphorBackend backend)
+    {
+        switch (backend) {
+            case plot::WavePhosphorBackend::Auto:
+                return "auto";
+            case plot::WavePhosphorBackend::GpuFbo:
+                return "gpu_fbo";
+            case plot::WavePhosphorBackend::CpuTexture:
+                return "cpu_texture";
+        }
+        return "auto";
+    }
+
+    plot::WavePhosphorBackend parsePhosphorBackend(const std::string& value)
+    {
+        if (value == "gpu_fbo") {
+            return plot::WavePhosphorBackend::GpuFbo;
+        }
+        if (value == "cpu_texture") {
+            return plot::WavePhosphorBackend::CpuTexture;
+        }
+        return plot::WavePhosphorBackend::Auto;
+    }
+
+    std::string phosphorModeName(plot::WavePhosphorMode mode)
+    {
+        switch (mode) {
+            case plot::WavePhosphorMode::FreeRun:
+                return "free_run";
+            case plot::WavePhosphorMode::Triggered:
+                return "triggered";
+        }
+        return "free_run";
+    }
+
+    plot::WavePhosphorMode parsePhosphorMode(const std::string& value)
+    {
+        return value == "triggered" ? plot::WavePhosphorMode::Triggered : plot::WavePhosphorMode::FreeRun;
+    }
+
+    std::string triggerEdgeName(plot::WavePhosphorTriggerEdge edge)
+    {
+        return edge == plot::WavePhosphorTriggerEdge::Falling ? "falling" : "rising";
+    }
+
+    plot::WavePhosphorTriggerEdge parseTriggerEdge(const std::string& value)
+    {
+        return value == "falling" ? plot::WavePhosphorTriggerEdge::Falling : plot::WavePhosphorTriggerEdge::Rising;
     }
 
     std::string toolsDrawerName(plot::WaveToolsDrawer drawer)
@@ -464,7 +524,14 @@ namespace {
         node["bit_display_readout_policy"] = bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy);
         node["show_cursors"] = view.showCursors;
         node["show_measurement_overlay"] = view.showMeasurementOverlay;
-        node["phosphor_glow_enabled"] = view.phosphorGlowEnabled;
+        node["glow_enabled"] = view.glowEnabled;
+        node["phosphor_enabled"] = view.phosphorEnabled;
+        node["phosphor_backend"] = phosphorBackendName(view.phosphorBackend);
+        node["phosphor_mode"] = phosphorModeName(view.phosphorMode);
+        node["trigger_edge"] = triggerEdgeName(view.triggerEdge);
+        node["trigger_channel_index"] = view.triggerChannelIndex;
+        node["trigger_threshold"] = view.triggerThreshold;
+        node["trigger_position_ratio"] = view.triggerPositionRatio;
         node["cursor_interval_locked"] = view.cursorIntervalLocked;
         node["view_mode"] = viewModeName(view.viewMode);
     }
@@ -645,7 +712,23 @@ namespace {
             bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy)));
         view.showCursors = node["show_cursors"].as<bool>(view.showCursors);
         view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);
-        view.phosphorGlowEnabled = node["phosphor_glow_enabled"].as<bool>(view.phosphorGlowEnabled);
+        if (node["glow_enabled"]) {
+            view.glowEnabled = node["glow_enabled"].as<bool>(view.glowEnabled);
+        } else {
+            // 兼容旧字段：旧 phosphor_glow_enabled 只迁移为 Glow，不默认开启新的 Phosphor 累积。
+            view.glowEnabled = node["phosphor_glow_enabled"].as<bool>(view.glowEnabled);
+        }
+        view.phosphorEnabled = node["phosphor_enabled"].as<bool>(view.phosphorEnabled);
+        view.phosphorBackend =
+            parsePhosphorBackend(node["phosphor_backend"].as<std::string>(phosphorBackendName(view.phosphorBackend)));
+        view.phosphorMode =
+            parsePhosphorMode(node["phosphor_mode"].as<std::string>(phosphorModeName(view.phosphorMode)));
+        view.triggerEdge = parseTriggerEdge(node["trigger_edge"].as<std::string>(triggerEdgeName(view.triggerEdge)));
+        view.triggerChannelIndex = node["trigger_channel_index"].as<std::size_t>(view.triggerChannelIndex);
+        view.triggerThreshold =
+            finiteOrFallback(node["trigger_threshold"].as<double>(view.triggerThreshold), view.triggerThreshold);
+        view.triggerPositionRatio = normalizedRatioOrFallback(
+            node["trigger_position_ratio"].as<double>(view.triggerPositionRatio), view.triggerPositionRatio);
         view.cursorIntervalLocked = node["cursor_interval_locked"].as<bool>(view.cursorIntervalLocked);
         view.viewMode = parseViewMode(node["view_mode"].as<std::string>(viewModeName(view.viewMode)));
     }

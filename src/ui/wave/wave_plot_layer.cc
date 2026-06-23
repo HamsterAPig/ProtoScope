@@ -684,6 +684,9 @@ void renderWaveChannels(plot::WaveDockState& wave,
             view.lastRenderPointCount += rawVisibleCount;
             view.lastRenderSourceSampleCount += sourceSampleCount;
             ++view.lastRenderStats.rawChannelCount;
+            if (view.glowEnabled) {
+                renderGlowSamples(&(*begin), rawVisibleCount, color, view.glowIntensity, lineWidth);
+            }
             if (view.showPointsWhenSparse) {
                 ImPlotSpec pointSpec{};
                 pointSpec.Marker = ImPlotMarker_Circle;
@@ -732,6 +735,9 @@ void renderWaveChannels(plot::WaveDockState& wave,
                 ImPlotSpec spec{};
                 spec.LineColor = color;
                 spec.LineWeight = lineWidth;
+                if (view.glowEnabled) {
+                    renderGlowSamples(trace.data(), trace.size(), color, view.glowIntensity, lineWidth);
+                }
                 ImPlot::PlotLineG((channel.label + " peak").c_str(),
                                   reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
                                   &payload,
@@ -756,9 +762,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
             view.lastRenderPointCount += envelope.size();
             ++view.lastRenderStats.envelopeDownsampleChannelCount;
         }
-        if (view.phosphorGlowEnabled) {
-            renderPhosphorEnvelope(
-                envelope, color, limits.X.Max, view.persistenceWindow, view.glowIntensity, lineWidth);
+        if (view.glowEnabled) {
+            renderGlowEnvelope(envelope, color, view.glowIntensity, lineWidth);
         } else {
             renderEnvelopeAsBars(envelope, color, lineWidth);
         }
@@ -1345,6 +1350,9 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
     }
 
     auto& view = wave.view;
+    if (view.phosphorEnabled) {
+        view.lastRenderStats.phosphorBackendStatus = "Split 暂不支持";
+    }
     const auto& snapshot = frame.snapshot;
     const auto& displayData = *frame.displayData;
     std::vector<std::size_t> visibleChannels = channelIndicesForDerivedViews(wave, snapshot);
@@ -1463,6 +1471,9 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
                                   &payload,
                                   static_cast<int>(samples.size()),
                                   spec);
+                if (view.glowEnabled) {
+                    renderGlowSamples(samples.data(), samples.size(), color, view.glowIntensity, spec.LineWeight);
+                }
             }
 
             auto* drawList = ImPlot::GetPlotDrawList();
@@ -1669,6 +1680,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     BitLaneLayout bitLayout;
     renderWaveChannels(
         wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
+    renderWavePhosphor(view, frame.snapshot, renderDisplayData, visibleChannelIndices, limits);
     if (stackedDisplay.has_value()) {
         drawStackedChannelGuides(frame.snapshot, stackedDisplay->channelBaseY);
     }

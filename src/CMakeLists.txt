@@ -238,6 +238,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/wave/wave_measurement_overlay.cc
         ui/wave/wave_measurement_overlay_layer.cc
         ui/wave/wave_overview_layer.cc
+        ui/wave/wave_phosphor_renderer.cc
         ui/wave/wave_plot_layer.cc
         ui/wave/wave_toolbar.cc
         ui/wave/wave_viewport_controller.cc

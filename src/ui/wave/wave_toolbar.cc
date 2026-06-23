@@ -715,6 +715,7 @@ double normalizeWaveToolbarViewState(plot::WaveViewState& view)
     if (view.persistenceWindow <= 0.0) {
         view.persistenceWindow = minVisibleTimeSpan;
     }
+    view.triggerPositionRatio = (std::clamp)(view.triggerPositionRatio, 0.0, 1.0);
     return minVisibleTimeSpan;
 }
 
@@ -970,10 +971,15 @@ void drawWaveMeasurementSection(plot::WaveViewState& view)
 void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
 {
     if (drawAdaptiveToolbarButton(
-            "磷光辉光", "辉", "开启后使用类似示波器余辉的曲线显示效果。", view.phosphorGlowEnabled)) {
-        view.phosphorGlowEnabled = !view.phosphorGlowEnabled;
+            "辉光 Glow", "辉", "开启当前可见波形的恒定亮度多层描边。", view.glowEnabled, true)) {
+        view.glowEnabled = !view.glowEnabled;
+    }
+    if (drawAdaptiveToolbarButton(
+            "余辉 Phosphor", "余", "开启屏幕空间余辉累积；仅在跟随最新数据时推进。", view.phosphorEnabled)) {
+        view.phosphorEnabled = !view.phosphorEnabled;
     }
     ImGui::Text("模式: %s", waveRenderModeLabel(view.lastRenderStats));
+    ImGui::Text("余辉: %s", view.lastRenderStats.phosphorBackendStatus.c_str());
     ImGui::Text("通道: raw %zu / peak %zu / envelope %zu / bit %zu",
                 view.lastRenderStats.rawChannelCount,
                 view.lastRenderStats.peakDownsampleChannelCount,
@@ -994,12 +1000,75 @@ void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
     }
     addItemHelp("用于把样本序号换算成时间轴的采样频率。");
 
-    ImGui::TextUnformatted("余辉时间窗");
-    ImGui::SetNextItemWidth(-1.0F);
-    ImGui::InputDouble(
-        "##persistence_window", &view.persistenceWindow, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
-    addItemHelp("余辉模式保留历史亮度的时间窗口。");
-    view.persistenceWindow = (std::max) (view.persistenceWindow, minVisibleTimeSpan);
+    if (view.phosphorEnabled) {
+        ImGui::TextUnformatted("余辉后端");
+        const char* backendItems[] = {"Auto", "GPU FBO", "CPU Texture"};
+        int backendIndex = 0;
+        if (view.phosphorBackend == plot::WavePhosphorBackend::GpuFbo) {
+            backendIndex = 1;
+        } else if (view.phosphorBackend == plot::WavePhosphorBackend::CpuTexture) {
+            backendIndex = 2;
+        }
+        ImGui::SetNextItemWidth(-1.0F);
+        if (ImGui::Combo("##phosphor_backend", &backendIndex, backendItems, IM_ARRAYSIZE(backendItems))) {
+            view.phosphorBackend = backendIndex == 1   ? plot::WavePhosphorBackend::GpuFbo
+                                  : backendIndex == 2 ? plot::WavePhosphorBackend::CpuTexture
+                                                      : plot::WavePhosphorBackend::Auto;
+        }
+        addItemHelp("Auto 优先尝试 GPU FBO，失败时回退 CPU Texture。");
+
+        ImGui::TextUnformatted("余辉模式");
+        const char* modeItems[] = {"Free Run", "Triggered"};
+        int modeIndex = view.phosphorMode == plot::WavePhosphorMode::Triggered ? 1 : 0;
+        ImGui::SetNextItemWidth(-1.0F);
+        if (ImGui::Combo("##phosphor_mode", &modeIndex, modeItems, IM_ARRAYSIZE(modeItems))) {
+            view.phosphorMode = modeIndex == 1 ? plot::WavePhosphorMode::Triggered : plot::WavePhosphorMode::FreeRun;
+        }
+        addItemHelp("Triggered 会把选定通道的阈值边沿对齐到固定屏幕位置后累积。");
+
+        ImGui::TextUnformatted("余辉时间窗");
+        ImGui::SetNextItemWidth(-1.0F);
+        ImGui::InputDouble(
+            "##persistence_window", &view.persistenceWindow, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
+        addItemHelp("余辉累积纹理在跟随模式下按该窗口衰减；暂停或浏览历史时冻结。");
+        view.persistenceWindow = (std::max) (view.persistenceWindow, minVisibleTimeSpan);
+
+        if (view.phosphorMode == plot::WavePhosphorMode::Triggered) {
+            ImGui::TextUnformatted("触发边沿");
+            const char* edgeItems[] = {"Rising", "Falling"};
+            int edgeIndex = view.triggerEdge == plot::WavePhosphorTriggerEdge::Falling ? 1 : 0;
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::Combo("##trigger_edge", &edgeIndex, edgeItems, IM_ARRAYSIZE(edgeItems))) {
+                view.triggerEdge =
+                    edgeIndex == 1 ? plot::WavePhosphorTriggerEdge::Falling : plot::WavePhosphorTriggerEdge::Rising;
+            }
+
+            int triggerChannel = static_cast<int>(view.triggerChannelIndex);
+            ImGui::TextUnformatted("触发通道");
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::InputInt("##trigger_channel", &triggerChannel, 1, 1)) {
+                view.triggerChannelIndex = static_cast<std::size_t>((std::max)(0, triggerChannel));
+            }
+            addItemHelp("通道序号从 0 开始；bit display 通道不会进入余辉触发。");
+
+            ImGui::TextUnformatted("触发阈值");
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::InputDouble("##trigger_threshold", &view.triggerThreshold, 0.1, 1.0, "%.6g");
+
+            ImGui::TextUnformatted("触发位置");
+            ImGui::SetNextItemWidth(-1.0F);
+            const double triggerPositionMin = 0.0;
+            const double triggerPositionMax = 1.0;
+            ImGui::SliderScalar(
+                "##trigger_position",
+                ImGuiDataType_Double,
+                &view.triggerPositionRatio,
+                &triggerPositionMin,
+                &triggerPositionMax,
+                "%.2f");
+            addItemHelp("触发点在当前可视宽度中的相对位置，0.20 表示靠左 20%。");
+        }
+    }
 
     ImGui::TextUnformatted("降采样启动倍数");
     ImGui::SetNextItemWidth(-1.0F);

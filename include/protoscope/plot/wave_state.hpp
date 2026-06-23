@@ -45,6 +45,22 @@ enum class WaveViewMode {
     Split,
 };
 
+enum class WavePhosphorBackend {
+    Auto,
+    GpuFbo,
+    CpuTexture,
+};
+
+enum class WavePhosphorMode {
+    FreeRun,
+    Triggered,
+};
+
+enum class WavePhosphorTriggerEdge {
+    Rising,
+    Falling,
+};
+
 enum class WaveLegendOverlayOpenMode {
     Hover,
     DoubleClick,
@@ -130,6 +146,7 @@ struct WaveRenderStats {
     std::size_t bitLaneChannelCount{0};
     std::size_t lastRenderPointBudget{0};
     std::size_t lastDownsampleThreshold{0};
+    std::string phosphorBackendStatus{"关闭"};
 };
 
 struct WaveViewState {
@@ -145,7 +162,8 @@ struct WaveViewState {
     WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy{WaveBitDisplayReadoutPolicy::MixedNearest};
     bool showCursors{true};
     bool showMeasurementOverlay{true};
-    bool phosphorGlowEnabled{true};
+    bool glowEnabled{true};
+    bool phosphorEnabled{false};
     bool initialized{false};
     bool cursorIntervalLocked{false};
     bool overviewWindowDragging{false};
@@ -168,6 +186,7 @@ struct WaveViewState {
     std::size_t lastCursorFftAnchorIndex{1};
     ActiveBitLaneState activeBitLane{};
     std::size_t referenceChannelIndex{0};
+    std::size_t triggerChannelIndex{0};
     WaveMeasurementReferenceMode referenceMode{WaveMeasurementReferenceMode::Channel};
     WaveMeasurementSelection measurement{};
     WaveMouseYOffsetDragMode mouseYOffsetDragMode{WaveMouseYOffsetDragMode::Direct};
@@ -178,6 +197,9 @@ struct WaveViewState {
     WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
     WaveXAxisDoubleClickAction xAxisDoubleClickAction{WaveXAxisDoubleClickAction::FitFullHistory};
     WaveHiddenChannelPolicy hiddenChannelPolicy{WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
+    WavePhosphorBackend phosphorBackend{WavePhosphorBackend::Auto};
+    WavePhosphorMode phosphorMode{WavePhosphorMode::FreeRun};
+    WavePhosphorTriggerEdge triggerEdge{WavePhosphorTriggerEdge::Rising};
     WaveFftConfig fft{};
     WaveViewMode viewMode{WaveViewMode::Overlay};
     bool fftSourceWindowValid{false};
@@ -192,6 +214,8 @@ struct WaveViewState {
     double verticalAutoFitMultiplier{1.2};
     double persistenceWindow{0.25};
     double glowIntensity{1.0};
+    double triggerThreshold{0.0};
+    double triggerPositionRatio{0.2};
     double sampleFrequencyHz{0.0};
     double manualReferenceValue{0.0};
     double lockedCursorInterval{0.0};

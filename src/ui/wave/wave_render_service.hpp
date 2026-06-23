@@ -61,6 +61,18 @@ struct WaveSampleGetterPayload {
     const plot::WaveSample* samples{nullptr};
 };
 
+struct WavePhosphorTrigger {
+    double time{0.0};
+    double value{0.0};
+};
+
+struct WavePhosphorTriggerWindow {
+    double sourceMinTime{0.0};
+    double sourceMaxTime{0.0};
+    double targetMinTime{0.0};
+    double targetMaxTime{0.0};
+};
+
 struct SmartCursorSnap {
     plot::CursorReadout readout;
     std::string_view label;
@@ -149,7 +161,7 @@ void invalidateWaveDisplayCaches(plot::WaveDockState& wave);
 RenderBudget makeRenderBudget(const plot::WaveViewState& view,
                               std::size_t channelCount,
                               std::size_t pixelWidth,
-                              bool phosphorGlowEnabled);
+                              bool glowEnabled);
 ImPlotPoint envelopeLineMinGetter(int index, const void* data);
 ImPlotPoint envelopeLineMaxGetter(int index, const void* data);
 ImPlotPoint waveSampleGetter(int index, const void* data);
@@ -164,12 +176,31 @@ std::vector<plot::WaveSample> buildPeakDetectDownsample(const std::vector<plot::
                                                         std::size_t maxPoints,
                                                         std::size_t* sourceSampleCount = nullptr);
 void renderEnvelopeAsBars(const std::vector<plot::EnvelopePoint>& points, const ImVec4& color, float lineWidth);
-void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
-                            const ImVec4& color,
-                            double latestTime,
-                            double persistenceWindow,
-                            double glowIntensity,
-                            float lineWidth);
+void renderGlowEnvelope(const std::vector<plot::EnvelopePoint>& points,
+                        const ImVec4& color,
+                        double glowIntensity,
+                        float lineWidth);
+void renderGlowSamples(const plot::WaveSample* samples,
+                       std::size_t sampleCount,
+                       const ImVec4& color,
+                       double glowIntensity,
+                       float lineWidth);
+std::vector<WavePhosphorTrigger> findWavePhosphorTriggers(const std::vector<plot::WaveSample>& samples,
+                                                          double minTime,
+                                                          double maxTime,
+                                                          plot::WavePhosphorTriggerEdge edge,
+                                                          double threshold);
+WavePhosphorTriggerWindow makeWavePhosphorTriggerWindow(double triggerTime,
+                                                        double visibleMinTime,
+                                                        double visibleDuration,
+                                                        double triggerPositionRatio);
+double alignWavePhosphorSampleTime(const WavePhosphorTriggerWindow& window, double sourceTime);
+bool wavePhosphorShouldAdvance(const plot::WaveViewState& view);
+void renderWavePhosphor(plot::WaveViewState& view,
+                        const plot::WaveSnapshot& snapshot,
+                        const plot::WaveDisplayData& displayData,
+                        const std::vector<std::size_t>& visibleChannelIndices,
+                        const ImPlotRect& limits);
 ImVec4 withAlpha(ImVec4 color, float alphaScale);
 ImVec4 fallbackChannelColor(std::size_t channelIndex);
 ImVec4 channelColor(const plot::ChannelSpec& spec, std::size_t channelIndex);
@@ -221,7 +252,7 @@ std::optional<std::size_t> findBitDisplayChannelAtValue(const plot::WaveDockStat
 void drawWaveChannel(const plot::ChannelView& channel,
                      const std::vector<plot::EnvelopePoint>& envelope,
                      const ImVec4& color,
-                     bool phosphorGlowEnabled);
+                     bool glowEnabled);
 
 void drawChannelCardText(const ImVec2& min, const ImVec2& max, const std::string& text, ImU32 color);
 void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active);

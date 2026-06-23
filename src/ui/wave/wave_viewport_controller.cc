@@ -365,7 +365,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
     frame.renderBudget = makeRenderBudget(view,
                                           wave.cachedFullSnapshot.channels.size(),
                                           contentPixelWidth,
-                                          view.phosphorGlowEnabled);
+                                          view.glowEnabled);
     const auto latestTime = hasSampleFrequencyTimebase(view)
                                 ? latestDisplayTime(wave.cachedFullSnapshot, view.sampleFrequencyHz)
                                 : wave.buffer.latestTime();

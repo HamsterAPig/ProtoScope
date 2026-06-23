@@ -3207,6 +3207,56 @@ void test_wave_status_overlay_items_only_show_non_default_states()
     require(draggingItems[2].label == std::string_view("框选"), "框选拖动中也应保留框选状态标签");
 }
 
+void test_wave_phosphor_trigger_detection_interpolates_edges()
+{
+    const std::vector<protoscope::plot::WaveSample> risingSamples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 2.0, .value = 10.0},
+        {.time = 3.0, .value = 8.0},
+    };
+    const auto rising = protoscope::ui::findWavePhosphorTriggers(
+        risingSamples, 0.0, 3.0, protoscope::plot::WavePhosphorTriggerEdge::Rising, 5.0);
+    require(rising.size() == 1U, "上升沿触发应只命中一次");
+    require(std::abs(rising.front().time - 1.0) < 1e-12, "上升沿触发时间应按阈值线性插值");
+
+    const std::vector<protoscope::plot::WaveSample> fallingSamples{
+        {.time = 0.0, .value = 8.0},
+        {.time = 4.0, .value = 2.0},
+        {.time = 6.0, .value = -2.0},
+    };
+    const auto falling = protoscope::ui::findWavePhosphorTriggers(
+        fallingSamples, 0.0, 6.0, protoscope::plot::WavePhosphorTriggerEdge::Falling, 0.0);
+    require(falling.size() == 1U, "下降沿触发应只命中一次");
+    require(std::abs(falling.front().time - 5.0) < 1e-12, "下降沿触发时间应按阈值线性插值");
+}
+
+void test_wave_phosphor_trigger_window_aligns_to_fixed_x()
+{
+    const auto window = protoscope::ui::makeWavePhosphorTriggerWindow(10.0, 100.0, 4.0, 0.25);
+
+    require(std::abs(window.sourceMinTime - 9.0) < 1e-12, "触发窗口源起点应按触发位置向左回溯");
+    require(std::abs(window.sourceMaxTime - 13.0) < 1e-12, "触发窗口源终点应覆盖一个可视时长");
+    require(std::abs(protoscope::ui::alignWavePhosphorSampleTime(window, 10.0) - 101.0) < 1e-12,
+            "触发点应对齐到目标视窗固定 x 位置");
+    require(std::abs(protoscope::ui::alignWavePhosphorSampleTime(window, 12.0) - 103.0) < 1e-12,
+            "触发窗口内样本应保持相对时间偏移");
+}
+
+void test_wave_phosphor_non_follow_mode_freezes()
+{
+    protoscope::plot::WaveViewState view;
+    view.phosphorEnabled = true;
+    view.autoFollowLatest = true;
+    require(protoscope::ui::wavePhosphorShouldAdvance(view), "跟随模式下 Phosphor 应推进");
+
+    view.autoFollowLatest = false;
+    require(!protoscope::ui::wavePhosphorShouldAdvance(view), "非跟随模式下 Phosphor 应冻结");
+
+    view.autoFollowLatest = true;
+    view.phosphorEnabled = false;
+    require(!protoscope::ui::wavePhosphorShouldAdvance(view), "关闭 Phosphor 时不应扫描或衰减");
+}
+
 void test_wave_channel_reset_all_uses_protocol_default()
 {
     auto wave = makeChannelResetWave();

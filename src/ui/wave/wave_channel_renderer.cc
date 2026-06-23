@@ -31,18 +31,18 @@ std::size_t clampRenderConfig(const std::size_t value, const std::size_t fallbac
     return value == 0 ? fallback : value;
 }
 
-std::size_t estimateVerticesPerPoint(const bool phosphorGlowEnabled)
+std::size_t estimateVerticesPerPoint(const bool glowEnabled)
 {
-    return phosphorGlowEnabled ? 16 : 6;
+    return glowEnabled ? 16 : 6;
 }
 
 RenderBudget makeRenderBudget(const plot::WaveViewState& view,
                               const std::size_t channelCount,
                               std::size_t pixelWidth,
-                              const bool phosphorGlowEnabled)
+                              const bool glowEnabled)
 {
     const std::size_t safeChannelCount = (std::max)(std::size_t{1}, channelCount);
-    const std::size_t estimatedVerticesPerPoint = estimateVerticesPerPoint(phosphorGlowEnabled);
+    const std::size_t estimatedVerticesPerPoint = estimateVerticesPerPoint(glowEnabled);
     const std::size_t configuredPointLimit = clampRenderConfig(view.maxRenderPointsPerChannel, 1200);
     const std::size_t configuredVertexLimit = clampRenderConfig(view.maxRenderVertices, 60000);
     const std::size_t pointsByVertexBudget =
@@ -74,22 +74,6 @@ ImVec4 withAlpha(ImVec4 color, const float alphaScale)
 {
     color.w *= alphaScale;
     return color;
-}
-
-float phosphorFade(const double latestTime, const double pointTime, const double persistenceWindow)
-{
-    if (persistenceWindow <= 1e-12) {
-        return 1.0F;
-    }
-    const double age = (std::max)(0.0, latestTime - pointTime);
-    const double fade = 1.0 - age / persistenceWindow;
-    return static_cast<float>((std::clamp)(fade, 0.08, 1.0));
-}
-
-float densityStrength(const std::size_t sampleCount)
-{
-    const double strength = std::log2(static_cast<double>(sampleCount) + 1.0) / 4.0;
-    return static_cast<float>((std::clamp)(0.35 + strength, 0.35, 1.0));
 }
 
 ImVec4 fallbackChannelColor(const std::size_t channelIndex)
@@ -369,68 +353,116 @@ std::optional<std::size_t> findBitDisplayChannelAtValue(const plot::WaveDockStat
     return std::nullopt;
 }
 
-void renderPhosphorEnvelope(const std::vector<plot::EnvelopePoint>& points,
-                            const ImVec4& color,
-                            const double latestTime,
-                            const double persistenceWindow,
-                            const double glowIntensity,
-                            const float lineWidth)
+namespace {
+
+    float sanitizedGlowIntensity(const double glowIntensity)
+    {
+        if (!std::isfinite(glowIntensity)) {
+            return 1.0F;
+        }
+        return static_cast<float>((std::clamp)(glowIntensity, 0.0, 3.0));
+    }
+
+    struct GlowStyle {
+        float coreWidth{1.0F};
+        float innerWidth{3.0F};
+        float outerWidth{5.0F};
+        float coreAlpha{1.0F};
+        float innerAlpha{0.22F};
+        float outerAlpha{0.10F};
+    };
+
+    GlowStyle makeGlowStyle(const double glowIntensity, const float lineWidth)
+    {
+        const float coreLineWidth = plot::sanitizeChannelLineWidth(lineWidth);
+        const float intensity = sanitizedGlowIntensity(glowIntensity);
+        return {
+            .coreWidth = coreLineWidth,
+            .innerWidth = (std::min)(coreLineWidth + 2.0F, 4.5F),
+            .outerWidth = (std::min)(coreLineWidth + 4.0F, 7.0F),
+            .coreAlpha = 1.0F,
+            .innerAlpha = (std::clamp)(0.18F * intensity, 0.0F, 0.55F),
+            .outerAlpha = (std::clamp)(0.08F * intensity, 0.0F, 0.35F),
+        };
+    }
+
+    void drawGlowLine(ImDrawList* drawList, const ImVec2& from, const ImVec2& to, const ImVec4& color, GlowStyle style)
+    {
+        drawList->AddLine(from, to, ImGui::ColorConvertFloat4ToU32(withAlpha(color, style.outerAlpha)), style.outerWidth);
+        drawList->AddLine(from, to, ImGui::ColorConvertFloat4ToU32(withAlpha(color, style.innerAlpha)), style.innerWidth);
+        drawList->AddLine(from, to, ImGui::ColorConvertFloat4ToU32(withAlpha(color, style.coreAlpha)), style.coreWidth);
+    }
+
+} // namespace
+
+void renderGlowEnvelope(const std::vector<plot::EnvelopePoint>& points,
+                        const ImVec4& color,
+                        const double glowIntensity,
+                        const float lineWidth)
 {
     if (points.empty()) {
         return;
     }
 
-    const float coreLineWidth = plot::sanitizeChannelLineWidth(lineWidth);
-    const float innerGlowWidth = (std::min)(coreLineWidth + 2.0F, 4.5F);
-    const float outerGlowWidth = (std::min)(coreLineWidth + 4.0F, 7.0F);
-    const float connectorCoreWidth = (std::max)(coreLineWidth, 1.2F);
-    const float connectorGlowWidth = (std::min)(coreLineWidth + 3.5F, 5.0F);
+    const GlowStyle style = makeGlowStyle(glowIntensity, lineWidth);
+    const GlowStyle connectorStyle{
+        .coreWidth = (std::max)(style.coreWidth, 1.2F),
+        .innerWidth = style.innerWidth,
+        .outerWidth = (std::min)(style.coreWidth + 3.5F, 5.0F),
+        .coreAlpha = 0.78F,
+        .innerAlpha = style.innerAlpha,
+        .outerAlpha = style.outerAlpha,
+    };
     auto* drawList = ImPlot::GetPlotDrawList();
     ImPlot::PushPlotClipRect();
 
     bool hasPrevMid = false;
     ImVec2 prevMid{};
-    float prevAlpha = 0.0F;
     for (const auto& [time, minValue, maxValue, sampleCount] : points) {
-        const float fade = phosphorFade(latestTime, time, persistenceWindow);
-        const float density = densityStrength(sampleCount);
-        const float alpha = static_cast<float>((std::clamp)(fade * density * glowIntensity, 0.05, 1.0));
-
+        static_cast<void>(sampleCount);
         const ImVec2 minPos = ImPlot::PlotToPixels(time, minValue);
         const ImVec2 maxPos = ImPlot::PlotToPixels(time, maxValue);
         const auto midPos = ImVec2(minPos.x, 0.5F * (minPos.y + maxPos.y));
 
-        drawList->AddLine(ImVec2(minPos.x, minPos.y),
-                          ImVec2(maxPos.x, maxPos.y),
-                          ImGui::ColorConvertFloat4ToU32(withAlpha(color, alpha * 0.12F)),
-                          outerGlowWidth);
-        drawList->AddLine(ImVec2(minPos.x, minPos.y),
-                          ImVec2(maxPos.x, maxPos.y),
-                          ImGui::ColorConvertFloat4ToU32(withAlpha(color, alpha * 0.28F)),
-                          innerGlowWidth);
-        drawList->AddLine(ImVec2(minPos.x, minPos.y),
-                          ImVec2(maxPos.x, maxPos.y),
-                          ImGui::ColorConvertFloat4ToU32(withAlpha(color, alpha * 0.9F)),
-                          coreLineWidth);
+        drawGlowLine(drawList, minPos, maxPos, color, style);
         drawList->AddCircleFilled(
-            midPos, 1.5F + 1.5F * alpha, ImGui::ColorConvertFloat4ToU32(withAlpha(color, alpha * 0.85F)));
+            midPos, 1.5F, ImGui::ColorConvertFloat4ToU32(withAlpha(color, (std::min)(1.0F, color.w))));
 
         if (hasPrevMid) {
-            const float lineAlpha = (std::min)(prevAlpha, alpha);
-            drawList->AddLine(prevMid,
-                              midPos,
-                              ImGui::ColorConvertFloat4ToU32(withAlpha(color, lineAlpha * 0.18F)),
-                              connectorGlowWidth);
-            drawList->AddLine(prevMid,
-                              midPos,
-                              ImGui::ColorConvertFloat4ToU32(withAlpha(color, lineAlpha * 0.75F)),
-                              connectorCoreWidth);
+            drawGlowLine(drawList, prevMid, midPos, color, connectorStyle);
         }
         hasPrevMid = true;
         prevMid = midPos;
-        prevAlpha = alpha;
     }
 
+    ImPlot::PopPlotClipRect();
+}
+
+void renderGlowSamples(const plot::WaveSample* samples,
+                       const std::size_t sampleCount,
+                       const ImVec4& color,
+                       const double glowIntensity,
+                       const float lineWidth)
+{
+    if (samples == nullptr || sampleCount == 0) {
+        return;
+    }
+
+    const GlowStyle style = makeGlowStyle(glowIntensity, lineWidth);
+    auto* drawList = ImPlot::GetPlotDrawList();
+    ImPlot::PushPlotClipRect();
+    if (sampleCount == 1) {
+        const ImVec2 pos = ImPlot::PlotToPixels(samples[0].time, samples[0].value);
+        drawList->AddCircleFilled(pos, 1.5F, ImGui::ColorConvertFloat4ToU32(color));
+        ImPlot::PopPlotClipRect();
+        return;
+    }
+    ImVec2 previous = ImPlot::PlotToPixels(samples[0].time, samples[0].value);
+    for (std::size_t index = 1; index < sampleCount; ++index) {
+        const ImVec2 current = ImPlot::PlotToPixels(samples[index].time, samples[index].value);
+        drawGlowLine(drawList, previous, current, color, style);
+        previous = current;
+    }
     ImPlot::PopPlotClipRect();
 }
 
