@@ -187,6 +187,153 @@ void drawWaveStatusOverlay(const plot::WaveViewState& view,
     }
 }
 
+std::vector<plot::WaveSample> buildBitRenderLanePoints(const std::vector<plot::WaveSample>& displaySamples,
+                                                       const plot::WaveSample* sourceSamples,
+                                                       std::size_t sourceSampleCount,
+                                                       std::size_t bitIndex,
+                                                       double lowY,
+                                                       double highY,
+                                                       double fallbackMaxTime,
+                                                       std::size_t maxPoints)
+{
+    const std::size_t sampleCount = (std::min)(sourceSampleCount, displaySamples.size());
+    if (sampleCount == 0 || sourceSamples == nullptr || maxPoints == 0) {
+        return {};
+    }
+
+    const auto stateY = [lowY, highY](bool state) { return state ? highY : lowY; };
+    const auto appendPoint = [](std::vector<plot::WaveSample>& lane, double time, double value) {
+        if (!lane.empty() && lane.back().time == time && lane.back().value == value) {
+            return;
+        }
+        lane.push_back({.time = time, .value = value});
+    };
+
+    const bool firstState = rawBitEnabled(sourceSamples[0].value, bitIndex);
+    const bool finalState = rawBitEnabled(sourceSamples[sampleCount - 1U].value, bitIndex);
+    const double firstTime = displaySamples.front().time;
+    double lastTime = displaySamples[sampleCount - 1U].time;
+    if (std::abs(lastTime - firstTime) <= 1e-12 && fallbackMaxTime > firstTime) {
+        lastTime = fallbackMaxTime;
+    }
+
+    std::vector<plot::WaveSample> exact;
+    exact.reserve((std::min<std::size_t>) (sampleCount * 2U, maxPoints + 1U));
+    bool previousState = firstState;
+    double previousY = stateY(previousState);
+    appendPoint(exact, firstTime, previousY);
+    for (std::size_t sampleIndex = 1; sampleIndex < sampleCount; ++sampleIndex) {
+        const bool currentState = rawBitEnabled(sourceSamples[sampleIndex].value, bitIndex);
+        if (currentState == previousState) {
+            continue;
+        }
+
+        const double transitionTime = displaySamples[sampleIndex].time;
+        appendPoint(exact, transitionTime, previousY);
+        previousState = currentState;
+        previousY = stateY(previousState);
+        appendPoint(exact, transitionTime, previousY);
+    }
+    appendPoint(exact, lastTime, previousY);
+    if (exact.size() <= maxPoints) {
+        return exact;
+    }
+
+    const double firstY = stateY(firstState);
+    const double finalY = stateY(finalState);
+    if (maxPoints == 1U) {
+        return {{.time = lastTime, .value = finalY}};
+    }
+    if (maxPoints == 2U) {
+        if (firstState == finalState) {
+            return {{.time = firstTime, .value = firstY}, {.time = lastTime, .value = finalY}};
+        }
+        return {{.time = lastTime, .value = firstY}, {.time = lastTime, .value = finalY}};
+    }
+    if (maxPoints == 3U) {
+        return {
+            {.time = firstTime, .value = firstY},
+            {.time = lastTime, .value = firstY},
+            {.time = lastTime, .value = finalY},
+        };
+    }
+
+    struct BitActivityBucket {
+        bool initialized{false};
+        double time{0.0};
+        bool sawLow{false};
+        bool sawHigh{false};
+        bool endState{false};
+    };
+
+    const std::size_t bucketCount =
+        (std::max<std::size_t>) (1U, (std::min<std::size_t>) (sampleCount, (maxPoints - 2U) / 3U));
+    std::vector<BitActivityBucket> buckets(bucketCount);
+    const double timeSpan = (std::max)(lastTime - firstTime, 1e-12);
+    for (std::size_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
+        const double sampleTime = displaySamples[sampleIndex].time;
+        const double normalized = (std::clamp)((sampleTime - firstTime) / timeSpan, 0.0, 1.0);
+        std::size_t bucketIndex = static_cast<std::size_t>(normalized * static_cast<double>(bucketCount));
+        if (bucketIndex >= bucketCount) {
+            bucketIndex = bucketCount - 1U;
+        }
+
+        const bool state = rawBitEnabled(sourceSamples[sampleIndex].value, bitIndex);
+        auto& bucket = buckets[bucketIndex];
+        bucket.initialized = true;
+        bucket.time = sampleTime;
+        bucket.sawLow = bucket.sawLow || !state;
+        bucket.sawHigh = bucket.sawHigh || state;
+        bucket.endState = state;
+    }
+    if (!buckets.empty() && buckets.back().initialized) {
+        buckets.back().time = lastTime;
+    }
+
+    std::vector<plot::WaveSample> compressed;
+    compressed.reserve(maxPoints);
+    appendPoint(compressed, firstTime, firstY);
+    bool outputState = firstState;
+    for (const auto& bucket : buckets) {
+        if (!bucket.initialized) {
+            continue;
+        }
+        const bool activity = bucket.sawLow && bucket.sawHigh;
+        if (!activity && bucket.endState == outputState) {
+            continue;
+        }
+
+        std::vector<plot::WaveSample> additions;
+        additions.reserve(3U);
+        appendPoint(additions, bucket.time, stateY(outputState));
+        if (activity) {
+            appendPoint(additions, bucket.time, lowY);
+            appendPoint(additions, bucket.time, highY);
+            appendPoint(additions, bucket.time, stateY(bucket.endState));
+        } else {
+            appendPoint(additions, bucket.time, stateY(bucket.endState));
+        }
+        if (compressed.size() + additions.size() > maxPoints) {
+            break;
+        }
+        compressed.insert(compressed.end(), additions.begin(), additions.end());
+        outputState = bucket.endState;
+    }
+
+    if (compressed.empty()) {
+        compressed.push_back({.time = lastTime, .value = finalY});
+    } else if ((compressed.back().time != lastTime || compressed.back().value != finalY) &&
+               compressed.size() < maxPoints) {
+        if (compressed.back().value == finalY) {
+            appendPoint(compressed, lastTime, finalY);
+        } else if (compressed.size() + 2U <= maxPoints) {
+            appendPoint(compressed, lastTime, compressed.back().value);
+            appendPoint(compressed, lastTime, finalY);
+        }
+    }
+    return compressed;
+}
+
 namespace {
 
     plot::WaveDockState::RenderEnvelopeCacheKey makeRenderEnvelopeCacheKey(const plot::WaveDockState& wave,
@@ -309,18 +456,6 @@ namespace {
         };
     }
 
-    void appendBitRenderPoint(std::vector<plot::WaveSample>& lane, plot::WaveSample point, std::size_t maxPointsPerLane)
-    {
-        if (lane.size() < maxPointsPerLane) {
-            lane.push_back(point);
-            return;
-        }
-        if (!lane.empty()) {
-            // 核心流程：预算耗尽时保留最新状态，避免极高频 bit 跳变把 draw list 顶爆。
-            lane.back() = point;
-        }
-    }
-
     void buildBitRenderCacheEntry(plot::WaveDockState::BitRenderCacheEntry& entry,
                                   const plot::ChannelView& channel,
                                   const plot::WaveDisplayChannel& displayChannel,
@@ -360,31 +495,14 @@ namespace {
                     break;
                 }
             }
-            bool previousState = rawBitEnabled(channel.samples[begin].value, bitIndex);
-            double previousY = previousState ? highY : lowY;
-            const double firstTime = displayChannel.samples.front().time;
-            double lastTime = firstTime;
-            appendBitRenderPoint(lane, {.time = firstTime, .value = previousY}, maxPointsPerLane);
-
-            for (std::size_t sampleIndex = 1; sampleIndex < sampleCount; ++sampleIndex) {
-                const auto& displaySample = displayChannel.samples[sampleIndex];
-                const bool currentState = rawBitEnabled(channel.samples[begin + sampleIndex].value, bitIndex);
-                if (currentState == previousState) {
-                    lastTime = displaySample.time;
-                    continue;
-                }
-
-                appendBitRenderPoint(lane, {.time = displaySample.time, .value = previousY}, maxPointsPerLane);
-                previousState = currentState;
-                previousY = previousState ? highY : lowY;
-                appendBitRenderPoint(lane, {.time = displaySample.time, .value = previousY}, maxPointsPerLane);
-                lastTime = displaySample.time;
-            }
-
-            if (std::abs(lastTime - firstTime) <= 1e-12 && limits.X.Max > firstTime) {
-                lastTime = limits.X.Max;
-            }
-            appendBitRenderPoint(lane, {.time = lastTime, .value = previousY}, maxPointsPerLane);
+            lane = buildBitRenderLanePoints(displayChannel.samples,
+                                            channel.samples + begin,
+                                            sampleCount,
+                                            bitIndex,
+                                            lowY,
+                                            highY,
+                                            limits.X.Max,
+                                            maxPointsPerLane);
         }
     }
 

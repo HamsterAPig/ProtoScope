@@ -181,6 +181,8 @@ void test_split_cursor_snap_forced_channel_ignores_other_rows();
 void test_split_cursor_smart_snap_forced_channel_ignores_hidden_row_candidate();
 void test_plot_channel_scale_and_offset_apply_to_display_only();
 void test_plot_channel_bit_display_reaches_snapshot();
+void test_bit_render_lane_downsample_keeps_orthogonal_segments();
+void test_bit_render_lane_low_density_keeps_exact_steps();
 void test_wave_bit_display_bounds_and_hidden_policy();
 void test_bit_cursor_only_snaps_to_transitions();
 void test_hidden_bit_lane_excluded_from_layout_hit_and_snap();

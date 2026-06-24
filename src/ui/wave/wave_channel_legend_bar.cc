@@ -103,6 +103,12 @@ namespace {
 
     std::string formatChannelDivisionSummary(const plot::WaveViewState& view, const plot::ChannelSpec& spec)
     {
+        if (bitDisplayEnabled(spec.bitDisplay)) {
+            return "Bits " + std::to_string(spec.bitDisplay.firstBit) + ".." +
+                   std::to_string(spec.bitDisplay.firstBit + spec.bitDisplay.bitCount - 1U) + "  Y offset " +
+                   formatMetricText(spec.bitDisplay.yOffset, nullptr);
+        }
+
         const double displayPerDiv = plot::waveDisplayValuePerDivision(view.viewMinValue, view.viewMaxValue);
         const auto perDiv =
             plot::waveChannelValuePerDivision(displayPerDiv, spec, view.displayFormula, view.gridDivisionReadoutMode);
@@ -268,12 +274,7 @@ namespace {
         const ImVec2 summaryMin(textMin.x, titleMax.y + cardStyle.textSpacingY);
         const ImVec2 summaryMax(textMax.x, summaryMin.y + lineHeight);
         drawChannelCardText(textMin, titleMax, spec.label, ImGui::GetColorU32(ImGuiCol_Text));
-        std::string summary = formatChannelDivisionSummary(view, spec);
-        if (bitDisplayEnabled(spec.bitDisplay)) {
-            summary = "Bits " + std::to_string(spec.bitDisplay.firstBit) + ".." +
-                      std::to_string(spec.bitDisplay.firstBit + spec.bitDisplay.bitCount - 1U) + "  Y " +
-                      formatMetricText(spec.bitDisplay.yOffset, nullptr);
-        }
+        const std::string summary = formatChannelDivisionSummary(view, spec);
         drawChannelCardText(summaryMin, summaryMax, summary, ImGui::GetColorU32(ImGuiCol_TextDisabled));
     }
 
@@ -394,7 +395,7 @@ namespace {
         channels.reserve(snapshot.channels.size());
         for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
             const auto spec = wave.buffer.channelSpec(channelIndex);
-            if (!spec.has_value() || bitDisplayEnabled(spec->bitDisplay)) {
+            if (!spec.has_value()) {
                 continue;
             }
             if (!includeHidden && channelHiddenByLegendState(wave, channelIndex)) {
@@ -407,6 +408,12 @@ namespace {
 
     std::string formatActualPerDivText(const plot::WaveViewState& view, const plot::ChannelSpec& spec)
     {
+        if (bitDisplayEnabled(spec.bitDisplay)) {
+            return "Bits " + std::to_string(spec.bitDisplay.firstBit) + ".." +
+                   std::to_string(spec.bitDisplay.firstBit + spec.bitDisplay.bitCount - 1U) + "  Y offset " +
+                   formatMetricText(spec.bitDisplay.yOffset, nullptr);
+        }
+
         const double displayPerDiv = plot::waveDisplayValuePerDivision(view.viewMinValue, view.viewMaxValue);
         const auto perDiv = plot::waveChannelValuePerDivision(
             displayPerDiv, spec, view.displayFormula, plot::WaveGridDivisionReadoutMode::ActualValue);
@@ -481,7 +488,7 @@ namespace {
 
     void drawCompactLegendEmptyState(plot::WaveDockState& wave, bool hasAnalogChannels)
     {
-        ImGui::TextDisabled(hasAnalogChannels ? "所有 CH 已隐藏" : "无模拟 CH");
+        ImGui::TextDisabled(hasAnalogChannels ? "所有 CH 已隐藏" : "无 CH");
         if (hasAnalogChannels) {
             ImGui::SameLine();
             if (ImGui::SmallButton("全部恢复") && plot::resetAllChannelViewSettings(wave)) {
@@ -602,13 +609,16 @@ namespace {
         }
     }
 
-    void drawExpandedLegendChannelRow(plot::WaveDockState& wave, std::size_t channelIndex, const plot::ChannelSpec& spec)
+    void drawExpandedLegendChannelRow(plot::WaveDockState& wave,
+                                      std::size_t channelIndex,
+                                      const plot::ChannelSpec& spec)
     {
         ImGui::PushID(static_cast<int>(channelIndex));
         const plot::ChannelSpec defaultSpec = channelDefaultSpec(wave, channelIndex, spec);
         auto updated = spec;
         bool visible = !channelHiddenByLegendState(wave, channelIndex);
         const bool active = channelIndex == wave.view.measurementChannelIndex;
+        const bool bitChannel = bitDisplayEnabled(spec.bitDisplay);
         LegendRowBlankHitTest blankHitTest;
         if (active) {
             ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImVec4(0.20F, 0.38F, 0.22F, 0.42F)));
@@ -639,6 +649,11 @@ namespace {
         ImGui::TableNextColumn();
         recordCurrentTableCell(blankHitTest);
         ImGui::Text("CH%zu", channelIndex + 1U);
+        if (bitChannel) {
+            ImGui::SameLine();
+            ImGui::TextDisabled(
+                "bit %zu..%zu", spec.bitDisplay.firstBit, spec.bitDisplay.firstBit + spec.bitDisplay.bitCount - 1U);
+        }
         recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
@@ -658,23 +673,36 @@ namespace {
         ImGui::TableNextColumn();
         recordCurrentTableCell(blankHitTest);
         ImGui::SetNextItemWidth(-1.0F);
-        if (ImGui::InputDouble("##ratio", &updated.ratio, 0.0, 0.0, "%.4g")) {
+        if (bitChannel) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::InputDouble("##ratio", &updated.ratio, 0.0, 0.0, "%.4g") && !bitChannel) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+        }
+        if (bitChannel) {
+            ImGui::EndDisabled();
         }
         recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
         recordCurrentTableCell(blankHitTest);
         ImGui::SetNextItemWidth(-1.0F);
-        if (ImGui::InputDouble("##scale", &updated.scale, 0.0, 0.0, "%.4g")) {
+        if (bitChannel) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::InputDouble("##scale", &updated.scale, 0.0, 0.0, "%.4g") && !bitChannel) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
+        }
+        if (bitChannel) {
+            ImGui::EndDisabled();
         }
         recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
         recordCurrentTableCell(blankHitTest);
         ImGui::SetNextItemWidth(-1.0F);
-        if (ImGui::InputDouble("##offset", &updated.offset, 0.0, 0.0, "%.4g")) {
+        double& offsetValue = bitChannel ? updated.bitDisplay.yOffset : updated.offset;
+        if (ImGui::InputDouble("##offset", &offsetValue, 0.0, 0.0, "%.4g")) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
         recordLastItem(blankHitTest);
@@ -704,7 +732,7 @@ namespace {
     void drawExpandedLegendRows(plot::WaveDockState& wave, const std::vector<std::size_t>& channels)
     {
         if (channels.empty()) {
-            ImGui::TextDisabled("没有普通 CH 可显示");
+            ImGui::TextDisabled("没有 CH 可显示");
             return;
         }
 

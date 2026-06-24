@@ -100,6 +100,21 @@ protoscope::plot::WaveDockState makeChannelResetWave()
     return wave;
 }
 
+void requireOrthogonalBitSegments(const std::vector<protoscope::plot::WaveSample>& lane)
+{
+    for (std::size_t index = 1; index < lane.size(); ++index) {
+        const bool sameTime = std::abs(lane[index - 1U].time - lane[index].time) < 1e-12;
+        const bool sameValue = std::abs(lane[index - 1U].value - lane[index].value) < 1e-12;
+        require(sameTime || sameValue, "bit 渲染相邻点不应同时改变 time 和 value");
+    }
+}
+
+bool hasValue(const std::vector<protoscope::plot::WaveSample>& lane, double value)
+{
+    return std::ranges::any_of(
+        lane, [value](const protoscope::plot::WaveSample& point) { return std::abs(point.value - value) < 1e-12; });
+}
+
 } // namespace
 
 void test_plot_history_trim_and_envelope()
@@ -979,6 +994,51 @@ void test_plot_channel_bit_display_reaches_snapshot()
     const auto resetSpec = wave.buffer.channelSpec(0);
     require(resetSpec.has_value(), "复位后 bit_display 通道配置应存在");
     require(std::abs(resetSpec->bitDisplay.yOffset) < 1e-12, "bit_display y_offset 应复位为 0");
+}
+
+void test_bit_render_lane_downsample_keeps_orthogonal_segments()
+{
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(20U);
+    for (std::size_t index = 0; index < 20U; ++index) {
+        samples.push_back({.time = static_cast<double>(index), .value = static_cast<double>(index % 2U)});
+    }
+
+    constexpr double lowY = -2.0;
+    constexpr double highY = 3.0;
+    const auto lane = protoscope::ui::buildBitRenderLanePoints(
+        samples, samples.data(), samples.size(), 0, lowY, highY, samples.back().time, 8U);
+
+    require(lane.size() <= 8U, "bit 降采样输出点数不应超过预算");
+    requireOrthogonalBitSegments(lane);
+    require(hasValue(lane, lowY), "bit 降采样应保留低电平活动信息");
+    require(hasValue(lane, highY), "bit 降采样应保留高电平活动信息");
+    require(std::abs(lane.back().time - samples.back().time) < 1e-12, "bit 降采样应保留末尾时间");
+    require(std::abs(lane.back().value - highY) < 1e-12, "bit 降采样应保留末尾状态");
+}
+
+void test_bit_render_lane_low_density_keeps_exact_steps()
+{
+    const std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 1.0},
+        {.time = 2.0, .value = 1.0},
+        {.time = 3.0, .value = 0.0},
+    };
+
+    const auto lane =
+        protoscope::ui::buildBitRenderLanePoints(samples, samples.data(), samples.size(), 0, 0.0, 1.0, 3.0, 16U);
+
+    require(lane.size() == 5U, "低密度 bit 渲染应保留精确阶梯点");
+    requireOrthogonalBitSegments(lane);
+    require(std::abs(lane[0].time - 0.0) < 1e-12 && std::abs(lane[0].value - 0.0) < 1e-12, "低密度 bit 首点错误");
+    require(std::abs(lane[1].time - 1.0) < 1e-12 && std::abs(lane[1].value - 0.0) < 1e-12,
+            "低密度 bit 第一段水平终点错误");
+    require(std::abs(lane[2].time - 1.0) < 1e-12 && std::abs(lane[2].value - 1.0) < 1e-12,
+            "低密度 bit 第一段竖向跳变错误");
+    require(std::abs(lane[3].time - 3.0) < 1e-12 && std::abs(lane[3].value - 1.0) < 1e-12,
+            "低密度 bit 第二段水平终点错误");
+    require(std::abs(lane[4].time - 3.0) < 1e-12 && std::abs(lane[4].value - 0.0) < 1e-12, "低密度 bit 末尾状态错误");
 }
 
 void test_wave_bit_display_bounds_and_hidden_policy()

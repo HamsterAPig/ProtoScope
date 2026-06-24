@@ -215,6 +215,14 @@ bool bitDisplayEnabled(const plot::BitDisplaySpec& spec);
 std::uint64_t rawBitsFromSampleValue(double value);
 bool rawBitEnabled(double value, std::size_t bitIndex);
 std::string bitLaneDisplayLabel(std::size_t bitIndex);
+std::vector<plot::WaveSample> buildBitRenderLanePoints(const std::vector<plot::WaveSample>& displaySamples,
+                                                       const plot::WaveSample* sourceSamples,
+                                                       std::size_t sourceSampleCount,
+                                                       std::size_t bitIndex,
+                                                       double lowY,
+                                                       double highY,
+                                                       double fallbackMaxTime,
+                                                       std::size_t maxPoints);
 double bitDisplayLanePitch();
 double bitDisplayLaneHeight();
 std::vector<std::size_t> bitDisplayRowsForChannels(const plot::WaveSnapshot& snapshot,
