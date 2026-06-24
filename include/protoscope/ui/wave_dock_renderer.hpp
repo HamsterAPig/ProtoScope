@@ -17,6 +17,8 @@ enum class WaveToolsDrawer;
 
 namespace protoscope::ui {
 
+struct DeferredWaveOverlayCapture;
+
 void addItemHelp(const char* text);
 bool drawToolbarActionButton(const char* label, const char* help, const ImVec2& size = ImVec2(0.0F, 0.0F));
 bool drawToolbarToggleButton(const char* label, bool active, const char* help, const ImVec2& size = ImVec2(0.0F, 0.0F));
@@ -48,7 +50,8 @@ private:
     void drawContent(const ImVec2& available,
                      bool fullscreenActive,
                      bool* fullscreenToggleRequested,
-                     bool shortcutFocusOverride = false);
+                     bool shortcutFocusOverride = false,
+                     DeferredWaveOverlayCapture* deferredOverlayCapture = nullptr);
     void syncWaveViewToLatest();
     void handleWaveShortcuts(bool dockFocused, bool fullscreenActive, bool* fullscreenToggleRequested);
     static std::string formatMetric(double value, const char* baseUnit);

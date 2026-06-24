@@ -1585,7 +1585,9 @@ void updateSplitCursorReadoutsForChannel(const plot::WaveSnapshot& snapshot,
     }
 }
 
-PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const WaveFrameData& frame)
+PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
+                                            const WaveFrameData& frame,
+                                            bool drawOverlays)
 {
     PlotRenderResult result;
     if (frame.displayData == nullptr || frame.fullSnapshot == nullptr || frame.fullSnapshot->channels.empty()) {
@@ -1607,6 +1609,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
 
     const ImVec2 splitPos = ImGui::GetCursorScreenPos();
     const ImVec2 splitSize = ImGui::GetContentRegionAvail();
+    result.legendOverlay = {.pos = splitPos, .size = splitSize, .valid = true};
     const bool mouseInsideSplitRegion = ImGui::IsMouseHoveringRect(
         splitPos, ImVec2(splitPos.x + splitSize.x, splitPos.y + splitSize.y), false);
     ScopedImPlotInputMap inputMapGuard(view.controlMode);
@@ -1771,13 +1774,16 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
                     snapshot, displayData, view, channelIndex, maxCursorReadoutDistance, result);
                 updateSplitMeasurementResult(view, displayData, result, channelIndex);
                 auto* hostViewport = ImGui::GetWindowViewport();
-                drawMeasurementOverlay(view,
-                                       snapshot,
-                                       displayData,
-                                       result,
-                                       plotPos,
-                                       plotSize,
-                                       ImGui::GetForegroundDrawList(hostViewport));
+                result.measurementOverlay = {.pos = plotPos, .size = plotSize, .valid = true};
+                if (drawOverlays) {
+                    drawMeasurementOverlay(view,
+                                           snapshot,
+                                           displayData,
+                                           result,
+                                           plotPos,
+                                           plotSize,
+                                           ImGui::GetForegroundDrawList(hostViewport));
+                }
             }
 
             const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
@@ -1795,7 +1801,9 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
         view.forceNextMainPlotLimits = false;
     }
     ImGui::EndChild();
-    drawChannelLegendOverlay(wave, snapshot, splitPos, splitSize, ImGui::GetWindowViewport());
+    if (drawOverlays) {
+        drawChannelLegendOverlay(wave, snapshot, splitPos, splitSize, ImGui::GetWindowViewport());
+    }
 
     if (userInteractingInAnySplitPlot && view.pauseAutoFollowOnInteraction) {
         view.autoFollowLatest = false;
@@ -1828,7 +1836,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
     return result;
 }
 
-PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame)
+PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame, bool drawOverlays)
 {
     PlotRenderResult result;
     if (frame.fullSnapshot == nullptr || frame.displayData == nullptr || frame.fullSnapshot->channels.empty()) {
@@ -1837,7 +1845,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     }
     auto& view = wave.view;
     if (view.viewMode == plot::WaveViewMode::Split) {
-        return drawSplitOscilloscopePlots(wave, frame);
+        return drawSplitOscilloscopePlots(wave, frame, drawOverlays);
     }
 
     if (!view.showAxisLabels) {
@@ -1895,6 +1903,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
     const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
     const ImVec2 plotPos = ImPlot::GetPlotPos();
     const ImVec2 plotSize = ImPlot::GetPlotSize();
+    result.measurementOverlay = {.pos = plotPos, .size = plotSize, .valid = true};
+    result.legendOverlay = {.pos = plotPos, .size = plotSize, .valid = true};
     const ImPlotRect limits = ImPlot::GetPlotLimits();
     drawOscilloscopeGrid(limits);
     if (view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit && view.showCursors &&
@@ -2050,17 +2060,21 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
         }
     }
     auto* hostViewport = ImGui::GetWindowViewport();
-    drawMeasurementOverlay(view,
-                           frame.snapshot,
-                           displayData,
-                           result,
-                           plotPos,
-                           plotSize,
-                           ImGui::GetForegroundDrawList(hostViewport));
+    if (drawOverlays) {
+        drawMeasurementOverlay(view,
+                               frame.snapshot,
+                               displayData,
+                               result,
+                               plotPos,
+                               plotSize,
+                               ImGui::GetForegroundDrawList(hostViewport));
+    }
     drawWaveStatusOverlay(view, &renderDisplayData, &visibleChannelIndices);
 
     ImPlot::EndPlot();
-    drawChannelLegendOverlay(wave, frame.snapshot, plotPos, plotSize, hostViewport);
+    if (drawOverlays) {
+        drawChannelLegendOverlay(wave, frame.snapshot, plotPos, plotSize, hostViewport);
+    }
     inputMap = savedInputMap;
     ImPlot::PopStyleColor();
     if (!view.showAxisLabels) {

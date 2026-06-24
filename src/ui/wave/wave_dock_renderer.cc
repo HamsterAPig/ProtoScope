@@ -28,6 +28,11 @@
 
 namespace protoscope::ui {
 
+struct DeferredWaveOverlayCapture {
+    PlotRenderResult plotResult{};
+    bool hasPlotResult{false};
+};
+
 namespace {
 
     constexpr float kTopToolbarHeight = 44.0F;
@@ -47,6 +52,33 @@ namespace {
     bool pointInRect(const ImVec2& point, const ImVec2& min, const ImVec2& max)
     {
         return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
+    }
+
+    void drawDeferredWaveOverlays(plot::WaveDockState& wave,
+                                  const DeferredWaveOverlayCapture& capture,
+                                  ImGuiViewport* hostViewport)
+    {
+        if (!capture.hasPlotResult || !capture.plotResult.plotRendered) {
+            return;
+        }
+
+        const auto& result = capture.plotResult;
+        if (result.measurementOverlay.valid) {
+            drawMeasurementOverlay(wave.view,
+                                   wave.cachedFullSnapshot,
+                                   wave.cachedDisplayData,
+                                   result,
+                                   result.measurementOverlay.pos,
+                                   result.measurementOverlay.size,
+                                   ImGui::GetForegroundDrawList(hostViewport));
+        }
+        if (result.legendOverlay.valid) {
+            drawChannelLegendOverlay(wave,
+                                     wave.cachedFullSnapshot,
+                                     result.legendOverlay.pos,
+                                     result.legendOverlay.size,
+                                     hostViewport);
+        }
     }
 
     void resetLegendOverlayTransientForFullscreenEntry(plot::WaveDockState& wave)
@@ -1159,7 +1191,12 @@ public:
     {
         ImGui::BeginChild(
             "##wave_main_panel", ImVec2(0.0F, context.layout->mainHeight), false, ImGuiWindowFlags_NoScrollbar);
-        drawOscilloscopePlot(context.wave, *context.renderFrame);
+        auto result =
+            drawOscilloscopePlot(context.wave, *context.renderFrame, context.deferredOverlayCapture == nullptr);
+        if (context.deferredOverlayCapture != nullptr) {
+            context.deferredOverlayCapture->plotResult = result;
+            context.deferredOverlayCapture->hasPlotResult = result.plotRendered;
+        }
         ImGui::EndChild();
     }
 };
@@ -1175,7 +1212,12 @@ public:
         const float panelHeight = (std::max) (80.0F, (totalHeight - gap) * 0.5F);
 
         ImGui::BeginChild("##wave_cursor_split_time", ImVec2(0.0F, panelHeight), false, ImGuiWindowFlags_NoScrollbar);
-        drawOscilloscopePlot(context.wave, *context.renderFrame);
+        auto result =
+            drawOscilloscopePlot(context.wave, *context.renderFrame, context.deferredOverlayCapture == nullptr);
+        if (context.deferredOverlayCapture != nullptr) {
+            context.deferredOverlayCapture->plotResult = result;
+            context.deferredOverlayCapture->hasPlotResult = result.plotRendered;
+        }
         ImGui::EndChild();
 
         ImGui::BeginChild("##wave_cursor_split_fft", ImVec2(0.0F, panelHeight), false, ImGuiWindowFlags_NoScrollbar);
@@ -1526,17 +1568,21 @@ void WaveDockRenderer::drawOverlay(bool fullscreenActive, bool* fullscreenToggle
     ImGui::SetNextWindowViewport(viewport->ID);
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
-                                   ImGuiWindowFlags_NoCollapse;
+                                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoNavFocus;
+    DeferredWaveOverlayCapture deferredOverlayCapture;
     if (ImGui::Begin("波形全屏##wave_fullscreen_overlay", nullptr, flags)) {
-        drawContent(ImGui::GetContentRegionAvail(), fullscreenActive, fullscreenToggleRequested, true);
+        drawContent(
+            ImGui::GetContentRegionAvail(), fullscreenActive, fullscreenToggleRequested, true, &deferredOverlayCapture);
     }
     ImGui::End();
+    drawDeferredWaveOverlays(application_.docks().waveState(), deferredOverlayCapture, ImGui::GetMainViewport());
 }
 
 void WaveDockRenderer::drawContent(const ImVec2& available,
                                    bool fullscreenActive,
                                    bool* fullscreenToggleRequested,
-                                   bool shortcutFocusOverride)
+                                   bool shortcutFocusOverride,
+                                   DeferredWaveOverlayCapture* deferredOverlayCapture)
 {
     auto& wave = application_.docks().waveState();
     auto& view = wave.view;
@@ -1551,6 +1597,7 @@ void WaveDockRenderer::drawContent(const ImVec2& available,
     auto plan = buildWaveContentPlan(wave, view, available);
     auto context =
         makeWaveContext(application_, wave, view, config, plan, available, fullscreenActive, fullscreenToggleRequested);
+    context.deferredOverlayCapture = deferredOverlayCapture;
     WaveComponentSet components;
     prepareWaveComponents(components, context);
     drawWaveContentComponents(components, context);

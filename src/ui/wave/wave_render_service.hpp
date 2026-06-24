@@ -35,10 +35,18 @@ struct WaveFrameData {
 };
 
 struct PlotRenderResult {
+    struct OverlayGeometry {
+        ImVec2 pos{};
+        ImVec2 size{};
+        bool valid{false};
+    };
+
     bool plotRendered{false};
     bool bitMeasurementActive{false};
     std::array<std::optional<plot::CursorReadout>, 2> cursorReadouts{};
     std::optional<plot::MeasurementReadout> measurement;
+    OverlayGeometry measurementOverlay{};
+    OverlayGeometry legendOverlay{};
 };
 
 struct ZoomSelectionResult {
@@ -406,7 +414,9 @@ void renderWaveChannels(plot::WaveDockState& wave,
                         const ImPlotRect& limits,
                         std::vector<std::size_t>& visibleChannelIndices,
                         BitLaneLayout& outBitLayout);
-PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrameData& frame);
+PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
+                                      const WaveFrameData& frame,
+                                      bool drawOverlays = true);
 PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,
                                  const WaveFrameData& frame,
                                  bool includePhase,

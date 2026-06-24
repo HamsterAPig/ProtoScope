@@ -846,7 +846,8 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                                             : ImVec4(0.051F, 0.075F, 0.106F, 0.78F));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.30F, 0.42F, 0.54F, 0.55F));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
-                                   ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove;
+                                   ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoFocusOnAppearing;
     if (ImGui::Begin("##wave_channel_overlay_legend", nullptr, flags)) {
         ImGui::SetWindowFontScale(kLegendOverlayFontScale);
         const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
