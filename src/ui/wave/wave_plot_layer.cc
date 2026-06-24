@@ -1773,7 +1773,6 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
                 updateSplitCursorReadoutsForChannel(
                     snapshot, displayData, view, channelIndex, maxCursorReadoutDistance, result);
                 updateSplitMeasurementResult(view, displayData, result, channelIndex);
-                auto* hostViewport = ImGui::GetWindowViewport();
                 result.measurementOverlay = {.pos = plotPos, .size = plotSize, .valid = true};
                 if (drawOverlays) {
                     drawMeasurementOverlay(view,
@@ -1782,7 +1781,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
                                            result,
                                            plotPos,
                                            plotSize,
-                                           ImGui::GetForegroundDrawList(hostViewport));
+                                           ImPlot::GetPlotDrawList());
                 }
             }
 
@@ -2067,7 +2066,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
                                result,
                                plotPos,
                                plotSize,
-                               ImGui::GetForegroundDrawList(hostViewport));
+                               ImPlot::GetPlotDrawList());
     }
     drawWaveStatusOverlay(view, &renderDisplayData, &visibleChannelIndices);
 
