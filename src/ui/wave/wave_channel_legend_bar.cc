@@ -714,12 +714,14 @@ namespace {
             recordLastItem(blankHitTest);
             ImGui::SameLine();
         }
-        if (ImGui::SmallButton(visible ? "隐藏" : "显示")) {
+        const std::string visibilityButtonLabel = waveChannelItemLabel(visible ? "隐藏" : "显示", channelIndex);
+        if (ImGui::SmallButton(visibilityButtonLabel.c_str())) {
             setChannelHidden(wave, channelIndex, visible);
         }
         recordLastItem(blankHitTest);
         ImGui::SameLine();
-        if (ImGui::SmallButton("恢复")) {
+        const std::string resetButtonLabel = waveChannelItemLabel("恢复", channelIndex);
+        if (ImGui::SmallButton(resetButtonLabel.c_str())) {
             if (plot::resetOneChannelViewSettings(wave, channelIndex)) {
                 invalidateWaveDisplayCaches(wave);
             }
@@ -740,7 +742,7 @@ namespace {
             const ImGuiTableFlags tableFlags =
                 ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
             if (ImGui::BeginTable("##wave_legend_overlay_table", 8, tableFlags)) {
-                ImGui::TableSetupColumn("显示", ImGuiTableColumnFlags_WidthFixed, 38.0F);
+                ImGui::TableSetupColumn("显示##wave_legend_visible_column", ImGuiTableColumnFlags_WidthFixed, 38.0F);
                 ImGui::TableSetupColumn("颜色", ImGuiTableColumnFlags_WidthFixed, 90.0F);
                 ImGui::TableSetupColumn("通道", ImGuiTableColumnFlags_WidthFixed, 42.0F);
                 const float nameMaxWidth = configuredLegendNameMaxWidth(wave.view);
