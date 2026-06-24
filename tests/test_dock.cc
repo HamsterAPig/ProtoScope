@@ -740,7 +740,8 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
     const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
     require(encoded["view_mode"].as<std::string>() == "split", "协议 UI 状态应写出分屏视图模式");
     require(encoded["tools_drawer"].as<std::string>() == "view", "协议 UI 状态应写出当前右侧抽屉类型");
-    require(encoded["legend_overlay"]["expanded"].as<bool>(), "协议 UI 状态应写出图例展开状态");
+    require(!encoded["legend_overlay"]["expanded"].as<bool>(),
+            "自动收起开启时协议 UI 状态不应写出临时图例展开状态");
     require(encoded["legend_overlay"]["offset_x"].as<float>() == 24.0F, "协议 UI 状态应写出图例 X 偏移");
     require(encoded["channel_overrides"][0]["color_overridden"].as<bool>(), "协议 UI 状态应写出颜色覆盖标记");
     require(encoded["channel_overrides"][0]["color"].size() == 4U, "协议 UI 状态应写出 RGBA 颜色");
@@ -756,11 +757,22 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
             "协议 UI 状态应恢复当前右侧抽屉类型");
     require(restored.legendOverlay.openMode == protoscope::plot::WaveLegendOverlayOpenMode::DoubleClick,
             "协议 UI 状态应恢复图例 overlay 打开模式");
-    require(restored.legendOverlay.expanded && restored.legendOverlay.offsetX == 24.0F &&
+    require(!restored.legendOverlay.expanded && restored.legendOverlay.offsetX == 24.0F &&
                 restored.legendOverlay.offsetY == 36.0F,
-            "协议 UI 状态应恢复图例 overlay 状态");
+            "自动收起开启时协议 UI 状态应恢复图例位置但不恢复展开状态");
     require(restoredSpec.has_value() && restoredSpec->color.has_value() && (*restoredSpec->color)[0] == 0.8F,
             "协议 UI 状态应把颜色覆盖应用到通道规格");
+
+    wave.legendOverlay.doubleClickAutoCollapse = false;
+    wave.legendOverlay.expanded = true;
+    const auto compatEncoded = protoscope::ui::encodeWaveProtocolState(wave);
+    require(compatEncoded["legend_overlay"]["expanded"].as<bool>(),
+            "自动收起关闭时协议 UI 状态应兼容写出图例展开状态");
+    protoscope::plot::WaveDockState compatRestored;
+    compatRestored.legendOverlay.doubleClickAutoCollapse = false;
+    protoscope::ui::decodeWaveProtocolState(compatEncoded, compatRestored);
+    require(compatRestored.legendOverlay.expanded,
+            "自动收起关闭时协议 UI 状态应兼容恢复图例展开状态");
 
     const auto legacy = YAML::Load("view_mode: unknown\n");
     protoscope::plot::WaveDockState legacyRestored;

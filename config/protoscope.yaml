@@ -31,15 +31,17 @@ gui:
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
     x_axis_double_click_action: fit_full_history
+    y_axis_double_click_action: fit_visible_channels
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct
+    legend_overlay_double_click_auto_collapse: true
     zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
     # 0.0 表示不限制；正数按 ImGui 逻辑像素限制全部通道图例的名称显示宽度。
     legend_channel_name_max_width: 0.0
-    vertical_auto_fit_multiplier: 1.2
+    vertical_auto_fit_multiplier: 1.25
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
     peak_detect_downsample: true

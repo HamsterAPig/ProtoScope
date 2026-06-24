@@ -1353,6 +1353,7 @@ void test_application_wave_legend_visibility_config_roundtrip()
     config.gui.wave.showFftLegend = false;
     config.gui.wave.cursorFftHighlightRgba = {0.11F, 0.22F, 0.33F, 0.44F};
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
+    config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
     require(application.applyConfig(config), "图例显示配置应用失败");
 
     require(!application.docks().waveState().view.showChannelLegend, "应用配置后应隐藏图例");
@@ -1362,6 +1363,8 @@ void test_application_wave_legend_visibility_config_roundtrip()
     require(application.docks().waveState().view.hiddenChannelPolicy ==
                 protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "应用配置后应切换隐藏 CH 策略");
+    require(!application.docks().waveState().legendOverlay.doubleClickAutoCollapse,
+            "应用配置后应同步图例双击展开自动收起开关");
     const auto captured = application.captureConfig();
     require(!captured.gui.wave.showChannelLegend, "captureConfig 应带出图例显示开关");
     require(!captured.gui.wave.showFftLegend, "captureConfig 应带出 FFT 图例显示开关");
@@ -1370,12 +1373,14 @@ void test_application_wave_legend_visibility_config_roundtrip()
             "captureConfig 应带出游标 FFT 高亮色");
     require(captured.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "captureConfig 应带出隐藏 CH 策略");
+    require(!captured.gui.wave.legendOverlayDoubleClickAutoCollapse, "captureConfig 应带出图例双击展开自动收起开关");
 
     application.docks().waveState().view.showChannelLegend = true;
     application.docks().waveState().view.showFftLegend = true;
     application.docks().waveState().view.cursorFftHighlightRgba = {0.55F, 0.66F, 0.77F, 0.88F};
     application.docks().waveState().view.hiddenChannelPolicy =
         protoscope::plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
+    application.docks().waveState().legendOverlay.doubleClickAutoCollapse = true;
     const auto capturedLive = application.captureConfig();
     require(capturedLive.gui.wave.showChannelLegend, "captureConfig 不应覆盖 dock 中实时波形图例状态");
     require(capturedLive.gui.wave.showFftLegend, "captureConfig 不应覆盖 dock 中实时 FFT 图例状态");
@@ -1385,6 +1390,8 @@ void test_application_wave_legend_visibility_config_roundtrip()
     require(
         capturedLive.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::IncludeInDerivedViews,
         "captureConfig 不应覆盖 dock 中实时隐藏 CH 策略");
+    require(capturedLive.gui.wave.legendOverlayDoubleClickAutoCollapse,
+            "captureConfig 不应覆盖 dock 中实时图例双击展开自动收起开关");
 
     application.shutdown();
 }
@@ -1398,28 +1405,41 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
     require(!config.gui.wave.zoomSelectionAutoExit, "captureConfig 默认应保持手动退出");
     require(config.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
             "captureConfig 默认应保持 X 轴双击全历史缩放");
+    require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
+            "captureConfig 默认应保持 Y 轴双击适配可见通道");
 
     config.gui.wave.zoomSelectionAutoExit = true;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
+    config.gui.wave.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
     require(application.applyConfig(config), "框选放大自动退出配置应用失败");
     require(application.docks().waveState().view.zoomSelectionAutoExit, "应用配置后应同步更新框选放大退出模式");
     require(application.docks().waveState().view.xAxisDoubleClickAction ==
                 protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow,
             "应用配置后应同步 X 轴双击行为");
+    require(application.docks().waveState().view.yAxisDoubleClickAction ==
+                protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
+            "应用配置后应同步 Y 轴双击行为");
 
     const auto captured = application.captureConfig();
     require(captured.gui.wave.zoomSelectionAutoExit, "captureConfig 应带出框选放大退出模式");
     require(captured.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow,
             "captureConfig 应带出 X 轴双击行为");
+    require(captured.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
+            "captureConfig 应带出 Y 轴双击行为");
 
     application.docks().waveState().view.zoomSelectionAutoExit = false;
     application.docks().waveState().view.xAxisDoubleClickAction =
         protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory;
+    application.docks().waveState().view.yAxisDoubleClickAction =
+        protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels;
     const auto capturedLive = application.captureConfig();
     require(!capturedLive.gui.wave.zoomSelectionAutoExit, "captureConfig 不应覆盖 dock 中实时框选放大退出模式");
     require(
         capturedLive.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
         "captureConfig 不应覆盖 dock 中实时 X 轴双击行为");
+    require(capturedLive.gui.wave.yAxisDoubleClickAction ==
+                protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
+            "captureConfig 不应覆盖 dock 中实时 Y 轴双击行为");
 
     application.shutdown();
 }

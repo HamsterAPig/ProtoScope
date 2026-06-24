@@ -1,3 +1,4 @@
+#include "../src/ui/wave/wave_context.hpp"
 #include "../src/ui/wave/wave_render_service.hpp"
 
 #include "protoscope/config/config.hpp"
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -421,6 +423,14 @@ void test_wave_layout_solver_clamps_without_overflow()
     require(layout.mainHeight >= 160.0F, "主视图高度不应低于最小值");
     require(layout.overviewHeight + layout.mainHeight + 6.0F + 58.0F <= 420.0F + 1e-3F, "布局总高度不应溢出父窗口");
 
+    const auto toolbarScrollbarReserved = protoscope::plot::solveWaveLayout(
+        900.0F, 420.0F, 240.0F, 300.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 76.0F);
+    require(toolbarScrollbarReserved.overviewHeight >= 72.0F, "工具栏预留滚动条后概览高度仍不应低于最小值");
+    require(toolbarScrollbarReserved.mainHeight >= 160.0F, "工具栏预留滚动条后主视图高度仍不应低于最小值");
+    require(toolbarScrollbarReserved.overviewHeight + toolbarScrollbarReserved.mainHeight + 6.0F + 76.0F <=
+                420.0F + 1e-3F,
+            "工具栏预留横向滚动条后布局总高度不应溢出父窗口");
+
     const auto draggedOverview = protoscope::plot::solveWaveLayout(
         900.0F, 600.0F, 260.0F, 300.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 70.0F);
     require(std::abs(draggedOverview.overviewHeight - 260.0F) < 1e-3F, "概览高度应尊重用户拖拽值，不应被 35% 上限拉回");
@@ -445,21 +455,53 @@ void test_wave_layout_solver_clamps_without_overflow()
     for (std::size_t rowCount = 2; rowCount <= splitMaxRowsWithoutScroll; ++rowCount) {
         const float rowHeight = protoscope::plot::solveSplitWavePlotHeight(
             rowCount, splitAvailableHeight, splitRowSpacing, splitPreferredMinHeight, splitMaxRowsWithoutScroll);
-        const float totalHeight = rowHeight * static_cast<float>(rowCount) +
-                                  splitRowSpacing * static_cast<float>(rowCount - 1U);
+        const float totalHeight =
+            rowHeight * static_cast<float>(rowCount) + splitRowSpacing * static_cast<float>(rowCount - 1U);
         require(totalHeight <= splitAvailableHeight + 1e-3F, "4 行以内分屏图不应撑出纵向滚动条");
     }
 
     const std::size_t overflowingRowCount = splitMaxRowsWithoutScroll + 1U;
-    const float overflowingRowHeight = protoscope::plot::solveSplitWavePlotHeight(overflowingRowCount,
-                                                                                  splitAvailableHeight,
-                                                                                  splitRowSpacing,
-                                                                                  splitPreferredMinHeight,
-                                                                                  splitMaxRowsWithoutScroll);
-    const float overflowingTotalHeight =
-        overflowingRowHeight * static_cast<float>(overflowingRowCount) +
-        splitRowSpacing * static_cast<float>(overflowingRowCount - 1U);
+    const float overflowingRowHeight = protoscope::plot::solveSplitWavePlotHeight(
+        overflowingRowCount, splitAvailableHeight, splitRowSpacing, splitPreferredMinHeight, splitMaxRowsWithoutScroll);
+    const float overflowingTotalHeight = overflowingRowHeight * static_cast<float>(overflowingRowCount) +
+                                         splitRowSpacing * static_cast<float>(overflowingRowCount - 1U);
     require(overflowingTotalHeight > splitAvailableHeight, "超过 4 行分屏图应允许内容溢出并交给滚动条处理");
+}
+
+void test_measurement_overlay_safe_right_collapsed_uses_content_right()
+{
+    const float safeRight = protoscope::ui::resolveMeasurementSafeRightX(
+        120.0F, 880.0F, true, 360.0F, 220.0F, 520.0F, 6.0F);
+
+    require(std::abs(safeRight - 1000.0F) < 1e-6F, "工具抽屉折叠时测量浮层安全右边界应等于内容右边界");
+}
+
+void test_measurement_overlay_safe_right_open_drawer_reserves_drawer_width()
+{
+    const float safeRight = protoscope::ui::resolveMeasurementSafeRightX(
+        120.0F, 880.0F, false, 640.0F, 220.0F, 520.0F, 6.0F);
+
+    require(std::abs(safeRight - 474.0F) < 1e-6F,
+            "工具抽屉展开时测量浮层安全右边界应扣除 clamp 后抽屉宽度和分隔条");
+}
+
+void test_measurement_overlay_placement_clamps_to_safe_right()
+{
+    const auto placement = protoscope::ui::resolveMeasurementOverlayPlacementSize(
+        ImVec2(150.0F, 40.0F), ImVec2(800.0F, 320.0F), 650.0F);
+
+    require(placement.visible, "测量浮层安全区域足够时应继续显示");
+    require(std::abs(placement.plotSize.x - 500.0F) < 1e-6F, "测量浮层绘制宽度应被安全右边界裁到左侧区域");
+    require(std::abs(placement.plotSize.y - 320.0F) < 1e-6F, "测量浮层避让不应修改 plot 高度");
+}
+
+void test_measurement_overlay_placement_skips_when_safe_area_too_narrow()
+{
+    const auto placement = protoscope::ui::resolveMeasurementOverlayPlacementSize(
+        ImVec2(150.0F, 40.0F), ImVec2(800.0F, 320.0F), 200.0F);
+
+    require(!placement.visible, "测量浮层安全区域过窄时应跳过绘制");
+    require(placement.plotSize.x <= 64.0F, "跳过绘制时返回宽度应反映过窄安全区域");
 }
 
 void test_plot_low_density_envelope_keeps_single_value_line()
@@ -994,6 +1036,38 @@ void test_plot_channel_bit_display_reaches_snapshot()
     const auto resetSpec = wave.buffer.channelSpec(0);
     require(resetSpec.has_value(), "复位后 bit_display 通道配置应存在");
     require(std::abs(resetSpec->bitDisplay.yOffset) < 1e-12, "bit_display y_offset 应复位为 0");
+}
+
+void test_bit_lane_double_click_reset_selects_without_active_lane()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.buffer.setChannelSpec(0,
+                               {.label = "BITS",
+                                .unit = "raw",
+                                .bitDisplay = {.enabled = true, .firstBit = 2, .bitCount = 4, .yOffset = 5.0}});
+    wave.view.measurementChannelIndex = 99;
+    wave.view.activeBitLane = {};
+    wave.view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
+
+    const protoscope::ui::BitLaneLayoutEntry lane{
+        .parentChannelIndex = 0,
+        .bitIndex = 4,
+        .laneIndex = 2,
+        .rowIndex = 0,
+    };
+
+    require(protoscope::ui::resetBitLaneYOffsetFromHit(wave, lane), "bit lane 双击应在未预先激活时直接复位 y_offset");
+
+    const auto resetSpec = wave.buffer.channelSpec(0);
+    require(resetSpec.has_value(), "bit lane 双击复位后通道配置应存在");
+    require(std::abs(resetSpec->bitDisplay.yOffset) < 1e-12, "bit lane 双击应将 y_offset 清为 0");
+    require(wave.view.measurementChannelIndex == 0, "bit lane 双击应切换 measurementChannelIndex 到父通道");
+    require(wave.view.activeBitLane.active, "bit lane 双击应激活命中的 lane");
+    require(wave.view.activeBitLane.parentChannelIndex == lane.parentChannelIndex,
+            "active bit lane 父通道应匹配命中 lane");
+    require(wave.view.activeBitLane.bitIndex == lane.bitIndex, "active bit lane bitIndex 应匹配命中 lane");
+    require(wave.view.activeBitLane.laneIndex == lane.laneIndex, "active bit lane laneIndex 应匹配命中 lane");
 }
 
 void test_bit_render_lane_downsample_keeps_orthogonal_segments()
@@ -2330,8 +2404,7 @@ void test_wave_render_mode_label_reports_each_path()
 
     stats = {};
     stats.phosphorChannelCount = 1;
-    require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "余辉",
-            "phosphor 通道应显示余辉模式");
+    require(std::string_view(protoscope::ui::waveRenderModeLabel(stats)) == "余辉", "phosphor 通道应显示余辉模式");
 
     stats = {};
     stats.bitLaneChannelCount = 1;
@@ -2643,6 +2716,48 @@ void test_wave_max_total_samples_noop_preserves_revision()
     require(snapshot.channels.front().sampleIndexOffset == 0, "max_total_samples=0 不应改变全局样本偏移");
 }
 
+void test_wave_oscilloscope_toggle_deferred()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    require(wave.buffer.append(0,
+                               protoscope::plot::WaveAppendRequest{
+                                   .source = "deferred-toggle",
+                                   .samples =
+                                       {
+                                           {.time = 0.0, .value = 1.0},
+                                           {.time = 1.0, .value = 0.0},
+                                       },
+                               }),
+            "启停延迟测试样本应追加成功");
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = false;
+    wave.view.viewMinTime = 0.0;
+    wave.view.viewMaxTime = 1.0;
+    wave.view.visibleDuration = 1.0;
+    wave.view.centerTime = 0.5;
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+    require(!frame.snapshot.channels.empty(), "启停延迟测试应准备出快照通道");
+    require(frame.snapshot.channels.front().samples != nullptr, "启停延迟测试快照样本指针不能为空");
+    require(frame.snapshot.channels.front().totalSamples == 2, "启停延迟测试快照应包含旧样本");
+
+    const auto revisionBeforeToggle = wave.buffer.dataRevision();
+    protoscope::ui::WaveFrameState frameState;
+    protoscope::ui::deferOscilloscopeToggle(frameState, false, true);
+
+    require(frameState.oscilloscopeToggleRequest.has_value(), "工具栏启停应只记录本帧 pending 请求");
+    require(!frameState.oscilloscopeToggleRequest->currentRunning, "pending 请求应保留当前运行态");
+    require(frameState.oscilloscopeToggleRequest->targetRunning, "pending 请求应保留目标运行态");
+    require(wave.buffer.dataRevision() == revisionBeforeToggle, "记录 pending 启停请求不应修改 buffer");
+    require(frame.snapshot.channels.front().samples[0].value == 1.0, "记录 pending 后旧快照样本仍应可读");
+
+    const auto snapshotAfterToggle =
+        wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(snapshotAfterToggle.channels.front().totalSamples == 2, "pending 启停请求不应清空历史样本");
+}
+
 void test_wave_overview_display_data_is_budgeted()
 {
     protoscope::plot::WaveDockState wave;
@@ -2740,6 +2855,126 @@ void test_wave_overview_bounds_use_full_history_window()
     require(std::abs(visibleOnlyBounds.maxValue - 19.0) < 1e-12, "隐藏通道不应参与概览 Y 上限");
     require(includeHiddenBounds.minValue < visibleOnlyBounds.minValue, "包含隐藏通道时应能看到隐藏通道下限");
     require(includeHiddenBounds.maxValue > visibleOnlyBounds.maxValue, "包含隐藏通道时应能看到隐藏通道上限");
+}
+
+void test_wave_fit_visible_waveforms_uses_full_history_time_bounds()
+{
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(20);
+    for (std::size_t index = 0; index < 20; ++index) {
+        samples.push_back({.time = static_cast<double>(index), .value = static_cast<double>(index)});
+    }
+
+    protoscope::plot::WaveSnapshot fullSnapshot{};
+    fullSnapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+
+    protoscope::plot::WaveDisplayData overviewDisplay;
+    overviewDisplay.axisSource = protoscope::plot::WaveTimeAxisSource::ScriptTime;
+    overviewDisplay.channels.push_back({
+        .samples = {{.time = 1.0, .value = 0.0}, {.time = 18.0, .value = 19.0}},
+        .actualValues = {},
+    });
+
+    protoscope::plot::WaveViewState view;
+    view.initialized = true;
+    view.fitVisibleWaveformsRequested = true;
+    view.viewMinTime = 15.0;
+    view.viewMaxTime = 19.0;
+    view.visibleDuration = 4.0;
+    view.centerTime = 17.0;
+
+    require(protoscope::ui::applyFitVisibleWaveforms(view, fullSnapshot, overviewDisplay, {0}),
+            "适配应消费请求并提交视口");
+    require(std::abs(view.viewMinTime - 0.0) < 1e-12, "适配 X 下限应来自完整历史首样本");
+    require(std::abs(view.viewMaxTime - 19.0) < 1e-12, "适配 X 上限应来自完整历史尾样本");
+    require(!view.autoFollowLatest, "适配后应暂停自动跟随");
+    require(view.forceNextMainPlotLimits, "适配后应强制下一帧写入主图 limits");
+
+    view.forceNextMainPlotLimits = false;
+    view.fitVisibleWaveformsRequested = true;
+    require(protoscope::ui::applyFitVisibleWaveforms(view, fullSnapshot, overviewDisplay, {0}),
+            "连续适配应仍然消费请求");
+    require(std::abs(view.viewMinTime - 0.0) < 1e-12, "连续适配不应继续内缩 X 下限");
+    require(std::abs(view.viewMaxTime - 19.0) < 1e-12, "连续适配不应继续内缩 X 上限");
+}
+
+void test_wave_fit_visible_waveforms_uses_sample_frequency_full_history()
+{
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(20);
+    for (std::size_t index = 0; index < 20; ++index) {
+        samples.push_back({.time = static_cast<double>(100 + index), .value = static_cast<double>(index)});
+    }
+
+    protoscope::plot::WaveSnapshot fullSnapshot{};
+    fullSnapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .sampleIndexOffset = 0,
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+
+    auto overviewDisplay = protoscope::plot::buildDisplayData(fullSnapshot, 10.0);
+    protoscope::plot::WaveViewState view;
+    view.sampleFrequencyHz = 10.0;
+    view.fitVisibleWaveformsRequested = true;
+    view.viewMinTime = 1.5;
+    view.viewMaxTime = 1.9;
+
+    require(protoscope::ui::applyFitVisibleWaveforms(view, fullSnapshot, overviewDisplay, {0}),
+            "采样频率时间轴适配应消费请求");
+    require(std::abs(view.viewMinTime - 0.0) < 1e-12, "Fs 适配 X 下限应使用全局首样本序号");
+    require(std::abs(view.viewMaxTime - 1.9) < 1e-12, "Fs 适配 X 上限应使用全局尾样本序号");
+}
+
+void test_wave_fit_visible_waveforms_ignores_hidden_channels()
+{
+    const std::vector<protoscope::plot::WaveSample> visibleSamples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 19.0, .value = 19.0},
+    };
+    const std::vector<protoscope::plot::WaveSample> hiddenSamples{
+        {.time = -100.0, .value = -50.0},
+        {.time = 100.0, .value = 50.0},
+    };
+
+    protoscope::plot::WaveSnapshot fullSnapshot{};
+    fullSnapshot.channels.push_back({
+        .label = "Visible",
+        .unit = "V",
+        .totalSamples = visibleSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = visibleSamples.size(),
+        .samples = visibleSamples.data(),
+    });
+    fullSnapshot.channels.push_back({
+        .label = "Hidden",
+        .unit = "V",
+        .totalSamples = hiddenSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = hiddenSamples.size(),
+        .samples = hiddenSamples.data(),
+    });
+    const auto overviewDisplay = protoscope::plot::buildDisplayData(fullSnapshot, 0.0);
+
+    protoscope::plot::WaveViewState view;
+    view.fitVisibleWaveformsRequested = true;
+    require(protoscope::ui::applyFitVisibleWaveforms(view, fullSnapshot, overviewDisplay, {0}),
+            "只包含可见通道时适配应成功");
+    require(std::abs(view.viewMinTime - 0.0) < 1e-12, "隐藏通道不应拉低 X 下限");
+    require(std::abs(view.viewMaxTime - 19.0) < 1e-12, "隐藏通道不应拉高 X 上限");
+    require(std::abs(view.viewMinValue + 2.375) < 1e-12, "隐藏通道不应拉低 Y 下限");
+    require(std::abs(view.viewMaxValue - 21.375) < 1e-12, "隐藏通道不应拉高 Y 上限");
 }
 
 void test_wave_x_axis_double_click_bounds_selects_full_history()
@@ -3147,13 +3382,93 @@ void test_wave_channel_card_width_modes()
 
 void test_wave_vertical_auto_fit_multiplier()
 {
-    const auto negativeRange = protoscope::plot::makeVerticalAutoFitRange(-10.0, 5.0, 1.2);
-    require(std::abs(negativeRange.minValue + 12.0) < 1e-12, "负向范围 Auto Fit 下限应乘以系数");
-    require(std::abs(negativeRange.maxValue - 12.0) < 1e-12, "负向范围 Auto Fit 上限应乘以系数");
+    const auto negativeRange = protoscope::plot::makeVerticalAutoFitRange(-10.0, 5.0, 1.25);
+    require(std::abs(negativeRange.minValue + 11.875) < 1e-12, "负向范围 Auto Fit 下限应围绕数据中心留白");
+    require(std::abs(negativeRange.maxValue - 6.875) < 1e-12, "负向范围 Auto Fit 上限应围绕数据中心留白");
 
-    const auto positiveRange = protoscope::plot::makeVerticalAutoFitRange(2.0, 3.0, 1.2);
-    require(std::abs(positiveRange.minValue + 3.6) < 1e-12, "正向范围 Auto Fit 下限应围绕 0 对称");
-    require(std::abs(positiveRange.maxValue - 3.6) < 1e-12, "正向范围 Auto Fit 上限应围绕 0 对称");
+    const auto positiveRange = protoscope::plot::makeVerticalAutoFitRange(2.0, 3.0, 1.25);
+    require(std::abs(positiveRange.minValue - 1.875) < 1e-12, "正向范围 Auto Fit 下限应围绕数据中心");
+    require(std::abs(positiveRange.maxValue - 3.125) < 1e-12, "正向范围 Auto Fit 上限应围绕数据中心");
+}
+
+void test_wave_y_axis_double_click_bounds_selects_visible_or_active()
+{
+    const std::vector<protoscope::plot::WaveSample> ch0{
+        {.time = 0.0, .value = -2.0},
+        {.time = 1.0, .value = 2.0},
+    };
+    const std::vector<protoscope::plot::WaveSample> hidden{
+        {.time = 0.0, .value = -100.0},
+        {.time = 1.0, .value = 100.0},
+    };
+    const std::vector<protoscope::plot::WaveSample> ch2{
+        {.time = 0.0, .value = 10.0},
+        {.time = 1.0, .value = 12.0},
+    };
+    const std::vector<protoscope::plot::WaveSample> bitSamples{
+        {.time = 0.0, .value = 0.0},
+        {.time = 1.0, .value = 1.0},
+    };
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH0",
+        .unit = "V",
+        .totalSamples = ch0.size(),
+        .visibleBegin = 0,
+        .visibleEnd = ch0.size(),
+        .samples = ch0.data(),
+    });
+    snapshot.channels.push_back({
+        .label = "Hidden",
+        .unit = "V",
+        .totalSamples = hidden.size(),
+        .visibleBegin = 0,
+        .visibleEnd = hidden.size(),
+        .samples = hidden.data(),
+    });
+    snapshot.channels.push_back({
+        .label = "CH2",
+        .unit = "V",
+        .totalSamples = ch2.size(),
+        .visibleBegin = 0,
+        .visibleEnd = ch2.size(),
+        .samples = ch2.data(),
+    });
+    snapshot.channels.push_back({
+        .label = "Bits",
+        .unit = "bit",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = bitSamples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = bitSamples.size(),
+        .samples = bitSamples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, 0.0);
+    const std::vector<std::size_t> visibleChannels{0, 2, 3};
+
+    protoscope::plot::WaveDockState wave;
+    wave.view.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels;
+    auto bounds = protoscope::ui::boundsForYAxisAutoFit(wave, snapshot, displayData, visibleChannels);
+    require(bounds.valid, "可见模拟通道 Y bounds 应有效");
+    require(std::abs(bounds.minValue + 2.0) < 1e-12, "隐藏通道和 bit 通道不应拉低可见通道 Y 下限");
+    require(std::abs(bounds.maxValue - 12.0) < 1e-12, "可见模拟通道应决定聚合 Y 上限");
+
+    wave.view.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
+    wave.view.measurementChannelIndex = 2;
+    bounds = protoscope::ui::boundsForYAxisAutoFit(wave, snapshot, displayData, visibleChannels);
+    require(std::abs(bounds.minValue - 10.0) < 1e-12, "激活模拟通道应单独决定 Y 下限");
+    require(std::abs(bounds.maxValue - 12.0) < 1e-12, "激活模拟通道应单独决定 Y 上限");
+
+    wave.view.measurementChannelIndex = 3;
+    bounds = protoscope::ui::boundsForYAxisAutoFit(wave, snapshot, displayData, visibleChannels);
+    require(std::abs(bounds.minValue + 2.0) < 1e-12, "激活 bit 通道时应回退可见模拟通道下限");
+    require(std::abs(bounds.maxValue - 12.0) < 1e-12, "激活 bit 通道时应回退可见模拟通道上限");
+
+    wave.view.measurementChannelIndex = 1;
+    bounds = protoscope::ui::boundsForYAxisAutoFit(wave, snapshot, displayData, visibleChannels);
+    require(std::abs(bounds.minValue + 2.0) < 1e-12, "激活隐藏通道时应回退可见模拟通道下限");
+    require(std::abs(bounds.maxValue - 12.0) < 1e-12, "激活隐藏通道时应回退可见模拟通道上限");
 }
 
 void test_wave_visible_channel_bounds_ignore_hidden_channels()

@@ -471,8 +471,24 @@ plot::WaveDataBounds boundsForYAxisAutoFit(const plot::WaveDockState& wave,
                                            const plot::WaveDisplayData& displayData,
                                            const std::vector<std::size_t>& channelIndices)
 {
-    return computeAnalogDerivedBounds(
-        snapshot, displayData, channelIndices, (std::max)(wave.view.minVisibleTimeSpan, 1e-6));
+    const double fallbackStep = (std::max)(wave.view.minVisibleTimeSpan, 1e-6);
+    if (wave.view.yAxisDoubleClickAction == plot::WaveYAxisDoubleClickAction::FitActiveChannel) {
+        const std::size_t activeChannelIndex = wave.view.measurementChannelIndex;
+        const bool activeChannelVisible =
+            std::find(channelIndices.begin(), channelIndices.end(), activeChannelIndex) != channelIndices.end();
+        const bool activeChannelAnalog = activeChannelIndex < snapshot.channels.size() &&
+                                         activeChannelIndex < displayData.channels.size() &&
+                                         !bitDisplayEnabled(snapshot.channels[activeChannelIndex].bitDisplay);
+        if (activeChannelVisible && activeChannelAnalog) {
+            const std::vector<std::size_t> activeOnly{activeChannelIndex};
+            const auto activeBounds = computeAnalogDerivedBounds(snapshot, displayData, activeOnly, fallbackStep);
+            if (activeBounds.valid) {
+                return activeBounds;
+            }
+        }
+    }
+
+    return computeAnalogDerivedBounds(snapshot, displayData, channelIndices, fallbackStep);
 }
 
 void applySavedLegendVisibility(const plot::WaveDockState& wave, std::size_t channelIndex)

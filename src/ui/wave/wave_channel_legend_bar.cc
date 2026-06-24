@@ -808,7 +808,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
     // 固定展开只属于双击模式；悬浮模式每帧都回到瞬态展开语义。
     if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Hover) {
         wave.legendOverlay.expanded = false;
-    } else {
+    } else if (!wave.legendOverlay.doubleClickAutoCollapse) {
         wave.legendOverlay.hoverFloating = false;
         wave.legendOverlay.hoverInteractionLocked = false;
         wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
@@ -892,6 +892,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
         if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick && !effectiveExpanded &&
             hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             wave.legendOverlay.expanded = true;
+            wave.legendOverlay.hoverCloseRemainingSec = wave.legendOverlay.hoverCloseDelaySec;
         }
 
         // 实际窗口矩形只用于保持已展开交互，不作为新的悬浮触发源。
@@ -917,6 +918,22 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                 wave.legendOverlay.hoverCloseRemainingSec -= ImGui::GetIO().DeltaTime;
                 if (wave.legendOverlay.hoverCloseRemainingSec <= 0.0F) {
                     wave.legendOverlay.hoverFloating = false;
+                }
+            }
+        } else if (wave.legendOverlay.doubleClickAutoCollapse) {
+            wave.legendOverlay.hoverFloating = false;
+            if (collapseRequested || !wave.legendOverlay.expanded) {
+                wave.legendOverlay.hoverInteractionLocked = false;
+                wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+            } else if (hovered || mouseInActualWindow || wave.legendOverlay.hoverInteractionLocked) {
+                // 核心流程：双击展开后只在离开图例且没有拖动/输入交互时开始倒计时收起。
+                wave.legendOverlay.hoverCloseRemainingSec = wave.legendOverlay.hoverCloseDelaySec;
+            } else {
+                wave.legendOverlay.hoverCloseRemainingSec -= ImGui::GetIO().DeltaTime;
+                if (wave.legendOverlay.hoverCloseRemainingSec <= 0.0F) {
+                    wave.legendOverlay.expanded = false;
+                    wave.legendOverlay.hoverInteractionLocked = false;
+                    wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
                 }
             }
         } else {

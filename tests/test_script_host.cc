@@ -1551,8 +1551,7 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
     require(text.find("@class ProtoElfSymbolValue") != std::string::npos, "LuaLS API 应声明 ProtoElfSymbolValue");
     require(text.find("function stream() end") != std::string::npos, "LuaLS API 应声明 stream()");
     require(text.find("function on_tx(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_tx");
-    require(text.find("function on_oscilloscope_toggle(ctx, current_running, target_running) end") !=
-                std::string::npos,
+    require(text.find("function on_oscilloscope_toggle(ctx, current_running, target_running) end") != std::string::npos,
             "LuaLS API 应声明 on_oscilloscope_toggle");
     require(text.find("function on_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_dialog");
     require(text.find("function on_file_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_file_dialog");
@@ -2187,9 +2186,11 @@ void test_config_default_roundtrip()
         "CH 卡片双击默认值应为 reset_scale_offset");
     require(config.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
             "X 轴双击默认值应为 fit_full_history");
+    require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
+            "Y 轴双击默认值应为 fit_visible_channels");
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
-    require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.2");
+    require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.25) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.25");
     require(!config.gui.wave.zoomSelectionAutoExit, "框选放大默认不应自动退出");
     require(config.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "隐藏 CH 策略默认应只让可见通道参与派生视图");
@@ -2197,6 +2198,7 @@ void test_config_default_roundtrip()
             "游标极值吸附策略默认应为 nearest_waveform");
     require(config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
             "鼠标 Y 偏移拖动模式默认应为 direct");
+    require(config.gui.wave.legendOverlayDoubleClickAutoCollapse, "双击图例展开默认应在鼠标离开后自动收起");
     require(config.gui.wave.peakDetectDownsample, "peak-detect 降采样默认应开启");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
@@ -2250,9 +2252,11 @@ void test_config_default_roundtrip()
     config.gui.wave.channelCardWidthMode = protoscope::plot::WaveChannelCardWidthMode::Adaptive;
     config.gui.wave.channelDoubleClickAction = protoscope::plot::WaveChannelDoubleClickAction::ResetAll;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
+    config.gui.wave.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
+    config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
@@ -2317,6 +2321,9 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.wave.xAxisDoubleClickAction ==
                 protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow,
             "X 轴双击行为 roundtrip 失败");
+    require(reloaded.config.gui.wave.yAxisDoubleClickAction ==
+                protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
+            "Y 轴双击行为 roundtrip 失败");
     require(reloaded.config.gui.wave.hiddenChannelPolicy ==
                 protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "隐藏 CH 策略 roundtrip 失败");
@@ -2325,6 +2332,7 @@ void test_config_default_roundtrip()
         "游标极值吸附策略 roundtrip 失败");
     require(reloaded.config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Shift,
             "鼠标 Y 偏移拖动模式 roundtrip 失败");
+    require(!reloaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "双击图例展开自动收起开关 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12,
             "CH 卡片自适应比例 roundtrip 失败");
@@ -2392,6 +2400,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::ActualValue;
     config.gui.wave.cursorFftHighlightRgba = {0.30F, 0.40F, 0.50F, 0.60F};
     config.gui.wave.peakDetectDownsample = false;
+    config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
 
     protoscope::dock::DockStore dockStore;
     store.applyToDock(config, dockStore);
@@ -2403,11 +2412,13 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     require(std::abs(dockStore.waveState().view.cursorFftHighlightRgba[3] - 0.60F) < 1e-6F,
             "applyToDock 应写入游标 FFT 高亮色");
     require(!dockStore.waveState().view.peakDetectDownsample, "applyToDock 应写入 peak-detect 降采样开关");
+    require(!dockStore.waveState().legendOverlay.doubleClickAutoCollapse, "applyToDock 应写入图例双击展开自动收起开关");
 
     dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
     dockStore.waveState().view.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
     dockStore.waveState().view.cursorFftHighlightRgba = {0.70F, 0.60F, 0.50F, 0.40F};
     dockStore.waveState().view.peakDetectDownsample = true;
+    dockStore.waveState().legendOverlay.doubleClickAutoCollapse = true;
     const auto captured = store.captureFromDock(dockStore);
     require(captured.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Disabled,
             "captureFromDock 应捕获鼠标 Y 偏移拖动模式");
@@ -2417,6 +2428,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
                 std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
             "captureFromDock 应捕获游标 FFT 高亮色");
     require(captured.gui.wave.peakDetectDownsample, "captureFromDock 应捕获 peak-detect 降采样开关");
+    require(captured.gui.wave.legendOverlayDoubleClickAutoCollapse, "captureFromDock 应捕获图例双击展开自动收起开关");
 }
 
 void test_config_repo_default_yaml_loads()
@@ -2438,6 +2450,7 @@ void test_config_repo_default_yaml_loads()
     require(loaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "源码默认配置应读取 overlay 波形全屏模式");
     require(loaded.config.gui.wave.peakDetectDownsample, "源码默认配置应开启 peak-detect 降采样");
+    require(loaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "源码默认配置应开启图例双击展开自动收起");
 }
 
 void test_script_file_io_proto_buffer_roundtrip()
@@ -2571,6 +2584,7 @@ void test_config_wave_mode_invalid_fallback()
            "    channel_card_width_mode: weird\n"
            "    channel_double_click_action: weird\n"
            "    x_axis_double_click_action: weird\n"
+           "    y_axis_double_click_action: weird\n"
            "    mouse_y_offset_drag_mode: weird\n"
            "    fullscreen_mode: weird\n"
            "    channel_card_fixed_width: 0\n"
@@ -2592,6 +2606,8 @@ void test_config_wave_mode_invalid_fallback()
         "非法 channel_double_click_action 应回退到 reset_scale_offset");
     require(loaded.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
             "非法 x_axis_double_click_action 应回退到 fit_full_history");
+    require(loaded.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
+            "非法 y_axis_double_click_action 应回退到 fit_visible_channels");
     require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "非法 fullscreen_mode 应回退到 overlay");
     require(loaded.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
@@ -2600,7 +2616,7 @@ void test_config_wave_mode_invalid_fallback()
             "非法 chinese_glyph_range 应回退到 simplified_common");
     require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
     require(std::abs(loaded.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "非正自适应比例应回退到 0.22");
-    require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "非正 Auto Fit 系数应回退到 1.2");
+    require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.25) < 1e-12, "非正 Auto Fit 系数应回退到 1.25");
 }
 
 void test_config_logging_roundtrip()
@@ -3756,16 +3772,14 @@ static const TestCase kAllTests[] = {
     {"script_oscilloscope_toggle_returns_true_and_receives_args",
      &test_script_oscilloscope_toggle_returns_true_and_receives_args},
     {"script_oscilloscope_toggle_returns_false", &test_script_oscilloscope_toggle_returns_false},
-    {"script_oscilloscope_set_running_outputs_update",
-     &test_script_oscilloscope_set_running_outputs_update},
+    {"script_oscilloscope_set_running_outputs_update", &test_script_oscilloscope_set_running_outputs_update},
     {"script_oscilloscope_toggle_true_defaults_target_update",
      &test_script_oscilloscope_toggle_true_defaults_target_update},
     {"script_oscilloscope_toggle_explicit_set_running_overrides_default",
      &test_script_oscilloscope_toggle_explicit_set_running_overrides_default},
     {"script_oscilloscope_toggle_false_allows_later_set_running",
      &test_script_oscilloscope_toggle_false_allows_later_set_running},
-    {"script_oscilloscope_toggle_missing_callback_rejects",
-     &test_script_oscilloscope_toggle_missing_callback_rejects},
+    {"script_oscilloscope_toggle_missing_callback_rejects", &test_script_oscilloscope_toggle_missing_callback_rejects},
     {"script_oscilloscope_toggle_non_function_rejects_and_logs",
      &test_script_oscilloscope_toggle_non_function_rejects_and_logs},
     {"script_oscilloscope_toggle_runtime_error_rejects_and_logs",
@@ -3927,8 +3941,7 @@ static const TestCase kAllTests[] = {
     {"wave_cursor_smart_snap_fallback_to_nearest", &test_wave_cursor_smart_snap_fallback_to_nearest},
     {"wave_cursor_drag_time_uses_smart_snap", &test_wave_cursor_drag_time_uses_smart_snap},
     {"split_cursor_drag_id_namespace_is_unique", &test_split_cursor_drag_id_namespace_is_unique},
-    {"split_cursor_snap_forced_channel_ignores_other_rows",
-     &test_split_cursor_snap_forced_channel_ignores_other_rows},
+    {"split_cursor_snap_forced_channel_ignores_other_rows", &test_split_cursor_snap_forced_channel_ignores_other_rows},
     {"split_cursor_smart_snap_forced_channel_ignores_hidden_row_candidate",
      &test_split_cursor_smart_snap_forced_channel_ignores_hidden_row_candidate},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
@@ -4072,11 +4085,20 @@ static const TestCase kAllTests[] = {
     {"wave_max_total_samples_trim_refreshes_cached_frame", &test_wave_max_total_samples_trim_refreshes_cached_frame},
     {"wave_max_total_samples_noop_preserves_revision", &test_wave_max_total_samples_noop_preserves_revision},
     {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},
+    {"measurement_overlay_safe_right_collapsed_uses_content_right",
+     &test_measurement_overlay_safe_right_collapsed_uses_content_right},
+    {"measurement_overlay_safe_right_open_drawer_reserves_drawer_width",
+     &test_measurement_overlay_safe_right_open_drawer_reserves_drawer_width},
+    {"measurement_overlay_placement_clamps_to_safe_right", &test_measurement_overlay_placement_clamps_to_safe_right},
+    {"measurement_overlay_placement_skips_when_safe_area_too_narrow",
+     &test_measurement_overlay_placement_skips_when_safe_area_too_narrow},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
     {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
     {"plot_channel_bit_display_reaches_snapshot", &test_plot_channel_bit_display_reaches_snapshot},
+    {"bit_lane_double_click_reset_selects_without_active_lane",
+     &test_bit_lane_double_click_reset_selects_without_active_lane},
     {"bit_render_lane_downsample_keeps_orthogonal_segments",
      &test_bit_render_lane_downsample_keeps_orthogonal_segments},
     {"bit_render_lane_low_density_keeps_exact_steps", &test_bit_render_lane_low_density_keeps_exact_steps},
@@ -4132,13 +4154,18 @@ static const TestCase kAllTests[] = {
     {"wave_default_viewport_without_frequency_uses_time_scale",
      &test_wave_default_viewport_without_frequency_uses_time_scale},
     {"wave_default_viewport_uses_sample_frequency_budget", &test_wave_default_viewport_uses_sample_frequency_budget},
-    {"wave_default_viewport_duration_tracks_render_budget",
-     &test_wave_default_viewport_duration_tracks_render_budget},
+    {"wave_default_viewport_duration_tracks_render_budget", &test_wave_default_viewport_duration_tracks_render_budget},
     {"wave_default_viewport_preserves_configured_y_range", &test_wave_default_viewport_preserves_configured_y_range},
     {"wave_sample_frequency_auto_follow_preserves_trimmed_offset",
      &test_wave_sample_frequency_auto_follow_preserves_trimmed_offset},
+    {"wave_oscilloscope_toggle_deferred", &test_wave_oscilloscope_toggle_deferred},
     {"wave_overview_display_data_is_budgeted", &test_wave_overview_display_data_is_budgeted},
     {"wave_overview_bounds_use_full_history_window", &test_wave_overview_bounds_use_full_history_window},
+    {"wave_fit_visible_waveforms_uses_full_history_time_bounds",
+     &test_wave_fit_visible_waveforms_uses_full_history_time_bounds},
+    {"wave_fit_visible_waveforms_uses_sample_frequency_full_history",
+     &test_wave_fit_visible_waveforms_uses_sample_frequency_full_history},
+    {"wave_fit_visible_waveforms_ignores_hidden_channels", &test_wave_fit_visible_waveforms_ignores_hidden_channels},
     {"wave_x_axis_double_click_bounds_selects_full_history",
      &test_wave_x_axis_double_click_bounds_selects_full_history},
     {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
@@ -4158,6 +4185,8 @@ static const TestCase kAllTests[] = {
     {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
     {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},
     {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
+    {"wave_y_axis_double_click_bounds_selects_visible_or_active",
+     &test_wave_y_axis_double_click_bounds_selects_visible_or_active},
     {"wave_visible_channel_bounds_ignore_hidden_channels", &test_wave_visible_channel_bounds_ignore_hidden_channels},
     {"wave_hidden_channel_policy_defaults_to_visible_only", &test_wave_hidden_channel_policy_defaults_to_visible_only},
     {"wave_hidden_channel_indices_allow_duplicate_labels", &test_wave_hidden_channel_indices_allow_duplicate_labels},
@@ -4168,8 +4197,7 @@ static const TestCase kAllTests[] = {
     {"wave_status_overlay_items_only_show_non_default_states",
      &test_wave_status_overlay_items_only_show_non_default_states},
     {"wave_phosphor_stroke_style_uses_channel_style", &test_wave_phosphor_stroke_style_uses_channel_style},
-    {"wave_phosphor_trigger_detection_interpolates_edges",
-     &test_wave_phosphor_trigger_detection_interpolates_edges},
+    {"wave_phosphor_trigger_detection_interpolates_edges", &test_wave_phosphor_trigger_detection_interpolates_edges},
     {"wave_phosphor_trigger_window_aligns_to_fixed_x", &test_wave_phosphor_trigger_window_aligns_to_fixed_x},
     {"wave_phosphor_non_follow_mode_freezes", &test_wave_phosphor_non_follow_mode_freezes},
     {"wave_channel_reset_all_uses_protocol_default", &test_wave_channel_reset_all_uses_protocol_default},

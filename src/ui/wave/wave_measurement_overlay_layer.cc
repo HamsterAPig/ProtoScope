@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -319,6 +320,50 @@ namespace {
     }
 
 } // namespace
+
+float resolveMeasurementSafeRightX(float contentLeftX,
+                                   float contentWidth,
+                                   bool toolsCollapsed,
+                                   float requestedDrawerWidth,
+                                   float minDrawerWidth,
+                                   float maxDrawerWidth,
+                                   float splitterWidth)
+{
+    const float safeContentWidth = (std::max)(contentWidth, 0.0F);
+    const float contentRight = contentLeftX + safeContentWidth;
+    if (toolsCollapsed) {
+        return contentRight;
+    }
+
+    const float safeMinDrawerWidth = (std::max)(minDrawerWidth, 0.0F);
+    const float safeMaxDrawerWidth = (std::max)(maxDrawerWidth, safeMinDrawerWidth);
+    const float drawerWidth =
+        (std::min)((std::clamp)(requestedDrawerWidth, safeMinDrawerWidth, safeMaxDrawerWidth), safeContentWidth);
+    const float reservedSplitterWidth = (std::max)(splitterWidth, 0.0F);
+    return (std::max)(contentLeftX, contentRight - drawerWidth - reservedSplitterWidth);
+}
+
+MeasurementOverlayPlacementSize resolveMeasurementOverlayPlacementSize(const ImVec2& plotPos,
+                                                                       const ImVec2& plotSize,
+                                                                       float measurementSafeRightX)
+{
+    constexpr float kMinMeasurementSafeWidth = 64.0F;
+    MeasurementOverlayPlacementSize placement{.plotSize = plotSize, .visible = plotSize.x >= kMinMeasurementSafeWidth};
+    if (!std::isfinite(measurementSafeRightX)) {
+        return placement;
+    }
+
+    const float safeWidth = measurementSafeRightX - plotPos.x;
+    if (safeWidth < kMinMeasurementSafeWidth) {
+        placement.plotSize.x = (std::max)(safeWidth, 0.0F);
+        placement.visible = false;
+        return placement;
+    }
+
+    placement.plotSize.x = (std::min)(plotSize.x, safeWidth);
+    placement.visible = placement.plotSize.x >= kMinMeasurementSafeWidth;
+    return placement;
+}
 
 void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveSnapshot& snapshot,

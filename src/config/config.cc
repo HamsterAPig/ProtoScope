@@ -234,6 +234,11 @@ namespace {
         {plot::WaveXAxisDoubleClickAction::FitVisibleWindow, "fit_visible_window"},
     }};
 
+    constexpr std::array<EnumNamePair<plot::WaveYAxisDoubleClickAction>, 2> kWaveYAxisDoubleClickActionNames{{
+        {plot::WaveYAxisDoubleClickAction::FitVisibleChannels, "fit_visible_channels"},
+        {plot::WaveYAxisDoubleClickAction::FitActiveChannel, "fit_active_channel"},
+    }};
+
     constexpr std::array<EnumNamePair<plot::WaveHiddenChannelPolicy>, 2> kWaveHiddenChannelPolicyNames{{
         {plot::WaveHiddenChannelPolicy::IncludeInDerivedViews, "include_hidden"},
         {plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews, "visible_only"},
@@ -341,6 +346,17 @@ namespace {
     const char* toWaveXAxisDoubleClickActionText(const plot::WaveXAxisDoubleClickAction action)
     {
         return enumToText(action, kWaveXAxisDoubleClickActionNames, "fit_full_history");
+    }
+
+    plot::WaveYAxisDoubleClickAction parseWaveYAxisDoubleClickAction(const std::string& value,
+                                                                     plot::WaveYAxisDoubleClickAction fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveYAxisDoubleClickActionNames, fallback);
+    }
+
+    const char* toWaveYAxisDoubleClickActionText(const plot::WaveYAxisDoubleClickAction action)
+    {
+        return enumToText(action, kWaveYAxisDoubleClickActionNames, "fit_visible_channels");
     }
 
     plot::WaveHiddenChannelPolicy parseWaveHiddenChannelPolicy(const std::string& value,
@@ -503,6 +519,11 @@ namespace {
                                     "x_axis_double_click_action",
                                     toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction)),
             config.gui.wave.xAxisDoubleClickAction);
+        config.gui.wave.yAxisDoubleClickAction = parseWaveYAxisDoubleClickAction(
+            readScalar<std::string>(wave,
+                                    "y_axis_double_click_action",
+                                    toWaveYAxisDoubleClickActionText(config.gui.wave.yAxisDoubleClickAction)),
+            config.gui.wave.yAxisDoubleClickAction);
         config.gui.wave.hiddenChannelPolicy = parseWaveHiddenChannelPolicy(
             readScalar<std::string>(
                 wave, "hidden_channel_policy", toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy)),
@@ -521,6 +542,8 @@ namespace {
                                     "legend_overlay_open_mode",
                                     toWaveLegendOverlayOpenModeText(config.gui.wave.legendOverlayOpenMode)),
             config.gui.wave.legendOverlayOpenMode);
+        config.gui.wave.legendOverlayDoubleClickAutoCollapse = readScalar<bool>(
+            wave, "legend_overlay_double_click_auto_collapse", config.gui.wave.legendOverlayDoubleClickAutoCollapse);
         config.gui.wave.zoomSelectionAutoExit =
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
         config.gui.wave.peakDetectDownsample =
@@ -541,11 +564,10 @@ namespace {
             readScalar<double>(wave, "channel_card_fixed_width", config.gui.wave.channelCardFixedWidth), 128.0);
         config.gui.wave.channelCardAdaptiveRatio = positiveOrFallback(
             readScalar<double>(wave, "channel_card_adaptive_ratio", config.gui.wave.channelCardAdaptiveRatio), 0.22);
-        config.gui.wave.legendChannelNameMaxWidth =
-            positiveOrZero(readScalar<double>(
-                wave, "legend_channel_name_max_width", config.gui.wave.legendChannelNameMaxWidth));
+        config.gui.wave.legendChannelNameMaxWidth = positiveOrZero(
+            readScalar<double>(wave, "legend_channel_name_max_width", config.gui.wave.legendChannelNameMaxWidth));
         config.gui.wave.verticalAutoFitMultiplier = positiveOrFallback(
-            readScalar<double>(wave, "vertical_auto_fit_multiplier", config.gui.wave.verticalAutoFitMultiplier), 1.2);
+            readScalar<double>(wave, "vertical_auto_fit_multiplier", config.gui.wave.verticalAutoFitMultiplier), 1.25);
         config.gui.wave.resetHistoryOnTimeReset =
             readScalar<bool>(wave, "reset_history_on_time_reset", config.gui.wave.resetHistoryOnTimeReset);
         config.gui.wave.showAxisLabels = readScalar<bool>(wave, "show_axis_labels", config.gui.wave.showAxisLabels);
@@ -854,12 +876,15 @@ namespace {
             toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
         gui["wave"]["x_axis_double_click_action"] =
             toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction);
+        gui["wave"]["y_axis_double_click_action"] =
+            toWaveYAxisDoubleClickActionText(config.gui.wave.yAxisDoubleClickAction);
         gui["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
         gui["wave"]["cursor_extreme_snap_policy"] =
             toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
         gui["wave"]["mouse_y_offset_drag_mode"] = toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode);
         gui["wave"]["legend_overlay_open_mode"] =
             toWaveLegendOverlayOpenModeText(config.gui.wave.legendOverlayOpenMode);
+        gui["wave"]["legend_overlay_double_click_auto_collapse"] = config.gui.wave.legendOverlayDoubleClickAutoCollapse;
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
         gui["wave"]["peak_detect_downsample"] = config.gui.wave.peakDetectDownsample;
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
@@ -1352,6 +1377,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.channelCardWidthMode = config.gui.wave.channelCardWidthMode;
     wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
     wave.xAxisDoubleClickAction = config.gui.wave.xAxisDoubleClickAction;
+    wave.yAxisDoubleClickAction = config.gui.wave.yAxisDoubleClickAction;
     wave.mouseYOffsetDragMode = config.gui.wave.mouseYOffsetDragMode;
     wave.zoomSelectionAutoExit = config.gui.wave.zoomSelectionAutoExit;
     wave.peakDetectDownsample = config.gui.wave.peakDetectDownsample;
@@ -1363,7 +1389,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.channelCardFixedWidth = positiveOrFallback(config.gui.wave.channelCardFixedWidth, 128.0);
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
     wave.legendChannelNameMaxWidth = positiveOrZero(config.gui.wave.legendChannelNameMaxWidth);
-    wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.2);
+    wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.25);
     wave.hiddenChannelPolicy = config.gui.wave.hiddenChannelPolicy;
     wave.cursorExtremeSnapPolicy = config.gui.wave.cursorExtremeSnapPolicy;
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
@@ -1371,6 +1397,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.showFftLegend = config.gui.wave.showFftLegend;
     wave.cursorFftHighlightRgba = config.gui.wave.cursorFftHighlightRgba;
     waveState.legendOverlay.openMode = config.gui.wave.legendOverlayOpenMode;
+    waveState.legendOverlay.doubleClickAutoCollapse = config.gui.wave.legendOverlayDoubleClickAutoCollapse;
     if (waveState.legendOverlay.openMode != plot::WaveLegendOverlayOpenMode::DoubleClick) {
         waveState.legendOverlay.expanded = false;
     }
@@ -1402,6 +1429,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
     config.gui.wave.xAxisDoubleClickAction = dockStore.waveState().view.xAxisDoubleClickAction;
+    config.gui.wave.yAxisDoubleClickAction = dockStore.waveState().view.yAxisDoubleClickAction;
     config.gui.wave.mouseYOffsetDragMode = dockStore.waveState().view.mouseYOffsetDragMode;
     config.gui.wave.zoomSelectionAutoExit = dockStore.waveState().view.zoomSelectionAutoExit;
     config.gui.wave.peakDetectDownsample = dockStore.waveState().view.peakDetectDownsample;
@@ -1421,6 +1449,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;
     config.gui.wave.cursorFftHighlightRgba = dockStore.waveState().view.cursorFftHighlightRgba;
     config.gui.wave.legendOverlayOpenMode = dockStore.waveState().legendOverlay.openMode;
+    config.gui.wave.legendOverlayDoubleClickAutoCollapse = dockStore.waveState().legendOverlay.doubleClickAutoCollapse;
     config.configPath = dockStore.configState().loadedFromPath;
 
     return config;

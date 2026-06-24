@@ -72,6 +72,7 @@ struct WaveLegendOverlayState {
     bool hoverFloating{false};
     bool hoverInteractionLocked{false};
     WaveLegendOverlayOpenMode openMode{WaveLegendOverlayOpenMode::Hover};
+    bool doubleClickAutoCollapse{true};
     float hoverCloseDelaySec{0.30F};
     float hoverCloseRemainingSec{0.0F};
     float offsetX{8.0F};
@@ -197,6 +198,7 @@ struct WaveViewState {
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
     WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
     WaveXAxisDoubleClickAction xAxisDoubleClickAction{WaveXAxisDoubleClickAction::FitFullHistory};
+    WaveYAxisDoubleClickAction yAxisDoubleClickAction{WaveYAxisDoubleClickAction::FitVisibleChannels};
     WaveHiddenChannelPolicy hiddenChannelPolicy{WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     WavePhosphorBackend phosphorBackend{WavePhosphorBackend::Auto};
     WavePhosphorMode phosphorMode{WavePhosphorMode::FreeRun};
@@ -212,7 +214,7 @@ struct WaveViewState {
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
     double legendChannelNameMaxWidth{0.0};
-    double verticalAutoFitMultiplier{1.2};
+    double verticalAutoFitMultiplier{1.25};
     double persistenceWindow{0.25};
     double glowIntensity{1.0};
     double triggerThreshold{0.0};
@@ -372,8 +374,8 @@ struct WaveDockState {
                    visibleMinTime == other.visibleMinTime && visibleMaxTime == other.visibleMaxTime &&
                    channelIndex == other.channelIndex && pointLimit == other.pointLimit &&
                    sampleCount == other.sampleCount && peakDetectDownsample == other.peakDetectDownsample &&
-                   displayFormula == other.displayFormula && ratio == other.ratio &&
-                   scale == other.scale && offset == other.offset;
+                   displayFormula == other.displayFormula && ratio == other.ratio && scale == other.scale &&
+                   offset == other.offset;
         }
     };
 

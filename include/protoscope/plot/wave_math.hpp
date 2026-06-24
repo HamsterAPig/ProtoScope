@@ -39,6 +39,11 @@ enum class WaveXAxisDoubleClickAction {
     FitVisibleWindow,
 };
 
+enum class WaveYAxisDoubleClickAction {
+    FitVisibleChannels,
+    FitActiveChannel,
+};
+
 enum class WaveHiddenChannelPolicy {
     IncludeInDerivedViews,
     ExcludeFromDerivedViews,

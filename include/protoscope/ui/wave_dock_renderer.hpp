@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include <imgui.h>
@@ -47,6 +48,11 @@ public:
     void drawOverlay(bool fullscreenActive, bool* fullscreenToggleRequested);
 
 private:
+    struct PendingOscilloscopeToggle {
+        bool currentRunning{false};
+        bool targetRunning{false};
+    };
+
     void drawContent(const ImVec2& available,
                      bool fullscreenActive,
                      bool* fullscreenToggleRequested,
@@ -54,10 +60,12 @@ private:
                      WaveOverlayFrame* overlayFrame = nullptr);
     void syncWaveViewToLatest();
     void handleWaveShortcuts(bool dockFocused, bool fullscreenActive, bool* fullscreenToggleRequested);
+    void flushPendingOscilloscopeToggle();
     static std::string formatMetric(double value, const char* baseUnit);
 
 private:
     app::Application& application_;
+    std::optional<PendingOscilloscopeToggle> pendingOscilloscopeToggle_{};
 };
 
 } // namespace protoscope::ui

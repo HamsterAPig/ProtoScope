@@ -186,8 +186,7 @@ float solveSplitWavePlotHeight(std::size_t visibleChannelCount,
     const float safeAvailableHeight = (std::max)(availableHeight, 0.0F);
     const float safeSpacing = (std::max)(rowSpacingY, 0.0F);
     const float totalSpacing = safeSpacing * static_cast<float>(fittedRows - 1U);
-    const float fittedHeight =
-        (std::max)(0.0F, safeAvailableHeight - totalSpacing) / static_cast<float>(fittedRows);
+    const float fittedHeight = (std::max)(0.0F, safeAvailableHeight - totalSpacing) / static_cast<float>(fittedRows);
 
     // 分屏 4 行以内优先完整塞进当前 child，超过 4 行才保留首屏高度并交给滚动条处理。
     if (visibleChannelCount <= maxRowsWithoutScroll) {
@@ -909,15 +908,17 @@ double resolveChannelCardWidth(WaveChannelCardWidthMode mode,
 
 WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double multiplier)
 {
-    const double safeMultiplier = multiplier > 0.0 ? multiplier : 1.2;
-    double maxAbs = (std::max)(std::abs(minValue), std::abs(maxValue));
-    if (maxAbs <= kEpsilon) {
-        maxAbs = 1.0;
+    const double safeMultiplier = multiplier > 0.0 ? multiplier : 1.25;
+    const double center = (minValue + maxValue) * 0.5;
+    double span = maxValue - minValue;
+    if (std::abs(span) <= kEpsilon || !std::isfinite(span)) {
+        span = 2.0;
     }
-    const double halfRange = maxAbs * safeMultiplier;
+    const double viewSpan = span * safeMultiplier;
+    const double halfRange = viewSpan * 0.5;
     return {
-        .minValue = -halfRange,
-        .maxValue = halfRange,
+        .minValue = center - halfRange,
+        .maxValue = center + halfRange,
     };
 }
 

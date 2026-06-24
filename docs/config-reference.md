@@ -75,13 +75,16 @@ gui:
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
     x_axis_double_click_action: fit_full_history
+    y_axis_double_click_action: fit_visible_channels
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
+    mouse_y_offset_drag_mode: direct
+    legend_overlay_double_click_auto_collapse: true
     zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
     legend_channel_name_max_width: 0.0
-    vertical_auto_fit_multiplier: 1.2
+    vertical_auto_fit_multiplier: 1.25
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
     peak_detect_downsample: true
@@ -103,12 +106,15 @@ gui:
 - `channel_card_width_mode`：`fixed` 或 `adaptive`。
 - `channel_double_click_action`：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset`。
 - `x_axis_double_click_action`：`fit_full_history` 或 `fit_visible_window`。
+- `y_axis_double_click_action`：`fit_visible_channels` 或 `fit_active_channel`。默认聚合所有图例可见模拟通道；激活通道模式只取当前激活模拟通道，激活通道无效、隐藏或为 bit-display 时回退到可见模拟通道。
 - `hidden_channel_policy`：`visible_only` 或 `include_hidden`，控制隐藏通道是否参与派生视图。
 - `cursor_extreme_snap_policy`：`nearest_waveform` 或 `viewport_zone`。
+- `mouse_y_offset_drag_mode`：`direct`、`shift` 或 `disabled`，控制鼠标拖动通道 Y 偏移的触发方式。
+- `legend_overlay_double_click_auto_collapse`：双击展开图内图例后，鼠标离开并结束输入/拖动交互时是否自动收起。仅在 `legend_overlay_open_mode: double_click` 时生效，默认 `true`。
 - `zoom_selection_auto_exit`：框选放大后是否自动退出框选模式。
 - `channel_card_fixed_width` / `channel_card_adaptive_ratio`：通道卡片宽度策略参数。
 - `legend_channel_name_max_width`：通道图例名称显示宽度上限，单位为 ImGui 逻辑像素；`0.0`、缺失或非正值表示不限制。作用于展开态表格、紧凑态浮窗和底部通道卡片，超长名称会裁剪并在悬浮时显示完整 tooltip。
-- `vertical_auto_fit_multiplier`：纵向自动适配余量倍数。
+- `vertical_auto_fit_multiplier`：纵向自动适配余量倍数，默认 `1.25`，即数据包络约占视图高度 80%。
 - `max_render_points_per_channel` / `max_render_vertices`：单通道和总顶点渲染预算。
 - `peak_detect_downsample`：高密度主图是否启用示波器式 peak-detect 降采样，默认 `true`。开启时每个桶保留首点、极小值、极大值和末点并连成单条轨迹；关闭时回退旧的 min/max 包络渲染，便于对比。
 - `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。

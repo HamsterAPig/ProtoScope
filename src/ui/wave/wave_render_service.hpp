@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -47,6 +48,17 @@ struct PlotRenderResult {
     std::optional<plot::MeasurementReadout> measurement;
     OverlayGeometry measurementOverlay{};
     OverlayGeometry legendOverlay{};
+};
+
+struct WavePlotOverlayPolicy {
+    bool drawMeasurementOverlay{true};
+    bool drawLegendOverlay{true};
+    float measurementSafeRightX{std::numeric_limits<float>::infinity()};
+};
+
+struct MeasurementOverlayPlacementSize {
+    ImVec2 plotSize{};
+    bool visible{false};
 };
 
 struct ZoomSelectionResult {
@@ -131,6 +143,16 @@ struct WaveStatusOverlayItem {
 std::string formatMetricText(double value, const char* baseUnit);
 bool plotInteractionActive(bool toolHeld);
 std::vector<WaveStatusOverlayItem> buildWaveStatusOverlayItems(const plot::WaveViewState& view);
+float resolveMeasurementSafeRightX(float contentLeftX,
+                                   float contentWidth,
+                                   bool toolsCollapsed,
+                                   float requestedDrawerWidth,
+                                   float minDrawerWidth,
+                                   float maxDrawerWidth,
+                                   float splitterWidth);
+MeasurementOverlayPlacementSize resolveMeasurementOverlayPlacementSize(const ImVec2& plotPos,
+                                                                       const ImVec2& plotSize,
+                                                                       float measurementSafeRightX);
 void drawWaveStatusOverlay(const plot::WaveViewState& view,
                            const plot::WaveDisplayData* displayData = nullptr,
                            const std::vector<std::size_t>* channelIndices = nullptr);
@@ -147,7 +169,7 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
                                    const plot::WaveDataBounds& yAutoFitBounds);
 bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
-                              const plot::WaveSnapshot& snapshot,
+                              const plot::WaveSnapshot& fullSnapshot,
                               const plot::WaveDisplayData& displayData,
                               const std::vector<std::size_t>& channelIndices);
 ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool suppressEscapeCancel = false);
@@ -159,6 +181,7 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
                                                 const ImPlotPoint& mousePos,
                                                 double timeSnapDistance,
                                                 double valueSnapDistance);
+bool resetBitLaneYOffsetFromHit(plot::WaveDockState& wave, const BitLaneLayoutEntry& lane);
 const char* axisSourceName(plot::WaveTimeAxisSource source);
 plot::WaveViewport currentViewport(const plot::WaveViewState& view);
 void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport);
@@ -340,17 +363,17 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
                                                              double time,
                                                              double maxTimeDistance);
 int splitCursorDragId(std::size_t channelIndex, std::size_t cursorIndex);
-std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnapshot& snapshot,
-                                                             const plot::WaveDisplayData& displayData,
-                                                             const plot::WaveViewState& view,
-                                                             const BitLaneLayout& bitLayout,
-                                                             double time,
-                                                             double plotY,
-                                                             double maxTimeDistance,
-                                                             double maxValueDistance,
-                                                             bool allowActiveChannelTimeFallback = false,
-                                                             std::optional<std::size_t> forcedChannelIndex =
-                                                                 std::nullopt);
+std::optional<plot::CursorReadout> findNearestCursorByScope(
+    const plot::WaveSnapshot& snapshot,
+    const plot::WaveDisplayData& displayData,
+    const plot::WaveViewState& view,
+    const BitLaneLayout& bitLayout,
+    double time,
+    double plotY,
+    double maxTimeDistance,
+    double maxValueDistance,
+    bool allowActiveChannelTimeFallback = false,
+    std::optional<std::size_t> forcedChannelIndex = std::nullopt);
 std::vector<std::size_t> visibleChannelIndicesForFit(const plot::WaveSnapshot& snapshot);
 bool cursorSmartSnapActive(const plot::WaveViewState& view, const ImGuiIO& io);
 std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDisplayData& displayData,
@@ -421,7 +444,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
                         BitLaneLayout& outBitLayout);
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                       const WaveFrameData& frame,
-                                      bool drawOverlays = true);
+                                      const WavePlotOverlayPolicy& overlayPolicy = {});
 PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,
                                  const WaveFrameData& frame,
                                  bool includePhase,
