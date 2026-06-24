@@ -288,11 +288,16 @@ double offsetParameterDeltaFromDisplayDelta(const plot::ChannelSpec& spec,
                                             double displayDelta);
 float measureChannelLegendHeight(const plot::WaveSnapshot& snapshot, const plot::WaveDockState& wave);
 void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
+enum class WaveLegendOverlayLayerPolicy {
+    Normal,
+    ForceDisplayFront,
+};
 void drawChannelLegendOverlay(plot::WaveDockState& wave,
                               const plot::WaveSnapshot& snapshot,
                               const ImVec2& plotPos,
                               const ImVec2& plotSize,
-                              ImGuiViewport* hostViewport);
+                              ImGuiViewport* hostViewport,
+                              WaveLegendOverlayLayerPolicy layerPolicy = WaveLegendOverlayLayerPolicy::Normal);
 void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 
 bool updateActiveChannelScale(plot::WaveDockState& wave, double factor);

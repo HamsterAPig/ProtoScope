@@ -792,7 +792,8 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                               const plot::WaveSnapshot& snapshot,
                               const ImVec2& plotPos,
                               const ImVec2& plotSize,
-                              ImGuiViewport* hostViewport)
+                              ImGuiViewport* hostViewport,
+                              WaveLegendOverlayLayerPolicy layerPolicy)
 {
     if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
         wave.legendOverlay.expanded = false;
@@ -849,6 +850,9 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                                    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoFocusOnAppearing;
     if (ImGui::Begin("##wave_channel_overlay_legend", nullptr, flags)) {
+        if (layerPolicy == WaveLegendOverlayLayerPolicy::ForceDisplayFront) {
+            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+        }
         ImGui::SetWindowFontScale(kLegendOverlayFontScale);
         const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
                                                     ImGuiHoveredFlags_ChildWindows);

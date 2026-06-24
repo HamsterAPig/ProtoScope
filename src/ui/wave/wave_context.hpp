@@ -20,7 +20,7 @@ struct WaveSnapshot;
 
 namespace protoscope::ui {
 
-struct DeferredWaveOverlayCapture;
+struct WaveOverlayFrame;
 struct WaveFrameData;
 
 struct WaveFrameState {
@@ -47,7 +47,7 @@ struct WaveContext {
     float toolsWidth{0.0F};
     bool fullscreenActive{false};
     bool* fullscreenToggleRequested{nullptr};
-    DeferredWaveOverlayCapture* deferredOverlayCapture{nullptr};
+    WaveOverlayFrame* overlayFrame{nullptr};
 };
 
 } // namespace protoscope::ui
