@@ -160,7 +160,8 @@ namespace {
         return !batch.events.empty() || !batch.logs.empty() || !batch.txRequests.empty() ||
                !batch.requestGuardResets.empty() || !batch.plotSetups.empty() || !batch.plotAppends.empty() ||
                !batch.requestDoneResults.empty() || !batch.statusUpdates.empty() ||
-               !batch.streamRuntimeProfiles.empty() || !batch.dialogRequests.empty() ||
+               !batch.oscilloscopeRunningUpdates.empty() || !batch.streamRuntimeProfiles.empty() ||
+               !batch.dialogRequests.empty() ||
                !batch.fileDialogRequests.empty() || batch.transportStats.has_value();
     }
 
@@ -175,6 +176,7 @@ namespace {
             .plotAppends = host.drainPlotAppends(),
             .requestDoneResults = host.drainRequestDoneResults(),
             .statusUpdates = host.drainStatusUpdates(),
+            .oscilloscopeRunningUpdates = host.drainOscilloscopeRunningUpdates(),
             .streamRuntimeProfiles = host.drainStreamRuntimeProfileEvents(),
             .dialogRequests = host.drainDialogRequests(),
             .fileDialogRequests = host.drainFileDialogRequests(),

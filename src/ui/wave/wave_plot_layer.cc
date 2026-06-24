@@ -1723,6 +1723,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
 
             auto* drawList = ImPlot::GetPlotDrawList();
             const ImVec2 plotPos = ImPlot::GetPlotPos();
+            const ImVec2 plotSize = ImPlot::GetPlotSize();
             drawList->AddText(ImVec2(plotPos.x + 8.0F, plotPos.y + 6.0F),
                               ImGui::ColorConvertFloat4ToU32(ImVec4(0.90F, 0.94F, 0.98F, 0.86F)),
                               ("CH" + std::to_string(channelIndex + 1U) + "  " + channel.label).c_str());
@@ -1769,7 +1770,14 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
                 updateSplitCursorReadoutsForChannel(
                     snapshot, displayData, view, channelIndex, maxCursorReadoutDistance, result);
                 updateSplitMeasurementResult(view, displayData, result, channelIndex);
-                drawMeasurementOverlay(view, snapshot, displayData, result);
+                auto* hostViewport = ImGui::GetWindowViewport();
+                drawMeasurementOverlay(view,
+                                       snapshot,
+                                       displayData,
+                                       result,
+                                       plotPos,
+                                       plotSize,
+                                       ImGui::GetForegroundDrawList(hostViewport));
             }
 
             const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
@@ -1787,7 +1795,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave, const Wav
         view.forceNextMainPlotLimits = false;
     }
     ImGui::EndChild();
-    drawChannelLegendOverlay(wave, snapshot, splitPos, splitSize);
+    drawChannelLegendOverlay(wave, snapshot, splitPos, splitSize, ImGui::GetWindowViewport());
 
     if (userInteractingInAnySplitPlot && view.pauseAutoFollowOnInteraction) {
         view.autoFollowLatest = false;
@@ -2041,11 +2049,18 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave, const WaveFrame
                                                       manualReferenceValue);
         }
     }
-    drawMeasurementOverlay(view, frame.snapshot, displayData, result);
+    auto* hostViewport = ImGui::GetWindowViewport();
+    drawMeasurementOverlay(view,
+                           frame.snapshot,
+                           displayData,
+                           result,
+                           plotPos,
+                           plotSize,
+                           ImGui::GetForegroundDrawList(hostViewport));
     drawWaveStatusOverlay(view, &renderDisplayData, &visibleChannelIndices);
 
     ImPlot::EndPlot();
-    drawChannelLegendOverlay(wave, frame.snapshot, plotPos, plotSize);
+    drawChannelLegendOverlay(wave, frame.snapshot, plotPos, plotSize, hostViewport);
     inputMap = savedInputMap;
     ImPlot::PopStyleColor();
     if (!view.showAxisLabels) {

@@ -3318,6 +3318,19 @@ bool Application::applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutpu
     return changed;
 }
 
+bool Application::applyScriptOscilloscopeOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
+    auto& wave = dockStore_.waveState();
+    for (const auto& update : batch.oscilloscopeRunningUpdates) {
+        if (wave.oscilloscopeRunning != update.running) {
+            wave.oscilloscopeRunning = update.running;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 bool Application::applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
 {
     const bool setupChanged = applyScriptPlotSetups(batch.plotSetups);
@@ -3381,6 +3394,7 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
     changed = applyScriptTxOutputs(batch) || changed;
     changed = applyScriptRuntimeProfileEvents(batch) || changed;
     changed = applyScriptUiAndLogOutputs(batch) || changed;
+    changed = applyScriptOscilloscopeOutputs(batch) || changed;
     changed = applyScriptPlotOutputs(batch) || changed;
     changed = driveTxScheduler() || changed;
     return changed;

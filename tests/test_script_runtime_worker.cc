@@ -112,6 +112,19 @@ bool hasLog(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& 
     return false;
 }
 
+bool hasOscilloscopeRunningUpdate(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& batches,
+                                  bool running)
+{
+    for (const auto& batch : batches) {
+        for (const auto& update : batch.oscilloscopeRunningUpdates) {
+            if (update.running == running) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 std::string workerProbeScript()
 {
     return R"lua(
@@ -273,8 +286,14 @@ end
 
     require(worker.requestOscilloscopeToggle(workerContext(), false, true),
             "worker 同步请求应传回 Lua true");
+    const auto acceptedOutputs = worker.drainOutputs();
+    require(hasOscilloscopeRunningUpdate(acceptedOutputs, true),
+            "worker 应把 Lua true 的默认 target 状态发布到输出队列");
     require(!worker.requestOscilloscopeToggle(workerContext(), true, false),
             "worker 同步请求应传回 Lua false");
+    const auto rejectedOutputs = worker.drainOutputs();
+    require(!hasOscilloscopeRunningUpdate(rejectedOutputs, false),
+            "Lua 返回 false 时 worker 不应默认发布 target 状态");
 }
 
 void test_pipeline_worker_threads_resolve_from_hardware_limit()

@@ -506,6 +506,36 @@ void test_application_lua_controls_without_connection()
     application.shutdown();
 }
 
+void test_application_oscilloscope_toggle_syncs_running_from_script_outputs()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-app-oscilloscope-running"));
+    writeTextFile(protocolDir.path() / "main.lua",
+                  R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  if target_running then
+    return true
+  end
+  proto.oscilloscope.set_running(true)
+  return true
+end
+)lua");
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "示波器状态同步测试协议应可加载");
+
+    auto& wave = application.docks().waveState();
+    wave.oscilloscopeRunning = false;
+    require(application.requestOscilloscopeToggle(false, true), "Lua 返回 true 时应用层应保留允许切换语义");
+    require(wave.oscilloscopeRunning, "Lua 返回 true 且未显式 set_running 时应同步 target_running=true");
+
+    require(application.requestOscilloscopeToggle(true, false), "显式 set_running 不应改变 true 返回语义");
+    require(wave.oscilloscopeRunning, "显式 set_running(true) 应优先于默认 target_running=false");
+
+    application.shutdown();
+}
+
 void test_application_tx_overflow_popup_keeps_dialog_payload()
 {
     protoscope::app::Application application;

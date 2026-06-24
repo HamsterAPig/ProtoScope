@@ -323,9 +323,12 @@ namespace {
 void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveSnapshot& snapshot,
                             const plot::WaveDisplayData& displayData,
-                            const PlotRenderResult& result)
+                            const PlotRenderResult& result,
+                            const ImVec2& plotPos,
+                            const ImVec2& plotSize,
+                            ImDrawList* drawList)
 {
-    if (!view.showMeasurementOverlay) {
+    if (!view.showMeasurementOverlay || drawList == nullptr) {
         return;
     }
 
@@ -340,9 +343,6 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     if (chips.empty()) {
         return;
     }
-
-    const ImVec2 plotPos = ImPlot::GetPlotPos();
-    const ImVec2 plotSize = ImPlot::GetPlotSize();
 
     constexpr float margin = 8.0F;
     constexpr float padding = 9.0F;
@@ -376,8 +376,6 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     const ImVec2 overlayMax(plotPos.x + plotSize.x - margin, plotPos.y + margin + overlayHeight);
 
     const ImVec2 overlayMin(overlayMax.x - overlayWidth, plotPos.y + margin);
-
-    auto* drawList = ImPlot::GetPlotDrawList();
 
     const ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.035F, 0.040F, 0.050F, 0.72F));
     const ImU32 borderColor = ImGui::ColorConvertFloat4ToU32(ImVec4(1.000F, 1.000F, 1.000F, 0.15F));

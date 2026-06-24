@@ -220,6 +220,7 @@ private:
     bool applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptRuntimeProfileEvents(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptOscilloscopeOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups);
     void enqueueScriptPlotAppends(const std::vector<std::pair<std::size_t, plot::WaveAppendRequest>>& appends);

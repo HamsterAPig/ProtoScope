@@ -84,6 +84,7 @@ add_library(protoscope_scripting STATIC
     scripting/host/status_api_module.cc
     scripting/host/ui_api_module.cc
     scripting/host/file_api_module.cc
+    scripting/host/oscilloscope_api_module.cc
     scripting/host/plot_api_module.cc
     scripting/host/control_api_module.cc
     scripting/host/codec_api_module.cc

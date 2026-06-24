@@ -791,7 +791,8 @@ namespace {
 void drawChannelLegendOverlay(plot::WaveDockState& wave,
                               const plot::WaveSnapshot& snapshot,
                               const ImVec2& plotPos,
-                              const ImVec2& plotSize)
+                              const ImVec2& plotSize,
+                              ImGuiViewport* hostViewport)
 {
     if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
         wave.legendOverlay.expanded = false;
@@ -835,7 +836,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
     const ImVec2 windowSize = effectiveExpanded ? expandedSize : compactSize;
     const ImVec2 windowPos = effectiveExpanded ? expandedPos : compactPos;
 
-    if (const ImGuiViewport* hostViewport = ImGui::GetWindowViewport()) {
+    if (hostViewport != nullptr) {
         ImGui::SetNextWindowViewport(hostViewport->ID);
     }
     ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always);

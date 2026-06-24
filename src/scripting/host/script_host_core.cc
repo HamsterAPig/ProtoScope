@@ -3367,7 +3367,13 @@ bool ScriptHost::requestOscilloscopeToggle(const transport::ConnectionContext& c
                                            bool currentRunning,
                                            bool targetRunning)
 {
-    return callbackOnOscilloscopeToggle(ScriptHostContext{ctx}, currentRunning, targetRunning);
+    const auto updateCountBeforeCallback = oscilloscopeRunningUpdates_.size();
+    const bool accepted = callbackOnOscilloscopeToggle(ScriptHostContext{ctx}, currentRunning, targetRunning);
+    if (accepted && oscilloscopeRunningUpdates_.size() == updateCountBeforeCallback) {
+        // 核心流程：旧脚本只返回 true 时仍按目标状态同步；显式 set_running 优先。
+        protoOscilloscopeSetRunning(targetRunning);
+    }
+    return accepted;
 }
 
 bool ScriptHost::setControlValue(const std::string& id, const ControlValue& value)
@@ -3582,6 +3588,13 @@ std::vector<StatusUpdate> ScriptHost::drainStatusUpdates()
     return drained;
 }
 
+std::vector<OscilloscopeRunningUpdate> ScriptHost::drainOscilloscopeRunningUpdates()
+{
+    auto drained = std::move(oscilloscopeRunningUpdates_);
+    oscilloscopeRunningUpdates_.clear();
+    return drained;
+}
+
 std::vector<StreamRuntimeProfileEvent> ScriptHost::drainStreamRuntimeProfileEvents()
 {
     auto drained = std::move(streamRuntimeProfileEvents_);
@@ -3613,6 +3626,7 @@ void ScriptHost::registerLuaApi(sol::state_view lua, sol::table& proto)
         makeStatusApiModule(*this),
         makeUiApiModule(*this),
         makeFileApiModule(*this),
+        makeOscilloscopeApiModule(*this),
         makePlotApiModule(*this),
         makeControlApiModule(*this),
         makeCodecApiModule(*this),
@@ -4014,6 +4028,11 @@ void ScriptHost::protoCancelTimer(const std::string& name)
     if (iter != timers_.end()) {
         iter->second.active = false;
     }
+}
+
+void ScriptHost::protoOscilloscopeSetRunning(bool running)
+{
+    oscilloscopeRunningUpdates_.push_back(OscilloscopeRunningUpdate{.running = running});
 }
 
 void ScriptHost::protoPlotSetup(const PlotSetup& setup)

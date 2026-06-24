@@ -42,6 +42,7 @@ std::unique_ptr<IScriptHostApiModule> makeTxApiModule(ScriptHost& host);
 std::unique_ptr<IScriptHostApiModule> makeStatusApiModule(ScriptHost& host);
 std::unique_ptr<IScriptHostApiModule> makeUiApiModule(ScriptHost& host);
 std::unique_ptr<IScriptHostApiModule> makeFileApiModule(ScriptHost& host);
+std::unique_ptr<IScriptHostApiModule> makeOscilloscopeApiModule(ScriptHost& host);
 std::unique_ptr<IScriptHostApiModule> makePlotApiModule(ScriptHost& host);
 std::unique_ptr<IScriptHostApiModule> makeControlApiModule(ScriptHost& host);
 std::unique_ptr<IScriptHostApiModule> makeCodecApiModule(ScriptHost& host);

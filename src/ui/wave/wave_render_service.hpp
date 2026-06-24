@@ -283,7 +283,8 @@ void drawChannelLegendBar(plot::WaveDockState& wave, const plot::WaveSnapshot& s
 void drawChannelLegendOverlay(plot::WaveDockState& wave,
                               const plot::WaveSnapshot& snapshot,
                               const ImVec2& plotPos,
-                              const ImVec2& plotSize);
+                              const ImVec2& plotSize,
+                              ImGuiViewport* hostViewport);
 void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 
 bool updateActiveChannelScale(plot::WaveDockState& wave, double factor);
@@ -413,6 +414,9 @@ PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,
 void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveSnapshot& snapshot,
                             const plot::WaveDisplayData& displayData,
-                            const PlotRenderResult& result);
+                            const PlotRenderResult& result,
+                            const ImVec2& plotPos,
+                            const ImVec2& plotSize,
+                            ImDrawList* drawList);
 
 } // namespace protoscope::ui

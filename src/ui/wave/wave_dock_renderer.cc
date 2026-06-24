@@ -410,9 +410,7 @@ namespace {
         if (drawTopToolbarButton(currentRunning ? PROTOSCOPE_ICON_PAUSE : PROTOSCOPE_ICON_PLAY,
                                  currentRunning,
                                  currentRunning ? "请求暂停示波器" : "请求启动示波器")) {
-            if (application.requestOscilloscopeToggle(currentRunning, targetRunning)) {
-                wave.oscilloscopeRunning = targetRunning;
-            }
+            application.requestOscilloscopeToggle(currentRunning, targetRunning);
         }
 
         drawTopToolbarSeparator();

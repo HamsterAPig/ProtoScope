@@ -1534,6 +1534,8 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
             "LuaLS API 应声明 proto.status.set");
     require(text.find("function proto.plot.push(channel_index, payload) end") != std::string::npos,
             "LuaLS API 应声明 proto.plot.push");
+    require(text.find("function proto.oscilloscope.set_running(running) end") != std::string::npos,
+            "LuaLS API 应声明 proto.oscilloscope.set_running");
     require(text.find("function proto.ui.alert(opts) end") != std::string::npos, "LuaLS API 应声明 proto.ui.alert");
     require(text.find("@class ProtoDialogWindowOptions") != std::string::npos,
             "LuaLS API 应声明 ProtoDialogWindowOptions");
@@ -1597,6 +1599,94 @@ end
     protoscope::scripting::ScriptHost host;
     require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "示波器切换 false 测试脚本应可加载");
     require(!host.requestOscilloscopeToggle(sampleCtx(), true, false), "Lua 返回 false 时应拒绝切换");
+}
+
+void test_script_oscilloscope_set_running_outputs_update()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-set-running"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_open(ctx)
+  proto.oscilloscope.set_running(true)
+  proto.oscilloscope.set_running(false)
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "set_running 测试脚本应可加载");
+
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 2, "set_running 应进入示波器状态输出队列");
+    require(updates[0].running, "第一条状态应为 running=true");
+    require(!updates[1].running, "第二条状态应为 running=false");
+}
+
+void test_script_oscilloscope_toggle_true_defaults_target_update()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-default-update"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  return true
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "默认状态同步测试脚本应可加载");
+
+    require(host.requestOscilloscopeToggle(sampleCtx(), false, true), "Lua 返回 true 时应保留允许切换语义");
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1, "Lua 返回 true 且未显式 set_running 时应默认同步 target_running");
+    require(updates[0].running, "默认同步状态应使用 target_running=true");
+}
+
+void test_script_oscilloscope_toggle_explicit_set_running_overrides_default()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-explicit-update"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  proto.oscilloscope.set_running(false)
+  return true
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "显式状态同步测试脚本应可加载");
+
+    require(host.requestOscilloscopeToggle(sampleCtx(), false, true), "显式 set_running 不应破坏旧 true 语义");
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1, "同一回调显式 set_running 时不应再追加默认 target 状态");
+    require(!updates[0].running, "显式 set_running(false) 应优先于 target_running=true");
+}
+
+void test_script_oscilloscope_toggle_false_allows_later_set_running()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-later-update"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  proto.set_timer("start_ack", 1)
+  return false
+end
+
+function on_timer(ctx, name)
+  if name == "start_ack" then
+    proto.oscilloscope.set_running(true)
+  end
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "延迟状态同步测试脚本应可加载");
+
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "Lua 返回 false 时仍应保持旧拒绝语义");
+    require(host.drainOscilloscopeRunningUpdates().empty(), "返回 false 本身不应默认同步 target 状态");
+
+    host.tick(nowMs() + 10);
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && updates[0].running, "后续 set_running(true) 应可同步运行状态");
 }
 
 void test_script_oscilloscope_toggle_missing_callback_rejects()
@@ -3666,6 +3756,14 @@ static const TestCase kAllTests[] = {
     {"script_oscilloscope_toggle_returns_true_and_receives_args",
      &test_script_oscilloscope_toggle_returns_true_and_receives_args},
     {"script_oscilloscope_toggle_returns_false", &test_script_oscilloscope_toggle_returns_false},
+    {"script_oscilloscope_set_running_outputs_update",
+     &test_script_oscilloscope_set_running_outputs_update},
+    {"script_oscilloscope_toggle_true_defaults_target_update",
+     &test_script_oscilloscope_toggle_true_defaults_target_update},
+    {"script_oscilloscope_toggle_explicit_set_running_overrides_default",
+     &test_script_oscilloscope_toggle_explicit_set_running_overrides_default},
+    {"script_oscilloscope_toggle_false_allows_later_set_running",
+     &test_script_oscilloscope_toggle_false_allows_later_set_running},
     {"script_oscilloscope_toggle_missing_callback_rejects",
      &test_script_oscilloscope_toggle_missing_callback_rejects},
     {"script_oscilloscope_toggle_non_function_rejects_and_logs",
@@ -3849,6 +3947,8 @@ static const TestCase kAllTests[] = {
      &test_script_dialog_requests_reject_invalid_window_options},
     {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
+    {"application_oscilloscope_toggle_syncs_running_from_script_outputs",
+     &test_application_oscilloscope_toggle_syncs_running_from_script_outputs},
     {"application_tx_overflow_popup_keeps_dialog_payload", &test_application_tx_overflow_popup_keeps_dialog_payload},
     {"application_failed_protocol_reload_keeps_previous_runtime",
      &test_application_failed_protocol_reload_keeps_previous_runtime},

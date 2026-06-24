@@ -30,6 +30,7 @@ class CodecScriptHostApiModule;
 class ControlScriptHostApiModule;
 class CoreScriptHostApiModule;
 class FileScriptHostApiModule;
+class OscilloscopeScriptHostApiModule;
 class PlotScriptHostApiModule;
 class StatusScriptHostApiModule;
 class TxScriptHostApiModule;
@@ -267,6 +268,10 @@ struct StatusUpdate {
     std::uint64_t timestampMs{0};
 };
 
+struct OscilloscopeRunningUpdate {
+    bool running{false};
+};
+
 struct StreamRuntimeProfileEvent {
     bool cleared{false};
     std::string frameName;
@@ -404,6 +409,7 @@ public:
     RealtimeOutputDiscardCounts clearPendingRealtimeOutputs();
     std::vector<RequestDoneResult> drainRequestDoneResults();
     std::vector<StatusUpdate> drainStatusUpdates();
+    std::vector<OscilloscopeRunningUpdate> drainOscilloscopeRunningUpdates();
     std::vector<StreamRuntimeProfileEvent> drainStreamRuntimeProfileEvents();
     std::vector<DialogRequest> drainDialogRequests();
     std::vector<FileDialogRequest> drainFileDialogRequests();
@@ -495,6 +501,7 @@ private:
     bool protoRequestDone(const sol::object& result, std::string& error);
     void protoStatusSet(const std::string& text, const sol::object& opts);
     void protoStatusClear();
+    void protoOscilloscopeSetRunning(bool running);
     std::optional<DialogRequest> protoDialog(DialogKind kind, const sol::object& opts, std::string& error);
     std::optional<FileDialogRequest> protoFileDialog(FileDialogKind kind, const sol::object& opts, std::string& error);
     std::tuple<sol::object, sol::object> protoFsOpen(sol::state_view lua,
@@ -525,6 +532,7 @@ private:
     friend class ControlScriptHostApiModule;
     friend class CoreScriptHostApiModule;
     friend class FileScriptHostApiModule;
+    friend class OscilloscopeScriptHostApiModule;
     friend class PlotScriptHostApiModule;
     friend class StatusScriptHostApiModule;
     friend class TxScriptHostApiModule;
@@ -552,6 +560,7 @@ private:
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends_;
     std::vector<RequestDoneResult> requestDoneResults_;
     std::vector<StatusUpdate> statusUpdates_;
+    std::vector<OscilloscopeRunningUpdate> oscilloscopeRunningUpdates_;
     std::vector<StreamRuntimeProfileEvent> streamRuntimeProfileEvents_;
     std::vector<DialogRequest> dialogRequests_;
     std::vector<FileDialogRequest> fileDialogRequests_;

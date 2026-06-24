@@ -78,6 +78,7 @@ ScriptHost::LoadSnapshot ScriptHost::captureLoadSnapshot()
         .plotAppends = std::move(plotAppends_),
         .requestDoneResults = std::move(requestDoneResults_),
         .statusUpdates = std::move(statusUpdates_),
+        .oscilloscopeRunningUpdates = std::move(oscilloscopeRunningUpdates_),
         .dialogRequests = std::move(dialogRequests_),
         .fileDialogRequests = std::move(fileDialogRequests_),
         .timers = std::move(timers_),
@@ -103,6 +104,7 @@ void ScriptHost::restoreLoadSnapshot(LoadSnapshot&& snapshot, std::string messag
     plotAppends_ = std::move(snapshot.plotAppends);
     requestDoneResults_ = std::move(snapshot.requestDoneResults);
     statusUpdates_ = std::move(snapshot.statusUpdates);
+    oscilloscopeRunningUpdates_ = std::move(snapshot.oscilloscopeRunningUpdates);
     dialogRequests_ = std::move(snapshot.dialogRequests);
     fileDialogRequests_ = std::move(snapshot.fileDialogRequests);
     timers_ = std::move(snapshot.timers);
@@ -129,6 +131,7 @@ void ScriptHost::resetForScriptLoad(const std::string& path, const std::string& 
     plotAppends_.clear();
     requestDoneResults_.clear();
     statusUpdates_.clear();
+    oscilloscopeRunningUpdates_.clear();
     dialogRequests_.clear();
     fileDialogRequests_.clear();
     timers_.clear();
