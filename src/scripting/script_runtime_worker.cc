@@ -46,6 +46,13 @@ namespace {
         std::shared_ptr<std::promise<bool>> result;
     };
 
+    struct OscilloscopeToggleCommand {
+        transport::ConnectionContext context;
+        bool currentRunning{false};
+        bool targetRunning{false};
+        std::shared_ptr<std::promise<bool>> result;
+    };
+
     struct ClearRealtimeOutputsCommand {
         std::shared_ptr<std::promise<RealtimeOutputDiscardCounts>> result;
     };
@@ -108,6 +115,7 @@ namespace {
                                        SetFileIoConfigCommand,
                                        ReloadProtocolCommand,
                                        SetControlValueCommand,
+                                       OscilloscopeToggleCommand,
                                        ClearRealtimeOutputsCommand,
                                        ApplyStreamRuntimeProfileCommand,
                                        OpenCommand,
@@ -648,6 +656,15 @@ struct ScriptRuntimeWorker::Impl {
 
     CommandExecutionResult executeCommandItem(ScriptHost& host,
                                               std::optional<std::uint64_t>&,
+                                              OscilloscopeToggleCommand& command)
+    {
+        command.result->set_value(host.requestOscilloscopeToggle(
+            command.context, command.currentRunning, command.targetRunning));
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
                                               ClearRealtimeOutputsCommand& command)
     {
         command.result->set_value(clearHostRealtimeOutputs(host));
@@ -811,6 +828,20 @@ bool ScriptRuntimeWorker::setControlValue(const std::string& id, const ControlVa
 {
     auto promise = std::make_shared<std::promise<bool>>();
     return impl_->runSync<bool>(SetControlValueCommand{.id = id, .value = value, .result = promise}, promise);
+}
+
+bool ScriptRuntimeWorker::requestOscilloscopeToggle(transport::ConnectionContext context,
+                                                    bool currentRunning,
+                                                    bool targetRunning)
+{
+    auto promise = std::make_shared<std::promise<bool>>();
+    return impl_->runSync<bool>(OscilloscopeToggleCommand{
+                                    .context = std::move(context),
+                                    .currentRunning = currentRunning,
+                                    .targetRunning = targetRunning,
+                                    .result = promise,
+                                },
+                                promise);
 }
 
 RealtimeOutputDiscardCounts ScriptRuntimeWorker::clearPendingRealtimeOutputs()

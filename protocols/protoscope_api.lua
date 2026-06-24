@@ -604,6 +604,13 @@ function on_bytes(ctx, bytes) end
 ---@param name string
 function on_timer(ctx, name) end
 
+-- 示波器启动/暂停请求回调：返回 true 才允许宿主切换工具栏状态，启动/暂停动作由脚本自行处理。
+---@param ctx ProtoConnectionContext
+---@param current_running boolean
+---@param target_running boolean
+---@return boolean allow_toggle
+function on_oscilloscope_toggle(ctx, current_running, target_running) end
+
 -- 传输事件回调：用于跟踪 send/request 的发送结果、超时或失败。
 ---@param ctx ProtoConnectionContext
 ---@param evt ProtoTxEvent

@@ -1731,6 +1731,34 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
     syncDockState();
 }
 
+bool Application::requestOscilloscopeToggle(bool currentRunning, bool targetRunning)
+{
+    transport::ConnectionContext context;
+    if (activeConnection_.has_value()) {
+        context = *activeConnection_;
+    } else {
+        // 核心流程：示波器启停由 Lua 决定，未连接时仍允许脚本基于 detached 上下文处理本地动作。
+        context.endpoint = "detached";
+        context.connectionId = 0;
+        context.timestampMs = nowMs();
+        context.readyForIo = false;
+    }
+
+    try {
+        const bool accepted = scriptWorker_.requestOscilloscopeToggle(context, currentRunning, targetRunning);
+        flushScriptOutputs();
+        syncDockState();
+        return accepted;
+    } catch (const std::exception& ex) {
+        setStatusMessage(std::string("示波器切换请求失败: ") + ex.what(), false);
+    } catch (...) {
+        setStatusMessage("示波器切换请求失败: 未知异常", false);
+    }
+    flushScriptOutputs();
+    syncDockState();
+    return false;
+}
+
 bool Application::restoreControlValue(const std::string& id, const scripting::ControlValue& value)
 {
     if (!scriptWorker_.setControlValue(id, value)) {

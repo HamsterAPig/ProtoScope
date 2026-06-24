@@ -405,6 +405,17 @@ namespace {
         ImGui::SetCursorPosY(offsetY);
         ImGui::AlignTextToFramePadding();
 
+        const bool currentRunning = wave.oscilloscopeRunning;
+        const bool targetRunning = !currentRunning;
+        if (drawTopToolbarButton(currentRunning ? PROTOSCOPE_ICON_PAUSE : PROTOSCOPE_ICON_PLAY,
+                                 currentRunning,
+                                 currentRunning ? "请求暂停示波器" : "请求启动示波器")) {
+            if (application.requestOscilloscopeToggle(currentRunning, targetRunning)) {
+                wave.oscilloscopeRunning = targetRunning;
+            }
+        }
+
+        drawTopToolbarSeparator();
         if (drawTopToolbarButton("叠加", view.viewMode == plot::WaveViewMode::Overlay, "多通道共用同一个波形区域。")) {
             view.viewMode = plot::WaveViewMode::Overlay;
         }

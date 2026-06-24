@@ -383,6 +383,9 @@ public:
     bool applyStreamRuntimeProfileEvent(const StreamRuntimeProfileEvent& event, std::string& error);
     void clearAllStreamRuntimeProfiles();
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
+    [[nodiscard]] bool requestOscilloscopeToggle(const transport::ConnectionContext& ctx,
+                                                 bool currentRunning,
+                                                 bool targetRunning);
     bool setControlValue(const std::string& id, const ControlValue& value);
     void tick(std::uint64_t currentMs);
 
@@ -442,6 +445,7 @@ private:
     void callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error);
     void callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName);
     void callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value);
+    bool callbackOnOscilloscopeToggle(const ScriptHostContext& ctx, bool currentRunning, bool targetRunning);
     void callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event);
     void callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event);
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);

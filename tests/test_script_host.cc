@@ -1549,6 +1549,9 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
     require(text.find("@class ProtoElfSymbolValue") != std::string::npos, "LuaLS API 应声明 ProtoElfSymbolValue");
     require(text.find("function stream() end") != std::string::npos, "LuaLS API 应声明 stream()");
     require(text.find("function on_tx(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_tx");
+    require(text.find("function on_oscilloscope_toggle(ctx, current_running, target_running) end") !=
+                std::string::npos,
+            "LuaLS API 应声明 on_oscilloscope_toggle");
     require(text.find("function on_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_dialog");
     require(text.find("function on_file_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_file_dialog");
     require(text.find("@field color? string") != std::string::npos, "LuaLS API 应声明 ProtoPlotChannel.color");
@@ -1557,6 +1560,109 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
     require(text.find("@class ProtoPlotBitDisplay") != std::string::npos, "LuaLS API 应声明 ProtoPlotBitDisplay");
     require(text.find("@field bit_display? boolean|ProtoPlotBitDisplay") != std::string::npos,
             "LuaLS API 应声明 ProtoPlotChannel.bit_display");
+}
+
+void test_script_oscilloscope_toggle_returns_true_and_receives_args()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-true"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  proto.emit("oscilloscope_toggle", "endpoint=" .. ctx.endpoint .. ",current=" .. tostring(current_running) .. ",target=" .. tostring(target_running))
+  return true
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "示波器切换测试脚本应可加载");
+
+    require(host.requestOscilloscopeToggle(sampleCtx(), false, true), "Lua 返回 true 时应允许切换");
+    const auto events = host.drainEvents();
+    require(events.size() == 1, "示波器切换回调应收到参数并 emit 事件");
+    require(events[0].payload.find("endpoint=127.0.0.1:9000") != std::string::npos, "应传入连接上下文");
+    require(events[0].payload.find("current=false") != std::string::npos, "应传入 current_running=false");
+    require(events[0].payload.find("target=true") != std::string::npos, "应传入 target_running=true");
+}
+
+void test_script_oscilloscope_toggle_returns_false()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-false"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  return false
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "示波器切换 false 测试脚本应可加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), true, false), "Lua 返回 false 时应拒绝切换");
+}
+
+void test_script_oscilloscope_toggle_missing_callback_rejects()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("missing_callbacks").generic_string()),
+            "缺失回调脚本也应允许加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "缺失示波器切换回调应拒绝切换");
+}
+
+void test_script_oscilloscope_toggle_non_function_rejects_and_logs()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-non-function"));
+    writeMainLua(protocolDir.path(), "on_oscilloscope_toggle = \"bad\"\n");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "非 function 回调不应阻止脚本加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "非 function 示波器回调应拒绝切换");
+
+    bool foundLog = false;
+    for (const auto& log : host.drainLogs()) {
+        foundLog = foundLog || log.message.find("on_oscilloscope_toggle 必须是 function") != std::string::npos;
+    }
+    require(foundLog, "非 function 示波器回调应写错误日志");
+}
+
+void test_script_oscilloscope_toggle_runtime_error_rejects_and_logs()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-error"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  error("boom")
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "异常回调测试脚本应可加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "示波器回调异常时应拒绝切换");
+
+    bool foundLog = false;
+    for (const auto& log : host.drainLogs()) {
+        foundLog = foundLog || log.message.find("on_oscilloscope_toggle 执行失败") != std::string::npos;
+    }
+    require(foundLog, "示波器回调异常应写错误日志");
+}
+
+void test_script_oscilloscope_toggle_non_boolean_rejects_and_logs()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-non-boolean"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  return "yes"
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "非 boolean 回调测试脚本应可加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "示波器回调返回非 boolean 时应拒绝切换");
+
+    bool foundLog = false;
+    for (const auto& log : host.drainLogs()) {
+        foundLog = foundLog || log.message.find("on_oscilloscope_toggle 必须返回 boolean") != std::string::npos;
+    }
+    require(foundLog, "示波器回调返回非 boolean 应写错误日志");
 }
 
 void test_script_missing_callbacks_allowed()
@@ -3557,6 +3663,17 @@ static const TestCase kAllTests[] = {
     {"frame_stream_parser_runtime_profile_truncated_fields",
      &test_frame_stream_parser_runtime_profile_truncated_fields},
     {"luals_api_sync_contains_tx_and_dialog_api", &test_luals_api_sync_contains_tx_and_dialog_api},
+    {"script_oscilloscope_toggle_returns_true_and_receives_args",
+     &test_script_oscilloscope_toggle_returns_true_and_receives_args},
+    {"script_oscilloscope_toggle_returns_false", &test_script_oscilloscope_toggle_returns_false},
+    {"script_oscilloscope_toggle_missing_callback_rejects",
+     &test_script_oscilloscope_toggle_missing_callback_rejects},
+    {"script_oscilloscope_toggle_non_function_rejects_and_logs",
+     &test_script_oscilloscope_toggle_non_function_rejects_and_logs},
+    {"script_oscilloscope_toggle_runtime_error_rejects_and_logs",
+     &test_script_oscilloscope_toggle_runtime_error_rejects_and_logs},
+    {"script_oscilloscope_toggle_non_boolean_rejects_and_logs",
+     &test_script_oscilloscope_toggle_non_boolean_rejects_and_logs},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},
     {"script_invalid_dock_anchor_fail", &test_script_invalid_dock_anchor_fail},
@@ -3837,6 +3954,8 @@ static const TestCase kAllTests[] = {
      &test_script_runtime_worker_rx_limit_keeps_all_queued_bytes},
     {"script_runtime_worker_batch_bytes_merges_adjacent_rx_events",
      &test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events},
+    {"script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result",
+     &test_script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result},
     {"pipeline_worker_threads_resolve_from_hardware_limit", &test_pipeline_worker_threads_resolve_from_hardware_limit},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_history_limit_zero_keeps_all_samples", &test_plot_history_limit_zero_keeps_all_samples},

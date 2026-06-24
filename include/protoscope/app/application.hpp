@@ -40,6 +40,7 @@ public:
     void closeTransport();
     bool sendManualPayload(const std::string& payload, bool hexMode);
     void updateControlValue(const std::string& id, const scripting::ControlValue& value);
+    bool requestOscilloscopeToggle(bool currentRunning, bool targetRunning);
     bool restoreControlValue(const std::string& id, const scripting::ControlValue& value);
     void markCommConfigEdited(bool reconnectRequired);
     void markProtocolEdited();

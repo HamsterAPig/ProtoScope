@@ -298,6 +298,7 @@ struct WaveDockState {
     std::vector<std::string> hiddenChannelLabels;
     std::vector<std::uint8_t> fftChannelEnabled;
     WaveLegendOverlayState legendOverlay{};
+    bool oscilloscopeRunning{false};
     bool toolsCollapsed{true};
     WaveToolsDrawer activeToolsDrawer{WaveToolsDrawer::Main};
     bool overviewCollapsed{false};

@@ -250,6 +250,33 @@ void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events()
             "超过 batch_bytes 的后续 RX 应保留为新块");
 }
 
+void test_script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result()
+{
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir(
+        "oscilloscope-toggle",
+        R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  return target_running
+end
+)lua"));
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
+        .enabled = true,
+        .rxQueueLimitBytes = 64U * 1024U,
+        .outputQueueLimit = 128U,
+        .batchBytes = 1024U,
+        .backpressureEnabled = false,
+    });
+    const auto loaded = worker.loadProtocolDirectory(protocolDir.path().generic_string());
+    require(loaded.ok, "worker 示波器切换测试协议应可加载");
+    (void) worker.drainOutputs();
+
+    require(worker.requestOscilloscopeToggle(workerContext(), false, true),
+            "worker 同步请求应传回 Lua true");
+    require(!worker.requestOscilloscopeToggle(workerContext(), true, false),
+            "worker 同步请求应传回 Lua false");
+}
+
 void test_pipeline_worker_threads_resolve_from_hardware_limit()
 {
     using protoscope::scripting::resolvePipelineWorkerThreads;

@@ -75,6 +75,9 @@ public:
     void setFileIoConfig(FileIoConfig config);
     [[nodiscard]] ScriptRuntimeLoadResult loadProtocolDirectory(const std::string& directory);
     [[nodiscard]] bool setControlValue(const std::string& id, const ControlValue& value);
+    [[nodiscard]] bool requestOscilloscopeToggle(transport::ConnectionContext context,
+                                                 bool currentRunning,
+                                                 bool targetRunning);
     [[nodiscard]] RealtimeOutputDiscardCounts clearPendingRealtimeOutputs();
 
     void postTransportOpen(transport::TransportOpenEvent event);

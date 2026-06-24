@@ -3363,6 +3363,13 @@ void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::s
     callbackOnControl(ScriptHostContext{ctx}, id, value);
 }
 
+bool ScriptHost::requestOscilloscopeToggle(const transport::ConnectionContext& ctx,
+                                           bool currentRunning,
+                                           bool targetRunning)
+{
+    return callbackOnOscilloscopeToggle(ScriptHostContext{ctx}, currentRunning, targetRunning);
+}
+
 bool ScriptHost::setControlValue(const std::string& id, const ControlValue& value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);

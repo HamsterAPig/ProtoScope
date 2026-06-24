@@ -237,6 +237,34 @@ void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::stri
     }
 }
 
+bool ScriptHost::callbackOnOscilloscopeToggle(const ScriptHostContext& ctx, bool currentRunning, bool targetRunning)
+{
+    const auto callback = resolveGlobalCallback("on_oscilloscope_toggle");
+    if (!callback.has_value()) {
+        return false;
+    }
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result =
+            (*callback)(makeContextTable(view, ctx.connection), currentRunning, targetRunning);
+        if (!result.valid()) {
+            protoLog("error", "on_oscilloscope_toggle 执行失败: " + protectedCallError(result));
+            return false;
+        }
+        const sol::object returned = result.get<sol::object>();
+        if (!returned.is<bool>()) {
+            protoLog("error", "on_oscilloscope_toggle 必须返回 boolean");
+            return false;
+        }
+        return returned.as<bool>();
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_oscilloscope_toggle 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_oscilloscope_toggle 执行异常: 未知异常");
+    }
+    return false;
+}
+
 void ScriptHost::callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event)
 {
     const auto callback = resolveGlobalCallback("on_tx");
