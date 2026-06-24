@@ -163,10 +163,11 @@ proto.set_control("holding_values", {
 
 ### UI 事件回调
 
-动态 UI 常用两个回调：
+动态 UI 常用回调：
 
 - `on_control(ctx, id, value)`：用户操作控件时触发。按钮的 `value` 固定为 `true`；输入框、数字框、开关、下拉框会传当前值；`elf_symbol_combo` 可能传字符串或符号表。
 - `on_dialog(ctx, evt)`：`proto.ui.confirm()` 或 `proto.ui.alert()` 关闭后触发。常用字段是 `evt.tag`、`evt.dialog_id` 和 `evt.result`。
+- `on_oscilloscope_toggle(ctx, current_running, target_running)`：波形工具栏播放/暂停按钮触发。脚本返回 `true` 才允许宿主切换按钮状态；返回 `false`、缺失回调、异常或非 boolean 返回都会拒绝切换。启动或暂停设备的实际动作应由脚本自行调用 `proto.send()` / `proto.request()` 等 API 完成。
 
 如果只需要处理当前控件，直接使用 `value`；如果一次按钮点击需要组装多个控件值，再用 `proto.get_control()` 读取其他控件。
 
