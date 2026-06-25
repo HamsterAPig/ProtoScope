@@ -71,17 +71,23 @@ gui:
     fullscreen_mode: overlay
     control_mode: oscilloscope
     display_formula: offset_then_scale
+    grid_division_readout_mode: display_value
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
     x_axis_double_click_action: fit_full_history
+    y_axis_double_click_action: fit_visible_channels
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
+    mouse_y_offset_drag_mode: direct
+    legend_overlay_double_click_auto_collapse: true
     zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
-    vertical_auto_fit_multiplier: 1.2
+    legend_channel_name_max_width: 0.0
+    vertical_auto_fit_multiplier: 1.25
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
+    peak_detect_downsample: true
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
     max_total_samples: 0
@@ -90,26 +96,34 @@ gui:
     show_axis_labels: false
     show_channel_legend: true
     show_fft_legend: true
+    cursor_fft_highlight_rgba: [0.20, 0.55, 1.00, 0.16]
 ```
 
 - `fullscreen_mode`：`focus` 或 `overlay`。
 - `control_mode`：`legacy_global` 或 `oscilloscope`。
 - `display_formula`：`offset_then_scale` 或 `scale_then_offset`。
+- `grid_division_readout_mode`：`display_value`、`actual_value` 或 `raw_value`，控制通道卡片展示每格读数的换算口径。
 - `channel_card_width_mode`：`fixed` 或 `adaptive`。
 - `channel_double_click_action`：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset`。
 - `x_axis_double_click_action`：`fit_full_history` 或 `fit_visible_window`。
+- `y_axis_double_click_action`：`fit_visible_channels` 或 `fit_active_channel`。默认聚合所有图例可见模拟通道；激活通道模式只取当前激活模拟通道，激活通道无效、隐藏或为 bit-display 时回退到可见模拟通道。
 - `hidden_channel_policy`：`visible_only` 或 `include_hidden`，控制隐藏通道是否参与派生视图。
 - `cursor_extreme_snap_policy`：`nearest_waveform` 或 `viewport_zone`。
+- `mouse_y_offset_drag_mode`：`direct`、`shift` 或 `disabled`，控制鼠标拖动通道 Y 偏移的触发方式。
+- `legend_overlay_double_click_auto_collapse`：双击展开图内图例后，鼠标离开并结束输入/拖动交互时是否自动收起。仅在 `legend_overlay_open_mode: double_click` 时生效，默认 `true`。
 - `zoom_selection_auto_exit`：框选放大后是否自动退出框选模式。
 - `channel_card_fixed_width` / `channel_card_adaptive_ratio`：通道卡片宽度策略参数。
-- `vertical_auto_fit_multiplier`：纵向自动适配余量倍数。
+- `legend_channel_name_max_width`：通道图例名称显示宽度上限，单位为 ImGui 逻辑像素；`0.0`、缺失或非正值表示不限制。作用于展开态表格、紧凑态浮窗和底部通道卡片，超长名称会裁剪并在悬浮时显示完整 tooltip。
+- `vertical_auto_fit_multiplier`：纵向自动适配余量倍数，默认 `1.25`，即数据包络约占视图高度 80%。
 - `max_render_points_per_channel` / `max_render_vertices`：单通道和总顶点渲染预算。
+- `peak_detect_downsample`：高密度主图是否启用示波器式 peak-detect 降采样，默认 `true`。开启时每个桶保留首点、极小值、极大值和末点并连成单条轨迹；关闭时回退旧的 min/max 包络渲染，便于对比。
 - `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。
 - `overview_max_samples`：总览数据上限。
 - `max_total_samples`：每通道历史样本上限，`0` 表示不额外限制。
 - `min_visible_time_span`：X 轴最小可见时间跨度。
 - `reset_history_on_time_reset`：时间轴重置时是否清空历史。
 - `show_axis_labels` / `show_channel_legend` / `show_fft_legend`：波形轴标签、通道图例、FFT 图例显示开关。
+- `cursor_fft_highlight_rgba`：游标分屏模式下主波形 C1~C2 FFT 输入窗口高亮色，按 `[r, g, b, a]` 写入。
 
 ### gui 运行态预算
 

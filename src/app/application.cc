@@ -94,6 +94,16 @@ namespace {
         return std::abs(*left - *right) <= 1e-6F;
     }
 
+    bool sameBitDisplayIdentity(const plot::BitDisplaySpec& left, const plot::BitDisplaySpec& right)
+    {
+        return left.enabled == right.enabled && left.firstBit == right.firstBit && left.bitCount == right.bitCount;
+    }
+
+    bool sameBitDisplaySpec(const plot::BitDisplaySpec& left, const plot::BitDisplaySpec& right)
+    {
+        return sameBitDisplayIdentity(left, right) && std::abs(left.yOffset - right.yOffset) <= 1e-12;
+    }
+
     bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer)
     {
         if (setupChannels.size() != buffer.channelCount()) {
@@ -106,7 +116,8 @@ namespace {
             }
             const auto& setup = setupChannels[i];
             if (current->label != setup.label || current->unit != setup.unit ||
-                !sameColor(current->color, setup.color) || !sameLineWidth(current->lineWidth, setup.lineWidth)) {
+                !sameColor(current->color, setup.color) || !sameLineWidth(current->lineWidth, setup.lineWidth) ||
+                !sameBitDisplayIdentity(current->bitDisplay, setup.bitDisplay)) {
                 return false;
             }
         }
@@ -123,7 +134,8 @@ namespace {
             const auto current = buffer.channelSpec(index);
             const auto& setup = setupChannels[index];
             if (!current.has_value() || std::abs(current->ratio - setup.ratio) > 1e-12 ||
-                std::abs(current->scale - setup.scale) > 1e-12 || std::abs(current->offset - setup.offset) > 1e-12) {
+                std::abs(current->scale - setup.scale) > 1e-12 || std::abs(current->offset - setup.offset) > 1e-12 ||
+                !sameBitDisplaySpec(current->bitDisplay, setup.bitDisplay)) {
                 return false;
             }
         }
@@ -142,7 +154,8 @@ namespace {
                 return false;
             }
             const auto& setup = setupChannels[i];
-            if (current->label != setup.label || current->unit != setup.unit) {
+            if (current->label != setup.label || current->unit != setup.unit ||
+                !sameBitDisplayIdentity(current->bitDisplay, setup.bitDisplay)) {
                 return false;
             }
         }
@@ -269,8 +282,8 @@ namespace {
         }
 
         std::error_code walkError;
-        for (std::filesystem::recursive_directory_iterator it(
-                 protocolDir, std::filesystem::directory_options::skip_permission_denied, walkError),
+        for (std::filesystem::recursive_directory_iterator
+                 it(protocolDir, std::filesystem::directory_options::skip_permission_denied, walkError),
              end;
              it != end;
              it.increment(walkError)) {
@@ -308,9 +321,7 @@ namespace {
             });
         }
 
-        std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
-            return lhs.name < rhs.name;
-        });
+        std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) { return lhs.name < rhs.name; });
         return true;
     }
 
@@ -400,6 +411,7 @@ namespace {
                 .offset = channel.offset,
                 .color = channel.color,
                 .lineWidth = channel.lineWidth,
+                .bitDisplay = channel.bitDisplay,
             });
         }
         return rawSetup;
@@ -762,7 +774,8 @@ namespace {
             return true;
         }
 
-        const auto rawText = std::string_view(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
+        const auto rawText =
+            std::string_view(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
         auto capture = plot::decodeRawCaptureFile(rawText, error);
         if (!capture.has_value()) {
             return false;
@@ -984,9 +997,9 @@ namespace {
     }
 
     dock::RequestTraceRow makeRequestTraceRow(const scripting::TxRequest& request,
-                                             dock::RequestTraceState state,
-                                             const std::optional<std::string>& error,
-                                             std::uint64_t timestampMs)
+                                              dock::RequestTraceState state,
+                                              const std::optional<std::string>& error,
+                                              std::uint64_t timestampMs)
     {
         return dock::RequestTraceRow{
             .timestampMs = timestampMs,
@@ -1032,10 +1045,6 @@ namespace {
         }
         if (!nearlyEqual(view.manualVerticalMin, config.verticalMin) ||
             !nearlyEqual(view.manualVerticalMax, config.verticalMax)) {
-            return false;
-        }
-        if (!nearlyEqual(view.viewMinValue, config.verticalMin) ||
-            !nearlyEqual(view.viewMaxValue, config.verticalMax)) {
             return false;
         }
         return true;
@@ -1511,20 +1520,30 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
             if (overrideState.offsetOverridden) {
                 effectiveSpec.offset = overrideState.offset;
             }
+            if (overrideState.bitYOffsetOverridden) {
+                effectiveSpec.bitDisplay.yOffset = overrideState.bitYOffset;
+            }
         }
         wave.defaultChannelSpecs.push_back(defaultSpec);
         wave.buffer.setChannelSpec(index, std::move(effectiveSpec));
     }
-    const bool viewChanged = !sameWaveViewState(wave.view, setup.view);
-    const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged || viewChanged;
+    const bool verticalDefaultsChanged = !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
+                                         !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax);
+    const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged;
     if (shouldResetView) {
         wave.view.visibleDuration =
             (std::max)(wave.view.minVisibleTimeSpan, (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
-        wave.view.manualVerticalMin = setup.view.verticalMin;
-        wave.view.manualVerticalMax = setup.view.verticalMax;
-        wave.view.viewMinValue = setup.view.verticalMin;
-        wave.view.viewMaxValue = setup.view.verticalMax;
+        if (setup.resetHistory || verticalDefaultsChanged) {
+            wave.view.manualVerticalMin = setup.view.verticalMin;
+            wave.view.manualVerticalMax = setup.view.verticalMax;
+            wave.view.viewMinValue = setup.view.verticalMin;
+            wave.view.viewMaxValue = setup.view.verticalMax;
+        }
         wave.view.initialized = false;
+        if (setup.resetHistory) {
+            wave.view.autoFollowLatest = true;
+        }
+        wave.view.defaultViewportPending = true;
         wave.statusMessage = "Lua 已更新波形通道配置";
     }
     return true;
@@ -1710,6 +1729,34 @@ void Application::updateControlValue(const std::string& id, const scripting::Con
     scriptWorker_.waitIdle();
     flushScriptOutputs();
     syncDockState();
+}
+
+bool Application::requestOscilloscopeToggle(bool currentRunning, bool targetRunning)
+{
+    transport::ConnectionContext context;
+    if (activeConnection_.has_value()) {
+        context = *activeConnection_;
+    } else {
+        // 核心流程：示波器启停由 Lua 决定，未连接时仍允许脚本基于 detached 上下文处理本地动作。
+        context.endpoint = "detached";
+        context.connectionId = 0;
+        context.timestampMs = nowMs();
+        context.readyForIo = false;
+    }
+
+    try {
+        const bool accepted = scriptWorker_.requestOscilloscopeToggle(context, currentRunning, targetRunning);
+        flushScriptOutputs();
+        syncDockState();
+        return accepted;
+    } catch (const std::exception& ex) {
+        setStatusMessage(std::string("示波器切换请求失败: ") + ex.what(), false);
+    } catch (...) {
+        setStatusMessage("示波器切换请求失败: 未知异常", false);
+    }
+    flushScriptOutputs();
+    syncDockState();
+    return false;
 }
 
 bool Application::restoreControlValue(const std::string& id, const scripting::ControlValue& value)
@@ -2388,14 +2435,13 @@ void Application::setRawCaptureReplaySpeed(const double speed)
 
 Application::RawCaptureReplayStatus Application::rawCaptureReplayStatus() const
 {
-    const auto eventCount =
-        rawCaptureReplay_.capture.events.empty() ? (rawCaptureReplay_.capture.payload.empty() ? 0U : 1U)
-                                                : rawCaptureReplay_.capture.events.size();
-    const double progress = eventCount == 0U
-                                ? 0.0
-                                : (std::min)(1.0,
-                                             static_cast<double>(rawCaptureReplay_.eventIndex) /
-                                                 static_cast<double>(eventCount));
+    const auto eventCount = rawCaptureReplay_.capture.events.empty()
+                                ? (rawCaptureReplay_.capture.payload.empty() ? 0U : 1U)
+                                : rawCaptureReplay_.capture.events.size();
+    const double progress =
+        eventCount == 0U
+            ? 0.0
+            : (std::min)(1.0, static_cast<double>(rawCaptureReplay_.eventIndex) / static_cast<double>(eventCount));
     return RawCaptureReplayStatus{
         .loaded = rawCaptureReplay_.loaded,
         .playing = rawCaptureReplay_.playing,
@@ -2495,6 +2541,8 @@ void Application::resetWaveHistory()
     wave.view.viewMaxTime = wave.view.visibleDuration;
     wave.view.viewMinValue = wave.view.manualVerticalMin;
     wave.view.viewMaxValue = wave.view.manualVerticalMax;
+    wave.view.autoFollowLatest = true;
+    wave.view.defaultViewportPending = true;
     wave.statusMessage = "波形历史已清空";
 }
 
@@ -2691,9 +2739,8 @@ void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
 
     const auto hasPressure = [](const CommPressureDebugSnapshot& value) {
         return value.pendingRxBytes > 0U || value.pendingTransferFrameRows > 0U || value.pendingPlotAppends > 0U ||
-               value.rxInputQueueBytes > 0U || value.parserPendingBytes > 0U ||
-               value.postprocessPendingBatches > 0U || value.luaPendingItems > 0U || value.uiPendingItems > 0U ||
-               !value.backlogWarning.empty();
+               value.rxInputQueueBytes > 0U || value.parserPendingBytes > 0U || value.postprocessPendingBatches > 0U ||
+               value.luaPendingItems > 0U || value.uiPendingItems > 0U || !value.backlogWarning.empty();
     };
     const auto pressureValuesChanged = [](const CommPressureDebugSnapshot& current,
                                           const CommPressureDebugSnapshot& previous) {
@@ -2703,7 +2750,8 @@ void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
                current.rxInputQueueBytes != previous.rxInputQueueBytes ||
                current.parserPendingBytes != previous.parserPendingBytes ||
                current.postprocessPendingBatches != previous.postprocessPendingBatches ||
-               current.luaPendingItems != previous.luaPendingItems || current.uiPendingItems != previous.uiPendingItems ||
+               current.luaPendingItems != previous.luaPendingItems ||
+               current.uiPendingItems != previous.uiPendingItems ||
                current.postprocessWorkerThreads != previous.postprocessWorkerThreads ||
                current.backlogWarning != previous.backlogWarning;
     };
@@ -2717,8 +2765,8 @@ void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
     const auto now = nowMs();
     const bool changed =
         !commPressureDebugLog_.hasSnapshot || pressureValuesChanged(snapshot, commPressureDebugLog_.lastSnapshot);
-    const bool intervalElapsed =
-        commPressureDebugLog_.lastLogMs == 0U || now - commPressureDebugLog_.lastLogMs >= kCommPressureDebugLogIntervalMs;
+    const bool intervalElapsed = commPressureDebugLog_.lastLogMs == 0U ||
+                                 now - commPressureDebugLog_.lastLogMs >= kCommPressureDebugLogIntervalMs;
     if (!changed && !intervalElapsed) {
         return;
     }
@@ -2728,20 +2776,14 @@ void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
     message << std::fixed << std::setprecision(2);
     message << "通讯压力: rx_backlog=" << snapshot.pendingRxBytes << " bytes"
             << ", parser_backlog=" << snapshot.parserPendingBytes << " bytes"
-            << ", frame_rows=" << snapshot.pendingTransferFrameRows
-            << ", plot_appends=" << snapshot.pendingPlotAppends
+            << ", frame_rows=" << snapshot.pendingTransferFrameRows << ", plot_appends=" << snapshot.pendingPlotAppends
             << ", rx_input=" << snapshot.rxInputQueueBytes << " bytes"
-            << ", post_batches=" << snapshot.postprocessPendingBatches
-            << ", lua_pending=" << snapshot.luaPendingItems
-            << ", ui_pending=" << snapshot.uiPendingItems
-            << ", post_threads=" << snapshot.postprocessWorkerThreads
-            << ", last_pump_events=" << snapshot.lastPumpEvents
-            << ", last_pump_rx=" << snapshot.lastPumpRxBytes << " bytes"
-            << ", last_stream_frames=" << snapshot.lastPumpStreamFrames
-            << ", last_stream_errors=" << snapshot.lastPumpStreamErrors
-            << ", pump_ms=" << snapshot.lastPumpTransportMs
-            << ", parser_ms=" << snapshot.lastPumpParserMs
-            << ", lua_callback_ms=" << snapshot.lastPumpCallbackMs
+            << ", post_batches=" << snapshot.postprocessPendingBatches << ", lua_pending=" << snapshot.luaPendingItems
+            << ", ui_pending=" << snapshot.uiPendingItems << ", post_threads=" << snapshot.postprocessWorkerThreads
+            << ", last_pump_events=" << snapshot.lastPumpEvents << ", last_pump_rx=" << snapshot.lastPumpRxBytes
+            << " bytes" << ", last_stream_frames=" << snapshot.lastPumpStreamFrames
+            << ", last_stream_errors=" << snapshot.lastPumpStreamErrors << ", pump_ms=" << snapshot.lastPumpTransportMs
+            << ", parser_ms=" << snapshot.lastPumpParserMs << ", lua_callback_ms=" << snapshot.lastPumpCallbackMs
             << ", script_ms=" << snapshot.lastPumpScriptMs
             << ", warning=" << (snapshot.backlogWarning.empty() ? "none" : snapshot.backlogWarning);
     loggingFacade_.debug("comm_pressure", message.str());
@@ -2786,9 +2828,8 @@ void Application::pullTransportEventsFromTransport()
         return;
     }
     auto events = transport_->takeEvents();
-    pendingTransportEvents_.insert(pendingTransportEvents_.end(),
-                                   std::make_move_iterator(events.begin()),
-                                   std::make_move_iterator(events.end()));
+    pendingTransportEvents_.insert(
+        pendingTransportEvents_.end(), std::make_move_iterator(events.begin()), std::make_move_iterator(events.end()));
 }
 
 bool Application::drainTransportEventQueues(const std::chrono::steady_clock::time_point& startedAt,
@@ -3277,6 +3318,19 @@ bool Application::applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutpu
     return changed;
 }
 
+bool Application::applyScriptOscilloscopeOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
+{
+    bool changed = false;
+    auto& wave = dockStore_.waveState();
+    for (const auto& update : batch.oscilloscopeRunningUpdates) {
+        if (wave.oscilloscopeRunning != update.running) {
+            wave.oscilloscopeRunning = update.running;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 bool Application::applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch)
 {
     const bool setupChanged = applyScriptPlotSetups(batch.plotSetups);
@@ -3308,7 +3362,8 @@ void Application::enqueueScriptPlotAppends(const std::vector<std::pair<std::size
 std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> Application::drainScriptPlotAppendsForPump(
     const std::size_t maxPlotAppends)
 {
-    ScriptPlotAppendDrainState drainState{.maxSelectedKeys = maxPlotAppends};
+    ScriptPlotAppendDrainState drainState{};
+    drainState.maxSelectedKeys = maxPlotAppends;
     while (!pendingScriptPlotAppends_.empty()) {
         auto append = takePendingScriptPlotAppend(pendingScriptPlotAppends_);
         drainScriptPlotAppendCandidate(drainState, std::move(append));
@@ -3339,6 +3394,7 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
     changed = applyScriptTxOutputs(batch) || changed;
     changed = applyScriptRuntimeProfileEvents(batch) || changed;
     changed = applyScriptUiAndLogOutputs(batch) || changed;
+    changed = applyScriptOscilloscopeOutputs(batch) || changed;
     changed = applyScriptPlotOutputs(batch) || changed;
     changed = driveTxScheduler() || changed;
     return changed;

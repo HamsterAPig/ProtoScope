@@ -30,7 +30,6 @@ public:
             return bytes.has_value() ? protocol_utils::crc32Ieee(*bytes) : 0U;
         });
     }
-
 };
 
 std::unique_ptr<IScriptHostApiModule> makeCodecApiModule(ScriptHost& host)

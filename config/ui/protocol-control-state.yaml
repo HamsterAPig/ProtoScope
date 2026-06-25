@@ -23,9 +23,17 @@ protocols:
       show_points_when_sparse: true
       show_axis_labels: false
       show_hover_readout: true
+      prefer_waveform_hover_readout: true
       show_cursors: true
       show_measurement_overlay: true
-      phosphor_glow_enabled: true
+      glow_enabled: true
+      phosphor_enabled: false
+      phosphor_backend: auto
+      phosphor_mode: free_run
+      trigger_edge: rising
+      trigger_channel_index: 0
+      trigger_threshold: 0
+      trigger_position_ratio: 0.2
       cursor_interval_locked: false
       measurement_channel_index: 0
       sample_frequency_hz: 0

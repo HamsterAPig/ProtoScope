@@ -38,6 +38,27 @@ namespace {
         return values;
     }
 
+    std::array<float, 4> readFloat4(const YAML::Node& node, const char* key, std::array<float, 4> fallback)
+    {
+        if (!node || !node[key] || !node[key].IsSequence() || node[key].size() != fallback.size()) {
+            return fallback;
+        }
+        std::array<float, 4> values{};
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            values[index] = node[key][index].as<float>(fallback[index]);
+        }
+        return values;
+    }
+
+    YAML::Node makeFloat4Node(const std::array<float, 4>& values)
+    {
+        YAML::Node node;
+        for (const float value : values) {
+            node.push_back(value);
+        }
+        return node;
+    }
+
     bool hasScalar(const YAML::Node& node, const char* key)
     {
         return node && node[key];
@@ -190,6 +211,12 @@ namespace {
         {plot::WaveDisplayFormula::OffsetThenScale, "offset_then_scale"},
     }};
 
+    constexpr std::array<EnumNamePair<plot::WaveGridDivisionReadoutMode>, 3> kWaveGridDivisionReadoutModeNames{{
+        {plot::WaveGridDivisionReadoutMode::DisplayValue, "display_value"},
+        {plot::WaveGridDivisionReadoutMode::ActualValue, "actual_value"},
+        {plot::WaveGridDivisionReadoutMode::RawValue, "raw_value"},
+    }};
+
     constexpr std::array<EnumNamePair<plot::WaveChannelCardWidthMode>, 2> kWaveChannelCardWidthModeNames{{
         {plot::WaveChannelCardWidthMode::Fixed, "fixed"},
         {plot::WaveChannelCardWidthMode::Adaptive, "adaptive"},
@@ -207,6 +234,11 @@ namespace {
         {plot::WaveXAxisDoubleClickAction::FitVisibleWindow, "fit_visible_window"},
     }};
 
+    constexpr std::array<EnumNamePair<plot::WaveYAxisDoubleClickAction>, 2> kWaveYAxisDoubleClickActionNames{{
+        {plot::WaveYAxisDoubleClickAction::FitVisibleChannels, "fit_visible_channels"},
+        {plot::WaveYAxisDoubleClickAction::FitActiveChannel, "fit_active_channel"},
+    }};
+
     constexpr std::array<EnumNamePair<plot::WaveHiddenChannelPolicy>, 2> kWaveHiddenChannelPolicyNames{{
         {plot::WaveHiddenChannelPolicy::IncludeInDerivedViews, "include_hidden"},
         {plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews, "visible_only"},
@@ -215,6 +247,18 @@ namespace {
     constexpr std::array<EnumNamePair<plot::WaveCursorExtremeSnapPolicy>, 2> kWaveCursorExtremeSnapPolicyNames{{
         {plot::WaveCursorExtremeSnapPolicy::NearestWaveform, "nearest_waveform"},
         {plot::WaveCursorExtremeSnapPolicy::ViewportZone, "viewport_zone"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveMouseYOffsetDragMode>, 3> kWaveMouseYOffsetDragModeNames{{
+        {plot::WaveMouseYOffsetDragMode::Direct, "direct"},
+        {plot::WaveMouseYOffsetDragMode::Shift, "shift"},
+        {plot::WaveMouseYOffsetDragMode::Disabled, "disabled"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveLegendOverlayOpenMode>, 3> kWaveLegendOverlayOpenModeNames{{
+        {plot::WaveLegendOverlayOpenMode::Hover, "hover"},
+        {plot::WaveLegendOverlayOpenMode::DoubleClick, "double_click"},
+        {plot::WaveLegendOverlayOpenMode::Disabled, "disabled"},
     }};
 
     constexpr std::array<EnumNamePair<GuiWaveFullscreenMode>, 2> kWaveFullscreenModeNames{{
@@ -260,6 +304,17 @@ namespace {
         return enumToText(formula, kWaveDisplayFormulaNames, "offset_then_scale");
     }
 
+    plot::WaveGridDivisionReadoutMode parseWaveGridDivisionReadoutMode(const std::string& value,
+                                                                       plot::WaveGridDivisionReadoutMode fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveGridDivisionReadoutModeNames, fallback);
+    }
+
+    const char* toWaveGridDivisionReadoutModeText(const plot::WaveGridDivisionReadoutMode mode)
+    {
+        return enumToText(mode, kWaveGridDivisionReadoutModeNames, "display_value");
+    }
+
     plot::WaveChannelCardWidthMode parseWaveChannelCardWidthMode(const std::string& value)
     {
         return lookupEnum(
@@ -293,6 +348,17 @@ namespace {
         return enumToText(action, kWaveXAxisDoubleClickActionNames, "fit_full_history");
     }
 
+    plot::WaveYAxisDoubleClickAction parseWaveYAxisDoubleClickAction(const std::string& value,
+                                                                     plot::WaveYAxisDoubleClickAction fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveYAxisDoubleClickActionNames, fallback);
+    }
+
+    const char* toWaveYAxisDoubleClickActionText(const plot::WaveYAxisDoubleClickAction action)
+    {
+        return enumToText(action, kWaveYAxisDoubleClickActionNames, "fit_visible_channels");
+    }
+
     plot::WaveHiddenChannelPolicy parseWaveHiddenChannelPolicy(const std::string& value,
                                                                plot::WaveHiddenChannelPolicy fallback)
     {
@@ -313,6 +379,28 @@ namespace {
     const char* toWaveCursorExtremeSnapPolicyText(const plot::WaveCursorExtremeSnapPolicy policy)
     {
         return enumToText(policy, kWaveCursorExtremeSnapPolicyNames, "nearest_waveform");
+    }
+
+    plot::WaveMouseYOffsetDragMode parseWaveMouseYOffsetDragMode(const std::string& value,
+                                                                 plot::WaveMouseYOffsetDragMode fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveMouseYOffsetDragModeNames, fallback);
+    }
+
+    const char* toWaveMouseYOffsetDragModeText(const plot::WaveMouseYOffsetDragMode mode)
+    {
+        return enumToText(mode, kWaveMouseYOffsetDragModeNames, "direct");
+    }
+
+    plot::WaveLegendOverlayOpenMode parseWaveLegendOverlayOpenMode(const std::string& value,
+                                                                   plot::WaveLegendOverlayOpenMode fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveLegendOverlayOpenModeNames, fallback);
+    }
+
+    const char* toWaveLegendOverlayOpenModeText(const plot::WaveLegendOverlayOpenMode mode)
+    {
+        return enumToText(mode, kWaveLegendOverlayOpenModeNames, "hover");
     }
 
     GuiWaveFullscreenMode parseWaveFullscreenMode(const std::string& value, GuiWaveFullscreenMode fallback)
@@ -338,6 +426,11 @@ namespace {
     double positiveOrFallback(double value, double fallback)
     {
         return value > 0.0 ? value : fallback;
+    }
+
+    double positiveOrZero(double value)
+    {
+        return std::isfinite(value) && value > 0.0 ? value : 0.0;
     }
 
     transport::TransportKind parseTransportKind(const std::string& value)
@@ -409,6 +502,11 @@ namespace {
         config.gui.wave.displayFormula = parseWaveDisplayFormula(
             readScalar<std::string>(wave, "display_formula", toWaveDisplayFormulaText(config.gui.wave.displayFormula)),
             config.gui.wave.displayFormula);
+        config.gui.wave.gridDivisionReadoutMode = parseWaveGridDivisionReadoutMode(
+            readScalar<std::string>(wave,
+                                    "grid_division_readout_mode",
+                                    toWaveGridDivisionReadoutModeText(config.gui.wave.gridDivisionReadoutMode)),
+            config.gui.wave.gridDivisionReadoutMode);
         config.gui.wave.channelCardWidthMode =
             parseWaveChannelCardWidthMode(readScalar<std::string>(wave, "channel_card_width_mode", "fixed"));
         config.gui.wave.channelDoubleClickAction = parseWaveChannelDoubleClickAction(
@@ -421,6 +519,11 @@ namespace {
                                     "x_axis_double_click_action",
                                     toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction)),
             config.gui.wave.xAxisDoubleClickAction);
+        config.gui.wave.yAxisDoubleClickAction = parseWaveYAxisDoubleClickAction(
+            readScalar<std::string>(wave,
+                                    "y_axis_double_click_action",
+                                    toWaveYAxisDoubleClickActionText(config.gui.wave.yAxisDoubleClickAction)),
+            config.gui.wave.yAxisDoubleClickAction);
         config.gui.wave.hiddenChannelPolicy = parseWaveHiddenChannelPolicy(
             readScalar<std::string>(
                 wave, "hidden_channel_policy", toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy)),
@@ -430,8 +533,21 @@ namespace {
                                     "cursor_extreme_snap_policy",
                                     toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy)),
             config.gui.wave.cursorExtremeSnapPolicy);
+        config.gui.wave.mouseYOffsetDragMode = parseWaveMouseYOffsetDragMode(
+            readScalar<std::string>(
+                wave, "mouse_y_offset_drag_mode", toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode)),
+            config.gui.wave.mouseYOffsetDragMode);
+        config.gui.wave.legendOverlayOpenMode = parseWaveLegendOverlayOpenMode(
+            readScalar<std::string>(wave,
+                                    "legend_overlay_open_mode",
+                                    toWaveLegendOverlayOpenModeText(config.gui.wave.legendOverlayOpenMode)),
+            config.gui.wave.legendOverlayOpenMode);
+        config.gui.wave.legendOverlayDoubleClickAutoCollapse = readScalar<bool>(
+            wave, "legend_overlay_double_click_auto_collapse", config.gui.wave.legendOverlayDoubleClickAutoCollapse);
         config.gui.wave.zoomSelectionAutoExit =
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
+        config.gui.wave.peakDetectDownsample =
+            readScalar<bool>(wave, "peak_detect_downsample", config.gui.wave.peakDetectDownsample);
         config.gui.wave.maxRenderPointsPerChannel =
             readScalar<std::size_t>(wave, "max_render_points_per_channel", config.gui.wave.maxRenderPointsPerChannel);
         config.gui.wave.maxRenderVertices =
@@ -448,14 +564,18 @@ namespace {
             readScalar<double>(wave, "channel_card_fixed_width", config.gui.wave.channelCardFixedWidth), 128.0);
         config.gui.wave.channelCardAdaptiveRatio = positiveOrFallback(
             readScalar<double>(wave, "channel_card_adaptive_ratio", config.gui.wave.channelCardAdaptiveRatio), 0.22);
+        config.gui.wave.legendChannelNameMaxWidth = positiveOrZero(
+            readScalar<double>(wave, "legend_channel_name_max_width", config.gui.wave.legendChannelNameMaxWidth));
         config.gui.wave.verticalAutoFitMultiplier = positiveOrFallback(
-            readScalar<double>(wave, "vertical_auto_fit_multiplier", config.gui.wave.verticalAutoFitMultiplier), 1.2);
+            readScalar<double>(wave, "vertical_auto_fit_multiplier", config.gui.wave.verticalAutoFitMultiplier), 1.25);
         config.gui.wave.resetHistoryOnTimeReset =
             readScalar<bool>(wave, "reset_history_on_time_reset", config.gui.wave.resetHistoryOnTimeReset);
         config.gui.wave.showAxisLabels = readScalar<bool>(wave, "show_axis_labels", config.gui.wave.showAxisLabels);
         config.gui.wave.showChannelLegend =
             readScalar<bool>(wave, "show_channel_legend", config.gui.wave.showChannelLegend);
         config.gui.wave.showFftLegend = readScalar<bool>(wave, "show_fft_legend", config.gui.wave.showFftLegend);
+        config.gui.wave.cursorFftHighlightRgba =
+            readFloat4(wave, "cursor_fft_highlight_rgba", config.gui.wave.cursorFftHighlightRgba);
         config.gui.wave.fullscreenMode = parseWaveFullscreenMode(
             readScalar<std::string>(wave, "fullscreen_mode", toWaveFullscreenModeText(config.gui.wave.fullscreenMode)),
             config.gui.wave.fullscreenMode);
@@ -749,17 +869,27 @@ namespace {
     {
         gui["wave"]["control_mode"] = toWaveControlModeText(config.gui.wave.controlMode);
         gui["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
+        gui["wave"]["grid_division_readout_mode"] =
+            toWaveGridDivisionReadoutModeText(config.gui.wave.gridDivisionReadoutMode);
         gui["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
         gui["wave"]["channel_double_click_action"] =
             toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
         gui["wave"]["x_axis_double_click_action"] =
             toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction);
+        gui["wave"]["y_axis_double_click_action"] =
+            toWaveYAxisDoubleClickActionText(config.gui.wave.yAxisDoubleClickAction);
         gui["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
         gui["wave"]["cursor_extreme_snap_policy"] =
             toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
+        gui["wave"]["mouse_y_offset_drag_mode"] = toWaveMouseYOffsetDragModeText(config.gui.wave.mouseYOffsetDragMode);
+        gui["wave"]["legend_overlay_open_mode"] =
+            toWaveLegendOverlayOpenModeText(config.gui.wave.legendOverlayOpenMode);
+        gui["wave"]["legend_overlay_double_click_auto_collapse"] = config.gui.wave.legendOverlayDoubleClickAutoCollapse;
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
+        gui["wave"]["peak_detect_downsample"] = config.gui.wave.peakDetectDownsample;
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
         gui["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
+        gui["wave"]["legend_channel_name_max_width"] = config.gui.wave.legendChannelNameMaxWidth;
         gui["wave"]["vertical_auto_fit_multiplier"] = config.gui.wave.verticalAutoFitMultiplier;
         gui["wave"]["max_render_points_per_channel"] = config.gui.wave.maxRenderPointsPerChannel;
         gui["wave"]["max_render_vertices"] = config.gui.wave.maxRenderVertices;
@@ -771,6 +901,7 @@ namespace {
         gui["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
         gui["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
         gui["wave"]["show_fft_legend"] = config.gui.wave.showFftLegend;
+        gui["wave"]["cursor_fft_highlight_rgba"] = makeFloat4Node(config.gui.wave.cursorFftHighlightRgba);
         gui["wave"]["fullscreen_mode"] = toWaveFullscreenModeText(config.gui.wave.fullscreenMode);
     }
 
@@ -1242,10 +1373,14 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     auto& wave = waveState.view;
     wave.controlMode = config.gui.wave.controlMode;
     wave.displayFormula = config.gui.wave.displayFormula;
+    wave.gridDivisionReadoutMode = config.gui.wave.gridDivisionReadoutMode;
     wave.channelCardWidthMode = config.gui.wave.channelCardWidthMode;
     wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
     wave.xAxisDoubleClickAction = config.gui.wave.xAxisDoubleClickAction;
+    wave.yAxisDoubleClickAction = config.gui.wave.yAxisDoubleClickAction;
+    wave.mouseYOffsetDragMode = config.gui.wave.mouseYOffsetDragMode;
     wave.zoomSelectionAutoExit = config.gui.wave.zoomSelectionAutoExit;
+    wave.peakDetectDownsample = config.gui.wave.peakDetectDownsample;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
     wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
@@ -1253,12 +1388,22 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
     wave.channelCardFixedWidth = positiveOrFallback(config.gui.wave.channelCardFixedWidth, 128.0);
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
-    wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.2);
+    wave.legendChannelNameMaxWidth = positiveOrZero(config.gui.wave.legendChannelNameMaxWidth);
+    wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.25);
     wave.hiddenChannelPolicy = config.gui.wave.hiddenChannelPolicy;
     wave.cursorExtremeSnapPolicy = config.gui.wave.cursorExtremeSnapPolicy;
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;
+    wave.cursorFftHighlightRgba = config.gui.wave.cursorFftHighlightRgba;
+    waveState.legendOverlay.openMode = config.gui.wave.legendOverlayOpenMode;
+    waveState.legendOverlay.doubleClickAutoCollapse = config.gui.wave.legendOverlayDoubleClickAutoCollapse;
+    if (waveState.legendOverlay.openMode != plot::WaveLegendOverlayOpenMode::DoubleClick) {
+        waveState.legendOverlay.expanded = false;
+    }
+    waveState.legendOverlay.hoverFloating = false;
+    waveState.legendOverlay.hoverInteractionLocked = false;
+    waveState.legendOverlay.hoverCloseRemainingSec = 0.0F;
     auto viewConfig = waveState.buffer.viewConfig();
     viewConfig.displayFormula = config.gui.wave.displayFormula;
     waveState.buffer.setViewConfig(viewConfig);
@@ -1280,10 +1425,14 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.luaDockRenderCopyMode = dockStore.configState().luaDockRenderCopyMode;
     config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
     config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
+    config.gui.wave.gridDivisionReadoutMode = dockStore.waveState().view.gridDivisionReadoutMode;
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
     config.gui.wave.xAxisDoubleClickAction = dockStore.waveState().view.xAxisDoubleClickAction;
+    config.gui.wave.yAxisDoubleClickAction = dockStore.waveState().view.yAxisDoubleClickAction;
+    config.gui.wave.mouseYOffsetDragMode = dockStore.waveState().view.mouseYOffsetDragMode;
     config.gui.wave.zoomSelectionAutoExit = dockStore.waveState().view.zoomSelectionAutoExit;
+    config.gui.wave.peakDetectDownsample = dockStore.waveState().view.peakDetectDownsample;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;
@@ -1291,12 +1440,16 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.minVisibleTimeSpan = dockStore.waveState().view.minVisibleTimeSpan;
     config.gui.wave.channelCardFixedWidth = dockStore.waveState().view.channelCardFixedWidth;
     config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;
+    config.gui.wave.legendChannelNameMaxWidth = positiveOrZero(dockStore.waveState().view.legendChannelNameMaxWidth);
     config.gui.wave.verticalAutoFitMultiplier = dockStore.waveState().view.verticalAutoFitMultiplier;
     config.gui.wave.hiddenChannelPolicy = dockStore.waveState().view.hiddenChannelPolicy;
     config.gui.wave.cursorExtremeSnapPolicy = dockStore.waveState().view.cursorExtremeSnapPolicy;
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
     config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;
+    config.gui.wave.cursorFftHighlightRgba = dockStore.waveState().view.cursorFftHighlightRgba;
+    config.gui.wave.legendOverlayOpenMode = dockStore.waveState().legendOverlay.openMode;
+    config.gui.wave.legendOverlayDoubleClickAutoCollapse = dockStore.waveState().legendOverlay.doubleClickAutoCollapse;
     config.configPath = dockStore.configState().loadedFromPath;
 
     return config;

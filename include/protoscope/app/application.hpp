@@ -8,8 +8,8 @@
 #include "protoscope/scripting/script_runtime_worker.hpp"
 #include "protoscope/transport/transport.hpp"
 
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -40,6 +40,7 @@ public:
     void closeTransport();
     bool sendManualPayload(const std::string& payload, bool hexMode);
     void updateControlValue(const std::string& id, const scripting::ControlValue& value);
+    bool requestOscilloscopeToggle(bool currentRunning, bool targetRunning);
     bool restoreControlValue(const std::string& id, const scripting::ControlValue& value);
     void markCommConfigEdited(bool reconnectRequired);
     void markProtocolEdited();
@@ -50,6 +51,7 @@ public:
     bool exportSessionPackage(const std::filesystem::path& path, std::string& error) const;
     bool importSessionPackage(const std::filesystem::path& path, std::string& error);
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
+
     struct RawCaptureReplayStatus {
         bool loaded{false};
         bool playing{false};
@@ -58,6 +60,7 @@ public:
         double progress{0.0};
         double speed{1.0};
     };
+
     bool loadRawCaptureReplayTimeline(const plot::RawCaptureFileData& capture, std::string& error);
     void unloadRawCaptureReplayTimeline();
     bool playRawCaptureReplay(std::string& error);
@@ -217,6 +220,7 @@ private:
     bool applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptRuntimeProfileEvents(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptUiAndLogOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
+    bool applyScriptOscilloscopeOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptPlotOutputs(const scripting::ScriptRuntimeOutputBatch& batch);
     bool applyScriptPlotSetups(const std::vector<scripting::PlotSetup>& setups);
     void enqueueScriptPlotAppends(const std::vector<std::pair<std::size_t, plot::WaveAppendRequest>>& appends);

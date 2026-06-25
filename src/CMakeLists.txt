@@ -84,6 +84,7 @@ add_library(protoscope_scripting STATIC
     scripting/host/status_api_module.cc
     scripting/host/ui_api_module.cc
     scripting/host/file_api_module.cc
+    scripting/host/oscilloscope_api_module.cc
     scripting/host/plot_api_module.cc
     scripting/host/control_api_module.cc
     scripting/host/codec_api_module.cc
@@ -238,6 +239,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/wave/wave_measurement_overlay.cc
         ui/wave/wave_measurement_overlay_layer.cc
         ui/wave/wave_overview_layer.cc
+        ui/wave/wave_phosphor_renderer.cc
         ui/wave/wave_plot_layer.cc
         ui/wave/wave_toolbar.cc
         ui/wave/wave_viewport_controller.cc

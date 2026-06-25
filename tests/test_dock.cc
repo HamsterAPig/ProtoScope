@@ -3,6 +3,8 @@
 
 #include "test_registry.hpp"
 
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -490,9 +492,11 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.buffer.configureChannels(1);
     waveA.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 1.0, .offset = 0.0});
     waveA.view.showHoverReadout = false;
+    waveA.view.preferWaveformHoverReadout = false;
     waveA.view.sampleFrequencyHz = 2048.0;
     waveA.view.sampleFrequencyInput = "2048";
     waveA.view.fft.enabled = true;
+    waveA.view.fft.displayMode = protoscope::plot::WaveFftDisplayMode::CursorSplit;
     waveA.view.fft.pointCount = protoscope::plot::WaveFftPointCount::N1024;
     waveA.view.fft.window = protoscope::plot::WaveFftWindow::BlackmanHarris;
     waveA.view.fft.magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::Decibel;
@@ -516,8 +520,9 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.view.referenceChannelIndex = 2;
     waveA.view.manualReferenceValue = 1.25;
     waveA.fftChannelEnabled = {1};
-    waveA.hiddenChannelLabels = {"CH1"};
+    waveA.hiddenChannelIndices = {0};
     waveA.toolsCollapsed = true;
+    waveA.activeToolsDrawer = protoscope::plot::WaveToolsDrawer::Cursor;
     waveA.legendCollapsed = true;
     waveA.channelOverrides.resize(1);
     waveA.channelOverrides[0].labelOverridden = true;
@@ -561,6 +566,8 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredASpec->offset == -0.25, "proto_a 应恢复自己的偏移覆盖");
     require(restoredA.view.sampleFrequencyHz == 2048.0, "proto_a 应恢复自己的采样频率");
     require(restoredA.view.fft.enabled, "proto_a 应恢复 FFT 开关");
+    require(restoredA.view.fft.displayMode == protoscope::plot::WaveFftDisplayMode::CursorSplit,
+            "proto_a 应恢复 FFT 显示模式");
     require(restoredA.view.fft.pointCount == protoscope::plot::WaveFftPointCount::N1024, "proto_a 应恢复 FFT 点数");
     require(restoredA.view.fft.window == protoscope::plot::WaveFftWindow::BlackmanHarris, "proto_a 应恢复 FFT 窗函数");
     require(restoredA.view.fft.magnitudeMode == protoscope::plot::WaveFftMagnitudeMode::Decibel,
@@ -586,11 +593,14 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredA.view.manualReferenceValue == 1.25, "proto_a 应恢复手动标定值");
     require(restoredA.fftChannelEnabled.size() == 1 && restoredA.fftChannelEnabled[0] == 1,
             "proto_a 应恢复 FFT 通道选择");
-    require(restoredA.hiddenChannelLabels.size() == 1 && restoredA.hiddenChannelLabels[0] == "CH1",
+    require(restoredA.hiddenChannelIndices.size() == 1 && restoredA.hiddenChannelIndices[0] == 0,
             "proto_a 应恢复自己的主图 Legend 隐藏通道");
     require(restoredA.toolsCollapsed, "proto_a 应恢复自己的工具栏折叠状态");
+    require(restoredA.activeToolsDrawer == protoscope::plot::WaveToolsDrawer::Cursor,
+            "proto_a 应恢复自己的右侧抽屉类型");
     require(restoredA.legendCollapsed, "proto_a 应恢复自己的图例折叠状态");
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
+    require(!restoredA.view.preferWaveformHoverReadout, "proto_a 应恢复自己的悬浮读数优先级策略");
     require(restoredA.analysisMarkers.size() == 1 && restoredA.analysisMarkers[0].label == "标记A",
             "proto_a 应恢复自己的分析标记");
 
@@ -601,12 +611,14 @@ void test_wave_protocol_state_isolated_by_protocol_key()
 
     const auto restoredBSpec = restoredB.buffer.channelSpec(0);
     require(restoredBSpec.has_value(), "proto_b 恢复后应保留通道配置");
-    require(restoredB.hiddenChannelLabels.empty(), "不同协议不应串用 proto_a 的主图 Legend 隐藏通道");
+    require(restoredB.hiddenChannelIndices.empty(), "不同协议不应串用 proto_a 的主图 Legend 隐藏通道");
     require(!restoredB.legendCollapsed, "不同协议默认不应继承 proto_a 的图例折叠状态");
     require(restoredBSpec->label == "总线B", "不同协议不应串用 proto_a 标签");
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
     require(!restoredB.view.fft.enabled, "不同协议不应串用 proto_a FFT 开关");
+    require(restoredB.view.fft.displayMode == protoscope::plot::WaveFftDisplayMode::FullSpectrum,
+            "不同协议应保留默认完整频谱显示模式");
     require(restoredB.analysisMarkers.empty(), "不同协议不应串用 proto_a 分析标记");
     require(restoredB.view.measurement.stddev && !restoredB.view.measurement.variance,
             "老状态或其他协议应保留默认测量项");
@@ -618,7 +630,7 @@ void test_wave_protocol_state_missing_wave_node_clears_analysis_markers()
     root["protocols"]["other"]["wave"]["show_hover_readout"] = true;
 
     protoscope::plot::WaveDockState wave;
-    wave.hiddenChannelLabels = {"CH1"};
+    wave.hiddenChannelIndices = {0};
     wave.analysisMarkers = {{
         .id = 1,
         .label = "残留标记",
@@ -629,9 +641,37 @@ void test_wave_protocol_state_missing_wave_node_clears_analysis_markers()
     }};
 
     protoscope::ui::restoreWaveProtocolState(root, "missing", wave);
-    require(wave.hiddenChannelLabels.empty(), "缺失协议 wave 节点时应清空隐藏通道状态");
+    require(wave.hiddenChannelIndices.empty(), "缺失协议 wave 节点时应清空隐藏通道状态");
     require(wave.analysisMarkers.empty(), "缺失协议 wave 节点时应清空分析标记");
     require(wave.legendVisibilityRestorePending, "缺失协议 wave 节点时应重新应用图例可见性");
+}
+
+void test_wave_protocol_state_hidden_channel_indices_roundtrip_and_legacy_labels()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.hiddenChannelIndices = {1};
+
+    const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
+    require(encoded["hidden_channel_indices"].IsSequence(), "协议 UI 状态应写出隐藏通道 index 列表");
+    require(encoded["hidden_channel_indices"].size() == 1U &&
+                encoded["hidden_channel_indices"][0].as<std::size_t>() == 1,
+            "协议 UI 状态应按 index 写出隐藏通道");
+    require(!encoded["hidden_channel_labels"], "新协议 UI 状态不应再写出旧 hidden_channel_labels 字段");
+
+    protoscope::plot::WaveDockState restored;
+    protoscope::ui::decodeWaveProtocolState(encoded, restored);
+    require(restored.hiddenChannelIndices.size() == 1 && restored.hiddenChannelIndices[0] == 1,
+            "协议 UI 状态应按 index 恢复隐藏通道");
+    require(restored.hiddenChannelLabels.empty(), "新协议 UI 状态恢复后不应残留旧 label 隐藏状态");
+
+    const auto legacy = YAML::Load("hidden_channel_labels:\n  - CH2\n");
+    protoscope::plot::WaveDockState legacyRestored;
+    legacyRestored.buffer.configureChannels(2);
+    legacyRestored.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V"});
+    legacyRestored.buffer.setChannelSpec(1, {.label = "CH2", .unit = "V"});
+    protoscope::ui::decodeWaveProtocolState(legacy, legacyRestored);
+    require(legacyRestored.hiddenChannelIndices.size() == 1 && legacyRestored.hiddenChannelIndices[0] == 1,
+            "旧 hidden_channel_labels 字段应迁移为隐藏通道 index");
 }
 
 void test_wave_protocol_state_cursor_extreme_snap_policy()
@@ -654,6 +694,141 @@ void test_wave_protocol_state_cursor_extreme_snap_policy()
     require(
         legacyRestored.view.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform,
         "缺失游标极值吸附策略时应使用 nearest_waveform 默认值");
+}
+
+void test_wave_protocol_state_prefer_waveform_hover_readout_defaults_true()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.view.preferWaveformHoverReadout = false;
+    wave.view.bitDisplayReadoutPolicy = protoscope::plot::WaveBitDisplayReadoutPolicy::ExplicitActivation;
+
+    const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
+    require(!encoded["prefer_waveform_hover_readout"].as<bool>(), "协议 UI 状态应写出 waveform hover 优先级策略");
+    require(encoded["bit_display_readout_policy"].as<std::string>() == "explicit_activation",
+            "协议 UI 状态应写出 bit display 读数策略");
+
+    protoscope::plot::WaveDockState restored;
+    protoscope::ui::decodeWaveProtocolState(encoded, restored);
+    require(!restored.view.preferWaveformHoverReadout, "协议 UI 状态应恢复 false 策略");
+    require(restored.view.bitDisplayReadoutPolicy == protoscope::plot::WaveBitDisplayReadoutPolicy::ExplicitActivation,
+            "协议 UI 状态应恢复 bit display 读数策略");
+
+    const auto legacy = YAML::Load("show_hover_readout: true\n");
+    protoscope::plot::WaveDockState legacyRestored;
+    legacyRestored.view.preferWaveformHoverReadout = true;
+    protoscope::ui::decodeWaveProtocolState(legacy, legacyRestored);
+    require(legacyRestored.view.preferWaveformHoverReadout, "旧状态缺字段时应保持默认 true");
+    require(legacyRestored.view.bitDisplayReadoutPolicy == protoscope::plot::WaveBitDisplayReadoutPolicy::MixedNearest,
+            "旧状态缺 bit display 读数策略时应保持 mixed_nearest 默认值");
+}
+
+void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}});
+    wave.view.viewMode = protoscope::plot::WaveViewMode::Split;
+    wave.activeToolsDrawer = protoscope::plot::WaveToolsDrawer::View;
+    wave.legendOverlay.openMode = protoscope::plot::WaveLegendOverlayOpenMode::DoubleClick;
+    wave.legendOverlay.expanded = true;
+    wave.legendOverlay.offsetX = 24.0F;
+    wave.legendOverlay.offsetY = 36.0F;
+    wave.channelOverrides.resize(1);
+    wave.channelOverrides[0].colorOverridden = true;
+    wave.channelOverrides[0].color = std::array<float, 4>{0.8F, 0.7F, 0.6F, 1.0F};
+
+    const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
+    require(encoded["view_mode"].as<std::string>() == "split", "协议 UI 状态应写出分屏视图模式");
+    require(encoded["tools_drawer"].as<std::string>() == "view", "协议 UI 状态应写出当前右侧抽屉类型");
+    require(!encoded["legend_overlay"]["expanded"].as<bool>(),
+            "自动收起开启时协议 UI 状态不应写出临时图例展开状态");
+    require(encoded["legend_overlay"]["offset_x"].as<float>() == 24.0F, "协议 UI 状态应写出图例 X 偏移");
+    require(encoded["channel_overrides"][0]["color_overridden"].as<bool>(), "协议 UI 状态应写出颜色覆盖标记");
+    require(encoded["channel_overrides"][0]["color"].size() == 4U, "协议 UI 状态应写出 RGBA 颜色");
+
+    protoscope::plot::WaveDockState restored;
+    restored.buffer.configureChannels(1);
+    restored.buffer.setChannelSpec(
+        0, {.label = "CH1", .unit = "V", .color = std::array<float, 4>{0.1F, 0.2F, 0.3F, 1.0F}});
+    protoscope::ui::decodeWaveProtocolState(encoded, restored);
+    const auto restoredSpec = restored.buffer.channelSpec(0);
+    require(restored.view.viewMode == protoscope::plot::WaveViewMode::Split, "协议 UI 状态应恢复分屏模式");
+    require(restored.activeToolsDrawer == protoscope::plot::WaveToolsDrawer::View,
+            "协议 UI 状态应恢复当前右侧抽屉类型");
+    require(restored.legendOverlay.openMode == protoscope::plot::WaveLegendOverlayOpenMode::DoubleClick,
+            "协议 UI 状态应恢复图例 overlay 打开模式");
+    require(!restored.legendOverlay.expanded && restored.legendOverlay.offsetX == 24.0F &&
+                restored.legendOverlay.offsetY == 36.0F,
+            "自动收起开启时协议 UI 状态应恢复图例位置但不恢复展开状态");
+    require(restoredSpec.has_value() && restoredSpec->color.has_value() && (*restoredSpec->color)[0] == 0.8F,
+            "协议 UI 状态应把颜色覆盖应用到通道规格");
+
+    wave.legendOverlay.doubleClickAutoCollapse = false;
+    wave.legendOverlay.expanded = true;
+    const auto compatEncoded = protoscope::ui::encodeWaveProtocolState(wave);
+    require(compatEncoded["legend_overlay"]["expanded"].as<bool>(),
+            "自动收起关闭时协议 UI 状态应兼容写出图例展开状态");
+    protoscope::plot::WaveDockState compatRestored;
+    compatRestored.legendOverlay.doubleClickAutoCollapse = false;
+    protoscope::ui::decodeWaveProtocolState(compatEncoded, compatRestored);
+    require(compatRestored.legendOverlay.expanded,
+            "自动收起关闭时协议 UI 状态应兼容恢复图例展开状态");
+
+    const auto legacy = YAML::Load("view_mode: unknown\n");
+    protoscope::plot::WaveDockState legacyRestored;
+    protoscope::ui::decodeWaveProtocolState(legacy, legacyRestored);
+    require(legacyRestored.view.viewMode == protoscope::plot::WaveViewMode::Overlay, "非法视图模式应回退 overlay");
+    require(legacyRestored.activeToolsDrawer == protoscope::plot::WaveToolsDrawer::Main,
+            "旧状态缺抽屉类型时应使用 main 默认值");
+    require(legacyRestored.legendOverlay.offsetX == 8.0F && legacyRestored.legendOverlay.offsetY == 8.0F,
+            "旧状态缺图例 overlay 字段时应使用左上角默认值");
+}
+
+void test_wave_protocol_state_glow_phosphor_roundtrip()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.view.glowEnabled = false;
+    wave.view.phosphorEnabled = true;
+    wave.view.phosphorBackend = protoscope::plot::WavePhosphorBackend::CpuTexture;
+    wave.view.phosphorMode = protoscope::plot::WavePhosphorMode::Triggered;
+    wave.view.triggerEdge = protoscope::plot::WavePhosphorTriggerEdge::Falling;
+    wave.view.triggerChannelIndex = 3;
+    wave.view.triggerThreshold = 1.25;
+    wave.view.triggerPositionRatio = 0.35;
+
+    const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
+    require(!encoded["glow_enabled"].as<bool>(), "协议 UI 状态应写出独立 Glow 开关");
+    require(encoded["phosphor_enabled"].as<bool>(), "协议 UI 状态应写出独立 Phosphor 开关");
+    require(encoded["phosphor_backend"].as<std::string>() == "cpu_texture", "协议 UI 状态应写出 Phosphor 后端");
+    require(encoded["phosphor_mode"].as<std::string>() == "triggered", "协议 UI 状态应写出 Phosphor 模式");
+    require(encoded["trigger_edge"].as<std::string>() == "falling", "协议 UI 状态应写出触发边沿");
+
+    protoscope::plot::WaveDockState restored;
+    protoscope::ui::decodeWaveProtocolState(encoded, restored);
+    require(!restored.view.glowEnabled, "协议 UI 状态应恢复 Glow 开关");
+    require(restored.view.phosphorEnabled, "协议 UI 状态应恢复 Phosphor 开关");
+    require(restored.view.phosphorBackend == protoscope::plot::WavePhosphorBackend::CpuTexture,
+            "协议 UI 状态应恢复 Phosphor 后端");
+    require(restored.view.phosphorMode == protoscope::plot::WavePhosphorMode::Triggered,
+            "协议 UI 状态应恢复 Phosphor 模式");
+    require(restored.view.triggerEdge == protoscope::plot::WavePhosphorTriggerEdge::Falling,
+            "协议 UI 状态应恢复触发边沿");
+    require(restored.view.triggerChannelIndex == 3, "协议 UI 状态应恢复触发通道");
+    require(std::abs(restored.view.triggerThreshold - 1.25) < 1e-12, "协议 UI 状态应恢复触发阈值");
+    require(std::abs(restored.view.triggerPositionRatio - 0.35) < 1e-12, "协议 UI 状态应恢复触发位置");
+}
+
+void test_wave_protocol_state_legacy_phosphor_glow_only_migrates_to_glow()
+{
+    const auto legacy = YAML::Load("phosphor_glow_enabled: true\n");
+    protoscope::plot::WaveDockState restored;
+    restored.view.glowEnabled = false;
+    restored.view.phosphorEnabled = false;
+
+    protoscope::ui::decodeWaveProtocolState(legacy, restored);
+
+    require(restored.view.glowEnabled, "旧 phosphor_glow_enabled 应迁移为 Glow 开关");
+    require(!restored.view.phosphorEnabled, "旧 phosphor_glow_enabled 不应默认开启新 Phosphor");
 }
 
 void test_dock_visibility_state_isolated_by_protocol_key()

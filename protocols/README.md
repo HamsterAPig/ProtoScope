@@ -163,10 +163,12 @@ proto.set_control("holding_values", {
 
 ### UI 事件回调
 
-动态 UI 常用两个回调：
+动态 UI 常用回调：
 
 - `on_control(ctx, id, value)`：用户操作控件时触发。按钮的 `value` 固定为 `true`；输入框、数字框、开关、下拉框会传当前值；`elf_symbol_combo` 可能传字符串或符号表。
 - `on_dialog(ctx, evt)`：`proto.ui.confirm()` 或 `proto.ui.alert()` 关闭后触发。常用字段是 `evt.tag`、`evt.dialog_id` 和 `evt.result`。
+- `on_oscilloscope_toggle(ctx, current_running, target_running)`：波形工具栏播放/暂停按钮触发。脚本返回 `true` 时宿主默认把按钮同步到 `target_running`；返回 `false`、缺失回调、异常或非 boolean 返回都不会默认切换。启动或暂停设备的实际动作应由脚本自行调用 `proto.send()` / `proto.request()` 等 API 完成。
+- `proto.oscilloscope.set_running(running)`：脚本主动同步波形工具栏运行状态；适合按钮、定时器或 ACK 回调在真实启动/停止完成后调用。同一次 `on_oscilloscope_toggle` 回调里显式调用时，显式状态优先于 `return true` 的默认目标状态。
 
 如果只需要处理当前控件，直接使用 `value`；如果一次按钮点击需要组装多个控件值，再用 `proto.get_control()` 读取其他控件。
 
@@ -174,25 +176,25 @@ proto.set_control("holding_values", {
 
 显式布局统一使用 `type + children` 的递归树，不再兼容旧的 `layout.kind`、`form.items`、`table.rows` control-only 写法。
 `column`、`flow` 和 `inline_group` 可用 `controls = { "id1", "id2" }` 简写连续控件；同一个 layout 节点上 `children` 与 `controls` 互斥，不能同时填写。
-需要约束宽度时使用显式 `control` 节点，例如 `{ type = "control", id = "device_id", min_width = 180, max_width = 260 }`。宽度约束只属于 layout 的 `control` 节点；顶层控件描述只声明控件类型、标签、默认值和选项。
+需要约束宽度时使用显式 `control` 节点，例如 `{ type = "control", id = "device_id", min_width = 180, max_width = 260 }`。需要让输入控件跟随 dock 宽度拉伸时，可在 layout control 上写 `fill_width = true`。宽度约束只属于 layout 的 `control` 节点；顶层控件描述只声明控件类型、标签、默认值和选项。
 
 语法糖写法会在加载时展开为同一套 Layout Tree，因此校验规则不变：
 
 - `layout = { ... }` 且未写 `type` 时默认是 `column`。
 - `"device_id"` 等价于 `{ type = "control", id = "device_id" }`。
 - `{ "device_id", "hex_send", "send_once" }` 等价于一个 `flow`，内部按顺序引用这些控件。
-- `{ id = "last_action", min_width = 280 }` 等价于 `control` 节点，并保留宽度约束。
+- `{ id = "last_action", min_width = 280, fill_width = true }` 等价于 `control` 节点，并保留宽度约束与行尾填充语义。
 - `{ text = "说明文字" }`、`{ separator = true }`、`{ spacer = true }` 分别等价于 `text`、`separator`、`spacer` 节点。
 
 通用规则：
 
 - `{ type = "column", children = { ... } }` 或 `{ type = "column", controls = { "id1", "id2" } }`：纵向块级布局。
 - `{ type = "flow", spacing = 6, run_spacing = 5, children = { ... } }` 或 `{ type = "flow", controls = { "id1", "id2" } }`：横向流式布局，空间不足时自动换行。
-- `{ type = "inline_group", spacing = 4, min_width = 160, children = { ... } }` 或 `{ type = "inline_group", controls = { "id1", "id2" } }`：在外层 `flow` 中作为整体参与换行；组内只允许 `control` / `text`，始终横向排列，不做比例缩放。
+- `{ type = "inline_group", spacing = 4, min_width = 160, fill_width = true, children = { ... } }` 或 `{ type = "inline_group", controls = { "id1", "id2" } }`：在外层 `flow` 中作为整体参与换行；组内只允许 `control` / `text`，始终横向排列。组本身设置 `fill_width = true` 时可占满当前行剩余宽度，组内通常只给一个输入类 control 设置 `fill_width = true`。
 - `{ type = "table", columns = 2, rows = { ... } }`：表格布局，单元格可以放任意 layout node。
 - `{ type = "group", title = "...", children = { ... } }`：标题分组。
 - `{ type = "collapse", title = "...", default_open = true, children = { ... } }`：折叠分组。
-- `{ type = "control", id = "xxx" }`：引用一个已声明控件。可选 `min_width` / `max_width` 约束控件宽度，值必须是正数；可以只写其中一个，同时填写时要求 `min_width <= max_width`。
+- `{ type = "control", id = "xxx" }`：引用一个已声明控件。可选 `min_width` / `max_width` 约束控件宽度，值必须是正数；可以只写其中一个，同时填写时要求 `min_width <= max_width`。`fill_width = true` 仅接受 boolean；在 `flow` 中会作为行尾填充项，绘制后后续项换行。
 - `{ type = "text", text = "..." }`：说明文字。
 - `{ type = "separator" }`：分割线。
 - `{ type = "spacer" }`：占位空白。
@@ -621,7 +623,7 @@ proto.plot.setup({
   reset_history = true,
   channels = {
     { label = "CH1", unit = "V", color = "#4FC3F7", line_width = 2.5 },
-    { label = "CH2", unit = "V", color = "#81C784" },
+    { label = "CH2", unit = "raw", color = "#81C784", bit_display = { enabled = true, first_bit = 0, bit_count = 8 } },
   },
 })
 
@@ -632,7 +634,18 @@ proto.plot.push(1, {
     { t = 0.001, y = 1.3 },
   },
 })
+
+proto.plot.push(2, {
+  source = "demo",
+  samples = {
+    { t = 0.000, y = 0x55 },
+    { t = 0.001, y = 0xAA },
+  },
+})
 ```
+
+`bit_display` 读取同一通道 `push()` 的原始 `y` 作为非负整数 bitfield；
+这些 bit 不会套用 `ratio`、`scale` 或 `offset`。
 
 ## 半双工 Modbus Schema Demo
 

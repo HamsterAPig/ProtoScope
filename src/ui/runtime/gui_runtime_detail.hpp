@@ -13,11 +13,10 @@
 #include "protoscope/ui/update_check.hpp"
 
 #if defined(_WIN32)
-#include <windows.h>
-
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <windows.h>
 #endif
 
 #include <imgui.h>

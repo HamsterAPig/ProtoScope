@@ -83,13 +83,18 @@ void drawOverviewWindow(plot::WaveViewState& view,
             ImPlotSpec spec{};
             spec.LineColor = color;
             spec.LineWeight = 1.0F;
-            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview min").c_str(),
-                              &envelopeLineMinGetter,
+            spec.Flags = ImPlotItemFlags_NoLegend | ImPlotItemFlags_NoFit;
+            const auto minItemLabel = std::string(fullSnapshot.channels[channelIndex].label) +
+                                      " overview min##wave_channel_overview_min_" + std::to_string(channelIndex);
+            const auto maxItemLabel = std::string(fullSnapshot.channels[channelIndex].label) +
+                                      " overview max##wave_channel_overview_max_" + std::to_string(channelIndex);
+            ImPlot::PlotLineG(minItemLabel.c_str(),
+                              reinterpret_cast<ImPlotGetter>(&envelopeLineMinGetter),
                               &payload,
                               static_cast<int>(overview.size()),
                               spec);
-            ImPlot::PlotLineG((fullSnapshot.channels[channelIndex].label + " overview max").c_str(),
-                              &envelopeLineMaxGetter,
+            ImPlot::PlotLineG(maxItemLabel.c_str(),
+                              reinterpret_cast<ImPlotGetter>(&envelopeLineMaxGetter),
                               &payload,
                               static_cast<int>(overview.size()),
                               spec);

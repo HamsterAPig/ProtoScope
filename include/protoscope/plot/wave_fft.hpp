@@ -41,8 +41,14 @@ enum class WaveFftFundamentalMode {
     Manual,
 };
 
+enum class WaveFftDisplayMode {
+    FullSpectrum,
+    CursorSplit,
+};
+
 struct WaveFftConfig {
     bool enabled{false};
+    WaveFftDisplayMode displayMode{WaveFftDisplayMode::FullSpectrum};
     WaveFftPointCount pointCount{WaveFftPointCount::VisibleSamples};
     WaveFftWindow window{WaveFftWindow::Hann};
     WaveFftMagnitudeMode magnitudeMode{WaveFftMagnitudeMode::Linear};
@@ -97,6 +103,13 @@ struct WaveFftFrame {
     std::string message;
 };
 
+struct WaveFftCursorWindow {
+    double minTime{0.0};
+    double maxTime{0.0};
+    std::size_t pointCount{0};
+    double durationSeconds{0.0};
+};
+
 struct WaveFftReadout {
     bool valid{false};
     std::size_t channelIndex{0};
@@ -133,6 +146,12 @@ const char* fftPointCountName(WaveFftPointCount pointCount);
 const char* fftWindowName(WaveFftWindow window);
 const char* fftMagnitudeModeName(WaveFftMagnitudeMode mode);
 const char* fftFundamentalModeName(WaveFftFundamentalMode mode);
+const char* fftDisplayModeName(WaveFftDisplayMode mode);
+std::size_t resolveWaveFftPointCount(const WaveFftConfig& config, std::size_t visibleSampleCount);
+std::optional<WaveFftCursorWindow> resolveWaveFftCursorWindow(const WaveFftConfig& config,
+                                                              std::size_t visibleSampleCount,
+                                                              double sampleFrequencyHz,
+                                                              double rightCursorTime);
 
 WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
                                const WaveDisplayData& displayData,

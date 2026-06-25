@@ -232,11 +232,12 @@ Lua 脚本通过 `proto.plot.setup()` 创建通道，再通过 `proto.plot.push(
 
 常用操作：
 
+- 点击波形工具栏最左侧的播放/暂停按钮会调用 `on_oscilloscope_toggle(ctx, current_running, target_running)`；脚本返回 `true` 时默认把按钮同步到 `target_running`，实际启动或暂停动作由脚本负责。异步 ACK 成功后也可以调用 `proto.oscilloscope.set_running(running)` 主动同步状态。
 - 通过通道卡片查看通道状态，设置激活通道。
 - 在通道卡片里修改标签、缩放和偏移。
 - 使用总览区域快速定位长时间数据。
 - 双击主图 X 轴会缩放到当前仍保留的完整历史；如需旧行为，可把 `gui.wave.x_axis_double_click_action` 设为 `fit_visible_window`。
-- 双击主图 Y 轴会按当前可见通道的数值范围自动缩放，并应用 `gui.wave.vertical_auto_fit_multiplier` 留出余量。
+- 双击主图 Y 轴默认按图例可见的模拟通道自动缩放，让数据包络约占视图高度 80%；可把 `gui.wave.y_axis_double_click_action` 设为 `fit_active_channel` 改为只适配当前激活模拟通道。
 - 使用游标和测量覆盖层观察时间差和值差。
 - 启用 FFT 频谱模式查看当前可视区频谱。
 - 通过 `文件 -> 导入原始波形...` 一次性导入 `.psraw` 文件，立即重建波形结果。
@@ -330,6 +331,7 @@ scripting:
 - `on_control(ctx, id, value)`：动态控件变化。
 - `on_bytes(ctx, bytes)`：收到原始字节。
 - `on_timer(ctx, name)`：定时器触发。
+- `on_oscilloscope_toggle(ctx, current_running, target_running)`：波形工具栏请求启动或暂停示波器，返回 `true` 时默认同步到 `target_running`；脚本也可用 `proto.oscilloscope.set_running(running)` 显式同步。
 - `on_tx(ctx, evt)`：发送或请求状态变化。
 - `on_dialog(ctx, evt)`：脚本弹窗关闭。
 - `on_file_dialog(ctx, evt)`：文件或目录对话框返回。
@@ -341,6 +343,7 @@ scripting:
 - `proto.request_guarded(payload, opts?)`：受保护半双工请求，`max_attempts` 只统计当前请求；最终失败后熔断后续 guarded 请求。
 - `proto.reset_request_guard()`：解除 guarded 熔断，新的 guarded 请求从 `attempt=1` 重新开始。
 - `proto.request_done(result?)`：脚本确认当前请求已经收到完整业务应答。
+- `proto.oscilloscope.set_running(running)`：主动同步波形工具栏运行状态，适合脚本按钮、定时器或设备 ACK 回调。
 - `proto.emit(name, payload)`：输出脚本事件。
 - `proto.set_timer(name, interval_ms)` / `proto.cancel_timer(name)`：管理定时器。
 - `proto.status.set(text, opts?)` / `proto.status.clear()`：更新状态提示。

@@ -560,10 +560,8 @@ end
     require(dock.controls[5].type == protoscope::scripting::ControlType::Combo, "select 应映射为 combo");
     require(dock.controls[6].type == protoscope::scripting::ControlType::ElfSymbolCombo,
             "symbol 应映射为 elf_symbol_combo");
-    require(dock.controls[7].type == protoscope::scripting::ControlType::ValueTable,
-            "values 应映射为 value_table");
-    require(dock.controls[1].id == "device_id" && dock.controls[1].label == "设备 ID",
-            "控件位置参数应展开 id/label");
+    require(dock.controls[7].type == protoscope::scripting::ControlType::ValueTable, "values 应映射为 value_table");
+    require(dock.controls[1].id == "device_id" && dock.controls[1].label == "设备 ID", "控件位置参数应展开 id/label");
     require(dock.controls[1].textDefault == "01", "input_text default 应保持可用");
     require(dock.controls[4].boolDefault, "checkbox default 应保持可用");
     require(dock.controls[4].labelPosition == protoscope::scripting::ControlLabelPosition::Right,
@@ -587,13 +585,11 @@ end
     require(root.children[2].kind == protoscope::scripting::LayoutNodeKind::Control &&
                 root.children[2].controlId == "scale" && root.children[2].minWidth == 120.0F,
             "id + min_width 糖应展开为 control 节点");
-    require(root.children[3].kind == protoscope::scripting::LayoutNodeKind::Text &&
-                root.children[3].text == "说明文字",
+    require(root.children[3].kind == protoscope::scripting::LayoutNodeKind::Text && root.children[3].text == "说明文字",
             "text 糖应展开为 text 节点");
     require(root.children[4].kind == protoscope::scripting::LayoutNodeKind::Separator,
             "separator 糖应展开为 separator 节点");
-    require(root.children[5].kind == protoscope::scripting::LayoutNodeKind::Spacer,
-            "spacer 糖应展开为 spacer 节点");
+    require(root.children[5].kind == protoscope::scripting::LayoutNodeKind::Spacer, "spacer 糖应展开为 spacer 节点");
 }
 
 void test_script_ui_descriptor_sugar_layout_validation_failures()
@@ -664,8 +660,7 @@ function ui()
 end
 )lua");
         protoscope::scripting::ScriptHost host;
-        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()),
-                "语法糖 layout 漏布局控件应加载失败");
+        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "语法糖 layout 漏布局控件应加载失败");
         require(host.lastError().find("缺少控件") != std::string::npos, "漏布局错误应复用 layout 校验");
     }
 }
@@ -762,6 +757,7 @@ void test_script_layout_width_controls_shorthand_snapshot()
     require(constrained.controlId == "mode", "第三项应绑定 mode");
     require(constrained.minWidth.has_value() && *constrained.minWidth == 120.0F, "control min_width 应解析");
     require(constrained.maxWidth.has_value() && *constrained.maxWidth == 240.0F, "control max_width 应解析");
+    require(constrained.fillWidth, "control fill_width 应解析");
 }
 
 void test_script_inline_group_layout_snapshot()
@@ -792,9 +788,9 @@ void test_script_inline_group_layout_snapshot()
     const auto& shortcutGroup = flow.children[0];
     require(shortcutGroup.kind == protoscope::scripting::LayoutNodeKind::InlineGroup, "第一项应为 inline_group");
     require(shortcutGroup.spacing == 3.0F, "inline_group spacing 应解析");
-    require(shortcutGroup.minWidth.has_value() && *shortcutGroup.minWidth == 200.0F,
-            "inline_group min_width 应解析");
+    require(shortcutGroup.minWidth.has_value() && *shortcutGroup.minWidth == 200.0F, "inline_group min_width 应解析");
     require(!shortcutGroup.maxWidth.has_value(), "inline_group 不应解析 max_width");
+    require(shortcutGroup.fillWidth, "inline_group fill_width 应解析");
     require(shortcutGroup.children.size() == 2, "inline_group.controls 应展开两个 control 子节点");
     require(shortcutGroup.children[0].controlId == "read_version", "inline_group.controls 第一个控件顺序错误");
     require(shortcutGroup.children[1].controlId == "device_id", "inline_group.controls 第二个控件顺序错误");
@@ -802,7 +798,8 @@ void test_script_inline_group_layout_snapshot()
     const auto& mixedGroup = flow.children[1];
     require(mixedGroup.kind == protoscope::scripting::LayoutNodeKind::InlineGroup, "第二项应为 inline_group");
     require(mixedGroup.children.size() == 2, "inline_group.children 应解析 text 与 control");
-    require(mixedGroup.children[0].kind == protoscope::scripting::LayoutNodeKind::Text, "inline_group 第一个子项应为 text");
+    require(mixedGroup.children[0].kind == protoscope::scripting::LayoutNodeKind::Text,
+            "inline_group 第一个子项应为 text");
     require(mixedGroup.children[0].text == "发送选项", "inline_group text 内容应保留");
     require(mixedGroup.children[1].controlId == "hex_send", "inline_group 第二个子项应绑定 hex_send");
     require(flow.children[2].controlId == "timeout_ms", "flow 第三个子项应绑定 timeout_ms");
@@ -1537,6 +1534,8 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
             "LuaLS API 应声明 proto.status.set");
     require(text.find("function proto.plot.push(channel_index, payload) end") != std::string::npos,
             "LuaLS API 应声明 proto.plot.push");
+    require(text.find("function proto.oscilloscope.set_running(running) end") != std::string::npos,
+            "LuaLS API 应声明 proto.oscilloscope.set_running");
     require(text.find("function proto.ui.alert(opts) end") != std::string::npos, "LuaLS API 应声明 proto.ui.alert");
     require(text.find("@class ProtoDialogWindowOptions") != std::string::npos,
             "LuaLS API 应声明 ProtoDialogWindowOptions");
@@ -1552,11 +1551,207 @@ void test_luals_api_sync_contains_tx_and_dialog_api()
     require(text.find("@class ProtoElfSymbolValue") != std::string::npos, "LuaLS API 应声明 ProtoElfSymbolValue");
     require(text.find("function stream() end") != std::string::npos, "LuaLS API 应声明 stream()");
     require(text.find("function on_tx(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_tx");
+    require(text.find("function on_oscilloscope_toggle(ctx, current_running, target_running) end") != std::string::npos,
+            "LuaLS API 应声明 on_oscilloscope_toggle");
     require(text.find("function on_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_dialog");
     require(text.find("function on_file_dialog(ctx, evt) end") != std::string::npos, "LuaLS API 应声明 on_file_dialog");
     require(text.find("@field color? string") != std::string::npos, "LuaLS API 应声明 ProtoPlotChannel.color");
     require(text.find("@field line_width? number") != std::string::npos,
             "LuaLS API 应声明 ProtoPlotChannel.line_width");
+    require(text.find("@class ProtoPlotBitDisplay") != std::string::npos, "LuaLS API 应声明 ProtoPlotBitDisplay");
+    require(text.find("@field bit_display? boolean|ProtoPlotBitDisplay") != std::string::npos,
+            "LuaLS API 应声明 ProtoPlotChannel.bit_display");
+}
+
+void test_script_oscilloscope_toggle_returns_true_and_receives_args()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-true"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  proto.emit("oscilloscope_toggle", "endpoint=" .. ctx.endpoint .. ",current=" .. tostring(current_running) .. ",target=" .. tostring(target_running))
+  return true
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "示波器切换测试脚本应可加载");
+
+    require(host.requestOscilloscopeToggle(sampleCtx(), false, true), "Lua 返回 true 时应允许切换");
+    const auto events = host.drainEvents();
+    require(events.size() == 1, "示波器切换回调应收到参数并 emit 事件");
+    require(events[0].payload.find("endpoint=127.0.0.1:9000") != std::string::npos, "应传入连接上下文");
+    require(events[0].payload.find("current=false") != std::string::npos, "应传入 current_running=false");
+    require(events[0].payload.find("target=true") != std::string::npos, "应传入 target_running=true");
+}
+
+void test_script_oscilloscope_toggle_returns_false()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-false"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  return false
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "示波器切换 false 测试脚本应可加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), true, false), "Lua 返回 false 时应拒绝切换");
+}
+
+void test_script_oscilloscope_set_running_outputs_update()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-set-running"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_open(ctx)
+  proto.oscilloscope.set_running(true)
+  proto.oscilloscope.set_running(false)
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "set_running 测试脚本应可加载");
+
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 2, "set_running 应进入示波器状态输出队列");
+    require(updates[0].running, "第一条状态应为 running=true");
+    require(!updates[1].running, "第二条状态应为 running=false");
+}
+
+void test_script_oscilloscope_toggle_true_defaults_target_update()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-default-update"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  return true
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "默认状态同步测试脚本应可加载");
+
+    require(host.requestOscilloscopeToggle(sampleCtx(), false, true), "Lua 返回 true 时应保留允许切换语义");
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1, "Lua 返回 true 且未显式 set_running 时应默认同步 target_running");
+    require(updates[0].running, "默认同步状态应使用 target_running=true");
+}
+
+void test_script_oscilloscope_toggle_explicit_set_running_overrides_default()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-explicit-update"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  proto.oscilloscope.set_running(false)
+  return true
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "显式状态同步测试脚本应可加载");
+
+    require(host.requestOscilloscopeToggle(sampleCtx(), false, true), "显式 set_running 不应破坏旧 true 语义");
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1, "同一回调显式 set_running 时不应再追加默认 target 状态");
+    require(!updates[0].running, "显式 set_running(false) 应优先于 target_running=true");
+}
+
+void test_script_oscilloscope_toggle_false_allows_later_set_running()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-later-update"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  proto.set_timer("start_ack", 1)
+  return false
+end
+
+function on_timer(ctx, name)
+  if name == "start_ack" then
+    proto.oscilloscope.set_running(true)
+  end
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "延迟状态同步测试脚本应可加载");
+
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "Lua 返回 false 时仍应保持旧拒绝语义");
+    require(host.drainOscilloscopeRunningUpdates().empty(), "返回 false 本身不应默认同步 target 状态");
+
+    host.tick(nowMs() + 10);
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && updates[0].running, "后续 set_running(true) 应可同步运行状态");
+}
+
+void test_script_oscilloscope_toggle_missing_callback_rejects()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(fixtureProtocolDir("missing_callbacks").generic_string()),
+            "缺失回调脚本也应允许加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "缺失示波器切换回调应拒绝切换");
+}
+
+void test_script_oscilloscope_toggle_non_function_rejects_and_logs()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-non-function"));
+    writeMainLua(protocolDir.path(), "on_oscilloscope_toggle = \"bad\"\n");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "非 function 回调不应阻止脚本加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "非 function 示波器回调应拒绝切换");
+
+    bool foundLog = false;
+    for (const auto& log : host.drainLogs()) {
+        foundLog = foundLog || log.message.find("on_oscilloscope_toggle 必须是 function") != std::string::npos;
+    }
+    require(foundLog, "非 function 示波器回调应写错误日志");
+}
+
+void test_script_oscilloscope_toggle_runtime_error_rejects_and_logs()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-error"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  error("boom")
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "异常回调测试脚本应可加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "示波器回调异常时应拒绝切换");
+
+    bool foundLog = false;
+    for (const auto& log : host.drainLogs()) {
+        foundLog = foundLog || log.message.find("on_oscilloscope_toggle 执行失败") != std::string::npos;
+    }
+    require(foundLog, "示波器回调异常应写错误日志");
+}
+
+void test_script_oscilloscope_toggle_non_boolean_rejects_and_logs()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-oscilloscope-toggle-non-boolean"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  return "yes"
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "非 boolean 回调测试脚本应可加载");
+    require(!host.requestOscilloscopeToggle(sampleCtx(), false, true), "示波器回调返回非 boolean 时应拒绝切换");
+
+    bool foundLog = false;
+    for (const auto& log : host.drainLogs()) {
+        foundLog = foundLog || log.message.find("on_oscilloscope_toggle 必须返回 boolean") != std::string::npos;
+    }
+    require(foundLog, "示波器回调返回非 boolean 应写错误日志");
 }
 
 void test_script_missing_callbacks_allowed()
@@ -1675,6 +1870,24 @@ void test_script_layout_width_type_fail()
     require(host.lastError().find("min_width 必须是 number") != std::string::npos, "宽度类型错误应包含 number 提示");
 }
 
+void test_script_layout_fill_width_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_layout_fill_width_type").generic_string()),
+            "非 boolean fill_width 应加载失败");
+    require(host.lastError().find("fill_width 必须是 boolean") != std::string::npos,
+            "fill_width 类型错误应包含 boolean 提示");
+}
+
+void test_script_inline_group_fill_width_type_fail()
+{
+    protoscope::scripting::ScriptHost host;
+    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_fill_width_type").generic_string()),
+            "非 boolean inline_group fill_width 应加载失败");
+    require(host.lastError().find("fill_width 必须是 boolean") != std::string::npos,
+            "inline_group fill_width 类型错误应包含 boolean 提示");
+}
+
 void test_script_layout_width_non_positive_fail()
 {
     protoscope::scripting::ScriptHost host;
@@ -1731,8 +1944,7 @@ void test_script_inline_group_unknown_control_fail()
     protoscope::scripting::ScriptHost host;
     require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_inline_group_unknown_control").generic_string()),
             "inline_group.controls 引用未知控件应加载失败");
-    require(host.lastError().find("未声明控件") != std::string::npos,
-            "inline_group 未知控件错误应包含未声明控件提示");
+    require(host.lastError().find("未声明控件") != std::string::npos, "inline_group 未知控件错误应包含未声明控件提示");
 }
 
 void test_script_inline_group_child_layout_fail()
@@ -1781,8 +1993,9 @@ void test_script_compact_label_below_type_fail()
 void test_script_compact_label_below_non_positive_fail()
 {
     protoscope::scripting::ScriptHost host;
-    require(!host.loadProtocolDirectory(fixtureProtocolDir("invalid_compact_label_below_non_positive").generic_string()),
-            "compact_label_below 非正数时应加载失败");
+    require(
+        !host.loadProtocolDirectory(fixtureProtocolDir("invalid_compact_label_below_non_positive").generic_string()),
+        "compact_label_below 非正数时应加载失败");
     require(host.lastError().find("compact_label_below 必须是正数") != std::string::npos,
             "compact_label_below 非正数错误应包含正数提示");
 }
@@ -1964,6 +2177,8 @@ void test_config_default_roundtrip()
             "波形控制模式默认值应为 oscilloscope");
     require(config.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::OffsetThenScale,
             "波形显示公式默认值应为 offset_then_scale");
+    require(config.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue,
+            "网格每格读数默认值应为 display_value");
     require(config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "CH 卡片宽度模式默认值应为 fixed");
     require(
@@ -1971,16 +2186,27 @@ void test_config_default_roundtrip()
         "CH 卡片双击默认值应为 reset_scale_offset");
     require(config.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
             "X 轴双击默认值应为 fit_full_history");
+    require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
+            "Y 轴双击默认值应为 fit_visible_channels");
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
-    require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.2");
+    require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.25) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.25");
     require(!config.gui.wave.zoomSelectionAutoExit, "框选放大默认不应自动退出");
     require(config.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "隐藏 CH 策略默认应只让可见通道参与派生视图");
     require(config.gui.wave.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform,
             "游标极值吸附策略默认应为 nearest_waveform");
+    require(config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
+            "鼠标 Y 偏移拖动模式默认应为 direct");
+    require(config.gui.wave.legendOverlayDoubleClickAutoCollapse, "双击图例展开默认应在鼠标离开后自动收起");
+    require(config.gui.wave.peakDetectDownsample, "peak-detect 降采样默认应开启");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
+    require(std::abs(config.gui.wave.cursorFftHighlightRgba[0] - 0.20F) < 1e-6F &&
+                std::abs(config.gui.wave.cursorFftHighlightRgba[1] - 0.55F) < 1e-6F &&
+                std::abs(config.gui.wave.cursorFftHighlightRgba[2] - 1.00F) < 1e-6F &&
+                std::abs(config.gui.wave.cursorFftHighlightRgba[3] - 0.16F) < 1e-6F,
+            "游标 FFT 高亮色默认值应为建议 RGBA");
     require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式默认应为 overlay");
     require(config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
@@ -2022,17 +2248,23 @@ void test_config_default_roundtrip()
     config.gui.wave.minVisibleTimeSpan = 0.0025;
     config.gui.wave.controlMode = protoscope::plot::WaveControlMode::LegacyGlobal;
     config.gui.wave.displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset;
+    config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
     config.gui.wave.channelCardWidthMode = protoscope::plot::WaveChannelCardWidthMode::Adaptive;
     config.gui.wave.channelDoubleClickAction = protoscope::plot::WaveChannelDoubleClickAction::ResetAll;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
+    config.gui.wave.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
+    config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
+    config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
     config.gui.wave.zoomSelectionAutoExit = true;
+    config.gui.wave.peakDetectDownsample = false;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
+    config.gui.wave.cursorFftHighlightRgba = {0.10F, 0.20F, 0.30F, 0.40F};
     config.gui.wave.fullscreenMode = protoscope::config::GuiWaveFullscreenMode::Overlay;
     config.gui.font.chineseGlyphRange = protoscope::config::GuiFontChineseGlyphRange::Full;
     config.gui.logHistory.transferRawLimit = 11;
@@ -2079,6 +2311,8 @@ void test_config_default_roundtrip()
             "波形控制模式 roundtrip 失败");
     require(reloaded.config.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::ScaleThenOffset,
             "波形显示公式 roundtrip 失败");
+    require(reloaded.config.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::RawValue,
+            "网格每格读数模式 roundtrip 失败");
     require(reloaded.config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Adaptive,
             "CH 卡片宽度模式 roundtrip 失败");
     require(
@@ -2087,20 +2321,32 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.wave.xAxisDoubleClickAction ==
                 protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow,
             "X 轴双击行为 roundtrip 失败");
+    require(reloaded.config.gui.wave.yAxisDoubleClickAction ==
+                protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
+            "Y 轴双击行为 roundtrip 失败");
     require(reloaded.config.gui.wave.hiddenChannelPolicy ==
                 protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "隐藏 CH 策略 roundtrip 失败");
     require(
         reloaded.config.gui.wave.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone,
         "游标极值吸附策略 roundtrip 失败");
+    require(reloaded.config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Shift,
+            "鼠标 Y 偏移拖动模式 roundtrip 失败");
+    require(!reloaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "双击图例展开自动收起开关 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12,
             "CH 卡片自适应比例 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.verticalAutoFitMultiplier - 1.5) < 1e-12,
             "Y 轴 Auto Fit 系数 roundtrip 失败");
     require(reloaded.config.gui.wave.zoomSelectionAutoExit, "框选放大自动退出开关 roundtrip 失败");
+    require(!reloaded.config.gui.wave.peakDetectDownsample, "peak-detect 降采样开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showChannelLegend, "波形图例显示开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
+    require(std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[0] - 0.10F) < 1e-6F &&
+                std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[1] - 0.20F) < 1e-6F &&
+                std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[2] - 0.30F) < 1e-6F &&
+                std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
+            "游标 FFT 高亮色 roundtrip 失败");
     require(reloaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式 roundtrip 失败");
     require(reloaded.config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::Full,
@@ -2146,6 +2392,45 @@ void test_config_default_roundtrip()
     require(error.find("创建配置目录失败") != std::string::npos, "配置目录创建失败应返回明确错误");
 }
 
+void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
+{
+    protoscope::config::ConfigStore store;
+    protoscope::config::AppConfig config;
+    config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
+    config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::ActualValue;
+    config.gui.wave.cursorFftHighlightRgba = {0.30F, 0.40F, 0.50F, 0.60F};
+    config.gui.wave.peakDetectDownsample = false;
+    config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
+
+    protoscope::dock::DockStore dockStore;
+    store.applyToDock(config, dockStore);
+    require(dockStore.waveState().view.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Shift,
+            "applyToDock 应写入鼠标 Y 偏移拖动模式");
+    require(dockStore.waveState().view.gridDivisionReadoutMode ==
+                protoscope::plot::WaveGridDivisionReadoutMode::ActualValue,
+            "applyToDock 应写入网格每格读数模式");
+    require(std::abs(dockStore.waveState().view.cursorFftHighlightRgba[3] - 0.60F) < 1e-6F,
+            "applyToDock 应写入游标 FFT 高亮色");
+    require(!dockStore.waveState().view.peakDetectDownsample, "applyToDock 应写入 peak-detect 降采样开关");
+    require(!dockStore.waveState().legendOverlay.doubleClickAutoCollapse, "applyToDock 应写入图例双击展开自动收起开关");
+
+    dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
+    dockStore.waveState().view.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
+    dockStore.waveState().view.cursorFftHighlightRgba = {0.70F, 0.60F, 0.50F, 0.40F};
+    dockStore.waveState().view.peakDetectDownsample = true;
+    dockStore.waveState().legendOverlay.doubleClickAutoCollapse = true;
+    const auto captured = store.captureFromDock(dockStore);
+    require(captured.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Disabled,
+            "captureFromDock 应捕获鼠标 Y 偏移拖动模式");
+    require(captured.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::RawValue,
+            "captureFromDock 应捕获网格每格读数模式");
+    require(std::abs(captured.gui.wave.cursorFftHighlightRgba[0] - 0.70F) < 1e-6F &&
+                std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
+            "captureFromDock 应捕获游标 FFT 高亮色");
+    require(captured.gui.wave.peakDetectDownsample, "captureFromDock 应捕获 peak-detect 降采样开关");
+    require(captured.gui.wave.legendOverlayDoubleClickAutoCollapse, "captureFromDock 应捕获图例双击展开自动收起开关");
+}
+
 void test_config_repo_default_yaml_loads()
 {
     protoscope::config::ConfigStore store;
@@ -2164,6 +2449,8 @@ void test_config_repo_default_yaml_loads()
             "默认配置应读取 worker 低水位");
     require(loaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "源码默认配置应读取 overlay 波形全屏模式");
+    require(loaded.config.gui.wave.peakDetectDownsample, "源码默认配置应开启 peak-detect 降采样");
+    require(loaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "源码默认配置应开启图例双击展开自动收起");
 }
 
 void test_script_file_io_proto_buffer_roundtrip()
@@ -2293,9 +2580,12 @@ void test_config_wave_mode_invalid_fallback()
            "  wave:\n"
            "    control_mode: weird\n"
            "    display_formula: wrong\n"
+           "    grid_division_readout_mode: weird\n"
            "    channel_card_width_mode: weird\n"
            "    channel_double_click_action: weird\n"
            "    x_axis_double_click_action: weird\n"
+           "    y_axis_double_click_action: weird\n"
+           "    mouse_y_offset_drag_mode: weird\n"
            "    fullscreen_mode: weird\n"
            "    channel_card_fixed_width: 0\n"
            "    channel_card_adaptive_ratio: -0.5\n"
@@ -2307,6 +2597,8 @@ void test_config_wave_mode_invalid_fallback()
             "非法 control_mode 应回退到 oscilloscope");
     require(loaded.gui.wave.displayFormula == protoscope::plot::WaveDisplayFormula::OffsetThenScale,
             "非法 display_formula 应回退到 offset_then_scale");
+    require(loaded.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue,
+            "非法 grid_division_readout_mode 应回退到 display_value");
     require(loaded.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "非法 channel_card_width_mode 应回退到 fixed");
     require(
@@ -2314,13 +2606,17 @@ void test_config_wave_mode_invalid_fallback()
         "非法 channel_double_click_action 应回退到 reset_scale_offset");
     require(loaded.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
             "非法 x_axis_double_click_action 应回退到 fit_full_history");
+    require(loaded.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
+            "非法 y_axis_double_click_action 应回退到 fit_visible_channels");
     require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "非法 fullscreen_mode 应回退到 overlay");
+    require(loaded.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
+            "非法 mouse_y_offset_drag_mode 应回退到 direct");
     require(loaded.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
             "非法 chinese_glyph_range 应回退到 simplified_common");
     require(std::abs(loaded.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "非正固定宽度应回退到 128");
     require(std::abs(loaded.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "非正自适应比例应回退到 0.22");
-    require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.2) < 1e-12, "非正 Auto Fit 系数应回退到 1.2");
+    require(std::abs(loaded.gui.wave.verticalAutoFitMultiplier - 1.25) < 1e-12, "非正 Auto Fit 系数应回退到 1.25");
 }
 
 void test_config_logging_roundtrip()
@@ -2493,6 +2789,68 @@ void test_script_plot_api_snapshot()
     require(!setups[0].channels[1].lineWidth.has_value(), "CH2 未配置 line_width 时应保留默认样式");
     require(appends.size() == 2, "打开连接后应推送 2 组通道数据");
     require(appends[0].second.samples.size() == 3, "通道采样点数量不正确");
+}
+
+void test_script_plot_bit_display_config()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-bit-plot"));
+    writeMainLua(protocolDir.path(), R"lua(
+function on_open(ctx)
+  proto.plot.setup({
+    channels = {
+      { label = "CH1", unit = "raw", bit_display = true },
+      { label = "CH2", unit = "raw", bit_display = { first_bit = 4, bit_count = 12, y_offset = 2.5 } },
+      { label = "CH3", unit = "raw", bit_display = { enabled = false, first_bit = 2, bit_count = 3 } },
+    }
+  })
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "bit_display 协议应可加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{.context = sampleCtx()});
+
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "bit_display setup 应生成 1 次配置");
+    require(setups[0].channels.size() == 3, "bit_display setup 应保留所有通道");
+    require(setups[0].channels[0].bitDisplay.enabled, "bit_display=true 应启用 bit 显示");
+    require(setups[0].channels[0].bitDisplay.firstBit == 0, "bit_display=true first_bit 默认值错误");
+    require(setups[0].channels[0].bitDisplay.bitCount == 8, "bit_display=true bit_count 默认值错误");
+    require(std::abs(setups[0].channels[0].bitDisplay.yOffset) < 1e-12, "bit_display=true y_offset 默认值错误");
+    require(setups[0].channels[1].bitDisplay.enabled, "bit_display table 省略 enabled 时应默认启用");
+    require(setups[0].channels[1].bitDisplay.firstBit == 4, "bit_display first_bit 解析错误");
+    require(setups[0].channels[1].bitDisplay.bitCount == 12, "bit_display bit_count 解析错误");
+    require(std::abs(setups[0].channels[1].bitDisplay.yOffset - 2.5) < 1e-12, "bit_display y_offset 解析错误");
+    require(!setups[0].channels[2].bitDisplay.enabled, "bit_display.enabled=false 应关闭 bit 显示");
+    require(setups[0].channels[2].bitDisplay.firstBit == 2, "关闭状态仍应保留 first_bit 配置");
+    require(setups[0].channels[2].bitDisplay.bitCount == 3, "关闭状态仍应保留 bit_count 配置");
+}
+
+void test_script_plot_bit_display_rejects_invalid_config()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-bit-plot-invalid"));
+    writeMainLua(protocolDir.path(), R"lua(
+function on_open(ctx)
+  proto.plot.setup({
+    channels = {
+      { label = "CH1", bit_display = { first_bit = 60, bit_count = 8 } },
+    }
+  })
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "非法 bit_display 脚本本身应可加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{.context = sampleCtx()});
+    require(host.drainPlotSetups().empty(), "非法 bit_display 不应生成 plot.setup");
+
+    bool hasBitDisplayError = false;
+    for (const auto& log : host.drainLogs()) {
+        if (log.message.find("bit_display.first_bit + bit_count 不允许超过 64") != std::string::npos) {
+            hasBitDisplayError = true;
+        }
+    }
+    require(hasBitDisplayError, "非法 bit_display 应记录明确字段错误");
 }
 
 void test_script_plot_push_accepts_compact_series()
@@ -3168,7 +3526,7 @@ void test_script_value_table_parse_and_update()
     require(cs2 != nullptr, "regs 应在快照中");
     const auto* tvFinal = std::get_if<protoscope::scripting::ValueTableValue>(&cs2->value);
     require(tvFinal != nullptr && tvFinal->rows[3].value == "25.3" && tvFinal->rows[4].value == "68.1",
-        "range 更新应正确写入");
+            "range 更新应正确写入");
     require(tvFinal->rows[0].value == "220.1", "之前的普通行更新应保留");
     require(tvFinal->rows[1].value == "停", "bit0 更新应保留");
     require(tvFinal->rows[2].value == "高", "bit31 更新应保留");
@@ -3411,6 +3769,23 @@ static const TestCase kAllTests[] = {
     {"frame_stream_parser_runtime_profile_truncated_fields",
      &test_frame_stream_parser_runtime_profile_truncated_fields},
     {"luals_api_sync_contains_tx_and_dialog_api", &test_luals_api_sync_contains_tx_and_dialog_api},
+    {"script_oscilloscope_toggle_returns_true_and_receives_args",
+     &test_script_oscilloscope_toggle_returns_true_and_receives_args},
+    {"script_oscilloscope_toggle_returns_false", &test_script_oscilloscope_toggle_returns_false},
+    {"script_oscilloscope_set_running_outputs_update", &test_script_oscilloscope_set_running_outputs_update},
+    {"script_oscilloscope_toggle_true_defaults_target_update",
+     &test_script_oscilloscope_toggle_true_defaults_target_update},
+    {"script_oscilloscope_toggle_explicit_set_running_overrides_default",
+     &test_script_oscilloscope_toggle_explicit_set_running_overrides_default},
+    {"script_oscilloscope_toggle_false_allows_later_set_running",
+     &test_script_oscilloscope_toggle_false_allows_later_set_running},
+    {"script_oscilloscope_toggle_missing_callback_rejects", &test_script_oscilloscope_toggle_missing_callback_rejects},
+    {"script_oscilloscope_toggle_non_function_rejects_and_logs",
+     &test_script_oscilloscope_toggle_non_function_rejects_and_logs},
+    {"script_oscilloscope_toggle_runtime_error_rejects_and_logs",
+     &test_script_oscilloscope_toggle_runtime_error_rejects_and_logs},
+    {"script_oscilloscope_toggle_non_boolean_rejects_and_logs",
+     &test_script_oscilloscope_toggle_non_boolean_rejects_and_logs},
     {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
     {"script_invalid_controls_fail", &test_script_invalid_controls_fail},
     {"script_invalid_dock_anchor_fail", &test_script_invalid_dock_anchor_fail},
@@ -3424,6 +3799,8 @@ static const TestCase kAllTests[] = {
     {"script_layout_unknown_type_fail", &test_script_layout_unknown_type_fail},
     {"script_layout_width_range_fail", &test_script_layout_width_range_fail},
     {"script_layout_width_type_fail", &test_script_layout_width_type_fail},
+    {"script_layout_fill_width_type_fail", &test_script_layout_fill_width_type_fail},
+    {"script_inline_group_fill_width_type_fail", &test_script_inline_group_fill_width_type_fail},
     {"script_layout_width_non_positive_fail", &test_script_layout_width_non_positive_fail},
     {"script_layout_children_controls_conflict_fail", &test_script_layout_children_controls_conflict_fail},
     {"script_layout_shortcut_unknown_control_fail", &test_script_layout_shortcut_unknown_control_fail},
@@ -3450,6 +3827,7 @@ static const TestCase kAllTests[] = {
     {"protocol_directory_reload", &test_protocol_directory_reload},
     {"protocol_ui_templates_load", &test_protocol_ui_templates_load},
     {"config_default_roundtrip", &test_config_default_roundtrip},
+    {"config_wave_mouse_y_offset_drag_mode_apply_capture", &test_config_wave_mouse_y_offset_drag_mode_apply_capture},
     {"config_repo_default_yaml_loads", &test_config_repo_default_yaml_loads},
     {"config_performance_scale_applies_default_budgets", &test_config_performance_scale_applies_default_budgets},
     {"config_performance_save_keeps_scaled_defaults_compact",
@@ -3470,6 +3848,8 @@ static const TestCase kAllTests[] = {
      &test_protocol_state_file_roundtrips_elf_path_per_protocol},
     {"protocol_state_file_replace_failure_keeps_target", &test_protocol_state_file_replace_failure_keeps_target},
     {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
+    {"script_plot_bit_display_config", &test_script_plot_bit_display_config},
+    {"script_plot_bit_display_rejects_invalid_config", &test_script_plot_bit_display_rejects_invalid_config},
     {"script_plot_push_accepts_compact_series", &test_script_plot_push_accepts_compact_series},
     {"half_duplex_modbus_request_batches", &test_half_duplex_modbus_request_batches},
     {"half_duplex_modbus_ack_and_plot_flow", &test_half_duplex_modbus_ack_and_plot_flow},
@@ -3496,7 +3876,16 @@ static const TestCase kAllTests[] = {
     {"wave_protocol_state_isolated_by_protocol_key", &test_wave_protocol_state_isolated_by_protocol_key},
     {"wave_protocol_state_missing_wave_node_clears_analysis_markers",
      &test_wave_protocol_state_missing_wave_node_clears_analysis_markers},
+    {"wave_protocol_state_hidden_channel_indices_roundtrip_and_legacy_labels",
+     &test_wave_protocol_state_hidden_channel_indices_roundtrip_and_legacy_labels},
     {"wave_protocol_state_cursor_extreme_snap_policy", &test_wave_protocol_state_cursor_extreme_snap_policy},
+    {"wave_protocol_state_prefer_waveform_hover_readout_defaults_true",
+     &test_wave_protocol_state_prefer_waveform_hover_readout_defaults_true},
+    {"wave_protocol_state_view_mode_legend_overlay_and_color_override",
+     &test_wave_protocol_state_view_mode_legend_overlay_and_color_override},
+    {"wave_protocol_state_glow_phosphor_roundtrip", &test_wave_protocol_state_glow_phosphor_roundtrip},
+    {"wave_protocol_state_legacy_phosphor_glow_only_migrates_to_glow",
+     &test_wave_protocol_state_legacy_phosphor_glow_only_migrates_to_glow},
     {"dock_visibility_state_isolated_by_protocol_key", &test_dock_visibility_state_isolated_by_protocol_key},
     {"dock_visibility_state_decode_missing_fields_defaults",
      &test_dock_visibility_state_decode_missing_fields_defaults},
@@ -3551,6 +3940,10 @@ static const TestCase kAllTests[] = {
      &test_wave_cursor_extreme_snap_falls_back_to_window_trough},
     {"wave_cursor_smart_snap_fallback_to_nearest", &test_wave_cursor_smart_snap_fallback_to_nearest},
     {"wave_cursor_drag_time_uses_smart_snap", &test_wave_cursor_drag_time_uses_smart_snap},
+    {"split_cursor_drag_id_namespace_is_unique", &test_split_cursor_drag_id_namespace_is_unique},
+    {"split_cursor_snap_forced_channel_ignores_other_rows", &test_split_cursor_snap_forced_channel_ignores_other_rows},
+    {"split_cursor_smart_snap_forced_channel_ignores_hidden_row_candidate",
+     &test_split_cursor_smart_snap_forced_channel_ignores_hidden_row_candidate},
     {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
     {"transport_enqueue_send_async_roundtrip", &test_transport_enqueue_send_async_roundtrip},
     {"tcp_server_connection_takeover_replaces_active_client",
@@ -3567,6 +3960,8 @@ static const TestCase kAllTests[] = {
      &test_script_dialog_requests_reject_invalid_window_options},
     {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
     {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
+    {"application_oscilloscope_toggle_syncs_running_from_script_outputs",
+     &test_application_oscilloscope_toggle_syncs_running_from_script_outputs},
     {"application_tx_overflow_popup_keeps_dialog_payload", &test_application_tx_overflow_popup_keeps_dialog_payload},
     {"application_failed_protocol_reload_keeps_previous_runtime",
      &test_application_failed_protocol_reload_keeps_previous_runtime},
@@ -3600,6 +3995,8 @@ static const TestCase kAllTests[] = {
     {"application_wave_legend_visibility_config_roundtrip", &test_application_wave_legend_visibility_config_roundtrip},
     {"application_wave_zoom_selection_auto_exit_config_roundtrip",
      &test_application_wave_zoom_selection_auto_exit_config_roundtrip},
+    {"application_reset_wave_history_restores_default_viewport",
+     &test_application_reset_wave_history_restores_default_viewport},
     {"application_refreshes_selected_elf_symbol_controls_silently",
      &test_application_refreshes_selected_elf_symbol_controls_silently},
     {"application_refreshes_selected_elf_symbol_controls_with_on_control",
@@ -3670,6 +4067,8 @@ static const TestCase kAllTests[] = {
      &test_script_runtime_worker_rx_limit_keeps_all_queued_bytes},
     {"script_runtime_worker_batch_bytes_merges_adjacent_rx_events",
      &test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events},
+    {"script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result",
+     &test_script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result},
     {"pipeline_worker_threads_resolve_from_hardware_limit", &test_pipeline_worker_threads_resolve_from_hardware_limit},
     {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
     {"plot_history_limit_zero_keeps_all_samples", &test_plot_history_limit_zero_keeps_all_samples},
@@ -3679,21 +4078,54 @@ static const TestCase kAllTests[] = {
     {"plot_time_reset_can_continue_history", &test_plot_time_reset_can_continue_history},
     {"wave_sample_frequency_visible_range_filters_by_sample_index",
      &test_wave_sample_frequency_visible_range_filters_by_sample_index},
-    {"wave_snapshot_visible_range_keeps_adjacent_samples",
-     &test_wave_snapshot_visible_range_keeps_adjacent_samples},
-    {"wave_visible_range_adjacent_samples_clamp_at_edges",
-     &test_wave_visible_range_adjacent_samples_clamp_at_edges},
+    {"wave_snapshot_visible_range_keeps_adjacent_samples", &test_wave_snapshot_visible_range_keeps_adjacent_samples},
+    {"wave_visible_range_adjacent_samples_clamp_at_edges", &test_wave_visible_range_adjacent_samples_clamp_at_edges},
     {"wave_sample_frequency_preserves_trimmed_sample_offset",
      &test_wave_sample_frequency_preserves_trimmed_sample_offset},
-    {"wave_max_total_samples_trim_refreshes_cached_frame",
-     &test_wave_max_total_samples_trim_refreshes_cached_frame},
-    {"wave_max_total_samples_noop_preserves_revision",
-     &test_wave_max_total_samples_noop_preserves_revision},
+    {"wave_max_total_samples_trim_refreshes_cached_frame", &test_wave_max_total_samples_trim_refreshes_cached_frame},
+    {"wave_max_total_samples_noop_preserves_revision", &test_wave_max_total_samples_noop_preserves_revision},
     {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},
+    {"measurement_overlay_safe_right_collapsed_uses_content_right",
+     &test_measurement_overlay_safe_right_collapsed_uses_content_right},
+    {"measurement_overlay_safe_right_open_drawer_reserves_drawer_width",
+     &test_measurement_overlay_safe_right_open_drawer_reserves_drawer_width},
+    {"measurement_overlay_placement_clamps_to_safe_right", &test_measurement_overlay_placement_clamps_to_safe_right},
+    {"measurement_overlay_placement_skips_when_safe_area_too_narrow",
+     &test_measurement_overlay_placement_skips_when_safe_area_too_narrow},
     {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
     {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
     {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
     {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
+    {"plot_channel_bit_display_reaches_snapshot", &test_plot_channel_bit_display_reaches_snapshot},
+    {"bit_lane_double_click_reset_selects_without_active_lane",
+     &test_bit_lane_double_click_reset_selects_without_active_lane},
+    {"bit_render_lane_downsample_keeps_orthogonal_segments",
+     &test_bit_render_lane_downsample_keeps_orthogonal_segments},
+    {"bit_render_lane_low_density_keeps_exact_steps", &test_bit_render_lane_low_density_keeps_exact_steps},
+    {"wave_bit_display_bounds_and_hidden_policy", &test_wave_bit_display_bounds_and_hidden_policy},
+    {"bit_cursor_only_snaps_to_transitions", &test_bit_cursor_only_snaps_to_transitions},
+    {"hidden_bit_lane_excluded_from_layout_hit_and_snap", &test_hidden_bit_lane_excluded_from_layout_hit_and_snap},
+    {"split_bit_cursor_forced_channel_still_snaps_to_transition",
+     &test_split_bit_cursor_forced_channel_still_snaps_to_transition},
+    {"bit_measurement_cross_lane_still_outputs_dt_f", &test_bit_measurement_cross_lane_still_outputs_dt_f},
+    {"bit_cursor_cross_lane_refresh_uses_own_y_anchor", &test_bit_cursor_cross_lane_refresh_uses_own_y_anchor},
+    {"bit_active_switches_measurement_mode", &test_bit_active_switches_measurement_mode},
+    {"invisible_active_bit_lane_falls_back_to_waveform_cursor",
+     &test_invisible_active_bit_lane_falls_back_to_waveform_cursor},
+    {"active_channel_cursor_time_fallback_rebinds_after_channel_switch",
+     &test_active_channel_cursor_time_fallback_rebinds_after_channel_switch},
+    {"active_channel_cursor_time_fallback_restores_pair_measurement",
+     &test_active_channel_cursor_time_fallback_restores_pair_measurement},
+    {"active_bit_lane_cursor_can_return_nearby_waveform", &test_active_bit_lane_cursor_can_return_nearby_waveform},
+    {"bit_display_cursor_excludes_same_channel_raw_waveform",
+     &test_bit_display_cursor_excludes_same_channel_raw_waveform},
+    {"explicit_bit_readout_policy_keeps_waveform_when_bit_not_active",
+     &test_explicit_bit_readout_policy_keeps_waveform_when_bit_not_active},
+    {"bit_layout_independent_of_axis_range", &test_bit_layout_independent_of_axis_range},
+    {"bit_layout_multiple_channels_with_y_offset", &test_bit_layout_multiple_channels_with_y_offset},
+    {"bit_lane_display_label_uses_simplified_bit_text", &test_bit_lane_display_label_uses_simplified_bit_text},
+    {"bit_layout_16_and_8_bit_channels_share_absolute_rows",
+     &test_bit_layout_16_and_8_bit_channels_share_absolute_rows},
     {"plot_snapshot_without_stats_keeps_ranges_and_samples",
      &test_plot_snapshot_without_stats_keeps_ranges_and_samples},
     {"plot_build_display_data_into_reuses_storage_and_matches_output",
@@ -3702,24 +4134,50 @@ static const TestCase kAllTests[] = {
     {"plot_channel_transform_updates_are_isolated", &test_plot_channel_transform_updates_are_isolated},
     {"plot_cursor_snap_scope_selection", &test_plot_cursor_snap_scope_selection},
     {"plot_hover_readout_ignores_hidden_channels", &test_plot_hover_readout_ignores_hidden_channels},
+    {"bit_hover_readout_tracks_steady_level", &test_bit_hover_readout_tracks_steady_level},
+    {"bit_hover_readout_uses_sample_frequency_time_axis", &test_bit_hover_readout_uses_sample_frequency_time_axis},
+    {"bit_hover_readout_excludes_same_channel_raw_waveform",
+     &test_bit_hover_readout_excludes_same_channel_raw_waveform},
+    {"bit_hover_readout_uses_nearest_display_shape_in_mixed_view",
+     &test_bit_hover_readout_uses_nearest_display_shape_in_mixed_view},
+    {"bit_hover_readout_falls_back_to_waveform_outside_lane",
+     &test_bit_hover_readout_falls_back_to_waveform_outside_lane},
     {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
     {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
     {"wave_display_data_uses_visible_window_only", &test_wave_display_data_uses_visible_window_only},
     {"wave_main_render_data_uses_viewport_window", &test_wave_main_render_data_uses_viewport_window},
+    {"wave_peak_detect_downsample_orders_bucket_points", &test_wave_peak_detect_downsample_orders_bucket_points},
+    {"wave_peak_detect_downsample_respects_point_budget", &test_wave_peak_detect_downsample_respects_point_budget},
+    {"wave_render_mode_label_reports_each_path", &test_wave_render_mode_label_reports_each_path},
     {"wave_main_render_data_uses_sample_frequency_viewport",
      &test_wave_main_render_data_uses_sample_frequency_viewport},
+    {"wave_default_viewport_without_frequency_uses_time_scale",
+     &test_wave_default_viewport_without_frequency_uses_time_scale},
+    {"wave_default_viewport_uses_sample_frequency_budget", &test_wave_default_viewport_uses_sample_frequency_budget},
+    {"wave_default_viewport_duration_tracks_render_budget", &test_wave_default_viewport_duration_tracks_render_budget},
+    {"wave_default_viewport_preserves_configured_y_range", &test_wave_default_viewport_preserves_configured_y_range},
     {"wave_sample_frequency_auto_follow_preserves_trimmed_offset",
      &test_wave_sample_frequency_auto_follow_preserves_trimmed_offset},
+    {"wave_oscilloscope_toggle_deferred", &test_wave_oscilloscope_toggle_deferred},
     {"wave_overview_display_data_is_budgeted", &test_wave_overview_display_data_is_budgeted},
     {"wave_overview_bounds_use_full_history_window", &test_wave_overview_bounds_use_full_history_window},
+    {"wave_fit_visible_waveforms_uses_full_history_time_bounds",
+     &test_wave_fit_visible_waveforms_uses_full_history_time_bounds},
+    {"wave_fit_visible_waveforms_uses_sample_frequency_full_history",
+     &test_wave_fit_visible_waveforms_uses_sample_frequency_full_history},
+    {"wave_fit_visible_waveforms_ignores_hidden_channels", &test_wave_fit_visible_waveforms_ignores_hidden_channels},
     {"wave_x_axis_double_click_bounds_selects_full_history",
      &test_wave_x_axis_double_click_bounds_selects_full_history},
     {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
     {"wave_fft_visible_samples_supports_non_power_of_two", &test_wave_fft_visible_samples_supports_non_power_of_two},
     {"wave_fft_manual_point_count_supports_non_power_of_two",
      &test_wave_fft_manual_point_count_supports_non_power_of_two},
+    {"wave_fft_cursor_window_resolves_point_counts_and_duration",
+     &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
     {"wave_fft_fit_viewport_resets_frequency_and_value_ranges",
      &test_wave_fft_fit_viewport_resets_frequency_and_value_ranges},
+    {"wave_fft_cursor_window_resolves_point_counts_and_duration",
+     &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
     {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
     {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
@@ -3727,15 +4185,31 @@ static const TestCase kAllTests[] = {
     {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
     {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},
     {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
+    {"wave_y_axis_double_click_bounds_selects_visible_or_active",
+     &test_wave_y_axis_double_click_bounds_selects_visible_or_active},
     {"wave_visible_channel_bounds_ignore_hidden_channels", &test_wave_visible_channel_bounds_ignore_hidden_channels},
     {"wave_hidden_channel_policy_defaults_to_visible_only", &test_wave_hidden_channel_policy_defaults_to_visible_only},
+    {"wave_hidden_channel_indices_allow_duplicate_labels", &test_wave_hidden_channel_indices_allow_duplicate_labels},
+    {"wave_hidden_channel_indices_survive_duplicate_rename",
+     &test_wave_hidden_channel_indices_survive_duplicate_rename},
+    {"wave_grid_division_readout_conversions", &test_wave_grid_division_readout_conversions},
+    {"wave_grid_division_readout_formula_offset_cancels", &test_wave_grid_division_readout_formula_offset_cancels},
     {"wave_status_overlay_items_only_show_non_default_states",
      &test_wave_status_overlay_items_only_show_non_default_states},
+    {"wave_phosphor_stroke_style_uses_channel_style", &test_wave_phosphor_stroke_style_uses_channel_style},
+    {"wave_phosphor_trigger_detection_interpolates_edges", &test_wave_phosphor_trigger_detection_interpolates_edges},
+    {"wave_phosphor_trigger_window_aligns_to_fixed_x", &test_wave_phosphor_trigger_window_aligns_to_fixed_x},
+    {"wave_phosphor_non_follow_mode_freezes", &test_wave_phosphor_non_follow_mode_freezes},
     {"wave_channel_reset_all_uses_protocol_default", &test_wave_channel_reset_all_uses_protocol_default},
     {"wave_channel_reset_scale_offset_preserves_label_and_ratio",
      &test_wave_channel_reset_scale_offset_preserves_label_and_ratio},
     {"wave_channel_reset_scale_preserves_offset", &test_wave_channel_reset_scale_preserves_offset},
     {"wave_offset_reset_uses_protocol_default_only", &test_wave_offset_reset_uses_protocol_default_only},
+    {"wave_reset_one_channel_view_settings_only_resets_target",
+     &test_wave_reset_one_channel_view_settings_only_resets_target},
+    {"wave_reset_all_channel_view_settings_preserves_samples",
+     &test_wave_reset_all_channel_view_settings_preserves_samples},
+    {"wave_mouse_y_offset_drag_mode_gate", &test_wave_mouse_y_offset_drag_mode_gate},
     {"raw_capture_file_roundtrip", &test_raw_capture_file_roundtrip},
     {"raw_capture_file_plot_setup_roundtrip", &test_raw_capture_file_plot_setup_roundtrip},
     {"raw_capture_file_plot_setup_rejects_bad_fields", &test_raw_capture_file_plot_setup_rejects_bad_fields},

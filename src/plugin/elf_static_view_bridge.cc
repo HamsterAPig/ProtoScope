@@ -5,8 +5,8 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
-#include <system_error>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <elf_static_view/project.hpp>

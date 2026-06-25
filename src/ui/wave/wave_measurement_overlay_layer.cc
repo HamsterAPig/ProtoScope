@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -25,16 +26,22 @@ namespace {
     }
 
     void addMetricChip(MetricChips& chips, const char* label, double value, const char* unit = nullptr)
-    { addChip(chips, label, formatMetricText(value, unit)); }
+    {
+        addChip(chips, label, formatMetricText(value, unit));
+    }
 
     void addOptionalMetricChip(MetricChips& chips,
                                const char* label,
                                const std::optional<double>& value,
                                const char* unit = nullptr)
-    { addChip(chips, label, value.has_value() ? formatMetricText(*value, unit) : "N/A"); }
+    {
+        addChip(chips, label, value.has_value() ? formatMetricText(*value, unit) : "N/A");
+    }
 
     const char* safeUnit(const std::string& unit)
-    { return unit.empty() ? nullptr : unit.c_str(); }
+    {
+        return unit.empty() ? nullptr : unit.c_str();
+    }
 
     ImVec2 calcChipSize(const MetricChip& chip, float padX, float padY)
     {
@@ -57,7 +64,7 @@ namespace {
             const ImVec2 chipSize = calcChipSize(chip, padX, padY);
 
             if (rowWidth > 0.0F && rowWidth + gapX + chipSize.x > maxWidth) {
-                size.x = (std::max) (size.x, rowWidth);
+                size.x = (std::max)(size.x, rowWidth);
                 size.y += rowHeight + gapY;
 
                 rowWidth = 0.0F;
@@ -69,10 +76,10 @@ namespace {
             }
 
             rowWidth += chipSize.x;
-            rowHeight = (std::max) (rowHeight, chipSize.y);
+            rowHeight = (std::max)(rowHeight, chipSize.y);
         }
 
-        size.x = (std::max) (size.x, rowWidth);
+        size.x = (std::max)(size.x, rowWidth);
         size.y += rowHeight;
 
         return size;
@@ -147,7 +154,7 @@ namespace {
                            rounding);
 
             x += chipSize.x + gapX;
-            rowHeight = (std::max) (rowHeight, chipSize.y);
+            rowHeight = (std::max)(rowHeight, chipSize.y);
         }
     }
 
@@ -158,6 +165,7 @@ namespace {
                            const PlotRenderResult& result)
     {
         const auto& selection = view.measurement;
+        const bool bitMode = result.bitMeasurementActive;
 
         if (!view.showCursors) {
             return;
@@ -168,7 +176,11 @@ namespace {
             const auto& channel = snapshot.channels[cursor.channelIndex];
 
             addChip(chips, "A·t", formatMetricText(cursor.time, displayData.timeUnit.c_str()));
-            addChip(chips, "A·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
+            if (bitMode && cursor.bit.has_value()) {
+                addChip(chips, "A·val", cursor.bit->value ? "1" : "0");
+            } else {
+                addChip(chips, "A·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
+            }
         }
 
         if (selection.cursorB && result.cursorReadouts[1].has_value()) {
@@ -176,7 +188,11 @@ namespace {
             const auto& channel = snapshot.channels[cursor.channelIndex];
 
             addChip(chips, "B·t", formatMetricText(cursor.time, displayData.timeUnit.c_str()));
-            addChip(chips, "B·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
+            if (bitMode && cursor.bit.has_value()) {
+                addChip(chips, "B·val", cursor.bit->value ? "1" : "0");
+            } else {
+                addChip(chips, "B·y", formatMetricText(cursor.value, safeUnit(channel.unit)));
+            }
         }
 
         if (!result.cursorReadouts[0].has_value() || !result.cursorReadouts[1].has_value()) {
@@ -201,7 +217,9 @@ namespace {
         }
 
         if (selection.deltaValue) {
-            addChip(chips, "Δy", formatMetricText(delta.deltaValue, nullptr));
+            if (!bitMode) {
+                addChip(chips, "Δy", formatMetricText(delta.deltaValue, nullptr));
+            }
         }
 
         if (selection.frequency && intervalText.showFrequency) {
@@ -303,26 +321,73 @@ namespace {
 
 } // namespace
 
+float resolveMeasurementSafeRightX(float contentLeftX,
+                                   float contentWidth,
+                                   bool toolsCollapsed,
+                                   float requestedDrawerWidth,
+                                   float minDrawerWidth,
+                                   float maxDrawerWidth,
+                                   float splitterWidth)
+{
+    const float safeContentWidth = (std::max)(contentWidth, 0.0F);
+    const float contentRight = contentLeftX + safeContentWidth;
+    if (toolsCollapsed) {
+        return contentRight;
+    }
+
+    const float safeMinDrawerWidth = (std::max)(minDrawerWidth, 0.0F);
+    const float safeMaxDrawerWidth = (std::max)(maxDrawerWidth, safeMinDrawerWidth);
+    const float drawerWidth =
+        (std::min)((std::clamp)(requestedDrawerWidth, safeMinDrawerWidth, safeMaxDrawerWidth), safeContentWidth);
+    const float reservedSplitterWidth = (std::max)(splitterWidth, 0.0F);
+    return (std::max)(contentLeftX, contentRight - drawerWidth - reservedSplitterWidth);
+}
+
+MeasurementOverlayPlacementSize resolveMeasurementOverlayPlacementSize(const ImVec2& plotPos,
+                                                                       const ImVec2& plotSize,
+                                                                       float measurementSafeRightX)
+{
+    constexpr float kMinMeasurementSafeWidth = 64.0F;
+    MeasurementOverlayPlacementSize placement{.plotSize = plotSize, .visible = plotSize.x >= kMinMeasurementSafeWidth};
+    if (!std::isfinite(measurementSafeRightX)) {
+        return placement;
+    }
+
+    const float safeWidth = measurementSafeRightX - plotPos.x;
+    if (safeWidth < kMinMeasurementSafeWidth) {
+        placement.plotSize.x = (std::max)(safeWidth, 0.0F);
+        placement.visible = false;
+        return placement;
+    }
+
+    placement.plotSize.x = (std::min)(plotSize.x, safeWidth);
+    placement.visible = placement.plotSize.x >= kMinMeasurementSafeWidth;
+    return placement;
+}
+
 void drawMeasurementOverlay(const plot::WaveViewState& view,
                             const plot::WaveSnapshot& snapshot,
                             const plot::WaveDisplayData& displayData,
-                            const PlotRenderResult& result)
+                            const PlotRenderResult& result,
+                            const ImVec2& plotPos,
+                            const ImVec2& plotSize,
+                            ImDrawList* drawList)
 {
-    if (!view.showMeasurementOverlay) {
+    if (!view.showMeasurementOverlay || drawList == nullptr) {
         return;
     }
 
     MetricChips chips;
     appendCursorChips(chips, view, snapshot, displayData, result);
 
-    const std::string measuredChannel = appendMeasurementChips(chips, view, snapshot, displayData, result);
+    std::string measuredChannel;
+    if (!result.bitMeasurementActive) {
+        measuredChannel = appendMeasurementChips(chips, view, snapshot, displayData, result);
+    }
 
     if (chips.empty()) {
         return;
     }
-
-    const ImVec2 plotPos = ImPlot::GetPlotPos();
-    const ImVec2 plotSize = ImPlot::GetPlotSize();
 
     constexpr float margin = 8.0F;
     constexpr float padding = 9.0F;
@@ -335,17 +400,20 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     constexpr float chipPadX = 8.0F;
     constexpr float chipPadY = 4.0F;
 
-    const float gridMaxWidth = (std::min) (maxOverlayWidth, plotSize.x * 0.52F) - padding * 2.0F;
+    const float gridMaxWidth = (std::min)(maxOverlayWidth, plotSize.x * 0.52F) - padding * 2.0F;
 
     const ImVec2 gridSize = calcChipGridSize(chips, gridMaxWidth, chipGapX, chipGapY, chipPadX, chipPadY);
 
     std::string title = "测量";
+    if (result.bitMeasurementActive) {
+        title = "周期测量";
+    }
     if (!measuredChannel.empty()) {
         title += " · " + measuredChannel;
     }
 
     const float titleWidth = ImGui::CalcTextSize(title.c_str()).x;
-    const float contentWidth = (std::max) (gridSize.x, titleWidth);
+    const float contentWidth = (std::max)(gridSize.x, titleWidth);
 
     const float overlayWidth = contentWidth + padding * 2.0F;
     const float overlayHeight = padding * 2.0F + ImGui::GetTextLineHeight() + headerGap + gridSize.y;
@@ -353,8 +421,6 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
     const ImVec2 overlayMax(plotPos.x + plotSize.x - margin, plotPos.y + margin + overlayHeight);
 
     const ImVec2 overlayMin(overlayMax.x - overlayWidth, plotPos.y + margin);
-
-    auto* drawList = ImPlot::GetPlotDrawList();
 
     const ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.035F, 0.040F, 0.050F, 0.72F));
     const ImU32 borderColor = ImGui::ColorConvertFloat4ToU32(ImVec4(1.000F, 1.000F, 1.000F, 0.15F));

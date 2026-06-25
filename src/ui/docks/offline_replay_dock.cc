@@ -16,125 +16,125 @@ namespace protoscope::ui {
 
 namespace {
 
-std::string formatBytes(const std::uint64_t bytes)
-{
-    static constexpr const char* kUnits[] = {"B", "KB", "MB", "GB"};
-    double value = static_cast<double>(bytes);
-    std::size_t unitIndex = 0;
-    while (value >= 1024.0 && unitIndex + 1U < std::size(kUnits)) {
-        value /= 1024.0;
-        ++unitIndex;
+    std::string formatBytes(const std::uint64_t bytes)
+    {
+        static constexpr const char* kUnits[] = {"B", "KB", "MB", "GB"};
+        double value = static_cast<double>(bytes);
+        std::size_t unitIndex = 0;
+        while (value >= 1024.0 && unitIndex + 1U < std::size(kUnits)) {
+            value /= 1024.0;
+            ++unitIndex;
+        }
+
+        char buffer[64]{};
+        if (unitIndex == 0U) {
+            std::snprintf(buffer, sizeof(buffer), "%llu B", static_cast<unsigned long long>(bytes));
+        } else {
+            std::snprintf(buffer, sizeof(buffer), "%.2f %s", value, kUnits[unitIndex]);
+        }
+        return buffer;
     }
 
-    char buffer[64]{};
-    if (unitIndex == 0U) {
-        std::snprintf(buffer, sizeof(buffer), "%llu B", static_cast<unsigned long long>(bytes));
-    } else {
-        std::snprintf(buffer, sizeof(buffer), "%.2f %s", value, kUnits[unitIndex]);
+    std::string formatCount(const std::size_t count)
+    {
+        char buffer[48]{};
+        std::snprintf(buffer, sizeof(buffer), "%llu", static_cast<unsigned long long>(count));
+        return buffer;
     }
-    return buffer;
-}
 
-std::string formatCount(const std::size_t count)
-{
-    char buffer[48]{};
-    std::snprintf(buffer, sizeof(buffer), "%llu", static_cast<unsigned long long>(count));
-    return buffer;
-}
-
-std::string dashIfEmpty(const std::string& value)
-{
-    return value.empty() ? std::string("-") : value;
-}
-
-std::string fileNameOrDash(const std::string& pathText)
-{
-    if (pathText.empty()) {
-        return "-";
+    std::string dashIfEmpty(const std::string& value)
+    {
+        return value.empty() ? std::string("-") : value;
     }
-    const auto path = std::filesystem::path(pathText);
-    const auto name = path.filename().generic_string();
-    return name.empty() ? path.generic_string() : name;
-}
 
-void drawSectionTitle(const char* title)
-{
-    ImGui::Spacing();
-    ImGui::TextUnformatted(title);
-    ImGui::Separator();
-}
+    std::string fileNameOrDash(const std::string& pathText)
+    {
+        if (pathText.empty()) {
+            return "-";
+        }
+        const auto path = std::filesystem::path(pathText);
+        const auto name = path.filename().generic_string();
+        return name.empty() ? path.generic_string() : name;
+    }
 
-void drawKeyValue(const char* key, const std::string& value)
-{
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextDisabled("%s", key);
-    ImGui::TableNextColumn();
-    ImGui::TextWrapped("%s", value.c_str());
-}
+    void drawSectionTitle(const char* title)
+    {
+        ImGui::Spacing();
+        ImGui::TextUnformatted(title);
+        ImGui::Separator();
+    }
 
-void drawKeyValue(const char* key, const char* value)
-{
-    drawKeyValue(key, std::string(value));
-}
+    void drawKeyValue(const char* key, const std::string& value)
+    {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("%s", key);
+        ImGui::TableNextColumn();
+        ImGui::TextWrapped("%s", value.c_str());
+    }
 
-bool drawDisabledAwareButton(const char* label, const char* tooltip, const bool enabled)
-{
-    if (!enabled) {
-        ImGui::BeginDisabled();
+    void drawKeyValue(const char* key, const char* value)
+    {
+        drawKeyValue(key, std::string(value));
     }
-    const bool clicked = drawToolbarSectionButton(label, tooltip, false, ImVec2(-1.0F, 0.0F));
-    if (!enabled) {
-        ImGui::EndDisabled();
-    }
-    return clicked && enabled;
-}
 
-void drawTwoColumnActionRow(const char* leftLabel,
-                            const char* leftTooltip,
-                            const bool leftEnabled,
-                            const char* rightLabel,
-                            const char* rightTooltip,
-                            const bool rightEnabled,
-                            const std::function<void()>& leftAction,
-                            const std::function<void()>& rightAction)
-{
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    if (drawDisabledAwareButton(leftLabel, leftTooltip, leftEnabled)) {
-        leftAction();
+    bool drawDisabledAwareButton(const char* label, const char* tooltip, const bool enabled)
+    {
+        if (!enabled) {
+            ImGui::BeginDisabled();
+        }
+        const bool clicked = drawToolbarSectionButton(label, tooltip, false, ImVec2(-1.0F, 0.0F));
+        if (!enabled) {
+            ImGui::EndDisabled();
+        }
+        return clicked && enabled;
     }
-    ImGui::TableNextColumn();
-    if (drawDisabledAwareButton(rightLabel, rightTooltip, rightEnabled)) {
-        rightAction();
-    }
-}
 
-const char* replayStateLabel(const app::Application::RawCaptureReplayStatus& status)
-{
-    if (!status.loaded) {
-        return "未载入";
+    void drawTwoColumnActionRow(const char* leftLabel,
+                                const char* leftTooltip,
+                                const bool leftEnabled,
+                                const char* rightLabel,
+                                const char* rightTooltip,
+                                const bool rightEnabled,
+                                const std::function<void()>& leftAction,
+                                const std::function<void()>& rightAction)
+    {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        if (drawDisabledAwareButton(leftLabel, leftTooltip, leftEnabled)) {
+            leftAction();
+        }
+        ImGui::TableNextColumn();
+        if (drawDisabledAwareButton(rightLabel, rightTooltip, rightEnabled)) {
+            rightAction();
+        }
     }
-    if (status.playing) {
-        return "播放中";
-    }
-    if (status.eventIndex >= status.eventCount) {
-        return "已结束";
-    }
-    return "已暂停";
-}
 
-std::string replayPositionText(const app::Application::RawCaptureReplayStatus& status)
-{
-    char buffer[96]{};
-    std::snprintf(buffer,
-                  sizeof(buffer),
-                  "%llu / %llu (%.1f%%)",
-                  static_cast<unsigned long long>(status.eventIndex),
-                  static_cast<unsigned long long>(status.eventCount),
-                  status.progress * 100.0);
-    return buffer;
-}
+    const char* replayStateLabel(const app::Application::RawCaptureReplayStatus& status)
+    {
+        if (!status.loaded) {
+            return "未载入";
+        }
+        if (status.playing) {
+            return "播放中";
+        }
+        if (status.eventIndex >= status.eventCount) {
+            return "已结束";
+        }
+        return "已暂停";
+    }
+
+    std::string replayPositionText(const app::Application::RawCaptureReplayStatus& status)
+    {
+        char buffer[96]{};
+        std::snprintf(buffer,
+                      sizeof(buffer),
+                      "%llu / %llu (%.1f%%)",
+                      static_cast<unsigned long long>(status.eventIndex),
+                      static_cast<unsigned long long>(status.eventCount),
+                      status.progress * 100.0);
+        return buffer;
+    }
 
 } // namespace
 
@@ -311,9 +311,10 @@ void GuiRuntime::drawOfflineReplayDock()
         drawKeyValue("缓存来源协议", dashIfEmpty(capture.protocolDir));
         drawKeyValue("缓存截断", capture.truncated ? "是" : "否");
         drawKeyValue("录制状态", application_.isRawCaptureRecording() ? "录制中" : "未录制");
-        drawKeyValue("录制文件", application_.rawCaptureRecordingPath().empty()
-                                     ? std::string("-")
-                                     : application_.rawCaptureRecordingPath().filename().generic_string());
+        drawKeyValue("录制文件",
+                     application_.rawCaptureRecordingPath().empty()
+                         ? std::string("-")
+                         : application_.rawCaptureRecordingPath().filename().generic_string());
         drawKeyValue("录制字节", formatBytes(application_.rawCaptureRecordingBytes()));
         drawKeyValue("回放状态", replayStateLabel(replayStatus));
         drawKeyValue("回放位置", replayPositionText(replayStatus));

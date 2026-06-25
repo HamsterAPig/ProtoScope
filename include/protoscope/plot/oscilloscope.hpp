@@ -24,6 +24,15 @@ struct WaveSample {
     double value{0.0};
 };
 
+struct BitDisplaySpec {
+    bool enabled{false};
+    std::size_t firstBit{0};
+    std::size_t bitCount{8};
+    double yOffset{0.0};
+
+    bool operator==(const BitDisplaySpec&) const = default;
+};
+
 struct WaveAppendRequest {
     std::string source{};
     std::vector<WaveSample> samples{};
@@ -37,15 +46,18 @@ struct ChannelSpec {
     double offset{0.0};
     std::optional<std::array<float, 4>> color{};
     std::optional<float> lineWidth{};
+    BitDisplaySpec bitDisplay{};
 };
 
 inline constexpr float kDefaultChannelLineWidth{1.5F};
 inline constexpr float kMinChannelLineWidth{0.5F};
 inline constexpr float kMaxChannelLineWidth{8.0F};
+inline constexpr std::size_t kMaxBitDisplayCount{64};
 
 float sanitizeChannelLineWidth(double lineWidth);
 float resolveChannelLineWidth(const std::optional<float>& lineWidth);
 float resolveChannelLineWidth(const ChannelSpec& spec);
+BitDisplaySpec sanitizeBitDisplaySpec(BitDisplaySpec spec);
 double applyChannelActualValue(double rawValue, const ChannelSpec& spec);
 double applyChannelDisplayTransform(double rawValue,
                                     const ChannelSpec& spec,
@@ -69,6 +81,14 @@ struct WaveStats {
     double maxValue{0.0};
 };
 
+struct BitLaneReadout {
+    std::size_t parentChannelIndex{0};
+    std::size_t bitIndex{0};
+    std::size_t laneIndex{0};
+    bool value{false};
+    double y{0.0};
+};
+
 struct CursorReadout {
     bool valid{false};
     std::size_t channelIndex{0};
@@ -76,6 +96,7 @@ struct CursorReadout {
     double time{0.0};
     double value{0.0};
     double displayValue{0.0};
+    std::optional<BitLaneReadout> bit{};
 };
 
 struct DeltaReadout {
@@ -134,6 +155,7 @@ struct ChannelView {
     double offset{0.0};
     std::optional<std::array<float, 4>> color{};
     std::optional<float> lineWidth{};
+    BitDisplaySpec bitDisplay{};
     std::size_t totalSamples{0};
     std::size_t sampleIndexOffset{0};
     std::size_t visibleBegin{0};

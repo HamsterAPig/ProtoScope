@@ -27,16 +27,15 @@ namespace script_host_lua {
         return std::make_tuple(sol::make_object(lua, sol::lua_nil), sol::make_object(lua, error));
     }
 
-    template <typename T>
-    std::tuple<sol::object, sol::object> luaValueOk(sol::state_view lua, T&& value)
+    template <typename T> std::tuple<sol::object, sol::object> luaValueOk(sol::state_view lua, T&& value)
     {
         return std::make_tuple(sol::make_object(lua, std::forward<T>(value)), sol::make_object(lua, sol::lua_nil));
     }
 
     template <typename T>
     std::tuple<sol::object, sol::object> luaOptionalValueResult(sol::state_view lua,
-                                                               const std::optional<T>& value,
-                                                               const std::string& error)
+                                                                const std::optional<T>& value,
+                                                                const std::string& error)
     {
         if (!value.has_value()) {
             return luaNilError(lua, error);

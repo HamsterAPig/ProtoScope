@@ -30,6 +30,7 @@ class CodecScriptHostApiModule;
 class ControlScriptHostApiModule;
 class CoreScriptHostApiModule;
 class FileScriptHostApiModule;
+class OscilloscopeScriptHostApiModule;
 class PlotScriptHostApiModule;
 class StatusScriptHostApiModule;
 class TxScriptHostApiModule;
@@ -135,6 +136,7 @@ struct LayoutNodeDescriptor {
     std::size_t columns{1};
     std::optional<float> minWidth;
     std::optional<float> maxWidth;
+    bool fillWidth{false};
     bool borders{false};
     bool resizable{true};
     bool rowBg{false};
@@ -181,6 +183,7 @@ struct PlotChannelDescriptor {
     double offset{0.0};
     std::optional<std::array<float, 4>> color;
     std::optional<float> lineWidth;
+    plot::BitDisplaySpec bitDisplay;
 };
 
 struct PlotSetup {
@@ -263,6 +266,10 @@ struct StatusUpdate {
     std::string level{"info"};
     bool clear{false};
     std::uint64_t timestampMs{0};
+};
+
+struct OscilloscopeRunningUpdate {
+    bool running{false};
 };
 
 struct StreamRuntimeProfileEvent {
@@ -381,6 +388,9 @@ public:
     bool applyStreamRuntimeProfileEvent(const StreamRuntimeProfileEvent& event, std::string& error);
     void clearAllStreamRuntimeProfiles();
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
+    [[nodiscard]] bool requestOscilloscopeToggle(const transport::ConnectionContext& ctx,
+                                                 bool currentRunning,
+                                                 bool targetRunning);
     bool setControlValue(const std::string& id, const ControlValue& value);
     void tick(std::uint64_t currentMs);
 
@@ -399,6 +409,7 @@ public:
     RealtimeOutputDiscardCounts clearPendingRealtimeOutputs();
     std::vector<RequestDoneResult> drainRequestDoneResults();
     std::vector<StatusUpdate> drainStatusUpdates();
+    std::vector<OscilloscopeRunningUpdate> drainOscilloscopeRunningUpdates();
     std::vector<StreamRuntimeProfileEvent> drainStreamRuntimeProfileEvents();
     std::vector<DialogRequest> drainDialogRequests();
     std::vector<FileDialogRequest> drainFileDialogRequests();
@@ -440,6 +451,7 @@ private:
     void callbackOnStreamError(const ScriptHostContext& ctx, const StreamParseError& error);
     void callbackOnTimer(const ScriptHostContext& ctx, const std::string& timerName);
     void callbackOnControl(const ScriptHostContext& ctx, const std::string& id, const ControlValue& value);
+    bool callbackOnOscilloscopeToggle(const ScriptHostContext& ctx, bool currentRunning, bool targetRunning);
     void callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event);
     void callbackOnDialog(const ScriptHostContext& ctx, const DialogEvent& event);
     void callbackOnFileDialog(const ScriptHostContext& ctx, const FileDialogEvent& event);
@@ -472,11 +484,8 @@ private:
 
     TxRequest createTxRequest(TxRequestKind kind, std::vector<std::uint8_t> payload, bool guarded);
     void applyTxRequestConnection(TxRequest& request) const;
-    bool applyTxRequestOptions(TxRequest& request,
-                               const sol::object& opts,
-                               const std::string& apiName,
-                               std::string& error,
-                               bool guarded);
+    bool applyTxRequestOptions(
+        TxRequest& request, const sol::object& opts, const std::string& apiName, std::string& error, bool guarded);
     std::optional<TxRequest> protoSendLike(TxRequestKind kind,
                                            const sol::object& payload,
                                            const sol::object& opts,
@@ -492,6 +501,7 @@ private:
     bool protoRequestDone(const sol::object& result, std::string& error);
     void protoStatusSet(const std::string& text, const sol::object& opts);
     void protoStatusClear();
+    void protoOscilloscopeSetRunning(bool running);
     std::optional<DialogRequest> protoDialog(DialogKind kind, const sol::object& opts, std::string& error);
     std::optional<FileDialogRequest> protoFileDialog(FileDialogKind kind, const sol::object& opts, std::string& error);
     std::tuple<sol::object, sol::object> protoFsOpen(sol::state_view lua,
@@ -522,6 +532,7 @@ private:
     friend class ControlScriptHostApiModule;
     friend class CoreScriptHostApiModule;
     friend class FileScriptHostApiModule;
+    friend class OscilloscopeScriptHostApiModule;
     friend class PlotScriptHostApiModule;
     friend class StatusScriptHostApiModule;
     friend class TxScriptHostApiModule;
@@ -549,6 +560,7 @@ private:
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends_;
     std::vector<RequestDoneResult> requestDoneResults_;
     std::vector<StatusUpdate> statusUpdates_;
+    std::vector<OscilloscopeRunningUpdate> oscilloscopeRunningUpdates_;
     std::vector<StreamRuntimeProfileEvent> streamRuntimeProfileEvents_;
     std::vector<DialogRequest> dialogRequests_;
     std::vector<FileDialogRequest> fileDialogRequests_;

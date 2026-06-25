@@ -31,8 +31,7 @@ void test_keyboard_shortcut_labels_match_plan()
 
     require(protoscope::ui::shortcutLabel(ShortcutAction::SaveConfig) == "Ctrl+S", "保存配置快捷键应为 Ctrl+S");
     require(protoscope::ui::shortcutLabel(ShortcutAction::ReloadProtocol) == "F5", "重载协议快捷键应为 F5");
-    require(protoscope::ui::shortcutLabel(ShortcutAction::ToggleWaveDock) == "Ctrl+6",
-            "波形 Dock 快捷键应为 Ctrl+6");
+    require(protoscope::ui::shortcutLabel(ShortcutAction::ToggleWaveDock) == "Ctrl+6", "波形 Dock 快捷键应为 Ctrl+6");
     require(protoscope::ui::shortcutLabel(ShortcutAction::ToggleRequestTraceDock) == "Ctrl+7",
             "请求追踪 Dock 快捷键应为 Ctrl+7");
     require(protoscope::ui::shortcutLabel(ShortcutAction::ToggleOfflineReplayDock) == "Ctrl+8",

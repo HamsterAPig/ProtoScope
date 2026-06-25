@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include <imgui.h>
@@ -12,9 +13,12 @@ namespace protoscope::plot {
 struct ViewConfig;
 struct WaveDisplayData;
 struct WaveDockState;
+enum class WaveToolsDrawer;
 } // namespace protoscope::plot
 
 namespace protoscope::ui {
+
+struct WaveOverlayFrame;
 
 void addItemHelp(const char* text);
 bool drawToolbarActionButton(const char* label, const char* help, const ImVec2& size = ImVec2(0.0F, 0.0F));
@@ -25,6 +29,13 @@ void drawWaveToolbar(app::Application& application,
                      const plot::WaveDisplayData& displayData,
                      bool fullscreenActive = false,
                      bool* fullscreenToggleRequested = nullptr);
+void drawWaveToolsDrawer(app::Application& application,
+                         plot::WaveDockState& wave,
+                         const plot::ViewConfig& config,
+                         const plot::WaveDisplayData& displayData,
+                         plot::WaveToolsDrawer drawer,
+                         bool fullscreenActive = false,
+                         bool* fullscreenToggleRequested = nullptr);
 
 class WaveDockRenderer {
 public:
@@ -37,16 +48,24 @@ public:
     void drawOverlay(bool fullscreenActive, bool* fullscreenToggleRequested);
 
 private:
+    struct PendingOscilloscopeToggle {
+        bool currentRunning{false};
+        bool targetRunning{false};
+    };
+
     void drawContent(const ImVec2& available,
                      bool fullscreenActive,
                      bool* fullscreenToggleRequested,
-                     bool shortcutFocusOverride = false);
+                     bool shortcutFocusOverride = false,
+                     WaveOverlayFrame* overlayFrame = nullptr);
     void syncWaveViewToLatest();
-    void handleWaveShortcuts(bool dockFocused, bool* fullscreenToggleRequested);
+    void handleWaveShortcuts(bool dockFocused, bool fullscreenActive, bool* fullscreenToggleRequested);
+    void flushPendingOscilloscopeToggle();
     static std::string formatMetric(double value, const char* baseUnit);
 
 private:
     app::Application& application_;
+    std::optional<PendingOscilloscopeToggle> pendingOscilloscopeToggle_{};
 };
 
 } // namespace protoscope::ui

@@ -10,8 +10,8 @@
 #include <fstream>
 #include <optional>
 #include <stdexcept>
-#include <system_error>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -105,6 +105,19 @@ bool hasLog(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& 
     for (const auto& batch : batches) {
         for (const auto& log : batch.logs) {
             if (log.message.find(token) != std::string::npos) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool hasOscilloscopeRunningUpdate(const std::vector<protoscope::scripting::ScriptRuntimeOutputBatch>& batches,
+                                  bool running)
+{
+    for (const auto& batch : batches) {
+        for (const auto& update : batch.oscilloscopeRunningUpdates) {
+            if (update.running == running) {
                 return true;
             }
         }
@@ -248,6 +261,39 @@ void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events()
             "相邻 RX 事件应合并到不超过 batch_bytes 的块");
     require(hasEventWithTokens(outputs, "worker_bytes", "first=19", "size=1"),
             "超过 batch_bytes 的后续 RX 应保留为新块");
+}
+
+void test_script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result()
+{
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir(
+        "oscilloscope-toggle",
+        R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  return target_running
+end
+)lua"));
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
+        .enabled = true,
+        .rxQueueLimitBytes = 64U * 1024U,
+        .outputQueueLimit = 128U,
+        .batchBytes = 1024U,
+        .backpressureEnabled = false,
+    });
+    const auto loaded = worker.loadProtocolDirectory(protocolDir.path().generic_string());
+    require(loaded.ok, "worker 示波器切换测试协议应可加载");
+    (void) worker.drainOutputs();
+
+    require(worker.requestOscilloscopeToggle(workerContext(), false, true),
+            "worker 同步请求应传回 Lua true");
+    const auto acceptedOutputs = worker.drainOutputs();
+    require(hasOscilloscopeRunningUpdate(acceptedOutputs, true),
+            "worker 应把 Lua true 的默认 target 状态发布到输出队列");
+    require(!worker.requestOscilloscopeToggle(workerContext(), true, false),
+            "worker 同步请求应传回 Lua false");
+    const auto rejectedOutputs = worker.drainOutputs();
+    require(!hasOscilloscopeRunningUpdate(rejectedOutputs, false),
+            "Lua 返回 false 时 worker 不应默认发布 target 状态");
 }
 
 void test_pipeline_worker_threads_resolve_from_hardware_limit()

@@ -69,6 +69,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field type 'inline_group'
 ---@field spacing? number
 ---@field min_width? number @组最小宽度约束，必须为正数；不压缩组内控件。
+---@field fill_width? boolean @在 flow 中吃掉当前行剩余宽度；组内可搭配一个 fill_width control。
 ---@field children? ProtoInlineGroupChildNode[]
 ---@field controls? string[]
 
@@ -97,6 +98,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field id string
 ---@field min_width? number @控件最小宽度约束，必须为正数；只在 layout control 节点上生效。
 ---@field max_width? number @控件最大宽度约束，必须为正数；同时设置时要求 min_width <= max_width。
+---@field fill_width? boolean @在 flow 中作为行尾填充项，吃掉当前行剩余宽度。
 
 ---@class ProtoTextLayoutNode
 ---@field type? 'text'
@@ -192,7 +194,16 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field controls ProtoControlDescriptorEntry[]
 ---@field layout? ProtoDockLayout|ProtoLayoutNode
 
--- 波形通道描述：定义曲线显示名称、单位、缩放和颜色。
+-- 波形 bit 拆分显示配置：启用后该通道按固定数字轨道显示本通道原始 y 值的 bit。
+-- bit 取值来自 proto.plot.push(channel, { samples = { { y = <非负整数 bitfield> } } })，
+-- 不使用 ratio / scale / offset；负数、NaN 和无法表示的浮点值按 0 处理。
+---@class ProtoPlotBitDisplay
+---@field enabled? boolean @省略时 table 写法默认启用；设为 false 可保留配置但关闭 bit 显示。
+---@field first_bit? integer @起始 bit，默认 0，范围 0..63。
+---@field bit_count? integer @显示 bit 数，默认 8，范围 1..64，且 first_bit + bit_count 不超过 64。
+---@field y_offset? number @bit 轨道组纵向偏移，默认 0。
+
+-- 波形通道描述：定义曲线显示名称、单位、缩放、颜色和可选 bit 显示。
 ---@class ProtoPlotChannel
 ---@field label string
 ---@field unit? string
@@ -201,6 +212,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field offset? number
 ---@field color? string @支持 '#RRGGBB' 或 '#RRGGBBAA'。
 ---@field line_width? number @主波形区线宽，范围 0.5 到 8.0；省略时使用默认线宽。
+---@field bit_display? boolean|ProtoPlotBitDisplay @启用 bit 拆分显示；true 等价于默认 8-bit 配置；需要向同一通道 push 非负整数 bitfield。
 
 -- 波形初始化参数：用于一次性配置波形来源、通道和视图范围。
 ---@class ProtoPlotSetup
@@ -530,6 +542,10 @@ function proto.plot.setup(payload) end
 ---@param payload ProtoPlotAppendRequest
 function proto.plot.push(channel_index, payload) end
 
+-- 主动同步波形工具栏运行状态，适合按钮、定时器或 ACK 回调在真实启动/停止完成后调用。
+---@param running boolean
+function proto.oscilloscope.set_running(running) end
+
 -- 读取某个控件的当前值，常用于界面联动或提交前取回最新状态。
 ---@param id string
 ---@return ProtoControlValue
@@ -591,6 +607,13 @@ function on_bytes(ctx, bytes) end
 ---@param ctx ProtoConnectionContext
 ---@param name string
 function on_timer(ctx, name) end
+
+-- 示波器启动/暂停请求回调：返回 true 时默认同步到 target_running；显式 proto.oscilloscope.set_running() 优先。
+---@param ctx ProtoConnectionContext
+---@param current_running boolean
+---@param target_running boolean
+---@return boolean allow_toggle
+function on_oscilloscope_toggle(ctx, current_running, target_running) end
 
 -- 传输事件回调：用于跟踪 send/request 的发送结果、超时或失败。
 ---@param ctx ProtoConnectionContext

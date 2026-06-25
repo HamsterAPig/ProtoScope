@@ -4,8 +4,9 @@
 #include "protoscope/ui/ui_theme.hpp"
 
 #include <cmath>
-#include <imgui.h>
 #include <string>
+
+#include <imgui.h>
 
 namespace protoscope::ui {
 
@@ -81,10 +82,8 @@ void GuiRuntime::drawMainMenu()
                             !recording)) {
             openRawCaptureRecordingDialog();
         }
-        if (ImGui::MenuItem("停止完整原始数据录制",
-                            shortcutLabel(ShortcutAction::ToggleRawRecording).data(),
-                            false,
-                            recording)) {
+        if (ImGui::MenuItem(
+                "停止完整原始数据录制", shortcutLabel(ShortcutAction::ToggleRawRecording).data(), false, recording)) {
             stopRawCaptureRecordingWithStatus();
         }
         ImGui::EndMenu();
@@ -156,16 +155,13 @@ void GuiRuntime::drawMainMenu()
         const bool previousShowWaveDock = showWaveDock_;
 
         ImGui::MenuItem("通讯配置", shortcutLabel(ShortcutAction::ToggleCommDock).data(), &showCommDock_);
-        ImGui::MenuItem("协议脚本 / 动态控件",
-                        shortcutLabel(ShortcutAction::ToggleProtocolDock).data(),
-                        &showProtocolDock_);
+        ImGui::MenuItem(
+            "协议脚本 / 动态控件", shortcutLabel(ShortcutAction::ToggleProtocolDock).data(), &showProtocolDock_);
         ImGui::MenuItem("收发数据", shortcutLabel(ShortcutAction::ToggleTransferDock).data(), &showTransferDock_);
-        ImGui::MenuItem("请求追踪",
-                        shortcutLabel(ShortcutAction::ToggleRequestTraceDock).data(),
-                        &showRequestTraceDock_);
-        ImGui::MenuItem("离线复现",
-                        shortcutLabel(ShortcutAction::ToggleOfflineReplayDock).data(),
-                        &showOfflineReplayDock_);
+        ImGui::MenuItem(
+            "请求追踪", shortcutLabel(ShortcutAction::ToggleRequestTraceDock).data(), &showRequestTraceDock_);
+        ImGui::MenuItem(
+            "离线复现", shortcutLabel(ShortcutAction::ToggleOfflineReplayDock).data(), &showOfflineReplayDock_);
         ImGui::MenuItem("日志", shortcutLabel(ShortcutAction::ToggleLogDock).data(), &showLogDock_);
         ImGui::MenuItem("脚本", shortcutLabel(ShortcutAction::ToggleScriptDock).data(), &showScriptDock_);
         ImGui::MenuItem("波形", shortcutLabel(ShortcutAction::ToggleWaveDock).data(), &showWaveDock_);
@@ -176,8 +172,7 @@ void GuiRuntime::drawMainMenu()
         if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
             previousShowTransferDock != showTransferDock_ || previousShowRequestTraceDock != showRequestTraceDock_ ||
             previousShowOfflineReplayDock != showOfflineReplayDock_ || previousShowLogDock != showLogDock_ ||
-            previousShowScriptDock != showScriptDock_ ||
-            previousShowWaveDock != showWaveDock_) {
+            previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
             pendingProtocolWorkspaceSave_ = true;
         }
         ImGui::Separator();

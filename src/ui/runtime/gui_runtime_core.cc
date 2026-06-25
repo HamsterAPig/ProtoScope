@@ -345,8 +345,7 @@ void GuiRuntime::ensureChineseFont()
             // 核心流程：默认只构建常用简中字符，避免启动首帧前烘焙全量 CJK 字体图集导致白屏和 CPU 峰值。
             const auto* chineseRanges =
                 chineseGlyphRangesForConfig(*io.Fonts, application_.runtimeConfig().gui.font.chineseGlyphRange);
-            io.Fonts->AddFontFromFileTTF(
-                candidate.string().c_str(), 18.0F, nullptr, chineseRanges);
+            io.Fonts->AddFontFromFileTTF(candidate.string().c_str(), 18.0F, nullptr, chineseRanges);
             break;
         }
     }
@@ -508,7 +507,7 @@ void GuiRuntime::applyWaveFocusFullscreen()
     showScriptDock_ = false;
     showWaveDock_ = true;
     for (auto& [stableId, visible] : luaDockVisibility_) {
-        (void)stableId;
+        (void) stableId;
         visible = false;
     }
 }
@@ -809,11 +808,11 @@ void GuiRuntime::renderFrame()
     const bool waveOverlayFullscreen =
         waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay;
     if (!waveOverlayFullscreen) {
-        waveDockRenderer_.draw(showWaveDock_,
-                               waveFullscreenActive_,
-                               &waveFullscreenToggleRequested_,
-                               waveFullscreenActive_ &&
-                                   waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus);
+        waveDockRenderer_.draw(
+            showWaveDock_,
+            waveFullscreenActive_,
+            &waveFullscreenToggleRequested_,
+            waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus);
     }
     if (waveOverlayFullscreen) {
         // Overlay 已完整绘制波形，跳过底层 Dock 可避免同一滚轮输入被处理两次。
@@ -826,8 +825,7 @@ void GuiRuntime::renderFrame()
     if (previousShowCommDock != showCommDock_ || previousShowProtocolDock != showProtocolDock_ ||
         previousShowTransferDock != showTransferDock_ || previousShowRequestTraceDock != showRequestTraceDock_ ||
         previousShowOfflineReplayDock != showOfflineReplayDock_ || previousShowLogDock != showLogDock_ ||
-        previousShowScriptDock != showScriptDock_ ||
-        previousShowWaveDock != showWaveDock_) {
+        previousShowScriptDock != showScriptDock_ || previousShowWaveDock != showWaveDock_) {
         if (!waveFullscreenActive_ && !waveFullscreenToggleRequested_) {
             pendingProtocolWorkspaceSave_ = true;
         }

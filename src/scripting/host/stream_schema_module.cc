@@ -871,9 +871,7 @@ bool registerStreamFrameCallback(const sol::table& frameTable,
     return true;
 }
 
-std::optional<std::uint32_t> streamSchemaU32Value(const sol::object& object,
-                                                  const char* fieldPath,
-                                                  std::string& error)
+std::optional<std::uint32_t> streamSchemaU32Value(const sol::object& object, const char* fieldPath, std::string& error)
 {
     const auto value = luaIntegerValue(object);
     if (!value.has_value() || *value < 0 ||

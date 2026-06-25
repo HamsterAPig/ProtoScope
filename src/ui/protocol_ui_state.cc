@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -32,6 +33,21 @@ namespace {
             return plot::WaveTimeAxisSource::ScriptTime;
         }
         return plot::WaveTimeAxisSource::SampleIndex;
+    }
+
+    double positiveOrZero(double value)
+    {
+        return std::isfinite(value) && value > 0.0 ? value : 0.0;
+    }
+
+    double finiteOrFallback(double value, double fallback)
+    {
+        return std::isfinite(value) ? value : fallback;
+    }
+
+    double normalizedRatioOrFallback(double value, double fallback)
+    {
+        return std::isfinite(value) ? (std::clamp)(value, 0.0, 1.0) : fallback;
     }
 
     std::string snapModeName(plot::WaveCursorSnapMode mode)
@@ -84,6 +100,23 @@ namespace {
                                         : plot::WaveCursorExtremeSnapPolicy::NearestWaveform;
     }
 
+    std::string bitDisplayReadoutPolicyName(plot::WaveBitDisplayReadoutPolicy policy)
+    {
+        switch (policy) {
+            case plot::WaveBitDisplayReadoutPolicy::MixedNearest:
+                return "mixed_nearest";
+            case plot::WaveBitDisplayReadoutPolicy::ExplicitActivation:
+                return "explicit_activation";
+        }
+        return "mixed_nearest";
+    }
+
+    plot::WaveBitDisplayReadoutPolicy parseBitDisplayReadoutPolicy(const std::string& value)
+    {
+        return value == "explicit_activation" ? plot::WaveBitDisplayReadoutPolicy::ExplicitActivation
+                                              : plot::WaveBitDisplayReadoutPolicy::MixedNearest;
+    }
+
     std::string measurementReferenceModeName(plot::WaveMeasurementReferenceMode mode)
     {
         return mode == plot::WaveMeasurementReferenceMode::ManualValue ? "manual_value" : "channel";
@@ -93,6 +126,155 @@ namespace {
     {
         return value == "manual_value" ? plot::WaveMeasurementReferenceMode::ManualValue
                                        : plot::WaveMeasurementReferenceMode::Channel;
+    }
+
+    std::string viewModeName(plot::WaveViewMode mode)
+    {
+        switch (mode) {
+            case plot::WaveViewMode::Overlay:
+                return "overlay";
+            case plot::WaveViewMode::Stacked:
+                return "stacked";
+            case plot::WaveViewMode::Split:
+                return "split";
+        }
+        return "overlay";
+    }
+
+    plot::WaveViewMode parseViewMode(const std::string& value)
+    {
+        if (value == "stacked") {
+            return plot::WaveViewMode::Stacked;
+        }
+        if (value == "split") {
+            return plot::WaveViewMode::Split;
+        }
+        return plot::WaveViewMode::Overlay;
+    }
+
+    std::string phosphorBackendName(plot::WavePhosphorBackend backend)
+    {
+        switch (backend) {
+            case plot::WavePhosphorBackend::Auto:
+                return "auto";
+            case plot::WavePhosphorBackend::GpuFbo:
+                return "gpu_fbo";
+            case plot::WavePhosphorBackend::CpuTexture:
+                return "cpu_texture";
+        }
+        return "auto";
+    }
+
+    plot::WavePhosphorBackend parsePhosphorBackend(const std::string& value)
+    {
+        if (value == "gpu_fbo") {
+            return plot::WavePhosphorBackend::GpuFbo;
+        }
+        if (value == "cpu_texture") {
+            return plot::WavePhosphorBackend::CpuTexture;
+        }
+        return plot::WavePhosphorBackend::Auto;
+    }
+
+    std::string phosphorModeName(plot::WavePhosphorMode mode)
+    {
+        switch (mode) {
+            case plot::WavePhosphorMode::FreeRun:
+                return "free_run";
+            case plot::WavePhosphorMode::Triggered:
+                return "triggered";
+        }
+        return "free_run";
+    }
+
+    plot::WavePhosphorMode parsePhosphorMode(const std::string& value)
+    {
+        return value == "triggered" ? plot::WavePhosphorMode::Triggered : plot::WavePhosphorMode::FreeRun;
+    }
+
+    std::string triggerEdgeName(plot::WavePhosphorTriggerEdge edge)
+    {
+        return edge == plot::WavePhosphorTriggerEdge::Falling ? "falling" : "rising";
+    }
+
+    plot::WavePhosphorTriggerEdge parseTriggerEdge(const std::string& value)
+    {
+        return value == "falling" ? plot::WavePhosphorTriggerEdge::Falling : plot::WavePhosphorTriggerEdge::Rising;
+    }
+
+    std::string toolsDrawerName(plot::WaveToolsDrawer drawer)
+    {
+        switch (drawer) {
+            case plot::WaveToolsDrawer::Main:
+                return "main";
+            case plot::WaveToolsDrawer::Cursor:
+                return "cursor";
+            case plot::WaveToolsDrawer::Measure:
+                return "measure";
+            case plot::WaveToolsDrawer::View:
+                return "view";
+        }
+        return "main";
+    }
+
+    plot::WaveToolsDrawer parseToolsDrawer(const std::string& value)
+    {
+        if (value == "cursor") {
+            return plot::WaveToolsDrawer::Cursor;
+        }
+        if (value == "measure") {
+            return plot::WaveToolsDrawer::Measure;
+        }
+        if (value == "view") {
+            return plot::WaveToolsDrawer::View;
+        }
+        return plot::WaveToolsDrawer::Main;
+    }
+
+    std::string legendOverlayOpenModeName(plot::WaveLegendOverlayOpenMode mode)
+    {
+        switch (mode) {
+            case plot::WaveLegendOverlayOpenMode::Hover:
+                return "hover";
+            case plot::WaveLegendOverlayOpenMode::DoubleClick:
+                return "double_click";
+            case plot::WaveLegendOverlayOpenMode::Disabled:
+                return "disabled";
+        }
+        return "hover";
+    }
+
+    plot::WaveLegendOverlayOpenMode parseLegendOverlayOpenMode(const std::string& value)
+    {
+        if (value == "double_click") {
+            return plot::WaveLegendOverlayOpenMode::DoubleClick;
+        }
+        if (value == "disabled") {
+            return plot::WaveLegendOverlayOpenMode::Disabled;
+        }
+        return plot::WaveLegendOverlayOpenMode::Hover;
+    }
+
+    YAML::Node encodeRgba(const std::array<float, 4>& color)
+    {
+        YAML::Node node;
+        for (const float component : color) {
+            node.push_back(component);
+        }
+        return node;
+    }
+
+    std::optional<std::array<float, 4>> decodeRgba(const YAML::Node& node)
+    {
+        if (!node || !node.IsSequence() || node.size() != 4U) {
+            return std::nullopt;
+        }
+        return std::array<float, 4>{
+            node[0].as<float>(1.0F),
+            node[1].as<float>(1.0F),
+            node[2].as<float>(1.0F),
+            node[3].as<float>(1.0F),
+        };
     }
 
     std::string fftPointCountStateName(plot::WaveFftPointCount value)
@@ -182,6 +364,16 @@ namespace {
     plot::WaveFftFundamentalMode parseFftFundamentalMode(const std::string& value)
     {
         return value == "manual" ? plot::WaveFftFundamentalMode::Manual : plot::WaveFftFundamentalMode::Auto;
+    }
+
+    std::string fftDisplayModeStateName(plot::WaveFftDisplayMode value)
+    {
+        return value == plot::WaveFftDisplayMode::CursorSplit ? "cursor_split" : "full_spectrum";
+    }
+
+    plot::WaveFftDisplayMode parseFftDisplayMode(const std::string& value)
+    {
+        return value == "cursor_split" ? plot::WaveFftDisplayMode::CursorSplit : plot::WaveFftDisplayMode::FullSpectrum;
     }
 
     YAML::Node encodeMeasurementSelection(const plot::WaveMeasurementSelection& selection)
@@ -294,6 +486,12 @@ namespace {
                 if (overrideState.offsetOverridden) {
                     updated.offset = overrideState.offset;
                 }
+                if (overrideState.colorOverridden) {
+                    updated.color = overrideState.color;
+                }
+                if (overrideState.bitYOffsetOverridden) {
+                    updated.bitDisplay.yOffset = overrideState.bitYOffset;
+                }
             }
             wave.buffer.setChannelSpec(channelIndex, updated);
         }
@@ -319,12 +517,23 @@ namespace {
         node["show_points_when_sparse"] = view.showPointsWhenSparse;
         node["show_axis_labels"] = view.showAxisLabels;
         node["show_channel_legend"] = view.showChannelLegend;
+        node["legend_channel_name_max_width"] = view.legendChannelNameMaxWidth;
         node["show_fft_legend"] = view.showFftLegend;
         node["show_hover_readout"] = view.showHoverReadout;
+        node["prefer_waveform_hover_readout"] = view.preferWaveformHoverReadout;
+        node["bit_display_readout_policy"] = bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy);
         node["show_cursors"] = view.showCursors;
         node["show_measurement_overlay"] = view.showMeasurementOverlay;
-        node["phosphor_glow_enabled"] = view.phosphorGlowEnabled;
+        node["glow_enabled"] = view.glowEnabled;
+        node["phosphor_enabled"] = view.phosphorEnabled;
+        node["phosphor_backend"] = phosphorBackendName(view.phosphorBackend);
+        node["phosphor_mode"] = phosphorModeName(view.phosphorMode);
+        node["trigger_edge"] = triggerEdgeName(view.triggerEdge);
+        node["trigger_channel_index"] = view.triggerChannelIndex;
+        node["trigger_threshold"] = view.triggerThreshold;
+        node["trigger_position_ratio"] = view.triggerPositionRatio;
         node["cursor_interval_locked"] = view.cursorIntervalLocked;
+        node["view_mode"] = viewModeName(view.viewMode);
     }
 
     void encodeWaveViewAxesAndCursors(YAML::Node& node, const plot::WaveViewState& view)
@@ -364,6 +573,7 @@ namespace {
         const auto& view = wave.view;
         YAML::Node fftNode;
         fftNode["enabled"] = view.fft.enabled;
+        fftNode["display_mode"] = fftDisplayModeStateName(view.fft.displayMode);
         fftNode["point_count"] = fftPointCountStateName(view.fft.pointCount);
         fftNode["window"] = fftWindowStateName(view.fft.window);
         fftNode["magnitude_mode"] = fftMagnitudeModeStateName(view.fft.magnitudeMode);
@@ -387,20 +597,28 @@ namespace {
     void encodeWavePanelState(YAML::Node& node, const plot::WaveDockState& wave)
     {
         node["tools_collapsed"] = wave.toolsCollapsed;
+        node["tools_drawer"] = toolsDrawerName(wave.activeToolsDrawer);
         node["overview_collapsed"] = wave.overviewCollapsed;
         node["legend_collapsed"] = wave.legendCollapsed;
         node["tools_expanded_width"] = wave.toolsExpandedWidth;
         node["overview_panel_height"] = wave.overviewPanelHeight;
         node["overview_collapsed_height"] = wave.overviewCollapsedHeight;
+
+        YAML::Node legendOverlayNode;
+        legendOverlayNode["open_mode"] = legendOverlayOpenModeName(wave.legendOverlay.openMode);
+        legendOverlayNode["expanded"] = wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick &&
+                                        !wave.legendOverlay.doubleClickAutoCollapse &&
+                                        wave.legendOverlay.expanded;
+        legendOverlayNode["offset_x"] = wave.legendOverlay.offsetX;
+        legendOverlayNode["offset_y"] = wave.legendOverlay.offsetY;
+        node["legend_overlay"] = legendOverlayNode;
     }
 
-    YAML::Node encodeHiddenChannelLabels(const plot::WaveDockState& wave)
+    YAML::Node encodeHiddenChannelIndices(const plot::WaveDockState& wave)
     {
         YAML::Node hiddenChannelsNode;
-        for (const auto& label : wave.hiddenChannelLabels) {
-            if (!label.empty()) {
-                hiddenChannelsNode.push_back(label);
-            }
+        for (const auto channelIndex : wave.hiddenChannelIndices) {
+            hiddenChannelsNode.push_back(channelIndex);
         }
         return hiddenChannelsNode;
     }
@@ -419,13 +637,15 @@ namespace {
         }
         return cursorsNode;
     }
+
     YAML::Node encodeWaveChannelOverrides(const plot::WaveDockState& wave)
     {
         YAML::Node overridesNode;
         for (std::size_t channelIndex = 0; channelIndex < wave.channelOverrides.size(); ++channelIndex) {
             const auto& overrideState = wave.channelOverrides[channelIndex];
             if (!overrideState.labelOverridden && !overrideState.ratioOverridden && !overrideState.scaleOverridden &&
-                !overrideState.offsetOverridden) {
+                !overrideState.offsetOverridden && !overrideState.colorOverridden &&
+                !overrideState.bitYOffsetOverridden) {
                 continue;
             }
             YAML::Node entry;
@@ -434,10 +654,16 @@ namespace {
             entry["ratio_overridden"] = overrideState.ratioOverridden;
             entry["scale_overridden"] = overrideState.scaleOverridden;
             entry["offset_overridden"] = overrideState.offsetOverridden;
+            entry["color_overridden"] = overrideState.colorOverridden;
+            entry["bit_y_offset_overridden"] = overrideState.bitYOffsetOverridden;
             entry["label"] = overrideState.label;
             entry["ratio"] = overrideState.ratio;
             entry["scale"] = overrideState.scale;
             entry["offset"] = overrideState.offset;
+            if (overrideState.color.has_value()) {
+                entry["color"] = encodeRgba(*overrideState.color);
+            }
+            entry["bit_y_offset"] = overrideState.bitYOffset;
             overridesNode.push_back(entry);
         }
         return overridesNode;
@@ -461,6 +687,7 @@ namespace {
 
     void resetMissingWaveProtocolState(plot::WaveDockState& wave)
     {
+        wave.hiddenChannelIndices.clear();
         wave.hiddenChannelLabels.clear();
         wave.analysisMarkers.clear();
         wave.legendVisibilityRestorePending = true;
@@ -475,12 +702,35 @@ namespace {
         view.showPointsWhenSparse = node["show_points_when_sparse"].as<bool>(view.showPointsWhenSparse);
         view.showAxisLabels = node["show_axis_labels"].as<bool>(view.showAxisLabels);
         view.showChannelLegend = node["show_channel_legend"].as<bool>(view.showChannelLegend);
+        view.legendChannelNameMaxWidth =
+            positiveOrZero(node["legend_channel_name_max_width"].as<double>(view.legendChannelNameMaxWidth));
         view.showFftLegend = node["show_fft_legend"].as<bool>(view.showFftLegend);
         view.showHoverReadout = node["show_hover_readout"].as<bool>(view.showHoverReadout);
+        view.preferWaveformHoverReadout =
+            node["prefer_waveform_hover_readout"].as<bool>(view.preferWaveformHoverReadout);
+        view.bitDisplayReadoutPolicy = parseBitDisplayReadoutPolicy(node["bit_display_readout_policy"].as<std::string>(
+            bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy)));
         view.showCursors = node["show_cursors"].as<bool>(view.showCursors);
         view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);
-        view.phosphorGlowEnabled = node["phosphor_glow_enabled"].as<bool>(view.phosphorGlowEnabled);
+        if (node["glow_enabled"]) {
+            view.glowEnabled = node["glow_enabled"].as<bool>(view.glowEnabled);
+        } else {
+            // 兼容旧字段：旧 phosphor_glow_enabled 只迁移为 Glow，不默认开启新的 Phosphor 累积。
+            view.glowEnabled = node["phosphor_glow_enabled"].as<bool>(view.glowEnabled);
+        }
+        view.phosphorEnabled = node["phosphor_enabled"].as<bool>(view.phosphorEnabled);
+        view.phosphorBackend =
+            parsePhosphorBackend(node["phosphor_backend"].as<std::string>(phosphorBackendName(view.phosphorBackend)));
+        view.phosphorMode =
+            parsePhosphorMode(node["phosphor_mode"].as<std::string>(phosphorModeName(view.phosphorMode)));
+        view.triggerEdge = parseTriggerEdge(node["trigger_edge"].as<std::string>(triggerEdgeName(view.triggerEdge)));
+        view.triggerChannelIndex = node["trigger_channel_index"].as<std::size_t>(view.triggerChannelIndex);
+        view.triggerThreshold =
+            finiteOrFallback(node["trigger_threshold"].as<double>(view.triggerThreshold), view.triggerThreshold);
+        view.triggerPositionRatio = normalizedRatioOrFallback(
+            node["trigger_position_ratio"].as<double>(view.triggerPositionRatio), view.triggerPositionRatio);
         view.cursorIntervalLocked = node["cursor_interval_locked"].as<bool>(view.cursorIntervalLocked);
+        view.viewMode = parseViewMode(node["view_mode"].as<std::string>(viewModeName(view.viewMode)));
     }
 
     void decodeWaveViewAxesAndCursors(const YAML::Node& node, plot::WaveViewState& view)
@@ -490,7 +740,8 @@ namespace {
         view.sampleFrequencyInput = node["sample_frequency_input"].as<std::string>(view.sampleFrequencyInput);
         view.timeAxisSource =
             parseAxisSource(node["time_axis_source"].as<std::string>(axisSourceName(view.timeAxisSource)));
-        view.cursorSnapMode = parseSnapMode(node["cursor_snap_mode"].as<std::string>(snapModeName(view.cursorSnapMode)));
+        view.cursorSnapMode =
+            parseSnapMode(node["cursor_snap_mode"].as<std::string>(snapModeName(view.cursorSnapMode)));
         view.cursorSnapScope =
             parseSnapScope(node["cursor_snap_scope"].as<std::string>(snapScopeName(view.cursorSnapScope)));
         view.cursorExtremeSnapPolicy = parseExtremeSnapPolicy(
@@ -531,6 +782,8 @@ namespace {
 
         auto& view = wave.view;
         view.fft.enabled = fftNode["enabled"].as<bool>(view.fft.enabled);
+        view.fft.displayMode =
+            parseFftDisplayMode(fftNode["display_mode"].as<std::string>(fftDisplayModeStateName(view.fft.displayMode)));
         view.fft.pointCount =
             parseFftPointCount(fftNode["point_count"].as<std::string>(fftPointCountStateName(view.fft.pointCount)));
         view.fft.window = parseFftWindow(fftNode["window"].as<std::string>(fftWindowStateName(view.fft.window)));
@@ -560,26 +813,72 @@ namespace {
     void decodeWavePanelState(const YAML::Node& node, plot::WaveDockState& wave)
     {
         wave.toolsCollapsed = node["tools_collapsed"].as<bool>(wave.toolsCollapsed);
+        wave.activeToolsDrawer =
+            parseToolsDrawer(node["tools_drawer"].as<std::string>(toolsDrawerName(wave.activeToolsDrawer)));
         wave.overviewCollapsed = node["overview_collapsed"].as<bool>(wave.overviewCollapsed);
         wave.legendCollapsed = node["legend_collapsed"].as<bool>(wave.legendCollapsed);
         wave.toolsExpandedWidth = node["tools_expanded_width"].as<float>(wave.toolsExpandedWidth);
         wave.overviewPanelHeight = node["overview_panel_height"].as<float>(wave.overviewPanelHeight);
         wave.overviewCollapsedHeight = node["overview_collapsed_height"].as<float>(wave.overviewCollapsedHeight);
+
+        const auto legendOverlayNode = node["legend_overlay"];
+        if (legendOverlayNode && legendOverlayNode.IsMap()) {
+            wave.legendOverlay.openMode = parseLegendOverlayOpenMode(
+                legendOverlayNode["open_mode"].as<std::string>(legendOverlayOpenModeName(wave.legendOverlay.openMode)));
+            const bool savedExpanded = legendOverlayNode["expanded"].as<bool>(wave.legendOverlay.expanded);
+            wave.legendOverlay.expanded = wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick &&
+                                          !wave.legendOverlay.doubleClickAutoCollapse && savedExpanded;
+            wave.legendOverlay.offsetX = legendOverlayNode["offset_x"].as<float>(wave.legendOverlay.offsetX);
+            wave.legendOverlay.offsetY = legendOverlayNode["offset_y"].as<float>(wave.legendOverlay.offsetY);
+            wave.legendOverlay.hoverFloating = false;
+            wave.legendOverlay.hoverInteractionLocked = false;
+            wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+        }
     }
 
-    void decodeHiddenChannelLabels(const YAML::Node& node, plot::WaveDockState& wave)
+    void pushUniqueHiddenChannelIndex(plot::WaveDockState& wave, std::size_t channelIndex)
     {
-        wave.hiddenChannelLabels.clear();
+        if (std::find(wave.hiddenChannelIndices.begin(), wave.hiddenChannelIndices.end(), channelIndex) !=
+            wave.hiddenChannelIndices.end()) {
+            return;
+        }
+        wave.hiddenChannelIndices.push_back(channelIndex);
+    }
+
+    void decodeLegacyHiddenChannelLabels(const YAML::Node& node, plot::WaveDockState& wave)
+    {
         const auto hiddenChannelsNode = node["hidden_channel_labels"];
         if (hiddenChannelsNode && hiddenChannelsNode.IsSequence()) {
             for (const auto& entry : hiddenChannelsNode) {
                 const auto label = entry.as<std::string>("");
-                if (label.empty() || std::find(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label) !=
-                                         wave.hiddenChannelLabels.end()) {
+                if (label.empty() ||
+                    std::find(wave.hiddenChannelLabels.begin(), wave.hiddenChannelLabels.end(), label) !=
+                        wave.hiddenChannelLabels.end()) {
                     continue;
                 }
                 wave.hiddenChannelLabels.push_back(label);
+                for (std::size_t channelIndex = 0; channelIndex < wave.buffer.channelCount(); ++channelIndex) {
+                    const auto spec = wave.buffer.channelSpec(channelIndex);
+                    if (spec.has_value() && spec->label == label) {
+                        pushUniqueHiddenChannelIndex(wave, channelIndex);
+                    }
+                }
             }
+        }
+    }
+
+    void decodeHiddenChannelVisibility(const YAML::Node& node, plot::WaveDockState& wave)
+    {
+        wave.hiddenChannelIndices.clear();
+        wave.hiddenChannelLabels.clear();
+        const auto hiddenIndicesNode = node["hidden_channel_indices"];
+        if (hiddenIndicesNode && hiddenIndicesNode.IsSequence()) {
+            for (const auto& entry : hiddenIndicesNode) {
+                pushUniqueHiddenChannelIndex(wave, entry.as<std::size_t>(0));
+            }
+        } else {
+            // 兼容旧协议状态：旧版本只能按 label 记隐藏项，解码时尽量迁移到当前通道下标。
+            decodeLegacyHiddenChannelLabels(node, wave);
         }
         wave.legendVisibilityRestorePending = true;
     }
@@ -616,10 +915,15 @@ namespace {
                 overrideState.ratioOverridden = entry["ratio_overridden"].as<bool>(overrideState.ratioOverridden);
                 overrideState.scaleOverridden = entry["scale_overridden"].as<bool>(overrideState.scaleOverridden);
                 overrideState.offsetOverridden = entry["offset_overridden"].as<bool>(overrideState.offsetOverridden);
+                overrideState.colorOverridden = entry["color_overridden"].as<bool>(overrideState.colorOverridden);
+                overrideState.bitYOffsetOverridden =
+                    entry["bit_y_offset_overridden"].as<bool>(overrideState.bitYOffsetOverridden);
                 overrideState.label = entry["label"].as<std::string>(overrideState.label);
                 overrideState.ratio = entry["ratio"].as<double>(overrideState.ratio);
                 overrideState.scale = entry["scale"].as<double>(overrideState.scale);
                 overrideState.offset = entry["offset"].as<double>(overrideState.offset);
+                overrideState.color = decodeRgba(entry["color"]);
+                overrideState.bitYOffset = entry["bit_y_offset"].as<double>(overrideState.bitYOffset);
             }
         }
     }
@@ -656,7 +960,7 @@ YAML::Node encodeWaveProtocolState(const plot::WaveDockState& wave)
     encodeWaveMeasurementState(node, view);
     node["fft"] = encodeWaveFftState(wave);
     encodeWavePanelState(node, wave);
-    node["hidden_channel_labels"] = encodeHiddenChannelLabels(wave);
+    node["hidden_channel_indices"] = encodeHiddenChannelIndices(wave);
     node["cursors"] = encodeWaveCursorState(view);
     node["channel_overrides"] = encodeWaveChannelOverrides(wave);
     node["analysis_markers"] = encodeWaveAnalysisMarkers(wave);
@@ -676,7 +980,7 @@ void decodeWaveProtocolState(const YAML::Node& node, plot::WaveDockState& wave)
     decodeWaveMeasurementState(node, wave.view);
     decodeWaveFftState(node, wave);
     decodeWavePanelState(node, wave);
-    decodeHiddenChannelLabels(node, wave);
+    decodeHiddenChannelVisibility(node, wave);
     decodeWaveCursorState(node, wave.view);
     decodeWaveChannelOverrides(node, wave);
     decodeWaveAnalysisMarkers(node, wave);

@@ -94,6 +94,7 @@ struct ScriptHost::LoadSnapshot {
     std::vector<std::pair<std::size_t, plot::WaveAppendRequest>> plotAppends;
     std::vector<RequestDoneResult> requestDoneResults;
     std::vector<StatusUpdate> statusUpdates;
+    std::vector<OscilloscopeRunningUpdate> oscilloscopeRunningUpdates;
     std::vector<DialogRequest> dialogRequests;
     std::vector<FileDialogRequest> fileDialogRequests;
     std::unordered_map<std::string, TimerState> timers;

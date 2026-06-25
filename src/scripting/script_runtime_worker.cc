@@ -46,6 +46,13 @@ namespace {
         std::shared_ptr<std::promise<bool>> result;
     };
 
+    struct OscilloscopeToggleCommand {
+        transport::ConnectionContext context;
+        bool currentRunning{false};
+        bool targetRunning{false};
+        std::shared_ptr<std::promise<bool>> result;
+    };
+
     struct ClearRealtimeOutputsCommand {
         std::shared_ptr<std::promise<RealtimeOutputDiscardCounts>> result;
     };
@@ -108,6 +115,7 @@ namespace {
                                        SetFileIoConfigCommand,
                                        ReloadProtocolCommand,
                                        SetControlValueCommand,
+                                       OscilloscopeToggleCommand,
                                        ClearRealtimeOutputsCommand,
                                        ApplyStreamRuntimeProfileCommand,
                                        OpenCommand,
@@ -151,7 +159,8 @@ namespace {
     {
         return !batch.events.empty() || !batch.logs.empty() || !batch.txRequests.empty() ||
                !batch.requestGuardResets.empty() || !batch.plotSetups.empty() || !batch.plotAppends.empty() ||
-               !batch.requestDoneResults.empty() || !batch.statusUpdates.empty() || !batch.streamRuntimeProfiles.empty() ||
+               !batch.requestDoneResults.empty() || !batch.statusUpdates.empty() ||
+               !batch.oscilloscopeRunningUpdates.empty() || !batch.streamRuntimeProfiles.empty() ||
                !batch.dialogRequests.empty() ||
                !batch.fileDialogRequests.empty() || batch.transportStats.has_value();
     }
@@ -167,6 +176,7 @@ namespace {
             .plotAppends = host.drainPlotAppends(),
             .requestDoneResults = host.drainRequestDoneResults(),
             .statusUpdates = host.drainStatusUpdates(),
+            .oscilloscopeRunningUpdates = host.drainOscilloscopeRunningUpdates(),
             .streamRuntimeProfiles = host.drainStreamRuntimeProfileEvents(),
             .dialogRequests = host.drainDialogRequests(),
             .fileDialogRequests = host.drainFileDialogRequests(),
@@ -543,7 +553,7 @@ struct ScriptRuntimeWorker::Impl {
                 }
             }
             if (hasCommand) {
-                return std::move(command);
+                return command;
             }
 
 #ifndef __MINGW32__
@@ -615,9 +625,7 @@ struct ScriptRuntimeWorker::Impl {
         return true;
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost&,
-                                              std::optional<std::uint64_t>&,
-                                              ConfigureCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost&, std::optional<std::uint64_t>&, ConfigureCommand& command)
     {
         std::lock_guard lock(mutex);
         config = command.config;
@@ -645,6 +653,15 @@ struct ScriptRuntimeWorker::Impl {
                                               SetControlValueCommand& command)
     {
         command.result->set_value(host.setControlValue(command.id, command.value));
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>&,
+                                              OscilloscopeToggleCommand& command)
+    {
+        command.result->set_value(host.requestOscilloscopeToggle(
+            command.context, command.currentRunning, command.targetRunning));
         return {};
     }
 
@@ -690,9 +707,7 @@ struct ScriptRuntimeWorker::Impl {
         return {};
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost& host,
-                                              std::optional<std::uint64_t>&,
-                                              ErrorCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, ErrorCommand& command)
     {
         host.onTransportError(command.event);
         return {};
@@ -707,25 +722,19 @@ struct ScriptRuntimeWorker::Impl {
         return result;
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost& host,
-                                              std::optional<std::uint64_t>&,
-                                              ControlCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, ControlCommand& command)
     {
         host.onControl(command.context, command.id, command.value);
         return {};
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost& host,
-                                              std::optional<std::uint64_t>&,
-                                              TickCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, TickCommand& command)
     {
         host.tick(command.currentMs);
         return {};
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost& host,
-                                              std::optional<std::uint64_t>&,
-                                              TxEventCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, TxEventCommand& command)
     {
         host.onTxEvent(command.context, command.event);
         return {};
@@ -769,11 +778,7 @@ struct ScriptRuntimeWorker::Impl {
         CommandExecutionResult result;
 
         // 核心流程：命令副作用按命令类型下沉到具名 helper，run 只负责取命令和发布执行后的状态。
-        std::visit(
-            [&](auto& item) {
-                result = executeCommandItem(host, activeConnectionId, item);
-            },
-            command);
+        std::visit([&](auto& item) { result = executeCommandItem(host, activeConnectionId, item); }, command);
 
         return result;
     }
@@ -825,6 +830,20 @@ bool ScriptRuntimeWorker::setControlValue(const std::string& id, const ControlVa
 {
     auto promise = std::make_shared<std::promise<bool>>();
     return impl_->runSync<bool>(SetControlValueCommand{.id = id, .value = value, .result = promise}, promise);
+}
+
+bool ScriptRuntimeWorker::requestOscilloscopeToggle(transport::ConnectionContext context,
+                                                    bool currentRunning,
+                                                    bool targetRunning)
+{
+    auto promise = std::make_shared<std::promise<bool>>();
+    return impl_->runSync<bool>(OscilloscopeToggleCommand{
+                                    .context = std::move(context),
+                                    .currentRunning = currentRunning,
+                                    .targetRunning = targetRunning,
+                                    .result = promise,
+                                },
+                                promise);
 }
 
 RealtimeOutputDiscardCounts ScriptRuntimeWorker::clearPendingRealtimeOutputs()

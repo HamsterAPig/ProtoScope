@@ -3,6 +3,7 @@
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -74,12 +75,18 @@ enum class GuiWaveFullscreenMode {
 struct GuiWaveConfig {
     plot::WaveControlMode controlMode{plot::WaveControlMode::Oscilloscope};
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
+    plot::WaveGridDivisionReadoutMode gridDivisionReadoutMode{plot::WaveGridDivisionReadoutMode::DisplayValue};
     plot::WaveChannelCardWidthMode channelCardWidthMode{plot::WaveChannelCardWidthMode::Fixed};
     plot::WaveChannelDoubleClickAction channelDoubleClickAction{plot::WaveChannelDoubleClickAction::ResetScaleOffset};
     plot::WaveXAxisDoubleClickAction xAxisDoubleClickAction{plot::WaveXAxisDoubleClickAction::FitFullHistory};
+    plot::WaveYAxisDoubleClickAction yAxisDoubleClickAction{plot::WaveYAxisDoubleClickAction::FitVisibleChannels};
     plot::WaveHiddenChannelPolicy hiddenChannelPolicy{plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     plot::WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{plot::WaveCursorExtremeSnapPolicy::NearestWaveform};
+    plot::WaveMouseYOffsetDragMode mouseYOffsetDragMode{plot::WaveMouseYOffsetDragMode::Direct};
+    plot::WaveLegendOverlayOpenMode legendOverlayOpenMode{plot::WaveLegendOverlayOpenMode::Hover};
+    bool legendOverlayDoubleClickAutoCollapse{true};
     bool zoomSelectionAutoExit{false};
+    bool peakDetectDownsample{true};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     double downsampleStartMultiplier{2.0};
@@ -88,11 +95,13 @@ struct GuiWaveConfig {
     std::size_t maxTotalSamples{0};
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
-    double verticalAutoFitMultiplier{1.2};
+    double legendChannelNameMaxWidth{0.0};
+    double verticalAutoFitMultiplier{1.25};
     bool resetHistoryOnTimeReset{true};
     bool showAxisLabels{false};
     bool showChannelLegend{true};
     bool showFftLegend{true};
+    std::array<float, 4> cursorFftHighlightRgba{0.20F, 0.55F, 1.00F, 0.16F};
     GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Overlay};
 };
 

@@ -15,9 +15,9 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
-#include <system_error>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -26,9 +26,9 @@
 
 namespace {
 
-using protoscope::tests::ScopedTempPath;
 using protoscope::tests::makeUniqueTempDir;
 using protoscope::tests::require;
+using protoscope::tests::ScopedTempPath;
 
 std::uint64_t currentTimeMs();
 
@@ -253,7 +253,8 @@ void writeRuntimeProfileProtocol(const std::filesystem::path& protocolDir)
     out << "  return { buffer = { capacity = 64, overflow = 'drop_oldest' }, frames = { {\n";
     out << "    name = 'dynamic_profile', header = { 0xFF, 0x26 }, runtime_profile = true,\n";
     out << "    crc = { type = 'crc16_modbus', order = 'hi_lo' },\n";
-    out << "    fields = { { name = 'values', type = 'i16_be', offset = 3, count = { op = 'remaining', unit = 2 } } },\n";
+    out << "    fields = { { name = 'values', type = 'i16_be', offset = 3, count = { op = 'remaining', unit = 2 } } "
+           "},\n";
     out << "    on_frame = on_frame,\n";
     out << "  } } }\n";
     out << "end\n";
@@ -380,9 +381,8 @@ const protoscope::scripting::ElfSymbolValue* findElfSymbolControl(const protosco
                                                                   const std::string& id)
 {
     const auto& controls = application.docks().luaState().controlStates;
-    const auto iter = std::find_if(controls.begin(), controls.end(), [&](const auto& control) {
-        return control.descriptor.id == id;
-    });
+    const auto iter = std::find_if(
+        controls.begin(), controls.end(), [&](const auto& control) { return control.descriptor.id == id; });
     if (iter == controls.end()) {
         return nullptr;
     }
@@ -391,9 +391,10 @@ const protoscope::scripting::ElfSymbolValue* findElfSymbolControl(const protosco
 
 std::size_t countScriptEvents(const protoscope::dock::ScriptDockState& scriptState, const std::string& name)
 {
-    return static_cast<std::size_t>(std::count_if(scriptState.rows.begin(), scriptState.rows.end(), [&](const auto& row) {
-        return row.direction == "EVENT" && row.message.find(name + ":") != std::string::npos;
-    }));
+    return static_cast<std::size_t>(
+        std::count_if(scriptState.rows.begin(), scriptState.rows.end(), [&](const auto& row) {
+            return row.direction == "EVENT" && row.message.find(name + ":") != std::string::npos;
+        }));
 }
 
 void writeTextFile(const std::filesystem::path& path, std::string_view text)
@@ -501,6 +502,36 @@ void test_application_lua_controls_without_connection()
     application.updateControlValue("clear_history", true);
     application.pumpOnce();
     require(application.docks().waveState().buffer.channelCount() == 4, "清空历史应能在未连接时重建波形通道");
+
+    application.shutdown();
+}
+
+void test_application_oscilloscope_toggle_syncs_running_from_script_outputs()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-app-oscilloscope-running"));
+    writeTextFile(protocolDir.path() / "main.lua",
+                  R"lua(
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  if target_running then
+    return true
+  end
+  proto.oscilloscope.set_running(true)
+  return true
+end
+)lua");
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "示波器状态同步测试协议应可加载");
+
+    auto& wave = application.docks().waveState();
+    wave.oscilloscopeRunning = false;
+    require(application.requestOscilloscopeToggle(false, true), "Lua 返回 true 时应用层应保留允许切换语义");
+    require(wave.oscilloscopeRunning, "Lua 返回 true 且未显式 set_running 时应同步 target_running=true");
+
+    require(application.requestOscilloscopeToggle(true, false), "显式 set_running 不应改变 true 返回语义");
+    require(wave.oscilloscopeRunning, "显式 set_running(true) 应优先于默认 target_running=false");
 
     application.shutdown();
 }
@@ -728,12 +759,14 @@ void test_application_same_protocol_reload_without_force_preserves_runtime_state
 
     protoscope::app::Application application;
     require(application.initialize(), "应用应可初始化默认 Lua 工作区");
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "非强制 reload 测试协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "非强制 reload 测试协议应可加载");
 
     application.updateControlValue("tick", true);
     require(application.docks().configState().statusMessage == "count:1", "首次触发应把计数写入状态栏");
 
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), false), "同协议非强制 reload 应成功");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), false),
+            "同协议非强制 reload 应成功");
     const auto& lua = application.docks().luaState();
     require(lua.loaded, "同协议非强制 reload 后协议仍应处于已加载状态");
     require(lua.protocolDir == protocolDir.path().generic_string(), "同协议非强制 reload 后协议目录应保持不变");
@@ -777,7 +810,8 @@ void test_application_failed_reload_keeps_old_callbacks_alive()
     require(application.reloadProtocolDirectory(validProtocolDir.path().generic_string(), true), "有效协议应可加载");
 
     const auto before = application.docks().luaState();
-    require(!application.reloadProtocolDirectory(invalidProtocolDir.path().generic_string(), true), "非法协议 reload 应失败");
+    require(!application.reloadProtocolDirectory(invalidProtocolDir.path().generic_string(), true),
+            "非法协议 reload 应失败");
     const auto& after = application.docks().luaState();
     require(after.protocolDir == before.protocolDir, "失败 reload 后旧协议目录应保留");
     require(after.docks.size() == before.docks.size(), "失败 reload 后旧 Dock 快照应保留");
@@ -987,8 +1021,10 @@ void test_application_guarded_request_timeout_retry_then_success_keeps_guard_act
     application.pumpOnce();
 
     require(transportState->sentTasks.size() == 2, "同一个 guarded request 应先超时再重发一次");
-    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01}, "第 1 次 attempt payload 应保持不变");
-    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01}, "第 2 次 attempt payload 应保持不变");
+    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01},
+            "第 1 次 attempt payload 应保持不变");
+    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01},
+            "第 2 次 attempt payload 应保持不变");
 
     application.updateControlValue("follow", true);
     application.pumpOnce();
@@ -1089,10 +1125,14 @@ void test_application_guarded_requests_count_attempts_independently()
     }
 
     require(transportState->sentTasks.size() == 4, "两个 guarded request 应各自独立重试到第 2 次");
-    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01}, "first 第 1 次 attempt 应发送 0x01");
-    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01}, "first 第 2 次 attempt 应仍发送 0x01");
-    require(transportState->sentTasks[2].payload == std::vector<std::uint8_t>{0x02}, "second 第 1 次 attempt 应发送 0x02");
-    require(transportState->sentTasks[3].payload == std::vector<std::uint8_t>{0x02}, "second 第 2 次 attempt 应仍发送 0x02");
+    require(transportState->sentTasks[0].payload == std::vector<std::uint8_t>{0x01},
+            "first 第 1 次 attempt 应发送 0x01");
+    require(transportState->sentTasks[1].payload == std::vector<std::uint8_t>{0x01},
+            "first 第 2 次 attempt 应仍发送 0x01");
+    require(transportState->sentTasks[2].payload == std::vector<std::uint8_t>{0x02},
+            "second 第 1 次 attempt 应发送 0x02");
+    require(transportState->sentTasks[3].payload == std::vector<std::uint8_t>{0x02},
+            "second 第 2 次 attempt 应仍发送 0x02");
     application.shutdown();
 }
 
@@ -1133,7 +1173,8 @@ void test_application_guarded_request_reset_allows_new_attempts()
     });
 
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "guarded reset 测试协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "guarded reset 测试协议应可加载");
     application.openTransport();
     application.pumpOnce();
 
@@ -1310,30 +1351,47 @@ void test_application_wave_legend_visibility_config_roundtrip()
     auto config = application.captureConfig();
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
+    config.gui.wave.cursorFftHighlightRgba = {0.11F, 0.22F, 0.33F, 0.44F};
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
+    config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
     require(application.applyConfig(config), "图例显示配置应用失败");
 
     require(!application.docks().waveState().view.showChannelLegend, "应用配置后应隐藏图例");
     require(!application.docks().waveState().view.showFftLegend, "应用配置后应隐藏 FFT 图例");
+    require(std::abs(application.docks().waveState().view.cursorFftHighlightRgba[3] - 0.44F) < 1e-6F,
+            "应用配置后应同步游标 FFT 高亮色");
     require(application.docks().waveState().view.hiddenChannelPolicy ==
                 protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "应用配置后应切换隐藏 CH 策略");
+    require(!application.docks().waveState().legendOverlay.doubleClickAutoCollapse,
+            "应用配置后应同步图例双击展开自动收起开关");
     const auto captured = application.captureConfig();
     require(!captured.gui.wave.showChannelLegend, "captureConfig 应带出图例显示开关");
     require(!captured.gui.wave.showFftLegend, "captureConfig 应带出 FFT 图例显示开关");
+    require(std::abs(captured.gui.wave.cursorFftHighlightRgba[0] - 0.11F) < 1e-6F &&
+                std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.44F) < 1e-6F,
+            "captureConfig 应带出游标 FFT 高亮色");
     require(captured.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "captureConfig 应带出隐藏 CH 策略");
+    require(!captured.gui.wave.legendOverlayDoubleClickAutoCollapse, "captureConfig 应带出图例双击展开自动收起开关");
 
     application.docks().waveState().view.showChannelLegend = true;
     application.docks().waveState().view.showFftLegend = true;
+    application.docks().waveState().view.cursorFftHighlightRgba = {0.55F, 0.66F, 0.77F, 0.88F};
     application.docks().waveState().view.hiddenChannelPolicy =
         protoscope::plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
+    application.docks().waveState().legendOverlay.doubleClickAutoCollapse = true;
     const auto capturedLive = application.captureConfig();
     require(capturedLive.gui.wave.showChannelLegend, "captureConfig 不应覆盖 dock 中实时波形图例状态");
     require(capturedLive.gui.wave.showFftLegend, "captureConfig 不应覆盖 dock 中实时 FFT 图例状态");
+    require(std::abs(capturedLive.gui.wave.cursorFftHighlightRgba[0] - 0.55F) < 1e-6F &&
+                std::abs(capturedLive.gui.wave.cursorFftHighlightRgba[3] - 0.88F) < 1e-6F,
+            "captureConfig 不应覆盖 dock 中实时游标 FFT 高亮色");
     require(
         capturedLive.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::IncludeInDerivedViews,
         "captureConfig 不应覆盖 dock 中实时隐藏 CH 策略");
+    require(capturedLive.gui.wave.legendOverlayDoubleClickAutoCollapse,
+            "captureConfig 不应覆盖 dock 中实时图例双击展开自动收起开关");
 
     application.shutdown();
 }
@@ -1347,28 +1405,65 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
     require(!config.gui.wave.zoomSelectionAutoExit, "captureConfig 默认应保持手动退出");
     require(config.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
             "captureConfig 默认应保持 X 轴双击全历史缩放");
+    require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
+            "captureConfig 默认应保持 Y 轴双击适配可见通道");
 
     config.gui.wave.zoomSelectionAutoExit = true;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
+    config.gui.wave.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
     require(application.applyConfig(config), "框选放大自动退出配置应用失败");
     require(application.docks().waveState().view.zoomSelectionAutoExit, "应用配置后应同步更新框选放大退出模式");
     require(application.docks().waveState().view.xAxisDoubleClickAction ==
                 protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow,
             "应用配置后应同步 X 轴双击行为");
+    require(application.docks().waveState().view.yAxisDoubleClickAction ==
+                protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
+            "应用配置后应同步 Y 轴双击行为");
 
     const auto captured = application.captureConfig();
     require(captured.gui.wave.zoomSelectionAutoExit, "captureConfig 应带出框选放大退出模式");
     require(captured.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow,
             "captureConfig 应带出 X 轴双击行为");
+    require(captured.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
+            "captureConfig 应带出 Y 轴双击行为");
 
     application.docks().waveState().view.zoomSelectionAutoExit = false;
     application.docks().waveState().view.xAxisDoubleClickAction =
         protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory;
+    application.docks().waveState().view.yAxisDoubleClickAction =
+        protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels;
     const auto capturedLive = application.captureConfig();
     require(!capturedLive.gui.wave.zoomSelectionAutoExit, "captureConfig 不应覆盖 dock 中实时框选放大退出模式");
     require(
         capturedLive.gui.wave.xAxisDoubleClickAction == protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory,
         "captureConfig 不应覆盖 dock 中实时 X 轴双击行为");
+    require(capturedLive.gui.wave.yAxisDoubleClickAction ==
+                protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
+            "captureConfig 不应覆盖 dock 中实时 Y 轴双击行为");
+
+    application.shutdown();
+}
+
+void test_application_reset_wave_history_restores_default_viewport()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto& wave = application.docks().waveState();
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = false;
+    wave.view.visibleDuration = 2.0;
+    wave.view.viewMinTime = 5.0;
+    wave.view.viewMaxTime = 7.0;
+
+    application.resetWaveHistory();
+
+    require(wave.view.autoFollowLatest, "清空历史后应恢复自动跟随");
+    require(wave.view.defaultViewportPending, "清空历史后应等待按真实宽度应用默认视口");
+    require(!wave.view.initialized, "清空历史后应重新初始化视口");
+    require(std::abs(wave.view.viewMinTime - 0.0) < 1e-12, "清空历史后 X 起点应回到 0");
+    require(std::abs(wave.view.viewMaxTime - 2.0) < 1e-12, "清空历史后 X 窗口应沿用当前 duration");
 
     application.shutdown();
 }
@@ -1696,8 +1791,7 @@ void test_application_session_package_import_rejects_unsafe_entries()
     protoscope::app::Application parentEscapeImporter;
     require(parentEscapeImporter.initialize(), "父目录逃逸导入应用初始化失败");
     error.clear();
-    require(!parentEscapeImporter.importSessionPackage(parentEscapePath, error),
-            "包含 protocol/../x 的现场包应被拒绝");
+    require(!parentEscapeImporter.importSessionPackage(parentEscapePath, error), "包含 protocol/../x 的现场包应被拒绝");
     require(error.find("不安全条目") != std::string::npos, "父目录逃逸错误应说明不安全条目");
     parentEscapeImporter.shutdown();
 
@@ -1781,13 +1875,12 @@ void test_application_session_package_import_without_markers_clears_existing_sta
     if (!package.has_value()) {
         throw std::runtime_error("完整现场包应可读取: " + error);
     }
-    package->entries.erase(
-        std::remove_if(package->entries.begin(),
-                       package->entries.end(),
-                       [](const protoscope::session::SessionPackageEntry& entry) {
-                           return entry.name == "analysis/markers.yaml";
-                       }),
-        package->entries.end());
+    package->entries.erase(std::remove_if(package->entries.begin(),
+                                          package->entries.end(),
+                                          [](const protoscope::session::SessionPackageEntry& entry) {
+                                              return entry.name == "analysis/markers.yaml";
+                                          }),
+                           package->entries.end());
     require(protoscope::session::writeSessionPackage(legacyPackagePath, *package, error), "旧现场包应可重新写入");
 
     protoscope::app::Application importer;
@@ -1934,12 +2027,9 @@ void test_application_loads_protocol_action_templates()
     protoscope::app::Application application;
     require(application.initialize(), "应用初始化失败");
 
-    require(application.reloadProtocolDirectory("protocols/templates/file_dialog", true),
-            "文件对话框模板应可加载");
-    require(application.reloadProtocolDirectory("protocols/templates/send_file", true),
-            "文件发送模板应可加载");
-    require(application.reloadProtocolDirectory("protocols/templates/request_guarded", true),
-            "受保护请求模板应可加载");
+    require(application.reloadProtocolDirectory("protocols/templates/file_dialog", true), "文件对话框模板应可加载");
+    require(application.reloadProtocolDirectory("protocols/templates/send_file", true), "文件发送模板应可加载");
+    require(application.reloadProtocolDirectory("protocols/templates/request_guarded", true), "受保护请求模板应可加载");
 
     application.shutdown();
 }
@@ -2050,7 +2140,8 @@ void test_application_live_raw_capture_trim_keeps_runtime_profile_event()
 
     protoscope::app::Application importedApplication;
     require(importedApplication.initialize(), "导入验证应用初始化失败");
-    require(importedApplication.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "导入验证协议应可加载");
+    require(importedApplication.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "导入验证协议应可加载");
     require(importedApplication.importWaveRawCapture(*exported, error), "导出的 runtime profile raw 应可重新导入");
 }
 
@@ -2107,12 +2198,12 @@ void test_application_session_package_export_trims_raw_capture_window()
 
     if (capture->payload != secondFrame) {
         throw std::runtime_error("现场包内 psraw 应只包含当前可见 raw 窗口: actual=" +
-                                 protoscope::protocol_utils::bytesToHex(capture->payload, true) + " expected=" +
-                                 protoscope::protocol_utils::bytesToHex(secondFrame, true));
+                                 protoscope::protocol_utils::bytesToHex(capture->payload, true) +
+                                 " expected=" + protoscope::protocol_utils::bytesToHex(secondFrame, true));
     }
-    require(!capture->events.empty() &&
-                capture->events.front().type == protoscope::plot::RawCaptureEventType::ProfileSet,
-            "现场包导出应保留当前 raw 依赖的 profile_set");
+    require(
+        !capture->events.empty() && capture->events.front().type == protoscope::plot::RawCaptureEventType::ProfileSet,
+        "现场包导出应保留当前 raw 依赖的 profile_set");
 }
 
 void test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims()
@@ -2277,7 +2368,8 @@ void test_application_raw_capture_import_replays_plot_setup_snapshot()
 
     protoscope::app::Application application;
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true), "plot_setup 导入协议应可加载");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "plot_setup 导入协议应可加载");
     std::string error;
     require(application.importWaveRawCapture(capture, error), "带 plot_setup 的 psraw 导入应成功");
 
@@ -2298,8 +2390,7 @@ void test_application_raw_capture_import_replays_plot_setup_snapshot()
                                                                           std::numeric_limits<double>::infinity());
     require(!snapshot.channels.empty(), "导入 plot_setup 后应有波形通道");
     require(snapshot.channels.front().lineWidth.has_value(), "导入 plot_setup 后快照应携带 line_width");
-    require(std::abs(*snapshot.channels.front().lineWidth - 3.25F) < 1e-6F,
-            "导入 plot_setup 后快照 line_width 错误");
+    require(std::abs(*snapshot.channels.front().lineWidth - 3.25F) < 1e-6F, "导入 plot_setup 后快照 line_width 错误");
     require(snapshot.channels.front().totalSamples == 3U, "导入 plot_setup 后应回放 raw 样本");
     application.shutdown();
 }
@@ -2782,8 +2873,7 @@ void test_application_comm_pressure_debug_log_respects_log_level()
         require(application.pumpOnce(), "第一轮 pump 应生成实时 backlog 压力");
         const auto& comm = application.docks().commState();
         ScenarioResult result{
-            .pressureLogVisible =
-                hasHostLogMessage(application.docks().logState(), "comm_pressure", "派生 UI backlog"),
+            .pressureLogVisible = hasHostLogMessage(application.docks().logState(), "comm_pressure", "派生 UI backlog"),
             .pendingTransferFrameRows = comm.pendingTransferFrameRows,
             .backlogWarning = comm.backlogWarning,
         };

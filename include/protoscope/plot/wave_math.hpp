@@ -39,15 +39,30 @@ enum class WaveXAxisDoubleClickAction {
     FitVisibleWindow,
 };
 
+enum class WaveYAxisDoubleClickAction {
+    FitVisibleChannels,
+    FitActiveChannel,
+};
+
 enum class WaveHiddenChannelPolicy {
     IncludeInDerivedViews,
     ExcludeFromDerivedViews,
+};
+
+enum class WaveGridDivisionReadoutMode {
+    DisplayValue,
+    ActualValue,
+    RawValue,
 };
 
 enum class WaveExtremeKind {
     Maximum,
     Minimum,
 };
+
+inline constexpr int kWaveGridMajorXDivisions{10};
+inline constexpr int kWaveGridMajorYDivisions{8};
+inline constexpr int kWaveGridMinorDivisionsPerMajor{5};
 
 struct FrequencyParseResult {
     bool accepted{false};
@@ -115,6 +130,11 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
                                 float minToolsWidth,
                                 float maxToolsWidth,
                                 float fixedContentHeight);
+float solveSplitWavePlotHeight(std::size_t visibleChannelCount,
+                               float availableHeight,
+                               float rowSpacingY,
+                               float preferredMinPlotHeight,
+                               std::size_t maxRowsWithoutScroll);
 bool scriptTimeUsable(const std::vector<WaveSample>& samples);
 void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
@@ -126,6 +146,11 @@ WaveDataBounds computeDisplayBoundsForChannels(const WaveDisplayData& data,
 const WaveDataBounds& selectXAxisDoubleClickBounds(WaveXAxisDoubleClickAction action,
                                                    const WaveDataBounds& visibleWindowBounds,
                                                    const WaveDataBounds& fullHistoryBounds);
+double waveDisplayValuePerDivision(double minValue, double maxValue);
+std::optional<double> waveChannelValuePerDivision(double displayValuePerDivision,
+                                                  const ChannelSpec& spec,
+                                                  WaveDisplayFormula formula,
+                                                  WaveGridDivisionReadoutMode mode);
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,

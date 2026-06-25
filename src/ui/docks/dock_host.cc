@@ -1,5 +1,4 @@
 #include "../runtime/gui_runtime_detail.hpp"
-
 #include "lua_control_label.hpp"
 
 #include "protoscope/ui/gui_runtime.hpp"
@@ -32,7 +31,8 @@ namespace {
 
     void drawLuaControlCompactTooltip(const scripting::ControlDescriptor& descriptor, std::string_view visibleLabel)
     {
-        if (luaControlUsesCompactLabel(descriptor, visibleLabel) && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+        if (luaControlUsesCompactLabel(descriptor, visibleLabel) &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
             ImGui::SetTooltip("%s", descriptor.label.c_str());
         }
     }
@@ -871,9 +871,11 @@ void GuiRuntime::drawRequestTraceDock()
         drawRequestTraceFilterButton(
             "进行中", "仅显示排队和已发送事件", dock::RequestTraceStatusFilter::Active, trace.filter);
         ImGui::SameLine();
-        drawRequestTraceFilterButton("成功", "仅显示完成和熔断重置事件", dock::RequestTraceStatusFilter::Success, trace.filter);
+        drawRequestTraceFilterButton(
+            "成功", "仅显示完成和熔断重置事件", dock::RequestTraceStatusFilter::Success, trace.filter);
         ImGui::SameLine();
-        drawRequestTraceFilterButton("失败", "仅显示失败、超时、拒绝、丢弃和取消事件", dock::RequestTraceStatusFilter::Failure, trace.filter);
+        drawRequestTraceFilterButton(
+            "失败", "仅显示失败、超时、拒绝、丢弃和取消事件", dock::RequestTraceStatusFilter::Failure, trace.filter);
         ImGui::SameLine();
         drawTransferToolbarToggleButton(PROTOSCOPE_ICON_CLOCK " 时间", trace.showTimestamps, "显示或隐藏时间列");
         ImGui::SameLine();
@@ -894,9 +896,9 @@ void GuiRuntime::drawRequestTraceDock()
         ImGui::TextDisabled("暂无请求事件");
     } else if (ImGui::BeginTable("##request_trace_table",
                                  trace.showTimestamps ? 10 : 9,
-                                 ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                                     ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
-                                     ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp,
+                                 ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable |
+                                     ImGuiTableFlags_Reorderable | ImGuiTableFlags_ScrollY |
+                                     ImGuiTableFlags_SizingStretchProp,
                                  ImVec2(0.0F, 0.0F))) {
         if (trace.showTimestamps) {
             ImGui::TableSetupColumn("时间", ImGuiTableColumnFlags_WidthFixed, 96.0F);

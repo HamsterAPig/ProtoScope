@@ -200,7 +200,8 @@ namespace {
             return false;
         }
         const bool cancelByEscape = ImGui::IsKeyPressed(ImGuiKey_Escape) && !suppressEscapeCancel;
-        if (cancelByEscape || ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+        if (cancelByEscape || ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
             cancelFftZoomSelection(view);
             return true;
         }
@@ -514,9 +515,11 @@ namespace {
     bool drawFftCursors(plot::WaveViewState& view,
                         const plot::WaveFftFrame& frame,
                         bool phasePlot,
+                        bool enableInteraction,
                         std::array<std::optional<plot::WaveFftReadout>, 2>& cursorReadouts)
     {
-        if (!view.showCursors) {
+        if (!view.showCursors || !enableInteraction) {
+            // 分屏 FFT 下方面板只做读数，不能把 Hz 写回复用的时域游标。
             return false;
         }
 
@@ -584,10 +587,12 @@ namespace {
             const auto color = channelColor(snapshot.channels[channel.channelIndex], channel.channelIndex);
             FftGetterPayload payload{.bins = channel.bins.data(), .phase = phasePlot};
             const std::string label = channel.label + (phasePlot ? " 相位" : " 幅值");
+            const std::string itemLabel = label + "##wave_fft_channel_" + std::to_string(channel.channelIndex) +
+                                          (phasePlot ? "_phase" : "_magnitude");
             ImPlotSpec spec{};
             spec.LineColor = color;
             spec.LineWeight = 1.5F;
-            ImPlot::PlotLineG(label.c_str(), &fftBinGetter, &payload, static_cast<int>(channel.bins.size()), spec);
+            ImPlot::PlotLineG(itemLabel.c_str(), &fftBinGetter, &payload, static_cast<int>(channel.bins.size()), spec);
             if (!phasePlot && channel.fundamental.has_value() && std::isfinite(channel.fundamental->frequencyHz)) {
                 ImPlot::TagX(channel.fundamental->frequencyHz, color, "基波 %.4g Hz", channel.fundamental->frequencyHz);
             }
@@ -726,7 +731,10 @@ namespace {
 
 namespace {
 
-    PlotRenderResult drawWaveFftPlotContent(plot::WaveDockState& wave, const WaveFrameData& frame)
+    PlotRenderResult drawWaveFftPlotContent(plot::WaveDockState& wave,
+                                            const WaveFrameData& frame,
+                                            bool includePhase,
+                                            bool enableCursorInteraction)
     {
         PlotRenderResult result{};
         const auto* fftFrame = frame.fftFrame;
@@ -743,11 +751,13 @@ namespace {
         ensureFftViewport(view, *fftFrame);
         const char* yLabel = view.fft.magnitudeMode == plot::WaveFftMagnitudeMode::Decibel ? "幅值 (dB)" : "幅值";
         const ImVec2 available = ImGui::GetContentRegionAvail();
-        const float summaryHeight = view.showCursors && !view.showMeasurementOverlay ? 58.0F : 8.0F;
+        const bool showFrequencyCursors = enableCursorInteraction && view.showCursors;
+        const float summaryHeight = showFrequencyCursors && !view.showMeasurementOverlay ? 58.0F : 8.0F;
         const float plotGap = ImGui::GetStyle().ItemSpacing.y;
         const float plotAreaHeight = (std::max)(120.0F, available.y - summaryHeight - plotGap);
-        const float magnitudeHeight = (std::max)(90.0F, plotAreaHeight * 0.58F);
-        const float phaseHeight = (std::max)(80.0F, plotAreaHeight - magnitudeHeight - plotGap);
+        const float magnitudeHeight =
+            includePhase ? (std::max)(90.0F, plotAreaHeight * 0.58F) : (std::max)(90.0F, plotAreaHeight);
+        const float phaseHeight = includePhase ? (std::max)(80.0F, plotAreaHeight - magnitudeHeight - plotGap) : 0.0F;
         std::array<std::optional<plot::WaveFftReadout>, 2> cursorReadouts{};
 
         auto& inputMap = ImPlot::GetInputMap();
@@ -766,13 +776,13 @@ namespace {
             ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftMagnitudeMin, view.fftMagnitudeMax, ImGuiCond_Always);
             drawFftChannelLines(*fftFrame, *frame.fullSnapshot, false);
             const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
-                const bool zoomSelectionConsumed =
-                    handleFftZoomSelection(view, false, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);
+            const bool zoomSelectionConsumed =
+                handleFftZoomSelection(view, false, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);
             const auto limits = ImPlot::GetPlotLimits();
             if (!zoomSelectionConsumed) {
                 drawHoverReadout(view, *fftFrame, false, limits);
-                const bool cursorHeld = drawFftCursors(view, *fftFrame, false, cursorReadouts);
-                if (view.showMeasurementOverlay) {
+                const bool cursorHeld = drawFftCursors(view, *fftFrame, false, enableCursorInteraction, cursorReadouts);
+                if (showFrequencyCursors && view.showMeasurementOverlay) {
                     drawCursorOverlay(cursorReadouts);
                 }
                 drawWaveStatusOverlay(view);
@@ -788,19 +798,19 @@ namespace {
             ImPlot::EndPlot();
         }
 
-        if (ImPlot::BeginPlot("##wave_fft_phase", ImVec2(-1.0F, phaseHeight), plotFlags)) {
+        if (includePhase && ImPlot::BeginPlot("##wave_fft_phase", ImVec2(-1.0F, phaseHeight), plotFlags)) {
             result.plotRendered = true;
             ImPlot::SetupAxes("频率 (Hz)", "相位 (deg)");
             ImPlot::SetupAxisLimits(ImAxis_X1, view.fftFrequencyMin, view.fftFrequencyMax, ImGuiCond_Always);
             ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftPhaseMin, view.fftPhaseMax, ImGuiCond_Always);
             drawFftChannelLines(*fftFrame, *frame.fullSnapshot, true);
             const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
-                const bool zoomSelectionConsumed =
-                    handleFftZoomSelection(view, true, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);
+            const bool zoomSelectionConsumed =
+                handleFftZoomSelection(view, true, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);
             const auto limits = ImPlot::GetPlotLimits();
             if (!zoomSelectionConsumed) {
                 drawHoverReadout(view, *fftFrame, true, limits);
-                const bool cursorHeld = drawFftCursors(view, *fftFrame, true, cursorReadouts);
+                const bool cursorHeld = drawFftCursors(view, *fftFrame, true, enableCursorInteraction, cursorReadouts);
                 const bool axisResetConsumed = handleFftAxisDoubleClick(view, *fftFrame, true);
                 const bool panConsumed =
                     !axisResetConsumed && handleFftPan(view, *fftFrame, true, minFrequencyWidth, cursorHeld);
@@ -815,7 +825,7 @@ namespace {
 
         inputMap = savedInputMap;
 
-        if (view.showCursors && !view.showMeasurementOverlay) {
+        if (showFrequencyCursors && !view.showMeasurementOverlay) {
             drawCursorSummary(cursorReadouts);
         }
         return result;
@@ -829,8 +839,16 @@ void WaveFftComponent::draw(WaveContext& context)
 {
     ImGui::BeginChild(
         "##wave_main_panel", ImVec2(0.0F, context.layout->mainHeight), false, ImGuiWindowFlags_NoScrollbar);
-    drawWaveFftPlotContent(context.wave, *context.renderFrame);
+    drawWaveFftPlot(context.wave, *context.renderFrame, true);
     ImGui::EndChild();
+}
+
+PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,
+                                 const WaveFrameData& frame,
+                                 bool includePhase,
+                                 bool enableCursorInteraction)
+{
+    return drawWaveFftPlotContent(wave, frame, includePhase, enableCursorInteraction);
 }
 
 } // namespace protoscope::ui

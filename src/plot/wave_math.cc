@@ -172,6 +172,29 @@ WaveLayoutSizes solveWaveLayout(float contentWidth,
     return result;
 }
 
+float solveSplitWavePlotHeight(std::size_t visibleChannelCount,
+                               float availableHeight,
+                               float rowSpacingY,
+                               float preferredMinPlotHeight,
+                               std::size_t maxRowsWithoutScroll)
+{
+    if (visibleChannelCount == 0 || maxRowsWithoutScroll == 0) {
+        return 0.0F;
+    }
+
+    const std::size_t fittedRows = (std::min)(visibleChannelCount, maxRowsWithoutScroll);
+    const float safeAvailableHeight = (std::max)(availableHeight, 0.0F);
+    const float safeSpacing = (std::max)(rowSpacingY, 0.0F);
+    const float totalSpacing = safeSpacing * static_cast<float>(fittedRows - 1U);
+    const float fittedHeight = (std::max)(0.0F, safeAvailableHeight - totalSpacing) / static_cast<float>(fittedRows);
+
+    // 分屏 4 行以内优先完整塞进当前 child，超过 4 行才保留首屏高度并交给滚动条处理。
+    if (visibleChannelCount <= maxRowsWithoutScroll) {
+        return fittedHeight;
+    }
+    return (std::max)(fittedHeight, (std::max)(preferredMinPlotHeight, 0.0F));
+}
+
 bool scriptTimeUsable(const std::vector<WaveSample>& samples)
 {
     if (samples.empty()) {
@@ -225,91 +248,86 @@ bool scriptTimeUsable(const ChannelView& channel, std::size_t begin, std::size_t
 
 namespace {
 
-void resetDisplayDataChannels(WaveDisplayData& data, std::size_t channelCount)
-{
-    data.channels.resize(channelCount);
-    for (auto& channel : data.channels) {
-        channel.samples.clear();
-        channel.actualValues.clear();
-    }
-}
-
-bool hasUsableScriptTime(const WaveSnapshot& snapshot)
-{
-    for (const auto& channel : snapshot.channels) {
-        const auto [begin, end] = displaySampleRange(channel);
-        if (scriptTimeUsable(channel, begin, end)) {
-            return true;
+    void resetDisplayDataChannels(WaveDisplayData& data, std::size_t channelCount)
+    {
+        data.channels.resize(channelCount);
+        for (auto& channel : data.channels) {
+            channel.samples.clear();
+            channel.actualValues.clear();
         }
     }
-    return false;
-}
 
-void resolveDisplayTimeAxis(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data)
-{
-    if (sampleFrequencyHz > 0.0 && std::isfinite(sampleFrequencyHz)) {
-        data.axisSource = WaveTimeAxisSource::SampleFrequency;
-        data.timeUnit = "s";
-    } else if (hasUsableScriptTime(snapshot)) {
-        data.axisSource = WaveTimeAxisSource::ScriptTime;
-        data.timeUnit = snapshot.config.timeUnit.empty() ? "s" : snapshot.config.timeUnit;
-    } else {
-        data.axisSource = WaveTimeAxisSource::SampleIndex;
-        data.timeUnit = "sample";
-    }
-}
-
-double resolveDisplaySampleTime(const WaveSample& source,
-                                std::size_t sampleIndexOffset,
-                                std::size_t sampleIndex,
-                                double sampleFrequencyHz,
-                                WaveTimeAxisSource axisSource)
-{
-    const std::size_t globalSampleIndex = sampleIndexOffset + sampleIndex;
-    if (axisSource == WaveTimeAxisSource::SampleFrequency) {
-        return static_cast<double>(globalSampleIndex) / sampleFrequencyHz;
-    }
-    if (axisSource == WaveTimeAxisSource::ScriptTime) {
-        return source.time;
-    }
-    return static_cast<double>(globalSampleIndex);
-}
-
-void fillDisplayChannel(const ChannelView& channel,
-                        const ViewConfig& config,
-                        double sampleFrequencyHz,
-                        WaveTimeAxisSource axisSource,
-                        WaveDisplayChannel& displayChannel)
-{
-    const auto [begin, end] = displaySampleRange(channel);
-    if (begin >= end) {
-        return;
+    bool hasUsableScriptTime(const WaveSnapshot& snapshot)
+    {
+        for (const auto& channel : snapshot.channels) {
+            const auto [begin, end] = displaySampleRange(channel);
+            if (scriptTimeUsable(channel, begin, end)) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    const std::size_t visibleSamples = end - begin;
-    auto& display = displayChannel.samples;
-    display.resize(visibleSamples);
-    displayChannel.actualValues.resize(visibleSamples);
-    const bool offsetThenScale = config.displayFormula == WaveDisplayFormula::OffsetThenScale;
-    for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
-        const auto& source = channel.samples[sampleIndex];
-        const double actualValue = source.value * channel.ratio;
-        const double displayValue =
-            offsetThenScale ? (actualValue + channel.offset) * channel.scale
-                            : actualValue * channel.scale + channel.offset;
-        const auto outputIndex = sampleIndex - begin;
-        display[outputIndex] = {
-            .time =
-                resolveDisplaySampleTime(source,
-                                         channel.sampleIndexOffset,
-                                         sampleIndex,
-                                         sampleFrequencyHz,
-                                         axisSource),
-            .value = displayValue,
-        };
-        displayChannel.actualValues[outputIndex] = actualValue;
+    void resolveDisplayTimeAxis(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data)
+    {
+        if (sampleFrequencyHz > 0.0 && std::isfinite(sampleFrequencyHz)) {
+            data.axisSource = WaveTimeAxisSource::SampleFrequency;
+            data.timeUnit = "s";
+        } else if (hasUsableScriptTime(snapshot)) {
+            data.axisSource = WaveTimeAxisSource::ScriptTime;
+            data.timeUnit = snapshot.config.timeUnit.empty() ? "s" : snapshot.config.timeUnit;
+        } else {
+            data.axisSource = WaveTimeAxisSource::SampleIndex;
+            data.timeUnit = "sample";
+        }
     }
-}
+
+    double resolveDisplaySampleTime(const WaveSample& source,
+                                    std::size_t sampleIndexOffset,
+                                    std::size_t sampleIndex,
+                                    double sampleFrequencyHz,
+                                    WaveTimeAxisSource axisSource)
+    {
+        const std::size_t globalSampleIndex = sampleIndexOffset + sampleIndex;
+        if (axisSource == WaveTimeAxisSource::SampleFrequency) {
+            return static_cast<double>(globalSampleIndex) / sampleFrequencyHz;
+        }
+        if (axisSource == WaveTimeAxisSource::ScriptTime) {
+            return source.time;
+        }
+        return static_cast<double>(globalSampleIndex);
+    }
+
+    void fillDisplayChannel(const ChannelView& channel,
+                            const ViewConfig& config,
+                            double sampleFrequencyHz,
+                            WaveTimeAxisSource axisSource,
+                            WaveDisplayChannel& displayChannel)
+    {
+        const auto [begin, end] = displaySampleRange(channel);
+        if (begin >= end) {
+            return;
+        }
+
+        const std::size_t visibleSamples = end - begin;
+        auto& display = displayChannel.samples;
+        display.resize(visibleSamples);
+        displayChannel.actualValues.resize(visibleSamples);
+        const bool offsetThenScale = config.displayFormula == WaveDisplayFormula::OffsetThenScale;
+        for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
+            const auto& source = channel.samples[sampleIndex];
+            const double actualValue = source.value * channel.ratio;
+            const double displayValue = offsetThenScale ? (actualValue + channel.offset) * channel.scale
+                                                        : actualValue * channel.scale + channel.offset;
+            const auto outputIndex = sampleIndex - begin;
+            display[outputIndex] = {
+                .time = resolveDisplaySampleTime(
+                    source, channel.sampleIndexOffset, sampleIndex, sampleFrequencyHz, axisSource),
+                .value = displayValue,
+            };
+            displayChannel.actualValues[outputIndex] = actualValue;
+        }
+    }
 
 } // namespace
 
@@ -574,6 +592,37 @@ const WaveDataBounds& selectXAxisDoubleClickBounds(const WaveXAxisDoubleClickAct
         return fullHistoryBounds;
     }
     return visibleWindowBounds;
+}
+
+double waveDisplayValuePerDivision(double minValue, double maxValue)
+{
+    return std::abs(maxValue - minValue) / static_cast<double>(kWaveGridMajorYDivisions);
+}
+
+std::optional<double> waveChannelValuePerDivision(double displayValuePerDivision,
+                                                  const ChannelSpec& spec,
+                                                  WaveDisplayFormula formula,
+                                                  WaveGridDivisionReadoutMode mode)
+{
+    // 核心逻辑：每格读数是差值换算，offset 在两种显示公式中都会抵消。
+    static_cast<void>(formula);
+    switch (mode) {
+        case WaveGridDivisionReadoutMode::DisplayValue:
+            return displayValuePerDivision;
+        case WaveGridDivisionReadoutMode::ActualValue:
+            if (std::abs(spec.scale) <= kEpsilon) {
+                return std::nullopt;
+            }
+            return displayValuePerDivision / std::abs(spec.scale);
+        case WaveGridDivisionReadoutMode::RawValue: {
+            const double displayPerRaw = spec.scale * spec.ratio;
+            if (std::abs(displayPerRaw) <= kEpsilon) {
+                return std::nullopt;
+            }
+            return displayValuePerDivision / std::abs(displayPerRaw);
+        }
+    }
+    return std::nullopt;
 }
 
 WaveViewport normalizeOverviewViewport(const WaveViewport& viewport, const WaveDataBounds& bounds, double minTimeWidth)
@@ -859,15 +908,17 @@ double resolveChannelCardWidth(WaveChannelCardWidthMode mode,
 
 WaveValueRange makeVerticalAutoFitRange(double minValue, double maxValue, double multiplier)
 {
-    const double safeMultiplier = multiplier > 0.0 ? multiplier : 1.2;
-    double maxAbs = (std::max)(std::abs(minValue), std::abs(maxValue));
-    if (maxAbs <= kEpsilon) {
-        maxAbs = 1.0;
+    const double safeMultiplier = multiplier > 0.0 ? multiplier : 1.25;
+    const double center = (minValue + maxValue) * 0.5;
+    double span = maxValue - minValue;
+    if (std::abs(span) <= kEpsilon || !std::isfinite(span)) {
+        span = 2.0;
     }
-    const double halfRange = maxAbs * safeMultiplier;
+    const double viewSpan = span * safeMultiplier;
+    const double halfRange = viewSpan * 0.5;
     return {
-        .minValue = -halfRange,
-        .maxValue = halfRange,
+        .minValue = center - halfRange,
+        .maxValue = center + halfRange,
     };
 }
 
@@ -907,10 +958,15 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > kEpsilon;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > kEpsilon;
     overrideState.offsetOverridden = std::abs(updated.offset - defaultSpec.offset) > kEpsilon;
+    overrideState.colorOverridden = updated.color != defaultSpec.color;
+    overrideState.bitYOffsetOverridden =
+        std::abs(updated.bitDisplay.yOffset - defaultSpec.bitDisplay.yOffset) > kEpsilon;
     overrideState.label = updated.label;
     overrideState.ratio = updated.ratio;
     overrideState.scale = updated.scale;
     overrideState.offset = updated.offset;
+    overrideState.color = updated.color;
+    overrideState.bitYOffset = updated.bitDisplay.yOffset;
     wave.buffer.setChannelSpec(channelIndex, std::move(updated));
     return true;
 }
@@ -926,6 +982,50 @@ bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, 
 bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex)
 {
     return resetChannelConfigToDefault(wave, channelIndex, WaveChannelDoubleClickAction::ResetOffset);
+}
+
+bool resetOneChannelViewSettings(WaveDockState& wave, std::size_t channelIndex)
+{
+    if (channelIndex >= wave.defaultChannelSpecs.size()) {
+        return false;
+    }
+    const auto hiddenEnd =
+        std::remove(wave.hiddenChannelIndices.begin(), wave.hiddenChannelIndices.end(), channelIndex);
+    const bool hiddenStateChanged = hiddenEnd != wave.hiddenChannelIndices.end();
+    wave.hiddenChannelIndices.erase(hiddenEnd, wave.hiddenChannelIndices.end());
+    wave.hiddenChannelLabels.clear();
+    if (hiddenStateChanged) {
+        wave.legendVisibilityRestorePending = true;
+    }
+    if (!resetChannelConfigToDefault(
+            wave, channelIndex, wave.defaultChannelSpecs[channelIndex], WaveChannelDoubleClickAction::ResetAll)) {
+        return false;
+    }
+    if (channelIndex < wave.channelOverrides.size()) {
+        wave.channelOverrides[channelIndex] = {};
+    }
+    return true;
+}
+
+bool resetAllChannelViewSettings(WaveDockState& wave)
+{
+    bool changed = false;
+    const std::size_t channelCount = wave.buffer.channelCount();
+    for (std::size_t channelIndex = 0; channelIndex < channelCount; ++channelIndex) {
+        changed = resetOneChannelViewSettings(wave, channelIndex) || changed;
+    }
+
+    wave.hiddenChannelIndices.clear();
+    wave.hiddenChannelLabels.clear();
+    wave.channelOverrides.clear();
+    wave.legendOverlay.expanded = false;
+    wave.legendOverlay.hoverFloating = false;
+    wave.legendOverlay.hoverInteractionLocked = false;
+    wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+    wave.legendOverlay.offsetX = 8.0F;
+    wave.legendOverlay.offsetY = 8.0F;
+    wave.legendVisibilityRestorePending = true;
+    return changed || channelCount > 0;
 }
 
 } // namespace protoscope::plot

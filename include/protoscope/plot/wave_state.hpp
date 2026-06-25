@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -28,9 +29,54 @@ enum class WaveCursorExtremeSnapPolicy {
     ViewportZone,
 };
 
+enum class WaveBitDisplayReadoutPolicy {
+    MixedNearest,
+    ExplicitActivation,
+};
+
 enum class WaveMeasurementReferenceMode {
     Channel,
     ManualValue,
+};
+
+enum class WaveViewMode {
+    Overlay,
+    Stacked,
+    Split,
+};
+
+enum class WavePhosphorBackend {
+    Auto,
+    GpuFbo,
+    CpuTexture,
+};
+
+enum class WavePhosphorMode {
+    FreeRun,
+    Triggered,
+};
+
+enum class WavePhosphorTriggerEdge {
+    Rising,
+    Falling,
+};
+
+enum class WaveLegendOverlayOpenMode {
+    Hover,
+    DoubleClick,
+    Disabled,
+};
+
+struct WaveLegendOverlayState {
+    bool expanded{false};
+    bool hoverFloating{false};
+    bool hoverInteractionLocked{false};
+    WaveLegendOverlayOpenMode openMode{WaveLegendOverlayOpenMode::Hover};
+    bool doubleClickAutoCollapse{true};
+    float hoverCloseDelaySec{0.30F};
+    float hoverCloseRemainingSec{0.0F};
+    float offsetX{8.0F};
+    float offsetY{8.0F};
 };
 
 struct WaveCursorState {
@@ -81,6 +127,30 @@ struct WaveMeasurementSelection {
     bool bias{false};
 };
 
+struct ActiveBitLaneState {
+    bool active{false};
+    std::size_t parentChannelIndex{0};
+    std::size_t bitIndex{0};
+    std::size_t laneIndex{0};
+};
+
+enum class WaveMouseYOffsetDragMode {
+    Direct,
+    Shift,
+    Disabled,
+};
+
+struct WaveRenderStats {
+    std::size_t rawChannelCount{0};
+    std::size_t peakDownsampleChannelCount{0};
+    std::size_t envelopeDownsampleChannelCount{0};
+    std::size_t phosphorChannelCount{0};
+    std::size_t bitLaneChannelCount{0};
+    std::size_t lastRenderPointBudget{0};
+    std::size_t lastDownsampleThreshold{0};
+    std::string phosphorBackendStatus{"关闭"};
+};
+
 struct WaveViewState {
     bool autoFollowLatest{true};
     bool pauseAutoFollowOnInteraction{true};
@@ -90,35 +160,51 @@ struct WaveViewState {
     bool showChannelLegend{true};
     bool showFftLegend{true};
     bool showHoverReadout{true};
+    bool preferWaveformHoverReadout{true};
+    WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy{WaveBitDisplayReadoutPolicy::MixedNearest};
     bool showCursors{true};
     bool showMeasurementOverlay{true};
-    bool phosphorGlowEnabled{true};
+    bool glowEnabled{true};
+    bool phosphorEnabled{false};
     bool initialized{false};
     bool cursorIntervalLocked{false};
     bool overviewWindowDragging{false};
     bool forceNextMainPlotLimits{false};
     bool activeChannelOffsetDrag{false};
     bool activeChannelScaleDrag{false};
+    bool activeBitYOffsetDrag{false};
     bool zoomSelectionActive{false};
     bool zoomSelectionDragging{false};
     bool zoomSelectionAutoExit{false};
+    bool peakDetectDownsample{true};
     bool fitVisibleWaveformsRequested{false};
+    bool defaultViewportPending{true};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     std::size_t overviewMaxSamples{20000};
     std::size_t lastRenderPointCount{0};
     std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};
+    std::size_t lastCursorFftAnchorIndex{1};
+    ActiveBitLaneState activeBitLane{};
     std::size_t referenceChannelIndex{0};
+    std::size_t triggerChannelIndex{0};
     WaveMeasurementReferenceMode referenceMode{WaveMeasurementReferenceMode::Channel};
     WaveMeasurementSelection measurement{};
+    WaveMouseYOffsetDragMode mouseYOffsetDragMode{WaveMouseYOffsetDragMode::Direct};
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
+    WaveGridDivisionReadoutMode gridDivisionReadoutMode{WaveGridDivisionReadoutMode::DisplayValue};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};
     WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
     WaveXAxisDoubleClickAction xAxisDoubleClickAction{WaveXAxisDoubleClickAction::FitFullHistory};
+    WaveYAxisDoubleClickAction yAxisDoubleClickAction{WaveYAxisDoubleClickAction::FitVisibleChannels};
     WaveHiddenChannelPolicy hiddenChannelPolicy{WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
+    WavePhosphorBackend phosphorBackend{WavePhosphorBackend::Auto};
+    WavePhosphorMode phosphorMode{WavePhosphorMode::FreeRun};
+    WavePhosphorTriggerEdge triggerEdge{WavePhosphorTriggerEdge::Rising};
     WaveFftConfig fft{};
+    WaveViewMode viewMode{WaveViewMode::Overlay};
     bool fftSourceWindowValid{false};
     bool fftViewportInitialized{false};
     bool fftFitAllRequested{false};
@@ -127,9 +213,12 @@ struct WaveViewState {
     double downsampleStartMultiplier{2.0};
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
-    double verticalAutoFitMultiplier{1.2};
+    double legendChannelNameMaxWidth{0.0};
+    double verticalAutoFitMultiplier{1.25};
     double persistenceWindow{0.25};
     double glowIntensity{1.0};
+    double triggerThreshold{0.0};
+    double triggerPositionRatio{0.2};
     double sampleFrequencyHz{0.0};
     double manualReferenceValue{0.0};
     double lockedCursorInterval{0.0};
@@ -153,12 +242,14 @@ struct WaveViewState {
     double zoomSelectionStartY{0.0};
     double zoomSelectionCurrentX{0.0};
     double zoomSelectionCurrentY{0.0};
+    std::array<float, 4> cursorFftHighlightRgba{0.20F, 0.55F, 1.00F, 0.16F};
     std::string sampleFrequencyInput;
     std::string sampleFrequencyError;
     WaveTimeAxisSource timeAxisSource{WaveTimeAxisSource::SampleIndex};
     WaveCursorSnapMode cursorSnapMode{WaveCursorSnapMode::SmartSnap};
     WaveCursorSnapScope cursorSnapScope{WaveCursorSnapScope::AllChannels};
     WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{WaveCursorExtremeSnapPolicy::NearestWaveform};
+    WaveRenderStats lastRenderStats{};
     std::array<WaveCursorState, 2> cursors{};
 };
 
@@ -171,16 +262,29 @@ struct WaveAnalysisMarker {
     std::size_t channelIndex{0};
 };
 
+enum class WaveToolsDrawer {
+    Main,
+    FFT,
+    Renderer,
+    Cursor,
+    Measure,
+    View,
+};
+
 struct WaveDockState {
     struct ChannelTransformOverride {
         bool labelOverridden{false};
         bool ratioOverridden{false};
         bool scaleOverridden{false};
         bool offsetOverridden{false};
+        bool colorOverridden{false};
+        bool bitYOffsetOverridden{false};
         std::string label;
         double ratio{1.0};
         double scale{1.0};
         double offset{0.0};
+        std::optional<std::array<float, 4>> color{};
+        double bitYOffset{0.0};
     };
 
     OscilloscopeBuffer buffer{};
@@ -191,14 +295,19 @@ struct WaveDockState {
     std::vector<std::string> channelSummaries;
     std::vector<ChannelSpec> defaultChannelSpecs;
     std::vector<ChannelTransformOverride> channelOverrides;
+    std::vector<std::size_t> hiddenChannelIndices;
+    // 仅用于兼容旧协议 UI 状态中的 hidden_channel_labels，新的隐藏状态以通道下标为准。
     std::vector<std::string> hiddenChannelLabels;
     std::vector<std::uint8_t> fftChannelEnabled;
-    bool toolsCollapsed{false};
+    WaveLegendOverlayState legendOverlay{};
+    bool oscilloscopeRunning{false};
+    bool toolsCollapsed{true};
+    WaveToolsDrawer activeToolsDrawer{WaveToolsDrawer::Main};
     bool overviewCollapsed{false};
     bool legendCollapsed{false};
     bool legendVisibilityRestorePending{false};
     float toolsExpandedWidth{280.0F};
-    float toolsCollapsedWidth{34.0F};
+    float toolsCollapsedWidth{38.0F};
     float overviewPanelHeight{120.0F};
     float overviewCollapsedHeight{30.0F};
     float contentToolsSplitterWidth{6.0F};
@@ -253,6 +362,7 @@ struct WaveDockState {
         std::size_t channelIndex{0};
         std::size_t pointLimit{0};
         std::size_t sampleCount{0};
+        bool peakDetectDownsample{false};
         WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
         double ratio{1.0};
         double scale{1.0};
@@ -263,8 +373,9 @@ struct WaveDockState {
             return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
                    visibleMinTime == other.visibleMinTime && visibleMaxTime == other.visibleMaxTime &&
                    channelIndex == other.channelIndex && pointLimit == other.pointLimit &&
-                   sampleCount == other.sampleCount && displayFormula == other.displayFormula &&
-                   ratio == other.ratio && scale == other.scale && offset == other.offset;
+                   sampleCount == other.sampleCount && peakDetectDownsample == other.peakDetectDownsample &&
+                   displayFormula == other.displayFormula && ratio == other.ratio && scale == other.scale &&
+                   offset == other.offset;
         }
     };
 
@@ -272,6 +383,33 @@ struct WaveDockState {
         bool valid{false};
         RenderEnvelopeCacheKey key{};
         std::vector<EnvelopePoint> envelope;
+        std::vector<WaveSample> peakDetectTrace;
+        std::size_t sourceSampleCount{0};
+    };
+
+    struct BitRenderCacheKey {
+        std::uint64_t dataRevision{0};
+        std::size_t channelIndex{0};
+        double visibleMinTime{0.0};
+        double visibleMaxTime{0.0};
+        double visibleMinValue{0.0};
+        double visibleMaxValue{0.0};
+        double sampleFrequencyHz{0.0};
+        std::size_t firstBit{0};
+        std::size_t bitCount{0};
+        double yOffset{0.0};
+        std::size_t plotPixelWidth{0};
+        std::size_t plotPixelHeight{0};
+        std::size_t layoutFingerprint{0};
+        std::size_t vertexBudget{0};
+
+        bool operator==(const BitRenderCacheKey&) const = default;
+    };
+
+    struct BitRenderCacheEntry {
+        bool valid{false};
+        BitRenderCacheKey key{};
+        std::vector<std::vector<WaveSample>> lanes;
         std::size_t sourceSampleCount{0};
     };
 
@@ -284,6 +422,7 @@ struct WaveDockState {
     WaveDisplayData cachedOverviewDisplayData{};
     WaveDataBounds cachedDisplayBounds{};
     std::vector<RenderEnvelopeCacheEntry> renderEnvelopeCache;
+    std::vector<BitRenderCacheEntry> bitRenderCache;
     bool cachedFftKeyValid{false};
     WaveFftCacheKey cachedFftKey{};
     WaveFftFrame cachedFftFrame{};
@@ -296,5 +435,7 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
                                  WaveChannelDoubleClickAction action);
 bool resetChannelConfigToDefault(WaveDockState& wave, std::size_t channelIndex, WaveChannelDoubleClickAction action);
 bool resetChannelOffsetToDefault(WaveDockState& wave, std::size_t channelIndex);
+bool resetOneChannelViewSettings(WaveDockState& wave, std::size_t channelIndex);
+bool resetAllChannelViewSettings(WaveDockState& wave);
 
 } // namespace protoscope::plot

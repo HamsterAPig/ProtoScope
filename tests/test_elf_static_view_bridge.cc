@@ -139,7 +139,6 @@ void test_elf_static_view_bridge_loads_dump_json_and_queries_symbols()
     require(wildcardResults.size() == 1, "应兼容 Lua 下拉输入的通配符后缀");
     require(wildcardResults[0].label == "global.a_var_int", "a_var* 应命中 a_var_int");
     require(wildcardResults[0].value == "0x20000000", "a_var_int 地址应格式化为十六进制字符串");
-
 }
 
 void test_elf_static_view_bridge_finds_exact_label_only()
@@ -163,7 +162,6 @@ void test_elf_static_view_bridge_finds_exact_label_only()
 
     const auto fuzzyOnly = bridge.findExactLabel("counter");
     require(!fuzzyOnly.has_value(), "普通候选查询可模糊命中的文本不应被当作精确 label");
-
 }
 
 void test_elf_static_view_bridge_queries_flattened_composite_members()
@@ -195,8 +193,7 @@ void test_elf_static_view_bridge_queries_flattened_composite_members()
 
     const auto deepArrayMember = bridge.query("h_var_struct_arr[11].age", 1);
     require(deepArrayMember.size() == 1, "结果条数上限仍应生效");
-    require(deepArrayMember[0].label == "global.h_var_struct_arr[11].age",
-            "候选上限不应影响数组展开预算");
+    require(deepArrayMember[0].label == "global.h_var_struct_arr[11].age", "候选上限不应影响数组展开预算");
     require(deepArrayMember[0].value == "0x2000105A", "深层数组成员地址应完整保留");
 
     const auto objectPrefixResults = bridge.query("objADC", 64);
@@ -205,7 +202,6 @@ void test_elf_static_view_bridge_queries_flattened_composite_members()
         objectPrefixResults.end(),
         [](const protoscope::plugin::ElfStaticAddressEntry& entry) { return entry.label == "global.objADC.member"; });
     require(memberIt != objectPrefixResults.end(), "按对象名前缀查询时应包含展开后的成员地址");
-
 }
 
 void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_reload()
@@ -262,7 +258,6 @@ void test_elf_static_address_file_watch_detects_changes_and_delete_recreate_relo
     require(stable.changed, "稳定后应报告自动重载事件");
     require(stable.shouldReload, "重建稳定后应触发自动重载");
     require(stable.clearComboCache, "自动重载后应要求清空符号下拉缓存");
-
 }
 
 void test_elf_static_view_bridge_loads_private_binary_without_extension()
@@ -290,7 +285,6 @@ void test_elf_static_view_bridge_loads_private_binary_without_extension()
     const auto results = bridge.query("counter", 64);
     require(results.size() == 1, "私有二进制导出应能查询静态地址");
     require(results[0].value == "0x20000010", "私有二进制导出的地址应保持一致");
-
 }
 
 void test_elf_static_view_bridge_loads_variable_summary_export()
@@ -325,7 +319,6 @@ void test_elf_static_view_bridge_loads_variable_summary_export()
     require(results.size() == 1, "轻量变量摘要应能进入静态地址查询");
     require(results[0].label == "global.a_var_int", "轻量变量摘要应保留变量路径");
     require(results[0].value == "0x20000000", "轻量变量摘要应保留静态地址");
-
 }
 
 void test_elf_static_view_bridge_keeps_old_model_on_load_failure()
@@ -352,7 +345,6 @@ void test_elf_static_view_bridge_keeps_old_model_on_load_failure()
     require(error.find("ElfStaticView") != std::string::npos, "错误信息应包含数据导入上下文");
     require(error.find("ELF 扫描失败") != std::string::npos, "错误信息应包含 ELF 扫描上下文");
     require(!bridge.query("counter", 64).empty(), "加载失败后应保留旧模型");
-
 }
 
 void test_elf_static_view_bridge_clear_resets_loaded_model()
@@ -376,5 +368,4 @@ void test_elf_static_view_bridge_clear_resets_loaded_model()
     require(!bridge.loaded(), "clear 后 bridge 不应继续标记为 loaded");
     require(bridge.sourcePath().empty(), "clear 后 sourcePath 应清空");
     require(bridge.query("counter", 64).empty(), "clear 后查询结果应为空");
-
 }

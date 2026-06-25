@@ -37,7 +37,6 @@ public:
         });
         proto["plot"] = plotApi;
     }
-
 };
 
 std::unique_ptr<IScriptHostApiModule> makePlotApiModule(ScriptHost& host)

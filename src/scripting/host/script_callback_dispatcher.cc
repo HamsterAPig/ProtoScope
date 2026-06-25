@@ -123,11 +123,10 @@ bool ScriptHost::callbackOnStreamBatch(const ScriptHostContext& ctx, const std::
     try {
         sol::state_view view(runtime_->lua.lua_state());
         auto callback = callbackIter->second;
-        auto result = callback(makeContextTable(view, ctx.connection),
-                               makeStreamFrameArrayTable(view,
-                                                         frames,
-                                                         runtime_->stream->includeRawFrames,
-                                                         runtime_->stream->includeFieldAliases));
+        auto result =
+            callback(makeContextTable(view, ctx.connection),
+                     makeStreamFrameArrayTable(
+                         view, frames, runtime_->stream->includeRawFrames, runtime_->stream->includeFieldAliases));
         if (!result.valid()) {
             protoLog("error", "stream.on_batch 执行失败: " + protectedCallError(result));
         }
@@ -158,11 +157,10 @@ void ScriptHost::callbackOnStreamFrame(const ScriptHostContext& ctx, const Strea
     try {
         sol::state_view view(runtime_->lua.lua_state());
         auto callback = callbackIter->second;
-        auto result = callback(makeContextTable(view, ctx.connection),
-                               makeStreamFrameTable(view,
-                                                    frame,
-                                                    runtime_->stream->includeRawFrames,
-                                                    runtime_->stream->includeFieldAliases));
+        auto result =
+            callback(makeContextTable(view, ctx.connection),
+                     makeStreamFrameTable(
+                         view, frame, runtime_->stream->includeRawFrames, runtime_->stream->includeFieldAliases));
         if (!result.valid()) {
             protoLog("error", "stream.on_frame 执行失败: " + protectedCallError(result));
         }
@@ -237,6 +235,34 @@ void ScriptHost::callbackOnControl(const ScriptHostContext& ctx, const std::stri
     } catch (...) {
         protoLog("error", "on_control 执行异常: 未知异常");
     }
+}
+
+bool ScriptHost::callbackOnOscilloscopeToggle(const ScriptHostContext& ctx, bool currentRunning, bool targetRunning)
+{
+    const auto callback = resolveGlobalCallback("on_oscilloscope_toggle");
+    if (!callback.has_value()) {
+        return false;
+    }
+    try {
+        sol::state_view view(runtime_->lua.lua_state());
+        sol::protected_function_result result =
+            (*callback)(makeContextTable(view, ctx.connection), currentRunning, targetRunning);
+        if (!result.valid()) {
+            protoLog("error", "on_oscilloscope_toggle 执行失败: " + protectedCallError(result));
+            return false;
+        }
+        const sol::object returned = result.get<sol::object>();
+        if (!returned.is<bool>()) {
+            protoLog("error", "on_oscilloscope_toggle 必须返回 boolean");
+            return false;
+        }
+        return returned.as<bool>();
+    } catch (const std::exception& ex) {
+        protoLog("error", std::string("on_oscilloscope_toggle 执行异常: ") + ex.what());
+    } catch (...) {
+        protoLog("error", "on_oscilloscope_toggle 执行异常: 未知异常");
+    }
+    return false;
 }
 
 void ScriptHost::callbackOnTx(const ScriptHostContext& ctx, const TxEvent& event)

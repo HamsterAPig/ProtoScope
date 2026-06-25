@@ -1,10 +1,10 @@
 #include "../runtime/gui_runtime_detail.hpp"
-
 #include "lua_control_label.hpp"
 
 #include "protoscope/ui/gui_runtime.hpp"
 
 #include <algorithm>
+#include <optional>
 
 namespace protoscope::ui {
 
@@ -40,6 +40,12 @@ namespace {
                node.kind == scripting::LayoutNodeKind::InlineGroup;
     }
 
+    bool isLuaFlowFillNode(const scripting::LayoutNodeDescriptor& node)
+    {
+        return node.fillWidth &&
+               (node.kind == scripting::LayoutNodeKind::Control || node.kind == scripting::LayoutNodeKind::InlineGroup);
+    }
+
     float applyLuaLayoutWidthConstraints(const scripting::LayoutNodeDescriptor& node, float naturalWidth)
     {
         float width = naturalWidth;
@@ -72,6 +78,13 @@ namespace {
         return 140.0F + luaLayoutControlLabelPartWidth(visibleLabel);
     }
 
+    float luaLayoutEditableComboItemNaturalWidth(float textWidth)
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float arrowWidth = ImGui::GetFrameHeight();
+        return textWidth + style.FramePadding.x * 2.0F + arrowWidth;
+    }
+
     float applyLuaLayoutControlWidth(const scripting::LayoutNodeDescriptor& node,
                                      const scripting::ControlDescriptor& descriptor,
                                      float naturalWidth)
@@ -81,47 +94,6 @@ namespace {
             return node.minWidth.has_value() ? std::max(naturalWidth, *node.minWidth) : naturalWidth;
         }
         return applyLuaLayoutWidthConstraints(node, naturalWidth);
-    }
-
-    float luaLayoutControlWidth(const scripting::LayoutNodeDescriptor& node,
-                                const scripting::ControlDescriptor& descriptor)
-    {
-        const float fullLabelWidth =
-            applyLuaLayoutControlWidth(node, descriptor, luaLayoutControlNaturalWidth(descriptor, descriptor.label));
-        const std::string visibleLabel = resolveLuaControlVisibleLabel(descriptor, fullLabelWidth);
-        return applyLuaLayoutControlWidth(node, descriptor, luaLayoutControlNaturalWidth(descriptor, visibleLabel));
-    }
-
-    float estimateLuaFlowNodeWidth(const scripting::LayoutNodeDescriptor& node,
-                                   const std::vector<scripting::ControlSnapshot>& controls);
-
-    float estimateLuaInlineGroupWidth(const scripting::LayoutNodeDescriptor& node,
-                                      const std::vector<scripting::ControlSnapshot>& controls)
-    {
-        float width = 0.0F;
-        for (std::size_t index = 0; index < node.children.size(); ++index) {
-            if (index > 0) {
-                width += node.spacing;
-            }
-            width += estimateLuaFlowNodeWidth(node.children[index], controls);
-        }
-        return node.minWidth.has_value() ? std::max(width, *node.minWidth) : width;
-    }
-
-    float estimateLuaFlowNodeWidth(const scripting::LayoutNodeDescriptor& node,
-                                   const std::vector<scripting::ControlSnapshot>& controls)
-    {
-        if (node.kind == scripting::LayoutNodeKind::Text) {
-            return ImGui::CalcTextSize(node.text.c_str()).x;
-        }
-        if (node.kind == scripting::LayoutNodeKind::Control && node.controlIndex < controls.size()) {
-            const auto& descriptor = controls[node.controlIndex].descriptor;
-            return luaLayoutControlWidth(node, descriptor);
-        }
-        if (node.kind == scripting::LayoutNodeKind::InlineGroup) {
-            return estimateLuaInlineGroupWidth(node, controls);
-        }
-        return ImGui::GetFrameHeight();
     }
 
     void reserveLuaLayoutNodeWidth(float startX, float width)
@@ -134,7 +106,92 @@ namespace {
         ImGui::Dummy(ImVec2(width - drawnWidth, 0.0F));
     }
 
+    float luaLayoutRemainingLineWidth()
+    {
+        const float rightEdge = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+        return std::max(1.0F, rightEdge - ImGui::GetCursorScreenPos().x);
+    }
+
 } // namespace
+
+float GuiRuntime::elfSymbolComboLayoutNaturalWidth(const scripting::ControlSnapshot& control,
+                                                   std::string_view visibleLabel) const
+{
+    float maxTextWidth = 0.0F;
+    const auto measureText = [&maxTextWidth](std::string_view text) {
+        if (text.empty()) {
+            return;
+        }
+        maxTextWidth = std::max(maxTextWidth, ImGui::CalcTextSize(text.data(), text.data() + text.size()).x);
+    };
+
+    if (const auto* current = std::get_if<scripting::ElfSymbolValue>(&control.value)) {
+        measureText(current->label);
+    }
+    if (const auto stateIter = elfSymbolComboStates_.find(control.descriptor.id);
+        stateIter != elfSymbolComboStates_.end()) {
+        // 核心流程：按上一帧已加载候选和当前编辑草稿估算宽度，后端刷新后下一帧自然扩展。
+        measureText(stateIter->second.draft);
+        for (const auto& option : stateIter->second.options) {
+            measureText(option.label);
+        }
+    }
+
+    const float itemWidth = std::max(140.0F, luaLayoutEditableComboItemNaturalWidth(maxTextWidth));
+    return itemWidth + luaLayoutControlLabelPartWidth(visibleLabel);
+}
+
+float GuiRuntime::luaLayoutControlWidth(const scripting::LayoutNodeDescriptor& node,
+                                        const scripting::ControlSnapshot& control) const
+{
+    const auto& descriptor = control.descriptor;
+    const auto naturalWidth = [this, &control, &descriptor](std::string_view visibleLabel) {
+        if (descriptor.type == scripting::ControlType::ElfSymbolCombo) {
+            return elfSymbolComboLayoutNaturalWidth(control, visibleLabel);
+        }
+        return luaLayoutControlNaturalWidth(descriptor, visibleLabel);
+    };
+
+    const float fullLabelWidth = applyLuaLayoutControlWidth(node, descriptor, naturalWidth(descriptor.label));
+    const std::string visibleLabel = resolveLuaControlVisibleLabel(descriptor, fullLabelWidth);
+    return applyLuaLayoutControlWidth(node, descriptor, naturalWidth(visibleLabel));
+}
+
+float GuiRuntime::luaLayoutControlFillWidth(const scripting::LayoutNodeDescriptor& node,
+                                            const scripting::ControlSnapshot& control,
+                                            float availableWidth) const
+{
+    const float naturalWidth = luaLayoutControlWidth(node, control);
+    return applyLuaLayoutControlWidth(node, control.descriptor, std::max(naturalWidth, availableWidth));
+}
+
+float GuiRuntime::estimateLuaInlineGroupWidth(const scripting::LayoutNodeDescriptor& node,
+                                              const std::vector<scripting::ControlSnapshot>& controls) const
+{
+    float width = 0.0F;
+    for (std::size_t index = 0; index < node.children.size(); ++index) {
+        if (index > 0) {
+            width += node.spacing;
+        }
+        width += estimateLuaFlowNodeWidth(node.children[index], controls);
+    }
+    return node.minWidth.has_value() ? std::max(width, *node.minWidth) : width;
+}
+
+float GuiRuntime::estimateLuaFlowNodeWidth(const scripting::LayoutNodeDescriptor& node,
+                                           const std::vector<scripting::ControlSnapshot>& controls) const
+{
+    if (node.kind == scripting::LayoutNodeKind::Text) {
+        return ImGui::CalcTextSize(node.text.c_str()).x;
+    }
+    if (node.kind == scripting::LayoutNodeKind::Control && node.controlIndex < controls.size()) {
+        return luaLayoutControlWidth(node, controls[node.controlIndex]);
+    }
+    if (node.kind == scripting::LayoutNodeKind::InlineGroup) {
+        return estimateLuaInlineGroupWidth(node, controls);
+    }
+    return ImGui::GetFrameHeight();
+}
 
 bool GuiRuntime::drawLuaLayoutNode(const scripting::LayoutNodeDescriptor& node,
                                    const std::vector<scripting::ControlSnapshot>& controls,
@@ -148,7 +205,13 @@ bool GuiRuntime::drawLuaLayoutNode(const scripting::LayoutNodeDescriptor& node,
         case scripting::LayoutNodeKind::Flow:
             return drawLuaFlowLayoutNode(node, controls, stableId, widgetIndex, earlyExit);
         case scripting::LayoutNodeKind::InlineGroup:
-            return drawLuaInlineGroupLayoutNode(node, controls, stableId, widgetIndex, earlyExit);
+            return drawLuaInlineGroupLayoutNode(
+                node,
+                controls,
+                stableId,
+                widgetIndex,
+                earlyExit,
+                node.fillWidth ? std::optional<float>(luaLayoutRemainingLineWidth()) : std::nullopt);
         case scripting::LayoutNodeKind::Table:
             return drawLuaTableLayoutNode(node, controls, stableId, widgetIndex, earlyExit);
         case scripting::LayoutNodeKind::Group:
@@ -159,8 +222,11 @@ bool GuiRuntime::drawLuaLayoutNode(const scripting::LayoutNodeDescriptor& node,
             if (node.controlIndex >= controls.size()) {
                 return false;
             }
-            return drawDynamicLayoutControl(controls[node.controlIndex],
-                                            luaLayoutControlWidth(node, controls[node.controlIndex].descriptor));
+            return drawDynamicLayoutControl(
+                controls[node.controlIndex],
+                node.fillWidth
+                    ? luaLayoutControlFillWidth(node, controls[node.controlIndex], luaLayoutRemainingLineWidth())
+                    : luaLayoutControlWidth(node, controls[node.controlIndex]));
         case scripting::LayoutNodeKind::Text:
             ImGui::TextWrapped("%s", node.text.c_str());
             return false;
@@ -194,14 +260,43 @@ bool GuiRuntime::drawLuaInlineGroupLayoutNode(const scripting::LayoutNodeDescrip
                                               const std::vector<scripting::ControlSnapshot>& controls,
                                               std::string_view stableId,
                                               std::size_t& widgetIndex,
-                                              bool earlyExit)
+                                              bool earlyExit,
+                                              std::optional<float> layoutWidth)
 {
     const float startX = ImGui::GetCursorScreenPos().x;
+    std::optional<std::size_t> fillChildIndex;
+    if (layoutWidth.has_value()) {
+        for (std::size_t index = 0; index < node.children.size(); ++index) {
+            const auto& child = node.children[index];
+            if (isLuaFlowFillNode(child) &&
+                (child.kind != scripting::LayoutNodeKind::Control || child.controlIndex < controls.size())) {
+                fillChildIndex = index;
+                break;
+            }
+        }
+    }
+    float fixedChildrenWidth = 0.0F;
+    if (fillChildIndex.has_value()) {
+        for (std::size_t index = 0; index < node.children.size(); ++index) {
+            if (index > 0) {
+                fixedChildrenWidth += node.spacing;
+            }
+            if (index == *fillChildIndex) {
+                continue;
+            }
+            fixedChildrenWidth += estimateLuaFlowNodeWidth(node.children[index], controls);
+        }
+    }
     bool updated = false;
     for (std::size_t index = 0; index < node.children.size(); ++index) {
         const auto& child = node.children[index];
         if (child.kind == scripting::LayoutNodeKind::Text) {
             ImGui::TextUnformatted(child.text.c_str());
+        } else if (fillChildIndex.has_value() && index == *fillChildIndex &&
+                   child.kind == scripting::LayoutNodeKind::Control && child.controlIndex < controls.size()) {
+            const float fillWidth =
+                luaLayoutControlFillWidth(child, controls[child.controlIndex], *layoutWidth - fixedChildrenWidth);
+            updated = drawDynamicLayoutControl(controls[child.controlIndex], fillWidth) || updated;
         } else {
             updated = drawLuaLayoutNode(child, controls, stableId, widgetIndex, earlyExit) || updated;
         }
@@ -212,7 +307,10 @@ bool GuiRuntime::drawLuaInlineGroupLayoutNode(const scripting::LayoutNodeDescrip
             ImGui::SameLine(0.0F, node.spacing);
         }
     }
-    if (node.minWidth.has_value()) {
+    if (layoutWidth.has_value()) {
+        // inline_group 自身 fill_width 只扩展组占位；组内 fill 子控件才吃掉剩余宽度。
+        reserveLuaLayoutNodeWidth(startX, *layoutWidth);
+    } else if (node.minWidth.has_value()) {
         // inline_group 作为 flow 原子项时，min_width 只扩展占位，不压缩组内控件。
         reserveLuaLayoutNodeWidth(startX, *node.minWidth);
     }
@@ -228,14 +326,35 @@ bool GuiRuntime::drawLuaFlowLayoutNode(const scripting::LayoutNodeDescriptor& no
     bool updated = false;
     for (std::size_t index = 0; index < node.children.size(); ++index) {
         const auto& child = node.children[index];
+        std::optional<float> fillWidth;
+        if (isLuaFlowFillNode(child)) {
+            if (child.kind == scripting::LayoutNodeKind::Control && child.controlIndex < controls.size()) {
+                fillWidth =
+                    luaLayoutControlFillWidth(child, controls[child.controlIndex], luaLayoutRemainingLineWidth());
+            } else {
+                fillWidth = std::max(estimateLuaFlowNodeWidth(child, controls), luaLayoutRemainingLineWidth());
+            }
+        }
         if (child.kind == scripting::LayoutNodeKind::Text) {
             // flow 内文本按未换行宽度绘制，保持与换行估算一致。
             ImGui::TextUnformatted(child.text.c_str());
+        } else if (fillWidth.has_value() && child.kind == scripting::LayoutNodeKind::Control &&
+                   child.controlIndex < controls.size()) {
+            updated = drawDynamicLayoutControl(controls[child.controlIndex], *fillWidth) || updated;
+        } else if (fillWidth.has_value() && child.kind == scripting::LayoutNodeKind::InlineGroup) {
+            updated =
+                drawLuaInlineGroupLayoutNode(child, controls, stableId, widgetIndex, earlyExit, fillWidth) || updated;
         } else {
             updated = drawLuaLayoutNode(child, controls, stableId, widgetIndex, earlyExit) || updated;
         }
         if (earlyExit && updated) {
             return true;
+        }
+        if (fillWidth.has_value()) {
+            if (index + 1 < node.children.size() && node.runSpacing > 0.0F) {
+                ImGui::Dummy(ImVec2(0.0F, node.runSpacing));
+            }
+            continue;
         }
         if (index + 1 < node.children.size() && isLuaFlowInlineNode(child) &&
             isLuaFlowInlineNode(node.children[index + 1])) {
@@ -358,11 +477,8 @@ void GuiRuntime::drawLuaDockWindows()
             if (windowVisible) {
                 if (dockSnapshot.descriptor.layout.has_value()) {
                     std::size_t widgetIndex = 0;
-                    drawLuaLayoutNode(dockSnapshot.descriptor.layout->root,
-                                      dockSnapshot.controls,
-                                      stableId,
-                                      widgetIndex,
-                                      false);
+                    drawLuaLayoutNode(
+                        dockSnapshot.descriptor.layout->root, dockSnapshot.controls, stableId, widgetIndex, false);
                 } else {
                     drawLuaDockFlow(dockSnapshot.controls, false);
                 }
