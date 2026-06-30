@@ -17,20 +17,20 @@ endif()
 include(${PROJECT_SOURCE_DIR}/3rdparty/cmrc/CMakeRC.cmake)
 
 add_library(elf_static_view_core
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/address_bias.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/export_document.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/expander.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_json.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_utils.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/project.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/project_summary.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/static_address_query.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/elf_symbol_table.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_reader.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/raw_dwarf_reader.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_wrappers.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/ti_coff_object.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/logging/logger.cpp
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/address_bias.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/export_document.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/expander.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_json.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_utils.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/project.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/project_summary.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/static_address_query.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/elf_symbol_table.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_reader.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/raw_dwarf_reader.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_wrappers.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/ti_coff_object.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/logging/logger.cc
 )
 target_include_directories(elf_static_view_core
     PUBLIC

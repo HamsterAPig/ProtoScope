@@ -176,6 +176,17 @@ target_link_libraries(protoscope_logging
 )
 target_compile_features(protoscope_logging PUBLIC cxx_std_20)
 
+add_library(protoscope_startup_diagnostics STATIC
+    app/startup_diagnostics.cc
+)
+target_include_directories(protoscope_startup_diagnostics
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/include
+    PRIVATE
+        ${PROJECT_BINARY_DIR}/generated/include
+)
+target_compile_features(protoscope_startup_diagnostics PUBLIC cxx_std_20)
+
 add_library(protoscope_app STATIC
     app/application.cc
 )
@@ -286,6 +297,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         PRIVATE
             protoscope_app
             protoscope_config
+            protoscope_startup_diagnostics
             protoscope_ui
     )
 
@@ -305,6 +317,7 @@ foreach(target_name IN ITEMS
     protoscope_plot
     protoscope_session
     protoscope_config
+    protoscope_startup_diagnostics
     protoscope_app
     protoscope_update_check
 )

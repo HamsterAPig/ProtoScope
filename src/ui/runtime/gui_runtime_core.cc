@@ -1,5 +1,6 @@
 #include "gui_runtime_detail.hpp"
 
+#include "protoscope/app/startup_diagnostics.hpp"
 #include "protoscope/build/version.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
@@ -68,6 +69,20 @@ namespace protoscope::ui {
 namespace {
     constexpr float kAppHeaderHeight = 58.0F;
     constexpr float kStatusBarHeight = 44.0F;
+    int gLastGlfwErrorCode = 0;
+    std::string gLastGlfwErrorDescription;
+
+    void startupGlfwErrorCallback(int code, const char* description)
+    {
+        gLastGlfwErrorCode = code;
+        gLastGlfwErrorDescription = description == nullptr ? "unknown" : description;
+    }
+
+    std::string lastGlfwErrorText(std::string_view prefix)
+    {
+        return std::string(prefix) + ", code=" + std::to_string(gLastGlfwErrorCode) + ", message=" +
+               (gLastGlfwErrorDescription.empty() ? "unknown" : gLastGlfwErrorDescription);
+    }
 
     const ImWchar* chineseGlyphRangesForConfig(ImFontAtlas& fonts, config::GuiFontChineseGlyphRange range)
     {
@@ -111,8 +126,10 @@ namespace {
 #endif
 } // namespace
 
-GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
-    : application_(application), configStore_(configStore),
+GuiRuntime::GuiRuntime(app::Application& application,
+                       const config::ConfigStore& configStore,
+                       app::StartupDiagnosticsSink* diagnostics)
+    : application_(application), configStore_(configStore), startupDiagnostics_(diagnostics),
       workspaceController_(std::make_unique<WorkspaceController>(*this)), executableDir_(executableDirectory()),
       waveDockRenderer_(application)
 {
@@ -252,8 +269,22 @@ void GuiRuntime::shutdown()
 
 bool GuiRuntime::initializeWindow()
 {
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->setStage("GuiRuntime::initializeWindow");
+        startupDiagnostics_->logEvent("glfwInit", "开始初始化 GLFW");
+    }
+    gLastGlfwErrorCode = 0;
+    gLastGlfwErrorDescription.clear();
+    glfwSetErrorCallback(startupGlfwErrorCallback);
     if (!glfwInit()) {
+        const std::string reason = lastGlfwErrorText("GLFW 初始化失败");
+        if (startupDiagnostics_ != nullptr) {
+            startupDiagnostics_->logFailure("glfwInit", reason);
+        }
         return false;
+    }
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->logEvent("glfwInit", "GLFW 初始化成功");
     }
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -262,16 +293,32 @@ bool GuiRuntime::initializeWindow()
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
     const auto& window = application_.captureConfig().gui.window;
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->logEvent("glfwCreateWindow", "尝试创建 OpenGL 3.2 Core 窗口");
+    }
+    gLastGlfwErrorCode = 0;
+    gLastGlfwErrorDescription.clear();
     window_ = glfwCreateWindow(window.width, window.height, window.title.c_str(), nullptr, nullptr);
     if (!window_) {
+        if (startupDiagnostics_ != nullptr) {
+            startupDiagnostics_->logEvent(
+                "glfwCreateWindow",
+                lastGlfwErrorText("OpenGL 3.2 Core 窗口创建失败，准备回退 3.0"));
+        }
         // 核心流程：优先使用 3.2 Core 以启用 ImGui 顶点偏移能力；失败时回退 3.0，兼容老显卡/驱动。
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
         kGlslVersion = "#version 130";
+        gLastGlfwErrorCode = 0;
+        gLastGlfwErrorDescription.clear();
         window_ = glfwCreateWindow(window.width, window.height, window.title.c_str(), nullptr, nullptr);
     }
     if (!window_) {
+        const std::string reason = lastGlfwErrorText("GLFW 窗口创建失败");
+        if (startupDiagnostics_ != nullptr) {
+            startupDiagnostics_->logFailure("glfwCreateWindow", reason);
+        }
         glfwTerminate();
         return false;
     }
@@ -280,6 +327,17 @@ bool GuiRuntime::initializeWindow()
 #endif
     glfwMakeContextCurrent(window_);
     glfwSwapInterval(1);
+    if (startupDiagnostics_ != nullptr) {
+        const auto* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+        const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+        startupDiagnostics_->logEvent("OpenGL",
+                                      std::string("GL_VENDOR=") + (vendor == nullptr ? "unknown" : vendor));
+        startupDiagnostics_->logEvent("OpenGL",
+                                      std::string("GL_RENDERER=") + (renderer == nullptr ? "unknown" : renderer));
+        startupDiagnostics_->logEvent("OpenGL",
+                                      std::string("GL_VERSION=") + (version == nullptr ? "unknown" : version));
+    }
     if (window.maximized) {
         glfwMaximizeWindow(window_);
     }
@@ -289,6 +347,10 @@ bool GuiRuntime::initializeWindow()
 
 bool GuiRuntime::initializeImGui()
 {
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->setStage("GuiRuntime::initializeImGui");
+        startupDiagnostics_->logEvent("ImGui", "开始初始化 ImGui 上下文");
+    }
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     applyImGuiProfessionalDarkTheme();
@@ -297,23 +359,45 @@ bool GuiRuntime::initializeImGui()
     io.IniFilename = nullptr;
     ensureChineseFont();
 
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->logEvent("ImGui_ImplGlfw_InitForOpenGL", "开始初始化 GLFW backend");
+    }
     if (!ImGui_ImplGlfw_InitForOpenGL(window_, true)) {
+        if (startupDiagnostics_ != nullptr) {
+            startupDiagnostics_->logFailure("ImGui_ImplGlfw_InitForOpenGL", "GLFW backend 初始化失败");
+        }
         return false;
     }
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->logEvent("ImGui_ImplGlfw_InitForOpenGL", "GLFW backend 初始化成功");
+        startupDiagnostics_->logEvent("ImGui_ImplOpenGL3_Init", std::string("开始初始化 OpenGL backend, glsl=") + kGlslVersion);
+    }
     if (!ImGui_ImplOpenGL3_Init(kGlslVersion)) {
+        if (startupDiagnostics_ != nullptr) {
+            startupDiagnostics_->logFailure("ImGui_ImplOpenGL3_Init", "OpenGL backend 初始化失败");
+        }
         return false;
+    }
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->logEvent("ImGui_ImplOpenGL3_Init", "OpenGL backend 初始化成功");
     }
     return true;
 }
 
 bool GuiRuntime::initializePlotContext()
 {
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->setStage("GuiRuntime::initializePlotContext");
+    }
     ImPlot::CreateContext();
     applyImPlotProfessionalDarkTheme();
     auto& inputMap = ImPlot::GetInputMap();
     inputMap.Pan = ImGuiMouseButton_Left;
     inputMap.Select = ImGuiMouseButton_Right;
     inputMap.SelectCancel = ImGuiMouseButton_Left;
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->logEvent("ImPlot", "ImPlot 上下文初始化成功");
+    }
     return true;
 }
 

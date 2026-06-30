@@ -28,6 +28,7 @@ struct GLFWwindow;
 
 namespace protoscope::app {
 class Application;
+class StartupDiagnosticsSink;
 }
 
 namespace protoscope::ui {
@@ -40,7 +41,9 @@ class WorkspaceController;
 
 class GuiRuntime {
 public:
-    GuiRuntime(app::Application& application, const config::ConfigStore& configStore);
+    GuiRuntime(app::Application& application,
+               const config::ConfigStore& configStore,
+               app::StartupDiagnosticsSink* diagnostics = nullptr);
     ~GuiRuntime();
 
     bool initialize();
@@ -323,6 +326,7 @@ private:
 
     app::Application& application_;
     const config::ConfigStore& configStore_;
+    app::StartupDiagnosticsSink* startupDiagnostics_{nullptr};
     GLFWwindow* window_{nullptr};
     std::unique_ptr<WorkspaceController> workspaceController_;
     GuiRuntimeState runtimeState_{};

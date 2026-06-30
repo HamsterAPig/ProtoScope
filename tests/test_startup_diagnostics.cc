@@ -1,0 +1,109 @@
+#include "test_helpers.hpp"
+#include "test_registry.hpp"
+
+#include "protoscope/app/startup_diagnostics.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <vector>
+
+namespace {
+
+std::string readTextFile(const std::filesystem::path& path)
+{
+    std::ifstream in(path);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+} // namespace
+
+void test_startup_diagnostics_parse_diagnose_arg()
+{
+    const auto parsed = protoscope::app::parseStartupCommandLine(std::vector<std::string>{"ProtoScope.exe", "--diagnose"});
+    protoscope::tests::require(parsed.diagnose, "--diagnose should enable startup diagnostics");
+}
+
+void test_startup_diagnostics_parse_default_off()
+{
+    const auto parsed = protoscope::app::parseStartupCommandLine(std::vector<std::string>{"ProtoScope.exe"});
+    protoscope::tests::require(!parsed.diagnose, "diagnostics should be disabled by default");
+}
+
+void test_startup_diagnostics_log_path_fallback()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-paths");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    const auto blockedExeLogs = root / "blocked-exe-logs";
+    {
+        std::ofstream out(blockedExeLogs);
+        out << "not a directory";
+    }
+
+    const auto localLogs = root / "local" / "ProtoScope" / "logs";
+    const auto tempLogs = root / "temp" / "ProtoScope" / "logs";
+    const auto selected = protoscope::app::selectDiagnosticsLogPath(
+        {.exeLogDir = blockedExeLogs, .localAppDataLogDir = localLogs, .tempLogDir = tempLogs},
+        "startup.log");
+
+    protoscope::tests::require(selected.path == localLogs / "startup.log", "log path should fall back to LocalAppData");
+    protoscope::tests::require(selected.attempts.size() == 3, "all path candidates should be recorded");
+    protoscope::tests::require(!selected.attempts[0].writable, "blocked exe log directory should fail probe");
+    protoscope::tests::require(selected.attempts[1].writable, "LocalAppData log directory should be writable");
+}
+
+void test_startup_diagnostics_report_omits_config_body()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-report");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    const auto configPath = root / "config" / "protoscope.yaml";
+    std::filesystem::create_directories(configPath.parent_path());
+    {
+        std::ofstream out(configPath);
+        out << "communication:\n  serial:\n    port: COM_SECRET\n";
+    }
+
+    protoscope::app::StartupDiagnostics diagnostics({
+        .diagnose = true,
+        .version = "test-version",
+        .exePath = root / "ProtoScope.exe",
+        .currentDir = root,
+        .configPath = configPath,
+        .protocolRootDir = root / "protocols",
+        .protocolSelectedDir = root / "protocols" / "templates" / "default_protocol",
+        .pathCandidates =
+            {
+                .exeLogDir = root / "logs",
+                .localAppDataLogDir = root / "local" / "ProtoScope" / "logs",
+                .tempLogDir = root / "temp" / "ProtoScope" / "logs",
+            },
+    });
+    diagnostics.logEvent("test", "只写环境和路径");
+
+    const auto report = readTextFile(diagnostics.logPath());
+    protoscope::tests::require(report.find("expected_config_path:") != std::string::npos,
+                               "report should include expected config path");
+    protoscope::tests::require(report.find("communication:") == std::string::npos,
+                               "report should not include YAML config body");
+    protoscope::tests::require(report.find("COM_SECRET") == std::string::npos,
+                               "report should not include config values");
+}
+
+void test_startup_diagnostics_fatal_message_includes_stage_reason_log()
+{
+    const auto message = protoscope::app::formatStartupFatalMessage({
+        .stage = "GuiRuntime::initialize",
+        .reason = "GLFW 初始化失败",
+        .logPath = "C:/Temp/ProtoScope/logs/startup.log",
+    });
+
+    protoscope::tests::require(message.find("GuiRuntime::initialize") != std::string::npos,
+                               "fatal message should include stage");
+    protoscope::tests::require(message.find("GLFW 初始化失败") != std::string::npos,
+                               "fatal message should include reason");
+    protoscope::tests::require(message.find("startup.log") != std::string::npos,
+                               "fatal message should include log path");
+}
