@@ -89,7 +89,6 @@ private:
     void writeHeader();
     void writePathAttempts();
     void writeLine(std::string_view line);
-    void writeWritableProbe(std::string_view name, const std::filesystem::path& directory);
     [[nodiscard]] double elapsedMs() const;
 
     StartupDiagnosticsOptions options_;

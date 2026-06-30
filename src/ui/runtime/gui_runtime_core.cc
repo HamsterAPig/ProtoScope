@@ -235,6 +235,11 @@ namespace {
         return out.str();
     }
 
+    const char* d3d11DriverTypeName(bool warp)
+    {
+        return warp ? "warp" : "hardware";
+    }
+
     class D3D11GlfwBackend final : public GuiRendererBackend {
     public:
         explicit D3D11GlfwBackend(bool warp) : warp_(warp) {}
@@ -243,10 +248,22 @@ namespace {
 
         bool initialize(GLFWwindow* window, app::StartupDiagnosticsSink* diagnostics) override
         {
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent(
+                    "D3D11",
+                    "开始初始化后端, backend=" + std::string(name()) +
+                        ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
+                        lastGlfwErrorText("glfwCreateWindow state"));
+            }
+
             const HWND hwnd = glfwGetWin32Window(window);
             if (hwnd == nullptr) {
                 if (diagnostics != nullptr) {
-                    diagnostics->logFailure("D3D11", "无法获取 GLFW Win32 窗口句柄");
+                    diagnostics->logFailure(
+                        "D3D11",
+                        "无法获取 GLFW Win32 窗口句柄, backend=" + std::string(name()) +
+                            ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
+                            lastGlfwErrorText("glfwCreateWindow state"));
                 }
                 return false;
             }
@@ -279,8 +296,11 @@ namespace {
                                                                  &deviceContext_);
             if (FAILED(result)) {
                 if (diagnostics != nullptr) {
-                    diagnostics->logFailure("D3D11CreateDeviceAndSwapChain",
-                                            hresultText("D3D11 device/swap chain 创建失败", result));
+                    diagnostics->logFailure(
+                        "D3D11CreateDeviceAndSwapChain",
+                        "backend=" + std::string(name()) + ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
+                            hresultText("D3D11 device/swap chain 创建失败", result) + ", " +
+                            lastGlfwErrorText("glfwCreateWindow state"));
                 }
                 return false;
             }
@@ -288,7 +308,9 @@ namespace {
                 return false;
             }
             if (diagnostics != nullptr) {
-                diagnostics->logEvent("D3D11", std::string("渲染后端初始化成功: ") + name());
+                diagnostics->logEvent("D3D11",
+                                      "渲染后端初始化成功, backend=" + std::string(name()) +
+                                          ", driver_type=" + d3d11DriverTypeName(warp_));
             }
             return true;
         }

@@ -17,6 +17,25 @@ std::string readTextFile(const std::filesystem::path& path)
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
+protoscope::app::StartupDiagnosticsOptions makeDiagnosticsOptions(const std::filesystem::path& root, bool diagnose)
+{
+    return {
+        .diagnose = diagnose,
+        .version = "test-version",
+        .exePath = root / "ProtoScope.exe",
+        .currentDir = root,
+        .configPath = root / "config" / "protoscope.yaml",
+        .protocolRootDir = root / "protocols",
+        .protocolSelectedDir = root / "protocols" / "templates" / "default_protocol",
+        .pathCandidates =
+            {
+                .exeLogDir = root / "logs",
+                .localAppDataLogDir = root / "local" / "ProtoScope" / "logs",
+                .tempLogDir = root / "temp" / "ProtoScope" / "logs",
+            },
+    };
+}
+
 } // namespace
 
 void test_startup_diagnostics_parse_diagnose_arg()
@@ -119,6 +138,47 @@ void test_startup_diagnostics_log_path_fallback()
     protoscope::tests::require(selected.attempts[1].writable, "LocalAppData log directory should be writable");
 }
 
+void test_startup_diagnostics_log_failure_no_diagnose_does_not_create_log()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-no-log-failure");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::StartupDiagnostics diagnostics(makeDiagnosticsOptions(root, false));
+    diagnostics.logFailure("test_stage", "test reason");
+
+    std::error_code error;
+    protoscope::tests::require(diagnostics.logPath().empty(), "未启用 diagnose 时 logFailure 不应选择日志路径");
+    protoscope::tests::require(!std::filesystem::exists(root / "logs", error),
+                               "未启用 diagnose 时 logFailure 不应创建 exe logs 目录");
+}
+
+void test_startup_diagnostics_write_crash_no_diagnose_does_not_create_log()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-no-crash");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::StartupDiagnostics diagnostics(makeDiagnosticsOptions(root, false));
+    diagnostics.writeCrash("test crash", 0xC0000005UL);
+
+    std::error_code error;
+    protoscope::tests::require(diagnostics.logPath().empty(), "未启用 diagnose 时 writeCrash 不应选择日志路径");
+    protoscope::tests::require(!std::filesystem::exists(root / "logs", error),
+                               "未启用 diagnose 时 writeCrash 不应创建 exe logs 目录");
+}
+
+void test_startup_diagnostics_log_failure_with_diagnose_writes_stage_reason()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-log-failure");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::StartupDiagnostics diagnostics(makeDiagnosticsOptions(root, true));
+    diagnostics.logFailure("test_stage", "test reason");
+
+    const auto report = readTextFile(diagnostics.logPath());
+    protoscope::tests::require(report.find("[test_stage] FAILED: test reason") != std::string::npos,
+                               "启用 diagnose 时 logFailure 应写入 stage 和 reason");
+}
+
 void test_startup_diagnostics_report_omits_config_body()
 {
     const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-report");
@@ -171,4 +231,20 @@ void test_startup_diagnostics_fatal_message_includes_stage_reason_log()
                                "fatal message should include reason");
     protoscope::tests::require(message.find("startup.log") != std::string::npos,
                                "fatal message should include log path");
+}
+
+void test_startup_diagnostics_fatal_message_omits_empty_log_path()
+{
+    const auto message = protoscope::app::formatStartupFatalMessage({
+        .stage = "GuiRuntime::initialize",
+        .reason = "GLFW 初始化失败",
+        .logPath = {},
+    });
+
+    protoscope::tests::require(message.find("GuiRuntime::initialize") != std::string::npos,
+                               "fatal message should include stage");
+    protoscope::tests::require(message.find("GLFW 初始化失败") != std::string::npos,
+                               "fatal message should include reason");
+    protoscope::tests::require(message.find("诊断日志:") == std::string::npos,
+                               "empty log path should omit diagnostics log field");
 }

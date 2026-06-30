@@ -254,7 +254,9 @@ std::string formatStartupFatalMessage(const StartupFailureInfo& failure)
     out << "ProtoScope 启动失败\n\n";
     out << "阶段: " << failure.stage << '\n';
     out << "原因: " << failure.reason << '\n';
-    out << "诊断日志: " << pathText(failure.logPath) << '\n';
+    if (!failure.logPath.empty()) {
+        out << "诊断日志: " << pathText(failure.logPath) << '\n';
+    }
     return out.str();
 }
 
@@ -321,6 +323,10 @@ void StartupDiagnostics::logEvent(std::string_view stage, std::string_view messa
 
 void StartupDiagnostics::logFailure(std::string_view stage, std::string_view reason)
 {
+    if (!options_.diagnose) {
+        return;
+    }
+
     ensureLogOpen();
 
     std::ostringstream out;
@@ -342,6 +348,10 @@ void StartupDiagnostics::completeStage(std::string_view stage)
 
 void StartupDiagnostics::writeCrash(std::string_view reason, std::optional<unsigned long> exceptionCode)
 {
+    if (!options_.diagnose) {
+        return;
+    }
+
     ensureLogOpen();
 
     std::ostringstream out;
@@ -473,9 +483,6 @@ void StartupDiagnostics::writeHeader()
 
     headerWritten_ = true;
     writePathAttempts();
-    writeWritableProbe("exe_logs", options_.pathCandidates.exeLogDir);
-    writeWritableProbe("local_app_data_logs", options_.pathCandidates.localAppDataLogDir);
-    writeWritableProbe("temp_logs", options_.pathCandidates.tempLogDir);
 }
 
 void StartupDiagnostics::writePathAttempts()
@@ -502,19 +509,6 @@ void StartupDiagnostics::writeLine(std::string_view line)
     if (out.good()) {
         out << line << '\n';
     }
-}
-
-void StartupDiagnostics::writeWritableProbe(std::string_view name, const std::filesystem::path& directory)
-{
-    std::string error;
-    const bool writable = !directory.empty() && probeWritableDirectory(directory, error);
-    std::ostringstream out;
-    out << "writable_probe: " << name << ", path=" << pathText(directory)
-        << ", writable=" << (writable ? "true" : "false");
-    if (!error.empty()) {
-        out << ", error=" << error;
-    }
-    writeLine(out.str());
 }
 
 double StartupDiagnostics::elapsedMs() const

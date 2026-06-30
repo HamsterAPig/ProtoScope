@@ -1057,6 +1057,15 @@ Application::Application() = default;
 bool Application::initialize()
 {
     loggingFacade_.bindDockStore(&dockStore_);
+
+    std::error_code configDirectoryError;
+    std::filesystem::create_directories(configStore_.defaultConfigPath().parent_path(), configDirectoryError);
+    if (configDirectoryError) {
+        const std::string message = "初始化 config 工作目录失败: " + configDirectoryError.message();
+        dockStore_.markDirty(message);
+        loggingFacade_.warn("config", message);
+    }
+
     std::string workspaceError;
     if (!configStore_.ensureDefaultProtocolWorkspace(workspaceError)) {
         dockStore_.markDirty("初始化 protocols 工作目录失败: " + workspaceError);
@@ -1079,7 +1088,7 @@ bool Application::initialize()
         dockStore_.clearDirty("已从 YAML 加载配置");
     } else if (!loaded.error.empty()) {
         dockStore_.markDirty(loaded.error);
-    } else if (workspaceError.empty()) {
+    } else if (workspaceError.empty() && !configDirectoryError) {
         dockStore_.markDirty("未找到配置文件，已使用默认配置");
     }
 
