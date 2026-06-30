@@ -7,11 +7,13 @@
 #include <dbghelp.h>
 #endif
 
+#include <algorithm>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <mutex>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -175,11 +177,55 @@ std::string exceptionCodeText(unsigned long code)
     return out.str();
 }
 
+std::string quoteCommandLineArg(std::string_view arg)
+{
+    if (arg.empty()) {
+        return "\"\"";
+    }
+
+    if (arg.find_first_of(" \t\r\n\"") == std::string_view::npos) {
+        return std::string(arg);
+    }
+
+    std::string quoted;
+    quoted.reserve(arg.size() + 2);
+    quoted.push_back('"');
+    for (const char ch : arg) {
+        if (ch == '"' || ch == '\\') {
+            quoted.push_back('\\');
+        }
+        quoted.push_back(ch);
+    }
+    quoted.push_back('"');
+    return quoted;
+}
+
+std::string commandLineText(const std::vector<std::string>& argv)
+{
+    if (argv.empty()) {
+        return "<empty>";
+    }
+
+    std::ostringstream out;
+    for (std::size_t index = 0; index < argv.size(); ++index) {
+        if (index > 0) {
+            out << ' ';
+        }
+        out << quoteCommandLineArg(argv[index]);
+    }
+    return out.str();
+}
+
 } // namespace
 
 StartupCommandLine parseStartupCommandLine(const int argc, const char* const* argv)
 {
     StartupCommandLine options;
+    options.argv.reserve(static_cast<std::size_t>((std::max)(argc, 0)));
+    for (int index = 0; index < argc; ++index) {
+        options.argv.push_back(argv[index] == nullptr ? std::string{} : std::string(argv[index]));
+    }
+
     for (int index = 1; index < argc; ++index) {
         if (argv[index] == nullptr) {
             continue;
@@ -207,6 +253,7 @@ StartupCommandLine parseStartupCommandLine(const int argc, const char* const* ar
         }
 
         if (rendererValue.has_value()) {
+            options.rendererArgument = std::string(*rendererValue);
             const auto backend = config::parseGuiRendererBackend(*rendererValue);
             if (!backend.has_value()) {
                 options.error = "非法 --renderer 参数值: " + std::string(*rendererValue);
@@ -257,6 +304,9 @@ std::string formatStartupFatalMessage(const StartupFailureInfo& failure)
     if (!failure.logPath.empty()) {
         out << "诊断日志: " << pathText(failure.logPath) << '\n';
     }
+    if (!failure.diagnosticsState.empty()) {
+        out << "诊断状态: " << failure.diagnosticsState << '\n';
+    }
     return out.str();
 }
 
@@ -289,13 +339,12 @@ StartupDiagnostics::StartupDiagnostics(StartupDiagnosticsOptions options)
     if (options_.diagnose) {
         logPath_ = selectDiagnosticsLogPath(options_.pathCandidates, timestampFileName());
         ensureLogOpen();
-        logEvent("process_start", "诊断模式已启用");
     }
 }
 
 StartupDiagnostics::~StartupDiagnostics()
 {
-    if (headerWritten_) {
+    if (options_.diagnose && headerWritten_) {
         logEvent("process_exit", "诊断结束");
     }
 }
@@ -310,7 +359,7 @@ void StartupDiagnostics::setStage(std::string_view stage)
 
 void StartupDiagnostics::logEvent(std::string_view stage, std::string_view message)
 {
-    if (!options_.diagnose && !headerWritten_) {
+    if (!options_.diagnose) {
         return;
     }
     ensureLogOpen();
@@ -319,6 +368,29 @@ void StartupDiagnostics::logEvent(std::string_view stage, std::string_view messa
     out << std::fixed << std::setprecision(3) << elapsedMs() << "ms"
         << " [" << stage << "] " << message;
     writeLine(out.str());
+}
+
+void StartupDiagnostics::logCommandLineParsed(const StartupCommandLine& commandLine)
+{
+    if (!options_.diagnose) {
+        return;
+    }
+
+    const std::string rendererSource = commandLine.rendererArgument.has_value() ? "cli" : "unset";
+    const std::string rendererBackend = commandLine.rendererBackend.has_value()
+                                            ? std::string(config::guiRendererBackendId(*commandLine.rendererBackend))
+                                            : "<unset>";
+    const std::string rendererValue = commandLine.rendererArgument.value_or("<unset>");
+
+    std::ostringstream out;
+    out << "diagnose=" << (commandLine.diagnose ? "true" : "false")
+        << ", renderer_backend=" << rendererBackend << ", renderer_source=" << rendererSource
+        << ", renderer_value=" << rendererValue;
+    if (!commandLine.error.empty()) {
+        out << ", parse_error=" << commandLine.error;
+    }
+    out << ", command_line=" << commandLineText(commandLine.argv);
+    logEvent("command_line_parsed", out.str());
 }
 
 void StartupDiagnostics::logFailure(std::string_view stage, std::string_view reason)
@@ -358,6 +430,10 @@ void StartupDiagnostics::writeCrash(std::string_view reason, std::optional<unsig
     out << "崩溃兜底: " << reason << ", stage=" << currentStage_ << ", thread=" << std::this_thread::get_id();
     if (exceptionCode.has_value()) {
         out << ", exception_code=" << exceptionCodeText(*exceptionCode);
+    }
+    const auto state = logWriteState();
+    if (!state.empty()) {
+        out << ", diagnostics_state=" << state;
     }
     writeLine(out.str());
 }
@@ -441,6 +517,20 @@ const std::string& StartupDiagnostics::currentStage() const
     return currentStage_;
 }
 
+std::string StartupDiagnostics::logWriteState() const
+{
+    if (appendOpenFailureCount_ == 0 && lastAppendOpenError_.empty()) {
+        return {};
+    }
+
+    std::ostringstream out;
+    out << "append_open_failed_count=" << appendOpenFailureCount_;
+    if (!lastAppendOpenError_.empty()) {
+        out << ", last_error=" << lastAppendOpenError_;
+    }
+    return out.str();
+}
+
 void StartupDiagnostics::ensureLogOpen()
 {
     if (headerWritten_) {
@@ -465,6 +555,9 @@ void StartupDiagnostics::writeHeader()
     std::ofstream out(logPath_.path, std::ios::out | std::ios::trunc);
     if (!out.good()) {
         headerWritten_ = true;
+        ++appendOpenFailureCount_;
+        lastAppendOpenError_ = "header_open_failed";
+        appendFailurePending_ = true;
         return;
     }
 
@@ -474,28 +567,42 @@ void StartupDiagnostics::writeHeader()
     out << "diagnose: " << (options_.diagnose ? "true" : "false") << '\n';
     out << "process_arch: " << processArchitecture() << '\n';
     out << "system_arch: " << systemArchitecture() << '\n';
+    out << "selected_log_path: " << pathText(logPath_.path) << '\n';
+    out << "command_line: " << commandLineText(options_.commandLine) << '\n';
     out << "exe_path: " << pathText(options_.exePath) << '\n';
     out << "current_dir: " << pathText(options_.currentDir) << '\n';
     out << "expected_config_path: " << pathText(options_.configPath) << '\n';
     out << "expected_protocol_root: " << pathText(options_.protocolRootDir) << '\n';
     out << "expected_protocol_selected: " << pathText(options_.protocolSelectedDir) << '\n';
-    out.close();
+    // 启动早期最容易崩溃，header、路径探测和 process_start 必须同一次打开写完。
+    writePathAttempts(out);
+    writeProcessStart(out);
+    out.flush();
+    if (!out.good()) {
+        ++appendOpenFailureCount_;
+        lastAppendOpenError_ = "header_flush_failed";
+        appendFailurePending_ = true;
+    }
 
     headerWritten_ = true;
-    writePathAttempts();
 }
 
-void StartupDiagnostics::writePathAttempts()
+void StartupDiagnostics::writePathAttempts(std::ostream& out)
 {
     for (const auto& attempt : logPath_.attempts) {
-        std::ostringstream out;
         out << "log_path_attempt: dir=" << pathText(attempt.directory)
             << ", writable=" << (attempt.writable ? "true" : "false");
         if (!attempt.error.empty()) {
             out << ", error=" << attempt.error;
         }
-        writeLine(out.str());
+        out << '\n';
     }
+}
+
+void StartupDiagnostics::writeProcessStart(std::ostream& out)
+{
+    out << std::fixed << std::setprecision(3) << elapsedMs() << "ms"
+        << " [process_start] 诊断模式已启用\n";
 }
 
 void StartupDiagnostics::writeLine(std::string_view line)
@@ -506,8 +613,28 @@ void StartupDiagnostics::writeLine(std::string_view line)
 
     std::lock_guard lock(g_logMutex);
     std::ofstream out(logPath_.path, std::ios::out | std::ios::app);
-    if (out.good()) {
-        out << line << '\n';
+    if (!out.good()) {
+        ++appendOpenFailureCount_;
+        lastAppendOpenError_ = "append_open_failed";
+        appendFailurePending_ = true;
+        return;
+    }
+
+    if (appendFailurePending_) {
+        out << "append_open_failed: count=" << appendOpenFailureCount_;
+        if (!lastAppendOpenError_.empty()) {
+            out << ", last_error=" << lastAppendOpenError_;
+        }
+        out << '\n';
+        appendFailurePending_ = false;
+    }
+
+    out << line << '\n';
+    out.flush();
+    if (!out.good()) {
+        ++appendOpenFailureCount_;
+        lastAppendOpenError_ = "append_write_failed";
+        appendFailurePending_ = true;
     }
 }
 

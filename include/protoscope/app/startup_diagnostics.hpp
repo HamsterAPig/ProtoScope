@@ -14,7 +14,9 @@ namespace protoscope::app {
 struct StartupCommandLine {
     bool diagnose{false};
     std::optional<config::GuiRendererBackend> rendererBackend;
+    std::optional<std::string> rendererArgument;
     std::string error;
+    std::vector<std::string> argv;
 };
 
 struct DiagnosticsLogPathAttempt {
@@ -37,6 +39,7 @@ struct DiagnosticsPathCandidates {
 struct StartupDiagnosticsOptions {
     bool diagnose{false};
     std::string version{"unknown"};
+    std::vector<std::string> commandLine;
     std::filesystem::path exePath;
     std::filesystem::path currentDir;
     std::filesystem::path configPath;
@@ -49,6 +52,7 @@ struct StartupFailureInfo {
     std::string stage;
     std::string reason;
     std::filesystem::path logPath;
+    std::string diagnosticsState;
 };
 
 class StartupDiagnosticsSink {
@@ -76,6 +80,7 @@ public:
     void logEvent(std::string_view stage, std::string_view message) override;
     void logFailure(std::string_view stage, std::string_view reason) override;
 
+    void logCommandLineParsed(const StartupCommandLine& commandLine);
     void completeStage(std::string_view stage);
     void writeCrash(std::string_view reason, std::optional<unsigned long> exceptionCode = std::nullopt);
     bool writeCrashDump(void* exceptionPointers);
@@ -83,11 +88,13 @@ public:
     [[nodiscard]] bool diagnoseEnabled() const;
     [[nodiscard]] const std::filesystem::path& logPath() const;
     [[nodiscard]] const std::string& currentStage() const;
+    [[nodiscard]] std::string logWriteState() const;
 
 private:
     void ensureLogOpen();
     void writeHeader();
-    void writePathAttempts();
+    void writePathAttempts(std::ostream& out);
+    void writeProcessStart(std::ostream& out);
     void writeLine(std::string_view line);
     [[nodiscard]] double elapsedMs() const;
 
@@ -96,6 +103,9 @@ private:
     std::chrono::steady_clock::time_point startedAt_;
     std::string currentStage_{"process_start"};
     bool headerWritten_{false};
+    std::size_t appendOpenFailureCount_{0};
+    std::string lastAppendOpenError_;
+    bool appendFailurePending_{false};
 };
 
 } // namespace protoscope::app

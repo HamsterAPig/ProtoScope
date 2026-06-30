@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -138,6 +139,34 @@ void test_startup_diagnostics_log_path_fallback()
     protoscope::tests::require(selected.attempts[1].writable, "LocalAppData log directory should be writable");
 }
 
+void test_startup_diagnostics_construct_with_diagnose_writes_process_start()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-process-start");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::StartupDiagnostics diagnostics(makeDiagnosticsOptions(root, true));
+
+    const auto report = readTextFile(diagnostics.logPath());
+    protoscope::tests::require(report.find("[process_start] 诊断模式已启用") != std::string::npos,
+                               "启用 diagnose 后构造函数应立即写入 process_start");
+}
+
+void test_startup_diagnostics_header_writes_selected_path_and_attempts()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-header-attempts");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::StartupDiagnostics diagnostics(makeDiagnosticsOptions(root, true));
+
+    const auto report = readTextFile(diagnostics.logPath());
+    protoscope::tests::require(report.find("selected_log_path:") != std::string::npos,
+                               "header 应写入最终 selected_log_path");
+    protoscope::tests::require(report.find("log_path_attempt: dir=") != std::string::npos,
+                               "header 同一次打开周期应写入 log_path_attempt");
+    protoscope::tests::require(report.find("[process_start]") != std::string::npos,
+                               "header 同一次打开周期应写入 process_start");
+}
+
 void test_startup_diagnostics_log_failure_no_diagnose_does_not_create_log()
 {
     const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-no-log-failure");
@@ -164,6 +193,42 @@ void test_startup_diagnostics_write_crash_no_diagnose_does_not_create_log()
     protoscope::tests::require(diagnostics.logPath().empty(), "未启用 diagnose 时 writeCrash 不应选择日志路径");
     protoscope::tests::require(!std::filesystem::exists(root / "logs", error),
                                "未启用 diagnose 时 writeCrash 不应创建 exe logs 目录");
+}
+
+void test_startup_diagnostics_set_stage_with_diagnose_appends_stage()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-set-stage");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::StartupDiagnostics diagnostics(makeDiagnosticsOptions(root, true));
+    diagnostics.setStage("Application::initialize");
+
+    const auto report = readTextFile(diagnostics.logPath());
+    protoscope::tests::require(report.find("[Application::initialize] 进入启动阶段") != std::string::npos,
+                               "启用 diagnose 时 setStage 应正常追加阶段日志");
+}
+
+void test_startup_diagnostics_command_line_parsed_logs_renderer_cli()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-command-line");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    const auto parsed = protoscope::app::parseStartupCommandLine(
+        std::vector<std::string>{"ProtoScope.exe", "--diagnose", "--renderer", "d3d11"});
+    auto options = makeDiagnosticsOptions(root, true);
+    options.commandLine = parsed.argv;
+    protoscope::app::StartupDiagnostics diagnostics(std::move(options));
+    diagnostics.logCommandLineParsed(parsed);
+
+    const auto report = readTextFile(diagnostics.logPath());
+    protoscope::tests::require(report.find("[command_line_parsed]") != std::string::npos,
+                               "command_line_parsed 应写入诊断日志");
+    protoscope::tests::require(report.find("diagnose=true") != std::string::npos,
+                               "command_line_parsed 应记录 diagnose=true");
+    protoscope::tests::require(report.find("renderer_backend=d3d11") != std::string::npos,
+                               "command_line_parsed 应记录 CLI renderer 值");
+    protoscope::tests::require(report.find("renderer_source=cli") != std::string::npos,
+                               "command_line_parsed 应记录 renderer 来源为 cli");
 }
 
 void test_startup_diagnostics_log_failure_with_diagnose_writes_stage_reason()
