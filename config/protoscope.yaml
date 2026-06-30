@@ -15,6 +15,7 @@ app:
 
 gui:
   show_app_header: false
+  renderer_backend: opengl
   window:
     title: ProtoScope
     width: 1600

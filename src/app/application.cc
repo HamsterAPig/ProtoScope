@@ -1133,6 +1133,7 @@ config::AppConfig Application::captureConfig() const
     }
     captured.performance = runtimeConfig_.performance;
     captured.gui.window = runtimeConfig_.gui.window;
+    captured.gui.rendererBackend = runtimeConfig_.gui.rendererBackend;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;

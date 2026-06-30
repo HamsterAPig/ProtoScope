@@ -2210,6 +2210,8 @@ void test_config_default_roundtrip()
             "游标 FFT 高亮色默认值应为建议 RGBA");
     require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式默认应为 overlay");
+    require(config.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
+            "GUI 渲染后端默认应为 opengl");
     require(config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
             "中文字体默认应只加载常用简中字形");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
@@ -2268,6 +2270,7 @@ void test_config_default_roundtrip()
     config.gui.wave.followMeasurementCursorsOnScroll = true;
     config.gui.wave.cursorFftHighlightRgba = {0.10F, 0.20F, 0.30F, 0.40F};
     config.gui.wave.fullscreenMode = protoscope::config::GuiWaveFullscreenMode::Overlay;
+    config.gui.rendererBackend = protoscope::config::GuiRendererBackend::D3D11Warp;
     config.gui.font.chineseGlyphRange = protoscope::config::GuiFontChineseGlyphRange::Full;
     config.gui.logHistory.transferRawLimit = 11;
     config.gui.logHistory.transferFrameLimit = 22;
@@ -2352,6 +2355,8 @@ void test_config_default_roundtrip()
             "游标 FFT 高亮色 roundtrip 失败");
     require(reloaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式 roundtrip 失败");
+    require(reloaded.config.gui.rendererBackend == protoscope::config::GuiRendererBackend::D3D11Warp,
+            "GUI 渲染后端 roundtrip 失败");
     require(reloaded.config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::Full,
             "中文字体字形范围 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
@@ -2456,6 +2461,8 @@ void test_config_repo_default_yaml_loads()
             "默认配置应读取 worker 低水位");
     require(loaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "源码默认配置应读取 overlay 波形全屏模式");
+    require(loaded.config.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
+            "源码默认配置应读取 opengl 渲染后端");
     require(loaded.config.gui.wave.peakDetectDownsample, "源码默认配置应开启 peak-detect 降采样");
     require(loaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "源码默认配置应开启图例双击展开自动收起");
 }
@@ -2582,6 +2589,7 @@ void test_config_wave_mode_invalid_fallback()
     const auto tempPath = tempRoot.path() / "config.yaml";
     std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
     out << "gui:\n"
+           "  renderer_backend: weird\n"
            "  font:\n"
            "    chinese_glyph_range: weird\n"
            "  wave:\n"
@@ -2617,6 +2625,8 @@ void test_config_wave_mode_invalid_fallback()
             "非法 y_axis_double_click_action 应回退到 fit_visible_channels");
     require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "非法 fullscreen_mode 应回退到 overlay");
+    require(loaded.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
+            "非法 renderer_backend 应回退到 opengl");
     require(loaded.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
             "非法 mouse_y_offset_drag_mode 应回退到 direct");
     require(loaded.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
@@ -3701,6 +3711,12 @@ static const TestCase kAllTests[] = {
     {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
     {"startup_diagnostics_parse_diagnose_arg", &test_startup_diagnostics_parse_diagnose_arg},
     {"startup_diagnostics_parse_default_off", &test_startup_diagnostics_parse_default_off},
+    {"startup_diagnostics_parse_renderer_equals", &test_startup_diagnostics_parse_renderer_equals},
+    {"startup_diagnostics_parse_renderer_space", &test_startup_diagnostics_parse_renderer_space},
+    {"startup_diagnostics_parse_renderer_missing_value", &test_startup_diagnostics_parse_renderer_missing_value},
+    {"startup_diagnostics_parse_renderer_invalid_value", &test_startup_diagnostics_parse_renderer_invalid_value},
+    {"startup_diagnostics_parse_renderer_with_diagnose", &test_startup_diagnostics_parse_renderer_with_diagnose},
+    {"startup_renderer_backend_priority", &test_startup_renderer_backend_priority},
     {"startup_diagnostics_log_path_fallback", &test_startup_diagnostics_log_path_fallback},
     {"startup_diagnostics_report_omits_config_body", &test_startup_diagnostics_report_omits_config_body},
     {"startup_diagnostics_fatal_message_includes_stage_reason_log",

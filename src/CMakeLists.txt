@@ -185,6 +185,10 @@ target_include_directories(protoscope_startup_diagnostics
     PRIVATE
         ${PROJECT_BINARY_DIR}/generated/include
 )
+target_link_libraries(protoscope_startup_diagnostics
+    PUBLIC
+        protoscope_config
+)
 target_compile_features(protoscope_startup_diagnostics PUBLIC cxx_std_20)
 
 add_library(protoscope_app STATIC

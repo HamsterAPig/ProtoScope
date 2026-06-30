@@ -132,6 +132,12 @@ if(PROTOSCOPE_ENABLE_GUI)
         ${PROTOSCOPE_IMGUI_ROOT}/backends/imgui_impl_glfw.cpp
         ${PROTOSCOPE_IMGUI_ROOT}/backends/imgui_impl_opengl3.cpp
     )
+    if(WIN32)
+        target_sources(protoscope_imgui
+            PRIVATE
+                ${PROTOSCOPE_IMGUI_ROOT}/backends/imgui_impl_dx11.cpp
+        )
+    endif()
     target_include_directories(protoscope_imgui
         PUBLIC
             ${PROJECT_SOURCE_DIR}/include
@@ -142,7 +148,7 @@ if(PROTOSCOPE_ENABLE_GUI)
     target_compile_features(protoscope_imgui PUBLIC cxx_std_20)
     if(WIN32)
         target_compile_definitions(protoscope_imgui PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-        target_link_libraries(protoscope_imgui PUBLIC opengl32 imm32 gdi32)
+        target_link_libraries(protoscope_imgui PUBLIC opengl32 imm32 gdi32 d3d11 dxgi d3dcompiler)
         if(MSVC)
             target_link_directories(protoscope_imgui PUBLIC ${PROTOSCOPE_IMGUI_ROOT}/examples/libs/glfw/lib-vc2010-64)
             target_link_libraries(protoscope_imgui PUBLIC glfw3 legacy_stdio_definitions)

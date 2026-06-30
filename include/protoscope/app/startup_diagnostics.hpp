@@ -1,5 +1,7 @@
 #pragma once
 
+#include "protoscope/config/config.hpp"
+
 #include <chrono>
 #include <filesystem>
 #include <optional>
@@ -11,6 +13,8 @@ namespace protoscope::app {
 
 struct StartupCommandLine {
     bool diagnose{false};
+    std::optional<config::GuiRendererBackend> rendererBackend;
+    std::string error;
 };
 
 struct DiagnosticsLogPathAttempt {

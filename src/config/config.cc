@@ -99,6 +99,20 @@ namespace {
         return fallback;
     }
 
+    std::string normalizeRendererBackendText(std::string_view text)
+    {
+        std::string normalized;
+        normalized.reserve(text.size());
+        for (const char ch : text) {
+            if (ch == '-') {
+                normalized.push_back('_');
+                continue;
+            }
+            normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+        return normalized;
+    }
+
     double normalizePerformanceScale(const double scale)
     {
         return scale > 0.0 ? scale : 1.0;
@@ -271,6 +285,12 @@ namespace {
         {GuiFontChineseGlyphRange::Full, "full"},
     }};
 
+    constexpr std::array<EnumNamePair<GuiRendererBackend>, 3> kRendererBackendNames{{
+        {GuiRendererBackend::OpenGL, "opengl"},
+        {GuiRendererBackend::D3D11, "d3d11"},
+        {GuiRendererBackend::D3D11Warp, "d3d11_warp"},
+    }};
+
     LogLevel parseLogLevel(const std::string& value)
     {
         if (value == "warn" || value == "warning") {
@@ -421,6 +441,11 @@ namespace {
     const char* toFontChineseGlyphRangeText(const GuiFontChineseGlyphRange range)
     {
         return enumToText(range, kFontChineseGlyphRangeNames, "simplified_common");
+    }
+
+    const char* toRendererBackendText(const GuiRendererBackend backend)
+    {
+        return enumToText(backend, kRendererBackendNames, "opengl");
     }
 
     double positiveOrFallback(double value, double fallback)
@@ -667,6 +692,10 @@ namespace {
     void loadGuiConfig(const YAML::Node& root, AppConfig& config)
     {
         const auto gui = root["gui"];
+        const auto rendererBackendText =
+            readScalar<std::string>(gui, "renderer_backend", toRendererBackendText(config.gui.rendererBackend));
+        config.gui.rendererBackend =
+            parseGuiRendererBackend(rendererBackendText).value_or(GuiRendererBackend::OpenGL);
         loadGuiWindowConfig(gui, config);
         loadGuiFontConfig(gui, config);
         if (const auto wave = childNode(gui, "wave")) {
@@ -968,6 +997,7 @@ namespace {
     void writeGuiConfig(YAML::Node& root, const AppConfig& config, const AppConfig& scaledDefaults)
     {
         auto gui = root["gui"];
+        gui["renderer_backend"] = toRendererBackendText(config.gui.rendererBackend);
         gui["window"]["title"] = config.gui.window.title;
         gui["window"]["width"] = config.gui.window.width;
         gui["window"]["height"] = config.gui.window.height;
@@ -1153,6 +1183,22 @@ namespace {
         }
     }
 } // namespace
+
+std::optional<GuiRendererBackend> parseGuiRendererBackend(std::string_view value)
+{
+    const auto normalized = normalizeRendererBackendText(value);
+    for (const auto& pair : kRendererBackendNames) {
+        if (pair.name == normalized) {
+            return pair.value;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string_view guiRendererBackendId(const GuiRendererBackend backend)
+{
+    return toRendererBackendText(backend);
+}
 
 ConfigStore::ConfigStore()
     : defaultConfigPath_(embedded::executableDirectory() / "config" / "protoscope.yaml"),

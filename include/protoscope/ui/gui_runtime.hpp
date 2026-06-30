@@ -37,12 +37,21 @@ class IDialogComponent;
 class IDockComponent;
 class IMenuContributor;
 class IUiComponent;
+class GuiRendererBackend;
 class WorkspaceController;
+
+struct GuiRuntimeOptions {
+    config::GuiRendererBackend rendererBackend{config::GuiRendererBackend::OpenGL};
+};
 
 class GuiRuntime {
 public:
     GuiRuntime(app::Application& application,
                const config::ConfigStore& configStore,
+               app::StartupDiagnosticsSink* diagnostics = nullptr);
+    GuiRuntime(app::Application& application,
+               const config::ConfigStore& configStore,
+               GuiRuntimeOptions options,
                app::StartupDiagnosticsSink* diagnostics = nullptr);
     ~GuiRuntime();
 
@@ -326,8 +335,10 @@ private:
 
     app::Application& application_;
     const config::ConfigStore& configStore_;
+    GuiRuntimeOptions options_{};
     app::StartupDiagnosticsSink* startupDiagnostics_{nullptr};
     GLFWwindow* window_{nullptr};
+    std::unique_ptr<GuiRendererBackend> rendererBackend_;
     std::unique_ptr<WorkspaceController> workspaceController_;
     GuiRuntimeState runtimeState_{};
     std::vector<std::unique_ptr<IUiComponent>> uiComponents_;

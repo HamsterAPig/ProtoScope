@@ -67,6 +67,12 @@ struct GuiWindowConfig {
     bool maximized{false};
 };
 
+enum class GuiRendererBackend {
+    OpenGL,
+    D3D11,
+    D3D11Warp,
+};
+
 enum class GuiWaveFullscreenMode {
     Focus,
     Overlay,
@@ -148,6 +154,7 @@ struct GuiFontConfig {
 
 struct GuiConfig {
     GuiWindowConfig window{};
+    GuiRendererBackend rendererBackend{GuiRendererBackend::OpenGL};
     GuiWaveConfig wave{};
     GuiFontConfig font{};
     GuiLogHistoryConfig logHistory{};
@@ -268,5 +275,8 @@ private:
     std::filesystem::path defaultProtocolRootDir_;
     std::filesystem::path defaultProtocolDir_;
 };
+
+std::optional<GuiRendererBackend> parseGuiRendererBackend(std::string_view value);
+std::string_view guiRendererBackendId(GuiRendererBackend backend);
 
 } // namespace protoscope::config

@@ -76,6 +76,10 @@ int runProtoScope(const protoscope::app::StartupCommandLine& commandLine)
     installCrashHandlers(diagnostics);
 
     try {
+        if (!commandLine.error.empty()) {
+            return failStartup(diagnostics, "parseStartupCommandLine", commandLine.error);
+        }
+
         protoscope::app::Application app;
         diagnostics.setStage("Application::initialize");
         if (!app.initialize()) {
@@ -84,8 +88,21 @@ int runProtoScope(const protoscope::app::StartupCommandLine& commandLine)
         }
         diagnostics.completeStage("Application::initialize");
 
+        const auto rendererBackend =
+            commandLine.rendererBackend.value_or(app.runtimeConfig().gui.rendererBackend);
+        const std::string rendererSource = commandLine.rendererBackend.has_value() ? "cli" : "yaml_or_default";
+        diagnostics.logEvent(
+            "GuiRuntime::rendererBackend",
+            "renderer_backend=" + std::string(protoscope::config::guiRendererBackendId(rendererBackend)) +
+                ", source=" + rendererSource);
+        app.logger().info(
+            "main",
+            "GUI 渲染后端: " + std::string(protoscope::config::guiRendererBackendId(rendererBackend)) +
+                " (" + rendererSource + ")");
+
         protoscope::config::ConfigStore configStore;
-        protoscope::ui::GuiRuntime runtime(app, configStore, &diagnostics);
+        protoscope::ui::GuiRuntime runtime(
+            app, configStore, protoscope::ui::GuiRuntimeOptions{.rendererBackend = rendererBackend}, &diagnostics);
         diagnostics.setStage("GuiRuntime::initialize");
         if (!runtime.initialize()) {
             app.logger().error("main", "ProtoScope GUI 初始化失败");

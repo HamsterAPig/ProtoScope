@@ -181,8 +181,38 @@ StartupCommandLine parseStartupCommandLine(const int argc, const char* const* ar
 {
     StartupCommandLine options;
     for (int index = 1; index < argc; ++index) {
-        if (argv[index] != nullptr && std::string_view(argv[index]) == "--diagnose") {
+        if (argv[index] == nullptr) {
+            continue;
+        }
+
+        const std::string_view arg(argv[index]);
+        if (arg == "--diagnose") {
             options.diagnose = true;
+            continue;
+        }
+
+        std::optional<std::string_view> rendererValue;
+        if (arg == "--renderer") {
+            if (index + 1 >= argc || argv[index + 1] == nullptr || std::string_view(argv[index + 1]).starts_with("--")) {
+                options.error = "缺少 --renderer 参数值";
+                continue;
+            }
+            rendererValue = std::string_view(argv[++index]);
+        } else if (arg.starts_with("--renderer=")) {
+            rendererValue = arg.substr(std::string_view("--renderer=").size());
+            if (rendererValue->empty()) {
+                options.error = "缺少 --renderer 参数值";
+                continue;
+            }
+        }
+
+        if (rendererValue.has_value()) {
+            const auto backend = config::parseGuiRendererBackend(*rendererValue);
+            if (!backend.has_value()) {
+                options.error = "非法 --renderer 参数值: " + std::string(*rendererValue);
+                continue;
+            }
+            options.rendererBackend = *backend;
         }
     }
     return options;

@@ -12,6 +12,12 @@ bool GuiRuntime::reloadConfigFromDisk()
     if (!application_.applyConfig(loaded.config)) {
         return false;
     }
+    if (loaded.config.gui.rendererBackend != options_.rendererBackend) {
+        application_.setStatusMessage(
+            "渲染后端配置已更新为 " +
+                std::string(config::guiRendererBackendId(loaded.config.gui.rendererBackend)) + "，重启后生效",
+            false);
+    }
     loadCurrentProtocolWorkspace();
     configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
     auto& configState = application_.docks().configState();

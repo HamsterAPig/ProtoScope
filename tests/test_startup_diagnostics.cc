@@ -29,6 +29,71 @@ void test_startup_diagnostics_parse_default_off()
 {
     const auto parsed = protoscope::app::parseStartupCommandLine(std::vector<std::string>{"ProtoScope.exe"});
     protoscope::tests::require(!parsed.diagnose, "diagnostics should be disabled by default");
+    protoscope::tests::require(!parsed.rendererBackend.has_value(), "renderer should be unset by default");
+}
+
+void test_startup_diagnostics_parse_renderer_equals()
+{
+    const auto parsed =
+        protoscope::app::parseStartupCommandLine(std::vector<std::string>{"ProtoScope.exe", "--renderer=d3d11_warp"});
+    protoscope::tests::require(parsed.rendererBackend == protoscope::config::GuiRendererBackend::D3D11Warp,
+                               "--renderer=value should parse d3d11_warp");
+    protoscope::tests::require(parsed.error.empty(), "valid renderer should not set parse error");
+}
+
+void test_startup_diagnostics_parse_renderer_space()
+{
+    const auto parsed =
+        protoscope::app::parseStartupCommandLine(std::vector<std::string>{"ProtoScope.exe", "--renderer", "D3D11"});
+    protoscope::tests::require(parsed.rendererBackend == protoscope::config::GuiRendererBackend::D3D11,
+                               "--renderer value should parse d3d11 case-insensitively");
+    protoscope::tests::require(parsed.error.empty(), "valid renderer should not set parse error");
+}
+
+void test_startup_diagnostics_parse_renderer_missing_value()
+{
+    const auto parsed =
+        protoscope::app::parseStartupCommandLine(std::vector<std::string>{"ProtoScope.exe", "--renderer"});
+    protoscope::tests::require(!parsed.error.empty(), "missing --renderer value should set parse error");
+}
+
+void test_startup_diagnostics_parse_renderer_invalid_value()
+{
+    const auto parsed =
+        protoscope::app::parseStartupCommandLine(std::vector<std::string>{"ProtoScope.exe", "--renderer=metal"});
+    protoscope::tests::require(!parsed.error.empty(), "invalid --renderer value should set parse error");
+}
+
+void test_startup_diagnostics_parse_renderer_with_diagnose()
+{
+    const auto parsed = protoscope::app::parseStartupCommandLine(
+        std::vector<std::string>{"ProtoScope.exe", "--diagnose", "--renderer", "d3d11-warp"});
+    protoscope::tests::require(parsed.diagnose, "--diagnose should coexist with --renderer");
+    protoscope::tests::require(parsed.rendererBackend == protoscope::config::GuiRendererBackend::D3D11Warp,
+                               "d3d11-warp should normalize to d3d11_warp");
+    protoscope::tests::require(parsed.error.empty(), "valid diagnose + renderer args should not set parse error");
+}
+
+void test_startup_renderer_backend_priority()
+{
+    auto yamlConfig = protoscope::config::AppConfig{};
+    yamlConfig.gui.rendererBackend = protoscope::config::GuiRendererBackend::D3D11;
+
+    const auto noCli = protoscope::app::parseStartupCommandLine(std::vector<std::string>{"ProtoScope.exe"});
+    const auto fromYaml = noCli.rendererBackend.value_or(yamlConfig.gui.rendererBackend);
+    protoscope::tests::require(fromYaml == protoscope::config::GuiRendererBackend::D3D11,
+                               "无 CLI 时应使用 YAML renderer_backend");
+
+    const auto cli = protoscope::app::parseStartupCommandLine(
+        std::vector<std::string>{"ProtoScope.exe", "--renderer=opengl"});
+    const auto fromCli = cli.rendererBackend.value_or(yamlConfig.gui.rendererBackend);
+    protoscope::tests::require(fromCli == protoscope::config::GuiRendererBackend::OpenGL,
+                               "CLI renderer 应覆盖 YAML renderer_backend");
+
+    const auto defaults = protoscope::config::AppConfig{};
+    const auto fromDefault = noCli.rendererBackend.value_or(defaults.gui.rendererBackend);
+    protoscope::tests::require(fromDefault == protoscope::config::GuiRendererBackend::OpenGL,
+                               "无 CLI 且无 YAML 覆盖时应使用默认 opengl");
 }
 
 void test_startup_diagnostics_log_path_fallback()
