@@ -101,6 +101,7 @@ struct GuiWaveConfig {
     bool showAxisLabels{false};
     bool showChannelLegend{true};
     bool showFftLegend{true};
+    bool followMeasurementCursorsOnScroll{false};
     std::array<float, 4> cursorFftHighlightRgba{0.20F, 0.55F, 1.00F, 0.16F};
     GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Overlay};
 };

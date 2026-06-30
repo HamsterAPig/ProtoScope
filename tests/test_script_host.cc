@@ -2202,6 +2202,7 @@ void test_config_default_roundtrip()
     require(config.gui.wave.peakDetectDownsample, "peak-detect 降采样默认应开启");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
+    require(!config.gui.wave.followMeasurementCursorsOnScroll, "测量游标跟随滚动默认应关闭");
     require(std::abs(config.gui.wave.cursorFftHighlightRgba[0] - 0.20F) < 1e-6F &&
                 std::abs(config.gui.wave.cursorFftHighlightRgba[1] - 0.55F) < 1e-6F &&
                 std::abs(config.gui.wave.cursorFftHighlightRgba[2] - 1.00F) < 1e-6F &&
@@ -2264,6 +2265,7 @@ void test_config_default_roundtrip()
     config.gui.wave.peakDetectDownsample = false;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
+    config.gui.wave.followMeasurementCursorsOnScroll = true;
     config.gui.wave.cursorFftHighlightRgba = {0.10F, 0.20F, 0.30F, 0.40F};
     config.gui.wave.fullscreenMode = protoscope::config::GuiWaveFullscreenMode::Overlay;
     config.gui.font.chineseGlyphRange = protoscope::config::GuiFontChineseGlyphRange::Full;
@@ -2342,6 +2344,7 @@ void test_config_default_roundtrip()
     require(!reloaded.config.gui.wave.peakDetectDownsample, "peak-detect 降采样开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showChannelLegend, "波形图例显示开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
+    require(reloaded.config.gui.wave.followMeasurementCursorsOnScroll, "测量游标跟随滚动开关 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[0] - 0.10F) < 1e-6F &&
                 std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[1] - 0.20F) < 1e-6F &&
                 std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[2] - 0.30F) < 1e-6F &&
@@ -2399,6 +2402,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
     config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::ActualValue;
     config.gui.wave.cursorFftHighlightRgba = {0.30F, 0.40F, 0.50F, 0.60F};
+    config.gui.wave.followMeasurementCursorsOnScroll = true;
     config.gui.wave.peakDetectDownsample = false;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
 
@@ -2411,12 +2415,14 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
             "applyToDock 应写入网格每格读数模式");
     require(std::abs(dockStore.waveState().view.cursorFftHighlightRgba[3] - 0.60F) < 1e-6F,
             "applyToDock 应写入游标 FFT 高亮色");
+    require(dockStore.waveState().view.followMeasurementCursorsOnScroll, "applyToDock 应写入测量游标跟随滚动开关");
     require(!dockStore.waveState().view.peakDetectDownsample, "applyToDock 应写入 peak-detect 降采样开关");
     require(!dockStore.waveState().legendOverlay.doubleClickAutoCollapse, "applyToDock 应写入图例双击展开自动收起开关");
 
     dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
     dockStore.waveState().view.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
     dockStore.waveState().view.cursorFftHighlightRgba = {0.70F, 0.60F, 0.50F, 0.40F};
+    dockStore.waveState().view.followMeasurementCursorsOnScroll = false;
     dockStore.waveState().view.peakDetectDownsample = true;
     dockStore.waveState().legendOverlay.doubleClickAutoCollapse = true;
     const auto captured = store.captureFromDock(dockStore);
@@ -2427,6 +2433,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     require(std::abs(captured.gui.wave.cursorFftHighlightRgba[0] - 0.70F) < 1e-6F &&
                 std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
             "captureFromDock 应捕获游标 FFT 高亮色");
+    require(!captured.gui.wave.followMeasurementCursorsOnScroll, "captureFromDock 应捕获测量游标跟随滚动开关");
     require(captured.gui.wave.peakDetectDownsample, "captureFromDock 应捕获 peak-detect 降采样开关");
     require(captured.gui.wave.legendOverlayDoubleClickAutoCollapse, "captureFromDock 应捕获图例双击展开自动收起开关");
 }
@@ -4181,6 +4188,9 @@ static const TestCase kAllTests[] = {
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
     {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
     {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
+    {"wave_measurement_cursors_follow_equal_width_scroll", &test_wave_measurement_cursors_follow_equal_width_scroll},
+    {"wave_measurement_cursor_scroll_refresh_rebinds_by_time",
+     &test_wave_measurement_cursor_scroll_refresh_rebinds_by_time},
     {"wave_cursor_interval_text_by_axis", &test_wave_cursor_interval_text_by_axis},
     {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
     {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},

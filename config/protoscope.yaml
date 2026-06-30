@@ -52,6 +52,7 @@ gui:
     show_axis_labels: false
     show_channel_legend: true
     show_fft_legend: true
+    follow_measurement_cursors_on_scroll: false
     cursor_fft_highlight_rgba: [0.20, 0.55, 1.00, 0.16]
   log_history:
     transfer_raw_limit: 10000

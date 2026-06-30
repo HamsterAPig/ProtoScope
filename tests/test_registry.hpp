@@ -249,6 +249,8 @@ void test_wave_fft_cursor_window_resolves_point_counts_and_duration();
 void test_wave_viewport_zoom_modes_and_clamp();
 void test_wave_overview_viewport_normalize();
 void test_wave_cursor_position_in_viewport();
+void test_wave_measurement_cursors_follow_equal_width_scroll();
+void test_wave_measurement_cursor_scroll_refresh_rebinds_by_time();
 void test_wave_cursor_interval_text_by_axis();
 void test_wave_cursor_interval_lock();
 void test_wave_channel_card_width_modes();

@@ -1169,6 +1169,9 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
                            std::optional<std::size_t> splitChannelIndex)
 {
     if (!view.showCursors) {
+        if (!splitChannelIndex.has_value()) {
+            view.measurementCursorReadoutRefreshPending = false;
+        }
         return false;
     }
     clampActiveChannel(view, snapshot.channels.size());
@@ -1177,6 +1180,8 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
     }
 
     const auto& io = ImGui::GetIO();
+    const bool timeRefreshPending =
+        view.measurementCursorReadoutRefreshPending && !splitChannelIndex.has_value();
     bool anyCursorHeld = false;
     for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
         auto& cursor = view.cursors[cursorIndex];
@@ -1230,22 +1235,29 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
             view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
         }
 
-        const double searchY = cursorSearchAnchorY(cursor, cursorReadouts[cursorIndex], snapshot, mousePos.y, held);
-        const bool allowActiveChannelTimeFallback =
-            view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel && !held &&
-            (cursor.channelIndex >= snapshot.channels.size() || cursor.channelIndex != view.measurementChannelIndex) &&
-            view.measurementChannelIndex < snapshot.channels.size() &&
-            !bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay);
-        auto best = findNearestCursorByScope(snapshot,
-                                             displayData,
-                                             view,
-                                             bitLayout,
-                                             cursor.time,
-                                             searchY,
-                                             timeSnapDistance,
-                                             valueSnapDistance,
-                                             allowActiveChannelTimeFallback,
-                                             splitChannelIndex);
+        std::optional<plot::CursorReadout> best;
+        if (timeRefreshPending && !held) {
+            // 核心流程：跟随滚动后的读数刷新不再依赖旧 Y 值，优先按游标时间重新绑定采样点。
+            best = findMeasurementCursorReadoutByTimeRefresh(displayData, view, cursor, timeSnapDistance);
+        } else {
+            const double searchY = cursorSearchAnchorY(cursor, cursorReadouts[cursorIndex], snapshot, mousePos.y, held);
+            const bool allowActiveChannelTimeFallback =
+                view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel && !held &&
+                (cursor.channelIndex >= snapshot.channels.size() ||
+                 cursor.channelIndex != view.measurementChannelIndex) &&
+                view.measurementChannelIndex < snapshot.channels.size() &&
+                !bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay);
+            best = findNearestCursorByScope(snapshot,
+                                            displayData,
+                                            view,
+                                            bitLayout,
+                                            cursor.time,
+                                            searchY,
+                                            timeSnapDistance,
+                                            valueSnapDistance,
+                                            allowActiveChannelTimeFallback,
+                                            splitChannelIndex);
+        }
         if (smartSnap.has_value()) {
             best = smartSnap;
         }
@@ -1299,6 +1311,9 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
                     cursorIndex, *best, snapshot.channels[best->channelIndex], displayData.timeUnit, snapLabel);
             }
         }
+    }
+    if (timeRefreshPending) {
+        view.measurementCursorReadoutRefreshPending = false;
     }
     return anyCursorHeld;
 }
@@ -1828,6 +1843,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
         }
         updateSplitMeasurementResult(view, displayData, result);
     }
+    view.measurementCursorReadoutRefreshPending = false;
     result.plotRendered = true;
     return result;
 }

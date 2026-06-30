@@ -922,6 +922,13 @@ void drawWaveCursorSection(plot::WaveViewState& view)
             "测量浮层", "测", "显示游标间隔、测量通道和读数摘要。", view.showMeasurementOverlay, true)) {
         view.showMeasurementOverlay = !view.showMeasurementOverlay;
     }
+    if (drawAdaptiveToolbarButton(view.followMeasurementCursorsOnScroll ? "游标跟随滚动" : "游标固定时间",
+                                  "随",
+                                  "开启后横向平移主图或概览窗口时，A/B 测量游标保持屏幕相对位置。",
+                                  view.followMeasurementCursorsOnScroll,
+                                  true)) {
+        view.followMeasurementCursorsOnScroll = !view.followMeasurementCursorsOnScroll;
+    }
     const bool smartSnapMode = view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap;
     if (drawAdaptiveToolbarButton(smartSnapMode ? "智能吸附" : "按键吸附",
                                   smartSnapMode ? "智能" : "按键",

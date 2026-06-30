@@ -678,15 +678,18 @@ void test_wave_protocol_state_cursor_extreme_snap_policy()
 {
     protoscope::plot::WaveDockState wave;
     wave.view.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
+    wave.view.followMeasurementCursorsOnScroll = true;
 
     const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
     require(encoded["cursor_extreme_snap_policy"].as<std::string>() == "viewport_zone",
             "协议 UI 状态应写出游标极值吸附策略");
+    require(encoded["follow_measurement_cursors_on_scroll"].as<bool>(), "协议 UI 状态应写出测量游标跟随滚动开关");
 
     protoscope::plot::WaveDockState restored;
     protoscope::ui::decodeWaveProtocolState(encoded, restored);
     require(restored.view.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone,
             "协议 UI 状态应恢复 viewport_zone 策略");
+    require(restored.view.followMeasurementCursorsOnScroll, "协议 UI 状态应恢复测量游标跟随滚动开关");
 
     const auto legacy = YAML::Load("cursor_snap_mode: smart\ncursor_snap_scope: all_channels\n");
     protoscope::plot::WaveDockState legacyRestored;
@@ -694,6 +697,7 @@ void test_wave_protocol_state_cursor_extreme_snap_policy()
     require(
         legacyRestored.view.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform,
         "缺失游标极值吸附策略时应使用 nearest_waveform 默认值");
+    require(!legacyRestored.view.followMeasurementCursorsOnScroll, "缺失跟随滚动开关时应使用关闭默认值");
 }
 
 void test_wave_protocol_state_prefer_waveform_hover_readout_defaults_true()

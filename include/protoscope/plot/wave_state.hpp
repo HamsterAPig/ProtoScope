@@ -163,6 +163,8 @@ struct WaveViewState {
     bool preferWaveformHoverReadout{true};
     WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy{WaveBitDisplayReadoutPolicy::MixedNearest};
     bool showCursors{true};
+    bool followMeasurementCursorsOnScroll{false};
+    bool measurementCursorReadoutRefreshPending{false};
     bool showMeasurementOverlay{true};
     bool glowEnabled{true};
     bool phosphorEnabled{false};

@@ -88,6 +88,8 @@ struct WaveViewport {
     double maxValue{1.0};
 };
 
+struct WaveViewState;
+
 struct WaveDataBounds {
     double minTime{0.0};
     double maxTime{1.0};
@@ -195,6 +197,9 @@ WaveViewport moveViewportByDelta(const WaveViewport& viewport,
                                  const WaveDataBounds& bounds,
                                  double minTimeWidth);
 double cursorTimeInViewport(const WaveViewport& viewport, double ratio);
+bool shiftMeasurementCursorsForViewportScroll(WaveViewState& view,
+                                              const WaveViewport& oldViewport,
+                                              const WaveViewport& newViewport);
 double resolveChannelCardWidth(WaveChannelCardWidthMode mode,
                                double fixedWidth,
                                double adaptiveRatio,

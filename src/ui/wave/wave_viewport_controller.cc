@@ -372,10 +372,12 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
     const bool defaultViewportApplied =
         applyDefaultViewportIfPending(wave, frame.renderBudget, latestTime, minVisibleTimeSpan);
     if (!defaultViewportApplied && latestTime.has_value() && view.autoFollowLatest) {
+        const auto oldViewport = currentViewport(view);
         view.viewMaxTime = *latestTime;
         view.viewMinTime = view.viewMaxTime - view.visibleDuration;
         clampViewportLowerBoundToZero(view);
         view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+        plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, currentViewport(view));
     }
 
     const auto refreshMainDisplayFrame = [&]() {

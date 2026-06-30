@@ -574,6 +574,8 @@ namespace {
         config.gui.wave.showChannelLegend =
             readScalar<bool>(wave, "show_channel_legend", config.gui.wave.showChannelLegend);
         config.gui.wave.showFftLegend = readScalar<bool>(wave, "show_fft_legend", config.gui.wave.showFftLegend);
+        config.gui.wave.followMeasurementCursorsOnScroll = readScalar<bool>(
+            wave, "follow_measurement_cursors_on_scroll", config.gui.wave.followMeasurementCursorsOnScroll);
         config.gui.wave.cursorFftHighlightRgba =
             readFloat4(wave, "cursor_fft_highlight_rgba", config.gui.wave.cursorFftHighlightRgba);
         config.gui.wave.fullscreenMode = parseWaveFullscreenMode(
@@ -901,6 +903,7 @@ namespace {
         gui["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
         gui["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
         gui["wave"]["show_fft_legend"] = config.gui.wave.showFftLegend;
+        gui["wave"]["follow_measurement_cursors_on_scroll"] = config.gui.wave.followMeasurementCursorsOnScroll;
         gui["wave"]["cursor_fft_highlight_rgba"] = makeFloat4Node(config.gui.wave.cursorFftHighlightRgba);
         gui["wave"]["fullscreen_mode"] = toWaveFullscreenModeText(config.gui.wave.fullscreenMode);
     }
@@ -1395,6 +1398,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;
+    wave.followMeasurementCursorsOnScroll = config.gui.wave.followMeasurementCursorsOnScroll;
     wave.cursorFftHighlightRgba = config.gui.wave.cursorFftHighlightRgba;
     waveState.legendOverlay.openMode = config.gui.wave.legendOverlayOpenMode;
     waveState.legendOverlay.doubleClickAutoCollapse = config.gui.wave.legendOverlayDoubleClickAutoCollapse;
@@ -1447,6 +1451,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
     config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;
+    config.gui.wave.followMeasurementCursorsOnScroll = dockStore.waveState().view.followMeasurementCursorsOnScroll;
     config.gui.wave.cursorFftHighlightRgba = dockStore.waveState().view.cursorFftHighlightRgba;
     config.gui.wave.legendOverlayOpenMode = dockStore.waveState().legendOverlay.openMode;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = dockStore.waveState().legendOverlay.doubleClickAutoCollapse;

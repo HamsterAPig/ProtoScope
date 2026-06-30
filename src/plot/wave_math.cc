@@ -892,6 +892,38 @@ double cursorTimeInViewport(const WaveViewport& viewport, double ratio)
     return minTime + (maxTime - minTime) * clampedRatio;
 }
 
+bool shiftMeasurementCursorsForViewportScroll(WaveViewState& view,
+                                              const WaveViewport& oldViewport,
+                                              const WaveViewport& newViewport)
+{
+    if (!view.followMeasurementCursorsOnScroll) {
+        return false;
+    }
+
+    const double oldWidth = oldViewport.maxTime - oldViewport.minTime;
+    const double newWidth = newViewport.maxTime - newViewport.minTime;
+    const double deltaTime = newViewport.minTime - oldViewport.minTime;
+    const double widthScale = (std::max)({std::abs(oldWidth), std::abs(newWidth), 1.0});
+    if (!std::isfinite(oldWidth) || !std::isfinite(newWidth) || !std::isfinite(deltaTime) ||
+        std::abs(oldWidth - newWidth) > widthScale * 1e-9 || std::abs(deltaTime) <= kEpsilon) {
+        return false;
+    }
+
+    bool shifted = false;
+    for (auto& cursor : view.cursors) {
+        if (!cursor.enabled) {
+            continue;
+        }
+        cursor.time += deltaTime;
+        shifted = true;
+    }
+    if (shifted) {
+        // 核心流程：跟随滚动只平移时间；下一帧主图按时间重绑定读数，避免旧 Y 锚点失效。
+        view.measurementCursorReadoutRefreshPending = true;
+    }
+    return shifted;
+}
+
 double resolveChannelCardWidth(WaveChannelCardWidthMode mode,
                                double fixedWidth,
                                double adaptiveRatio,

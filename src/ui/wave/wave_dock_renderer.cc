@@ -664,6 +664,7 @@ bool drawHorizontalSplitter(
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits)
 {
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    const auto oldViewport = currentViewport(view);
     view.viewMinTime = limits.X.Min;
     view.viewMaxTime = limits.X.Max;
     view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
@@ -672,6 +673,7 @@ void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits)
         view.viewMinValue = limits.Y.Min;
         view.viewMaxValue = limits.Y.Max;
     }
+    plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, currentViewport(view));
 }
 
 bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits)
@@ -1133,6 +1135,7 @@ const char* axisSourceName(plot::WaveTimeAxisSource source)
 void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport)
 {
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    const auto oldViewport = currentViewport(view);
     view.viewMinTime = viewport.minTime;
     view.viewMaxTime = viewport.maxTime;
     view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
@@ -1143,6 +1146,7 @@ void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport
     }
     view.autoFollowLatest = false;
     view.forceNextMainPlotLimits = true;
+    plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, currentViewport(view));
 }
 
 plot::WaveViewport currentViewport(const plot::WaveViewState& view)
@@ -1798,10 +1802,12 @@ void WaveDockRenderer::syncWaveViewToLatest()
     }
 
     if (const auto latestTime = latestWaveViewTime(wave)) {
+        const auto oldViewport = currentViewport(wave.view);
         wave.view.viewMaxTime = *latestTime;
         wave.view.viewMinTime = *latestTime - wave.view.visibleDuration;
         clampWaveViewLowerBoundToZero(wave.view);
         wave.view.centerTime = 0.5 * (wave.view.viewMinTime + wave.view.viewMaxTime);
+        plot::shiftMeasurementCursorsForViewportScroll(wave.view, oldViewport, currentViewport(wave.view));
         if (!wave.view.lockVerticalRange && !wave.view.initialized) {
             wave.view.viewMinValue = wave.view.manualVerticalMin;
             wave.view.viewMaxValue = wave.view.manualVerticalMax;

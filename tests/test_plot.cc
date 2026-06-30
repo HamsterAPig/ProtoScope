@@ -3322,6 +3322,118 @@ void test_wave_cursor_position_in_viewport()
             "游标快捷定位比例应夹紧到右边界");
 }
 
+void test_wave_measurement_cursors_follow_equal_width_scroll()
+{
+    const protoscope::plot::WaveViewport oldViewport{
+        .minTime = 10.0,
+        .maxTime = 20.0,
+        .minValue = -1.0,
+        .maxValue = 1.0,
+    };
+    const protoscope::plot::WaveViewport scrolledViewport{
+        .minTime = 14.0,
+        .maxTime = 24.0,
+        .minValue = -1.0,
+        .maxValue = 1.0,
+    };
+
+    protoscope::plot::WaveViewState view;
+    view.cursors[0].time = 12.0;
+    view.cursors[1].time = 18.0;
+    view.cursors[0].enabled = true;
+    view.cursors[1].enabled = true;
+    require(!protoscope::plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, scrolledViewport),
+            "默认关闭时，视口横向平移不应移动测量游标");
+    require(!view.measurementCursorReadoutRefreshPending, "默认关闭时不应请求游标读数刷新");
+    require(std::abs(view.cursors[0].time - 12.0) < 1e-12 && std::abs(view.cursors[1].time - 18.0) < 1e-12,
+            "默认关闭时 A/B 游标时间应保持固定");
+
+    view.followMeasurementCursorsOnScroll = true;
+    require(protoscope::plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, scrolledViewport),
+            "开启后等宽横向平移应移动测量游标");
+    require(view.measurementCursorReadoutRefreshPending, "等宽横向平移后应请求按时间刷新游标读数");
+    require(std::abs(view.cursors[0].time - 16.0) < 1e-12 && std::abs(view.cursors[1].time - 22.0) < 1e-12,
+            "开启后 A/B 游标应同步移动同样时间偏移");
+    require(std::abs((view.cursors[1].time - view.cursors[0].time) - 6.0) < 1e-12,
+            "游标跟随平移后 delta 时间应保持不变");
+
+    const protoscope::plot::WaveViewport zoomedViewport{
+        .minTime = 14.0,
+        .maxTime = 22.0,
+        .minValue = -1.0,
+        .maxValue = 1.0,
+    };
+    view.measurementCursorReadoutRefreshPending = false;
+    require(!protoscope::plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, zoomedViewport),
+            "视口宽度变化时不应移动测量游标");
+    require(!view.measurementCursorReadoutRefreshPending, "视口宽度变化时不应请求游标读数刷新");
+    require(std::abs(view.cursors[0].time - 16.0) < 1e-12 && std::abs(view.cursors[1].time - 22.0) < 1e-12,
+            "缩放类视口变化不应重定位游标");
+
+    view.measurementCursorReadoutRefreshPending = false;
+    view.cursors[0].enabled = false;
+    view.cursors[0].time = 30.0;
+    view.cursors[1].time = 40.0;
+    require(protoscope::plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, scrolledViewport),
+            "至少一个游标启用时等宽横向平移应返回已处理");
+    require(view.measurementCursorReadoutRefreshPending, "存在已启用游标移动时应请求游标读数刷新");
+    require(std::abs(view.cursors[0].time - 30.0) < 1e-12, "未启用游标不应移动");
+    require(std::abs(view.cursors[1].time - 44.0) < 1e-12, "已启用游标应继续跟随横向平移");
+
+    view.measurementCursorReadoutRefreshPending = false;
+    view.cursors[1].enabled = false;
+    require(!protoscope::plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, scrolledViewport),
+            "没有已启用游标时不应报告已处理");
+    require(!view.measurementCursorReadoutRefreshPending, "没有已启用游标时不应请求游标读数刷新");
+}
+
+void test_wave_measurement_cursor_scroll_refresh_rebinds_by_time()
+{
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 11.0, .value = 1000.0}, {.time = 12.0, .value = 1010.0}},
+        .actualValues = {1000.0, 1010.0},
+    });
+
+    protoscope::plot::WaveViewState view;
+    view.followMeasurementCursorsOnScroll = true;
+    view.cursors[0] = {.enabled = true, .channelIndex = 0, .time = 1.0, .value = 0.0};
+    view.cursors[1] = {.enabled = true, .channelIndex = 0, .time = 2.0, .value = 0.0};
+
+    const protoscope::plot::WaveViewport oldViewport{
+        .minTime = 0.0,
+        .maxTime = 2.0,
+        .minValue = -1.0,
+        .maxValue = 1.0,
+    };
+    const protoscope::plot::WaveViewport scrolledViewport{
+        .minTime = 10.0,
+        .maxTime = 12.0,
+        .minValue = -1.0,
+        .maxValue = 1.0,
+    };
+    require(protoscope::plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, scrolledViewport),
+            "等宽滚动应移动 A/B 游标");
+    require(view.measurementCursorReadoutRefreshPending, "等宽滚动后应等待刷新读数");
+
+    const auto oldYSearch = protoscope::plot::findNearestDisplayPoint(displayData, view.cursors[0].time, 0.0, 0.2, 0.1);
+    require(!oldYSearch.has_value(), "新窗口波形值远离旧 Y 值时，普通 Y+time 查找应失败");
+
+    const auto left =
+        protoscope::ui::findMeasurementCursorReadoutByTimeRefresh(displayData, view, view.cursors[0], 0.2);
+    const auto right =
+        protoscope::ui::findMeasurementCursorReadoutByTimeRefresh(displayData, view, view.cursors[1], 0.2);
+    require(left.has_value() && right.has_value(), "按时间刷新应恢复 A/B readout");
+    require(std::abs((right->time - left->time) - 1.0) < 1e-12, "按时间刷新后 delta 时间应保持滚动前间隔");
+    require(std::abs(left->value - 1000.0) < 1e-9 && std::abs(right->value - 1010.0) < 1e-9,
+            "按时间刷新应读取滚动后窗口的新波形值");
+
+    const auto measurement = protoscope::ui::measureDisplayWindow(displayData, 0, left->time, right->time);
+    require(measurement.valid, "A/B readout 恢复后测量统计应有效");
+    require(measurement.sampleCount == 2, "测量统计应覆盖 A/B 区间样本");
+    require(std::abs(measurement.peakToPeak - 10.0) < 1e-9, "测量统计应基于滚动后的采样值");
+}
+
 void test_wave_cursor_interval_text_by_axis()
 {
     const protoscope::plot::CursorReadout left{

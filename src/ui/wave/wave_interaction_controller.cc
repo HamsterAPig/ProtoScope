@@ -709,6 +709,28 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
     return plot::findNearestDisplayByTimeAcrossChannels(displayData, time, maxTimeDistance);
 }
 
+std::optional<plot::CursorReadout> findMeasurementCursorReadoutByTimeRefresh(
+    const plot::WaveDisplayData& displayData,
+    const plot::WaveViewState& view,
+    const plot::WaveCursorState& cursor,
+    double maxTimeDistance,
+    std::optional<std::size_t> forcedChannelIndex)
+{
+    if (forcedChannelIndex.has_value()) {
+        return plot::findNearestDisplayByTime(displayData, *forcedChannelIndex, cursor.time, maxTimeDistance);
+    }
+
+    if (cursor.channelIndex < displayData.channels.size()) {
+        const auto currentChannel =
+            plot::findNearestDisplayByTime(displayData, cursor.channelIndex, cursor.time, maxTimeDistance);
+        if (currentChannel.has_value()) {
+            return currentChannel;
+        }
+    }
+
+    return findNearestDisplayByScope(displayData, view, cursor.time, maxTimeDistance);
+}
+
 std::vector<std::size_t> waveformCursorChannelsByScope(const plot::WaveSnapshot& snapshot,
                                                        const plot::WaveDisplayData& displayData,
                                                        const plot::WaveViewState& view,

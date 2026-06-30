@@ -362,6 +362,12 @@ std::optional<plot::CursorReadout> findNearestDisplayByScope(const plot::WaveDis
                                                              const plot::WaveViewState& view,
                                                              double time,
                                                              double maxTimeDistance);
+std::optional<plot::CursorReadout> findMeasurementCursorReadoutByTimeRefresh(
+    const plot::WaveDisplayData& displayData,
+    const plot::WaveViewState& view,
+    const plot::WaveCursorState& cursor,
+    double maxTimeDistance,
+    std::optional<std::size_t> forcedChannelIndex = std::nullopt);
 int splitCursorDragId(std::size_t channelIndex, std::size_t cursorIndex);
 std::optional<plot::CursorReadout> findNearestCursorByScope(
     const plot::WaveSnapshot& snapshot,
