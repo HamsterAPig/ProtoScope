@@ -161,8 +161,11 @@ struct WaveViewState {
     bool showFftLegend{true};
     bool showHoverReadout{true};
     bool preferWaveformHoverReadout{true};
+    bool showCursorIntersectionReadouts{false};
     WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy{WaveBitDisplayReadoutPolicy::MixedNearest};
     bool showCursors{true};
+    bool followMeasurementCursorsOnScroll{false};
+    bool measurementCursorReadoutRefreshPending{false};
     bool showMeasurementOverlay{true};
     bool glowEnabled{true};
     bool phosphorEnabled{false};

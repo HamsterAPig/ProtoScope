@@ -454,8 +454,8 @@ namespace {
         const float rowHeight = ImGui::GetFrameHeight();
         const float buttonAreaHeight =
             (std::max)(rowHeight, toolbarHeight - style.ScrollbarSize - style.ChildBorderSize * 2.0F);
-        const float offsetY = style.ChildBorderSize +
-                              (std::max)(0.0F, std::floor((buttonAreaHeight - rowHeight) * 0.5F));
+        const float offsetY =
+            style.ChildBorderSize + (std::max)(0.0F, std::floor((buttonAreaHeight - rowHeight) * 0.5F));
         ImGui::SetCursorPosY(offsetY);
         ImGui::AlignTextToFramePadding();
 
@@ -515,6 +515,13 @@ namespace {
         if (drawTopToolbarButton("B", view.cursors[1].enabled, "显示或隐藏 B 游标。")) {
             view.cursors[1].enabled = !view.cursors[1].enabled;
         }
+        ImGui::SameLine();
+        ImGui::PushID("cursor_intersection_readouts");
+        if (drawTopToolbarButton(
+                "交点", view.showCursorIntersectionReadouts, "显示或隐藏可见普通曲线通道上的 A/B 游标交点读数。")) {
+            view.showCursorIntersectionReadouts = !view.showCursorIntersectionReadouts;
+        }
+        ImGui::PopID();
         ImGui::SameLine();
         if (drawTopToolbarButton(
                 view.cursorIntervalLocked ? "锁定" : "间隔", view.cursorIntervalLocked, "锁定 A/B 游标间隔。")) {
@@ -664,6 +671,7 @@ bool drawHorizontalSplitter(
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits)
 {
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    const auto oldViewport = currentViewport(view);
     view.viewMinTime = limits.X.Min;
     view.viewMaxTime = limits.X.Max;
     view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
@@ -672,6 +680,7 @@ void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits)
         view.viewMinValue = limits.Y.Min;
         view.viewMaxValue = limits.Y.Max;
     }
+    plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, currentViewport(view));
 }
 
 bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits)
@@ -1133,6 +1142,7 @@ const char* axisSourceName(plot::WaveTimeAxisSource source)
 void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport)
 {
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    const auto oldViewport = currentViewport(view);
     view.viewMinTime = viewport.minTime;
     view.viewMaxTime = viewport.maxTime;
     view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
@@ -1143,6 +1153,7 @@ void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport
     }
     view.autoFollowLatest = false;
     view.forceNextMainPlotLimits = true;
+    plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, currentViewport(view));
 }
 
 plot::WaveViewport currentViewport(const plot::WaveViewState& view)
@@ -1616,12 +1627,12 @@ void drawWaveContentComponents(WaveComponentSet& components, WaveContext& contex
         "##wave_content", ImVec2(context.contentWidth, context.availableHeight), false, ImGuiWindowFlags_NoScrollbar);
     const ImVec2 contentPos = ImGui::GetWindowPos();
     context.measurementSafeRightX = resolveMeasurementSafeRightX(contentPos.x,
-                                                                  context.contentWidth,
-                                                                  context.wave.toolsCollapsed,
-                                                                  context.wave.toolsExpandedWidth,
-                                                                  context.wave.minToolsExpandedWidth,
-                                                                  context.wave.maxToolsExpandedWidth,
-                                                                  context.wave.contentToolsSplitterWidth);
+                                                                 context.contentWidth,
+                                                                 context.wave.toolsCollapsed,
+                                                                 context.wave.toolsExpandedWidth,
+                                                                 context.wave.minToolsExpandedWidth,
+                                                                 context.wave.maxToolsExpandedWidth,
+                                                                 context.wave.contentToolsSplitterWidth);
     const bool cursorSplitMode = isCursorSplitFftMode(context.view);
     if (!cursorSplitMode) {
         components.overview.draw(context);
@@ -1798,10 +1809,12 @@ void WaveDockRenderer::syncWaveViewToLatest()
     }
 
     if (const auto latestTime = latestWaveViewTime(wave)) {
+        const auto oldViewport = currentViewport(wave.view);
         wave.view.viewMaxTime = *latestTime;
         wave.view.viewMinTime = *latestTime - wave.view.visibleDuration;
         clampWaveViewLowerBoundToZero(wave.view);
         wave.view.centerTime = 0.5 * (wave.view.viewMinTime + wave.view.viewMaxTime);
+        plot::shiftMeasurementCursorsForViewportScroll(wave.view, oldViewport, currentViewport(wave.view));
         if (!wave.view.lockVerticalRange && !wave.view.initialized) {
             wave.view.viewMinValue = wave.view.manualVerticalMin;
             wave.view.viewMaxValue = wave.view.manualVerticalMax;

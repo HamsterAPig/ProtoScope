@@ -493,6 +493,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 1.0, .offset = 0.0});
     waveA.view.showHoverReadout = false;
     waveA.view.preferWaveformHoverReadout = false;
+    waveA.view.showCursorIntersectionReadouts = true;
     waveA.view.sampleFrequencyHz = 2048.0;
     waveA.view.sampleFrequencyInput = "2048";
     waveA.view.fft.enabled = true;
@@ -545,6 +546,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveB.buffer.configureChannels(1);
     waveB.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = 1.0, .offset = 0.0});
     waveB.view.showHoverReadout = true;
+    waveB.view.showCursorIntersectionReadouts = false;
     waveB.view.sampleFrequencyHz = 512.0;
     waveB.view.sampleFrequencyInput = "512";
     waveB.channelOverrides.resize(1);
@@ -601,6 +603,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredA.legendCollapsed, "proto_a 应恢复自己的图例折叠状态");
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
     require(!restoredA.view.preferWaveformHoverReadout, "proto_a 应恢复自己的悬浮读数优先级策略");
+    require(restoredA.view.showCursorIntersectionReadouts, "proto_a 应恢复自己的游标交点读数开关");
     require(restoredA.analysisMarkers.size() == 1 && restoredA.analysisMarkers[0].label == "标记A",
             "proto_a 应恢复自己的分析标记");
 
@@ -616,6 +619,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredBSpec->label == "总线B", "不同协议不应串用 proto_a 标签");
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
+    require(!restoredB.view.showCursorIntersectionReadouts, "不同协议不应串用 proto_a 游标交点读数开关");
     require(!restoredB.view.fft.enabled, "不同协议不应串用 proto_a FFT 开关");
     require(restoredB.view.fft.displayMode == protoscope::plot::WaveFftDisplayMode::FullSpectrum,
             "不同协议应保留默认完整频谱显示模式");
@@ -653,9 +657,9 @@ void test_wave_protocol_state_hidden_channel_indices_roundtrip_and_legacy_labels
 
     const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
     require(encoded["hidden_channel_indices"].IsSequence(), "协议 UI 状态应写出隐藏通道 index 列表");
-    require(encoded["hidden_channel_indices"].size() == 1U &&
-                encoded["hidden_channel_indices"][0].as<std::size_t>() == 1,
-            "协议 UI 状态应按 index 写出隐藏通道");
+    require(
+        encoded["hidden_channel_indices"].size() == 1U && encoded["hidden_channel_indices"][0].as<std::size_t>() == 1,
+        "协议 UI 状态应按 index 写出隐藏通道");
     require(!encoded["hidden_channel_labels"], "新协议 UI 状态不应再写出旧 hidden_channel_labels 字段");
 
     protoscope::plot::WaveDockState restored;
@@ -678,15 +682,18 @@ void test_wave_protocol_state_cursor_extreme_snap_policy()
 {
     protoscope::plot::WaveDockState wave;
     wave.view.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
+    wave.view.followMeasurementCursorsOnScroll = true;
 
     const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
     require(encoded["cursor_extreme_snap_policy"].as<std::string>() == "viewport_zone",
             "协议 UI 状态应写出游标极值吸附策略");
+    require(encoded["follow_measurement_cursors_on_scroll"].as<bool>(), "协议 UI 状态应写出测量游标跟随滚动开关");
 
     protoscope::plot::WaveDockState restored;
     protoscope::ui::decodeWaveProtocolState(encoded, restored);
     require(restored.view.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone,
             "协议 UI 状态应恢复 viewport_zone 策略");
+    require(restored.view.followMeasurementCursorsOnScroll, "协议 UI 状态应恢复测量游标跟随滚动开关");
 
     const auto legacy = YAML::Load("cursor_snap_mode: smart\ncursor_snap_scope: all_channels\n");
     protoscope::plot::WaveDockState legacyRestored;
@@ -694,6 +701,7 @@ void test_wave_protocol_state_cursor_extreme_snap_policy()
     require(
         legacyRestored.view.cursorExtremeSnapPolicy == protoscope::plot::WaveCursorExtremeSnapPolicy::NearestWaveform,
         "缺失游标极值吸附策略时应使用 nearest_waveform 默认值");
+    require(!legacyRestored.view.followMeasurementCursorsOnScroll, "缺失跟随滚动开关时应使用关闭默认值");
 }
 
 void test_wave_protocol_state_prefer_waveform_hover_readout_defaults_true()
@@ -740,8 +748,7 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
     const auto encoded = protoscope::ui::encodeWaveProtocolState(wave);
     require(encoded["view_mode"].as<std::string>() == "split", "协议 UI 状态应写出分屏视图模式");
     require(encoded["tools_drawer"].as<std::string>() == "view", "协议 UI 状态应写出当前右侧抽屉类型");
-    require(!encoded["legend_overlay"]["expanded"].as<bool>(),
-            "自动收起开启时协议 UI 状态不应写出临时图例展开状态");
+    require(!encoded["legend_overlay"]["expanded"].as<bool>(), "自动收起开启时协议 UI 状态不应写出临时图例展开状态");
     require(encoded["legend_overlay"]["offset_x"].as<float>() == 24.0F, "协议 UI 状态应写出图例 X 偏移");
     require(encoded["channel_overrides"][0]["color_overridden"].as<bool>(), "协议 UI 状态应写出颜色覆盖标记");
     require(encoded["channel_overrides"][0]["color"].size() == 4U, "协议 UI 状态应写出 RGBA 颜色");
@@ -766,13 +773,11 @@ void test_wave_protocol_state_view_mode_legend_overlay_and_color_override()
     wave.legendOverlay.doubleClickAutoCollapse = false;
     wave.legendOverlay.expanded = true;
     const auto compatEncoded = protoscope::ui::encodeWaveProtocolState(wave);
-    require(compatEncoded["legend_overlay"]["expanded"].as<bool>(),
-            "自动收起关闭时协议 UI 状态应兼容写出图例展开状态");
+    require(compatEncoded["legend_overlay"]["expanded"].as<bool>(), "自动收起关闭时协议 UI 状态应兼容写出图例展开状态");
     protoscope::plot::WaveDockState compatRestored;
     compatRestored.legendOverlay.doubleClickAutoCollapse = false;
     protoscope::ui::decodeWaveProtocolState(compatEncoded, compatRestored);
-    require(compatRestored.legendOverlay.expanded,
-            "自动收起关闭时协议 UI 状态应兼容恢复图例展开状态");
+    require(compatRestored.legendOverlay.expanded, "自动收起关闭时协议 UI 状态应兼容恢复图例展开状态");
 
     const auto legacy = YAML::Load("view_mode: unknown\n");
     protoscope::plot::WaveDockState legacyRestored;

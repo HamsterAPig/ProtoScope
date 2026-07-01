@@ -450,6 +450,35 @@ namespace {
         return ImVec2(plotPos.x + clampedX, plotPos.y + clampedY);
     }
 
+    bool windowBelongsToLegendOverlay(const ImGuiWindow* window, const ImGuiWindow* legendWindow)
+    {
+        if (window == nullptr || legendWindow == nullptr) {
+            return false;
+        }
+
+        const ImGuiWindow* legendRoot =
+            legendWindow->RootWindowPopupTree != nullptr ? legendWindow->RootWindowPopupTree : legendWindow;
+        return window == legendWindow || window == legendRoot || window->RootWindow == legendRoot ||
+               window->RootWindowPopupTree == legendRoot;
+    }
+
+    bool legendOverlayPopupOpen(const ImGuiWindow* legendWindow)
+    {
+        if (legendWindow == nullptr || GImGui == nullptr) {
+            return false;
+        }
+
+        const ImGuiContext& context = *GImGui;
+        for (const ImGuiPopupData& popup : context.OpenPopupStack) {
+            // 核心边界：只保护图例 overlay/子窗口打开的 popup，避免其他区域的全局弹窗影响图例收起。
+            if (windowBelongsToLegendOverlay(popup.Window, legendWindow) ||
+                windowBelongsToLegendOverlay(popup.RestoreNavWindow, legendWindow)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     ImVec2 compactLegendWindowSize(plot::WaveDockState& wave,
                                    const std::vector<std::size_t>& channels,
                                    const ImVec2& plotSize)
@@ -852,8 +881,10 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                                    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoFocusOnAppearing;
     if (ImGui::Begin("##wave_channel_overlay_legend", nullptr, flags)) {
-        if (layerPolicy == WaveLegendOverlayLayerPolicy::ForceDisplayFront) {
-            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+        ImGuiWindow* legendWindow = ImGui::GetCurrentWindow();
+        bool legendPopupOpen = legendOverlayPopupOpen(legendWindow);
+        if (layerPolicy == WaveLegendOverlayLayerPolicy::ForceDisplayFront && !legendPopupOpen) {
+            ImGui::BringWindowToDisplayFront(legendWindow);
         }
         ImGui::SetWindowFontScale(kLegendOverlayFontScale);
         const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
@@ -888,6 +919,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
         } else {
             drawCompactLegendRows(wave, compactChannels, hasAnalogChannels, windowSize.x);
         }
+        legendPopupOpen = legendPopupOpen || legendOverlayPopupOpen(legendWindow);
 
         if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick && !effectiveExpanded &&
             hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -899,12 +931,13 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
         const bool previousInteractionLocked = wave.legendOverlay.hoverInteractionLocked;
         const bool mouseHeldInLegend = (ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
                                         ImGui::IsMouseDown(ImGuiMouseButton_Right)) &&
-                                       (hovered || previousInteractionLocked ||
+                                       (hovered || legendPopupOpen || previousInteractionLocked ||
                                         (wave.legendOverlay.hoverFloating && mouseInActualWindow));
         const bool activeLegendInteraction =
             ImGui::IsAnyItemActive() &&
-            (hovered || previousInteractionLocked || (wave.legendOverlay.hoverFloating && mouseInActualWindow));
-        wave.legendOverlay.hoverInteractionLocked = mouseHeldInLegend || activeLegendInteraction;
+            (hovered || legendPopupOpen || previousInteractionLocked ||
+             (wave.legendOverlay.hoverFloating && mouseInActualWindow));
+        wave.legendOverlay.hoverInteractionLocked = legendPopupOpen || mouseHeldInLegend || activeLegendInteraction;
 
         if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Hover) {
             if (collapseRequested) {

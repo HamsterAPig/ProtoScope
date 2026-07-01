@@ -37,11 +37,10 @@ const char* zoomSelectionHelpText(const plot::WaveViewState& view)
 
 const char* waveRenderModeLabel(const plot::WaveRenderStats& stats)
 {
-    const std::size_t activeModes = (stats.rawChannelCount > 0 ? 1U : 0U) +
-                                    (stats.peakDownsampleChannelCount > 0 ? 1U : 0U) +
-                                    (stats.envelopeDownsampleChannelCount > 0 ? 1U : 0U) +
-                                    (stats.phosphorChannelCount > 0 ? 1U : 0U) +
-                                    (stats.bitLaneChannelCount > 0 ? 1U : 0U);
+    const std::size_t activeModes =
+        (stats.rawChannelCount > 0 ? 1U : 0U) + (stats.peakDownsampleChannelCount > 0 ? 1U : 0U) +
+        (stats.envelopeDownsampleChannelCount > 0 ? 1U : 0U) + (stats.phosphorChannelCount > 0 ? 1U : 0U) +
+        (stats.bitLaneChannelCount > 0 ? 1U : 0U);
     if (activeModes > 1U) {
         return "混合";
     }
@@ -136,10 +135,14 @@ void addItemHelp(const char* text)
 }
 
 bool drawToolbarActionButton(const char* label, const char* help, const ImVec2& size)
-{ return drawToolbarSectionButton(label, help, false, size); }
+{
+    return drawToolbarSectionButton(label, help, false, size);
+}
 
 bool drawToolbarToggleButton(const char* label, bool active, const char* help, const ImVec2& size)
-{ return drawToolbarSectionButton(label, help, active, size); }
+{
+    return drawToolbarSectionButton(label, help, active, size);
+}
 
 float calcToolbarButtonWidth(const char* label)
 {
@@ -284,10 +287,8 @@ template <typename DrawFn> void drawFlowItem(DrawFn&& drawFn)
 
 template <typename Fn> void drawMeasurementFlowGroup(Fn&& drawContent)
 {
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                        ImVec2(kWaveToolbarButtonGap, kWaveToolbarButtonVerticalGap));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                        ImVec2(kWaveToolbarFramePaddingX, kWaveToolbarFramePaddingY));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(kWaveToolbarButtonGap, kWaveToolbarButtonVerticalGap));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kWaveToolbarFramePaddingX, kWaveToolbarFramePaddingY));
 
     drawContent();
 
@@ -487,7 +488,7 @@ void ensureFftChannelState(plot::WaveDockState& wave)
         const auto oldSize = wave.fftChannelEnabled.size();
         wave.fftChannelEnabled.resize(channelCount, 0);
         if (oldSize == 0 && channelCount > 0) {
-            const auto preferredChannel = (std::min) (wave.view.measurementChannelIndex, channelCount - 1);
+            const auto preferredChannel = (std::min)(wave.view.measurementChannelIndex, channelCount - 1);
             wave.fftChannelEnabled[preferredChannel] = 1;
         }
     }
@@ -545,14 +546,14 @@ void drawFftPointCountControls(plot::WaveDockState& wave)
     if (view.fft.pointCount == plot::WaveFftPointCount::Manual &&
         ImGui::InputInt("手动点数", &manualPointCount, 128, 1024)) {
         // 核心流程：手动 N 强制使用用户输入的点数，样本不足时由 FFT 计算层给出不足提示，不做隐式补零。
-        view.fft.manualPointCount = static_cast<std::size_t>((std::clamp) (manualPointCount, 16, 16384));
+        view.fft.manualPointCount = static_cast<std::size_t>((std::clamp)(manualPointCount, 16, 16384));
         wave.cachedFftKeyValid = false;
     }
 
     int autoMaxPointCount = static_cast<int>(view.fft.autoMaxPointCount);
     if (view.fft.pointCount == plot::WaveFftPointCount::Auto &&
         ImGui::InputInt("Auto 上限", &autoMaxPointCount, 256, 1024)) {
-        view.fft.autoMaxPointCount = static_cast<std::size_t>((std::clamp) (autoMaxPointCount, 256, 16384));
+        view.fft.autoMaxPointCount = static_cast<std::size_t>((std::clamp)(autoMaxPointCount, 256, 16384));
         wave.cachedFftKeyValid = false;
     }
 }
@@ -602,7 +603,7 @@ void drawFftSpectrumOptions(plot::WaveDockState& wave)
     }
     if (view.fft.fundamentalMode == plot::WaveFftFundamentalMode::Manual &&
         ImGui::InputDouble("手动基波 Hz", &view.fft.manualFundamentalHz, 1.0, 10.0, "%.6g")) {
-        view.fft.manualFundamentalHz = (std::max) (0.0, view.fft.manualFundamentalHz);
+        view.fft.manualFundamentalHz = (std::max)(0.0, view.fft.manualFundamentalHz);
         wave.cachedFftKeyValid = false;
     }
 }
@@ -632,7 +633,7 @@ void drawFftChannelSelectionControls(plot::WaveDockState& wave)
         if (drawAdaptiveToolbarButton("仅当前测量通道", "仅当前", "只保留当前激活通道参与 FFT 计算。", false)) {
             std::fill(wave.fftChannelEnabled.begin(), wave.fftChannelEnabled.end(), 0);
             if (!wave.fftChannelEnabled.empty()) {
-                const auto channelIndex = (std::min) (view.measurementChannelIndex, wave.fftChannelEnabled.size() - 1);
+                const auto channelIndex = (std::min)(view.measurementChannelIndex, wave.fftChannelEnabled.size() - 1);
                 wave.fftChannelEnabled[channelIndex] = 1;
             }
             wave.cachedFftKeyValid = false;
@@ -711,11 +712,11 @@ static_assert(std::is_base_of_v<IWaveToolbarSection, WaveFftToolbarSection>,
 
 double normalizeWaveToolbarViewState(plot::WaveViewState& view)
 {
-    const double minVisibleTimeSpan = (std::max) (view.minVisibleTimeSpan, 1e-6);
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     if (view.visibleDuration <= 0.0) {
         view.visibleDuration = minVisibleTimeSpan;
     }
-    view.visibleDuration = (std::max) (view.visibleDuration, minVisibleTimeSpan);
+    view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
     if (view.persistenceWindow <= 0.0) {
         view.persistenceWindow = minVisibleTimeSpan;
     }
@@ -753,6 +754,15 @@ void drawWaveMainControlSection(app::Application& application,
                                   true)) {
         view.showCursors = !view.showCursors;
     }
+    ImGui::PushID("cursor_intersection_readouts");
+    if (drawAdaptiveToolbarButton("游标交点读数",
+                                  "交",
+                                  "开启后在每个可见普通曲线通道上显示 A/B 游标交点最近采样读数。",
+                                  view.showCursorIntersectionReadouts,
+                                  true)) {
+        view.showCursorIntersectionReadouts = !view.showCursorIntersectionReadouts;
+    }
+    ImGui::PopID();
     if (drawAdaptiveToolbarButton("A 到视窗", "A", "仅移动 A 游标到当前主视窗，不改变当前视窗范围。", false, true)) {
         placeCursorInViewport(view, config, displayData, 0, 0.5);
     }
@@ -835,6 +845,16 @@ void drawCollapsedWaveToolbar(app::Application& application,
                                 collapsedButtonSize)) {
         view.showCursors = !view.showCursors;
     }
+    ImGui::PushID("cursor_intersection_readouts");
+    if (drawToolbarToggleButton("交",
+                                view.showCursorIntersectionReadouts,
+                                view.showCursorIntersectionReadouts
+                                    ? "游标交点读数：已开启。点击后隐藏全通道交点采样读数。"
+                                    : "游标交点读数：当前关闭。点击后显示可见普通曲线通道读数。",
+                                collapsedButtonSize)) {
+        view.showCursorIntersectionReadouts = !view.showCursorIntersectionReadouts;
+    }
+    ImGui::PopID();
     if (drawToolbarToggleButton("读",
                                 view.showHoverReadout,
                                 view.showHoverReadout ? "悬停读数：已开启。鼠标靠近曲线时显示最近采样点。点击后关闭。"
@@ -906,14 +926,14 @@ void drawWaveViewSection(plot::WaveViewState& view, double minVisibleTimeSpan)
     ImGui::InputDouble(
         "##visible_duration", &view.visibleDuration, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
     addItemHelp("当前主视图横向可见时间范围，单位与波形时间轴一致。");
-    view.visibleDuration = (std::max) (view.visibleDuration, minVisibleTimeSpan);
+    view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
 
     ImGui::TextUnformatted("最小可视跨度");
     ImGui::SetNextItemWidth(-1.0F);
     ImGui::InputDouble("##min_visible_span", &view.minVisibleTimeSpan, 0.001, 0.01, "%.6f");
     addItemHelp("限制横向缩放的最小时长，防止缩放到过小范围。");
-    view.minVisibleTimeSpan = (std::max) (view.minVisibleTimeSpan, 1e-6);
-    view.visibleDuration = (std::max) (view.visibleDuration, view.minVisibleTimeSpan);
+    view.minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    view.visibleDuration = (std::max)(view.visibleDuration, view.minVisibleTimeSpan);
 }
 
 void drawWaveCursorSection(plot::WaveViewState& view)
@@ -921,6 +941,22 @@ void drawWaveCursorSection(plot::WaveViewState& view)
     if (drawAdaptiveToolbarButton(
             "测量浮层", "测", "显示游标间隔、测量通道和读数摘要。", view.showMeasurementOverlay, true)) {
         view.showMeasurementOverlay = !view.showMeasurementOverlay;
+    }
+    ImGui::PushID("cursor_intersection_readouts");
+    if (drawAdaptiveToolbarButton("游标交点读数",
+                                  "交",
+                                  "开启后在每个可见普通曲线通道上显示 A/B 游标交点最近采样读数。",
+                                  view.showCursorIntersectionReadouts,
+                                  true)) {
+        view.showCursorIntersectionReadouts = !view.showCursorIntersectionReadouts;
+    }
+    ImGui::PopID();
+    if (drawAdaptiveToolbarButton(view.followMeasurementCursorsOnScroll ? "游标跟随滚动" : "游标固定时间",
+                                  "随",
+                                  "开启后横向平移主图或概览窗口时，A/B 测量游标保持屏幕相对位置。",
+                                  view.followMeasurementCursorsOnScroll,
+                                  true)) {
+        view.followMeasurementCursorsOnScroll = !view.followMeasurementCursorsOnScroll;
     }
     const bool smartSnapMode = view.cursorSnapMode == plot::WaveCursorSnapMode::SmartSnap;
     if (drawAdaptiveToolbarButton(smartSnapMode ? "智能吸附" : "按键吸附",
@@ -962,7 +998,7 @@ void drawWaveMeasurementSection(plot::WaveViewState& view)
     if (view.referenceMode == plot::WaveMeasurementReferenceMode::Channel) {
         int referenceIndex = static_cast<int>(view.referenceChannelIndex);
         if (ImGui::InputInt("参考通道##reference_channel_input", &referenceIndex, 1, 1)) {
-            view.referenceChannelIndex = static_cast<std::size_t>((std::max) (0, referenceIndex));
+            view.referenceChannelIndex = static_cast<std::size_t>((std::max)(0, referenceIndex));
         }
         addItemHelp("通道序号从 0 开始；无效或时间点不匹配时误差项显示 N/A。");
     } else {
@@ -974,8 +1010,7 @@ void drawWaveMeasurementSection(plot::WaveViewState& view)
 
 void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
 {
-    if (drawAdaptiveToolbarButton(
-            "辉光 Glow", "辉", "开启当前可见波形的恒定亮度多层描边。", view.glowEnabled, true)) {
+    if (drawAdaptiveToolbarButton("辉光 Glow", "辉", "开启当前可见波形的恒定亮度多层描边。", view.glowEnabled, true)) {
         view.glowEnabled = !view.glowEnabled;
     }
     if (drawAdaptiveToolbarButton(
@@ -1017,8 +1052,8 @@ void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
         ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::Combo("##phosphor_backend", &backendIndex, backendItems, IM_ARRAYSIZE(backendItems))) {
             view.phosphorBackend = backendIndex == 1   ? plot::WavePhosphorBackend::GpuFbo
-                                  : backendIndex == 2 ? plot::WavePhosphorBackend::CpuTexture
-                                                      : plot::WavePhosphorBackend::Auto;
+                                   : backendIndex == 2 ? plot::WavePhosphorBackend::CpuTexture
+                                                       : plot::WavePhosphorBackend::Auto;
         }
         addItemHelp("Auto 优先尝试 GPU FBO，失败时回退 CPU Texture。");
 
@@ -1036,7 +1071,7 @@ void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
         ImGui::InputDouble(
             "##persistence_window", &view.persistenceWindow, minVisibleTimeSpan, minVisibleTimeSpan * 10.0, "%.6f");
         addItemHelp("余辉累积纹理在跟随模式下按该窗口衰减；暂停或浏览历史时冻结。");
-        view.persistenceWindow = (std::max) (view.persistenceWindow, minVisibleTimeSpan);
+        view.persistenceWindow = (std::max)(view.persistenceWindow, minVisibleTimeSpan);
 
         if (view.phosphorMode == plot::WavePhosphorMode::Triggered) {
             ImGui::TextUnformatted("触发边沿");
@@ -1064,13 +1099,12 @@ void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
             ImGui::SetNextItemWidth(-1.0F);
             const double triggerPositionMin = 0.0;
             const double triggerPositionMax = 1.0;
-            ImGui::SliderScalar(
-                "##trigger_position",
-                ImGuiDataType_Double,
-                &view.triggerPositionRatio,
-                &triggerPositionMin,
-                &triggerPositionMax,
-                "%.2f");
+            ImGui::SliderScalar("##trigger_position",
+                                ImGuiDataType_Double,
+                                &view.triggerPositionRatio,
+                                &triggerPositionMin,
+                                &triggerPositionMax,
+                                "%.2f");
             addItemHelp("触发点在当前可视宽度中的相对位置，0.20 表示靠左 20%。");
         }
     }
@@ -1079,7 +1113,7 @@ void drawWaveRenderSection(plot::WaveViewState& view, double minVisibleTimeSpan)
     ImGui::SetNextItemWidth(-1.0F);
     ImGui::InputDouble("##downsample_multiplier", &view.downsampleStartMultiplier, 0.1, 0.5, "%.2f");
     addItemHelp("可见点数超过渲染预算一定倍数后开始降采样，数值越大越晚触发。");
-    view.downsampleStartMultiplier = (std::max) (view.downsampleStartMultiplier, 1.0);
+    view.downsampleStartMultiplier = (std::max)(view.downsampleStartMultiplier, 1.0);
 
     ImGui::TextUnformatted("辉光强度");
     ImGui::SetNextItemWidth(-1.0F);
@@ -1119,11 +1153,11 @@ void drawWaveOverviewSection(plot::WaveViewState& view)
         return;
     }
 
-    int maxSamplesInput = static_cast<int>((std::min) (view.overviewMaxSamples, static_cast<std::size_t>(1000000)));
+    int maxSamplesInput = static_cast<int>((std::min)(view.overviewMaxSamples, static_cast<std::size_t>(1000000)));
     ImGui::TextUnformatted("概览最大样本/通道");
     ImGui::SetNextItemWidth(-1.0F);
     if (ImGui::InputInt("##overview_max_samples", &maxSamplesInput, 1000, 10000)) {
-        view.overviewMaxSamples = static_cast<std::size_t>((std::max) (0, maxSamplesInput));
+        view.overviewMaxSamples = static_cast<std::size_t>((std::max)(0, maxSamplesInput));
     }
     addItemHelp("限制概览图每个通道保留的最大样本数，避免概览绘制过重。");
 }

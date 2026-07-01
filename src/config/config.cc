@@ -99,6 +99,20 @@ namespace {
         return fallback;
     }
 
+    std::string normalizeRendererBackendText(std::string_view text)
+    {
+        std::string normalized;
+        normalized.reserve(text.size());
+        for (const char ch : text) {
+            if (ch == '-') {
+                normalized.push_back('_');
+                continue;
+            }
+            normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+        return normalized;
+    }
+
     double normalizePerformanceScale(const double scale)
     {
         return scale > 0.0 ? scale : 1.0;
@@ -271,6 +285,12 @@ namespace {
         {GuiFontChineseGlyphRange::Full, "full"},
     }};
 
+    constexpr std::array<EnumNamePair<GuiRendererBackend>, 3> kRendererBackendNames{{
+        {GuiRendererBackend::OpenGL, "opengl"},
+        {GuiRendererBackend::D3D11, "d3d11"},
+        {GuiRendererBackend::D3D11Warp, "d3d11_warp"},
+    }};
+
     LogLevel parseLogLevel(const std::string& value)
     {
         if (value == "warn" || value == "warning") {
@@ -421,6 +441,11 @@ namespace {
     const char* toFontChineseGlyphRangeText(const GuiFontChineseGlyphRange range)
     {
         return enumToText(range, kFontChineseGlyphRangeNames, "simplified_common");
+    }
+
+    const char* toRendererBackendText(const GuiRendererBackend backend)
+    {
+        return enumToText(backend, kRendererBackendNames, "opengl");
     }
 
     double positiveOrFallback(double value, double fallback)
@@ -574,6 +599,8 @@ namespace {
         config.gui.wave.showChannelLegend =
             readScalar<bool>(wave, "show_channel_legend", config.gui.wave.showChannelLegend);
         config.gui.wave.showFftLegend = readScalar<bool>(wave, "show_fft_legend", config.gui.wave.showFftLegend);
+        config.gui.wave.followMeasurementCursorsOnScroll = readScalar<bool>(
+            wave, "follow_measurement_cursors_on_scroll", config.gui.wave.followMeasurementCursorsOnScroll);
         config.gui.wave.cursorFftHighlightRgba =
             readFloat4(wave, "cursor_fft_highlight_rgba", config.gui.wave.cursorFftHighlightRgba);
         config.gui.wave.fullscreenMode = parseWaveFullscreenMode(
@@ -665,6 +692,10 @@ namespace {
     void loadGuiConfig(const YAML::Node& root, AppConfig& config)
     {
         const auto gui = root["gui"];
+        const auto rendererBackendText =
+            readScalar<std::string>(gui, "renderer_backend", toRendererBackendText(config.gui.rendererBackend));
+        config.gui.rendererBackend =
+            parseGuiRendererBackend(rendererBackendText).value_or(GuiRendererBackend::OpenGL);
         loadGuiWindowConfig(gui, config);
         loadGuiFontConfig(gui, config);
         if (const auto wave = childNode(gui, "wave")) {
@@ -901,6 +932,7 @@ namespace {
         gui["wave"]["show_axis_labels"] = config.gui.wave.showAxisLabels;
         gui["wave"]["show_channel_legend"] = config.gui.wave.showChannelLegend;
         gui["wave"]["show_fft_legend"] = config.gui.wave.showFftLegend;
+        gui["wave"]["follow_measurement_cursors_on_scroll"] = config.gui.wave.followMeasurementCursorsOnScroll;
         gui["wave"]["cursor_fft_highlight_rgba"] = makeFloat4Node(config.gui.wave.cursorFftHighlightRgba);
         gui["wave"]["fullscreen_mode"] = toWaveFullscreenModeText(config.gui.wave.fullscreenMode);
     }
@@ -965,6 +997,7 @@ namespace {
     void writeGuiConfig(YAML::Node& root, const AppConfig& config, const AppConfig& scaledDefaults)
     {
         auto gui = root["gui"];
+        gui["renderer_backend"] = toRendererBackendText(config.gui.rendererBackend);
         gui["window"]["title"] = config.gui.window.title;
         gui["window"]["width"] = config.gui.window.width;
         gui["window"]["height"] = config.gui.window.height;
@@ -1150,6 +1183,22 @@ namespace {
         }
     }
 } // namespace
+
+std::optional<GuiRendererBackend> parseGuiRendererBackend(std::string_view value)
+{
+    const auto normalized = normalizeRendererBackendText(value);
+    for (const auto& pair : kRendererBackendNames) {
+        if (pair.name == normalized) {
+            return pair.value;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string_view guiRendererBackendId(const GuiRendererBackend backend)
+{
+    return toRendererBackendText(backend);
+}
 
 ConfigStore::ConfigStore()
     : defaultConfigPath_(embedded::executableDirectory() / "config" / "protoscope.yaml"),
@@ -1395,6 +1444,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;
+    wave.followMeasurementCursorsOnScroll = config.gui.wave.followMeasurementCursorsOnScroll;
     wave.cursorFftHighlightRgba = config.gui.wave.cursorFftHighlightRgba;
     waveState.legendOverlay.openMode = config.gui.wave.legendOverlayOpenMode;
     waveState.legendOverlay.doubleClickAutoCollapse = config.gui.wave.legendOverlayDoubleClickAutoCollapse;
@@ -1447,6 +1497,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
     config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;
+    config.gui.wave.followMeasurementCursorsOnScroll = dockStore.waveState().view.followMeasurementCursorsOnScroll;
     config.gui.wave.cursorFftHighlightRgba = dockStore.waveState().view.cursorFftHighlightRgba;
     config.gui.wave.legendOverlayOpenMode = dockStore.waveState().legendOverlay.openMode;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = dockStore.waveState().legendOverlay.doubleClickAutoCollapse;

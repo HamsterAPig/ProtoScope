@@ -1057,6 +1057,15 @@ Application::Application() = default;
 bool Application::initialize()
 {
     loggingFacade_.bindDockStore(&dockStore_);
+
+    std::error_code configDirectoryError;
+    std::filesystem::create_directories(configStore_.defaultConfigPath().parent_path(), configDirectoryError);
+    if (configDirectoryError) {
+        const std::string message = "初始化 config 工作目录失败: " + configDirectoryError.message();
+        dockStore_.markDirty(message);
+        loggingFacade_.warn("config", message);
+    }
+
     std::string workspaceError;
     if (!configStore_.ensureDefaultProtocolWorkspace(workspaceError)) {
         dockStore_.markDirty("初始化 protocols 工作目录失败: " + workspaceError);
@@ -1065,6 +1074,7 @@ bool Application::initialize()
 
     const auto loaded = configStore_.load(configStore_.defaultConfigPath());
     runtimeConfig_ = loaded.config;
+    loadedConfigFromDisk_ = loaded.loadedFromDisk;
     loggingFacade_.applyConfig(loaded.config.logging);
     const bool configApplied = applyConfig(loaded.config);
 
@@ -1079,7 +1089,7 @@ bool Application::initialize()
         dockStore_.clearDirty("已从 YAML 加载配置");
     } else if (!loaded.error.empty()) {
         dockStore_.markDirty(loaded.error);
-    } else if (workspaceError.empty()) {
+    } else if (workspaceError.empty() && !configDirectoryError) {
         dockStore_.markDirty("未找到配置文件，已使用默认配置");
     }
 
@@ -1133,6 +1143,7 @@ config::AppConfig Application::captureConfig() const
     }
     captured.performance = runtimeConfig_.performance;
     captured.gui.window = runtimeConfig_.gui.window;
+    captured.gui.rendererBackend = runtimeConfig_.gui.rendererBackend;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
@@ -1153,6 +1164,11 @@ config::AppConfig Application::captureConfig() const
 const config::AppConfig& Application::runtimeConfig() const
 {
     return runtimeConfig_;
+}
+
+bool Application::loadedConfigFromDisk() const
+{
+    return loadedConfigFromDisk_;
 }
 
 bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool forceReload)
@@ -2595,11 +2611,12 @@ bool Application::exportWaveAnalysisReport(const std::filesystem::path& path, st
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const
 {
     const auto scriptSnapshot = scriptWorker_.snapshot();
+    const auto pendingWorkerRxBytes = scriptWorker_.pendingRxBytes();
     if (rawCaptureReplay_.loaded && rawCaptureReplay_.playing) {
         return nowMs();
     }
     if (!pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || !pendingTransferFrameRows_.empty() ||
-        scriptSnapshot.pendingPlotAppends > 0U || scriptSnapshot.pendingWorkerRxBytes > 0U) {
+        scriptSnapshot.pendingPlotAppends > 0U || pendingWorkerRxBytes > 0U) {
         return nowMs();
     }
     auto nextWakeup = scriptSnapshot.nextWakeupAtMs;
@@ -2670,11 +2687,12 @@ void Application::syncDockState()
         comm.state = transport::TransportState::Closed;
     }
     const auto scriptSnapshot = scriptWorker_.snapshot();
-    comm.pendingRxBytes = pendingRxByteCount() + scriptSnapshot.pendingWorkerRxBytes;
+    const auto pendingWorkerRxBytes = scriptWorker_.pendingRxBytes();
+    comm.pendingRxBytes = pendingRxByteCount() + pendingWorkerRxBytes;
     comm.pendingTransferFrameRows = pendingTransferFrameRows_.size();
     comm.pendingPlotAppends = scriptSnapshot.pendingPlotAppends + pendingScriptPlotAppends_.size();
     comm.rxInputQueueBytes = pendingRxByteCount();
-    comm.parserPendingBytes = scriptSnapshot.pendingWorkerRxBytes;
+    comm.parserPendingBytes = pendingWorkerRxBytes;
     comm.postprocessPendingBatches = 0U;
     comm.luaPendingItems = scriptSnapshot.inputQueueSize;
     comm.uiPendingItems =

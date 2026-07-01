@@ -17,20 +17,20 @@ endif()
 include(${PROJECT_SOURCE_DIR}/3rdparty/cmrc/CMakeRC.cmake)
 
 add_library(elf_static_view_core
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/address_bias.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/export_document.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/expander.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_json.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_utils.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/project.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/project_summary.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/static_address_query.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/elf_symbol_table.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_reader.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/raw_dwarf_reader.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_wrappers.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/ti_coff_object.cpp
-    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/logging/logger.cpp
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/address_bias.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/export_document.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/expander.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_json.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/model_utils.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/project.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/project_summary.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/static_address_query.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/elf_symbol_table.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_reader.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/raw_dwarf_reader.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_wrappers.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/ti_coff_object.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/logging/logger.cc
 )
 target_include_directories(elf_static_view_core
     PUBLIC
@@ -132,6 +132,12 @@ if(PROTOSCOPE_ENABLE_GUI)
         ${PROTOSCOPE_IMGUI_ROOT}/backends/imgui_impl_glfw.cpp
         ${PROTOSCOPE_IMGUI_ROOT}/backends/imgui_impl_opengl3.cpp
     )
+    if(WIN32)
+        target_sources(protoscope_imgui
+            PRIVATE
+                ${PROTOSCOPE_IMGUI_ROOT}/backends/imgui_impl_dx11.cpp
+        )
+    endif()
     target_include_directories(protoscope_imgui
         PUBLIC
             ${PROJECT_SOURCE_DIR}/include
@@ -142,7 +148,7 @@ if(PROTOSCOPE_ENABLE_GUI)
     target_compile_features(protoscope_imgui PUBLIC cxx_std_20)
     if(WIN32)
         target_compile_definitions(protoscope_imgui PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-        target_link_libraries(protoscope_imgui PUBLIC opengl32 imm32 gdi32)
+        target_link_libraries(protoscope_imgui PUBLIC opengl32 imm32 gdi32 d3d11 dxgi d3dcompiler)
         if(MSVC)
             target_link_directories(protoscope_imgui PUBLIC ${PROTOSCOPE_IMGUI_ROOT}/examples/libs/glfw/lib-vc2010-64)
             target_link_libraries(protoscope_imgui PUBLIC glfw3 legacy_stdio_definitions)

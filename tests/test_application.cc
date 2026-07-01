@@ -2034,6 +2034,24 @@ void test_application_loads_protocol_action_templates()
     application.shutdown();
 }
 
+void test_application_initialize_prepares_default_config_and_protocol_dirs()
+{
+    protoscope::config::ConfigStore store;
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    std::error_code error;
+    require(std::filesystem::is_directory(store.defaultConfigPath().parent_path(), error) && !error,
+            "应用初始化应确保默认 config 目录存在");
+
+    const auto selectedProtocolDir = std::filesystem::path(application.captureConfig().protocol.selectedDir);
+    require(std::filesystem::is_regular_file(selectedProtocolDir / "main.lua", error) && !error,
+            "应用初始化应确保默认协议目录和 main.lua 可用");
+
+    application.shutdown();
+}
+
 void test_application_live_raw_capture_trims_to_limit()
 {
     auto transportState = std::make_shared<QueuedEventTransport::State>();

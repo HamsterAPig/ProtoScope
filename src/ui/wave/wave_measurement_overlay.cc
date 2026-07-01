@@ -269,6 +269,46 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
     return waveformReadout;
 }
 
+std::vector<CursorIntersectionReadout> collectCursorIntersectionReadouts(
+    const plot::WaveViewState& view,
+    const plot::WaveSnapshot& snapshot,
+    const plot::WaveDisplayData& displayData,
+    const std::vector<std::size_t>& visibleChannelIndices,
+    double maxTimeDistance)
+{
+    std::vector<CursorIntersectionReadout> readouts;
+    if (!view.showCursorIntersectionReadouts || !view.showCursors || visibleChannelIndices.empty()) {
+        return readouts;
+    }
+
+    for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
+        const auto& cursor = view.cursors[cursorIndex];
+        if (!cursor.enabled) {
+            continue;
+        }
+        for (const std::size_t channelIndex : visibleChannelIndices) {
+            if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
+                continue;
+            }
+            if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
+                continue;
+            }
+            // 核心流程：交点读数按游标时间找最近采样点，和现有 hover/游标读数保持一致，不做插值。
+            const auto readout =
+                plot::findNearestDisplayByTime(displayData, channelIndex, cursor.time, maxTimeDistance);
+            if (!readout.has_value()) {
+                continue;
+            }
+            readouts.push_back({
+                .cursorIndex = cursorIndex,
+                .cursorTime = cursor.time,
+                .readout = *readout,
+            });
+        }
+    }
+    return readouts;
+}
+
 bool bitLaneMeasurementActive(const plot::WaveViewState& view)
 {
     return view.activeBitLane.active;
@@ -402,13 +442,8 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByWaveformScope(const plot::Wa
         if (channelIndex >= snapshot.channels.size() || bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
             return std::nullopt;
         }
-        return findSmartCursorSnapForChannel(displayData,
-                                             channelIndex,
-                                             time,
-                                             mouseValue,
-                                             limits,
-                                             maxTimeDistance,
-                                             view.cursorExtremeSnapPolicy);
+        return findSmartCursorSnapForChannel(
+            displayData, channelIndex, time, mouseValue, limits, maxTimeDistance, view.cursorExtremeSnapPolicy);
     }
 
     if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
@@ -457,13 +492,8 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveDispla
                                                           std::optional<std::size_t> forcedChannelIndex)
 {
     if (forcedChannelIndex.has_value()) {
-        return findSmartCursorSnapForChannel(displayData,
-                                             *forcedChannelIndex,
-                                             time,
-                                             mouseValue,
-                                             limits,
-                                             maxTimeDistance,
-                                             view.cursorExtremeSnapPolicy);
+        return findSmartCursorSnapForChannel(
+            displayData, *forcedChannelIndex, time, mouseValue, limits, maxTimeDistance, view.cursorExtremeSnapPolicy);
     }
 
     if (view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel) {
@@ -616,6 +646,30 @@ void drawCursorAnnotation(std::size_t cursorIndex,
                        formatMetricText(readout.time, std::string(timeUnit).c_str()).c_str(),
                        channel.label.c_str(),
                        readout.value);
+}
+
+void drawCursorIntersectionReadouts(const std::vector<CursorIntersectionReadout>& readouts,
+                                    const plot::WaveSnapshot& snapshot)
+{
+    for (std::size_t index = 0; index < readouts.size(); ++index) {
+        const auto& entry = readouts[index];
+        if (entry.readout.channelIndex >= snapshot.channels.size()) {
+            continue;
+        }
+        const auto& channel = snapshot.channels[entry.readout.channelIndex];
+        const float yOffset = entry.cursorIndex == 0 ? -18.0F : 18.0F;
+        const float xOffset = 10.0F + static_cast<float>(index % 3U) * 4.0F;
+        ImPlot::Annotation(entry.cursorTime,
+                           entry.readout.displayValue,
+                           ImVec4(1.0F, 1.0F, 1.0F, 0.86F),
+                           ImVec2(xOffset, yOffset),
+                           true,
+                           "%c %s\n%.6g %s",
+                           entry.cursorIndex == 0 ? 'A' : 'B',
+                           channel.label.c_str(),
+                           entry.readout.value,
+                           channel.unit.c_str());
+    }
 }
 
 void drawCursorIntervalHint(const plot::CursorReadout& left,

@@ -25,6 +25,7 @@ protocols:
       show_hover_readout: true
       prefer_waveform_hover_readout: true
       show_cursors: true
+      follow_measurement_cursors_on_scroll: false
       show_measurement_overlay: true
       glow_enabled: true
       phosphor_enabled: false

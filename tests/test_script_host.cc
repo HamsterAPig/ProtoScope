@@ -2202,6 +2202,7 @@ void test_config_default_roundtrip()
     require(config.gui.wave.peakDetectDownsample, "peak-detect 降采样默认应开启");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
+    require(!config.gui.wave.followMeasurementCursorsOnScroll, "测量游标跟随滚动默认应关闭");
     require(std::abs(config.gui.wave.cursorFftHighlightRgba[0] - 0.20F) < 1e-6F &&
                 std::abs(config.gui.wave.cursorFftHighlightRgba[1] - 0.55F) < 1e-6F &&
                 std::abs(config.gui.wave.cursorFftHighlightRgba[2] - 1.00F) < 1e-6F &&
@@ -2209,6 +2210,8 @@ void test_config_default_roundtrip()
             "游标 FFT 高亮色默认值应为建议 RGBA");
     require(config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式默认应为 overlay");
+    require(config.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
+            "GUI 渲染后端默认应为 opengl");
     require(config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
             "中文字体默认应只加载常用简中字形");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
@@ -2223,7 +2226,14 @@ void test_config_default_roundtrip()
     require(config.gui.realtimeBacklog.rawFirstBacklogWarnBytes == 32U * 1024U * 1024U,
             "raw-first backlog 默认告警阈值应为 32MiB");
     require(config.gui.realtimeBacklog.derivedBacklogDegradeEnabled, "派生 UI backlog 默认应允许降级");
-    require(config.receive.transportReadBufferBytes == 64U * 1024U, "transport 读缓冲默认应为 64KiB");
+    require(config.gui.realtimeBacklog.rxChunkBytesPerPump == 4096U, "实时 backlog RX pump 默认应为 4096 字节");
+    require(config.gui.realtimeBacklog.plotAppendsPerPump == 128U, "实时 backlog plot append 默认应为 128");
+    require(std::abs(config.gui.realtimeBacklog.pumpMinIntervalMs - 1.0) < 1e-12,
+            "实时 backlog pump 最小间隔默认应为 1ms");
+    require(config.receive.transportReadBufferBytes == 4096U, "transport 读缓冲默认应为 4096 字节");
+    require(config.scripting.workerBatchBytes == 8192U, "worker batch 默认应为 8192 字节");
+    require(std::abs(config.scripting.workerOutputFlushBudgetMs - 2.0) < 1e-12,
+            "worker 输出刷新时间预算默认应为 2ms");
     require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
     require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
     require(config.gui.elfSymbolCombo.autoRefreshSelectedAddress, "ELF 已选地址默认应自动刷新");
@@ -2264,8 +2274,10 @@ void test_config_default_roundtrip()
     config.gui.wave.peakDetectDownsample = false;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
+    config.gui.wave.followMeasurementCursorsOnScroll = true;
     config.gui.wave.cursorFftHighlightRgba = {0.10F, 0.20F, 0.30F, 0.40F};
     config.gui.wave.fullscreenMode = protoscope::config::GuiWaveFullscreenMode::Overlay;
+    config.gui.rendererBackend = protoscope::config::GuiRendererBackend::D3D11Warp;
     config.gui.font.chineseGlyphRange = protoscope::config::GuiFontChineseGlyphRange::Full;
     config.gui.logHistory.transferRawLimit = 11;
     config.gui.logHistory.transferFrameLimit = 22;
@@ -2342,6 +2354,7 @@ void test_config_default_roundtrip()
     require(!reloaded.config.gui.wave.peakDetectDownsample, "peak-detect 降采样开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showChannelLegend, "波形图例显示开关 roundtrip 失败");
     require(!reloaded.config.gui.wave.showFftLegend, "FFT 图例显示开关 roundtrip 失败");
+    require(reloaded.config.gui.wave.followMeasurementCursorsOnScroll, "测量游标跟随滚动开关 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[0] - 0.10F) < 1e-6F &&
                 std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[1] - 0.20F) < 1e-6F &&
                 std::abs(reloaded.config.gui.wave.cursorFftHighlightRgba[2] - 0.30F) < 1e-6F &&
@@ -2349,6 +2362,8 @@ void test_config_default_roundtrip()
             "游标 FFT 高亮色 roundtrip 失败");
     require(reloaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "波形全屏模式 roundtrip 失败");
+    require(reloaded.config.gui.rendererBackend == protoscope::config::GuiRendererBackend::D3D11Warp,
+            "GUI 渲染后端 roundtrip 失败");
     require(reloaded.config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::Full,
             "中文字体字形范围 roundtrip 失败");
     require(reloaded.config.gui.wave.maxRenderPointsPerChannel == 64, "波形每通道渲染点数 roundtrip 失败");
@@ -2399,6 +2414,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
     config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::ActualValue;
     config.gui.wave.cursorFftHighlightRgba = {0.30F, 0.40F, 0.50F, 0.60F};
+    config.gui.wave.followMeasurementCursorsOnScroll = true;
     config.gui.wave.peakDetectDownsample = false;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
 
@@ -2411,12 +2427,14 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
             "applyToDock 应写入网格每格读数模式");
     require(std::abs(dockStore.waveState().view.cursorFftHighlightRgba[3] - 0.60F) < 1e-6F,
             "applyToDock 应写入游标 FFT 高亮色");
+    require(dockStore.waveState().view.followMeasurementCursorsOnScroll, "applyToDock 应写入测量游标跟随滚动开关");
     require(!dockStore.waveState().view.peakDetectDownsample, "applyToDock 应写入 peak-detect 降采样开关");
     require(!dockStore.waveState().legendOverlay.doubleClickAutoCollapse, "applyToDock 应写入图例双击展开自动收起开关");
 
     dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
     dockStore.waveState().view.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
     dockStore.waveState().view.cursorFftHighlightRgba = {0.70F, 0.60F, 0.50F, 0.40F};
+    dockStore.waveState().view.followMeasurementCursorsOnScroll = false;
     dockStore.waveState().view.peakDetectDownsample = true;
     dockStore.waveState().legendOverlay.doubleClickAutoCollapse = true;
     const auto captured = store.captureFromDock(dockStore);
@@ -2427,6 +2445,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     require(std::abs(captured.gui.wave.cursorFftHighlightRgba[0] - 0.70F) < 1e-6F &&
                 std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
             "captureFromDock 应捕获游标 FFT 高亮色");
+    require(!captured.gui.wave.followMeasurementCursorsOnScroll, "captureFromDock 应捕获测量游标跟随滚动开关");
     require(captured.gui.wave.peakDetectDownsample, "captureFromDock 应捕获 peak-detect 降采样开关");
     require(captured.gui.wave.legendOverlayDoubleClickAutoCollapse, "captureFromDock 应捕获图例双击展开自动收起开关");
 }
@@ -2449,6 +2468,8 @@ void test_config_repo_default_yaml_loads()
             "默认配置应读取 worker 低水位");
     require(loaded.config.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "源码默认配置应读取 overlay 波形全屏模式");
+    require(loaded.config.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
+            "源码默认配置应读取 opengl 渲染后端");
     require(loaded.config.gui.wave.peakDetectDownsample, "源码默认配置应开启 peak-detect 降采样");
     require(loaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "源码默认配置应开启图例双击展开自动收起");
 }
@@ -2515,17 +2536,17 @@ scripting:
     const auto loaded = store.load(tempPath).config;
 
     require(std::abs(loaded.performance.scale - 2.0) < 1e-12, "performance.scale 应读取为 2.0");
-    require(loaded.receive.transportReadBufferBytes == 128U * 1024U, "transport 读缓冲缺省值应按 scale 放大");
+    require(loaded.receive.transportReadBufferBytes == 8192U, "transport 读缓冲缺省值应按 scale 放大");
     require(loaded.scripting.workerRxQueueLimitBytes == 128U * 1024U * 1024U, "worker RX 队列缺省值应按 scale 放大");
     require(loaded.scripting.workerMemoryBudgetBytes == 512U * 1024U * 1024U, "worker 内存预算缺省值应按 scale 放大");
     require(loaded.scripting.workerOutputQueueLimit == 131072U, "worker 输出队列缺省值应按 scale 放大");
     require(loaded.scripting.workerBatchBytes == 123U, "显式 batch_bytes 不应被 performance.scale 覆盖");
-    require(std::abs(loaded.scripting.workerOutputFlushBudgetMs - 8.0) < 1e-12,
+    require(std::abs(loaded.scripting.workerOutputFlushBudgetMs - 4.0) < 1e-12,
             "worker 输出刷新时间预算缺省值应按 scale 放大");
-    require(loaded.gui.realtimeBacklog.rxChunkBytesPerPump == 128U * 1024U,
+    require(loaded.gui.realtimeBacklog.rxChunkBytesPerPump == 8192U,
             "实时 backlog RX pump 字节预算缺省值应按 scale 放大");
     require(loaded.gui.realtimeBacklog.transferFrameRowsPerPump == 4000U, "实时 backlog 行预算缺省值应按 scale 放大");
-    require(loaded.gui.realtimeBacklog.plotAppendsPerPump == 8192U,
+    require(loaded.gui.realtimeBacklog.plotAppendsPerPump == 256U,
             "实时 backlog plot append 预算缺省值应按 scale 放大");
     require(loaded.gui.realtimeBacklog.rawFirstBacklogWarnBytes == 64U * 1024U * 1024U,
             "raw-first backlog 告警阈值缺省值应按 scale 放大");
@@ -2575,6 +2596,7 @@ void test_config_wave_mode_invalid_fallback()
     const auto tempPath = tempRoot.path() / "config.yaml";
     std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
     out << "gui:\n"
+           "  renderer_backend: weird\n"
            "  font:\n"
            "    chinese_glyph_range: weird\n"
            "  wave:\n"
@@ -2610,6 +2632,8 @@ void test_config_wave_mode_invalid_fallback()
             "非法 y_axis_double_click_action 应回退到 fit_visible_channels");
     require(loaded.gui.wave.fullscreenMode == protoscope::config::GuiWaveFullscreenMode::Overlay,
             "非法 fullscreen_mode 应回退到 overlay");
+    require(loaded.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
+            "非法 renderer_backend 应回退到 opengl");
     require(loaded.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
             "非法 mouse_y_offset_drag_mode 应回退到 direct");
     require(loaded.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
@@ -3692,6 +3716,40 @@ static const TestCase kAllTests[] = {
     {"crc_known_vectors", &test_crc_known_vectors},
     {"keyboard_shortcut_table_has_no_scope_duplicates", &test_keyboard_shortcut_table_has_no_scope_duplicates},
     {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
+    {"startup_diagnostics_parse_diagnose_arg", &test_startup_diagnostics_parse_diagnose_arg},
+    {"startup_diagnostics_parse_default_off", &test_startup_diagnostics_parse_default_off},
+    {"startup_diagnostics_parse_renderer_equals", &test_startup_diagnostics_parse_renderer_equals},
+    {"startup_diagnostics_parse_renderer_space", &test_startup_diagnostics_parse_renderer_space},
+    {"startup_diagnostics_parse_renderer_missing_value", &test_startup_diagnostics_parse_renderer_missing_value},
+    {"startup_diagnostics_parse_renderer_invalid_value", &test_startup_diagnostics_parse_renderer_invalid_value},
+    {"startup_diagnostics_parse_renderer_with_diagnose", &test_startup_diagnostics_parse_renderer_with_diagnose},
+    {"startup_diagnostics_parse_renderer_probe_enables_diagnose",
+     &test_startup_diagnostics_parse_renderer_probe_enables_diagnose},
+    {"startup_renderer_backend_priority", &test_startup_renderer_backend_priority},
+    {"startup_diagnostics_log_path_fallback", &test_startup_diagnostics_log_path_fallback},
+    {"startup_diagnostics_construct_with_diagnose_writes_process_start",
+     &test_startup_diagnostics_construct_with_diagnose_writes_process_start},
+    {"startup_diagnostics_header_writes_selected_path_and_attempts",
+     &test_startup_diagnostics_header_writes_selected_path_and_attempts},
+    {"startup_diagnostics_log_failure_no_diagnose_does_not_create_log",
+     &test_startup_diagnostics_log_failure_no_diagnose_does_not_create_log},
+    {"startup_diagnostics_write_crash_no_diagnose_does_not_create_log",
+     &test_startup_diagnostics_write_crash_no_diagnose_does_not_create_log},
+    {"startup_diagnostics_set_stage_with_diagnose_appends_stage",
+     &test_startup_diagnostics_set_stage_with_diagnose_appends_stage},
+    {"startup_diagnostics_command_line_parsed_logs_renderer_cli",
+     &test_startup_diagnostics_command_line_parsed_logs_renderer_cli},
+    {"startup_diagnostics_append_failure_state_records_stage",
+     &test_startup_diagnostics_append_failure_state_records_stage},
+    {"startup_diagnostics_log_failure_with_diagnose_writes_stage_reason",
+     &test_startup_diagnostics_log_failure_with_diagnose_writes_stage_reason},
+    {"startup_diagnostics_report_omits_config_body", &test_startup_diagnostics_report_omits_config_body},
+    {"startup_diagnostics_fatal_message_includes_stage_reason_log",
+     &test_startup_diagnostics_fatal_message_includes_stage_reason_log},
+    {"startup_diagnostics_fatal_message_includes_diagnostics_state",
+     &test_startup_diagnostics_fatal_message_includes_diagnostics_state},
+    {"startup_diagnostics_fatal_message_omits_empty_log_path",
+     &test_startup_diagnostics_fatal_message_omits_empty_log_path},
     {"config_external_reload_state", &test_config_external_reload_state},
     {"request_trace_filter_and_clear", &test_request_trace_filter_and_clear},
     {"request_trace_csv_export_format", &test_request_trace_csv_export_format},
@@ -4020,6 +4078,8 @@ static const TestCase kAllTests[] = {
     {"application_raw_capture_replay_timeline_steps_events",
      &test_application_raw_capture_replay_timeline_steps_events},
     {"application_loads_protocol_action_templates", &test_application_loads_protocol_action_templates},
+    {"application_initialize_prepares_default_config_and_protocol_dirs",
+     &test_application_initialize_prepares_default_config_and_protocol_dirs},
     {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
     {"application_live_raw_capture_trim_keeps_runtime_profile_event",
      &test_application_live_raw_capture_trim_keeps_runtime_profile_event},
@@ -4181,8 +4241,20 @@ static const TestCase kAllTests[] = {
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
     {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
     {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
+    {"wave_measurement_cursors_follow_equal_width_scroll", &test_wave_measurement_cursors_follow_equal_width_scroll},
+    {"wave_measurement_cursor_scroll_refresh_rebinds_by_time",
+     &test_wave_measurement_cursor_scroll_refresh_rebinds_by_time},
     {"wave_cursor_interval_text_by_axis", &test_wave_cursor_interval_text_by_axis},
     {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
+    {"cursor_intersection_readouts_default_disabled", &test_cursor_intersection_readouts_default_disabled},
+    {"cursor_intersection_readouts_respect_enabled_cursors",
+     &test_cursor_intersection_readouts_respect_enabled_cursors},
+    {"cursor_intersection_readouts_use_visible_waveform_channels_only",
+     &test_cursor_intersection_readouts_use_visible_waveform_channels_only},
+    {"cursor_intersection_readouts_skip_bit_lane_channels", &test_cursor_intersection_readouts_skip_bit_lane_channels},
+    {"cursor_intersection_readouts_respect_max_time_distance",
+     &test_cursor_intersection_readouts_respect_max_time_distance},
+    {"cursor_readout_annotation_requires_hold_or_pin", &test_cursor_readout_annotation_requires_hold_or_pin},
     {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},
     {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
     {"wave_y_axis_double_click_bounds_selects_visible_or_active",

@@ -29,6 +29,7 @@ public:
     bool applyConfig(const config::AppConfig& config);
     config::AppConfig captureConfig() const;
     [[nodiscard]] const config::AppConfig& runtimeConfig() const;
+    [[nodiscard]] bool loadedConfigFromDisk() const;
     bool reloadProtocolDirectory(const std::string& protocolDir, bool forceReload = false);
     bool pumpOnce();
     void shutdown();
@@ -273,6 +274,7 @@ private:
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
     config::AppConfig runtimeConfig_{};
+    bool loadedConfigFromDisk_{false};
     std::optional<config::ProtocolConfig> captureProtocolConfigOverride_;
     logging::LoggingFacade loggingFacade_{};
     scripting::ScriptRuntimeWorker scriptWorker_;

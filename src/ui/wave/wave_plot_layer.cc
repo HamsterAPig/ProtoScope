@@ -30,7 +30,15 @@ std::vector<WaveStatusOverlayItem> buildWaveStatusOverlayItems(const plot::WaveV
     if (!view.showHoverReadout) {
         items.push_back({"读数隐藏"});
     }
+    if (view.showCursorIntersectionReadouts) {
+        items.push_back({"交点读数"});
+    }
     return items;
+}
+
+bool shouldDrawCursorReadoutAnnotation(bool held, bool pinned)
+{
+    return held || pinned;
 }
 
 namespace {
@@ -1169,6 +1177,9 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
                            std::optional<std::size_t> splitChannelIndex)
 {
     if (!view.showCursors) {
+        if (!splitChannelIndex.has_value()) {
+            view.measurementCursorReadoutRefreshPending = false;
+        }
         return false;
     }
     clampActiveChannel(view, snapshot.channels.size());
@@ -1177,6 +1188,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
     }
 
     const auto& io = ImGui::GetIO();
+    const bool timeRefreshPending = view.measurementCursorReadoutRefreshPending && !splitChannelIndex.has_value();
     bool anyCursorHeld = false;
     for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
         auto& cursor = view.cursors[cursorIndex];
@@ -1230,22 +1242,29 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
             view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
         }
 
-        const double searchY = cursorSearchAnchorY(cursor, cursorReadouts[cursorIndex], snapshot, mousePos.y, held);
-        const bool allowActiveChannelTimeFallback =
-            view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel && !held &&
-            (cursor.channelIndex >= snapshot.channels.size() || cursor.channelIndex != view.measurementChannelIndex) &&
-            view.measurementChannelIndex < snapshot.channels.size() &&
-            !bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay);
-        auto best = findNearestCursorByScope(snapshot,
-                                             displayData,
-                                             view,
-                                             bitLayout,
-                                             cursor.time,
-                                             searchY,
-                                             timeSnapDistance,
-                                             valueSnapDistance,
-                                             allowActiveChannelTimeFallback,
-                                             splitChannelIndex);
+        std::optional<plot::CursorReadout> best;
+        if (timeRefreshPending && !held) {
+            // 核心流程：跟随滚动后的读数刷新不再依赖旧 Y 值，优先按游标时间重新绑定采样点。
+            best = findMeasurementCursorReadoutByTimeRefresh(displayData, view, cursor, timeSnapDistance);
+        } else {
+            const double searchY = cursorSearchAnchorY(cursor, cursorReadouts[cursorIndex], snapshot, mousePos.y, held);
+            const bool allowActiveChannelTimeFallback =
+                view.cursorSnapScope == plot::WaveCursorSnapScope::ActiveChannel && !held &&
+                (cursor.channelIndex >= snapshot.channels.size() ||
+                 cursor.channelIndex != view.measurementChannelIndex) &&
+                view.measurementChannelIndex < snapshot.channels.size() &&
+                !bitDisplayEnabled(snapshot.channels[view.measurementChannelIndex].bitDisplay);
+            best = findNearestCursorByScope(snapshot,
+                                            displayData,
+                                            view,
+                                            bitLayout,
+                                            cursor.time,
+                                            searchY,
+                                            timeSnapDistance,
+                                            valueSnapDistance,
+                                            allowActiveChannelTimeFallback,
+                                            splitChannelIndex);
+        }
         if (smartSnap.has_value()) {
             best = smartSnap;
         }
@@ -1276,7 +1295,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
         } else if (!smartSnap.has_value()) {
             view.activeBitLane = {};
         }
-        if (held || hovered || cursor.pinned) {
+        if (shouldDrawCursorReadoutAnnotation(held, cursor.pinned)) {
             if (best->bit.has_value()) {
                 const auto& laneInfo = *best->bit;
                 const auto& bitChannel = snapshot.channels[laneInfo.parentChannelIndex];
@@ -1299,6 +1318,9 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
                     cursorIndex, *best, snapshot.channels[best->channelIndex], displayData.timeUnit, snapLabel);
             }
         }
+    }
+    if (timeRefreshPending) {
+        view.measurementCursorReadoutRefreshPending = false;
     }
     return anyCursorHeld;
 }
@@ -1759,6 +1781,9 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
                 bitLaneDoubleClickConsumed
                     ? false
                     : handleSplitPlotCursors(view, snapshot, displayData, interactionContext, result.cursorReadouts);
+            const auto intersectionReadouts =
+                collectCursorIntersectionReadouts(view, snapshot, displayData, splitChannelIndices, timeSnapDistance);
+            drawCursorIntersectionReadouts(intersectionReadouts, snapshot);
             anyCursorHeld = rowCursorHeld || anyCursorHeld;
             if (plotHovered || (!mouseInsideSplitRegion && channelIndex == view.measurementChannelIndex)) {
                 const double maxCursorReadoutDistance =
@@ -1828,6 +1853,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
         }
         updateSplitMeasurementResult(view, displayData, result);
     }
+    view.measurementCursorReadoutRefreshPending = false;
     result.plotRendered = true;
     return result;
 }
@@ -2021,6 +2047,9 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                                                          smartSnapDistance,
                                                                          valueSnapDistance,
                                                                          result.cursorReadouts);
+    const auto intersectionReadouts = collectCursorIntersectionReadouts(
+        view, frame.snapshot, plotDisplayData, visibleChannelIndices, timeSnapDistance);
+    drawCursorIntersectionReadouts(intersectionReadouts, frame.snapshot);
     const bool userInteracting = plotInteractionActive(anyCursorHeld);
     if (!viewportChangedThisFrame) {
         const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();

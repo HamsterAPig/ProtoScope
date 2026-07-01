@@ -1,8 +1,8 @@
 #include "protoscope/ui/protocol_ui_state.hpp"
 
 #include <algorithm>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -521,8 +521,10 @@ namespace {
         node["show_fft_legend"] = view.showFftLegend;
         node["show_hover_readout"] = view.showHoverReadout;
         node["prefer_waveform_hover_readout"] = view.preferWaveformHoverReadout;
+        node["show_cursor_intersection_readouts"] = view.showCursorIntersectionReadouts;
         node["bit_display_readout_policy"] = bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy);
         node["show_cursors"] = view.showCursors;
+        node["follow_measurement_cursors_on_scroll"] = view.followMeasurementCursorsOnScroll;
         node["show_measurement_overlay"] = view.showMeasurementOverlay;
         node["glow_enabled"] = view.glowEnabled;
         node["phosphor_enabled"] = view.phosphorEnabled;
@@ -607,8 +609,7 @@ namespace {
         YAML::Node legendOverlayNode;
         legendOverlayNode["open_mode"] = legendOverlayOpenModeName(wave.legendOverlay.openMode);
         legendOverlayNode["expanded"] = wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::DoubleClick &&
-                                        !wave.legendOverlay.doubleClickAutoCollapse &&
-                                        wave.legendOverlay.expanded;
+                                        !wave.legendOverlay.doubleClickAutoCollapse && wave.legendOverlay.expanded;
         legendOverlayNode["offset_x"] = wave.legendOverlay.offsetX;
         legendOverlayNode["offset_y"] = wave.legendOverlay.offsetY;
         node["legend_overlay"] = legendOverlayNode;
@@ -708,9 +709,13 @@ namespace {
         view.showHoverReadout = node["show_hover_readout"].as<bool>(view.showHoverReadout);
         view.preferWaveformHoverReadout =
             node["prefer_waveform_hover_readout"].as<bool>(view.preferWaveformHoverReadout);
+        view.showCursorIntersectionReadouts =
+            node["show_cursor_intersection_readouts"].as<bool>(view.showCursorIntersectionReadouts);
         view.bitDisplayReadoutPolicy = parseBitDisplayReadoutPolicy(node["bit_display_readout_policy"].as<std::string>(
             bitDisplayReadoutPolicyName(view.bitDisplayReadoutPolicy)));
         view.showCursors = node["show_cursors"].as<bool>(view.showCursors);
+        view.followMeasurementCursorsOnScroll =
+            node["follow_measurement_cursors_on_scroll"].as<bool>(view.followMeasurementCursorsOnScroll);
         view.showMeasurementOverlay = node["show_measurement_overlay"].as<bool>(view.showMeasurementOverlay);
         if (node["glow_enabled"]) {
             view.glowEnabled = node["glow_enabled"].as<bool>(view.glowEnabled);

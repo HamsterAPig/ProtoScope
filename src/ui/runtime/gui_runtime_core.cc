@@ -1,5 +1,6 @@
 #include "gui_runtime_detail.hpp"
 
+#include "protoscope/app/startup_diagnostics.hpp"
 #include "protoscope/build/version.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
@@ -31,6 +32,11 @@
 #include <implot.h>
 
 #include <cmrc/cmrc.hpp>
+#if defined(_WIN32)
+#include <d3d11.h>
+#include <dxgi.h>
+#include <imgui_impl_dx11.h>
+#endif
 #include <imgui_impl_opengl3.h>
 #include <yaml-cpp/yaml.h>
 
@@ -56,6 +62,7 @@ CMRC_DECLARE(ui_resources);
 #include <cwchar>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <sstream>
 #include <system_error>
@@ -68,6 +75,20 @@ namespace protoscope::ui {
 namespace {
     constexpr float kAppHeaderHeight = 58.0F;
     constexpr float kStatusBarHeight = 44.0F;
+    int gLastGlfwErrorCode = 0;
+    std::string gLastGlfwErrorDescription;
+
+    void startupGlfwErrorCallback(int code, const char* description)
+    {
+        gLastGlfwErrorCode = code;
+        gLastGlfwErrorDescription = description == nullptr ? "unknown" : description;
+    }
+
+    std::string lastGlfwErrorText(std::string_view prefix)
+    {
+        return std::string(prefix) + ", code=" + std::to_string(gLastGlfwErrorCode) + ", message=" +
+               (gLastGlfwErrorDescription.empty() ? "unknown" : gLastGlfwErrorDescription);
+    }
 
     const ImWchar* chineseGlyphRangesForConfig(ImFontAtlas& fonts, config::GuiFontChineseGlyphRange range)
     {
@@ -111,8 +132,500 @@ namespace {
 #endif
 } // namespace
 
-GuiRuntime::GuiRuntime(app::Application& application, const config::ConfigStore& configStore)
-    : application_(application), configStore_(configStore),
+class GuiRendererBackend {
+public:
+    virtual ~GuiRendererBackend() = default;
+
+    virtual const char* name() const = 0;
+    virtual bool initialize(GLFWwindow* window, app::StartupDiagnosticsSink* diagnostics) = 0;
+    virtual bool initializeImGui(GLFWwindow* window, app::StartupDiagnosticsSink* diagnostics) = 0;
+    virtual void newFrame() = 0;
+    virtual void renderDrawData(GLFWwindow* window, ImDrawData* drawData) = 0;
+    virtual void present(GLFWwindow* window) = 0;
+    virtual void shutdownImGui() = 0;
+    virtual void shutdown() = 0;
+};
+
+namespace {
+
+    class OpenGlGlfwBackend final : public GuiRendererBackend {
+    public:
+        const char* name() const override { return "opengl"; }
+
+        bool initialize(GLFWwindow* window, app::StartupDiagnosticsSink* diagnostics) override
+        {
+            glfwMakeContextCurrent(window);
+            glfwSwapInterval(1);
+            if (diagnostics != nullptr) {
+                const auto* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+                const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+                const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+                diagnostics->logEvent("OpenGL",
+                                      std::string("GL_VENDOR=") + (vendor == nullptr ? "unknown" : vendor));
+                diagnostics->logEvent("OpenGL",
+                                      std::string("GL_RENDERER=") + (renderer == nullptr ? "unknown" : renderer));
+                diagnostics->logEvent("OpenGL",
+                                      std::string("GL_VERSION=") + (version == nullptr ? "unknown" : version));
+            }
+            return true;
+        }
+
+        bool initializeImGui(GLFWwindow* window, app::StartupDiagnosticsSink* diagnostics) override
+        {
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent("ImGui_ImplGlfw_InitForOpenGL", "开始初始化 GLFW backend");
+            }
+            if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) {
+                if (diagnostics != nullptr) {
+                    diagnostics->logFailure("ImGui_ImplGlfw_InitForOpenGL", "GLFW backend 初始化失败");
+                }
+                return false;
+            }
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent("ImGui_ImplGlfw_InitForOpenGL", "GLFW backend 初始化成功");
+                diagnostics->logEvent("ImGui_ImplOpenGL3_Init",
+                                      std::string("开始初始化 OpenGL backend, glsl=") + kGlslVersion);
+            }
+            if (!ImGui_ImplOpenGL3_Init(kGlslVersion)) {
+                if (diagnostics != nullptr) {
+                    diagnostics->logFailure("ImGui_ImplOpenGL3_Init", "OpenGL backend 初始化失败");
+                }
+                return false;
+            }
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent("ImGui_ImplOpenGL3_Init", "OpenGL backend 初始化成功");
+            }
+            return true;
+        }
+
+        void newFrame() override
+        {
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+        }
+
+        void renderDrawData(GLFWwindow* window, ImDrawData* drawData) override
+        {
+            int displayW = 0;
+            int displayH = 0;
+            glfwGetFramebufferSize(window, &displayW, &displayH);
+            glViewport(0, 0, displayW, displayH);
+            const auto& tokens = defaultUiStyleTokens();
+            glClearColor(tokens.appBackground.x, tokens.appBackground.y, tokens.appBackground.z, 1.00F);
+            glClear(GL_COLOR_BUFFER_BIT);
+            ImGui_ImplOpenGL3_RenderDrawData(drawData);
+        }
+
+        void present(GLFWwindow* window) override { glfwSwapBuffers(window); }
+
+        void shutdownImGui() override
+        {
+            ImGui_ImplOpenGL3_Shutdown();
+            ImGui_ImplGlfw_Shutdown();
+        }
+
+        void shutdown() override {}
+    };
+
+#if defined(_WIN32)
+    std::string hresultText(const char* message, HRESULT result)
+    {
+        std::ostringstream out;
+        out << message << ": HRESULT=0x" << std::uppercase << std::hex << static_cast<unsigned long>(result);
+        return out.str();
+    }
+
+    const char* d3d11DriverTypeName(bool warp)
+    {
+        return warp ? "warp" : "hardware";
+    }
+
+    const char* d3d11FeatureLevelName(D3D_FEATURE_LEVEL featureLevel)
+    {
+        switch (featureLevel) {
+            case D3D_FEATURE_LEVEL_11_1:
+                return "11_1";
+            case D3D_FEATURE_LEVEL_11_0:
+                return "11_0";
+            case D3D_FEATURE_LEVEL_10_1:
+                return "10_1";
+            case D3D_FEATURE_LEVEL_10_0:
+                return "10_0";
+            case D3D_FEATURE_LEVEL_9_3:
+                return "9_3";
+            case D3D_FEATURE_LEVEL_9_2:
+                return "9_2";
+            case D3D_FEATURE_LEVEL_9_1:
+                return "9_1";
+            default:
+                return "unknown";
+        }
+    }
+
+    class D3D11GlfwBackend final : public GuiRendererBackend {
+    public:
+        explicit D3D11GlfwBackend(bool warp) : warp_(warp) {}
+
+        const char* name() const override { return warp_ ? "d3d11_warp" : "d3d11"; }
+
+        bool initialize(GLFWwindow* window, app::StartupDiagnosticsSink* diagnostics) override
+        {
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent(
+                    "D3D11",
+                    "开始初始化后端, backend=" + std::string(name()) +
+                        ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
+                        lastGlfwErrorText("glfwCreateWindow state"));
+            }
+
+            const HWND hwnd = glfwGetWin32Window(window);
+            if (hwnd == nullptr) {
+                if (diagnostics != nullptr) {
+                    diagnostics->logFailure(
+                        "D3D11",
+                        "无法获取 GLFW Win32 窗口句柄, backend=" + std::string(name()) +
+                            ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
+                            lastGlfwErrorText("glfwCreateWindow state"));
+                }
+                return false;
+            }
+
+            DXGI_SWAP_CHAIN_DESC swapChainDesc{};
+            swapChainDesc.BufferCount = 2;
+            swapChainDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            swapChainDesc.BufferDesc.RefreshRate.Numerator = 60;
+            swapChainDesc.BufferDesc.RefreshRate.Denominator = 1;
+            swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            swapChainDesc.OutputWindow = hwnd;
+            swapChainDesc.SampleDesc.Count = 1;
+            swapChainDesc.Windowed = TRUE;
+            swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+            constexpr D3D_FEATURE_LEVEL kFeatureLevels[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0};
+            D3D_FEATURE_LEVEL selectedFeatureLevel{};
+            const auto driverType = warp_ ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE;
+            const HRESULT result = D3D11CreateDeviceAndSwapChain(nullptr,
+                                                                 driverType,
+                                                                 nullptr,
+                                                                 0,
+                                                                 kFeatureLevels,
+                                                                 static_cast<UINT>(std::size(kFeatureLevels)),
+                                                                 D3D11_SDK_VERSION,
+                                                                 &swapChainDesc,
+                                                                 &swapChain_,
+                                                                 &device_,
+                                                                 &selectedFeatureLevel,
+                                                                 &deviceContext_);
+            if (FAILED(result)) {
+                if (diagnostics != nullptr) {
+                    diagnostics->logFailure(
+                        "D3D11CreateDeviceAndSwapChain",
+                        "backend=" + std::string(name()) + ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
+                            hresultText("D3D11 device/swap chain 创建失败", result) + ", " +
+                            lastGlfwErrorText("glfwCreateWindow state"));
+                }
+                return false;
+            }
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent(
+                    "D3D11CreateDeviceAndSwapChain",
+                    "backend=" + std::string(name()) + ", driver_type=" + d3d11DriverTypeName(warp_) +
+                        ", HRESULT=0x" + [&] {
+                            std::ostringstream out;
+                            out << std::uppercase << std::hex << static_cast<unsigned long>(result);
+                            return out.str();
+                        }() + ", feature_level=" + d3d11FeatureLevelName(selectedFeatureLevel));
+            }
+            if (!createRenderTarget(diagnostics)) {
+                return false;
+            }
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent("D3D11",
+                                      "渲染后端初始化成功, backend=" + std::string(name()) +
+                                          ", driver_type=" + d3d11DriverTypeName(warp_));
+            }
+            return true;
+        }
+
+        bool initializeImGui(GLFWwindow* window, app::StartupDiagnosticsSink* diagnostics) override
+        {
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent("ImGui_ImplGlfw_InitForOther", "开始初始化 GLFW backend");
+            }
+            if (!ImGui_ImplGlfw_InitForOther(window, true)) {
+                if (diagnostics != nullptr) {
+                    diagnostics->logFailure("ImGui_ImplGlfw_InitForOther", "GLFW backend 初始化失败");
+                }
+                return false;
+            }
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent("ImGui_ImplGlfw_InitForOther", "GLFW backend 初始化成功");
+                diagnostics->logEvent("ImGui_ImplDX11_Init", "开始初始化 D3D11 backend");
+            }
+            if (!ImGui_ImplDX11_Init(device_, deviceContext_)) {
+                if (diagnostics != nullptr) {
+                    diagnostics->logFailure("ImGui_ImplDX11_Init", "D3D11 backend 初始化失败");
+                }
+                return false;
+            }
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent("ImGui_ImplDX11_Init", "D3D11 backend 初始化成功");
+            }
+            return true;
+        }
+
+        void newFrame() override
+        {
+            ImGui_ImplDX11_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+        }
+
+        void renderDrawData(GLFWwindow* window, ImDrawData* drawData) override
+        {
+            int displayW = 0;
+            int displayH = 0;
+            glfwGetFramebufferSize(window, &displayW, &displayH);
+            if (displayW <= 0 || displayH <= 0) {
+                return;
+            }
+            if (displayW != framebufferWidth_ || displayH != framebufferHeight_) {
+                resizeRenderTarget(displayW, displayH);
+            }
+
+            const auto& tokens = defaultUiStyleTokens();
+            const float clearColor[4] = {tokens.appBackground.x, tokens.appBackground.y, tokens.appBackground.z, 1.0F};
+            deviceContext_->OMSetRenderTargets(1, &renderTargetView_, nullptr);
+            deviceContext_->ClearRenderTargetView(renderTargetView_, clearColor);
+            ImGui_ImplDX11_RenderDrawData(drawData);
+        }
+
+        void present(GLFWwindow*) override
+        {
+            if (swapChain_ != nullptr) {
+                swapChain_->Present(1, 0);
+            }
+        }
+
+        void shutdownImGui() override
+        {
+            ImGui_ImplDX11_Shutdown();
+            ImGui_ImplGlfw_Shutdown();
+        }
+
+        void shutdown() override
+        {
+            cleanupRenderTarget();
+            if (swapChain_ != nullptr) {
+                swapChain_->Release();
+                swapChain_ = nullptr;
+            }
+            if (deviceContext_ != nullptr) {
+                deviceContext_->Release();
+                deviceContext_ = nullptr;
+            }
+            if (device_ != nullptr) {
+                device_->Release();
+                device_ = nullptr;
+            }
+        }
+
+    private:
+        bool createRenderTarget(app::StartupDiagnosticsSink* diagnostics)
+        {
+            ID3D11Texture2D* backBuffer = nullptr;
+            HRESULT result = swapChain_->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+            if (FAILED(result) || backBuffer == nullptr) {
+                if (diagnostics != nullptr) {
+                    diagnostics->logFailure("D3D11", hresultText("获取 swap chain back buffer 失败", result));
+                }
+                return false;
+            }
+
+            result = device_->CreateRenderTargetView(backBuffer, nullptr, &renderTargetView_);
+            backBuffer->Release();
+            if (FAILED(result) || renderTargetView_ == nullptr) {
+                if (diagnostics != nullptr) {
+                    diagnostics->logFailure("D3D11", hresultText("创建 render target view 失败", result));
+                }
+                return false;
+            }
+            return true;
+        }
+
+        void resizeRenderTarget(int width, int height)
+        {
+            cleanupRenderTarget();
+            if (swapChain_ != nullptr &&
+                SUCCEEDED(swapChain_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0))) {
+                createRenderTarget(nullptr);
+                framebufferWidth_ = width;
+                framebufferHeight_ = height;
+            }
+        }
+
+        void cleanupRenderTarget()
+        {
+            if (deviceContext_ != nullptr) {
+                deviceContext_->OMSetRenderTargets(0, nullptr, nullptr);
+            }
+            if (renderTargetView_ != nullptr) {
+                renderTargetView_->Release();
+                renderTargetView_ = nullptr;
+            }
+        }
+
+        bool warp_{false};
+        ID3D11Device* device_{nullptr};
+        ID3D11DeviceContext* deviceContext_{nullptr};
+        IDXGISwapChain* swapChain_{nullptr};
+        ID3D11RenderTargetView* renderTargetView_{nullptr};
+        int framebufferWidth_{0};
+        int framebufferHeight_{0};
+    };
+#endif
+
+    std::unique_ptr<GuiRendererBackend> makeRendererBackend(config::GuiRendererBackend backend)
+    {
+        switch (backend) {
+            case config::GuiRendererBackend::OpenGL:
+                return std::make_unique<OpenGlGlfwBackend>();
+#if defined(_WIN32)
+            case config::GuiRendererBackend::D3D11:
+                return std::make_unique<D3D11GlfwBackend>(false);
+            case config::GuiRendererBackend::D3D11Warp:
+                return std::make_unique<D3D11GlfwBackend>(true);
+#else
+            case config::GuiRendererBackend::D3D11:
+            case config::GuiRendererBackend::D3D11Warp:
+                return nullptr;
+#endif
+        }
+        return nullptr;
+    }
+
+    bool isOpenGlRenderer(config::GuiRendererBackend backend)
+    {
+        return backend == config::GuiRendererBackend::OpenGL;
+    }
+
+#if defined(_WIN32)
+    bool probeD3D11Device(bool warp, app::StartupDiagnosticsSink* diagnostics)
+    {
+        constexpr D3D_FEATURE_LEVEL kFeatureLevels[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0};
+        D3D_FEATURE_LEVEL selectedFeatureLevel{};
+        ID3D11Device* device = nullptr;
+        ID3D11DeviceContext* deviceContext = nullptr;
+        const auto driverType = warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE;
+        const HRESULT result = D3D11CreateDevice(nullptr,
+                                                 driverType,
+                                                 nullptr,
+                                                 0,
+                                                 kFeatureLevels,
+                                                 static_cast<UINT>(std::size(kFeatureLevels)),
+                                                 D3D11_SDK_VERSION,
+                                                 &device,
+                                                 &selectedFeatureLevel,
+                                                 &deviceContext);
+        if (deviceContext != nullptr) {
+            deviceContext->Release();
+        }
+        if (device != nullptr) {
+            device->Release();
+        }
+
+        const std::string stage = warp ? "renderer_probe_d3d11_warp" : "renderer_probe_d3d11_hardware";
+        const std::string message = "driver_type=" + std::string(d3d11DriverTypeName(warp)) + ", " +
+                                    hresultText("D3D11CreateDevice", result) +
+                                    ", feature_level=" + d3d11FeatureLevelName(selectedFeatureLevel);
+        if (diagnostics != nullptr) {
+            if (FAILED(result)) {
+                diagnostics->logFailure(stage, message);
+            } else {
+                diagnostics->logEvent(stage, message);
+            }
+        }
+        return SUCCEEDED(result);
+    }
+#endif
+} // namespace
+
+bool runRendererProbe(app::StartupDiagnosticsSink* diagnostics)
+{
+    if (diagnostics != nullptr) {
+        diagnostics->setStage("before_glfw_init");
+        diagnostics->logEvent("renderer_probe", "开始 renderer probe");
+    }
+
+    gLastGlfwErrorCode = 0;
+    gLastGlfwErrorDescription.clear();
+    glfwSetErrorCallback(startupGlfwErrorCallback);
+    const bool glfwOk = glfwInit() == GLFW_TRUE;
+    if (diagnostics != nullptr) {
+        if (glfwOk) {
+            diagnostics->setStage("after_glfw_init");
+            diagnostics->logEvent("renderer_probe_glfw", "glfwInit 成功");
+        } else {
+            diagnostics->logFailure("renderer_probe_glfw", lastGlfwErrorText("glfwInit 失败"));
+        }
+        diagnostics->setStage("before_renderer_backend_initialize");
+    }
+
+#if defined(_WIN32)
+    probeD3D11Device(false, diagnostics);
+    probeD3D11Device(true, diagnostics);
+#else
+    if (diagnostics != nullptr) {
+        diagnostics->logEvent("renderer_probe_d3d11", "当前平台不支持 D3D11 probe");
+    }
+#endif
+
+    if (glfwOk) {
+        glfwDefaultWindowHints();
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+        gLastGlfwErrorCode = 0;
+        gLastGlfwErrorDescription.clear();
+        GLFWwindow* probeWindow = glfwCreateWindow(64, 64, "ProtoScope Renderer Probe", nullptr, nullptr);
+        if (probeWindow == nullptr) {
+            if (diagnostics != nullptr) {
+                diagnostics->logFailure("renderer_probe_opengl", lastGlfwErrorText("OpenGL probe 窗口创建失败"));
+            }
+        } else {
+            glfwMakeContextCurrent(probeWindow);
+            const auto* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+            const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+            const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent(
+                    "renderer_probe_opengl",
+                    std::string("GL_VENDOR=") + (vendor == nullptr ? "unknown" : vendor) +
+                        ", GL_RENDERER=" + (renderer == nullptr ? "unknown" : renderer) +
+                        ", GL_VERSION=" + (version == nullptr ? "unknown" : version));
+            }
+            glfwDestroyWindow(probeWindow);
+        }
+        glfwTerminate();
+    }
+
+    if (diagnostics != nullptr) {
+        diagnostics->logEvent("renderer_probe", "renderer probe 完成");
+    }
+    return true;
+}
+
+GuiRuntime::GuiRuntime(app::Application& application,
+                       const config::ConfigStore& configStore,
+                       app::StartupDiagnosticsSink* diagnostics)
+    : GuiRuntime(application, configStore, GuiRuntimeOptions{}, diagnostics)
+{
+}
+
+GuiRuntime::GuiRuntime(app::Application& application,
+                       const config::ConfigStore& configStore,
+                       GuiRuntimeOptions options,
+                       app::StartupDiagnosticsSink* diagnostics)
+    : application_(application), configStore_(configStore), options_(options), startupDiagnostics_(diagnostics),
       workspaceController_(std::make_unique<WorkspaceController>(*this)), executableDir_(executableDirectory()),
       waveDockRenderer_(application)
 {
@@ -226,7 +739,6 @@ int GuiRuntime::run()
 
         workspaceController_->processPendingProtocolWorkspaceSwitch();
         renderFrame();
-        glfwSwapBuffers(window_);
         lastRenderAtMs_ = frameStartMs;
         if (ImGui::GetIO().WantSaveIniSettings && workspaceLayoutMode_ == WorkspaceLayoutMode::Ready) {
             saveCurrentProtocolWorkspace();
@@ -252,34 +764,94 @@ void GuiRuntime::shutdown()
 
 bool GuiRuntime::initializeWindow()
 {
-    if (!glfwInit()) {
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->setStage("before_glfw_init");
+        startupDiagnostics_->logEvent(
+            "GuiRuntime::rendererBackend",
+            "最终 GUI 渲染后端: " + std::string(config::guiRendererBackendId(options_.rendererBackend)));
+        startupDiagnostics_->logEvent("glfwInit", "开始初始化 GLFW");
+    }
+    rendererBackend_ = makeRendererBackend(options_.rendererBackend);
+    if (!rendererBackend_) {
+        const std::string reason =
+            "当前平台不支持 GUI 渲染后端: " + std::string(config::guiRendererBackendId(options_.rendererBackend));
+        if (startupDiagnostics_ != nullptr) {
+            startupDiagnostics_->logFailure("GuiRuntime::rendererBackend", reason);
+        }
         return false;
     }
 
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+    gLastGlfwErrorCode = 0;
+    gLastGlfwErrorDescription.clear();
+    glfwSetErrorCallback(startupGlfwErrorCallback);
+    if (!glfwInit()) {
+        const std::string reason = lastGlfwErrorText("GLFW 初始化失败");
+        if (startupDiagnostics_ != nullptr) {
+            startupDiagnostics_->logFailure("glfwInit", reason);
+        }
+        return false;
+    }
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->setStage("after_glfw_init");
+        startupDiagnostics_->logEvent("glfwInit", "GLFW 初始化成功");
+    }
+
+    if (isOpenGlRenderer(options_.rendererBackend)) {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+    } else {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    }
 
     const auto& window = application_.captureConfig().gui.window;
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->logEvent(
+            "glfwCreateWindow",
+            isOpenGlRenderer(options_.rendererBackend) ? "尝试创建 OpenGL 3.2 Core 窗口"
+                                                       : "尝试创建无 OpenGL 上下文的 GLFW 窗口");
+    }
+    gLastGlfwErrorCode = 0;
+    gLastGlfwErrorDescription.clear();
     window_ = glfwCreateWindow(window.width, window.height, window.title.c_str(), nullptr, nullptr);
-    if (!window_) {
+    if (!window_ && isOpenGlRenderer(options_.rendererBackend)) {
+        if (startupDiagnostics_ != nullptr) {
+            startupDiagnostics_->logEvent(
+                "glfwCreateWindow",
+                lastGlfwErrorText("OpenGL 3.2 Core 窗口创建失败，准备回退 3.0"));
+        }
         // 核心流程：优先使用 3.2 Core 以启用 ImGui 顶点偏移能力；失败时回退 3.0，兼容老显卡/驱动。
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
         kGlslVersion = "#version 130";
+        gLastGlfwErrorCode = 0;
+        gLastGlfwErrorDescription.clear();
         window_ = glfwCreateWindow(window.width, window.height, window.title.c_str(), nullptr, nullptr);
     }
     if (!window_) {
+        const std::string reason = lastGlfwErrorText("GLFW 窗口创建失败");
+        if (startupDiagnostics_ != nullptr) {
+            startupDiagnostics_->logFailure("glfwCreateWindow", reason);
+        }
         glfwTerminate();
         return false;
     }
 #if defined(_WIN32)
     applyWindowIcon(window_);
 #endif
-    glfwMakeContextCurrent(window_);
-    glfwSwapInterval(1);
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->setStage("before_renderer_backend_initialize");
+    }
+    if (!rendererBackend_->initialize(window_, startupDiagnostics_)) {
+        rendererBackend_->shutdown();
+        rendererBackend_.reset();
+        glfwDestroyWindow(window_);
+        window_ = nullptr;
+        glfwTerminate();
+        return false;
+    }
     if (window.maximized) {
         glfwMaximizeWindow(window_);
     }
@@ -289,6 +861,10 @@ bool GuiRuntime::initializeWindow()
 
 bool GuiRuntime::initializeImGui()
 {
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->setStage("GuiRuntime::initializeImGui");
+        startupDiagnostics_->logEvent("ImGui", "开始初始化 ImGui 上下文");
+    }
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     applyImGuiProfessionalDarkTheme();
@@ -297,30 +873,31 @@ bool GuiRuntime::initializeImGui()
     io.IniFilename = nullptr;
     ensureChineseFont();
 
-    if (!ImGui_ImplGlfw_InitForOpenGL(window_, true)) {
-        return false;
-    }
-    if (!ImGui_ImplOpenGL3_Init(kGlslVersion)) {
-        return false;
-    }
-    return true;
+    return rendererBackend_ != nullptr && rendererBackend_->initializeImGui(window_, startupDiagnostics_);
 }
 
 bool GuiRuntime::initializePlotContext()
 {
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->setStage("GuiRuntime::initializePlotContext");
+    }
     ImPlot::CreateContext();
     applyImPlotProfessionalDarkTheme();
     auto& inputMap = ImPlot::GetInputMap();
     inputMap.Pan = ImGuiMouseButton_Left;
     inputMap.Select = ImGuiMouseButton_Right;
     inputMap.SelectCancel = ImGuiMouseButton_Left;
+    if (startupDiagnostics_ != nullptr) {
+        startupDiagnostics_->logEvent("ImPlot", "ImPlot 上下文初始化成功");
+    }
     return true;
 }
 
 void GuiRuntime::shutdownImGui()
 {
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
+    if (rendererBackend_ != nullptr) {
+        rendererBackend_->shutdownImGui();
+    }
     ImGui::DestroyContext();
 }
 
@@ -331,6 +908,10 @@ void GuiRuntime::shutdownPlotContext()
 
 void GuiRuntime::shutdownWindow()
 {
+    if (rendererBackend_ != nullptr) {
+        rendererBackend_->shutdown();
+        rendererBackend_.reset();
+    }
     glfwDestroyWindow(window_);
     window_ = nullptr;
     glfwTerminate();
@@ -783,8 +1364,7 @@ void GuiRuntime::renderFrame()
 {
     refreshWindowTitle();
 
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
+    rendererBackend_->newFrame();
     ImGui::NewFrame();
 
     waveFullscreenToggleRequested_ = false;
@@ -839,15 +1419,8 @@ void GuiRuntime::renderFrame()
     }
 
     ImGui::Render();
-
-    int displayW = 0;
-    int displayH = 0;
-    glfwGetFramebufferSize(window_, &displayW, &displayH);
-    glViewport(0, 0, displayW, displayH);
-    const auto& tokens = defaultUiStyleTokens();
-    glClearColor(tokens.appBackground.x, tokens.appBackground.y, tokens.appBackground.z, 1.00F);
-    glClear(GL_COLOR_BUFFER_BIT);
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    rendererBackend_->renderDrawData(window_, ImGui::GetDrawData());
+    rendererBackend_->present(window_);
 }
 
 void GuiRuntime::refreshWindowTitle()

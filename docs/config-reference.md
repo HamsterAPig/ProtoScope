@@ -141,13 +141,13 @@ gui:
     replay_raw_history_on_schema_switch: false
   realtime_backlog:
     mode: responsive
-    rx_chunk_bytes_per_pump: 65536
+    rx_chunk_bytes_per_pump: 4096
     transfer_frame_rows_per_pump: 2000
-    plot_appends_per_pump: 4096
+    plot_appends_per_pump: 128
     raw_first_backlog_warn_bytes: 33554432
     derived_backlog_degrade_enabled: true
     discard_backlog_on_disconnect: false
-    pump_min_interval_ms: 2.0
+    pump_min_interval_ms: 1.0
   elf_symbol_combo:
     limit: 10
     debounce_ms: 300
@@ -162,11 +162,11 @@ gui:
 - `raw_capture.recording_queue_limit_bytes`：完整录制队列上限。
 - `transfer_log.replay_raw_history_on_schema_switch`：切换 schema 后是否重放原始历史。
 - `realtime_backlog.mode`：实时追赶模式，默认 `responsive`。
-- `realtime_backlog.*_per_pump`：每轮 UI 追赶预算，缺省受 `performance.scale` 控制。
+- `realtime_backlog.*_per_pump`：每轮 UI 追赶预算，缺省受 `performance.scale` 控制。默认偏向平滑刷新，`rx_chunk_bytes_per_pump` 为 `4096`，`plot_appends_per_pump` 为 `128`。
 - `realtime_backlog.raw_first_backlog_warn_bytes`：原始 backlog 首次告警阈值。
 - `realtime_backlog.derived_backlog_degrade_enabled`：派生视图 backlog 过高时是否降级。
 - `realtime_backlog.discard_backlog_on_disconnect`：断开连接时是否丢弃待追赶 backlog。
-- `realtime_backlog.pump_min_interval_ms`：实时追赶最小间隔。
+- `realtime_backlog.pump_min_interval_ms`：实时追赶最小间隔，默认 `1.0` ms；该项不受 `performance.scale` 控制。
 - `elf_symbol_combo.limit` / `debounce_ms`：Lua `elf_symbol_combo` 默认候选数和输入消抖。
 - `elf_symbol_combo.auto_refresh_selected_address`：已选符号地址是否随数据源自动刷新。
 - `elf_symbol_combo.auto_refresh_emit_on_control`：自动刷新时是否触发控件回调。
@@ -199,13 +199,13 @@ protocol:
 
 ```yaml
 receive:
-  transport_read_buffer_bytes: 65536
+  transport_read_buffer_bytes: 4096
   stream_buffer:
     near_overflow_threshold: 0.8
     popup_enabled: true
 ```
 
-- `transport_read_buffer_bytes`：底层通讯读取缓冲，缺省受 `performance.scale` 控制。
+- `transport_read_buffer_bytes`：底层通讯读取缓冲，默认 `4096` 字节，缺省受 `performance.scale` 控制。
 - `stream_buffer.near_overflow_threshold`：接收流缓冲接近溢出的告警比例。
 - `stream_buffer.popup_enabled`：接近溢出时是否弹窗提示。
 
@@ -221,11 +221,11 @@ scripting:
     memory_budget_bytes: 268435456
     memory_budget_available_ratio: 0.0
     output_queue_limit: 65536
-    batch_bytes: 262144
+    batch_bytes: 8192
     backpressure_enabled: true
     backpressure_rx_queue_high_watermark: 0.5
     backpressure_rx_queue_low_watermark: 0.3
-    output_flush_budget_ms: 4.0
+    output_flush_budget_ms: 2.0
     drain_request_outputs_unbounded: false
 ```
 
@@ -235,10 +235,10 @@ scripting:
 - `worker.memory_budget_bytes`：worker 内存预算。
 - `worker.memory_budget_available_ratio`：按可用内存比例扩展预算，`0.0` 表示关闭。
 - `worker.output_queue_limit`：worker 输出队列上限。
-- `worker.batch_bytes`：RX 字节合批上限，也是调节 worker 输出颗粒度的主控项。
+- `worker.batch_bytes`：RX 字节合批上限，默认 `8192` 字节，也是调节 worker 输出颗粒度的主控项。
 - `worker.backpressure_enabled`：是否启用背压。
 - `worker.backpressure_rx_queue_high_watermark` / `low_watermark`：背压高低水位。
-- `worker.output_flush_budget_ms`：每轮输出刷新的时间预算。
+- `worker.output_flush_budget_ms`：每轮输出刷新的时间预算，默认 `2.0` ms。
 - `worker.drain_request_outputs_unbounded`：超时前是否使用无帧预算限制的 drain，默认关闭。
 
 ### scripting.file_io

@@ -67,6 +67,12 @@ struct GuiWindowConfig {
     bool maximized{false};
 };
 
+enum class GuiRendererBackend {
+    OpenGL,
+    D3D11,
+    D3D11Warp,
+};
+
 enum class GuiWaveFullscreenMode {
     Focus,
     Overlay,
@@ -101,6 +107,7 @@ struct GuiWaveConfig {
     bool showAxisLabels{false};
     bool showChannelLegend{true};
     bool showFftLegend{true};
+    bool followMeasurementCursorsOnScroll{false};
     std::array<float, 4> cursorFftHighlightRgba{0.20F, 0.55F, 1.00F, 0.16F};
     GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Overlay};
 };
@@ -120,13 +127,13 @@ struct GuiRawCaptureConfig {
 
 struct GuiRealtimeBacklogConfig {
     std::string mode{"responsive"};
-    std::size_t rxChunkBytesPerPump{64U * 1024U};
+    std::size_t rxChunkBytesPerPump{4096U};
     std::size_t transferFrameRowsPerPump{2000};
-    std::size_t plotAppendsPerPump{4096};
+    std::size_t plotAppendsPerPump{128};
     std::size_t rawFirstBacklogWarnBytes{32U * 1024U * 1024U};
     bool derivedBacklogDegradeEnabled{true};
     bool discardBacklogOnDisconnect{false};
-    double pumpMinIntervalMs{2.0};
+    double pumpMinIntervalMs{1.0};
 };
 
 struct GuiElfSymbolComboConfig {
@@ -147,6 +154,7 @@ struct GuiFontConfig {
 
 struct GuiConfig {
     GuiWindowConfig window{};
+    GuiRendererBackend rendererBackend{GuiRendererBackend::OpenGL};
     GuiWaveConfig wave{};
     GuiFontConfig font{};
     GuiLogHistoryConfig logHistory{};
@@ -181,7 +189,7 @@ struct ReceiveStreamBufferConfig {
 
 struct ReceiveConfig {
     ReceiveStreamBufferConfig streamBuffer{};
-    std::size_t transportReadBufferBytes{64U * 1024U};
+    std::size_t transportReadBufferBytes{4096U};
 };
 
 struct ScriptingPipelineConfig {
@@ -196,11 +204,11 @@ struct ScriptingConfig {
     std::size_t workerMemoryBudgetBytes{256U * 1024U * 1024U};
     double workerMemoryBudgetAvailableRatio{0.0};
     std::size_t workerOutputQueueLimit{65536U};
-    std::size_t workerBatchBytes{256U * 1024U};
+    std::size_t workerBatchBytes{8192U};
     bool workerBackpressureEnabled{true};
     double workerBackpressureHighWatermark{0.5};
     double workerBackpressureLowWatermark{0.3};
-    double workerOutputFlushBudgetMs{4.0};
+    double workerOutputFlushBudgetMs{2.0};
     /// 超时前是否使用无帧预算限制的 drain（默认关闭）；开启时采用 flushScriptOutputsUnbounded()
     bool drainRequestOutputsUnbounded{false};
 };
@@ -267,5 +275,8 @@ private:
     std::filesystem::path defaultProtocolRootDir_;
     std::filesystem::path defaultProtocolDir_;
 };
+
+std::optional<GuiRendererBackend> parseGuiRendererBackend(std::string_view value);
+std::string_view guiRendererBackendId(GuiRendererBackend backend);
 
 } // namespace protoscope::config

@@ -9,6 +9,7 @@ add_executable(protoscope_tests
     test_plot.cc
     test_protocol_state_file.cc
     test_runtime_scheduler.cc
+    test_startup_diagnostics.cc
     test_script_runtime_worker.cc
     test_elf_static_view_bridge.cc
     test_script_host.cc
@@ -27,6 +28,7 @@ target_link_libraries(protoscope_tests
         protoscope_dock
         protoscope_ui_layout
         protoscope_app
+        protoscope_startup_diagnostics
         protoscope_elf_static_view
         protoscope_protocol_utils
         protoscope_plot
