@@ -2226,7 +2226,14 @@ void test_config_default_roundtrip()
     require(config.gui.realtimeBacklog.rawFirstBacklogWarnBytes == 32U * 1024U * 1024U,
             "raw-first backlog 默认告警阈值应为 32MiB");
     require(config.gui.realtimeBacklog.derivedBacklogDegradeEnabled, "派生 UI backlog 默认应允许降级");
-    require(config.receive.transportReadBufferBytes == 64U * 1024U, "transport 读缓冲默认应为 64KiB");
+    require(config.gui.realtimeBacklog.rxChunkBytesPerPump == 4096U, "实时 backlog RX pump 默认应为 4096 字节");
+    require(config.gui.realtimeBacklog.plotAppendsPerPump == 128U, "实时 backlog plot append 默认应为 128");
+    require(std::abs(config.gui.realtimeBacklog.pumpMinIntervalMs - 1.0) < 1e-12,
+            "实时 backlog pump 最小间隔默认应为 1ms");
+    require(config.receive.transportReadBufferBytes == 4096U, "transport 读缓冲默认应为 4096 字节");
+    require(config.scripting.workerBatchBytes == 8192U, "worker batch 默认应为 8192 字节");
+    require(std::abs(config.scripting.workerOutputFlushBudgetMs - 2.0) < 1e-12,
+            "worker 输出刷新时间预算默认应为 2ms");
     require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
     require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
     require(config.gui.elfSymbolCombo.autoRefreshSelectedAddress, "ELF 已选地址默认应自动刷新");
@@ -2529,17 +2536,17 @@ scripting:
     const auto loaded = store.load(tempPath).config;
 
     require(std::abs(loaded.performance.scale - 2.0) < 1e-12, "performance.scale 应读取为 2.0");
-    require(loaded.receive.transportReadBufferBytes == 128U * 1024U, "transport 读缓冲缺省值应按 scale 放大");
+    require(loaded.receive.transportReadBufferBytes == 8192U, "transport 读缓冲缺省值应按 scale 放大");
     require(loaded.scripting.workerRxQueueLimitBytes == 128U * 1024U * 1024U, "worker RX 队列缺省值应按 scale 放大");
     require(loaded.scripting.workerMemoryBudgetBytes == 512U * 1024U * 1024U, "worker 内存预算缺省值应按 scale 放大");
     require(loaded.scripting.workerOutputQueueLimit == 131072U, "worker 输出队列缺省值应按 scale 放大");
     require(loaded.scripting.workerBatchBytes == 123U, "显式 batch_bytes 不应被 performance.scale 覆盖");
-    require(std::abs(loaded.scripting.workerOutputFlushBudgetMs - 8.0) < 1e-12,
+    require(std::abs(loaded.scripting.workerOutputFlushBudgetMs - 4.0) < 1e-12,
             "worker 输出刷新时间预算缺省值应按 scale 放大");
-    require(loaded.gui.realtimeBacklog.rxChunkBytesPerPump == 128U * 1024U,
+    require(loaded.gui.realtimeBacklog.rxChunkBytesPerPump == 8192U,
             "实时 backlog RX pump 字节预算缺省值应按 scale 放大");
     require(loaded.gui.realtimeBacklog.transferFrameRowsPerPump == 4000U, "实时 backlog 行预算缺省值应按 scale 放大");
-    require(loaded.gui.realtimeBacklog.plotAppendsPerPump == 8192U,
+    require(loaded.gui.realtimeBacklog.plotAppendsPerPump == 256U,
             "实时 backlog plot append 预算缺省值应按 scale 放大");
     require(loaded.gui.realtimeBacklog.rawFirstBacklogWarnBytes == 64U * 1024U * 1024U,
             "raw-first backlog 告警阈值缺省值应按 scale 放大");
@@ -4239,6 +4246,15 @@ static const TestCase kAllTests[] = {
      &test_wave_measurement_cursor_scroll_refresh_rebinds_by_time},
     {"wave_cursor_interval_text_by_axis", &test_wave_cursor_interval_text_by_axis},
     {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
+    {"cursor_intersection_readouts_default_disabled", &test_cursor_intersection_readouts_default_disabled},
+    {"cursor_intersection_readouts_respect_enabled_cursors",
+     &test_cursor_intersection_readouts_respect_enabled_cursors},
+    {"cursor_intersection_readouts_use_visible_waveform_channels_only",
+     &test_cursor_intersection_readouts_use_visible_waveform_channels_only},
+    {"cursor_intersection_readouts_skip_bit_lane_channels", &test_cursor_intersection_readouts_skip_bit_lane_channels},
+    {"cursor_intersection_readouts_respect_max_time_distance",
+     &test_cursor_intersection_readouts_respect_max_time_distance},
+    {"cursor_readout_annotation_requires_hold_or_pin", &test_cursor_readout_annotation_requires_hold_or_pin},
     {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},
     {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
     {"wave_y_axis_double_click_bounds_selects_visible_or_active",

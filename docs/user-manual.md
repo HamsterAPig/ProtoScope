@@ -282,10 +282,10 @@ performance:
   scale: 2.0
 scripting:
   worker:
-    batch_bytes: 131072
+    batch_bytes: 8192
 ```
 
-上例中，未写出的 RX 队列、内存预算和实时 backlog 预算会按 `2.0` 放大；`batch_bytes` 固定为 `131072`，不再被公共系数覆盖。整数预算使用“默认值 × scale”四舍五入，非零默认值至少保留 `1`；显式写 `0` 时仍保留该单项自己的特殊含义。
+上例中，未写出的 RX 队列、内存预算和实时 backlog 预算会按 `2.0` 放大；`batch_bytes` 固定为 `8192`，不再被公共系数覆盖。整数预算使用“默认值 × scale”四舍五入，非零默认值至少保留 `1`；显式写 `0` 时仍保留该单项自己的特殊含义。
 
 受公共系数影响的缺省项包括：`receive.transport_read_buffer_bytes`、`scripting.worker.rx_queue_limit_bytes`、`scripting.worker.memory_budget_bytes`、`scripting.worker.output_queue_limit`、`scripting.worker.batch_bytes`、`scripting.worker.output_flush_budget_ms`、`gui.realtime_backlog.rx_chunk_bytes_per_pump`、`gui.realtime_backlog.transfer_frame_rows_per_pump`、`gui.realtime_backlog.plot_appends_per_pump`、`gui.realtime_backlog.raw_first_backlog_warn_bytes`。
 
@@ -293,9 +293,13 @@ scripting:
 
 #### 分块发送与 UI 追赶
 
+默认配置偏向平滑实时刷新：`receive.transport_read_buffer_bytes` 为 `4096`，`scripting.worker.batch_bytes` 为 `8192`，`scripting.worker.output_flush_budget_ms` 为 `2.0`，`gui.realtime_backlog.rx_chunk_bytes_per_pump` 为 `4096`，`gui.realtime_backlog.plot_appends_per_pump` 为 `128`，`gui.realtime_backlog.pump_min_interval_ms` 为 `1.0`。
+
 `scripting.worker.batch_bytes` 是 worker 分块主控项。它会限制相邻 RX 字节事件合并后的最大字节数，并间接决定 worker 每次输出给宿主/UI 的 batch 粗细。
 
 如果要调“worker 给 UI 的块粗细”，优先调 `scripting.worker.batch_bytes`；如果要调“UI 每帧追赶速度”，再调 `gui.realtime_backlog.rx_chunk_bytes_per_pump`、`gui.realtime_backlog.transfer_frame_rows_per_pump`、`gui.realtime_backlog.plot_appends_per_pump` 和 `scripting.worker.output_flush_budget_ms`。
+
+更平滑时，减小 `batch_bytes`、`transport_read_buffer_bytes`、`rx_chunk_bytes_per_pump` 和 `plot_appends_per_pump`，并适当降低 `output_flush_budget_ms`、`pump_min_interval_ms`。更高吞吐时，增大这些批量预算，让 UI 每轮追更多 backlog，但可能出现更明显的大段刷新。渲染性能不足时，降低 `app.fps_limit`、`gui.wave.max_render_points_per_channel`、`gui.wave.max_render_vertices`，并保持 `gui.wave.peak_detect_downsample: true`；需要更高细节时反向提高渲染点数预算或延后降采样。
 
 ## 内置协议模板
 

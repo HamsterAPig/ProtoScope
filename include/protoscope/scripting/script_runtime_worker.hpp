@@ -18,7 +18,7 @@ struct ScriptRuntimeWorkerConfig {
     std::size_t memoryBudgetBytes{256U * 1024U * 1024U};
     double memoryBudgetAvailableRatio{0.0};
     std::size_t outputQueueLimit{65536U};
-    std::size_t batchBytes{256U * 1024U};
+    std::size_t batchBytes{8192U};
     bool backpressureEnabled{true};
     double backpressureHighWatermark{0.5};
     double backpressureLowWatermark{0.3};

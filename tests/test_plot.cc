@@ -427,9 +427,9 @@ void test_wave_layout_solver_clamps_without_overflow()
         900.0F, 420.0F, 240.0F, 300.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 76.0F);
     require(toolbarScrollbarReserved.overviewHeight >= 72.0F, "工具栏预留滚动条后概览高度仍不应低于最小值");
     require(toolbarScrollbarReserved.mainHeight >= 160.0F, "工具栏预留滚动条后主视图高度仍不应低于最小值");
-    require(toolbarScrollbarReserved.overviewHeight + toolbarScrollbarReserved.mainHeight + 6.0F + 76.0F <=
-                420.0F + 1e-3F,
-            "工具栏预留横向滚动条后布局总高度不应溢出父窗口");
+    require(
+        toolbarScrollbarReserved.overviewHeight + toolbarScrollbarReserved.mainHeight + 6.0F + 76.0F <= 420.0F + 1e-3F,
+        "工具栏预留横向滚动条后布局总高度不应溢出父窗口");
 
     const auto draggedOverview = protoscope::plot::solveWaveLayout(
         900.0F, 600.0F, 260.0F, 300.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 70.0F);
@@ -470,25 +470,24 @@ void test_wave_layout_solver_clamps_without_overflow()
 
 void test_measurement_overlay_safe_right_collapsed_uses_content_right()
 {
-    const float safeRight = protoscope::ui::resolveMeasurementSafeRightX(
-        120.0F, 880.0F, true, 360.0F, 220.0F, 520.0F, 6.0F);
+    const float safeRight =
+        protoscope::ui::resolveMeasurementSafeRightX(120.0F, 880.0F, true, 360.0F, 220.0F, 520.0F, 6.0F);
 
     require(std::abs(safeRight - 1000.0F) < 1e-6F, "工具抽屉折叠时测量浮层安全右边界应等于内容右边界");
 }
 
 void test_measurement_overlay_safe_right_open_drawer_reserves_drawer_width()
 {
-    const float safeRight = protoscope::ui::resolveMeasurementSafeRightX(
-        120.0F, 880.0F, false, 640.0F, 220.0F, 520.0F, 6.0F);
+    const float safeRight =
+        protoscope::ui::resolveMeasurementSafeRightX(120.0F, 880.0F, false, 640.0F, 220.0F, 520.0F, 6.0F);
 
-    require(std::abs(safeRight - 474.0F) < 1e-6F,
-            "工具抽屉展开时测量浮层安全右边界应扣除 clamp 后抽屉宽度和分隔条");
+    require(std::abs(safeRight - 474.0F) < 1e-6F, "工具抽屉展开时测量浮层安全右边界应扣除 clamp 后抽屉宽度和分隔条");
 }
 
 void test_measurement_overlay_placement_clamps_to_safe_right()
 {
-    const auto placement = protoscope::ui::resolveMeasurementOverlayPlacementSize(
-        ImVec2(150.0F, 40.0F), ImVec2(800.0F, 320.0F), 650.0F);
+    const auto placement =
+        protoscope::ui::resolveMeasurementOverlayPlacementSize(ImVec2(150.0F, 40.0F), ImVec2(800.0F, 320.0F), 650.0F);
 
     require(placement.visible, "测量浮层安全区域足够时应继续显示");
     require(std::abs(placement.plotSize.x - 500.0F) < 1e-6F, "测量浮层绘制宽度应被安全右边界裁到左侧区域");
@@ -497,8 +496,8 @@ void test_measurement_overlay_placement_clamps_to_safe_right()
 
 void test_measurement_overlay_placement_skips_when_safe_area_too_narrow()
 {
-    const auto placement = protoscope::ui::resolveMeasurementOverlayPlacementSize(
-        ImVec2(150.0F, 40.0F), ImVec2(800.0F, 320.0F), 200.0F);
+    const auto placement =
+        protoscope::ui::resolveMeasurementOverlayPlacementSize(ImVec2(150.0F, 40.0F), ImVec2(800.0F, 320.0F), 200.0F);
 
     require(!placement.visible, "测量浮层安全区域过窄时应跳过绘制");
     require(placement.plotSize.x <= 64.0F, "跳过绘制时返回宽度应反映过窄安全区域");
@@ -2168,6 +2167,125 @@ void test_bit_hover_readout_falls_back_to_waveform_outside_lane()
     require(readout->readout.channelIndex == 1, "bit-display 通道不应以原始 y 值抢占普通 hover");
 }
 
+void test_cursor_intersection_readouts_default_disabled()
+{
+    protoscope::plot::WaveViewState view;
+    view.cursors[0].enabled = true;
+    view.cursors[0].time = 1.0;
+
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "CH1", .unit = "V"});
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 2.0}},
+        .actualValues = {2.0},
+    });
+
+    const auto readouts = protoscope::ui::collectCursorIntersectionReadouts(view, snapshot, displayData, {0}, 0.1);
+    require(readouts.empty(), "交点读数默认关闭时不应返回读数");
+}
+
+void test_cursor_intersection_readouts_respect_enabled_cursors()
+{
+    protoscope::plot::WaveViewState view;
+    view.showCursorIntersectionReadouts = true;
+    view.cursors[0].enabled = true;
+    view.cursors[0].time = 1.0;
+    view.cursors[1].enabled = false;
+    view.cursors[1].time = 2.0;
+
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "CH1", .unit = "V"});
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 2.0}, {.time = 2.0, .value = 3.0}},
+        .actualValues = {2.0, 3.0},
+    });
+
+    auto readouts = protoscope::ui::collectCursorIntersectionReadouts(view, snapshot, displayData, {0}, 0.1);
+    require(readouts.size() == 1U && readouts[0].cursorIndex == 0, "仅 A 游标启用时应只返回 A 读数");
+
+    view.cursors[0].enabled = false;
+    view.cursors[1].enabled = true;
+    readouts = protoscope::ui::collectCursorIntersectionReadouts(view, snapshot, displayData, {0}, 0.1);
+    require(readouts.size() == 1U && readouts[0].cursorIndex == 1, "仅 B 游标启用时应只返回 B 读数");
+}
+
+void test_cursor_intersection_readouts_use_visible_waveform_channels_only()
+{
+    protoscope::plot::WaveViewState view;
+    view.showCursorIntersectionReadouts = true;
+    view.cursors[0].enabled = true;
+    view.cursors[0].time = 1.0;
+    view.cursors[1].enabled = false;
+
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "CH1", .unit = "V"});
+    snapshot.channels.push_back({.label = "CH2", .unit = "V"});
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({.samples = {{.time = 1.0, .value = 2.0}}, .actualValues = {2.0}});
+    displayData.channels.push_back({.samples = {{.time = 1.0, .value = 4.0}}, .actualValues = {4.0}});
+
+    const auto readouts = protoscope::ui::collectCursorIntersectionReadouts(view, snapshot, displayData, {1}, 0.1);
+    require(readouts.size() == 1U, "隐藏通道不应返回交点读数");
+    require(readouts[0].readout.channelIndex == 1U, "交点读数应只来自 visibleChannelIndices");
+}
+
+void test_cursor_intersection_readouts_skip_bit_lane_channels()
+{
+    protoscope::plot::WaveViewState view;
+    view.showCursorIntersectionReadouts = true;
+    view.cursors[0].enabled = true;
+    view.cursors[0].time = 1.0;
+    view.cursors[1].enabled = false;
+
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "CH1", .unit = "V"});
+    snapshot.channels.push_back({
+        .label = "BITS",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1},
+    });
+    snapshot.channels.push_back({.label = "CH3", .unit = "V"});
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({.samples = {{.time = 1.0, .value = 2.0}}, .actualValues = {2.0}});
+    displayData.channels.push_back({.samples = {{.time = 1.0, .value = 1.0}}, .actualValues = {1.0}});
+    displayData.channels.push_back({.samples = {{.time = 1.0, .value = 3.0}}, .actualValues = {3.0}});
+
+    const auto readouts =
+        protoscope::ui::collectCursorIntersectionReadouts(view, snapshot, displayData, {0, 1, 2}, 0.1);
+    require(readouts.size() == 2U, "bit lane 通道不应返回交点读数");
+    require(readouts[0].readout.channelIndex == 0U && readouts[1].readout.channelIndex == 2U,
+            "交点读数应保留普通曲线通道顺序");
+}
+
+void test_cursor_intersection_readouts_respect_max_time_distance()
+{
+    protoscope::plot::WaveViewState view;
+    view.showCursorIntersectionReadouts = true;
+    view.cursors[0].enabled = true;
+    view.cursors[0].time = 10.0;
+    view.cursors[1].enabled = false;
+
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "CH1", .unit = "V"});
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = {{.time = 1.0, .value = 2.0}},
+        .actualValues = {2.0},
+    });
+
+    const auto readouts = protoscope::ui::collectCursorIntersectionReadouts(view, snapshot, displayData, {0}, 0.1);
+    require(readouts.empty(), "超过最大时间距离时不应返回交点读数");
+}
+
+void test_cursor_readout_annotation_requires_hold_or_pin()
+{
+    require(!protoscope::ui::shouldDrawCursorReadoutAnnotation(false, false), "未拖动且未固定时不应显示游标读数");
+    require(protoscope::ui::shouldDrawCursorReadoutAnnotation(true, false), "拖动游标时应显示游标读数");
+    require(protoscope::ui::shouldDrawCursorReadoutAnnotation(false, true), "固定游标时应显示游标读数");
+}
+
 void test_plot_limited_envelope_edges()
 {
     protoscope::plot::OscilloscopeBuffer buffer;
@@ -3741,15 +3859,17 @@ void test_wave_status_overlay_items_only_show_non_default_states()
     view.lockVerticalRange = true;
     view.showCursors = false;
     view.showHoverReadout = false;
+    view.showCursorIntersectionReadouts = true;
 
     const auto items = protoscope::ui::buildWaveStatusOverlayItems(view);
-    require(items.size() == 6, "非默认波形状态应生成对应图内状态标签");
+    require(items.size() == 7, "非默认波形状态应生成对应图内状态标签");
     require(items[0].label == std::string_view("暂停跟随"), "暂停跟随状态应排在第一位");
     require(items[1].label == std::string_view("FFT"), "FFT 状态应排在第二位");
     require(items[2].label == std::string_view("框选"), "框选状态应排在第三位");
     require(items[3].label == std::string_view("纵轴锁定"), "纵轴锁定状态应排在第四位");
     require(items[4].label == std::string_view("游标隐藏"), "游标隐藏状态应排在第五位");
     require(items[5].label == std::string_view("读数隐藏"), "悬停读数隐藏状态应排在第六位");
+    require(items[6].label == std::string_view("交点读数"), "交点读数状态应排在第七位");
 
     view.zoomSelectionActive = false;
     view.zoomSelectionDragging = true;

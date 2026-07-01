@@ -30,7 +30,15 @@ std::vector<WaveStatusOverlayItem> buildWaveStatusOverlayItems(const plot::WaveV
     if (!view.showHoverReadout) {
         items.push_back({"读数隐藏"});
     }
+    if (view.showCursorIntersectionReadouts) {
+        items.push_back({"交点读数"});
+    }
     return items;
+}
+
+bool shouldDrawCursorReadoutAnnotation(bool held, bool pinned)
+{
+    return held || pinned;
 }
 
 namespace {
@@ -1180,8 +1188,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
     }
 
     const auto& io = ImGui::GetIO();
-    const bool timeRefreshPending =
-        view.measurementCursorReadoutRefreshPending && !splitChannelIndex.has_value();
+    const bool timeRefreshPending = view.measurementCursorReadoutRefreshPending && !splitChannelIndex.has_value();
     bool anyCursorHeld = false;
     for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
         auto& cursor = view.cursors[cursorIndex];
@@ -1288,7 +1295,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
         } else if (!smartSnap.has_value()) {
             view.activeBitLane = {};
         }
-        if (held || hovered || cursor.pinned) {
+        if (shouldDrawCursorReadoutAnnotation(held, cursor.pinned)) {
             if (best->bit.has_value()) {
                 const auto& laneInfo = *best->bit;
                 const auto& bitChannel = snapshot.channels[laneInfo.parentChannelIndex];
@@ -1774,6 +1781,9 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
                 bitLaneDoubleClickConsumed
                     ? false
                     : handleSplitPlotCursors(view, snapshot, displayData, interactionContext, result.cursorReadouts);
+            const auto intersectionReadouts =
+                collectCursorIntersectionReadouts(view, snapshot, displayData, splitChannelIndices, timeSnapDistance);
+            drawCursorIntersectionReadouts(intersectionReadouts, snapshot);
             anyCursorHeld = rowCursorHeld || anyCursorHeld;
             if (plotHovered || (!mouseInsideSplitRegion && channelIndex == view.measurementChannelIndex)) {
                 const double maxCursorReadoutDistance =
@@ -2037,6 +2047,9 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                                                          smartSnapDistance,
                                                                          valueSnapDistance,
                                                                          result.cursorReadouts);
+    const auto intersectionReadouts = collectCursorIntersectionReadouts(
+        view, frame.snapshot, plotDisplayData, visibleChannelIndices, timeSnapDistance);
+    drawCursorIntersectionReadouts(intersectionReadouts, frame.snapshot);
     const bool userInteracting = plotInteractionActive(anyCursorHeld);
     if (!viewportChangedThisFrame) {
         const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();

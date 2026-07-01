@@ -136,6 +136,12 @@ struct HoverReadout {
     plot::CursorReadout readout;
 };
 
+struct CursorIntersectionReadout {
+    std::size_t cursorIndex{0};
+    double cursorTime{0.0};
+    plot::CursorReadout readout;
+};
+
 struct WaveStatusOverlayItem {
     std::string_view label;
 };
@@ -143,6 +149,7 @@ struct WaveStatusOverlayItem {
 std::string formatMetricText(double value, const char* baseUnit);
 bool plotInteractionActive(bool toolHeld);
 std::vector<WaveStatusOverlayItem> buildWaveStatusOverlayItems(const plot::WaveViewState& view);
+bool shouldDrawCursorReadoutAnnotation(bool held, bool pinned);
 float resolveMeasurementSafeRightX(float contentLeftX,
                                    float contentWidth,
                                    bool toolsCollapsed,
@@ -286,6 +293,12 @@ std::optional<HoverReadout> findHoverReadout(
     bool preferWaveformHoverReadout = true,
     plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy = plot::WaveBitDisplayReadoutPolicy::MixedNearest,
     bool activeBitLaneVisibleForReadout = false);
+std::vector<CursorIntersectionReadout> collectCursorIntersectionReadouts(
+    const plot::WaveViewState& view,
+    const plot::WaveSnapshot& snapshot,
+    const plot::WaveDisplayData& displayData,
+    const std::vector<std::size_t>& visibleChannelIndices,
+    double maxTimeDistance);
 bool bitLaneMeasurementActive(const plot::WaveViewState& view);
 bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout);
 bool cursorPairUsesBitLanes(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);
@@ -413,6 +426,8 @@ void drawCursorAnnotation(std::size_t cursorIndex,
                           const plot::ChannelView& channel,
                           std::string_view timeUnit,
                           std::string_view snapLabel);
+void drawCursorIntersectionReadouts(const std::vector<CursorIntersectionReadout>& readouts,
+                                    const plot::WaveSnapshot& snapshot);
 
 void drawOverviewWindow(plot::WaveViewState& view,
                         const plot::ViewConfig& config,

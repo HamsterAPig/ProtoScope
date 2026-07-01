@@ -23,6 +23,33 @@ ProtoScope.exe --diagnose --renderer=d3d11
 ProtoScope.exe --diagnose-renderer-probe --renderer=d3d11
 ```
 
+## 性能调优速查
+
+推荐的平滑实时刷新配置如下。新默认值已经采用这组预算；如果本地 YAML 显式写了旧的大预算值，需要删除或改小这些单项后才会回到新默认。
+
+```yaml
+receive:
+  transport_read_buffer_bytes: 4096
+gui:
+  realtime_backlog:
+    rx_chunk_bytes_per_pump: 4096
+    plot_appends_per_pump: 128
+    pump_min_interval_ms: 1.0
+scripting:
+  worker:
+    batch_bytes: 8192
+    output_flush_budget_ms: 2.0
+```
+
+- `performance.scale` 只影响未显式写出的预算项；YAML 里写出的单项会优先覆盖公共系数。
+- `batch_bytes`、`transport_read_buffer_bytes`、`rx_chunk_bytes_per_pump` 控制数据投递颗粒度，越小越容易平滑刷新。
+- `fps_limit`、`pump_min_interval_ms` 控制 UI 刷新频率和 CPU 占用。
+- `max_render_points_per_channel`、`max_render_vertices`、`peak_detect_downsample` 控制绘制压力，不负责拆分数据批次。
+- 更平滑：减小 `batch_bytes`、`transport_read_buffer_bytes`、`rx_chunk_bytes_per_pump`、`plot_appends_per_pump`，适当降低 `output_flush_budget_ms` 和 `pump_min_interval_ms`。
+- 更高吞吐：增大上述批量预算，让 UI 一轮追更多 backlog，但可能出现更明显的大段刷新。
+- 更省渲染性能：降低 `fps_limit`、`max_render_points_per_channel`、`max_render_vertices`，保持 `peak_detect_downsample: true`。
+- 更高细节：提高渲染点数预算或延后降采样，代价是 CPU/GPU 压力上升。
+
 ## 当前能力
 
 - `通讯配置`：支持 `TCP Client`、`TCP Server`、`Serial`、`UDP Peer`。

@@ -454,8 +454,8 @@ namespace {
         const float rowHeight = ImGui::GetFrameHeight();
         const float buttonAreaHeight =
             (std::max)(rowHeight, toolbarHeight - style.ScrollbarSize - style.ChildBorderSize * 2.0F);
-        const float offsetY = style.ChildBorderSize +
-                              (std::max)(0.0F, std::floor((buttonAreaHeight - rowHeight) * 0.5F));
+        const float offsetY =
+            style.ChildBorderSize + (std::max)(0.0F, std::floor((buttonAreaHeight - rowHeight) * 0.5F));
         ImGui::SetCursorPosY(offsetY);
         ImGui::AlignTextToFramePadding();
 
@@ -515,6 +515,13 @@ namespace {
         if (drawTopToolbarButton("B", view.cursors[1].enabled, "显示或隐藏 B 游标。")) {
             view.cursors[1].enabled = !view.cursors[1].enabled;
         }
+        ImGui::SameLine();
+        ImGui::PushID("cursor_intersection_readouts");
+        if (drawTopToolbarButton(
+                "交点", view.showCursorIntersectionReadouts, "显示或隐藏可见普通曲线通道上的 A/B 游标交点读数。")) {
+            view.showCursorIntersectionReadouts = !view.showCursorIntersectionReadouts;
+        }
+        ImGui::PopID();
         ImGui::SameLine();
         if (drawTopToolbarButton(
                 view.cursorIntervalLocked ? "锁定" : "间隔", view.cursorIntervalLocked, "锁定 A/B 游标间隔。")) {
@@ -1620,12 +1627,12 @@ void drawWaveContentComponents(WaveComponentSet& components, WaveContext& contex
         "##wave_content", ImVec2(context.contentWidth, context.availableHeight), false, ImGuiWindowFlags_NoScrollbar);
     const ImVec2 contentPos = ImGui::GetWindowPos();
     context.measurementSafeRightX = resolveMeasurementSafeRightX(contentPos.x,
-                                                                  context.contentWidth,
-                                                                  context.wave.toolsCollapsed,
-                                                                  context.wave.toolsExpandedWidth,
-                                                                  context.wave.minToolsExpandedWidth,
-                                                                  context.wave.maxToolsExpandedWidth,
-                                                                  context.wave.contentToolsSplitterWidth);
+                                                                 context.contentWidth,
+                                                                 context.wave.toolsCollapsed,
+                                                                 context.wave.toolsExpandedWidth,
+                                                                 context.wave.minToolsExpandedWidth,
+                                                                 context.wave.maxToolsExpandedWidth,
+                                                                 context.wave.contentToolsSplitterWidth);
     const bool cursorSplitMode = isCursorSplitFftMode(context.view);
     if (!cursorSplitMode) {
         components.overview.draw(context);

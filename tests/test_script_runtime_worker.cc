@@ -235,6 +235,9 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
 
 void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events()
 {
+    const protoscope::scripting::ScriptRuntimeWorkerConfig defaultConfig;
+    require(defaultConfig.batchBytes == 8192U, "ScriptRuntimeWorkerConfig 默认 batch_bytes 应为 8192");
+
     const ScopedTempPath protocolDir(makeWorkerProtocolDir("batch-bytes", workerBatchProbeScript()));
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{

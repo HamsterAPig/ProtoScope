@@ -68,10 +68,11 @@ gui:
   realtime_backlog:
     mode: responsive
     # 以下预算缺省受 performance.scale 控制；写出后即覆盖公共系数。
-    # rx_chunk_bytes_per_pump: 65536
+    # rx_chunk_bytes_per_pump: 4096
     # transfer_frame_rows_per_pump: 2000
-    # plot_appends_per_pump: 4096
+    # plot_appends_per_pump: 128
     # raw_first_backlog_warn_bytes: 33554432
+    pump_min_interval_ms: 1.0
     discard_backlog_on_disconnect: false
   elf_symbol_combo:
     limit: 10
@@ -93,7 +94,7 @@ protocol:
 
 receive:
   # 缺省受 performance.scale 控制；写出后即覆盖公共系数。
-  # transport_read_buffer_bytes: 65536
+  # transport_read_buffer_bytes: 4096
   stream_buffer:
     near_overflow_threshold: 0.8
     popup_enabled: true
@@ -107,8 +108,8 @@ scripting:
     # rx_queue_limit_bytes: 67108864
     # memory_budget_bytes: 268435456
     # output_queue_limit: 65536
-    # batch_bytes: 262144
-    # output_flush_budget_ms: 4.0
+    # batch_bytes: 8192
+    # output_flush_budget_ms: 2.0
     memory_budget_available_ratio: 0.0
     backpressure_enabled: true
     backpressure_rx_queue_high_watermark: 0.5
