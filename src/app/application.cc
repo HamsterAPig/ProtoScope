@@ -2611,11 +2611,12 @@ bool Application::exportWaveAnalysisReport(const std::filesystem::path& path, st
 std::optional<std::uint64_t> Application::nextWakeupAtMs() const
 {
     const auto scriptSnapshot = scriptWorker_.snapshot();
+    const auto pendingWorkerRxBytes = scriptWorker_.pendingRxBytes();
     if (rawCaptureReplay_.loaded && rawCaptureReplay_.playing) {
         return nowMs();
     }
     if (!pendingTransportEvents_.empty() || !pendingRxByteChunks_.empty() || !pendingTransferFrameRows_.empty() ||
-        scriptSnapshot.pendingPlotAppends > 0U || scriptSnapshot.pendingWorkerRxBytes > 0U) {
+        scriptSnapshot.pendingPlotAppends > 0U || pendingWorkerRxBytes > 0U) {
         return nowMs();
     }
     auto nextWakeup = scriptSnapshot.nextWakeupAtMs;
@@ -2686,11 +2687,12 @@ void Application::syncDockState()
         comm.state = transport::TransportState::Closed;
     }
     const auto scriptSnapshot = scriptWorker_.snapshot();
-    comm.pendingRxBytes = pendingRxByteCount() + scriptSnapshot.pendingWorkerRxBytes;
+    const auto pendingWorkerRxBytes = scriptWorker_.pendingRxBytes();
+    comm.pendingRxBytes = pendingRxByteCount() + pendingWorkerRxBytes;
     comm.pendingTransferFrameRows = pendingTransferFrameRows_.size();
     comm.pendingPlotAppends = scriptSnapshot.pendingPlotAppends + pendingScriptPlotAppends_.size();
     comm.rxInputQueueBytes = pendingRxByteCount();
-    comm.parserPendingBytes = scriptSnapshot.pendingWorkerRxBytes;
+    comm.parserPendingBytes = pendingWorkerRxBytes;
     comm.postprocessPendingBatches = 0U;
     comm.luaPendingItems = scriptSnapshot.inputQueueSize;
     comm.uiPendingItems =
