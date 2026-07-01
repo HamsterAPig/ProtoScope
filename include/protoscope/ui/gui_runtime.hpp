@@ -44,6 +44,8 @@ struct GuiRuntimeOptions {
     config::GuiRendererBackend rendererBackend{config::GuiRendererBackend::OpenGL};
 };
 
+bool runRendererProbe(app::StartupDiagnosticsSink* diagnostics);
+
 class GuiRuntime {
 public:
     GuiRuntime(app::Application& application,

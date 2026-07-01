@@ -8,6 +8,7 @@
 #endif
 
 #include <algorithm>
+#include <csignal>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
@@ -177,6 +178,17 @@ std::string exceptionCodeText(unsigned long code)
     return out.str();
 }
 
+std::string currentThreadIdText()
+{
+#if defined(_WIN32)
+    return std::to_string(GetCurrentThreadId());
+#else
+    std::ostringstream out;
+    out << std::this_thread::get_id();
+    return out.str();
+#endif
+}
+
 std::string quoteCommandLineArg(std::string_view arg)
 {
     if (arg.empty()) {
@@ -216,6 +228,26 @@ std::string commandLineText(const std::vector<std::string>& argv)
     return out.str();
 }
 
+std::string commandLineParsedText(const StartupCommandLine& commandLine)
+{
+    const std::string rendererSource = commandLine.rendererArgument.has_value() ? "cli" : "unset";
+    const std::string rendererBackend = commandLine.rendererBackend.has_value()
+                                            ? std::string(config::guiRendererBackendId(*commandLine.rendererBackend))
+                                            : "<unset>";
+    const std::string rendererValue = commandLine.rendererArgument.value_or("<unset>");
+
+    std::ostringstream out;
+    out << "diagnose=" << (commandLine.diagnose ? "true" : "false")
+        << ", diagnose_renderer_probe=" << (commandLine.diagnoseRendererProbe ? "true" : "false")
+        << ", renderer_backend=" << rendererBackend << ", renderer_source=" << rendererSource
+        << ", renderer_value=" << rendererValue;
+    if (!commandLine.error.empty()) {
+        out << ", parse_error=" << commandLine.error;
+    }
+    out << ", command_line=" << commandLineText(commandLine.argv);
+    return out.str();
+}
+
 } // namespace
 
 StartupCommandLine parseStartupCommandLine(const int argc, const char* const* argv)
@@ -234,6 +266,11 @@ StartupCommandLine parseStartupCommandLine(const int argc, const char* const* ar
         const std::string_view arg(argv[index]);
         if (arg == "--diagnose") {
             options.diagnose = true;
+            continue;
+        }
+        if (arg == "--diagnose-renderer-probe") {
+            options.diagnose = true;
+            options.diagnoseRendererProbe = true;
             continue;
         }
 
@@ -339,6 +376,7 @@ StartupDiagnostics::StartupDiagnostics(StartupDiagnosticsOptions options)
     if (options_.diagnose) {
         logPath_ = selectDiagnosticsLogPath(options_.pathCandidates, timestampFileName());
         ensureLogOpen();
+        writeStateFile();
     }
 }
 
@@ -354,6 +392,7 @@ void StartupDiagnostics::setStage(std::string_view stage)
     currentStage_ = std::string(stage);
     if (options_.diagnose) {
         logEvent(stage, "进入启动阶段");
+        writeStateFile();
     }
 }
 
@@ -367,7 +406,7 @@ void StartupDiagnostics::logEvent(std::string_view stage, std::string_view messa
     std::ostringstream out;
     out << std::fixed << std::setprecision(3) << elapsedMs() << "ms"
         << " [" << stage << "] " << message;
-    writeLine(out.str());
+    writeLine(stage, out.str());
 }
 
 void StartupDiagnostics::logCommandLineParsed(const StartupCommandLine& commandLine)
@@ -376,21 +415,12 @@ void StartupDiagnostics::logCommandLineParsed(const StartupCommandLine& commandL
         return;
     }
 
-    const std::string rendererSource = commandLine.rendererArgument.has_value() ? "cli" : "unset";
-    const std::string rendererBackend = commandLine.rendererBackend.has_value()
-                                            ? std::string(config::guiRendererBackendId(*commandLine.rendererBackend))
-                                            : "<unset>";
-    const std::string rendererValue = commandLine.rendererArgument.value_or("<unset>");
-
-    std::ostringstream out;
-    out << "diagnose=" << (commandLine.diagnose ? "true" : "false")
-        << ", renderer_backend=" << rendererBackend << ", renderer_source=" << rendererSource
-        << ", renderer_value=" << rendererValue;
-    if (!commandLine.error.empty()) {
-        out << ", parse_error=" << commandLine.error;
+    currentStage_ = "command_line_parsed";
+    if (!commandLineParsedWritten_) {
+        logEvent("command_line_parsed", commandLineParsedText(commandLine));
+        commandLineParsedWritten_ = true;
     }
-    out << ", command_line=" << commandLineText(commandLine.argv);
-    logEvent("command_line_parsed", out.str());
+    writeStateFile();
 }
 
 void StartupDiagnostics::logFailure(std::string_view stage, std::string_view reason)
@@ -404,7 +434,7 @@ void StartupDiagnostics::logFailure(std::string_view stage, std::string_view rea
     std::ostringstream out;
     out << std::fixed << std::setprecision(3) << elapsedMs() << "ms"
         << " [" << stage << "] FAILED: " << reason;
-    writeLine(out.str());
+    writeLine(stage, out.str());
 }
 
 void StartupDiagnostics::completeStage(std::string_view stage)
@@ -427,7 +457,7 @@ void StartupDiagnostics::writeCrash(std::string_view reason, std::optional<unsig
     ensureLogOpen();
 
     std::ostringstream out;
-    out << "崩溃兜底: " << reason << ", stage=" << currentStage_ << ", thread=" << std::this_thread::get_id();
+    out << "crash_reason=" << reason << ", stage=" << currentStage_ << ", thread_id=" << currentThreadIdText();
     if (exceptionCode.has_value()) {
         out << ", exception_code=" << exceptionCodeText(*exceptionCode);
     }
@@ -435,7 +465,8 @@ void StartupDiagnostics::writeCrash(std::string_view reason, std::optional<unsig
     if (!state.empty()) {
         out << ", diagnostics_state=" << state;
     }
-    writeLine(out.str());
+    writeLine("crash", out.str());
+    writeStateFile();
 }
 
 bool StartupDiagnostics::writeCrashDump(void* exceptionPointers)
@@ -512,6 +543,11 @@ const std::filesystem::path& StartupDiagnostics::logPath() const
     return logPath_.path;
 }
 
+std::filesystem::path StartupDiagnostics::statePath() const
+{
+    return logPath_.path.empty() ? std::filesystem::path{} : logPath_.path.parent_path() / "diagnostics-state.txt";
+}
+
 const std::string& StartupDiagnostics::currentStage() const
 {
     return currentStage_;
@@ -526,7 +562,10 @@ std::string StartupDiagnostics::logWriteState() const
     std::ostringstream out;
     out << "append_open_failed_count=" << appendOpenFailureCount_;
     if (!lastAppendOpenError_.empty()) {
-        out << ", last_error=" << lastAppendOpenError_;
+        out << ", last_append_error=" << lastAppendOpenError_;
+    }
+    if (!lastAppendStage_.empty()) {
+        out << ", last_append_stage=" << lastAppendStage_;
     }
     return out.str();
 }
@@ -557,7 +596,9 @@ void StartupDiagnostics::writeHeader()
         headerWritten_ = true;
         ++appendOpenFailureCount_;
         lastAppendOpenError_ = "header_open_failed";
+        lastAppendStage_ = currentStage_;
         appendFailurePending_ = true;
+        writeStateFile();
         return;
     }
 
@@ -577,14 +618,21 @@ void StartupDiagnostics::writeHeader()
     // 启动早期最容易崩溃，header、路径探测和 process_start 必须同一次打开写完。
     writePathAttempts(out);
     writeProcessStart(out);
+    if (!options_.commandLine.empty()) {
+        writeCommandLineParsed(out, parseStartupCommandLine(options_.commandLine));
+        commandLineParsedWritten_ = true;
+        currentStage_ = "command_line_parsed";
+    }
     out.flush();
     if (!out.good()) {
         ++appendOpenFailureCount_;
         lastAppendOpenError_ = "header_flush_failed";
+        lastAppendStage_ = currentStage_;
         appendFailurePending_ = true;
     }
 
     headerWritten_ = true;
+    writeStateFile();
 }
 
 void StartupDiagnostics::writePathAttempts(std::ostream& out)
@@ -605,7 +653,39 @@ void StartupDiagnostics::writeProcessStart(std::ostream& out)
         << " [process_start] 诊断模式已启用\n";
 }
 
-void StartupDiagnostics::writeLine(std::string_view line)
+void StartupDiagnostics::writeCommandLineParsed(std::ostream& out, const StartupCommandLine& commandLine)
+{
+    out << std::fixed << std::setprecision(3) << elapsedMs() << "ms"
+        << " [command_line_parsed] " << commandLineParsedText(commandLine) << '\n';
+}
+
+void StartupDiagnostics::writeStateFile()
+{
+    if (!options_.diagnose) {
+        return;
+    }
+    const auto path = statePath();
+    if (path.empty()) {
+        return;
+    }
+
+    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    if (!out.good()) {
+        return;
+    }
+    out << "last_stage: " << currentStage_ << '\n';
+    out << "main_log_path: " << pathText(logPath_.path) << '\n';
+    out << "append_open_failed_count: " << appendOpenFailureCount_ << '\n';
+    if (!lastAppendOpenError_.empty()) {
+        out << "last_append_error: " << lastAppendOpenError_ << '\n';
+    }
+    if (!lastAppendStage_.empty()) {
+        out << "last_append_stage: " << lastAppendStage_ << '\n';
+    }
+    out.flush();
+}
+
+void StartupDiagnostics::writeLine(std::string_view stage, std::string_view line)
 {
     if (logPath_.path.empty()) {
         return;
@@ -616,7 +696,9 @@ void StartupDiagnostics::writeLine(std::string_view line)
     if (!out.good()) {
         ++appendOpenFailureCount_;
         lastAppendOpenError_ = "append_open_failed";
+        lastAppendStage_ = std::string(stage);
         appendFailurePending_ = true;
+        writeStateFile();
         return;
     }
 
@@ -624,6 +706,9 @@ void StartupDiagnostics::writeLine(std::string_view line)
         out << "append_open_failed: count=" << appendOpenFailureCount_;
         if (!lastAppendOpenError_.empty()) {
             out << ", last_error=" << lastAppendOpenError_;
+        }
+        if (!lastAppendStage_.empty()) {
+            out << ", last_stage=" << lastAppendStage_;
         }
         out << '\n';
         appendFailurePending_ = false;
@@ -634,7 +719,9 @@ void StartupDiagnostics::writeLine(std::string_view line)
     if (!out.good()) {
         ++appendOpenFailureCount_;
         lastAppendOpenError_ = "append_write_failed";
+        lastAppendStage_ = std::string(stage);
         appendFailurePending_ = true;
+        writeStateFile();
     }
 }
 

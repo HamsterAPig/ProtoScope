@@ -9,6 +9,7 @@
 #endif
 
 #include <algorithm>
+#include <csignal>
 #include <cstdlib>
 #include <exception>
 #include <string>
@@ -17,6 +18,14 @@
 namespace {
 
 protoscope::app::StartupDiagnostics* g_startupDiagnostics = nullptr;
+
+void writeSignalCrash(int signalValue)
+{
+    if (g_startupDiagnostics != nullptr) {
+        g_startupDiagnostics->writeCrash("signal " + std::to_string(signalValue));
+    }
+    std::_Exit(128 + signalValue);
+}
 
 void showStartupFailureMessage(const protoscope::app::StartupFailureInfo& failure)
 {
@@ -31,6 +40,12 @@ void showStartupFailureMessage(const protoscope::app::StartupFailureInfo& failur
 void installCrashHandlers(protoscope::app::StartupDiagnostics& diagnostics)
 {
     g_startupDiagnostics = &diagnostics;
+    std::signal(SIGABRT, writeSignalCrash);
+    std::signal(SIGFPE, writeSignalCrash);
+    std::signal(SIGILL, writeSignalCrash);
+    std::signal(SIGSEGV, writeSignalCrash);
+    std::signal(SIGTERM, writeSignalCrash);
+
     std::set_terminate([] {
         if (g_startupDiagnostics != nullptr) {
             g_startupDiagnostics->writeCrash("std::terminate");
@@ -39,6 +54,19 @@ void installCrashHandlers(protoscope::app::StartupDiagnostics& diagnostics)
     });
 
 #if defined(_WIN32)
+    AddVectoredExceptionHandler(1, [](EXCEPTION_POINTERS* exceptionPointers) -> LONG {
+        if (g_startupDiagnostics != nullptr) {
+            const auto code = exceptionPointers != nullptr && exceptionPointers->ExceptionRecord != nullptr
+                                  ? exceptionPointers->ExceptionRecord->ExceptionCode
+                                  : 0UL;
+            // Windows 会用一阶异常承载 C++ EH 和调试线程名事件，这些不是崩溃证据。
+            if (code == 0xE06D7363UL || code == 0x406D1388UL) {
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+            g_startupDiagnostics->writeCrash("windows vectored exception", code);
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    });
     SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* exceptionPointers) -> LONG {
         if (g_startupDiagnostics != nullptr) {
             const auto code = exceptionPointers != nullptr && exceptionPointers->ExceptionRecord != nullptr
@@ -87,6 +115,11 @@ int runProtoScope(const protoscope::app::StartupCommandLine& commandLine)
         if (!commandLine.error.empty()) {
             return failStartup(diagnostics, "parseStartupCommandLine", commandLine.error);
         }
+        if (commandLine.diagnoseRendererProbe) {
+            diagnostics.setStage("diagnose_renderer_probe");
+            const bool ok = protoscope::ui::runRendererProbe(&diagnostics);
+            return ok ? 0 : failStartup(diagnostics, "diagnose_renderer_probe", "renderer probe 失败");
+        }
 
         diagnostics.setStage("before_application_construct");
         protoscope::app::Application app;
@@ -101,7 +134,8 @@ int runProtoScope(const protoscope::app::StartupCommandLine& commandLine)
 
         const auto rendererBackend =
             commandLine.rendererBackend.value_or(app.runtimeConfig().gui.rendererBackend);
-        const std::string rendererSource = commandLine.rendererBackend.has_value() ? "cli" : "yaml_or_default";
+        const std::string rendererSource =
+            commandLine.rendererBackend.has_value() ? "cli" : (app.loadedConfigFromDisk() ? "yaml" : "default");
         diagnostics.logEvent(
             "GuiRuntime::rendererBackend",
             "renderer_backend=" + std::string(protoscope::config::guiRendererBackendId(rendererBackend)) +
@@ -112,15 +146,16 @@ int runProtoScope(const protoscope::app::StartupCommandLine& commandLine)
                 " (" + rendererSource + ")");
 
         protoscope::config::ConfigStore configStore;
+        diagnostics.setStage("before_gui_runtime_construct");
         protoscope::ui::GuiRuntime runtime(
             app, configStore, protoscope::ui::GuiRuntimeOptions{.rendererBackend = rendererBackend}, &diagnostics);
-        diagnostics.setStage("GuiRuntime::initialize");
+        diagnostics.setStage("before_gui_runtime_initialize");
         if (!runtime.initialize()) {
             app.logger().error("main", "ProtoScope GUI 初始化失败");
             return failStartup(
                 diagnostics, "GuiRuntime::initialize", "GuiRuntime::initialize 返回失败", &app, &runtime);
         }
-        diagnostics.completeStage("GuiRuntime::initialize");
+        diagnostics.setStage("after_gui_runtime_initialize");
 
         diagnostics.setStage("GuiRuntime::run");
         const int exitCode = runtime.run();

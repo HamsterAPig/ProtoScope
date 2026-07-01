@@ -13,6 +13,7 @@ namespace protoscope::app {
 
 struct StartupCommandLine {
     bool diagnose{false};
+    bool diagnoseRendererProbe{false};
     std::optional<config::GuiRendererBackend> rendererBackend;
     std::optional<std::string> rendererArgument;
     std::string error;
@@ -87,6 +88,7 @@ public:
 
     [[nodiscard]] bool diagnoseEnabled() const;
     [[nodiscard]] const std::filesystem::path& logPath() const;
+    [[nodiscard]] std::filesystem::path statePath() const;
     [[nodiscard]] const std::string& currentStage() const;
     [[nodiscard]] std::string logWriteState() const;
 
@@ -95,16 +97,20 @@ private:
     void writeHeader();
     void writePathAttempts(std::ostream& out);
     void writeProcessStart(std::ostream& out);
-    void writeLine(std::string_view line);
+    void writeCommandLineParsed(std::ostream& out, const StartupCommandLine& commandLine);
+    void writeStateFile();
+    void writeLine(std::string_view stage, std::string_view line);
     [[nodiscard]] double elapsedMs() const;
 
     StartupDiagnosticsOptions options_;
     DiagnosticsLogPathResult logPath_;
     std::chrono::steady_clock::time_point startedAt_;
-    std::string currentStage_{"process_start"};
+    std::string currentStage_{"diagnostics_constructed"};
     bool headerWritten_{false};
+    bool commandLineParsedWritten_{false};
     std::size_t appendOpenFailureCount_{0};
     std::string lastAppendOpenError_;
+    std::string lastAppendStage_;
     bool appendFailurePending_{false};
 };
 

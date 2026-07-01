@@ -10,6 +10,19 @@ ProtoScope 是一个面向串口、TCP、UDP 调试场景的 `ImGui + ImPlot + L
 - LuaLS 提示：`protocols/protoscope_api.lua` 由 `protocols/protoscope_api_manifest.json` 生成。
 - 维护说明：见 [src/include 模块设计导览](docs/module-design.md) 和 [Lua 宿主 API 接入指南](docs/lua-host-integration.md)。
 
+## 启动参数
+
+- `--diagnose`：启用启动诊断日志。日志会写入可用的 `logs/` 目录，并记录启动阶段、命令行、路径探测、崩溃兜底和 GUI/renderer 初始化信息。
+- `--renderer=<backend>` 或 `--renderer <backend>`：指定 GUI 渲染后端，优先级高于 YAML 配置和默认值。可选值：`opengl`、`d3d11`、`d3d11_warp`，其中 `d3d11-warp` 也会归一化为 `d3d11_warp`。
+- `--diagnose-renderer-probe`：启用独立 renderer 探测模式，不进入完整应用。该模式会自动启用 `--diagnose`，并单独探测 `glfwInit`、D3D11 hardware、D3D11 WARP 和 OpenGL 版本。
+
+常用启动诊断命令：
+
+```powershell
+ProtoScope.exe --diagnose --renderer=d3d11
+ProtoScope.exe --diagnose-renderer-probe --renderer=d3d11
+```
+
 ## 当前能力
 
 - `通讯配置`：支持 `TCP Client`、`TCP Server`、`Serial`、`UDP Peer`。

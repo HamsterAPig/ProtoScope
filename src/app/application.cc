@@ -1074,6 +1074,7 @@ bool Application::initialize()
 
     const auto loaded = configStore_.load(configStore_.defaultConfigPath());
     runtimeConfig_ = loaded.config;
+    loadedConfigFromDisk_ = loaded.loadedFromDisk;
     loggingFacade_.applyConfig(loaded.config.logging);
     const bool configApplied = applyConfig(loaded.config);
 
@@ -1163,6 +1164,11 @@ config::AppConfig Application::captureConfig() const
 const config::AppConfig& Application::runtimeConfig() const
 {
     return runtimeConfig_;
+}
+
+bool Application::loadedConfigFromDisk() const
+{
+    return loadedConfigFromDisk_;
 }
 
 bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool forceReload)

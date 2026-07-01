@@ -94,6 +94,14 @@ void test_startup_diagnostics_parse_renderer_with_diagnose()
     protoscope::tests::require(parsed.error.empty(), "valid diagnose + renderer args should not set parse error");
 }
 
+void test_startup_diagnostics_parse_renderer_probe_enables_diagnose()
+{
+    const auto parsed = protoscope::app::parseStartupCommandLine(
+        std::vector<std::string>{"ProtoScope.exe", "--diagnose-renderer-probe"});
+    protoscope::tests::require(parsed.diagnose, "--diagnose-renderer-probe should enable diagnostics");
+    protoscope::tests::require(parsed.diagnoseRendererProbe, "--diagnose-renderer-probe should select probe mode");
+}
+
 void test_startup_renderer_backend_priority()
 {
     auto yamlConfig = protoscope::config::AppConfig{};
@@ -144,11 +152,17 @@ void test_startup_diagnostics_construct_with_diagnose_writes_process_start()
     const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-process-start");
     const protoscope::tests::ScopedTempPath cleanup(root);
 
-    protoscope::app::StartupDiagnostics diagnostics(makeDiagnosticsOptions(root, true));
+    auto options = makeDiagnosticsOptions(root, true);
+    options.commandLine = {"ProtoScope.exe", "--diagnose", "--renderer=d3d11"};
+    protoscope::app::StartupDiagnostics diagnostics(std::move(options));
 
     const auto report = readTextFile(diagnostics.logPath());
     protoscope::tests::require(report.find("[process_start] 诊断模式已启用") != std::string::npos,
                                "启用 diagnose 后构造函数应立即写入 process_start");
+    protoscope::tests::require(report.find("[command_line_parsed]") != std::string::npos,
+                               "构造函数应在首次打开日志时写入 command_line_parsed");
+    protoscope::tests::require(report.find("renderer_backend=d3d11") != std::string::npos,
+                               "首次日志应记录 CLI d3d11 renderer");
 }
 
 void test_startup_diagnostics_header_writes_selected_path_and_attempts()
@@ -179,6 +193,8 @@ void test_startup_diagnostics_log_failure_no_diagnose_does_not_create_log()
     protoscope::tests::require(diagnostics.logPath().empty(), "未启用 diagnose 时 logFailure 不应选择日志路径");
     protoscope::tests::require(!std::filesystem::exists(root / "logs", error),
                                "未启用 diagnose 时 logFailure 不应创建 exe logs 目录");
+    protoscope::tests::require(!std::filesystem::exists(root / "logs" / "diagnostics-state.txt", error),
+                               "未启用 diagnose 时不应创建旁路 state 文件");
 }
 
 void test_startup_diagnostics_write_crash_no_diagnose_does_not_create_log()
@@ -206,6 +222,9 @@ void test_startup_diagnostics_set_stage_with_diagnose_appends_stage()
     const auto report = readTextFile(diagnostics.logPath());
     protoscope::tests::require(report.find("[Application::initialize] 进入启动阶段") != std::string::npos,
                                "启用 diagnose 时 setStage 应正常追加阶段日志");
+    const auto state = readTextFile(diagnostics.statePath());
+    protoscope::tests::require(state.find("last_stage: Application::initialize") != std::string::npos,
+                               "setStage 应同步旁路 state 文件");
 }
 
 void test_startup_diagnostics_command_line_parsed_logs_renderer_cli()
@@ -229,6 +248,31 @@ void test_startup_diagnostics_command_line_parsed_logs_renderer_cli()
                                "command_line_parsed 应记录 CLI renderer 值");
     protoscope::tests::require(report.find("renderer_source=cli") != std::string::npos,
                                "command_line_parsed 应记录 renderer 来源为 cli");
+}
+
+void test_startup_diagnostics_append_failure_state_records_stage()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-diagnostics-append-failure");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::StartupDiagnostics diagnostics(makeDiagnosticsOptions(root, true));
+    const auto logPath = diagnostics.logPath();
+    std::filesystem::remove(logPath);
+    std::filesystem::create_directory(logPath);
+
+    diagnostics.logEvent("append_failure_stage", "force append failure");
+
+    const auto state = diagnostics.logWriteState();
+    protoscope::tests::require(state.find("append_open_failed_count=1") != std::string::npos,
+                               "append 打开失败应增加失败计数");
+    protoscope::tests::require(state.find("last_append_error=append_open_failed") != std::string::npos,
+                               "append 打开失败应记录错误");
+    protoscope::tests::require(state.find("last_append_stage=append_failure_stage") != std::string::npos,
+                               "append 打开失败应记录阶段");
+
+    const auto stateFile = readTextFile(diagnostics.statePath());
+    protoscope::tests::require(stateFile.find("last_append_stage: append_failure_stage") != std::string::npos,
+                               "旁路 state 文件应记录 append 失败阶段");
 }
 
 void test_startup_diagnostics_log_failure_with_diagnose_writes_stage_reason()
@@ -296,6 +340,21 @@ void test_startup_diagnostics_fatal_message_includes_stage_reason_log()
                                "fatal message should include reason");
     protoscope::tests::require(message.find("startup.log") != std::string::npos,
                                "fatal message should include log path");
+}
+
+void test_startup_diagnostics_fatal_message_includes_diagnostics_state()
+{
+    const auto message = protoscope::app::formatStartupFatalMessage({
+        .stage = "before_gui_runtime_initialize",
+        .reason = "renderer failed",
+        .logPath = "C:/Temp/ProtoScope/logs/startup.log",
+        .diagnosticsState = "append_open_failed_count=1, last_append_stage=crash",
+    });
+
+    protoscope::tests::require(message.find("append_open_failed_count=1") != std::string::npos,
+                               "fatal message should include diagnostics state");
+    protoscope::tests::require(message.find("last_append_stage=crash") != std::string::npos,
+                               "fatal message should include append stage");
 }
 
 void test_startup_diagnostics_fatal_message_omits_empty_log_path()
