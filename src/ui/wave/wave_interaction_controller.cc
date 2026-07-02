@@ -212,7 +212,7 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     auto viewport = currentViewport(view);
     viewport.minTime += previousPlot.x - currentPlot.x;
     viewport.maxTime += previousPlot.x - currentPlot.x;
-    applyViewport(view, viewport);
+    applyViewport(view, viewport, WaveViewportAutoFollowPolicy::UserInteraction);
     changed = true;
 
     if (canDragYOffset && view.activeBitYOffsetDrag) {

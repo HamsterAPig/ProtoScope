@@ -1689,9 +1689,7 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
             wave.view.viewMaxValue = setup.view.verticalMax;
         }
         wave.view.initialized = false;
-        if (setup.resetHistory) {
-            wave.view.autoFollowLatest = true;
-        }
+        // 核心流程：运行中的 plot.setup(reset_history=true) 只重建历史和默认视口，不覆盖用户手动暂停跟随状态。
         wave.view.defaultViewportPending = true;
         wave.statusMessage = "Lua 已更新波形通道配置";
     }

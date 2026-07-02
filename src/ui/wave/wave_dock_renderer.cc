@@ -385,7 +385,7 @@ namespace {
         view.viewMaxTime = center + nextSpan * 0.5;
         view.visibleDuration = nextSpan;
         view.centerTime = center;
-        view.autoFollowLatest = false;
+        applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::ExplicitCommand);
         view.forceNextMainPlotLimits = true;
     }
 
@@ -697,7 +697,7 @@ bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits)
     // 核心流程：ImPlot 双击坐标轴会直接改当前帧轴限，这里回写视口状态，避免下一帧被旧的 viewMin/viewMax 覆盖。
     recordMainPlotLimits(view, limits);
     if (xChanged) {
-        view.autoFollowLatest = false;
+        applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
     }
     return true;
 }
@@ -757,7 +757,7 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
         view.visibleDuration =
             (std::max)(view.viewMaxTime - view.viewMinTime, (std::max)(view.minVisibleTimeSpan, 1e-6));
         view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
-        view.autoFollowLatest = false;
+        applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
         changed = true;
     }
     if (ImPlot::IsAxisHovered(ImAxis_Y1) && selectedChannelUsesBitDisplay(view, snapshot)) {
@@ -785,7 +785,12 @@ void cancelZoomSelection(plot::WaveViewState& view)
     view.zoomSelectionDragging = false;
 }
 
-bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue);
+bool applyFullViewport(plot::WaveViewState& view,
+                       double minTime,
+                       double maxTime,
+                       double minValue,
+                       double maxValue,
+                       WaveViewportAutoFollowPolicy policy);
 
 enum class ZoomSelectionAxisMode {
     XOnly,
@@ -855,7 +860,7 @@ bool applyZoomSelectionViewport(plot::WaveViewState& view,
             view.viewMaxTime = maxTime;
             view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
             view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
-            view.autoFollowLatest = false;
+            applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
             view.forceNextMainPlotLimits = true;
             return true;
         case ZoomSelectionAxisMode::YOnly:
@@ -869,17 +874,39 @@ bool applyZoomSelectionViewport(plot::WaveViewState& view,
                 view.manualVerticalMin = minValue;
                 view.manualVerticalMax = maxValue;
             }
-            view.autoFollowLatest = false;
+            applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
             view.forceNextMainPlotLimits = true;
             return true;
         case ZoomSelectionAxisMode::XY:
             // 核心流程：斜向框选保留原有 XY 矩形缩放语义，两个轴一起回写到视口。
-            return applyFullViewport(view, minTime, maxTime, minValue, maxValue);
+            return applyFullViewport(
+                view, minTime, maxTime, minValue, maxValue, WaveViewportAutoFollowPolicy::UserInteraction);
     }
     return false;
 }
 
-bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue)
+void applyAutoFollowPausePolicy(plot::WaveViewState& view, WaveViewportAutoFollowPolicy policy)
+{
+    switch (policy) {
+        case WaveViewportAutoFollowPolicy::Preserve:
+            return;
+        case WaveViewportAutoFollowPolicy::UserInteraction:
+            if (view.pauseAutoFollowOnInteraction) {
+                view.autoFollowLatest = false;
+            }
+            return;
+        case WaveViewportAutoFollowPolicy::ExplicitCommand:
+            view.autoFollowLatest = false;
+            return;
+    }
+}
+
+bool applyFullViewport(plot::WaveViewState& view,
+                       double minTime,
+                       double maxTime,
+                       double minValue,
+                       double maxValue,
+                       WaveViewportAutoFollowPolicy policy)
 {
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     if (!std::isfinite(minTime) || !std::isfinite(maxTime) || maxTime - minTime < minVisibleTimeSpan) {
@@ -900,7 +927,7 @@ bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime
         view.manualVerticalMax = maxValue;
     }
     view.forceNextMainPlotLimits = true;
-    view.autoFollowLatest = false;
+    applyAutoFollowPausePolicy(view, policy);
     return true;
 }
 
@@ -998,7 +1025,12 @@ bool applyFitVisibleWaveforms(plot::WaveViewState& view,
 
     const auto yRange =
         plot::makeVerticalAutoFitRange(bounds.minValue, bounds.maxValue, view.verticalAutoFitMultiplier);
-    return applyFullViewport(view, bounds.minTime, bounds.maxTime, yRange.minValue, yRange.maxValue);
+    return applyFullViewport(view,
+                             bounds.minTime,
+                             bounds.maxTime,
+                             yRange.minValue,
+                             yRange.maxValue,
+                             WaveViewportAutoFollowPolicy::ExplicitCommand);
 }
 
 ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool suppressEscapeCancel)
@@ -1139,7 +1171,9 @@ const char* axisSourceName(plot::WaveTimeAxisSource source)
     return "未知";
 }
 
-void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport)
+void applyViewport(plot::WaveViewState& view,
+                   const plot::WaveViewport& viewport,
+                   WaveViewportAutoFollowPolicy policy)
 {
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     const auto oldViewport = currentViewport(view);
@@ -1151,7 +1185,7 @@ void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport
         view.viewMinValue = viewport.minValue;
         view.viewMaxValue = viewport.maxValue;
     }
-    view.autoFollowLatest = false;
+    applyAutoFollowPausePolicy(view, policy);
     view.forceNextMainPlotLimits = true;
     plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, currentViewport(view));
 }

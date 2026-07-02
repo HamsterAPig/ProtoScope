@@ -239,6 +239,20 @@ protoscope::plot::RawCaptureEvent makePlotSetupEvent(bool resetHistory = true)
     return event;
 }
 
+void writePlotSetupOnOpenProtocol(const std::filesystem::path& protocolDir)
+{
+    std::ofstream out(protocolDir / "main.lua");
+    require(out.good(), "plot.setup on_open 测试协议应可写入");
+    out << "function on_open(ctx)\n";
+    out << "  proto.plot.setup({\n";
+    out << "    source = 'follow_regression', reset_history = true,\n";
+    out << "    time_scale = 0.5, time_unit = 'ms', vertical_min = -20, vertical_max = 100, vertical_unit = '℃', "
+           "history_limit = 128,\n";
+    out << "    channels = { { label = '温度A', unit = '℃', ratio = 0.5, scale = 2.0, offset = -1.0 } }\n";
+    out << "  })\n";
+    out << "end\n";
+}
+
 void writeRuntimeProfileProtocol(const std::filesystem::path& protocolDir)
 {
     std::ofstream out(protocolDir / "main.lua");
@@ -1464,6 +1478,66 @@ void test_application_reset_wave_history_restores_default_viewport()
     require(!wave.view.initialized, "清空历史后应重新初始化视口");
     require(std::abs(wave.view.viewMinTime - 0.0) < 1e-12, "清空历史后 X 起点应回到 0");
     require(std::abs(wave.view.viewMaxTime - 2.0) < 1e-12, "清空历史后 X 窗口应沿用当前 duration");
+
+    application.shutdown();
+}
+
+void test_application_plot_setup_reset_history_preserves_paused_follow()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-plot-setup-follow-paused"));
+    writePlotSetupOnOpenProtocol(protocolDir.path());
+
+    auto transportState = std::make_shared<RecordingTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<RecordingTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "plot.setup on_open 协议应可加载");
+
+    auto& wave = application.docks().waveState();
+    wave.view.autoFollowLatest = false;
+
+    application.openTransport();
+    require(waitUntil([&application, &wave] {
+                application.pumpOnce();
+                return wave.buffer.channelSpec(0).has_value();
+            }),
+            "plot.setup on_open 应被应用到波形状态");
+
+    require(!wave.view.autoFollowLatest, "用户已暂停时 plot.setup(reset_history=true) 不应恢复跟随");
+
+    application.shutdown();
+}
+
+void test_application_plot_setup_reset_history_preserves_active_follow()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-plot-setup-follow-active"));
+    writePlotSetupOnOpenProtocol(protocolDir.path());
+
+    auto transportState = std::make_shared<RecordingTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<RecordingTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "plot.setup on_open 协议应可加载");
+
+    auto& wave = application.docks().waveState();
+    wave.view.autoFollowLatest = true;
+
+    application.openTransport();
+    require(waitUntil([&application, &wave] {
+                application.pumpOnce();
+                return wave.buffer.channelSpec(0).has_value();
+            }),
+            "plot.setup on_open 应被应用到波形状态");
+
+    require(wave.view.autoFollowLatest, "用户仍在跟随时 plot.setup(reset_history=true) 应保持跟随");
 
     application.shutdown();
 }

@@ -3999,6 +3999,23 @@ void test_wave_status_overlay_items_only_show_non_default_states()
     require(draggingItems[2].label == std::string_view("框选"), "框选拖动中也应保留框选状态标签");
 }
 
+void test_wave_auto_follow_pause_policy_respects_interaction_setting()
+{
+    protoscope::plot::WaveViewState view;
+    view.autoFollowLatest = true;
+    view.pauseAutoFollowOnInteraction = true;
+    protoscope::ui::applyAutoFollowPausePolicy(view, protoscope::ui::WaveViewportAutoFollowPolicy::UserInteraction);
+    require(!view.autoFollowLatest, "开启交互后暂停时，用户交互应暂停跟随");
+
+    view.autoFollowLatest = true;
+    view.pauseAutoFollowOnInteraction = false;
+    protoscope::ui::applyAutoFollowPausePolicy(view, protoscope::ui::WaveViewportAutoFollowPolicy::UserInteraction);
+    require(view.autoFollowLatest, "关闭交互后暂停时，用户交互不应暂停跟随");
+
+    protoscope::ui::applyAutoFollowPausePolicy(view, protoscope::ui::WaveViewportAutoFollowPolicy::ExplicitCommand);
+    require(!view.autoFollowLatest, "显式命令应不受交互开关影响并暂停跟随");
+}
+
 void test_wave_phosphor_trigger_detection_interpolates_edges()
 {
     const std::vector<protoscope::plot::WaveSample> risingSamples{
