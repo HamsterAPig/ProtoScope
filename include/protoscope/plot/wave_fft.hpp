@@ -34,6 +34,7 @@ enum class WaveFftWindow {
 enum class WaveFftMagnitudeMode {
     Linear,
     Decibel,
+    FundamentalPercent,
 };
 
 enum class WaveFftFundamentalMode {
@@ -44,6 +45,12 @@ enum class WaveFftFundamentalMode {
 enum class WaveFftDisplayMode {
     FullSpectrum,
     CursorSplit,
+};
+
+enum class WaveFftXAxisMode {
+    FrequencyHz,
+    Order,
+    Log10Hz,
 };
 
 struct WaveFftConfig {
@@ -147,6 +154,9 @@ const char* fftWindowName(WaveFftWindow window);
 const char* fftMagnitudeModeName(WaveFftMagnitudeMode mode);
 const char* fftFundamentalModeName(WaveFftFundamentalMode mode);
 const char* fftDisplayModeName(WaveFftDisplayMode mode);
+const char* fftXAxisModeName(WaveFftXAxisMode mode);
+std::optional<double> fftXAxisValue(WaveFftXAxisMode mode, double frequencyHz, double fundamentalHz);
+std::optional<double> frequencyHzFromFftXAxisValue(WaveFftXAxisMode mode, double axisValue, double fundamentalHz);
 std::size_t resolveWaveFftPointCount(const WaveFftConfig& config, std::size_t visibleSampleCount);
 std::optional<WaveFftCursorWindow> resolveWaveFftCursorWindow(const WaveFftConfig& config,
                                                               std::size_t visibleSampleCount,

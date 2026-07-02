@@ -203,7 +203,7 @@ ReceiveRowVisualKind classifyReceiveRow(const ReceiveRow& row)
     if (direction == "TX") {
         return ReceiveRowVisualKind::Tx;
     }
-    if (direction == "DEBUG") {
+    if (direction == "TRACE" || direction == "DEBUG") {
         return ReceiveRowVisualKind::Debug;
     }
     if (direction == "INFO") {

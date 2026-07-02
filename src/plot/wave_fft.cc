@@ -43,10 +43,13 @@ namespace {
         return 1.0;
     }
 
-    double displayMagnitude(double magnitude, WaveFftMagnitudeMode mode)
+    double displayMagnitude(double magnitude, WaveFftMagnitudeMode mode, double fundamentalMagnitude)
     {
         if (mode == WaveFftMagnitudeMode::Decibel) {
             return 20.0 * std::log10((std::max)(magnitude, kMagnitudeFloor));
+        }
+        if (mode == WaveFftMagnitudeMode::FundamentalPercent) {
+            return 100.0 * magnitude / fundamentalMagnitude;
         }
         return magnitude;
     }
@@ -91,6 +94,44 @@ namespace {
         }
         return WaveFftPeak{
             .frequencyHz = bins[bestIndex].frequencyHz, .magnitude = bestMagnitude, .binIndex = bestIndex};
+    }
+
+    std::optional<std::size_t> findNearestFftBinIndex(const std::vector<WaveFftBin>& bins, double frequencyHz)
+    {
+        if (bins.empty() || !std::isfinite(frequencyHz)) {
+            return std::nullopt;
+        }
+        auto iter = std::lower_bound(
+            bins.begin(), bins.end(), frequencyHz, [](const WaveFftBin& bin, double value) {
+                return bin.frequencyHz < value;
+            });
+        if (iter == bins.end()) {
+            return bins.size() - 1;
+        }
+        if (iter == bins.begin()) {
+            return 0;
+        }
+        const auto index = static_cast<std::size_t>(std::distance(bins.begin(), iter));
+        const double leftDistance = std::abs(bins[index - 1].frequencyHz - frequencyHz);
+        const double rightDistance = std::abs(bins[index].frequencyHz - frequencyHz);
+        return leftDistance <= rightDistance ? index - 1 : index;
+    }
+
+    std::optional<WaveFftPeak> resolveFundamentalPeak(const std::vector<WaveFftBin>& bins,
+                                                      const WaveFftConfig& config)
+    {
+        if (config.fundamentalMode != WaveFftFundamentalMode::Manual || config.manualFundamentalHz <= 0.0) {
+            return findFundamentalPeak(bins);
+        }
+        const auto binIndex = findNearestFftBinIndex(bins, config.manualFundamentalHz);
+        if (!binIndex.has_value()) {
+            return std::nullopt;
+        }
+        return WaveFftPeak{
+            .frequencyHz = config.manualFundamentalHz,
+            .magnitude = bins[*binIndex].magnitude,
+            .binIndex = *binIndex,
+        };
     }
 
     WaveFftReadout makeReadout(const WaveFftChannelResult& channel, std::size_t binIndex)
@@ -174,11 +215,9 @@ namespace {
     }
 
     void appendFftBins(WaveFftChannelResult& result,
-                       WaveFftFrame& frame,
                        const std::vector<std::complex<double>>& spectrum,
                        std::size_t pointCount,
                        double coherentGain,
-                       WaveFftMagnitudeMode magnitudeMode,
                        double frequencyResolutionHz)
     {
         result.bins.reserve(spectrum.size());
@@ -188,47 +227,67 @@ namespace {
             if (binIndex > 0 && binIndex + 1 < spectrum.size()) {
                 magnitude *= 2.0;
             }
-            const double shownMagnitude = displayMagnitude(magnitude, magnitudeMode);
             const double phaseRadians = std::atan2(complexValue.imag(), complexValue.real());
             const double phaseDegrees = wrapPhaseDegrees(phaseRadians);
             result.bins.push_back({
                 .frequencyHz = static_cast<double>(binIndex) * frequencyResolutionHz,
                 .magnitude = magnitude,
-                .displayMagnitude = shownMagnitude,
                 .phaseRadians = phaseRadians,
                 .phaseDegrees = phaseDegrees,
             });
-            if (result.bins.size() == 1 && frame.channels.empty()) {
-                frame.minDisplayMagnitude = shownMagnitude;
-                frame.maxDisplayMagnitude = shownMagnitude;
-            } else {
-                frame.minDisplayMagnitude = (std::min)(frame.minDisplayMagnitude, shownMagnitude);
-                frame.maxDisplayMagnitude = (std::max)(frame.maxDisplayMagnitude, shownMagnitude);
-            }
         }
     }
 
-    void updateFrameAfterFftChannel(WaveFftFrame& frame,
-                                    WaveFftChannelResult& result,
-                                    const WaveFftConfig& config,
-                                    std::size_t pointCount,
-                                    double sampleFrequencyHz)
+    void updateFftChannelGeometry(WaveFftFrame& frame,
+                                  WaveFftChannelResult& result,
+                                  std::size_t pointCount,
+                                  double sampleFrequencyHz)
     {
         result.usedSampleCount = pointCount;
         frame.usedSampleCount = (std::max)(frame.usedSampleCount, result.usedSampleCount);
         frame.pointCount = (std::max)(frame.pointCount, pointCount);
         frame.frequencyResolutionHz = sampleFrequencyHz / static_cast<double>(pointCount);
         frame.maxFrequencyHz = sampleFrequencyHz * 0.5;
-        result.valid = !result.bins.empty();
-        result.fundamental =
-            config.fundamentalMode == WaveFftFundamentalMode::Manual && config.manualFundamentalHz > 0.0
-                ? std::optional<WaveFftPeak>(
-                      WaveFftPeak{.frequencyHz = config.manualFundamentalHz, .magnitude = 0.0, .binIndex = 0})
-                : findFundamentalPeak(result.bins);
+    }
+
+    bool applyFftDisplayMagnitudes(WaveFftFrame& frame,
+                                   WaveFftChannelResult& result,
+                                   WaveFftMagnitudeMode magnitudeMode,
+                                   bool& hasDisplayMagnitude)
+    {
+        if (result.bins.empty()) {
+            return false;
+        }
+        double fundamentalMagnitude = 1.0;
+        if (magnitudeMode == WaveFftMagnitudeMode::FundamentalPercent) {
+            if (!result.fundamental.has_value() || !std::isfinite(result.fundamental->magnitude) ||
+                result.fundamental->magnitude <= kMagnitudeFloor) {
+                result.message = "基波百分比需要有效基波幅值";
+                return false;
+            }
+            fundamentalMagnitude = result.fundamental->magnitude;
+        }
+
+        for (auto& bin : result.bins) {
+            bin.displayMagnitude = displayMagnitude(bin.magnitude, magnitudeMode, fundamentalMagnitude);
+            if (!hasDisplayMagnitude) {
+                frame.minDisplayMagnitude = bin.displayMagnitude;
+                frame.maxDisplayMagnitude = bin.displayMagnitude;
+                hasDisplayMagnitude = true;
+            } else {
+                frame.minDisplayMagnitude = (std::min)(frame.minDisplayMagnitude, bin.displayMagnitude);
+                frame.maxDisplayMagnitude = (std::max)(frame.maxDisplayMagnitude, bin.displayMagnitude);
+            }
+        }
+        return true;
+    }
+
+    void updateFrameAfterFftChannel(WaveFftFrame& frame, WaveFftChannelResult& result, const WaveFftConfig& config)
+    {
+        result.fundamental = resolveFundamentalPeak(result.bins, config);
         if (!frame.fundamentalHz.has_value() && result.fundamental.has_value()) {
             frame.fundamentalHz = result.fundamental->frequencyHz;
         }
-        frame.valid = true;
     }
 
 } // namespace
@@ -322,6 +381,8 @@ const char* fftMagnitudeModeName(WaveFftMagnitudeMode mode)
             return "Linear";
         case WaveFftMagnitudeMode::Decibel:
             return "dB";
+        case WaveFftMagnitudeMode::FundamentalPercent:
+            return "% Fundamental";
     }
     return "Linear";
 }
@@ -346,6 +407,68 @@ const char* fftDisplayModeName(WaveFftDisplayMode mode)
             return "Cursor split";
     }
     return "Full spectrum";
+}
+
+const char* fftXAxisModeName(WaveFftXAxisMode mode)
+{
+    switch (mode) {
+        case WaveFftXAxisMode::FrequencyHz:
+            return "Frequency Hz";
+        case WaveFftXAxisMode::Order:
+            return "Order";
+        case WaveFftXAxisMode::Log10Hz:
+            return "log10(Hz)";
+    }
+    return "Frequency Hz";
+}
+
+std::optional<double> fftXAxisValue(WaveFftXAxisMode mode, double frequencyHz, double fundamentalHz)
+{
+    if (!std::isfinite(frequencyHz) || frequencyHz < 0.0) {
+        return std::nullopt;
+    }
+    switch (mode) {
+        case WaveFftXAxisMode::FrequencyHz:
+            return frequencyHz;
+        case WaveFftXAxisMode::Order:
+            if (!std::isfinite(fundamentalHz) || fundamentalHz <= 0.0) {
+                return std::nullopt;
+            }
+            return frequencyHz / fundamentalHz;
+        case WaveFftXAxisMode::Log10Hz:
+            if (frequencyHz <= 0.0) {
+                return std::nullopt;
+            }
+            return std::log10(frequencyHz);
+    }
+    return std::nullopt;
+}
+
+std::optional<double> frequencyHzFromFftXAxisValue(WaveFftXAxisMode mode, double axisValue, double fundamentalHz)
+{
+    if (!std::isfinite(axisValue)) {
+        return std::nullopt;
+    }
+    switch (mode) {
+        case WaveFftXAxisMode::FrequencyHz:
+            if (axisValue < 0.0) {
+                return std::nullopt;
+            }
+            return axisValue;
+        case WaveFftXAxisMode::Order:
+            if (!std::isfinite(fundamentalHz) || fundamentalHz <= 0.0 || axisValue < 0.0) {
+                return std::nullopt;
+            }
+            return axisValue * fundamentalHz;
+        case WaveFftXAxisMode::Log10Hz: {
+            const double frequencyHz = std::pow(10.0, axisValue);
+            if (!std::isfinite(frequencyHz) || frequencyHz <= 0.0) {
+                return std::nullopt;
+            }
+            return frequencyHz;
+        }
+    }
+    return std::nullopt;
 }
 
 std::size_t resolveWaveFftPointCount(const WaveFftConfig& config, std::size_t visibleSampleCount)
@@ -419,6 +542,8 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
     }
 
     const std::size_t channelCount = (std::min)(snapshot.channels.size(), displayData.channels.size());
+    bool hasDisplayMagnitude = false;
+    bool percentModeNeedsFundamentalMagnitude = false;
     frame.channels.reserve(channelCount);
     for (std::size_t channelIndex = 0; channelIndex < channelCount; ++channelIndex) {
         const bool enabled = channelIndex < channelEnabled.size() && channelEnabled[channelIndex] != 0;
@@ -443,13 +568,19 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
         const double coherentGain = applyFftWindow(values, config.window, pointCount);
         auto spectrum = computeRealFftSpectrum(values, pointCount);
         const double frequencyResolutionHz = sampleFrequencyHz / static_cast<double>(pointCount);
-        appendFftBins(result, frame, spectrum, pointCount, coherentGain, config.magnitudeMode, frequencyResolutionHz);
-        updateFrameAfterFftChannel(frame, result, config, pointCount, sampleFrequencyHz);
+        appendFftBins(result, spectrum, pointCount, coherentGain, frequencyResolutionHz);
+        updateFftChannelGeometry(frame, result, pointCount, sampleFrequencyHz);
+        updateFrameAfterFftChannel(frame, result, config);
+        result.valid = applyFftDisplayMagnitudes(frame, result, config.magnitudeMode, hasDisplayMagnitude);
+        if (!result.valid && config.magnitudeMode == WaveFftMagnitudeMode::FundamentalPercent && !result.bins.empty()) {
+            percentModeNeedsFundamentalMagnitude = true;
+        }
+        frame.valid = frame.valid || result.valid;
         frame.channels.push_back(std::move(result));
     }
 
     if (!frame.valid && frame.message.empty()) {
-        frame.message = "没有可计算 FFT 的通道";
+        frame.message = percentModeNeedsFundamentalMagnitude ? "基波百分比需要有效基波幅值" : "没有可计算 FFT 的通道";
     }
     if (frame.maxDisplayMagnitude <= frame.minDisplayMagnitude) {
         frame.maxDisplayMagnitude = frame.minDisplayMagnitude + 1.0;

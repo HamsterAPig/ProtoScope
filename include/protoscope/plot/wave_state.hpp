@@ -207,6 +207,7 @@ struct WaveViewState {
     WavePhosphorMode phosphorMode{WavePhosphorMode::FreeRun};
     WavePhosphorTriggerEdge triggerEdge{WavePhosphorTriggerEdge::Rising};
     WaveFftConfig fft{};
+    WaveFftXAxisMode fftXAxisMode{WaveFftXAxisMode::FrequencyHz};
     WaveViewMode viewMode{WaveViewMode::Overlay};
     bool fftSourceWindowValid{false};
     bool fftViewportInitialized{false};

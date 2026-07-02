@@ -1484,7 +1484,9 @@ void test_application_logging_filters_script_and_host()
     require(application.applyConfig(config), "日志配置应用失败");
 
     application.logger().info("host", "this should be filtered");
+    application.logger().trace("host", "trace filtered");
     application.logger().warn("host", "host warn visible");
+    application.logger().script("trace", "script trace filtered");
     application.logger().script("info", "script info filtered");
     application.logger().script("error", "script error visible");
 
@@ -1502,7 +1504,18 @@ void test_application_logging_filters_script_and_host()
     require(contents.find("host warn visible") != std::string::npos, "日志文件应包含宿主 warn 日志");
     require(contents.find("script error visible") != std::string::npos, "日志文件应包含脚本 error 日志");
     require(contents.find("this should be filtered") == std::string::npos, "日志文件不应包含被过滤的 info 日志");
+    require(contents.find("trace filtered") == std::string::npos, "日志文件不应包含被过滤的 trace 日志");
 
+    config.logging.level = protoscope::config::LogLevel::Trace;
+    require(application.applyConfig(config), "trace 日志配置应用失败");
+    application.logger().trace("host", "host trace visible");
+    application.logger().script("trace", "script trace visible");
+    require(application.docks().logState().rows.back().direction == "TRACE", "trace 宿主日志方向应为 TRACE");
+    require(application.docks().logState().rows.back().message == "host trace visible", "trace 宿主日志应进入日志面板");
+    require(application.docks().scriptState().rows.back().message == "[trace] script trace visible",
+            "trace 脚本日志应进入脚本面板");
+
+    config.logging.level = protoscope::config::LogLevel::Warn;
     config.logging.filePath.clear();
     require(application.applyConfig(config), "禁用日志文件落盘失败");
     application.logger().error("host", "after disable file logging");
@@ -1628,12 +1641,14 @@ void test_application_session_package_export_contains_replay_assets()
     const auto* luaEntry = protoscope::session::findSessionPackageEntry(*package, "protocol/main.lua");
     const auto* markersEntry = protoscope::session::findSessionPackageEntry(*package, "analysis/markers.yaml");
     const auto* summaryEntry = protoscope::session::findSessionPackageEntry(*package, "logs/summary.txt");
+    const auto* requestTraceEntry = protoscope::session::findSessionPackageEntry(*package, "logs/request_trace.csv");
     require(manifestEntry != nullptr, "现场会话包应包含 manifest.yaml");
     require(rawEntry != nullptr, "现场会话包应包含 raw_capture.psraw");
     require(configEntry != nullptr, "现场会话包应包含配置 YAML");
     require(luaEntry != nullptr, "现场会话包应包含当前协议 main.lua");
     require(markersEntry != nullptr, "现场会话包应包含分析标记 YAML");
     require(summaryEntry != nullptr, "现场会话包应包含日志摘要");
+    require(requestTraceEntry != nullptr, "现场会话包应包含请求追踪快照");
 
     const std::string_view rawBytes(reinterpret_cast<const char*>(rawEntry->bytes.data()), rawEntry->bytes.size());
     const auto capture = protoscope::plot::decodeRawCaptureFile(rawBytes, error);
@@ -1655,6 +1670,7 @@ void test_application_session_package_export_contains_replay_assets()
     require(luaText.find("proto") != std::string::npos, "会话包协议脚本应包含 Lua 协议内容");
     require(markersText.find("startup edge") != std::string::npos, "会话包分析标记应保留 label");
     require(summaryText.find("raw_capture_bytes: 4") != std::string::npos, "会话包日志摘要应包含原始字节数");
+    require(summaryText.find("request_trace_rows:") != std::string::npos, "会话包日志摘要应包含请求追踪计数");
 
     application.shutdown();
 

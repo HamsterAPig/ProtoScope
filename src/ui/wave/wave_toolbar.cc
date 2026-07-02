@@ -114,6 +114,110 @@ plot::WaveMouseYOffsetDragMode nextMouseYOffsetDragMode(plot::WaveMouseYOffsetDr
     return plot::WaveMouseYOffsetDragMode::Direct;
 }
 
+plot::WaveFftXAxisMode nextFftXAxisMode(plot::WaveFftXAxisMode mode)
+{
+    switch (mode) {
+        case plot::WaveFftXAxisMode::FrequencyHz:
+            return plot::WaveFftXAxisMode::Order;
+        case plot::WaveFftXAxisMode::Order:
+            return plot::WaveFftXAxisMode::Log10Hz;
+        case plot::WaveFftXAxisMode::Log10Hz:
+            return plot::WaveFftXAxisMode::FrequencyHz;
+    }
+    return plot::WaveFftXAxisMode::FrequencyHz;
+}
+
+plot::WaveFftMagnitudeMode nextFftMagnitudeMode(plot::WaveFftMagnitudeMode mode)
+{
+    switch (mode) {
+        case plot::WaveFftMagnitudeMode::Linear:
+            return plot::WaveFftMagnitudeMode::Decibel;
+        case plot::WaveFftMagnitudeMode::Decibel:
+            return plot::WaveFftMagnitudeMode::FundamentalPercent;
+        case plot::WaveFftMagnitudeMode::FundamentalPercent:
+            return plot::WaveFftMagnitudeMode::Linear;
+    }
+    return plot::WaveFftMagnitudeMode::Linear;
+}
+
+const char* fftMagnitudeModeButtonLabel(plot::WaveFftMagnitudeMode mode)
+{
+    switch (mode) {
+        case plot::WaveFftMagnitudeMode::Linear:
+            return "幅值: 幅值";
+        case plot::WaveFftMagnitudeMode::Decibel:
+            return "幅值: dB";
+        case plot::WaveFftMagnitudeMode::FundamentalPercent:
+            return "幅值: 基波%";
+    }
+    return "幅值: 幅值";
+}
+
+const char* fftMagnitudeModeShortLabel(plot::WaveFftMagnitudeMode mode)
+{
+    switch (mode) {
+        case plot::WaveFftMagnitudeMode::Linear:
+            return "幅";
+        case plot::WaveFftMagnitudeMode::Decibel:
+            return "dB";
+        case plot::WaveFftMagnitudeMode::FundamentalPercent:
+            return "基%";
+    }
+    return "幅";
+}
+
+const char* fftMagnitudeModeHelp(plot::WaveFftMagnitudeMode mode)
+{
+    switch (mode) {
+        case plot::WaveFftMagnitudeMode::Linear:
+            return "当前显示线性幅值；点击切换为 dB。";
+        case plot::WaveFftMagnitudeMode::Decibel:
+            return "当前显示 dB；点击切换为相对本通道基波幅值的百分比。";
+        case plot::WaveFftMagnitudeMode::FundamentalPercent:
+            return "当前显示基波百分比；点击切回线性幅值。缺少有效基波幅值的通道不绘制。";
+    }
+    return "循环切换 FFT 幅值显示方式。";
+}
+
+const char* fftXAxisModeButtonLabel(plot::WaveFftXAxisMode mode)
+{
+    switch (mode) {
+        case plot::WaveFftXAxisMode::FrequencyHz:
+            return "横轴: 频率 Hz";
+        case plot::WaveFftXAxisMode::Order:
+            return "横轴: 次数 x";
+        case plot::WaveFftXAxisMode::Log10Hz:
+            return "横轴: log10";
+    }
+    return "横轴: 频率 Hz";
+}
+
+const char* fftXAxisModeShortLabel(plot::WaveFftXAxisMode mode)
+{
+    switch (mode) {
+        case plot::WaveFftXAxisMode::FrequencyHz:
+            return "Hz";
+        case plot::WaveFftXAxisMode::Order:
+            return "次数";
+        case plot::WaveFftXAxisMode::Log10Hz:
+            return "log10";
+    }
+    return "Hz";
+}
+
+const char* fftXAxisModeHelp(plot::WaveFftXAxisMode mode)
+{
+    switch (mode) {
+        case plot::WaveFftXAxisMode::FrequencyHz:
+            return "当前横轴显示频率 Hz；点击切换为次数，次数 = f / 基波频率。";
+        case plot::WaveFftXAxisMode::Order:
+            return "当前横轴显示基波倍数；点击切换为 log10(Hz)。次数依赖当前 FFT 基波。";
+        case plot::WaveFftXAxisMode::Log10Hz:
+            return "当前横轴显示 log10(频率 Hz)；点击切回频率 Hz。DC/0Hz 点不会显示。";
+    }
+    return "循环切换 FFT 横轴显示单位。";
+}
+
 void wave_detail::applyFrequencyInput(plot::WaveViewState& view)
 {
     const auto parsed = plot::parseSampleFrequencyText(view.sampleFrequencyInput);
@@ -530,6 +634,18 @@ void drawFftModeToggle(plot::WaveDockState& wave)
     addItemHelp("完整频谱保留原有幅值/相位频域视图；游标分屏使用 A~B 时间窗口计算 FFT。");
 }
 
+void drawFftXAxisModeControl(plot::WaveDockState& wave)
+{
+    auto& view = wave.view;
+    if (drawAdaptiveToolbarButton(fftXAxisModeButtonLabel(view.fftXAxisMode),
+                                  fftXAxisModeShortLabel(view.fftXAxisMode),
+                                  fftXAxisModeHelp(view.fftXAxisMode),
+                                  false)) {
+        // 核心流程：横轴单位只是显示映射，不改变 FFT 输入窗口和频谱缓存。
+        view.fftXAxisMode = nextFftXAxisMode(view.fftXAxisMode);
+    }
+}
+
 void drawFftPointCountControls(plot::WaveDockState& wave)
 {
     auto& view = wave.view;
@@ -588,10 +704,12 @@ void drawFftSpectrumOptions(plot::WaveDockState& wave)
     }
     addItemHelp("默认 Hann，适合常规频谱观察；Rectangular 适合整周期采样，Blackman-Harris 旁瓣更低。");
 
-    const char* magnitudeItems[] = {"幅值", "dB"};
-    int magnitudeIndex = static_cast<int>(view.fft.magnitudeMode);
-    if (ImGui::Combo("幅值模式", &magnitudeIndex, magnitudeItems, IM_ARRAYSIZE(magnitudeItems))) {
-        view.fft.magnitudeMode = static_cast<plot::WaveFftMagnitudeMode>(magnitudeIndex);
+    if (drawAdaptiveToolbarButton(fftMagnitudeModeButtonLabel(view.fft.magnitudeMode),
+                                  fftMagnitudeModeShortLabel(view.fft.magnitudeMode),
+                                  fftMagnitudeModeHelp(view.fft.magnitudeMode),
+                                  view.fft.magnitudeMode != plot::WaveFftMagnitudeMode::Linear)) {
+        view.fft.magnitudeMode = nextFftMagnitudeMode(view.fft.magnitudeMode);
+        view.fftViewportInitialized = false;
         wave.cachedFftKeyValid = false;
     }
 
@@ -599,11 +717,13 @@ void drawFftSpectrumOptions(plot::WaveDockState& wave)
     int fundamentalIndex = static_cast<int>(view.fft.fundamentalMode);
     if (ImGui::Combo("基波", &fundamentalIndex, fundamentalItems, IM_ARRAYSIZE(fundamentalItems))) {
         view.fft.fundamentalMode = static_cast<plot::WaveFftFundamentalMode>(fundamentalIndex);
+        view.fftViewportInitialized = false;
         wave.cachedFftKeyValid = false;
     }
     if (view.fft.fundamentalMode == plot::WaveFftFundamentalMode::Manual &&
         ImGui::InputDouble("手动基波 Hz", &view.fft.manualFundamentalHz, 1.0, 10.0, "%.6g")) {
         view.fft.manualFundamentalHz = (std::max)(0.0, view.fft.manualFundamentalHz);
+        view.fftViewportInitialized = false;
         wave.cachedFftKeyValid = false;
     }
 }
@@ -692,6 +812,7 @@ void drawFftToolbarSectionContent(plot::WaveDockState& wave)
 
     // 核心流程：工具栏入口只负责段落编排，具体状态修改保留在各自控件段落内。
     drawFftModeToggle(wave);
+    drawFftXAxisModeControl(wave);
     drawFftPointCountControls(wave);
     drawFftInputWindowActions(wave);
     drawFftSpectrumOptions(wave);

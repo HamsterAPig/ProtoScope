@@ -1318,23 +1318,33 @@ public:
 
     void draw(WaveContext& context) override
     {
-        const float gap = ImGui::GetStyle().ItemSpacing.y;
-        const float totalHeight = (std::max)(context.layout->mainHeight, context.wave.minMainPanelHeight);
-        const float panelHeight = (std::max)(80.0F, (totalHeight - gap) * 0.5F);
+        const float plotAreaHeight = (std::max)(2.0F, context.layout->mainHeight);
+        const float timePanelHeight = (std::max)(1.0F, std::floor(plotAreaHeight * 0.5F));
+        const float fftPanelHeight = (std::max)(1.0F, plotAreaHeight - timePanelHeight);
         const WavePlotOverlayPolicy overlayPolicy{
             .drawMeasurementOverlay = true,
             .drawLegendOverlay = context.overlayFrame == nullptr,
             .measurementSafeRightX = context.measurementSafeRightX,
         };
 
-        ImGui::BeginChild("##wave_cursor_split_time", ImVec2(0.0F, panelHeight), false, ImGuiWindowFlags_NoScrollbar);
+        ImGui::BeginChild(
+            "##wave_cursor_split_time", ImVec2(0.0F, timePanelHeight), false, ImGuiWindowFlags_NoScrollbar);
         auto result = drawOscilloscopePlot(context.wave, *context.renderFrame, overlayPolicy);
         if (context.overlayFrame != nullptr) {
             captureWaveOverlayFrame(*context.overlayFrame, result, *context.renderFrame);
         }
         ImGui::EndChild();
 
-        ImGui::BeginChild("##wave_cursor_split_fft", ImVec2(0.0F, panelHeight), false, ImGuiWindowFlags_NoScrollbar);
+        drawCompactMainToolbar(context.application,
+                               context.wave,
+                               *context.config,
+                               *context.renderFrame->displayData,
+                               context.frame,
+                               context.fullscreenActive,
+                               context.fullscreenToggleRequested);
+
+        ImGui::BeginChild(
+            "##wave_cursor_split_fft", ImVec2(0.0F, fftPanelHeight), false, ImGuiWindowFlags_NoScrollbar);
         drawWaveFftPlot(context.wave, *context.renderFrame, false, false);
         ImGui::EndChild();
     }
@@ -1560,7 +1570,7 @@ WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewSt
     const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
     const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
     const bool cursorSplitMode = isCursorSplitFftMode(view);
-    const float toolbarHeight = cursorSplitMode ? 0.0F : compactMainToolbarHeight();
+    const float toolbarHeight = compactMainToolbarHeight();
     const float overviewRequestedHeight =
         cursorSplitMode ? 0.0F : (wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.overviewPanelHeight);
     const float overviewMinHeight =

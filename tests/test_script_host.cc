@@ -445,6 +445,27 @@ void test_script_on_error_log()
     }
 }
 
+void test_script_proto_log_trace_level()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-script-log-trace"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_open(ctx)
+  proto.log("trace", "trace detail")
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "trace 日志协议应可加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+
+    bool foundTraceLog = false;
+    for (const auto& log : host.drainLogs()) {
+        foundTraceLog = foundTraceLog || (log.level == "trace" && log.message == "trace detail");
+    }
+    require(foundTraceLog, "proto.log(\"trace\") 应保留 trace 等级");
+}
+
 void test_script_multi_dock_snapshot()
 {
     protoscope::scripting::ScriptHost host;
@@ -2650,14 +2671,22 @@ void test_config_logging_roundtrip()
     const auto tempPath = tempRoot.path() / "logging.yaml";
 
     auto base = store.load(tempPath).config;
-    base.logging.level = protoscope::config::LogLevel::Warn;
+    base.logging.level = protoscope::config::LogLevel::Trace;
     base.logging.filePath = "logs/protoscope.log";
+    base.logging.payloadPreview.enabled = true;
+    base.logging.payloadPreview.maxBytes = 8;
+    base.logging.maxFileSizeBytes = 1024;
+    base.logging.maxFiles = 2;
 
     std::string error;
     require(store.save(tempPath, base, error), "日志配置写回失败");
     auto reloaded = store.load(tempPath).config;
-    require(reloaded.logging.level == protoscope::config::LogLevel::Warn, "日志等级 roundtrip 失败");
+    require(reloaded.logging.level == protoscope::config::LogLevel::Trace, "trace 日志等级 roundtrip 失败");
     require(reloaded.logging.filePath == "logs/protoscope.log", "日志相对路径 roundtrip 失败");
+    require(reloaded.logging.payloadPreview.enabled, "payload preview enabled roundtrip 失败");
+    require(reloaded.logging.payloadPreview.maxBytes == 8, "payload preview max_bytes roundtrip 失败");
+    require(reloaded.logging.maxFileSizeBytes == 1024, "日志轮转 max_file_size_bytes roundtrip 失败");
+    require(reloaded.logging.maxFiles == 2, "日志轮转 max_files roundtrip 失败");
 
     base.logging.filePath.clear();
     require(store.save(tempPath, base, error), "空日志路径写回失败");
@@ -2668,6 +2697,8 @@ void test_config_logging_roundtrip()
     const auto missing = store.load(missingPath).config;
     require(missing.logging.filePath.empty(), "缺失日志路径时应默认为空");
     require(missing.logging.level == protoscope::config::LogLevel::Info, "缺失日志等级时应回退到 info");
+    require(!missing.logging.payloadPreview.enabled, "payload preview 缺省应关闭");
+    require(missing.logging.payloadPreview.maxBytes == 64, "payload preview max_bytes 缺省值错误");
 }
 
 void test_config_default_protocol_workspace_initializes_half_duplex_demos()
@@ -3780,6 +3811,7 @@ static const TestCase kAllTests[] = {
     {"script_on_open_log", &test_script_on_open_log},
     {"script_on_close_log", &test_script_on_close_log},
     {"script_on_error_log", &test_script_on_error_log},
+    {"script_proto_log_trace_level", &test_script_proto_log_trace_level},
     {"script_multi_dock_snapshot", &test_script_multi_dock_snapshot},
     {"script_dock_layout_fields", &test_script_dock_layout_fields},
     {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
@@ -4242,6 +4274,10 @@ static const TestCase kAllTests[] = {
     {"wave_x_axis_double_click_bounds_selects_full_history",
      &test_wave_x_axis_double_click_bounds_selects_full_history},
     {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
+    {"wave_fft_fundamental_percent_uses_each_channel_fundamental",
+     &test_wave_fft_fundamental_percent_uses_each_channel_fundamental},
+    {"wave_fft_fundamental_percent_requires_valid_fundamental_magnitude",
+     &test_wave_fft_fundamental_percent_requires_valid_fundamental_magnitude},
     {"wave_fft_visible_samples_supports_non_power_of_two", &test_wave_fft_visible_samples_supports_non_power_of_two},
     {"wave_fft_manual_point_count_supports_non_power_of_two",
      &test_wave_fft_manual_point_count_supports_non_power_of_two},
@@ -4249,6 +4285,7 @@ static const TestCase kAllTests[] = {
      &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
     {"wave_fft_fit_viewport_resets_frequency_and_value_ranges",
      &test_wave_fft_fit_viewport_resets_frequency_and_value_ranges},
+    {"wave_fft_x_axis_mode_conversions", &test_wave_fft_x_axis_mode_conversions},
     {"wave_fft_cursor_window_resolves_point_counts_and_duration",
      &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},

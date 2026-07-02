@@ -3181,6 +3181,101 @@ void test_wave_fft_detects_50hz_and_150hz_components()
     require(std::abs(frame.channels[0].fundamental->frequencyHz - 50.0) < 1e-12, "自动基波应为 50Hz");
 }
 
+void test_wave_fft_fundamental_percent_uses_each_channel_fundamental()
+{
+    constexpr double sampleFrequencyHz = 1024.0;
+    constexpr std::size_t pointCount = 1024;
+    std::vector<protoscope::plot::WaveSample> channelA;
+    std::vector<protoscope::plot::WaveSample> channelB;
+    channelA.reserve(pointCount);
+    channelB.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double fundamental = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time);
+        const double harmonic = std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
+        channelA.push_back({.time = time, .value = 2.0 * fundamental + 1.0 * harmonic});
+        channelB.push_back({.time = time, .value = 4.0 * fundamental + 1.0 * harmonic});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = channelA.size(),
+        .visibleBegin = 0,
+        .visibleEnd = channelA.size(),
+        .samples = channelA.data(),
+    });
+    snapshot.channels.push_back({
+        .label = "CH2",
+        .unit = "V",
+        .totalSamples = channelB.size(),
+        .visibleBegin = 0,
+        .visibleEnd = channelB.size(),
+        .samples = channelB.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::N1024,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+        .magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::FundamentalPercent,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(
+        snapshot, displayData, config, std::vector<std::uint8_t>{1, 1}, 0.0, 1.0, sampleFrequencyHz);
+    require(frame.valid, "基波百分比 FFT 帧应计算成功");
+    require(frame.channels.size() == 2 && frame.channels[0].valid && frame.channels[1].valid,
+            "两个通道都应有有效百分比频谱");
+    require(std::abs(frame.channels[0].bins[50].displayMagnitude - 100.0) < 1e-9,
+            "CH1 基波应显示为 100%");
+    require(std::abs(frame.channels[1].bins[50].displayMagnitude - 100.0) < 1e-9,
+            "CH2 基波应显示为 100%");
+    require(std::abs(frame.channels[0].bins[150].displayMagnitude - 50.0) < 1e-9,
+            "CH1 三次谐波应按 CH1 基波幅值归一化");
+    require(std::abs(frame.channels[1].bins[150].displayMagnitude - 25.0) < 1e-9,
+            "CH2 三次谐波应按 CH2 基波幅值归一化");
+}
+
+void test_wave_fft_fundamental_percent_requires_valid_fundamental_magnitude()
+{
+    constexpr double sampleFrequencyHz = 1024.0;
+    constexpr std::size_t pointCount = 1024;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        samples.push_back({.time = static_cast<double>(index) / sampleFrequencyHz, .value = 0.0});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::N1024,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+        .magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::FundamentalPercent,
+        .fundamentalMode = protoscope::plot::WaveFftFundamentalMode::Manual,
+        .manualFundamentalHz = 50.0,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(
+        snapshot, displayData, config, std::vector<std::uint8_t>{1}, 0.0, 1.0, sampleFrequencyHz);
+    require(!frame.valid, "基波幅值为 0 时百分比 FFT 帧不应回退为普通幅值");
+    require(frame.message.find("基波百分比需要有效基波幅值") != std::string::npos,
+            "无有效基波幅值时应给出明确帧提示");
+    require(frame.channels.size() == 1 && !frame.channels[0].valid, "无有效分母的通道应标记为无效");
+    require(frame.channels[0].message.find("基波百分比需要有效基波幅值") != std::string::npos,
+            "无有效分母的通道应给出明确提示");
+}
+
 void test_wave_fft_visible_samples_supports_non_power_of_two()
 {
     constexpr double sampleFrequencyHz = 1000.0;
@@ -3335,6 +3430,32 @@ void test_wave_fft_fit_viewport_resets_frequency_and_value_ranges()
     require(viewport.magnitudeMax > frame.maxDisplayMagnitude, "显示全部频谱应给幅值上限留 padding");
     require(std::abs(viewport.phaseMin + 180.0) < 1e-12, "显示全部频谱应恢复相位下限");
     require(std::abs(viewport.phaseMax - 180.0) < 1e-12, "显示全部频谱应恢复相位上限");
+}
+
+void test_wave_fft_x_axis_mode_conversions()
+{
+    using protoscope::plot::WaveFftXAxisMode;
+
+    const auto frequencyValue = protoscope::plot::fftXAxisValue(WaveFftXAxisMode::FrequencyHz, 50.0, 50.0);
+    require(frequencyValue.has_value() && std::abs(*frequencyValue - 50.0) < 1e-12,
+            "频率横轴应直接显示 Hz");
+    const auto frequencyBack = protoscope::plot::frequencyHzFromFftXAxisValue(WaveFftXAxisMode::FrequencyHz, 50.0, 0.0);
+    require(frequencyBack.has_value() && std::abs(*frequencyBack - 50.0) < 1e-12,
+            "频率横轴应能反算 Hz");
+
+    const auto orderValue = protoscope::plot::fftXAxisValue(WaveFftXAxisMode::Order, 100.0, 50.0);
+    require(orderValue.has_value() && std::abs(*orderValue - 2.0) < 1e-12, "次数横轴应显示基波倍数");
+    const auto orderBack = protoscope::plot::frequencyHzFromFftXAxisValue(WaveFftXAxisMode::Order, 2.0, 50.0);
+    require(orderBack.has_value() && std::abs(*orderBack - 100.0) < 1e-12, "次数横轴应按基波反算 Hz");
+    require(!protoscope::plot::fftXAxisValue(WaveFftXAxisMode::Order, 100.0, 0.0).has_value(),
+            "次数横轴缺少有效基波时不应显示伪坐标");
+
+    const auto logValue = protoscope::plot::fftXAxisValue(WaveFftXAxisMode::Log10Hz, 1000.0, 50.0);
+    require(logValue.has_value() && std::abs(*logValue - 3.0) < 1e-12, "log10 横轴应显示 log10(Hz)");
+    const auto logBack = protoscope::plot::frequencyHzFromFftXAxisValue(WaveFftXAxisMode::Log10Hz, 3.0, 0.0);
+    require(logBack.has_value() && std::abs(*logBack - 1000.0) < 1e-9, "log10 横轴应能反算 Hz");
+    require(!protoscope::plot::fftXAxisValue(WaveFftXAxisMode::Log10Hz, 0.0, 50.0).has_value(),
+            "log10 横轴不应显示 0Hz/DC 点");
 }
 
 void test_wave_viewport_zoom_modes_and_clamp()
