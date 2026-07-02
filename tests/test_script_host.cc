@@ -2253,8 +2253,7 @@ void test_config_default_roundtrip()
             "实时 backlog pump 最小间隔默认应为 1ms");
     require(config.receive.transportReadBufferBytes == 4096U, "transport 读缓冲默认应为 4096 字节");
     require(config.scripting.workerBatchBytes == 8192U, "worker batch 默认应为 8192 字节");
-    require(std::abs(config.scripting.workerOutputFlushBudgetMs - 2.0) < 1e-12,
-            "worker 输出刷新时间预算默认应为 2ms");
+    require(std::abs(config.scripting.workerOutputFlushBudgetMs - 2.0) < 1e-12, "worker 输出刷新时间预算默认应为 2ms");
     require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
     require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
     require(config.gui.elfSymbolCombo.autoRefreshSelectedAddress, "ELF 已选地址默认应自动刷新");
@@ -3778,8 +3777,7 @@ static const TestCase kAllTests[] = {
      &test_startup_diagnostics_log_failure_no_diagnose_does_not_create_log},
     {"startup_early_diagnostics_default_stage_does_not_create_log",
      &test_startup_early_diagnostics_default_stage_does_not_create_log},
-    {"startup_early_diagnostics_diagnose_writes_fixed_log",
-     &test_startup_early_diagnostics_diagnose_writes_fixed_log},
+    {"startup_early_diagnostics_diagnose_writes_fixed_log", &test_startup_early_diagnostics_diagnose_writes_fixed_log},
     {"startup_early_diagnostics_crash_without_diagnose_creates_log",
      &test_startup_early_diagnostics_crash_without_diagnose_creates_log},
     {"startup_early_diagnostics_crash_falls_back_to_temp_log",
@@ -4296,6 +4294,11 @@ static const TestCase kAllTests[] = {
      &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
     {"wave_fft_fit_viewport_resets_frequency_and_value_ranges",
      &test_wave_fft_fit_viewport_resets_frequency_and_value_ranges},
+    {"wave_fft_fit_viewport_can_ignore_channel_fundamental_bins",
+     &test_wave_fft_fit_viewport_can_ignore_channel_fundamental_bins},
+    {"wave_fft_fit_viewport_ignore_fundamental_falls_back_when_empty",
+     &test_wave_fft_fit_viewport_ignore_fundamental_falls_back_when_empty},
+    {"wave_fft_fit_viewport_offsets_are_visual_only", &test_wave_fft_fit_viewport_offsets_are_visual_only},
     {"wave_fft_x_axis_mode_conversions", &test_wave_fft_x_axis_mode_conversions},
     {"wave_fft_cursor_window_resolves_point_counts_and_duration",
      &test_wave_fft_cursor_window_resolves_point_counts_and_duration},

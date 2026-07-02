@@ -596,6 +596,9 @@ void ensureFftChannelState(plot::WaveDockState& wave)
             wave.fftChannelEnabled[preferredChannel] = 1;
         }
     }
+    if (wave.fftMagnitudeChannelOffsets.size() != channelCount) {
+        wave.fftMagnitudeChannelOffsets.resize(channelCount, 0.0);
+    }
 }
 
 void drawFftModeToggle(plot::WaveDockState& wave)
@@ -690,6 +693,12 @@ void drawFftInputWindowActions(plot::WaveDockState& wave)
     }
     if (drawAdaptiveToolbarButton("显示全部频谱", "全谱", "重置频率、幅值和相位轴范围，不改变 FFT 输入窗口。", false)) {
         view.fftFitAllRequested = true;
+    }
+    if (drawAdaptiveToolbarButton("幅值 Y 轴双击自适应时忽略每个通道的基波峰；显示全部频谱仍包含基波。",
+                                  "忽基",
+                                  "只影响幅值 Y 轴双击自适应，不改变 FFT 计算、读数或显示全部频谱。",
+                                  view.fftMagnitudeAutoFitIgnoreFundamental)) {
+        view.fftMagnitudeAutoFitIgnoreFundamental = !view.fftMagnitudeAutoFitIgnoreFundamental;
     }
 }
 

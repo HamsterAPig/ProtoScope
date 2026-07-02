@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -136,6 +137,11 @@ struct WaveFftViewport {
     double phaseMax{180.0};
 };
 
+struct WaveFftFitOptions {
+    bool ignoreFundamentalBinsForMagnitude{false};
+    std::span<const double> magnitudeChannelOffsets{};
+};
+
 struct WaveFftCacheKey {
     std::uint64_t dataRevision{0};
     double viewMinTime{0.0};
@@ -171,6 +177,7 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
                                double viewMaxTime,
                                double sampleFrequencyHz);
 WaveFftViewport makeFftFitViewport(const WaveFftFrame& frame);
+WaveFftViewport makeFftFitViewport(const WaveFftFrame& frame, const WaveFftFitOptions& options);
 std::optional<WaveFftReadout> findNearestFftBin(const WaveFftFrame& frame,
                                                 std::size_t channelIndex,
                                                 double frequencyHz);

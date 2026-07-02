@@ -176,6 +176,8 @@ struct WaveViewState {
     bool activeChannelOffsetDrag{false};
     bool activeChannelScaleDrag{false};
     bool activeBitYOffsetDrag{false};
+    bool activeFftMagnitudeOffsetDrag{false};
+    bool fftMagnitudeAutoFitIgnoreFundamental{false};
     bool zoomSelectionActive{false};
     bool zoomSelectionDragging{false};
     bool zoomSelectionAutoExit{false};
@@ -188,6 +190,7 @@ struct WaveViewState {
     std::size_t lastRenderPointCount{0};
     std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};
+    std::size_t activeFftMagnitudeOffsetDragChannelIndex{0};
     std::size_t lastCursorFftAnchorIndex{1};
     ActiveBitLaneState activeBitLane{};
     std::size_t referenceChannelIndex{0};
@@ -303,6 +306,7 @@ struct WaveDockState {
     // 仅用于兼容旧协议 UI 状态中的 hidden_channel_labels，新的隐藏状态以通道下标为准。
     std::vector<std::string> hiddenChannelLabels;
     std::vector<std::uint8_t> fftChannelEnabled;
+    std::vector<double> fftMagnitudeChannelOffsets;
     WaveLegendOverlayState legendOverlay{};
     bool oscilloscopeRunning{false};
     bool toolsCollapsed{true};

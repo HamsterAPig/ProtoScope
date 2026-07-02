@@ -4,6 +4,7 @@
 #include <cmath>
 #include <complex>
 #include <limits>
+#include <utility>
 
 #include <pocketfft_hdronly.h>
 
@@ -101,10 +102,9 @@ namespace {
         if (bins.empty() || !std::isfinite(frequencyHz)) {
             return std::nullopt;
         }
-        auto iter = std::lower_bound(
-            bins.begin(), bins.end(), frequencyHz, [](const WaveFftBin& bin, double value) {
-                return bin.frequencyHz < value;
-            });
+        auto iter = std::lower_bound(bins.begin(), bins.end(), frequencyHz, [](const WaveFftBin& bin, double value) {
+            return bin.frequencyHz < value;
+        });
         if (iter == bins.end()) {
             return bins.size() - 1;
         }
@@ -117,8 +117,7 @@ namespace {
         return leftDistance <= rightDistance ? index - 1 : index;
     }
 
-    std::optional<WaveFftPeak> resolveFundamentalPeak(const std::vector<WaveFftBin>& bins,
-                                                      const WaveFftConfig& config)
+    std::optional<WaveFftPeak> resolveFundamentalPeak(const std::vector<WaveFftBin>& bins, const WaveFftConfig& config)
     {
         if (config.fundamentalMode != WaveFftFundamentalMode::Manual || config.manualFundamentalHz <= 0.0) {
             return findFundamentalPeak(bins);
@@ -590,14 +589,72 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
 
 WaveFftViewport makeFftFitViewport(const WaveFftFrame& frame)
 {
+    return makeFftFitViewport(frame, {});
+}
+
+WaveFftViewport makeFftFitViewport(const WaveFftFrame& frame, const WaveFftFitOptions& options)
+{
     if (!frame.valid) {
         return {};
+    }
+
+    double magnitudeMin = frame.minDisplayMagnitude;
+    double magnitudeMax = frame.maxDisplayMagnitude;
+    const bool useVisualMagnitudeRange =
+        options.ignoreFundamentalBinsForMagnitude || !options.magnitudeChannelOffsets.empty();
+    if (useVisualMagnitudeRange) {
+        auto includeMagnitude = [&](bool skipFundamental) {
+            double minValue = std::numeric_limits<double>::infinity();
+            double maxValue = -std::numeric_limits<double>::infinity();
+            bool hasValue = false;
+            for (const auto& channel : frame.channels) {
+                if (!channel.enabled || !channel.valid) {
+                    continue;
+                }
+                const double offset = channel.channelIndex < options.magnitudeChannelOffsets.size()
+                                          ? options.magnitudeChannelOffsets[channel.channelIndex]
+                                          : 0.0;
+                const std::optional<std::size_t> skippedBin =
+                    skipFundamental && channel.fundamental.has_value()
+                        ? std::optional<std::size_t>{channel.fundamental->binIndex}
+                        : std::nullopt;
+                for (std::size_t binIndex = 0; binIndex < channel.bins.size(); ++binIndex) {
+                    if (skippedBin.has_value() && *skippedBin == binIndex) {
+                        continue;
+                    }
+                    const double value = channel.bins[binIndex].displayMagnitude + offset;
+                    if (!std::isfinite(value)) {
+                        continue;
+                    }
+                    minValue = (std::min)(minValue, value);
+                    maxValue = (std::max)(maxValue, value);
+                    hasValue = true;
+                }
+            }
+            if (!hasValue) {
+                return std::optional<std::pair<double, double>>{};
+            }
+            return std::optional<std::pair<double, double>>{{minValue, maxValue}};
+        };
+
+        auto magnitudeRange = includeMagnitude(options.ignoreFundamentalBinsForMagnitude);
+        if (!magnitudeRange.has_value() && options.ignoreFundamentalBinsForMagnitude) {
+            // 忽略基波后可能没有剩余有效点，此时回退到完整频谱范围，避免双击后得到空视口。
+            magnitudeRange = includeMagnitude(false);
+        }
+        if (magnitudeRange.has_value()) {
+            magnitudeMin = magnitudeRange->first;
+            magnitudeMax = magnitudeRange->second;
+        }
+    }
+    if (magnitudeMax <= magnitudeMin) {
+        magnitudeMax = magnitudeMin + 1.0;
     }
     return {
         .frequencyMin = 0.0,
         .frequencyMax = frame.maxFrequencyHz,
-        .magnitudeMin = paddedMin(frame.minDisplayMagnitude, frame.maxDisplayMagnitude),
-        .magnitudeMax = paddedMax(frame.minDisplayMagnitude, frame.maxDisplayMagnitude),
+        .magnitudeMin = paddedMin(magnitudeMin, magnitudeMax),
+        .magnitudeMax = paddedMax(magnitudeMin, magnitudeMax),
         .phaseMin = -180.0,
         .phaseMax = 180.0,
     };
