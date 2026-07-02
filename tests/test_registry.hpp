@@ -16,6 +16,11 @@ void test_keyboard_shortcut_table_has_no_scope_duplicates();
 void test_keyboard_shortcut_labels_match_plan();
 void test_startup_diagnostics_parse_diagnose_arg();
 void test_startup_diagnostics_parse_default_off();
+#if defined(_WIN32)
+void test_startup_windows_arg_to_utf8_ascii_exe();
+void test_startup_windows_arg_to_utf8_renderer_equals();
+void test_startup_windows_arg_to_utf8_chinese_and_empty();
+#endif
 void test_startup_diagnostics_parse_renderer_equals();
 void test_startup_diagnostics_parse_renderer_space();
 void test_startup_diagnostics_parse_renderer_missing_value();
@@ -27,6 +32,10 @@ void test_startup_diagnostics_log_path_fallback();
 void test_startup_diagnostics_construct_with_diagnose_writes_process_start();
 void test_startup_diagnostics_header_writes_selected_path_and_attempts();
 void test_startup_diagnostics_log_failure_no_diagnose_does_not_create_log();
+void test_startup_early_diagnostics_default_stage_does_not_create_log();
+void test_startup_early_diagnostics_diagnose_writes_fixed_log();
+void test_startup_early_diagnostics_crash_without_diagnose_creates_log();
+void test_startup_early_diagnostics_crash_falls_back_to_temp_log();
 void test_startup_diagnostics_write_crash_no_diagnose_does_not_create_log();
 void test_startup_diagnostics_set_stage_with_diagnose_appends_stage();
 void test_startup_diagnostics_command_line_parsed_logs_renderer_cli();

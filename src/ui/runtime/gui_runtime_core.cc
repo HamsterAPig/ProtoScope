@@ -262,6 +262,33 @@ namespace {
         }
     }
 
+    bool ensureD3DCompiler47Available(app::StartupDiagnosticsSink* diagnostics)
+    {
+        if (GetModuleHandleW(L"D3DCompiler_47.dll") != nullptr) {
+            if (diagnostics != nullptr) {
+                diagnostics->logEvent("D3DCompiler_47", "D3DCompiler_47.dll 已加载");
+            }
+            return true;
+        }
+
+        HMODULE compiler = LoadLibraryW(L"D3DCompiler_47.dll");
+        if (compiler == nullptr) {
+            const DWORD error = GetLastError();
+            std::ostringstream out;
+            out << "D3DCompiler_47.dll 缺失或不可加载, GetLastError=" << error;
+            if (diagnostics != nullptr) {
+                diagnostics->logFailure("D3DCompiler_47", out.str());
+            }
+            return false;
+        }
+
+        // D3D11 ImGui backend 之后会通过 delay-load 使用该 DLL，保持模块已加载。
+        if (diagnostics != nullptr) {
+            diagnostics->logEvent("D3DCompiler_47", "D3DCompiler_47.dll 加载成功");
+        }
+        return true;
+    }
+
     class D3D11GlfwBackend final : public GuiRendererBackend {
     public:
         explicit D3D11GlfwBackend(bool warp) : warp_(warp) {}
@@ -361,6 +388,9 @@ namespace {
             if (diagnostics != nullptr) {
                 diagnostics->logEvent("ImGui_ImplGlfw_InitForOther", "GLFW backend 初始化成功");
                 diagnostics->logEvent("ImGui_ImplDX11_Init", "开始初始化 D3D11 backend");
+            }
+            if (!ensureD3DCompiler47Available(diagnostics)) {
+                return false;
             }
             if (!ImGui_ImplDX11_Init(device_, deviceContext_)) {
                 if (diagnostics != nullptr) {

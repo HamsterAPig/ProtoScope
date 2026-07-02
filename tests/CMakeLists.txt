@@ -39,6 +39,10 @@ target_link_libraries(protoscope_tests
         protoscope_update_check
 )
 target_compile_features(protoscope_tests PRIVATE cxx_std_20)
+if(WIN32 AND MSVC)
+    target_link_options(protoscope_tests PRIVATE "/DELAYLOAD:D3DCOMPILER_47.dll")
+    target_link_libraries(protoscope_tests PRIVATE delayimp)
+endif()
 protoscope_enable_warnings(protoscope_tests)
 
 add_test(NAME protoscope_unit_tests COMMAND protoscope_tests)

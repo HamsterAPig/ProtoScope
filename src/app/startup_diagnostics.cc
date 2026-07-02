@@ -370,6 +370,159 @@ StartupDiagnosticsOptions makeDefaultStartupDiagnosticsOptions(bool diagnose)
     return options;
 }
 
+EarlyStartupDiagnosticsOptions makeDefaultEarlyStartupDiagnosticsOptions(bool diagnose)
+{
+    auto startupOptions = makeDefaultStartupDiagnosticsOptions(diagnose);
+    return {
+        .diagnose = diagnose,
+        .version = std::move(startupOptions.version),
+        .commandLine = {},
+        .exePath = std::move(startupOptions.exePath),
+        .currentDir = std::move(startupOptions.currentDir),
+        .pathCandidates =
+            {
+                .exeLogDir = std::move(startupOptions.pathCandidates.exeLogDir),
+                .localAppDataLogDir = {},
+                .tempLogDir = std::move(startupOptions.pathCandidates.tempLogDir),
+            },
+    };
+}
+
+EarlyStartupDiagnostics::EarlyStartupDiagnostics(EarlyStartupDiagnosticsOptions options)
+    : options_(std::move(options)), startedAt_(std::chrono::steady_clock::now())
+{
+}
+
+void EarlyStartupDiagnostics::setCommandLine(std::vector<std::string> commandLine)
+{
+    options_.commandLine = std::move(commandLine);
+    if (options_.diagnose && headerWritten_) {
+        writeLine("command_line", "command_line: " + commandLineText(options_.commandLine));
+    }
+}
+
+void EarlyStartupDiagnostics::setStage(std::string_view stage)
+{
+    currentStage_ = std::string(stage);
+    if (options_.diagnose) {
+        ensureLogOpen();
+        std::ostringstream out;
+        out << std::fixed << std::setprecision(3) << elapsedMs() << "ms"
+            << " [" << stage << "] 进入启动早期阶段";
+        writeLine(stage, out.str());
+    }
+}
+
+void EarlyStartupDiagnostics::writeCrash(std::string_view reason, std::optional<unsigned long> exceptionCode)
+{
+    ensureLogOpen();
+    if (logPath_.path.empty()) {
+        return;
+    }
+
+    std::ostringstream out;
+    out << "crash_reason=" << reason << ", stage=" << currentStage_ << ", thread_id=" << currentThreadIdText();
+    if (exceptionCode.has_value()) {
+        out << ", exception_code=" << exceptionCodeText(*exceptionCode);
+    }
+    writeLine("crash", out.str());
+}
+
+const std::filesystem::path& EarlyStartupDiagnostics::logPath() const
+{
+    return logPath_.path;
+}
+
+const std::string& EarlyStartupDiagnostics::currentStage() const
+{
+    return currentStage_;
+}
+
+StartupFailureInfo EarlyStartupDiagnostics::failureInfo(std::string reason) const
+{
+    return {
+        .stage = currentStage_,
+        .reason = std::move(reason),
+        .logPath = logPath_.path,
+        .diagnosticsState = {},
+    };
+}
+
+void EarlyStartupDiagnostics::ensureLogOpen()
+{
+    if (headerWritten_) {
+        return;
+    }
+    writeHeader();
+}
+
+void EarlyStartupDiagnostics::writeHeader()
+{
+    if (logPath_.path.empty() && logPath_.attempts.empty()) {
+        const DiagnosticsPathCandidates earlyCandidates{
+            .exeLogDir = options_.pathCandidates.exeLogDir,
+            .localAppDataLogDir = {},
+            .tempLogDir = options_.pathCandidates.tempLogDir,
+        };
+        logPath_ = selectDiagnosticsLogPath(earlyCandidates, "startup-early.log");
+    }
+    if (logPath_.path.empty()) {
+        headerWritten_ = true;
+        return;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(logPath_.path.parent_path(), ec);
+
+    std::ofstream out(logPath_.path, std::ios::out | std::ios::trunc);
+    if (!out.good()) {
+        headerWritten_ = true;
+        return;
+    }
+
+    out << "ProtoScope early startup diagnostics\n";
+    out << "created_at: " << nowText() << '\n';
+    out << "version: " << options_.version << '\n';
+    out << "diagnose: " << (options_.diagnose ? "true" : "false") << '\n';
+    out << "selected_log_path: " << pathText(logPath_.path) << '\n';
+    out << "command_line: " << commandLineText(options_.commandLine) << '\n';
+    out << "exe_path: " << pathText(options_.exePath) << '\n';
+    out << "current_dir: " << pathText(options_.currentDir) << '\n';
+    // 早期兜底日志必须单文件覆盖，避免正常机器留下历史噪声。
+    for (const auto& attempt : logPath_.attempts) {
+        out << "log_path_attempt: dir=" << pathText(attempt.directory)
+            << ", writable=" << (attempt.writable ? "true" : "false");
+        if (!attempt.error.empty()) {
+            out << ", error=" << attempt.error;
+        }
+        out << '\n';
+    }
+    out << std::fixed << std::setprecision(3) << elapsedMs() << "ms"
+        << " [process_start] 启动早期日志已打开\n";
+    out.flush();
+    headerWritten_ = true;
+}
+
+void EarlyStartupDiagnostics::writeLine(std::string_view, std::string_view line)
+{
+    if (logPath_.path.empty()) {
+        return;
+    }
+
+    std::lock_guard lock(g_logMutex);
+    std::ofstream out(logPath_.path, std::ios::out | std::ios::app);
+    if (!out.good()) {
+        return;
+    }
+    out << line << '\n';
+    out.flush();
+}
+
+double EarlyStartupDiagnostics::elapsedMs() const
+{
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startedAt_).count();
+}
+
 StartupDiagnostics::StartupDiagnostics(StartupDiagnosticsOptions options)
     : options_(std::move(options)), startedAt_(std::chrono::steady_clock::now())
 {

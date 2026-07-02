@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.21)
 
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
 project(ProtoScope VERSION 0.1.0 LANGUAGES C CXX)
 
 include(CTest)
@@ -8,6 +12,11 @@ find_package(Threads REQUIRED)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set(LIBDWARF_CRT "MT" CACHE STRING "Use the static MSVC runtime for libdwarf" FORCE)
+endif()
 
 option(PROTOSCOPE_BUILD_EXAMPLES "Build ProtoScope examples" ON)
 option(SPDLOG_BUILD_EXAMPLE "Build spdlog examples" OFF)
