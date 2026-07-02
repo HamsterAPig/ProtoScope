@@ -230,6 +230,7 @@ endif()
 
 if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
+        ui/algorithm_help.cc
         ui/editable_combo.cc
         ui/keyboard_shortcuts.cc
         ui/ui_theme.cc

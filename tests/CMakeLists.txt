@@ -1,6 +1,7 @@
 add_executable(protoscope_tests
     test_main.cc
     test_application.cc
+    test_algorithm_help.cc
     test_codec.cc
     test_dock.cc
     test_dock_layout.cc

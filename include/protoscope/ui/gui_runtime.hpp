@@ -10,6 +10,7 @@
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -310,6 +311,8 @@ private:
     void drawAboutDialog();
     void requestShortcutHelpDialog();
     void drawShortcutHelpDialog();
+    void requestAlgorithmHelpDialog();
+    void drawAlgorithmHelpDialog();
     void startUpdateCheck();
     void drawUpdateCheckDialog();
     std::filesystem::path currentProtocolLayoutPath() const;
@@ -382,6 +385,12 @@ private:
     float transferSendSectionHeight_{210.0F};
     bool aboutDialogRequested_{false};
     bool shortcutHelpDialogRequested_{false};
+    bool algorithmHelpDialogRequested_{false};
+    std::array<char, 128> algorithmHelpSearchBuffer_{};
+    std::string algorithmHelpLastQuery_;
+    std::vector<std::size_t> algorithmHelpMatches_;
+    std::size_t algorithmHelpCurrentMatchOrdinal_{0};
+    bool algorithmHelpScrollToCurrent_{false};
     bool updateCheckDialogRequested_{false};
     bool updateCheckInProgress_{false};
     std::optional<UpdateCheckResult> updateCheckResult_;

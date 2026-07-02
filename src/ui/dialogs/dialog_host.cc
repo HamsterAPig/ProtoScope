@@ -1,10 +1,12 @@
 #include "../runtime/gui_runtime_detail.hpp"
 
+#include "protoscope/ui/algorithm_help.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/keyboard_shortcuts.hpp"
 
 #include <cstdio>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <system_error>
 
@@ -73,6 +75,14 @@ namespace {
             flags |= ImGuiWindowFlags_NoMove;
         }
         return flags;
+    }
+
+    std::size_t activeAlgorithmHelpEntry(std::span<const std::size_t> matches, std::size_t ordinal)
+    {
+        if (matches.empty() || ordinal >= matches.size()) {
+            return kNoAlgorithmHelpMatch;
+        }
+        return matches[ordinal];
     }
 
 } // namespace
@@ -175,6 +185,92 @@ void GuiRuntime::drawShortcutHelpDialog()
     if (ImGui::Button("关闭")) {
         ImGui::CloseCurrentPopup();
     }
+    ImGui::EndPopup();
+}
+
+void GuiRuntime::requestAlgorithmHelpDialog()
+{
+    algorithmHelpDialogRequested_ = true;
+}
+
+void GuiRuntime::drawAlgorithmHelpDialog()
+{
+    constexpr const char* popupId = "算法手册";
+    if (algorithmHelpDialogRequested_) {
+        ImGui::OpenPopup(popupId);
+        algorithmHelpDialogRequested_ = false;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(760.0F, 560.0F), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoSavedSettings)) {
+        return;
+    }
+
+    const float searchWidth = (std::max)(220.0F, ImGui::GetContentRegionAvail().x - 300.0F);
+    ImGui::SetNextItemWidth(searchWidth);
+    const bool searchChanged =
+        ImGui::InputText("搜索", algorithmHelpSearchBuffer_.data(), algorithmHelpSearchBuffer_.size());
+    const std::string query = algorithmHelpSearchBuffer_.data();
+    if (searchChanged || query != algorithmHelpLastQuery_) {
+        algorithmHelpLastQuery_ = query;
+        algorithmHelpMatches_ = findAlgorithmHelpMatches(query);
+        algorithmHelpCurrentMatchOrdinal_ = algorithmHelpMatches_.empty() ? kNoAlgorithmHelpMatch : 0U;
+        algorithmHelpScrollToCurrent_ = !algorithmHelpMatches_.empty();
+    }
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(algorithmHelpMatches_.empty());
+    if (ImGui::Button("上一个")) {
+        algorithmHelpCurrentMatchOrdinal_ =
+            previousAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
+        algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("下一个")) {
+        algorithmHelpCurrentMatchOrdinal_ =
+            nextAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
+        algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    const std::size_t displayOrdinal =
+        algorithmHelpCurrentMatchOrdinal_ == kNoAlgorithmHelpMatch ? 0U : algorithmHelpCurrentMatchOrdinal_ + 1U;
+    ImGui::Text("匹配 %zu / %zu", displayOrdinal, algorithmHelpMatches_.size());
+
+    ImGui::SameLine();
+    if (ImGui::Button("关闭")) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::Separator();
+
+    const std::size_t activeEntry = activeAlgorithmHelpEntry(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
+    if (ImGui::BeginChild("##algorithm_help_content", ImVec2(0.0F, 0.0F), ImGuiChildFlags_Borders)) {
+        const auto entries = algorithmHelpEntries();
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const auto& entry = entries[index];
+            ImGui::PushID(static_cast<int>(index));
+            const bool active = index == activeEntry;
+            if (active) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0F, 0.86F, 0.36F, 1.0F));
+            }
+            ImGui::TextUnformatted(entry.title.data(), entry.title.data() + entry.title.size());
+            if (active) {
+                ImGui::PopStyleColor();
+                if (algorithmHelpScrollToCurrent_) {
+                    ImGui::SetScrollHereY(0.15F);
+                    algorithmHelpScrollToCurrent_ = false;
+                }
+            }
+            ImGui::Spacing();
+            ImGui::TextWrapped("%.*s", static_cast<int>(entry.body.size()), entry.body.data());
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+
     ImGui::EndPopup();
 }
 

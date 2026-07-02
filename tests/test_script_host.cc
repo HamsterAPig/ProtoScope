@@ -3747,6 +3747,13 @@ static const TestCase kAllTests[] = {
     {"crc_known_vectors", &test_crc_known_vectors},
     {"keyboard_shortcut_table_has_no_scope_duplicates", &test_keyboard_shortcut_table_has_no_scope_duplicates},
     {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
+    {"algorithm_help_search_empty_query_has_no_match", &test_algorithm_help_search_empty_query_has_no_match},
+    {"algorithm_help_search_chinese_keyword", &test_algorithm_help_search_chinese_keyword},
+    {"algorithm_help_search_english_case_insensitive", &test_algorithm_help_search_english_case_insensitive},
+    {"algorithm_help_search_multiple_terms_require_all", &test_algorithm_help_search_multiple_terms_require_all},
+    {"algorithm_help_search_no_match", &test_algorithm_help_search_no_match},
+    {"algorithm_help_search_navigation_wraps", &test_algorithm_help_search_navigation_wraps},
+    {"algorithm_help_search_fft_unit_keywords", &test_algorithm_help_search_fft_unit_keywords},
     {"startup_diagnostics_parse_diagnose_arg", &test_startup_diagnostics_parse_diagnose_arg},
     {"startup_diagnostics_parse_default_off", &test_startup_diagnostics_parse_default_off},
 #if defined(_WIN32)

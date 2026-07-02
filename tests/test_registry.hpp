@@ -14,6 +14,13 @@ void test_hex_editor_cursor_normalize();
 void test_crc_known_vectors();
 void test_keyboard_shortcut_table_has_no_scope_duplicates();
 void test_keyboard_shortcut_labels_match_plan();
+void test_algorithm_help_search_empty_query_has_no_match();
+void test_algorithm_help_search_chinese_keyword();
+void test_algorithm_help_search_english_case_insensitive();
+void test_algorithm_help_search_multiple_terms_require_all();
+void test_algorithm_help_search_no_match();
+void test_algorithm_help_search_navigation_wraps();
+void test_algorithm_help_search_fft_unit_keywords();
 void test_startup_diagnostics_parse_diagnose_arg();
 void test_startup_diagnostics_parse_default_off();
 #if defined(_WIN32)
