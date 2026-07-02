@@ -2,6 +2,7 @@
 #include "../src/ui/wave/wave_render_service.hpp"
 
 #include "protoscope/config/config.hpp"
+#include "protoscope/plot/csv_data_file.hpp"
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plot/wave_fft.hpp"
@@ -4250,6 +4251,207 @@ void test_raw_capture_file_roundtrip()
     require(loaded->sampleFrequencyHz == capture.sampleFrequencyHz, "psraw 应保留采样频率");
     require(loaded->capturedAtMs == capture.capturedAtMs, "psraw 应保留采集时间");
     require(loaded->payload == capture.payload, "psraw 应保留原始 payload");
+}
+
+void test_wave_csv_wide_roundtrip()
+{
+    const ScopedTempFile tempFile("protoscope-wave-csv-wide");
+    const auto& tempPath = tempFile.path();
+
+    protoscope::plot::WaveCsvData data;
+    data.sampleFrequencyHz = 1000.0;
+    data.channels = {
+        {.label = "温度A", .unit = "℃", .samples = {{0.0, 1.25}, {0.001, 1.5}}},
+        {.label = "CH2", .unit = "V", .samples = {{0.0, 5.0}, {0.002, 6.0}}},
+    };
+
+    std::string error;
+    require(protoscope::plot::writeWaveCsvFile(tempPath,
+                                               data,
+                                               protoscope::plot::WaveCsvShape::Wide,
+                                               protoscope::plot::CsvExportRange{},
+                                               error),
+            "波形宽表 CSV 写入应成功");
+    require(protoscope::plot::detectCsvKind(tempPath, error) == protoscope::plot::CsvKind::Wave,
+            "波形宽表 CSV 类型应可检测");
+    const auto loaded = protoscope::plot::readWaveCsvFile(tempPath, error);
+    if (!loaded.has_value()) {
+        throw std::runtime_error("波形宽表 CSV 读回应成功: " + error);
+    }
+
+    require(loaded->shape == protoscope::plot::WaveCsvShape::Wide, "波形宽表 CSV 应保留 shape");
+    require(std::abs(loaded->sampleFrequencyHz - 1000.0) < 1e-12, "波形 CSV 应保留采样频率");
+    require(loaded->channels.size() == 2, "波形 CSV 应保留通道数量");
+    require(loaded->channels[0].label == "温度A", "波形 CSV 应保留 UTF-8 label");
+    require(loaded->channels[0].unit == "℃", "波形 CSV 应保留 UTF-8 unit");
+    require(loaded->channels[0].samples.size() == 2, "波形 CSV 应保留 CH1 样本");
+    require(loaded->channels[1].samples.size() == 2, "波形 CSV 空单元格不应生成样本");
+    require(std::abs(loaded->channels[1].samples.back().time - 0.002) < 1e-12, "波形 CSV 应保留稀疏时间点");
+}
+
+void test_wave_csv_long_import_rejects_non_finite()
+{
+    const ScopedTempFile tempFile("protoscope-wave-csv-long-bad");
+    const auto& tempPath = tempFile.path();
+    {
+        std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
+        out << "# protoscope_csv_version=1\n";
+        out << "# kind=wave\n";
+        out << "# shape=long\n";
+        out << "channel_index,channel_label,unit,time,value\n";
+        out << "1,CH1,V,0.0,1.0\n";
+        out << "2,CH2,A,0.1,nan\n";
+    }
+
+    std::string error;
+    const auto loaded = protoscope::plot::readWaveCsvFile(tempPath, error);
+    require(!loaded.has_value(), "波形长表 CSV 应拒绝非有限数");
+    require(error.find("time/value") != std::string::npos, "非有限数错误应指出 time/value");
+}
+
+void test_wave_csv_long_import()
+{
+    const ScopedTempFile tempFile("protoscope-wave-csv-long");
+    const auto& tempPath = tempFile.path();
+    {
+        std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
+        out << "channel_index,channel_label,unit,time,value\n";
+        out << "1,CH1,V,0.0,1.0\n";
+        out << "2,CH2,A,0.0,5.0\n";
+        out << "1,CH1,V,0.1,2.0\n";
+    }
+
+    std::string error;
+    const auto loaded = protoscope::plot::readWaveCsvFile(tempPath, error);
+    if (!loaded.has_value()) {
+        throw std::runtime_error("无注释波形长表 CSV 应可导入: " + error);
+    }
+    require(loaded->shape == protoscope::plot::WaveCsvShape::Long, "无注释长表应按列检测 shape");
+    require(loaded->channels.size() == 2, "长表 1-based channel_index 应生成两个通道");
+    require(loaded->channels[0].samples.size() == 2, "长表 CH1 应保留两点");
+    require(loaded->channels[1].label == "CH2", "长表应保留 channel_label");
+    require(loaded->channels[1].unit == "A", "长表应保留 unit");
+}
+
+void test_raw_capture_csv_roundtrip()
+{
+    const ScopedTempFile tempFile("protoscope-raw-events-csv");
+    const auto& tempPath = tempFile.path();
+
+    protoscope::plot::RawCaptureEvent setupEvent;
+    setupEvent.type = protoscope::plot::RawCaptureEventType::PlotSetup;
+    setupEvent.timestampMs = 1002;
+    setupEvent.plotSetup.source = "csv_setup";
+    setupEvent.plotSetup.resetHistory = true;
+    setupEvent.plotSetup.channels = {{.label = "BITS",
+                                      .unit = "raw",
+                                      .bitDisplay = {.enabled = true, .firstBit = 8, .bitCount = 4, .yOffset = 2.0}}};
+    setupEvent.plotSetup.view.historyLimit = 64;
+
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "demo",
+        .protocolDir = "protocols/demo",
+        .sampleFrequencyHz = 2048.0,
+        .capturedAtMs = 1000,
+        .payload = {0x01, 0x02, 0xA0},
+        .events = {
+            {.type = protoscope::plot::RawCaptureEventType::RxBytes,
+             .timestampMs = 1000,
+             .bytes = {0x01, 0x02, 0xA0}},
+            {.type = protoscope::plot::RawCaptureEventType::ProfileSet,
+             .timestampMs = 1001,
+             .profile = {.frameName = "frame_a", .length = 8, .channelMap = {1, 0}}},
+            {.type = protoscope::plot::RawCaptureEventType::ProfileClear,
+             .timestampMs = 1001,
+             .profile = {.frameName = "frame_a"}},
+            setupEvent,
+        },
+    };
+
+    std::string error;
+    require(protoscope::plot::writeRawCaptureCsvFile(tempPath, capture, protoscope::plot::CsvExportRange{}, error),
+            "原始事件 CSV 写入应成功");
+    require(protoscope::plot::detectCsvKind(tempPath, error) == protoscope::plot::CsvKind::RawEvents,
+            "原始事件 CSV 类型应可检测");
+    const auto loaded = protoscope::plot::readRawCaptureCsvFile(tempPath, error);
+    if (!loaded.has_value()) {
+        throw std::runtime_error("原始事件 CSV 读回应成功: " + error);
+    }
+
+    require(loaded->protocolName == "demo", "原始事件 CSV 应保留 protocol_name");
+    require(loaded->protocolDir == "protocols/demo", "原始事件 CSV 应保留 protocol_dir");
+    require(loaded->payload == capture.payload, "原始事件 CSV 应由 rx_bytes 重建 payload");
+    require(loaded->events.size() == capture.events.size(), "原始事件 CSV 应保留事件数量");
+    require(loaded->events[1].profile.channelMap == std::vector<std::size_t>({1, 0}),
+            "原始事件 CSV 应保留 profile_channel_map");
+    require(loaded->events[3].plotSetup.channels.front().bitDisplay.enabled,
+            "plot_setup_record_hex 应保留 bit_display");
+    require(loaded->events[3].plotSetup.channels.front().bitDisplay.firstBit == 8,
+            "plot_setup_record_hex 应保留 bit_display.first_bit");
+}
+
+void test_raw_capture_csv_rejects_bad_hex()
+{
+    const ScopedTempFile tempFile("protoscope-raw-events-csv-bad-hex");
+    const auto& tempPath = tempFile.path();
+    {
+        std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
+        out << "# kind=raw_events\n";
+        out << "# captured_at_ms=1000\n";
+        out << "event_type,timestamp_ms,elapsed_ms,bytes_hex,profile_frame,profile_length,profile_channel_map,"
+               "plot_setup_record_hex\n";
+        out << "rx_bytes,1000,0,01XZ,,,,\n";
+    }
+
+    std::string error;
+    const auto loaded = protoscope::plot::readRawCaptureCsvFile(tempPath, error);
+    require(!loaded.has_value(), "原始事件 CSV 应拒绝坏 HEX");
+    require(error.find("HEX") != std::string::npos, "坏 HEX 错误应明确字段");
+}
+
+void test_csv_export_range_filters_wave_and_raw_events()
+{
+    const protoscope::plot::CsvExportRange range{
+        .kind = protoscope::plot::CsvExportRangeKind::Manual,
+        .manualMinTime = 0.05,
+        .manualMaxTime = 0.15,
+    };
+
+    protoscope::plot::WaveCsvData wave;
+    wave.channels = {{.label = "CH1", .unit = "V", .samples = {{0.0, 1.0}, {0.1, 2.0}, {0.2, 3.0}}}};
+
+    const ScopedTempFile waveFile("protoscope-wave-csv-range");
+    std::string error;
+    require(protoscope::plot::writeWaveCsvFile(
+                waveFile.path(), wave, protoscope::plot::WaveCsvShape::Wide, range, error),
+            "范围波形 CSV 写入应成功");
+    const auto loadedWave = protoscope::plot::readWaveCsvFile(waveFile.path(), error);
+    if (!loadedWave.has_value()) {
+        throw std::runtime_error("范围波形 CSV 应可读回: " + error);
+    }
+    require(loadedWave->channels.front().samples.size() == 1, "波形 CSV 手动范围应只保留区间内样本");
+    require(std::abs(loadedWave->channels.front().samples.front().time - 0.1) < 1e-12,
+            "波形 CSV 范围过滤应按显示时间");
+
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "demo",
+        .protocolDir = "protocols/demo",
+        .capturedAtMs = 1000,
+        .events = {
+            {.type = protoscope::plot::RawCaptureEventType::RxBytes, .timestampMs = 1000, .bytes = {0x00}},
+            {.type = protoscope::plot::RawCaptureEventType::RxBytes, .timestampMs = 1100, .bytes = {0x01}},
+            {.type = protoscope::plot::RawCaptureEventType::RxBytes, .timestampMs = 1200, .bytes = {0x02}},
+        },
+    };
+    const ScopedTempFile rawFile("protoscope-raw-events-csv-range");
+    require(protoscope::plot::writeRawCaptureCsvFile(rawFile.path(), capture, range, error),
+            "范围原始事件 CSV 写入应成功");
+    const auto loadedRaw = protoscope::plot::readRawCaptureCsvFile(rawFile.path(), error);
+    if (!loadedRaw.has_value()) {
+        throw std::runtime_error("范围原始事件 CSV 应可读回: " + error);
+    }
+    require(loadedRaw->events.size() == 1, "原始事件 CSV 范围应按 elapsed 秒保留整条事件");
+    require(loadedRaw->payload == std::vector<std::uint8_t>{0x01}, "原始事件 CSV 范围不应拆分 RX chunk");
 }
 
 void test_raw_capture_file_plot_setup_roundtrip()

@@ -51,6 +51,8 @@ struct RawCaptureFileData {
 };
 
 std::string encodeRawCaptureHeader(const RawCaptureFileData& capture);
+std::string encodeRawCaptureEventRecordText(const RawCaptureEvent& event);
+std::optional<RawCaptureEvent> decodeRawCaptureEventRecordText(std::string_view text, std::string& error);
 bool encodeRawCaptureFile(const RawCaptureFileData& capture, std::vector<std::uint8_t>& bytes, std::string& error);
 std::optional<RawCaptureFileData> decodeRawCaptureFile(std::string_view bytes, std::string& error);
 bool writeRawCaptureFile(const std::filesystem::path& path, const RawCaptureFileData& capture, std::string& error);

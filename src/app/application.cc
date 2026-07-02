@@ -1,5 +1,6 @@
 #include "protoscope/app/application.hpp"
 
+#include "protoscope/plot/wave_math.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/pipeline_threading.hpp"
 #include "protoscope/session/session_package.hpp"
@@ -1972,6 +1973,13 @@ bool Application::setSendHexMode(bool enabled)
 
 bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const
 {
+    return exportWaveRawCapture(path, plot::CsvExportRange{}, error);
+}
+
+bool Application::exportWaveRawCapture(const std::filesystem::path& path,
+                                       const plot::CsvExportRange& range,
+                                       std::string& error) const
+{
     const auto& lua = dockStore_.luaState();
     const auto& wave = dockStore_.waveState();
     plot::RawCaptureFileData capture = wave.rawCapture;
@@ -1984,7 +1992,120 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
                                     error)) {
         return false;
     }
+    if (const auto timeRange = plot::resolveCsvExportTimeRange(range); timeRange.has_value()) {
+        std::vector<plot::RawCaptureEvent> filteredEvents;
+        filteredEvents.reserve(capture.events.size());
+        capture.payload.clear();
+        for (const auto& event : capture.events) {
+            const double elapsedSeconds =
+                (static_cast<double>(event.timestampMs) - static_cast<double>(capture.capturedAtMs)) / 1000.0;
+            if (elapsedSeconds < timeRange->first || elapsedSeconds > timeRange->second) {
+                continue;
+            }
+            filteredEvents.push_back(event);
+            if (event.type == plot::RawCaptureEventType::RxBytes) {
+                capture.payload.insert(capture.payload.end(), event.bytes.begin(), event.bytes.end());
+            }
+        }
+        capture.events = std::move(filteredEvents);
+    }
     return plot::writeRawCaptureFile(path, capture, error);
+}
+
+bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& error)
+{
+    if (data.channels.empty()) {
+        error = "波形 CSV 未包含任何通道";
+        return false;
+    }
+
+    auto& wave = dockStore_.waveState();
+    wave.buffer.clear();
+    wave.buffer.setHistoryTrimSuspended(true);
+    wave.buffer.configureChannels(data.channels.size());
+    wave.defaultChannelSpecs.clear();
+    wave.defaultChannelSpecs.reserve(data.channels.size());
+    std::size_t maxSampleCount = 0;
+    for (std::size_t channelIndex = 0; channelIndex < data.channels.size(); ++channelIndex) {
+        const auto& csvChannel = data.channels[channelIndex];
+        plot::ChannelSpec spec{
+            .label = csvChannel.label.empty() ? "CH" + std::to_string(channelIndex + 1) : csvChannel.label,
+            .unit = csvChannel.unit,
+        };
+        wave.buffer.setChannelSpec(channelIndex, spec);
+        wave.defaultChannelSpecs.push_back(spec);
+        if (!csvChannel.samples.empty()) {
+            // 核心流程：CSV time 是外部数据的显示时间，直接作为脚本时间轴写入，不再按采样率重解释。
+            wave.buffer.append(channelIndex,
+                               plot::WaveAppendRequest{
+                                   .source = "csv_wave",
+                                   .samples = csvChannel.samples,
+                               });
+            maxSampleCount = (std::max)(maxSampleCount, csvChannel.samples.size());
+        }
+    }
+    wave.buffer.setHistoryTrimSuspended(false);
+    wave.buffer.preserveHistoryLimitAtLeast(maxSampleCount);
+    wave.rawCapture = {};
+    wave.analysisMarkers.clear();
+    wave.channelSummaries.clear();
+    wave.hiddenChannelIndices.clear();
+    wave.view.sampleFrequencyHz = 0.0;
+    wave.view.sampleFrequencyInput.clear();
+    wave.view.timeAxisSource = plot::WaveTimeAxisSource::ScriptTime;
+    wave.view.defaultViewportPending = true;
+    wave.view.autoFollowLatest = false;
+    wave.statusMessage = "波形 CSV 已导入";
+    syncDockState();
+    return true;
+}
+
+bool Application::exportWaveCsv(const std::filesystem::path& path,
+                                plot::WaveCsvShape shape,
+                                const plot::CsvExportRange& range,
+                                std::string& error) const
+{
+    const auto& wave = dockStore_.waveState();
+    auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(),
+                                         std::numeric_limits<double>::infinity(),
+                                         false);
+    const auto displayData = plot::buildDisplayData(snapshot, wave.view.sampleFrequencyHz);
+
+    plot::WaveCsvData data;
+    data.shape = shape;
+    data.sampleFrequencyHz = wave.view.sampleFrequencyHz;
+    data.view = wave.buffer.viewConfig();
+    data.channels.reserve(snapshot.channels.size());
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        plot::WaveCsvChannel channel{
+            .label = snapshot.channels[channelIndex].label,
+            .unit = snapshot.channels[channelIndex].unit,
+        };
+        if (channelIndex < displayData.channels.size()) {
+            channel.samples = displayData.channels[channelIndex].samples;
+        }
+        data.channels.push_back(std::move(channel));
+    }
+    return plot::writeWaveCsvFile(path, data, shape, range, error);
+}
+
+bool Application::exportRawCaptureCsv(const std::filesystem::path& path,
+                                      const plot::CsvExportRange& range,
+                                      std::string& error) const
+{
+    const auto& lua = dockStore_.luaState();
+    const auto& wave = dockStore_.waveState();
+    plot::RawCaptureFileData capture = wave.rawCapture;
+    if (!prepareRawCaptureForExport(capture,
+                                    lua.protocolName,
+                                    lua.protocolDir,
+                                    wave.view.sampleFrequencyHz,
+                                    nowMs(),
+                                    "当前协议元数据不完整，无法导出原始事件 CSV",
+                                    error)) {
+        return false;
+    }
+    return plot::writeRawCaptureCsvFile(path, capture, range, error);
 }
 
 bool Application::exportSessionPackage(const std::filesystem::path& path, std::string& error) const

@@ -65,11 +65,20 @@ void GuiRuntime::drawMainMenu()
         if (ImGui::MenuItem("导入原始波形...", shortcutLabel(ShortcutAction::ImportRawWave).data())) {
             openRawCaptureImportDialog();
         }
+        if (ImGui::MenuItem("导入 CSV 数据...")) {
+            openCsvDataImportDialog();
+        }
         if (ImGui::MenuItem("载入原始回放时间轴...")) {
             openRawCaptureReplayTimelineDialog();
         }
         if (ImGui::MenuItem("导出当前缓存快照...", shortcutLabel(ShortcutAction::ExportRawWave).data())) {
             openRawCaptureExportDialog();
+        }
+        if (ImGui::MenuItem("导出波形 CSV...")) {
+            openWaveCsvExportDialog();
+        }
+        if (ImGui::MenuItem("导出原始事件 CSV...")) {
+            openRawCaptureCsvExportDialog();
         }
         if (ImGui::MenuItem("导出波形分析报告...")) {
             openWaveAnalysisExportDialog();

@@ -3,6 +3,7 @@
 #include "protoscope/config/config.hpp"
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/logging/logging.hpp"
+#include "protoscope/plot/csv_data_file.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plugin/elf_static_view_bridge.hpp"
 #include "protoscope/scripting/script_runtime_worker.hpp"
@@ -49,6 +50,17 @@ public:
     void setLogLevel(config::LogLevel level);
     bool setSendHexMode(bool enabled);
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
+    bool exportWaveRawCapture(const std::filesystem::path& path,
+                              const plot::CsvExportRange& range,
+                              std::string& error) const;
+    bool importWaveCsvData(const plot::WaveCsvData& data, std::string& error);
+    bool exportWaveCsv(const std::filesystem::path& path,
+                       plot::WaveCsvShape shape,
+                       const plot::CsvExportRange& range,
+                       std::string& error) const;
+    bool exportRawCaptureCsv(const std::filesystem::path& path,
+                             const plot::CsvExportRange& range,
+                             std::string& error) const;
     bool exportSessionPackage(const std::filesystem::path& path, std::string& error) const;
     bool importSessionPackage(const std::filesystem::path& path, std::string& error);
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);

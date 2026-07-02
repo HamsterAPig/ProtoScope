@@ -1,4 +1,5 @@
 add_library(protoscope_plot STATIC
+    plot/csv_data_file.cc
     plot/oscilloscope.cc
     plot/raw_capture_file.cc
     plot/wave_fft.cc

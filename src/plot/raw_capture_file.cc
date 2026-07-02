@@ -961,6 +961,23 @@ std::string encodeRawCaptureHeader(const RawCaptureFileData& capture)
     return encodeRawCaptureHeaderWithSize(normalized, rawSize, true);
 }
 
+std::string encodeRawCaptureEventRecordText(const RawCaptureEvent& event)
+{
+    return encodeEventRecord(event);
+}
+
+std::optional<RawCaptureEvent> decodeRawCaptureEventRecordText(std::string_view text, std::string& error)
+{
+    std::vector<RawCaptureEvent> events;
+    if (!decodeEventStream(text, events, error) || events.size() != 1) {
+        if (error.empty()) {
+            error = "psraw 事件记录数量错误";
+        }
+        return std::nullopt;
+    }
+    return std::move(events.front());
+}
+
 bool encodeRawCaptureFile(const RawCaptureFileData& capture, std::vector<std::uint8_t>& bytes, std::string& error)
 {
     PreparedRawCaptureEncoding prepared;
