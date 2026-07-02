@@ -328,26 +328,32 @@ void GuiRuntime::drawSerialCommConfig(dock::CommDockState& comm)
         application_.markCommConfigEdited(true);
     }
 
-    const char* parityItems[] = {"none", "odd", "even"};
+    const char* parityValues[] = {"none", "odd", "even"};
+    const char* parityItems[] = {"无校验", "奇校验", "偶校验"};
     int parityIndex = comm.serial.parity == "odd" ? 1 : (comm.serial.parity == "even" ? 2 : 0);
     if (ImGui::Combo("奇偶校验", &parityIndex, parityItems, IM_ARRAYSIZE(parityItems))) {
-        comm.serial.parity = parityItems[parityIndex];
+        comm.serial.parity = parityValues[parityIndex];
         application_.markCommConfigEdited(true);
     }
+    ImGui::SetItemTooltip("仅改变界面显示名称；配置仍保存为 none / odd / even。");
 
-    const char* stopBitItems[] = {"one", "one_point_five", "two"};
+    const char* stopBitValues[] = {"one", "one_point_five", "two"};
+    const char* stopBitItems[] = {"1 位", "1.5 位", "2 位"};
     int stopBitIndex = comm.serial.stopBits == "two" ? 2 : (comm.serial.stopBits == "one_point_five" ? 1 : 0);
     if (ImGui::Combo("停止位", &stopBitIndex, stopBitItems, IM_ARRAYSIZE(stopBitItems))) {
-        comm.serial.stopBits = stopBitItems[stopBitIndex];
+        comm.serial.stopBits = stopBitValues[stopBitIndex];
         application_.markCommConfigEdited(true);
     }
+    ImGui::SetItemTooltip("仅改变界面显示名称；配置仍保存为 one / one_point_five / two。");
 
-    const char* flowItems[] = {"none", "software", "hardware"};
+    const char* flowValues[] = {"none", "software", "hardware"};
+    const char* flowItems[] = {"无流控", "软件流控 (XON/XOFF)", "硬件流控 (RTS/CTS)"};
     int flowIndex = comm.serial.flowControl == "software" ? 1 : (comm.serial.flowControl == "hardware" ? 2 : 0);
     if (ImGui::Combo("流控", &flowIndex, flowItems, IM_ARRAYSIZE(flowItems))) {
-        comm.serial.flowControl = flowItems[flowIndex];
+        comm.serial.flowControl = flowValues[flowIndex];
         application_.markCommConfigEdited(true);
     }
+    ImGui::SetItemTooltip("仅改变界面显示名称；配置仍保存为 none / software / hardware。");
 }
 
 void GuiRuntime::drawUdpPeerCommConfig(dock::CommDockState& comm)
@@ -597,26 +603,27 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
 
             ImGui::TableSetColumnIndex(3);
             if (drawTransferToolbarButton(
-                    "全部", "显示全部收发记录", receive.filter.status == dock::LogStatusFilter::All)) {
+                    "全部", "显示 RX、TX 和系统状态等全部收发记录。", receive.filter.status == dock::LogStatusFilter::All)) {
                 receive.filter.status = dock::LogStatusFilter::All;
             }
 
             ImGui::TableSetColumnIndex(4);
             if (drawTransferToolbarButton(
-                    "RX", "仅显示 RX 收发记录", receive.filter.status == dock::LogStatusFilter::Rx)) {
+                    "RX", "只显示设备发来的 RX 数据记录。", receive.filter.status == dock::LogStatusFilter::Rx)) {
                 receive.filter.status = dock::LogStatusFilter::Rx;
             }
 
             ImGui::TableSetColumnIndex(5);
             if (drawTransferToolbarButton(
-                    "TX", "仅显示 TX 收发记录", receive.filter.status == dock::LogStatusFilter::Tx)) {
+                    "TX", "只显示宿主发出的 TX 数据记录。", receive.filter.status == dock::LogStatusFilter::Tx)) {
                 receive.filter.status = dock::LogStatusFilter::Tx;
             }
 
             ImGui::TableSetColumnIndex(6);
             const bool parsedFrames = receive.displayMode == dock::TransferLogDisplayMode::ParsedFrames;
             if (drawTransferToolbarButton(parsedFrames ? "逐帧" : "原始",
-                                          parsedFrames ? "按 Lua stream() schema 逐帧显示" : "按运输层原始分块显示",
+                                          parsedFrames ? "当前按 Lua stream() schema 逐帧显示；点击切回运输层原始分块。"
+                                                       : "当前按运输层原始分块显示；点击解析为 Lua stream() 帧列表。",
                                           parsedFrames)) {
                 receive.displayMode =
                     parsedFrames ? dock::TransferLogDisplayMode::RawChunks : dock::TransferLogDisplayMode::ParsedFrames;
@@ -626,23 +633,30 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
             }
 
             ImGui::TableSetColumnIndex(7);
-            drawTransferToolbarToggleButton("HEX", receive.showHex, "显示 HEX");
+            drawTransferToolbarToggleButton(
+                "HEX", receive.showHex, receive.showHex ? "当前显示 HEX 字节；点击后隐藏字节列。"
+                                                         : "当前隐藏 HEX 字节；点击后显示字节列。");
 
             ImGui::TableSetColumnIndex(8);
-            drawTransferToolbarToggleButton("时间", receive.showTimestamps, "显示时间戳");
+            drawTransferToolbarToggleButton("时间",
+                                            receive.showTimestamps,
+                                            receive.showTimestamps ? "当前显示时间戳；点击后隐藏时间列。"
+                                                                   : "当前隐藏时间戳；点击后显示时间列。");
 
             ImGui::TableSetColumnIndex(9);
             drawTransferToolbarToggleButton(receive.pauseScroll ? "继续" : "暂停",
                                             receive.pauseScroll,
-                                            receive.pauseScroll ? "继续自动滚动" : "暂停自动滚动");
+                                            receive.pauseScroll ? "恢复自动滚动，最新收发记录会回到底部可见。"
+                                                                : "暂停自动滚动，便于停在当前位置查看历史记录。");
 
             ImGui::TableSetColumnIndex(10);
-            if (drawTransferToolbarButton("导出", "导出当前过滤后的收发记录", false)) {
+            if (drawTransferToolbarButton("导出", "导出当前过滤结果中的收发记录。", false)) {
                 openTransferLogExportDialog();
             }
 
             ImGui::TableSetColumnIndex(11);
-            if (drawTransferToolbarDangerButton(PROTOSCOPE_ICON_TRASH " 清空", "清空收发记录")) {
+            if (drawTransferToolbarDangerButton(PROTOSCOPE_ICON_TRASH " 清空",
+                                                "清空收发记录和已解析帧缓存；不会断开连接。")) {
                 application_.docks().clearReceiveRows();
                 application_.rebuildTransferFrameRows();
             }

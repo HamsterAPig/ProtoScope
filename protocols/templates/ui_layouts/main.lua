@@ -7,7 +7,7 @@ function ui()
     controls = {
       { "text", "device_id", "设备 ID", default = "01" },
       { "select", "mode", "模式", options = { "轮询", "单次" }, default = 1 },
-      { "btn", "read_version", "读取版本" },
+      { "btn", "read_version", "查询设备版本" },
       { "check", "hex_send", "HEX 发送", label_position = "right", default = true },
       { "check", "auto_send", "自动发送", label_position = "right", default = false },
       { "int", "sample_limit", "采样数", default = 128 },

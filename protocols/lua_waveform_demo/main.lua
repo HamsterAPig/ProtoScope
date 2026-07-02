@@ -166,9 +166,9 @@ function ui()
       anchor = "left_bottom",
       tab_group = "wave_tools",
       controls = {
-        { type = "button", id = "start", label = "开始" },
-        { type = "button", id = "pause", label = "暂停" },
-        { type = "button", id = "resume", label = "恢复" },
+        { type = "button", id = "start", label = "启动演示" },
+        { type = "button", id = "pause", label = "暂停演示" },
+        { type = "button", id = "resume", label = "继续演示" },
         { type = "button", id = "clear_history", label = "清空历史" },
         { type = "input_float", id = "frequency_hz", label = "频率(Hz)", default = defaults.frequency_hz },
         { type = "input_float", id = "amplitude", label = "幅值", default = defaults.amplitude },
@@ -187,7 +187,7 @@ function ui()
         children = {
           {
             type = "collapse",
-            title = "运行控制",
+            title = "演示控制",
             default_open = true,
             children = {
               {

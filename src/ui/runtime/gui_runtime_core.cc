@@ -1303,15 +1303,18 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
         }
         ImGui::SameLine();
         if (application_.isRawCaptureRecording()) {
-            if (drawDangerIconButton("停止录制", "停止完整原始数据录制")) {
+            if (drawDangerIconButton("停止录制", "停止写入当前完整 .psraw 原始事件流")) {
                 stopRawCaptureRecordingWithStatus();
             }
         } else if (drawToolbarSectionButton(
-                       "开始录制", "打开文件对话框并开始完整原始数据录制", false, ImVec2(0.0F, 0.0F))) {
+                       "开始录制",
+                       "选择 .psraw 文件后开始记录完整原始事件流",
+                       false,
+                       ImVec2(0.0F, 0.0F))) {
             openRawCaptureRecordingDialog();
         }
         ImGui::SameLine();
-        if (drawGhostIconButton("导入波形", "从原始波形文件恢复完整历史数据")) {
+        if (drawGhostIconButton("导入波形", "导入 .psraw 快照并重建当前波形缓存")) {
             openRawCaptureImportDialog();
         }
     }

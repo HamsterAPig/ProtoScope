@@ -523,6 +523,7 @@ namespace {
             if (ImGui::SmallButton("全部恢复") && plot::resetAllChannelViewSettings(wave)) {
                 invalidateWaveDisplayCaches(wave);
             }
+            ImGui::SetItemTooltip("恢复所有通道的隐藏状态和显示设置；不清空波形数据。");
         }
     }
 
@@ -569,6 +570,7 @@ namespace {
                 if (ImGui::MenuItem("隐藏通道")) {
                     setChannelHidden(wave, channelIndex, true);
                 }
+                ImGui::SetItemTooltip("隐藏当前通道，波形数据仍保留。");
                 ImGui::EndPopup();
             }
 
@@ -658,6 +660,7 @@ namespace {
         if (ImGui::Checkbox("##visible", &visible)) {
             setChannelHidden(wave, channelIndex, !visible);
         }
+        ImGui::SetItemTooltip(visible ? "当前通道已显示；取消勾选后隐藏该通道。" : "当前通道已隐藏；勾选后恢复显示。");
         recordLastItem(blankHitTest);
 
         ImGui::TableNextColumn();
@@ -747,6 +750,7 @@ namespace {
         if (ImGui::SmallButton(visibilityButtonLabel.c_str())) {
             setChannelHidden(wave, channelIndex, visible);
         }
+        ImGui::SetItemTooltip(visible ? "隐藏该通道；波形数据仍保留。" : "恢复显示该通道。");
         recordLastItem(blankHitTest);
         ImGui::SameLine();
         const std::string resetButtonLabel = waveChannelItemLabel("恢复", channelIndex);
@@ -755,6 +759,7 @@ namespace {
                 invalidateWaveDisplayCaches(wave);
             }
         }
+        ImGui::SetItemTooltip("恢复该通道的颜色、名称、比例和偏移；不清空波形数据。");
         recordLastItem(blankHitTest);
         activateLegendRowFromBlankArea(wave, blankHitTest, channelIndex);
         ImGui::PopID();
@@ -903,6 +908,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                     invalidateWaveDisplayCaches(wave);
                 }
             }
+            ImGui::SetItemTooltip("恢复所有通道的隐藏状态和显示设置；不清空波形数据。");
             ImGui::SameLine();
             if (ImGui::SmallButton("收起")) {
                 wave.legendOverlay.expanded = false;
@@ -911,6 +917,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                 wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
                 collapseRequested = true;
             }
+            ImGui::SetItemTooltip("收起图内通道图例，保留当前展开方式设置。");
             ImGui::Separator();
         }
 

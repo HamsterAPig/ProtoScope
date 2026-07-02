@@ -252,8 +252,6 @@ namespace {
 
     bool drawRailToggleButton(const char* label, bool active, const char* tooltip, const ImVec2& size)
     {
-        const ImGuiStyle& style = ImGui::GetStyle();
-
         ImGui::InvisibleButton("##rail_toggle_button", size);
 
         const bool hovered = ImGui::IsItemHovered();
@@ -328,17 +326,17 @@ namespace {
 
         addRailVerticalSpace(kWaveToolsRailTopPadding);
 
-        drawToolsRailButton(wave, plot::WaveToolsDrawer::Main, "...", "主视图设置");
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::Main, "...", "打开主视图设置：跟随、坐标轴和交互行为。");
 
-        drawToolsRailButton(wave, plot::WaveToolsDrawer::FFT, "F", "FFT设置");
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::FFT, "F", "打开 FFT 设置：频谱坐标、幅值模式和窗口参数。");
 
-        drawToolsRailButton(wave, plot::WaveToolsDrawer::Renderer, "R", "渲染设置");
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::Renderer, "R", "打开渲染设置：降采样、余辉和性能显示。");
 
-        drawToolsRailButton(wave, plot::WaveToolsDrawer::Cursor, "A", "游标吸附、锁定与定位设置");
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::Cursor, "A", "打开游标设置：吸附、锁定和 A/B 游标定位。");
 
-        drawToolsRailButton(wave, plot::WaveToolsDrawer::Measure, "dt", "双游标测量项与误差参考设置");
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::Measure, "dt", "打开测量设置：时间差、频率、峰峰值和误差参考。");
 
-        drawToolsRailButton(wave, plot::WaveToolsDrawer::View, PROTOSCOPE_ICON_EXPAND, "概览、图例与显示策略");
+        drawToolsRailButton(wave, plot::WaveToolsDrawer::View, PROTOSCOPE_ICON_EXPAND, "打开显示设置：概览图、通道图例和展开策略。");
 
         ImGui::PopStyleVar();
     }
@@ -463,7 +461,8 @@ namespace {
         const bool targetRunning = !currentRunning;
         if (drawTopToolbarButton(currentRunning ? PROTOSCOPE_ICON_PAUSE : PROTOSCOPE_ICON_PLAY,
                                  currentRunning,
-                                 currentRunning ? "请求暂停示波器" : "请求启动示波器")) {
+                                 currentRunning ? "请求协议脚本暂停示波器采集；脚本确认后状态才会改变。"
+                                                : "请求协议脚本启动示波器采集；脚本确认后开始写入波形。")) {
             // 核心流程：延迟 Lua 启停回调，避免同一帧清空 buffer 后继续使用旧波形快照。
             deferOscilloscopeToggle(frame, currentRunning, targetRunning);
         }
@@ -484,83 +483,119 @@ namespace {
         }
 
         drawTopToolbarSeparator();
-        if (drawTopToolbarButton("-", false, "缩小时间轴。")) {
+        if (drawTopToolbarButton("-", false, "缩小时间轴视图，显示更长时间范围。")) {
             zoomTimeAroundCenter(view, 1.25);
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("+", false, "放大时间轴。")) {
+        if (drawTopToolbarButton("+", false, "放大时间轴视图，查看更短时间范围内的细节。")) {
             zoomTimeAroundCenter(view, 0.80);
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("适配", false, "适配当前可见波形到完整视图。")) {
+        if (drawTopToolbarButton("适配", false, "把当前可见通道的全部波形放入主视图。")) {
             view.fitVisibleWaveformsRequested = true;
         }
         ImGui::SameLine();
         if (drawTopToolbarButton(
-                view.zoomSelectionActive ? "框选" : "平移", view.zoomSelectionActive, "切换框选放大模式。")) {
+                view.zoomSelectionActive ? "框选" : "平移",
+                view.zoomSelectionActive,
+                view.zoomSelectionActive ? "当前为框选放大；点击后回到拖拽平移。"
+                                         : "当前为拖拽平移；点击后用鼠标框选局部放大。")) {
             view.zoomSelectionActive = !view.zoomSelectionActive;
             view.zoomSelectionDragging = false;
         }
         ImGui::SameLine();
         if (drawTopToolbarButton(
-                view.autoFollowLatest ? "跟随" : "停跟", view.autoFollowLatest, "切换自动跟随最新数据。")) {
+                view.autoFollowLatest ? "跟随" : "停跟",
+                view.autoFollowLatest,
+                view.autoFollowLatest ? "当前自动跟随最新数据；点击后停在手动浏览位置。"
+                                      : "当前不跟随最新数据；点击后视图回到最新数据末尾。")) {
             view.autoFollowLatest = !view.autoFollowLatest;
         }
 
         drawTopToolbarSeparator();
-        if (drawTopToolbarButton("A", view.cursors[0].enabled, "显示或隐藏 A 游标。")) {
+        if (drawTopToolbarButton("A",
+                                 view.cursors[0].enabled,
+                                 view.cursors[0].enabled ? "A 游标已显示；点击后隐藏 A 游标。"
+                                                         : "A 游标已隐藏；点击后显示 A 游标。")) {
             view.cursors[0].enabled = !view.cursors[0].enabled;
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("B", view.cursors[1].enabled, "显示或隐藏 B 游标。")) {
+        if (drawTopToolbarButton("B",
+                                 view.cursors[1].enabled,
+                                 view.cursors[1].enabled ? "B 游标已显示；点击后隐藏 B 游标。"
+                                                         : "B 游标已隐藏；点击后显示 B 游标。")) {
             view.cursors[1].enabled = !view.cursors[1].enabled;
         }
         ImGui::SameLine();
         ImGui::PushID("cursor_intersection_readouts");
         if (drawTopToolbarButton(
-                "交点", view.showCursorIntersectionReadouts, "显示或隐藏可见普通曲线通道上的 A/B 游标交点读数。")) {
+                "交点",
+                view.showCursorIntersectionReadouts,
+                view.showCursorIntersectionReadouts
+                    ? "当前显示 A/B 游标与各可见曲线的交点读数；点击后隐藏。"
+                    : "当前隐藏游标交点读数；点击后显示每个可见通道的采样读数。")) {
             view.showCursorIntersectionReadouts = !view.showCursorIntersectionReadouts;
         }
         ImGui::PopID();
         ImGui::SameLine();
-        if (drawTopToolbarButton(
-                view.cursorIntervalLocked ? "锁定" : "间隔", view.cursorIntervalLocked, "锁定 A/B 游标间隔。")) {
+        if (drawTopToolbarButton(view.cursorIntervalLocked ? "锁定" : "间隔",
+                                 view.cursorIntervalLocked,
+                                 view.cursorIntervalLocked ? "A/B 游标间隔已锁定；点击后解除联动。"
+                                                           : "点击后锁定当前 A/B 间隔，拖动单个游标时另一个同步移动。")) {
             view.cursorIntervalLocked = !view.cursorIntervalLocked;
             view.lockedCursorInterval = std::abs(view.cursors[1].time - view.cursors[0].time);
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("同步", false, "把 A/B 游标移入当前视窗。")) {
+        if (drawTopToolbarButton("同步", false, "把 A/B 游标重新放到当前可见时间范围内。")) {
             placeCursorPairInViewport(view, config, displayData);
         }
 
         drawTopToolbarSeparator();
-        if (drawTopToolbarButton("dt", view.measurement.deltaTime, "切换时间差测量。")) {
+        if (drawTopToolbarButton("dt",
+                                 view.measurement.deltaTime,
+                                 view.measurement.deltaTime ? "时间差测量已显示；点击后隐藏 dt。"
+                                                            : "显示 A/B 游标之间的时间差 dt。")) {
             view.measurement.deltaTime = !view.measurement.deltaTime;
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("Hz", view.measurement.frequency, "切换等效频率测量。")) {
+        if (drawTopToolbarButton("Hz",
+                                 view.measurement.frequency,
+                                 view.measurement.frequency ? "等效频率已显示；点击后隐藏 Hz。"
+                                                            : "根据 A/B 时间差显示等效频率 Hz。")) {
             view.measurement.frequency = !view.measurement.frequency;
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("峰峰", view.measurement.peakToPeak, "切换峰峰值测量。")) {
+        if (drawTopToolbarButton("峰峰",
+                                 view.measurement.peakToPeak,
+                                 view.measurement.peakToPeak ? "峰峰值测量已显示；点击后隐藏。"
+                                                             : "显示当前测量通道在 A/B 范围内的峰峰值。")) {
             view.measurement.peakToPeak = !view.measurement.peakToPeak;
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("均值", view.measurement.mean, "切换均值测量。")) {
+        if (drawTopToolbarButton("均值",
+                                 view.measurement.mean,
+                                 view.measurement.mean ? "均值测量已显示；点击后隐藏。"
+                                                       : "显示当前测量通道在 A/B 范围内的均值。")) {
             view.measurement.mean = !view.measurement.mean;
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("更多", !wave.toolsCollapsed, "展开右侧高级工具轨。")) {
+        if (drawTopToolbarButton("更多", !wave.toolsCollapsed, "打开右侧高级工具抽屉。")) {
             wave.activeToolsDrawer = plot::WaveToolsDrawer::Main;
             wave.toolsCollapsed = false;
         }
 
         drawTopToolbarSeparator();
-        if (drawTopToolbarButton("概览", !wave.overviewCollapsed, "展开或折叠概览图。")) {
+        if (drawTopToolbarButton("概览",
+                                 !wave.overviewCollapsed,
+                                 wave.overviewCollapsed ? "概览图已折叠；点击后显示全局时间轴概览。"
+                                                        : "概览图已显示；点击后折叠概览区域。")) {
             wave.overviewCollapsed = !wave.overviewCollapsed;
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("图例", view.showChannelLegend, "显示或隐藏图内通道图例。")) {
+        if (drawTopToolbarButton("图例",
+                                 view.showChannelLegend,
+                                 view.showChannelLegend ? "图内通道图例已显示；点击后隐藏。"
+                                                        : "图内通道图例已隐藏；点击后显示。")) {
             view.showChannelLegend = !view.showChannelLegend;
         }
         ImGui::SameLine();
@@ -580,14 +615,17 @@ namespace {
             wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
         }
         ImGui::SameLine();
-        if (drawTopToolbarButton("恢复", false, "恢复所有通道显示设置，不清空波形数据。")) {
+        if (drawTopToolbarButton("恢复", false, "恢复所有通道的颜色、名称、比例和隐藏状态；不清空波形数据。")) {
             if (plot::resetAllChannelViewSettings(wave)) {
                 invalidateWaveDisplayCaches(wave);
             }
         }
         ImGui::SameLine();
         if (fullscreenToggleRequested != nullptr &&
-            drawTopToolbarButton(fullscreenActive ? "退全" : "全屏", fullscreenActive, "切换波形全屏显示。")) {
+            drawTopToolbarButton(fullscreenActive ? "退全" : "全屏",
+                                 fullscreenActive,
+                                 fullscreenActive ? "退出波形全屏，恢复普通 Dock 布局。"
+                                                  : "进入波形全屏，只聚焦当前波形视图。")) {
             if (!fullscreenActive) {
                 resetLegendOverlayTransientForFullscreenEntry(wave);
             }

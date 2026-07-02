@@ -911,7 +911,9 @@ void drawWaveMainControlSection(app::Application& application,
     }
     if (drawAdaptiveToolbarButton(view.showHoverReadout ? "显示悬停读数" : "隐藏悬停读数",
                                   "读",
-                                  "显示或隐藏鼠标悬停读数。开启后鼠标靠近曲线会显示最近采样点。",
+                                  view.showHoverReadout
+                                      ? "悬停读数已开启；点击后关闭鼠标附近采样点读数。"
+                                      : "悬停读数已关闭；点击后鼠标靠近曲线会显示最近采样点。",
                                   view.showHoverReadout,
                                   true)) {
         view.showHoverReadout = !view.showHoverReadout;
@@ -925,7 +927,7 @@ void drawWaveMainControlSection(app::Application& application,
         view.zoomSelectionDragging = false;
     }
     if (drawAdaptiveToolbarButton(
-            PROTOSCOPE_ICON_EXPAND " 显示全部", "全", "适配当前可见波形到完整视图。", false, true)) {
+            PROTOSCOPE_ICON_EXPAND " 显示全部", "适", "把当前可见通道的全部波形放入主视图。", false, true)) {
         view.fitVisibleWaveformsRequested = true;
     }
     if (drawAdaptiveToolbarButton(
@@ -941,7 +943,7 @@ void drawWaveMainControlSection(app::Application& application,
                                   true)) {
         *fullscreenToggleRequested = true;
     }
-    if (drawAdaptiveToolbarButton("关闭抽屉", "关", "关闭右侧抽屉，保留窄按钮列入口。", false)) {
+    if (drawAdaptiveToolbarButton("关闭抽屉", "关", "收起右侧抽屉，只保留窄按钮列入口。", false)) {
         wave.toolsCollapsed = true;
     }
 }
@@ -992,7 +994,11 @@ void drawCollapsedWaveToolbar(app::Application& application,
                                 collapsedButtonSize)) {
         view.showHoverReadout = !view.showHoverReadout;
     }
-    if (drawToolbarToggleButton("框", view.zoomSelectionActive, zoomSelectionHelpText(view), collapsedButtonSize)) {
+    if (drawToolbarToggleButton("框",
+                                view.zoomSelectionActive,
+                                view.zoomSelectionActive ? "框选放大已开启；点击后回到拖拽平移。"
+                                                         : zoomSelectionHelpText(view),
+                                collapsedButtonSize)) {
         view.zoomSelectionActive = !view.zoomSelectionActive;
         view.zoomSelectionDragging = false;
     }
@@ -1010,7 +1016,7 @@ void drawCollapsedWaveToolbar(app::Application& application,
                                 collapsedButtonSize)) {
         *fullscreenToggleRequested = true;
     }
-    if (drawToolbarActionButton("展", "展开工具栏：显示 FFT、渲染、游标和测量等高级设置。", collapsedButtonSize)) {
+    if (drawToolbarActionButton("展", "展开工具栏：打开右侧抽屉，显示 FFT、渲染、游标和测量等高级设置。", collapsedButtonSize)) {
         wave.activeToolsDrawer = plot::WaveToolsDrawer::Main;
         wave.toolsCollapsed = false;
     }

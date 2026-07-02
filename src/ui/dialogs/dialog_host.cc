@@ -5,6 +5,7 @@
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/keyboard_shortcuts.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <optional>
 #include <span>
@@ -202,46 +203,61 @@ void GuiRuntime::drawAlgorithmHelpDialog()
         algorithmHelpDialogRequested_ = false;
     }
 
+    const ImVec2 viewportSize = dialogViewportFallbackSize();
+    const ImVec2 maxSize((std::max)(1.0F, viewportSize.x * 0.92F), (std::max)(1.0F, viewportSize.y * 0.92F));
+    const ImVec2 minSize((std::min)(560.0F, maxSize.x), (std::min)(360.0F, maxSize.y));
+    ImGui::SetNextWindowSizeConstraints(minSize, maxSize);
     ImGui::SetNextWindowSize(ImVec2(760.0F, 560.0F), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoSavedSettings)) {
+    if (!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_NoSavedSettings)) {
         return;
     }
 
-    const float searchWidth = (std::max)(220.0F, ImGui::GetContentRegionAvail().x - 300.0F);
-    ImGui::SetNextItemWidth(searchWidth);
-    const bool searchChanged =
-        ImGui::InputText("搜索", algorithmHelpSearchBuffer_.data(), algorithmHelpSearchBuffer_.size());
-    const std::string query = algorithmHelpSearchBuffer_.data();
-    if (searchChanged || query != algorithmHelpLastQuery_) {
-        algorithmHelpLastQuery_ = query;
-        algorithmHelpMatches_ = findAlgorithmHelpMatches(query);
-        algorithmHelpCurrentMatchOrdinal_ = algorithmHelpMatches_.empty() ? kNoAlgorithmHelpMatch : 0U;
-        algorithmHelpScrollToCurrent_ = !algorithmHelpMatches_.empty();
-    }
+    if (ImGui::BeginTable(
+            "##algorithm_help_toolbar", 5, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings)) {
+        ImGui::TableSetupColumn("搜索", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("上一个", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+        ImGui::TableSetupColumn("下一个", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+        ImGui::TableSetupColumn("匹配数", ImGuiTableColumnFlags_WidthFixed, 112.0F);
+        ImGui::TableSetupColumn("关闭", ImGuiTableColumnFlags_WidthFixed, 56.0F);
 
-    ImGui::SameLine();
-    ImGui::BeginDisabled(algorithmHelpMatches_.empty());
-    if (ImGui::Button("上一个")) {
-        algorithmHelpCurrentMatchOrdinal_ =
-            previousAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
-        algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("下一个")) {
-        algorithmHelpCurrentMatchOrdinal_ =
-            nextAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
-        algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
-    }
-    ImGui::EndDisabled();
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::SetNextItemWidth(-1.0F);
+        const bool searchChanged = ImGui::InputTextWithHint(
+            "##algorithm_help_search", "搜索", algorithmHelpSearchBuffer_.data(), algorithmHelpSearchBuffer_.size());
+        const std::string query = algorithmHelpSearchBuffer_.data();
+        if (searchChanged || query != algorithmHelpLastQuery_) {
+            algorithmHelpLastQuery_ = query;
+            algorithmHelpMatches_ = findAlgorithmHelpMatches(query);
+            algorithmHelpCurrentMatchOrdinal_ = algorithmHelpMatches_.empty() ? kNoAlgorithmHelpMatch : 0U;
+            algorithmHelpScrollToCurrent_ = !algorithmHelpMatches_.empty();
+        }
 
-    ImGui::SameLine();
-    const std::size_t displayOrdinal =
-        algorithmHelpCurrentMatchOrdinal_ == kNoAlgorithmHelpMatch ? 0U : algorithmHelpCurrentMatchOrdinal_ + 1U;
-    ImGui::Text("匹配 %zu / %zu", displayOrdinal, algorithmHelpMatches_.size());
+        ImGui::BeginDisabled(algorithmHelpMatches_.empty());
+        ImGui::TableSetColumnIndex(1);
+        if (ImGui::Button("上一个", ImVec2(-1.0F, 0.0F))) {
+            algorithmHelpCurrentMatchOrdinal_ =
+                previousAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
+            algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
+        }
+        ImGui::TableSetColumnIndex(2);
+        if (ImGui::Button("下一个", ImVec2(-1.0F, 0.0F))) {
+            algorithmHelpCurrentMatchOrdinal_ =
+                nextAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
+            algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
+        }
+        ImGui::EndDisabled();
 
-    ImGui::SameLine();
-    if (ImGui::Button("关闭")) {
-        ImGui::CloseCurrentPopup();
+        ImGui::TableSetColumnIndex(3);
+        const std::size_t displayOrdinal =
+            algorithmHelpCurrentMatchOrdinal_ == kNoAlgorithmHelpMatch ? 0U : algorithmHelpCurrentMatchOrdinal_ + 1U;
+        ImGui::Text("匹配 %zu / %zu", displayOrdinal, algorithmHelpMatches_.size());
+
+        ImGui::TableSetColumnIndex(4);
+        if (ImGui::Button("关闭", ImVec2(-1.0F, 0.0F))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndTable();
     }
 
     ImGui::Separator();

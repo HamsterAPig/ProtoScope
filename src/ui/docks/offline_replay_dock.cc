@@ -159,26 +159,26 @@ void GuiRuntime::drawOfflineReplayDock()
     drawSectionTitle("复现输入");
     if (ImGui::BeginTable("##offline_replay_inputs", 2, ImGuiTableFlags_SizingStretchSame)) {
         drawTwoColumnActionRow(
-            "导入 .pssession",
-            "导入现场会话包",
+            "导入现场包",
+            "导入 .pssession 现场会话包，恢复协议、原始缓存和复现上下文。",
             true,
-            "导出 .pssession",
-            "导出现场会话包",
+            "导出现场包",
+            "导出 .pssession 现场会话包，打包当前协议和复现证据。",
             true,
             [&]() { openSessionPackageImportDialog(); },
             [&]() { openSessionPackageExportDialog(); });
         drawTwoColumnActionRow(
-            "导入 .psraw",
-            "导入原始波形并重建当前缓存",
+            "导入缓存快照",
+            "导入 .psraw 缓存快照，重建当前可查看的原始波形。",
             true,
-            "导出 .psraw",
-            "导出当前缓存快照",
+            "导出缓存快照",
+            "导出当前窗口内的 .psraw 原始字节和必要配置快照。",
             true,
             [&]() { openRawCaptureImportDialog(); },
             [&]() { openRawCaptureExportDialog(); });
         drawTwoColumnActionRow(
             "载入回放时间轴",
-            "载入原始数据回放时间轴",
+            "载入 .psraw 完整事件流，用原始时间戳回放采集过程。",
             true,
             "打开 ELF 数据",
             "打开 ELF/ElfStaticView 数据文件",
@@ -204,18 +204,18 @@ void GuiRuntime::drawOfflineReplayDock()
     if (ImGui::BeginTable("##offline_replay_controls", 3, ImGuiTableFlags_SizingStretchSame)) {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        if (drawDisabledAwareButton("继续", "继续原始时间轴回放", canAdvanceReplay && !replayStatus.playing)) {
+        if (drawDisabledAwareButton("继续回放", "从当前位置继续按原始时间轴播放事件。", canAdvanceReplay && !replayStatus.playing)) {
             std::string error;
             if (!application_.playRawCaptureReplay(error)) {
                 application_.setStatusMessage("原始回放继续失败: " + error);
             }
         }
         ImGui::TableNextColumn();
-        if (drawDisabledAwareButton("暂停", "暂停原始时间轴回放", replayStatus.loaded && replayStatus.playing)) {
+        if (drawDisabledAwareButton("暂停回放", "暂停时间轴播放，保留当前位置。", replayStatus.loaded && replayStatus.playing)) {
             application_.pauseRawCaptureReplay();
         }
         ImGui::TableNextColumn();
-        if (drawDisabledAwareButton("单步", "推进一个回放事件", canAdvanceReplay)) {
+        if (drawDisabledAwareButton("单步推进", "只执行下一个原始事件，便于逐帧排查。", canAdvanceReplay)) {
             std::string error;
             if (!application_.stepRawCaptureReplay(error)) {
                 application_.setStatusMessage("原始回放单步失败: " + error);
@@ -263,7 +263,7 @@ void GuiRuntime::drawOfflineReplayDock()
 
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        if (drawDisabledAwareButton("卸载时间轴", "停止并卸载当前回放时间轴", replayStatus.loaded)) {
+        if (drawDisabledAwareButton("卸载时间轴", "停止回放并释放当前载入的 .psraw 时间轴。", replayStatus.loaded)) {
             application_.unloadRawCaptureReplayTimeline();
         }
         ImGui::TableNextColumn();
