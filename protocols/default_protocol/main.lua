@@ -8,7 +8,7 @@ function ui()
       anchor = "left_bottom",
       tab_group = "protocol_tools",
       controls = {
-        { type = "button", id = "read_version", label = "读取版本" },
+        { type = "button", id = "read_version", label = "查询设备版本" },
         { type = "input_text", id = "device_id", label = "设备 ID", default = "01" },
         { type = "checkbox", id = "hex_send", label = "HEX 发送", default = true },
         { type = "combo", id = "mode", label = "模式", options = { "轮询", "单次" }, default = 1 },
@@ -26,7 +26,10 @@ function ui()
             children = {
               {
                 type = "flow",
-                controls = { "read_version", "device_id" },
+                children = {
+                  { type = "control", id = "read_version" },
+                  { type = "control", id = "device_id" },
+                },
               }
             }
           },

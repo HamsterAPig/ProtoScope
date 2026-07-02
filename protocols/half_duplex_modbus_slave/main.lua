@@ -303,7 +303,7 @@ function ui()
       title = "SN Scope Slave",
       anchor = "left_bottom",
       controls = {
-        { type = "button", id = "noop", label = "从机自动模式" },
+        { type = "button", id = "noop", label = "从机自动应答中" },
       },
     },
   }

@@ -2,6 +2,7 @@
 #include "../src/ui/wave/wave_render_service.hpp"
 
 #include "protoscope/config/config.hpp"
+#include "protoscope/plot/csv_data_file.hpp"
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plot/wave_fft.hpp"
@@ -3181,6 +3182,98 @@ void test_wave_fft_detects_50hz_and_150hz_components()
     require(std::abs(frame.channels[0].fundamental->frequencyHz - 50.0) < 1e-12, "自动基波应为 50Hz");
 }
 
+void test_wave_fft_fundamental_percent_uses_each_channel_fundamental()
+{
+    constexpr double sampleFrequencyHz = 1024.0;
+    constexpr std::size_t pointCount = 1024;
+    std::vector<protoscope::plot::WaveSample> channelA;
+    std::vector<protoscope::plot::WaveSample> channelB;
+    channelA.reserve(pointCount);
+    channelB.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        const double time = static_cast<double>(index) / sampleFrequencyHz;
+        const double fundamental = std::sin(2.0 * 3.14159265358979323846 * 50.0 * time);
+        const double harmonic = std::sin(2.0 * 3.14159265358979323846 * 150.0 * time);
+        channelA.push_back({.time = time, .value = 2.0 * fundamental + 1.0 * harmonic});
+        channelB.push_back({.time = time, .value = 4.0 * fundamental + 1.0 * harmonic});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = channelA.size(),
+        .visibleBegin = 0,
+        .visibleEnd = channelA.size(),
+        .samples = channelA.data(),
+    });
+    snapshot.channels.push_back({
+        .label = "CH2",
+        .unit = "V",
+        .totalSamples = channelB.size(),
+        .visibleBegin = 0,
+        .visibleEnd = channelB.size(),
+        .samples = channelB.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::N1024,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+        .magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::FundamentalPercent,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(
+        snapshot, displayData, config, std::vector<std::uint8_t>{1, 1}, 0.0, 1.0, sampleFrequencyHz);
+    require(frame.valid, "基波百分比 FFT 帧应计算成功");
+    require(frame.channels.size() == 2 && frame.channels[0].valid && frame.channels[1].valid,
+            "两个通道都应有有效百分比频谱");
+    require(std::abs(frame.channels[0].bins[50].displayMagnitude - 100.0) < 1e-9, "CH1 基波应显示为 100%");
+    require(std::abs(frame.channels[1].bins[50].displayMagnitude - 100.0) < 1e-9, "CH2 基波应显示为 100%");
+    require(std::abs(frame.channels[0].bins[150].displayMagnitude - 50.0) < 1e-9,
+            "CH1 三次谐波应按 CH1 基波幅值归一化");
+    require(std::abs(frame.channels[1].bins[150].displayMagnitude - 25.0) < 1e-9,
+            "CH2 三次谐波应按 CH2 基波幅值归一化");
+}
+
+void test_wave_fft_fundamental_percent_requires_valid_fundamental_magnitude()
+{
+    constexpr double sampleFrequencyHz = 1024.0;
+    constexpr std::size_t pointCount = 1024;
+    std::vector<protoscope::plot::WaveSample> samples;
+    samples.reserve(pointCount);
+    for (std::size_t index = 0; index < pointCount; ++index) {
+        samples.push_back({.time = static_cast<double>(index) / sampleFrequencyHz, .value = 0.0});
+    }
+
+    protoscope::plot::WaveSnapshot snapshot{};
+    snapshot.channels.push_back({
+        .label = "CH1",
+        .unit = "V",
+        .totalSamples = samples.size(),
+        .visibleBegin = 0,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, sampleFrequencyHz);
+    const protoscope::plot::WaveFftConfig config{
+        .enabled = true,
+        .pointCount = protoscope::plot::WaveFftPointCount::N1024,
+        .window = protoscope::plot::WaveFftWindow::Rectangular,
+        .magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::FundamentalPercent,
+        .fundamentalMode = protoscope::plot::WaveFftFundamentalMode::Manual,
+        .manualFundamentalHz = 50.0,
+    };
+
+    const auto frame = protoscope::plot::buildWaveFftFrame(
+        snapshot, displayData, config, std::vector<std::uint8_t>{1}, 0.0, 1.0, sampleFrequencyHz);
+    require(!frame.valid, "基波幅值为 0 时百分比 FFT 帧不应回退为普通幅值");
+    require(frame.message.find("基波百分比需要有效基波幅值") != std::string::npos, "无有效基波幅值时应给出明确帧提示");
+    require(frame.channels.size() == 1 && !frame.channels[0].valid, "无有效分母的通道应标记为无效");
+    require(frame.channels[0].message.find("基波百分比需要有效基波幅值") != std::string::npos,
+            "无有效分母的通道应给出明确提示");
+}
+
 void test_wave_fft_visible_samples_supports_non_power_of_two()
 {
     constexpr double sampleFrequencyHz = 1000.0;
@@ -3335,6 +3428,128 @@ void test_wave_fft_fit_viewport_resets_frequency_and_value_ranges()
     require(viewport.magnitudeMax > frame.maxDisplayMagnitude, "显示全部频谱应给幅值上限留 padding");
     require(std::abs(viewport.phaseMin + 180.0) < 1e-12, "显示全部频谱应恢复相位下限");
     require(std::abs(viewport.phaseMax - 180.0) < 1e-12, "显示全部频谱应恢复相位上限");
+}
+
+protoscope::plot::WaveFftFrame makeManualFftFitFrame()
+{
+    protoscope::plot::WaveFftFrame frame{};
+    frame.enabled = true;
+    frame.valid = true;
+    frame.maxFrequencyHz = 30.0;
+    frame.minDisplayMagnitude = 1.0;
+    frame.maxDisplayMagnitude = 100.0;
+    frame.channels.push_back({
+        .channelIndex = 0,
+        .label = "CH1",
+        .unit = "",
+        .bins =
+            {
+                {.frequencyHz = 0.0, .displayMagnitude = 1.0},
+                {.frequencyHz = 10.0, .displayMagnitude = 100.0},
+                {.frequencyHz = 20.0, .displayMagnitude = 5.0},
+            },
+        .fundamental = protoscope::plot::WaveFftPeak{.frequencyHz = 10.0, .magnitude = 100.0, .binIndex = 1},
+        .visibleSampleCount = 0,
+        .usedSampleCount = 0,
+        .enabled = true,
+        .valid = true,
+        .message = "",
+    });
+    frame.channels.push_back({
+        .channelIndex = 1,
+        .label = "CH2",
+        .unit = "",
+        .bins =
+            {
+                {.frequencyHz = 0.0, .displayMagnitude = 2.0},
+                {.frequencyHz = 10.0, .displayMagnitude = 4.0},
+                {.frequencyHz = 20.0, .displayMagnitude = 80.0},
+            },
+        .fundamental = protoscope::plot::WaveFftPeak{.frequencyHz = 20.0, .magnitude = 80.0, .binIndex = 2},
+        .visibleSampleCount = 0,
+        .usedSampleCount = 0,
+        .enabled = true,
+        .valid = true,
+        .message = "",
+    });
+    return frame;
+}
+
+void test_wave_fft_fit_viewport_can_ignore_channel_fundamental_bins()
+{
+    const auto frame = makeManualFftFitFrame();
+
+    const auto defaultViewport = protoscope::plot::makeFftFitViewport(frame);
+    const auto ignoreViewport = protoscope::plot::makeFftFitViewport(
+        frame, {.ignoreFundamentalBinsForMagnitude = true, .magnitudeChannelOffsets = {}});
+
+    require(defaultViewport.magnitudeMax > 100.0, "默认幅值 fit 应包含各通道基波峰");
+    require(ignoreViewport.magnitudeMax > 5.0 && ignoreViewport.magnitudeMax < 10.0,
+            "开启忽略基波后，幅值 fit 应跳过各通道自己的基波 bin");
+    require(ignoreViewport.magnitudeMin < 1.0, "忽略基波后仍应按剩余点计算带 padding 的下限");
+}
+
+void test_wave_fft_fit_viewport_ignore_fundamental_falls_back_when_empty()
+{
+    protoscope::plot::WaveFftFrame frame{};
+    frame.enabled = true;
+    frame.valid = true;
+    frame.maxFrequencyHz = 10.0;
+    frame.minDisplayMagnitude = 42.0;
+    frame.maxDisplayMagnitude = 42.0;
+    frame.channels.push_back({
+        .channelIndex = 0,
+        .label = "CH1",
+        .unit = "",
+        .bins = {{.frequencyHz = 10.0, .displayMagnitude = 42.0}},
+        .fundamental = protoscope::plot::WaveFftPeak{.frequencyHz = 10.0, .magnitude = 42.0, .binIndex = 0},
+        .visibleSampleCount = 0,
+        .usedSampleCount = 0,
+        .enabled = true,
+        .valid = true,
+        .message = "",
+    });
+
+    const auto viewport = protoscope::plot::makeFftFitViewport(
+        frame, {.ignoreFundamentalBinsForMagnitude = true, .magnitudeChannelOffsets = {}});
+
+    require(viewport.magnitudeMin < 42.0 && viewport.magnitudeMax > 42.0, "忽略基波后无剩余点时应回退到完整幅值范围");
+}
+
+void test_wave_fft_fit_viewport_offsets_are_visual_only()
+{
+    const auto frame = makeManualFftFitFrame();
+    const std::vector<double> offsets{10.0, -2.0};
+
+    const auto viewport = protoscope::plot::makeFftFitViewport(
+        frame, {.ignoreFundamentalBinsForMagnitude = false, .magnitudeChannelOffsets = offsets});
+
+    require(viewport.magnitudeMax > 110.0, "幅值视觉 offset 应参与 fit 范围");
+    require(std::abs(frame.channels[0].bins[1].displayMagnitude - 100.0) < 1e-12, "幅值视觉 offset 不应修改 FFT 读数");
+}
+
+void test_wave_fft_x_axis_mode_conversions()
+{
+    using protoscope::plot::WaveFftXAxisMode;
+
+    const auto frequencyValue = protoscope::plot::fftXAxisValue(WaveFftXAxisMode::FrequencyHz, 50.0, 50.0);
+    require(frequencyValue.has_value() && std::abs(*frequencyValue - 50.0) < 1e-12, "频率横轴应直接显示 Hz");
+    const auto frequencyBack = protoscope::plot::frequencyHzFromFftXAxisValue(WaveFftXAxisMode::FrequencyHz, 50.0, 0.0);
+    require(frequencyBack.has_value() && std::abs(*frequencyBack - 50.0) < 1e-12, "频率横轴应能反算 Hz");
+
+    const auto orderValue = protoscope::plot::fftXAxisValue(WaveFftXAxisMode::Order, 100.0, 50.0);
+    require(orderValue.has_value() && std::abs(*orderValue - 2.0) < 1e-12, "次数横轴应显示基波倍数");
+    const auto orderBack = protoscope::plot::frequencyHzFromFftXAxisValue(WaveFftXAxisMode::Order, 2.0, 50.0);
+    require(orderBack.has_value() && std::abs(*orderBack - 100.0) < 1e-12, "次数横轴应按基波反算 Hz");
+    require(!protoscope::plot::fftXAxisValue(WaveFftXAxisMode::Order, 100.0, 0.0).has_value(),
+            "次数横轴缺少有效基波时不应显示伪坐标");
+
+    const auto logValue = protoscope::plot::fftXAxisValue(WaveFftXAxisMode::Log10Hz, 1000.0, 50.0);
+    require(logValue.has_value() && std::abs(*logValue - 3.0) < 1e-12, "log10 横轴应显示 log10(Hz)");
+    const auto logBack = protoscope::plot::frequencyHzFromFftXAxisValue(WaveFftXAxisMode::Log10Hz, 3.0, 0.0);
+    require(logBack.has_value() && std::abs(*logBack - 1000.0) < 1e-9, "log10 横轴应能反算 Hz");
+    require(!protoscope::plot::fftXAxisValue(WaveFftXAxisMode::Log10Hz, 0.0, 50.0).has_value(),
+            "log10 横轴不应显示 0Hz/DC 点");
 }
 
 void test_wave_viewport_zoom_modes_and_clamp()
@@ -3877,6 +4092,23 @@ void test_wave_status_overlay_items_only_show_non_default_states()
     require(draggingItems[2].label == std::string_view("框选"), "框选拖动中也应保留框选状态标签");
 }
 
+void test_wave_auto_follow_pause_policy_respects_interaction_setting()
+{
+    protoscope::plot::WaveViewState view;
+    view.autoFollowLatest = true;
+    view.pauseAutoFollowOnInteraction = true;
+    protoscope::ui::applyAutoFollowPausePolicy(view, protoscope::ui::WaveViewportAutoFollowPolicy::UserInteraction);
+    require(!view.autoFollowLatest, "开启交互后暂停时，用户交互应暂停跟随");
+
+    view.autoFollowLatest = true;
+    view.pauseAutoFollowOnInteraction = false;
+    protoscope::ui::applyAutoFollowPausePolicy(view, protoscope::ui::WaveViewportAutoFollowPolicy::UserInteraction);
+    require(view.autoFollowLatest, "关闭交互后暂停时，用户交互不应暂停跟随");
+
+    protoscope::ui::applyAutoFollowPausePolicy(view, protoscope::ui::WaveViewportAutoFollowPolicy::ExplicitCommand);
+    require(!view.autoFollowLatest, "显式命令应不受交互开关影响并暂停跟随");
+}
+
 void test_wave_phosphor_trigger_detection_interpolates_edges()
 {
     const std::vector<protoscope::plot::WaveSample> risingSamples{
@@ -4046,6 +4278,7 @@ void test_wave_reset_one_channel_view_settings_only_resets_target()
     wave.channelOverrides[1].labelOverridden = true;
     wave.channelOverrides[1].scaleOverridden = true;
     wave.hiddenChannelIndices = {0, 1};
+    wave.fftMagnitudeChannelOffsets = {12.0, -6.0};
 
     require(protoscope::plot::resetOneChannelViewSettings(wave, 0), "恢复单通道显示设置应成功");
     const auto spec0 = wave.buffer.channelSpec(0);
@@ -4058,6 +4291,9 @@ void test_wave_reset_one_channel_view_settings_only_resets_target()
             "非目标通道覆盖项应保留");
     require(wave.hiddenChannelIndices.size() == 1 && wave.hiddenChannelIndices[0] == 1,
             "恢复单通道应只让目标通道重新可见");
+    require(std::abs(wave.fftMagnitudeChannelOffsets[0]) < 1e-12 &&
+                std::abs(wave.fftMagnitudeChannelOffsets[1] + 6.0) < 1e-12,
+            "恢复单通道应只清目标通道 FFT 幅值视觉 offset");
 }
 
 void test_wave_reset_all_channel_view_settings_preserves_samples()
@@ -4071,6 +4307,7 @@ void test_wave_reset_all_channel_view_settings_preserves_samples()
     wave.channelOverrides[0].labelOverridden = true;
     wave.channelOverrides[0].scaleOverridden = true;
     wave.hiddenChannelIndices = {0};
+    wave.fftMagnitudeChannelOffsets = {8.0};
     wave.legendOverlay.expanded = true;
     wave.legendOverlay.offsetX = 42.0F;
     wave.legendOverlay.offsetY = 64.0F;
@@ -4082,6 +4319,8 @@ void test_wave_reset_all_channel_view_settings_preserves_samples()
     require(snapshot.channels.size() == 1 && snapshot.channels[0].totalSamples == 2, "全部恢复不应清空波形数据");
     require(wave.channelOverrides.empty(), "全部恢复应清空覆盖项");
     require(wave.hiddenChannelIndices.empty(), "全部恢复应恢复所有通道可见");
+    require(wave.fftMagnitudeChannelOffsets.size() == 1 && std::abs(wave.fftMagnitudeChannelOffsets[0]) < 1e-12,
+            "全部恢复应清空全部 FFT 幅值视觉 offset");
     require(!wave.legendOverlay.expanded && wave.legendOverlay.offsetX == 8.0F && wave.legendOverlay.offsetY == 8.0F,
             "全部恢复应重置图例 overlay 状态");
 }
@@ -4129,6 +4368,205 @@ void test_raw_capture_file_roundtrip()
     require(loaded->sampleFrequencyHz == capture.sampleFrequencyHz, "psraw 应保留采样频率");
     require(loaded->capturedAtMs == capture.capturedAtMs, "psraw 应保留采集时间");
     require(loaded->payload == capture.payload, "psraw 应保留原始 payload");
+}
+
+void test_wave_csv_wide_roundtrip()
+{
+    const ScopedTempFile tempFile("protoscope-wave-csv-wide");
+    const auto& tempPath = tempFile.path();
+
+    protoscope::plot::WaveCsvData data;
+    data.sampleFrequencyHz = 1000.0;
+    data.channels = {
+        {.label = "温度A", .unit = "℃", .samples = {{0.0, 1.25}, {0.001, 1.5}}},
+        {.label = "CH2", .unit = "V", .samples = {{0.0, 5.0}, {0.002, 6.0}}},
+    };
+
+    std::string error;
+    require(protoscope::plot::writeWaveCsvFile(
+                tempPath, data, protoscope::plot::WaveCsvShape::Wide, protoscope::plot::CsvExportRange{}, error),
+            "波形宽表 CSV 写入应成功");
+    require(protoscope::plot::detectCsvKind(tempPath, error) == protoscope::plot::CsvKind::Wave,
+            "波形宽表 CSV 类型应可检测");
+    const auto loaded = protoscope::plot::readWaveCsvFile(tempPath, error);
+    if (!loaded.has_value()) {
+        throw std::runtime_error("波形宽表 CSV 读回应成功: " + error);
+    }
+
+    require(loaded->shape == protoscope::plot::WaveCsvShape::Wide, "波形宽表 CSV 应保留 shape");
+    require(std::abs(loaded->sampleFrequencyHz - 1000.0) < 1e-12, "波形 CSV 应保留采样频率");
+    require(loaded->channels.size() == 2, "波形 CSV 应保留通道数量");
+    require(loaded->channels[0].label == "温度A", "波形 CSV 应保留 UTF-8 label");
+    require(loaded->channels[0].unit == "℃", "波形 CSV 应保留 UTF-8 unit");
+    require(loaded->channels[0].samples.size() == 2, "波形 CSV 应保留 CH1 样本");
+    require(loaded->channels[1].samples.size() == 2, "波形 CSV 空单元格不应生成样本");
+    require(std::abs(loaded->channels[1].samples.back().time - 0.002) < 1e-12, "波形 CSV 应保留稀疏时间点");
+}
+
+void test_wave_csv_long_import_rejects_non_finite()
+{
+    const ScopedTempFile tempFile("protoscope-wave-csv-long-bad");
+    const auto& tempPath = tempFile.path();
+    {
+        std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
+        out << "# protoscope_csv_version=1\n";
+        out << "# kind=wave\n";
+        out << "# shape=long\n";
+        out << "channel_index,channel_label,unit,time,value\n";
+        out << "1,CH1,V,0.0,1.0\n";
+        out << "2,CH2,A,0.1,nan\n";
+    }
+
+    std::string error;
+    const auto loaded = protoscope::plot::readWaveCsvFile(tempPath, error);
+    require(!loaded.has_value(), "波形长表 CSV 应拒绝非有限数");
+    require(error.find("time/value") != std::string::npos, "非有限数错误应指出 time/value");
+}
+
+void test_wave_csv_long_import()
+{
+    const ScopedTempFile tempFile("protoscope-wave-csv-long");
+    const auto& tempPath = tempFile.path();
+    {
+        std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
+        out << "channel_index,channel_label,unit,time,value\n";
+        out << "1,CH1,V,0.0,1.0\n";
+        out << "2,CH2,A,0.0,5.0\n";
+        out << "1,CH1,V,0.1,2.0\n";
+    }
+
+    std::string error;
+    const auto loaded = protoscope::plot::readWaveCsvFile(tempPath, error);
+    if (!loaded.has_value()) {
+        throw std::runtime_error("无注释波形长表 CSV 应可导入: " + error);
+    }
+    require(loaded->shape == protoscope::plot::WaveCsvShape::Long, "无注释长表应按列检测 shape");
+    require(loaded->channels.size() == 2, "长表 1-based channel_index 应生成两个通道");
+    require(loaded->channels[0].samples.size() == 2, "长表 CH1 应保留两点");
+    require(loaded->channels[1].label == "CH2", "长表应保留 channel_label");
+    require(loaded->channels[1].unit == "A", "长表应保留 unit");
+}
+
+void test_raw_capture_csv_roundtrip()
+{
+    const ScopedTempFile tempFile("protoscope-raw-events-csv");
+    const auto& tempPath = tempFile.path();
+
+    protoscope::plot::RawCaptureEvent setupEvent;
+    setupEvent.type = protoscope::plot::RawCaptureEventType::PlotSetup;
+    setupEvent.timestampMs = 1002;
+    setupEvent.plotSetup.source = "csv_setup";
+    setupEvent.plotSetup.resetHistory = true;
+    setupEvent.plotSetup.channels = {{.label = "BITS",
+                                      .unit = "raw",
+                                      .bitDisplay = {.enabled = true, .firstBit = 8, .bitCount = 4, .yOffset = 2.0}}};
+    setupEvent.plotSetup.view.historyLimit = 64;
+
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "demo",
+        .protocolDir = "protocols/demo",
+        .sampleFrequencyHz = 2048.0,
+        .capturedAtMs = 1000,
+        .payload = {0x01, 0x02, 0xA0},
+        .events =
+            {
+                {.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                 .timestampMs = 1000,
+                 .bytes = {0x01, 0x02, 0xA0}},
+                {.type = protoscope::plot::RawCaptureEventType::ProfileSet,
+                 .timestampMs = 1001,
+                 .profile = {.frameName = "frame_a", .length = 8, .channelMap = {1, 0}}},
+                {.type = protoscope::plot::RawCaptureEventType::ProfileClear,
+                 .timestampMs = 1001,
+                 .profile = {.frameName = "frame_a"}},
+                setupEvent,
+            },
+    };
+
+    std::string error;
+    require(protoscope::plot::writeRawCaptureCsvFile(tempPath, capture, protoscope::plot::CsvExportRange{}, error),
+            "原始事件 CSV 写入应成功");
+    require(protoscope::plot::detectCsvKind(tempPath, error) == protoscope::plot::CsvKind::RawEvents,
+            "原始事件 CSV 类型应可检测");
+    const auto loaded = protoscope::plot::readRawCaptureCsvFile(tempPath, error);
+    if (!loaded.has_value()) {
+        throw std::runtime_error("原始事件 CSV 读回应成功: " + error);
+    }
+
+    require(loaded->protocolName == "demo", "原始事件 CSV 应保留 protocol_name");
+    require(loaded->protocolDir == "protocols/demo", "原始事件 CSV 应保留 protocol_dir");
+    require(loaded->payload == capture.payload, "原始事件 CSV 应由 rx_bytes 重建 payload");
+    require(loaded->events.size() == capture.events.size(), "原始事件 CSV 应保留事件数量");
+    require(loaded->events[1].profile.channelMap == std::vector<std::size_t>({1, 0}),
+            "原始事件 CSV 应保留 profile_channel_map");
+    require(loaded->events[3].plotSetup.channels.front().bitDisplay.enabled,
+            "plot_setup_record_hex 应保留 bit_display");
+    require(loaded->events[3].plotSetup.channels.front().bitDisplay.firstBit == 8,
+            "plot_setup_record_hex 应保留 bit_display.first_bit");
+}
+
+void test_raw_capture_csv_rejects_bad_hex()
+{
+    const ScopedTempFile tempFile("protoscope-raw-events-csv-bad-hex");
+    const auto& tempPath = tempFile.path();
+    {
+        std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
+        out << "# kind=raw_events\n";
+        out << "# captured_at_ms=1000\n";
+        out << "event_type,timestamp_ms,elapsed_ms,bytes_hex,profile_frame,profile_length,profile_channel_map,"
+               "plot_setup_record_hex\n";
+        out << "rx_bytes,1000,0,01XZ,,,,\n";
+    }
+
+    std::string error;
+    const auto loaded = protoscope::plot::readRawCaptureCsvFile(tempPath, error);
+    require(!loaded.has_value(), "原始事件 CSV 应拒绝坏 HEX");
+    require(error.find("HEX") != std::string::npos, "坏 HEX 错误应明确字段");
+}
+
+void test_csv_export_range_filters_wave_and_raw_events()
+{
+    const protoscope::plot::CsvExportRange range{
+        .kind = protoscope::plot::CsvExportRangeKind::Manual,
+        .manualMinTime = 0.05,
+        .manualMaxTime = 0.15,
+    };
+
+    protoscope::plot::WaveCsvData wave;
+    wave.channels = {{.label = "CH1", .unit = "V", .samples = {{0.0, 1.0}, {0.1, 2.0}, {0.2, 3.0}}}};
+
+    const ScopedTempFile waveFile("protoscope-wave-csv-range");
+    std::string error;
+    require(
+        protoscope::plot::writeWaveCsvFile(waveFile.path(), wave, protoscope::plot::WaveCsvShape::Wide, range, error),
+        "范围波形 CSV 写入应成功");
+    const auto loadedWave = protoscope::plot::readWaveCsvFile(waveFile.path(), error);
+    if (!loadedWave.has_value()) {
+        throw std::runtime_error("范围波形 CSV 应可读回: " + error);
+    }
+    require(loadedWave->channels.front().samples.size() == 1, "波形 CSV 手动范围应只保留区间内样本");
+    require(std::abs(loadedWave->channels.front().samples.front().time - 0.1) < 1e-12, "波形 CSV 范围过滤应按显示时间");
+
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "demo",
+        .protocolDir = "protocols/demo",
+        .capturedAtMs = 1000,
+        .events =
+            {
+                {.type = protoscope::plot::RawCaptureEventType::RxBytes, .timestampMs = 1000, .bytes = {0x00}},
+                {.type = protoscope::plot::RawCaptureEventType::RxBytes, .timestampMs = 1100, .bytes = {0x01}},
+                {.type = protoscope::plot::RawCaptureEventType::RxBytes, .timestampMs = 1200, .bytes = {0x02}},
+            },
+    };
+    const ScopedTempFile rawFile("protoscope-raw-events-csv-range");
+    require(protoscope::plot::writeRawCaptureCsvFile(rawFile.path(), capture, range, error),
+            "范围原始事件 CSV 写入应成功");
+    const auto loadedRaw = protoscope::plot::readRawCaptureCsvFile(rawFile.path(), error);
+    if (!loadedRaw.has_value()) {
+        throw std::runtime_error("范围原始事件 CSV 应可读回: " + error);
+    }
+    require(loadedRaw->events.size() == 1, "原始事件 CSV 范围应按 elapsed 秒保留整条事件");
+    require(loadedRaw->payload == std::vector<std::uint8_t>{0x01}, "原始事件 CSV 范围不应拆分 RX chunk");
 }
 
 void test_raw_capture_file_plot_setup_roundtrip()

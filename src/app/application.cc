@@ -1,5 +1,6 @@
 #include "protoscope/app/application.hpp"
 
+#include "protoscope/plot/wave_math.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/pipeline_threading.hpp"
 #include "protoscope/session/session_package.hpp"
@@ -65,6 +66,105 @@ namespace {
                 return "error";
         }
         return "unknown";
+    }
+
+    const char* txRequestKindName(scripting::TxRequestKind kind)
+    {
+        switch (kind) {
+            case scripting::TxRequestKind::Send:
+                return "send";
+            case scripting::TxRequestKind::Request:
+                return "request";
+        }
+        return "send";
+    }
+
+    const char* txEventStateName(scripting::TxEventState state)
+    {
+        switch (state) {
+            case scripting::TxEventState::Sent:
+                return "sent";
+            case scripting::TxEventState::Completed:
+                return "completed";
+            case scripting::TxEventState::Failed:
+                return "failed";
+            case scripting::TxEventState::Timeout:
+                return "timeout";
+            case scripting::TxEventState::Rejected:
+                return "rejected";
+            case scripting::TxEventState::Dropped:
+                return "dropped";
+            case scripting::TxEventState::Canceled:
+                return "canceled";
+        }
+        return "rejected";
+    }
+
+    void appendLogField(std::ostringstream& out, std::string_view name, std::string_view value)
+    {
+        if (value.empty()) {
+            return;
+        }
+        out << ' ' << name << '=' << value;
+    }
+
+    void appendLogField(std::ostringstream& out, std::string_view name, std::uint64_t value)
+    {
+        out << ' ' << name << '=' << value;
+    }
+
+    std::string payloadPreviewSuffix(const config::AppLoggingConfig& logging,
+                                     const std::vector<std::uint8_t>& payload)
+    {
+        if (!logging.payloadPreview.enabled || payload.empty()) {
+            return {};
+        }
+        std::ostringstream out;
+        const auto maxBytes = logging.payloadPreview.maxBytes == 0U ? payload.size() : logging.payloadPreview.maxBytes;
+        out << " payload_hex=" << protocol_utils::bytesToHex(
+            std::vector<std::uint8_t>(payload.begin(),
+                                      payload.begin() + static_cast<std::ptrdiff_t>(
+                                                          (std::min)(payload.size(), maxBytes))),
+            true);
+        if (payload.size() > maxBytes) {
+            out << "...";
+        }
+        return out.str();
+    }
+
+    std::string transportContextFields(std::string_view kind, const transport::ConnectionContext& context)
+    {
+        std::ostringstream out;
+        appendLogField(out, "kind", kind);
+        appendLogField(out, "endpoint", context.endpoint);
+        appendLogField(out, "connection_id", context.connectionId);
+        return out.str();
+    }
+
+    std::string txRequestLogMessage(std::string_view state,
+                                    const scripting::TxRequest& request,
+                                    std::size_t queueSize,
+                                    std::optional<std::string_view> error = std::nullopt,
+                                    std::uint64_t timestampMs = 0)
+    {
+        std::ostringstream out;
+        appendLogField(out, "kind", txRequestKindName(request.kind));
+        appendLogField(out, "state", state);
+        appendLogField(out, "endpoint", request.connection.endpoint);
+        appendLogField(out, "connection_id", request.connection.connectionId);
+        appendLogField(out, "request_id", request.id);
+        appendLogField(out, "tag", request.tag);
+        appendLogField(out, "attempt", request.attempt);
+        out << " bytes=" << request.payload.size();
+        out << " queue_size=" << queueSize;
+        if (timestampMs != 0U) {
+            const auto elapsedMs = timestampMs >= request.createdAtMs ? timestampMs - request.createdAtMs : 0U;
+            out << " elapsed_ms=" << elapsedMs;
+        }
+        if (error.has_value() && !error->empty()) {
+            appendLogField(out, "error", *error);
+        }
+        return out.str();
     }
 
     bool sameColor(const std::optional<std::array<float, 4>>& left, const std::optional<std::array<float, 4>>& right)
@@ -647,6 +747,7 @@ namespace {
         std::size_t transferFrameRows{0};
         std::size_t hostLogRows{0};
         std::size_t scriptLogRows{0};
+        std::size_t requestTraceRows{0};
         std::size_t rawCaptureEvents{0};
         std::size_t rawCaptureBytes{0};
     };
@@ -658,9 +759,20 @@ namespace {
         logSummary << "transfer_frame_rows: " << counts.transferFrameRows << '\n';
         logSummary << "host_log_rows: " << counts.hostLogRows << '\n';
         logSummary << "script_log_rows: " << counts.scriptLogRows << '\n';
+        logSummary << "request_trace_rows: " << counts.requestTraceRows << '\n';
         logSummary << "raw_capture_events: " << counts.rawCaptureEvents << '\n';
         logSummary << "raw_capture_bytes: " << counts.rawCaptureBytes << '\n';
         return logSummary.str();
+    }
+
+    std::vector<dock::ReceiveRow> copyReceiveRows(const std::deque<dock::ReceiveRow>& rows)
+    {
+        return std::vector<dock::ReceiveRow>(rows.begin(), rows.end());
+    }
+
+    std::vector<dock::RequestTraceRow> copyRequestTraceRows(const std::deque<dock::RequestTraceRow>& rows)
+    {
+        return std::vector<dock::RequestTraceRow>(rows.begin(), rows.end());
     }
 
     std::string buildSessionManifest(std::uint64_t createdAtMs,
@@ -690,6 +802,9 @@ namespace {
                                                     std::vector<session::SessionPackageEntry> protocolEntries,
                                                     std::string analysisMarkersYaml,
                                                     std::string logSummary,
+                                                    std::string hostLogText,
+                                                    std::string scriptLogText,
+                                                    std::string requestTraceText,
                                                     const std::string& manifestProtocolName,
                                                     const std::string& manifestProtocolDir,
                                                     double sampleFrequencyHz)
@@ -702,6 +817,15 @@ namespace {
                        std::make_move_iterator(protocolEntries.end()));
         entries.push_back({.name = "analysis/markers.yaml", .bytes = stringBytes(analysisMarkersYaml)});
         entries.push_back({.name = "logs/summary.txt", .bytes = stringBytes(logSummary)});
+        if (!hostLogText.empty()) {
+            entries.push_back({.name = "logs/host.txt", .bytes = stringBytes(hostLogText)});
+        }
+        if (!scriptLogText.empty()) {
+            entries.push_back({.name = "logs/script.txt", .bytes = stringBytes(scriptLogText)});
+        }
+        if (!requestTraceText.empty()) {
+            entries.push_back({.name = "logs/request_trace.csv", .bytes = stringBytes(requestTraceText)});
+        }
 
         const auto manifest =
             buildSessionManifest(createdAtMs, manifestProtocolName, manifestProtocolDir, sampleFrequencyHz, entries);
@@ -1183,11 +1307,13 @@ bool Application::reloadProtocolDirectory(const std::string& protocolDir, bool f
 
         // 核心流程：配置热加载只在协议目录真正变化时重载脚本，避免窗口刷新阶段重复刷加载日志。
         if (!forceReload && unchanged) {
+            loggingFacade_.trace("protocol", "protocol reload skipped kind=protocol endpoint=" + resolvedDirText);
             lua.lastError.clear();
             applyLuaScriptSnapshot(scriptWorker_.snapshot());
             return true;
         }
 
+        loggingFacade_.info("protocol", "protocol reload requested kind=protocol endpoint=" + resolvedDirText);
         if (!probeProtocolDirectory(resolvedDirText)) {
             return false;
         }
@@ -1274,7 +1400,7 @@ bool Application::applyProtocolLoadResult(const std::string& resolvedDirText,
     applyLuaScriptSnapshot(loadResult.snapshot);
     lua.lastError.clear();
     refreshTransferFrameDisplayAfterProtocolReload();
-    loggingFacade_.info("protocol", "协议已加载: " + resolvedDirText);
+    loggingFacade_.info("protocol", "protocol loaded kind=protocol endpoint=" + resolvedDirText);
     flushScriptOutputs();
     syncDockState();
     return true;
@@ -1342,18 +1468,23 @@ void Application::openTransport()
     transport_ = createTransport(kind);
     if (!transport_) {
         dockStore_.commState().lastError = "创建 transport 失败";
-        loggingFacade_.error("transport", dockStore_.commState().lastError);
+        loggingFacade_.error("transport", "transport create failed kind=" + std::string(transport::transportKindId(kind)) +
+                                              " error=" + dockStore_.commState().lastError);
         return;
     }
 
+    loggingFacade_.info("transport", "transport open requested kind=" + std::string(transport::transportKindId(kind)));
     const bool opened = transport_->open(currentTransportConfig(kind));
     if (!opened) {
         dockStore_.commState().lastError = "打开连接失败";
-        loggingFacade_.error("transport", dockStore_.commState().lastError);
+        loggingFacade_.error("transport", "transport open rejected kind=" +
+                                              std::string(transport::transportKindId(kind)) +
+                                              " error=" + dockStore_.commState().lastError);
     } else {
         dockStore_.commState().lastError.clear();
         dockStore_.commState().reconnectRequired = false;
-        loggingFacade_.info("transport", "连接打开请求已提交");
+        loggingFacade_.info("transport", "transport open submitted kind=" +
+                                              std::string(transport::transportKindId(kind)));
     }
 
     syncDockState();
@@ -1372,6 +1503,8 @@ void Application::closeTransport()
         loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
     }
     if (transport_) {
+        loggingFacade_.info("transport", "transport close requested kind=" +
+                                          std::string(transport::transportKindId(dockStore_.commState().kind)));
         transport_->close();
     }
     activeConnection_.reset();
@@ -1556,9 +1689,7 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
             wave.view.viewMaxValue = setup.view.verticalMax;
         }
         wave.view.initialized = false;
-        if (setup.resetHistory) {
-            wave.view.autoFollowLatest = true;
-        }
+        // 核心流程：运行中的 plot.setup(reset_history=true) 只重建历史和默认视口，不覆盖用户手动暂停跟随状态。
         wave.view.defaultViewportPending = true;
         wave.statusMessage = "Lua 已更新波形通道配置";
     }
@@ -1840,6 +1971,13 @@ bool Application::setSendHexMode(bool enabled)
 
 bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const
 {
+    return exportWaveRawCapture(path, plot::CsvExportRange{}, error);
+}
+
+bool Application::exportWaveRawCapture(const std::filesystem::path& path,
+                                       const plot::CsvExportRange& range,
+                                       std::string& error) const
+{
     const auto& lua = dockStore_.luaState();
     const auto& wave = dockStore_.waveState();
     plot::RawCaptureFileData capture = wave.rawCapture;
@@ -1852,7 +1990,120 @@ bool Application::exportWaveRawCapture(const std::filesystem::path& path, std::s
                                     error)) {
         return false;
     }
+    if (const auto timeRange = plot::resolveCsvExportTimeRange(range); timeRange.has_value()) {
+        std::vector<plot::RawCaptureEvent> filteredEvents;
+        filteredEvents.reserve(capture.events.size());
+        capture.payload.clear();
+        for (const auto& event : capture.events) {
+            const double elapsedSeconds =
+                (static_cast<double>(event.timestampMs) - static_cast<double>(capture.capturedAtMs)) / 1000.0;
+            if (elapsedSeconds < timeRange->first || elapsedSeconds > timeRange->second) {
+                continue;
+            }
+            filteredEvents.push_back(event);
+            if (event.type == plot::RawCaptureEventType::RxBytes) {
+                capture.payload.insert(capture.payload.end(), event.bytes.begin(), event.bytes.end());
+            }
+        }
+        capture.events = std::move(filteredEvents);
+    }
     return plot::writeRawCaptureFile(path, capture, error);
+}
+
+bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& error)
+{
+    if (data.channels.empty()) {
+        error = "波形 CSV 未包含任何通道";
+        return false;
+    }
+
+    auto& wave = dockStore_.waveState();
+    wave.buffer.clear();
+    wave.buffer.setHistoryTrimSuspended(true);
+    wave.buffer.configureChannels(data.channels.size());
+    wave.defaultChannelSpecs.clear();
+    wave.defaultChannelSpecs.reserve(data.channels.size());
+    std::size_t maxSampleCount = 0;
+    for (std::size_t channelIndex = 0; channelIndex < data.channels.size(); ++channelIndex) {
+        const auto& csvChannel = data.channels[channelIndex];
+        plot::ChannelSpec spec{
+            .label = csvChannel.label.empty() ? "CH" + std::to_string(channelIndex + 1) : csvChannel.label,
+            .unit = csvChannel.unit,
+        };
+        wave.buffer.setChannelSpec(channelIndex, spec);
+        wave.defaultChannelSpecs.push_back(spec);
+        if (!csvChannel.samples.empty()) {
+            // 核心流程：CSV time 是外部数据的显示时间，直接作为脚本时间轴写入，不再按采样率重解释。
+            wave.buffer.append(channelIndex,
+                               plot::WaveAppendRequest{
+                                   .source = "csv_wave",
+                                   .samples = csvChannel.samples,
+                               });
+            maxSampleCount = (std::max)(maxSampleCount, csvChannel.samples.size());
+        }
+    }
+    wave.buffer.setHistoryTrimSuspended(false);
+    wave.buffer.preserveHistoryLimitAtLeast(maxSampleCount);
+    wave.rawCapture = {};
+    wave.analysisMarkers.clear();
+    wave.channelSummaries.clear();
+    wave.hiddenChannelIndices.clear();
+    wave.view.sampleFrequencyHz = 0.0;
+    wave.view.sampleFrequencyInput.clear();
+    wave.view.timeAxisSource = plot::WaveTimeAxisSource::ScriptTime;
+    wave.view.defaultViewportPending = true;
+    wave.view.autoFollowLatest = false;
+    wave.statusMessage = "波形 CSV 已导入";
+    syncDockState();
+    return true;
+}
+
+bool Application::exportWaveCsv(const std::filesystem::path& path,
+                                plot::WaveCsvShape shape,
+                                const plot::CsvExportRange& range,
+                                std::string& error) const
+{
+    const auto& wave = dockStore_.waveState();
+    auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(),
+                                         std::numeric_limits<double>::infinity(),
+                                         false);
+    const auto displayData = plot::buildDisplayData(snapshot, wave.view.sampleFrequencyHz);
+
+    plot::WaveCsvData data;
+    data.shape = shape;
+    data.sampleFrequencyHz = wave.view.sampleFrequencyHz;
+    data.view = wave.buffer.viewConfig();
+    data.channels.reserve(snapshot.channels.size());
+    for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
+        plot::WaveCsvChannel channel{
+            .label = snapshot.channels[channelIndex].label,
+            .unit = snapshot.channels[channelIndex].unit,
+        };
+        if (channelIndex < displayData.channels.size()) {
+            channel.samples = displayData.channels[channelIndex].samples;
+        }
+        data.channels.push_back(std::move(channel));
+    }
+    return plot::writeWaveCsvFile(path, data, shape, range, error);
+}
+
+bool Application::exportRawCaptureCsv(const std::filesystem::path& path,
+                                      const plot::CsvExportRange& range,
+                                      std::string& error) const
+{
+    const auto& lua = dockStore_.luaState();
+    const auto& wave = dockStore_.waveState();
+    plot::RawCaptureFileData capture = wave.rawCapture;
+    if (!prepareRawCaptureForExport(capture,
+                                    lua.protocolName,
+                                    lua.protocolDir,
+                                    wave.view.sampleFrequencyHz,
+                                    nowMs(),
+                                    "当前协议元数据不完整，无法导出原始事件 CSV",
+                                    error)) {
+        return false;
+    }
+    return plot::writeRawCaptureCsvFile(path, capture, range, error);
 }
 
 bool Application::exportSessionPackage(const std::filesystem::path& path, std::string& error) const
@@ -1885,14 +2136,22 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
     const auto& transfer = dockStore_.receiveState();
     const auto& hostLog = dockStore_.logState();
     const auto& scriptLog = dockStore_.scriptState();
+    const auto& requestTrace = dockStore_.requestTraceState();
     const auto logSummary = buildSessionLogSummary(SessionLogSummaryCounts{
         .transferRows = transfer.rows.size(),
         .transferFrameRows = transfer.frameRows.size(),
         .hostLogRows = hostLog.rows.size(),
         .scriptLogRows = scriptLog.rows.size(),
+        .requestTraceRows = requestTrace.rows.size(),
         .rawCaptureEvents = capture.events.size(),
         .rawCaptureBytes = capture.payload.size(),
     });
+    const auto hostLogRows = copyReceiveRows(hostLog.rows);
+    const auto scriptLogRows = copyReceiveRows(scriptLog.rows);
+    const auto requestTraceRows = copyRequestTraceRows(requestTrace.rows);
+    const auto hostLogText = dock::formatReceiveRowsText(hostLogRows, hostLog.showTimestamps, true);
+    const auto scriptLogText = dock::formatReceiveRowsText(scriptLogRows, scriptLog.showTimestamps, true);
+    const auto requestTraceText = dock::formatRequestTraceRowsCsv(requestTraceRows, requestTrace.showTimestamps);
     const auto analysisMarkersYaml = encodeAnalysisMarkersYaml(wave.analysisMarkers);
 
     std::vector<session::SessionPackageEntry> protocolEntries;
@@ -1906,6 +2165,9 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
                                        std::move(protocolEntries),
                                        analysisMarkersYaml,
                                        logSummary,
+                                       hostLogText,
+                                       scriptLogText,
+                                       requestTraceText,
                                        lua.protocolName,
                                        lua.protocolDir,
                                        capture.sampleFrequencyHz);
@@ -1914,6 +2176,7 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
 
 bool Application::importSessionPackage(const std::filesystem::path& path, std::string& error)
 {
+    loggingFacade_.info("session", "session import requested kind=session endpoint=" + path.generic_string());
     const auto previousConfig = runtimeConfig_;
     const auto previousWave = dockStore_.waveState();
     const auto previousCaptureProtocolOverride = captureProtocolConfigOverride_;
@@ -1999,6 +2262,7 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     wave.analysisMarkers = std::move(importedMarkers);
 
     setStatusMessage("现场包已导入: " + path.generic_string());
+    loggingFacade_.info("session", "session imported kind=session endpoint=" + path.generic_string());
     return true;
 }
 
@@ -2103,6 +2367,10 @@ void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& 
     wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
     wave.view.sampleFrequencyError.clear();
     wave.buffer.setHistoryTrimSuspended(true);
+    loggingFacade_.info("raw_capture",
+                        "raw import prepared kind=raw_import endpoint=" + capture.protocolDir +
+                            " bytes=" + std::to_string(capture.payload.size()) +
+                            " events=" + std::to_string(capture.events.size()));
 }
 
 transport::ConnectionContext Application::makeRawCaptureReplayContext(const plot::RawCaptureFileData& capture) const
@@ -2117,6 +2385,9 @@ transport::ConnectionContext Application::makeRawCaptureReplayContext(const plot
 
 bool Application::replayRawCaptureEvents(const plot::RawCaptureFileData& capture, std::string& error)
 {
+    loggingFacade_.info("raw_capture",
+                        "raw replay events kind=raw_replay endpoint=" + capture.protocolDir +
+                            " events=" + std::to_string(capture.events.size()));
     auto replayContext = makeRawCaptureReplayContext(capture);
     suppressRawCaptureProfileEvents_ = true;
     suppressRawCapturePlotSetupEvents_ = true;
@@ -2142,6 +2413,10 @@ bool Application::pumpRawCaptureReplay(std::string& error)
         return false;
     }
     if (rawCaptureReplay_.capture.events.empty()) {
+        loggingFacade_.trace("raw_capture",
+                             "raw replay payload kind=raw_replay endpoint=" +
+                                 rawCaptureReplay_.capture.protocolDir +
+                                 " bytes=" + std::to_string(rawCaptureReplay_.capture.payload.size()));
         replayRawCaptureBytes(rawCaptureReplay_.context, rawCaptureReplay_.capture.payload);
         finishRawCaptureImportReplay();
         rawCaptureReplay_.playing = false;
@@ -2275,6 +2550,10 @@ bool Application::applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent
 void Application::replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
                                         const std::vector<std::uint8_t>& bytes)
 {
+    loggingFacade_.trace("raw_capture",
+                         "raw replay bytes" + transportContextFields("raw_replay", replayContext) +
+                             " bytes=" + std::to_string(bytes.size()) +
+                             payloadPreviewSuffix(loggingFacade_.currentConfig(), bytes));
     std::size_t cursor = 0;
     while (cursor < bytes.size()) {
         const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, bytes.size() - cursor);
@@ -2304,6 +2583,8 @@ void Application::finishRawCaptureImportReplay()
     wave.buffer.preserveHistoryLimitAtLeast(importedHistoryLimit);
     syncDockState();
     wave.statusMessage = "原始波形已导入";
+    loggingFacade_.info("raw_capture", "raw import finished kind=raw_import endpoint=" +
+                                           dockStore_.luaState().protocolDir);
 }
 
 void Application::cancelRawCaptureImportReplay()
@@ -2471,10 +2752,12 @@ Application::RawCaptureReplayStatus Application::rawCaptureReplayStatus() const
 bool Application::loadElfStaticAddressFile(const std::filesystem::path& path, std::string& error)
 {
     if (!elfStaticView_.loadFile(path, error)) {
+        loggingFacade_.warn("elf", "elf load failed kind=elf endpoint=" + path.generic_string() + " error=" + error);
         return false;
     }
     ++elfStaticAddressRevision_;
     setStatusMessage("ELF/ElfStaticView 数据文件已加载: " + elfStaticView_.sourcePath());
+    loggingFacade_.info("elf", "elf loaded kind=elf endpoint=" + elfStaticView_.sourcePath());
     return true;
 }
 
@@ -2484,6 +2767,7 @@ void Application::clearElfStaticAddressFile()
     elfStaticView_.clear();
     if (hadLoadedContext) {
         ++elfStaticAddressRevision_;
+        loggingFacade_.info("elf", "elf cleared kind=elf");
     }
 }
 
@@ -3075,7 +3359,8 @@ bool Application::processTransportOpenEvent(const transport::TransportOpenEvent&
     loggingFacade_.host(config::LogLevel::Info,
                         "OPEN",
                         event.context.endpoint,
-                        stateMessage(dockStore_.commState().state),
+                        "transport open" + transportContextFields("transport_open", event.context) +
+                            " state=" + stateMessage(dockStore_.commState().state),
                         event.context.timestampMs);
     return true;
 }
@@ -3086,8 +3371,12 @@ bool Application::processTransportCloseEvent(const transport::TransportCloseEven
         scriptWorker_.postTransportClose(event);
         scriptWorker_.waitIdle();
     }
-    loggingFacade_.host(
-        config::LogLevel::Info, "CLOSE", event.context.endpoint, event.reason, event.context.timestampMs);
+    loggingFacade_.host(config::LogLevel::Info,
+                        "CLOSE",
+                        event.context.endpoint,
+                        "transport close" + transportContextFields("transport_close", event.context) +
+                            " reason=" + event.reason,
+                        event.context.timestampMs);
     resetStreamBufferAlertState(event.context.connectionId);
     if (activeConnection_.has_value() && activeConnection_->connectionId == event.context.connectionId) {
         activeConnection_.reset();
@@ -3106,8 +3395,12 @@ bool Application::processTransportErrorEvent(const transport::TransportErrorEven
         scriptWorker_.postTransportError(event);
         scriptWorker_.waitIdle();
     }
-    loggingFacade_.host(
-        config::LogLevel::Error, "ERROR", event.context.endpoint, event.message, event.context.timestampMs);
+    loggingFacade_.host(config::LogLevel::Error,
+                        "ERROR",
+                        event.context.endpoint,
+                        "transport error" + transportContextFields("transport_error", event.context) +
+                            " error=" + event.message,
+                        event.context.timestampMs);
     dockStore_.commState().lastError = event.message;
     return true;
 }
@@ -3126,6 +3419,10 @@ bool Application::processTransportBytesEvent(const transport::TransportBytesEven
     appendRawCaptureRecording(event);
     appendLiveRawCapture(event);
     scriptWorker_.postTransportBytes(event);
+    loggingFacade_.trace("transport",
+                         "transport rx" + transportContextFields("transport_rx", event.context) +
+                             " bytes=" + std::to_string(event.bytes.size()) +
+                             payloadPreviewSuffix(loggingFacade_.currentConfig(), event.bytes));
     if (event.context.readyForIo) {
         activeConnection_ = event.context;
     }
@@ -3175,6 +3472,13 @@ bool Application::processTransportTxEvent(const transport::TransportTxEvent& eve
         scriptWorker_.waitIdle();
         dockStore_.appendRequestTraceRow(
             makeRequestTraceRow(activeWrite.request, dock::RequestTraceState::Sent, error, event.finishedAtMs));
+        loggingFacade_.trace("tx",
+                             txRequestLogMessage("sent",
+                                                 activeWrite.request,
+                                                 pendingTxQueue_.size(),
+                                                 std::nullopt,
+                                                 event.finishedAtMs) +
+                                 payloadPreviewSuffix(loggingFacade_.currentConfig(), activeWrite.request.payload));
         appendTransferRow(dock::ReceiveRow{
             .timestampMs = event.finishedAtMs,
             .direction = "TX",
@@ -3203,6 +3507,14 @@ bool Application::applyScriptTransportStats(const scripting::ScriptRuntimeOutput
         comm.lastPumpParserMs += stats.parserMs;
         comm.lastPumpCallbackMs += stats.callbackMs;
         comm.lastPumpScriptMs += stats.totalMs;
+        const auto snapshot = scriptWorker_.snapshot();
+        if (snapshot.pendingWorkerRxBytes > 0U || snapshot.inputQueueSize > 0U || snapshot.outputQueueSize > 0U) {
+            loggingFacade_.trace("worker",
+                                 "worker backlog kind=worker_backlog queue_size=" +
+                                     std::to_string(snapshot.inputQueueSize + snapshot.outputQueueSize) +
+                                     " bytes=" + std::to_string(snapshot.pendingWorkerRxBytes) +
+                                     " elapsed_ms=" + std::to_string(static_cast<std::uint64_t>(stats.totalMs)));
+        }
         changed = true;
     }
     return changed;
@@ -3214,6 +3526,7 @@ bool Application::applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch
     for (const auto& connection : batch.requestGuardResets) {
         txRequestGuardHalted_ = false;
         const auto resetAtMs = nowMs();
+        loggingFacade_.info("tx", "request guard reset" + transportContextFields("request_guard", connection));
         dockStore_.appendRequestTraceRow(dock::RequestTraceRow{
             .timestampMs = resetAtMs,
             .id = 0,
@@ -3243,6 +3556,13 @@ bool Application::applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch
     }
 
     for (auto request : batch.txRequests) {
+        loggingFacade_.trace("tx",
+                             txRequestLogMessage("received",
+                                                 request,
+                                                 pendingTxQueue_.size() +
+                                                     (activeWrite_.has_value() ? 1U : 0U) +
+                                                     (activeHalfDuplexRequest_.has_value() ? 1U : 0U)) +
+                                 payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
         enqueueTxRequest(std::move(request));
         changed = true;
     }
@@ -3494,6 +3814,13 @@ bool Application::processRequestTimeouts()
         // 核心流程：guarded request 的重试只属于当前请求；
         // 超时后把下一次 attempt 放回队首，避免后续请求抢在重试前发送。
         ++request.attempt;
+        loggingFacade_.trace("tx",
+                             txRequestLogMessage("retry_queued",
+                                                 request,
+                                                 pendingTxQueue_.size(),
+                                                 std::nullopt,
+                                                 currentMs) +
+                                 payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
         dockStore_.appendRequestTraceRow(
             makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, currentMs));
         pendingTxQueue_.push_front(std::move(request));
@@ -3509,6 +3836,12 @@ bool Application::driveTxScheduler()
         if (!transport_ || transport_->state() != transport::TransportState::Open) {
             auto request = std::move(pendingTxQueue_.front());
             pendingTxQueue_.pop_front();
+            loggingFacade_.trace("tx",
+                                 txRequestLogMessage("rejected",
+                                                     request,
+                                                     pendingTxQueue_.size(),
+                                                     std::string_view("连接未打开"),
+                                                     nowMs()));
             finishTxRequest(request, scripting::TxEventState::Rejected, std::string("连接未打开"), nowMs());
             changed = true;
             continue;
@@ -3519,6 +3852,12 @@ bool Application::driveTxScheduler()
         pendingTxQueue_.pop_front();
 
         if (active.request.guarded && txRequestGuardHalted_) {
+            loggingFacade_.warn("tx",
+                                txRequestLogMessage("guard_halted",
+                                                    active.request,
+                                                    pendingTxQueue_.size(),
+                                                    std::string_view("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
+                                                    nowMs()));
             finishTxRequest(active.request,
                             scripting::TxEventState::Rejected,
                             std::string("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
@@ -3534,12 +3873,25 @@ bool Application::driveTxScheduler()
         task.timeoutMs = active.request.timeoutMs;
         task.queuedAtMs = active.request.createdAtMs;
         if (!transport_->enqueueSend(std::move(task))) {
+            loggingFacade_.warn("tx",
+                                txRequestLogMessage("enqueue_failed",
+                                                    active.request,
+                                                    pendingTxQueue_.size(),
+                                                    std::string_view("transport enqueueSend 失败"),
+                                                    nowMs()));
             finishTxRequest(
                 active.request, scripting::TxEventState::Rejected, std::string("transport enqueueSend 失败"), nowMs());
             changed = true;
             continue;
         }
 
+        loggingFacade_.trace("tx",
+                             txRequestLogMessage("sending",
+                                                 active.request,
+                                                 pendingTxQueue_.size(),
+                                                 std::nullopt,
+                                                 nowMs()) +
+                                 payloadPreviewSuffix(loggingFacade_.currentConfig(), active.request.payload));
         activeWrite_ = std::move(active);
         changed = true;
     }
@@ -3556,6 +3908,12 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     request.attempt = std::max<std::uint32_t>(1U, request.attempt);
 
     if (request.guarded && txRequestGuardHalted_) {
+        loggingFacade_.warn("tx",
+                            txRequestLogMessage("guard_halted",
+                                                request,
+                                                pendingTxQueue_.size(),
+                                                std::string_view("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
+                                                nowMs()));
         finishTxRequest(request,
                         scripting::TxEventState::Rejected,
                         std::string("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
@@ -3566,6 +3924,13 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     const std::size_t activeCount = pendingTxQueue_.size() + (activeWrite_.has_value() ? 1U : 0U) +
                                     (activeHalfDuplexRequest_.has_value() ? 1U : 0U);
     if (activeCount < runtimeConfig_.protocol.tx.maxPending) {
+        loggingFacade_.trace("tx",
+                             txRequestLogMessage("queued",
+                                                 request,
+                                                 activeCount + 1U,
+                                                 std::nullopt,
+                                                 nowMs()) +
+                                 payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
         dockStore_.appendRequestTraceRow(
             makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, nowMs()));
         pendingTxQueue_.push_back(std::move(request));
@@ -3576,7 +3941,20 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     if (runtimeConfig_.protocol.tx.overflowPolicy == "drop_oldest_waiting" && !pendingTxQueue_.empty()) {
         auto dropped = std::move(pendingTxQueue_.front());
         pendingTxQueue_.pop_front();
+        loggingFacade_.warn("tx",
+                            txRequestLogMessage("dropped",
+                                                dropped,
+                                                activeCount,
+                                                std::string_view(overflowMessage),
+                                                nowMs()));
         finishTxRequest(dropped, scripting::TxEventState::Dropped, overflowMessage, nowMs());
+        loggingFacade_.trace("tx",
+                             txRequestLogMessage("queued",
+                                                 request,
+                                                 activeCount,
+                                                 std::nullopt,
+                                                 nowMs()) +
+                                 payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
         dockStore_.appendRequestTraceRow(
             makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, nowMs()));
         pendingTxQueue_.push_back(std::move(request));
@@ -3585,11 +3963,23 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     }
 
     if (runtimeConfig_.protocol.tx.overflowPolicy == "drop_newest") {
+        loggingFacade_.warn("tx",
+                            txRequestLogMessage("dropped",
+                                                request,
+                                                activeCount,
+                                                std::string_view(overflowMessage),
+                                                nowMs()));
         finishTxRequest(request, scripting::TxEventState::Dropped, overflowMessage, nowMs());
         notifyTxOverflow(overflowMessage);
         return true;
     }
 
+    loggingFacade_.warn("tx",
+                        txRequestLogMessage("rejected",
+                                            request,
+                                            activeCount,
+                                            std::string_view(overflowMessage),
+                                            nowMs()));
     finishTxRequest(request, scripting::TxEventState::Rejected, overflowMessage, nowMs());
     notifyTxOverflow(overflowMessage);
     return true;
@@ -3619,6 +4009,15 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
     }
 
     dockStore_.appendRequestTraceRow(makeRequestTraceRow(request, toRequestTraceState(state), error, finishedAtMs));
+    const auto stateText = txEventStateName(state);
+    loggingFacade_.trace("tx",
+                         txRequestLogMessage(stateText,
+                                             request,
+                                             pendingTxQueue_.size(),
+                                             error.has_value() ? std::optional<std::string_view>{*error}
+                                                               : std::nullopt,
+                                             finishedAtMs) +
+                             payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
 
     if (state == scripting::TxEventState::Sent) {
         appendTransferRow(dock::ReceiveRow{

@@ -208,7 +208,8 @@ namespace {
         return path.generic_string();
     }
 
-    constexpr std::array<EnumNamePair<LogLevel>, 4> kLogLevelNames{{
+    constexpr std::array<EnumNamePair<LogLevel>, 5> kLogLevelNames{{
+        {LogLevel::Trace, "trace"},
         {LogLevel::Debug, "debug"},
         {LogLevel::Info, "info"},
         {LogLevel::Warn, "warn"},
@@ -822,6 +823,15 @@ namespace {
         config.logging.level =
             parseLogLevel(readScalar<std::string>(logging, "level", toLogLevelText(config.logging.level)));
         config.logging.filePath = readScalar<std::string>(logging, "file_path", config.logging.filePath);
+        config.logging.maxFileSizeBytes =
+            readScalar<std::size_t>(logging, "max_file_size_bytes", config.logging.maxFileSizeBytes);
+        config.logging.maxFiles = readScalar<std::size_t>(logging, "max_files", config.logging.maxFiles);
+        if (const auto payloadPreview = childNode(logging, "payload_preview")) {
+            config.logging.payloadPreview.enabled =
+                readScalar<bool>(payloadPreview, "enabled", config.logging.payloadPreview.enabled);
+            config.logging.payloadPreview.maxBytes =
+                readScalar<std::size_t>(payloadPreview, "max_bytes", config.logging.payloadPreview.maxBytes);
+        }
     }
 
     void loadCommunicationConfig(const YAML::Node& root, AppConfig& config)
@@ -1106,6 +1116,10 @@ namespace {
         if (!config.logging.filePath.empty()) {
             root["logging"]["file_path"] = config.logging.filePath;
         }
+        root["logging"]["payload_preview"]["enabled"] = config.logging.payloadPreview.enabled;
+        root["logging"]["payload_preview"]["max_bytes"] = config.logging.payloadPreview.maxBytes;
+        root["logging"]["max_file_size_bytes"] = config.logging.maxFileSizeBytes;
+        root["logging"]["max_files"] = config.logging.maxFiles;
     }
 
     void writeCommunicationConfig(YAML::Node& root, const AppConfig& config)

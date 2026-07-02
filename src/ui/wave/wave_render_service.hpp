@@ -174,7 +174,18 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
                                    const plot::WaveDataBounds& visibleWindowBounds,
                                    const plot::WaveDataBounds& fullHistoryBounds,
                                    const plot::WaveDataBounds& yAutoFitBounds);
-bool applyFullViewport(plot::WaveViewState& view, double minTime, double maxTime, double minValue, double maxValue);
+enum class WaveViewportAutoFollowPolicy {
+    Preserve,
+    UserInteraction,
+    ExplicitCommand,
+};
+void applyAutoFollowPausePolicy(plot::WaveViewState& view, WaveViewportAutoFollowPolicy policy);
+bool applyFullViewport(plot::WaveViewState& view,
+                       double minTime,
+                       double maxTime,
+                       double minValue,
+                       double maxValue,
+                       WaveViewportAutoFollowPolicy policy);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveSnapshot& fullSnapshot,
                               const plot::WaveDisplayData& displayData,
@@ -191,7 +202,9 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
 bool resetBitLaneYOffsetFromHit(plot::WaveDockState& wave, const BitLaneLayoutEntry& lane);
 const char* axisSourceName(plot::WaveTimeAxisSource source);
 plot::WaveViewport currentViewport(const plot::WaveViewState& view);
-void applyViewport(plot::WaveViewState& view, const plot::WaveViewport& viewport);
+void applyViewport(plot::WaveViewState& view,
+                   const plot::WaveViewport& viewport,
+                   WaveViewportAutoFollowPolicy policy);
 plot::ChannelSpec channelDefaultSpec(const plot::WaveDockState& wave,
                                      std::size_t channelIndex,
                                      const plot::ChannelSpec& snapshotSpec);

@@ -27,6 +27,7 @@ public:
     {
         runtime_.drawAboutDialog();
         runtime_.drawShortcutHelpDialog();
+        runtime_.drawAlgorithmHelpDialog();
         runtime_.drawUpdateCheckDialog();
         runtime_.drawDialogs();
         runtime_.drawRawCaptureFileDialogs();

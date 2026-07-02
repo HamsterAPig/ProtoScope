@@ -10,6 +10,7 @@
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -260,6 +261,9 @@ private:
     bool setLuaDockVisible(std::string_view stableId, bool visible);
     void syncLuaDockVisibilityDefaults();
     void openRawCaptureImportDialog();
+    void openCsvDataImportDialog();
+    void openWaveCsvExportDialog();
+    void openRawCaptureCsvExportDialog();
     void openRawCaptureExportDialog();
     void openRawCaptureRecordingDialog();
     void openRawCaptureReplayTimelineDialog();
@@ -273,6 +277,9 @@ private:
     void openLogExportDialog(LogExportTarget target);
     void openElfStaticAddressDialog();
     void importRawCaptureFromPath(const std::filesystem::path& path);
+    void importCsvDataFromPath(const std::filesystem::path& path);
+    void exportWaveCsvToPath(const std::filesystem::path& path);
+    void exportRawCaptureCsvToPath(const std::filesystem::path& path);
     void exportRawCaptureToPath(const std::filesystem::path& path);
     void loadRawCaptureReplayTimelineFromPath(const std::filesystem::path& path);
     void startRawCaptureRecordingToPath(const std::filesystem::path& path);
@@ -310,6 +317,8 @@ private:
     void drawAboutDialog();
     void requestShortcutHelpDialog();
     void drawShortcutHelpDialog();
+    void requestAlgorithmHelpDialog();
+    void drawAlgorithmHelpDialog();
     void startUpdateCheck();
     void drawUpdateCheckDialog();
     std::filesystem::path currentProtocolLayoutPath() const;
@@ -382,6 +391,12 @@ private:
     float transferSendSectionHeight_{210.0F};
     bool aboutDialogRequested_{false};
     bool shortcutHelpDialogRequested_{false};
+    bool algorithmHelpDialogRequested_{false};
+    std::array<char, 128> algorithmHelpSearchBuffer_{};
+    std::string algorithmHelpLastQuery_;
+    std::vector<std::size_t> algorithmHelpMatches_;
+    std::size_t algorithmHelpCurrentMatchOrdinal_{0};
+    bool algorithmHelpScrollToCurrent_{false};
     bool updateCheckDialogRequested_{false};
     bool updateCheckInProgress_{false};
     std::optional<UpdateCheckResult> updateCheckResult_;
@@ -400,6 +415,8 @@ private:
     bool rawCaptureImportDialogOpened_{false};
     std::string rawCaptureImportPath_;
     std::string rawCaptureImportError_;
+    std::string csvDataImportPath_;
+    std::string csvDataImportError_;
     bool rawCaptureReplayTimelineDialogOpen_{false};
     bool rawCaptureReplayTimelineDialogOpened_{false};
     std::string rawCaptureReplayTimelinePath_;
@@ -408,6 +425,10 @@ private:
     bool rawCaptureExportDialogOpened_{false};
     std::string rawCaptureExportPath_;
     std::string rawCaptureExportError_;
+    std::string waveCsvExportPath_;
+    std::string waveCsvExportError_;
+    std::string rawCaptureCsvExportPath_;
+    std::string rawCaptureCsvExportError_;
     bool rawCaptureRecordingDialogOpen_{false};
     bool rawCaptureRecordingDialogOpened_{false};
     std::string rawCaptureRecordingPath_;

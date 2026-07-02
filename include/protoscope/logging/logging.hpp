@@ -31,6 +31,7 @@ public:
     void bindDockStore(dock::DockStore* dockStore);
     void applyConfig(const config::AppLoggingConfig& config);
 
+    void trace(std::string endpoint, std::string message);
     void debug(std::string endpoint, std::string message);
     void info(std::string endpoint, std::string message);
     void warn(std::string endpoint, std::string message);

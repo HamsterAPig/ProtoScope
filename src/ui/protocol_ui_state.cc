@@ -348,12 +348,26 @@ namespace {
 
     std::string fftMagnitudeModeStateName(plot::WaveFftMagnitudeMode value)
     {
-        return value == plot::WaveFftMagnitudeMode::Decibel ? "db" : "linear";
+        switch (value) {
+            case plot::WaveFftMagnitudeMode::Linear:
+                return "linear";
+            case plot::WaveFftMagnitudeMode::Decibel:
+                return "db";
+            case plot::WaveFftMagnitudeMode::FundamentalPercent:
+                return "fundamental_percent";
+        }
+        return "linear";
     }
 
     plot::WaveFftMagnitudeMode parseFftMagnitudeMode(const std::string& value)
     {
-        return value == "db" ? plot::WaveFftMagnitudeMode::Decibel : plot::WaveFftMagnitudeMode::Linear;
+        if (value == "db") {
+            return plot::WaveFftMagnitudeMode::Decibel;
+        }
+        if (value == "fundamental_percent") {
+            return plot::WaveFftMagnitudeMode::FundamentalPercent;
+        }
+        return plot::WaveFftMagnitudeMode::Linear;
     }
 
     std::string fftFundamentalModeStateName(plot::WaveFftFundamentalMode value)
@@ -374,6 +388,30 @@ namespace {
     plot::WaveFftDisplayMode parseFftDisplayMode(const std::string& value)
     {
         return value == "cursor_split" ? plot::WaveFftDisplayMode::CursorSplit : plot::WaveFftDisplayMode::FullSpectrum;
+    }
+
+    std::string fftXAxisModeStateName(plot::WaveFftXAxisMode value)
+    {
+        switch (value) {
+            case plot::WaveFftXAxisMode::FrequencyHz:
+                return "frequency_hz";
+            case plot::WaveFftXAxisMode::Order:
+                return "order";
+            case plot::WaveFftXAxisMode::Log10Hz:
+                return "log10_hz";
+        }
+        return "frequency_hz";
+    }
+
+    plot::WaveFftXAxisMode parseFftXAxisMode(const std::string& value)
+    {
+        if (value == "order") {
+            return plot::WaveFftXAxisMode::Order;
+        }
+        if (value == "log10_hz") {
+            return plot::WaveFftXAxisMode::Log10Hz;
+        }
+        return plot::WaveFftXAxisMode::FrequencyHz;
     }
 
     YAML::Node encodeMeasurementSelection(const plot::WaveMeasurementSelection& selection)
@@ -576,6 +614,7 @@ namespace {
         YAML::Node fftNode;
         fftNode["enabled"] = view.fft.enabled;
         fftNode["display_mode"] = fftDisplayModeStateName(view.fft.displayMode);
+        fftNode["x_axis_mode"] = fftXAxisModeStateName(view.fftXAxisMode);
         fftNode["point_count"] = fftPointCountStateName(view.fft.pointCount);
         fftNode["window"] = fftWindowStateName(view.fft.window);
         fftNode["magnitude_mode"] = fftMagnitudeModeStateName(view.fft.magnitudeMode);
@@ -789,6 +828,8 @@ namespace {
         view.fft.enabled = fftNode["enabled"].as<bool>(view.fft.enabled);
         view.fft.displayMode =
             parseFftDisplayMode(fftNode["display_mode"].as<std::string>(fftDisplayModeStateName(view.fft.displayMode)));
+        view.fftXAxisMode =
+            parseFftXAxisMode(fftNode["x_axis_mode"].as<std::string>(fftXAxisModeStateName(view.fftXAxisMode)));
         view.fft.pointCount =
             parseFftPointCount(fftNode["point_count"].as<std::string>(fftPointCountStateName(view.fft.pointCount)));
         view.fft.window = parseFftWindow(fftNode["window"].as<std::string>(fftWindowStateName(view.fft.window)));

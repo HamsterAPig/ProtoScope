@@ -2,6 +2,7 @@
 #include "test_registry.hpp"
 
 #include "protoscope/app/startup_diagnostics.hpp"
+#include "protoscope/app/windows_args.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -51,6 +52,31 @@ void test_startup_diagnostics_parse_default_off()
     protoscope::tests::require(!parsed.diagnose, "diagnostics should be disabled by default");
     protoscope::tests::require(!parsed.rendererBackend.has_value(), "renderer should be unset by default");
 }
+
+#if defined(_WIN32)
+void test_startup_windows_arg_to_utf8_ascii_exe()
+{
+    const auto arg = protoscope::app::wideArgToUtf8(L"ProtoScope.exe");
+    protoscope::tests::require(arg == "ProtoScope.exe", "wideArgToUtf8 should convert ascii exe name");
+    protoscope::tests::require(arg.find('\0') == std::string::npos, "wideArgToUtf8 should not keep trailing nul");
+}
+
+void test_startup_windows_arg_to_utf8_renderer_equals()
+{
+    const auto arg = protoscope::app::wideArgToUtf8(L"--renderer=opengl");
+    protoscope::tests::require(arg == "--renderer=opengl", "wideArgToUtf8 should not truncate renderer arg");
+}
+
+void test_startup_windows_arg_to_utf8_chinese_and_empty()
+{
+    const auto chinese = protoscope::app::wideArgToUtf8(L"中文参数");
+    protoscope::tests::require(chinese == "\xE4\xB8\xAD\xE6\x96\x87\xE5\x8F\x82\xE6\x95\xB0",
+                               "wideArgToUtf8 should convert Chinese arg to UTF-8");
+
+    const auto empty = protoscope::app::wideArgToUtf8(L"");
+    protoscope::tests::require(empty.empty(), "wideArgToUtf8 should preserve empty arg");
+}
+#endif
 
 void test_startup_diagnostics_parse_renderer_equals()
 {
@@ -195,6 +221,136 @@ void test_startup_diagnostics_log_failure_no_diagnose_does_not_create_log()
                                "未启用 diagnose 时 logFailure 不应创建 exe logs 目录");
     protoscope::tests::require(!std::filesystem::exists(root / "logs" / "diagnostics-state.txt", error),
                                "未启用 diagnose 时不应创建旁路 state 文件");
+}
+
+void test_startup_early_diagnostics_default_stage_does_not_create_log()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-early-diagnostics-default-off");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::EarlyStartupDiagnostics diagnostics({
+        .diagnose = false,
+        .version = "test-version",
+        .commandLine = {},
+        .exePath = root / "ProtoScope.exe",
+        .currentDir = root,
+        .pathCandidates =
+            {
+                .exeLogDir = root / "logs",
+                .localAppDataLogDir = root / "local" / "ProtoScope" / "logs",
+                .tempLogDir = root / "temp" / "ProtoScope" / "logs",
+            },
+    });
+    diagnostics.setStage("after_crash_handlers");
+
+    std::error_code error;
+    protoscope::tests::require(diagnostics.logPath().empty(), "未启用 diagnose 时早期阶段不应选择日志路径");
+    protoscope::tests::require(!std::filesystem::exists(root / "logs", error),
+                               "未启用 diagnose 且无异常时不应创建 startup-early.log 目录");
+}
+
+void test_startup_early_diagnostics_diagnose_writes_fixed_log()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-early-diagnostics-diagnose");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::EarlyStartupDiagnostics diagnostics({
+        .diagnose = true,
+        .version = "test-version",
+        .commandLine = {"ProtoScope.exe", "--diagnose"},
+        .exePath = root / "ProtoScope.exe",
+        .currentDir = root,
+        .pathCandidates =
+            {
+                .exeLogDir = root / "logs",
+                .localAppDataLogDir = root / "local" / "ProtoScope" / "logs",
+                .tempLogDir = root / "temp" / "ProtoScope" / "logs",
+            },
+    });
+
+    std::error_code beforeStageError;
+    protoscope::tests::require(diagnostics.logPath().empty(), "早期 diagnose 构造函数不应立即选择日志路径");
+    protoscope::tests::require(!std::filesystem::exists(root / "logs", beforeStageError),
+                               "早期 diagnose 构造函数不应立即创建 startup-early.log 目录");
+
+    diagnostics.setStage("before_crash_handlers");
+
+    protoscope::tests::require(diagnostics.logPath() == root / "logs" / "startup-early.log",
+                               "早期 diagnose 应使用固定 startup-early.log");
+    const auto report = readTextFile(diagnostics.logPath());
+    protoscope::tests::require(report.find("[process_start] 启动早期日志已打开") != std::string::npos,
+                               "早期 diagnose 应写入 process_start");
+    protoscope::tests::require(report.find("[before_crash_handlers] 进入启动早期阶段") != std::string::npos,
+                               "早期 diagnose 应写入阶段 breadcrumb");
+}
+
+void test_startup_early_diagnostics_crash_without_diagnose_creates_log()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-early-diagnostics-crash");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    protoscope::app::EarlyStartupDiagnostics diagnostics({
+        .diagnose = false,
+        .version = "test-version",
+        .commandLine = {},
+        .exePath = root / "ProtoScope.exe",
+        .currentDir = root,
+        .pathCandidates =
+            {
+                .exeLogDir = root / "logs",
+                .localAppDataLogDir = root / "local" / "ProtoScope" / "logs",
+                .tempLogDir = root / "temp" / "ProtoScope" / "logs",
+            },
+    });
+    diagnostics.setStage("before_startup_diagnostics_construct");
+    diagnostics.writeCrash("std::exception: boom", 0xC0000005UL);
+
+    protoscope::tests::require(diagnostics.logPath() == root / "logs" / "startup-early.log",
+                               "非 diagnose 早期异常应创建 startup-early.log");
+    const auto report = readTextFile(diagnostics.logPath());
+    protoscope::tests::require(report.find("diagnose: false") != std::string::npos,
+                               "异常兜底日志应保留 diagnose=false");
+    protoscope::tests::require(report.find("crash_reason=std::exception: boom") != std::string::npos,
+                               "异常兜底日志应记录错误类型和 what()");
+    protoscope::tests::require(report.find("stage=before_startup_diagnostics_construct") != std::string::npos,
+                               "异常兜底日志应记录最后阶段");
+    protoscope::tests::require(report.find("exception_code=0xC0000005") != std::string::npos,
+                               "异常兜底日志应记录 Windows exception code");
+}
+
+void test_startup_early_diagnostics_crash_falls_back_to_temp_log()
+{
+    const auto root = protoscope::tests::makeUniqueTempDir("protoscope-early-diagnostics-temp-fallback");
+    const protoscope::tests::ScopedTempPath cleanup(root);
+
+    const auto blockedExeLogs = root / "logs";
+    {
+        std::ofstream out(blockedExeLogs);
+        out << "not a directory";
+    }
+
+    protoscope::app::EarlyStartupDiagnostics diagnostics({
+        .diagnose = false,
+        .version = "test-version",
+        .commandLine = {},
+        .exePath = root / "ProtoScope.exe",
+        .currentDir = root,
+        .pathCandidates =
+            {
+                .exeLogDir = blockedExeLogs,
+                .localAppDataLogDir = root / "local" / "ProtoScope" / "logs",
+                .tempLogDir = root / "temp" / "ProtoScope" / "logs",
+            },
+    });
+    diagnostics.writeCrash("unknown exception");
+
+    protoscope::tests::require(diagnostics.logPath() == root / "temp" / "ProtoScope" / "logs" / "startup-early.log",
+                               "exe logs 不可写时早期兜底日志应回退到 temp logs");
+    const auto report = readTextFile(diagnostics.logPath());
+    protoscope::tests::require(report.find("log_path_attempt: dir=") != std::string::npos,
+                               "早期兜底日志应记录路径尝试");
+    protoscope::tests::require(report.find("crash_reason=unknown exception") != std::string::npos,
+                               "temp 回退日志应记录异常原因");
 }
 
 void test_startup_diagnostics_write_crash_no_diagnose_does_not_create_log()

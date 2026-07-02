@@ -1,10 +1,14 @@
 #include "../runtime/gui_runtime_detail.hpp"
 
+#include "protoscope/plot/csv_data_file.hpp"
+#include "protoscope/ui/algorithm_help.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/keyboard_shortcuts.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <system_error>
 
@@ -73,6 +77,14 @@ namespace {
             flags |= ImGuiWindowFlags_NoMove;
         }
         return flags;
+    }
+
+    std::size_t activeAlgorithmHelpEntry(std::span<const std::size_t> matches, std::size_t ordinal)
+    {
+        if (matches.empty() || ordinal >= matches.size()) {
+            return kNoAlgorithmHelpMatch;
+        }
+        return matches[ordinal];
     }
 
 } // namespace
@@ -175,6 +187,107 @@ void GuiRuntime::drawShortcutHelpDialog()
     if (ImGui::Button("关闭")) {
         ImGui::CloseCurrentPopup();
     }
+    ImGui::EndPopup();
+}
+
+void GuiRuntime::requestAlgorithmHelpDialog()
+{
+    algorithmHelpDialogRequested_ = true;
+}
+
+void GuiRuntime::drawAlgorithmHelpDialog()
+{
+    constexpr const char* popupId = "算法手册";
+    if (algorithmHelpDialogRequested_) {
+        ImGui::OpenPopup(popupId);
+        algorithmHelpDialogRequested_ = false;
+    }
+
+    const ImVec2 viewportSize = dialogViewportFallbackSize();
+    const ImVec2 maxSize((std::max)(1.0F, viewportSize.x * 0.92F), (std::max)(1.0F, viewportSize.y * 0.92F));
+    const ImVec2 minSize((std::min)(560.0F, maxSize.x), (std::min)(360.0F, maxSize.y));
+    ImGui::SetNextWindowSizeConstraints(minSize, maxSize);
+    ImGui::SetNextWindowSize(ImVec2(760.0F, 560.0F), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        return;
+    }
+
+    if (ImGui::BeginTable(
+            "##algorithm_help_toolbar", 5, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings)) {
+        ImGui::TableSetupColumn("搜索", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("上一个", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+        ImGui::TableSetupColumn("下一个", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+        ImGui::TableSetupColumn("匹配数", ImGuiTableColumnFlags_WidthFixed, 112.0F);
+        ImGui::TableSetupColumn("关闭", ImGuiTableColumnFlags_WidthFixed, 56.0F);
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::SetNextItemWidth(-1.0F);
+        const bool searchChanged = ImGui::InputTextWithHint(
+            "##algorithm_help_search", "搜索", algorithmHelpSearchBuffer_.data(), algorithmHelpSearchBuffer_.size());
+        const std::string query = algorithmHelpSearchBuffer_.data();
+        if (searchChanged || query != algorithmHelpLastQuery_) {
+            algorithmHelpLastQuery_ = query;
+            algorithmHelpMatches_ = findAlgorithmHelpMatches(query);
+            algorithmHelpCurrentMatchOrdinal_ = algorithmHelpMatches_.empty() ? kNoAlgorithmHelpMatch : 0U;
+            algorithmHelpScrollToCurrent_ = !algorithmHelpMatches_.empty();
+        }
+
+        ImGui::BeginDisabled(algorithmHelpMatches_.empty());
+        ImGui::TableSetColumnIndex(1);
+        if (ImGui::Button("上一个", ImVec2(-1.0F, 0.0F))) {
+            algorithmHelpCurrentMatchOrdinal_ =
+                previousAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
+            algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
+        }
+        ImGui::TableSetColumnIndex(2);
+        if (ImGui::Button("下一个", ImVec2(-1.0F, 0.0F))) {
+            algorithmHelpCurrentMatchOrdinal_ =
+                nextAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
+            algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
+        }
+        ImGui::EndDisabled();
+
+        ImGui::TableSetColumnIndex(3);
+        const std::size_t displayOrdinal =
+            algorithmHelpCurrentMatchOrdinal_ == kNoAlgorithmHelpMatch ? 0U : algorithmHelpCurrentMatchOrdinal_ + 1U;
+        ImGui::Text("匹配 %zu / %zu", displayOrdinal, algorithmHelpMatches_.size());
+
+        ImGui::TableSetColumnIndex(4);
+        if (ImGui::Button("关闭", ImVec2(-1.0F, 0.0F))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+
+    const std::size_t activeEntry = activeAlgorithmHelpEntry(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
+    if (ImGui::BeginChild("##algorithm_help_content", ImVec2(0.0F, 0.0F), ImGuiChildFlags_Borders)) {
+        const auto entries = algorithmHelpEntries();
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const auto& entry = entries[index];
+            ImGui::PushID(static_cast<int>(index));
+            const bool active = index == activeEntry;
+            if (active) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0F, 0.86F, 0.36F, 1.0F));
+            }
+            ImGui::TextUnformatted(entry.title.data(), entry.title.data() + entry.title.size());
+            if (active) {
+                ImGui::PopStyleColor();
+                if (algorithmHelpScrollToCurrent_) {
+                    ImGui::SetScrollHereY(0.15F);
+                    algorithmHelpScrollToCurrent_ = false;
+                }
+            }
+            ImGui::Spacing();
+            ImGui::TextWrapped("%.*s", static_cast<int>(entry.body.size()), entry.body.data());
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+
     ImGui::EndPopup();
 }
 
@@ -355,6 +468,34 @@ void GuiRuntime::openRawCaptureImportDialog()
 #endif
 }
 
+void GuiRuntime::openCsvDataImportDialog()
+{
+#if defined(_WIN32)
+    const auto defaultPath = csvDataImportPath_.empty() ? executableDir_ / "captures" / "data.csv"
+                                                        : std::filesystem::path(csvDataImportPath_);
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"导入 CSV 数据",
+                                       L"ProtoScope CSV (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       false,
+                                       L"csv",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        importCsvDataFromPath(*path);
+    }
+#else
+    csvDataImportError_.clear();
+    if (csvDataImportPath_.empty()) {
+        csvDataImportPath_ = (executableDir_ / "captures" / "data.csv").generic_string();
+    }
+    application_.setStatusMessage("当前平台暂未实现 CSV 数据文件对话框");
+#endif
+}
+
 void GuiRuntime::openRawCaptureReplayTimelineDialog()
 {
 #if defined(_WIN32)
@@ -364,10 +505,10 @@ void GuiRuntime::openRawCaptureReplayTimelineDialog()
     std::string dialogError;
     const auto path = nativeFileDialog(window_,
                                        L"载入原始回放时间轴",
-                                       L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
+                                       L"ProtoScope Replay (*.psraw;*.csv)\0*.psraw;*.csv\0All Files (*.*)\0*.*\0",
                                        defaultPath,
                                        false,
-                                       L"psraw",
+                                       nullptr,
                                        dialogError);
     if (!dialogError.empty()) {
         application_.setStatusMessage(dialogError);
@@ -411,6 +552,63 @@ void GuiRuntime::openRawCaptureExportDialog()
     rawCaptureExportDialogOpened_ = false;
     rawCaptureExportError_.clear();
     rawCaptureExportPath_ = defaultPath.generic_string();
+#endif
+}
+
+void GuiRuntime::openWaveCsvExportDialog()
+{
+    const auto& lua = application_.docks().luaState();
+    const std::string baseName = lua.protocolName.empty() ? std::string("wave") : lua.protocolName + "-wave";
+    const auto defaultPath = waveCsvExportPath_.empty() ? executableDir_ / "captures" / (baseName + ".csv")
+                                                        : std::filesystem::path(waveCsvExportPath_);
+#if defined(_WIN32)
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"导出波形 CSV",
+                                       L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       true,
+                                       L"csv",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        exportWaveCsvToPath(*path);
+    }
+#else
+    waveCsvExportPath_ = defaultPath.generic_string();
+    waveCsvExportError_.clear();
+    application_.setStatusMessage("当前平台暂未实现波形 CSV 文件对话框");
+#endif
+}
+
+void GuiRuntime::openRawCaptureCsvExportDialog()
+{
+    const auto& lua = application_.docks().luaState();
+    const std::string baseName =
+        lua.protocolName.empty() ? std::string("raw-events") : lua.protocolName + "-raw-events";
+    const auto defaultPath = rawCaptureCsvExportPath_.empty() ? executableDir_ / "captures" / (baseName + ".csv")
+                                                              : std::filesystem::path(rawCaptureCsvExportPath_);
+#if defined(_WIN32)
+    std::string dialogError;
+    const auto path = nativeFileDialog(window_,
+                                       L"导出原始事件 CSV",
+                                       L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
+                                       defaultPath,
+                                       true,
+                                       L"csv",
+                                       dialogError);
+    if (!dialogError.empty()) {
+        application_.setStatusMessage(dialogError);
+    }
+    if (path.has_value()) {
+        exportRawCaptureCsvToPath(*path);
+    }
+#else
+    rawCaptureCsvExportPath_ = defaultPath.generic_string();
+    rawCaptureCsvExportError_.clear();
+    application_.setStatusMessage("当前平台暂未实现原始事件 CSV 文件对话框");
 #endif
 }
 
@@ -667,6 +865,65 @@ void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path)
     }
 }
 
+void GuiRuntime::importCsvDataFromPath(const std::filesystem::path& path)
+{
+    csvDataImportPath_ = path.generic_string();
+    std::string error;
+    const auto kind = plot::detectCsvKind(path, error);
+    if (kind == plot::CsvKind::Wave) {
+        const auto data = plot::readWaveCsvFile(path, error);
+        if (!data.has_value()) {
+            csvDataImportError_ = error;
+            application_.setStatusMessage("CSV 数据导入失败: " + error);
+            return;
+        }
+        if (!application_.importWaveCsvData(*data, error)) {
+            csvDataImportError_ = error;
+            application_.setStatusMessage("CSV 数据导入失败: " + error);
+            return;
+        }
+        application_.setStatusMessage("波形 CSV 导入成功");
+        csvDataImportError_.clear();
+        return;
+    }
+
+    if (kind != plot::CsvKind::RawEvents) {
+        csvDataImportError_ = error.empty() ? "未知 CSV 类型" : error;
+        application_.setStatusMessage("CSV 数据导入失败: " + csvDataImportError_);
+        return;
+    }
+
+    const auto capture = plot::readRawCaptureCsvFile(path, error);
+    if (!capture.has_value()) {
+        csvDataImportError_ = error;
+        application_.setStatusMessage("CSV 数据导入失败: " + error);
+        return;
+    }
+    std::error_code protocolEntryError;
+    if (!capture->protocolDir.empty() && !std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir),
+                                                                   protocolEntryError)) {
+        csvDataImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
+        if (protocolEntryError) {
+            csvDataImportError_ += " (" + protocolEntryError.message() + ")";
+        }
+        application_.setStatusMessage("CSV 数据导入失败: " + csvDataImportError_);
+        return;
+    }
+
+    const auto& currentLua = application_.docks().luaState();
+    if (!capture->protocolDir.empty() && currentLua.protocolDir != capture->protocolDir &&
+        !switchProtocolWorkspace(capture->protocolDir, false)) {
+        csvDataImportError_ = "切换导入协议失败";
+        application_.setStatusMessage("CSV 数据导入失败: " + csvDataImportError_);
+    } else if (!application_.importWaveRawCapture(*capture, error)) {
+        csvDataImportError_ = error;
+        application_.setStatusMessage("CSV 数据导入失败: " + error);
+    } else {
+        application_.setStatusMessage("原始事件 CSV 导入成功");
+        csvDataImportError_.clear();
+    }
+}
+
 void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path)
 {
     // 核心流程：导出路径只在 UI 层选择，实际写入仍交给 Application 统一处理。
@@ -685,18 +942,57 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path)
     rawCaptureExportError_.clear();
 }
 
+void GuiRuntime::exportWaveCsvToPath(const std::filesystem::path& path)
+{
+    waveCsvExportPath_ = path.generic_string();
+    std::string error;
+    if (!application_.exportWaveCsv(path, plot::WaveCsvShape::Wide, plot::CsvExportRange{}, error)) {
+        waveCsvExportError_ = error;
+        application_.setStatusMessage("波形 CSV 导出失败: " + error);
+        return;
+    }
+    application_.setStatusMessage("波形 CSV 导出成功");
+    waveCsvExportError_.clear();
+}
+
+void GuiRuntime::exportRawCaptureCsvToPath(const std::filesystem::path& path)
+{
+    rawCaptureCsvExportPath_ = path.generic_string();
+    std::string error;
+    if (!application_.exportRawCaptureCsv(path, plot::CsvExportRange{}, error)) {
+        rawCaptureCsvExportError_ = error;
+        application_.setStatusMessage("原始事件 CSV 导出失败: " + error);
+        return;
+    }
+    application_.setStatusMessage("原始事件 CSV 导出成功");
+    rawCaptureCsvExportError_.clear();
+}
+
 void GuiRuntime::loadRawCaptureReplayTimelineFromPath(const std::filesystem::path& path)
 {
     rawCaptureReplayTimelinePath_ = path.generic_string();
     std::string error;
-    const auto capture = plot::readRawCaptureFile(path, error);
+    std::optional<plot::RawCaptureFileData> capture;
+    const auto csvKind = plot::detectCsvKind(path, error);
+    if (csvKind == plot::CsvKind::Wave) {
+        rawCaptureReplayTimelineError_ = "波形 CSV 不能作为原始回放时间轴载入";
+        application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
+        return;
+    }
+    if (csvKind == plot::CsvKind::RawEvents) {
+        capture = plot::readRawCaptureCsvFile(path, error);
+    } else {
+        error.clear();
+        capture = plot::readRawCaptureFile(path, error);
+    }
     if (!capture.has_value()) {
         rawCaptureReplayTimelineError_ = error;
         application_.setStatusMessage("原始回放时间轴载入失败: " + error);
         return;
     }
     std::error_code protocolEntryError;
-    if (!std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
+    if (!capture->protocolDir.empty() &&
+        !std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
         rawCaptureReplayTimelineError_ = "回放文件引用的协议目录不存在: " + capture->protocolDir;
         if (protocolEntryError) {
             rawCaptureReplayTimelineError_ += " (" + protocolEntryError.message() + ")";
@@ -706,7 +1002,8 @@ void GuiRuntime::loadRawCaptureReplayTimelineFromPath(const std::filesystem::pat
     }
 
     const auto& currentLua = application_.docks().luaState();
-    if (currentLua.protocolDir != capture->protocolDir && !switchProtocolWorkspace(capture->protocolDir, false)) {
+    if (!capture->protocolDir.empty() && currentLua.protocolDir != capture->protocolDir &&
+        !switchProtocolWorkspace(capture->protocolDir, false)) {
         rawCaptureReplayTimelineError_ = "切换回放协议失败";
         application_.setStatusMessage("原始回放时间轴载入失败: " + rawCaptureReplayTimelineError_);
     } else if (!application_.loadRawCaptureReplayTimeline(*capture, error)) {

@@ -503,6 +503,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.view.fft.magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::Decibel;
     waveA.view.fft.fundamentalMode = protoscope::plot::WaveFftFundamentalMode::Manual;
     waveA.view.fft.manualFundamentalHz = 50.0;
+    waveA.view.fftXAxisMode = protoscope::plot::WaveFftXAxisMode::Order;
     waveA.view.showFftLegend = false;
     waveA.view.fftSourceWindowValid = true;
     waveA.view.fftSourceMinTime = 0.25;
@@ -549,6 +550,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveB.view.showCursorIntersectionReadouts = false;
     waveB.view.sampleFrequencyHz = 512.0;
     waveB.view.sampleFrequencyInput = "512";
+    waveB.view.fft.magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::FundamentalPercent;
     waveB.channelOverrides.resize(1);
     waveB.channelOverrides[0].labelOverridden = true;
     waveB.channelOverrides[0].label = "总线B";
@@ -577,6 +579,8 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredA.view.fft.fundamentalMode == protoscope::plot::WaveFftFundamentalMode::Manual,
             "proto_a 应恢复 FFT 基波模式");
     require(restoredA.view.fft.manualFundamentalHz == 50.0, "proto_a 应恢复手动基波频率");
+    require(restoredA.view.fftXAxisMode == protoscope::plot::WaveFftXAxisMode::Order,
+            "proto_a 应恢复 FFT 横轴单位");
     require(!restoredA.view.showFftLegend, "proto_a 应恢复 FFT 图例显示状态");
     require(restoredA.view.fftSourceWindowValid, "proto_a 应恢复 FFT 输入窗口状态");
     require(restoredA.view.fftSourceMinTime == 0.25 && restoredA.view.fftSourceMaxTime == 0.75,
@@ -614,6 +618,8 @@ void test_wave_protocol_state_isolated_by_protocol_key()
 
     const auto restoredBSpec = restoredB.buffer.channelSpec(0);
     require(restoredBSpec.has_value(), "proto_b 恢复后应保留通道配置");
+    require(restoredB.view.fft.magnitudeMode == protoscope::plot::WaveFftMagnitudeMode::FundamentalPercent,
+            "proto_b 应恢复基波百分比 FFT 幅值模式");
     require(restoredB.hiddenChannelIndices.empty(), "不同协议不应串用 proto_a 的主图 Legend 隐藏通道");
     require(!restoredB.legendCollapsed, "不同协议默认不应继承 proto_a 的图例折叠状态");
     require(restoredBSpec->label == "总线B", "不同协议不应串用 proto_a 标签");

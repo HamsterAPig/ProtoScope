@@ -41,15 +41,24 @@ struct PerformanceConfig {
 };
 
 enum class LogLevel {
+    Trace,
     Debug,
     Info,
     Warn,
     Error,
 };
 
+struct AppLoggingPayloadPreviewConfig {
+    bool enabled{false};
+    std::size_t maxBytes{64};
+};
+
 struct AppLoggingConfig {
     LogLevel level{LogLevel::Info};
     std::string filePath;
+    AppLoggingPayloadPreviewConfig payloadPreview{};
+    std::size_t maxFileSizeBytes{5U * 1024U * 1024U};
+    std::size_t maxFiles{3};
 };
 
 struct AppRuntimeConfig {

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,7 @@ enum class WaveFftWindow {
 enum class WaveFftMagnitudeMode {
     Linear,
     Decibel,
+    FundamentalPercent,
 };
 
 enum class WaveFftFundamentalMode {
@@ -44,6 +46,12 @@ enum class WaveFftFundamentalMode {
 enum class WaveFftDisplayMode {
     FullSpectrum,
     CursorSplit,
+};
+
+enum class WaveFftXAxisMode {
+    FrequencyHz,
+    Order,
+    Log10Hz,
 };
 
 struct WaveFftConfig {
@@ -129,6 +137,11 @@ struct WaveFftViewport {
     double phaseMax{180.0};
 };
 
+struct WaveFftFitOptions {
+    bool ignoreFundamentalBinsForMagnitude{false};
+    std::span<const double> magnitudeChannelOffsets{};
+};
+
 struct WaveFftCacheKey {
     std::uint64_t dataRevision{0};
     double viewMinTime{0.0};
@@ -147,6 +160,9 @@ const char* fftWindowName(WaveFftWindow window);
 const char* fftMagnitudeModeName(WaveFftMagnitudeMode mode);
 const char* fftFundamentalModeName(WaveFftFundamentalMode mode);
 const char* fftDisplayModeName(WaveFftDisplayMode mode);
+const char* fftXAxisModeName(WaveFftXAxisMode mode);
+std::optional<double> fftXAxisValue(WaveFftXAxisMode mode, double frequencyHz, double fundamentalHz);
+std::optional<double> frequencyHzFromFftXAxisValue(WaveFftXAxisMode mode, double axisValue, double fundamentalHz);
 std::size_t resolveWaveFftPointCount(const WaveFftConfig& config, std::size_t visibleSampleCount);
 std::optional<WaveFftCursorWindow> resolveWaveFftCursorWindow(const WaveFftConfig& config,
                                                               std::size_t visibleSampleCount,
@@ -161,6 +177,7 @@ WaveFftFrame buildWaveFftFrame(const WaveSnapshot& snapshot,
                                double viewMaxTime,
                                double sampleFrequencyHz);
 WaveFftViewport makeFftFitViewport(const WaveFftFrame& frame);
+WaveFftViewport makeFftFitViewport(const WaveFftFrame& frame, const WaveFftFitOptions& options);
 std::optional<WaveFftReadout> findNearestFftBin(const WaveFftFrame& frame,
                                                 std::size_t channelIndex,
                                                 double frequencyHz);

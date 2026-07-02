@@ -56,6 +56,15 @@ struct StartupFailureInfo {
     std::string diagnosticsState;
 };
 
+struct EarlyStartupDiagnosticsOptions {
+    bool diagnose{false};
+    std::string version{"unknown"};
+    std::vector<std::string> commandLine;
+    std::filesystem::path exePath;
+    std::filesystem::path currentDir;
+    DiagnosticsPathCandidates pathCandidates;
+};
+
 class StartupDiagnosticsSink {
 public:
     virtual ~StartupDiagnosticsSink() = default;
@@ -71,6 +80,32 @@ DiagnosticsLogPathResult selectDiagnosticsLogPath(const DiagnosticsPathCandidate
                                                   std::string_view fileName);
 std::string formatStartupFatalMessage(const StartupFailureInfo& failure);
 StartupDiagnosticsOptions makeDefaultStartupDiagnosticsOptions(bool diagnose);
+EarlyStartupDiagnosticsOptions makeDefaultEarlyStartupDiagnosticsOptions(bool diagnose);
+
+class EarlyStartupDiagnostics final {
+public:
+    explicit EarlyStartupDiagnostics(EarlyStartupDiagnosticsOptions options);
+
+    void setCommandLine(std::vector<std::string> commandLine);
+    void setStage(std::string_view stage);
+    void writeCrash(std::string_view reason, std::optional<unsigned long> exceptionCode = std::nullopt);
+
+    [[nodiscard]] const std::filesystem::path& logPath() const;
+    [[nodiscard]] const std::string& currentStage() const;
+    [[nodiscard]] StartupFailureInfo failureInfo(std::string reason) const;
+
+private:
+    void ensureLogOpen();
+    void writeHeader();
+    void writeLine(std::string_view stage, std::string_view line);
+    [[nodiscard]] double elapsedMs() const;
+
+    EarlyStartupDiagnosticsOptions options_;
+    DiagnosticsLogPathResult logPath_;
+    std::chrono::steady_clock::time_point startedAt_;
+    std::string currentStage_{"process_start"};
+    bool headerWritten_{false};
+};
 
 class StartupDiagnostics final : public StartupDiagnosticsSink {
 public:

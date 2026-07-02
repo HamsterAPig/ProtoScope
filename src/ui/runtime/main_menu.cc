@@ -24,6 +24,20 @@ namespace {
         {.label = "错误", .level = config::LogLevel::Error},
     };
 
+    bool menuItemWithHelp(const char* label,
+                          const char* shortcut,
+                          const char* help,
+                          bool selected = false,
+                          bool enabled = true)
+    {
+        const bool clicked = ImGui::MenuItem(label, shortcut, selected, enabled);
+        if (help != nullptr && help[0] != '\0' &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", help);
+        }
+        return clicked;
+    }
+
 } // namespace
 
 void GuiRuntime::drawMainMenu()
@@ -46,44 +60,69 @@ void GuiRuntime::drawMainMenu()
         if (ImGui::MenuItem("重新加载协议", shortcutLabel(ShortcutAction::ReloadProtocol).data())) {
             requestProtocolWorkspaceSwitch(application_.docks().luaState().protocolDir, true);
         }
-        if (ImGui::MenuItem("导入现场会话包...")) {
+        if (menuItemWithHelp("导入现场会话包...",
+                             nullptr,
+                             "打开 .pssession，恢复协议、原始缓存和现场复现上下文。")) {
             openSessionPackageImportDialog();
         }
-        if (ImGui::MenuItem("导出现场会话包...")) {
+        if (menuItemWithHelp("导出现场会话包...",
+                             nullptr,
+                             "保存 .pssession，打包当前协议、原始缓存和复现证据。")) {
             openSessionPackageExportDialog();
         }
-        if (ImGui::MenuItem("重置当前协议 Dock 布局",
-                            nullptr,
-                            false,
-                            canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_))) {
+        if (menuItemWithHelp(
+                "重置当前协议 Dock 布局",
+                nullptr,
+                "清除当前协议保存的 Dock 布局，并恢复默认窗口排布。",
+                false,
+                canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_))) {
             resetCurrentProtocolWorkspaceLayout();
         }
         if (ImGui::MenuItem("打开 ELF/ElfStaticView 数据文件...",
                             shortcutLabel(ShortcutAction::OpenElfDataFile).data())) {
             openElfStaticAddressDialog();
         }
-        if (ImGui::MenuItem("导入原始波形...", shortcutLabel(ShortcutAction::ImportRawWave).data())) {
+        if (menuItemWithHelp("导入原始波形...",
+                             shortcutLabel(ShortcutAction::ImportRawWave).data(),
+                             "打开 .psraw 快照，重建当前可查看的原始波形缓存。")) {
             openRawCaptureImportDialog();
         }
-        if (ImGui::MenuItem("载入原始回放时间轴...")) {
+        if (ImGui::MenuItem("导入 CSV 数据...")) {
+            openCsvDataImportDialog();
+        }
+        if (menuItemWithHelp("载入原始回放时间轴...",
+                             nullptr,
+                             "打开 .psraw 完整事件流，用原始时间戳按时间轴复现采集过程。")) {
             openRawCaptureReplayTimelineDialog();
         }
-        if (ImGui::MenuItem("导出当前缓存快照...", shortcutLabel(ShortcutAction::ExportRawWave).data())) {
+        if (menuItemWithHelp("导出当前缓存快照...",
+                             shortcutLabel(ShortcutAction::ExportRawWave).data(),
+                             "导出当前可回放窗口内的 .psraw 原始字节和必要配置快照。")) {
             openRawCaptureExportDialog();
+        }
+        if (ImGui::MenuItem("导出波形 CSV...")) {
+            openWaveCsvExportDialog();
+        }
+        if (ImGui::MenuItem("导出原始事件 CSV...")) {
+            openRawCaptureCsvExportDialog();
         }
         if (ImGui::MenuItem("导出波形分析报告...")) {
             openWaveAnalysisExportDialog();
         }
         ImGui::Separator();
         const bool recording = application_.isRawCaptureRecording();
-        if (ImGui::MenuItem("开始完整原始数据录制...",
-                            shortcutLabel(ShortcutAction::ToggleRawRecording).data(),
-                            false,
-                            !recording)) {
+        if (menuItemWithHelp("开始完整原始数据录制...",
+                             shortcutLabel(ShortcutAction::ToggleRawRecording).data(),
+                             "选择 .psraw 文件后开始连续写入完整原始事件流。",
+                             false,
+                             !recording)) {
             openRawCaptureRecordingDialog();
         }
-        if (ImGui::MenuItem(
-                "停止完整原始数据录制", shortcutLabel(ShortcutAction::ToggleRawRecording).data(), false, recording)) {
+        if (menuItemWithHelp("停止完整原始数据录制",
+                             shortcutLabel(ShortcutAction::ToggleRawRecording).data(),
+                             "停止写入当前完整录制文件，并保留已经采集的事件流。",
+                             false,
+                             recording)) {
             stopRawCaptureRecordingWithStatus();
         }
         ImGui::EndMenu();
@@ -100,20 +139,20 @@ void GuiRuntime::drawMainMenu()
         ImGui::Text("位置 %zu / %zu (%.1f%%)", status.eventIndex, status.eventCount, status.progress * 100.0);
         ImGui::Text("倍速 %.1fx", status.speed);
         std::string error;
-        if (ImGui::MenuItem("继续", nullptr, false, canAdvance && !status.playing)) {
+        if (menuItemWithHelp("继续回放", nullptr, "从当前位置继续按原始时间轴播放事件。", false, canAdvance && !status.playing)) {
             if (!application_.playRawCaptureReplay(error)) {
                 application_.setStatusMessage("原始回放继续失败: " + error);
             }
         }
-        if (ImGui::MenuItem("暂停", nullptr, false, status.loaded && status.playing)) {
+        if (menuItemWithHelp("暂停回放", nullptr, "暂停时间轴播放，保留当前位置。", false, status.loaded && status.playing)) {
             application_.pauseRawCaptureReplay();
         }
-        if (ImGui::MenuItem("单步", nullptr, false, canAdvance)) {
+        if (menuItemWithHelp("单步推进", nullptr, "只执行下一个原始事件，便于逐帧排查。", false, canAdvance)) {
             if (!application_.stepRawCaptureReplay(error)) {
                 application_.setStatusMessage("原始回放单步失败: " + error);
             }
         }
-        if (ImGui::MenuItem("停止并卸载时间轴", nullptr, false, status.loaded)) {
+        if (menuItemWithHelp("停止并卸载时间轴", nullptr, "停止回放并释放当前载入的 .psraw 时间轴。", false, status.loaded)) {
             application_.unloadRawCaptureReplayTimeline();
         }
         if (ImGui::BeginMenu("倍速", status.loaded)) {

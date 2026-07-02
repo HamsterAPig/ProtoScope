@@ -8,7 +8,7 @@ ProtoScope 脚本 API 定义文件。
 ]]
 
 -- 基础枚举：覆盖日志、控件、停靠、传输和弹窗状态。
----@alias ProtoLogLevel 'debug'|'info'|'warn'|'error'
+---@alias ProtoLogLevel 'trace'|'debug'|'info'|'warn'|'error'
 ---@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'|'value_table'
 ---@alias ProtoControlShortType 'btn'|'text'|'int'|'float'|'check'|'select'|'symbol'|'values'
 ---@alias ProtoDockAnchor 'left'|'left_bottom'|'right_top'|'right_mid'|'right_bottom'|'main_bottom'

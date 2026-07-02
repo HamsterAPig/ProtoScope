@@ -1,5 +1,7 @@
 #include "protoscope/logging/logging.hpp"
 
+#include "protoscope/config/embedded_protocols.hpp"
+
 #include <chrono>
 #include <exception>
 #include <filesystem>
@@ -8,7 +10,7 @@
 #include <vector>
 
 #include <spdlog/logger.h>
-#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
@@ -19,6 +21,8 @@ namespace {
     spdlog::level::level_enum toSpdlogLevel(const config::LogLevel level)
     {
         switch (level) {
+            case config::LogLevel::Trace:
+                return spdlog::level::trace;
             case config::LogLevel::Debug:
                 return spdlog::level::debug;
             case config::LogLevel::Info:
@@ -31,12 +35,21 @@ namespace {
         return spdlog::level::info;
     }
 
+    std::filesystem::path resolveLogFilePath(const std::string& filePath)
+    {
+        std::filesystem::path resolved(filePath);
+        if (resolved.is_relative()) {
+            resolved = config::embedded::executableDirectory() / resolved;
+        }
+        return resolved.lexically_normal();
+    }
+
 } // namespace
 
 struct LoggingFacade::Impl {
     std::shared_ptr<spdlog::logger> logger;
     std::shared_ptr<spdlog::sinks::stdout_color_sink_mt> consoleSink;
-    std::shared_ptr<spdlog::sinks::basic_file_sink_mt> fileSink;
+    std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> fileSink;
     std::string activeFilePath;
 };
 
@@ -56,6 +69,18 @@ void LoggingFacade::applyConfig(const config::AppLoggingConfig& config)
 {
     config_ = config;
     rebuildLogger();
+}
+
+void LoggingFacade::trace(std::string endpoint, std::string message)
+{
+    log(LogRecord{
+        .level = config::LogLevel::Trace,
+        .audience = LogAudience::Host,
+        .direction = levelDirection(config::LogLevel::Trace),
+        .endpoint = std::move(endpoint),
+        .message = std::move(message),
+        .timestampMs = nowMs(),
+    });
 }
 
 void LoggingFacade::debug(std::string endpoint, std::string message)
@@ -190,11 +215,14 @@ void LoggingFacade::rebuildLogger()
     std::string filePath = config_.filePath;
     if (!filePath.empty()) {
         try {
-            std::filesystem::path resolved(filePath);
+            std::filesystem::path resolved = resolveLogFilePath(filePath);
             if (!resolved.parent_path().empty()) {
                 std::filesystem::create_directories(resolved.parent_path());
             }
-            impl_->fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(resolved.string(), true);
+            const auto maxFileSizeBytes = config_.maxFileSizeBytes == 0U ? 1U : config_.maxFileSizeBytes;
+            const auto maxFiles = config_.maxFiles == 0U ? 1U : config_.maxFiles;
+            impl_->fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                resolved.string(), maxFileSizeBytes, maxFiles, true);
             impl_->fileSink->set_level(toSpdlogLevel(config_.level));
             impl_->activeFilePath = resolved.generic_string();
             sinks.push_back(impl_->fileSink);
@@ -207,7 +235,7 @@ void LoggingFacade::rebuildLogger()
     impl_->logger = std::make_shared<spdlog::logger>("protoscope", sinks.begin(), sinks.end());
     impl_->logger->set_pattern("%Y-%m-%d %H:%M:%S.%e [%^%l%$] %v");
     impl_->logger->set_level(toSpdlogLevel(config_.level));
-    impl_->logger->flush_on(toSpdlogLevel(config::LogLevel::Debug));
+    impl_->logger->flush_on(toSpdlogLevel(config::LogLevel::Trace));
     spdlog::set_default_logger(impl_->logger);
     spdlog::set_level(toSpdlogLevel(config_.level));
 
@@ -227,6 +255,9 @@ config::LogLevel LoggingFacade::parseLevelOrFallback(const std::string& levelTex
 {
     if (recognized) {
         *recognized = true;
+    }
+    if (levelTextValue == "trace") {
+        return config::LogLevel::Trace;
     }
     if (levelTextValue == "debug") {
         return config::LogLevel::Debug;
@@ -249,6 +280,8 @@ config::LogLevel LoggingFacade::parseLevelOrFallback(const std::string& levelTex
 std::string LoggingFacade::levelText(const config::LogLevel level)
 {
     switch (level) {
+        case config::LogLevel::Trace:
+            return "trace";
         case config::LogLevel::Debug:
             return "debug";
         case config::LogLevel::Info:
@@ -264,6 +297,8 @@ std::string LoggingFacade::levelText(const config::LogLevel level)
 std::string LoggingFacade::levelDirection(const config::LogLevel level)
 {
     switch (level) {
+        case config::LogLevel::Trace:
+            return "TRACE";
         case config::LogLevel::Debug:
             return "DEBUG";
         case config::LogLevel::Info:

@@ -528,6 +528,8 @@ struct ScriptRuntimeWorker::Impl {
     struct CommandExecutionResult {
         bool includeTransportStats{false};
         std::shared_ptr<std::promise<void>> idlePromise;
+        std::shared_ptr<std::promise<bool>> boolPromise;
+        bool boolValue{false};
     };
 
     std::optional<WorkerCommand> popCommandOrWait()
@@ -660,9 +662,11 @@ struct ScriptRuntimeWorker::Impl {
                                               std::optional<std::uint64_t>&,
                                               OscilloscopeToggleCommand& command)
     {
-        command.result->set_value(host.requestOscilloscopeToggle(
-            command.context, command.currentRunning, command.targetRunning));
-        return {};
+        CommandExecutionResult result;
+        result.boolValue =
+            host.requestOscilloscopeToggle(command.context, command.currentRunning, command.targetRunning);
+        result.boolPromise = command.result;
+        return result;
     }
 
     CommandExecutionResult executeCommandItem(ScriptHost& host,
@@ -798,6 +802,9 @@ struct ScriptRuntimeWorker::Impl {
             const auto execution = executeCommand(host, activeConnectionId, *command);
             publishOutputs(drainHostOutputs(host, execution.includeTransportStats));
             publishSnapshot(host);
+            if (execution.boolPromise) {
+                execution.boolPromise->set_value(execution.boolValue);
+            }
             if (execution.idlePromise) {
                 execution.idlePromise->set_value();
             }

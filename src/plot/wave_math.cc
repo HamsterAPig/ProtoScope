@@ -1021,6 +1021,7 @@ bool resetOneChannelViewSettings(WaveDockState& wave, std::size_t channelIndex)
     if (channelIndex >= wave.defaultChannelSpecs.size()) {
         return false;
     }
+    bool changed = false;
     const auto hiddenEnd =
         std::remove(wave.hiddenChannelIndices.begin(), wave.hiddenChannelIndices.end(), channelIndex);
     const bool hiddenStateChanged = hiddenEnd != wave.hiddenChannelIndices.end();
@@ -1028,15 +1029,22 @@ bool resetOneChannelViewSettings(WaveDockState& wave, std::size_t channelIndex)
     wave.hiddenChannelLabels.clear();
     if (hiddenStateChanged) {
         wave.legendVisibilityRestorePending = true;
+        changed = true;
     }
     if (!resetChannelConfigToDefault(
             wave, channelIndex, wave.defaultChannelSpecs[channelIndex], WaveChannelDoubleClickAction::ResetAll)) {
         return false;
     }
+    changed = true;
     if (channelIndex < wave.channelOverrides.size()) {
         wave.channelOverrides[channelIndex] = {};
     }
-    return true;
+    if (channelIndex < wave.fftMagnitudeChannelOffsets.size() &&
+        std::abs(wave.fftMagnitudeChannelOffsets[channelIndex]) > kEpsilon) {
+        wave.fftMagnitudeChannelOffsets[channelIndex] = 0.0;
+        changed = true;
+    }
+    return changed;
 }
 
 bool resetAllChannelViewSettings(WaveDockState& wave)
@@ -1049,6 +1057,7 @@ bool resetAllChannelViewSettings(WaveDockState& wave)
 
     wave.hiddenChannelIndices.clear();
     wave.hiddenChannelLabels.clear();
+    wave.fftMagnitudeChannelOffsets.assign(channelCount, 0.0);
     wave.channelOverrides.clear();
     wave.legendOverlay.expanded = false;
     wave.legendOverlay.hoverFloating = false;

@@ -1,4 +1,5 @@
 add_library(protoscope_plot STATIC
+    plot/csv_data_file.cc
     plot/oscilloscope.cc
     plot/raw_capture_file.cc
     plot/wave_fft.cc
@@ -178,6 +179,7 @@ target_compile_features(protoscope_logging PUBLIC cxx_std_20)
 
 add_library(protoscope_startup_diagnostics STATIC
     app/startup_diagnostics.cc
+    app/windows_args.cc
 )
 target_include_directories(protoscope_startup_diagnostics
     PUBLIC
@@ -229,6 +231,7 @@ endif()
 
 if(PROTOSCOPE_ENABLE_GUI)
     add_library(protoscope_ui STATIC
+        ui/algorithm_help.cc
         ui/editable_combo.cc
         ui/keyboard_shortcuts.cc
         ui/ui_theme.cc
@@ -308,6 +311,10 @@ if(PROTOSCOPE_ENABLE_GUI)
     target_compile_features(ProtoScope PRIVATE cxx_std_20)
     if(WIN32)
         target_link_libraries(ProtoScope PRIVATE ws2_32)
+        if(MSVC)
+            target_link_options(ProtoScope PRIVATE "/DELAYLOAD:D3DCOMPILER_47.dll")
+            target_link_libraries(ProtoScope PRIVATE delayimp)
+        endif()
     endif()
 endif()
 

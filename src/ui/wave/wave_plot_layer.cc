@@ -1827,8 +1827,8 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
         drawChannelLegendOverlay(wave, snapshot, splitPos, splitSize, ImGui::GetWindowViewport());
     }
 
-    if (userInteractingInAnySplitPlot && view.pauseAutoFollowOnInteraction) {
-        view.autoFollowLatest = false;
+    if (userInteractingInAnySplitPlot) {
+        applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
     }
 
     if (view.showCursors) {
@@ -2058,8 +2058,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
             recordMainPlotLimits(view, updatedLimits);
         }
     }
-    if (userInteracting && view.pauseAutoFollowOnInteraction) {
-        view.autoFollowLatest = false;
+    if (userInteracting) {
+        applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
     }
 
     if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {

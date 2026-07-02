@@ -445,6 +445,27 @@ void test_script_on_error_log()
     }
 }
 
+void test_script_proto_log_trace_level()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-script-log-trace"));
+    writeMainLua(protocolDir.path(),
+                 R"lua(
+function on_open(ctx)
+  proto.log("trace", "trace detail")
+end
+)lua");
+
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "trace 日志协议应可加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{sampleCtx()});
+
+    bool foundTraceLog = false;
+    for (const auto& log : host.drainLogs()) {
+        foundTraceLog = foundTraceLog || (log.level == "trace" && log.message == "trace detail");
+    }
+    require(foundTraceLog, "proto.log(\"trace\") 应保留 trace 等级");
+}
+
 void test_script_multi_dock_snapshot()
 {
     protoscope::scripting::ScriptHost host;
@@ -2232,8 +2253,7 @@ void test_config_default_roundtrip()
             "实时 backlog pump 最小间隔默认应为 1ms");
     require(config.receive.transportReadBufferBytes == 4096U, "transport 读缓冲默认应为 4096 字节");
     require(config.scripting.workerBatchBytes == 8192U, "worker batch 默认应为 8192 字节");
-    require(std::abs(config.scripting.workerOutputFlushBudgetMs - 2.0) < 1e-12,
-            "worker 输出刷新时间预算默认应为 2ms");
+    require(std::abs(config.scripting.workerOutputFlushBudgetMs - 2.0) < 1e-12, "worker 输出刷新时间预算默认应为 2ms");
     require(config.gui.elfSymbolCombo.limit == 10, "ELF 变量候选默认上限应为 10");
     require(config.gui.elfSymbolCombo.debounceMs == 300, "ELF 变量候选默认消抖应为 300ms");
     require(config.gui.elfSymbolCombo.autoRefreshSelectedAddress, "ELF 已选地址默认应自动刷新");
@@ -2650,14 +2670,22 @@ void test_config_logging_roundtrip()
     const auto tempPath = tempRoot.path() / "logging.yaml";
 
     auto base = store.load(tempPath).config;
-    base.logging.level = protoscope::config::LogLevel::Warn;
+    base.logging.level = protoscope::config::LogLevel::Trace;
     base.logging.filePath = "logs/protoscope.log";
+    base.logging.payloadPreview.enabled = true;
+    base.logging.payloadPreview.maxBytes = 8;
+    base.logging.maxFileSizeBytes = 1024;
+    base.logging.maxFiles = 2;
 
     std::string error;
     require(store.save(tempPath, base, error), "日志配置写回失败");
     auto reloaded = store.load(tempPath).config;
-    require(reloaded.logging.level == protoscope::config::LogLevel::Warn, "日志等级 roundtrip 失败");
+    require(reloaded.logging.level == protoscope::config::LogLevel::Trace, "trace 日志等级 roundtrip 失败");
     require(reloaded.logging.filePath == "logs/protoscope.log", "日志相对路径 roundtrip 失败");
+    require(reloaded.logging.payloadPreview.enabled, "payload preview enabled roundtrip 失败");
+    require(reloaded.logging.payloadPreview.maxBytes == 8, "payload preview max_bytes roundtrip 失败");
+    require(reloaded.logging.maxFileSizeBytes == 1024, "日志轮转 max_file_size_bytes roundtrip 失败");
+    require(reloaded.logging.maxFiles == 2, "日志轮转 max_files roundtrip 失败");
 
     base.logging.filePath.clear();
     require(store.save(tempPath, base, error), "空日志路径写回失败");
@@ -2668,6 +2696,8 @@ void test_config_logging_roundtrip()
     const auto missing = store.load(missingPath).config;
     require(missing.logging.filePath.empty(), "缺失日志路径时应默认为空");
     require(missing.logging.level == protoscope::config::LogLevel::Info, "缺失日志等级时应回退到 info");
+    require(!missing.logging.payloadPreview.enabled, "payload preview 缺省应关闭");
+    require(missing.logging.payloadPreview.maxBytes == 64, "payload preview max_bytes 缺省值错误");
 }
 
 void test_config_default_protocol_workspace_initializes_half_duplex_demos()
@@ -3716,8 +3746,20 @@ static const TestCase kAllTests[] = {
     {"crc_known_vectors", &test_crc_known_vectors},
     {"keyboard_shortcut_table_has_no_scope_duplicates", &test_keyboard_shortcut_table_has_no_scope_duplicates},
     {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
+    {"algorithm_help_search_empty_query_has_no_match", &test_algorithm_help_search_empty_query_has_no_match},
+    {"algorithm_help_search_chinese_keyword", &test_algorithm_help_search_chinese_keyword},
+    {"algorithm_help_search_english_case_insensitive", &test_algorithm_help_search_english_case_insensitive},
+    {"algorithm_help_search_multiple_terms_require_all", &test_algorithm_help_search_multiple_terms_require_all},
+    {"algorithm_help_search_no_match", &test_algorithm_help_search_no_match},
+    {"algorithm_help_search_navigation_wraps", &test_algorithm_help_search_navigation_wraps},
+    {"algorithm_help_search_fft_unit_keywords", &test_algorithm_help_search_fft_unit_keywords},
     {"startup_diagnostics_parse_diagnose_arg", &test_startup_diagnostics_parse_diagnose_arg},
     {"startup_diagnostics_parse_default_off", &test_startup_diagnostics_parse_default_off},
+#if defined(_WIN32)
+    {"startup_windows_arg_to_utf8_ascii_exe", &test_startup_windows_arg_to_utf8_ascii_exe},
+    {"startup_windows_arg_to_utf8_renderer_equals", &test_startup_windows_arg_to_utf8_renderer_equals},
+    {"startup_windows_arg_to_utf8_chinese_and_empty", &test_startup_windows_arg_to_utf8_chinese_and_empty},
+#endif
     {"startup_diagnostics_parse_renderer_equals", &test_startup_diagnostics_parse_renderer_equals},
     {"startup_diagnostics_parse_renderer_space", &test_startup_diagnostics_parse_renderer_space},
     {"startup_diagnostics_parse_renderer_missing_value", &test_startup_diagnostics_parse_renderer_missing_value},
@@ -3733,6 +3775,13 @@ static const TestCase kAllTests[] = {
      &test_startup_diagnostics_header_writes_selected_path_and_attempts},
     {"startup_diagnostics_log_failure_no_diagnose_does_not_create_log",
      &test_startup_diagnostics_log_failure_no_diagnose_does_not_create_log},
+    {"startup_early_diagnostics_default_stage_does_not_create_log",
+     &test_startup_early_diagnostics_default_stage_does_not_create_log},
+    {"startup_early_diagnostics_diagnose_writes_fixed_log", &test_startup_early_diagnostics_diagnose_writes_fixed_log},
+    {"startup_early_diagnostics_crash_without_diagnose_creates_log",
+     &test_startup_early_diagnostics_crash_without_diagnose_creates_log},
+    {"startup_early_diagnostics_crash_falls_back_to_temp_log",
+     &test_startup_early_diagnostics_crash_falls_back_to_temp_log},
     {"startup_diagnostics_write_crash_no_diagnose_does_not_create_log",
      &test_startup_diagnostics_write_crash_no_diagnose_does_not_create_log},
     {"startup_diagnostics_set_stage_with_diagnose_appends_stage",
@@ -3767,6 +3816,7 @@ static const TestCase kAllTests[] = {
     {"script_on_open_log", &test_script_on_open_log},
     {"script_on_close_log", &test_script_on_close_log},
     {"script_on_error_log", &test_script_on_error_log},
+    {"script_proto_log_trace_level", &test_script_proto_log_trace_level},
     {"script_multi_dock_snapshot", &test_script_multi_dock_snapshot},
     {"script_dock_layout_fields", &test_script_dock_layout_fields},
     {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
@@ -4055,6 +4105,10 @@ static const TestCase kAllTests[] = {
      &test_application_wave_zoom_selection_auto_exit_config_roundtrip},
     {"application_reset_wave_history_restores_default_viewport",
      &test_application_reset_wave_history_restores_default_viewport},
+    {"application_plot_setup_reset_history_preserves_paused_follow",
+     &test_application_plot_setup_reset_history_preserves_paused_follow},
+    {"application_plot_setup_reset_history_preserves_active_follow",
+     &test_application_plot_setup_reset_history_preserves_active_follow},
     {"application_refreshes_selected_elf_symbol_controls_silently",
      &test_application_refreshes_selected_elf_symbol_controls_silently},
     {"application_refreshes_selected_elf_symbol_controls_with_on_control",
@@ -4229,6 +4283,10 @@ static const TestCase kAllTests[] = {
     {"wave_x_axis_double_click_bounds_selects_full_history",
      &test_wave_x_axis_double_click_bounds_selects_full_history},
     {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
+    {"wave_fft_fundamental_percent_uses_each_channel_fundamental",
+     &test_wave_fft_fundamental_percent_uses_each_channel_fundamental},
+    {"wave_fft_fundamental_percent_requires_valid_fundamental_magnitude",
+     &test_wave_fft_fundamental_percent_requires_valid_fundamental_magnitude},
     {"wave_fft_visible_samples_supports_non_power_of_two", &test_wave_fft_visible_samples_supports_non_power_of_two},
     {"wave_fft_manual_point_count_supports_non_power_of_two",
      &test_wave_fft_manual_point_count_supports_non_power_of_two},
@@ -4236,6 +4294,12 @@ static const TestCase kAllTests[] = {
      &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
     {"wave_fft_fit_viewport_resets_frequency_and_value_ranges",
      &test_wave_fft_fit_viewport_resets_frequency_and_value_ranges},
+    {"wave_fft_fit_viewport_can_ignore_channel_fundamental_bins",
+     &test_wave_fft_fit_viewport_can_ignore_channel_fundamental_bins},
+    {"wave_fft_fit_viewport_ignore_fundamental_falls_back_when_empty",
+     &test_wave_fft_fit_viewport_ignore_fundamental_falls_back_when_empty},
+    {"wave_fft_fit_viewport_offsets_are_visual_only", &test_wave_fft_fit_viewport_offsets_are_visual_only},
+    {"wave_fft_x_axis_mode_conversions", &test_wave_fft_x_axis_mode_conversions},
     {"wave_fft_cursor_window_resolves_point_counts_and_duration",
      &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
     {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
@@ -4268,6 +4332,8 @@ static const TestCase kAllTests[] = {
     {"wave_grid_division_readout_formula_offset_cancels", &test_wave_grid_division_readout_formula_offset_cancels},
     {"wave_status_overlay_items_only_show_non_default_states",
      &test_wave_status_overlay_items_only_show_non_default_states},
+    {"wave_auto_follow_pause_policy_respects_interaction_setting",
+     &test_wave_auto_follow_pause_policy_respects_interaction_setting},
     {"wave_phosphor_stroke_style_uses_channel_style", &test_wave_phosphor_stroke_style_uses_channel_style},
     {"wave_phosphor_trigger_detection_interpolates_edges", &test_wave_phosphor_trigger_detection_interpolates_edges},
     {"wave_phosphor_trigger_window_aligns_to_fixed_x", &test_wave_phosphor_trigger_window_aligns_to_fixed_x},
@@ -4283,6 +4349,12 @@ static const TestCase kAllTests[] = {
      &test_wave_reset_all_channel_view_settings_preserves_samples},
     {"wave_mouse_y_offset_drag_mode_gate", &test_wave_mouse_y_offset_drag_mode_gate},
     {"raw_capture_file_roundtrip", &test_raw_capture_file_roundtrip},
+    {"wave_csv_wide_roundtrip", &test_wave_csv_wide_roundtrip},
+    {"wave_csv_long_import_rejects_non_finite", &test_wave_csv_long_import_rejects_non_finite},
+    {"wave_csv_long_import", &test_wave_csv_long_import},
+    {"raw_capture_csv_roundtrip", &test_raw_capture_csv_roundtrip},
+    {"raw_capture_csv_rejects_bad_hex", &test_raw_capture_csv_rejects_bad_hex},
+    {"csv_export_range_filters_wave_and_raw_events", &test_csv_export_range_filters_wave_and_raw_events},
     {"raw_capture_file_plot_setup_roundtrip", &test_raw_capture_file_plot_setup_roundtrip},
     {"raw_capture_file_plot_setup_rejects_bad_fields", &test_raw_capture_file_plot_setup_rejects_bad_fields},
     {"raw_capture_file_v2_event_stream_still_reads", &test_raw_capture_file_v2_event_stream_still_reads},

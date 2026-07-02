@@ -14,6 +14,9 @@ void GuiRuntime::drawHelpMenu()
     if (ImGui::MenuItem("快捷键说明", shortcutLabel(ShortcutAction::ShowShortcutHelp).data())) {
         requestShortcutHelpDialog();
     }
+    if (ImGui::MenuItem("算法手册")) {
+        requestAlgorithmHelpDialog();
+    }
     if (ImGui::MenuItem("检查更新")) {
         startUpdateCheck();
     }
