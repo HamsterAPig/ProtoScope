@@ -216,9 +216,11 @@ jobs:
           $exeAsset = Join-Path $assetDir $exeAssetName
           $zipAsset = Join-Path $assetDir $zipAssetName
           $packageDir = Join-Path $stagingDir $env:ASSET_BASE
+          $packageConfigDir = Join-Path $packageDir "config"
           $packageDocsDir = Join-Path $packageDir "docs"
           $packageProtocolsDir = Join-Path $packageDir "protocols"
 
+          New-Item -ItemType Directory -Force -Path $packageConfigDir | Out-Null
           New-Item -ItemType Directory -Force -Path $packageDocsDir | Out-Null
           New-Item -ItemType Directory -Force -Path $packageProtocolsDir | Out-Null
 
@@ -226,6 +228,7 @@ jobs:
           Copy-Item -Path $env:EXE_PATH -Destination (Join-Path $packageDir "ProtoScope.exe") -Force
           Copy-Item -Path README.md -Destination (Join-Path $packageDir "README.md") -Force
           Copy-Item -Path LICENSE -Destination (Join-Path $packageDir "LICENSE") -Force
+          Copy-Item -Path config/protoscope.yaml -Destination (Join-Path $packageConfigDir "protoscope.yaml") -Force
           Copy-Item -Path docs/* -Destination $packageDocsDir -Recurse -Force
           Copy-Item -Path protocols/* -Destination $packageProtocolsDir -Recurse -Force
 
@@ -233,6 +236,7 @@ jobs:
             "ProtoScope.exe",
             "README.md",
             "LICENSE",
+            "config/protoscope.yaml",
             "docs/user-manual.md",
             "docs/config-reference.md",
             "docs/lua-host-integration.md",
@@ -351,7 +355,7 @@ jobs:
             "",
             "Assets:",
             "- $env:ASSET_BASE.exe: standalone executable",
-            "- $env:ASSET_BASE.zip: executable, README, LICENSE, docs and Lua protocol examples",
+            "- $env:ASSET_BASE.zip: executable, README, LICENSE, default config, docs and Lua protocol examples",
             "- SHA256 checksums"
           )
           Set-Content -Path $notesPath -Value $notesLines -Encoding UTF8
