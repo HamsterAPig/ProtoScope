@@ -239,20 +239,6 @@ protoscope::plot::RawCaptureEvent makePlotSetupEvent(bool resetHistory = true)
     return event;
 }
 
-void writePlotSetupOnOpenProtocol(const std::filesystem::path& protocolDir)
-{
-    std::ofstream out(protocolDir / "main.lua");
-    require(out.good(), "plot.setup on_open 测试协议应可写入");
-    out << "function on_open(ctx)\n";
-    out << "  proto.plot.setup({\n";
-    out << "    source = 'follow_regression', reset_history = true,\n";
-    out << "    time_scale = 0.5, time_unit = 'ms', vertical_min = -20, vertical_max = 100, vertical_unit = '℃', "
-           "history_limit = 128,\n";
-    out << "    channels = { { label = '温度A', unit = '℃', ratio = 0.5, scale = 2.0, offset = -1.0 } }\n";
-    out << "  })\n";
-    out << "end\n";
-}
-
 void writeRuntimeProfileProtocol(const std::filesystem::path& protocolDir)
 {
     std::ofstream out(protocolDir / "main.lua");
@@ -1482,62 +1468,127 @@ void test_application_reset_wave_history_restores_default_viewport()
     application.shutdown();
 }
 
-void test_application_plot_setup_reset_history_preserves_paused_follow()
+void test_application_manual_clear_applies_reset_viewport_policy()
 {
-    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-plot-setup-follow-paused"));
-    writePlotSetupOnOpenProtocol(protocolDir.path());
-
-    auto transportState = std::make_shared<RecordingTransport::State>();
     protoscope::app::Application application;
-    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
-        static_cast<void>(kind);
-        return std::make_unique<RecordingTransport>(transportState);
-    });
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
-            "plot.setup on_open 协议应可加载");
+
+    auto config = application.captureConfig();
+    config.gui.wave.resetViewport.applyOnManualClear = true;
+    config.gui.wave.resetViewport.xScale = protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault;
+    config.gui.wave.resetViewport.yScale = protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault;
+    config.gui.wave.resetViewport.xAnchor = protoscope::plot::WaveResetViewportAnchor::Latest;
+    config.gui.wave.resetViewport.autoFollow = protoscope::plot::WaveResetViewportAutoFollowMode::Disable;
+    require(application.applyConfig(config), "手动清空视口策略配置应用失败");
 
     auto& wave = application.docks().waveState();
-    wave.view.autoFollowLatest = false;
+    wave.view.autoFollowLatest = true;
+    wave.view.visibleDuration = 2.0;
+    application.resetWaveHistory();
 
-    application.openTransport();
-    require(waitUntil([&application, &wave] {
-                application.pumpOnce();
-                return wave.buffer.channelSpec(0).has_value();
-            }),
-            "plot.setup on_open 应被应用到波形状态");
-
-    require(!wave.view.autoFollowLatest, "用户已暂停时 plot.setup(reset_history=true) 不应恢复跟随");
+    require(!wave.view.autoFollowLatest, "手动清空应按配置关闭自动跟随");
+    require(wave.view.defaultViewportXScale == protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault,
+            "手动清空应应用 X 缩放策略");
+    require(wave.view.defaultViewportYScale == protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault,
+            "手动清空应应用 Y 缩放策略");
+    require(wave.view.defaultViewportXAnchor == protoscope::plot::WaveResetViewportAnchor::Latest,
+            "手动清空应应用 X 锚点策略");
+    require(!wave.view.defaultViewportLegacyBehavior, "手动清空启用新策略时不应走旧视口逻辑");
 
     application.shutdown();
 }
 
-void test_application_plot_setup_reset_history_preserves_active_follow()
+void test_application_manual_clear_can_fall_back_to_legacy_viewport()
 {
-    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-plot-setup-follow-active"));
-    writePlotSetupOnOpenProtocol(protocolDir.path());
-
-    auto transportState = std::make_shared<RecordingTransport::State>();
     protoscope::app::Application application;
-    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
-        static_cast<void>(kind);
-        return std::make_unique<RecordingTransport>(transportState);
-    });
     require(application.initialize(), "应用初始化失败");
-    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
-            "plot.setup on_open 协议应可加载");
+
+    auto config = application.captureConfig();
+    config.gui.wave.resetViewport.applyOnManualClear = false;
+    config.gui.wave.resetViewport.autoFollow = protoscope::plot::WaveResetViewportAutoFollowMode::Disable;
+    require(application.applyConfig(config), "手动清空旧视口策略配置应用失败");
 
     auto& wave = application.docks().waveState();
-    wave.view.autoFollowLatest = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.visibleDuration = 2.0;
+    application.resetWaveHistory();
 
-    application.openTransport();
-    require(waitUntil([&application, &wave] {
-                application.pumpOnce();
-                return wave.buffer.channelSpec(0).has_value();
-            }),
-            "plot.setup on_open 应被应用到波形状态");
+    require(wave.view.autoFollowLatest, "手动清空关闭新策略时应保持旧逻辑恢复自动跟随");
+    require(wave.view.defaultViewportLegacyBehavior, "手动清空关闭新策略时应标记旧默认视口逻辑");
+    require(std::abs(wave.view.viewMaxTime - 2.0) < 1e-12, "旧逻辑手动清空应保留当前 X duration");
 
-    require(wave.view.autoFollowLatest, "用户仍在跟随时 plot.setup(reset_history=true) 应保持跟随");
+    application.shutdown();
+}
+
+void test_application_raw_import_applies_reset_viewport_policy()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto config = application.captureConfig();
+    config.gui.wave.resetViewport.applyOnRawImport = true;
+    config.gui.wave.resetViewport.xAnchor = protoscope::plot::WaveResetViewportAnchor::Latest;
+    config.gui.wave.resetViewport.autoFollow = protoscope::plot::WaveResetViewportAutoFollowMode::Disable;
+    require(application.applyConfig(config), "raw import 视口策略配置应用失败");
+
+    const auto& lua = application.docks().luaState();
+    protoscope::plot::RawCaptureFileData capture{
+        .protocolName = lua.protocolName,
+        .protocolDir = lua.protocolDir,
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 123,
+        .payload = {0x11, 0x22},
+        .events = {},
+    };
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "raw import 视口策略测试载入失败");
+
+    const auto& view = application.docks().waveState().view;
+    require(!view.autoFollowLatest, "raw import 应按配置关闭自动跟随");
+    require(view.defaultViewportXAnchor == protoscope::plot::WaveResetViewportAnchor::Latest,
+            "raw import 应应用 X 锚点策略");
+    require(!view.defaultViewportLegacyBehavior, "raw import 启用新策略时不应走旧视口逻辑");
+
+    application.shutdown();
+}
+
+void test_application_plot_setup_reset_applies_reset_viewport_policy()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto config = application.captureConfig();
+    config.gui.wave.resetViewport.applyOnRawImport = false;
+    config.gui.wave.resetViewport.applyOnPlotSetupReset = true;
+    config.gui.wave.resetViewport.xScale = protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault;
+    config.gui.wave.resetViewport.yScale = protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault;
+    config.gui.wave.resetViewport.xAnchor = protoscope::plot::WaveResetViewportAnchor::Latest;
+    config.gui.wave.resetViewport.autoFollow = protoscope::plot::WaveResetViewportAutoFollowMode::Disable;
+    require(application.applyConfig(config), "plot setup reset 视口策略配置应用失败");
+
+    const auto& lua = application.docks().luaState();
+    protoscope::plot::RawCaptureFileData capture{
+        .protocolName = lua.protocolName,
+        .protocolDir = lua.protocolDir,
+        .sampleFrequencyHz = 0.0,
+        .capturedAtMs = 0,
+        .payload = {},
+        .events = {makePlotSetupEvent(true)},
+    };
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "plot setup reset 测试载入失败");
+    require(application.stepRawCaptureReplay(error), "plot setup reset 测试单步失败");
+
+    const auto& view = application.docks().waveState().view;
+    require(!view.autoFollowLatest, "plot setup reset 应按配置关闭自动跟随");
+    require(view.defaultViewportXScale == protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault,
+            "plot setup reset 应应用 X 缩放策略");
+    require(view.defaultViewportYScale == protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault,
+            "plot setup reset 应应用 Y 缩放策略");
+    require(view.defaultViewportXAnchor == protoscope::plot::WaveResetViewportAnchor::Latest,
+            "plot setup reset 应应用 X 锚点策略");
+    require(std::abs(view.manualVerticalMin + 20.0) < 1e-12, "plot setup reset 应按协议默认 Y 下限");
+    require(std::abs(view.manualVerticalMax - 100.0) < 1e-12, "plot setup reset 应按协议默认 Y 上限");
 
     application.shutdown();
 }

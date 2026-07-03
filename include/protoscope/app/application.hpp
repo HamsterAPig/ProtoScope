@@ -109,6 +109,12 @@ public:
         std::function<std::unique_ptr<transport::ITransport>(transport::TransportKind)> factory);
 
 private:
+    enum class WaveResetViewportTrigger {
+        PlotSetupReset,
+        ManualClear,
+        RawImport,
+    };
+
     struct ActiveTxRequest {
         scripting::TxRequest request;
         std::uint64_t sentAtMs{0};
@@ -272,6 +278,9 @@ private:
     void finishRawCaptureImportReplay();
     void cancelRawCaptureImportReplay();
     bool applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup);
+    bool applyResetViewportPolicy(WaveResetViewportTrigger trigger, const plot::ViewConfig& protocolView);
+    void applyLegacyResetViewport(const plot::ViewConfig& protocolView, bool resetVerticalRange);
+    void resetWaveHistoryForTrigger(WaveResetViewportTrigger trigger);
     void recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventData& setup, std::uint64_t timestampMs);
     void resetTransferFrameParser();
     void resetTransferFrameDisplayState();

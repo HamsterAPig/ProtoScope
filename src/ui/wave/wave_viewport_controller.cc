@@ -38,6 +38,11 @@ namespace {
         return static_cast<double>(*latestSampleIndex) / sampleFrequencyHz;
     }
 
+    double protocolDefaultVisibleDuration(const plot::ViewConfig& config, double minVisibleTimeSpan)
+    {
+        return (std::max)(minVisibleTimeSpan, (std::max)(config.timeScale * 1000.0, config.timeScale));
+    }
+
     std::size_t fftReferenceChannelIndex(const plot::WaveDockState& wave, std::size_t channelCount)
     {
         if (channelCount == 0) {
@@ -192,6 +197,36 @@ namespace {
         return plot::WaveTimeAxisSource::SampleIndex;
     }
 
+    double firstDisplayTime(const plot::WaveSnapshot& snapshot, const plot::WaveViewState& view)
+    {
+        const auto axisSource = overviewAxisSource(snapshot, view.sampleFrequencyHz);
+        std::optional<double> firstTime;
+        for (const auto& channel : snapshot.channels) {
+            const auto [begin, end] = visibleSampleRange(channel);
+            if (channel.samples == nullptr || begin >= end) {
+                continue;
+            }
+            double candidate = 0.0;
+            if (axisSource == plot::WaveTimeAxisSource::SampleFrequency) {
+                candidate = static_cast<double>(channel.sampleIndexOffset + begin) / view.sampleFrequencyHz;
+            } else if (axisSource == plot::WaveTimeAxisSource::ScriptTime) {
+                if (!channelScriptTimeUsable(channel, begin, end)) {
+                    continue;
+                }
+                candidate = channel.samples[begin].time;
+            } else {
+                candidate = static_cast<double>(channel.sampleIndexOffset + begin);
+            }
+            if (!std::isfinite(candidate)) {
+                continue;
+            }
+            if (!firstTime.has_value() || candidate < *firstTime) {
+                firstTime = candidate;
+            }
+        }
+        return firstTime.value_or(0.0);
+    }
+
     double overviewSampleTime(const plot::WaveSample& sample,
                               std::size_t sampleIndexOffset,
                               std::size_t sampleIndex,
@@ -288,6 +323,7 @@ namespace {
     }
 
     bool applyDefaultViewportIfPending(plot::WaveDockState& wave,
+                                       const plot::WaveSnapshot& snapshot,
                                        const RenderBudget& renderBudget,
                                        std::optional<double> latestTime,
                                        double minVisibleTimeSpan)
@@ -298,14 +334,34 @@ namespace {
         }
 
         // 核心流程：启动/reset 后默认只确定 X 窗口；Y 轴沿用配置或用户当前范围，不被首批数据覆盖。
-        if (hasSampleFrequencyTimebase(view)) {
+        if (view.defaultViewportLegacyBehavior && hasSampleFrequencyTimebase(view)) {
             const double budgetDuration = static_cast<double>(renderBudget.pointsPerChannel) / view.sampleFrequencyHz;
             view.visibleDuration = (std::max)(budgetDuration, minVisibleTimeSpan);
+        } else if (view.defaultViewportLegacyBehavior) {
+            view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
+        } else if (view.defaultViewportXScale == plot::WaveResetViewportScaleMode::ProtocolDefault &&
+            hasSampleFrequencyTimebase(view)) {
+            const double budgetDuration = static_cast<double>(renderBudget.pointsPerChannel) / view.sampleFrequencyHz;
+            view.visibleDuration = (std::max)(budgetDuration, minVisibleTimeSpan);
+        } else if (view.defaultViewportXScale == plot::WaveResetViewportScaleMode::ProtocolDefault) {
+            view.visibleDuration = protocolDefaultVisibleDuration(wave.buffer.viewConfig(), minVisibleTimeSpan);
         } else {
             view.visibleDuration = (std::max)(view.visibleDuration, minVisibleTimeSpan);
         }
 
-        if (latestTime.has_value()) {
+        if (view.defaultViewportYScale == plot::WaveResetViewportScaleMode::ProtocolDefault) {
+            const auto& config = wave.buffer.viewConfig();
+            view.manualVerticalMin = config.verticalMin;
+            view.manualVerticalMax = config.verticalMax;
+            view.viewMinValue = config.verticalMin;
+            view.viewMaxValue = config.verticalMax;
+        }
+
+        if (!view.defaultViewportLegacyBehavior &&
+            view.defaultViewportXAnchor == plot::WaveResetViewportAnchor::WaveStart) {
+            view.viewMinTime = firstDisplayTime(snapshot, view);
+            view.viewMaxTime = view.viewMinTime + view.visibleDuration;
+        } else if (latestTime.has_value()) {
             view.viewMaxTime = *latestTime;
             view.viewMinTime = view.viewMaxTime - view.visibleDuration;
             clampViewportLowerBoundToZero(view);
@@ -316,6 +372,7 @@ namespace {
         view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
         view.forceNextMainPlotLimits = true;
         view.defaultViewportPending = false;
+        view.defaultViewportLegacyBehavior = false;
         wave.cachedDisplayKeyValid = false;
         return true;
     }
@@ -370,7 +427,8 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
                                 ? latestDisplayTime(wave.cachedFullSnapshot, view.sampleFrequencyHz)
                                 : wave.buffer.latestTime();
     const bool defaultViewportApplied =
-        applyDefaultViewportIfPending(wave, frame.renderBudget, latestTime, minVisibleTimeSpan);
+        applyDefaultViewportIfPending(
+            wave, wave.cachedFullSnapshot, frame.renderBudget, latestTime, minVisibleTimeSpan);
     if (!defaultViewportApplied && latestTime.has_value() && view.autoFollowLatest) {
         const auto oldViewport = currentViewport(view);
         view.viewMaxTime = *latestTime;

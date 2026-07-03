@@ -55,6 +55,14 @@ gui:
     show_fft_legend: true
     follow_measurement_cursors_on_scroll: false
     cursor_fft_highlight_rgba: [0.20, 0.55, 1.00, 0.16]
+    reset_viewport:
+      apply_on_plot_setup_reset: true
+      apply_on_manual_clear: true
+      apply_on_raw_import: true
+      x_scale: preserve
+      y_scale: preserve
+      x_anchor: wave_start
+      auto_follow: existing
   log_history:
     transfer_raw_limit: 10000
     transfer_frame_limit: 120000

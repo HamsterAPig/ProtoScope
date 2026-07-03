@@ -270,6 +270,23 @@ namespace {
         {plot::WaveMouseYOffsetDragMode::Disabled, "disabled"},
     }};
 
+    constexpr std::array<EnumNamePair<plot::WaveResetViewportScaleMode>, 2> kWaveResetViewportScaleModeNames{{
+        {plot::WaveResetViewportScaleMode::Preserve, "preserve"},
+        {plot::WaveResetViewportScaleMode::ProtocolDefault, "protocol_default"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveResetViewportAnchor>, 2> kWaveResetViewportAnchorNames{{
+        {plot::WaveResetViewportAnchor::WaveStart, "wave_start"},
+        {plot::WaveResetViewportAnchor::Latest, "latest"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveResetViewportAutoFollowMode>, 3>
+        kWaveResetViewportAutoFollowModeNames{{
+            {plot::WaveResetViewportAutoFollowMode::Existing, "existing"},
+            {plot::WaveResetViewportAutoFollowMode::Enable, "enable"},
+            {plot::WaveResetViewportAutoFollowMode::Disable, "disable"},
+        }};
+
     constexpr std::array<EnumNamePair<plot::WaveLegendOverlayOpenMode>, 3> kWaveLegendOverlayOpenModeNames{{
         {plot::WaveLegendOverlayOpenMode::Hover, "hover"},
         {plot::WaveLegendOverlayOpenMode::DoubleClick, "double_click"},
@@ -411,6 +428,39 @@ namespace {
     const char* toWaveMouseYOffsetDragModeText(const plot::WaveMouseYOffsetDragMode mode)
     {
         return enumToText(mode, kWaveMouseYOffsetDragModeNames, "direct");
+    }
+
+    plot::WaveResetViewportScaleMode parseWaveResetViewportScaleMode(
+        const std::string& value, plot::WaveResetViewportScaleMode fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveResetViewportScaleModeNames, fallback);
+    }
+
+    const char* toWaveResetViewportScaleModeText(const plot::WaveResetViewportScaleMode mode)
+    {
+        return enumToText(mode, kWaveResetViewportScaleModeNames, "preserve");
+    }
+
+    plot::WaveResetViewportAnchor parseWaveResetViewportAnchor(const std::string& value,
+                                                               plot::WaveResetViewportAnchor fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveResetViewportAnchorNames, fallback);
+    }
+
+    const char* toWaveResetViewportAnchorText(const plot::WaveResetViewportAnchor anchor)
+    {
+        return enumToText(anchor, kWaveResetViewportAnchorNames, "wave_start");
+    }
+
+    plot::WaveResetViewportAutoFollowMode parseWaveResetViewportAutoFollowMode(
+        const std::string& value, plot::WaveResetViewportAutoFollowMode fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveResetViewportAutoFollowModeNames, fallback);
+    }
+
+    const char* toWaveResetViewportAutoFollowModeText(const plot::WaveResetViewportAutoFollowMode mode)
+    {
+        return enumToText(mode, kWaveResetViewportAutoFollowModeNames, "existing");
     }
 
     plot::WaveLegendOverlayOpenMode parseWaveLegendOverlayOpenMode(const std::string& value,
@@ -607,6 +657,27 @@ namespace {
         config.gui.wave.fullscreenMode = parseWaveFullscreenMode(
             readScalar<std::string>(wave, "fullscreen_mode", toWaveFullscreenModeText(config.gui.wave.fullscreenMode)),
             config.gui.wave.fullscreenMode);
+        if (const auto resetViewport = childNode(wave, "reset_viewport")) {
+            auto& policy = config.gui.wave.resetViewport;
+            policy.applyOnPlotSetupReset = readScalar<bool>(
+                resetViewport, "apply_on_plot_setup_reset", policy.applyOnPlotSetupReset);
+            policy.applyOnManualClear =
+                readScalar<bool>(resetViewport, "apply_on_manual_clear", policy.applyOnManualClear);
+            policy.applyOnRawImport = readScalar<bool>(resetViewport, "apply_on_raw_import", policy.applyOnRawImport);
+            policy.xScale = parseWaveResetViewportScaleMode(
+                readScalar<std::string>(resetViewport, "x_scale", toWaveResetViewportScaleModeText(policy.xScale)),
+                policy.xScale);
+            policy.yScale = parseWaveResetViewportScaleMode(
+                readScalar<std::string>(resetViewport, "y_scale", toWaveResetViewportScaleModeText(policy.yScale)),
+                policy.yScale);
+            policy.xAnchor = parseWaveResetViewportAnchor(
+                readScalar<std::string>(resetViewport, "x_anchor", toWaveResetViewportAnchorText(policy.xAnchor)),
+                policy.xAnchor);
+            policy.autoFollow = parseWaveResetViewportAutoFollowMode(
+                readScalar<std::string>(
+                    resetViewport, "auto_follow", toWaveResetViewportAutoFollowModeText(policy.autoFollow)),
+                policy.autoFollow);
+        }
     }
 
     void loadGuiWaveScopedRuntimeConfig(const YAML::Node& gui, AppConfig& config)
@@ -945,6 +1016,18 @@ namespace {
         gui["wave"]["follow_measurement_cursors_on_scroll"] = config.gui.wave.followMeasurementCursorsOnScroll;
         gui["wave"]["cursor_fft_highlight_rgba"] = makeFloat4Node(config.gui.wave.cursorFftHighlightRgba);
         gui["wave"]["fullscreen_mode"] = toWaveFullscreenModeText(config.gui.wave.fullscreenMode);
+        gui["wave"]["reset_viewport"]["apply_on_plot_setup_reset"] =
+            config.gui.wave.resetViewport.applyOnPlotSetupReset;
+        gui["wave"]["reset_viewport"]["apply_on_manual_clear"] = config.gui.wave.resetViewport.applyOnManualClear;
+        gui["wave"]["reset_viewport"]["apply_on_raw_import"] = config.gui.wave.resetViewport.applyOnRawImport;
+        gui["wave"]["reset_viewport"]["x_scale"] =
+            toWaveResetViewportScaleModeText(config.gui.wave.resetViewport.xScale);
+        gui["wave"]["reset_viewport"]["y_scale"] =
+            toWaveResetViewportScaleModeText(config.gui.wave.resetViewport.yScale);
+        gui["wave"]["reset_viewport"]["x_anchor"] =
+            toWaveResetViewportAnchorText(config.gui.wave.resetViewport.xAnchor);
+        gui["wave"]["reset_viewport"]["auto_follow"] =
+            toWaveResetViewportAutoFollowModeText(config.gui.wave.resetViewport.autoFollow);
     }
 
     void writeGuiRuntimeConfig(YAML::Node& gui, const AppConfig& config, const AppConfig& scaledDefaults)
@@ -1460,6 +1543,13 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.showFftLegend = config.gui.wave.showFftLegend;
     wave.followMeasurementCursorsOnScroll = config.gui.wave.followMeasurementCursorsOnScroll;
     wave.cursorFftHighlightRgba = config.gui.wave.cursorFftHighlightRgba;
+    wave.resetViewportApplyOnPlotSetupReset = config.gui.wave.resetViewport.applyOnPlotSetupReset;
+    wave.resetViewportApplyOnManualClear = config.gui.wave.resetViewport.applyOnManualClear;
+    wave.resetViewportApplyOnRawImport = config.gui.wave.resetViewport.applyOnRawImport;
+    wave.defaultViewportXScale = config.gui.wave.resetViewport.xScale;
+    wave.defaultViewportYScale = config.gui.wave.resetViewport.yScale;
+    wave.defaultViewportXAnchor = config.gui.wave.resetViewport.xAnchor;
+    wave.defaultViewportAutoFollow = config.gui.wave.resetViewport.autoFollow;
     waveState.legendOverlay.openMode = config.gui.wave.legendOverlayOpenMode;
     waveState.legendOverlay.doubleClickAutoCollapse = config.gui.wave.legendOverlayDoubleClickAutoCollapse;
     if (waveState.legendOverlay.openMode != plot::WaveLegendOverlayOpenMode::DoubleClick) {
@@ -1513,6 +1603,14 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;
     config.gui.wave.followMeasurementCursorsOnScroll = dockStore.waveState().view.followMeasurementCursorsOnScroll;
     config.gui.wave.cursorFftHighlightRgba = dockStore.waveState().view.cursorFftHighlightRgba;
+    config.gui.wave.resetViewport.applyOnPlotSetupReset =
+        dockStore.waveState().view.resetViewportApplyOnPlotSetupReset;
+    config.gui.wave.resetViewport.applyOnManualClear = dockStore.waveState().view.resetViewportApplyOnManualClear;
+    config.gui.wave.resetViewport.applyOnRawImport = dockStore.waveState().view.resetViewportApplyOnRawImport;
+    config.gui.wave.resetViewport.xScale = dockStore.waveState().view.defaultViewportXScale;
+    config.gui.wave.resetViewport.yScale = dockStore.waveState().view.defaultViewportYScale;
+    config.gui.wave.resetViewport.xAnchor = dockStore.waveState().view.defaultViewportXAnchor;
+    config.gui.wave.resetViewport.autoFollow = dockStore.waveState().view.defaultViewportAutoFollow;
     config.gui.wave.legendOverlayOpenMode = dockStore.waveState().legendOverlay.openMode;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = dockStore.waveState().legendOverlay.doubleClickAutoCollapse;
     config.configPath = dockStore.configState().loadedFromPath;

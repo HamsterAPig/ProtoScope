@@ -87,6 +87,16 @@ enum class GuiWaveFullscreenMode {
     Overlay,
 };
 
+struct GuiWaveResetViewportConfig {
+    bool applyOnPlotSetupReset{true};
+    bool applyOnManualClear{true};
+    bool applyOnRawImport{true};
+    plot::WaveResetViewportScaleMode xScale{plot::WaveResetViewportScaleMode::Preserve};
+    plot::WaveResetViewportScaleMode yScale{plot::WaveResetViewportScaleMode::Preserve};
+    plot::WaveResetViewportAnchor xAnchor{plot::WaveResetViewportAnchor::WaveStart};
+    plot::WaveResetViewportAutoFollowMode autoFollow{plot::WaveResetViewportAutoFollowMode::Existing};
+};
+
 struct GuiWaveConfig {
     plot::WaveControlMode controlMode{plot::WaveControlMode::Oscilloscope};
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
@@ -119,6 +129,7 @@ struct GuiWaveConfig {
     bool followMeasurementCursorsOnScroll{false};
     std::array<float, 4> cursorFftHighlightRgba{0.20F, 0.55F, 1.00F, 0.16F};
     GuiWaveFullscreenMode fullscreenMode{GuiWaveFullscreenMode::Overlay};
+    GuiWaveResetViewportConfig resetViewport{};
 };
 
 struct GuiLogHistoryConfig {

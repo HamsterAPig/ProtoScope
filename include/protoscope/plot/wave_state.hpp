@@ -140,6 +140,22 @@ enum class WaveMouseYOffsetDragMode {
     Disabled,
 };
 
+enum class WaveResetViewportScaleMode {
+    Preserve,
+    ProtocolDefault,
+};
+
+enum class WaveResetViewportAnchor {
+    WaveStart,
+    Latest,
+};
+
+enum class WaveResetViewportAutoFollowMode {
+    Existing,
+    Enable,
+    Disable,
+};
+
 struct WaveRenderStats {
     std::size_t rawChannelCount{0};
     std::size_t peakDownsampleChannelCount{0};
@@ -177,13 +193,21 @@ struct WaveViewState {
     bool activeChannelScaleDrag{false};
     bool activeBitYOffsetDrag{false};
     bool activeFftMagnitudeOffsetDrag{false};
-    bool fftMagnitudeAutoFitIgnoreFundamental{false};
     bool zoomSelectionActive{false};
     bool zoomSelectionDragging{false};
     bool zoomSelectionAutoExit{false};
+    bool fftMagnitudeAutoFitIgnoreFundamental{false};
     bool peakDetectDownsample{true};
     bool fitVisibleWaveformsRequested{false};
     bool defaultViewportPending{true};
+    bool defaultViewportLegacyBehavior{false};
+    bool resetViewportApplyOnPlotSetupReset{true};
+    bool resetViewportApplyOnManualClear{true};
+    bool resetViewportApplyOnRawImport{true};
+    WaveResetViewportScaleMode defaultViewportXScale{WaveResetViewportScaleMode::Preserve};
+    WaveResetViewportScaleMode defaultViewportYScale{WaveResetViewportScaleMode::Preserve};
+    WaveResetViewportAnchor defaultViewportXAnchor{WaveResetViewportAnchor::WaveStart};
+    WaveResetViewportAutoFollowMode defaultViewportAutoFollow{WaveResetViewportAutoFollowMode::Existing};
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     std::size_t overviewMaxSamples{20000};

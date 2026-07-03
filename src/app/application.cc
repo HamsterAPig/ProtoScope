@@ -1164,11 +1164,13 @@ namespace {
     {
         const double defaultVisibleDuration =
             (std::max)(view.minVisibleTimeSpan, (std::max)(config.timeScale * 1000.0, config.timeScale));
-        if (!nearlyEqual(view.visibleDuration, defaultVisibleDuration)) {
+        if (view.defaultViewportXScale == plot::WaveResetViewportScaleMode::ProtocolDefault &&
+            !nearlyEqual(view.visibleDuration, defaultVisibleDuration)) {
             return false;
         }
-        if (!nearlyEqual(view.manualVerticalMin, config.verticalMin) ||
-            !nearlyEqual(view.manualVerticalMax, config.verticalMax)) {
+        if (view.defaultViewportYScale == plot::WaveResetViewportScaleMode::ProtocolDefault &&
+            (!nearlyEqual(view.manualVerticalMin, config.verticalMin) ||
+             !nearlyEqual(view.manualVerticalMax, config.verticalMax))) {
             return false;
         }
         return true;
@@ -1273,6 +1275,11 @@ config::AppConfig Application::captureConfig() const
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
     captured.gui.wave.resetHistoryOnTimeReset = runtimeConfig_.gui.wave.resetHistoryOnTimeReset;
+    captured.gui.wave.resetViewport.applyOnPlotSetupReset =
+        runtimeConfig_.gui.wave.resetViewport.applyOnPlotSetupReset;
+    captured.gui.wave.resetViewport.applyOnManualClear = runtimeConfig_.gui.wave.resetViewport.applyOnManualClear;
+    captured.gui.wave.resetViewport.applyOnRawImport = runtimeConfig_.gui.wave.resetViewport.applyOnRawImport;
+    captured.gui.wave.resetViewport.autoFollow = runtimeConfig_.gui.wave.resetViewport.autoFollow;
     captured.gui.showAppHeader = runtimeConfig_.gui.showAppHeader;
     captured.gui.sendHistoryLimit = runtimeConfig_.gui.sendHistoryLimit;
     captured.gui.luaDockLayoutDebug = runtimeConfig_.gui.luaDockLayoutDebug;
@@ -1624,6 +1631,72 @@ void Application::appendRawCaptureEvent(const plot::RawCaptureEvent& event)
     }
 }
 
+void Application::applyLegacyResetViewport(const plot::ViewConfig& protocolView, const bool resetVerticalRange)
+{
+    auto& view = dockStore_.waveState().view;
+    view.visibleDuration =
+        (std::max)(view.minVisibleTimeSpan, (std::max)(protocolView.timeScale * 1000.0, protocolView.timeScale));
+    if (resetVerticalRange) {
+        view.manualVerticalMin = protocolView.verticalMin;
+        view.manualVerticalMax = protocolView.verticalMax;
+        view.viewMinValue = protocolView.verticalMin;
+        view.viewMaxValue = protocolView.verticalMax;
+    }
+    view.defaultViewportXScale = plot::WaveResetViewportScaleMode::ProtocolDefault;
+    view.defaultViewportYScale = resetVerticalRange ? plot::WaveResetViewportScaleMode::ProtocolDefault
+                                                    : plot::WaveResetViewportScaleMode::Preserve;
+    view.defaultViewportXAnchor = plot::WaveResetViewportAnchor::Latest;
+    view.initialized = false;
+    view.defaultViewportPending = true;
+    view.defaultViewportLegacyBehavior = true;
+}
+
+bool Application::applyResetViewportPolicy(const WaveResetViewportTrigger trigger, const plot::ViewConfig& protocolView)
+{
+    const auto& policy = runtimeConfig_.gui.wave.resetViewport;
+    bool enabled = false;
+    switch (trigger) {
+    case WaveResetViewportTrigger::PlotSetupReset:
+        enabled = policy.applyOnPlotSetupReset;
+        break;
+    case WaveResetViewportTrigger::ManualClear:
+        enabled = policy.applyOnManualClear;
+        break;
+    case WaveResetViewportTrigger::RawImport:
+        enabled = policy.applyOnRawImport;
+        break;
+    }
+    if (!enabled) {
+        return false;
+    }
+
+    auto& view = dockStore_.waveState().view;
+    view.defaultViewportXScale = policy.xScale;
+    view.defaultViewportYScale = policy.yScale;
+    view.defaultViewportXAnchor = policy.xAnchor;
+    if (policy.xScale == plot::WaveResetViewportScaleMode::ProtocolDefault) {
+        view.visibleDuration =
+            (std::max)(view.minVisibleTimeSpan, (std::max)(protocolView.timeScale * 1000.0, protocolView.timeScale));
+    } else {
+        view.visibleDuration = (std::max)(view.visibleDuration, view.minVisibleTimeSpan);
+    }
+    if (policy.yScale == plot::WaveResetViewportScaleMode::ProtocolDefault) {
+        view.manualVerticalMin = protocolView.verticalMin;
+        view.manualVerticalMax = protocolView.verticalMax;
+        view.viewMinValue = protocolView.verticalMin;
+        view.viewMaxValue = protocolView.verticalMax;
+    }
+    if (policy.autoFollow == plot::WaveResetViewportAutoFollowMode::Enable) {
+        view.autoFollowLatest = true;
+    } else if (policy.autoFollow == plot::WaveResetViewportAutoFollowMode::Disable) {
+        view.autoFollowLatest = false;
+    }
+    view.initialized = false;
+    view.defaultViewportPending = true;
+    view.defaultViewportLegacyBehavior = false;
+    return true;
+}
+
 bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup)
 {
     auto& wave = dockStore_.waveState();
@@ -1680,17 +1753,9 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
                                          !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax);
     const bool shouldResetView = setup.resetHistory || configChanged || channelsChanged;
     if (shouldResetView) {
-        wave.view.visibleDuration =
-            (std::max)(wave.view.minVisibleTimeSpan, (std::max)(setup.view.timeScale * 1000.0, setup.view.timeScale));
-        if (setup.resetHistory || verticalDefaultsChanged) {
-            wave.view.manualVerticalMin = setup.view.verticalMin;
-            wave.view.manualVerticalMax = setup.view.verticalMax;
-            wave.view.viewMinValue = setup.view.verticalMin;
-            wave.view.viewMaxValue = setup.view.verticalMax;
+        if (!applyResetViewportPolicy(WaveResetViewportTrigger::PlotSetupReset, setup.view)) {
+            applyLegacyResetViewport(setup.view, setup.resetHistory || verticalDefaultsChanged);
         }
-        wave.view.initialized = false;
-        // 核心流程：运行中的 plot.setup(reset_history=true) 只重建历史和默认视口，不覆盖用户手动暂停跟随状态。
-        wave.view.defaultViewportPending = true;
         wave.statusMessage = "Lua 已更新波形通道配置";
     }
     return true;
@@ -2360,7 +2425,7 @@ void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& 
     static_cast<void>(scriptWorker_.drainOutputs());
     const auto discarded = clearPendingRealtimeBacklog();
     logRealtimeBacklogDiscard(discarded);
-    resetWaveHistory();
+    resetWaveHistoryForTrigger(WaveResetViewportTrigger::RawImport);
     auto& wave = dockStore_.waveState();
     wave.rawCapture = capture;
     wave.view.sampleFrequencyHz = capture.sampleFrequencyHz;
@@ -2830,19 +2895,32 @@ void Application::refreshSelectedElfSymbolControls()
 
 void Application::resetWaveHistory()
 {
+    resetWaveHistoryForTrigger(WaveResetViewportTrigger::ManualClear);
+}
+
+void Application::resetWaveHistoryForTrigger(const WaveResetViewportTrigger trigger)
+{
     auto& wave = dockStore_.waveState();
     wave.buffer.clear();
     wave.rawCapture = {};
     wave.analysisMarkers.clear();
     wave.channelSummaries.clear();
+    wave.view.autoFollowLatest = true;
+    if (applyResetViewportPolicy(trigger, wave.buffer.viewConfig())) {
+        wave.view.centerTime = 0.0;
+        wave.view.viewMinTime = 0.0;
+        wave.view.viewMaxTime = wave.view.visibleDuration;
+        wave.statusMessage = "波形历史已清空";
+        return;
+    }
     wave.view.initialized = false;
     wave.view.centerTime = 0.0;
     wave.view.viewMinTime = 0.0;
     wave.view.viewMaxTime = wave.view.visibleDuration;
     wave.view.viewMinValue = wave.view.manualVerticalMin;
     wave.view.viewMaxValue = wave.view.manualVerticalMax;
-    wave.view.autoFollowLatest = true;
     wave.view.defaultViewportPending = true;
+    wave.view.defaultViewportLegacyBehavior = true;
     wave.statusMessage = "波形历史已清空";
 }
 
