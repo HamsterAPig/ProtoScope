@@ -86,7 +86,7 @@ PR 合并前必须通过 `Merge CI`：
 - 使用 MSVC Release 构建 `ProtoScope.exe`。
 - 用 `dumpbin /DEPENDENTS` 确认不依赖 MinGW/MSYS 运行时 DLL。
 - 执行完整 CTest。
-- 生成独立 `.exe`、包含 `README.md` / `LICENSE` / 用户文档 / Lua 协议样板的 `.zip` 和 SHA256 校验文件。
+- 生成独立 `.exe`、包含 `README.md` / `LICENSE` / 用户文档 / Lua 协议样板的 `.zip` 和 SHA256 校验文件，并在上传前展开 zip 校验必需文件。
 - 基于上一个正式 `vX.Y.Z` 标签到当前 HEAD 的提交生成发布说明。
 - 创建或更新草稿 GitHub Release；重复运行时也要刷新 release notes。
 
