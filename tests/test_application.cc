@@ -1426,10 +1426,12 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
             "captureConfig 默认应保持 X 轴双击全历史缩放");
     require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "captureConfig 默认应保持 Y 轴双击适配可见通道");
+    require(config.gui.wave.yAxisDoubleClickAdjustOffset, "captureConfig 默认应保持 Y 轴双击同步调整 offset");
 
     config.gui.wave.zoomSelectionAutoExit = true;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
     config.gui.wave.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
+    config.gui.wave.yAxisDoubleClickAdjustOffset = false;
     require(application.applyConfig(config), "框选放大自动退出配置应用失败");
     require(application.docks().waveState().view.zoomSelectionAutoExit, "应用配置后应同步更新框选放大退出模式");
     require(application.docks().waveState().view.xAxisDoubleClickAction ==
@@ -1438,6 +1440,8 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
     require(application.docks().waveState().view.yAxisDoubleClickAction ==
                 protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
             "应用配置后应同步 Y 轴双击行为");
+    require(!application.docks().waveState().view.yAxisDoubleClickAdjustOffset,
+            "应用配置后应同步 Y 轴双击 offset 调整开关");
 
     const auto captured = application.captureConfig();
     require(captured.gui.wave.zoomSelectionAutoExit, "captureConfig 应带出框选放大退出模式");
@@ -1445,12 +1449,14 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
             "captureConfig 应带出 X 轴双击行为");
     require(captured.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
             "captureConfig 应带出 Y 轴双击行为");
+    require(!captured.gui.wave.yAxisDoubleClickAdjustOffset, "captureConfig 应带出 Y 轴双击 offset 调整开关");
 
     application.docks().waveState().view.zoomSelectionAutoExit = false;
     application.docks().waveState().view.xAxisDoubleClickAction =
         protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory;
     application.docks().waveState().view.yAxisDoubleClickAction =
         protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels;
+    application.docks().waveState().view.yAxisDoubleClickAdjustOffset = true;
     const auto capturedLive = application.captureConfig();
     require(!capturedLive.gui.wave.zoomSelectionAutoExit, "captureConfig 不应覆盖 dock 中实时框选放大退出模式");
     require(
@@ -1459,6 +1465,8 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
     require(capturedLive.gui.wave.yAxisDoubleClickAction ==
                 protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "captureConfig 不应覆盖 dock 中实时 Y 轴双击行为");
+    require(capturedLive.gui.wave.yAxisDoubleClickAdjustOffset,
+            "captureConfig 不应覆盖 dock 中实时 Y 轴双击 offset 调整开关");
 
     application.shutdown();
 }

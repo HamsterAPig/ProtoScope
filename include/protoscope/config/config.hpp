@@ -105,6 +105,7 @@ struct GuiWaveConfig {
     plot::WaveChannelDoubleClickAction channelDoubleClickAction{plot::WaveChannelDoubleClickAction::ResetScaleOffset};
     plot::WaveXAxisDoubleClickAction xAxisDoubleClickAction{plot::WaveXAxisDoubleClickAction::FitFullHistory};
     plot::WaveYAxisDoubleClickAction yAxisDoubleClickAction{plot::WaveYAxisDoubleClickAction::FitVisibleChannels};
+    bool yAxisDoubleClickAdjustOffset{true};
     plot::WaveHiddenChannelPolicy hiddenChannelPolicy{plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     plot::WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{plot::WaveCursorExtremeSnapPolicy::NearestWaveform};
     plot::WaveMouseYOffsetDragMode mouseYOffsetDragMode{plot::WaveMouseYOffsetDragMode::Direct};

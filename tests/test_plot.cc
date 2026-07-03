@@ -3995,6 +3995,37 @@ void test_wave_y_axis_double_click_single_side_scale()
     wave.buffer.append(4, {.samples = {{0.0, -100.0}, {1.0, 100.0}}});
     wave.buffer.append(5, {.samples = {{0.0, 0.0}, {1.0, 0.0}}});
 
+    const auto targetRange = [&wave]() {
+        const double viewMin = (std::min)(wave.view.viewMinValue, wave.view.viewMaxValue);
+        const double viewMax = (std::max)(wave.view.viewMinValue, wave.view.viewMaxValue);
+        const double targetHeight = (viewMax - viewMin) / wave.view.verticalAutoFitMultiplier;
+        const double center = (viewMin + viewMax) * 0.5;
+        return std::pair<double, double>{center - targetHeight * 0.5, center + targetHeight * 0.5};
+    };
+    const auto displayRange = [&wave](std::size_t channelIndex) {
+        auto spec = wave.buffer.channelSpec(channelIndex);
+        require(spec.has_value(), "测试通道 spec 应存在");
+        const auto snapshot = wave.buffer.snapshot(wave.view.viewMinTime, wave.view.viewMaxTime);
+        require(channelIndex < snapshot.channels.size(), "测试通道快照应存在");
+        const auto& channel = snapshot.channels[channelIndex];
+        double minValue = std::numeric_limits<double>::infinity();
+        double maxValue = -std::numeric_limits<double>::infinity();
+        for (std::size_t sampleIndex = channel.visibleBegin; sampleIndex < channel.visibleEnd; ++sampleIndex) {
+            const double displayValue =
+                protoscope::plot::applyChannelDisplayTransform(channel.samples[sampleIndex].value,
+                                                               *spec,
+                                                               wave.view.displayFormula);
+            minValue = (std::min)(minValue, displayValue);
+            maxValue = (std::max)(maxValue, displayValue);
+        }
+        return std::pair<double, double>{minValue, maxValue};
+    };
+    const auto requireFitsTarget = [&](std::size_t channelIndex, const char* message) {
+        const auto [expectedMin, expectedMax] = targetRange();
+        const auto [displayMin, displayMax] = displayRange(channelIndex);
+        require(displayMin >= expectedMin - 1e-9 && displayMax <= expectedMax + 1e-9, message);
+    };
+
     auto snapshot = wave.buffer.snapshot(wave.view.viewMinTime, wave.view.viewMaxTime);
     require(protoscope::ui::applyYAxisSingleSideScaleToChannels(wave, snapshot, {0, 1, 2, 3, 5}),
             "Y 轴单边缩放应修改可见模拟通道");
@@ -4005,18 +4036,27 @@ void test_wave_y_axis_double_click_single_side_scale()
     auto bit = wave.buffer.channelSpec(3);
     auto hidden = wave.buffer.channelSpec(4);
     auto zero = wave.buffer.channelSpec(5);
-    require(ch0.has_value() && std::abs(ch0->scale - 8.0) < 1e-12,
-            "min=-10,max=5,height=100 时 scale 应为 8");
-    require(ch1.has_value() && std::abs(ch1->scale - 8.0) < 1e-12,
-            "正值单边应按 ratio 后最大实际值计算 scale");
-    require(ch2.has_value() && std::abs(ch2->scale + 20.0) < 1e-12, "负 scale 应保持反向");
-    require(bit.has_value() && std::abs(bit->scale - 1.0) < 1e-12, "bit 通道不应参与 Y 轴 scale 计算");
+    require(ch0.has_value() && std::abs(ch0->scale - (80.0 / 15.0)) < 1e-12 &&
+                std::abs(ch0->offset - 11.875) < 1e-12,
+            "双极性数据应通过 scale/offset 拟合进 [0,100] 视口内部");
+    require(ch1.has_value() && std::abs(ch1->scale - 10.0) < 1e-12 && std::abs(ch1->offset + 1.0) < 1e-12,
+            "正值通道应按 ratio 后的实际区间计算 scale/offset");
+    require(ch2.has_value() && std::abs(ch2->scale + 10.0) < 1e-12 && std::abs(ch2->offset + 5.0) < 1e-12,
+            "负 scale 应保持反向并同步调整 offset");
+    requireFitsTarget(0, "双极性数据双击后不应跑到当前 Y 视口下限外");
+    requireFitsTarget(1, "ratio 通道双击后应落入当前 Y 视口内部");
+    requireFitsTarget(2, "负 scale 通道双击后应落入当前 Y 视口内部");
+    require(bit.has_value() && std::abs(bit->scale - 1.0) < 1e-12 && std::abs(bit->offset) < 1e-12,
+            "bit 通道不应参与 Y 轴 scale/offset 计算");
     require(hidden.has_value() && std::abs(hidden->scale - 1.0) < 1e-12,
             "隐藏通道不应参与 Y 轴 scale 计算");
-    require(zero.has_value() && std::abs(zero->scale - 7.0) < 1e-12, "无有效幅值时不应修改 scale");
+    require(zero.has_value() && std::abs(zero->scale - 7.0) < 1e-12 && std::abs(zero->offset) < 1e-12,
+            "无有效幅值跨度时不应修改 scale/offset");
     require(wave.channelOverrides.size() >= 3 && wave.channelOverrides[0].scaleOverridden &&
-                wave.channelOverrides[1].scaleOverridden && wave.channelOverrides[2].scaleOverridden,
-            "Y 轴缩放应通过通道覆盖路径写回 scale");
+                wave.channelOverrides[0].offsetOverridden && wave.channelOverrides[1].scaleOverridden &&
+                wave.channelOverrides[1].offsetOverridden && wave.channelOverrides[2].scaleOverridden &&
+                wave.channelOverrides[2].offsetOverridden,
+            "Y 轴缩放应通过通道覆盖路径写回 scale/offset");
 
     wave.view.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
     wave.view.measurementChannelIndex = 1;
@@ -4026,10 +4066,11 @@ void test_wave_y_axis_double_click_single_side_scale()
             "激活通道模式应修改当前激活模拟通道");
     ch0 = wave.buffer.channelSpec(0);
     ch1 = wave.buffer.channelSpec(1);
-    require(ch0.has_value() && std::abs(ch0->scale - 8.0) < 1e-12,
+    require(ch0.has_value() && std::abs(ch0->scale - (80.0 / 15.0)) < 1e-12,
             "激活通道模式不应修改其他可见模拟通道");
-    require(ch1.has_value() && std::abs(ch1->scale - 4.0) < 1e-12,
-            "激活通道模式应按当前 Y 高度重算目标 CH scale");
+    require(ch1.has_value() && std::abs(ch1->scale - 5.0) < 1e-12 && std::abs(ch1->offset + 1.0) < 1e-12,
+            "激活通道模式应按当前 Y 高度重算目标 CH scale/offset");
+    requireFitsTarget(1, "激活通道模式应把目标 CH 拟合进当前 Y 视口内部");
 
     wave.view.measurementChannelIndex = 3;
     wave.view.viewMaxValue = 100.0;
@@ -4037,8 +4078,60 @@ void test_wave_y_axis_double_click_single_side_scale()
     require(protoscope::ui::applyYAxisSingleSideScaleToChannels(wave, snapshot, {0, 3}),
             "激活 bit 通道时应回退到可见模拟通道");
     ch0 = wave.buffer.channelSpec(0);
-    require(ch0.has_value() && std::abs(ch0->scale - 8.0) < 1e-12,
+    require(ch0.has_value() && std::abs(ch0->scale - (80.0 / 15.0)) < 1e-12,
             "激活 bit 通道回退后应重算可见模拟通道");
+
+    protoscope::plot::WaveDockState scaleThenOffsetWave;
+    scaleThenOffsetWave.view.viewMinTime = 0.0;
+    scaleThenOffsetWave.view.viewMaxTime = 1.0;
+    scaleThenOffsetWave.view.viewMinValue = 0.0;
+    scaleThenOffsetWave.view.viewMaxValue = 100.0;
+    scaleThenOffsetWave.view.displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset;
+    auto scaleThenOffsetViewConfig = scaleThenOffsetWave.buffer.viewConfig();
+    scaleThenOffsetViewConfig.displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset;
+    scaleThenOffsetWave.buffer.setViewConfig(scaleThenOffsetViewConfig);
+    scaleThenOffsetWave.defaultChannelSpecs = {{.label = "ScaleThenOffset", .unit = "V", .scale = 2.0}};
+    scaleThenOffsetWave.buffer.configureChannels(1);
+    scaleThenOffsetWave.buffer.setChannelSpec(0, scaleThenOffsetWave.defaultChannelSpecs[0]);
+    scaleThenOffsetWave.buffer.append(0, {.samples = {{0.0, -10.0}, {1.0, 5.0}}});
+    snapshot = scaleThenOffsetWave.buffer.snapshot(0.0, 1.0);
+    require(protoscope::ui::applyYAxisSingleSideScaleToChannels(scaleThenOffsetWave, snapshot, {0}),
+            "ScaleThenOffset 公式也应支持 Y 轴双击拟合");
+    const auto scaleThenOffsetSpec = scaleThenOffsetWave.buffer.channelSpec(0);
+    require(scaleThenOffsetSpec.has_value() && std::abs(scaleThenOffsetSpec->scale - (80.0 / 15.0)) < 1e-12 &&
+                std::abs(scaleThenOffsetSpec->offset - (50.0 + 2.5 * (80.0 / 15.0))) < 1e-12,
+            "ScaleThenOffset 应反推 offset 让实际区间落入当前视口内部");
+    const auto scaleThenOffsetSnapshot = scaleThenOffsetWave.buffer.snapshot(0.0, 1.0);
+    double scaleThenOffsetMin = std::numeric_limits<double>::infinity();
+    double scaleThenOffsetMax = -std::numeric_limits<double>::infinity();
+    for (std::size_t sampleIndex = 0; sampleIndex < scaleThenOffsetSnapshot.channels[0].visibleEnd; ++sampleIndex) {
+        const double displayValue =
+            protoscope::plot::applyChannelDisplayTransform(scaleThenOffsetSnapshot.channels[0].samples[sampleIndex].value,
+                                                           *scaleThenOffsetSpec,
+                                                           scaleThenOffsetWave.view.displayFormula);
+        scaleThenOffsetMin = (std::min)(scaleThenOffsetMin, displayValue);
+        scaleThenOffsetMax = (std::max)(scaleThenOffsetMax, displayValue);
+    }
+    require(scaleThenOffsetMin >= 10.0 - 1e-9 && scaleThenOffsetMax <= 90.0 + 1e-9,
+            "ScaleThenOffset 显示峰值应拟合到当前 Y 视口内部");
+
+    protoscope::plot::WaveDockState fixedOffsetWave;
+    fixedOffsetWave.view.viewMinTime = 0.0;
+    fixedOffsetWave.view.viewMaxTime = 1.0;
+    fixedOffsetWave.view.viewMinValue = 0.0;
+    fixedOffsetWave.view.viewMaxValue = 100.0;
+    fixedOffsetWave.view.yAxisDoubleClickAdjustOffset = false;
+    fixedOffsetWave.defaultChannelSpecs = {{.label = "FixedOffset", .unit = "V", .scale = 1.0, .offset = 0.0}};
+    fixedOffsetWave.buffer.configureChannels(1);
+    fixedOffsetWave.buffer.setChannelSpec(0, fixedOffsetWave.defaultChannelSpecs[0]);
+    fixedOffsetWave.buffer.append(0, {.samples = {{0.0, -10.0}, {1.0, 5.0}}});
+    snapshot = fixedOffsetWave.buffer.snapshot(0.0, 1.0);
+    require(!protoscope::ui::applyYAxisSingleSideScaleToChannels(fixedOffsetWave, snapshot, {0}),
+            "关闭 offset 自动调整且固定 offset 无法拟合时不应放大出界");
+    const auto fixedOffsetSpec = fixedOffsetWave.buffer.channelSpec(0);
+    require(fixedOffsetSpec.has_value() && std::abs(fixedOffsetSpec->scale - 1.0) < 1e-12 &&
+                std::abs(fixedOffsetSpec->offset) < 1e-12,
+            "固定 offset 无法拟合时应保持通道显示变换不变");
 }
 
 void test_wave_visible_channel_bounds_ignore_hidden_channels()
@@ -4077,6 +4170,8 @@ void test_wave_hidden_channel_policy_defaults_to_visible_only()
             "配置默认隐藏 CH 策略应只让可见通道参与派生视图");
     require(view.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "运行态默认隐藏 CH 策略应只让可见通道参与派生视图");
+    require(config.yAxisDoubleClickAdjustOffset, "配置默认 Y 轴双击应同步调整 offset");
+    require(view.yAxisDoubleClickAdjustOffset, "运行态默认 Y 轴双击应同步调整 offset");
 }
 
 void test_wave_hidden_channel_indices_allow_duplicate_labels()

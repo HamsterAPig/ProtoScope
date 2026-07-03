@@ -600,6 +600,8 @@ namespace {
                                     "y_axis_double_click_action",
                                     toWaveYAxisDoubleClickActionText(config.gui.wave.yAxisDoubleClickAction)),
             config.gui.wave.yAxisDoubleClickAction);
+        config.gui.wave.yAxisDoubleClickAdjustOffset = readScalar<bool>(
+            wave, "y_axis_double_click_adjust_offset", config.gui.wave.yAxisDoubleClickAdjustOffset);
         config.gui.wave.hiddenChannelPolicy = parseWaveHiddenChannelPolicy(
             readScalar<std::string>(
                 wave, "hidden_channel_policy", toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy)),
@@ -992,6 +994,7 @@ namespace {
             toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction);
         gui["wave"]["y_axis_double_click_action"] =
             toWaveYAxisDoubleClickActionText(config.gui.wave.yAxisDoubleClickAction);
+        gui["wave"]["y_axis_double_click_adjust_offset"] = config.gui.wave.yAxisDoubleClickAdjustOffset;
         gui["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
         gui["wave"]["cursor_extreme_snap_policy"] =
             toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
@@ -1527,6 +1530,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
     wave.xAxisDoubleClickAction = config.gui.wave.xAxisDoubleClickAction;
     wave.yAxisDoubleClickAction = config.gui.wave.yAxisDoubleClickAction;
+    wave.yAxisDoubleClickAdjustOffset = config.gui.wave.yAxisDoubleClickAdjustOffset;
     wave.mouseYOffsetDragMode = config.gui.wave.mouseYOffsetDragMode;
     wave.zoomSelectionAutoExit = config.gui.wave.zoomSelectionAutoExit;
     wave.peakDetectDownsample = config.gui.wave.peakDetectDownsample;
@@ -1588,6 +1592,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
     config.gui.wave.xAxisDoubleClickAction = dockStore.waveState().view.xAxisDoubleClickAction;
     config.gui.wave.yAxisDoubleClickAction = dockStore.waveState().view.yAxisDoubleClickAction;
+    config.gui.wave.yAxisDoubleClickAdjustOffset = dockStore.waveState().view.yAxisDoubleClickAdjustOffset;
     config.gui.wave.mouseYOffsetDragMode = dockStore.waveState().view.mouseYOffsetDragMode;
     config.gui.wave.zoomSelectionAutoExit = dockStore.waveState().view.zoomSelectionAutoExit;
     config.gui.wave.peakDetectDownsample = dockStore.waveState().view.peakDetectDownsample;

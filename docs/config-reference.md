@@ -76,6 +76,7 @@ gui:
     channel_double_click_action: reset_scale_offset
     x_axis_double_click_action: fit_full_history
     y_axis_double_click_action: fit_visible_channels
+    y_axis_double_click_adjust_offset: true
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct
@@ -108,6 +109,7 @@ gui:
 - `channel_double_click_action`：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset`。
 - `x_axis_double_click_action`：`fit_full_history` 或 `fit_visible_window`。
 - `y_axis_double_click_action`：`fit_visible_channels` 或 `fit_active_channel`。默认聚合所有图例可见模拟通道；激活通道模式只取当前激活模拟通道，激活通道无效、隐藏或为 bit-display 时回退到可见模拟通道。
+- `y_axis_double_click_adjust_offset`：Y 轴双击拟合时是否同步调整通道 offset，默认 `true`，会保持当前主图 Y 视口不变并把目标模拟波形移入视口内部。
 - `hidden_channel_policy`：`visible_only` 或 `include_hidden`，控制隐藏通道是否参与派生视图。
 - `cursor_extreme_snap_policy`：`nearest_waveform` 或 `viewport_zone`。
 - `mouse_y_offset_drag_mode`：`direct`、`shift` 或 `disabled`，控制鼠标拖动通道 Y 偏移的触发方式。

@@ -253,7 +253,7 @@ Lua 脚本通过 `proto.plot.setup()` 创建通道，再通过 `proto.plot.push(
 - 在通道卡片里修改标签、缩放和偏移。
 - 使用总览区域快速定位长时间数据。
 - 双击主图 X 轴会缩放到当前仍保留的完整历史；如需旧行为，可把 `gui.wave.x_axis_double_click_action` 设为 `fit_visible_window`。
-- 双击主图 Y 轴默认按图例可见的模拟通道自动缩放，让数据包络约占视图高度 80%；可把 `gui.wave.y_axis_double_click_action` 设为 `fit_active_channel` 改为只适配当前激活模拟通道。
+- 双击主图 Y 轴默认按图例可见的模拟通道自动调整缩放和偏移，让数据包络约占当前视图高度 80%；可把 `gui.wave.y_axis_double_click_action` 设为 `fit_active_channel` 改为只适配当前激活模拟通道，或把 `gui.wave.y_axis_double_click_adjust_offset` 设为 `false` 保留原 offset。
 - 使用游标和测量覆盖层观察时间差和值差。
 - 启用 FFT 频谱模式查看当前可视区频谱。
 - 通过 `文件 -> 导入原始波形...` 一次性导入 `.psraw` 文件，立即重建波形结果。

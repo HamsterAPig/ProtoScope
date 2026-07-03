@@ -238,6 +238,7 @@ struct WaveViewState {
     WaveChannelDoubleClickAction channelDoubleClickAction{WaveChannelDoubleClickAction::ResetScaleOffset};
     WaveXAxisDoubleClickAction xAxisDoubleClickAction{WaveXAxisDoubleClickAction::FitFullHistory};
     WaveYAxisDoubleClickAction yAxisDoubleClickAction{WaveYAxisDoubleClickAction::FitVisibleChannels};
+    bool yAxisDoubleClickAdjustOffset{true};
     WaveHiddenChannelPolicy hiddenChannelPolicy{WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     WavePhosphorBackend phosphorBackend{WavePhosphorBackend::Auto};
     WavePhosphorMode phosphorMode{WavePhosphorMode::FreeRun};

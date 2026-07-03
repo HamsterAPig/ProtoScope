@@ -2209,6 +2209,7 @@ void test_config_default_roundtrip()
             "X 轴双击默认值应为 fit_full_history");
     require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "Y 轴双击默认值应为 fit_visible_channels");
+    require(config.gui.wave.yAxisDoubleClickAdjustOffset, "Y 轴双击默认应同步调整 offset");
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.25) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.25");
@@ -2284,6 +2285,7 @@ void test_config_default_roundtrip()
     config.gui.wave.channelDoubleClickAction = protoscope::plot::WaveChannelDoubleClickAction::ResetAll;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
     config.gui.wave.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
+    config.gui.wave.yAxisDoubleClickAdjustOffset = false;
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
@@ -2358,6 +2360,7 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.wave.yAxisDoubleClickAction ==
                 protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
             "Y 轴双击行为 roundtrip 失败");
+    require(!reloaded.config.gui.wave.yAxisDoubleClickAdjustOffset, "Y 轴双击 offset 调整开关 roundtrip 失败");
     require(reloaded.config.gui.wave.hiddenChannelPolicy ==
                 protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "隐藏 CH 策略 roundtrip 失败");

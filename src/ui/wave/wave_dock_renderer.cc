@@ -837,10 +837,21 @@ bool applyYAxisSingleSideScaleToChannels(plot::WaveDockState& wave,
                                          const plot::WaveSnapshot& snapshot,
                                          const std::vector<std::size_t>& visibleChannelIndices)
 {
-    const double yHeight = std::abs(wave.view.viewMaxValue - wave.view.viewMinValue);
+    const double viewMin = (std::min)(wave.view.viewMinValue, wave.view.viewMaxValue);
+    const double viewMax = (std::max)(wave.view.viewMinValue, wave.view.viewMaxValue);
+    const double yHeight = viewMax - viewMin;
     if (wave.view.lockVerticalRange || !std::isfinite(yHeight) || yHeight <= 1e-12) {
         return false;
     }
+    const double safeMultiplier =
+        wave.view.verticalAutoFitMultiplier > 0.0 && std::isfinite(wave.view.verticalAutoFitMultiplier)
+            ? wave.view.verticalAutoFitMultiplier
+            : 1.25;
+    const double targetHeight = yHeight / safeMultiplier;
+    if (!std::isfinite(targetHeight) || targetHeight <= 1e-12) {
+        return false;
+    }
+    const double viewCenter = (viewMin + viewMax) * 0.5;
 
     bool changed = false;
     const auto targets = yAxisSingleSideScaleTargets(wave, snapshot, visibleChannelIndices);
@@ -863,21 +874,80 @@ bool applyYAxisSingleSideScaleToChannels(plot::WaveDockState& wave,
             end = begin;
         }
 
-        double maxAbsActual = 0.0;
+        double actualMin = std::numeric_limits<double>::infinity();
+        double actualMax = -std::numeric_limits<double>::infinity();
         for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
             const double actual = channel.samples[sampleIndex].value * currentSpec->ratio;
             if (!std::isfinite(actual)) {
                 continue;
             }
-            maxAbsActual = (std::max)(maxAbsActual, std::abs(actual));
+            actualMin = (std::min)(actualMin, actual);
+            actualMax = (std::max)(actualMax, actual);
         }
-        if (maxAbsActual <= 1e-12) {
+        if (!std::isfinite(actualMin) || !std::isfinite(actualMax)) {
+            continue;
+        }
+        const double actualSpan = actualMax - actualMin;
+        if (!std::isfinite(actualSpan) || actualSpan <= 1e-12) {
             continue;
         }
 
         auto updated = *currentSpec;
         const double sign = updated.scale < 0.0 ? -1.0 : 1.0;
-        updated.scale = sign * (0.8 * yHeight / maxAbsActual);
+        const double targetMagnitude = targetHeight / actualSpan;
+        if (!std::isfinite(targetMagnitude) || targetMagnitude <= 1e-12) {
+            continue;
+        }
+        updated.scale = sign * targetMagnitude;
+        const double actualCenter = (actualMin + actualMax) * 0.5;
+
+        if (wave.view.yAxisDoubleClickAdjustOffset) {
+            // 核心流程：默认同步反推 offset，让实际值区间落在当前 Y 视口内部目标区间。
+            if (wave.view.displayFormula == plot::WaveDisplayFormula::ScaleThenOffset) {
+                updated.offset = viewCenter - actualCenter * updated.scale;
+            } else {
+                updated.offset = viewCenter / updated.scale - actualCenter;
+            }
+        } else {
+            double lowerMagnitude = 0.0;
+            double upperMagnitude = std::numeric_limits<double>::infinity();
+            bool feasible = true;
+            const auto applyFixedOffsetConstraint = [&](double basis, double additive) {
+                if (!std::isfinite(basis) || !feasible) {
+                    feasible = false;
+                    return;
+                }
+                if (std::abs(basis) <= 1e-12) {
+                    feasible = viewMin <= additive && additive <= viewMax;
+                    return;
+                }
+                double lower = (viewMin - additive) / basis;
+                double upper = (viewMax - additive) / basis;
+                if (lower > upper) {
+                    std::swap(lower, upper);
+                }
+                lowerMagnitude = (std::max)(lowerMagnitude, lower);
+                upperMagnitude = (std::min)(upperMagnitude, upper);
+            };
+
+            if (wave.view.displayFormula == plot::WaveDisplayFormula::ScaleThenOffset) {
+                applyFixedOffsetConstraint(sign * actualMin, updated.offset);
+                applyFixedOffsetConstraint(sign * actualMax, updated.offset);
+            } else {
+                applyFixedOffsetConstraint(sign * (actualMin + updated.offset), 0.0);
+                applyFixedOffsetConstraint(sign * (actualMax + updated.offset), 0.0);
+            }
+
+            if (!feasible || lowerMagnitude < -1e-12 || lowerMagnitude - upperMagnitude > 1e-12) {
+                continue;
+            }
+            const double safeMagnitude = (std::min)(targetMagnitude, upperMagnitude);
+            if (!std::isfinite(safeMagnitude) || safeMagnitude + 1e-12 < lowerMagnitude ||
+                safeMagnitude <= 1e-12) {
+                continue;
+            }
+            updated.scale = sign * safeMagnitude;
+        }
         applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *currentSpec));
         changed = true;
     }
@@ -913,8 +983,7 @@ bool handleMainPlotAxisDoubleClick(plot::WaveDockState& wave,
         // Bit lanes are laid out in plot pixels. Consume the fit gesture so ImPlot does not persist a normal Y fit.
         changed = true;
     } else if (ImPlot::IsAxisHovered(ImAxis_Y1)) {
-        // 核心流程：Y 轴双击只改目标 CH 的 scale，让原始实际值单边占当前视窗高度的 80%。
-        // 视口范围保持不变，并通过覆盖写回路径持久化到通道显示配置。
+        // 核心流程：Y 轴双击保持当前视口不变，通过通道 scale/offset 把目标模拟波形拟合进视口。
         changed = applyYAxisSingleSideScaleToChannels(wave, snapshot, visibleChannelIndices) || changed;
     }
 
