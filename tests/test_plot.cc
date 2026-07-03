@@ -432,6 +432,15 @@ void test_wave_layout_solver_clamps_without_overflow()
         toolbarScrollbarReserved.overviewHeight + toolbarScrollbarReserved.mainHeight + 6.0F + 76.0F <= 420.0F + 1e-3F,
         "工具栏预留横向滚动条后布局总高度不应溢出父窗口");
 
+    const auto toolbarWithoutScrollbar = protoscope::plot::solveWaveLayout(
+        900.0F, 520.0F, 72.0F, 300.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 58.0F);
+    const auto toolbarWithScrollbar = protoscope::plot::solveWaveLayout(
+        900.0F, 520.0F, 72.0F, 300.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 76.0F);
+    require(toolbarWithoutScrollbar.overviewHeight == toolbarWithScrollbar.overviewHeight,
+            "工具栏滚动条高度变化不应挤压已稳定的概览高度");
+    require(std::abs((toolbarWithoutScrollbar.mainHeight - toolbarWithScrollbar.mainHeight) - 18.0F) < 1e-3F,
+            "无横向滚动条时主视图应回收对应工具栏高度");
+
     const auto draggedOverview = protoscope::plot::solveWaveLayout(
         900.0F, 600.0F, 260.0F, 300.0F, 34.0F, false, 6.0F, 6.0F, 72.0F, 160.0F, 220.0F, 520.0F, 70.0F);
     require(std::abs(draggedOverview.overviewHeight - 260.0F) < 1e-3F, "概览高度应尊重用户拖拽值，不应被 35% 上限拉回");

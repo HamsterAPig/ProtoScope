@@ -361,6 +361,8 @@ struct WaveDockState {
     float minMainPanelHeight{160.0F};
     float minToolsExpandedWidth{220.0F};
     float maxToolsExpandedWidth{520.0F};
+    float mainToolbarContentWidth{0.0F};
+    bool mainToolbarNeedsHorizontalScroll{true};
     std::uint64_t displayDataRevision{0};
     double displayDataSampleFrequencyHz{0.0};
     std::size_t lastLegendMeasurementChannelIndex{static_cast<std::size_t>(-1)};

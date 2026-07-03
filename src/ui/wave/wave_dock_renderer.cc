@@ -198,11 +198,12 @@ namespace {
         return drawToolbarSectionButton(label, tooltip, active, ImVec2(width, 0.0F));
     }
 
-    [[nodiscard]] float compactMainToolbarHeight()
+    [[nodiscard]] float compactMainToolbarHeight(bool reserveHorizontalScrollbar)
     {
         const ImGuiStyle& style = ImGui::GetStyle();
         const float buttonRowHeight = ImGui::GetTextLineHeight() + kCompactMainToolbarFramePaddingY * 2.0F;
-        return std::ceil(buttonRowHeight + style.ScrollbarSize + kCompactMainToolbarVerticalPadding +
+        const float scrollbarReserve = reserveHorizontalScrollbar ? style.ScrollbarSize : 0.0F;
+        return std::ceil(buttonRowHeight + scrollbarReserve + kCompactMainToolbarVerticalPadding +
                          style.ChildBorderSize * 2.0F);
     }
 
@@ -458,10 +459,15 @@ namespace {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.059F, 0.086F, 0.125F, 1.0F));
 
         const ImGuiStyle& style = ImGui::GetStyle();
-        const float toolbarHeight = compactMainToolbarHeight();
+        const bool reserveHorizontalScrollbar = wave.mainToolbarNeedsHorizontalScroll;
+        const float toolbarHeight = compactMainToolbarHeight(reserveHorizontalScrollbar);
+        const float availableWidth = ImGui::GetContentRegionAvail().x;
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.WindowPadding.x, 0.0F));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x, kCompactMainToolbarFramePaddingY));
+        if (wave.mainToolbarContentWidth > 0.0F) {
+            ImGui::SetNextWindowContentSize(ImVec2(wave.mainToolbarContentWidth, 0.0F));
+        }
 
         ImGui::BeginChild("##wave_main_toolbar",
                           ImVec2(0.0F, toolbarHeight),
@@ -469,13 +475,15 @@ namespace {
                           ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
         const float rowHeight = ImGui::GetFrameHeight();
+        const float scrollbarReserve = reserveHorizontalScrollbar ? style.ScrollbarSize : 0.0F;
         const float buttonAreaHeight =
-            (std::max)(rowHeight, toolbarHeight - style.ScrollbarSize - style.ChildBorderSize * 2.0F);
+            (std::max)(rowHeight, toolbarHeight - scrollbarReserve - style.ChildBorderSize * 2.0F);
         const float offsetY =
             style.ChildBorderSize + (std::max)(0.0F, std::floor((buttonAreaHeight - rowHeight) * 0.5F));
         ImGui::SetCursorPosY(offsetY);
         ImGui::AlignTextToFramePadding();
 
+        ImGui::BeginGroup();
         const bool currentRunning = wave.oscilloscopeRunning;
         const bool targetRunning = !currentRunning;
         if (drawTopToolbarButton(currentRunning ? PROTOSCOPE_ICON_PAUSE : PROTOSCOPE_ICON_PLAY,
@@ -651,6 +659,14 @@ namespace {
             *fullscreenToggleRequested = true;
             application.setStatusMessage(fullscreenActive ? "已请求退出波形全屏" : "已请求进入波形全屏", false);
         }
+        ImGui::EndGroup();
+
+        const ImVec2 groupMin = ImGui::GetItemRectMin();
+        const ImVec2 groupMax = ImGui::GetItemRectMax();
+        const float groupWidth = (std::max)(0.0F, groupMax.x - groupMin.x);
+        wave.mainToolbarContentWidth = std::ceil(groupWidth);
+        wave.mainToolbarNeedsHorizontalScroll =
+            groupWidth + style.WindowPadding.x * 2.0F > availableWidth - style.ChildBorderSize * 2.0F + 0.5F;
 
         ImGui::EndChild();
         ImGui::PopStyleVar(2);
@@ -1812,7 +1828,7 @@ WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewSt
     const float spacingWidth = ImGui::GetStyle().ItemSpacing.x;
     const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
     const bool cursorSplitMode = isCursorSplitFftMode(view);
-    const float toolbarHeight = compactMainToolbarHeight();
+    const float toolbarHeight = compactMainToolbarHeight(wave.mainToolbarNeedsHorizontalScroll);
     const float overviewProgress = (std::clamp)(wave.overviewPanelProgress, 0.0F, 1.0F);
     const float overviewRequestedHeight =
         cursorSplitMode ? 0.0F
