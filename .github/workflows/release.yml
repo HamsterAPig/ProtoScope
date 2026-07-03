@@ -269,25 +269,74 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $notes = @"
-          ProtoScope $env:RELEASE_TAG
+          $previousTags = @(
+            git tag --merged HEAD --list "v*.*.*" |
+              Where-Object { $_ -match '^v\d+\.\d+\.\d+$' -and $_ -ne $env:RELEASE_TAG } |
+              ForEach-Object {
+                [pscustomobject]@{
+                  Name = $_
+                  Version = [version]($_ -replace '^v', '')
+                }
+              } |
+              Sort-Object -Property @{ Expression = { $_.Version }; Descending = $true }
+          )
 
-          Assets:
-          - $env:ASSET_BASE.exe: standalone executable
-          - $env:ASSET_BASE.zip: executable, README, LICENSE, user docs and Lua protocol examples
-          - SHA256 checksums
-          "@
+          if ($previousTags.Count -gt 0) {
+            $changeRange = "$($previousTags[0].Name)..HEAD"
+            $changeTitle = "Changes since $($previousTags[0].Name):"
+          } else {
+            $changeRange = "HEAD"
+            $changeTitle = "Changes in this build:"
+          }
+
+          $changes = @(git log --pretty=format:"- %s (%h)" $changeRange)
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          if ($changes.Count -eq 0) {
+            $changes = @("- No code changes since the previous release tag.")
+          }
+
+          $notesPath = "release-notes.md"
+          $releaseDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+          $notesLines = @(
+            "ProtoScope $env:RELEASE_TAG",
+            "Release date (UTC): $releaseDate",
+            "",
+            $changeTitle
+          ) + $changes + @(
+            "",
+            "Assets:",
+            "- $env:ASSET_BASE.exe: standalone executable",
+            "- $env:ASSET_BASE.zip: executable, README, LICENSE, user docs and Lua protocol examples",
+            "- SHA256 checksums"
+          )
+          Set-Content -Path $notesPath -Value $notesLines -Encoding UTF8
 
           gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:RELEASE_TAG release-assets/* `
               --repo $env:GITHUB_REPOSITORY `
               --clobber
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            gh release edit $env:RELEASE_TAG `
+              --repo $env:GITHUB_REPOSITORY `
+              --title "ProtoScope $env:RELEASE_TAG" `
+              --notes-file $notesPath
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
           } else {
             gh release create $env:RELEASE_TAG release-assets/* `
               --repo $env:GITHUB_REPOSITORY `
               --title "ProtoScope $env:RELEASE_TAG" `
-              --notes $notes `
+              --notes-file $notesPath `
               --target $env:GITHUB_SHA `
               --draft
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
           }

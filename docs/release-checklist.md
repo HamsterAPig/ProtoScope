@@ -87,7 +87,8 @@ PR 合并前必须通过 `Merge CI`：
 - 用 `dumpbin /DEPENDENTS` 确认不依赖 MinGW/MSYS 运行时 DLL。
 - 执行完整 CTest。
 - 生成独立 `.exe`、包含 `README.md` / `LICENSE` / 用户文档 / Lua 协议样板的 `.zip` 和 SHA256 校验文件。
-- 创建或更新草稿 GitHub Release。
+- 基于上一个正式 `vX.Y.Z` 标签到当前 HEAD 的提交生成发布说明。
+- 创建或更新草稿 GitHub Release；重复运行时也要刷新 release notes。
 
 ## 发布资产人工检查
 
@@ -114,6 +115,6 @@ Expand-Archive .\ProtoScope-windows-x64-<tag>.zip -DestinationPath .\release-che
 草稿 Release 至少包含：
 
 - 版本号和发布日期。
-- 面向用户的新增能力、修复和已知限制。
+- 基于 Git 提交生成的变更摘要。
 - 资产列表和 SHA256 校验说明。
 - 如果 Lua API 或内置模板有变化，说明迁移影响和推荐示例。
