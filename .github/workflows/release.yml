@@ -201,7 +201,9 @@ jobs:
         shell: pwsh
         run: |
           $assetDir = "release-assets"
+          $stagingDir = "release-package"
           New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 
           if (-not (Test-Path $env:EXE_PATH)) {
             throw "Expected executable was not found: $env:EXE_PATH"
@@ -211,8 +213,35 @@ jobs:
           $zipAssetName = "$env:ASSET_BASE.zip"
           $exeAsset = Join-Path $assetDir $exeAssetName
           $zipAsset = Join-Path $assetDir $zipAssetName
+          $packageDir = Join-Path $stagingDir $env:ASSET_BASE
+          $packageDocsDir = Join-Path $packageDir "docs"
+          $packageProtocolsDir = Join-Path $packageDir "protocols"
+
+          New-Item -ItemType Directory -Force -Path $packageDocsDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $packageProtocolsDir | Out-Null
+
           Copy-Item -Path $env:EXE_PATH -Destination $exeAsset -Force
-          Compress-Archive -Path $exeAsset -DestinationPath $zipAsset -Force
+          Copy-Item -Path $env:EXE_PATH -Destination (Join-Path $packageDir "ProtoScope.exe") -Force
+          Copy-Item -Path README.md -Destination (Join-Path $packageDir "README.md") -Force
+          Copy-Item -Path LICENSE -Destination (Join-Path $packageDir "LICENSE") -Force
+          Copy-Item -Path docs/user-manual.md -Destination (Join-Path $packageDocsDir "user-manual.md") -Force
+          Copy-Item -Path protocols/README.md -Destination (Join-Path $packageProtocolsDir "README.md") -Force
+
+          $requiredPackageFiles = @(
+            "ProtoScope.exe",
+            "README.md",
+            "LICENSE",
+            "docs/user-manual.md",
+            "protocols/README.md"
+          )
+          foreach ($relativePath in $requiredPackageFiles) {
+            $fullPath = Join-Path $packageDir $relativePath
+            if (-not (Test-Path $fullPath)) {
+              throw "Release package is missing required file: $relativePath"
+            }
+          }
+
+          Compress-Archive -Path $packageDir -DestinationPath $zipAsset -Force
 
           Get-FileHash -Algorithm SHA256 $exeAsset |
             ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
@@ -238,8 +267,8 @@ jobs:
           ProtoScope $env:RELEASE_TAG
 
           Assets:
-          - $env:ASSET_BASE.exe
-          - $env:ASSET_BASE.zip
+          - $env:ASSET_BASE.exe: standalone executable
+          - $env:ASSET_BASE.zip: executable, README, LICENSE and user docs
           - SHA256 checksums
           "@
 
