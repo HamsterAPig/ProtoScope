@@ -247,6 +247,8 @@ jobs:
             "protocols/stream_types.lua",
             "protocols/default_protocol/main.lua",
             "protocols/lua_waveform_demo/main.lua",
+            "protocols/half_duplex_modbus_master/main.lua",
+            "protocols/half_duplex_modbus_slave/main.lua",
             "protocols/templates/README.md",
             "protocols/templates/oscilloscope_control/main.lua"
           )

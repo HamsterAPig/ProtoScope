@@ -103,7 +103,7 @@ Expand-Archive .\ProtoScope-windows-x64-<tag>.zip -DestinationPath .\release-che
 
 人工打开 GUI 后确认：
 
-- zip 内的发布目录包含 `ProtoScope.exe`、`README.md`、`LICENSE`、`config/protoscope.yaml`、README 引用的核心 `docs/*.md`、`protocols/protoscope_api.lua` 和 `protocols/templates/oscilloscope_control/main.lua`，并且不包含本机 `config/ui/protocol-control-state.yaml`。
+- zip 内的发布目录包含 `ProtoScope.exe`、`README.md`、`LICENSE`、`config/protoscope.yaml`、README 引用的核心 `docs/*.md`、顶层 Lua 示例 `main.lua`、`protocols/protoscope_api.lua` 和 `protocols/templates/oscilloscope_control/main.lua`，并且不包含本机 `config/ui/protocol-control-state.yaml`。
 - 默认协议列表可见，`default_protocol`、`lua_waveform_demo` 和半双工示例可加载。
 - Lua Dock 控件能触发脚本回调。
 - 波形 Dock 的播放/暂停按钮能触发 `on_oscilloscope_toggle()`。
