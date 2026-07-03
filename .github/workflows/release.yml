@@ -226,7 +226,7 @@ jobs:
           Copy-Item -Path $env:EXE_PATH -Destination (Join-Path $packageDir "ProtoScope.exe") -Force
           Copy-Item -Path README.md -Destination (Join-Path $packageDir "README.md") -Force
           Copy-Item -Path LICENSE -Destination (Join-Path $packageDir "LICENSE") -Force
-          Copy-Item -Path docs/user-manual.md -Destination (Join-Path $packageDocsDir "user-manual.md") -Force
+          Copy-Item -Path docs/* -Destination $packageDocsDir -Recurse -Force
           Copy-Item -Path protocols/* -Destination $packageProtocolsDir -Recurse -Force
 
           $requiredPackageFiles = @(
@@ -234,6 +234,10 @@ jobs:
             "README.md",
             "LICENSE",
             "docs/user-manual.md",
+            "docs/config-reference.md",
+            "docs/lua-host-integration.md",
+            "docs/module-design.md",
+            "docs/release-checklist.md",
             "protocols/README.md",
             "protocols/protoscope_api.lua",
             "protocols/stream_types.lua",
@@ -318,7 +322,7 @@ jobs:
             "",
             "Assets:",
             "- $env:ASSET_BASE.exe: standalone executable",
-            "- $env:ASSET_BASE.zip: executable, README, LICENSE, user docs and Lua protocol examples",
+            "- $env:ASSET_BASE.zip: executable, README, LICENSE, docs and Lua protocol examples",
             "- SHA256 checksums"
           )
           Set-Content -Path $notesPath -Value $notesLines -Encoding UTF8
