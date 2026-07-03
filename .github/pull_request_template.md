@@ -5,9 +5,11 @@
 ## 验证
 
 - [ ] `git diff --check`
+- [ ] `python tools/generate_luals_api.py --check`
 - [ ] `cmake -S . -B build -G "Ninja"`
 - [ ] `cmake --build build`
 - [ ] `ctest --test-dir build --output-on-failure`
+- [ ] 如影响发布包或用户文档，已按 `docs/release-checklist.md` 复核
 
 ## 影响范围
 

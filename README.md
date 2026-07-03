@@ -9,6 +9,7 @@ ProtoScope 是一个面向串口、TCP、UDP 调试场景的 `ImGui + ImPlot + L
 - Lua 脚本：见 [Lua 协议脚本指南](protocols/README.md)。
 - LuaLS 提示：`protocols/protoscope_api.lua` 由 `protocols/protoscope_api_manifest.json` 生成。
 - 维护说明：见 [src/include 模块设计导览](docs/module-design.md) 和 [Lua 宿主 API 接入指南](docs/lua-host-integration.md)。
+- 发布检查：见 [ProtoScope 发布检查清单](docs/release-checklist.md)。
 
 ## 启动参数
 
@@ -77,6 +78,7 @@ Windows 下已验证过的基础命令：
 ```
 
 如果使用 Visual Studio 或 Ninja，可以指定自己的构建目录。提交前优先运行与改动相关的目标测试。
+发布前按 [发布检查清单](docs/release-checklist.md) 复核构建、测试、LuaLS API 同步和发布资产。
 
 ## 协议目录
 
