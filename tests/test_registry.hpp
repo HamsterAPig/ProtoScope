@@ -63,6 +63,7 @@ void test_default_protocol_logs_elf_symbol_info();
 void test_default_protocol_oscilloscope_controls_apply_history_limit();
 void test_lua_waveform_demo_oscilloscope_controls_apply_history_limit();
 void test_oscilloscope_control_template_loads_and_syncs_toolbar();
+void test_builtin_protocol_examples_load();
 void test_script_elf_symbol_combo_descriptor_defaults();
 void test_script_elf_symbol_combo_invalid_config_fails();
 void test_script_elf_symbol_combo_get_control_returns_table();

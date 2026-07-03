@@ -68,6 +68,39 @@ std::filesystem::path templateProtocolDir(const char* name)
     return std::filesystem::path("protocols/templates") / name;
 }
 
+std::vector<std::filesystem::path> protocolDirsWithMainLua(const std::filesystem::path& root)
+{
+    const auto rootText = root.generic_string();
+    const auto existsMessage = rootText + " 目录应存在";
+    require(std::filesystem::exists(root), existsMessage.c_str());
+
+    std::vector<std::filesystem::path> dirs;
+    for (const auto& entry : std::filesystem::directory_iterator(root)) {
+        if (!entry.is_directory()) {
+            continue;
+        }
+        const auto mainLua = entry.path() / "main.lua";
+        if (std::filesystem::exists(mainLua)) {
+            dirs.push_back(entry.path());
+        }
+    }
+
+    std::sort(dirs.begin(), dirs.end());
+    const auto emptyMessage = rootText + " 应至少包含一个可加载协议";
+    require(!dirs.empty(), emptyMessage.c_str());
+    return dirs;
+}
+
+std::vector<std::filesystem::path> builtinProtocolDirs()
+{
+    return protocolDirsWithMainLua("protocols");
+}
+
+std::vector<std::filesystem::path> templateProtocolDirs()
+{
+    return protocolDirsWithMainLua("protocols/templates");
+}
+
 struct ScopedCurrentPath {
     explicit ScopedCurrentPath(const std::filesystem::path& path) : original_(std::filesystem::current_path())
     {
@@ -2227,16 +2260,26 @@ void test_protocol_directory_reload()
     require(host.scriptPath().find("main.lua") != std::string::npos, "协议入口应固定为 main.lua");
 }
 
+void test_builtin_protocol_examples_load()
+{
+    for (const auto& directory : builtinProtocolDirs()) {
+        protoscope::scripting::ScriptHost host;
+        const auto directoryText = directory.generic_string();
+
+        requireProtocolLoaded(host, directoryText.c_str());
+        const auto message = directory.filename().generic_string() + " 内置示例应声明可见控件";
+        require(!host.controlsSnapshot().empty(), message.c_str());
+    }
+}
+
 void test_protocol_ui_templates_load()
 {
-    const std::array<const char*, 3> templates{"ui_basic", "ui_layouts", "ui_dialogs"};
-
-    for (const auto* name : templates) {
+    for (const auto& directory : templateProtocolDirs()) {
         protoscope::scripting::ScriptHost host;
-        const auto directory = templateProtocolDir(name).generic_string();
+        const auto directoryText = directory.generic_string();
 
-        requireProtocolLoaded(host, directory.c_str());
-        const auto message = std::string(name) + " 模板应声明可见控件";
+        requireProtocolLoaded(host, directoryText.c_str());
+        const auto message = directory.filename().generic_string() + " 模板应声明可见控件";
         require(!host.controlsSnapshot().empty(), message.c_str());
     }
 }
@@ -4072,6 +4115,7 @@ static const TestCase kAllTests[] = {
     {"update_check_reports_development_build", &test_update_check_reports_development_build},
     {"update_check_rejects_response_without_semantic_tags", &test_update_check_rejects_response_without_semantic_tags},
     {"protocol_directory_reload", &test_protocol_directory_reload},
+    {"builtin_protocol_examples_load", &test_builtin_protocol_examples_load},
     {"protocol_ui_templates_load", &test_protocol_ui_templates_load},
     {"config_default_roundtrip", &test_config_default_roundtrip},
     {"config_wave_mouse_y_offset_drag_mode_apply_capture", &test_config_wave_mouse_y_offset_drag_mode_apply_capture},
