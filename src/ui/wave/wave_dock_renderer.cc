@@ -772,16 +772,94 @@ std::vector<std::size_t> selectableAnalogWaveformChannels(const plot::WaveSnapsh
     return channels;
 }
 
-bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
+std::vector<std::size_t> yAxisSingleSideScaleTargets(const plot::WaveDockState& wave,
+                                                     const plot::WaveSnapshot& snapshot,
+                                                     const std::vector<std::size_t>& visibleChannelIndices)
+{
+    const auto analogVisible = [&snapshot, &visibleChannelIndices](std::size_t channelIndex) {
+        return std::find(visibleChannelIndices.begin(), visibleChannelIndices.end(), channelIndex) !=
+                   visibleChannelIndices.end() &&
+               channelIndex < snapshot.channels.size() &&
+               !bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay);
+    };
+
+    if (wave.view.yAxisDoubleClickAction == plot::WaveYAxisDoubleClickAction::FitActiveChannel &&
+        analogVisible(wave.view.measurementChannelIndex)) {
+        return {wave.view.measurementChannelIndex};
+    }
+
+    std::vector<std::size_t> targets;
+    targets.reserve(visibleChannelIndices.size());
+    for (const std::size_t channelIndex : visibleChannelIndices) {
+        if (analogVisible(channelIndex)) {
+            targets.push_back(channelIndex);
+        }
+    }
+    return targets;
+}
+
+bool applyYAxisSingleSideScaleToChannels(plot::WaveDockState& wave,
+                                         const plot::WaveSnapshot& snapshot,
+                                         const std::vector<std::size_t>& visibleChannelIndices)
+{
+    const double yHeight = std::abs(wave.view.viewMaxValue - wave.view.viewMinValue);
+    if (wave.view.lockVerticalRange || !std::isfinite(yHeight) || yHeight <= 1e-12) {
+        return false;
+    }
+
+    bool changed = false;
+    const auto targets = yAxisSingleSideScaleTargets(wave, snapshot, visibleChannelIndices);
+    for (const std::size_t channelIndex : targets) {
+        if (channelIndex >= snapshot.channels.size()) {
+            continue;
+        }
+        const auto& channel = snapshot.channels[channelIndex];
+        if (bitDisplayEnabled(channel.bitDisplay) || channel.samples == nullptr) {
+            continue;
+        }
+        const auto currentSpec = wave.buffer.channelSpec(channelIndex);
+        if (!currentSpec.has_value()) {
+            continue;
+        }
+
+        std::size_t begin = (std::min)(channel.visibleBegin, channel.totalSamples);
+        std::size_t end = (std::min)(channel.visibleEnd, channel.totalSamples);
+        if (end < begin) {
+            end = begin;
+        }
+
+        double maxAbsActual = 0.0;
+        for (std::size_t sampleIndex = begin; sampleIndex < end; ++sampleIndex) {
+            const double actual = channel.samples[sampleIndex].value * currentSpec->ratio;
+            if (!std::isfinite(actual)) {
+                continue;
+            }
+            maxAbsActual = (std::max)(maxAbsActual, std::abs(actual));
+        }
+        if (maxAbsActual <= 1e-12) {
+            continue;
+        }
+
+        auto updated = *currentSpec;
+        const double sign = updated.scale < 0.0 ? -1.0 : 1.0;
+        updated.scale = sign * (0.8 * yHeight / maxAbsActual);
+        applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *currentSpec));
+        changed = true;
+    }
+    return changed;
+}
+
+bool handleMainPlotAxisDoubleClick(plot::WaveDockState& wave,
                                    const plot::WaveSnapshot& snapshot,
                                    const plot::WaveDataBounds& visibleWindowBounds,
                                    const plot::WaveDataBounds& fullHistoryBounds,
-                                   const plot::WaveDataBounds& yAutoFitBounds)
+                                   const std::vector<std::size_t>& visibleChannelIndices)
 {
     if (!isFitDoubleClicked()) {
         return false;
     }
 
+    auto& view = wave.view;
     bool changed = false;
     if (ImPlot::IsAxisHovered(ImAxis_X1)) {
         const auto& xBounds =
@@ -801,14 +879,10 @@ bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
     if (ImPlot::IsAxisHovered(ImAxis_Y1) && selectedChannelUsesBitDisplay(view, snapshot)) {
         // Bit lanes are laid out in plot pixels. Consume the fit gesture so ImPlot does not persist a normal Y fit.
         changed = true;
-    } else if (ImPlot::IsAxisHovered(ImAxis_Y1) && !view.lockVerticalRange && yAutoFitBounds.valid) {
-        // 核心流程：Y 轴双击 auto fit 在所有控制模式下都统一走倍率逻辑，避免默认 oscilloscope 模式退回 ImPlot 的 1x
-        // 紧贴范围。
-        const auto range = plot::makeVerticalAutoFitRange(
-            yAutoFitBounds.minValue, yAutoFitBounds.maxValue, view.verticalAutoFitMultiplier);
-        view.viewMinValue = range.minValue;
-        view.viewMaxValue = range.maxValue;
-        changed = true;
+    } else if (ImPlot::IsAxisHovered(ImAxis_Y1)) {
+        // 核心流程：Y 轴双击只改目标 CH 的 scale，让原始实际值单边占当前视窗高度的 80%。
+        // 视口范围保持不变，并通过覆盖写回路径持久化到通道显示配置。
+        changed = applyYAxisSingleSideScaleToChannels(wave, snapshot, visibleChannelIndices) || changed;
     }
 
     if (changed) {

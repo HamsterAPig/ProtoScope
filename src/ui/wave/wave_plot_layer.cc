@@ -1958,9 +1958,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     bool viewportChangedThisFrame = false;
     bool axisDoubleClickConsumed = false;
     if (!zoomSelectionMode) {
-        axisDoubleClickConsumed =
-            handleMainPlotAxisDoubleClick(view, frame.snapshot, derivedBounds, fullHistoryBounds, yAutoFitBounds);
-        viewportChangedThisFrame = axisDoubleClickConsumed || handleMainPlotZoom(view, mousePos);
+        viewportChangedThisFrame = handleMainPlotZoom(view, mousePos);
     }
     // 悬停读数必须跟随 ImPlot 图例隐藏状态，只对真实可见波形做吸附。
     std::vector<std::size_t> visibleChannelIndices;
@@ -1992,6 +1990,11 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         view.activeBitLane = {};
     }
     syncLegendVisibilityState(wave, frame.snapshot);
+    if (!zoomSelectionMode) {
+        axisDoubleClickConsumed =
+            handleMainPlotAxisDoubleClick(wave, frame.snapshot, derivedBounds, fullHistoryBounds, visibleChannelIndices);
+        viewportChangedThisFrame = axisDoubleClickConsumed || viewportChangedThisFrame;
+    }
     if (frame.overviewDisplayData != nullptr && frame.fullSnapshot != nullptr) {
         const auto fitChannelIndices = excludesLegendHiddenChannels(view)
                                            ? channelIndicesForDerivedViews(wave, *frame.fullSnapshot)

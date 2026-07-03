@@ -2626,8 +2626,8 @@ void test_wave_default_viewport_without_frequency_uses_time_scale()
 
     require(!wave.view.defaultViewportPending, "默认视口应用后应清除 pending 标记");
     require(!wave.view.autoFollowLatest, "默认视口不应强制恢复自动跟随");
-    require(std::abs(wave.view.viewMinTime - 17.5) < 1e-12, "无采样频率时应沿用 time_scale 窗口长度");
-    require(std::abs(wave.view.viewMaxTime - 20.0) < 1e-12, "无采样频率时默认窗口应右对齐最新脚本时间");
+    require(std::abs(wave.view.viewMinTime - 10.0) < 1e-12, "无采样频率时默认窗口应左对齐首个脚本时间");
+    require(std::abs(wave.view.viewMaxTime - 12.5) < 1e-12, "无采样频率时默认窗口应保持当前 X duration");
     require(std::abs(wave.view.viewMinValue + 3.0) < 1e-12, "默认视口不应按首批数据重算 Y 下限");
     require(std::abs(wave.view.viewMaxValue - 7.0) < 1e-12, "默认视口不应按首批数据重算 Y 上限");
     require(frame.displayData != nullptr, "默认视口后本帧显示数据指针不能为空");
@@ -2646,6 +2646,8 @@ void test_wave_default_viewport_uses_sample_frequency_budget()
     wave.view.initialized = true;
     wave.view.autoFollowLatest = false;
     wave.view.defaultViewportPending = true;
+    wave.view.defaultViewportXScale = protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault;
+    wave.view.defaultViewportXAnchor = protoscope::plot::WaveResetViewportAnchor::Latest;
     wave.view.sampleFrequencyHz = 1000.0;
     wave.view.viewMinTime = 10.0;
     wave.view.viewMaxTime = 11.0;
@@ -2669,6 +2671,35 @@ void test_wave_default_viewport_uses_sample_frequency_budget()
             "采样频率默认视口后本帧显示时间应按 sampleIndex / Hz 换算");
 }
 
+void test_wave_default_viewport_preserves_x_scale_and_anchors_frequency_start()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.setViewConfig(protoscope::plot::ViewConfig{.historyLimit = 5});
+    wave.buffer.configureChannels(1);
+    protoscope::plot::WaveAppendRequest request{.source = "default-frequency-start"};
+    for (int index = 0; index < 10; ++index) {
+        request.samples.push_back({.time = static_cast<double>(index), .value = static_cast<double>(index)});
+    }
+    require(wave.buffer.append(0, request), "采样频率首样本锚定测试样本应追加成功");
+
+    wave.view.initialized = true;
+    wave.view.autoFollowLatest = false;
+    wave.view.defaultViewportPending = true;
+    wave.view.sampleFrequencyHz = 10.0;
+    wave.view.viewMinTime = 10.0;
+    wave.view.viewMaxTime = 11.0;
+    wave.view.visibleDuration = 2.0;
+    wave.view.centerTime = 10.5;
+
+    const auto frame = protoscope::ui::prepareWaveFrame(wave, 800.0F);
+
+    require(!wave.view.defaultViewportPending, "采样频率首样本锚定后应清除 pending 标记");
+    require(std::abs(wave.view.visibleDuration - 2.0) < 1e-12, "默认策略应保持当前 X duration");
+    require(std::abs(wave.view.viewMinTime - 0.5) < 1e-12, "默认策略应左对齐首个可用全局样本时间");
+    require(std::abs(wave.view.viewMaxTime - 2.5) < 1e-12, "默认策略应按保持的 duration 推出右边界");
+    require(frame.displayData != nullptr, "采样频率首样本锚定后本帧显示数据不能为空");
+}
+
 void test_wave_default_viewport_duration_tracks_render_budget()
 {
     const auto makeWave = [](std::size_t channelCount) {
@@ -2686,6 +2717,8 @@ void test_wave_default_viewport_duration_tracks_render_budget()
         wave.view.autoFollowLatest = false;
         wave.view.defaultViewportPending = true;
         wave.view.sampleFrequencyHz = 100.0;
+        wave.view.defaultViewportXScale = protoscope::plot::WaveResetViewportScaleMode::ProtocolDefault;
+        wave.view.defaultViewportXAnchor = protoscope::plot::WaveResetViewportAnchor::Latest;
         wave.view.visibleDuration = 1.0;
         return wave;
     };
@@ -3914,6 +3947,86 @@ void test_wave_y_axis_double_click_bounds_selects_visible_or_active()
     bounds = protoscope::ui::boundsForYAxisAutoFit(wave, snapshot, displayData, visibleChannels);
     require(std::abs(bounds.minValue + 2.0) < 1e-12, "激活隐藏通道时应回退可见模拟通道下限");
     require(std::abs(bounds.maxValue - 12.0) < 1e-12, "激活隐藏通道时应回退可见模拟通道上限");
+}
+
+void test_wave_y_axis_double_click_single_side_scale()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.view.viewMinTime = 0.0;
+    wave.view.viewMaxTime = 1.0;
+    wave.view.viewMinValue = 0.0;
+    wave.view.viewMaxValue = 100.0;
+    wave.view.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels;
+
+    const std::vector<protoscope::plot::ChannelSpec> defaults{
+        {.label = "Bipolar", .unit = "V", .ratio = 1.0, .scale = 1.0},
+        {.label = "Positive", .unit = "V", .ratio = 2.0, .scale = 1.0},
+        {.label = "NegativeScale", .unit = "V", .ratio = 1.0, .scale = -3.0},
+        {.label = "Bits",
+         .unit = "bit",
+         .ratio = 1.0,
+         .scale = 1.0,
+         .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0}},
+        {.label = "Hidden", .unit = "V", .ratio = 1.0, .scale = 1.0},
+        {.label = "Zero", .unit = "V", .ratio = 1.0, .scale = 7.0},
+    };
+    wave.defaultChannelSpecs = defaults;
+    wave.buffer.configureChannels(defaults.size());
+    for (std::size_t channelIndex = 0; channelIndex < defaults.size(); ++channelIndex) {
+        wave.buffer.setChannelSpec(channelIndex, defaults[channelIndex]);
+    }
+
+    wave.buffer.append(0, {.samples = {{0.0, -10.0}, {1.0, 5.0}}});
+    wave.buffer.append(1, {.samples = {{0.0, 1.0}, {1.0, 5.0}}});
+    wave.buffer.append(2, {.samples = {{0.0, -4.0}, {1.0, 4.0}}});
+    wave.buffer.append(3, {.samples = {{0.0, 0.0}, {1.0, 1.0}}});
+    wave.buffer.append(4, {.samples = {{0.0, -100.0}, {1.0, 100.0}}});
+    wave.buffer.append(5, {.samples = {{0.0, 0.0}, {1.0, 0.0}}});
+
+    auto snapshot = wave.buffer.snapshot(wave.view.viewMinTime, wave.view.viewMaxTime);
+    require(protoscope::ui::applyYAxisSingleSideScaleToChannels(wave, snapshot, {0, 1, 2, 3, 5}),
+            "Y 轴单边缩放应修改可见模拟通道");
+
+    auto ch0 = wave.buffer.channelSpec(0);
+    auto ch1 = wave.buffer.channelSpec(1);
+    auto ch2 = wave.buffer.channelSpec(2);
+    auto bit = wave.buffer.channelSpec(3);
+    auto hidden = wave.buffer.channelSpec(4);
+    auto zero = wave.buffer.channelSpec(5);
+    require(ch0.has_value() && std::abs(ch0->scale - 8.0) < 1e-12,
+            "min=-10,max=5,height=100 时 scale 应为 8");
+    require(ch1.has_value() && std::abs(ch1->scale - 8.0) < 1e-12,
+            "正值单边应按 ratio 后最大实际值计算 scale");
+    require(ch2.has_value() && std::abs(ch2->scale + 20.0) < 1e-12, "负 scale 应保持反向");
+    require(bit.has_value() && std::abs(bit->scale - 1.0) < 1e-12, "bit 通道不应参与 Y 轴 scale 计算");
+    require(hidden.has_value() && std::abs(hidden->scale - 1.0) < 1e-12,
+            "隐藏通道不应参与 Y 轴 scale 计算");
+    require(zero.has_value() && std::abs(zero->scale - 7.0) < 1e-12, "无有效幅值时不应修改 scale");
+    require(wave.channelOverrides.size() >= 3 && wave.channelOverrides[0].scaleOverridden &&
+                wave.channelOverrides[1].scaleOverridden && wave.channelOverrides[2].scaleOverridden,
+            "Y 轴缩放应通过通道覆盖路径写回 scale");
+
+    wave.view.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
+    wave.view.measurementChannelIndex = 1;
+    wave.view.viewMaxValue = 50.0;
+    snapshot = wave.buffer.snapshot(wave.view.viewMinTime, wave.view.viewMaxTime);
+    require(protoscope::ui::applyYAxisSingleSideScaleToChannels(wave, snapshot, {0, 1}),
+            "激活通道模式应修改当前激活模拟通道");
+    ch0 = wave.buffer.channelSpec(0);
+    ch1 = wave.buffer.channelSpec(1);
+    require(ch0.has_value() && std::abs(ch0->scale - 8.0) < 1e-12,
+            "激活通道模式不应修改其他可见模拟通道");
+    require(ch1.has_value() && std::abs(ch1->scale - 4.0) < 1e-12,
+            "激活通道模式应按当前 Y 高度重算目标 CH scale");
+
+    wave.view.measurementChannelIndex = 3;
+    wave.view.viewMaxValue = 100.0;
+    snapshot = wave.buffer.snapshot(wave.view.viewMinTime, wave.view.viewMaxTime);
+    require(protoscope::ui::applyYAxisSingleSideScaleToChannels(wave, snapshot, {0, 3}),
+            "激活 bit 通道时应回退到可见模拟通道");
+    ch0 = wave.buffer.channelSpec(0);
+    require(ch0.has_value() && std::abs(ch0->scale - 8.0) < 1e-12,
+            "激活 bit 通道回退后应重算可见模拟通道");
 }
 
 void test_wave_visible_channel_bounds_ignore_hidden_channels()

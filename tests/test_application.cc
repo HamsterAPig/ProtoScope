@@ -239,6 +239,20 @@ protoscope::plot::RawCaptureEvent makePlotSetupEvent(bool resetHistory = true)
     return event;
 }
 
+void writePlotSetupOnOpenProtocol(const std::filesystem::path& protocolDir)
+{
+    std::ofstream out(protocolDir / "main.lua");
+    require(out.good(), "plot.setup on_open 测试协议应可写入");
+    out << "function on_open(ctx)\n";
+    out << "  proto.plot.setup({\n";
+    out << "    source = 'follow_regression', reset_history = true,\n";
+    out << "    time_scale = 0.5, time_unit = 'ms', vertical_min = -20, vertical_max = 100, vertical_unit = '℃', "
+           "history_limit = 128,\n";
+    out << "    channels = { { label = '温度A', unit = '℃', ratio = 0.5, scale = 2.0, offset = -1.0 } }\n";
+    out << "  })\n";
+    out << "end\n";
+}
+
 void writeRuntimeProfileProtocol(const std::filesystem::path& protocolDir)
 {
     std::ofstream out(protocolDir / "main.lua");
@@ -1589,6 +1603,135 @@ void test_application_plot_setup_reset_applies_reset_viewport_policy()
             "plot setup reset 应应用 X 锚点策略");
     require(std::abs(view.manualVerticalMin + 20.0) < 1e-12, "plot setup reset 应按协议默认 Y 下限");
     require(std::abs(view.manualVerticalMax - 100.0) < 1e-12, "plot setup reset 应按协议默认 Y 上限");
+
+    application.shutdown();
+}
+
+void test_application_plot_setup_reset_history_preserves_paused_follow()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-plot-setup-follow-paused"));
+    writePlotSetupOnOpenProtocol(protocolDir.path());
+
+    auto transportState = std::make_shared<RecordingTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<RecordingTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "plot.setup on_open 协议应可加载");
+
+    auto& wave = application.docks().waveState();
+    wave.view.autoFollowLatest = false;
+
+    application.openTransport();
+    require(waitUntil([&application, &wave] {
+                application.pumpOnce();
+                return wave.buffer.channelSpec(0).has_value();
+            }),
+            "plot.setup on_open 应被应用到波形状态");
+
+    require(!wave.view.autoFollowLatest, "用户已暂停时 plot.setup(reset_history=true) 不应恢复跟随");
+
+    application.shutdown();
+}
+
+void test_application_plot_setup_reset_history_preserves_active_follow()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-plot-setup-follow-active"));
+    writePlotSetupOnOpenProtocol(protocolDir.path());
+
+    auto transportState = std::make_shared<RecordingTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<RecordingTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "plot.setup on_open 协议应可加载");
+
+    auto& wave = application.docks().waveState();
+    wave.view.autoFollowLatest = true;
+
+    application.openTransport();
+    require(waitUntil([&application, &wave] {
+                application.pumpOnce();
+                return wave.buffer.channelSpec(0).has_value();
+            }),
+            "plot.setup on_open 应被应用到波形状态");
+
+    require(wave.view.autoFollowLatest, "用户仍在跟随时 plot.setup(reset_history=true) 应保持跟随");
+
+    application.shutdown();
+}
+
+void test_application_plot_setup_reset_history_preserves_channel_overrides()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    const auto& lua = application.docks().luaState();
+    protoscope::plot::RawCaptureFileData capture{
+        .protocolName = lua.protocolName,
+        .protocolDir = lua.protocolDir,
+        .sampleFrequencyHz = 0.0,
+        .capturedAtMs = 0,
+        .payload = {},
+        .events = {makePlotSetupEvent(true)},
+    };
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "plot.setup 覆盖保留回放应可载入");
+    require(application.stepRawCaptureReplay(error), "首次 plot.setup 回放应成功");
+
+    auto& wave = application.docks().waveState();
+    require(wave.buffer.channelSpec(0).has_value(), "首次 plot.setup 应被应用到波形状态");
+
+    auto updated = *wave.buffer.channelSpec(0);
+    updated.label = "用户CH";
+    updated.ratio = 3.0;
+    updated.scale = 4.0;
+    updated.offset = 10.0;
+    updated.color = std::array<float, 4>{0.9F, 0.8F, 0.7F, 1.0F};
+    updated.bitDisplay.yOffset = 6.0;
+    wave.buffer.setChannelSpec(0, updated);
+    wave.channelOverrides.resize(1);
+    auto& overrideState = wave.channelOverrides[0];
+    overrideState.labelOverridden = true;
+    overrideState.ratioOverridden = true;
+    overrideState.scaleOverridden = true;
+    overrideState.offsetOverridden = true;
+    overrideState.colorOverridden = true;
+    overrideState.bitYOffsetOverridden = true;
+    overrideState.label = updated.label;
+    overrideState.ratio = updated.ratio;
+    overrideState.scale = updated.scale;
+    overrideState.offset = updated.offset;
+    overrideState.color = updated.color;
+    overrideState.bitYOffset = updated.bitDisplay.yOffset;
+    wave.buffer.append(0, {.samples = {{0.0, 42.0}}});
+    require(wave.buffer.snapshot(0.0, 1.0).channels[0].totalSamples == 1U, "测试样本应先写入当前历史");
+
+    require(application.seekRawCaptureReplay(0, error), "plot.setup 覆盖保留回放应可回到起点");
+    require(application.stepRawCaptureReplay(error), "第二次 plot.setup(reset_history=true) 应可回放");
+    require(wave.buffer.snapshot(0.0, 1.0).channels[0].totalSamples == 0U,
+            "第二次 plot.setup(reset_history=true) 应清空当前历史");
+
+    const auto spec = wave.buffer.channelSpec(0);
+    require(spec.has_value(), "第二次 plot.setup 后应仍有通道配置");
+    require(spec->label == "用户CH", "reset_history 不应清除 label 覆盖");
+    require(std::abs(spec->ratio - 3.0) < 1e-12, "reset_history 不应清除 ratio 覆盖");
+    require(std::abs(spec->scale - 4.0) < 1e-12, "reset_history 不应清除 scale 覆盖");
+    require(std::abs(spec->offset - 10.0) < 1e-12, "reset_history 不应清除 offset 覆盖");
+    require(spec->color.has_value() && std::abs((*spec->color)[0] - 0.9F) < 1e-6F,
+            "reset_history 不应清除 color 覆盖");
+    require(std::abs(spec->bitDisplay.yOffset - 6.0) < 1e-12,
+            "reset_history 不应清除 bit_y_offset 覆盖");
+    require(wave.channelOverrides.size() == 1 && wave.channelOverrides[0].colorOverridden,
+            "覆盖状态应保留 colorOverridden 标记");
+    require(wave.defaultChannelSpecs.size() == 1 && wave.defaultChannelSpecs[0].label == "温度A",
+            "Lua 默认通道规格应继续记录协议原始身份");
 
     application.shutdown();
 }

@@ -169,11 +169,14 @@ bool drawHorizontalSplitter(
     const char* id, float& topHeight, float minTopHeight, float minBottomHeight, float totalHeight, float thickness);
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits);
 bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits);
-bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
+bool applyYAxisSingleSideScaleToChannels(plot::WaveDockState& wave,
+                                         const plot::WaveSnapshot& snapshot,
+                                         const std::vector<std::size_t>& visibleChannelIndices);
+bool handleMainPlotAxisDoubleClick(plot::WaveDockState& wave,
                                    const plot::WaveSnapshot& snapshot,
                                    const plot::WaveDataBounds& visibleWindowBounds,
                                    const plot::WaveDataBounds& fullHistoryBounds,
-                                   const plot::WaveDataBounds& yAutoFitBounds);
+                                   const std::vector<std::size_t>& visibleChannelIndices);
 enum class WaveViewportAutoFollowPolicy {
     Preserve,
     UserInteraction,

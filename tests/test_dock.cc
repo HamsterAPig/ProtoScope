@@ -503,7 +503,6 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.view.fft.magnitudeMode = protoscope::plot::WaveFftMagnitudeMode::Decibel;
     waveA.view.fft.fundamentalMode = protoscope::plot::WaveFftFundamentalMode::Manual;
     waveA.view.fft.manualFundamentalHz = 50.0;
-    waveA.view.fftIncludeFundamentalInYAxisAutoFit = true;
     waveA.view.fftXAxisMode = protoscope::plot::WaveFftXAxisMode::Order;
     waveA.view.showFftLegend = false;
     waveA.view.fftSourceWindowValid = true;
@@ -580,7 +579,6 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredA.view.fft.fundamentalMode == protoscope::plot::WaveFftFundamentalMode::Manual,
             "proto_a 应恢复 FFT 基波模式");
     require(restoredA.view.fft.manualFundamentalHz == 50.0, "proto_a 应恢复手动基波频率");
-    require(restoredA.view.fftIncludeFundamentalInYAxisAutoFit, "proto_a 应恢复 FFT 基波参与自动 Y 开关");
     require(restoredA.view.fftXAxisMode == protoscope::plot::WaveFftXAxisMode::Order,
             "proto_a 应恢复 FFT 横轴单位");
     require(!restoredA.view.showFftLegend, "proto_a 应恢复 FFT 图例显示状态");
@@ -631,7 +629,6 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(!restoredB.view.fft.enabled, "不同协议不应串用 proto_a FFT 开关");
     require(restoredB.view.fft.displayMode == protoscope::plot::WaveFftDisplayMode::FullSpectrum,
             "不同协议应保留默认完整频谱显示模式");
-    require(!restoredB.view.fftIncludeFundamentalInYAxisAutoFit, "不同协议应保留基波不参与自动 Y 的默认值");
     require(restoredB.analysisMarkers.empty(), "不同协议不应串用 proto_a 分析标记");
     require(restoredB.view.measurement.stddev && !restoredB.view.measurement.variance,
             "老状态或其他协议应保留默认测量项");
