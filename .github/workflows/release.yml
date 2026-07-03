@@ -311,6 +311,35 @@ jobs:
             $changes = @("- No code changes since the previous release tag.")
           }
 
+          if ($previousTags.Count -gt 0) {
+            $changedPaths = @(git diff --name-only $changeRange)
+          } else {
+            $changedPaths = @(git ls-tree -r --name-only HEAD)
+          }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $luaTouchedPaths = @(
+            $changedPaths |
+              Where-Object {
+                ($_ -match '^protocols/(protoscope_api_manifest\.json|protoscope_api\.lua|stream_types\.lua|README\.md|templates/|[^/]+/main\.lua)') -or
+                ($_ -match '^docs/(user-manual|lua-host-integration)\.md$')
+              } |
+              Sort-Object -Unique
+          )
+
+          $luaNotes = @()
+          if ($luaTouchedPaths.Count -gt 0) {
+            $luaNotes = @(
+              "",
+              "Lua API and protocol templates:",
+              "- Lua scripting or bundled examples changed; review protocols/README.md and docs/user-manual.md before publishing.",
+              "- Recommended copyable sample: protocols/templates/oscilloscope_control (toolbar toggle, Lua Dock controls, history_limit, reset_history).",
+              "- Editor hints are packaged in protocols/protoscope_api.lua and must match protocols/protoscope_api_manifest.json."
+            )
+          }
+
           $notesPath = "release-notes.md"
           $releaseDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
           $notesLines = @(
@@ -318,7 +347,7 @@ jobs:
             "Release date (UTC): $releaseDate",
             "",
             $changeTitle
-          ) + $changes + @(
+          ) + $changes + $luaNotes + @(
             "",
             "Assets:",
             "- $env:ASSET_BASE.exe: standalone executable",

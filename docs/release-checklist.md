@@ -117,4 +117,4 @@ Expand-Archive .\ProtoScope-windows-x64-<tag>.zip -DestinationPath .\release-che
 - 版本号和发布日期。
 - 基于 Git 提交生成的变更摘要。
 - 资产列表和 SHA256 校验说明。
-- 如果 Lua API 或内置模板有变化，说明迁移影响和推荐示例。
+- 如果 Lua API、内置示例或模板有变化，Release CI 会自动加入 `Lua API and protocol templates` 段；发布前仍需人工确认迁移影响和推荐示例是否足够清楚。
