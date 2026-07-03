@@ -225,14 +225,20 @@ jobs:
           Copy-Item -Path README.md -Destination (Join-Path $packageDir "README.md") -Force
           Copy-Item -Path LICENSE -Destination (Join-Path $packageDir "LICENSE") -Force
           Copy-Item -Path docs/user-manual.md -Destination (Join-Path $packageDocsDir "user-manual.md") -Force
-          Copy-Item -Path protocols/README.md -Destination (Join-Path $packageProtocolsDir "README.md") -Force
+          Copy-Item -Path protocols/* -Destination $packageProtocolsDir -Recurse -Force
 
           $requiredPackageFiles = @(
             "ProtoScope.exe",
             "README.md",
             "LICENSE",
             "docs/user-manual.md",
-            "protocols/README.md"
+            "protocols/README.md",
+            "protocols/protoscope_api.lua",
+            "protocols/stream_types.lua",
+            "protocols/default_protocol/main.lua",
+            "protocols/lua_waveform_demo/main.lua",
+            "protocols/templates/README.md",
+            "protocols/templates/oscilloscope_control/main.lua"
           )
           foreach ($relativePath in $requiredPackageFiles) {
             $fullPath = Join-Path $packageDir $relativePath
@@ -268,7 +274,7 @@ jobs:
 
           Assets:
           - $env:ASSET_BASE.exe: standalone executable
-          - $env:ASSET_BASE.zip: executable, README, LICENSE and user docs
+          - $env:ASSET_BASE.zip: executable, README, LICENSE, user docs and Lua protocol examples
           - SHA256 checksums
           "@
 

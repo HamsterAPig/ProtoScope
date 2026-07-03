@@ -86,7 +86,7 @@ PR 合并前必须通过 `Merge CI`：
 - 使用 MSVC Release 构建 `ProtoScope.exe`。
 - 用 `dumpbin /DEPENDENTS` 确认不依赖 MinGW/MSYS 运行时 DLL。
 - 执行完整 CTest。
-- 生成独立 `.exe`、包含 `README.md` / `LICENSE` / 用户文档的 `.zip` 和 SHA256 校验文件。
+- 生成独立 `.exe`、包含 `README.md` / `LICENSE` / 用户文档 / Lua 协议样板的 `.zip` 和 SHA256 校验文件。
 - 创建或更新草稿 GitHub Release。
 
 ## 发布资产人工检查
@@ -102,7 +102,7 @@ Expand-Archive .\ProtoScope-windows-x64-<tag>.zip -DestinationPath .\release-che
 
 人工打开 GUI 后确认：
 
-- zip 内的发布目录包含 `ProtoScope.exe`、`README.md`、`LICENSE`、`docs/user-manual.md` 和 `protocols/README.md`。
+- zip 内的发布目录包含 `ProtoScope.exe`、`README.md`、`LICENSE`、`docs/user-manual.md`、`protocols/protoscope_api.lua` 和 `protocols/templates/oscilloscope_control/main.lua`。
 - 默认协议列表可见，`default_protocol`、`lua_waveform_demo` 和半双工示例可加载。
 - Lua Dock 控件能触发脚本回调。
 - 波形 Dock 的播放/暂停按钮能触发 `on_oscilloscope_toggle()`。
