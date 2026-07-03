@@ -2,6 +2,8 @@
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/keyboard_shortcuts.hpp"
 
+#include <string>
+
 #include <imgui.h>
 
 namespace protoscope::ui {
@@ -53,6 +55,10 @@ namespace {
                 return ImGuiKey_F1;
             case ShortcutKey::F5:
                 return ImGuiKey_F5;
+            case ShortcutKey::F6:
+                return ImGuiKey_F6;
+            case ShortcutKey::F7:
+                return ImGuiKey_F7;
             case ShortcutKey::F11:
                 return ImGuiKey_F11;
         }
@@ -128,6 +134,35 @@ void GuiRuntime::handleGlobalShortcuts()
             stopRawCaptureRecordingWithStatus();
         } else {
             openRawCaptureRecordingDialog();
+        }
+        return;
+    }
+    if (shortcutPressed(ShortcutAction::PlaybackTogglePlayPause)) {
+        const auto status = application_.rawCaptureReplayStatus();
+        if (status.loaded && status.playing) {
+            application_.pauseRawCaptureReplay();
+        } else if (status.loaded && status.eventIndex < status.eventCount) {
+            std::string error;
+            if (!application_.playRawCaptureReplay(error)) {
+                application_.setStatusMessage("原始回放继续失败: " + error);
+            }
+        }
+        return;
+    }
+    if (shortcutPressed(ShortcutAction::PlaybackStepForward)) {
+        const auto status = application_.rawCaptureReplayStatus();
+        if (status.loaded && status.eventIndex < status.eventCount) {
+            std::string error;
+            if (!application_.stepRawCaptureReplay(error)) {
+                application_.setStatusMessage("原始回放单步失败: " + error);
+            }
+        }
+        return;
+    }
+    if (shortcutPressed(ShortcutAction::PlaybackUnloadTimeline)) {
+        const auto status = application_.rawCaptureReplayStatus();
+        if (status.loaded) {
+            application_.unloadRawCaptureReplayTimeline();
         }
         return;
     }

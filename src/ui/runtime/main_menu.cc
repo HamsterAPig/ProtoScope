@@ -60,27 +60,15 @@ void GuiRuntime::drawMainMenu()
         if (ImGui::MenuItem("重新加载协议", shortcutLabel(ShortcutAction::ReloadProtocol).data())) {
             requestProtocolWorkspaceSwitch(application_.docks().luaState().protocolDir, true);
         }
+        ImGui::Separator();
+        if (ImGui::MenuItem("打开 ELF/ElfStaticView 数据文件...",
+                            shortcutLabel(ShortcutAction::OpenElfDataFile).data())) {
+            openElfStaticAddressDialog();
+        }
         if (menuItemWithHelp("导入现场会话包...",
                              nullptr,
                              "打开 .pssession，恢复协议、原始缓存和现场复现上下文。")) {
             openSessionPackageImportDialog();
-        }
-        if (menuItemWithHelp("导出现场会话包...",
-                             nullptr,
-                             "保存 .pssession，打包当前协议、原始缓存和复现证据。")) {
-            openSessionPackageExportDialog();
-        }
-        if (menuItemWithHelp(
-                "重置当前协议 Dock 布局",
-                nullptr,
-                "清除当前协议保存的 Dock 布局，并恢复默认窗口排布。",
-                false,
-                canResetProtocolWorkspaceLayout(protocolWorkspaceLoaded_, activeWorkspaceProtocolKey_))) {
-            resetCurrentProtocolWorkspaceLayout();
-        }
-        if (ImGui::MenuItem("打开 ELF/ElfStaticView 数据文件...",
-                            shortcutLabel(ShortcutAction::OpenElfDataFile).data())) {
-            openElfStaticAddressDialog();
         }
         if (menuItemWithHelp("导入原始波形...",
                              shortcutLabel(ShortcutAction::ImportRawWave).data(),
@@ -94,6 +82,12 @@ void GuiRuntime::drawMainMenu()
                              nullptr,
                              "打开 .psraw 完整事件流，用原始时间戳按时间轴复现采集过程。")) {
             openRawCaptureReplayTimelineDialog();
+        }
+        ImGui::Separator();
+        if (menuItemWithHelp("导出现场会话包...",
+                             nullptr,
+                             "保存 .pssession，打包当前协议、原始缓存和复现证据。")) {
+            openSessionPackageExportDialog();
         }
         if (menuItemWithHelp("导出当前缓存快照...",
                              shortcutLabel(ShortcutAction::ExportRawWave).data(),
@@ -139,20 +133,31 @@ void GuiRuntime::drawMainMenu()
         ImGui::Text("位置 %zu / %zu (%.1f%%)", status.eventIndex, status.eventCount, status.progress * 100.0);
         ImGui::Text("倍速 %.1fx", status.speed);
         std::string error;
-        if (menuItemWithHelp("继续回放", nullptr, "从当前位置继续按原始时间轴播放事件。", false, canAdvance && !status.playing)) {
-            if (!application_.playRawCaptureReplay(error)) {
+        if (menuItemWithHelp("继续/暂停回放",
+                             shortcutLabel(ShortcutAction::PlaybackTogglePlayPause).data(),
+                             "从当前位置继续按原始时间轴播放事件，或暂停正在播放的时间轴。",
+                             false,
+                             (canAdvance && !status.playing) || (status.loaded && status.playing))) {
+            if (status.playing) {
+                application_.pauseRawCaptureReplay();
+            } else if (!application_.playRawCaptureReplay(error)) {
                 application_.setStatusMessage("原始回放继续失败: " + error);
             }
         }
-        if (menuItemWithHelp("暂停回放", nullptr, "暂停时间轴播放，保留当前位置。", false, status.loaded && status.playing)) {
-            application_.pauseRawCaptureReplay();
-        }
-        if (menuItemWithHelp("单步推进", nullptr, "只执行下一个原始事件，便于逐帧排查。", false, canAdvance)) {
+        if (menuItemWithHelp("单步推进",
+                             shortcutLabel(ShortcutAction::PlaybackStepForward).data(),
+                             "只执行下一个原始事件，便于逐帧排查。",
+                             false,
+                             canAdvance)) {
             if (!application_.stepRawCaptureReplay(error)) {
                 application_.setStatusMessage("原始回放单步失败: " + error);
             }
         }
-        if (menuItemWithHelp("停止并卸载时间轴", nullptr, "停止回放并释放当前载入的 .psraw 时间轴。", false, status.loaded)) {
+        if (menuItemWithHelp("停止并卸载时间轴",
+                             shortcutLabel(ShortcutAction::PlaybackUnloadTimeline).data(),
+                             "停止回放并释放当前载入的 .psraw 时间轴。",
+                             false,
+                             status.loaded)) {
             application_.unloadRawCaptureReplayTimeline();
         }
         if (ImGui::BeginMenu("倍速", status.loaded)) {
