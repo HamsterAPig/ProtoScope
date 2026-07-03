@@ -2220,6 +2220,7 @@ void test_config_default_roundtrip()
     require(config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
             "鼠标 Y 偏移拖动模式默认应为 direct");
     require(config.gui.wave.legendOverlayDoubleClickAutoCollapse, "双击图例展开默认应在鼠标离开后自动收起");
+    require(config.gui.wave.interactionAnimationEnabled, "Wave Dock 交互动效默认应开启");
     require(config.gui.wave.peakDetectDownsample, "peak-detect 降采样默认应开启");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
@@ -2287,6 +2288,7 @@ void test_config_default_roundtrip()
     config.gui.wave.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
+    config.gui.wave.interactionAnimationEnabled = false;
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
@@ -2365,6 +2367,7 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Shift,
             "鼠标 Y 偏移拖动模式 roundtrip 失败");
     require(!reloaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "双击图例展开自动收起开关 roundtrip 失败");
+    require(!reloaded.config.gui.wave.interactionAnimationEnabled, "Wave Dock 交互动效开关 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12,
             "CH 卡片自适应比例 roundtrip 失败");
@@ -4337,6 +4340,10 @@ static const TestCase kAllTests[] = {
      &test_wave_status_overlay_items_only_show_non_default_states},
     {"wave_auto_follow_pause_policy_respects_interaction_setting",
      &test_wave_auto_follow_pause_policy_respects_interaction_setting},
+    {"wave_viewport_animation_disabled_jumps_to_target",
+     &test_wave_viewport_animation_disabled_jumps_to_target},
+    {"wave_viewport_animation_advances_monotonically_and_finishes_exactly",
+     &test_wave_viewport_animation_advances_monotonically_and_finishes_exactly},
     {"wave_phosphor_stroke_style_uses_channel_style", &test_wave_phosphor_stroke_style_uses_channel_style},
     {"wave_phosphor_trigger_detection_interpolates_edges", &test_wave_phosphor_trigger_detection_interpolates_edges},
     {"wave_phosphor_trigger_window_aligns_to_fixed_x", &test_wave_phosphor_trigger_window_aligns_to_fixed_x},

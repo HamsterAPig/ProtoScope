@@ -620,6 +620,8 @@ namespace {
             config.gui.wave.legendOverlayOpenMode);
         config.gui.wave.legendOverlayDoubleClickAutoCollapse = readScalar<bool>(
             wave, "legend_overlay_double_click_auto_collapse", config.gui.wave.legendOverlayDoubleClickAutoCollapse);
+        config.gui.wave.interactionAnimationEnabled =
+            readScalar<bool>(wave, "interaction_animation_enabled", config.gui.wave.interactionAnimationEnabled);
         config.gui.wave.zoomSelectionAutoExit =
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
         config.gui.wave.peakDetectDownsample =
@@ -997,6 +999,7 @@ namespace {
         gui["wave"]["legend_overlay_open_mode"] =
             toWaveLegendOverlayOpenModeText(config.gui.wave.legendOverlayOpenMode);
         gui["wave"]["legend_overlay_double_click_auto_collapse"] = config.gui.wave.legendOverlayDoubleClickAutoCollapse;
+        gui["wave"]["interaction_animation_enabled"] = config.gui.wave.interactionAnimationEnabled;
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
         gui["wave"]["peak_detect_downsample"] = config.gui.wave.peakDetectDownsample;
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
@@ -1538,6 +1541,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.25);
     wave.hiddenChannelPolicy = config.gui.wave.hiddenChannelPolicy;
     wave.cursorExtremeSnapPolicy = config.gui.wave.cursorExtremeSnapPolicy;
+    wave.interactionAnimationEnabled = config.gui.wave.interactionAnimationEnabled;
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;
@@ -1598,6 +1602,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.verticalAutoFitMultiplier = dockStore.waveState().view.verticalAutoFitMultiplier;
     config.gui.wave.hiddenChannelPolicy = dockStore.waveState().view.hiddenChannelPolicy;
     config.gui.wave.cursorExtremeSnapPolicy = dockStore.waveState().view.cursorExtremeSnapPolicy;
+    config.gui.wave.interactionAnimationEnabled = dockStore.waveState().view.interactionAnimationEnabled;
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
     config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;

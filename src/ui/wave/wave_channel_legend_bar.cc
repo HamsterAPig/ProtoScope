@@ -36,6 +36,27 @@ namespace {
                    : 0.0F;
     }
 
+    float advanceLegendOverlayProgress(plot::WaveDockState& wave, bool expanded)
+    {
+        const float target = expanded ? 1.0F : 0.0F;
+        if (!wave.view.interactionAnimationEnabled) {
+            wave.legendOverlayProgress = target;
+            return target;
+        }
+        const float step = (std::max)(0.0F, ImGui::GetIO().DeltaTime) * 12.0F;
+        if (wave.legendOverlayProgress < target) {
+            wave.legendOverlayProgress = (std::min)(target, wave.legendOverlayProgress + step);
+        } else {
+            wave.legendOverlayProgress = (std::max)(target, wave.legendOverlayProgress - step);
+        }
+        return wave.legendOverlayProgress;
+    }
+
+    ImVec2 lerpVec2(const ImVec2& from, const ImVec2& to, float progress)
+    {
+        return ImVec2(from.x + (to.x - from.x) * progress, from.y + (to.y - from.y) * progress);
+    }
+
     float limitLegendNameWidth(float width, const plot::WaveViewState& view)
     {
         const float configuredMaxWidth = configuredLegendNameMaxWidth(view);
@@ -870,17 +891,17 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
     const ImVec2 expandedSize = expandedLegendWindowSize(plotSize, expandedChannels.size());
     const ImVec2 compactPos = windowPositionForSize(wave.legendOverlay, plotPos, plotSize, compactSize);
     const ImVec2 expandedPos = windowPositionForSize(wave.legendOverlay, plotPos, plotSize, expandedSize);
-    const ImVec2 windowSize = effectiveExpanded ? expandedSize : compactSize;
-    const ImVec2 windowPos = effectiveExpanded ? expandedPos : compactPos;
+    const float overlayProgress = advanceLegendOverlayProgress(wave, effectiveExpanded);
+    const ImVec2 windowSize = lerpVec2(compactSize, expandedSize, overlayProgress);
+    const ImVec2 windowPos = lerpVec2(compactPos, expandedPos, overlayProgress);
 
     if (hostViewport != nullptr) {
         ImGui::SetNextWindowViewport(hostViewport->ID);
     }
     ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,
-                          effectiveExpanded ? ImVec4(0.051F, 0.075F, 0.106F, 0.96F)
-                                            : ImVec4(0.051F, 0.075F, 0.106F, 0.78F));
+    const float bgAlpha = 0.78F + (0.96F - 0.78F) * overlayProgress;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.051F, 0.075F, 0.106F, bgAlpha));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.30F, 0.42F, 0.54F, 0.55F));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                                    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |

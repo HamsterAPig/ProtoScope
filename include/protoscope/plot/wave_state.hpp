@@ -167,6 +167,14 @@ struct WaveRenderStats {
     std::string phosphorBackendStatus{"关闭"};
 };
 
+struct WaveViewportAnimationState {
+    bool active{false};
+    WaveViewport start{};
+    WaveViewport target{};
+    double elapsedSec{0.0};
+    double durationSec{0.16};
+};
+
 struct WaveViewState {
     bool autoFollowLatest{true};
     bool pauseAutoFollowOnInteraction{true};
@@ -184,6 +192,7 @@ struct WaveViewState {
     bool measurementCursorReadoutRefreshPending{false};
     bool showMeasurementOverlay{true};
     bool glowEnabled{true};
+    bool interactionAnimationEnabled{true};
     bool phosphorEnabled{false};
     bool initialized{false};
     bool cursorIntervalLocked{false};
@@ -274,6 +283,7 @@ struct WaveViewState {
     double zoomSelectionCurrentX{0.0};
     double zoomSelectionCurrentY{0.0};
     std::array<float, 4> cursorFftHighlightRgba{0.20F, 0.55F, 1.00F, 0.16F};
+    WaveViewportAnimationState viewportAnimation{};
     std::string sampleFrequencyInput;
     std::string sampleFrequencyError;
     WaveTimeAxisSource timeAxisSource{WaveTimeAxisSource::SampleIndex};
@@ -338,6 +348,9 @@ struct WaveDockState {
     bool overviewCollapsed{false};
     bool legendCollapsed{false};
     bool legendVisibilityRestorePending{false};
+    float toolsDrawerProgress{0.0F};
+    float overviewPanelProgress{1.0F};
+    float legendOverlayProgress{0.0F};
     float toolsExpandedWidth{280.0F};
     float toolsCollapsedWidth{38.0F};
     float overviewPanelHeight{120.0F};

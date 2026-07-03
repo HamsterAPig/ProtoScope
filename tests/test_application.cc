@@ -1368,6 +1368,7 @@ void test_application_wave_legend_visibility_config_roundtrip()
     config.gui.wave.cursorFftHighlightRgba = {0.11F, 0.22F, 0.33F, 0.44F};
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
+    config.gui.wave.interactionAnimationEnabled = false;
     require(application.applyConfig(config), "图例显示配置应用失败");
 
     require(!application.docks().waveState().view.showChannelLegend, "应用配置后应隐藏图例");
@@ -1379,6 +1380,7 @@ void test_application_wave_legend_visibility_config_roundtrip()
             "应用配置后应切换隐藏 CH 策略");
     require(!application.docks().waveState().legendOverlay.doubleClickAutoCollapse,
             "应用配置后应同步图例双击展开自动收起开关");
+    require(!application.docks().waveState().view.interactionAnimationEnabled, "应用配置后应关闭 Wave Dock 动效");
     const auto captured = application.captureConfig();
     require(!captured.gui.wave.showChannelLegend, "captureConfig 应带出图例显示开关");
     require(!captured.gui.wave.showFftLegend, "captureConfig 应带出 FFT 图例显示开关");
@@ -1388,6 +1390,7 @@ void test_application_wave_legend_visibility_config_roundtrip()
     require(captured.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "captureConfig 应带出隐藏 CH 策略");
     require(!captured.gui.wave.legendOverlayDoubleClickAutoCollapse, "captureConfig 应带出图例双击展开自动收起开关");
+    require(!captured.gui.wave.interactionAnimationEnabled, "captureConfig 应带出 Wave Dock 动效开关");
 
     application.docks().waveState().view.showChannelLegend = true;
     application.docks().waveState().view.showFftLegend = true;
@@ -1395,6 +1398,7 @@ void test_application_wave_legend_visibility_config_roundtrip()
     application.docks().waveState().view.hiddenChannelPolicy =
         protoscope::plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
     application.docks().waveState().legendOverlay.doubleClickAutoCollapse = true;
+    application.docks().waveState().view.interactionAnimationEnabled = true;
     const auto capturedLive = application.captureConfig();
     require(capturedLive.gui.wave.showChannelLegend, "captureConfig 不应覆盖 dock 中实时波形图例状态");
     require(capturedLive.gui.wave.showFftLegend, "captureConfig 不应覆盖 dock 中实时 FFT 图例状态");
@@ -1406,6 +1410,7 @@ void test_application_wave_legend_visibility_config_roundtrip()
         "captureConfig 不应覆盖 dock 中实时隐藏 CH 策略");
     require(capturedLive.gui.wave.legendOverlayDoubleClickAutoCollapse,
             "captureConfig 不应覆盖 dock 中实时图例双击展开自动收起开关");
+    require(capturedLive.gui.wave.interactionAnimationEnabled, "captureConfig 不应覆盖 dock 中实时 Wave Dock 动效开关");
 
     application.shutdown();
 }

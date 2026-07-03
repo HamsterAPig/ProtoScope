@@ -46,6 +46,27 @@ namespace {
     constexpr float kWaveToolsRailButtonGap = 8.0F;
     constexpr float kWaveToolsRailButtonRadius = 8.0F;
 
+    float animateProgress(float current, float target, bool enabled, float deltaSec, float speed = 12.0F)
+    {
+        if (!enabled) {
+            return target;
+        }
+        const float step = (std::max)(0.0F, deltaSec) * speed;
+        if (current < target) {
+            return (std::min)(target, current + step);
+        }
+        return (std::max)(target, current - step);
+    }
+
+    void advanceWavePanelAnimations(plot::WaveDockState& wave, float deltaSec)
+    {
+        const bool enabled = wave.view.interactionAnimationEnabled;
+        wave.toolsDrawerProgress =
+            animateProgress(wave.toolsDrawerProgress, wave.toolsCollapsed ? 0.0F : 1.0F, enabled, deltaSec);
+        wave.overviewPanelProgress =
+            animateProgress(wave.overviewPanelProgress, wave.overviewCollapsed ? 0.0F : 1.0F, enabled, deltaSec);
+    }
+
     struct ToolsDrawerResizeState {
         ImVec2 min{};
         ImVec2 max{};
@@ -379,12 +400,10 @@ namespace {
         const double span = (std::max)(view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan);
         const double nextSpan = (std::max)(span * factor, view.minVisibleTimeSpan);
         const double center = 0.5 * (view.viewMinTime + view.viewMaxTime);
-        view.viewMinTime = center - nextSpan * 0.5;
-        view.viewMaxTime = center + nextSpan * 0.5;
-        view.visibleDuration = nextSpan;
-        view.centerTime = center;
-        applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::ExplicitCommand);
-        view.forceNextMainPlotLimits = true;
+        auto target = currentViewport(view);
+        target.minTime = center - nextSpan * 0.5;
+        target.maxTime = center + nextSpan * 0.5;
+        startViewportAnimation(view, target, WaveViewportAutoFollowPolicy::ExplicitCommand);
     }
 
     plot::WaveLegendOverlayOpenMode nextLegendOverlayOpenMode(plot::WaveLegendOverlayOpenMode mode)
@@ -867,13 +886,11 @@ bool handleMainPlotAxisDoubleClick(plot::WaveDockState& wave,
         if (!xBounds.valid) {
             return false;
         }
+        auto target = currentViewport(view);
+        target.minTime = xBounds.minTime;
+        target.maxTime = xBounds.maxTime;
         // 核心流程：横轴双击要同步应用层视口；否则 autoFollow/Once 条件会在下一帧把 ImPlot autofit 覆盖回旧范围。
-        view.viewMinTime = xBounds.minTime;
-        view.viewMaxTime = xBounds.maxTime;
-        view.visibleDuration =
-            (std::max)(view.viewMaxTime - view.viewMinTime, (std::max)(view.minVisibleTimeSpan, 1e-6));
-        view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
-        applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
+        startViewportAnimation(view, target, WaveViewportAutoFollowPolicy::UserInteraction);
         changed = true;
     }
     if (ImPlot::IsAxisHovered(ImAxis_Y1) && selectedChannelUsesBitDisplay(view, snapshot)) {
@@ -1043,6 +1060,74 @@ bool applyFullViewport(plot::WaveViewState& view,
     return true;
 }
 
+bool startViewportAnimation(plot::WaveViewState& view,
+                            const plot::WaveViewport& target,
+                            WaveViewportAutoFollowPolicy policy,
+                            double durationSec)
+{
+    const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
+    if (!std::isfinite(target.minTime) || !std::isfinite(target.maxTime) ||
+        target.maxTime - target.minTime < minVisibleTimeSpan || !std::isfinite(target.minValue) ||
+        !std::isfinite(target.maxValue) || target.maxValue <= target.minValue) {
+        return false;
+    }
+
+    if (!view.interactionAnimationEnabled || durationSec <= 0.0) {
+        view.viewportAnimation.active = false;
+        return applyFullViewport(
+            view, target.minTime, target.maxTime, target.minValue, target.maxValue, policy);
+    }
+
+    applyAutoFollowPausePolicy(view, policy);
+    view.viewportAnimation.active = true;
+    view.viewportAnimation.start = currentViewport(view);
+    view.viewportAnimation.target = target;
+    view.viewportAnimation.elapsedSec = 0.0;
+    view.viewportAnimation.durationSec = (std::max)(durationSec, 1e-6);
+    view.forceNextMainPlotLimits = true;
+    return true;
+}
+
+bool advanceViewportAnimation(plot::WaveViewState& view, double deltaSec)
+{
+    auto& animation = view.viewportAnimation;
+    if (!animation.active) {
+        return false;
+    }
+
+    const auto oldViewport = currentViewport(view);
+    animation.elapsedSec = (std::min)(animation.elapsedSec + (std::max)(deltaSec, 0.0), animation.durationSec);
+    const double linear = (std::clamp)(animation.elapsedSec / animation.durationSec, 0.0, 1.0);
+    const double progress = 1.0 - std::pow(1.0 - linear, 3.0);
+    const auto lerp = [progress](double from, double to) { return from + (to - from) * progress; };
+
+    view.viewMinTime = lerp(animation.start.minTime, animation.target.minTime);
+    view.viewMaxTime = lerp(animation.start.maxTime, animation.target.maxTime);
+    view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, (std::max)(view.minVisibleTimeSpan, 1e-6));
+    view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+    if (!view.lockVerticalRange) {
+        view.viewMinValue = lerp(animation.start.minValue, animation.target.minValue);
+        view.viewMaxValue = lerp(animation.start.maxValue, animation.target.maxValue);
+    }
+
+    if (linear >= 1.0) {
+        view.viewMinTime = animation.target.minTime;
+        view.viewMaxTime = animation.target.maxTime;
+        view.visibleDuration =
+            (std::max)(view.viewMaxTime - view.viewMinTime, (std::max)(view.minVisibleTimeSpan, 1e-6));
+        view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
+        if (!view.lockVerticalRange) {
+            view.viewMinValue = animation.target.minValue;
+            view.viewMaxValue = animation.target.maxValue;
+        }
+        animation.active = false;
+    }
+
+    plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, currentViewport(view));
+    view.forceNextMainPlotLimits = true;
+    return true;
+}
+
 namespace {
 
     struct ExactWaveTimeBounds {
@@ -1137,12 +1222,14 @@ bool applyFitVisibleWaveforms(plot::WaveViewState& view,
 
     const auto yRange =
         plot::makeVerticalAutoFitRange(bounds.minValue, bounds.maxValue, view.verticalAutoFitMultiplier);
-    return applyFullViewport(view,
-                             bounds.minTime,
-                             bounds.maxTime,
-                             yRange.minValue,
-                             yRange.maxValue,
-                             WaveViewportAutoFollowPolicy::ExplicitCommand);
+    return startViewportAnimation(view,
+                                  plot::WaveViewport{
+                                      .minTime = bounds.minTime,
+                                      .maxTime = bounds.maxTime,
+                                      .minValue = yRange.minValue,
+                                      .maxValue = yRange.maxValue,
+                                  },
+                                  WaveViewportAutoFollowPolicy::ExplicitCommand);
 }
 
 ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool suppressEscapeCancel)
@@ -1450,7 +1537,7 @@ public:
             .drawLegendOverlay = context.overlayFrame == nullptr,
             .measurementSafeRightX = context.measurementSafeRightX,
         };
-        auto result = drawOscilloscopePlot(context.wave, *context.renderFrame, overlayPolicy);
+        auto result = drawOscilloscopePlot(context.wave, *context.renderFrame, overlayPolicy, &context.frame);
         if (context.overlayFrame != nullptr) {
             captureWaveOverlayFrame(*context.overlayFrame, result, *context.renderFrame);
         }
@@ -1475,7 +1562,7 @@ public:
 
         ImGui::BeginChild(
             "##wave_cursor_split_time", ImVec2(0.0F, timePanelHeight), false, ImGuiWindowFlags_NoScrollbar);
-        auto result = drawOscilloscopePlot(context.wave, *context.renderFrame, overlayPolicy);
+        auto result = drawOscilloscopePlot(context.wave, *context.renderFrame, overlayPolicy, &context.frame);
         if (context.overlayFrame != nullptr) {
             captureWaveOverlayFrame(*context.overlayFrame, result, *context.renderFrame);
         }
@@ -1532,7 +1619,8 @@ public:
             wave.toolsCollapsed = true;
         }
 
-        if (wave.toolsCollapsed) {
+        const float drawerProgress = (std::clamp)(wave.toolsDrawerProgress, 0.0F, 1.0F);
+        if (drawerProgress <= 0.0F) {
             return;
         }
 
@@ -1540,17 +1628,23 @@ public:
             (std::clamp)(wave.toolsExpandedWidth, wave.minToolsExpandedWidth, wave.maxToolsExpandedWidth);
 
         const ToolsDrawerGeometry drawerGeometry = calculateToolsDrawerGeometry(
-            railPos, context.contentWidth, context.availableHeight, wave.toolsExpandedWidth, style.ItemSpacing.x);
+            railPos,
+            context.contentWidth,
+            context.availableHeight,
+            wave.toolsExpandedWidth * drawerProgress,
+            style.ItemSpacing.x);
 
         if (!drawerGeometry.valid) {
             return;
         }
 
-        const ToolsDrawerResizeState resizeState = drawToolsDrawerResizeHandle(wave,
-                                                                               drawerGeometry.pos,
-                                                                               context.availableHeight,
-                                                                               drawerGeometry.contentLeft,
-                                                                               wave.contentToolsSplitterWidth);
+        const ToolsDrawerResizeState resizeState =
+            wave.toolsCollapsed ? ToolsDrawerResizeState{}
+                                : drawToolsDrawerResizeHandle(wave,
+                                                              drawerGeometry.pos,
+                                                              context.availableHeight,
+                                                              drawerGeometry.contentLeft,
+                                                              wave.contentToolsSplitterWidth);
 
         bool drawerOpen = true;
         const std::string title = std::string(toolsDrawerTitle(wave.activeToolsDrawer)) + "##wave_tools_drawer";
@@ -1564,6 +1658,7 @@ public:
 
         bool drawerHovered = false;
         bool drawerFocused = false;
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, drawerProgress);
         if (ImGui::Begin(title.c_str(), &drawerOpen, drawerFlags)) {
             drawerHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
                                                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -1578,6 +1673,7 @@ public:
         }
 
         ImGui::End();
+        ImGui::PopStyleVar();
 
         if (!drawerOpen) {
             wave.toolsCollapsed = true;
@@ -1717,10 +1813,15 @@ WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewSt
     const float spacingHeight = ImGui::GetStyle().ItemSpacing.y;
     const bool cursorSplitMode = isCursorSplitFftMode(view);
     const float toolbarHeight = compactMainToolbarHeight();
+    const float overviewProgress = (std::clamp)(wave.overviewPanelProgress, 0.0F, 1.0F);
     const float overviewRequestedHeight =
-        cursorSplitMode ? 0.0F : (wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.overviewPanelHeight);
+        cursorSplitMode ? 0.0F
+                        : wave.overviewCollapsedHeight +
+                              (wave.overviewPanelHeight - wave.overviewCollapsedHeight) * overviewProgress;
     const float overviewMinHeight =
-        cursorSplitMode ? 0.0F : (wave.overviewCollapsed ? wave.overviewCollapsedHeight : wave.minOverviewPanelHeight);
+        cursorSplitMode ? 0.0F
+                        : wave.overviewCollapsedHeight +
+                              (wave.minOverviewPanelHeight - wave.overviewCollapsedHeight) * overviewProgress;
     const float mainPlotAxisReserve = ImGui::GetTextLineHeightWithSpacing() + spacingHeight;
     const float fixedContentHeight = toolbarHeight + spacingHeight * 2.0F + mainPlotAxisReserve;
     constexpr bool toolsLayoutCollapsed = true;
@@ -1734,7 +1835,7 @@ WaveContentPlan buildWaveContentPlan(plot::WaveDockState& wave, plot::WaveViewSt
                               wave.toolsCollapsedWidth,
                               toolsLayoutCollapsed,
                               spacingWidth,
-                              cursorSplitMode || wave.overviewCollapsed ? 0.0F : wave.overviewMainSplitterHeight,
+                              cursorSplitMode || overviewProgress <= 0.0F ? 0.0F : wave.overviewMainSplitterHeight,
                               overviewMinHeight,
                               wave.minMainPanelHeight,
                               wave.minToolsExpandedWidth,
@@ -1868,8 +1969,10 @@ void WaveDockRenderer::drawContent(const ImVec2& available,
 
     syncWaveViewToLatest();
     initializeWaveViewIfNeeded(view);
+    advanceWavePanelAnimations(wave, ImGui::GetIO().DeltaTime);
     const bool dockFocused = shortcutFocusOverride || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     handleWaveShortcuts(dockFocused, fullscreenActive, fullscreenToggleRequested);
+    advanceViewportAnimation(view, ImGui::GetIO().DeltaTime);
 
     auto plan = buildWaveContentPlan(wave, view, available);
     auto context =
@@ -1882,6 +1985,10 @@ void WaveDockRenderer::drawContent(const ImVec2& available,
     if (plan.frameState.oscilloscopeToggleRequest.has_value()) {
         const auto& request = *plan.frameState.oscilloscopeToggleRequest;
         pendingOscilloscopeToggle_ = PendingOscilloscopeToggle{request.currentRunning, request.targetRunning};
+    }
+    if (plan.frameState.resetHistoryRequested) {
+        application_.resetWaveHistory();
+        application_.setStatusMessage("当前波形历史已清空", false);
     }
     wave.suppressZoomSelectionEscapeThisFrame = false;
 }

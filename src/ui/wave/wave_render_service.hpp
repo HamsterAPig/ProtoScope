@@ -35,6 +35,8 @@ struct WaveFrameData {
     RenderBudget renderBudget;
 };
 
+struct WaveFrameState;
+
 struct PlotRenderResult {
     struct OverlayGeometry {
         ImVec2 pos{};
@@ -189,6 +191,11 @@ bool applyFullViewport(plot::WaveViewState& view,
                        double minValue,
                        double maxValue,
                        WaveViewportAutoFollowPolicy policy);
+bool startViewportAnimation(plot::WaveViewState& view,
+                            const plot::WaveViewport& target,
+                            WaveViewportAutoFollowPolicy policy,
+                            double durationSec = 0.16);
+bool advanceViewportAnimation(plot::WaveViewState& view, double deltaSec);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveSnapshot& fullSnapshot,
                               const plot::WaveDisplayData& displayData,
@@ -481,7 +488,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
                         BitLaneLayout& outBitLayout);
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                       const WaveFrameData& frame,
-                                      const WavePlotOverlayPolicy& overlayPolicy = {});
+                                      const WavePlotOverlayPolicy& overlayPolicy = {},
+                                      WaveFrameState* frameState = nullptr);
 PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,
                                  const WaveFrameData& frame,
                                  bool includePhase,

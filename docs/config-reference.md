@@ -80,6 +80,7 @@ gui:
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct
     legend_overlay_double_click_auto_collapse: true
+    interaction_animation_enabled: true
     zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
@@ -111,6 +112,7 @@ gui:
 - `cursor_extreme_snap_policy`：`nearest_waveform` 或 `viewport_zone`。
 - `mouse_y_offset_drag_mode`：`direct`、`shift` 或 `disabled`，控制鼠标拖动通道 Y 偏移的触发方式。
 - `legend_overlay_double_click_auto_collapse`：双击展开图内图例后，鼠标离开并结束输入/拖动交互时是否自动收起。仅在 `legend_overlay_open_mode: double_click` 时生效，默认 `true`。
+- `interaction_animation_enabled`：Wave Dock 交互动效总开关，默认 `true`。关闭后离散视口跳转、工具抽屉、概览折叠和图例浮层直接跳到最终状态。
 - `zoom_selection_auto_exit`：框选放大后是否自动退出框选模式。
 - `channel_card_fixed_width` / `channel_card_adaptive_ratio`：通道卡片宽度策略参数。
 - `legend_channel_name_max_width`：通道图例名称显示宽度上限，单位为 ImGui 逻辑像素；`0.0`、缺失或非正值表示不限制。作用于展开态表格、紧凑态浮窗和底部通道卡片，超长名称会裁剪并在悬浮时显示完整 tooltip。

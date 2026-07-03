@@ -33,6 +33,7 @@ struct WaveFrameState {
     std::vector<std::size_t> visibleChannelIndices{};
     std::optional<std::size_t> hoveredChannelIndex{};
     std::optional<WaveOscilloscopeToggleRequest> oscilloscopeToggleRequest{};
+    bool resetHistoryRequested{false};
     bool requestFit{false};
     bool requestResetOffset{false};
     bool syncLatest{false};

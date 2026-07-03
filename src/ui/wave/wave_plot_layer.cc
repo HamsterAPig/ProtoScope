@@ -1,4 +1,5 @@
 #include "wave_render_service.hpp"
+#include "wave_context.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1126,6 +1127,65 @@ namespace {
         double valueSnapDistance{0.0};
     };
 
+    void toggleWaveFft(plot::WaveDockState& wave)
+    {
+        auto& view = wave.view;
+        view.fft.enabled = !view.fft.enabled;
+        if (view.fft.enabled) {
+            view.fftSourceMinTime = view.viewMinTime;
+            view.fftSourceMaxTime = view.viewMaxTime;
+            view.fftSourceWindowValid = true;
+            view.fftViewportInitialized = false;
+        } else {
+            view.fftSourceWindowValid = false;
+            view.fftViewportInitialized = false;
+        }
+        wave.cachedFftKeyValid = false;
+    }
+
+    void drawMainPlotContextMenu(plot::WaveDockState& wave, WaveFrameState* frameState)
+    {
+        auto& view = wave.view;
+        const ImVec2 rightDrag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right);
+        const bool rightDragged = std::hypot(rightDrag.x, rightDrag.y) > 4.0F;
+        const bool canOpen = ImPlot::IsPlotHovered() && !view.zoomSelectionActive && !view.zoomSelectionDragging &&
+                             !ImGui::IsAnyItemActive() && !ImGui::IsMouseDragging(ImGuiMouseButton_Right) &&
+                             !rightDragged;
+        if (canOpen && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+            ImGui::OpenPopup("##wave_main_plot_context");
+        }
+
+        if (!ImGui::BeginPopup("##wave_main_plot_context")) {
+            return;
+        }
+
+        if (ImGui::MenuItem("适配可见波形")) {
+            view.fitVisibleWaveformsRequested = true;
+        }
+        if (ImGui::MenuItem("恢复自动跟随")) {
+            view.autoFollowLatest = true;
+            view.viewportAnimation.active = false;
+        }
+        if (ImGui::MenuItem(view.zoomSelectionActive ? "关闭框选放大" : "开启框选放大")) {
+            view.zoomSelectionActive = !view.zoomSelectionActive;
+            view.zoomSelectionDragging = false;
+        }
+        if (ImGui::MenuItem(view.cursors[0].enabled ? "隐藏 A 游标" : "显示 A 游标")) {
+            view.cursors[0].enabled = !view.cursors[0].enabled;
+        }
+        if (ImGui::MenuItem(view.cursors[1].enabled ? "隐藏 B 游标" : "显示 B 游标")) {
+            view.cursors[1].enabled = !view.cursors[1].enabled;
+        }
+        if (ImGui::MenuItem(view.fft.enabled ? "关闭 FFT" : "开启 FFT")) {
+            toggleWaveFft(wave);
+        }
+        if (ImGui::MenuItem("清空当前波形历史") && frameState != nullptr) {
+            frameState->resetHistoryRequested = true;
+        }
+
+        ImGui::EndPopup();
+    }
+
     double cursorDisplayAnchorFromActualValue(const plot::ChannelView& spec,
                                               plot::WaveDisplayFormula formula,
                                               double actualValue)
@@ -1597,7 +1657,8 @@ void updateSplitCursorReadoutsForChannel(const plot::WaveSnapshot& snapshot,
 
 PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
                                             const WaveFrameData& frame,
-                                            const WavePlotOverlayPolicy& overlayPolicy)
+                                            const WavePlotOverlayPolicy& overlayPolicy,
+                                            WaveFrameState* frameState)
 {
     PlotRenderResult result;
     if (frame.displayData == nullptr || frame.fullSnapshot == nullptr || frame.fullSnapshot->channels.empty()) {
@@ -1814,6 +1875,9 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
             // 核心流程：ImPlot 交互查询必须在当前子图 EndPlot 前完成，避免分屏结束后访问空 active plot。
             userInteractingInAnySplitPlot =
                 bitLaneDoubleClickConsumed || plotInteractionActive(rowCursorHeld) || userInteractingInAnySplitPlot;
+            ImGui::PushID(static_cast<int>(channelIndex));
+            drawMainPlotContextMenu(wave, frameState);
+            ImGui::PopID();
             ImPlot::EndPlot();
         }
         ImPlot::PopStyleColor();
@@ -1860,7 +1924,8 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
 
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                       const WaveFrameData& frame,
-                                      const WavePlotOverlayPolicy& overlayPolicy)
+                                      const WavePlotOverlayPolicy& overlayPolicy,
+                                      WaveFrameState* frameState)
 {
     PlotRenderResult result;
     if (frame.fullSnapshot == nullptr || frame.displayData == nullptr || frame.fullSnapshot->channels.empty()) {
@@ -1869,7 +1934,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     }
     auto& view = wave.view;
     if (view.viewMode == plot::WaveViewMode::Split) {
-        return drawSplitOscilloscopePlots(wave, frame, overlayPolicy);
+        return drawSplitOscilloscopePlots(wave, frame, overlayPolicy, frameState);
     }
 
     if (!view.showAxisLabels) {
@@ -2101,6 +2166,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         }
     }
     drawWaveStatusOverlay(view, &renderDisplayData, &visibleChannelIndices);
+    drawMainPlotContextMenu(wave, frameState);
 
     ImPlot::EndPlot();
     if (overlayPolicy.drawLegendOverlay) {

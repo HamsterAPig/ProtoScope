@@ -3035,6 +3035,7 @@ void test_wave_fit_visible_waveforms_uses_full_history_time_bounds()
     });
 
     protoscope::plot::WaveViewState view;
+    view.interactionAnimationEnabled = false;
     view.initialized = true;
     view.fitVisibleWaveformsRequested = true;
     view.viewMinTime = 15.0;
@@ -3078,6 +3079,7 @@ void test_wave_fit_visible_waveforms_uses_sample_frequency_full_history()
 
     auto overviewDisplay = protoscope::plot::buildDisplayData(fullSnapshot, 10.0);
     protoscope::plot::WaveViewState view;
+    view.interactionAnimationEnabled = false;
     view.sampleFrequencyHz = 10.0;
     view.fitVisibleWaveformsRequested = true;
     view.viewMinTime = 1.5;
@@ -3120,6 +3122,7 @@ void test_wave_fit_visible_waveforms_ignores_hidden_channels()
     const auto overviewDisplay = protoscope::plot::buildDisplayData(fullSnapshot, 0.0);
 
     protoscope::plot::WaveViewState view;
+    view.interactionAnimationEnabled = false;
     view.fitVisibleWaveformsRequested = true;
     require(protoscope::ui::applyFitVisibleWaveforms(view, fullSnapshot, overviewDisplay, {0}),
             "只包含可见通道时适配应成功");
@@ -4220,6 +4223,61 @@ void test_wave_auto_follow_pause_policy_respects_interaction_setting()
 
     protoscope::ui::applyAutoFollowPausePolicy(view, protoscope::ui::WaveViewportAutoFollowPolicy::ExplicitCommand);
     require(!view.autoFollowLatest, "显式命令应不受交互开关影响并暂停跟随");
+}
+
+void test_wave_viewport_animation_disabled_jumps_to_target()
+{
+    protoscope::plot::WaveViewState view;
+    view.interactionAnimationEnabled = false;
+    view.viewMinTime = 0.0;
+    view.viewMaxTime = 10.0;
+    view.visibleDuration = 10.0;
+    view.centerTime = 5.0;
+    view.viewMinValue = -1.0;
+    view.viewMaxValue = 1.0;
+    view.forceNextMainPlotLimits = false;
+
+    const protoscope::plot::WaveViewport target{.minTime = 10.0, .maxTime = 20.0, .minValue = -5.0, .maxValue = 5.0};
+    require(protoscope::ui::startViewportAnimation(
+                view, target, protoscope::ui::WaveViewportAutoFollowPolicy::ExplicitCommand),
+            "关闭动效时视口跳转仍应接受有效目标");
+    require(!view.viewportAnimation.active, "关闭动效时不应保留活动动画");
+    require(std::abs(view.viewMinTime - 10.0) < 1e-12 && std::abs(view.viewMaxTime - 20.0) < 1e-12,
+            "关闭动效时 X 视口应立即到达目标");
+    require(std::abs(view.visibleDuration - 10.0) < 1e-12, "关闭动效时 visibleDuration 应匹配目标宽度");
+    require(view.forceNextMainPlotLimits, "关闭动效时也应强制下一帧轴限");
+}
+
+void test_wave_viewport_animation_advances_monotonically_and_finishes_exactly()
+{
+    protoscope::plot::WaveViewState view;
+    view.interactionAnimationEnabled = true;
+    view.viewMinTime = 0.0;
+    view.viewMaxTime = 10.0;
+    view.visibleDuration = 10.0;
+    view.centerTime = 5.0;
+    view.viewMinValue = -1.0;
+    view.viewMaxValue = 1.0;
+    view.forceNextMainPlotLimits = false;
+
+    const protoscope::plot::WaveViewport target{.minTime = 10.0, .maxTime = 20.0, .minValue = -5.0, .maxValue = 5.0};
+    require(protoscope::ui::startViewportAnimation(
+                view, target, protoscope::ui::WaveViewportAutoFollowPolicy::ExplicitCommand, 0.16),
+            "开启动效时应启动有效视口动画");
+    require(view.viewportAnimation.active, "开启动效时应记录活动动画");
+
+    require(protoscope::ui::advanceViewportAnimation(view, 0.08), "动画第一段应推进");
+    require(view.viewMinTime > 0.0 && view.viewMinTime < 10.0, "动画中 X 起点应单调靠近目标");
+    require(view.viewMaxTime > 10.0 && view.viewMaxTime < 20.0, "动画中 X 终点应单调靠近目标");
+    require(std::abs(view.visibleDuration - 10.0) < 1e-12, "动画过程中应保持目标视口宽度");
+    require(view.forceNextMainPlotLimits, "动画过程中应持续强制主图轴限");
+
+    require(protoscope::ui::advanceViewportAnimation(view, 0.08), "动画第二段应推进到终点");
+    require(!view.viewportAnimation.active, "动画结束后活动标记应清除");
+    require(std::abs(view.viewMinTime - 10.0) < 1e-12 && std::abs(view.viewMaxTime - 20.0) < 1e-12,
+            "动画结束后 X 视口应精确落到目标");
+    require(std::abs(view.viewMinValue + 5.0) < 1e-12 && std::abs(view.viewMaxValue - 5.0) < 1e-12,
+            "动画结束后 Y 视口应精确落到目标");
 }
 
 void test_wave_phosphor_trigger_detection_interpolates_edges()

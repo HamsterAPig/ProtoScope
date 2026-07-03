@@ -37,6 +37,7 @@ gui:
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct
     legend_overlay_double_click_auto_collapse: true
+    interaction_animation_enabled: true
     zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
