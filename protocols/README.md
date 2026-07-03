@@ -16,7 +16,7 @@
 
 源码中的默认示例位于 `protocols/default_protocol`、`protocols/lua_waveform_demo`、
 `protocols/half_duplex_modbus_master` 和 `protocols/half_duplex_modbus_slave`。
-`protocols/templates` 只放可复制的操作模板，例如 `file_dialog`、`request_guarded`、`send_file`、`ui_basic`、`ui_layouts` 和 `ui_dialogs`。
+`protocols/templates` 只放可复制的操作模板，例如 `file_dialog`、`request_guarded`、`send_file`、`oscilloscope_control`、`ui_basic`、`ui_layouts` 和 `ui_dialogs`。
 每个协议目录只要求存在 `main.lua`，例如 `protocols/default_protocol/main.lua`。
 打包运行时会把内嵌默认协议释放到可执行目录下的协议目录，供用户直接选择和复制。
 
@@ -68,7 +68,7 @@ function on_control(ctx, id, value)
 end
 ```
 
-可复制模板位于 `protocols/templates/ui_basic`、`ui_layouts` 和 `ui_dialogs`。如果需要完整布局组合或弹窗回调示例，优先复制这些模板目录。
+可复制模板位于 `protocols/templates/ui_basic`、`ui_layouts`、`ui_dialogs` 和 `oscilloscope_control`。如果需要完整布局组合、弹窗回调或示波器运行态示例，优先复制这些模板目录。
 
 ### `ui()` 返回值
 
@@ -171,6 +171,56 @@ proto.set_control("holding_values", {
 - `proto.oscilloscope.set_running(running)`：脚本主动同步波形工具栏运行状态；适合按钮、定时器或 ACK 回调在真实启动/停止完成后调用。同一次 `on_oscilloscope_toggle` 回调里显式调用时，显式状态优先于 `return true` 的默认目标状态。
 
 如果只需要处理当前控件，直接使用 `value`；如果一次按钮点击需要组装多个控件值，再用 `proto.get_control()` 读取其他控件。
+
+### 示波器运行态和历史限制
+
+脚本可以把波形工具栏播放按钮和 Lua 动态 Dock 控件接到同一套运行态上。纯 Lua 演示或没有设备 ACK 的协议，可以在回调里立即同步：
+
+```lua
+local running = false
+
+local function set_running_state(next_running)
+  running = next_running == true
+  proto.oscilloscope.set_running(running)
+  proto.set_control("scope_state", running and "运行中" or "已暂停")
+end
+
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  set_running_state(target_running)
+  return true
+end
+```
+
+真实设备通常需要等待启动/停止 ACK。此时回调只发起请求并返回 `false`，等 ACK 匹配后再主动同步：
+
+```lua
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  local frame = target_running and build_start_frame() or build_stop_frame()
+  proto.request(frame, { tag = target_running and "start" or "stop" })
+  return false
+end
+
+function on_tx(ctx, evt)
+  if evt.tag == "start" and evt.state == "completed" then
+    proto.oscilloscope.set_running(true)
+  elseif evt.tag == "stop" and evt.state == "completed" then
+    proto.oscilloscope.set_running(false)
+  end
+end
+```
+
+历史限制不需要额外 API。把 `history_limit` 做成 Lua Dock 控件后，重新调用 `proto.plot.setup()` 即可应用；`0` 表示不裁剪，`reset_history = true` 表示清空历史。
+
+```lua
+proto.plot.setup({
+  source = "demo",
+  reset_history = false,
+  history_limit = proto.get_control("history_limit") or 5000,
+  channels = {
+    { label = "CH1", unit = "V" },
+  },
+})
+```
 
 ### Layout Tree
 
@@ -567,7 +617,7 @@ count = {
 - `proto.status.clear()`
 - `proto.ui.alert({ title = "...", message = "...", level = "warn", window = { width = 520, height = 260, x = 120, y = 80, resizable = true, movable = true, auto_resize = false } })`
 - `proto.ui.confirm({ title = "...", message = "...", tag = "confirm_send", dedupe_key = "confirm_send" })`
-- `proto.plot.setup({ source = "...", reset_history = true, channels = { ... } })`
+- `proto.plot.setup({ source = "...", reset_history = true, history_limit = 5000, channels = { ... } })`
 - `proto.plot.push(channel_index, { source = "...", samples = { { t = 0.0, y = 1.23 } } })`
 
 脚本弹窗的 `window` 子表只影响 `proto.ui.alert/confirm` 这类 ImGui 自绘模态窗口：

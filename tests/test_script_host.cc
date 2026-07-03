@@ -342,6 +342,64 @@ void test_default_protocol_logs_elf_symbol_info()
     require(foundInfoLog, "默认协议应把 ELF 变量信息以 info 日志输出");
 }
 
+void test_default_protocol_oscilloscope_controls_apply_history_limit()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
+
+    host.drainPlotSetups();
+    host.drainOscilloscopeRunningUpdates();
+
+    const auto ctx = sampleCtx();
+    require(host.requestOscilloscopeToggle(ctx, true, false), "默认协议应允许工具栏立即暂停波形记录");
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && !updates[0].running, "默认协议应把工具栏暂停同步到 running=false");
+
+    host.onControl(ctx, "history_limit", 128);
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "默认协议修改历史上限应重新 setup 波形");
+    require(setups[0].view.historyLimit == 128U, "默认协议应从 Lua Dock 读取 history_limit");
+}
+
+void test_lua_waveform_demo_oscilloscope_controls_apply_history_limit()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory("protocols/lua_waveform_demo"), "Lua 波形演示脚本应可加载");
+
+    host.drainPlotSetups();
+    host.drainOscilloscopeRunningUpdates();
+
+    const auto ctx = sampleCtx();
+    require(host.requestOscilloscopeToggle(ctx, true, false), "Lua 波形演示应允许工具栏立即暂停");
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && !updates[0].running, "Lua 波形演示应同步工具栏暂停状态");
+
+    host.onControl(ctx, "history_limit", 256);
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "Lua 波形演示修改历史上限应重新 setup 波形");
+    require(setups[0].view.historyLimit == 256U, "Lua 波形演示应从 Dock 控件读取 history_limit");
+}
+
+void test_oscilloscope_control_template_loads_and_syncs_toolbar()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(templateProtocolDir("oscilloscope_control").generic_string()),
+            "示波器控制模板应可加载");
+
+    host.drainPlotSetups();
+    host.drainOscilloscopeRunningUpdates();
+
+    const auto ctx = sampleCtx();
+    require(host.requestOscilloscopeToggle(ctx, false, true), "示波器控制模板应允许工具栏立即启动");
+    auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && updates[0].running, "示波器控制模板应同步 running=true");
+
+    host.onControl(ctx, "history_limit", 64);
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "示波器控制模板修改历史上限应重新 setup 波形");
+    require(setups[0].view.historyLimit == 64U, "示波器控制模板应从 Dock 控件读取 history_limit");
+}
+
 void test_script_elf_symbol_combo_descriptor_defaults()
 {
     protoscope::scripting::ScriptHost host;
@@ -2986,6 +3044,75 @@ void test_half_duplex_modbus_request_batches()
     require(readBe16(requests[4].payload, 4) == 0x0001U, "启动请求应写 0x8888=0x0001");
 }
 
+void test_half_duplex_modbus_oscilloscope_toolbar_waits_for_ack()
+{
+    protoscope::scripting::ScriptHost host;
+    requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    host.drainPlotSetups();
+    host.drainOscilloscopeRunningUpdates();
+
+    require(!host.requestOscilloscopeToggle(ctx, false, true), "真实设备示例应等待启动 ACK 后再同步运行态");
+    const auto requests = host.drainTxRequests();
+    require(requests.size() == 5, "工具栏启动应复用自动配置并启动流程");
+    require(host.drainOscilloscopeRunningUpdates().empty(), "启动 ACK 前不应同步 running=true");
+
+    for (std::size_t index = 0; index < requests.size(); ++index) {
+        const auto& request = requests[index];
+        host.onTxEvent(ctx,
+                       protoscope::scripting::TxEvent{
+                           .id = request.id,
+                           .kind = protoscope::scripting::TxRequestKind::Request,
+                           .state = protoscope::scripting::TxEventState::Sent,
+                           .tag = request.tag,
+                           .bytes = request.payload.size(),
+                           .queuedMs = nowMs(),
+                           .finishedMs = nowMs(),
+                           .error = std::nullopt,
+                       });
+        host.setRequestAwaitingCompletion(true);
+        if (index < 4) {
+            host.onTransportBytes(
+                protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc16Ack(readBe16(request.payload, 2), 2)});
+        } else {
+            host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc06Ack(0x8888U, 0x0001U)});
+        }
+        host.drainRequestDoneResults();
+    }
+
+    auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && updates[0].running, "启动 ACK 匹配后应同步 running=true");
+
+    host.onControl(ctx, "history_limit", 512);
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "Modbus 主机修改历史上限应重新 setup 波形");
+    require(setups[0].view.historyLimit == 512U, "Modbus 主机应从 Lua Dock 读取 history_limit");
+
+    host.onControl(ctx, "stop_stream", true);
+    const auto stopRequests = host.drainTxRequests();
+    require(stopRequests.size() == 1, "停止上传按钮应生成 1 条 FC06 request");
+    const auto& stopRequest = stopRequests.front();
+    host.onTxEvent(ctx,
+                   protoscope::scripting::TxEvent{
+                       .id = stopRequest.id,
+                       .kind = protoscope::scripting::TxRequestKind::Request,
+                       .state = protoscope::scripting::TxEventState::Sent,
+                       .tag = stopRequest.tag,
+                       .bytes = stopRequest.payload.size(),
+                       .queuedMs = nowMs(),
+                       .finishedMs = nowMs(),
+                       .error = std::nullopt,
+                   });
+    host.setRequestAwaitingCompletion(true);
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc06Ack(0x8888U, 0x0000U)});
+    host.drainRequestDoneResults();
+
+    updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && !updates[0].running, "停止 ACK 匹配后应同步 running=false");
+}
+
 void test_half_duplex_modbus_ack_and_plot_flow()
 {
     protoscope::scripting::ScriptHost master;
@@ -3813,6 +3940,12 @@ static const TestCase kAllTests[] = {
     {"script_optional_labels_allowed_for_compact_controls", &test_script_optional_labels_allowed_for_compact_controls},
     {"script_required_labels_still_reject_visual_controls", &test_script_required_labels_still_reject_visual_controls},
     {"default_protocol_logs_elf_symbol_info", &test_default_protocol_logs_elf_symbol_info},
+    {"default_protocol_oscilloscope_controls_apply_history_limit",
+     &test_default_protocol_oscilloscope_controls_apply_history_limit},
+    {"lua_waveform_demo_oscilloscope_controls_apply_history_limit",
+     &test_lua_waveform_demo_oscilloscope_controls_apply_history_limit},
+    {"oscilloscope_control_template_loads_and_syncs_toolbar",
+     &test_oscilloscope_control_template_loads_and_syncs_toolbar},
     {"script_elf_symbol_combo_descriptor_defaults", &test_script_elf_symbol_combo_descriptor_defaults},
     {"script_elf_symbol_combo_invalid_config_fails", &test_script_elf_symbol_combo_invalid_config_fails},
     {"script_elf_symbol_combo_get_control_returns_table", &test_script_elf_symbol_combo_get_control_returns_table},
@@ -3966,6 +4099,8 @@ static const TestCase kAllTests[] = {
     {"script_plot_bit_display_rejects_invalid_config", &test_script_plot_bit_display_rejects_invalid_config},
     {"script_plot_push_accepts_compact_series", &test_script_plot_push_accepts_compact_series},
     {"half_duplex_modbus_request_batches", &test_half_duplex_modbus_request_batches},
+    {"half_duplex_modbus_oscilloscope_toolbar_waits_for_ack",
+     &test_half_duplex_modbus_oscilloscope_toolbar_waits_for_ack},
     {"half_duplex_modbus_ack_and_plot_flow", &test_half_duplex_modbus_ack_and_plot_flow},
     {"half_duplex_modbus_ch3_uses_third_harmonic", &test_half_duplex_modbus_ch3_uses_third_harmonic},
     {"half_duplex_modbus_loss_status_keeps_valid_frame", &test_half_duplex_modbus_loss_status_keeps_valid_frame},

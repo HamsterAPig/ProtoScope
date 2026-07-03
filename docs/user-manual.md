@@ -48,6 +48,7 @@ protocols/
     ├── file_dialog/
     ├── request_guarded/
     ├── send_file/
+    ├── oscilloscope_control/
     ├── ui_basic/
     ├── ui_layouts/
     └── ui_dialogs/
@@ -248,7 +249,8 @@ Lua 脚本通过 `proto.plot.setup()` 创建通道，再通过 `proto.plot.push(
 
 常用操作：
 
-- 点击波形工具栏最左侧的播放/暂停按钮会调用 `on_oscilloscope_toggle(ctx, current_running, target_running)`；脚本返回 `true` 时默认把按钮同步到 `target_running`，实际启动或暂停动作由脚本负责。异步 ACK 成功后也可以调用 `proto.oscilloscope.set_running(running)` 主动同步状态。
+- 点击波形工具栏最左侧的播放/暂停按钮会调用 `on_oscilloscope_toggle(ctx, current_running, target_running)`；纯 Lua 演示可直接调用 `proto.oscilloscope.set_running(target_running)` 并返回 `true`，真实设备建议先发送启停请求并返回 `false`，等 ACK 到达后再调用 `proto.oscilloscope.set_running(running)`。
+- Lua Dock 可以把 `history_limit` 做成控件，并通过重新调用 `proto.plot.setup({ history_limit = ... })` 调整历史保留；`reset_history = true` 可用于清空当前历史。
 - 通过通道卡片查看通道状态，设置激活通道。
 - 在通道卡片里修改标签、缩放和偏移。
 - 使用总览区域快速定位长时间数据。
@@ -319,6 +321,7 @@ scripting:
 - `file_dialog`：文件/目录对话框示例。
 - `request_guarded`：受保护请求示例。
 - `send_file`：文件分块发送示例。
+- `oscilloscope_control`：示波器运行态、历史上限和清空历史示例。
 - `ui_basic`：最小 Lua UI 闭环，演示 `ui()`、`controls`、`layout`、`on_control()`、控件读写和弹窗提示。
 - `ui_layouts`：常见布局组合示例，演示 `column`、`flow`、`inline_group`、`table`、`group`、`collapse` 和控件宽度约束。
 - `ui_dialogs`：脚本弹窗示例，演示 `proto.ui.alert()`、`proto.ui.confirm()`、`window` 参数和 `on_dialog()`。
