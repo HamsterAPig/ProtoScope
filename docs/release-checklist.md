@@ -72,6 +72,8 @@ proto.plot.setup({
 
 PR 合并前必须通过 `Merge CI`：
 
+- 对 PR 相对目标分支的差异执行 `git diff --check`。
+- 显式执行 `python tools/generate_luals_api.py --check`。
 - 使用 Windows 2022 + MSVC x64 配置 Release 构建。
 - 执行 `cmake --build build --config Release`。
 - 执行 `ctest --test-dir build --output-on-failure --build-config Release`。
@@ -79,6 +81,8 @@ PR 合并前必须通过 `Merge CI`：
 发布时必须通过 `Release CI`：
 
 - 校验发布标签格式或手动演练来源分支。
+- 对上一个正式 `vX.Y.Z` 标签到当前 HEAD 的差异执行 `git diff --check`。
+- 显式执行 `python tools/generate_luals_api.py --check`。
 - 使用 MSVC Release 构建 `ProtoScope.exe`。
 - 用 `dumpbin /DEPENDENTS` 确认不依赖 MinGW/MSYS 运行时 DLL。
 - 执行完整 CTest。

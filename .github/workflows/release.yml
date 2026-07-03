@@ -92,6 +92,38 @@ jobs:
           "Package tag: $packageTag"
           "Asset base: $assetBase"
 
+      - name: Check source hygiene
+        shell: pwsh
+        run: |
+          $previousTags = @(
+            git tag --merged HEAD --list "v*.*.*" |
+              Where-Object { $_ -match '^v\d+\.\d+\.\d+$' -and $_ -ne $env:RELEASE_TAG } |
+              ForEach-Object {
+                [pscustomobject]@{
+                  Name = $_
+                  Version = [version]($_ -replace '^v', '')
+                }
+              } |
+              Sort-Object -Property @{ Expression = { $_.Version }; Descending = $true }
+          )
+
+          if ($previousTags.Count -gt 0) {
+            $range = "$($previousTags[0].Name)..HEAD"
+          } else {
+            $emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+            $range = "$emptyTree..HEAD"
+          }
+
+          "Checking whitespace in range: $range"
+          git diff --check $range
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Verify generated Lua API
+        shell: pwsh
+        run: python tools/generate_luals_api.py --check
+
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
