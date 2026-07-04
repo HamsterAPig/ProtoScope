@@ -47,6 +47,8 @@ public:
     void markCommConfigEdited(bool reconnectRequired);
     void markProtocolEdited();
     void setStatusMessage(std::string message, bool markDirty = false);
+    void setTransientStatusMessage(std::string message);
+    void clearExpiredTransientStatus(std::uint64_t nowMs);
     void setLogLevel(config::LogLevel level);
     bool setSendHexMode(bool enabled);
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;

@@ -193,6 +193,7 @@ struct WaveViewState {
     bool showMeasurementOverlay{true};
     bool glowEnabled{true};
     bool interactionAnimationEnabled{true};
+    bool effectiveInteractionAnimationEnabled{true};
     bool phosphorEnabled{false};
     bool initialized{false};
     bool cursorIntervalLocked{false};

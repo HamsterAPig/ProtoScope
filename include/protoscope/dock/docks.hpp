@@ -269,6 +269,8 @@ struct ConfigDockState {
     std::uint64_t fileTimestampMs{0};
     std::string loadedFromPath{"config/protoscope.yaml"};
     std::string statusMessage;
+    std::string transientStatusMessage;
+    std::uint64_t transientStatusExpiresAtMs{0};
     bool luaDockLayoutDebug{false};
     bool luaDockRenderCopyMode{true};
     bool pendingExternalReload{false};

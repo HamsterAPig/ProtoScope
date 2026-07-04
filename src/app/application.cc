@@ -1309,6 +1309,7 @@ config::AppConfig Application::captureConfig() const
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
+    captured.gui.interactionFeedback = runtimeConfig_.gui.interactionFeedback;
     captured.gui.wave.resetHistoryOnTimeReset = runtimeConfig_.gui.wave.resetHistoryOnTimeReset;
     captured.gui.wave.resetViewport.applyOnPlotSetupReset =
         runtimeConfig_.gui.wave.resetViewport.applyOnPlotSetupReset;
@@ -2041,6 +2042,29 @@ void Application::setStatusMessage(std::string message, bool markDirty)
         return;
     }
     dockStore_.configState().statusMessage = std::move(message);
+}
+
+void Application::setTransientStatusMessage(std::string message)
+{
+    auto& feedback = runtimeConfig_.gui.interactionFeedback;
+    auto& configState = dockStore_.configState();
+    if (!feedback.enabled || feedback.statusDurationMs == 0 || message.empty()) {
+        configState.transientStatusMessage.clear();
+        configState.transientStatusExpiresAtMs = 0;
+        return;
+    }
+    configState.transientStatusMessage = std::move(message);
+    configState.transientStatusExpiresAtMs = nowMs() + feedback.statusDurationMs;
+}
+
+void Application::clearExpiredTransientStatus(const std::uint64_t currentMs)
+{
+    auto& configState = dockStore_.configState();
+    if (configState.transientStatusExpiresAtMs == 0 || currentMs < configState.transientStatusExpiresAtMs) {
+        return;
+    }
+    configState.transientStatusMessage.clear();
+    configState.transientStatusExpiresAtMs = 0;
 }
 
 bool Application::setSendHexMode(bool enabled)
@@ -3026,6 +3050,11 @@ std::optional<std::uint64_t> Application::nextWakeupAtMs() const
         return nowMs();
     }
     auto nextWakeup = scriptSnapshot.nextWakeupAtMs;
+    const auto& configState = dockStore_.configState();
+    if (configState.transientStatusExpiresAtMs > 0 &&
+        (!nextWakeup.has_value() || configState.transientStatusExpiresAtMs < *nextWakeup)) {
+        nextWakeup = configState.transientStatusExpiresAtMs;
+    }
     if (activeHalfDuplexRequest_.has_value()) {
         if (!nextWakeup.has_value() || activeHalfDuplexRequest_->waitDeadlineMs < *nextWakeup) {
             nextWakeup = activeHalfDuplexRequest_->waitDeadlineMs;

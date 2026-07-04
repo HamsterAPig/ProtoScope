@@ -24,6 +24,9 @@ gui:
   font:
     # simplified_common 启动更快；full 会加载完整 CJK 字形范围，适合需要显示生僻字时手动开启。
     chinese_glyph_range: simplified_common
+  interaction_feedback:
+    enabled: true
+    status_duration_ms: 2000
   wave:
     fullscreen_mode: overlay
     control_mode: oscilloscope

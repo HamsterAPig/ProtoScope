@@ -570,6 +570,16 @@ namespace {
         }
     }
 
+    void loadGuiInteractionFeedbackConfig(const YAML::Node& gui, AppConfig& config)
+    {
+        if (const auto feedback = childNode(gui, "interaction_feedback")) {
+            config.gui.interactionFeedback.enabled =
+                readScalar<bool>(feedback, "enabled", config.gui.interactionFeedback.enabled);
+            config.gui.interactionFeedback.statusDurationMs = readScalar<std::uint64_t>(
+                feedback, "status_duration_ms", config.gui.interactionFeedback.statusDurationMs);
+        }
+    }
+
     void loadGuiWaveConfig(const YAML::Node& wave, AppConfig& config)
     {
         config.gui.wave.controlMode = parseWaveControlMode(
@@ -774,6 +784,7 @@ namespace {
             parseGuiRendererBackend(rendererBackendText).value_or(GuiRendererBackend::OpenGL);
         loadGuiWindowConfig(gui, config);
         loadGuiFontConfig(gui, config);
+        loadGuiInteractionFeedbackConfig(gui, config);
         if (const auto wave = childNode(gui, "wave")) {
             loadGuiWaveConfig(wave, config);
             loadGuiWaveScopedRuntimeConfig(gui, config);
@@ -1040,6 +1051,8 @@ namespace {
     {
         const auto& explicitOverrides = config.performance.explicitOverrides;
 
+        gui["interaction_feedback"]["enabled"] = config.gui.interactionFeedback.enabled;
+        gui["interaction_feedback"]["status_duration_ms"] = config.gui.interactionFeedback.statusDurationMs;
         gui["log_history"]["transfer_raw_limit"] = config.gui.logHistory.transferRawLimit;
         gui["log_history"]["transfer_frame_limit"] = config.gui.logHistory.transferFrameLimit;
         gui["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
@@ -1546,6 +1559,8 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.hiddenChannelPolicy = config.gui.wave.hiddenChannelPolicy;
     wave.cursorExtremeSnapPolicy = config.gui.wave.cursorExtremeSnapPolicy;
     wave.interactionAnimationEnabled = config.gui.wave.interactionAnimationEnabled;
+    wave.effectiveInteractionAnimationEnabled =
+        config.gui.interactionFeedback.enabled && config.gui.wave.interactionAnimationEnabled;
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;

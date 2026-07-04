@@ -1363,6 +1363,19 @@ void test_application_wave_legend_visibility_config_roundtrip()
     require(application.initialize(), "应用初始化失败");
 
     auto config = application.captureConfig();
+    config.gui.interactionFeedback.enabled = false;
+    config.gui.wave.interactionAnimationEnabled = true;
+    require(application.applyConfig(config), "全局交互反馈配置应用失败");
+    require(application.docks().waveState().view.interactionAnimationEnabled, "全局关闭不应覆盖 Wave Dock 局部动效开关");
+    require(!application.docks().waveState().view.effectiveInteractionAnimationEnabled,
+            "全局关闭时 Wave Dock effective 动效应关闭");
+    {
+        const auto captured = application.captureConfig();
+        require(!captured.gui.interactionFeedback.enabled, "captureConfig 应保留全局交互反馈关闭状态");
+        require(captured.gui.wave.interactionAnimationEnabled, "captureConfig 应保留 Wave Dock 局部动效开启状态");
+    }
+
+    config.gui.interactionFeedback.enabled = true;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
     config.gui.wave.cursorFftHighlightRgba = {0.11F, 0.22F, 0.33F, 0.44F};
@@ -1381,6 +1394,8 @@ void test_application_wave_legend_visibility_config_roundtrip()
     require(!application.docks().waveState().legendOverlay.doubleClickAutoCollapse,
             "应用配置后应同步图例双击展开自动收起开关");
     require(!application.docks().waveState().view.interactionAnimationEnabled, "应用配置后应关闭 Wave Dock 动效");
+    require(!application.docks().waveState().view.effectiveInteractionAnimationEnabled,
+            "Wave 局部关闭时 effective 动效应关闭");
     const auto captured = application.captureConfig();
     require(!captured.gui.wave.showChannelLegend, "captureConfig 应带出图例显示开关");
     require(!captured.gui.wave.showFftLegend, "captureConfig 应带出 FFT 图例显示开关");
@@ -1411,6 +1426,19 @@ void test_application_wave_legend_visibility_config_roundtrip()
     require(capturedLive.gui.wave.legendOverlayDoubleClickAutoCollapse,
             "captureConfig 不应覆盖 dock 中实时图例双击展开自动收起开关");
     require(capturedLive.gui.wave.interactionAnimationEnabled, "captureConfig 不应覆盖 dock 中实时 Wave Dock 动效开关");
+
+    config = application.captureConfig();
+    config.gui.interactionFeedback.statusDurationMs = 25;
+    require(application.applyConfig(config), "全局交互反馈状态提示时长应用失败");
+    application.setStatusMessage("长期状态");
+    application.setTransientStatusMessage("短暂状态");
+    require(application.docks().configState().transientStatusMessage == "短暂状态", "短暂状态提示应写入配置 Dock");
+    require(application.docks().configState().transientStatusExpiresAtMs > 0, "短暂状态提示应写入过期时间");
+    application.clearExpiredTransientStatus(application.docks().configState().transientStatusExpiresAtMs - 1);
+    require(application.docks().configState().transientStatusMessage == "短暂状态", "未到期短暂状态提示不应被清理");
+    application.clearExpiredTransientStatus(application.docks().configState().transientStatusExpiresAtMs);
+    require(application.docks().configState().transientStatusMessage.empty(), "到期短暂状态提示应被清理");
+    require(application.docks().configState().statusMessage == "长期状态", "清理短暂状态不应影响长期状态");
 
     application.shutdown();
 }

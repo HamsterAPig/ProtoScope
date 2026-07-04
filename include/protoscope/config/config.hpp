@@ -174,9 +174,15 @@ struct GuiFontConfig {
     GuiFontChineseGlyphRange chineseGlyphRange{GuiFontChineseGlyphRange::SimplifiedCommon};
 };
 
+struct GuiInteractionFeedbackConfig {
+    bool enabled{true};
+    std::uint64_t statusDurationMs{2000};
+};
+
 struct GuiConfig {
     GuiWindowConfig window{};
     GuiRendererBackend rendererBackend{GuiRendererBackend::OpenGL};
+    GuiInteractionFeedbackConfig interactionFeedback{};
     GuiWaveConfig wave{};
     GuiFontConfig font{};
     GuiLogHistoryConfig logHistory{};

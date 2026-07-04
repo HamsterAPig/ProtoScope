@@ -5,7 +5,9 @@
 #include "protoscope/ui/ui_theme.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
+#include <string_view>
 
 namespace protoscope::ui {
 
@@ -216,9 +218,12 @@ void GuiRuntime::drawStatusBar()
             ImGui::SameLine();
             drawHeaderBadge(recordingText.c_str(), tokens.danger, true);
         }
-        if (!config.statusMessage.empty()) {
+        const std::string_view statusText = !config.transientStatusMessage.empty()
+                                                ? std::string_view{config.transientStatusMessage}
+                                                : std::string_view{config.statusMessage};
+        if (!statusText.empty()) {
             ImGui::SameLine();
-            ImGui::TextDisabled("%s", config.statusMessage.c_str());
+            ImGui::TextDisabled("%.*s", static_cast<int>(statusText.size()), statusText.data());
         }
     }
     ImGui::End();
@@ -1100,6 +1105,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
     const float startX = ImGui::GetCursorScreenPos().x;
     const ScopedImGuiItemWidth itemWidth(luaDynamicControlItemWidth(descriptor, visibleLabel, layoutWidth));
     bool updated = false;
+    const int feedbackStyleColors = pushLuaControlFeedbackStyle(descriptor);
     switch (descriptor.type) {
         case scripting::ControlType::Button:
             updated = drawDynamicButtonControl(control, imguiLabel, layoutWidth);
@@ -1133,10 +1139,82 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
             break;
     }
+    if (feedbackStyleColors > 0) {
+        ImGui::PopStyleColor(feedbackStyleColors);
+    }
     if (layoutWidth.has_value()) {
         reserveLuaDynamicControlWidth(startX, *layoutWidth);
     }
     return updated;
+}
+
+int GuiRuntime::pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& descriptor)
+{
+    if (!application_.runtimeConfig().gui.interactionFeedback.enabled) {
+        return 0;
+    }
+
+    constexpr std::uint64_t kVisualFeedbackDurationMs = 420;
+    const auto stateIter = luaControlFeedbackStates_.find(descriptor.id);
+    if (stateIter == luaControlFeedbackStates_.end() || stateIter->second.triggeredAtMs == 0) {
+        return 0;
+    }
+
+    const std::uint64_t currentMs = nowMs();
+    const std::uint64_t elapsedMs =
+        currentMs > stateIter->second.triggeredAtMs ? currentMs - stateIter->second.triggeredAtMs : 0;
+    if (elapsedMs >= kVisualFeedbackDurationMs) {
+        luaControlFeedbackStates_.erase(stateIter);
+        return 0;
+    }
+
+    const float alpha =
+        1.0F - static_cast<float>(elapsedMs) / static_cast<float>(kVisualFeedbackDurationMs);
+    const ImVec4 accent(0.28F, 0.62F, 1.00F, 1.0F);
+    const auto blend = [alpha](ImVec4 base, ImVec4 highlight, float strength) {
+        const float amount = (std::clamp)(alpha * strength, 0.0F, 1.0F);
+        return ImVec4(base.x + (highlight.x - base.x) * amount,
+                      base.y + (highlight.y - base.y) * amount,
+                      base.z + (highlight.z - base.z) * amount,
+                      base.w);
+    };
+
+    if (descriptor.type == scripting::ControlType::Button) {
+        ImGui::PushStyleColor(ImGuiCol_Button, blend(ImGui::GetStyleColorVec4(ImGuiCol_Button), accent, 0.42F));
+        ImGui::PushStyleColor(
+            ImGuiCol_ButtonHovered, blend(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), accent, 0.50F));
+        ImGui::PushStyleColor(
+            ImGuiCol_ButtonActive, blend(ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive), accent, 0.58F));
+        return 3;
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, blend(ImGui::GetStyleColorVec4(ImGuiCol_FrameBg), accent, 0.32F));
+    ImGui::PushStyleColor(
+        ImGuiCol_FrameBgHovered, blend(ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered), accent, 0.40F));
+    ImGui::PushStyleColor(
+        ImGuiCol_FrameBgActive, blend(ImGui::GetStyleColorVec4(ImGuiCol_FrameBgActive), accent, 0.48F));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(accent.x, accent.y, accent.z, 0.45F * alpha));
+    return 4;
+}
+
+void GuiRuntime::updateDynamicControlValueWithFeedback(const scripting::ControlDescriptor& descriptor,
+                                                       const scripting::ControlValue& value)
+{
+    const bool feedbackEnabled = application_.runtimeConfig().gui.interactionFeedback.enabled;
+    const std::string previousStatus = application_.docks().configState().statusMessage;
+    application_.updateControlValue(descriptor.id, value);
+    if (!feedbackEnabled) {
+        return;
+    }
+
+    luaControlFeedbackStates_[descriptor.id].triggeredAtMs = nowMs();
+    if (application_.docks().configState().statusMessage != previousStatus) {
+        return;
+    }
+
+    const std::string label = descriptor.label.empty() ? descriptor.id : descriptor.label;
+    application_.setTransientStatusMessage(
+        (descriptor.type == scripting::ControlType::Button ? "已触发：" : "已更新：") + label);
 }
 
 bool GuiRuntime::drawDynamicButtonControl(const scripting::ControlSnapshot& control,
@@ -1145,7 +1223,7 @@ bool GuiRuntime::drawDynamicButtonControl(const scripting::ControlSnapshot& cont
 {
     const ImVec2 size(layoutWidth.value_or(0.0F), 0.0F);
     if (ImGui::Button(imguiLabel.c_str(), size)) {
-        application_.updateControlValue(control.descriptor.id, true);
+        updateDynamicControlValueWithFeedback(control.descriptor, true);
         return true;
     }
     return false;
@@ -1159,7 +1237,7 @@ bool GuiRuntime::drawDynamicCheckboxControl(const scripting::ControlSnapshot& co
     bool checked = std::get<bool>(control.value);
     drawLuaControlLeftLabel(descriptor, visibleLabel);
     if (ImGui::Checkbox(inputLabel.c_str(), &checked)) {
-        application_.updateControlValue(descriptor.id, checked);
+        updateDynamicControlValueWithFeedback(descriptor, checked);
         return true;
     }
     return false;
@@ -1174,7 +1252,7 @@ bool GuiRuntime::drawDynamicTextControl(const scripting::ControlSnapshot& contro
     std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
     drawLuaControlLeftLabel(descriptor, visibleLabel);
     if (ImGui::InputText(inputLabel.c_str(), buffer, sizeof(buffer))) {
-        application_.updateControlValue(descriptor.id, std::string(buffer));
+        updateDynamicControlValueWithFeedback(descriptor, std::string(buffer));
         return true;
     }
     return false;
@@ -1192,7 +1270,7 @@ bool GuiRuntime::drawDynamicComboControl(const scripting::ControlSnapshot& contr
     }
     drawLuaControlLeftLabel(descriptor, visibleLabel);
     if (!items.empty() && ImGui::Combo(inputLabel.c_str(), &index, items.data(), static_cast<int>(items.size()))) {
-        application_.updateControlValue(descriptor.id, index);
+        updateDynamicControlValueWithFeedback(descriptor, index);
         return true;
     }
     return false;
@@ -1276,7 +1354,7 @@ bool GuiRuntime::commitElfSymbolComboSelection(const scripting::ControlDescripto
     if (selected == state.options.end()) {
         return false;
     }
-    application_.updateControlValue(descriptor.id, *selected);
+    updateDynamicControlValueWithFeedback(descriptor, *selected);
     return true;
 }
 
@@ -1288,7 +1366,7 @@ bool GuiRuntime::drawDynamicIntControl(const scripting::ControlSnapshot& control
     int value = std::get<int>(control.value);
     drawLuaControlLeftLabel(descriptor, visibleLabel);
     if (ImGui::InputInt(inputLabel.c_str(), &value)) {
-        application_.updateControlValue(descriptor.id, value);
+        updateDynamicControlValueWithFeedback(descriptor, value);
         return true;
     }
     return false;
@@ -1302,7 +1380,7 @@ bool GuiRuntime::drawDynamicFloatControl(const scripting::ControlSnapshot& contr
     float value = std::get<float>(control.value);
     drawLuaControlLeftLabel(descriptor, visibleLabel);
     if (ImGui::InputFloat(inputLabel.c_str(), &value)) {
-        application_.updateControlValue(descriptor.id, value);
+        updateDynamicControlValueWithFeedback(descriptor, value);
         return true;
     }
     return false;
