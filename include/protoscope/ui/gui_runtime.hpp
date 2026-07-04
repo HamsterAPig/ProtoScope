@@ -30,7 +30,7 @@ struct GLFWwindow;
 namespace protoscope::app {
 class Application;
 class StartupDiagnosticsSink;
-}
+} // namespace protoscope::app
 
 namespace protoscope::ui {
 
@@ -139,6 +139,10 @@ private:
     void drawRawCaptureFileDialogs();
     void handleGlobalShortcuts();
     void drawMainMenu();
+    void drawFileMenu();
+    void drawReplayMenu();
+    void drawViewMenu();
+    void drawSettingsMenu();
     void drawHelpMenu();
     void drawLuaViewMenu();
     void drawCommDock();
@@ -233,6 +237,9 @@ private:
                                  const std::string& inputLabel,
                                  std::string_view visibleLabel);
     bool drawValueTableControl(const scripting::ControlSnapshot& control, std::string_view visibleLabel);
+    int pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& descriptor);
+    void updateDynamicControlValueWithFeedback(const scripting::ControlDescriptor& descriptor,
+                                               const scripting::ControlValue& value);
     void updateLuaDockDefaultLayout();
     void requestProtocolWorkspaceSwitch(std::string protocolDir, bool forceReload);
     void processPendingProtocolWorkspaceSwitch();
@@ -466,7 +473,12 @@ private:
         std::vector<scripting::ElfSymbolValue> options;
     };
 
+    struct LuaControlFeedbackState {
+        std::uint64_t triggeredAtMs{0};
+    };
+
     std::unordered_map<std::string, ElfSymbolComboUiState> elfSymbolComboStates_;
+    std::unordered_map<std::string, LuaControlFeedbackState> luaControlFeedbackStates_;
     WaveDockRenderer waveDockRenderer_;
 };
 

@@ -1,5 +1,5 @@
-#include "wave_render_service.hpp"
 #include "wave_context.hpp"
+#include "wave_render_service.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1655,6 +1655,200 @@ void updateSplitCursorReadoutsForChannel(const plot::WaveSnapshot& snapshot,
     }
 }
 
+struct SplitPlotRowOutcome {
+    bool cursorHeld{false};
+    bool userInteracting{false};
+    bool viewportChanged{false};
+};
+
+SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
+                                         const WaveFrameData& frame,
+                                         const plot::WaveSnapshot& snapshot,
+                                         const plot::WaveDisplayData& displayData,
+                                         const WavePlotOverlayPolicy& overlayPolicy,
+                                         WaveFrameState* frameState,
+                                         const std::vector<std::size_t>& visibleChannels,
+                                         std::size_t rowIndex,
+                                         float plotHeight,
+                                         bool mouseInsideSplitRegion,
+                                         bool viewportChangedBeforeRow,
+                                         PlotRenderResult& result)
+{
+    SplitPlotRowOutcome outcome;
+    auto& view = wave.view;
+    const std::size_t channelIndex = visibleChannels[rowIndex];
+    if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
+        return outcome;
+    }
+    const auto& channel = snapshot.channels[channelIndex];
+    const auto& samples = displayData.channels[channelIndex].samples;
+    if (samples.empty()) {
+        return outcome;
+    }
+
+    ImPlot::PushStyleColor(ImPlotCol_PlotBg, ImVec4(0.043F, 0.067F, 0.094F, 1.0F));
+    const std::string plotId = "##wave_split_" + std::to_string(channelIndex);
+    if (ImPlot::BeginPlot(plotId.c_str(), ImVec2(-1.0F, plotHeight), ImPlotFlags_NoLegend)) {
+        constexpr ImPlotAxisFlags xFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoGridLines;
+        constexpr ImPlotAxisFlags yFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoLabel |
+                                           ImPlotAxisFlags_NoGridLines | ImPlotAxisFlags_NoTickMarks |
+                                           ImPlotAxisFlags_NoTickLabels;
+        const bool bottomRow = rowIndex + 1U == visibleChannels.size();
+        const char* xAxisLabel = nullptr;
+        if (bottomRow && view.showAxisLabels) {
+            xAxisLabel = displayData.timeUnit == "sample" ? "Sample" : "Time";
+        }
+        ImPlot::SetupAxis(ImAxis_X1, xAxisLabel, bottomRow ? xFlags : (xFlags | ImPlotAxisFlags_NoTickLabels));
+        ImPlot::SetupAxis(ImAxis_Y1, nullptr, yFlags);
+        ImPlot::SetupAxisLimits(
+            ImAxis_X1,
+            view.viewMinTime,
+            view.viewMaxTime,
+            (view.autoFollowLatest || view.forceNextMainPlotLimits) ? ImPlotCond_Always : ImPlotCond_Once);
+
+        const bool bitChannel = bitDisplayEnabled(channel.bitDisplay);
+        if (bitChannel) {
+            ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
+        } else {
+            double minValue = std::numeric_limits<double>::infinity();
+            double maxValue = -std::numeric_limits<double>::infinity();
+            for (const auto& sample : samples) {
+                if (sample.time < view.viewMinTime || sample.time > view.viewMaxTime) {
+                    continue;
+                }
+                minValue = (std::min)(minValue, sample.value);
+                maxValue = (std::max)(maxValue, sample.value);
+            }
+            if (!std::isfinite(minValue) || !std::isfinite(maxValue) || std::abs(maxValue - minValue) <= 1e-12) {
+                minValue = channel.stats.minValue - 1.0;
+                maxValue = channel.stats.maxValue + 1.0;
+            }
+            const auto range = plot::makeVerticalAutoFitRange(minValue, maxValue, view.verticalAutoFitMultiplier);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, range.minValue, range.maxValue, ImPlotCond_Always);
+        }
+
+        const ImPlotRect limits = ImPlot::GetPlotLimits();
+        drawOscilloscopeGrid(limits);
+        const ImVec4 color = channelColor(channel, channelIndex);
+        BitLaneLayout bitLayout;
+        if (bitChannel) {
+            const std::vector<std::size_t> bitChannelIndices{channelIndex};
+            bitLayout =
+                buildBitLaneLayout(snapshot, bitChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
+            const ImVec2 plotSize = ImPlot::GetPlotSize();
+            const auto plotPixelWidth = static_cast<std::size_t>((std::max)(plotSize.x, 1.0F));
+            const std::size_t vertexBudget =
+                (std::max<std::size_t>) (channel.bitDisplay.bitCount * 2U, frame.renderBudget.pointsPerChannel * 2U);
+            const auto& entry = cachedBitRenderEntry(wave,
+                                                     channel,
+                                                     displayData.channels[channelIndex],
+                                                     bitLayout,
+                                                     channelIndex,
+                                                     limits,
+                                                     plotPixelWidth,
+                                                     vertexBudget);
+            std::size_t renderedPoints = 0;
+            for (const auto& lane : entry.lanes) {
+                renderedPoints += lane.size();
+            }
+            view.lastRenderSourceSampleCount += entry.sourceSampleCount;
+            view.lastRenderPointCount += renderedPoints;
+            drawBitRenderLanes(entry, color, plot::resolveChannelLineWidth(channel));
+            const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.88F, 0.92F, 0.72F));
+            drawBitLaneLabels(bitLayout, limits, labelColor);
+        } else {
+            WaveSampleGetterPayload payload{.samples = samples.data()};
+            ImPlotSpec spec{};
+            spec.LineColor = color;
+            spec.LineWeight = plot::resolveChannelLineWidth(channel);
+            const auto itemLabel = waveChannelItemLabel(channel.label, channelIndex);
+            ImPlot::PlotLineG(itemLabel.c_str(),
+                              reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
+                              &payload,
+                              static_cast<int>(samples.size()),
+                              spec);
+            if (view.glowEnabled) {
+                renderGlowSamples(samples.data(), samples.size(), color, view.glowIntensity, spec.LineWeight);
+            }
+        }
+
+        auto* drawList = ImPlot::GetPlotDrawList();
+        const ImVec2 plotPos = ImPlot::GetPlotPos();
+        const ImVec2 plotSize = ImPlot::GetPlotSize();
+        drawList->AddText(ImVec2(plotPos.x + 8.0F, plotPos.y + 6.0F),
+                          ImGui::ColorConvertFloat4ToU32(ImVec4(0.90F, 0.94F, 0.98F, 0.86F)),
+                          ("CH" + std::to_string(channelIndex + 1U) + "  " + channel.label).c_str());
+
+        const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
+        const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
+        const double timeSnapDistance = visibleTimeWidth / 80.0;
+        const double smartSnapDistance = (std::max)(timeSnapDistance, visibleTimeWidth * 0.02);
+        const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
+        const std::vector<std::size_t> splitChannelIndices{channelIndex};
+        const bool plotHovered = ImPlot::IsPlotHovered();
+        outcome.viewportChanged = handleMainPlotZoom(view, mousePos);
+        if (outcome.viewportChanged) {
+            view.forceNextMainPlotLimits = true;
+        }
+        handleHoverReadout(
+            view, snapshot, displayData, splitChannelIndices, bitLayout, mousePos, timeSnapDistance, valueSnapDistance);
+        const SplitPlotInteractionContext interactionContext{
+            .channelIndex = channelIndex,
+            .plotHovered = plotHovered,
+            .limits = limits,
+            .mousePos = mousePos,
+            .bitLayout = &bitLayout,
+            .timeSnapDistance = timeSnapDistance,
+            .smartSnapDistance = smartSnapDistance,
+            .valueSnapDistance = valueSnapDistance,
+        };
+        bool bitLaneDoubleClickConsumed = false;
+        if (plotHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && bitChannel) {
+            if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
+                bitLaneDoubleClickConsumed = true;
+                resetBitLaneYOffsetFromHit(wave, bitLane->lane);
+            }
+        }
+        outcome.cursorHeld =
+            bitLaneDoubleClickConsumed
+                ? false
+                : handleSplitPlotCursors(view, snapshot, displayData, interactionContext, result.cursorReadouts);
+        const auto intersectionReadouts =
+            collectCursorIntersectionReadouts(view, snapshot, displayData, splitChannelIndices, timeSnapDistance);
+        drawCursorIntersectionReadouts(intersectionReadouts, snapshot);
+        if (plotHovered || (!mouseInsideSplitRegion && channelIndex == view.measurementChannelIndex)) {
+            const double maxCursorReadoutDistance =
+                (std::max)(view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan) / 80.0;
+            updateSplitCursorReadoutsForChannel(
+                snapshot, displayData, view, channelIndex, maxCursorReadoutDistance, result);
+            updateSplitMeasurementResult(view, displayData, result, channelIndex);
+            result.measurementOverlay = {.pos = plotPos, .size = plotSize, .valid = true};
+            if (overlayPolicy.drawMeasurementOverlay) {
+                const auto placement =
+                    resolveMeasurementOverlayPlacementSize(plotPos, plotSize, overlayPolicy.measurementSafeRightX);
+                if (placement.visible) {
+                    drawMeasurementOverlay(
+                        view, snapshot, displayData, result, plotPos, placement.plotSize, ImPlot::GetPlotDrawList());
+                }
+            }
+        }
+
+        const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
+        if (!viewportChangedBeforeRow && !outcome.viewportChanged &&
+            (ImPlot::IsPlotHovered() || ImPlot::IsAxisHovered(ImAxis_X1))) {
+            recordMainPlotLimits(view, updatedLimits);
+        }
+        // 核心流程：ImPlot 交互查询必须在当前子图 EndPlot 前完成，避免分屏结束后访问空 active plot。
+        outcome.userInteracting = bitLaneDoubleClickConsumed || plotInteractionActive(outcome.cursorHeld);
+        ImGui::PushID(static_cast<int>(channelIndex));
+        drawMainPlotContextMenu(wave, frameState);
+        ImGui::PopID();
+        ImPlot::EndPlot();
+    }
+    ImPlot::PopStyleColor();
+    return outcome;
+}
+
 PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
                                             const WaveFrameData& frame,
                                             const WavePlotOverlayPolicy& overlayPolicy,
@@ -1698,189 +1892,21 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
         visibleChannels.size(), ImGui::GetContentRegionAvail().y, ImGui::GetStyle().ItemSpacing.y, 120.0F, 4U);
     ImPlot::PushStyleVar(ImPlotStyleVar_PlotMinSize, ImVec2(64.0F, 24.0F));
     for (std::size_t rowIndex = 0; rowIndex < visibleChannels.size(); ++rowIndex) {
-        const std::size_t channelIndex = visibleChannels[rowIndex];
-        if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size()) {
-            continue;
-        }
-        const auto& channel = snapshot.channels[channelIndex];
-        const auto& samples = displayData.channels[channelIndex].samples;
-        if (samples.empty()) {
-            continue;
-        }
-
-        ImPlot::PushStyleColor(ImPlotCol_PlotBg, ImVec4(0.043F, 0.067F, 0.094F, 1.0F));
-        const std::string plotId = "##wave_split_" + std::to_string(channelIndex);
-        if (ImPlot::BeginPlot(plotId.c_str(), ImVec2(-1.0F, plotHeight), ImPlotFlags_NoLegend)) {
-            constexpr ImPlotAxisFlags xFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoGridLines;
-            constexpr ImPlotAxisFlags yFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoLabel |
-                                               ImPlotAxisFlags_NoGridLines | ImPlotAxisFlags_NoTickMarks |
-                                               ImPlotAxisFlags_NoTickLabels;
-            const bool bottomRow = rowIndex + 1U == visibleChannels.size();
-            const char* xAxisLabel = nullptr;
-            if (bottomRow && view.showAxisLabels) {
-                xAxisLabel = displayData.timeUnit == "sample" ? "Sample" : "Time";
-            }
-            ImPlot::SetupAxis(ImAxis_X1, xAxisLabel, bottomRow ? xFlags : (xFlags | ImPlotAxisFlags_NoTickLabels));
-            ImPlot::SetupAxis(ImAxis_Y1, nullptr, yFlags);
-            ImPlot::SetupAxisLimits(
-                ImAxis_X1,
-                view.viewMinTime,
-                view.viewMaxTime,
-                (view.autoFollowLatest || view.forceNextMainPlotLimits) ? ImPlotCond_Always : ImPlotCond_Once);
-
-            const bool bitChannel = bitDisplayEnabled(channel.bitDisplay);
-            if (bitChannel) {
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
-            } else {
-                double minValue = std::numeric_limits<double>::infinity();
-                double maxValue = -std::numeric_limits<double>::infinity();
-                for (const auto& sample : samples) {
-                    if (sample.time < view.viewMinTime || sample.time > view.viewMaxTime) {
-                        continue;
-                    }
-                    minValue = (std::min)(minValue, sample.value);
-                    maxValue = (std::max)(maxValue, sample.value);
-                }
-                if (!std::isfinite(minValue) || !std::isfinite(maxValue) || std::abs(maxValue - minValue) <= 1e-12) {
-                    minValue = channel.stats.minValue - 1.0;
-                    maxValue = channel.stats.maxValue + 1.0;
-                }
-                const auto range = plot::makeVerticalAutoFitRange(minValue, maxValue, view.verticalAutoFitMultiplier);
-                ImPlot::SetupAxisLimits(ImAxis_Y1, range.minValue, range.maxValue, ImPlotCond_Always);
-            }
-
-            const ImPlotRect limits = ImPlot::GetPlotLimits();
-            drawOscilloscopeGrid(limits);
-            const ImVec4 color = channelColor(channel, channelIndex);
-            BitLaneLayout bitLayout;
-            if (bitChannel) {
-                const std::vector<std::size_t> bitChannelIndices{channelIndex};
-                bitLayout = buildBitLaneLayout(
-                    snapshot, bitChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
-                const ImVec2 plotSize = ImPlot::GetPlotSize();
-                const auto plotPixelWidth = static_cast<std::size_t>((std::max)(plotSize.x, 1.0F));
-                const std::size_t vertexBudget = (std::max<std::size_t>) (channel.bitDisplay.bitCount * 2U,
-                                                                          frame.renderBudget.pointsPerChannel * 2U);
-                const auto& entry = cachedBitRenderEntry(wave,
-                                                         channel,
-                                                         displayData.channels[channelIndex],
-                                                         bitLayout,
-                                                         channelIndex,
-                                                         limits,
-                                                         plotPixelWidth,
-                                                         vertexBudget);
-                std::size_t renderedPoints = 0;
-                for (const auto& lane : entry.lanes) {
-                    renderedPoints += lane.size();
-                }
-                view.lastRenderSourceSampleCount += entry.sourceSampleCount;
-                view.lastRenderPointCount += renderedPoints;
-                drawBitRenderLanes(entry, color, plot::resolveChannelLineWidth(channel));
-                const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.88F, 0.92F, 0.72F));
-                drawBitLaneLabels(bitLayout, limits, labelColor);
-            } else {
-                WaveSampleGetterPayload payload{.samples = samples.data()};
-                ImPlotSpec spec{};
-                spec.LineColor = color;
-                spec.LineWeight = plot::resolveChannelLineWidth(channel);
-                const auto itemLabel = waveChannelItemLabel(channel.label, channelIndex);
-                ImPlot::PlotLineG(itemLabel.c_str(),
-                                  reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
-                                  &payload,
-                                  static_cast<int>(samples.size()),
-                                  spec);
-                if (view.glowEnabled) {
-                    renderGlowSamples(samples.data(), samples.size(), color, view.glowIntensity, spec.LineWeight);
-                }
-            }
-
-            auto* drawList = ImPlot::GetPlotDrawList();
-            const ImVec2 plotPos = ImPlot::GetPlotPos();
-            const ImVec2 plotSize = ImPlot::GetPlotSize();
-            drawList->AddText(ImVec2(plotPos.x + 8.0F, plotPos.y + 6.0F),
-                              ImGui::ColorConvertFloat4ToU32(ImVec4(0.90F, 0.94F, 0.98F, 0.86F)),
-                              ("CH" + std::to_string(channelIndex + 1U) + "  " + channel.label).c_str());
-
-            const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
-            const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
-            const double timeSnapDistance = visibleTimeWidth / 80.0;
-            const double smartSnapDistance = (std::max)(timeSnapDistance, visibleTimeWidth * 0.02);
-            const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
-            const std::vector<std::size_t> splitChannelIndices{channelIndex};
-            const bool plotHovered = ImPlot::IsPlotHovered();
-            const bool splitZoomChanged = handleMainPlotZoom(view, mousePos);
-            viewportChangedThisFrame = splitZoomChanged || viewportChangedThisFrame;
-            if (splitZoomChanged) {
-                view.forceNextMainPlotLimits = true;
-            }
-            handleHoverReadout(view,
-                               snapshot,
-                               displayData,
-                               splitChannelIndices,
-                               bitLayout,
-                               mousePos,
-                               timeSnapDistance,
-                               valueSnapDistance);
-            const SplitPlotInteractionContext interactionContext{
-                .channelIndex = channelIndex,
-                .plotHovered = plotHovered,
-                .limits = limits,
-                .mousePos = mousePos,
-                .bitLayout = &bitLayout,
-                .timeSnapDistance = timeSnapDistance,
-                .smartSnapDistance = smartSnapDistance,
-                .valueSnapDistance = valueSnapDistance,
-            };
-            bool bitLaneDoubleClickConsumed = false;
-            if (plotHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && bitChannel) {
-                if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
-                    bitLaneDoubleClickConsumed = true;
-                    resetBitLaneYOffsetFromHit(wave, bitLane->lane);
-                }
-            }
-            const bool rowCursorHeld =
-                bitLaneDoubleClickConsumed
-                    ? false
-                    : handleSplitPlotCursors(view, snapshot, displayData, interactionContext, result.cursorReadouts);
-            const auto intersectionReadouts =
-                collectCursorIntersectionReadouts(view, snapshot, displayData, splitChannelIndices, timeSnapDistance);
-            drawCursorIntersectionReadouts(intersectionReadouts, snapshot);
-            anyCursorHeld = rowCursorHeld || anyCursorHeld;
-            if (plotHovered || (!mouseInsideSplitRegion && channelIndex == view.measurementChannelIndex)) {
-                const double maxCursorReadoutDistance =
-                    (std::max)(view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan) / 80.0;
-                updateSplitCursorReadoutsForChannel(
-                    snapshot, displayData, view, channelIndex, maxCursorReadoutDistance, result);
-                updateSplitMeasurementResult(view, displayData, result, channelIndex);
-                result.measurementOverlay = {.pos = plotPos, .size = plotSize, .valid = true};
-                if (overlayPolicy.drawMeasurementOverlay) {
-                    const auto placement =
-                        resolveMeasurementOverlayPlacementSize(plotPos, plotSize, overlayPolicy.measurementSafeRightX);
-                    if (placement.visible) {
-                        drawMeasurementOverlay(view,
-                                               snapshot,
-                                               displayData,
-                                               result,
-                                               plotPos,
-                                               placement.plotSize,
-                                               ImPlot::GetPlotDrawList());
-                    }
-                }
-            }
-
-            const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
-            if (!viewportChangedThisFrame && (ImPlot::IsPlotHovered() || ImPlot::IsAxisHovered(ImAxis_X1))) {
-                recordMainPlotLimits(view, updatedLimits);
-            }
-            // 核心流程：ImPlot 交互查询必须在当前子图 EndPlot 前完成，避免分屏结束后访问空 active plot。
-            userInteractingInAnySplitPlot =
-                bitLaneDoubleClickConsumed || plotInteractionActive(rowCursorHeld) || userInteractingInAnySplitPlot;
-            ImGui::PushID(static_cast<int>(channelIndex));
-            drawMainPlotContextMenu(wave, frameState);
-            ImGui::PopID();
-            ImPlot::EndPlot();
-        }
-        ImPlot::PopStyleColor();
+        const auto row = drawSplitChannelPlot(wave,
+                                              frame,
+                                              snapshot,
+                                              displayData,
+                                              overlayPolicy,
+                                              frameState,
+                                              visibleChannels,
+                                              rowIndex,
+                                              plotHeight,
+                                              mouseInsideSplitRegion,
+                                              viewportChangedThisFrame,
+                                              result);
+        viewportChangedThisFrame = row.viewportChanged || viewportChangedThisFrame;
+        anyCursorHeld = row.cursorHeld || anyCursorHeld;
+        userInteractingInAnySplitPlot = row.userInteracting || userInteractingInAnySplitPlot;
     }
     ImPlot::PopStyleVar();
     if (!viewportChangedThisFrame) {
@@ -1920,6 +1946,89 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
     view.measurementCursorReadoutRefreshPending = false;
     result.plotRendered = true;
     return result;
+}
+
+void drawCursorFftHighlight(const plot::WaveViewState& view, const ImPlotRect& limits)
+{
+    if (!view.fft.enabled || view.fft.displayMode != plot::WaveFftDisplayMode::CursorSplit || !view.showCursors ||
+        !view.cursors[0].enabled || !view.cursors[1].enabled) {
+        return;
+    }
+
+    const double minTime = (std::min)(view.cursors[0].time, view.cursors[1].time);
+    const double maxTime = (std::max)(view.cursors[0].time, view.cursors[1].time);
+    if (maxTime <= minTime) {
+        return;
+    }
+
+    const auto& rgba = view.cursorFftHighlightRgba;
+    const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3]));
+    const ImVec2 pixelA = ImPlot::PlotToPixels(minTime, limits.Y.Min);
+    const ImVec2 pixelB = ImPlot::PlotToPixels(maxTime, limits.Y.Max);
+    ImPlot::GetPlotDrawList()->AddRectFilled(ImVec2((std::min)(pixelA.x, pixelB.x), (std::min)(pixelA.y, pixelB.y)),
+                                             ImVec2((std::max)(pixelA.x, pixelB.x), (std::max)(pixelA.y, pixelB.y)),
+                                             fillColor);
+}
+
+void renderMainWaveContent(plot::WaveDockState& wave,
+                           const plot::WaveSnapshot& snapshot,
+                           const plot::WaveDisplayData& renderDisplayData,
+                           const RenderBudget& renderBudget,
+                           const ImPlotRect& limits,
+                           std::vector<std::size_t>& visibleChannelIndices,
+                           BitLaneLayout& bitLayout)
+{
+    auto& view = wave.view;
+    if (view.phosphorEnabled) {
+        resetWaveRenderStats(view, renderBudget);
+        visibleChannelIndices = collectVisiblePhosphorAnalogChannels(wave, snapshot, renderDisplayData, limits);
+        const bool phosphorRendered =
+            renderWavePhosphor(view, snapshot, renderDisplayData, visibleChannelIndices, limits);
+        if (phosphorRendered) {
+            registerPhosphorAnalogChannels(wave, snapshot, renderDisplayData, limits, visibleChannelIndices);
+            renderBitWaveChannels(
+                wave, snapshot, renderDisplayData, renderBudget, limits, visibleChannelIndices, bitLayout);
+            drawBitLaneLabelsIfNeeded(bitLayout, limits);
+            return;
+        }
+
+        const std::string phosphorStatus = view.lastRenderStats.phosphorBackendStatus;
+        renderWaveChannels(wave, snapshot, renderDisplayData, renderBudget, limits, visibleChannelIndices, bitLayout);
+        view.lastRenderStats.phosphorBackendStatus = phosphorStatus;
+        return;
+    }
+
+    renderWaveChannels(wave, snapshot, renderDisplayData, renderBudget, limits, visibleChannelIndices, bitLayout);
+}
+
+void updateMainMeasurementResult(const plot::WaveViewState& view,
+                                 const plot::WaveDisplayData& displayData,
+                                 const BitLaneLayout& bitLayout,
+                                 PlotRenderResult& result)
+{
+    if (!view.showCursors || !result.cursorReadouts[0].has_value() || !result.cursorReadouts[1].has_value()) {
+        return;
+    }
+
+    result.bitMeasurementActive =
+        cursorPairUsesBitLanes(result.cursorReadouts) && activeBitLaneVisible(view, bitLayout);
+    if (result.bitMeasurementActive) {
+        result.measurement = makeBitIntervalMeasurement(*result.cursorReadouts[0], *result.cursorReadouts[1]);
+        return;
+    }
+
+    const auto referenceChannelIndex = view.referenceMode == plot::WaveMeasurementReferenceMode::Channel
+                                           ? std::optional<std::size_t>(view.referenceChannelIndex)
+                                           : std::nullopt;
+    const auto manualReferenceValue = view.referenceMode == plot::WaveMeasurementReferenceMode::ManualValue
+                                          ? std::optional<double>(view.manualReferenceValue)
+                                          : std::nullopt;
+    result.measurement = measureDisplayWindow(displayData,
+                                              view.measurementChannelIndex,
+                                              result.cursorReadouts[0]->time,
+                                              result.cursorReadouts[1]->time,
+                                              referenceChannelIndex,
+                                              manualReferenceValue);
 }
 
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
@@ -1996,21 +2105,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     result.legendOverlay = {.pos = plotPos, .size = plotSize, .valid = true};
     const ImPlotRect limits = ImPlot::GetPlotLimits();
     drawOscilloscopeGrid(limits);
-    if (view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit && view.showCursors &&
-        view.cursors[0].enabled && view.cursors[1].enabled) {
-        const double minTime = (std::min)(view.cursors[0].time, view.cursors[1].time);
-        const double maxTime = (std::max)(view.cursors[0].time, view.cursors[1].time);
-        if (maxTime > minTime) {
-            const auto& rgba = view.cursorFftHighlightRgba;
-            const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3]));
-            const ImVec2 pixelA = ImPlot::PlotToPixels(minTime, limits.Y.Min);
-            const ImVec2 pixelB = ImPlot::PlotToPixels(maxTime, limits.Y.Max);
-            ImPlot::GetPlotDrawList()->AddRectFilled(
-                ImVec2((std::min)(pixelA.x, pixelB.x), (std::min)(pixelA.y, pixelB.y)),
-                ImVec2((std::max)(pixelA.x, pixelB.x), (std::max)(pixelA.y, pixelB.y)),
-                fillColor);
-        }
-    }
+    drawCursorFftHighlight(view, limits);
     const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);
     const double timeSnapDistance = visibleTimeWidth / 80.0;
     double smartSnapDistance = (std::max)(timeSnapDistance, visibleTimeWidth * 0.02);
@@ -2028,26 +2123,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     // 悬停读数必须跟随 ImPlot 图例隐藏状态，只对真实可见波形做吸附。
     std::vector<std::size_t> visibleChannelIndices;
     BitLaneLayout bitLayout;
-    if (view.phosphorEnabled) {
-        resetWaveRenderStats(view, frame.renderBudget);
-        visibleChannelIndices = collectVisiblePhosphorAnalogChannels(wave, frame.snapshot, renderDisplayData, limits);
-        const bool phosphorRendered =
-            renderWavePhosphor(view, frame.snapshot, renderDisplayData, visibleChannelIndices, limits);
-        if (phosphorRendered) {
-            registerPhosphorAnalogChannels(wave, frame.snapshot, renderDisplayData, limits, visibleChannelIndices);
-            renderBitWaveChannels(
-                wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
-            drawBitLaneLabelsIfNeeded(bitLayout, limits);
-        } else {
-            const std::string phosphorStatus = view.lastRenderStats.phosphorBackendStatus;
-            renderWaveChannels(
-                wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
-            view.lastRenderStats.phosphorBackendStatus = phosphorStatus;
-        }
-    } else {
-        renderWaveChannels(
-            wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
-    }
+    renderMainWaveContent(
+        wave, frame.snapshot, renderDisplayData, frame.renderBudget, limits, visibleChannelIndices, bitLayout);
     if (stackedDisplay.has_value()) {
         drawStackedChannelGuides(frame.snapshot, stackedDisplay->channelBaseY);
     }
@@ -2056,8 +2133,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     }
     syncLegendVisibilityState(wave, frame.snapshot);
     if (!zoomSelectionMode) {
-        axisDoubleClickConsumed =
-            handleMainPlotAxisDoubleClick(wave, frame.snapshot, derivedBounds, fullHistoryBounds, visibleChannelIndices);
+        axisDoubleClickConsumed = handleMainPlotAxisDoubleClick(
+            wave, frame.snapshot, derivedBounds, fullHistoryBounds, visibleChannelIndices);
         viewportChangedThisFrame = axisDoubleClickConsumed || viewportChangedThisFrame;
     }
     if (frame.overviewDisplayData != nullptr && frame.fullSnapshot != nullptr) {
@@ -2136,26 +2213,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         drawCursorIntervalHint(*result.cursorReadouts[0], *result.cursorReadouts[1], intervalText, limits);
     }
 
-    if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {
-        result.bitMeasurementActive =
-            cursorPairUsesBitLanes(result.cursorReadouts) && activeBitLaneVisible(view, bitLayout);
-        if (result.bitMeasurementActive) {
-            result.measurement = makeBitIntervalMeasurement(*result.cursorReadouts[0], *result.cursorReadouts[1]);
-        } else {
-            const auto referenceChannelIndex = view.referenceMode == plot::WaveMeasurementReferenceMode::Channel
-                                                   ? std::optional<std::size_t>(view.referenceChannelIndex)
-                                                   : std::nullopt;
-            const auto manualReferenceValue = view.referenceMode == plot::WaveMeasurementReferenceMode::ManualValue
-                                                  ? std::optional<double>(view.manualReferenceValue)
-                                                  : std::nullopt;
-            result.measurement = measureDisplayWindow(displayData,
-                                                      view.measurementChannelIndex,
-                                                      result.cursorReadouts[0]->time,
-                                                      result.cursorReadouts[1]->time,
-                                                      referenceChannelIndex,
-                                                      manualReferenceValue);
-        }
-    }
+    updateMainMeasurementResult(view, displayData, bitLayout, result);
     auto* hostViewport = ImGui::GetWindowViewport();
     if (overlayPolicy.drawMeasurementOverlay) {
         const auto placement =

@@ -9,6 +9,119 @@
 
 namespace protoscope::scripting {
 
+std::optional<ScriptHost::FsOpenRequest> ScriptHost::parseFsOpenRequest(const std::string& pathText,
+                                                                        const sol::object& opts,
+                                                                        std::string& error) const
+{
+    FsOpenRequest request;
+    if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
+        if (!opts.is<sol::table>()) {
+            error = "opts 必须是 table";
+            return std::nullopt;
+        }
+        const auto table = opts.as<sol::table>();
+        request.mode = luaStringField(table, "mode").value_or(request.mode);
+        request.createDirs = luaBoolField(table, "create_dirs").value_or(false);
+        request.overwrite = luaBoolField(table, "overwrite").value_or(false);
+    }
+
+    request.writeMode = request.mode == "write" || request.mode == "append";
+    request.readMode = request.mode == "read";
+    if (!request.readMode && !request.writeMode) {
+        error = "mode 必须是 read/write/append";
+        return std::nullopt;
+    }
+
+    request.path = std::filesystem::path(pathText);
+    if (request.path.is_relative() && !protocolDirectory_.empty()) {
+        request.path = std::filesystem::path(protocolDirectory_) / request.path;
+    }
+    request.path = canonicalPath(request.path);
+    return request;
+}
+
+bool ScriptHost::isFsPathAuthorized(const std::filesystem::path& path, bool writeAccess) const
+{
+    if (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty() &&
+        isSameOrChildPath(canonicalPath(protocolDirectory_), path, true)) {
+        return true;
+    }
+    for (const auto& root : fileIoConfig_.extraAllowedRoots) {
+        if (!root.empty() && isSameOrChildPath(canonicalPath(root), path, true)) {
+            return true;
+        }
+    }
+    for (const auto& root : dialogAuthorizedPaths_) {
+        if ((!writeAccess || root.writable) && (writeAccess || root.readable) &&
+            isSameOrChildPath(root.path, path, root.recursive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ScriptHost::validateFsOpenRequest(const FsOpenRequest& request, std::string& error) const
+{
+    if (!isFsPathAuthorized(request.path, request.writeMode)) {
+        error = "路径未授权: " + request.path.generic_string();
+        return false;
+    }
+
+    std::error_code errorCode;
+    if (request.readMode) {
+        if (!std::filesystem::is_regular_file(request.path, errorCode)) {
+            error = "文件不存在或不是普通文件: " + request.path.generic_string();
+            return false;
+        }
+        const auto size = std::filesystem::file_size(request.path, errorCode);
+        if (errorCode) {
+            error = "读取文件大小失败: " + errorCode.message();
+            return false;
+        }
+        if (size > fileIoConfig_.maxFileSizeBytes) {
+            error = "文件大小超过 max_file_size_bytes";
+            return false;
+        }
+        return true;
+    }
+
+    if (request.createDirs) {
+        std::filesystem::create_directories(request.path.parent_path(), errorCode);
+        if (errorCode) {
+            error = "创建目录失败: " + errorCode.message();
+            return false;
+        }
+    }
+    if (request.mode == "write" && std::filesystem::exists(request.path, errorCode) && !request.overwrite) {
+        error = "文件已存在，需设置 overwrite=true";
+        return false;
+    }
+    return true;
+}
+
+std::unique_ptr<ScriptHost::FileHandle> ScriptHost::createFsOpenHandle(const FsOpenRequest& request, std::string& error)
+{
+    auto handle = std::make_unique<FileHandle>();
+    handle->id = nextFileHandleId();
+    handle->path = request.path;
+    handle->readable = request.readMode;
+    handle->writable = request.writeMode;
+
+    auto openMode = std::ios::binary;
+    if (request.readMode) {
+        openMode |= std::ios::in;
+    } else {
+        openMode |= std::ios::out;
+        openMode |= request.mode == "append" ? std::ios::app : std::ios::trunc;
+    }
+    handle->stream.open(request.path, openMode);
+    if (!handle->stream.is_open()) {
+        error = "打开文件失败: " + request.path.generic_string();
+        return nullptr;
+    }
+    return handle;
+}
+
 std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua,
                                                              const std::string& pathText,
                                                              const sol::object& opts)
@@ -21,91 +134,17 @@ std::tuple<sol::object, sol::object> ScriptHost::protoFsOpen(sol::state_view lua
         return fail("打开文件数超过 max_open_files");
     }
 
-    std::string mode = "read";
-    bool createDirs = false;
-    bool overwrite = false;
-    if (opts.valid() && opts.get_type() != sol::type::lua_nil) {
-        if (!opts.is<sol::table>()) {
-            return fail("opts 必须是 table");
-        }
-        const auto table = opts.as<sol::table>();
-        mode = luaStringField(table, "mode").value_or(mode);
-        createDirs = luaBoolField(table, "create_dirs").value_or(false);
-        overwrite = luaBoolField(table, "overwrite").value_or(false);
+    std::string error;
+    auto request = parseFsOpenRequest(pathText, opts, error);
+    if (!request.has_value()) {
+        return fail(error);
     }
-    const bool writeMode = mode == "write" || mode == "append";
-    const bool readMode = mode == "read";
-    if (!readMode && !writeMode) {
-        return fail("mode 必须是 read/write/append");
+    if (!validateFsOpenRequest(*request, error)) {
+        return fail(error);
     }
-
-    auto path = std::filesystem::path(pathText);
-    if (path.is_relative() && !protocolDirectory_.empty()) {
-        path = std::filesystem::path(protocolDirectory_) / path;
-    }
-    path = canonicalPath(path);
-
-    auto authorized = [&](bool writeAccess) {
-        if (fileIoConfig_.allowProtocolDir && !protocolDirectory_.empty() &&
-            isSameOrChildPath(canonicalPath(protocolDirectory_), path, true)) {
-            return true;
-        }
-        for (const auto& root : fileIoConfig_.extraAllowedRoots) {
-            if (!root.empty() && isSameOrChildPath(canonicalPath(root), path, true)) {
-                return true;
-            }
-        }
-        for (const auto& root : dialogAuthorizedPaths_) {
-            if ((!writeAccess || root.writable) && (writeAccess || root.readable) &&
-                isSameOrChildPath(root.path, path, root.recursive)) {
-                return true;
-            }
-        }
-        return false;
-    };
-    if (!authorized(writeMode)) {
-        return fail("路径未授权: " + path.generic_string());
-    }
-
-    std::error_code errorCode;
-    if (readMode) {
-        if (!std::filesystem::is_regular_file(path, errorCode)) {
-            return fail("文件不存在或不是普通文件: " + path.generic_string());
-        }
-        const auto size = std::filesystem::file_size(path, errorCode);
-        if (errorCode) {
-            return fail("读取文件大小失败: " + errorCode.message());
-        }
-        if (size > fileIoConfig_.maxFileSizeBytes) {
-            return fail("文件大小超过 max_file_size_bytes");
-        }
-    } else {
-        if (createDirs) {
-            std::filesystem::create_directories(path.parent_path(), errorCode);
-            if (errorCode) {
-                return fail("创建目录失败: " + errorCode.message());
-            }
-        }
-        if (mode == "write" && std::filesystem::exists(path, errorCode) && !overwrite) {
-            return fail("文件已存在，需设置 overwrite=true");
-        }
-    }
-
-    auto handle = std::make_unique<FileHandle>();
-    handle->id = nextFileHandleId();
-    handle->path = path;
-    handle->readable = readMode;
-    handle->writable = writeMode;
-    auto openMode = std::ios::binary;
-    if (readMode) {
-        openMode |= std::ios::in;
-    } else {
-        openMode |= std::ios::out;
-        openMode |= mode == "append" ? std::ios::app : std::ios::trunc;
-    }
-    handle->stream.open(path, openMode);
-    if (!handle->stream.is_open()) {
-        return fail("打开文件失败: " + path.generic_string());
+    auto handle = createFsOpenHandle(*request, error);
+    if (handle == nullptr) {
+        return fail(error);
     }
 
     const auto id = handle->id;

@@ -39,7 +39,7 @@ namespace {
     float advanceLegendOverlayProgress(plot::WaveDockState& wave, bool expanded)
     {
         const float target = expanded ? 1.0F : 0.0F;
-        if (!wave.view.interactionAnimationEnabled) {
+        if (!(wave.view.interactionAnimationEnabled && wave.view.effectiveInteractionAnimationEnabled)) {
             wave.legendOverlayProgress = target;
             return target;
         }
@@ -444,11 +444,8 @@ namespace {
         return trimMetricText(formatMetricText(*perDiv, nullptr)) + "/div";
     }
 
-    void drawClippedText(const ImVec2& min,
-                         const ImVec2& max,
-                         const std::string& text,
-                         ImU32 color,
-                         bool tooltipWhenClipped = true)
+    void drawClippedText(
+        const ImVec2& min, const ImVec2& max, const std::string& text, ImU32 color, bool tooltipWhenClipped = true)
     {
         auto* drawList = ImGui::GetWindowDrawList();
         const float textY = min.y + (max.y - min.y - ImGui::GetTextLineHeight()) * 0.5F;
@@ -506,7 +503,7 @@ namespace {
     {
         float maxNameWidth = 0.0F;
         float maxDivisionWidth = ImGui::CalcTextSize("n/a/div").x;
-        const std::size_t rowCount = (std::min<std::size_t>)(channels.size(), kCompactLegendMaxRows);
+        const std::size_t rowCount = (std::min<std::size_t>) (channels.size(), kCompactLegendMaxRows);
         for (std::size_t channelIndex = 0; channelIndex < rowCount; ++channelIndex) {
             const auto spec = wave.buffer.channelSpec(channels[channelIndex]);
             if (!spec.has_value()) {
@@ -514,8 +511,8 @@ namespace {
             }
             maxNameWidth =
                 (std::max)(maxNameWidth, limitLegendNameWidth(ImGui::CalcTextSize(spec->label.c_str()).x, wave.view));
-            maxDivisionWidth = (std::max)(
-                maxDivisionWidth, ImGui::CalcTextSize(formatActualPerDivText(wave.view, *spec).c_str()).x);
+            maxDivisionWidth =
+                (std::max)(maxDivisionWidth, ImGui::CalcTextSize(formatActualPerDivText(wave.view, *spec).c_str()).x);
         }
 
         const auto& style = ImGui::GetStyle();
@@ -529,7 +526,7 @@ namespace {
         const float width =
             (std::clamp)(swatchAndChannelWidth + nameWidth + rightWidth + 30.0F, minWindowWidth, maxWindowWidth);
         const float rowHeight = ImGui::GetTextLineHeight() + style.FramePadding.y * 2.0F;
-        const float effectiveRowCount = static_cast<float>((std::max<std::size_t>)(rowCount, 1U));
+        const float effectiveRowCount = static_cast<float>((std::max<std::size_t>) (rowCount, 1U));
         const float rowsHeight = effectiveRowCount * rowHeight;
         const float moreHeight = channels.size() > rowCount ? ImGui::GetTextLineHeightWithSpacing() : 0.0F;
         const float height = (std::min)(plotSize.y - 16.0F, rowsHeight + moreHeight + style.WindowPadding.y * 2.0F);
@@ -561,10 +558,9 @@ namespace {
         const float divisionWidth = 96.0F;
         const float contentWidth = windowWidth - style.WindowPadding.x * 2.0F;
         const float nameWidth = limitLegendNameWidth(
-            (std::max)(0.0F,
-                       contentWidth - swatchSize - channelWidth - divisionWidth - style.ItemSpacing.x * 4.0F),
+            (std::max)(0.0F, contentWidth - swatchSize - channelWidth - divisionWidth - style.ItemSpacing.x * 4.0F),
             view);
-        const std::size_t maxCompactRows = (std::min<std::size_t>)(channels.size(), kCompactLegendMaxRows);
+        const std::size_t maxCompactRows = (std::min<std::size_t>) (channels.size(), kCompactLegendMaxRows);
 
         if (maxCompactRows == 0U) {
             drawCompactLegendEmptyState(wave, hasAnalogChannels);
@@ -599,8 +595,7 @@ namespace {
             const ImVec2 rowMax(rowMin.x + rowSize.x, rowMin.y + rowSize.y);
             const ImVec4 tint = channelColor(*spec, channelIndex);
             if (active || hovered) {
-                const ImVec4 fill = active ? ImVec4(tint.x, tint.y, tint.z, 0.24F)
-                                           : ImVec4(1.0F, 1.0F, 1.0F, 0.06F);
+                const ImVec4 fill = active ? ImVec4(tint.x, tint.y, tint.z, 0.24F) : ImVec4(1.0F, 1.0F, 1.0F, 0.06F);
                 drawList->AddRectFilled(rowMin, rowMax, ImGui::GetColorU32(fill), 4.0F);
             }
             if (active) {
@@ -831,16 +826,113 @@ namespace {
         const float minWidth = (std::min)(600.0F, maxWidth);
         const float width = (std::clamp)(plotSize.x * 0.70F, minWidth, maxWidth);
         const float maxHeight = (std::max)(48.0F, plotSize.y - 16.0F);
-        const float visibleRows = static_cast<float>((std::min<std::size_t>)(channelCount, kExpandedLegendMaxVisibleRows));
+        const float visibleRows =
+            static_cast<float>((std::min<std::size_t>) (channelCount, kExpandedLegendMaxVisibleRows));
         const float rowHeight = ImGui::GetFrameHeightWithSpacing();
         const float tableHeight =
-            rowHeight * (visibleRows + 1.0F) + (channelCount > kExpandedLegendMaxVisibleRows ? ImGui::GetStyle().ScrollbarSize : 0.0F);
+            rowHeight * (visibleRows + 1.0F) +
+            (channelCount > kExpandedLegendMaxVisibleRows ? ImGui::GetStyle().ScrollbarSize : 0.0F);
         const float chromeHeight = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() +
                                    ImGui::GetStyle().WindowPadding.y * 2.0F + 8.0F;
         const float wantedHeight = chromeHeight + (channelCount == 0U ? rowHeight : tableHeight);
         const float minHeight = (std::min)(110.0F, maxHeight);
         const float height = (std::clamp)(wantedHeight, minHeight, maxHeight);
         return ImVec2(width, height);
+    }
+
+    void resetLegendOverlayTransient(plot::WaveLegendOverlayState& overlay)
+    {
+        overlay.hoverFloating = false;
+        overlay.hoverInteractionLocked = false;
+        overlay.hoverCloseRemainingSec = 0.0F;
+    }
+
+    void collapseLegendOverlay(plot::WaveLegendOverlayState& overlay)
+    {
+        overlay.expanded = false;
+        resetLegendOverlayTransient(overlay);
+    }
+
+    bool normalizeLegendOverlayModeState(plot::WaveDockState& wave)
+    {
+        if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
+            collapseLegendOverlay(wave.legendOverlay);
+            return false;
+        }
+
+        // 固定展开只属于双击模式；悬浮模式每帧都回到瞬态展开语义。
+        if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Hover) {
+            wave.legendOverlay.expanded = false;
+        } else if (!wave.legendOverlay.doubleClickAutoCollapse) {
+            resetLegendOverlayTransient(wave.legendOverlay);
+        }
+        return true;
+    }
+
+    bool drawExpandedLegendHeader(plot::WaveDockState& wave)
+    {
+        bool collapseRequested = false;
+        ImGui::TextUnformatted("通道图例");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("全部恢复")) {
+            if (plot::resetAllChannelViewSettings(wave)) {
+                invalidateWaveDisplayCaches(wave);
+            }
+        }
+        ImGui::SetItemTooltip("恢复所有通道的隐藏状态和显示设置；不清空波形数据。");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("收起")) {
+            collapseLegendOverlay(wave.legendOverlay);
+            collapseRequested = true;
+        }
+        ImGui::SetItemTooltip("收起图内通道图例，保留当前展开方式设置。");
+        ImGui::Separator();
+        return collapseRequested;
+    }
+
+    void updateLegendOverlayInteractionState(
+        plot::WaveDockState& wave, bool legendPopupOpen, bool hovered, bool mouseInActualWindow, bool collapseRequested)
+    {
+        auto& overlay = wave.legendOverlay;
+        // 实际窗口矩形只用于保持已展开交互，不作为新的悬浮触发源。
+        const bool previousInteractionLocked = overlay.hoverInteractionLocked;
+        const bool mouseHeldInLegend =
+            (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Right)) &&
+            (hovered || legendPopupOpen || previousInteractionLocked || (overlay.hoverFloating && mouseInActualWindow));
+        const bool activeLegendInteraction =
+            ImGui::IsAnyItemActive() &&
+            (hovered || legendPopupOpen || previousInteractionLocked || (overlay.hoverFloating && mouseInActualWindow));
+        overlay.hoverInteractionLocked = legendPopupOpen || mouseHeldInLegend || activeLegendInteraction;
+
+        if (overlay.openMode == plot::WaveLegendOverlayOpenMode::Hover) {
+            if (collapseRequested) {
+                resetLegendOverlayTransient(overlay);
+            } else if (hovered || overlay.hoverInteractionLocked) {
+                overlay.hoverFloating = true;
+                overlay.hoverCloseRemainingSec = overlay.hoverCloseDelaySec;
+            } else if (!overlay.expanded && overlay.hoverFloating) {
+                overlay.hoverCloseRemainingSec -= ImGui::GetIO().DeltaTime;
+                if (overlay.hoverCloseRemainingSec <= 0.0F) {
+                    overlay.hoverFloating = false;
+                }
+            }
+        } else if (overlay.doubleClickAutoCollapse) {
+            overlay.hoverFloating = false;
+            if (collapseRequested || !overlay.expanded) {
+                overlay.hoverInteractionLocked = false;
+                overlay.hoverCloseRemainingSec = 0.0F;
+            } else if (hovered || mouseInActualWindow || overlay.hoverInteractionLocked) {
+                // 核心流程：双击展开后只在离开图例且没有拖动/输入交互时开始倒计时收起。
+                overlay.hoverCloseRemainingSec = overlay.hoverCloseDelaySec;
+            } else {
+                overlay.hoverCloseRemainingSec -= ImGui::GetIO().DeltaTime;
+                if (overlay.hoverCloseRemainingSec <= 0.0F) {
+                    collapseLegendOverlay(overlay);
+                }
+            }
+        } else {
+            resetLegendOverlayTransient(overlay);
+        }
     }
 
 } // namespace
@@ -852,21 +944,8 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                               ImGuiViewport* hostViewport,
                               WaveLegendOverlayLayerPolicy layerPolicy)
 {
-    if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Disabled) {
-        wave.legendOverlay.expanded = false;
-        wave.legendOverlay.hoverFloating = false;
-        wave.legendOverlay.hoverInteractionLocked = false;
-        wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
+    if (!normalizeLegendOverlayModeState(wave)) {
         return;
-    }
-
-    // 固定展开只属于双击模式；悬浮模式每帧都回到瞬态展开语义。
-    if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Hover) {
-        wave.legendOverlay.expanded = false;
-    } else if (!wave.legendOverlay.doubleClickAutoCollapse) {
-        wave.legendOverlay.hoverFloating = false;
-        wave.legendOverlay.hoverInteractionLocked = false;
-        wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
     }
 
     if (snapshot.channels.empty() || !wave.view.showChannelLegend) {
@@ -913,34 +992,13 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
             ImGui::BringWindowToDisplayFront(legendWindow);
         }
         ImGui::SetWindowFontScale(kLegendOverlayFontScale);
-        const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
-                                                    ImGuiHoveredFlags_ChildWindows);
+        const bool hovered =
+            ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem | ImGuiHoveredFlags_ChildWindows);
         const ImVec2 actualWindowMin = ImGui::GetWindowPos();
         const ImVec2 actualWindowMax(actualWindowMin.x + ImGui::GetWindowWidth(),
                                      actualWindowMin.y + ImGui::GetWindowHeight());
         const bool mouseInActualWindow = ImGui::IsMouseHoveringRect(actualWindowMin, actualWindowMax, false);
-        bool collapseRequested = false;
-
-        if (effectiveExpanded) {
-            ImGui::TextUnformatted("通道图例");
-            ImGui::SameLine();
-            if (ImGui::SmallButton("全部恢复")) {
-                if (plot::resetAllChannelViewSettings(wave)) {
-                    invalidateWaveDisplayCaches(wave);
-                }
-            }
-            ImGui::SetItemTooltip("恢复所有通道的隐藏状态和显示设置；不清空波形数据。");
-            ImGui::SameLine();
-            if (ImGui::SmallButton("收起")) {
-                wave.legendOverlay.expanded = false;
-                wave.legendOverlay.hoverFloating = false;
-                wave.legendOverlay.hoverInteractionLocked = false;
-                wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
-                collapseRequested = true;
-            }
-            ImGui::SetItemTooltip("收起图内通道图例，保留当前展开方式设置。");
-            ImGui::Separator();
-        }
+        const bool collapseRequested = effectiveExpanded && drawExpandedLegendHeader(wave);
 
         if (effectiveExpanded) {
             drawExpandedLegendRows(wave, expandedChannels);
@@ -955,53 +1013,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
             wave.legendOverlay.hoverCloseRemainingSec = wave.legendOverlay.hoverCloseDelaySec;
         }
 
-        // 实际窗口矩形只用于保持已展开交互，不作为新的悬浮触发源。
-        const bool previousInteractionLocked = wave.legendOverlay.hoverInteractionLocked;
-        const bool mouseHeldInLegend = (ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
-                                        ImGui::IsMouseDown(ImGuiMouseButton_Right)) &&
-                                       (hovered || legendPopupOpen || previousInteractionLocked ||
-                                        (wave.legendOverlay.hoverFloating && mouseInActualWindow));
-        const bool activeLegendInteraction =
-            ImGui::IsAnyItemActive() &&
-            (hovered || legendPopupOpen || previousInteractionLocked ||
-             (wave.legendOverlay.hoverFloating && mouseInActualWindow));
-        wave.legendOverlay.hoverInteractionLocked = legendPopupOpen || mouseHeldInLegend || activeLegendInteraction;
-
-        if (wave.legendOverlay.openMode == plot::WaveLegendOverlayOpenMode::Hover) {
-            if (collapseRequested) {
-                wave.legendOverlay.hoverFloating = false;
-                wave.legendOverlay.hoverInteractionLocked = false;
-                wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
-            } else if (hovered || wave.legendOverlay.hoverInteractionLocked) {
-                wave.legendOverlay.hoverFloating = true;
-                wave.legendOverlay.hoverCloseRemainingSec = wave.legendOverlay.hoverCloseDelaySec;
-            } else if (!wave.legendOverlay.expanded && wave.legendOverlay.hoverFloating) {
-                wave.legendOverlay.hoverCloseRemainingSec -= ImGui::GetIO().DeltaTime;
-                if (wave.legendOverlay.hoverCloseRemainingSec <= 0.0F) {
-                    wave.legendOverlay.hoverFloating = false;
-                }
-            }
-        } else if (wave.legendOverlay.doubleClickAutoCollapse) {
-            wave.legendOverlay.hoverFloating = false;
-            if (collapseRequested || !wave.legendOverlay.expanded) {
-                wave.legendOverlay.hoverInteractionLocked = false;
-                wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
-            } else if (hovered || mouseInActualWindow || wave.legendOverlay.hoverInteractionLocked) {
-                // 核心流程：双击展开后只在离开图例且没有拖动/输入交互时开始倒计时收起。
-                wave.legendOverlay.hoverCloseRemainingSec = wave.legendOverlay.hoverCloseDelaySec;
-            } else {
-                wave.legendOverlay.hoverCloseRemainingSec -= ImGui::GetIO().DeltaTime;
-                if (wave.legendOverlay.hoverCloseRemainingSec <= 0.0F) {
-                    wave.legendOverlay.expanded = false;
-                    wave.legendOverlay.hoverInteractionLocked = false;
-                    wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
-                }
-            }
-        } else {
-            wave.legendOverlay.hoverFloating = false;
-            wave.legendOverlay.hoverInteractionLocked = false;
-            wave.legendOverlay.hoverCloseRemainingSec = 0.0F;
-        }
+        updateLegendOverlayInteractionState(wave, legendPopupOpen, hovered, mouseInActualWindow, collapseRequested);
     }
     ImGui::End();
     ImGui::PopStyleColor(2);

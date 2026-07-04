@@ -436,6 +436,15 @@ private:
     struct LoadSnapshot;
     struct LoadedScript;
 
+    struct FsOpenRequest {
+        std::string mode{"read"};
+        bool createDirs{false};
+        bool overwrite{false};
+        bool readMode{true};
+        bool writeMode{false};
+        std::filesystem::path path;
+    };
+
     sol::state& luaState();
     sol::state_view luaView();
     const std::vector<ControlDescriptor>& controlDescriptors() const;
@@ -507,6 +516,12 @@ private:
     std::tuple<sol::object, sol::object> protoFsOpen(sol::state_view lua,
                                                      const std::string& path,
                                                      const sol::object& opts);
+    std::optional<FsOpenRequest> parseFsOpenRequest(const std::string& pathText,
+                                                    const sol::object& opts,
+                                                    std::string& error) const;
+    bool isFsPathAuthorized(const std::filesystem::path& path, bool writeAccess) const;
+    bool validateFsOpenRequest(const FsOpenRequest& request, std::string& error) const;
+    std::unique_ptr<FileHandle> createFsOpenHandle(const FsOpenRequest& request, std::string& error);
     std::tuple<sol::object, sol::object> protoFsRead(sol::state_view lua,
                                                      std::uint64_t handle,
                                                      const sol::object& opts);
