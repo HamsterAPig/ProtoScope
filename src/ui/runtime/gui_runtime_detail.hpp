@@ -456,6 +456,8 @@ namespace {
                 return "elf_symbol_combo";
             case scripting::ControlType::ValueTable:
                 return "value_table";
+            case scripting::ControlType::TxSequence:
+                return "tx_sequence";
         }
         return "unknown";
     }
@@ -464,7 +466,96 @@ namespace {
     {
         return type == scripting::ControlType::Checkbox || type == scripting::ControlType::InputText ||
                type == scripting::ControlType::Combo || type == scripting::ControlType::InputInt ||
-               type == scripting::ControlType::InputFloat;
+               type == scripting::ControlType::InputFloat || type == scripting::ControlType::TxSequence;
+    }
+
+    [[maybe_unused]] YAML::Node writeTxSequenceFieldValue(const scripting::TxSequenceFieldValue& value)
+    {
+        YAML::Node node;
+        std::visit([&node](const auto& current) { node = current; }, value);
+        return node;
+    }
+
+    [[maybe_unused]] std::optional<scripting::TxSequenceFieldValue> readTxSequenceFieldValue(
+        const YAML::Node& node,
+        const scripting::TxSequenceFieldDescriptor& field)
+    {
+        try {
+            if (field.type == scripting::TxSequenceFieldType::String) {
+                return node.IsScalar() ? std::optional<scripting::TxSequenceFieldValue>(node.as<std::string>())
+                                       : std::nullopt;
+            }
+            if (node.IsScalar()) {
+                return static_cast<std::int64_t>(node.as<long long>());
+            }
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    [[maybe_unused]] std::optional<scripting::TxSequenceValue> readTxSequenceValue(
+        const YAML::Node& node,
+        const scripting::ControlDescriptor& descriptor)
+    {
+        if (!node || !node.IsMap()) {
+            return std::nullopt;
+        }
+        scripting::TxSequenceValue value;
+        try {
+            value.intervalMs = std::max(1, node["interval_ms"].as<int>(descriptor.txSequenceIntervalMs));
+            value.loop = node["loop"].as<bool>(descriptor.txSequenceLoop);
+            value.running = node["running"].as<bool>(false);
+            const auto frames = node["frames"];
+            if (frames && frames.IsSequence()) {
+                for (const auto& frameNode : frames) {
+                    if (!frameNode || !frameNode.IsMap()) {
+                        continue;
+                    }
+                    scripting::TxSequenceFrameValue frame;
+                    frame.id = frameNode["id"].as<std::uint32_t>(0);
+                    frame.enabled = frameNode["enabled"].as<bool>(true);
+                    frame.name = frameNode["name"].as<std::string>("");
+                    const auto fieldsNode = frameNode["fields"];
+                    for (const auto& field : descriptor.txSequenceFields) {
+                        if (fieldsNode && fieldsNode[field.id]) {
+                            if (const auto fieldValue = readTxSequenceFieldValue(fieldsNode[field.id], field)) {
+                                frame.fields[field.id] = *fieldValue;
+                                continue;
+                            }
+                        }
+                        frame.fields[field.id] = field.defaultValue;
+                    }
+                    value.frames.push_back(std::move(frame));
+                }
+            }
+            return value;
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    }
+
+    [[maybe_unused]] YAML::Node writeTxSequenceValue(const scripting::TxSequenceValue& value)
+    {
+        YAML::Node node;
+        node["interval_ms"] = value.intervalMs;
+        node["loop"] = value.loop;
+        node["running"] = value.running;
+        YAML::Node framesNode;
+        for (const auto& frame : value.frames) {
+            YAML::Node frameNode;
+            frameNode["id"] = frame.id;
+            frameNode["enabled"] = frame.enabled;
+            frameNode["name"] = frame.name;
+            YAML::Node fieldsNode;
+            for (const auto& [fieldId, fieldValue] : frame.fields) {
+                fieldsNode[fieldId] = writeTxSequenceFieldValue(fieldValue);
+            }
+            frameNode["fields"] = fieldsNode;
+            framesNode.push_back(frameNode);
+        }
+        node["frames"] = framesNode;
+        return node;
     }
 
     [[maybe_unused]] std::optional<scripting::ControlValue> readControlValue(const YAML::Node& node,
@@ -499,6 +590,8 @@ namespace {
                     break;
                 case scripting::ControlType::ValueTable:
                     break;
+                case scripting::ControlType::TxSequence:
+                    return std::nullopt;
             }
         } catch (const std::exception&) {
             return std::nullopt;
@@ -527,6 +620,11 @@ namespace {
             case scripting::ControlType::Button:
                 break;
             case scripting::ControlType::ValueTable:
+                break;
+            case scripting::ControlType::TxSequence:
+                if (const auto* sequence = std::get_if<scripting::TxSequenceValue>(&control.value)) {
+                    node = writeTxSequenceValue(*sequence);
+                }
                 break;
         }
     }

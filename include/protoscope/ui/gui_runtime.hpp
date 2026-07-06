@@ -237,6 +237,7 @@ private:
                                  const std::string& inputLabel,
                                  std::string_view visibleLabel);
     bool drawValueTableControl(const scripting::ControlSnapshot& control, std::string_view visibleLabel);
+    bool drawTxSequenceControl(const scripting::ControlSnapshot& control, std::string_view visibleLabel);
     int pushLuaControlFeedbackStyle(const scripting::ControlDescriptor& descriptor);
     void updateDynamicControlValueWithFeedback(const scripting::ControlDescriptor& descriptor,
                                                const scripting::ControlValue& value);

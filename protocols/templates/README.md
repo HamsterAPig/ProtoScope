@@ -6,6 +6,7 @@
 
 - `file_dialog`：适合需要让用户选择样本文件、授权目录、读取小块数据的协议。演示 `proto.fs.open_file_dialog()`、`proto.fs.open_dir_dialog()`、`proto.fs.open()`、`proto.fs.read()` 和 `on_file_dialog()`。
 - `send_file`：适合固件、脚本或二进制样本按块发送。演示 `proto.fs.send_file()`、`chunk_size`、`tag` 和 `on_tx()` 进度处理。
+- `tx_sequence`：适合需要在界面动态增删、启停和循环发送多帧的协议。演示 `tx_sequence` 控件、`proto.get_control()`、`proto.set_timer()` 和 `proto.cancel_timer()`。
 - `request_guarded`：适合半双工请求需要超时、重试、熔断保护的场景。演示 `proto.request_guarded()`、`proto.request_done()`、`proto.reset_request_guard()` 和 `on_tx()`。
 - `oscilloscope_control`：适合需要由 Lua 动态 Dock 控制波形运行态的协议。演示 `proto.plot.setup()`、`history_limit`、`proto.plot.push()`、`on_oscilloscope_toggle()` 和 `proto.oscilloscope.set_running()`。
 - `ui_basic`：适合第一次写动态 UI。演示 `ui()`、`controls`、`layout`、`on_control()`、`proto.get_control()`、`proto.set_control()` 和 `proto.ui.alert()`。

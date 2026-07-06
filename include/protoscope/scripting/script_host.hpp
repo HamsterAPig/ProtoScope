@@ -45,6 +45,7 @@ enum class ControlType {
     Combo,
     ElfSymbolCombo,
     ValueTable,
+    TxSequence,
 };
 
 enum class ControlLabelPosition {
@@ -82,6 +83,43 @@ struct ValueTableValue {
     std::vector<ValueTableCellValue> rows;
 };
 
+enum class TxSequenceFieldType {
+    U8,
+    U16,
+    I16,
+    U32,
+    String,
+};
+
+enum class TxSequenceFieldRadix {
+    Dec,
+    Hex,
+};
+
+using TxSequenceFieldValue = std::variant<std::int64_t, std::string>;
+
+struct TxSequenceFieldDescriptor {
+    std::string id;
+    std::string label;
+    TxSequenceFieldType type{TxSequenceFieldType::U16};
+    TxSequenceFieldRadix radix{TxSequenceFieldRadix::Dec};
+    TxSequenceFieldValue defaultValue{std::int64_t{0}};
+};
+
+struct TxSequenceFrameValue {
+    std::uint32_t id{0};
+    bool enabled{true};
+    std::string name;
+    std::unordered_map<std::string, TxSequenceFieldValue> fields;
+};
+
+struct TxSequenceValue {
+    int intervalMs{100};
+    bool loop{false};
+    bool running{false};
+    std::vector<TxSequenceFrameValue> frames;
+};
+
 struct ControlDescriptor {
     ControlType type{ControlType::Button};
     ControlLabelPosition labelPosition{ControlLabelPosition::Left};
@@ -102,9 +140,14 @@ struct ControlDescriptor {
     std::vector<ValueTableRowDescriptor> valueRows;
     std::unordered_map<std::uint32_t, std::size_t> valueRowById;
     std::unordered_map<std::uint32_t, std::vector<std::size_t>> valueBitRowsBySourceId;
+    int txSequenceIntervalMs{100};
+    bool txSequenceLoop{false};
+    std::vector<TxSequenceFieldDescriptor> txSequenceFields;
+    TxSequenceValue txSequenceDefault;
 };
 
-using ControlValue = std::variant<bool, int, float, std::string, ElfSymbolValue, ValueTableValue>;
+using ControlValue =
+    std::variant<bool, int, float, std::string, ElfSymbolValue, ValueTableValue, TxSequenceValue>;
 
 struct ControlSnapshot {
     ControlDescriptor descriptor;

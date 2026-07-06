@@ -199,6 +199,7 @@ std::optional<std::array<float, 4>> parseColorText(std::string_view text)
 }
 
 ValueTableValue defaultValueTableFor(const ControlDescriptor& descriptor);
+TxSequenceValue defaultTxSequenceFor(const ControlDescriptor& descriptor);
 
 ControlValue defaultValueFor(const ControlDescriptor& descriptor)
 {
@@ -219,6 +220,8 @@ ControlValue defaultValueFor(const ControlDescriptor& descriptor)
             return ElfSymbolValue{};
         case ControlType::ValueTable:
             return defaultValueTableFor(descriptor);
+        case ControlType::TxSequence:
+            return defaultTxSequenceFor(descriptor);
     }
     return false;
 }
@@ -331,6 +334,9 @@ std::optional<ControlType> parseControlType(std::string_view value)
     if (value == "value_table") {
         return ControlType::ValueTable;
     }
+    if (value == "tx_sequence") {
+        return ControlType::TxSequence;
+    }
     return std::nullopt;
 }
 
@@ -373,6 +379,119 @@ ValueTableValue defaultValueTableFor(const ControlDescriptor& descriptor)
     ValueTableValue value;
     value.rows.resize(descriptor.valueRows.size());
     return value;
+}
+
+std::int64_t clampTxSequenceInteger(const TxSequenceFieldDescriptor& field, std::int64_t value)
+{
+    switch (field.type) {
+        case TxSequenceFieldType::U8:
+            return std::clamp<std::int64_t>(value, 0, 0xFF);
+        case TxSequenceFieldType::U16:
+            return std::clamp<std::int64_t>(value, 0, 0xFFFF);
+        case TxSequenceFieldType::I16:
+            return std::clamp<std::int64_t>(value, -32768, 32767);
+        case TxSequenceFieldType::U32:
+            return std::clamp<std::int64_t>(value, 0, static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()));
+        case TxSequenceFieldType::String:
+            break;
+    }
+    return value;
+}
+
+std::optional<std::int64_t> readLuaI64(const sol::object& object, std::string_view fieldName, std::string& error)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        error = std::string(fieldName) + " 必须是整数";
+        return std::nullopt;
+    }
+    if (object.is<int>() || object.is<lua_Integer>()) {
+        return static_cast<std::int64_t>(object.as<lua_Integer>());
+    }
+    if (object.is<double>()) {
+        const auto number = object.as<double>();
+        if (std::isfinite(number) && std::floor(number) == number &&
+            number >= static_cast<double>(std::numeric_limits<std::int64_t>::min()) &&
+            number <= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+            return static_cast<std::int64_t>(number);
+        }
+    }
+    error = std::string(fieldName) + " 必须是整数";
+    return std::nullopt;
+}
+
+std::optional<TxSequenceFieldType> parseTxSequenceFieldType(std::string_view value)
+{
+    if (value == "u8") {
+        return TxSequenceFieldType::U8;
+    }
+    if (value == "u16") {
+        return TxSequenceFieldType::U16;
+    }
+    if (value == "i16") {
+        return TxSequenceFieldType::I16;
+    }
+    if (value == "u32") {
+        return TxSequenceFieldType::U32;
+    }
+    if (value == "string") {
+        return TxSequenceFieldType::String;
+    }
+    return std::nullopt;
+}
+
+std::optional<TxSequenceFieldRadix> parseTxSequenceFieldRadix(std::string_view value)
+{
+    if (value.empty() || value == "dec") {
+        return TxSequenceFieldRadix::Dec;
+    }
+    if (value == "hex") {
+        return TxSequenceFieldRadix::Hex;
+    }
+    return std::nullopt;
+}
+
+TxSequenceFieldValue defaultTxSequenceFieldValue(const TxSequenceFieldDescriptor& field)
+{
+    if (field.type == TxSequenceFieldType::String) {
+        if (const auto* text = std::get_if<std::string>(&field.defaultValue)) {
+            return *text;
+        }
+        return std::string();
+    }
+    if (const auto* number = std::get_if<std::int64_t>(&field.defaultValue)) {
+        return clampTxSequenceInteger(field, *number);
+    }
+    return std::int64_t{0};
+}
+
+TxSequenceFrameValue makeDefaultTxSequenceFrame(const ControlDescriptor& descriptor, std::uint32_t id)
+{
+    TxSequenceFrameValue frame;
+    frame.id = id;
+    frame.enabled = true;
+    frame.name = "Frame " + std::to_string(id);
+    for (const auto& field : descriptor.txSequenceFields) {
+        frame.fields[field.id] = defaultTxSequenceFieldValue(field);
+    }
+    return frame;
+}
+
+TxSequenceValue defaultTxSequenceFor(const ControlDescriptor& descriptor)
+{
+    auto value = descriptor.txSequenceDefault;
+    value.intervalMs = descriptor.txSequenceIntervalMs;
+    value.loop = descriptor.txSequenceLoop;
+    value.running = false;
+    return value;
+}
+
+std::uint32_t nextTxSequenceFrameId(const TxSequenceValue& value)
+{
+    std::uint32_t maxId = 0;
+    for (const auto& frame : value.frames) {
+        maxId = std::max(maxId, frame.id);
+    }
+    return maxId == std::numeric_limits<std::uint32_t>::max() ? maxId : maxId + 1U;
 }
 
 struct ValueTableBitSource {
@@ -812,6 +931,117 @@ bool isValidDockAnchor(std::string_view value)
            value == "right_bottom" || value == "main_bottom";
 }
 
+std::optional<TxSequenceFieldValue> txSequenceFieldValueFromLua(const TxSequenceFieldDescriptor& field,
+                                                                const sol::object& object,
+                                                                std::string& error)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return defaultTxSequenceFieldValue(field);
+    }
+    if (field.type == TxSequenceFieldType::String) {
+        if (!object.is<std::string>()) {
+            error = "tx_sequence 字段 " + field.id + " 必须是 string";
+            return std::nullopt;
+        }
+        return object.as<std::string>();
+    }
+
+    const auto number = readLuaI64(object, "tx_sequence 字段 " + field.id, error);
+    if (!number.has_value()) {
+        return std::nullopt;
+    }
+    const auto clamped = clampTxSequenceInteger(field, *number);
+    if (clamped != *number) {
+        error = "tx_sequence 字段 " + field.id + " 超出类型范围";
+        return std::nullopt;
+    }
+    return clamped;
+}
+
+std::optional<TxSequenceFrameValue> txSequenceFrameFromLua(const ControlDescriptor& descriptor,
+                                                           const sol::object& object,
+                                                           std::uint32_t fallbackId,
+                                                           std::string& error)
+{
+    if (!object.is<sol::table>()) {
+        error = "tx_sequence frames 元素必须是 table";
+        return std::nullopt;
+    }
+    const auto table = object.as<sol::table>();
+    auto frame = makeDefaultTxSequenceFrame(descriptor, fallbackId);
+    const sol::object idObject = table["id"];
+    if (idObject.valid() && idObject.get_type() != sol::type::lua_nil) {
+        const auto id = readLuaU32(idObject, "tx_sequence frame id", error);
+        if (!id.has_value()) {
+            return std::nullopt;
+        }
+        frame.id = *id;
+    }
+    frame.enabled = table.get_or("enabled", true);
+    frame.name = readStringField(table, "name", frame.name);
+
+    const sol::object fieldsObject = table["fields"];
+    if (fieldsObject.valid() && fieldsObject.get_type() != sol::type::lua_nil) {
+        if (!fieldsObject.is<sol::table>()) {
+            error = "tx_sequence frame fields 必须是 table";
+            return std::nullopt;
+        }
+        const auto fieldsTable = fieldsObject.as<sol::table>();
+        for (const auto& field : descriptor.txSequenceFields) {
+            const auto parsed = txSequenceFieldValueFromLua(field, fieldsTable[field.id], error);
+            if (!parsed.has_value()) {
+                return std::nullopt;
+            }
+            frame.fields[field.id] = *parsed;
+        }
+    }
+    return frame;
+}
+
+std::optional<TxSequenceValue> txSequenceValueFromLua(const ControlDescriptor& descriptor,
+                                                      const sol::object& object,
+                                                      std::string& error)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        return defaultTxSequenceFor(descriptor);
+    }
+    if (!object.is<sol::table>()) {
+        error = "tx_sequence 控件仅支持 table";
+        return std::nullopt;
+    }
+
+    const auto table = object.as<sol::table>();
+    auto value = defaultTxSequenceFor(descriptor);
+    value.intervalMs = std::max(1, table.get_or("interval_ms", value.intervalMs));
+    value.loop = table.get_or("loop", value.loop);
+    value.running = table.get_or("running", value.running);
+
+    const sol::object framesObject = table["frames"];
+    if (!framesObject.valid() || framesObject.get_type() == sol::type::lua_nil) {
+        return value;
+    }
+    if (!framesObject.is<sol::table>()) {
+        error = "tx_sequence frames 必须是 table";
+        return std::nullopt;
+    }
+
+    value.frames.clear();
+    std::unordered_set<std::uint32_t> ids;
+    const auto framesTable = framesObject.as<sol::table>();
+    for (std::size_t index = 1; index <= framesTable.size(); ++index) {
+        const auto frame = txSequenceFrameFromLua(descriptor, framesTable[index], static_cast<std::uint32_t>(index), error);
+        if (!frame.has_value()) {
+            return std::nullopt;
+        }
+        if (!ids.insert(frame->id).second) {
+            error = "tx_sequence frame id 不能重复: " + std::to_string(frame->id);
+            return std::nullopt;
+        }
+        value.frames.push_back(*frame);
+    }
+    return value;
+}
+
 std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descriptor,
                                                 const sol::object& object,
                                                 std::string& error)
@@ -894,6 +1124,8 @@ std::optional<ControlValue> controlValueFromLua(const ControlDescriptor& descrip
         }
         case ControlType::ValueTable:
             return valueTableValueFromLuaPatch(descriptor, object, error);
+        case ControlType::TxSequence:
+            return txSequenceValueFromLua(descriptor, object, error);
     }
 
     error = "控件 " + descriptor.id + " 类型不匹配，实际收到 " + luaTypeName(object.get_type());
@@ -1253,6 +1485,117 @@ bool applyValueTableControlConfig(ControlDescriptor& descriptor, const sol::tabl
     return true;
 }
 
+bool appendTxSequenceField(ControlDescriptor& descriptor, TxSequenceFieldDescriptor field, std::string& error)
+{
+    if (field.id.empty()) {
+        error = "tx_sequence fields 元素必须提供 id";
+        return false;
+    }
+    if (field.label.empty()) {
+        field.label = field.id;
+    }
+    const auto duplicate = std::find_if(descriptor.txSequenceFields.begin(),
+                                        descriptor.txSequenceFields.end(),
+                                        [&](const auto& item) { return item.id == field.id; });
+    if (duplicate != descriptor.txSequenceFields.end()) {
+        error = "tx_sequence field id 不能重复: " + field.id;
+        return false;
+    }
+    descriptor.txSequenceFields.push_back(std::move(field));
+    return true;
+}
+
+bool applyTxSequenceFieldDefault(TxSequenceFieldDescriptor& field,
+                                 const sol::object& defaultObject,
+                                 std::string& error)
+{
+    if (!defaultObject.valid() || defaultObject.get_type() == sol::type::lua_nil) {
+        field.defaultValue = defaultTxSequenceFieldValue(field);
+        return true;
+    }
+    const auto parsed = txSequenceFieldValueFromLua(field, defaultObject, error);
+    if (!parsed.has_value()) {
+        return false;
+    }
+    field.defaultValue = *parsed;
+    return true;
+}
+
+bool applyTxSequenceFieldsConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    const sol::object fieldsObject = table["fields"];
+    if (!fieldsObject.valid() || !fieldsObject.is<sol::table>()) {
+        error = "tx_sequence 控件必须提供 fields";
+        return false;
+    }
+
+    const auto fields = fieldsObject.as<sol::table>();
+    if (fields.size() == 0) {
+        error = "tx_sequence fields 不能为空";
+        return false;
+    }
+    for (std::size_t index = 1; index <= fields.size(); ++index) {
+        const sol::object fieldObject = fields[index];
+        if (!fieldObject.is<sol::table>()) {
+            error = "tx_sequence fields 元素必须是 table";
+            return false;
+        }
+        const auto fieldTable = fieldObject.as<sol::table>();
+        TxSequenceFieldDescriptor field;
+        field.id = readStringFieldOrPosition(fieldTable, "id", 1);
+        field.label = readStringFieldOrPosition(fieldTable, "label", 2, field.id);
+        const auto typeText = readStringField(fieldTable, "type", "u16");
+        const auto fieldType = parseTxSequenceFieldType(typeText);
+        if (!fieldType.has_value()) {
+            error = "tx_sequence field type 仅支持 u8、u16、i16、u32、string";
+            return false;
+        }
+        field.type = *fieldType;
+        const auto radix = parseTxSequenceFieldRadix(readStringField(fieldTable, "radix", "dec"));
+        if (!radix.has_value()) {
+            error = "tx_sequence field radix 仅支持 hex 或 dec";
+            return false;
+        }
+        field.radix = *radix;
+        if (field.type == TxSequenceFieldType::String && field.radix == TxSequenceFieldRadix::Hex) {
+            error = "tx_sequence string 字段不支持 radix = hex";
+            return false;
+        }
+        if (!applyTxSequenceFieldDefault(field, fieldTable["default"], error)) {
+            return false;
+        }
+        if (!appendTxSequenceField(descriptor, std::move(field), error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool applyTxSequenceControlConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
+{
+    descriptor.txSequenceIntervalMs = std::max(1, table.get_or("interval_ms", 100));
+    descriptor.txSequenceLoop = table.get_or("loop", false);
+    if (!applyTxSequenceFieldsConfig(descriptor, table, error)) {
+        return false;
+    }
+
+    descriptor.txSequenceDefault.intervalMs = descriptor.txSequenceIntervalMs;
+    descriptor.txSequenceDefault.loop = descriptor.txSequenceLoop;
+    descriptor.txSequenceDefault.running = false;
+    descriptor.txSequenceDefault.frames.clear();
+
+    const sol::object defaultObject = table["default"];
+    if (defaultObject.valid() && defaultObject.get_type() != sol::type::lua_nil) {
+        const auto parsed = txSequenceValueFromLua(descriptor, defaultObject, error);
+        if (!parsed.has_value()) {
+            return false;
+        }
+        descriptor.txSequenceDefault = *parsed;
+        descriptor.txSequenceDefault.running = false;
+    }
+    return true;
+}
+
 bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
 {
     switch (descriptor.type) {
@@ -1276,8 +1619,49 @@ bool applyControlTypeConfig(ControlDescriptor& descriptor, const sol::table& tab
             return applyElfSymbolComboConfig(descriptor, table, error);
         case ControlType::ValueTable:
             return applyValueTableControlConfig(descriptor, table, error);
+        case ControlType::TxSequence:
+            return applyTxSequenceControlConfig(descriptor, table, error);
     }
     return true;
+}
+
+sol::object txSequenceFieldValueToLua(sol::state_view lua, const TxSequenceFieldValue& value)
+{
+    return std::visit(
+        [&lua](const auto& current) -> sol::object {
+            return sol::make_object(lua, current);
+        },
+        value);
+}
+
+sol::object txSequenceValueToLua(sol::state_view lua,
+                                 const ControlDescriptor& descriptor,
+                                 const TxSequenceValue& value)
+{
+    sol::table table = lua.create_table();
+    table["interval_ms"] = value.intervalMs;
+    table["loop"] = value.loop;
+    table["running"] = value.running;
+
+    sol::table frames = lua.create_table();
+    for (std::size_t index = 0; index < value.frames.size(); ++index) {
+        const auto& frame = value.frames[index];
+        sol::table frameTable = lua.create_table();
+        frameTable["id"] = frame.id;
+        frameTable["enabled"] = frame.enabled;
+        frameTable["name"] = frame.name;
+        sol::table fields = lua.create_table();
+        for (const auto& field : descriptor.txSequenceFields) {
+            const auto valueIter = frame.fields.find(field.id);
+            fields[field.id] = valueIter == frame.fields.end()
+                                   ? txSequenceFieldValueToLua(lua, defaultTxSequenceFieldValue(field))
+                                   : txSequenceFieldValueToLua(lua, valueIter->second);
+        }
+        frameTable["fields"] = fields;
+        frames[index + 1] = frameTable;
+    }
+    table["frames"] = frames;
+    return sol::make_object(lua, table);
 }
 
 sol::object controlValueToLua(sol::state_view lua, const ControlDescriptor* descriptor, const ControlValue& value)
@@ -1320,10 +1704,19 @@ sol::object controlValueToLua(sol::state_view lua, const ControlDescriptor* desc
         return sol::make_object(lua, rows);
     }
 
+    if (descriptor->type == ControlType::TxSequence) {
+        const auto* sequence = std::get_if<TxSequenceValue>(&value);
+        if (sequence == nullptr) {
+            return sol::make_object(lua, sol::lua_nil);
+        }
+        return txSequenceValueToLua(lua, *descriptor, *sequence);
+    }
+
     return std::visit(
         [&lua](const auto& current) -> sol::object {
             using ValueType = std::decay_t<decltype(current)>;
-            if constexpr (std::is_same_v<ValueType, ElfSymbolValue> || std::is_same_v<ValueType, ValueTableValue>) {
+            if constexpr (std::is_same_v<ValueType, ElfSymbolValue> || std::is_same_v<ValueType, ValueTableValue> ||
+                          std::is_same_v<ValueType, TxSequenceValue>) {
                 return sol::make_object(lua, sol::lua_nil);
             } else {
                 return sol::make_object(lua, current);
@@ -4084,6 +4477,9 @@ std::string ScriptHost::valueToString(const ControlValue& value)
                     }
                 }
                 return "value_table rows=" + std::to_string(setCount);
+            } else if constexpr (std::is_same_v<ValueType, TxSequenceValue>) {
+                return "tx_sequence frames=" + std::to_string(current.frames.size()) +
+                       " running=" + (current.running ? "true" : "false");
             } else {
                 std::ostringstream builder;
                 builder << current;

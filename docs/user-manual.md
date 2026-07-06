@@ -343,8 +343,12 @@ scripting:
 - `checkbox`
 - `combo`
 - `elf_symbol_combo`
+- `value_table`
+- `tx_sequence`
 
 布局可以省略，省略时按 `controls` 声明顺序显示；也可以使用 Layout Tree 组合 `column`、`flow`、`inline_group`、`table`、`group`、`collapse` 等节点。多个 Dock 可以通过 `tab_group` 合并到同一组选项卡。完整语法见 `protocols/README.md`。
+
+`tx_sequence` 用于 Lua 定义字段列、界面动态维护多帧序列。用户可以增删、复制、移动、启用帧，设置全局发送间隔和循环开关；脚本在 `on_control()` / `on_timer()` 中读取完整状态，自己组帧并调用 `proto.send()`、`proto.request()` 或 `proto.request_guarded()`。
 
 ### 常用回调
 
@@ -370,8 +374,8 @@ scripting:
 - `proto.emit(name, payload)`：输出脚本事件。
 - `proto.set_timer(name, interval_ms)` / `proto.cancel_timer(name)`：管理定时器。
 - `proto.status.set(text, opts?)` / `proto.status.clear()`：更新状态提示。
-- `proto.get_control(id)`：读取动态控件当前值，常用于按钮点击时取回输入框、开关或下拉框状态。
-- `proto.set_control(id, value)`：把协议结果或脚本状态写回控件，常用于刷新只读状态、回填最近操作或更新 `value_table`。
+- `proto.get_control(id)`：读取动态控件当前值，常用于按钮点击时取回输入框、开关、下拉框或 `tx_sequence` 状态。
+- `proto.set_control(id, value)`：把协议结果或脚本状态写回控件，常用于刷新只读状态、回填最近操作、更新 `value_table` 或同步 `tx_sequence`。
 - `proto.ui.alert(opts)` / `proto.ui.confirm(opts)`：弹出脚本对话框，支持可选 `window` 子表配置初始宽高、位置、是否可拖动和是否自动尺寸。
 - `proto.fs.*`：打开文件对话框、读写文件、查询文件状态和分块发送文件；文件对话框仍使用系统原生窗口，不支持 Lua 控制宽高、位置或拖动能力。
 - `proto.plot.setup(config)` / `proto.plot.push(channel, data)`：声明并推送波形。
