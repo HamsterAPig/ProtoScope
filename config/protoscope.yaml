@@ -24,6 +24,9 @@ gui:
   font:
     # simplified_common 启动更快；full 会加载完整 CJK 字形范围，适合需要显示生僻字时手动开启。
     chinese_glyph_range: simplified_common
+  interaction_feedback:
+    enabled: true
+    status_duration_ms: 2000
   wave:
     fullscreen_mode: overlay
     control_mode: oscilloscope
@@ -33,10 +36,12 @@ gui:
     channel_double_click_action: reset_scale_offset
     x_axis_double_click_action: fit_full_history
     y_axis_double_click_action: fit_visible_channels
+    y_axis_double_click_adjust_offset: true
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct
     legend_overlay_double_click_auto_collapse: true
+    interaction_animation_enabled: true
     zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22

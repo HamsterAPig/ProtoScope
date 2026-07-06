@@ -570,6 +570,16 @@ namespace {
         }
     }
 
+    void loadGuiInteractionFeedbackConfig(const YAML::Node& gui, AppConfig& config)
+    {
+        if (const auto feedback = childNode(gui, "interaction_feedback")) {
+            config.gui.interactionFeedback.enabled =
+                readScalar<bool>(feedback, "enabled", config.gui.interactionFeedback.enabled);
+            config.gui.interactionFeedback.statusDurationMs = readScalar<std::uint64_t>(
+                feedback, "status_duration_ms", config.gui.interactionFeedback.statusDurationMs);
+        }
+    }
+
     void loadGuiWaveConfig(const YAML::Node& wave, AppConfig& config)
     {
         config.gui.wave.controlMode = parseWaveControlMode(
@@ -600,6 +610,8 @@ namespace {
                                     "y_axis_double_click_action",
                                     toWaveYAxisDoubleClickActionText(config.gui.wave.yAxisDoubleClickAction)),
             config.gui.wave.yAxisDoubleClickAction);
+        config.gui.wave.yAxisDoubleClickAdjustOffset = readScalar<bool>(
+            wave, "y_axis_double_click_adjust_offset", config.gui.wave.yAxisDoubleClickAdjustOffset);
         config.gui.wave.hiddenChannelPolicy = parseWaveHiddenChannelPolicy(
             readScalar<std::string>(
                 wave, "hidden_channel_policy", toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy)),
@@ -620,6 +632,8 @@ namespace {
             config.gui.wave.legendOverlayOpenMode);
         config.gui.wave.legendOverlayDoubleClickAutoCollapse = readScalar<bool>(
             wave, "legend_overlay_double_click_auto_collapse", config.gui.wave.legendOverlayDoubleClickAutoCollapse);
+        config.gui.wave.interactionAnimationEnabled =
+            readScalar<bool>(wave, "interaction_animation_enabled", config.gui.wave.interactionAnimationEnabled);
         config.gui.wave.zoomSelectionAutoExit =
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
         config.gui.wave.peakDetectDownsample =
@@ -770,6 +784,7 @@ namespace {
             parseGuiRendererBackend(rendererBackendText).value_or(GuiRendererBackend::OpenGL);
         loadGuiWindowConfig(gui, config);
         loadGuiFontConfig(gui, config);
+        loadGuiInteractionFeedbackConfig(gui, config);
         if (const auto wave = childNode(gui, "wave")) {
             loadGuiWaveConfig(wave, config);
             loadGuiWaveScopedRuntimeConfig(gui, config);
@@ -990,6 +1005,7 @@ namespace {
             toWaveXAxisDoubleClickActionText(config.gui.wave.xAxisDoubleClickAction);
         gui["wave"]["y_axis_double_click_action"] =
             toWaveYAxisDoubleClickActionText(config.gui.wave.yAxisDoubleClickAction);
+        gui["wave"]["y_axis_double_click_adjust_offset"] = config.gui.wave.yAxisDoubleClickAdjustOffset;
         gui["wave"]["hidden_channel_policy"] = toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy);
         gui["wave"]["cursor_extreme_snap_policy"] =
             toWaveCursorExtremeSnapPolicyText(config.gui.wave.cursorExtremeSnapPolicy);
@@ -997,6 +1013,7 @@ namespace {
         gui["wave"]["legend_overlay_open_mode"] =
             toWaveLegendOverlayOpenModeText(config.gui.wave.legendOverlayOpenMode);
         gui["wave"]["legend_overlay_double_click_auto_collapse"] = config.gui.wave.legendOverlayDoubleClickAutoCollapse;
+        gui["wave"]["interaction_animation_enabled"] = config.gui.wave.interactionAnimationEnabled;
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
         gui["wave"]["peak_detect_downsample"] = config.gui.wave.peakDetectDownsample;
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
@@ -1034,6 +1051,8 @@ namespace {
     {
         const auto& explicitOverrides = config.performance.explicitOverrides;
 
+        gui["interaction_feedback"]["enabled"] = config.gui.interactionFeedback.enabled;
+        gui["interaction_feedback"]["status_duration_ms"] = config.gui.interactionFeedback.statusDurationMs;
         gui["log_history"]["transfer_raw_limit"] = config.gui.logHistory.transferRawLimit;
         gui["log_history"]["transfer_frame_limit"] = config.gui.logHistory.transferFrameLimit;
         gui["log_history"]["host_limit"] = config.gui.logHistory.hostLimit;
@@ -1524,6 +1543,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
     wave.xAxisDoubleClickAction = config.gui.wave.xAxisDoubleClickAction;
     wave.yAxisDoubleClickAction = config.gui.wave.yAxisDoubleClickAction;
+    wave.yAxisDoubleClickAdjustOffset = config.gui.wave.yAxisDoubleClickAdjustOffset;
     wave.mouseYOffsetDragMode = config.gui.wave.mouseYOffsetDragMode;
     wave.zoomSelectionAutoExit = config.gui.wave.zoomSelectionAutoExit;
     wave.peakDetectDownsample = config.gui.wave.peakDetectDownsample;
@@ -1538,6 +1558,9 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.verticalAutoFitMultiplier = positiveOrFallback(config.gui.wave.verticalAutoFitMultiplier, 1.25);
     wave.hiddenChannelPolicy = config.gui.wave.hiddenChannelPolicy;
     wave.cursorExtremeSnapPolicy = config.gui.wave.cursorExtremeSnapPolicy;
+    wave.interactionAnimationEnabled = config.gui.wave.interactionAnimationEnabled;
+    wave.effectiveInteractionAnimationEnabled =
+        config.gui.interactionFeedback.enabled && config.gui.wave.interactionAnimationEnabled;
     wave.showAxisLabels = config.gui.wave.showAxisLabels;
     wave.showChannelLegend = config.gui.wave.showChannelLegend;
     wave.showFftLegend = config.gui.wave.showFftLegend;
@@ -1584,6 +1607,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
     config.gui.wave.xAxisDoubleClickAction = dockStore.waveState().view.xAxisDoubleClickAction;
     config.gui.wave.yAxisDoubleClickAction = dockStore.waveState().view.yAxisDoubleClickAction;
+    config.gui.wave.yAxisDoubleClickAdjustOffset = dockStore.waveState().view.yAxisDoubleClickAdjustOffset;
     config.gui.wave.mouseYOffsetDragMode = dockStore.waveState().view.mouseYOffsetDragMode;
     config.gui.wave.zoomSelectionAutoExit = dockStore.waveState().view.zoomSelectionAutoExit;
     config.gui.wave.peakDetectDownsample = dockStore.waveState().view.peakDetectDownsample;
@@ -1598,6 +1622,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.verticalAutoFitMultiplier = dockStore.waveState().view.verticalAutoFitMultiplier;
     config.gui.wave.hiddenChannelPolicy = dockStore.waveState().view.hiddenChannelPolicy;
     config.gui.wave.cursorExtremeSnapPolicy = dockStore.waveState().view.cursorExtremeSnapPolicy;
+    config.gui.wave.interactionAnimationEnabled = dockStore.waveState().view.interactionAnimationEnabled;
     config.gui.wave.showAxisLabels = dockStore.waveState().view.showAxisLabels;
     config.gui.wave.showChannelLegend = dockStore.waveState().view.showChannelLegend;
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;

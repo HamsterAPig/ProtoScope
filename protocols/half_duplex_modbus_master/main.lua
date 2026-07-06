@@ -29,6 +29,7 @@ local upload_frame_cursor = 0
 local upload_sequence_state = nil
 local stopping_stream = false
 local last_noise_discarded_message = nil
+local scope_running = false
 
 local function append_bytes(target, source)
   for index = 1, #source do
@@ -131,6 +132,10 @@ local function read_gain(id, fallback)
   return value
 end
 
+local function history_limit()
+  return read_positive_int("history_limit", 30000)
+end
+
 local function setup_plot(reset_history)
   proto.plot.setup({
     source = "sn_scope_master",
@@ -141,8 +146,14 @@ local function setup_plot(reset_history)
       { label = "CH3", unit = "V", scale = 1.0, color = "#FFB74D" },
       { label = "CH4", unit = "V", scale = 1.0, color = "#E57373" },
     },
-    history_limit = 30000,
+    history_limit = history_limit(),
   })
+end
+
+local function sync_scope_running(running)
+  scope_running = running == true
+  proto.oscilloscope.set_running(scope_running)
+  proto.set_control("scope_state", scope_running and "上传运行中" or "上传已停止")
 end
 
 local function clear_request_state(request_id)
@@ -287,11 +298,13 @@ local function auto_configure_and_start()
       ok = queue_fc06(item.address, item.value, item.tag)
     end
     if not ok then
-      return
+      return false
     end
   end
 
+  proto.set_control("scope_state", "等待启动 ACK")
   proto.status.set("已入队 5 条 SN Scope 请求，等待宿主半双工调度", { level = "info" })
+  return true
 end
 
 local function send_start_stop(start_value)
@@ -301,9 +314,14 @@ local function send_start_stop(start_value)
   else
     stopping_stream = false
   end
-  if not queue_fc06(REG_STREAM_SWITCH, start_value, tag) and tag == "stop_stream" then
+  local queued = queue_fc06(REG_STREAM_SWITCH, start_value, tag)
+  if not queued and tag == "stop_stream" then
     stopping_stream = false
   end
+  if queued then
+    proto.set_control("scope_state", start_value == 0 and "等待停止 ACK" or "等待启动 ACK")
+  end
+  return queued
 end
 
 local function read_gain_registers()
@@ -397,7 +415,13 @@ local function handle_fc06_ack(ctx, frame)
   local received_address = fields.address or 0
   local received_value = fields.value or 0
   if active.kind == "fc06" and received_address == active.address and received_value == active.value then
+    local tag = active.tag
     finish_active_request(true, "FC06 ACK 匹配: " .. request_summary(active), "info")
+    if tag == "start_stream" then
+      sync_scope_running(true)
+    elseif tag == "stop_stream" then
+      sync_scope_running(false)
+    end
     return
   end
 
@@ -640,6 +664,8 @@ function ui()
         { type = "button", id = "stop_stream", label = "停止上传" },
         { type = "button", id = "read_gain", label = "读取增益系数" },
         { type = "button", id = "clear_plot", label = "清空波形" },
+        { type = "input_int", id = "history_limit", label = "历史上限", default = 30000 },
+        { type = "input_text", id = "scope_state", label = "上传状态", default = "上传已停止" },
       },
     },
   }
@@ -654,15 +680,18 @@ function on_open(ctx)
   last_noise_discarded_message = nil
   proto.status.clear()
   setup_plot(true)
+  sync_scope_running(false)
 end
 
 function on_close(ctx)
   stopping_stream = false
   last_noise_discarded_message = nil
+  sync_scope_running(false)
   proto.status.clear()
 end
 
 function on_error(ctx, message)
+  sync_scope_running(false)
   proto.status.set("连接错误: " .. tostring(message), { level = "error" })
 end
 
@@ -717,5 +746,18 @@ function on_control(ctx, id, value)
     upload_sequence_state = nil
     setup_plot(true)
     proto.status.set("波形已清空", { level = "info" })
+  elseif id == "history_limit" then
+    setup_plot(false)
+    proto.status.set("波形历史上限已应用: " .. tostring(history_limit()), { level = "info" })
   end
+end
+
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  -- 真实设备范式：工具栏只发起启停请求，等 FC06 ACK 匹配后再同步运行态。
+  if target_running then
+    auto_configure_and_start()
+  else
+    send_start_stop(0x0000)
+  end
+  return false
 end

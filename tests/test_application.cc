@@ -239,6 +239,20 @@ protoscope::plot::RawCaptureEvent makePlotSetupEvent(bool resetHistory = true)
     return event;
 }
 
+void writePlotSetupOnOpenProtocol(const std::filesystem::path& protocolDir)
+{
+    std::ofstream out(protocolDir / "main.lua");
+    require(out.good(), "plot.setup on_open 测试协议应可写入");
+    out << "function on_open(ctx)\n";
+    out << "  proto.plot.setup({\n";
+    out << "    source = 'follow_regression', reset_history = true,\n";
+    out << "    time_scale = 0.5, time_unit = 'ms', vertical_min = -20, vertical_max = 100, vertical_unit = '℃', "
+           "history_limit = 128,\n";
+    out << "    channels = { { label = '温度A', unit = '℃', ratio = 0.5, scale = 2.0, offset = -1.0 } }\n";
+    out << "  })\n";
+    out << "end\n";
+}
+
 void writeRuntimeProfileProtocol(const std::filesystem::path& protocolDir)
 {
     std::ofstream out(protocolDir / "main.lua");
@@ -1349,11 +1363,25 @@ void test_application_wave_legend_visibility_config_roundtrip()
     require(application.initialize(), "应用初始化失败");
 
     auto config = application.captureConfig();
+    config.gui.interactionFeedback.enabled = false;
+    config.gui.wave.interactionAnimationEnabled = true;
+    require(application.applyConfig(config), "全局交互反馈配置应用失败");
+    require(application.docks().waveState().view.interactionAnimationEnabled, "全局关闭不应覆盖 Wave Dock 局部动效开关");
+    require(!application.docks().waveState().view.effectiveInteractionAnimationEnabled,
+            "全局关闭时 Wave Dock effective 动效应关闭");
+    {
+        const auto captured = application.captureConfig();
+        require(!captured.gui.interactionFeedback.enabled, "captureConfig 应保留全局交互反馈关闭状态");
+        require(captured.gui.wave.interactionAnimationEnabled, "captureConfig 应保留 Wave Dock 局部动效开启状态");
+    }
+
+    config.gui.interactionFeedback.enabled = true;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
     config.gui.wave.cursorFftHighlightRgba = {0.11F, 0.22F, 0.33F, 0.44F};
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
+    config.gui.wave.interactionAnimationEnabled = false;
     require(application.applyConfig(config), "图例显示配置应用失败");
 
     require(!application.docks().waveState().view.showChannelLegend, "应用配置后应隐藏图例");
@@ -1365,6 +1393,9 @@ void test_application_wave_legend_visibility_config_roundtrip()
             "应用配置后应切换隐藏 CH 策略");
     require(!application.docks().waveState().legendOverlay.doubleClickAutoCollapse,
             "应用配置后应同步图例双击展开自动收起开关");
+    require(!application.docks().waveState().view.interactionAnimationEnabled, "应用配置后应关闭 Wave Dock 动效");
+    require(!application.docks().waveState().view.effectiveInteractionAnimationEnabled,
+            "Wave 局部关闭时 effective 动效应关闭");
     const auto captured = application.captureConfig();
     require(!captured.gui.wave.showChannelLegend, "captureConfig 应带出图例显示开关");
     require(!captured.gui.wave.showFftLegend, "captureConfig 应带出 FFT 图例显示开关");
@@ -1374,6 +1405,7 @@ void test_application_wave_legend_visibility_config_roundtrip()
     require(captured.gui.wave.hiddenChannelPolicy == protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "captureConfig 应带出隐藏 CH 策略");
     require(!captured.gui.wave.legendOverlayDoubleClickAutoCollapse, "captureConfig 应带出图例双击展开自动收起开关");
+    require(!captured.gui.wave.interactionAnimationEnabled, "captureConfig 应带出 Wave Dock 动效开关");
 
     application.docks().waveState().view.showChannelLegend = true;
     application.docks().waveState().view.showFftLegend = true;
@@ -1381,6 +1413,7 @@ void test_application_wave_legend_visibility_config_roundtrip()
     application.docks().waveState().view.hiddenChannelPolicy =
         protoscope::plot::WaveHiddenChannelPolicy::IncludeInDerivedViews;
     application.docks().waveState().legendOverlay.doubleClickAutoCollapse = true;
+    application.docks().waveState().view.interactionAnimationEnabled = true;
     const auto capturedLive = application.captureConfig();
     require(capturedLive.gui.wave.showChannelLegend, "captureConfig 不应覆盖 dock 中实时波形图例状态");
     require(capturedLive.gui.wave.showFftLegend, "captureConfig 不应覆盖 dock 中实时 FFT 图例状态");
@@ -1392,6 +1425,20 @@ void test_application_wave_legend_visibility_config_roundtrip()
         "captureConfig 不应覆盖 dock 中实时隐藏 CH 策略");
     require(capturedLive.gui.wave.legendOverlayDoubleClickAutoCollapse,
             "captureConfig 不应覆盖 dock 中实时图例双击展开自动收起开关");
+    require(capturedLive.gui.wave.interactionAnimationEnabled, "captureConfig 不应覆盖 dock 中实时 Wave Dock 动效开关");
+
+    config = application.captureConfig();
+    config.gui.interactionFeedback.statusDurationMs = 25;
+    require(application.applyConfig(config), "全局交互反馈状态提示时长应用失败");
+    application.setStatusMessage("长期状态");
+    application.setTransientStatusMessage("短暂状态");
+    require(application.docks().configState().transientStatusMessage == "短暂状态", "短暂状态提示应写入配置 Dock");
+    require(application.docks().configState().transientStatusExpiresAtMs > 0, "短暂状态提示应写入过期时间");
+    application.clearExpiredTransientStatus(application.docks().configState().transientStatusExpiresAtMs - 1);
+    require(application.docks().configState().transientStatusMessage == "短暂状态", "未到期短暂状态提示不应被清理");
+    application.clearExpiredTransientStatus(application.docks().configState().transientStatusExpiresAtMs);
+    require(application.docks().configState().transientStatusMessage.empty(), "到期短暂状态提示应被清理");
+    require(application.docks().configState().statusMessage == "长期状态", "清理短暂状态不应影响长期状态");
 
     application.shutdown();
 }
@@ -1407,10 +1454,12 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
             "captureConfig 默认应保持 X 轴双击全历史缩放");
     require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "captureConfig 默认应保持 Y 轴双击适配可见通道");
+    require(config.gui.wave.yAxisDoubleClickAdjustOffset, "captureConfig 默认应保持 Y 轴双击同步调整 offset");
 
     config.gui.wave.zoomSelectionAutoExit = true;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
     config.gui.wave.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
+    config.gui.wave.yAxisDoubleClickAdjustOffset = false;
     require(application.applyConfig(config), "框选放大自动退出配置应用失败");
     require(application.docks().waveState().view.zoomSelectionAutoExit, "应用配置后应同步更新框选放大退出模式");
     require(application.docks().waveState().view.xAxisDoubleClickAction ==
@@ -1419,6 +1468,8 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
     require(application.docks().waveState().view.yAxisDoubleClickAction ==
                 protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
             "应用配置后应同步 Y 轴双击行为");
+    require(!application.docks().waveState().view.yAxisDoubleClickAdjustOffset,
+            "应用配置后应同步 Y 轴双击 offset 调整开关");
 
     const auto captured = application.captureConfig();
     require(captured.gui.wave.zoomSelectionAutoExit, "captureConfig 应带出框选放大退出模式");
@@ -1426,12 +1477,14 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
             "captureConfig 应带出 X 轴双击行为");
     require(captured.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
             "captureConfig 应带出 Y 轴双击行为");
+    require(!captured.gui.wave.yAxisDoubleClickAdjustOffset, "captureConfig 应带出 Y 轴双击 offset 调整开关");
 
     application.docks().waveState().view.zoomSelectionAutoExit = false;
     application.docks().waveState().view.xAxisDoubleClickAction =
         protoscope::plot::WaveXAxisDoubleClickAction::FitFullHistory;
     application.docks().waveState().view.yAxisDoubleClickAction =
         protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels;
+    application.docks().waveState().view.yAxisDoubleClickAdjustOffset = true;
     const auto capturedLive = application.captureConfig();
     require(!capturedLive.gui.wave.zoomSelectionAutoExit, "captureConfig 不应覆盖 dock 中实时框选放大退出模式");
     require(
@@ -1440,6 +1493,8 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
     require(capturedLive.gui.wave.yAxisDoubleClickAction ==
                 protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "captureConfig 不应覆盖 dock 中实时 Y 轴双击行为");
+    require(capturedLive.gui.wave.yAxisDoubleClickAdjustOffset,
+            "captureConfig 不应覆盖 dock 中实时 Y 轴双击 offset 调整开关");
 
     application.shutdown();
 }
@@ -1589,6 +1644,135 @@ void test_application_plot_setup_reset_applies_reset_viewport_policy()
             "plot setup reset 应应用 X 锚点策略");
     require(std::abs(view.manualVerticalMin + 20.0) < 1e-12, "plot setup reset 应按协议默认 Y 下限");
     require(std::abs(view.manualVerticalMax - 100.0) < 1e-12, "plot setup reset 应按协议默认 Y 上限");
+
+    application.shutdown();
+}
+
+void test_application_plot_setup_reset_history_preserves_paused_follow()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-plot-setup-follow-paused"));
+    writePlotSetupOnOpenProtocol(protocolDir.path());
+
+    auto transportState = std::make_shared<RecordingTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<RecordingTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "plot.setup on_open 协议应可加载");
+
+    auto& wave = application.docks().waveState();
+    wave.view.autoFollowLatest = false;
+
+    application.openTransport();
+    require(waitUntil([&application, &wave] {
+                application.pumpOnce();
+                return wave.buffer.channelSpec(0).has_value();
+            }),
+            "plot.setup on_open 应被应用到波形状态");
+
+    require(!wave.view.autoFollowLatest, "用户已暂停时 plot.setup(reset_history=true) 不应恢复跟随");
+
+    application.shutdown();
+}
+
+void test_application_plot_setup_reset_history_preserves_active_follow()
+{
+    const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-plot-setup-follow-active"));
+    writePlotSetupOnOpenProtocol(protocolDir.path());
+
+    auto transportState = std::make_shared<RecordingTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<RecordingTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir.path().generic_string(), true),
+            "plot.setup on_open 协议应可加载");
+
+    auto& wave = application.docks().waveState();
+    wave.view.autoFollowLatest = true;
+
+    application.openTransport();
+    require(waitUntil([&application, &wave] {
+                application.pumpOnce();
+                return wave.buffer.channelSpec(0).has_value();
+            }),
+            "plot.setup on_open 应被应用到波形状态");
+
+    require(wave.view.autoFollowLatest, "用户仍在跟随时 plot.setup(reset_history=true) 应保持跟随");
+
+    application.shutdown();
+}
+
+void test_application_plot_setup_reset_history_preserves_channel_overrides()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    const auto& lua = application.docks().luaState();
+    protoscope::plot::RawCaptureFileData capture{
+        .protocolName = lua.protocolName,
+        .protocolDir = lua.protocolDir,
+        .sampleFrequencyHz = 0.0,
+        .capturedAtMs = 0,
+        .payload = {},
+        .events = {makePlotSetupEvent(true)},
+    };
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "plot.setup 覆盖保留回放应可载入");
+    require(application.stepRawCaptureReplay(error), "首次 plot.setup 回放应成功");
+
+    auto& wave = application.docks().waveState();
+    require(wave.buffer.channelSpec(0).has_value(), "首次 plot.setup 应被应用到波形状态");
+
+    auto updated = *wave.buffer.channelSpec(0);
+    updated.label = "用户CH";
+    updated.ratio = 3.0;
+    updated.scale = 4.0;
+    updated.offset = 10.0;
+    updated.color = std::array<float, 4>{0.9F, 0.8F, 0.7F, 1.0F};
+    updated.bitDisplay.yOffset = 6.0;
+    wave.buffer.setChannelSpec(0, updated);
+    wave.channelOverrides.resize(1);
+    auto& overrideState = wave.channelOverrides[0];
+    overrideState.labelOverridden = true;
+    overrideState.ratioOverridden = true;
+    overrideState.scaleOverridden = true;
+    overrideState.offsetOverridden = true;
+    overrideState.colorOverridden = true;
+    overrideState.bitYOffsetOverridden = true;
+    overrideState.label = updated.label;
+    overrideState.ratio = updated.ratio;
+    overrideState.scale = updated.scale;
+    overrideState.offset = updated.offset;
+    overrideState.color = updated.color;
+    overrideState.bitYOffset = updated.bitDisplay.yOffset;
+    wave.buffer.append(0, {.samples = {{0.0, 42.0}}});
+    require(wave.buffer.snapshot(0.0, 1.0).channels[0].totalSamples == 1U, "测试样本应先写入当前历史");
+
+    require(application.seekRawCaptureReplay(0, error), "plot.setup 覆盖保留回放应可回到起点");
+    require(application.stepRawCaptureReplay(error), "第二次 plot.setup(reset_history=true) 应可回放");
+    require(wave.buffer.snapshot(0.0, 1.0).channels[0].totalSamples == 0U,
+            "第二次 plot.setup(reset_history=true) 应清空当前历史");
+
+    const auto spec = wave.buffer.channelSpec(0);
+    require(spec.has_value(), "第二次 plot.setup 后应仍有通道配置");
+    require(spec->label == "用户CH", "reset_history 不应清除 label 覆盖");
+    require(std::abs(spec->ratio - 3.0) < 1e-12, "reset_history 不应清除 ratio 覆盖");
+    require(std::abs(spec->scale - 4.0) < 1e-12, "reset_history 不应清除 scale 覆盖");
+    require(std::abs(spec->offset - 10.0) < 1e-12, "reset_history 不应清除 offset 覆盖");
+    require(spec->color.has_value() && std::abs((*spec->color)[0] - 0.9F) < 1e-6F,
+            "reset_history 不应清除 color 覆盖");
+    require(std::abs(spec->bitDisplay.yOffset - 6.0) < 1e-12,
+            "reset_history 不应清除 bit_y_offset 覆盖");
+    require(wave.channelOverrides.size() == 1 && wave.channelOverrides[0].colorOverridden,
+            "覆盖状态应保留 colorOverridden 标记");
+    require(wave.defaultChannelSpecs.size() == 1 && wave.defaultChannelSpecs[0].label == "温度A",
+            "Lua 默认通道规格应继续记录协议原始身份");
 
     application.shutdown();
 }

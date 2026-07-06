@@ -14,6 +14,9 @@ function ui()
         { type = "combo", id = "mode", label = "模式", options = { "轮询", "单次" }, default = 1 },
         { type = "input_int", id = "timeout_ms", label = "超时(ms)", default = 1000 },
         { type = "input_float", id = "scale", label = "缩放", default = 1.0 },
+        { type = "input_int", id = "history_limit", label = "历史上限", default = 2000 },
+        { type = "button", id = "clear_plot", label = "清空波形" },
+        { type = "input_text", id = "scope_state", label = "波形状态", default = "波形记录中" },
         { type = "elf_symbol_combo", id = "target_symbol", label = "ELF 变量" },
       },
       layout = {
@@ -45,6 +48,21 @@ function ui()
                   { type = "control", id = "mode" },
                   { type = "control", id = "timeout_ms" },
                   { type = "control", id = "scale" },
+                  { type = "control", id = "history_limit" },
+                }
+              }
+            }
+          },
+          {
+            type = "collapse",
+            title = "波形控制",
+            default_open = true,
+            children = {
+              {
+                type = "flow",
+                children = {
+                  { type = "control", id = "clear_plot" },
+                  { type = "control", id = "scope_state", min_width = 220 },
                 }
               }
             }
@@ -72,20 +90,42 @@ local rx_buffer = {}
 local next_scope_t = 0.0
 local current_request_id = nil
 local current_request_tag = nil
+local scope_running = true
 
-proto.plot.setup({
-  source = "default_protocol",
-  channels = {
-    { label = "CH1", unit = "V", color = "#47C971" },
-    { label = "CH2", unit = "V", color = "#5B8FF9" },
-  },
-  time_scale = 0.2,
-  time_unit = "s",
-  vertical_min = -1.5,
-  vertical_max = 1.5,
-  vertical_unit = "V",
-  history_limit = 2000,
-})
+local function read_non_negative_int(id, fallback)
+  local value = math.floor(tonumber(proto.get_control(id)) or fallback or 0)
+  if value < 0 then
+    return fallback
+  end
+  return value
+end
+
+local function history_limit()
+  return read_non_negative_int("history_limit", 2000)
+end
+
+local function setup_plot(reset_history)
+  proto.plot.setup({
+    source = "default_protocol",
+    reset_history = reset_history,
+    channels = {
+      { label = "CH1", unit = "V", color = "#47C971" },
+      { label = "CH2", unit = "V", color = "#5B8FF9" },
+    },
+    time_scale = 0.2,
+    time_unit = "s",
+    vertical_min = -1.5,
+    vertical_max = 1.5,
+    vertical_unit = "V",
+    history_limit = history_limit(),
+  })
+end
+
+local function set_scope_running(running)
+  scope_running = running == true
+  proto.oscilloscope.set_running(scope_running)
+  proto.set_control("scope_state", scope_running and "波形记录中" or "波形已暂停")
+end
 
 local function clear_rx_buffer()
   rx_buffer = {}
@@ -134,6 +174,9 @@ local function parse_frame(buffer)
 end
 
 local function push_scope_samples(bytes)
+  if not scope_running then
+    return
+  end
   local scale = current_scale()
   local samples = {}
   for _, value in ipairs(bytes) do
@@ -151,19 +194,25 @@ local function clear_pending_request()
   current_request_tag = nil
 end
 
+setup_plot(false)
+proto.oscilloscope.set_running(true)
+
 function on_open(ctx)
   proto.log("info", "连接已打开: " .. ctx.kind .. " -> " .. ctx.endpoint)
+  set_scope_running(true)
   proto.status.set("连接已打开，等待发送请求", { level = "info" })
 end
 
 function on_close(ctx)
   proto.log("info", "连接已关闭: " .. ctx.endpoint)
+  set_scope_running(false)
   proto.status.clear()
   clear_pending_request()
 end
 
 function on_error(ctx, message)
   proto.log("error", "连接错误: " .. message)
+  set_scope_running(false)
   proto.status.set("连接错误: " .. message, { level = "error" })
   clear_pending_request()
 end
@@ -209,7 +258,20 @@ function on_control(ctx, id, value)
   elseif id == "target_symbol" then
     -- 核心流程：示范从新增 elf_symbol_combo 读取 `{ label, value, type }`，并用 info 日志输出变量信息。
     log_symbol_info(proto.get_control("target_symbol") or value)
+  elseif id == "clear_plot" then
+    next_scope_t = 0.0
+    setup_plot(true)
+    proto.status.set("默认协议波形已清空", { level = "info" })
+  elseif id == "history_limit" then
+    -- 核心流程：历史上限通过重新 setup 波形视图生效；0 表示不裁剪。
+    setup_plot(false)
+    proto.status.set("默认协议波形历史上限已应用: " .. tostring(history_limit()), { level = "info" })
   end
+end
+
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  set_scope_running(target_running)
+  return true
 end
 
 function on_bytes(ctx, bytes)

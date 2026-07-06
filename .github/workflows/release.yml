@@ -92,6 +92,38 @@ jobs:
           "Package tag: $packageTag"
           "Asset base: $assetBase"
 
+      - name: Check source hygiene
+        shell: pwsh
+        run: |
+          $previousTags = @(
+            git tag --merged HEAD --list "v*.*.*" |
+              Where-Object { $_ -match '^v\d+\.\d+\.\d+$' -and $_ -ne $env:RELEASE_TAG } |
+              ForEach-Object {
+                [pscustomobject]@{
+                  Name = $_
+                  Version = [version]($_ -replace '^v', '')
+                }
+              } |
+              Sort-Object -Property @{ Expression = { $_.Version }; Descending = $true }
+          )
+
+          if ($previousTags.Count -gt 0) {
+            $range = "$($previousTags[0].Name)..HEAD"
+          } else {
+            $emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+            $range = "$emptyTree..HEAD"
+          }
+
+          "Checking whitespace in range: $range"
+          git diff --check $range
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Verify generated Lua API
+        shell: pwsh
+        run: python tools/generate_luals_api.py --check
+
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
@@ -169,7 +201,11 @@ jobs:
         shell: pwsh
         run: |
           $assetDir = "release-assets"
+          $stagingDir = "release-package"
+          $zipCheckDir = "release-check"
           New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $zipCheckDir | Out-Null
 
           if (-not (Test-Path $env:EXE_PATH)) {
             throw "Expected executable was not found: $env:EXE_PATH"
@@ -179,8 +215,58 @@ jobs:
           $zipAssetName = "$env:ASSET_BASE.zip"
           $exeAsset = Join-Path $assetDir $exeAssetName
           $zipAsset = Join-Path $assetDir $zipAssetName
+          $packageDir = Join-Path $stagingDir $env:ASSET_BASE
+          $packageConfigDir = Join-Path $packageDir "config"
+          $packageDocsDir = Join-Path $packageDir "docs"
+          $packageProtocolsDir = Join-Path $packageDir "protocols"
+
+          New-Item -ItemType Directory -Force -Path $packageConfigDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $packageDocsDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $packageProtocolsDir | Out-Null
+
           Copy-Item -Path $env:EXE_PATH -Destination $exeAsset -Force
-          Compress-Archive -Path $exeAsset -DestinationPath $zipAsset -Force
+          Copy-Item -Path $env:EXE_PATH -Destination (Join-Path $packageDir "ProtoScope.exe") -Force
+          Copy-Item -Path README.md -Destination (Join-Path $packageDir "README.md") -Force
+          Copy-Item -Path LICENSE -Destination (Join-Path $packageDir "LICENSE") -Force
+          Copy-Item -Path config/protoscope.yaml -Destination (Join-Path $packageConfigDir "protoscope.yaml") -Force
+          Copy-Item -Path docs/* -Destination $packageDocsDir -Recurse -Force
+          Copy-Item -Path protocols/* -Destination $packageProtocolsDir -Recurse -Force
+
+          $requiredPackageFiles = @(
+            "ProtoScope.exe",
+            "README.md",
+            "LICENSE",
+            "config/protoscope.yaml",
+            "docs/user-manual.md",
+            "docs/config-reference.md",
+            "docs/lua-host-integration.md",
+            "docs/module-design.md",
+            "docs/release-checklist.md",
+            "protocols/README.md",
+            "protocols/protoscope_api.lua",
+            "protocols/stream_types.lua",
+            "protocols/default_protocol/main.lua",
+            "protocols/lua_waveform_demo/main.lua",
+            "protocols/half_duplex_modbus_master/main.lua",
+            "protocols/half_duplex_modbus_slave/main.lua",
+            "protocols/templates/README.md",
+            "protocols/templates/oscilloscope_control/main.lua"
+          )
+          foreach ($relativePath in $requiredPackageFiles) {
+            $fullPath = Join-Path $packageDir $relativePath
+            if (-not (Test-Path $fullPath)) {
+              throw "Release package is missing required file: $relativePath"
+            }
+          }
+
+          Compress-Archive -Path $packageDir -DestinationPath $zipAsset -Force
+          Expand-Archive -Path $zipAsset -DestinationPath $zipCheckDir -Force
+          foreach ($relativePath in $requiredPackageFiles) {
+            $fullPath = Join-Path $zipCheckDir "$env:ASSET_BASE/$relativePath"
+            if (-not (Test-Path $fullPath)) {
+              throw "Release zip is missing required file: $relativePath"
+            }
+          }
 
           Get-FileHash -Algorithm SHA256 $exeAsset |
             ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
@@ -202,25 +288,103 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $notes = @"
-          ProtoScope $env:RELEASE_TAG
+          $previousTags = @(
+            git tag --merged HEAD --list "v*.*.*" |
+              Where-Object { $_ -match '^v\d+\.\d+\.\d+$' -and $_ -ne $env:RELEASE_TAG } |
+              ForEach-Object {
+                [pscustomobject]@{
+                  Name = $_
+                  Version = [version]($_ -replace '^v', '')
+                }
+              } |
+              Sort-Object -Property @{ Expression = { $_.Version }; Descending = $true }
+          )
 
-          Assets:
-          - $env:ASSET_BASE.exe
-          - $env:ASSET_BASE.zip
-          - SHA256 checksums
-          "@
+          if ($previousTags.Count -gt 0) {
+            $changeRange = "$($previousTags[0].Name)..HEAD"
+            $changeTitle = "Changes since $($previousTags[0].Name):"
+          } else {
+            $changeRange = "HEAD"
+            $changeTitle = "Changes in this build:"
+          }
+
+          $changes = @(git log --pretty=format:"- %s (%h)" $changeRange)
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          if ($changes.Count -eq 0) {
+            $changes = @("- No code changes since the previous release tag.")
+          }
+
+          if ($previousTags.Count -gt 0) {
+            $changedPaths = @(git diff --name-only $changeRange)
+          } else {
+            $changedPaths = @(git ls-tree -r --name-only HEAD)
+          }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $luaTouchedPaths = @(
+            $changedPaths |
+              Where-Object {
+                ($_ -match '^protocols/(protoscope_api_manifest\.json|protoscope_api\.lua|stream_types\.lua|README\.md|templates/|[^/]+/main\.lua)') -or
+                ($_ -match '^docs/(user-manual|lua-host-integration)\.md$')
+              } |
+              Sort-Object -Unique
+          )
+
+          $luaNotes = @()
+          if ($luaTouchedPaths.Count -gt 0) {
+            $luaNotes = @(
+              "",
+              "Lua API and protocol templates:",
+              "- Lua scripting or bundled examples changed; review protocols/README.md and docs/user-manual.md before publishing.",
+              "- Recommended copyable sample: protocols/templates/oscilloscope_control (toolbar toggle, Lua Dock controls, history_limit, reset_history).",
+              "- Editor hints are packaged in protocols/protoscope_api.lua and must match protocols/protoscope_api_manifest.json."
+            )
+          }
+
+          $notesPath = "release-notes.md"
+          $releaseDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+          $notesLines = @(
+            "ProtoScope $env:RELEASE_TAG",
+            "Release date (UTC): $releaseDate",
+            "",
+            $changeTitle
+          ) + $changes + $luaNotes + @(
+            "",
+            "Assets:",
+            "- $env:ASSET_BASE.exe: standalone executable",
+            "- $env:ASSET_BASE.zip: executable, README, LICENSE, default config, docs and Lua protocol examples",
+            "- SHA256 checksums"
+          )
+          Set-Content -Path $notesPath -Value $notesLines -Encoding UTF8
 
           gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:RELEASE_TAG release-assets/* `
               --repo $env:GITHUB_REPOSITORY `
               --clobber
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            gh release edit $env:RELEASE_TAG `
+              --repo $env:GITHUB_REPOSITORY `
+              --title "ProtoScope $env:RELEASE_TAG" `
+              --notes-file $notesPath
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
           } else {
             gh release create $env:RELEASE_TAG release-assets/* `
               --repo $env:GITHUB_REPOSITORY `
               --title "ProtoScope $env:RELEASE_TAG" `
-              --notes $notes `
+              --notes-file $notesPath `
               --target $env:GITHUB_SHA `
               --draft
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
           }

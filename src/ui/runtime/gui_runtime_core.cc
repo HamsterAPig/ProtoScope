@@ -1416,6 +1416,7 @@ void GuiRuntime::renderFrame()
     const bool previousShowScriptDock = showScriptDock_;
     const bool previousShowWaveDock = showWaveDock_;
 
+    application_.clearExpiredTransientStatus(nowMs());
     drawStatusBar();
     drawRegisteredDocks();
     const bool waveOverlayFullscreen =

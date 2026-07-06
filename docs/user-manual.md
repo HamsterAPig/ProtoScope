@@ -48,6 +48,7 @@ protocols/
     ├── file_dialog/
     ├── request_guarded/
     ├── send_file/
+    ├── oscilloscope_control/
     ├── ui_basic/
     ├── ui_layouts/
     └── ui_dialogs/
@@ -60,6 +61,8 @@ protocols/
 - `通讯配置`：选择通讯模式并连接或断开。
 - `协议脚本 / 动态控件`：选择协议根目录和协议目录，重新扫描或重新加载协议。
 - `收发数据`：查看 RX/TX 记录，切换原始数据和逐帧视图，手动发送数据。
+- `请求追踪`：查看请求、响应和超时链路。
+- `离线复现`：管理原始回放时间轴、单步推进和定位。
 - `日志`：查看系统日志。
 - `脚本`：查看 Lua 日志和脚本事件。
 - `波形`：查看 Lua 推送的多通道波形、总览、游标测量和 FFT 频谱。
@@ -75,7 +78,9 @@ protocols/
 - `Ctrl+O`：打开 ELF/ElfStaticView 数据文件。
 - `Ctrl+I` / `Ctrl+E`：导入原始波形 / 导出当前缓存快照。
 - `Ctrl+Shift+R`：开始或停止完整原始数据录制。
-- `Ctrl+1` 到 `Ctrl+6`：切换通讯配置、协议脚本、收发数据、日志、脚本、波形 Dock。
+- `F6`：继续或暂停原始回放。
+- `F7` / `Shift+F7`：单步推进 / 停止并卸载原始回放时间轴。
+- `Ctrl+1` 到 `Ctrl+8`：切换通讯配置、协议脚本 / 动态控件、收发数据、请求追踪、离线复现、日志、脚本、波形 Dock。
 - 波形 Dock 聚焦时，`Space` 暂停或恢复自动跟随，`A` 适配可见波形，`Z` 切换框选放大，`F` 切换 FFT，`Ctrl+Shift+C` 清空波形历史。
 
 ## 启动程序
@@ -244,12 +249,13 @@ Lua 脚本通过 `proto.plot.setup()` 创建通道，再通过 `proto.plot.push(
 
 常用操作：
 
-- 点击波形工具栏最左侧的播放/暂停按钮会调用 `on_oscilloscope_toggle(ctx, current_running, target_running)`；脚本返回 `true` 时默认把按钮同步到 `target_running`，实际启动或暂停动作由脚本负责。异步 ACK 成功后也可以调用 `proto.oscilloscope.set_running(running)` 主动同步状态。
+- 点击波形工具栏最左侧的播放/暂停按钮会调用 `on_oscilloscope_toggle(ctx, current_running, target_running)`；纯 Lua 演示可直接调用 `proto.oscilloscope.set_running(target_running)` 并返回 `true`，真实设备建议先发送启停请求并返回 `false`，等 ACK 到达后再调用 `proto.oscilloscope.set_running(running)`。
+- Lua Dock 可以把 `history_limit` 做成控件，并通过重新调用 `proto.plot.setup({ history_limit = ... })` 调整历史保留；`reset_history = true` 可用于清空当前历史。
 - 通过通道卡片查看通道状态，设置激活通道。
 - 在通道卡片里修改标签、缩放和偏移。
 - 使用总览区域快速定位长时间数据。
 - 双击主图 X 轴会缩放到当前仍保留的完整历史；如需旧行为，可把 `gui.wave.x_axis_double_click_action` 设为 `fit_visible_window`。
-- 双击主图 Y 轴默认按图例可见的模拟通道自动缩放，让数据包络约占视图高度 80%；可把 `gui.wave.y_axis_double_click_action` 设为 `fit_active_channel` 改为只适配当前激活模拟通道。
+- 双击主图 Y 轴默认按图例可见的模拟通道自动调整缩放和偏移，让数据包络约占当前视图高度 80%；可把 `gui.wave.y_axis_double_click_action` 设为 `fit_active_channel` 改为只适配当前激活模拟通道，或把 `gui.wave.y_axis_double_click_adjust_offset` 设为 `false` 保留原 offset。
 - 使用游标和测量覆盖层观察时间差和值差。
 - 启用 FFT 频谱模式查看当前可视区频谱。
 - 通过 `文件 -> 导入原始波形...` 一次性导入 `.psraw` 文件，立即重建波形结果。
@@ -315,6 +321,7 @@ scripting:
 - `file_dialog`：文件/目录对话框示例。
 - `request_guarded`：受保护请求示例。
 - `send_file`：文件分块发送示例。
+- `oscilloscope_control`：示波器运行态、历史上限和清空历史示例。
 - `ui_basic`：最小 Lua UI 闭环，演示 `ui()`、`controls`、`layout`、`on_control()`、控件读写和弹窗提示。
 - `ui_layouts`：常见布局组合示例，演示 `column`、`flow`、`inline_group`、`table`、`group`、`collapse` 和控件宽度约束。
 - `ui_dialogs`：脚本弹窗示例，演示 `proto.ui.alert()`、`proto.ui.confirm()`、`window` 参数和 `on_dialog()`。
@@ -386,16 +393,35 @@ scripting:
 - `重新加载配置`
 - `重新加载协议`
 - `打开 ELF/ElfStaticView 数据文件...`
+- `导入现场会话包...`
 - `导入原始波形...`
+- `导入 CSV 数据...`
+- `载入原始回放时间轴...`
+- `导出现场会话包...`
 - `导出当前缓存快照...`
+- `导出波形 CSV...`
+- `导出原始事件 CSV...`
+- `导出波形分析报告...`
 - `开始完整原始数据录制...`
 - `停止完整原始数据录制`
+
+### 回放
+
+- `继续/暂停回放`
+- `单步推进`
+- `停止并卸载时间轴`
+- `倍速`：0.5x、1.0x、2.0x、4.0x、8.0x。
+- `定位到开头`
+- `定位到中点`
+- `定位到末尾`
 
 ### 视图
 
 - 显示或隐藏 `通讯配置`
 - 显示或隐藏 `协议脚本 / 动态控件`
 - 显示或隐藏 `收发数据`
+- 显示或隐藏 `请求追踪`
+- 显示或隐藏 `离线复现`
 - 显示或隐藏 `日志`
 - 显示或隐藏 `脚本`
 - 显示或隐藏 `波形`
@@ -411,6 +437,8 @@ scripting:
 
 ### 帮助
 
+- `快捷键说明`
+- `算法手册`
 - `检查更新`
 - `关于 ProtoScope`
 

@@ -87,6 +87,56 @@ namespace {
         return matches[ordinal];
     }
 
+    template <typename Confirm>
+    void drawPathModalDialog(bool& open,
+                             bool& opened,
+                             std::string& path,
+                             std::string& error,
+                             const char* popupId,
+                             const char* prompt,
+                             const char* confirmLabel,
+                             Confirm&& onConfirm)
+    {
+        if (!open) {
+            return;
+        }
+        if (!opened) {
+            ImGui::OpenPopup(popupId);
+            opened = true;
+        }
+
+        constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+        if (!ImGui::BeginPopupModal(popupId, nullptr, flags)) {
+            return;
+        }
+
+        ImGui::TextUnformatted(prompt);
+        char buffer[1024]{};
+        std::snprintf(buffer, sizeof(buffer), "%s", path.c_str());
+        if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
+            path = buffer;
+        }
+        if (!error.empty()) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", error.c_str());
+        }
+        ImGui::Spacing();
+        if (ImGui::Button(confirmLabel, ImVec2(90.0F, 0.0F))) {
+            onConfirm(path);
+            if (!open) {
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
+            open = false;
+            opened = false;
+            error.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
 } // namespace
 
 void GuiRuntime::requestAboutDialog()
@@ -900,8 +950,8 @@ void GuiRuntime::importCsvDataFromPath(const std::filesystem::path& path)
         return;
     }
     std::error_code protocolEntryError;
-    if (!capture->protocolDir.empty() && !std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir),
-                                                                   protocolEntryError)) {
+    if (!capture->protocolDir.empty() &&
+        !std::filesystem::exists(configStore_.mainLuaPath(capture->protocolDir), protocolEntryError)) {
         csvDataImportError_ = "导入文件引用的协议目录不存在: " + capture->protocolDir;
         if (protocolEntryError) {
             csvDataImportError_ += " (" + protocolEntryError.message() + ")";
@@ -1423,221 +1473,54 @@ void GuiRuntime::drawElfStaticAddressDialog()
 
 void GuiRuntime::drawRawCaptureFileDialogs()
 {
-    if (rawCaptureImportDialogOpen_) {
-        const char* popupId = "导入原始波形##psraw_import";
-        if (!rawCaptureImportDialogOpened_) {
-            ImGui::OpenPopup(popupId);
-            rawCaptureImportDialogOpened_ = true;
-        }
-        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
-            ImGui::TextUnformatted("请输入 .psraw 文件路径");
-            char buffer[1024]{};
-            std::snprintf(buffer, sizeof(buffer), "%s", rawCaptureImportPath_.c_str());
-            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
-                rawCaptureImportPath_ = buffer;
-            }
-            if (!rawCaptureImportError_.empty()) {
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureImportError_.c_str());
-            }
-            ImGui::Spacing();
-            if (ImGui::Button("导入", ImVec2(90.0F, 0.0F))) {
-                importRawCaptureFromPath(rawCaptureImportPath_);
-                if (!rawCaptureImportDialogOpen_) {
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
-                rawCaptureImportDialogOpen_ = false;
-                rawCaptureImportDialogOpened_ = false;
-                rawCaptureImportError_.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-    }
-
-    if (rawCaptureReplayTimelineDialogOpen_) {
-        const char* popupId = "载入原始回放时间轴##psraw_replay_timeline";
-        if (!rawCaptureReplayTimelineDialogOpened_) {
-            ImGui::OpenPopup(popupId);
-            rawCaptureReplayTimelineDialogOpened_ = true;
-        }
-        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
-            ImGui::TextUnformatted("请输入 .psraw 文件路径");
-            char buffer[1024]{};
-            std::snprintf(buffer, sizeof(buffer), "%s", rawCaptureReplayTimelinePath_.c_str());
-            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
-                rawCaptureReplayTimelinePath_ = buffer;
-            }
-            if (!rawCaptureReplayTimelineError_.empty()) {
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureReplayTimelineError_.c_str());
-            }
-            ImGui::Spacing();
-            if (ImGui::Button("载入", ImVec2(90.0F, 0.0F))) {
-                loadRawCaptureReplayTimelineFromPath(rawCaptureReplayTimelinePath_);
-                if (!rawCaptureReplayTimelineDialogOpen_) {
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
-                rawCaptureReplayTimelineDialogOpen_ = false;
-                rawCaptureReplayTimelineDialogOpened_ = false;
-                rawCaptureReplayTimelineError_.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-    }
-
-    if (rawCaptureExportDialogOpen_) {
-        const char* popupId = "导出当前缓存快照##psraw_export";
-        if (!rawCaptureExportDialogOpened_) {
-            ImGui::OpenPopup(popupId);
-            rawCaptureExportDialogOpened_ = true;
-        }
-        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
-            ImGui::TextUnformatted("请输入导出 .psraw 文件路径");
-            char buffer[1024]{};
-            std::snprintf(buffer, sizeof(buffer), "%s", rawCaptureExportPath_.c_str());
-            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
-                rawCaptureExportPath_ = buffer;
-            }
-            if (!rawCaptureExportError_.empty()) {
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureExportError_.c_str());
-            }
-            ImGui::Spacing();
-            if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
-                exportRawCaptureToPath(rawCaptureExportPath_);
-                if (!rawCaptureExportDialogOpen_) {
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
-                rawCaptureExportDialogOpen_ = false;
-                rawCaptureExportDialogOpened_ = false;
-                rawCaptureExportError_.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-    }
-
-    if (rawCaptureRecordingDialogOpen_) {
-        const char* popupId = "开始完整原始数据录制##psraw_record";
-        if (!rawCaptureRecordingDialogOpened_) {
-            ImGui::OpenPopup(popupId);
-            rawCaptureRecordingDialogOpened_ = true;
-        }
-        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
-            ImGui::TextUnformatted("请输入完整录制 .psraw 文件路径");
-            char buffer[1024]{};
-            std::snprintf(buffer, sizeof(buffer), "%s", rawCaptureRecordingPath_.c_str());
-            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
-                rawCaptureRecordingPath_ = buffer;
-            }
-            if (!rawCaptureRecordingError_.empty()) {
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", rawCaptureRecordingError_.c_str());
-            }
-            ImGui::Spacing();
-            if (ImGui::Button("开始录制", ImVec2(90.0F, 0.0F))) {
-                startRawCaptureRecordingToPath(rawCaptureRecordingPath_);
-                if (!rawCaptureRecordingDialogOpen_) {
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
-                rawCaptureRecordingDialogOpen_ = false;
-                rawCaptureRecordingDialogOpened_ = false;
-                rawCaptureRecordingError_.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-    }
-
-    if (sessionPackageImportDialogOpen_) {
-        const char* popupId = "导入现场会话包##pssession_import";
-        if (!sessionPackageImportDialogOpened_) {
-            ImGui::OpenPopup(popupId);
-            sessionPackageImportDialogOpened_ = true;
-        }
-        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
-            ImGui::TextUnformatted("请输入 .pssession 文件路径");
-            char buffer[1024]{};
-            std::snprintf(buffer, sizeof(buffer), "%s", sessionPackageImportPath_.c_str());
-            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
-                sessionPackageImportPath_ = buffer;
-            }
-            if (!sessionPackageImportError_.empty()) {
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", sessionPackageImportError_.c_str());
-            }
-            ImGui::Spacing();
-            if (ImGui::Button("导入", ImVec2(90.0F, 0.0F))) {
-                importSessionPackageFromPath(sessionPackageImportPath_);
-                if (!sessionPackageImportDialogOpen_) {
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
-                sessionPackageImportDialogOpen_ = false;
-                sessionPackageImportDialogOpened_ = false;
-                sessionPackageImportError_.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-    }
-
-    if (sessionPackageExportDialogOpen_) {
-        const char* popupId = "导出现场会话包##pssession_export";
-        if (!sessionPackageExportDialogOpened_) {
-            ImGui::OpenPopup(popupId);
-            sessionPackageExportDialogOpened_ = true;
-        }
-        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::BeginPopupModal(popupId, nullptr, flags)) {
-            ImGui::TextUnformatted("请输入导出 .pssession 文件路径");
-            char buffer[1024]{};
-            std::snprintf(buffer, sizeof(buffer), "%s", sessionPackageExportPath_.c_str());
-            if (ImGui::InputText("路径", buffer, sizeof(buffer))) {
-                sessionPackageExportPath_ = buffer;
-            }
-            if (!sessionPackageExportError_.empty()) {
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.90F, 0.35F, 0.35F, 1.0F), "%s", sessionPackageExportError_.c_str());
-            }
-            ImGui::Spacing();
-            if (ImGui::Button("导出", ImVec2(90.0F, 0.0F))) {
-                exportSessionPackageToPath(sessionPackageExportPath_);
-                if (!sessionPackageExportDialogOpen_) {
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("取消", ImVec2(90.0F, 0.0F))) {
-                sessionPackageExportDialogOpen_ = false;
-                sessionPackageExportDialogOpened_ = false;
-                sessionPackageExportError_.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-    }
+    drawPathModalDialog(rawCaptureImportDialogOpen_,
+                        rawCaptureImportDialogOpened_,
+                        rawCaptureImportPath_,
+                        rawCaptureImportError_,
+                        "导入原始波形##psraw_import",
+                        "请输入 .psraw 文件路径",
+                        "导入",
+                        [this](const std::string& path) { importRawCaptureFromPath(path); });
+    drawPathModalDialog(rawCaptureReplayTimelineDialogOpen_,
+                        rawCaptureReplayTimelineDialogOpened_,
+                        rawCaptureReplayTimelinePath_,
+                        rawCaptureReplayTimelineError_,
+                        "载入原始回放时间轴##psraw_replay_timeline",
+                        "请输入 .psraw 文件路径",
+                        "载入",
+                        [this](const std::string& path) { loadRawCaptureReplayTimelineFromPath(path); });
+    drawPathModalDialog(rawCaptureExportDialogOpen_,
+                        rawCaptureExportDialogOpened_,
+                        rawCaptureExportPath_,
+                        rawCaptureExportError_,
+                        "导出当前缓存快照##psraw_export",
+                        "请输入导出 .psraw 文件路径",
+                        "导出",
+                        [this](const std::string& path) { exportRawCaptureToPath(path); });
+    drawPathModalDialog(rawCaptureRecordingDialogOpen_,
+                        rawCaptureRecordingDialogOpened_,
+                        rawCaptureRecordingPath_,
+                        rawCaptureRecordingError_,
+                        "开始完整原始数据录制##psraw_record",
+                        "请输入完整录制 .psraw 文件路径",
+                        "开始录制",
+                        [this](const std::string& path) { startRawCaptureRecordingToPath(path); });
+    drawPathModalDialog(sessionPackageImportDialogOpen_,
+                        sessionPackageImportDialogOpened_,
+                        sessionPackageImportPath_,
+                        sessionPackageImportError_,
+                        "导入现场会话包##pssession_import",
+                        "请输入 .pssession 文件路径",
+                        "导入",
+                        [this](const std::string& path) { importSessionPackageFromPath(path); });
+    drawPathModalDialog(sessionPackageExportDialogOpen_,
+                        sessionPackageExportDialogOpened_,
+                        sessionPackageExportPath_,
+                        sessionPackageExportError_,
+                        "导出现场会话包##pssession_export",
+                        "请输入导出 .pssession 文件路径",
+                        "导出",
+                        [this](const std::string& path) { exportSessionPackageToPath(path); });
 }
 
 void GuiRuntime::drawLogExportFileDialog()

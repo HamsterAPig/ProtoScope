@@ -23,6 +23,24 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Check source hygiene
+        shell: pwsh
+        run: |
+          $baseRef = "origin/$env:GITHUB_BASE_REF"
+          git rev-parse --verify $baseRef
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          git diff --check "$baseRef...HEAD"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Verify generated Lua API
+        shell: pwsh
+        run: python tools/generate_luals_api.py --check
+
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:

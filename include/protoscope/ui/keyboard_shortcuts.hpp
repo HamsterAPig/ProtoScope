@@ -32,6 +32,8 @@ enum class ShortcutKey {
     Escape,
     F1,
     F5,
+    F6,
+    F7,
     F11,
 };
 
@@ -43,6 +45,9 @@ enum class ShortcutAction {
     ImportRawWave,
     ExportRawWave,
     ToggleRawRecording,
+    PlaybackTogglePlayPause,
+    PlaybackStepForward,
+    PlaybackUnloadTimeline,
     ToggleCommDock,
     ToggleProtocolDock,
     ToggleTransferDock,

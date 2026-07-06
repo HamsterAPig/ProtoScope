@@ -224,6 +224,24 @@ namespace {
         return true;
     }
 
+    bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels,
+                          const std::vector<plot::ChannelSpec>& previousDefaults)
+    {
+        if (setupChannels.size() != previousDefaults.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < setupChannels.size(); ++i) {
+            const auto& setup = setupChannels[i];
+            const auto& previous = previousDefaults[i];
+            if (previous.label != setup.label || previous.unit != setup.unit ||
+                !sameColor(previous.color, setup.color) || !sameLineWidth(previous.lineWidth, setup.lineWidth) ||
+                !sameBitDisplayIdentity(previous.bitDisplay, setup.bitDisplay)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool sameFullChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels,
                               const plot::OscilloscopeBuffer& buffer)
     {
@@ -256,6 +274,23 @@ namespace {
             const auto& setup = setupChannels[i];
             if (current->label != setup.label || current->unit != setup.unit ||
                 !sameBitDisplayIdentity(current->bitDisplay, setup.bitDisplay)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool sameChannelIdentity(const std::vector<plot::ChannelSpec>& setupChannels,
+                             const std::vector<plot::ChannelSpec>& previousDefaults)
+    {
+        if (setupChannels.size() != previousDefaults.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < setupChannels.size(); ++i) {
+            const auto& setup = setupChannels[i];
+            const auto& previous = previousDefaults[i];
+            if (previous.label != setup.label || previous.unit != setup.unit ||
+                !sameBitDisplayIdentity(previous.bitDisplay, setup.bitDisplay)) {
                 return false;
             }
         }
@@ -1274,6 +1309,7 @@ config::AppConfig Application::captureConfig() const
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
+    captured.gui.interactionFeedback = runtimeConfig_.gui.interactionFeedback;
     captured.gui.wave.resetHistoryOnTimeReset = runtimeConfig_.gui.wave.resetHistoryOnTimeReset;
     captured.gui.wave.resetViewport.applyOnPlotSetupReset =
         runtimeConfig_.gui.wave.resetViewport.applyOnPlotSetupReset;
@@ -1701,14 +1737,19 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
 {
     auto& wave = dockStore_.waveState();
     const auto previousConfig = wave.buffer.viewConfig();
+    const auto previousDefaultChannelSpecs = wave.defaultChannelSpecs;
     const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
                                previousConfig.timeUnit != setup.view.timeUnit ||
                                !nearlyEqual(previousConfig.verticalMin, setup.view.verticalMin) ||
                                !nearlyEqual(previousConfig.verticalMax, setup.view.verticalMax) ||
                                previousConfig.verticalUnit != setup.view.verticalUnit ||
                                previousConfig.historyLimit != setup.view.historyLimit;
-    const bool channelsChanged = !sameChannelSpecs(setup.channels, wave.buffer);
-    const bool channelIdentityChanged = !sameChannelIdentity(setup.channels, wave.buffer);
+    const bool hasPreviousDefaults = !previousDefaultChannelSpecs.empty();
+    const bool channelsChanged = hasPreviousDefaults ? !sameChannelSpecs(setup.channels, previousDefaultChannelSpecs)
+                                                     : !sameChannelSpecs(setup.channels, wave.buffer);
+    const bool channelIdentityChanged =
+        hasPreviousDefaults ? !sameChannelIdentity(setup.channels, previousDefaultChannelSpecs)
+                            : !sameChannelIdentity(setup.channels, wave.buffer);
 
     // 核心流程：Lua 和 psraw 回放共用同一套配置应用逻辑，确保通道默认值、覆盖状态和视图重置一致。
     if (setup.resetHistory) {
@@ -1720,7 +1761,7 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
     wave.buffer.configureChannels(setup.channels.size());
     wave.defaultChannelSpecs.clear();
     wave.defaultChannelSpecs.reserve(setup.channels.size());
-    const bool shouldResetOverrides = setup.resetHistory || channelIdentityChanged;
+    const bool shouldResetOverrides = channelIdentityChanged;
     if (shouldResetOverrides) {
         wave.channelOverrides.clear();
     }
@@ -1741,6 +1782,9 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
             }
             if (overrideState.offsetOverridden) {
                 effectiveSpec.offset = overrideState.offset;
+            }
+            if (overrideState.colorOverridden) {
+                effectiveSpec.color = overrideState.color;
             }
             if (overrideState.bitYOffsetOverridden) {
                 effectiveSpec.bitDisplay.yOffset = overrideState.bitYOffset;
@@ -2000,6 +2044,29 @@ void Application::setStatusMessage(std::string message, bool markDirty)
     dockStore_.configState().statusMessage = std::move(message);
 }
 
+void Application::setTransientStatusMessage(std::string message)
+{
+    auto& feedback = runtimeConfig_.gui.interactionFeedback;
+    auto& configState = dockStore_.configState();
+    if (!feedback.enabled || feedback.statusDurationMs == 0 || message.empty()) {
+        configState.transientStatusMessage.clear();
+        configState.transientStatusExpiresAtMs = 0;
+        return;
+    }
+    configState.transientStatusMessage = std::move(message);
+    configState.transientStatusExpiresAtMs = nowMs() + feedback.statusDurationMs;
+}
+
+void Application::clearExpiredTransientStatus(const std::uint64_t currentMs)
+{
+    auto& configState = dockStore_.configState();
+    if (configState.transientStatusExpiresAtMs == 0 || currentMs < configState.transientStatusExpiresAtMs) {
+        return;
+    }
+    configState.transientStatusMessage.clear();
+    configState.transientStatusExpiresAtMs = 0;
+}
+
 bool Application::setSendHexMode(bool enabled)
 {
     auto& send = dockStore_.sendState();
@@ -2117,6 +2184,7 @@ bool Application::importWaveCsvData(const plot::WaveCsvData& data, std::string& 
     wave.view.sampleFrequencyInput.clear();
     wave.view.timeAxisSource = plot::WaveTimeAxisSource::ScriptTime;
     wave.view.defaultViewportPending = true;
+    wave.view.defaultViewportLegacyBehavior = false;
     wave.view.autoFollowLatest = false;
     wave.statusMessage = "波形 CSV 已导入";
     syncDockState();
@@ -2893,11 +2961,6 @@ void Application::refreshSelectedElfSymbolControls()
     syncDockState();
 }
 
-void Application::resetWaveHistory()
-{
-    resetWaveHistoryForTrigger(WaveResetViewportTrigger::ManualClear);
-}
-
 void Application::resetWaveHistoryForTrigger(const WaveResetViewportTrigger trigger)
 {
     auto& wave = dockStore_.waveState();
@@ -2922,6 +2985,11 @@ void Application::resetWaveHistoryForTrigger(const WaveResetViewportTrigger trig
     wave.view.defaultViewportPending = true;
     wave.view.defaultViewportLegacyBehavior = true;
     wave.statusMessage = "波形历史已清空";
+}
+
+void Application::resetWaveHistory()
+{
+    resetWaveHistoryForTrigger(WaveResetViewportTrigger::ManualClear);
 }
 
 bool Application::exportWaveAnalysisReport(const std::filesystem::path& path, std::string& error) const
@@ -2982,6 +3050,11 @@ std::optional<std::uint64_t> Application::nextWakeupAtMs() const
         return nowMs();
     }
     auto nextWakeup = scriptSnapshot.nextWakeupAtMs;
+    const auto& configState = dockStore_.configState();
+    if (configState.transientStatusExpiresAtMs > 0 &&
+        (!nextWakeup.has_value() || configState.transientStatusExpiresAtMs < *nextWakeup)) {
+        nextWakeup = configState.transientStatusExpiresAtMs;
+    }
     if (activeHalfDuplexRequest_.has_value()) {
         if (!nextWakeup.has_value() || activeHalfDuplexRequest_->waitDeadlineMs < *nextWakeup) {
             nextWakeup = activeHalfDuplexRequest_->waitDeadlineMs;

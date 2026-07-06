@@ -68,6 +68,39 @@ std::filesystem::path templateProtocolDir(const char* name)
     return std::filesystem::path("protocols/templates") / name;
 }
 
+std::vector<std::filesystem::path> protocolDirsWithMainLua(const std::filesystem::path& root)
+{
+    const auto rootText = root.generic_string();
+    const auto existsMessage = rootText + " 目录应存在";
+    require(std::filesystem::exists(root), existsMessage.c_str());
+
+    std::vector<std::filesystem::path> dirs;
+    for (const auto& entry : std::filesystem::directory_iterator(root)) {
+        if (!entry.is_directory()) {
+            continue;
+        }
+        const auto mainLua = entry.path() / "main.lua";
+        if (std::filesystem::exists(mainLua)) {
+            dirs.push_back(entry.path());
+        }
+    }
+
+    std::sort(dirs.begin(), dirs.end());
+    const auto emptyMessage = rootText + " 应至少包含一个可加载协议";
+    require(!dirs.empty(), emptyMessage.c_str());
+    return dirs;
+}
+
+std::vector<std::filesystem::path> builtinProtocolDirs()
+{
+    return protocolDirsWithMainLua("protocols");
+}
+
+std::vector<std::filesystem::path> templateProtocolDirs()
+{
+    return protocolDirsWithMainLua("protocols/templates");
+}
+
 struct ScopedCurrentPath {
     explicit ScopedCurrentPath(const std::filesystem::path& path) : original_(std::filesystem::current_path())
     {
@@ -340,6 +373,64 @@ void test_default_protocol_logs_elf_symbol_info()
         }
     }
     require(foundInfoLog, "默认协议应把 ELF 变量信息以 info 日志输出");
+}
+
+void test_default_protocol_oscilloscope_controls_apply_history_limit()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory("protocols/default_protocol"), "默认协议脚本应可加载");
+
+    host.drainPlotSetups();
+    host.drainOscilloscopeRunningUpdates();
+
+    const auto ctx = sampleCtx();
+    require(host.requestOscilloscopeToggle(ctx, true, false), "默认协议应允许工具栏立即暂停波形记录");
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && !updates[0].running, "默认协议应把工具栏暂停同步到 running=false");
+
+    host.onControl(ctx, "history_limit", 128);
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "默认协议修改历史上限应重新 setup 波形");
+    require(setups[0].view.historyLimit == 128U, "默认协议应从 Lua Dock 读取 history_limit");
+}
+
+void test_lua_waveform_demo_oscilloscope_controls_apply_history_limit()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory("protocols/lua_waveform_demo"), "Lua 波形演示脚本应可加载");
+
+    host.drainPlotSetups();
+    host.drainOscilloscopeRunningUpdates();
+
+    const auto ctx = sampleCtx();
+    require(host.requestOscilloscopeToggle(ctx, true, false), "Lua 波形演示应允许工具栏立即暂停");
+    const auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && !updates[0].running, "Lua 波形演示应同步工具栏暂停状态");
+
+    host.onControl(ctx, "history_limit", 256);
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "Lua 波形演示修改历史上限应重新 setup 波形");
+    require(setups[0].view.historyLimit == 256U, "Lua 波形演示应从 Dock 控件读取 history_limit");
+}
+
+void test_oscilloscope_control_template_loads_and_syncs_toolbar()
+{
+    protoscope::scripting::ScriptHost host;
+    require(host.loadProtocolDirectory(templateProtocolDir("oscilloscope_control").generic_string()),
+            "示波器控制模板应可加载");
+
+    host.drainPlotSetups();
+    host.drainOscilloscopeRunningUpdates();
+
+    const auto ctx = sampleCtx();
+    require(host.requestOscilloscopeToggle(ctx, false, true), "示波器控制模板应允许工具栏立即启动");
+    auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && updates[0].running, "示波器控制模板应同步 running=true");
+
+    host.onControl(ctx, "history_limit", 64);
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "示波器控制模板修改历史上限应重新 setup 波形");
+    require(setups[0].view.historyLimit == 64U, "示波器控制模板应从 Dock 控件读取 history_limit");
 }
 
 void test_script_elf_symbol_combo_descriptor_defaults()
@@ -2169,16 +2260,26 @@ void test_protocol_directory_reload()
     require(host.scriptPath().find("main.lua") != std::string::npos, "协议入口应固定为 main.lua");
 }
 
+void test_builtin_protocol_examples_load()
+{
+    for (const auto& directory : builtinProtocolDirs()) {
+        protoscope::scripting::ScriptHost host;
+        const auto directoryText = directory.generic_string();
+
+        requireProtocolLoaded(host, directoryText.c_str());
+        const auto message = directory.filename().generic_string() + " 内置示例应声明可见控件";
+        require(!host.controlsSnapshot().empty(), message.c_str());
+    }
+}
+
 void test_protocol_ui_templates_load()
 {
-    const std::array<const char*, 3> templates{"ui_basic", "ui_layouts", "ui_dialogs"};
-
-    for (const auto* name : templates) {
+    for (const auto& directory : templateProtocolDirs()) {
         protoscope::scripting::ScriptHost host;
-        const auto directory = templateProtocolDir(name).generic_string();
+        const auto directoryText = directory.generic_string();
 
-        requireProtocolLoaded(host, directory.c_str());
-        const auto message = std::string(name) + " 模板应声明可见控件";
+        requireProtocolLoaded(host, directoryText.c_str());
+        const auto message = directory.filename().generic_string() + " 模板应声明可见控件";
         require(!host.controlsSnapshot().empty(), message.c_str());
     }
 }
@@ -2209,6 +2310,7 @@ void test_config_default_roundtrip()
             "X 轴双击默认值应为 fit_full_history");
     require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "Y 轴双击默认值应为 fit_visible_channels");
+    require(config.gui.wave.yAxisDoubleClickAdjustOffset, "Y 轴双击默认应同步调整 offset");
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.25) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.25");
@@ -2220,6 +2322,9 @@ void test_config_default_roundtrip()
     require(config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Direct,
             "鼠标 Y 偏移拖动模式默认应为 direct");
     require(config.gui.wave.legendOverlayDoubleClickAutoCollapse, "双击图例展开默认应在鼠标离开后自动收起");
+    require(config.gui.wave.interactionAnimationEnabled, "Wave Dock 交互动效默认应开启");
+    require(config.gui.interactionFeedback.enabled, "全局交互反馈默认应开启");
+    require(config.gui.interactionFeedback.statusDurationMs == 2000, "全局交互反馈状态提示默认应显示 2000ms");
     require(config.gui.wave.peakDetectDownsample, "peak-detect 降采样默认应开启");
     require(config.gui.wave.showChannelLegend, "波形图例默认应显示");
     require(config.gui.wave.showFftLegend, "FFT 图例默认应显示");
@@ -2283,10 +2388,14 @@ void test_config_default_roundtrip()
     config.gui.wave.channelDoubleClickAction = protoscope::plot::WaveChannelDoubleClickAction::ResetAll;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
     config.gui.wave.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
+    config.gui.wave.yAxisDoubleClickAdjustOffset = false;
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.cursorExtremeSnapPolicy = protoscope::plot::WaveCursorExtremeSnapPolicy::ViewportZone;
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
+    config.gui.wave.interactionAnimationEnabled = false;
+    config.gui.interactionFeedback.enabled = false;
+    config.gui.interactionFeedback.statusDurationMs = 1234;
     config.gui.wave.channelCardFixedWidth = 144.0;
     config.gui.wave.channelCardAdaptiveRatio = 0.3;
     config.gui.wave.verticalAutoFitMultiplier = 1.5;
@@ -2356,6 +2465,7 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.wave.yAxisDoubleClickAction ==
                 protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel,
             "Y 轴双击行为 roundtrip 失败");
+    require(!reloaded.config.gui.wave.yAxisDoubleClickAdjustOffset, "Y 轴双击 offset 调整开关 roundtrip 失败");
     require(reloaded.config.gui.wave.hiddenChannelPolicy ==
                 protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews,
             "隐藏 CH 策略 roundtrip 失败");
@@ -2365,6 +2475,10 @@ void test_config_default_roundtrip()
     require(reloaded.config.gui.wave.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Shift,
             "鼠标 Y 偏移拖动模式 roundtrip 失败");
     require(!reloaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "双击图例展开自动收起开关 roundtrip 失败");
+    require(!reloaded.config.gui.wave.interactionAnimationEnabled, "Wave Dock 交互动效开关 roundtrip 失败");
+    require(!reloaded.config.gui.interactionFeedback.enabled, "全局交互反馈开关 roundtrip 失败");
+    require(reloaded.config.gui.interactionFeedback.statusDurationMs == 1234,
+            "全局交互反馈状态提示时长 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardFixedWidth - 144.0) < 1e-12, "CH 卡片固定宽度 roundtrip 失败");
     require(std::abs(reloaded.config.gui.wave.channelCardAdaptiveRatio - 0.3) < 1e-12,
             "CH 卡片自适应比例 roundtrip 失败");
@@ -2492,6 +2606,9 @@ void test_config_repo_default_yaml_loads()
             "源码默认配置应读取 opengl 渲染后端");
     require(loaded.config.gui.wave.peakDetectDownsample, "源码默认配置应开启 peak-detect 降采样");
     require(loaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "源码默认配置应开启图例双击展开自动收起");
+    require(loaded.config.gui.interactionFeedback.enabled, "源码默认配置应开启全局交互反馈");
+    require(loaded.config.gui.interactionFeedback.statusDurationMs == 2000,
+            "源码默认配置应保持全局交互反馈状态提示 2000ms");
 }
 
 void test_script_file_io_proto_buffer_roundtrip()
@@ -2978,6 +3095,75 @@ void test_half_duplex_modbus_request_batches()
     require(readBe16(requests[3].payload, 2) == 0x5A5CU, "第四批请求起始地址错误");
     require(readBe16(requests[4].payload, 2) == 0x8888U, "第五批请求起始地址错误");
     require(readBe16(requests[4].payload, 4) == 0x0001U, "启动请求应写 0x8888=0x0001");
+}
+
+void test_half_duplex_modbus_oscilloscope_toolbar_waits_for_ack()
+{
+    protoscope::scripting::ScriptHost host;
+    requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
+
+    const auto ctx = sampleCtx();
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
+    host.drainPlotSetups();
+    host.drainOscilloscopeRunningUpdates();
+
+    require(!host.requestOscilloscopeToggle(ctx, false, true), "真实设备示例应等待启动 ACK 后再同步运行态");
+    const auto requests = host.drainTxRequests();
+    require(requests.size() == 5, "工具栏启动应复用自动配置并启动流程");
+    require(host.drainOscilloscopeRunningUpdates().empty(), "启动 ACK 前不应同步 running=true");
+
+    for (std::size_t index = 0; index < requests.size(); ++index) {
+        const auto& request = requests[index];
+        host.onTxEvent(ctx,
+                       protoscope::scripting::TxEvent{
+                           .id = request.id,
+                           .kind = protoscope::scripting::TxRequestKind::Request,
+                           .state = protoscope::scripting::TxEventState::Sent,
+                           .tag = request.tag,
+                           .bytes = request.payload.size(),
+                           .queuedMs = nowMs(),
+                           .finishedMs = nowMs(),
+                           .error = std::nullopt,
+                       });
+        host.setRequestAwaitingCompletion(true);
+        if (index < 4) {
+            host.onTransportBytes(
+                protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc16Ack(readBe16(request.payload, 2), 2)});
+        } else {
+            host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc06Ack(0x8888U, 0x0001U)});
+        }
+        host.drainRequestDoneResults();
+    }
+
+    auto updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && updates[0].running, "启动 ACK 匹配后应同步 running=true");
+
+    host.onControl(ctx, "history_limit", 512);
+    const auto setups = host.drainPlotSetups();
+    require(setups.size() == 1, "Modbus 主机修改历史上限应重新 setup 波形");
+    require(setups[0].view.historyLimit == 512U, "Modbus 主机应从 Lua Dock 读取 history_limit");
+
+    host.onControl(ctx, "stop_stream", true);
+    const auto stopRequests = host.drainTxRequests();
+    require(stopRequests.size() == 1, "停止上传按钮应生成 1 条 FC06 request");
+    const auto& stopRequest = stopRequests.front();
+    host.onTxEvent(ctx,
+                   protoscope::scripting::TxEvent{
+                       .id = stopRequest.id,
+                       .kind = protoscope::scripting::TxRequestKind::Request,
+                       .state = protoscope::scripting::TxEventState::Sent,
+                       .tag = stopRequest.tag,
+                       .bytes = stopRequest.payload.size(),
+                       .queuedMs = nowMs(),
+                       .finishedMs = nowMs(),
+                       .error = std::nullopt,
+                   });
+    host.setRequestAwaitingCompletion(true);
+    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc06Ack(0x8888U, 0x0000U)});
+    host.drainRequestDoneResults();
+
+    updates = host.drainOscilloscopeRunningUpdates();
+    require(updates.size() == 1 && !updates[0].running, "停止 ACK 匹配后应同步 running=false");
 }
 
 void test_half_duplex_modbus_ack_and_plot_flow()
@@ -3734,663 +3920,4 @@ void test_script_value_table_stream_value_targets_bit_sources()
     require(table->rows[2].value == "1" && table->rows[3].value == "1", "bytes value_targets 应展开第 1 字节");
     require(table->rows[4].value == "0" && table->rows[5].value == "1",
             "bytes value_targets 不应按 range 拆分，应作为单个低位优先 bit 源");
-}
-
-namespace {
-
-static const TestCase kAllTests[] = {
-    {"hex_roundtrip", &test_hex_roundtrip},
-    {"hex_invalid_input", &test_hex_invalid_input},
-    {"hex_normalize_input", &test_hex_normalize_input},
-    {"hex_editor_cursor_normalize", &test_hex_editor_cursor_normalize},
-    {"crc_known_vectors", &test_crc_known_vectors},
-    {"keyboard_shortcut_table_has_no_scope_duplicates", &test_keyboard_shortcut_table_has_no_scope_duplicates},
-    {"keyboard_shortcut_labels_match_plan", &test_keyboard_shortcut_labels_match_plan},
-    {"algorithm_help_search_empty_query_has_no_match", &test_algorithm_help_search_empty_query_has_no_match},
-    {"algorithm_help_search_chinese_keyword", &test_algorithm_help_search_chinese_keyword},
-    {"algorithm_help_search_english_case_insensitive", &test_algorithm_help_search_english_case_insensitive},
-    {"algorithm_help_search_multiple_terms_require_all", &test_algorithm_help_search_multiple_terms_require_all},
-    {"algorithm_help_search_no_match", &test_algorithm_help_search_no_match},
-    {"algorithm_help_search_navigation_wraps", &test_algorithm_help_search_navigation_wraps},
-    {"algorithm_help_search_fft_unit_keywords", &test_algorithm_help_search_fft_unit_keywords},
-    {"startup_diagnostics_parse_diagnose_arg", &test_startup_diagnostics_parse_diagnose_arg},
-    {"startup_diagnostics_parse_default_off", &test_startup_diagnostics_parse_default_off},
-#if defined(_WIN32)
-    {"startup_windows_arg_to_utf8_ascii_exe", &test_startup_windows_arg_to_utf8_ascii_exe},
-    {"startup_windows_arg_to_utf8_renderer_equals", &test_startup_windows_arg_to_utf8_renderer_equals},
-    {"startup_windows_arg_to_utf8_chinese_and_empty", &test_startup_windows_arg_to_utf8_chinese_and_empty},
-#endif
-    {"startup_diagnostics_parse_renderer_equals", &test_startup_diagnostics_parse_renderer_equals},
-    {"startup_diagnostics_parse_renderer_space", &test_startup_diagnostics_parse_renderer_space},
-    {"startup_diagnostics_parse_renderer_missing_value", &test_startup_diagnostics_parse_renderer_missing_value},
-    {"startup_diagnostics_parse_renderer_invalid_value", &test_startup_diagnostics_parse_renderer_invalid_value},
-    {"startup_diagnostics_parse_renderer_with_diagnose", &test_startup_diagnostics_parse_renderer_with_diagnose},
-    {"startup_diagnostics_parse_renderer_probe_enables_diagnose",
-     &test_startup_diagnostics_parse_renderer_probe_enables_diagnose},
-    {"startup_renderer_backend_priority", &test_startup_renderer_backend_priority},
-    {"startup_diagnostics_log_path_fallback", &test_startup_diagnostics_log_path_fallback},
-    {"startup_diagnostics_construct_with_diagnose_writes_process_start",
-     &test_startup_diagnostics_construct_with_diagnose_writes_process_start},
-    {"startup_diagnostics_header_writes_selected_path_and_attempts",
-     &test_startup_diagnostics_header_writes_selected_path_and_attempts},
-    {"startup_diagnostics_log_failure_no_diagnose_does_not_create_log",
-     &test_startup_diagnostics_log_failure_no_diagnose_does_not_create_log},
-    {"startup_early_diagnostics_default_stage_does_not_create_log",
-     &test_startup_early_diagnostics_default_stage_does_not_create_log},
-    {"startup_early_diagnostics_diagnose_writes_fixed_log", &test_startup_early_diagnostics_diagnose_writes_fixed_log},
-    {"startup_early_diagnostics_crash_without_diagnose_creates_log",
-     &test_startup_early_diagnostics_crash_without_diagnose_creates_log},
-    {"startup_early_diagnostics_crash_falls_back_to_temp_log",
-     &test_startup_early_diagnostics_crash_falls_back_to_temp_log},
-    {"startup_diagnostics_write_crash_no_diagnose_does_not_create_log",
-     &test_startup_diagnostics_write_crash_no_diagnose_does_not_create_log},
-    {"startup_diagnostics_set_stage_with_diagnose_appends_stage",
-     &test_startup_diagnostics_set_stage_with_diagnose_appends_stage},
-    {"startup_diagnostics_command_line_parsed_logs_renderer_cli",
-     &test_startup_diagnostics_command_line_parsed_logs_renderer_cli},
-    {"startup_diagnostics_append_failure_state_records_stage",
-     &test_startup_diagnostics_append_failure_state_records_stage},
-    {"startup_diagnostics_log_failure_with_diagnose_writes_stage_reason",
-     &test_startup_diagnostics_log_failure_with_diagnose_writes_stage_reason},
-    {"startup_diagnostics_report_omits_config_body", &test_startup_diagnostics_report_omits_config_body},
-    {"startup_diagnostics_fatal_message_includes_stage_reason_log",
-     &test_startup_diagnostics_fatal_message_includes_stage_reason_log},
-    {"startup_diagnostics_fatal_message_includes_diagnostics_state",
-     &test_startup_diagnostics_fatal_message_includes_diagnostics_state},
-    {"startup_diagnostics_fatal_message_omits_empty_log_path",
-     &test_startup_diagnostics_fatal_message_omits_empty_log_path},
-    {"config_external_reload_state", &test_config_external_reload_state},
-    {"request_trace_filter_and_clear", &test_request_trace_filter_and_clear},
-    {"request_trace_csv_export_format", &test_request_trace_csv_export_format},
-    {"script_controls_snapshot", &test_script_controls_snapshot},
-    {"script_load_directory_rejected_before_lua_dofile", &test_script_load_directory_rejected_before_lua_dofile},
-    {"script_optional_labels_allowed_for_compact_controls", &test_script_optional_labels_allowed_for_compact_controls},
-    {"script_required_labels_still_reject_visual_controls", &test_script_required_labels_still_reject_visual_controls},
-    {"default_protocol_logs_elf_symbol_info", &test_default_protocol_logs_elf_symbol_info},
-    {"script_elf_symbol_combo_descriptor_defaults", &test_script_elf_symbol_combo_descriptor_defaults},
-    {"script_elf_symbol_combo_invalid_config_fails", &test_script_elf_symbol_combo_invalid_config_fails},
-    {"script_elf_symbol_combo_get_control_returns_table", &test_script_elf_symbol_combo_get_control_returns_table},
-    {"script_value_table_parse_and_update", &test_script_value_table_parse_and_update},
-    {"script_value_table_bit_integer_and_bytes_sources", &test_script_value_table_bit_integer_and_bytes_sources},
-    {"script_value_table_stream_value_targets_bit_sources", &test_script_value_table_stream_value_targets_bit_sources},
-    {"script_on_open_log", &test_script_on_open_log},
-    {"script_on_close_log", &test_script_on_close_log},
-    {"script_on_error_log", &test_script_on_error_log},
-    {"script_proto_log_trace_level", &test_script_proto_log_trace_level},
-    {"script_multi_dock_snapshot", &test_script_multi_dock_snapshot},
-    {"script_dock_layout_fields", &test_script_dock_layout_fields},
-    {"script_table_layout_snapshot", &test_script_table_layout_snapshot},
-    {"script_ui_descriptor_sugar_snapshot", &test_script_ui_descriptor_sugar_snapshot},
-    {"script_ui_descriptor_sugar_layout_validation_failures",
-     &test_script_ui_descriptor_sugar_layout_validation_failures},
-    {"script_form_layout_snapshot", &test_script_form_layout_snapshot},
-    {"script_flow_layout_snapshot", &test_script_flow_layout_snapshot},
-    {"script_layout_width_controls_shorthand_snapshot", &test_script_layout_width_controls_shorthand_snapshot},
-    {"script_inline_group_layout_snapshot", &test_script_inline_group_layout_snapshot},
-    {"script_duplicate_label_controls_allowed", &test_script_duplicate_label_controls_allowed},
-    {"script_crc_bridge", &test_script_crc_bridge},
-    {"script_read_version_flow", &test_script_read_version_flow},
-    {"script_read_version_split_flow", &test_script_read_version_split_flow},
-    {"script_stream_schema_legacy_on_bytes_still_works", &test_script_stream_schema_legacy_on_bytes_still_works},
-    {"script_stream_schema_bypasses_on_bytes_and_calls_on_frame",
-     &test_script_stream_schema_bypasses_on_bytes_and_calls_on_frame},
-    {"script_stream_schema_prefers_on_batch_over_on_frame", &test_script_stream_schema_prefers_on_batch_over_on_frame},
-    {"script_stream_schema_allows_on_batch_without_on_frame",
-     &test_script_stream_schema_allows_on_batch_without_on_frame},
-    {"script_stream_schema_reports_overflow_and_crc_error", &test_script_stream_schema_reports_overflow_and_crc_error},
-    {"script_stream_runtime_profile_set_and_clear", &test_script_stream_runtime_profile_set_and_clear},
-    {"script_stream_raw_output_omit_skips_frame_raw", &test_script_stream_raw_output_omit_skips_frame_raw},
-    {"script_stream_low_overhead_keeps_fields_and_trims_last_batch",
-     &test_script_stream_low_overhead_keeps_fields_and_trims_last_batch},
-    {"script_stream_field_output_fields_only_omits_top_aliases",
-     &test_script_stream_field_output_fields_only_omits_top_aliases},
-    {"script_stream_schema_reload_uses_current_callbacks", &test_script_stream_schema_reload_uses_current_callbacks},
-    {"script_stream_schema_rejects_count_function", &test_script_stream_schema_rejects_count_function},
-    {"script_stream_schema_accepts_count_expression_table", &test_script_stream_schema_accepts_count_expression_table},
-    {"script_timeout_flow", &test_script_timeout_flow},
-    {"frame_stream_parser_waits_for_full_frame", &test_frame_stream_parser_waits_for_full_frame},
-    {"frame_stream_parser_handles_sticky_frames_and_noise_prefix",
-     &test_frame_stream_parser_handles_sticky_frames_and_noise_prefix},
-    {"frame_stream_parser_crc_resync_keeps_following_frame",
-     &test_frame_stream_parser_crc_resync_keeps_following_frame},
-    {"frame_stream_parser_reports_overflow_drop_oldest", &test_frame_stream_parser_reports_overflow_drop_oldest},
-    {"frame_stream_parser_default_grows_without_drop_oldest",
-     &test_frame_stream_parser_default_grows_without_drop_oldest},
-    {"frame_stream_parser_near_overflow_threshold", &test_frame_stream_parser_near_overflow_threshold},
-    {"frame_stream_parser_large_chunk_keeps_latest_window", &test_frame_stream_parser_large_chunk_keeps_latest_window},
-    {"frame_stream_parser_supports_fixed_size_raw_frame", &test_frame_stream_parser_supports_fixed_size_raw_frame},
-    {"frame_stream_parser_prefers_longer_same_header_candidate",
-     &test_frame_stream_parser_prefers_longer_same_header_candidate},
-    {"frame_stream_parser_count_expression_arithmetic", &test_frame_stream_parser_count_expression_arithmetic},
-    {"frame_stream_parser_count_expression_remaining_if_flag_and_case",
-     &test_frame_stream_parser_count_expression_remaining_if_flag_and_case},
-    {"frame_stream_parser_multi_schema_large_chunk_throughput",
-     &test_frame_stream_parser_multi_schema_large_chunk_throughput},
-    {"frame_stream_parser_crc_frame_across_chunks", &test_frame_stream_parser_crc_frame_across_chunks},
-    {"frame_stream_parser_can_omit_success_frame_raw", &test_frame_stream_parser_can_omit_success_frame_raw},
-    {"frame_stream_parser_overflow_keeps_latest_crc_window",
-     &test_frame_stream_parser_overflow_keeps_latest_crc_window},
-    {"frame_stream_parser_runtime_profile_length_and_channel_map",
-     &test_frame_stream_parser_runtime_profile_length_and_channel_map},
-    {"frame_stream_parser_runtime_profile_errors", &test_frame_stream_parser_runtime_profile_errors},
-    {"frame_stream_parser_rejects_unsafe_count_bounds", &test_frame_stream_parser_rejects_unsafe_count_bounds},
-    {"frame_stream_parser_runtime_profile_truncated_fields",
-     &test_frame_stream_parser_runtime_profile_truncated_fields},
-    {"luals_api_sync_contains_tx_and_dialog_api", &test_luals_api_sync_contains_tx_and_dialog_api},
-    {"script_oscilloscope_toggle_returns_true_and_receives_args",
-     &test_script_oscilloscope_toggle_returns_true_and_receives_args},
-    {"script_oscilloscope_toggle_returns_false", &test_script_oscilloscope_toggle_returns_false},
-    {"script_oscilloscope_set_running_outputs_update", &test_script_oscilloscope_set_running_outputs_update},
-    {"script_oscilloscope_toggle_true_defaults_target_update",
-     &test_script_oscilloscope_toggle_true_defaults_target_update},
-    {"script_oscilloscope_toggle_explicit_set_running_overrides_default",
-     &test_script_oscilloscope_toggle_explicit_set_running_overrides_default},
-    {"script_oscilloscope_toggle_false_allows_later_set_running",
-     &test_script_oscilloscope_toggle_false_allows_later_set_running},
-    {"script_oscilloscope_toggle_missing_callback_rejects", &test_script_oscilloscope_toggle_missing_callback_rejects},
-    {"script_oscilloscope_toggle_non_function_rejects_and_logs",
-     &test_script_oscilloscope_toggle_non_function_rejects_and_logs},
-    {"script_oscilloscope_toggle_runtime_error_rejects_and_logs",
-     &test_script_oscilloscope_toggle_runtime_error_rejects_and_logs},
-    {"script_oscilloscope_toggle_non_boolean_rejects_and_logs",
-     &test_script_oscilloscope_toggle_non_boolean_rejects_and_logs},
-    {"script_missing_callbacks_allowed", &test_script_missing_callbacks_allowed},
-    {"script_invalid_controls_fail", &test_script_invalid_controls_fail},
-    {"script_invalid_dock_anchor_fail", &test_script_invalid_dock_anchor_fail},
-    {"script_table_layout_unknown_control_fail", &test_script_table_layout_unknown_control_fail},
-    {"script_table_layout_duplicate_control_fail", &test_script_table_layout_duplicate_control_fail},
-    {"script_table_layout_missing_control_fail", &test_script_table_layout_missing_control_fail},
-    {"script_table_layout_row_overflow_fail", &test_script_table_layout_row_overflow_fail},
-    {"script_form_layout_unknown_control_fail", &test_script_form_layout_unknown_control_fail},
-    {"script_form_layout_duplicate_control_fail", &test_script_form_layout_duplicate_control_fail},
-    {"script_form_layout_missing_control_fail", &test_script_form_layout_missing_control_fail},
-    {"script_layout_unknown_type_fail", &test_script_layout_unknown_type_fail},
-    {"script_layout_width_range_fail", &test_script_layout_width_range_fail},
-    {"script_layout_width_type_fail", &test_script_layout_width_type_fail},
-    {"script_layout_fill_width_type_fail", &test_script_layout_fill_width_type_fail},
-    {"script_inline_group_fill_width_type_fail", &test_script_inline_group_fill_width_type_fail},
-    {"script_layout_width_non_positive_fail", &test_script_layout_width_non_positive_fail},
-    {"script_layout_children_controls_conflict_fail", &test_script_layout_children_controls_conflict_fail},
-    {"script_layout_shortcut_unknown_control_fail", &test_script_layout_shortcut_unknown_control_fail},
-    {"script_layout_shortcut_duplicate_control_fail", &test_script_layout_shortcut_duplicate_control_fail},
-    {"script_layout_shortcut_missing_control_fail", &test_script_layout_shortcut_missing_control_fail},
-    {"script_inline_group_children_controls_conflict_fail", &test_script_inline_group_children_controls_conflict_fail},
-    {"script_inline_group_unknown_control_fail", &test_script_inline_group_unknown_control_fail},
-    {"script_inline_group_child_layout_fail", &test_script_inline_group_child_layout_fail},
-    {"script_inline_group_min_width_fail", &test_script_inline_group_min_width_fail},
-    {"script_short_label_type_fail", &test_script_short_label_type_fail},
-    {"script_short_label_empty_fail", &test_script_short_label_empty_fail},
-    {"script_compact_label_below_type_fail", &test_script_compact_label_below_type_fail},
-    {"script_compact_label_below_non_positive_fail", &test_script_compact_label_below_non_positive_fail},
-    {"script_invalid_label_position_fail", &test_script_invalid_label_position_fail},
-    {"script_runtime_error_logged", &test_script_runtime_error_logged},
-    {"script_reload_invalid_types_fail_without_throw", &test_script_reload_invalid_types_fail_without_throw},
-    {"script_non_function_callbacks_only_log_errors", &test_script_non_function_callbacks_only_log_errors},
-    {"script_failed_reload_keeps_previous_runtime", &test_script_failed_reload_keeps_previous_runtime},
-    {"gui_runtime_version_utils", &test_gui_runtime_version_utils},
-    {"update_check_evaluates_newer_version", &test_update_check_evaluates_newer_version},
-    {"update_check_reports_up_to_date_for_exact_tag", &test_update_check_reports_up_to_date_for_exact_tag},
-    {"update_check_reports_development_build", &test_update_check_reports_development_build},
-    {"update_check_rejects_response_without_semantic_tags", &test_update_check_rejects_response_without_semantic_tags},
-    {"protocol_directory_reload", &test_protocol_directory_reload},
-    {"protocol_ui_templates_load", &test_protocol_ui_templates_load},
-    {"config_default_roundtrip", &test_config_default_roundtrip},
-    {"config_wave_mouse_y_offset_drag_mode_apply_capture", &test_config_wave_mouse_y_offset_drag_mode_apply_capture},
-    {"config_repo_default_yaml_loads", &test_config_repo_default_yaml_loads},
-    {"config_performance_scale_applies_default_budgets", &test_config_performance_scale_applies_default_budgets},
-    {"config_performance_save_keeps_scaled_defaults_compact",
-     &test_config_performance_save_keeps_scaled_defaults_compact},
-    {"config_wave_mode_invalid_fallback", &test_config_wave_mode_invalid_fallback},
-    {"config_logging_roundtrip", &test_config_logging_roundtrip},
-    {"config_default_protocol_workspace_initializes_half_duplex_demos",
-     &test_config_default_protocol_workspace_initializes_half_duplex_demos},
-    {"config_default_protocol_workspace_fills_missing_resources",
-     &test_config_default_protocol_workspace_fills_missing_resources},
-    {"script_file_io_proto_buffer_roundtrip", &test_script_file_io_proto_buffer_roundtrip},
-    {"protocol_scan_and_root_roundtrip", &test_protocol_scan_and_root_roundtrip},
-    {"protocol_state_file_backs_up_corrupt_yaml", &test_protocol_state_file_backs_up_corrupt_yaml},
-    {"protocol_state_file_atomic_write_replaces_valid_yaml",
-     &test_protocol_state_file_atomic_write_replaces_valid_yaml},
-    {"protocol_state_file_preserves_other_protocol_nodes", &test_protocol_state_file_preserves_other_protocol_nodes},
-    {"protocol_state_file_roundtrips_elf_path_per_protocol",
-     &test_protocol_state_file_roundtrips_elf_path_per_protocol},
-    {"protocol_state_file_replace_failure_keeps_target", &test_protocol_state_file_replace_failure_keeps_target},
-    {"script_plot_api_snapshot", &test_script_plot_api_snapshot},
-    {"script_plot_bit_display_config", &test_script_plot_bit_display_config},
-    {"script_plot_bit_display_rejects_invalid_config", &test_script_plot_bit_display_rejects_invalid_config},
-    {"script_plot_push_accepts_compact_series", &test_script_plot_push_accepts_compact_series},
-    {"half_duplex_modbus_request_batches", &test_half_duplex_modbus_request_batches},
-    {"half_duplex_modbus_ack_and_plot_flow", &test_half_duplex_modbus_ack_and_plot_flow},
-    {"half_duplex_modbus_ch3_uses_third_harmonic", &test_half_duplex_modbus_ch3_uses_third_harmonic},
-    {"half_duplex_modbus_loss_status_keeps_valid_frame", &test_half_duplex_modbus_loss_status_keeps_valid_frame},
-    {"half_duplex_modbus_ack_matching_rules", &test_half_duplex_modbus_ack_matching_rules},
-    {"half_duplex_modbus_stop_drains_late_upload_before_ack",
-     &test_half_duplex_modbus_stop_drains_late_upload_before_ack},
-    {"half_duplex_modbus_crc_error_finishes_request", &test_half_duplex_modbus_crc_error_finishes_request},
-    {"half_duplex_modbus_sticky_frames", &test_half_duplex_modbus_sticky_frames},
-    {"half_duplex_modbus_noise_prefix_ignored", &test_half_duplex_modbus_noise_prefix_ignored},
-    {"half_duplex_modbus_crc_resync_keeps_following_frame", &test_half_duplex_modbus_crc_resync_keeps_following_frame},
-    {"half_duplex_modbus_multi_schema_candidates", &test_half_duplex_modbus_multi_schema_candidates},
-    {"dock_log_and_script_split", &test_dock_log_and_script_split},
-    {"dock_history_limits_trim_all_log_types", &test_dock_history_limits_trim_all_log_types},
-    {"dock_receive_row_single_line_hex_and_ascii", &test_dock_receive_row_single_line_hex_and_ascii},
-    {"dock_receive_row_single_line_message_and_timestamp", &test_dock_receive_row_single_line_message_and_timestamp},
-    {"dock_receive_rows_text_export_format", &test_dock_receive_rows_text_export_format},
-    {"dock_receive_row_visual_kind_classification", &test_dock_receive_row_visual_kind_classification},
-    {"dock_send_history_deduplicates_and_trims", &test_dock_send_history_deduplicates_and_trims},
-    {"log_filter_keeps_order_and_matches_status", &test_log_filter_keeps_order_and_matches_status},
-    {"log_filter_keyword_matches_metadata_and_bytes", &test_log_filter_keyword_matches_metadata_and_bytes},
-    {"log_filter_combines_status_and_keyword", &test_log_filter_combines_status_and_keyword},
-    {"wave_protocol_state_isolated_by_protocol_key", &test_wave_protocol_state_isolated_by_protocol_key},
-    {"wave_protocol_state_missing_wave_node_clears_analysis_markers",
-     &test_wave_protocol_state_missing_wave_node_clears_analysis_markers},
-    {"wave_protocol_state_hidden_channel_indices_roundtrip_and_legacy_labels",
-     &test_wave_protocol_state_hidden_channel_indices_roundtrip_and_legacy_labels},
-    {"wave_protocol_state_cursor_extreme_snap_policy", &test_wave_protocol_state_cursor_extreme_snap_policy},
-    {"wave_protocol_state_prefer_waveform_hover_readout_defaults_true",
-     &test_wave_protocol_state_prefer_waveform_hover_readout_defaults_true},
-    {"wave_protocol_state_view_mode_legend_overlay_and_color_override",
-     &test_wave_protocol_state_view_mode_legend_overlay_and_color_override},
-    {"wave_protocol_state_glow_phosphor_roundtrip", &test_wave_protocol_state_glow_phosphor_roundtrip},
-    {"wave_protocol_state_legacy_phosphor_glow_only_migrates_to_glow",
-     &test_wave_protocol_state_legacy_phosphor_glow_only_migrates_to_glow},
-    {"dock_visibility_state_isolated_by_protocol_key", &test_dock_visibility_state_isolated_by_protocol_key},
-    {"dock_visibility_state_decode_missing_fields_defaults",
-     &test_dock_visibility_state_decode_missing_fields_defaults},
-    {"lua_dock_layout_key_uses_protocol_and_script", &test_lua_dock_layout_key_uses_protocol_and_script},
-    {"lua_dock_layout_key_falls_back_to_script_directory", &test_lua_dock_layout_key_falls_back_to_script_directory},
-    {"lua_dock_layout_paths_prefer_user_layout", &test_lua_dock_layout_paths_prefer_user_layout},
-    {"lua_dock_layout_paths_detect_legacy_source", &test_lua_dock_layout_paths_detect_legacy_source},
-    {"lua_dock_layout_meta_path_is_sibling_yaml", &test_lua_dock_layout_meta_path_is_sibling_yaml},
-    {"lua_dock_layout_meta_schema_v3_marks_modern_layout", &test_lua_dock_layout_meta_schema_v3_marks_modern_layout},
-    {"lua_dock_layout_meta_schema_v2_marks_modern_layout", &test_lua_dock_layout_meta_schema_v2_marks_modern_layout},
-    {"lua_dock_layout_meta_read_failure_falls_back_to_legacy",
-     &test_lua_dock_layout_meta_read_failure_falls_back_to_legacy},
-    {"lua_dock_layout_dock_id_sharing_does_not_mark_modern_legacy",
-     &test_lua_dock_layout_dock_id_sharing_does_not_mark_modern_legacy},
-    {"lua_dock_window_name_keeps_stable_id", &test_lua_dock_window_name_keeps_stable_id},
-    {"lua_dock_layout_requests_group_tabs", &test_lua_dock_layout_requests_group_tabs},
-    {"lua_dock_layout_requests_default_anchor_falls_back_left_bottom",
-     &test_lua_dock_layout_requests_default_anchor_falls_back_left_bottom},
-    {"dock_layout_ini_requires_exactly_one_central_node", &test_dock_layout_ini_requires_exactly_one_central_node},
-    {"dock_layout_ini_rebuilds_legacy_left_central_node", &test_dock_layout_ini_rebuilds_legacy_left_central_node},
-    {"lua_dock_layout_requests_preserve_supported_anchors", &test_lua_dock_layout_requests_preserve_supported_anchors},
-    {"lua_dock_settings_filter_keeps_current_protocol_windows",
-     &test_lua_dock_settings_filter_keeps_current_protocol_windows},
-    {"lua_dock_settings_filter_keeps_current_windows_without_active_docks",
-     &test_lua_dock_settings_filter_keeps_current_windows_without_active_docks},
-    {"lua_dock_settings_filter_keeps_same_dock_id_tab_stack",
-     &test_lua_dock_settings_filter_keeps_same_dock_id_tab_stack},
-    {"workspace_layout_mode_after_load_prefers_default_build_only_when_missing",
-     &test_workspace_layout_mode_after_load_prefers_default_build_only_when_missing},
-    {"protocol_workspace_switch_decision_uses_draft_only_until_reload",
-     &test_protocol_workspace_switch_decision_uses_draft_only_until_reload},
-    {"protocol_workspace_switch_decision_reloads_draft_when_clicked",
-     &test_protocol_workspace_switch_decision_reloads_draft_when_clicked},
-    {"protocol_switch_resets_lua_default_dock_state_only_when_changed",
-     &test_protocol_switch_resets_lua_default_dock_state_only_when_changed},
-    {"lua_default_dock_layout_runs_only_during_default_build",
-     &test_lua_default_dock_layout_runs_only_during_default_build},
-    {"protocol_workspace_layout_reset_requires_loaded_protocol",
-     &test_protocol_workspace_layout_reset_requires_loaded_protocol},
-    {"plot_cursor_snap_by_time_and_measurement", &test_plot_cursor_snap_by_time_and_measurement},
-    {"plot_measurement_dispersion_metrics", &test_plot_measurement_dispersion_metrics},
-    {"plot_measurement_error_metrics", &test_plot_measurement_error_metrics},
-    {"wave_cursor_smart_snap_edge", &test_wave_cursor_smart_snap_edge},
-    {"wave_cursor_smart_snap_extreme", &test_wave_cursor_smart_snap_extreme},
-    {"wave_cursor_nearest_waveform_extreme_policy_snaps_to_local_trough",
-     &test_wave_cursor_nearest_waveform_extreme_policy_snaps_to_local_trough},
-    {"wave_cursor_viewport_zone_extreme_policy_keeps_bottom_zone_behavior",
-     &test_wave_cursor_viewport_zone_extreme_policy_keeps_bottom_zone_behavior},
-    {"wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms",
-     &test_wave_cursor_extreme_snap_falls_back_to_window_peak_with_transforms},
-    {"wave_cursor_extreme_snap_falls_back_to_window_trough",
-     &test_wave_cursor_extreme_snap_falls_back_to_window_trough},
-    {"wave_cursor_smart_snap_fallback_to_nearest", &test_wave_cursor_smart_snap_fallback_to_nearest},
-    {"wave_cursor_drag_time_uses_smart_snap", &test_wave_cursor_drag_time_uses_smart_snap},
-    {"split_cursor_drag_id_namespace_is_unique", &test_split_cursor_drag_id_namespace_is_unique},
-    {"split_cursor_snap_forced_channel_ignores_other_rows", &test_split_cursor_snap_forced_channel_ignores_other_rows},
-    {"split_cursor_smart_snap_forced_channel_ignores_hidden_row_candidate",
-     &test_split_cursor_smart_snap_forced_channel_ignores_hidden_row_candidate},
-    {"tcp_transport_roundtrip", &test_tcp_transport_roundtrip},
-    {"transport_enqueue_send_async_roundtrip", &test_transport_enqueue_send_async_roundtrip},
-    {"tcp_server_connection_takeover_replaces_active_client",
-     &test_tcp_server_connection_takeover_replaces_active_client},
-    {"serial_transport_error_path", &test_serial_transport_error_path},
-    {"udp_peer_transport_roundtrip", &test_udp_peer_transport_roundtrip},
-    {"udp_peer_failed_open_releases_bound_socket", &test_udp_peer_failed_open_releases_bound_socket},
-    {"serial_port_name_normalization", &test_serial_port_name_normalization},
-    {"script_dialog_requests_keep_connection_context", &test_script_dialog_requests_keep_connection_context},
-    {"script_dialog_requests_detached_without_active_connection",
-     &test_script_dialog_requests_detached_without_active_connection},
-    {"script_dialog_requests_parse_window_options", &test_script_dialog_requests_parse_window_options},
-    {"script_dialog_requests_reject_invalid_window_options",
-     &test_script_dialog_requests_reject_invalid_window_options},
-    {"application_tcp_lua_read_version_roundtrip", &test_application_tcp_lua_read_version_roundtrip},
-    {"application_lua_controls_without_connection", &test_application_lua_controls_without_connection},
-    {"application_oscilloscope_toggle_syncs_running_from_script_outputs",
-     &test_application_oscilloscope_toggle_syncs_running_from_script_outputs},
-    {"application_tx_overflow_popup_keeps_dialog_payload", &test_application_tx_overflow_popup_keeps_dialog_payload},
-    {"application_failed_protocol_reload_keeps_previous_runtime",
-     &test_application_failed_protocol_reload_keeps_previous_runtime},
-    {"application_same_protocol_reload_keeps_runtime_stable",
-     &test_application_same_protocol_reload_keeps_runtime_stable},
-    {"application_same_protocol_reload_without_force_preserves_runtime_state",
-     &test_application_same_protocol_reload_without_force_preserves_runtime_state},
-    {"application_failed_reload_keeps_old_callbacks_alive", &test_application_failed_reload_keeps_old_callbacks_alive},
-    {"application_forced_reload_discards_old_tx_callback_outputs",
-     &test_application_forced_reload_discards_old_tx_callback_outputs},
-    {"application_request_done_success_does_not_set_comm_error",
-     &test_application_request_done_success_does_not_set_comm_error},
-    {"application_request_timeout_drains_pending_rx_before_timeout",
-     &test_application_request_timeout_drains_pending_rx_before_timeout},
-    {"application_guarded_request_timeout_retry_then_success_keeps_guard_active",
-     &test_application_guarded_request_timeout_retry_then_success_keeps_guard_active},
-    {"application_guarded_request_final_timeout_halts_followup_guarded",
-     &test_application_guarded_request_final_timeout_halts_followup_guarded},
-    {"application_guarded_requests_count_attempts_independently",
-     &test_application_guarded_requests_count_attempts_independently},
-    {"application_guarded_request_reset_allows_new_attempts",
-     &test_application_guarded_request_reset_allows_new_attempts},
-    {"application_request_done_failure_sets_comm_error", &test_application_request_done_failure_sets_comm_error},
-    {"application_open_transport_uses_serial_runtime_config",
-     &test_application_open_transport_uses_serial_runtime_config},
-    {"application_open_transport_uses_udp_peer_runtime_config",
-     &test_application_open_transport_uses_udp_peer_runtime_config},
-    {"application_set_log_level_updates_runtime_config", &test_application_set_log_level_updates_runtime_config},
-    {"application_capture_config_preserves_protocol_tx_runtime_config",
-     &test_application_capture_config_preserves_protocol_tx_runtime_config},
-    {"application_wave_legend_visibility_config_roundtrip", &test_application_wave_legend_visibility_config_roundtrip},
-    {"application_wave_zoom_selection_auto_exit_config_roundtrip",
-     &test_application_wave_zoom_selection_auto_exit_config_roundtrip},
-    {"application_reset_wave_history_restores_default_viewport",
-     &test_application_reset_wave_history_restores_default_viewport},
-    {"application_plot_setup_reset_history_preserves_paused_follow",
-     &test_application_plot_setup_reset_history_preserves_paused_follow},
-    {"application_plot_setup_reset_history_preserves_active_follow",
-     &test_application_plot_setup_reset_history_preserves_active_follow},
-    {"application_refreshes_selected_elf_symbol_controls_silently",
-     &test_application_refreshes_selected_elf_symbol_controls_silently},
-    {"application_refreshes_selected_elf_symbol_controls_with_on_control",
-     &test_application_refreshes_selected_elf_symbol_controls_with_on_control},
-    {"application_clear_elf_static_address_file_resets_queries",
-     &test_application_clear_elf_static_address_file_resets_queries},
-    {"application_logging_filters_script_and_host", &test_application_logging_filters_script_and_host},
-    {"application_raw_capture_export_import_roundtrip", &test_application_raw_capture_export_import_roundtrip},
-    {"application_session_package_export_contains_replay_assets",
-     &test_application_session_package_export_contains_replay_assets},
-    {"application_session_package_exports_protocol_directory_and_import_requires_helper",
-     &test_application_session_package_exports_protocol_directory_and_import_requires_helper},
-    {"application_session_package_import_rejects_unsafe_entries",
-     &test_application_session_package_import_rejects_unsafe_entries},
-    {"application_wave_analysis_report_exports_summary_and_markers",
-     &test_application_wave_analysis_report_exports_summary_and_markers},
-    {"application_session_package_import_without_markers_clears_existing_state",
-     &test_application_session_package_import_without_markers_clears_existing_state},
-    {"application_session_package_import_invalid_protocol_rolls_back_runtime",
-     &test_application_session_package_import_invalid_protocol_rolls_back_runtime},
-    {"application_raw_capture_replay_timeline_steps_events",
-     &test_application_raw_capture_replay_timeline_steps_events},
-    {"application_loads_protocol_action_templates", &test_application_loads_protocol_action_templates},
-    {"application_initialize_prepares_default_config_and_protocol_dirs",
-     &test_application_initialize_prepares_default_config_and_protocol_dirs},
-    {"application_live_raw_capture_trims_to_limit", &test_application_live_raw_capture_trims_to_limit},
-    {"application_live_raw_capture_trim_keeps_runtime_profile_event",
-     &test_application_live_raw_capture_trim_keeps_runtime_profile_event},
-    {"application_session_package_export_trims_raw_capture_window",
-     &test_application_session_package_export_trims_raw_capture_window},
-    {"application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims",
-     &test_application_raw_capture_recording_preserves_full_rx_when_live_buffer_trims},
-    {"application_raw_capture_import_preserves_full_history",
-     &test_application_raw_capture_import_preserves_full_history},
-    {"application_raw_capture_import_replays_runtime_profile_events",
-     &test_application_raw_capture_import_replays_runtime_profile_events},
-    {"application_raw_capture_import_replays_plot_setup_snapshot",
-     &test_application_raw_capture_import_replays_plot_setup_snapshot},
-    {"application_raw_capture_import_skips_duplicate_plot_setup_reset",
-     &test_application_raw_capture_import_skips_duplicate_plot_setup_reset},
-    {"application_raw_capture_import_replays_stream_in_chunks",
-     &test_application_raw_capture_import_replays_stream_in_chunks},
-    {"application_reload_rebuilds_frame_rows_with_count_expression",
-     &test_application_reload_rebuilds_frame_rows_with_count_expression},
-    {"application_transfer_log_frame_view_waits_for_rx_full_frame",
-     &test_application_transfer_log_frame_view_waits_for_rx_full_frame},
-    {"application_transfer_log_frame_view_keeps_unmatched_tx_raw",
-     &test_application_transfer_log_frame_view_keeps_unmatched_tx_raw},
-    {"application_switching_to_parsed_view_defaults_to_new_stream_only",
-     &test_application_switching_to_parsed_view_defaults_to_new_stream_only},
-    {"application_switching_to_parsed_view_can_replay_old_raw_history",
-     &test_application_switching_to_parsed_view_can_replay_old_raw_history},
-    {"application_rx_events_are_processed_with_budget", &test_application_rx_events_are_processed_with_budget},
-    {"application_large_rx_event_drains_by_byte_budget", &test_application_large_rx_event_drains_by_byte_budget},
-    {"application_comm_pressure_debug_log_respects_log_level",
-     &test_application_comm_pressure_debug_log_respects_log_level},
-    {"application_responsive_disconnect_discards_realtime_backlog",
-     &test_application_responsive_disconnect_discards_realtime_backlog},
-    {"application_complete_disconnect_keeps_realtime_backlog",
-     &test_application_complete_disconnect_keeps_realtime_backlog},
-    {"application_transfer_frame_rows_drain_after_input_stops",
-     &test_application_transfer_frame_rows_drain_after_input_stops},
-    {"application_plot_push_merges_same_channel_source", &test_application_plot_push_merges_same_channel_source},
-    {"application_plot_push_drains_with_budget_and_disconnect_keeps_pending",
-     &test_application_plot_push_drains_with_budget_and_disconnect_keeps_pending},
-    {"runtime_scheduler_limits_busy_render_frames", &test_runtime_scheduler_limits_busy_render_frames},
-    {"script_runtime_worker_disabled_mode_waits_for_rx_idle",
-     &test_script_runtime_worker_disabled_mode_waits_for_rx_idle},
-    {"script_runtime_worker_rx_limit_keeps_all_queued_bytes",
-     &test_script_runtime_worker_rx_limit_keeps_all_queued_bytes},
-    {"script_runtime_worker_batch_bytes_merges_adjacent_rx_events",
-     &test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events},
-    {"script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result",
-     &test_script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result},
-    {"pipeline_worker_threads_resolve_from_hardware_limit", &test_pipeline_worker_threads_resolve_from_hardware_limit},
-    {"plot_history_trim_and_envelope", &test_plot_history_trim_and_envelope},
-    {"plot_history_limit_zero_keeps_all_samples", &test_plot_history_limit_zero_keeps_all_samples},
-    {"plot_set_view_config_applies_history_limit_immediately",
-     &test_plot_set_view_config_applies_history_limit_immediately},
-    {"plot_time_reset_clears_history_by_default", &test_plot_time_reset_clears_history_by_default},
-    {"plot_time_reset_can_continue_history", &test_plot_time_reset_can_continue_history},
-    {"wave_sample_frequency_visible_range_filters_by_sample_index",
-     &test_wave_sample_frequency_visible_range_filters_by_sample_index},
-    {"wave_snapshot_visible_range_keeps_adjacent_samples", &test_wave_snapshot_visible_range_keeps_adjacent_samples},
-    {"wave_visible_range_adjacent_samples_clamp_at_edges", &test_wave_visible_range_adjacent_samples_clamp_at_edges},
-    {"wave_sample_frequency_preserves_trimmed_sample_offset",
-     &test_wave_sample_frequency_preserves_trimmed_sample_offset},
-    {"wave_max_total_samples_trim_refreshes_cached_frame", &test_wave_max_total_samples_trim_refreshes_cached_frame},
-    {"wave_max_total_samples_noop_preserves_revision", &test_wave_max_total_samples_noop_preserves_revision},
-    {"wave_layout_solver_clamps_without_overflow", &test_wave_layout_solver_clamps_without_overflow},
-    {"measurement_overlay_safe_right_collapsed_uses_content_right",
-     &test_measurement_overlay_safe_right_collapsed_uses_content_right},
-    {"measurement_overlay_safe_right_open_drawer_reserves_drawer_width",
-     &test_measurement_overlay_safe_right_open_drawer_reserves_drawer_width},
-    {"measurement_overlay_placement_clamps_to_safe_right", &test_measurement_overlay_placement_clamps_to_safe_right},
-    {"measurement_overlay_placement_skips_when_safe_area_too_narrow",
-     &test_measurement_overlay_placement_skips_when_safe_area_too_narrow},
-    {"plot_limited_envelope_preserves_spikes", &test_plot_limited_envelope_preserves_spikes},
-    {"plot_low_density_envelope_keeps_single_value_line", &test_plot_low_density_envelope_keeps_single_value_line},
-    {"plot_cursor_snap_and_delta", &test_plot_cursor_snap_and_delta},
-    {"plot_channel_scale_and_offset_apply_to_display_only", &test_plot_channel_scale_and_offset_apply_to_display_only},
-    {"plot_channel_bit_display_reaches_snapshot", &test_plot_channel_bit_display_reaches_snapshot},
-    {"bit_lane_double_click_reset_selects_without_active_lane",
-     &test_bit_lane_double_click_reset_selects_without_active_lane},
-    {"bit_render_lane_downsample_keeps_orthogonal_segments",
-     &test_bit_render_lane_downsample_keeps_orthogonal_segments},
-    {"bit_render_lane_low_density_keeps_exact_steps", &test_bit_render_lane_low_density_keeps_exact_steps},
-    {"wave_bit_display_bounds_and_hidden_policy", &test_wave_bit_display_bounds_and_hidden_policy},
-    {"bit_cursor_only_snaps_to_transitions", &test_bit_cursor_only_snaps_to_transitions},
-    {"hidden_bit_lane_excluded_from_layout_hit_and_snap", &test_hidden_bit_lane_excluded_from_layout_hit_and_snap},
-    {"split_bit_cursor_forced_channel_still_snaps_to_transition",
-     &test_split_bit_cursor_forced_channel_still_snaps_to_transition},
-    {"bit_measurement_cross_lane_still_outputs_dt_f", &test_bit_measurement_cross_lane_still_outputs_dt_f},
-    {"bit_cursor_cross_lane_refresh_uses_own_y_anchor", &test_bit_cursor_cross_lane_refresh_uses_own_y_anchor},
-    {"bit_active_switches_measurement_mode", &test_bit_active_switches_measurement_mode},
-    {"invisible_active_bit_lane_falls_back_to_waveform_cursor",
-     &test_invisible_active_bit_lane_falls_back_to_waveform_cursor},
-    {"active_channel_cursor_time_fallback_rebinds_after_channel_switch",
-     &test_active_channel_cursor_time_fallback_rebinds_after_channel_switch},
-    {"active_channel_cursor_time_fallback_restores_pair_measurement",
-     &test_active_channel_cursor_time_fallback_restores_pair_measurement},
-    {"active_bit_lane_cursor_can_return_nearby_waveform", &test_active_bit_lane_cursor_can_return_nearby_waveform},
-    {"bit_display_cursor_excludes_same_channel_raw_waveform",
-     &test_bit_display_cursor_excludes_same_channel_raw_waveform},
-    {"explicit_bit_readout_policy_keeps_waveform_when_bit_not_active",
-     &test_explicit_bit_readout_policy_keeps_waveform_when_bit_not_active},
-    {"bit_layout_independent_of_axis_range", &test_bit_layout_independent_of_axis_range},
-    {"bit_layout_multiple_channels_with_y_offset", &test_bit_layout_multiple_channels_with_y_offset},
-    {"bit_lane_display_label_uses_simplified_bit_text", &test_bit_lane_display_label_uses_simplified_bit_text},
-    {"bit_layout_16_and_8_bit_channels_share_absolute_rows",
-     &test_bit_layout_16_and_8_bit_channels_share_absolute_rows},
-    {"plot_snapshot_without_stats_keeps_ranges_and_samples",
-     &test_plot_snapshot_without_stats_keeps_ranges_and_samples},
-    {"plot_build_display_data_into_reuses_storage_and_matches_output",
-     &test_plot_build_display_data_into_reuses_storage_and_matches_output},
-    {"plot_channel_ratio_and_formula_modes", &test_plot_channel_ratio_and_formula_modes},
-    {"plot_channel_transform_updates_are_isolated", &test_plot_channel_transform_updates_are_isolated},
-    {"plot_cursor_snap_scope_selection", &test_plot_cursor_snap_scope_selection},
-    {"plot_hover_readout_ignores_hidden_channels", &test_plot_hover_readout_ignores_hidden_channels},
-    {"bit_hover_readout_tracks_steady_level", &test_bit_hover_readout_tracks_steady_level},
-    {"bit_hover_readout_uses_sample_frequency_time_axis", &test_bit_hover_readout_uses_sample_frequency_time_axis},
-    {"bit_hover_readout_excludes_same_channel_raw_waveform",
-     &test_bit_hover_readout_excludes_same_channel_raw_waveform},
-    {"bit_hover_readout_uses_nearest_display_shape_in_mixed_view",
-     &test_bit_hover_readout_uses_nearest_display_shape_in_mixed_view},
-    {"bit_hover_readout_falls_back_to_waveform_outside_lane",
-     &test_bit_hover_readout_falls_back_to_waveform_outside_lane},
-    {"plot_limited_envelope_edges", &test_plot_limited_envelope_edges},
-    {"wave_frequency_parse_and_axis_mapping", &test_wave_frequency_parse_and_axis_mapping},
-    {"wave_display_data_uses_visible_window_only", &test_wave_display_data_uses_visible_window_only},
-    {"wave_main_render_data_uses_viewport_window", &test_wave_main_render_data_uses_viewport_window},
-    {"wave_peak_detect_downsample_orders_bucket_points", &test_wave_peak_detect_downsample_orders_bucket_points},
-    {"wave_peak_detect_downsample_respects_point_budget", &test_wave_peak_detect_downsample_respects_point_budget},
-    {"wave_render_mode_label_reports_each_path", &test_wave_render_mode_label_reports_each_path},
-    {"wave_main_render_data_uses_sample_frequency_viewport",
-     &test_wave_main_render_data_uses_sample_frequency_viewport},
-    {"wave_default_viewport_without_frequency_uses_time_scale",
-     &test_wave_default_viewport_without_frequency_uses_time_scale},
-    {"wave_default_viewport_uses_sample_frequency_budget", &test_wave_default_viewport_uses_sample_frequency_budget},
-    {"wave_default_viewport_duration_tracks_render_budget", &test_wave_default_viewport_duration_tracks_render_budget},
-    {"wave_default_viewport_preserves_configured_y_range", &test_wave_default_viewport_preserves_configured_y_range},
-    {"wave_sample_frequency_auto_follow_preserves_trimmed_offset",
-     &test_wave_sample_frequency_auto_follow_preserves_trimmed_offset},
-    {"wave_oscilloscope_toggle_deferred", &test_wave_oscilloscope_toggle_deferred},
-    {"wave_overview_display_data_is_budgeted", &test_wave_overview_display_data_is_budgeted},
-    {"wave_overview_bounds_use_full_history_window", &test_wave_overview_bounds_use_full_history_window},
-    {"wave_fit_visible_waveforms_uses_full_history_time_bounds",
-     &test_wave_fit_visible_waveforms_uses_full_history_time_bounds},
-    {"wave_fit_visible_waveforms_uses_sample_frequency_full_history",
-     &test_wave_fit_visible_waveforms_uses_sample_frequency_full_history},
-    {"wave_fit_visible_waveforms_ignores_hidden_channels", &test_wave_fit_visible_waveforms_ignores_hidden_channels},
-    {"wave_x_axis_double_click_bounds_selects_full_history",
-     &test_wave_x_axis_double_click_bounds_selects_full_history},
-    {"wave_fft_detects_50hz_and_150hz_components", &test_wave_fft_detects_50hz_and_150hz_components},
-    {"wave_fft_fundamental_percent_uses_each_channel_fundamental",
-     &test_wave_fft_fundamental_percent_uses_each_channel_fundamental},
-    {"wave_fft_fundamental_percent_requires_valid_fundamental_magnitude",
-     &test_wave_fft_fundamental_percent_requires_valid_fundamental_magnitude},
-    {"wave_fft_visible_samples_supports_non_power_of_two", &test_wave_fft_visible_samples_supports_non_power_of_two},
-    {"wave_fft_manual_point_count_supports_non_power_of_two",
-     &test_wave_fft_manual_point_count_supports_non_power_of_two},
-    {"wave_fft_cursor_window_resolves_point_counts_and_duration",
-     &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
-    {"wave_fft_fit_viewport_resets_frequency_and_value_ranges",
-     &test_wave_fft_fit_viewport_resets_frequency_and_value_ranges},
-    {"wave_fft_fit_viewport_can_ignore_channel_fundamental_bins",
-     &test_wave_fft_fit_viewport_can_ignore_channel_fundamental_bins},
-    {"wave_fft_fit_viewport_ignore_fundamental_falls_back_when_empty",
-     &test_wave_fft_fit_viewport_ignore_fundamental_falls_back_when_empty},
-    {"wave_fft_fit_viewport_offsets_are_visual_only", &test_wave_fft_fit_viewport_offsets_are_visual_only},
-    {"wave_fft_x_axis_mode_conversions", &test_wave_fft_x_axis_mode_conversions},
-    {"wave_fft_cursor_window_resolves_point_counts_and_duration",
-     &test_wave_fft_cursor_window_resolves_point_counts_and_duration},
-    {"wave_viewport_zoom_modes_and_clamp", &test_wave_viewport_zoom_modes_and_clamp},
-    {"wave_overview_viewport_normalize", &test_wave_overview_viewport_normalize},
-    {"wave_cursor_position_in_viewport", &test_wave_cursor_position_in_viewport},
-    {"wave_measurement_cursors_follow_equal_width_scroll", &test_wave_measurement_cursors_follow_equal_width_scroll},
-    {"wave_measurement_cursor_scroll_refresh_rebinds_by_time",
-     &test_wave_measurement_cursor_scroll_refresh_rebinds_by_time},
-    {"wave_cursor_interval_text_by_axis", &test_wave_cursor_interval_text_by_axis},
-    {"wave_cursor_interval_lock", &test_wave_cursor_interval_lock},
-    {"cursor_intersection_readouts_default_disabled", &test_cursor_intersection_readouts_default_disabled},
-    {"cursor_intersection_readouts_respect_enabled_cursors",
-     &test_cursor_intersection_readouts_respect_enabled_cursors},
-    {"cursor_intersection_readouts_use_visible_waveform_channels_only",
-     &test_cursor_intersection_readouts_use_visible_waveform_channels_only},
-    {"cursor_intersection_readouts_skip_bit_lane_channels", &test_cursor_intersection_readouts_skip_bit_lane_channels},
-    {"cursor_intersection_readouts_respect_max_time_distance",
-     &test_cursor_intersection_readouts_respect_max_time_distance},
-    {"cursor_readout_annotation_requires_hold_or_pin", &test_cursor_readout_annotation_requires_hold_or_pin},
-    {"wave_channel_card_width_modes", &test_wave_channel_card_width_modes},
-    {"wave_vertical_auto_fit_multiplier", &test_wave_vertical_auto_fit_multiplier},
-    {"wave_y_axis_double_click_bounds_selects_visible_or_active",
-     &test_wave_y_axis_double_click_bounds_selects_visible_or_active},
-    {"wave_visible_channel_bounds_ignore_hidden_channels", &test_wave_visible_channel_bounds_ignore_hidden_channels},
-    {"wave_hidden_channel_policy_defaults_to_visible_only", &test_wave_hidden_channel_policy_defaults_to_visible_only},
-    {"wave_hidden_channel_indices_allow_duplicate_labels", &test_wave_hidden_channel_indices_allow_duplicate_labels},
-    {"wave_hidden_channel_indices_survive_duplicate_rename",
-     &test_wave_hidden_channel_indices_survive_duplicate_rename},
-    {"wave_grid_division_readout_conversions", &test_wave_grid_division_readout_conversions},
-    {"wave_grid_division_readout_formula_offset_cancels", &test_wave_grid_division_readout_formula_offset_cancels},
-    {"wave_status_overlay_items_only_show_non_default_states",
-     &test_wave_status_overlay_items_only_show_non_default_states},
-    {"wave_auto_follow_pause_policy_respects_interaction_setting",
-     &test_wave_auto_follow_pause_policy_respects_interaction_setting},
-    {"wave_phosphor_stroke_style_uses_channel_style", &test_wave_phosphor_stroke_style_uses_channel_style},
-    {"wave_phosphor_trigger_detection_interpolates_edges", &test_wave_phosphor_trigger_detection_interpolates_edges},
-    {"wave_phosphor_trigger_window_aligns_to_fixed_x", &test_wave_phosphor_trigger_window_aligns_to_fixed_x},
-    {"wave_phosphor_non_follow_mode_freezes", &test_wave_phosphor_non_follow_mode_freezes},
-    {"wave_channel_reset_all_uses_protocol_default", &test_wave_channel_reset_all_uses_protocol_default},
-    {"wave_channel_reset_scale_offset_preserves_label_and_ratio",
-     &test_wave_channel_reset_scale_offset_preserves_label_and_ratio},
-    {"wave_channel_reset_scale_preserves_offset", &test_wave_channel_reset_scale_preserves_offset},
-    {"wave_offset_reset_uses_protocol_default_only", &test_wave_offset_reset_uses_protocol_default_only},
-    {"wave_reset_one_channel_view_settings_only_resets_target",
-     &test_wave_reset_one_channel_view_settings_only_resets_target},
-    {"wave_reset_all_channel_view_settings_preserves_samples",
-     &test_wave_reset_all_channel_view_settings_preserves_samples},
-    {"wave_mouse_y_offset_drag_mode_gate", &test_wave_mouse_y_offset_drag_mode_gate},
-    {"raw_capture_file_roundtrip", &test_raw_capture_file_roundtrip},
-    {"wave_csv_wide_roundtrip", &test_wave_csv_wide_roundtrip},
-    {"wave_csv_long_import_rejects_non_finite", &test_wave_csv_long_import_rejects_non_finite},
-    {"wave_csv_long_import", &test_wave_csv_long_import},
-    {"raw_capture_csv_roundtrip", &test_raw_capture_csv_roundtrip},
-    {"raw_capture_csv_rejects_bad_hex", &test_raw_capture_csv_rejects_bad_hex},
-    {"csv_export_range_filters_wave_and_raw_events", &test_csv_export_range_filters_wave_and_raw_events},
-    {"raw_capture_file_plot_setup_roundtrip", &test_raw_capture_file_plot_setup_roundtrip},
-    {"raw_capture_file_plot_setup_rejects_bad_fields", &test_raw_capture_file_plot_setup_rejects_bad_fields},
-    {"raw_capture_file_v2_event_stream_still_reads", &test_raw_capture_file_v2_event_stream_still_reads},
-    {"raw_capture_file_rejects_size_mismatch", &test_raw_capture_file_rejects_size_mismatch},
-    {"raw_capture_file_requires_protocol_fields", &test_raw_capture_file_requires_protocol_fields},
-    {"application_raw_capture_import_updates_last_pump_diagnostics",
-     &test_application_raw_capture_import_updates_last_pump_diagnostics},
-    {"raw_capture_file_rejects_trailing_bytes", &test_raw_capture_file_rejects_trailing_bytes},
-    {"raw_capture_file_rejects_profile_set_without_length", &test_raw_capture_file_rejects_profile_set_without_length},
-    {"session_package_roundtrip_preserves_binary_entries", &test_session_package_roundtrip_preserves_binary_entries},
-    {"session_package_rejects_truncated_entry", &test_session_package_rejects_truncated_entry},
-    {"session_package_rejects_excessive_entry_count", &test_session_package_rejects_excessive_entry_count},
-    {"elf_static_view_bridge_loads_dump_json_and_queries_symbols",
-     &test_elf_static_view_bridge_loads_dump_json_and_queries_symbols},
-    {"elf_static_view_bridge_finds_exact_label_only", &test_elf_static_view_bridge_finds_exact_label_only},
-    {"elf_static_view_bridge_queries_flattened_composite_members",
-     &test_elf_static_view_bridge_queries_flattened_composite_members},
-    {"elf_static_view_bridge_loads_private_binary_without_extension",
-     &test_elf_static_view_bridge_loads_private_binary_without_extension},
-    {"elf_static_view_bridge_loads_variable_summary_export",
-     &test_elf_static_view_bridge_loads_variable_summary_export},
-    {"elf_static_view_bridge_keeps_old_model_on_load_failure",
-     &test_elf_static_view_bridge_keeps_old_model_on_load_failure},
-    {"elf_static_view_bridge_clear_resets_loaded_model", &test_elf_static_view_bridge_clear_resets_loaded_model},
-    {"elf_static_address_file_watch_detects_changes_and_delete_recreate_reload",
-     &test_elf_static_address_file_watch_detects_changes_and_delete_recreate_reload},
-};
-
-} // namespace
-
-const TestCase* allTests()
-{
-    return kAllTests;
-}
-
-int testCount()
-{
-    return static_cast<int>(sizeof(kAllTests) / sizeof(kAllTests[0]));
 }

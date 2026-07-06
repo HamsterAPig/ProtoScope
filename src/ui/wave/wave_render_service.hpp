@@ -35,6 +35,8 @@ struct WaveFrameData {
     RenderBudget renderBudget;
 };
 
+struct WaveFrameState;
+
 struct PlotRenderResult {
     struct OverlayGeometry {
         ImVec2 pos{};
@@ -169,11 +171,14 @@ bool drawHorizontalSplitter(
     const char* id, float& topHeight, float minTopHeight, float minBottomHeight, float totalHeight, float thickness);
 void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits);
 bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits);
-bool handleMainPlotAxisDoubleClick(plot::WaveViewState& view,
+bool applyYAxisSingleSideScaleToChannels(plot::WaveDockState& wave,
+                                         const plot::WaveSnapshot& snapshot,
+                                         const std::vector<std::size_t>& visibleChannelIndices);
+bool handleMainPlotAxisDoubleClick(plot::WaveDockState& wave,
                                    const plot::WaveSnapshot& snapshot,
                                    const plot::WaveDataBounds& visibleWindowBounds,
                                    const plot::WaveDataBounds& fullHistoryBounds,
-                                   const plot::WaveDataBounds& yAutoFitBounds);
+                                   const std::vector<std::size_t>& visibleChannelIndices);
 enum class WaveViewportAutoFollowPolicy {
     Preserve,
     UserInteraction,
@@ -186,6 +191,11 @@ bool applyFullViewport(plot::WaveViewState& view,
                        double minValue,
                        double maxValue,
                        WaveViewportAutoFollowPolicy policy);
+bool startViewportAnimation(plot::WaveViewState& view,
+                            const plot::WaveViewport& target,
+                            WaveViewportAutoFollowPolicy policy,
+                            double durationSec = 0.16);
+bool advanceViewportAnimation(plot::WaveViewState& view, double deltaSec);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveSnapshot& fullSnapshot,
                               const plot::WaveDisplayData& displayData,
@@ -478,7 +488,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
                         BitLaneLayout& outBitLayout);
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                       const WaveFrameData& frame,
-                                      const WavePlotOverlayPolicy& overlayPolicy = {});
+                                      const WavePlotOverlayPolicy& overlayPolicy = {},
+                                      WaveFrameState* frameState = nullptr);
 PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,
                                  const WaveFrameData& frame,
                                  bool includePhase,

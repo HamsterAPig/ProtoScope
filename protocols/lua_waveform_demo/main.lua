@@ -13,6 +13,7 @@ local defaults = {
   sample_rate_hz = 200,
   points_per_tick = 8,
   timer_ms = 40,
+  history_limit = 12000,
   show_sine = true,
   show_triangle = true,
   show_square = true,
@@ -41,6 +42,18 @@ local function read_positive_number(id, fallback, minimum)
     return minimum
   end
   return value
+end
+
+local function read_non_negative_int(id, fallback)
+  local value = math.floor(tonumber(proto.get_control(id)) or fallback or 0)
+  if value < 0 then
+    return fallback
+  end
+  return value
+end
+
+local function history_limit()
+  return read_non_negative_int("history_limit", defaults.history_limit)
 end
 
 local function phase_ratio()
@@ -89,7 +102,7 @@ local function setup_plot(reset_history)
     vertical_min = -vertical_range,
     vertical_max = vertical_range,
     vertical_unit = "V",
-    history_limit = 12000,
+    history_limit = history_limit(),
     channels = {
       { label = "正弦", unit = "V", offset = 0.0 },
       { label = "三角", unit = "V", offset = 0.0 },
@@ -153,9 +166,30 @@ local function schedule_next_tick()
   proto.set_timer(timer_name, math.floor(read_positive_number("timer_ms", defaults.timer_ms, 10.0)))
 end
 
+local function update_running_text()
+  proto.set_control("run_state", running and "运行中" or "已暂停")
+end
+
+local function set_running_state(next_running, reset_history)
+  running = next_running == true
+  if reset_history then
+    time_cursor = 0.0
+    setup_plot(true)
+  end
+  if running then
+    schedule_next_tick()
+  else
+    proto.cancel_timer(timer_name)
+  end
+  update_running_text()
+  proto.oscilloscope.set_running(running)
+end
+
 local function restart(reset_history)
   setup_plot(reset_history)
-  schedule_next_tick()
+  if running then
+    schedule_next_tick()
+  end
 end
 
 function ui()
@@ -170,6 +204,8 @@ function ui()
         { type = "button", id = "pause", label = "暂停演示" },
         { type = "button", id = "resume", label = "继续演示" },
         { type = "button", id = "clear_history", label = "清空历史" },
+        { type = "input_int", id = "history_limit", label = "历史上限", default = defaults.history_limit },
+        { type = "input_text", id = "run_state", label = "运行状态", default = "运行中" },
         { type = "input_float", id = "frequency_hz", label = "频率(Hz)", default = defaults.frequency_hz },
         { type = "input_float", id = "amplitude", label = "幅值", default = defaults.amplitude },
         { type = "input_float", id = "offset", label = "偏置", default = defaults.offset },
@@ -198,7 +234,8 @@ function ui()
                   { type = "control", id = "resume" },
                   { type = "control", id = "clear_history" },
                 }
-              }
+              },
+              { type = "control", id = "run_state", min_width = 220 },
             }
           },
           {
@@ -213,6 +250,7 @@ function ui()
               { type = "control", id = "sample_rate_hz" },
               { type = "control", id = "points_per_tick" },
               { type = "control", id = "timer_ms" },
+              { type = "control", id = "history_limit" },
             }
           },
           {
@@ -239,22 +277,30 @@ end
 
 function on_control(ctx, id, value)
   if id == "start" then
-    running = true
-    time_cursor = 0.0
-    restart(true)
+    set_running_state(true, true)
   elseif id == "pause" then
-    running = false
+    set_running_state(false, false)
   elseif id == "resume" then
-    running = true
-    schedule_next_tick()
+    set_running_state(true, false)
   elseif id == "clear_history" then
     time_cursor = 0.0
     restart(true)
+    proto.status.set("Lua 波形历史已清空", { level = "info" })
+  elseif id == "history_limit" then
+    -- 核心流程：历史上限仍复用 plot.setup，不新增宿主 API；reset_history=false 会保留现有数据并立即应用裁剪。
+    setup_plot(false)
+    proto.status.set("Lua 波形历史上限已应用: " .. tostring(history_limit()), { level = "info" })
   elseif id == "frequency_hz" or id == "amplitude" or id == "offset" or id == "phase_deg"
       or id == "sample_rate_hz" or id == "points_per_tick" or id == "timer_ms"
       or id == "show_sine" or id == "show_triangle" or id == "show_square" or id == "show_saw" then
     setup_plot(true)
   end
+end
+
+function on_oscilloscope_toggle(ctx, current_running, target_running)
+  -- 本地演示没有设备 ACK，工具栏请求可以立即同步；真实设备可先 return false，等 ACK 后 set_running。
+  set_running_state(target_running, false)
+  return true
 end
 
 function on_timer(ctx, name)
@@ -269,3 +315,4 @@ end
 
 -- 加载后自动启动，让用户无需串口连接即可立即看到波形。
 restart(true)
+proto.oscilloscope.set_running(true)

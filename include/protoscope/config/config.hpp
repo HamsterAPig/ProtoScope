@@ -105,11 +105,13 @@ struct GuiWaveConfig {
     plot::WaveChannelDoubleClickAction channelDoubleClickAction{plot::WaveChannelDoubleClickAction::ResetScaleOffset};
     plot::WaveXAxisDoubleClickAction xAxisDoubleClickAction{plot::WaveXAxisDoubleClickAction::FitFullHistory};
     plot::WaveYAxisDoubleClickAction yAxisDoubleClickAction{plot::WaveYAxisDoubleClickAction::FitVisibleChannels};
+    bool yAxisDoubleClickAdjustOffset{true};
     plot::WaveHiddenChannelPolicy hiddenChannelPolicy{plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     plot::WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{plot::WaveCursorExtremeSnapPolicy::NearestWaveform};
     plot::WaveMouseYOffsetDragMode mouseYOffsetDragMode{plot::WaveMouseYOffsetDragMode::Direct};
     plot::WaveLegendOverlayOpenMode legendOverlayOpenMode{plot::WaveLegendOverlayOpenMode::Hover};
     bool legendOverlayDoubleClickAutoCollapse{true};
+    bool interactionAnimationEnabled{true};
     bool zoomSelectionAutoExit{false};
     bool peakDetectDownsample{true};
     std::size_t maxRenderPointsPerChannel{1200};
@@ -172,9 +174,15 @@ struct GuiFontConfig {
     GuiFontChineseGlyphRange chineseGlyphRange{GuiFontChineseGlyphRange::SimplifiedCommon};
 };
 
+struct GuiInteractionFeedbackConfig {
+    bool enabled{true};
+    std::uint64_t statusDurationMs{2000};
+};
+
 struct GuiConfig {
     GuiWindowConfig window{};
     GuiRendererBackend rendererBackend{GuiRendererBackend::OpenGL};
+    GuiInteractionFeedbackConfig interactionFeedback{};
     GuiWaveConfig wave{};
     GuiFontConfig font{};
     GuiLogHistoryConfig logHistory{};

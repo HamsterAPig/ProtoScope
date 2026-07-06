@@ -76,10 +76,12 @@ gui:
     channel_double_click_action: reset_scale_offset
     x_axis_double_click_action: fit_full_history
     y_axis_double_click_action: fit_visible_channels
+    y_axis_double_click_adjust_offset: true
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct
     legend_overlay_double_click_auto_collapse: true
+    interaction_animation_enabled: true
     zoom_selection_auto_exit: false
     channel_card_fixed_width: 128.0
     channel_card_adaptive_ratio: 0.22
@@ -107,10 +109,12 @@ gui:
 - `channel_double_click_action`：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset`。
 - `x_axis_double_click_action`：`fit_full_history` 或 `fit_visible_window`。
 - `y_axis_double_click_action`：`fit_visible_channels` 或 `fit_active_channel`。默认聚合所有图例可见模拟通道；激活通道模式只取当前激活模拟通道，激活通道无效、隐藏或为 bit-display 时回退到可见模拟通道。
+- `y_axis_double_click_adjust_offset`：Y 轴双击拟合时是否同步调整通道 offset，默认 `true`，会保持当前主图 Y 视口不变并把目标模拟波形移入视口内部。
 - `hidden_channel_policy`：`visible_only` 或 `include_hidden`，控制隐藏通道是否参与派生视图。
 - `cursor_extreme_snap_policy`：`nearest_waveform` 或 `viewport_zone`。
 - `mouse_y_offset_drag_mode`：`direct`、`shift` 或 `disabled`，控制鼠标拖动通道 Y 偏移的触发方式。
 - `legend_overlay_double_click_auto_collapse`：双击展开图内图例后，鼠标离开并结束输入/拖动交互时是否自动收起。仅在 `legend_overlay_open_mode: double_click` 时生效，默认 `true`。
+- `interaction_animation_enabled`：Wave Dock 交互动效总开关，默认 `true`。关闭后离散视口跳转、工具抽屉、概览折叠和图例浮层直接跳到最终状态。
 - `zoom_selection_auto_exit`：框选放大后是否自动退出框选模式。
 - `channel_card_fixed_width` / `channel_card_adaptive_ratio`：通道卡片宽度策略参数。
 - `legend_channel_name_max_width`：通道图例名称显示宽度上限，单位为 ImGui 逻辑像素；`0.0`、缺失或非正值表示不限制。作用于展开态表格、紧凑态浮窗和底部通道卡片，超长名称会裁剪并在悬浮时显示完整 tooltip。

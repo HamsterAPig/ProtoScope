@@ -43,3 +43,11 @@ cmrc_add_resource_library(proto_resources
     WHENCE "${PROJECT_SOURCE_DIR}"
     ${PROTOSCOPE_PROTOCOL_RESOURCE_FILES}
 )
+
+if(MINGW AND CMAKE_RANLIB)
+    add_custom_command(TARGET proto_resources POST_BUILD
+        COMMAND "${CMAKE_RANLIB}" "$<TARGET_FILE:proto_resources>"
+        COMMENT "刷新 proto_resources 静态库符号索引"
+        VERBATIM
+    )
+endif()
