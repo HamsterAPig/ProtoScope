@@ -98,12 +98,18 @@ enum class TxSequenceFieldRadix {
 
 using TxSequenceFieldValue = std::variant<std::int64_t, std::string>;
 
+struct TxSequenceFieldOption {
+    std::string label;
+    TxSequenceFieldValue value{std::int64_t{0}};
+};
+
 struct TxSequenceFieldDescriptor {
     std::string id;
     std::string label;
     TxSequenceFieldType type{TxSequenceFieldType::U16};
     TxSequenceFieldRadix radix{TxSequenceFieldRadix::Dec};
     TxSequenceFieldValue defaultValue{std::int64_t{0}};
+    std::vector<TxSequenceFieldOption> options;
 };
 
 struct TxSequenceFrameValue {

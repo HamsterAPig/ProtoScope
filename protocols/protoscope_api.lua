@@ -191,12 +191,17 @@ function ProtoBuffer:bytes(max_bytes) end
 -- tx_sequence 动态发送帧序列：宿主只维护可编辑状态；Lua 在 on_control/on_timer 中组帧并调用 proto.send/request。
 ---@alias ProtoTxSequenceFieldType 'u8'|'u16'|'i16'|'u32'|'string'
 ---@alias ProtoTxSequenceRadix 'hex'|'dec'
+---@class ProtoTxSequenceFieldOption
+---@field label string @下拉显示文本。
+---@field value integer|string @写入 fields 的真实值；类型必须匹配字段 type。
+
 ---@class ProtoTxSequenceField
 ---@field id string
 ---@field label string
 ---@field type ProtoTxSequenceFieldType
 ---@field default? integer|string
 ---@field radix? ProtoTxSequenceRadix @数值字段显示进制；string 字段不支持 hex。
+---@field options? ProtoTxSequenceFieldOption[] @可选下拉项；未配置或为空时使用普通输入框。
 
 ---@class ProtoTxSequenceFrame
 ---@field id? integer @宿主为动态行分配的稳定 id；脚本声明默认值时可省略。

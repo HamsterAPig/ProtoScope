@@ -1,6 +1,8 @@
 #include "protoscope/ui/protocol_state_file.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 
+#include "../src/ui/runtime/gui_runtime_detail.hpp"
+
 #include "test_helpers.hpp"
 #include "test_registry.hpp"
 
@@ -106,6 +108,46 @@ void test_protocol_state_file_roundtrips_elf_path_per_protocol()
             "保存空路径应移除当前协议的 ELF 状态");
     require(protoscope::ui::restoreElfStaticAddressPath(root, "proto_b") == "D:/symbols/b.elf",
             "清空 proto_a 不应影响 proto_b 的 ELF 状态");
+}
+
+void test_protocol_state_file_tx_sequence_options_keep_scalar_unknown_value()
+{
+    protoscope::scripting::ControlDescriptor descriptor;
+    descriptor.type = protoscope::scripting::ControlType::TxSequence;
+    descriptor.txSequenceIntervalMs = 100;
+    descriptor.txSequenceLoop = false;
+    descriptor.txSequenceFields.push_back({
+        .id = "func",
+        .label = "功能码",
+        .type = protoscope::scripting::TxSequenceFieldType::U8,
+        .radix = protoscope::scripting::TxSequenceFieldRadix::Hex,
+        .defaultValue = std::int64_t{0x06},
+        .options = {
+            {.label = "03 读保持寄存器", .value = std::int64_t{0x03}},
+            {.label = "06 写单寄存器", .value = std::int64_t{0x06}},
+        },
+    });
+
+    protoscope::scripting::TxSequenceValue value;
+    value.intervalMs = 100;
+    value.loop = false;
+    value.running = false;
+    value.frames.push_back({
+        .id = 1,
+        .enabled = true,
+        .name = "历史功能码",
+        .fields = {{"func", std::int64_t{0x99}}},
+    });
+
+    const auto node = protoscope::ui::writeTxSequenceValue(value);
+    require(node["frames"][0]["fields"]["func"].IsScalar(), "带 options 的 tx_sequence 字段应仍按 scalar 持久化");
+    require(node["frames"][0]["fields"]["func"].as<int>() == 0x99, "持久化应写入真实 func 数值");
+
+    const auto restored = protoscope::ui::readTxSequenceValue(node, descriptor);
+    require(restored.has_value(), "带 options 的 tx_sequence 状态应能恢复");
+    require(restored->frames.size() == 1, "应恢复历史帧");
+    require(std::get<std::int64_t>(restored->frames[0].fields.at("func")) == 0x99,
+            "读取旧状态时不应覆盖未匹配 option 的历史值");
 }
 
 void test_protocol_state_file_replace_failure_keeps_target()

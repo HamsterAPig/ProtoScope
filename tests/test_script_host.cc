@@ -495,7 +495,13 @@ function ui()
       interval_ms = 100,
       loop = true,
       fields = {
-        { id = "func", label = "功能码", type = "u8", default = 0x06, radix = "hex" },
+        { id = "func", label = "功能码", type = "u8", default = 0x06, radix = "hex",
+          options = {
+            { label = "03 读保持寄存器", value = 0x03 },
+            { label = "06 写单寄存器", value = 0x06 },
+            { label = "10 写多个寄存器", value = 0x10 },
+          },
+        },
         { id = "addr", label = "地址", type = "u16", default = 0x8888, radix = "hex" },
         { id = "value", label = "数值", type = "u16", default = 1, radix = "hex" },
         { id = "note", label = "备注", type = "string", default = "启动" },
@@ -534,6 +540,10 @@ end
             "func 应为 u8 字段");
     require(descriptor.txSequenceFields[0].radix == protoscope::scripting::TxSequenceFieldRadix::Hex,
             "func 应为 hex 显示");
+    require(descriptor.txSequenceFields[0].options.size() == 3, "func 应解析 3 个下拉选项");
+    require(descriptor.txSequenceFields[0].options[1].label == "06 写单寄存器", "应解析 option label");
+    require(std::get<std::int64_t>(descriptor.txSequenceFields[0].options[1].value) == 0x06,
+            "应解析 option value 为真实数值");
 
     const auto snapshots = host.controlStatesSnapshot();
     const auto* value = std::get_if<protoscope::scripting::TxSequenceValue>(&snapshots[0].value);
@@ -555,8 +565,41 @@ end
     require(events[0].payload.find("interval=250") != std::string::npos, "proto.get_control 应返回 interval_ms");
     require(events[0].payload.find("loop=true") != std::string::npos, "proto.get_control 应返回 loop");
     require(events[0].payload.find("running=true") != std::string::npos, "proto.get_control 应返回 running");
+    require(events[0].payload.find("func=6") != std::string::npos, "proto.get_control 应返回真实 func 数值");
     require(events[0].payload.find("addr=34952") != std::string::npos, "proto.get_control 应返回字段表");
     require(events[0].payload.find("note=启动") != std::string::npos, "proto.get_control 应补齐字符串默认字段");
+}
+
+void test_script_tx_sequence_invalid_field_options_fail()
+{
+    const auto expectLoadFailure = [](const std::string& suffix, const std::string& optionsLua) {
+        const ScopedTempPath protocolDir(makeUniqueTempDir("protoscope-tx-sequence-options-" + suffix));
+        const auto script = R"lua(
+function ui()
+  return { { id = "tx", title = "TX", controls = {
+    { type = "tx_sequence", id = "frames", label = "Frames",
+      fields = {
+        { id = "func", label = "功能码", type = "u8", default = 0x06, radix = "hex",
+          options = )lua" + optionsLua +
+                            R"lua(
+        },
+      } },
+  } } }
+end
+)lua";
+        writeMainLua(protocolDir.path(), script.c_str());
+
+        protoscope::scripting::ScriptHost host;
+        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "非法 tx_sequence options 应加载失败");
+        require(host.lastError().find("tx_sequence field option") != std::string::npos ||
+                    host.lastError().find("tx_sequence 字段 func") != std::string::npos,
+                "非法 tx_sequence options 应记录明确错误");
+    };
+
+    expectLoadFailure("missing-label", "{ { value = 0x06 } }");
+    expectLoadFailure("missing-value", "{ { label = \"06 写单寄存器\" } }");
+    expectLoadFailure("out-of-range", "{ { label = \"越界\", value = 0x100 } }");
+    expectLoadFailure("wrong-type", "{ { label = \"错类型\", value = \"0x06\" } }");
 }
 
 void test_script_tx_sequence_invalid_field_type_fails()

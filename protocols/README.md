@@ -103,7 +103,7 @@ end
 - `combo`：下拉选择，必须提供 `options = { ... }`，`default` 是 1 基索引。
 - `elf_symbol_combo`：ELF 静态地址候选输入框，值是 `{ label, value, type }` 结构；可选 `debounce_ms` 和 `limit`，未写时使用 `gui.elf_symbol_combo.debounce_ms` 与 `gui.elf_symbol_combo.limit`。
 - `value_table`：只读寄存器显示表。`rows` 支持普通行（`id + label + unit? + note?`）、bit 展开行（在一个源 `id` 下声明 `bits = { ... }`，`bit` 使用 U32 下标）、批量行（`start_id + len + labels + units`）。row id 只用于内部匹配，不显示到界面；`note` 字段在悬浮时作为 tooltip 展示。
-- `tx_sequence`：动态发送帧序列控件。Lua 通过 `fields` 定义每行字段，界面支持添加、复制、删除、移动、启用/禁用、间隔和循环开关；点击开始/停止会触发 `on_control(ctx, id, value)`，控件不直接组帧或绕过 TX 队列。
+- `tx_sequence`：动态发送帧序列控件。Lua 通过 `fields` 定义每行变量，界面支持添加、复制、删除、移动、启用/禁用、间隔和循环开关；点击开始/停止会触发 `on_control(ctx, id, value)`，控件不直接组帧或绕过 TX 队列。帧头、帧尾、CRC 和发送节奏由脚本常量与回调控制。
 
 控件支持短类型和位置参数糖：`{ "text", "device_id", "设备 ID", default = "01" }` 等价于 `{ type = "input_text", id = "device_id", label = "设备 ID", default = "01" }`。短类型映射为：`btn -> button`、`text -> input_text`、`int -> input_int`、`float -> input_float`、`check -> checkbox`、`select -> combo`、`symbol -> elf_symbol_combo`、`values -> value_table`。
 
@@ -132,7 +132,28 @@ controls = {
 
 `proto.set_control("holding_values", { [0x1010] = "220.1", [0x1020] = 0x0023 })` 按 row id 更新。对于 bit 源行，收到非负整数、整数字符串、HEX 字符串、ProtoBuffer 或 number[] 后自动展开 bit：整数源按 64 位读取，字节源按 `bit0 = 第 1 个字节最低位`、`bit8 = 第 2 个字节最低位` 读取。也可以传 `{ start_id = ..., values = { ... } }` 做范围更新。schema 自动化流填充使用 `value_targets.controls` 映射，解析帧后自动写入目标 value_table 控件，再调用 on_batch/on_frame，handler 覆盖优先。
 
-`tx_sequence` 支持字段类型 `u8`、`u16`、`i16`、`u32`、`string`；数值字段可写 `radix = "hex"` 或 `"dec"`。`proto.get_control("send_frames")` 返回完整状态快照：
+`tx_sequence` 支持字段类型 `u8`、`u16`、`i16`、`u32`、`string`；数值字段可写 `radix = "hex"` 或 `"dec"`。字段可选 `options = { { label = "...", value = ... } }` 渲染成下拉框，`value` 类型必须匹配字段类型。Lua 读到的仍是 `value` 的真实标量，不是下拉索引；未配置或空 `options` 时继续使用输入框。
+
+帧头、帧尾这类固定结构建议放在 Lua 脚本常量里，不作为每行字段：
+
+```lua
+local FRAME_HEAD = { 0x01 }
+local FRAME_TAIL = {}
+
+fields = {
+  { id = "func", label = "功能码", type = "u8", default = 0x06, radix = "hex",
+    options = {
+      { label = "03 读保持寄存器", value = 0x03 },
+      { label = "06 写单寄存器", value = 0x06 },
+      { label = "10 写多个寄存器", value = 0x10 },
+    },
+  },
+  { id = "addr", label = "地址", type = "u16", default = 0x8888, radix = "hex" },
+  { id = "value", label = "数值", type = "u16", default = 1, radix = "hex" },
+}
+```
+
+`proto.get_control("send_frames")` 返回完整状态快照：
 
 ```lua
 {
@@ -140,7 +161,7 @@ controls = {
   loop = true,
   running = false,
   frames = {
-    { id = 1, enabled = true, name = "启动", fields = { addr = 0x8888, value = 1 } },
+    { id = 1, enabled = true, name = "启动", fields = { func = 0x06, addr = 0x8888, value = 1 } },
   },
 }
 ```
@@ -150,9 +171,32 @@ controls = {
 ```lua
 local timer_name = "tx_sequence:send_frames"
 local cursor = 1
+local FRAME_HEAD = { 0x01 }
+local FRAME_TAIL = {}
+
+local function append_bytes(out, bytes)
+  for _, byte in ipairs(bytes or {}) do
+    out[#out + 1] = byte & 0xFF
+  end
+end
+
+local function u16_be(value)
+  value = math.floor(tonumber(value) or 0)
+  return { (value >> 8) & 0xFF, value & 0xFF }
+end
 
 local function build_frame(row)
-  return build_fc06_request(row.fields.addr, row.fields.value)
+  local fields = row.fields or {}
+  local frame = {}
+  append_bytes(frame, FRAME_HEAD)
+  frame[#frame + 1] = (fields.func or 0x06) & 0xFF
+  append_bytes(frame, u16_be(fields.addr))
+  append_bytes(frame, u16_be(fields.value))
+  append_bytes(frame, FRAME_TAIL)
+  local crc = proto.crc16_modbus(frame)
+  frame[#frame + 1] = crc & 0xFF
+  frame[#frame + 1] = (crc >> 8) & 0xFF
+  return frame
 end
 
 local function active_frames(seq)

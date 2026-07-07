@@ -348,7 +348,7 @@ scripting:
 
 布局可以省略，省略时按 `controls` 声明顺序显示；也可以使用 Layout Tree 组合 `column`、`flow`、`inline_group`、`table`、`group`、`collapse` 等节点。多个 Dock 可以通过 `tab_group` 合并到同一组选项卡。完整语法见 `protocols/README.md`。
 
-`tx_sequence` 用于 Lua 定义字段列、界面动态维护多帧序列。用户可以增删、复制、移动、启用帧，设置全局发送间隔和循环开关；脚本在 `on_control()` / `on_timer()` 中读取完整状态，自己组帧并调用 `proto.send()`、`proto.request()` 或 `proto.request_guarded()`。
+`tx_sequence` 用于 Lua 定义每行变量列、界面动态维护多帧序列。字段可用 `options = { { label, value } }` 显示为下拉框，脚本读到的仍是 `value` 的真实标量。用户可以增删、复制、移动、启用帧，设置全局发送间隔和循环开关；帧头、帧尾和 CRC 建议保留为 Lua 脚本常量，由 `build_frame()` 组包。脚本在 `on_control()` / `on_timer()` 中读取完整状态，自己组帧并调用 `proto.send()`、`proto.request()` 或 `proto.request_guarded()`。
 
 ### 常用回调
 

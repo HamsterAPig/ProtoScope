@@ -958,6 +958,18 @@ std::optional<TxSequenceFieldValue> txSequenceFieldValueFromLua(const TxSequence
     return clamped;
 }
 
+std::optional<TxSequenceFieldValue> requiredTxSequenceFieldValueFromLua(const TxSequenceFieldDescriptor& field,
+                                                                        const sol::object& object,
+                                                                        std::string_view fieldName,
+                                                                        std::string& error)
+{
+    if (!object.valid() || object.get_type() == sol::type::lua_nil) {
+        error = std::string(fieldName) + " 必须提供 value";
+        return std::nullopt;
+    }
+    return txSequenceFieldValueFromLua(field, object, error);
+}
+
 std::optional<TxSequenceFrameValue> txSequenceFrameFromLua(const ControlDescriptor& descriptor,
                                                            const sol::object& object,
                                                            std::uint32_t fallbackId,
@@ -1521,6 +1533,66 @@ bool applyTxSequenceFieldDefault(TxSequenceFieldDescriptor& field,
     return true;
 }
 
+bool applyTxSequenceFieldOptions(TxSequenceFieldDescriptor& field,
+                                 const sol::object& optionsObject,
+                                 std::string& error)
+{
+    if (!optionsObject.valid() || optionsObject.get_type() == sol::type::lua_nil) {
+        return true;
+    }
+    if (!optionsObject.is<sol::table>()) {
+        error = "tx_sequence field options 必须是数组";
+        return false;
+    }
+
+    const auto optionsTable = optionsObject.as<sol::table>();
+    const auto optionCount = optionsTable.size();
+    std::vector<bool> seen(optionCount, false);
+    std::size_t visited = 0;
+    for (const auto& pair : optionsTable) {
+        const auto index = readLuaU32(pair.first, "tx_sequence field option index", error);
+        if (!index.has_value() || *index == 0U || *index > optionCount) {
+            error = "tx_sequence field options 必须是数组";
+            return false;
+        }
+        if (seen[*index - 1U]) {
+            error = "tx_sequence field options 必须是数组";
+            return false;
+        }
+        seen[*index - 1U] = true;
+        ++visited;
+    }
+    if (visited != optionCount) {
+        error = "tx_sequence field options 必须是数组";
+        return false;
+    }
+
+    field.options.clear();
+    for (std::size_t index = 1; index <= optionCount; ++index) {
+        const sol::object optionObject = optionsTable[index];
+        if (!optionObject.is<sol::table>()) {
+            error = "tx_sequence field options 元素必须是 table";
+            return false;
+        }
+
+        const auto optionTable = optionObject.as<sol::table>();
+        TxSequenceFieldOption option;
+        option.label = readStringField(optionTable, "label");
+        if (option.label.empty()) {
+            error = "tx_sequence field option label 不能为空";
+            return false;
+        }
+        const auto parsed =
+            requiredTxSequenceFieldValueFromLua(field, optionTable["value"], "tx_sequence field option", error);
+        if (!parsed.has_value()) {
+            return false;
+        }
+        option.value = *parsed;
+        field.options.push_back(std::move(option));
+    }
+    return true;
+}
+
 bool applyTxSequenceFieldsConfig(ControlDescriptor& descriptor, const sol::table& table, std::string& error)
 {
     const sol::object fieldsObject = table["fields"];
@@ -1562,6 +1634,9 @@ bool applyTxSequenceFieldsConfig(ControlDescriptor& descriptor, const sol::table
             return false;
         }
         if (!applyTxSequenceFieldDefault(field, fieldTable["default"], error)) {
+            return false;
+        }
+        if (!applyTxSequenceFieldOptions(field, fieldTable["options"], error)) {
             return false;
         }
         if (!appendTxSequenceField(descriptor, std::move(field), error)) {

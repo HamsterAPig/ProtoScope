@@ -135,21 +135,6 @@ namespace {
         return value;
     }
 
-    std::int64_t txSequenceFieldIntegerValue(const scripting::TxSequenceFieldDescriptor& field,
-                                             const scripting::TxSequenceFrameValue& frame)
-    {
-        const auto iter = frame.fields.find(field.id);
-        if (iter != frame.fields.end()) {
-            if (const auto* number = std::get_if<std::int64_t>(&iter->second)) {
-                return *number;
-            }
-        }
-        if (const auto* number = std::get_if<std::int64_t>(&field.defaultValue)) {
-            return *number;
-        }
-        return 0;
-    }
-
     bool drawTxSequenceIntegerInput(const char* label,
                                     const scripting::TxSequenceFieldDescriptor& field,
                                     std::int64_t& value)
@@ -179,6 +164,109 @@ namespace {
             value = 0;
         }
         return true;
+    }
+
+    scripting::TxSequenceFieldValue txSequenceFieldValueOrDefault(
+        const scripting::TxSequenceFieldDescriptor& field,
+        const scripting::TxSequenceFrameValue& frame)
+    {
+        const auto iter = frame.fields.find(field.id);
+        if (iter != frame.fields.end()) {
+            return iter->second;
+        }
+        return defaultTxSequenceFieldValue(field);
+    }
+
+    std::string txSequenceFieldPreviewText(const scripting::TxSequenceFieldDescriptor& field,
+                                           const scripting::TxSequenceFieldValue& value)
+    {
+        if (const auto* text = std::get_if<std::string>(&value)) {
+            return *text;
+        }
+        const auto number = std::get_if<std::int64_t>(&value);
+        if (number == nullptr) {
+            return {};
+        }
+        char buffer[32]{};
+        if (field.radix == scripting::TxSequenceFieldRadix::Hex) {
+            std::snprintf(buffer, sizeof(buffer), "0x%llX", static_cast<unsigned long long>(*number));
+        } else {
+            std::snprintf(buffer, sizeof(buffer), "%lld", static_cast<long long>(*number));
+        }
+        return buffer;
+    }
+
+    bool drawTxSequenceOptionCombo(const char* label,
+                                   const scripting::TxSequenceFieldDescriptor& field,
+                                   scripting::TxSequenceFieldValue& value)
+    {
+        if (field.options.empty()) {
+            return false;
+        }
+
+        const auto selected = std::find_if(field.options.begin(), field.options.end(), [&](const auto& option) {
+            return option.value == value;
+        });
+        const std::string fallbackPreview = txSequenceFieldPreviewText(field, value);
+        const char* preview = selected == field.options.end() ? fallbackPreview.c_str() : selected->label.c_str();
+        bool updated = false;
+        if (ImGui::BeginCombo(label, preview)) {
+            for (const auto& option : field.options) {
+                const bool isSelected = option.value == value;
+                if (ImGui::Selectable(option.label.c_str(), isSelected)) {
+                    value = option.value;
+                    updated = true;
+                }
+                if (isSelected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        return updated;
+    }
+
+    bool drawTxSequenceFieldEditor(const scripting::TxSequenceFieldDescriptor& field,
+                                   scripting::TxSequenceFrameValue& frame)
+    {
+        constexpr float kFieldWidth = 118.0F;
+        ImGui::SetNextItemWidth(kFieldWidth);
+        auto value = txSequenceFieldValueOrDefault(field, frame);
+        if (drawTxSequenceOptionCombo(("##" + field.id).c_str(), field, value)) {
+            frame.fields[field.id] = value;
+            return true;
+        }
+
+        if (field.type == scripting::TxSequenceFieldType::String) {
+            std::string text;
+            if (const auto* stored = std::get_if<std::string>(&value)) {
+                text = *stored;
+            }
+            char buffer[256]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", text.c_str());
+            if (ImGui::InputText(("##" + field.id).c_str(), buffer, sizeof(buffer))) {
+                frame.fields[field.id] = std::string(buffer);
+                return true;
+            }
+            return false;
+        }
+
+        std::int64_t integerValue = 0;
+        if (const auto* number = std::get_if<std::int64_t>(&value)) {
+            integerValue = *number;
+        }
+        if (drawTxSequenceIntegerInput(("##" + field.id).c_str(), field, integerValue)) {
+            frame.fields[field.id] = clampTxSequenceUiInteger(field, integerValue);
+            return true;
+        }
+        return false;
+    }
+
+    std::size_t enabledTxSequenceFrameCount(const scripting::TxSequenceValue& value)
+    {
+        return static_cast<std::size_t>(std::count_if(value.frames.begin(), value.frames.end(), [](const auto& frame) {
+            return frame.enabled;
+        }));
     }
 
     float luaDynamicControlLabelPartWidth(std::string_view visibleLabel)
@@ -1560,129 +1648,135 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
     }
 
     ImGui::PushID(descriptor.id.c_str());
-    ImGui::SetNextItemWidth(96.0F);
-    int intervalMs = next.intervalMs;
-    if (ImGui::InputInt("interval_ms", &intervalMs)) {
-        next.intervalMs = std::max(1, intervalMs);
-        updated = true;
+    const float toolbarHeight = compactLogToolbarHeight();
+    if (beginToolbarGroup("tx_sequence_toolbar", nullptr, toolbarHeight)) {
+        if (drawTransferToolbarButton(next.running ? PROTOSCOPE_ICON_PAUSE " 停止" : PROTOSCOPE_ICON_PLAY " 开始",
+                                      next.running ? "停止发送序列" : "开始发送序列",
+                                      next.running,
+                                      76.0F)) {
+            next.running = !next.running;
+            updated = true;
+        }
+        ImGui::SameLine();
+        if (drawTransferToolbarButton("添加", "添加一行发送帧", false, 54.0F)) {
+            next.frames.push_back(makeTxSequenceUiFrame(descriptor, nextTxSequenceFrameId(next)));
+            updated = true;
+        }
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(PROTOSCOPE_ICON_CLOCK " interval_ms");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(82.0F);
+        int intervalMs = next.intervalMs;
+        if (ImGui::InputInt("##interval_ms", &intervalMs, 0, 0)) {
+            next.intervalMs = std::max(1, intervalMs);
+            updated = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Checkbox("loop", &next.loop)) {
+            updated = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("启用 %zu / %zu", enabledTxSequenceFrameCount(next), next.frames.size());
     }
-    ImGui::SameLine();
-    if (ImGui::Checkbox("loop", &next.loop)) {
-        updated = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(next.running ? "停止" : "开始")) {
-        next.running = !next.running;
-        updated = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("添加")) {
-        next.frames.push_back(makeTxSequenceUiFrame(descriptor, nextTxSequenceFrameId(next)));
-        updated = true;
-    }
+    endToolbarGroup();
 
-    const int columnCount = 4 + static_cast<int>(descriptor.txSequenceFields.size());
+    const int columnCount = 3 + static_cast<int>(descriptor.txSequenceFields.size());
     const std::string tableId = "##lua_tx_sequence_" + descriptor.id;
     constexpr ImGuiTableFlags flags =
-        ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
-    if (ImGui::BeginTable(tableId.c_str(), columnCount, flags)) {
-        ImGui::TableSetupColumn("启用", ImGuiTableColumnFlags_WidthFixed, 44.0F);
-        ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthStretch);
-        for (const auto& field : descriptor.txSequenceFields) {
-            ImGui::TableSetupColumn(field.label.c_str(), ImGuiTableColumnFlags_WidthStretch);
-        }
-        ImGui::TableSetupColumn("操作", ImGuiTableColumnFlags_WidthFixed, 168.0F);
-        ImGui::TableHeadersRow();
-
-        for (std::size_t rowIndex = 0; rowIndex < next.frames.size(); ++rowIndex) {
-            auto& frame = next.frames[rowIndex];
-            ImGui::PushID(static_cast<int>(frame.id));
-            ImGui::TableNextRow();
-
-            ImGui::TableSetColumnIndex(0);
-            if (ImGui::Checkbox("##enabled", &frame.enabled)) {
-                updated = true;
-            }
-
-            ImGui::TableSetColumnIndex(1);
-            char nameBuffer[128]{};
-            std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", frame.name.c_str());
-            if (ImGui::InputText("##name", nameBuffer, sizeof(nameBuffer))) {
-                frame.name = nameBuffer;
-                updated = true;
-            }
-
-            int column = 2;
+        ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_SizingFixedFit;
+    const float rowHeight = ImGui::GetFrameHeightWithSpacing() + 6.0F;
+    const float tableHeight =
+        std::min(280.0F, std::max(120.0F, rowHeight * static_cast<float>(std::min<std::size_t>(next.frames.size() + 1U, 8U))));
+    if (ImGui::BeginChild("##tx_sequence_table_scroll",
+                          ImVec2(0.0F, tableHeight),
+                          ImGuiChildFlags_Borders,
+                          ImGuiWindowFlags_HorizontalScrollbar)) {
+        if (ImGui::BeginTable(tableId.c_str(), columnCount, flags)) {
+            ImGui::TableSetupColumn("启用", ImGuiTableColumnFlags_WidthFixed, 48.0F);
+            ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthFixed, 128.0F);
             for (const auto& field : descriptor.txSequenceFields) {
-                ImGui::TableSetColumnIndex(column++);
-                if (field.type == scripting::TxSequenceFieldType::String) {
-                    std::string text;
-                    const auto valueIter = frame.fields.find(field.id);
-                    if (valueIter != frame.fields.end()) {
-                        if (const auto* stored = std::get_if<std::string>(&valueIter->second)) {
-                            text = *stored;
-                        }
-                    } else if (const auto* stored = std::get_if<std::string>(&field.defaultValue)) {
-                        text = *stored;
-                    }
-                    char buffer[256]{};
-                    std::snprintf(buffer, sizeof(buffer), "%s", text.c_str());
-                    if (ImGui::InputText(("##" + field.id).c_str(), buffer, sizeof(buffer))) {
-                        frame.fields[field.id] = std::string(buffer);
-                        updated = true;
-                    }
-                    continue;
-                }
+                ImGui::TableSetupColumn(field.label.c_str(), ImGuiTableColumnFlags_WidthFixed, 124.0F);
+            }
+            ImGui::TableSetupColumn("操作", ImGuiTableColumnFlags_WidthFixed, 160.0F);
+            ImGui::TableHeadersRow();
 
-                std::int64_t value = txSequenceFieldIntegerValue(field, frame);
-                if (drawTxSequenceIntegerInput(("##" + field.id).c_str(), field, value)) {
-                    frame.fields[field.id] = clampTxSequenceUiInteger(field, value);
+            for (std::size_t rowIndex = 0; rowIndex < next.frames.size(); ++rowIndex) {
+                auto& frame = next.frames[rowIndex];
+                ImGui::PushID(static_cast<int>(frame.id));
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0);
+                if (ImGui::Checkbox("##enabled", &frame.enabled)) {
                     updated = true;
                 }
-            }
 
-            ImGui::TableSetColumnIndex(column);
-            const bool canMoveUp = rowIndex > 0;
-            const bool canMoveDown = rowIndex + 1 < next.frames.size();
-            if (!canMoveUp) {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::SmallButton("上")) {
-                std::swap(next.frames[rowIndex - 1], next.frames[rowIndex]);
-                updated = true;
-            }
-            if (!canMoveUp) {
-                ImGui::EndDisabled();
-            }
-            ImGui::SameLine();
-            if (!canMoveDown) {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::SmallButton("下")) {
-                std::swap(next.frames[rowIndex], next.frames[rowIndex + 1]);
-                updated = true;
-            }
-            if (!canMoveDown) {
-                ImGui::EndDisabled();
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("复制")) {
-                auto copy = frame;
-                copy.id = nextTxSequenceFrameId(next);
-                next.frames.insert(next.frames.begin() + static_cast<std::ptrdiff_t>(rowIndex + 1), std::move(copy));
-                updated = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("删")) {
-                next.frames.erase(next.frames.begin() + static_cast<std::ptrdiff_t>(rowIndex));
-                updated = true;
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(118.0F);
+                char nameBuffer[128]{};
+                std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", frame.name.c_str());
+                if (ImGui::InputText("##name", nameBuffer, sizeof(nameBuffer))) {
+                    frame.name = nameBuffer;
+                    updated = true;
+                }
+
+                int column = 2;
+                for (const auto& field : descriptor.txSequenceFields) {
+                    ImGui::TableSetColumnIndex(column++);
+                    if (drawTxSequenceFieldEditor(field, frame)) {
+                        updated = true;
+                    }
+                }
+
+                ImGui::TableSetColumnIndex(column);
+                const bool canMoveUp = rowIndex > 0;
+                const bool canMoveDown = rowIndex + 1 < next.frames.size();
+                if (!canMoveUp) {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("上", ImVec2(30.0F, 0.0F))) {
+                    std::swap(next.frames[rowIndex - 1], next.frames[rowIndex]);
+                    updated = true;
+                }
+                drawIconTooltip("上移一行");
+                if (!canMoveUp) {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SameLine();
+                if (!canMoveDown) {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("下", ImVec2(30.0F, 0.0F))) {
+                    std::swap(next.frames[rowIndex], next.frames[rowIndex + 1]);
+                    updated = true;
+                }
+                drawIconTooltip("下移一行");
+                if (!canMoveDown) {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("复制", ImVec2(44.0F, 0.0F))) {
+                    auto copy = frame;
+                    copy.id = nextTxSequenceFrameId(next);
+                    next.frames.insert(next.frames.begin() + static_cast<std::ptrdiff_t>(rowIndex + 1), std::move(copy));
+                    updated = true;
+                }
+                drawIconTooltip("复制当前帧");
+                ImGui::SameLine();
+                if (ImGui::Button(PROTOSCOPE_ICON_TRASH, ImVec2(30.0F, 0.0F))) {
+                    next.frames.erase(next.frames.begin() + static_cast<std::ptrdiff_t>(rowIndex));
+                    updated = true;
+                    ImGui::PopID();
+                    break;
+                }
+                drawIconTooltip("删除当前帧");
                 ImGui::PopID();
-                break;
             }
-            ImGui::PopID();
+            ImGui::EndTable();
         }
-        ImGui::EndTable();
     }
+    ImGui::EndChild();
     ImGui::PopID();
 
     if (updated) {
