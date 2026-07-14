@@ -261,6 +261,7 @@ private:
     void resetStreamBufferAlertState(std::uint64_t connectionId = 0);
     void enqueueDialogRequest(const scripting::DialogRequest& request);
     void appendTransferRow(dock::ReceiveRow row);
+    [[nodiscard]] bool validateOfflineReplayTransport(std::string& error) const;
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
     void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
     void appendRawCaptureEvent(const plot::RawCaptureEvent& event);
@@ -277,6 +278,7 @@ private:
     bool applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent& event, bool cleared, std::string& error);
     void replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
                                const std::vector<std::uint8_t>& bytes);
+    bool applyTransferFrameRuntimeProfileEvent(const scripting::StreamRuntimeProfileEvent& event, std::string& error);
     void finishRawCaptureImportReplay();
     void cancelRawCaptureImportReplay();
     bool applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup);
@@ -320,6 +322,7 @@ private:
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
     RawCaptureReplayState rawCaptureReplay_;
+    bool replayReceiveHistory_{false};
     std::deque<transport::TransportEvent> pendingTransportEvents_;
     std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;

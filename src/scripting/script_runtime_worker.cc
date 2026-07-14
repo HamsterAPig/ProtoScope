@@ -62,6 +62,10 @@ namespace {
         std::shared_ptr<std::promise<std::pair<bool, std::string>>> result;
     };
 
+    struct ResetStreamReplayStateCommand {
+        std::shared_ptr<std::promise<bool>> result;
+    };
+
     struct OpenCommand {
         transport::TransportOpenEvent event;
     };
@@ -118,6 +122,7 @@ namespace {
                                        OscilloscopeToggleCommand,
                                        ClearRealtimeOutputsCommand,
                                        ApplyStreamRuntimeProfileCommand,
+                                       ResetStreamReplayStateCommand,
                                        OpenCommand,
                                        CloseCommand,
                                        ErrorCommand,
@@ -689,6 +694,20 @@ struct ScriptRuntimeWorker::Impl {
 
     CommandExecutionResult executeCommandItem(ScriptHost& host,
                                               std::optional<std::uint64_t>& activeConnectionId,
+                                              ResetStreamReplayStateCommand& command)
+    {
+        {
+            std::lock_guard lock(mutex);
+            clearQueuedRxLocked();
+        }
+        activeConnectionId.reset();
+        host.resetStreamReplayState();
+        command.result->set_value(true);
+        return {};
+    }
+
+    CommandExecutionResult executeCommandItem(ScriptHost& host,
+                                              std::optional<std::uint64_t>& activeConnectionId,
                                               OpenCommand& command)
     {
         if (command.event.context.readyForIo) {
@@ -911,6 +930,12 @@ bool ScriptRuntimeWorker::applyStreamRuntimeProfileEvent(StreamRuntimeProfileEve
         ApplyStreamRuntimeProfileCommand{.event = std::move(event), .result = promise}, promise);
     error = result.second;
     return result.first;
+}
+
+void ScriptRuntimeWorker::resetStreamReplayState()
+{
+    auto promise = std::make_shared<std::promise<bool>>();
+    static_cast<void>(impl_->runSync<bool>(ResetStreamReplayStateCommand{.result = promise}, promise));
 }
 
 void ScriptRuntimeWorker::postRequestAwaitingCompletion(bool active)

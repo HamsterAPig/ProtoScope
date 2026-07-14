@@ -1504,6 +1504,19 @@ const dock::DockStore& Application::docks() const
 
 void Application::openTransport()
 {
+    if (rawCaptureReplay_.loaded) {
+        dockStore_.commState().lastError = "原始回放时间轴已载入，请先卸载后再打开实时连接";
+        loggingFacade_.warn("transport", dockStore_.commState().lastError);
+        syncDockState();
+        return;
+    }
+    if (replayReceiveHistory_) {
+        // 核心流程：离线回放可能停在半帧，重新连接前必须丢弃回放 parser 状态，
+        // 但保留当前收发记录供用户继续查看。
+        replayReceiveHistory_ = false;
+        pendingTransferFrameRows_.clear();
+        resetTransferFrameParser();
+    }
     cancelAllTxRequests("连接重新打开");
     pendingTransportEvents_.clear();
     pendingRxByteChunks_.clear();
@@ -1613,6 +1626,19 @@ void Application::appendTransferRow(dock::ReceiveRow row)
         appendTransferFrameRows(row);
     }
     dockStore_.appendReceiveRow(std::move(row));
+}
+
+bool Application::validateOfflineReplayTransport(std::string& error) const
+{
+    if (!transport_) {
+        return true;
+    }
+    const auto state = transport_->state();
+    if (state != transport::TransportState::Opening && state != transport::TransportState::Open) {
+        return true;
+    }
+    error = "实时连接仍处于打开状态，请先关闭连接再载入离线回放";
+    return false;
 }
 
 void Application::appendLiveRawCapture(const transport::TransportBytesEvent& event)
@@ -1817,7 +1843,7 @@ void Application::recordPlotSetupSnapshot(const plot::RawCapturePlotSetupEventDa
     if (!suppressRawCapturePlotSetupEvents_) {
         appendRawCaptureEvent(event);
     }
-    if (rawCaptureRecording_.isOpen()) {
+    if (!suppressRawCapturePlotSetupEvents_ && rawCaptureRecording_.isOpen()) {
         std::string error;
         if (!rawCaptureRecording_.appendEvent(event, error)) {
             loggingFacade_.error("raw_capture", "录制 plot.setup 事件失败: " + error);
@@ -1946,6 +1972,11 @@ void Application::rebuildTransferFrameRows()
 
 void Application::activateParsedTransferLogView()
 {
+    if (replayReceiveHistory_) {
+        // 回放时逐帧结果已经按 profile/原始事件顺序预生成，切换视图不能重置 parser 或丢弃结果。
+        flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
+        return;
+    }
     // 核心流程：默认只解析切换后的新 raw 行；开启兼容开关时才重放旧 RawChunks 历史。
     resetTransferFrameDisplayState();
     if (!runtimeConfig_.gui.replayRawHistoryOnSchemaSwitch) {
@@ -2310,16 +2341,30 @@ bool Application::exportSessionPackage(const std::filesystem::path& path, std::s
 bool Application::importSessionPackage(const std::filesystem::path& path, std::string& error)
 {
     loggingFacade_.info("session", "session import requested kind=session endpoint=" + path.generic_string());
+    if (!validateOfflineReplayTransport(error)) {
+        return false;
+    }
     const auto previousConfig = runtimeConfig_;
     const auto previousWave = dockStore_.waveState();
+    const auto previousReceive = dockStore_.receiveState();
     const auto previousCaptureProtocolOverride = captureProtocolConfigOverride_;
+    const auto previousReplay = rawCaptureReplay_;
+    const auto previousTransferFrameParser = transferFrameParser_;
+    const auto previousPendingTransferFrameRows = pendingTransferFrameRows_;
+    const bool previousReplayReceiveHistory = replayReceiveHistory_;
     auto rollbackImport = [&]() {
         std::string rollbackError;
         if (!applyConfig(previousConfig)) {
             rollbackError = "恢复导入前配置失败";
         }
         dockStore_.waveState() = previousWave;
+        dockStore_.receiveState() = previousReceive;
         captureProtocolConfigOverride_ = previousCaptureProtocolOverride;
+        rawCaptureReplay_ = previousReplay;
+        transferFrameParser_ = previousTransferFrameParser;
+        pendingTransferFrameRows_ = previousPendingTransferFrameRows;
+        replayReceiveHistory_ = previousReplayReceiveHistory;
+        syncDockState();
         if (!rollbackError.empty()) {
             error += "; " + rollbackError;
         }
@@ -2384,7 +2429,7 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     }
 
     if (rawCapture.has_value()) {
-        if (!importWaveRawCapture(*rawCapture, error)) {
+        if (!loadRawCaptureReplayTimeline(*rawCapture, error)) {
             rollbackImport();
             return false;
         }
@@ -2394,7 +2439,7 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
     wave.analysisMarkers.clear();
     wave.analysisMarkers = std::move(importedMarkers);
 
-    setStatusMessage("现场包已导入: " + path.generic_string());
+    setStatusMessage("现场包已导入，原始回放时间轴已载入并暂停在起点: " + path.generic_string());
     loggingFacade_.info("session", "session imported kind=session endpoint=" + path.generic_string());
     return true;
 }
@@ -2473,6 +2518,9 @@ std::uint64_t Application::rawCaptureRecordingBytes() const
 
 bool Application::validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const
 {
+    if (!validateOfflineReplayTransport(error)) {
+        return false;
+    }
     const auto& lua = dockStore_.luaState();
     if (!lua.loaded) {
         error = "当前协议尚未加载";
@@ -2487,13 +2535,18 @@ bool Application::validateRawCaptureImport(const plot::RawCaptureFileData& captu
 
 void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& capture)
 {
-    // 核心流程：导入回放必须先清空旧波形与旧原始缓冲，再走一次 on_bytes -> flushScriptPlots，
-    // 避免导入样本与现场采集样本混在同一份波形/原始容器里。
+    // 核心流程：导入回放必须同时清空旧波形、收发记录和帧 parser，
+    // 后续播放或 seek 才能从时间轴起点确定性地重建同一份离线现场。
     scriptWorker_.waitIdle();
     static_cast<void>(scriptWorker_.drainOutputs());
     const auto discarded = clearPendingRealtimeBacklog();
     logRealtimeBacklogDiscard(discarded);
+    scriptWorker_.resetStreamReplayState();
     resetWaveHistoryForTrigger(WaveResetViewportTrigger::RawImport);
+    dockStore_.clearReceiveRows();
+    pendingTransferFrameRows_.clear();
+    resetTransferFrameParser();
+    replayReceiveHistory_ = true;
     auto& wave = dockStore_.waveState();
     wave.rawCapture = capture;
     wave.view.sampleFrequencyHz = capture.sampleFrequencyHz;
@@ -2680,6 +2733,36 @@ bool Application::applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent
     return true;
 }
 
+bool Application::applyTransferFrameRuntimeProfileEvent(const scripting::StreamRuntimeProfileEvent& event,
+                                                        std::string& error)
+{
+    if (!transferFrameParser_.has_value()) {
+        resetTransferFrameParser();
+    }
+    if (!transferFrameParser_.has_value()) {
+        return true;
+    }
+
+    const auto applyToParser = [&](scripting::FrameStreamParser& parser) {
+        if (event.cleared) {
+            if (event.frameName.empty()) {
+                parser.clearRuntimeProfiles();
+                return true;
+            }
+            return parser.clearRuntimeProfile(std::optional<std::string>{event.frameName}, error);
+        }
+        return parser.setRuntimeProfile(
+            event.frameName,
+            scripting::StreamRuntimeProfile{
+                .length = event.length,
+                .channelMap = event.channelMap,
+            },
+            error);
+    };
+
+    return applyToParser(transferFrameParser_->rx) && applyToParser(transferFrameParser_->tx);
+}
+
 void Application::replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
                                         const std::vector<std::uint8_t>& bytes)
 {
@@ -2687,11 +2770,25 @@ void Application::replayRawCaptureBytes(const transport::ConnectionContext& repl
                          "raw replay bytes" + transportContextFields("raw_replay", replayContext) +
                              " bytes=" + std::to_string(bytes.size()) +
                              payloadPreviewSuffix(loggingFacade_.currentConfig(), bytes));
+    dockStore_.appendReceiveRow(dock::ReceiveRow{
+        .timestampMs = replayContext.timestampMs,
+        .direction = "RX",
+        .endpoint = replayContext.endpoint,
+        .bytes = bytes,
+        .message = {},
+    });
     std::size_t cursor = 0;
     while (cursor < bytes.size()) {
         const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, bytes.size() - cursor);
         std::vector<std::uint8_t> chunk(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
                                         bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
+        appendTransferFrameRows(dock::ReceiveRow{
+            .timestampMs = replayContext.timestampMs,
+            .direction = "RX",
+            .endpoint = replayContext.endpoint,
+            .bytes = chunk,
+            .message = {},
+        });
         scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
         if (runtimeConfig_.scripting.workerEnabled) {
             // 核心流程：异步 worker 需要先等到脚本消费完当前 chunk，再把输出合并到回放结果。
@@ -2700,12 +2797,14 @@ void Application::replayRawCaptureBytes(const transport::ConnectionContext& repl
         flushScriptOutputs();
         cursor += chunkSize;
     }
+    flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
 }
 
 void Application::finishRawCaptureImportReplay()
 {
     auto& wave = dockStore_.waveState();
     flushScriptOutputs();
+    flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
     const auto importedSnapshot =
         wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
     std::size_t importedHistoryLimit = 0;
@@ -3567,6 +3666,7 @@ bool Application::processTransportBytesEvent(const transport::TransportBytesEven
         activeConnection_->connectionId != event.context.connectionId) {
         return false;
     }
+    replayReceiveHistory_ = false;
     appendRawCaptureRecording(event);
     appendLiveRawCapture(event);
     scriptWorker_.postTransportBytes(event);
@@ -3751,6 +3851,10 @@ bool Application::applyScriptRuntimeProfileEvents(const scripting::ScriptRuntime
 {
     bool changed = false;
     for (const auto& profileEvent : batch.streamRuntimeProfiles) {
+        std::string transferFrameError;
+        if (!applyTransferFrameRuntimeProfileEvent(profileEvent, transferFrameError)) {
+            loggingFacade_.warn("protocol", "收发记录帧解析器应用 runtime profile 失败: " + transferFrameError);
+        }
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         const plot::RawCaptureEvent event{
             .type =
@@ -3768,7 +3872,7 @@ bool Application::applyScriptRuntimeProfileEvents(const scripting::ScriptRuntime
         if (!suppressRawCaptureProfileEvents_) {
             appendRawCaptureEvent(event);
         }
-        if (rawCaptureRecording_.isOpen()) {
+        if (!suppressRawCaptureProfileEvents_ && rawCaptureRecording_.isOpen()) {
             std::string error;
             if (!rawCaptureRecording_.appendEvent(event, error)) {
                 loggingFacade_.error("raw_capture", "录制 stream profile 事件失败: " + error);

@@ -436,6 +436,7 @@ public:
     bool clearStreamRuntimeProfile(const sol::object& frameName, std::string& error);
     bool applyStreamRuntimeProfileEvent(const StreamRuntimeProfileEvent& event, std::string& error);
     void clearAllStreamRuntimeProfiles();
+    void resetStreamReplayState();
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value);
     [[nodiscard]] bool requestOscilloscopeToggle(const transport::ConnectionContext& ctx,
                                                  bool currentRunning,

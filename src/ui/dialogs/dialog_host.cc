@@ -1091,7 +1091,9 @@ void GuiRuntime::importSessionPackageFromPath(const std::filesystem::path& path)
         application_.setStatusMessage("现场会话包导入失败: " + error);
         return;
     }
-    application_.setStatusMessage("现场会话包导入成功");
+    showOfflineReplayDock_ = true;
+    pendingProtocolWorkspaceSave_ = true;
+    application_.setStatusMessage("现场会话包已导入，原始回放已暂停在起点");
     sessionPackageImportDialogOpen_ = false;
     sessionPackageImportDialogOpened_ = false;
     sessionPackageImportError_.clear();

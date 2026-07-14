@@ -3596,6 +3596,22 @@ void ScriptHost::clearAllStreamRuntimeProfiles()
     runtime_->streamRuntimeProfiles.clear();
 }
 
+void ScriptHost::resetStreamReplayState()
+{
+    if (!runtime_ || !runtime_->stream) {
+        lastTransportStats_ = {};
+        return;
+    }
+    // 核心流程：离线 seek 从时间轴起点重建时，只复位 stream 解析状态，
+    // 保留协议 Lua 环境、控件值和 Dock 状态，避免一次定位演变成完整协议重载。
+    runtime_->stream->parser.reset();
+    runtime_->stream->parser.clearRuntimeProfiles();
+    runtime_->stream->lastBatch.reset();
+    runtime_->streamRuntimeProfiles.clear();
+    streamRuntimeProfileEvents_.clear();
+    lastTransportStats_ = {};
+}
+
 std::optional<StreamParseBatch> ScriptHost::lastStreamParseBatch() const
 {
     if (!runtime_ || !runtime_->stream) {
