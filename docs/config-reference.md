@@ -27,6 +27,7 @@ performance:
 - `adaptive.enabled`：自适应性能控制开关，默认 `false`。开启后每秒采样系统 CPU 忙碌率、可用物理内存以及应用 RX、worker、transfer、plot backlog 和脚本处理耗时。
 - `adaptive.max_multiplier`：性能上限倍率 K，默认 `1.0`，有效范围 `0.25` 到 `4.0`；缺失、非有限数或非正数回退到 `1.0`，超出范围会钳制。
 - 自适应启用时，运行时忽略 `scale`、`app.fps_limit`、`gui.wave.max_render_points_per_channel`、`gui.wave.max_render_vertices`、`gui.wave.overview_max_samples`、三个 `gui.realtime_backlog.*_per_pump` 以及 `scripting.worker.output_flush_budget_ms`。这些 YAML 值仍会保存，关闭自适应后再次生效。
+- 自适应内部会拆分两类倍率：系统压力升高时优先收紧 FPS 和波形渲染预算；软件 backlog 高但系统未临界时，清债预算保持在 K 档，避免降低 RX、transfer、plot 和脚本输出追赶能力。
 - 自适应预算以内置基线和当前 K 计算：正常为 `K`，轻度、高、严重压力分别为 `0.75K`、`0.5K`、`0.25K`，最终不低于 `0.25`。压力升级立即生效；连续 5 个健康采样后才逐级恢复。
 - `receive.transport_read_buffer_bytes`、`scripting.pipeline.worker_threads`、worker 队列/内存/输出上限、`scripting.worker.batch_bytes`、背压水位和 `gui.realtime_backlog.pump_min_interval_ms` 继续按 YAML 生效，作为连接、协议颗粒度或资源安全边界，不会由自适应控制器改写。
 - 通讯状态区会显示 K、当前有效倍率、压力等级和主导原因；系统指标无法取得时会标注为仅使用软件指标。

@@ -600,9 +600,10 @@ void GuiRuntime::drawCommStatus(const dock::CommDockState& comm)
                 static_cast<unsigned long long>(comm.txCount),
                 static_cast<unsigned long long>(comm.rxCount));
     if (comm.adaptivePerformanceEnabled) {
-        ImGui::Text("自适应性能: K=%.2f 当前=%.2f 等级=%s",
+        ImGui::Text("自适应性能: K=%.2f 渲染=%.2f 清债=%.2f 等级=%s",
                     comm.adaptivePerformanceMaxMultiplier,
                     comm.adaptivePerformanceEffectiveMultiplier,
+                    comm.adaptivePerformanceCatchUpMultiplier,
                     comm.adaptivePerformanceLevel.c_str());
         ImGui::TextWrapped("自适应原因: %s%s",
                            comm.adaptivePerformanceReason.c_str(),

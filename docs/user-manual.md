@@ -299,6 +299,8 @@ performance:
 
 自适应开启后，`performance.scale`、`app.fps_limit`、波形的三项渲染预算、三个实时 backlog 的每轮预算，以及 `scripting.worker.output_flush_budget_ms` 不再参与运行时调度，关闭自适应后仍按保存值恢复。自适应以内置基线计算这些热调预算，因此 `K=1.0` 对应程序默认档，不等同于 YAML 中逐项自定义值。
 
+自适应会拆分“渲染预算”和“清债预算”：系统 CPU 或内存压力升高时优先降低 FPS、波形点数、顶点数和总览样本；软件 backlog 高但系统未临界时，RX、transfer、plot 和脚本输出 flush 的清债预算保持在 K 档，避免越积压越慢。
+
 队列与内存上限、worker 线程数、传输读取缓冲、`batch_bytes`、背压水位和 `pump_min_interval_ms` 仍然生效：它们是内存保护、连接参数或协议回调颗粒度，不会在运行中被动态改变。自适应不会丢弃原始数据，原有背压和 backlog 保护继续负责输入安全。
 
 公共系数只作用于没有在 YAML 中显式写出的预算项。写出单项后，单项优先级更高，例如：

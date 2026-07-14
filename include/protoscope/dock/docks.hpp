@@ -170,6 +170,7 @@ struct CommDockState {
     bool adaptivePerformanceEnabled{false};
     double adaptivePerformanceMaxMultiplier{1.0};
     double adaptivePerformanceEffectiveMultiplier{1.0};
+    double adaptivePerformanceCatchUpMultiplier{1.0};
     std::string adaptivePerformanceLevel{"normal"};
     std::string adaptivePerformanceReason{"disabled"};
     bool adaptivePerformanceSystemMetricsAvailable{false};

@@ -3323,6 +3323,7 @@ void Application::syncAdaptivePerformanceStatus()
     comm.adaptivePerformanceEnabled = status.enabled;
     comm.adaptivePerformanceMaxMultiplier = status.maxMultiplier;
     comm.adaptivePerformanceEffectiveMultiplier = status.effectiveMultiplier;
+    comm.adaptivePerformanceCatchUpMultiplier = status.catchUpMultiplier;
     comm.adaptivePerformanceLevel = adaptivePressureLevelId(status.pressureLevel);
     comm.adaptivePerformanceReason = status.reason;
     comm.adaptivePerformanceSystemMetricsAvailable = status.systemMetricsAvailable;
@@ -3339,8 +3340,9 @@ void Application::syncAdaptivePerformanceStatus()
         return;
     }
     loggingFacade_.info("adaptive_performance",
-                        "adaptive performance level=" + comm.adaptivePerformanceLevel + " multiplier=" +
-                            std::to_string(status.effectiveMultiplier) + " reason=" + status.reason);
+                        "adaptive performance level=" + comm.adaptivePerformanceLevel + " render_multiplier=" +
+                            std::to_string(status.effectiveMultiplier) + " catchup_multiplier=" +
+                            std::to_string(status.catchUpMultiplier) + " reason=" + status.reason);
     loggedAdaptivePerformanceStatus_ = status;
 }
 

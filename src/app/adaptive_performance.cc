@@ -85,6 +85,21 @@ AdaptivePressureLevel lowerPressureLevel(const AdaptivePressureLevel level)
     return AdaptivePressureLevel::Normal;
 }
 
+double pressureLevelFactor(const AdaptivePressureLevel level)
+{
+    switch (level) {
+        case AdaptivePressureLevel::Normal:
+            return 1.0;
+        case AdaptivePressureLevel::Elevated:
+            return 0.75;
+        case AdaptivePressureLevel::High:
+            return 0.5;
+        case AdaptivePressureLevel::Critical:
+            return 0.25;
+    }
+    return 1.0;
+}
+
 AdaptivePressureLevel pressureForSystem(const SystemPressureSample& system, std::string& reason)
 {
     const auto cpu = system.cpuBusyRatio.value_or(-1.0);
@@ -287,10 +302,13 @@ void AdaptivePerformanceController::configure(config::AdaptivePerformanceConfig 
         .enabled = config_.enabled,
         .maxMultiplier = config_.maxMultiplier,
         .effectiveMultiplier = config_.maxMultiplier,
+        .catchUpMultiplier = config_.maxMultiplier,
         .pressureLevel = AdaptivePressureLevel::Normal,
         .reason = config_.enabled ? "normal" : "disabled",
         .systemMetricsAvailable = false,
     };
+    systemPressureLevel_ = AdaptivePressureLevel::Normal;
+    softwarePressureLevel_ = AdaptivePressureLevel::Normal;
     refreshBudget();
 }
 
@@ -305,7 +323,11 @@ void AdaptivePerformanceController::update(const AdaptivePerformanceInput& input
         input.system.cpuBusyRatio.has_value() || input.system.availableMemoryRatio.has_value();
 
     std::string reason;
-    const auto desiredLevel = classifyPressure(input, reason);
+    AdaptivePressureLevel systemLevel = AdaptivePressureLevel::Normal;
+    AdaptivePressureLevel softwareLevel = AdaptivePressureLevel::Normal;
+    const auto desiredLevel = classifyPressure(input, systemLevel, softwareLevel, reason);
+    systemPressureLevel_ = systemLevel;
+    softwarePressureLevel_ = softwareLevel;
     if (pressureSeverity(desiredLevel) > pressureSeverity(status_.pressureLevel)) {
         status_.pressureLevel = desiredLevel;
         healthySamples_ = 0;
@@ -319,7 +341,13 @@ void AdaptivePerformanceController::update(const AdaptivePerformanceInput& input
     } else {
         healthySamples_ = 0;
     }
-    status_.reason = reason.empty() ? "normal" : std::move(reason);
+    // 核心流程：压力消退后的恢复期仍保持上一档预算，状态原因不能误报为 normal。
+    if (desiredLevel == AdaptivePressureLevel::Normal &&
+        status_.pressureLevel != AdaptivePressureLevel::Normal) {
+        status_.reason = "recovery_wait";
+    } else {
+        status_.reason = reason.empty() ? "normal" : std::move(reason);
+    }
     refreshBudget();
 }
 
@@ -344,12 +372,14 @@ const AdaptivePerformanceStatus& AdaptivePerformanceController::status() const
 }
 
 AdaptivePressureLevel AdaptivePerformanceController::classifyPressure(const AdaptivePerformanceInput& input,
+                                                                       AdaptivePressureLevel& systemLevel,
+                                                                       AdaptivePressureLevel& softwareLevel,
                                                                        std::string& reason) const
 {
     std::string systemReason;
-    const auto systemLevel = pressureForSystem(input.system, systemReason);
+    systemLevel = pressureForSystem(input.system, systemReason);
     std::string softwareReason;
-    const auto softwareLevel = pressureForSoftware(input, softwareReason);
+    softwareLevel = pressureForSoftware(input, softwareReason);
     if (pressureSeverity(systemLevel) >= pressureSeverity(softwareLevel)) {
         reason = std::move(systemReason);
         return systemLevel;
@@ -360,32 +390,30 @@ AdaptivePressureLevel AdaptivePerformanceController::classifyPressure(const Adap
 
 void AdaptivePerformanceController::refreshBudget()
 {
-    double factor = 1.0;
-    switch (status_.pressureLevel) {
-        case AdaptivePressureLevel::Normal:
-            factor = 1.0;
-            break;
-        case AdaptivePressureLevel::Elevated:
-            factor = 0.75;
-            break;
-        case AdaptivePressureLevel::High:
-            factor = 0.5;
-            break;
-        case AdaptivePressureLevel::Critical:
-            factor = 0.25;
-            break;
+    const auto renderMultiplier = (std::max)(kMinMultiplier, config_.maxMultiplier * pressureLevelFactor(status_.pressureLevel));
+
+    double catchUpFactor = 1.0;
+    if (systemPressureLevel_ == AdaptivePressureLevel::Critical) {
+        catchUpFactor = 0.5;
+    } else if (systemPressureLevel_ == AdaptivePressureLevel::High &&
+               softwarePressureLevel_ == AdaptivePressureLevel::Normal) {
+        catchUpFactor = 0.75;
     }
-    status_.effectiveMultiplier = (std::max)(kMinMultiplier, config_.maxMultiplier * factor);
-    const auto multiplier = status_.effectiveMultiplier;
+    // 核心流程：软件 backlog 高时不能同步压低清债预算，否则会让积压更难恢复；
+    // 只有系统资源临界或系统高压且没有软件 backlog 时，才收紧清债预算。
+    const auto catchUpMultiplier = (std::max)(kMinMultiplier, config_.maxMultiplier * catchUpFactor);
+
+    status_.effectiveMultiplier = renderMultiplier;
+    status_.catchUpMultiplier = catchUpMultiplier;
     budget_ = AdaptivePerformanceBudget{
-        .fpsLimit = scaledFpsLimit(60U, multiplier),
-        .maxRenderPointsPerChannel = scaledBudget(1200U, multiplier),
-        .maxRenderVertices = scaledBudget(60000U, multiplier),
-        .overviewMaxSamples = scaledBudget(20000U, multiplier),
-        .rxChunkBytesPerPump = scaledBudget(4096U, multiplier),
-        .transferFrameRowsPerPump = scaledBudget(2000U, multiplier),
-        .plotAppendsPerPump = scaledBudget(128U, multiplier),
-        .workerOutputFlushBudgetMs = 2.0 * multiplier,
+        .fpsLimit = scaledFpsLimit(60U, renderMultiplier),
+        .maxRenderPointsPerChannel = scaledBudget(1200U, renderMultiplier),
+        .maxRenderVertices = scaledBudget(60000U, renderMultiplier),
+        .overviewMaxSamples = scaledBudget(20000U, renderMultiplier),
+        .rxChunkBytesPerPump = scaledBudget(4096U, catchUpMultiplier),
+        .transferFrameRowsPerPump = scaledBudget(2000U, catchUpMultiplier),
+        .plotAppendsPerPump = scaledBudget(128U, catchUpMultiplier),
+        .workerOutputFlushBudgetMs = 2.0 * catchUpMultiplier,
     };
 }
 

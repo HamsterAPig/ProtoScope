@@ -3588,6 +3588,22 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
             "CPU 高压力应立即进入 high");
     require(std::abs(controller.status().effectiveMultiplier - 1.0) < 1e-12,
             "high 压力下 K=2 应回落到 1.0");
+    require(std::abs(controller.status().catchUpMultiplier - 1.5) < 1e-12,
+            "系统高压且无软件积压时清债预算应温和收紧");
+
+    protoscope::app::AdaptivePerformanceController criticalSystemController;
+    criticalSystemController.configure(protoscope::config::AdaptivePerformanceConfig{
+        .enabled = true,
+        .maxMultiplier = 2.0,
+    });
+    criticalSystemController.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 2000,
+        .system = {.cpuBusyRatio = 0.96},
+    });
+    require(criticalSystemController.status().pressureLevel == protoscope::app::AdaptivePressureLevel::Critical,
+            "CPU 临界压力应立即进入 critical");
+    require(std::abs(criticalSystemController.status().catchUpMultiplier - 1.0) < 1e-12,
+            "系统临界压力下 K=2 的清债预算应收紧到 0.5K");
 
     for (std::uint64_t sample = 2; sample <= 6; ++sample) {
         controller.update(protoscope::app::AdaptivePerformanceInput{
@@ -3611,6 +3627,8 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
     });
     require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::Elevated,
             "连续五个健康采样后应只恢复一个压力等级");
+    require(controller.status().reason == "recovery_wait",
+            "滞回恢复期间状态原因应说明仍在等待恢复，而不是误报 normal");
 
     controller.configure(protoscope::config::AdaptivePerformanceConfig{
         .enabled = true,
@@ -3624,6 +3642,12 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
     });
     require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
             "系统指标缺失时原始 RX backlog 仍应驱动降档");
+    require(std::abs(controller.status().effectiveMultiplier - 2.0) < 1e-12,
+            "软件 backlog 高时渲染预算应降档释放主线程");
+    require(std::abs(controller.status().catchUpMultiplier - 4.0) < 1e-12,
+            "软件 backlog 高时清债预算不应被同步压低");
+    require(controller.budget().rxChunkBytesPerPump == 16384U,
+            "软件 backlog 高时 RX 清债预算应保持 K 档");
 }
 
 void test_application_adaptive_performance_keeps_static_config()

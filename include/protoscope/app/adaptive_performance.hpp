@@ -49,6 +49,7 @@ struct AdaptivePerformanceStatus {
     bool enabled{false};
     double maxMultiplier{1.0};
     double effectiveMultiplier{1.0};
+    double catchUpMultiplier{1.0};
     AdaptivePressureLevel pressureLevel{AdaptivePressureLevel::Normal};
     std::string reason{"disabled"};
     bool systemMetricsAvailable{false};
@@ -66,6 +67,8 @@ public:
 
 private:
     [[nodiscard]] AdaptivePressureLevel classifyPressure(const AdaptivePerformanceInput& input,
+                                                          AdaptivePressureLevel& systemLevel,
+                                                          AdaptivePressureLevel& softwareLevel,
                                                           std::string& reason) const;
     void refreshBudget();
 
@@ -73,6 +76,8 @@ private:
     config::AdaptivePerformanceConfig config_{};
     AdaptivePerformanceBudget budget_{};
     AdaptivePerformanceStatus status_{};
+    AdaptivePressureLevel systemPressureLevel_{AdaptivePressureLevel::Normal};
+    AdaptivePressureLevel softwarePressureLevel_{AdaptivePressureLevel::Normal};
     std::uint64_t lastSampleAtMs_{0};
     bool hasSample_{false};
     std::size_t healthySamples_{0};
