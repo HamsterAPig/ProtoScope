@@ -1262,6 +1262,8 @@ bool Application::applyConfig(const config::AppConfig& config)
 {
     captureProtocolConfigOverride_.reset();
     runtimeConfig_ = config;
+    adaptivePerformance_.configure(config.performance.adaptive);
+    loggedAdaptivePerformanceStatus_.reset();
     resetStreamBufferAlertState();
     const auto postprocessWorkerThreads = scripting::resolvePipelineWorkerThreads(
         config.scripting.pipeline.workerThreads, std::thread::hardware_concurrency());
@@ -1282,7 +1284,10 @@ bool Application::applyConfig(const config::AppConfig& config)
     dockStore_.waveState().buffer.setMaxTotalSamples(config.gui.wave.maxTotalSamples);
     dockStore_.waveState().buffer.setResetHistoryOnTimeReset(config.gui.wave.resetHistoryOnTimeReset);
     configStore_.applyToDock(config, dockStore_);
+    applyAdaptiveWaveBudget();
     loggingFacade_.applyConfig(config.logging);
+    // 配置重载后立即刷新状态，避免通讯面板在下一次 pump 前显示上一次的模式。
+    syncAdaptivePerformanceStatus();
     return reloadProtocolDirectory(dockStore_.luaState().protocolDir);
 }
 
@@ -1331,6 +1336,14 @@ config::AppConfig Application::captureConfig() const
 const config::AppConfig& Application::runtimeConfig() const
 {
     return runtimeConfig_;
+}
+
+std::uint32_t Application::effectiveFpsLimit() const
+{
+    if (adaptivePerformance_.enabled()) {
+        return adaptivePerformance_.budget().fpsLimit;
+    }
+    return runtimeConfig_.app.fpsLimit;
 }
 
 bool Application::loadedConfigFromDisk() const
@@ -1479,6 +1492,7 @@ bool Application::pumpOnce()
     }
     changed = flushPendingTransferFrameRows(transferFrameRowsPerPump()) || changed;
     syncDockState();
+    updateAdaptivePerformance();
     return changed;
 }
 
@@ -3237,8 +3251,8 @@ void Application::syncDockState()
     if (rawFirstWarnBytes > 0U && comm.pendingRxBytes >= rawFirstWarnBytes) {
         comm.backlogWarning = "raw-first backlog 已超过告警阈值；原始数据继续保留，派生 UI 可能延后或降级";
     } else if (runtimeConfig_.gui.realtimeBacklog.derivedBacklogDegradeEnabled &&
-               (comm.pendingTransferFrameRows > runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump ||
-                comm.pendingPlotAppends > runtimeConfig_.gui.realtimeBacklog.plotAppendsPerPump)) {
+               (comm.pendingTransferFrameRows > transferFrameRowsPerPump() ||
+                comm.pendingPlotAppends > plotAppendsPerPump())) {
         comm.backlogWarning = "派生 UI backlog 已超过单轮预算；transfer rows / plot append 将分批追赶";
     }
     comm.lastErrorSummary = scriptSnapshot.lastTransportStats.lastErrorSummary;
@@ -3260,6 +3274,74 @@ void Application::syncDockState()
         }
         cachedWaveSummaryRevision_ = waveRevision;
     }
+}
+
+void Application::updateAdaptivePerformance()
+{
+    const auto& comm = dockStore_.commState();
+    const auto currentMs = nowMs();
+    SystemPressureSample systemPressure;
+    if (adaptivePerformance_.shouldSample(currentMs)) {
+        systemPressure = sampleSystemPressure();
+    }
+    adaptivePerformance_.update(AdaptivePerformanceInput{
+        .nowMs = currentMs,
+        .system = std::move(systemPressure),
+        .pendingRxBytes = comm.pendingRxBytes,
+        .rawBacklogWarnBytes = runtimeConfig_.gui.realtimeBacklog.rawFirstBacklogWarnBytes,
+        .pendingTransferFrameRows = comm.pendingTransferFrameRows,
+        .pendingPlotAppends = comm.pendingPlotAppends,
+        .pendingWorkerRxBytes = comm.parserPendingBytes,
+        .workerInputQueueSize = comm.luaPendingItems,
+        .workerOutputQueueSize = comm.uiPendingItems,
+        .scriptPumpMs = comm.lastPumpScriptMs,
+    });
+    applyAdaptiveWaveBudget();
+    syncAdaptivePerformanceStatus();
+}
+
+void Application::applyAdaptiveWaveBudget()
+{
+    auto& view = dockStore_.waveState().view;
+    if (!adaptivePerformance_.enabled()) {
+        view.adaptiveMaxRenderPointsPerChannel.reset();
+        view.adaptiveMaxRenderVertices.reset();
+        view.adaptiveOverviewMaxSamples.reset();
+        return;
+    }
+
+    const auto& budget = adaptivePerformance_.budget();
+    view.adaptiveMaxRenderPointsPerChannel = budget.maxRenderPointsPerChannel;
+    view.adaptiveMaxRenderVertices = budget.maxRenderVertices;
+    view.adaptiveOverviewMaxSamples = budget.overviewMaxSamples;
+}
+
+void Application::syncAdaptivePerformanceStatus()
+{
+    const auto& status = adaptivePerformance_.status();
+    auto& comm = dockStore_.commState();
+    comm.adaptivePerformanceEnabled = status.enabled;
+    comm.adaptivePerformanceMaxMultiplier = status.maxMultiplier;
+    comm.adaptivePerformanceEffectiveMultiplier = status.effectiveMultiplier;
+    comm.adaptivePerformanceLevel = adaptivePressureLevelId(status.pressureLevel);
+    comm.adaptivePerformanceReason = status.reason;
+    comm.adaptivePerformanceSystemMetricsAvailable = status.systemMetricsAvailable;
+
+    if (!status.enabled) {
+        loggedAdaptivePerformanceStatus_.reset();
+        return;
+    }
+    const bool changed = !loggedAdaptivePerformanceStatus_.has_value() ||
+                         loggedAdaptivePerformanceStatus_->pressureLevel != status.pressureLevel ||
+                         loggedAdaptivePerformanceStatus_->reason != status.reason ||
+                         loggedAdaptivePerformanceStatus_->systemMetricsAvailable != status.systemMetricsAvailable;
+    if (!changed) {
+        return;
+    }
+    loggingFacade_.info("adaptive_performance",
+                        "adaptive performance level=" + comm.adaptivePerformanceLevel + " multiplier=" +
+                            std::to_string(status.effectiveMultiplier) + " reason=" + status.reason);
+    loggedAdaptivePerformanceStatus_ = status;
 }
 
 void Application::maybeLogCommPressureDebug(const dock::CommDockState& comm)
@@ -3528,17 +3610,34 @@ bool Application::responsiveBacklogMode() const
 
 std::size_t Application::rxBytesPerPump() const
 {
+    if (adaptivePerformance_.enabled()) {
+        return adaptivePerformance_.budget().rxChunkBytesPerPump;
+    }
     return (std::max<std::size_t>) (runtimeConfig_.gui.realtimeBacklog.rxChunkBytesPerPump, 1U);
 }
 
 std::size_t Application::transferFrameRowsPerPump() const
 {
+    if (adaptivePerformance_.enabled()) {
+        return adaptivePerformance_.budget().transferFrameRowsPerPump;
+    }
     return (std::max<std::size_t>) (runtimeConfig_.gui.realtimeBacklog.transferFrameRowsPerPump, 1U);
 }
 
 std::size_t Application::plotAppendsPerPump() const
 {
+    if (adaptivePerformance_.enabled()) {
+        return adaptivePerformance_.budget().plotAppendsPerPump;
+    }
     return (std::max<std::size_t>) (runtimeConfig_.gui.realtimeBacklog.plotAppendsPerPump, 1U);
+}
+
+double Application::outputFlushBudgetMs() const
+{
+    if (adaptivePerformance_.enabled()) {
+        return adaptivePerformance_.budget().workerOutputFlushBudgetMs;
+    }
+    return runtimeConfig_.scripting.workerOutputFlushBudgetMs;
 }
 
 std::size_t Application::pendingRxByteCount() const
@@ -3996,7 +4095,7 @@ bool Application::applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBat
 bool Application::flushScriptOutputs()
 {
     bool changed = false;
-    const auto flushBudgetMs = runtimeConfig_.scripting.workerOutputFlushBudgetMs;
+    const auto flushBudgetMs = outputFlushBudgetMs();
     std::uint64_t flushStartedAt = 0;
     if (flushBudgetMs > 0.0) {
         flushStartedAt = nowUs();

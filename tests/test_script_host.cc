@@ -2950,6 +2950,42 @@ void test_config_performance_save_keeps_scaled_defaults_compact()
             "显式 batch_bytes 应写回并继续覆盖 performance.scale");
 }
 
+void test_config_adaptive_performance_disables_static_scale()
+{
+    protoscope::config::ConfigStore store;
+    const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-config-adaptive-performance"));
+    const auto tempPath = tempRoot.path() / "protoscope.yaml";
+    {
+        std::ofstream out(tempPath);
+        out << R"yaml(
+performance:
+  scale: 2.0
+  adaptive:
+    enabled: true
+    max_multiplier: 99.0
+receive:
+  transport_read_buffer_bytes: 12345
+scripting:
+  worker:
+    batch_bytes: 321
+)yaml";
+    }
+
+    const auto loaded = store.load(tempPath).config;
+    require(loaded.performance.adaptive.enabled, "adaptive.enabled 应读取为 true");
+    require(std::abs(loaded.performance.adaptive.maxMultiplier - 4.0) < 1e-12, "adaptive K 应限制到 4.0");
+    require(loaded.receive.transportReadBufferBytes == 12345U, "显式静态传输安全上限应保留");
+    require(loaded.scripting.workerBatchBytes == 321U, "显式 worker 批量设置应保留");
+    require(loaded.scripting.workerRxQueueLimitBytes == 64U * 1024U * 1024U,
+            "启用 adaptive 后 performance.scale 不应放大静态安全预算");
+
+    std::string error;
+    require(store.save(tempPath, loaded, error), "自适应性能配置写回失败");
+    const auto saved = readTextFile(tempPath);
+    require(saved.find("adaptive:") != std::string::npos, "写回配置应保留 adaptive 分组");
+    require(saved.find("max_multiplier: 4") != std::string::npos, "写回配置应保留钳制后的 K");
+}
+
 void test_config_wave_mode_invalid_fallback()
 {
     protoscope::config::ConfigStore store;

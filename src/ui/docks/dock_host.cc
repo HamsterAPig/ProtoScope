@@ -599,6 +599,15 @@ void GuiRuntime::drawCommStatus(const dock::CommDockState& comm)
     ImGui::Text("TX=%llu RX=%llu",
                 static_cast<unsigned long long>(comm.txCount),
                 static_cast<unsigned long long>(comm.rxCount));
+    if (comm.adaptivePerformanceEnabled) {
+        ImGui::Text("自适应性能: K=%.2f 当前=%.2f 等级=%s",
+                    comm.adaptivePerformanceMaxMultiplier,
+                    comm.adaptivePerformanceEffectiveMultiplier,
+                    comm.adaptivePerformanceLevel.c_str());
+        ImGui::TextWrapped("自适应原因: %s%s",
+                           comm.adaptivePerformanceReason.c_str(),
+                           comm.adaptivePerformanceSystemMetricsAvailable ? "" : " (仅软件指标)");
+    }
     if (!comm.lastError.empty()) {
         ImGui::TextWrapped("错误：%s", comm.lastError.c_str());
     }

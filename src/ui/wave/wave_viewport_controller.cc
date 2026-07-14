@@ -462,9 +462,10 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
     refreshMainDisplayFrame();
 
     const std::size_t overviewPixelBudget = contentPixelWidth;
+    const auto overviewMaxSamples = view.adaptiveOverviewMaxSamples.value_or(view.overviewMaxSamples);
     const std::size_t overviewPointLimit =
-        view.overviewMaxSamples > 0
-            ? (std::min)({overviewPixelBudget, frame.renderBudget.pointsPerChannel, view.overviewMaxSamples})
+        overviewMaxSamples > 0
+            ? (std::min)({overviewPixelBudget, frame.renderBudget.pointsPerChannel, overviewMaxSamples})
             : (std::min)(overviewPixelBudget, frame.renderBudget.pointsPerChannel);
     const auto overviewKey = makeOverviewDisplayDataCacheKey(
         wave.cachedFullSnapshot, view, dataRevision, (std::max)(overviewPointLimit, std::size_t{1}));

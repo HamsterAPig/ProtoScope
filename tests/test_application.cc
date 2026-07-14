@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -3550,4 +3551,73 @@ void test_application_plot_push_drains_with_budget_and_disconnect_keeps_pending(
     snapshot = application.docks().waveState().buffer.snapshot(-std::numeric_limits<double>::infinity(),
                                                                std::numeric_limits<double>::infinity());
     require(snapshot.channels.front().totalSamples == 2, "断开保留 backlog 不应立即提交到 buffer");
+}
+
+void test_adaptive_performance_controller_applies_pressure_hysteresis()
+{
+    protoscope::app::AdaptivePerformanceController controller;
+    controller.configure(protoscope::config::AdaptivePerformanceConfig{
+        .enabled = true,
+        .maxMultiplier = 2.0,
+    });
+    require(controller.enabled(), "自适应控制器应启用");
+    require(controller.budget().fpsLimit == 120U, "无压力时预算应使用 K 上限倍率");
+
+    controller.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 1000,
+        .system = {.cpuBusyRatio = 0.90},
+    });
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "CPU 高压力应立即进入 high");
+    require(std::abs(controller.status().effectiveMultiplier - 1.0) < 1e-12,
+            "high 压力下 K=2 应回落到 1.0");
+
+    for (std::uint64_t sample = 2; sample <= 5; ++sample) {
+        controller.update(protoscope::app::AdaptivePerformanceInput{
+            .nowMs = sample * 1000,
+        });
+    }
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "恢复不足五个采样周期时不应提前升档");
+
+    controller.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 6000,
+    });
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::Elevated,
+            "连续五个健康采样后应只恢复一个压力等级");
+
+    controller.configure(protoscope::config::AdaptivePerformanceConfig{
+        .enabled = true,
+        .maxMultiplier = 99.0,
+    });
+    require(std::abs(controller.status().maxMultiplier - 4.0) < 1e-12, "K 应限制在 4.0");
+    controller.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 1000,
+        .pendingRxBytes = 1024,
+        .rawBacklogWarnBytes = 1024,
+    });
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "系统指标缺失时原始 RX backlog 仍应驱动降档");
+}
+
+void test_application_adaptive_performance_keeps_static_config()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto config = application.captureConfig();
+    config.performance.adaptive.enabled = true;
+    config.performance.adaptive.maxMultiplier = 0.5;
+    config.app.fpsLimit = 144;
+    config.gui.wave.maxRenderPointsPerChannel = 9999;
+    config.gui.realtimeBacklog.rxChunkBytesPerPump = 7777;
+    require(application.applyConfig(config), "自适应配置应可应用");
+
+    require(application.effectiveFpsLimit() == 30U, "启用自适应后 fps 应使用有效预算而非静态值");
+    require(application.docks().waveState().view.adaptiveMaxRenderPointsPerChannel == 600U,
+            "波形渲染应使用自适应覆盖预算");
+    const auto captured = application.captureConfig();
+    require(captured.app.fpsLimit == 144U, "保存配置不应写入自适应 fps 覆盖值");
+    require(captured.gui.wave.maxRenderPointsPerChannel == 9999U, "保存配置不应改写静态波形预算");
+    require(captured.gui.realtimeBacklog.rxChunkBytesPerPump == 7777U, "保存配置不应改写静态 backlog 预算");
 }

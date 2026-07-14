@@ -2,6 +2,11 @@ performance:
   # 公共性能系数：1.0 使用默认吞吐预算；0.5 更保守；2.0 允许更高吞吐。
   # 显式写出的受控单项优先级高于公共系数。
   scale: 1.0
+  adaptive:
+    # 开启后由运行时压力控制热调预算，performance.scale 和相关热调项不再生效。
+    enabled: false
+    # 性能上限倍率 K：有效倍率会根据系统和软件压力在 0.25 到 K 之间调整。
+    max_multiplier: 1.0
 
 app:
   language: zh-CN

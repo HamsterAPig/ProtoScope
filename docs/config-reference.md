@@ -9,18 +9,27 @@
 - `文件 -> 重新加载配置` 会先保存当前协议工作区状态，再从磁盘重新加载配置。
 - `app.auto_save.enabled` 开启后，配置 dirty 且达到 `interval_ms` 间隔时自动保存。
 - `app.config_hot_reload.enabled` 开启后，宿主会检测外部文件变化并提示用户处理；不会在用户未确认时覆盖当前未保存状态。
-- `performance.scale` 只影响未显式写出的吞吐预算项。某个预算项写入 YAML 后，该项优先于公共系数。
+- `performance.scale` 只影响未显式写出的吞吐预算项。某个预算项写入 YAML 后，该项优先于公共系数。启用 `performance.adaptive.enabled` 后，`performance.scale` 和自适应接管的热调预算不参与运行时调度。
 
 ## performance
 
 ```yaml
 performance:
   scale: 1.0
+  adaptive:
+    enabled: false
+    max_multiplier: 1.0
 ```
 
 - `scale`：公共吞吐预算系数，默认 `1.0`；小于等于 `0` 时按 `1.0` 处理。
 - 受影响的默认预算：`receive.transport_read_buffer_bytes`、`scripting.worker.rx_queue_limit_bytes`、`scripting.worker.memory_budget_bytes`、`scripting.worker.output_queue_limit`、`scripting.worker.batch_bytes`、`scripting.worker.output_flush_budget_ms`、`gui.realtime_backlog.rx_chunk_bytes_per_pump`、`gui.realtime_backlog.transfer_frame_rows_per_pump`、`gui.realtime_backlog.plot_appends_per_pump`、`gui.realtime_backlog.raw_first_backlog_warn_bytes`。
 - 写出后的预算项会被视为显式覆盖，保存时也会继续保留。
+- `adaptive.enabled`：自适应性能控制开关，默认 `false`。开启后每秒采样系统 CPU 忙碌率、可用物理内存以及应用 RX、worker、transfer、plot backlog 和脚本处理耗时。
+- `adaptive.max_multiplier`：性能上限倍率 K，默认 `1.0`，有效范围 `0.25` 到 `4.0`；缺失、非有限数或非正数回退到 `1.0`，超出范围会钳制。
+- 自适应启用时，运行时忽略 `scale`、`app.fps_limit`、`gui.wave.max_render_points_per_channel`、`gui.wave.max_render_vertices`、`gui.wave.overview_max_samples`、三个 `gui.realtime_backlog.*_per_pump` 以及 `scripting.worker.output_flush_budget_ms`。这些 YAML 值仍会保存，关闭自适应后再次生效。
+- 自适应预算以内置基线和当前 K 计算：正常为 `K`，轻度、高、严重压力分别为 `0.75K`、`0.5K`、`0.25K`，最终不低于 `0.25`。压力升级立即生效；连续 5 个健康采样后才逐级恢复。
+- `receive.transport_read_buffer_bytes`、`scripting.pipeline.worker_threads`、worker 队列/内存/输出上限、`scripting.worker.batch_bytes`、背压水位和 `gui.realtime_backlog.pump_min_interval_ms` 继续按 YAML 生效，作为连接、协议颗粒度或资源安全边界，不会由自适应控制器改写。
+- 通讯状态区会显示 K、当前有效倍率、压力等级和主导原因；系统指标无法取得时会标注为仅使用软件指标。
 
 ## app
 

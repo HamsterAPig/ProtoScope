@@ -1,5 +1,6 @@
 #pragma once
 
+#include "protoscope/app/adaptive_performance.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/logging/logging.hpp"
@@ -30,6 +31,7 @@ public:
     bool applyConfig(const config::AppConfig& config);
     config::AppConfig captureConfig() const;
     [[nodiscard]] const config::AppConfig& runtimeConfig() const;
+    [[nodiscard]] std::uint32_t effectiveFpsLimit() const;
     [[nodiscard]] bool loadedConfigFromDisk() const;
     bool reloadProtocolDirectory(const std::string& protocolDir, bool forceReload = false);
     bool pumpOnce();
@@ -192,6 +194,9 @@ private:
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
+    void updateAdaptivePerformance();
+    void applyAdaptiveWaveBudget();
+    void syncAdaptivePerformanceStatus();
     void maybeLogCommPressureDebug(const dock::CommDockState& comm);
     bool applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch);
     void applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot& snapshot);
@@ -224,6 +229,7 @@ private:
     [[nodiscard]] std::size_t rxBytesPerPump() const;
     [[nodiscard]] std::size_t transferFrameRowsPerPump() const;
     [[nodiscard]] std::size_t plotAppendsPerPump() const;
+    [[nodiscard]] double outputFlushBudgetMs() const;
     [[nodiscard]] std::size_t pendingRxByteCount() const;
     [[nodiscard]] bool hasPendingRequestDrainWork() const;
     bool drainRequestTimeoutBacklog();
@@ -299,6 +305,8 @@ private:
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
     config::AppConfig runtimeConfig_{};
+    AdaptivePerformanceController adaptivePerformance_{};
+    std::optional<AdaptivePerformanceStatus> loggedAdaptivePerformanceStatus_{};
     bool loadedConfigFromDisk_{false};
     std::optional<config::ProtocolConfig> captureProtocolConfigOverride_;
     logging::LoggingFacade loggingFacade_{};

@@ -118,6 +118,14 @@ namespace {
         return scale > 0.0 ? scale : 1.0;
     }
 
+    double normalizeAdaptiveMaxMultiplier(const double multiplier)
+    {
+        if (!std::isfinite(multiplier) || multiplier <= 0.0) {
+            return 1.0;
+        }
+        return (std::clamp)(multiplier, 0.25, 4.0);
+    }
+
     std::size_t scaleIntegerBudget(const std::size_t fallback, const double scale)
     {
         if (fallback == 0U) {
@@ -529,8 +537,16 @@ namespace {
         if (const auto performance = root["performance"]) {
             config.performance.scale =
                 normalizePerformanceScale(readScalar<double>(performance, "scale", config.performance.scale));
+            if (const auto adaptive = childNode(performance, "adaptive")) {
+                config.performance.adaptive.enabled =
+                    readScalar<bool>(adaptive, "enabled", config.performance.adaptive.enabled);
+                config.performance.adaptive.maxMultiplier = normalizeAdaptiveMaxMultiplier(
+                    readScalar<double>(adaptive, "max_multiplier", config.performance.adaptive.maxMultiplier));
+            }
         }
-        applyPerformanceScale(config);
+        if (!config.performance.adaptive.enabled) {
+            applyPerformanceScale(config);
+        }
     }
 
     void loadAppConfig(const YAML::Node& root, AppConfig& config)
@@ -977,9 +993,12 @@ namespace {
         }
     }
 
-    void writePerformanceConfig(YAML::Node& root, const AppConfig& scaledDefaults)
+    void writePerformanceConfig(YAML::Node& root, const AppConfig& config)
     {
-        root["performance"]["scale"] = scaledDefaults.performance.scale;
+        root["performance"]["scale"] = normalizePerformanceScale(config.performance.scale);
+        root["performance"]["adaptive"]["enabled"] = config.performance.adaptive.enabled;
+        root["performance"]["adaptive"]["max_multiplier"] =
+            normalizeAdaptiveMaxMultiplier(config.performance.adaptive.maxMultiplier);
     }
 
     void writeAppConfig(YAML::Node& root, const AppConfig& config)
@@ -1249,10 +1268,13 @@ namespace {
     {
         YAML::Node root;
         scaledDefaults.performance.scale = normalizePerformanceScale(config.performance.scale);
-        applyPerformanceScale(scaledDefaults);
+        scaledDefaults.performance.adaptive = config.performance.adaptive;
+        if (!scaledDefaults.performance.adaptive.enabled) {
+            applyPerformanceScale(scaledDefaults);
+        }
 
         // 核心流程：文件保存和现场包内存保存必须走同一套字段写入逻辑，避免配置格式分叉。
-        writePerformanceConfig(root, scaledDefaults);
+        writePerformanceConfig(root, config);
         writeAppConfig(root, config);
         writeGuiConfig(root, config, scaledDefaults);
         writeProtocolConfig(root, config);
