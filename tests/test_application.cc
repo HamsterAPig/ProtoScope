@@ -3555,6 +3555,23 @@ void test_application_plot_push_drains_with_budget_and_disconnect_keeps_pending(
 
 void test_adaptive_performance_controller_applies_pressure_hysteresis()
 {
+    protoscope::app::AdaptivePerformanceController samplingController;
+    samplingController.configure(protoscope::config::AdaptivePerformanceConfig{
+        .enabled = true,
+        .maxMultiplier = 1.0,
+    });
+    samplingController.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 0,
+        .system = {.cpuBusyRatio = 0.90},
+    });
+    for (std::uint64_t nowMs = 1; nowMs <= 5; ++nowMs) {
+        samplingController.update(protoscope::app::AdaptivePerformanceInput{
+            .nowMs = nowMs,
+        });
+    }
+    require(samplingController.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "0ms 首次采样后的不足一秒更新不应重复参与恢复计数");
+
     protoscope::app::AdaptivePerformanceController controller;
     controller.configure(protoscope::config::AdaptivePerformanceConfig{
         .enabled = true,
@@ -3572,7 +3589,16 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
     require(std::abs(controller.status().effectiveMultiplier - 1.0) < 1e-12,
             "high 压力下 K=2 应回落到 1.0");
 
-    for (std::uint64_t sample = 2; sample <= 5; ++sample) {
+    for (std::uint64_t sample = 2; sample <= 6; ++sample) {
+        controller.update(protoscope::app::AdaptivePerformanceInput{
+            .nowMs = sample * 1000,
+            .system = {.cpuBusyRatio = 0.80},
+        });
+    }
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "仍有轻度压力时不应被视为健康采样而恢复预算");
+
+    for (std::uint64_t sample = 7; sample <= 10; ++sample) {
         controller.update(protoscope::app::AdaptivePerformanceInput{
             .nowMs = sample * 1000,
         });
@@ -3581,7 +3607,7 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
             "恢复不足五个采样周期时不应提前升档");
 
     controller.update(protoscope::app::AdaptivePerformanceInput{
-        .nowMs = 6000,
+        .nowMs = 11000,
     });
     require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::Elevated,
             "连续五个健康采样后应只恢复一个压力等级");

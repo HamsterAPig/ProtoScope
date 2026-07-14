@@ -74,6 +74,7 @@ private:
     AdaptivePerformanceBudget budget_{};
     AdaptivePerformanceStatus status_{};
     std::uint64_t lastSampleAtMs_{0};
+    bool hasSample_{false};
     std::size_t healthySamples_{0};
 };
 

@@ -281,6 +281,7 @@ void AdaptivePerformanceController::configure(config::AdaptivePerformanceConfig 
     config.maxMultiplier = normalizeMultiplier(config.maxMultiplier);
     config_ = config;
     lastSampleAtMs_ = 0;
+    hasSample_ = false;
     healthySamples_ = 0;
     status_ = AdaptivePerformanceStatus{
         .enabled = config_.enabled,
@@ -299,6 +300,7 @@ void AdaptivePerformanceController::update(const AdaptivePerformanceInput& input
         return;
     }
     lastSampleAtMs_ = input.nowMs;
+    hasSample_ = true;
     status_.systemMetricsAvailable =
         input.system.cpuBusyRatio.has_value() || input.system.availableMemoryRatio.has_value();
 
@@ -307,7 +309,8 @@ void AdaptivePerformanceController::update(const AdaptivePerformanceInput& input
     if (pressureSeverity(desiredLevel) > pressureSeverity(status_.pressureLevel)) {
         status_.pressureLevel = desiredLevel;
         healthySamples_ = 0;
-    } else if (pressureSeverity(desiredLevel) < pressureSeverity(status_.pressureLevel)) {
+    } else if (desiredLevel == AdaptivePressureLevel::Normal &&
+               pressureSeverity(desiredLevel) < pressureSeverity(status_.pressureLevel)) {
         ++healthySamples_;
         if (healthySamples_ >= kRecoverySamples) {
             status_.pressureLevel = lowerPressureLevel(status_.pressureLevel);
@@ -327,7 +330,7 @@ bool AdaptivePerformanceController::enabled() const
 
 bool AdaptivePerformanceController::shouldSample(const std::uint64_t nowMs) const
 {
-    return config_.enabled && (lastSampleAtMs_ == 0U || nowMs - lastSampleAtMs_ >= kSampleIntervalMs);
+    return config_.enabled && (!hasSample_ || nowMs - lastSampleAtMs_ >= kSampleIntervalMs);
 }
 
 const AdaptivePerformanceBudget& AdaptivePerformanceController::budget() const
