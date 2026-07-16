@@ -167,6 +167,13 @@ struct CommDockState {
     double lastPumpParserMs{0.0};
     double lastPumpCallbackMs{0.0};
     double lastPumpScriptMs{0.0};
+    bool adaptivePerformanceEnabled{false};
+    double adaptivePerformanceMaxMultiplier{1.0};
+    double adaptivePerformanceEffectiveMultiplier{1.0};
+    double adaptivePerformanceCatchUpMultiplier{1.0};
+    std::string adaptivePerformanceLevel{"normal"};
+    std::string adaptivePerformanceReason{"disabled"};
+    bool adaptivePerformanceSystemMetricsAvailable{false};
     bool reconnectRequired{false};
     std::vector<std::string> serialPortOptions;
     std::string lastErrorSummary;

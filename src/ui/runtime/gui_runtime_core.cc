@@ -755,7 +755,7 @@ int GuiRuntime::run()
         changed = pollElfStaticAddressFileChanges() || changed;
         changed = maybeAutoSave() || changed;
 
-        const auto fpsLimit = application_.docks().configState().fpsLimit;
+        const auto fpsLimit = application_.effectiveFpsLimit();
         const auto nextRenderAtMs = nextRenderFrameAtMs(lastRenderAtMs_, fpsLimit);
         if (!shouldRenderFrameNow(frameStartMs, lastRenderAtMs_, fpsLimit)) {
             auto sleepTargetMs = nextRenderAtMs;

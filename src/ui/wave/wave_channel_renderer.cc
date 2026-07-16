@@ -43,8 +43,10 @@ RenderBudget makeRenderBudget(const plot::WaveViewState& view,
 {
     const std::size_t safeChannelCount = (std::max)(std::size_t{1}, channelCount);
     const std::size_t estimatedVerticesPerPoint = estimateVerticesPerPoint(glowEnabled);
-    const std::size_t configuredPointLimit = clampRenderConfig(view.maxRenderPointsPerChannel, 1200);
-    const std::size_t configuredVertexLimit = clampRenderConfig(view.maxRenderVertices, 60000);
+    const std::size_t configuredPointLimit = clampRenderConfig(
+        view.adaptiveMaxRenderPointsPerChannel.value_or(view.maxRenderPointsPerChannel), 1200);
+    const std::size_t configuredVertexLimit =
+        clampRenderConfig(view.adaptiveMaxRenderVertices.value_or(view.maxRenderVertices), 60000);
     const std::size_t pointsByVertexBudget =
         (std::max)(std::size_t{1}, configuredVertexLimit / (safeChannelCount * estimatedVerticesPerPoint));
     // 核心流程：每通道最终点数同时受像素宽度、用户配置和 16-bit 顶点预算约束，避免单帧 DrawList 溢出。

@@ -9,10 +9,10 @@ ProtoScope 脚本 API 定义文件。
 
 -- 基础枚举：覆盖日志、控件、停靠、传输和弹窗状态。
 ---@alias ProtoLogLevel 'trace'|'debug'|'info'|'warn'|'error'
----@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'|'value_table'
+---@alias ProtoControlType 'button'|'input_text'|'input_int'|'input_float'|'checkbox'|'combo'|'elf_symbol_combo'|'value_table'|'tx_sequence'
 ---@alias ProtoControlShortType 'btn'|'text'|'int'|'float'|'check'|'select'|'symbol'|'values'
 ---@alias ProtoDockAnchor 'left'|'left_bottom'|'right_top'|'right_mid'|'right_bottom'|'main_bottom'
----@alias ProtoControlValue boolean|integer|number|string|ProtoElfSymbolValue|ProtoValueTableUpdate|ProtoValueTableSnapshot|nil
+---@alias ProtoControlValue boolean|integer|number|string|ProtoElfSymbolValue|ProtoValueTableUpdate|ProtoValueTableSnapshot|ProtoTxSequenceValue|nil
 ---@alias ProtoBytes integer[]
 ---@alias ProtoPayload string|ProtoBytes|ProtoBuffer
 ---@alias ProtoTransportKind 'tcp_client'|'tcp_server'|'serial'|'udp_peer'
@@ -134,6 +134,9 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field default? ProtoControlValue
 ---@field options? string[]
 ---@field rows? ProtoValueTableRowEntry[] @value_table 行定义；普通行可用 id 或 { id, label, unit }，bit 行用 id+bits，range 行用 start_id+len。
+---@field fields? ProtoTxSequenceField[] @tx_sequence 字段列定义。
+---@field interval_ms? integer @tx_sequence 全局帧间隔，单位毫秒。
+---@field loop? boolean @tx_sequence 是否循环发送。
 ---@field debounce_ms? integer @elf_symbol_combo 输入消抖毫秒数；未设置时使用 gui.elf_symbol_combo.debounce_ms，默认 300。
 ---@field limit? integer @elf_symbol_combo 候选结果上限；未设置时使用 gui.elf_symbol_combo.limit，默认 10。
 
@@ -184,6 +187,36 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field note? string
 
 ---@alias ProtoValueTableSnapshot ProtoValueTableSnapshotRow[]
+
+-- tx_sequence 动态发送帧序列：宿主只维护可编辑状态；Lua 在 on_control/on_timer 中组帧并调用 proto.send/request。
+---@alias ProtoTxSequenceFieldType 'u8'|'u16'|'i16'|'u32'|'string'
+---@alias ProtoTxSequenceRadix 'hex'|'dec'
+---@class ProtoTxSequenceFieldOption
+---@field label string @下拉显示文本。
+---@field value integer|string @写入 fields 的真实值；类型必须匹配字段 type。
+
+---@class ProtoTxSequenceField
+---@field id string
+---@field label string
+---@field type ProtoTxSequenceFieldType
+---@field default? integer|string
+---@field radix? ProtoTxSequenceRadix @数值字段显示进制；string 字段不支持 hex。
+---@field options? ProtoTxSequenceFieldOption[] @可选下拉项；未配置或为空时使用普通输入框。
+
+---@class ProtoTxSequenceFrame
+---@field id? integer @宿主为动态行分配的稳定 id；脚本声明默认值时可省略。
+---@field enabled? boolean
+---@field name? string
+---@field fields table<string,integer|string>
+
+---@class ProtoTxSequenceDefault
+---@field frames? ProtoTxSequenceFrame[]
+
+---@class ProtoTxSequenceValue
+---@field interval_ms integer
+---@field loop boolean
+---@field running boolean
+---@field frames ProtoTxSequenceFrame[]
 
 -- 停靠面板描述：定义一个脚本 UI 面板的标题、锚点和控件布局。
 ---@class ProtoDockDescriptor

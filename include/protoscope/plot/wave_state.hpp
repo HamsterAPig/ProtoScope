@@ -221,6 +221,10 @@ struct WaveViewState {
     std::size_t maxRenderPointsPerChannel{1200};
     std::size_t maxRenderVertices{60000};
     std::size_t overviewMaxSamples{20000};
+    // 自适应性能只覆盖本帧预算，保存配置时仍使用上面的用户配置。
+    std::optional<std::size_t> adaptiveMaxRenderPointsPerChannel{};
+    std::optional<std::size_t> adaptiveMaxRenderVertices{};
+    std::optional<std::size_t> adaptiveOverviewMaxSamples{};
     std::size_t lastRenderPointCount{0};
     std::size_t lastRenderSourceSampleCount{0};
     std::size_t measurementChannelIndex{0};

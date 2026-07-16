@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -1880,6 +1881,7 @@ void test_application_raw_capture_export_import_roundtrip()
     }
     require(capture->payload == transportState->queuedRxBytes, "导出文件应保留实时 RX 原始字节");
 
+    application.closeTransport();
     application.resetWaveHistory();
     const auto emptySnapshot = application.docks().waveState().buffer.snapshot(-std::numeric_limits<double>::infinity(),
                                                                                std::numeric_limits<double>::infinity());
@@ -1994,6 +1996,19 @@ void test_application_session_package_export_contains_replay_assets()
             "保存配置时不应写入现场包临时协议目录");
     require(importedApplication.docks().waveState().rawCapture.payload == transportState->queuedRxBytes,
             "导入现场包后应回放包内 raw payload");
+    auto importedReplayStatus = importedApplication.rawCaptureReplayStatus();
+    require(importedReplayStatus.loaded && !importedReplayStatus.playing && importedReplayStatus.eventIndex == 0U,
+            "导入现场包后应载入时间轴并暂停在起点");
+    require(importedApplication.docks().receiveState().rows.empty(), "现场包导入后尚未推进时接收框应为空");
+    while (importedApplication.docks().receiveState().rows.empty() &&
+           importedReplayStatus.eventIndex < importedReplayStatus.eventCount) {
+        require(importedApplication.stepRawCaptureReplay(error), "现场包时间轴单步推进应成功");
+        importedReplayStatus = importedApplication.rawCaptureReplayStatus();
+    }
+    require(importedApplication.docks().receiveState().rows.size() == 1U,
+            "现场包推进到 RX 事件后接收框应显示一条原始记录");
+    require(importedApplication.docks().receiveState().rows.front().bytes == transportState->queuedRxBytes,
+            "现场包接收框原始记录应保留录制的 RX 字节");
     const auto& importedMarkers = importedApplication.docks().waveState().analysisMarkers;
     require(importedMarkers.size() == 1, "导入现场包后应恢复分析标记");
     require(importedMarkers.front().label == "startup edge", "导入现场包后分析标记 label 应保留");
@@ -2300,12 +2315,14 @@ void test_application_raw_capture_replay_timeline_steps_events()
     require(status.loaded && !status.playing, "载入后应处于已载入且暂停状态");
     require(status.eventIndex == 0 && status.eventCount == 3, "载入后时间轴应指向首个事件");
     require(status.progress == 0.0, "载入后进度应为 0");
+    require(application.docks().receiveState().rows.empty(), "载入但尚未推进时接收框应为空");
 
     require(application.playRawCaptureReplay(error), "继续回放应成功");
     application.pumpOnce();
     status = application.rawCaptureReplayStatus();
     require(status.loaded && status.playing, "初始等待未满足时仍应保持播放状态");
     require(status.eventIndex == 0, "首个事件应等待 capturedAt 到事件 timestamp 的间隔");
+    require(application.docks().receiveState().rows.empty(), "等待首个事件期间不应提前写入接收框");
     application.pauseRawCaptureReplay();
 
     require(application.stepRawCaptureReplay(error), "单步回放首个事件应成功");
@@ -2314,36 +2331,141 @@ void test_application_raw_capture_replay_timeline_steps_events()
     require(status.eventIndex == 1 && status.eventCount == 3, "单步后事件索引应前进");
     require(status.progress > 0.3 && status.progress < 0.4, "单步后进度应反映当前事件位置");
     require(application.docks().waveState().rawCapture.payload == capture.payload, "单步后应保留原始回放 payload");
+    require(application.docks().receiveState().rows.size() == 1U, "单步首个 RX 事件后接收框应新增一行");
+    require(application.docks().receiveState().rows.front().bytes == std::vector<std::uint8_t>({0x11, 0x22}),
+            "接收框应保留首个回放事件的完整原始字节");
 
     require(application.seekRawCaptureReplay(2, error), "回放时间轴应可定位到中间事件");
     status = application.rawCaptureReplayStatus();
     require(status.loaded && !status.playing, "暂停状态定位到中间事件后仍应暂停");
     require(status.eventIndex == 2 && status.eventCount == 3, "定位到中间事件后事件索引应正确");
+    require(application.docks().receiveState().rows.size() == 2U, "定位到中间事件后应重建两条接收记录");
 
     require(application.playRawCaptureReplay(error), "中间位置继续播放应成功");
     require(application.seekRawCaptureReplay(1, error), "播放中定位应成功并恢复播放状态");
     status = application.rawCaptureReplayStatus();
     require(status.loaded && status.playing, "播放中定位到未结束位置后应恢复播放状态");
     require(status.eventIndex == 1, "播放中定位后事件索引应正确");
+    require(application.docks().receiveState().rows.size() == 1U, "向后定位后接收框不应保留重复历史");
     application.pauseRawCaptureReplay();
 
     require(application.seekRawCaptureReplay(status.eventCount, error), "回放时间轴应可定位到末尾");
     status = application.rawCaptureReplayStatus();
     require(status.loaded && !status.playing, "定位到末尾后应停止播放");
     require(status.eventIndex == status.eventCount && status.progress == 1.0, "定位到末尾后进度应为 100%");
+    require(application.docks().receiveState().rows.size() == 3U, "定位到末尾后应重建全部接收记录");
 
     require(application.seekRawCaptureReplay(0, error), "回放时间轴应可重新定位到开头");
+    require(application.docks().receiveState().rows.empty(), "回到开头后接收框应清空");
     require(application.playRawCaptureReplay(error), "回放时间轴继续播放应成功");
     std::this_thread::sleep_for(std::chrono::milliseconds(180));
     application.pumpOnce();
     status = application.rawCaptureReplayStatus();
     require(status.loaded && !status.playing, "自动播放到末尾后应保留时间轴且停止播放");
     require(status.eventIndex == 3 && status.eventCount == 3, "自动播放到末尾后应保留末尾位置");
+    require(application.docks().receiveState().rows.size() == 3U, "自动播放到末尾后接收框应包含全部事件");
     require(application.seekRawCaptureReplay(0, error), "自动播放结束后仍应可重新定位");
+    require(application.docks().receiveState().rows.empty(), "重新定位到开头后不应残留上轮回放行");
     application.unloadRawCaptureReplayTimeline();
     status = application.rawCaptureReplayStatus();
     require(!status.loaded && !status.playing && status.eventCount == 0, "卸载后应清空回放时间轴状态");
 
+    application.shutdown();
+}
+
+void test_application_raw_capture_replay_populates_parsed_receive_rows()
+{
+    constexpr const char* protocolDir = "tests/fixtures/protocols/stream_frame_only";
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory(protocolDir, true), "stream_frame_only 协议应可加载");
+
+    const auto frame = makeRawImportStreamFrame(0x34);
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = application.docks().luaState().protocolName,
+        .protocolDir = protocolDir,
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 100,
+        .payload = frame,
+        .events = {{.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                    .timestampMs = 101,
+                    .bytes = std::vector<std::uint8_t>(frame.begin(), frame.begin() + 3),
+                    .profile = {},
+                    .plotSetup = {}},
+                   {.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                    .timestampMs = 102,
+                    .bytes = std::vector<std::uint8_t>(frame.begin() + 3, frame.end()),
+                    .profile = {},
+                    .plotSetup = {}}},
+    };
+
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "逐帧接收测试时间轴应可载入");
+    require(application.stepRawCaptureReplay(error), "首个半帧事件应可单步推进");
+    require(application.docks().receiveState().rows.size() == 1U, "首个半帧事件应进入原始接收记录");
+    require(application.docks().receiveState().frameRows.empty(), "半帧不应提前生成逐帧记录");
+
+    require(application.stepRawCaptureReplay(error), "第二个半帧事件应可单步推进");
+    const auto& receive = application.docks().receiveState();
+    require(receive.rows.size() == 2U, "两个录制事件应保留为两条原始接收记录");
+    require(receive.frameRows.size() == 1U, "跨事件拼成完整帧后应生成一条逐帧记录");
+    require(receive.frameRows.front().bytes == frame, "逐帧记录应保留完整帧字节");
+    require(receive.frameRows.front().message.find("value=52") != std::string::npos,
+            "逐帧记录应包含 schema 解析字段");
+
+    application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
+    application.activateParsedTransferLogView();
+    require(receive.frameRows.size() == 1U, "切换逐帧视图不应清空预生成的回放帧");
+
+    require(application.seekRawCaptureReplay(1, error), "逐帧回放应可向后定位到半帧位置");
+    require(receive.rows.size() == 1U && receive.frameRows.empty(),
+            "向后定位后原始行和逐帧结果应重建到目标位置");
+    require(application.seekRawCaptureReplay(2, error), "逐帧回放应可重新定位到完整帧位置");
+    require(receive.rows.size() == 2U && receive.frameRows.size() == 1U,
+            "重新定位到完整帧位置后应恢复对应原始行和解析帧");
+    require(application.docks().commState().lastPumpStreamErrors == 0U,
+            "向后定位后 Lua stream parser 不应残留上轮半帧并产生解析错误");
+    application.shutdown();
+}
+
+void test_application_raw_capture_replay_rejects_live_transport()
+{
+    auto transportState = std::make_shared<RecordingTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<RecordingTransport>(transportState);
+    });
+    require(application.initialize(), "应用初始化失败");
+
+    const auto& lua = application.docks().luaState();
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = lua.protocolName,
+        .protocolDir = lua.protocolDir,
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 100,
+        .payload = {0x11, 0x22},
+        .events = {{.type = protoscope::plot::RawCaptureEventType::RxBytes,
+                    .timestampMs = 101,
+                    .bytes = {0x11, 0x22},
+                    .profile = {},
+                    .plotSetup = {}}},
+    };
+
+    application.openTransport();
+    require(transportState->opened, "实时连接测试 transport 应已打开");
+    std::string error;
+    require(!application.loadRawCaptureReplayTimeline(capture, error), "实时连接打开时应拒绝载入离线回放");
+    require(error.find("先关闭连接") != std::string::npos, "拒绝载入时应提示先关闭实时连接");
+    require(!application.rawCaptureReplayStatus().loaded, "拒绝载入后不应留下半完成时间轴");
+
+    application.closeTransport();
+    require(application.loadRawCaptureReplayTimeline(capture, error), "关闭实时连接后应可载入离线回放");
+    application.openTransport();
+    require(!transportState->opened, "时间轴载入期间不应重新打开实时连接");
+    require(application.docks().commState().lastError.find("先卸载") != std::string::npos,
+            "时间轴载入期间打开连接应提示先卸载回放");
+    application.unloadRawCaptureReplayTimeline();
     application.shutdown();
 }
 
@@ -2652,8 +2774,8 @@ void test_application_raw_capture_import_replays_runtime_profile_events()
     });
     std::vector<std::uint8_t> raw{0xFF, 0x26, 0x00, 0x11, 0x00, 0x22};
     const auto crc = protoscope::protocol_utils::crc16Modbus(raw);
-    raw.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
     raw.push_back(static_cast<std::uint8_t>((crc >> 8U) & 0xFFU));
+    raw.push_back(static_cast<std::uint8_t>(crc & 0xFFU));
     capture.events.push_back(protoscope::plot::RawCaptureEvent{
         .type = protoscope::plot::RawCaptureEventType::RxBytes,
         .timestampMs = 101,
@@ -2676,6 +2798,12 @@ void test_application_raw_capture_import_replays_runtime_profile_events()
         throw std::runtime_error("导入后应保留事件流: actual=" +
                                  std::to_string(application.docks().waveState().rawCapture.events.size()));
     }
+    const auto& receive = application.docks().receiveState();
+    require(receive.rows.size() == 1U && receive.rows.front().bytes == raw,
+            "runtime profile 回放应把完整 RX 事件写入接收框");
+    require(receive.frameRows.size() == 1U, "runtime profile 回放应生成对应逐帧记录");
+    require(receive.frameRows.front().message.find("dynamic_profile") != std::string::npos,
+            "逐帧记录应使用回放事件恢复的 runtime profile");
     application.shutdown();
 }
 
@@ -3423,4 +3551,123 @@ void test_application_plot_push_drains_with_budget_and_disconnect_keeps_pending(
     snapshot = application.docks().waveState().buffer.snapshot(-std::numeric_limits<double>::infinity(),
                                                                std::numeric_limits<double>::infinity());
     require(snapshot.channels.front().totalSamples == 2, "断开保留 backlog 不应立即提交到 buffer");
+}
+
+void test_adaptive_performance_controller_applies_pressure_hysteresis()
+{
+    protoscope::app::AdaptivePerformanceController samplingController;
+    samplingController.configure(protoscope::config::AdaptivePerformanceConfig{
+        .enabled = true,
+        .maxMultiplier = 1.0,
+    });
+    samplingController.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 0,
+        .system = {.cpuBusyRatio = 0.90},
+    });
+    for (std::uint64_t nowMs = 1; nowMs <= 5; ++nowMs) {
+        samplingController.update(protoscope::app::AdaptivePerformanceInput{
+            .nowMs = nowMs,
+        });
+    }
+    require(samplingController.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "0ms 首次采样后的不足一秒更新不应重复参与恢复计数");
+
+    protoscope::app::AdaptivePerformanceController controller;
+    controller.configure(protoscope::config::AdaptivePerformanceConfig{
+        .enabled = true,
+        .maxMultiplier = 2.0,
+    });
+    require(controller.enabled(), "自适应控制器应启用");
+    require(controller.budget().fpsLimit == 120U, "无压力时预算应使用 K 上限倍率");
+
+    controller.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 1000,
+        .system = {.cpuBusyRatio = 0.90},
+    });
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "CPU 高压力应立即进入 high");
+    require(std::abs(controller.status().effectiveMultiplier - 1.0) < 1e-12,
+            "high 压力下 K=2 应回落到 1.0");
+    require(std::abs(controller.status().catchUpMultiplier - 1.5) < 1e-12,
+            "系统高压且无软件积压时清债预算应温和收紧");
+
+    protoscope::app::AdaptivePerformanceController criticalSystemController;
+    criticalSystemController.configure(protoscope::config::AdaptivePerformanceConfig{
+        .enabled = true,
+        .maxMultiplier = 2.0,
+    });
+    criticalSystemController.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 2000,
+        .system = {.cpuBusyRatio = 0.96},
+    });
+    require(criticalSystemController.status().pressureLevel == protoscope::app::AdaptivePressureLevel::Critical,
+            "CPU 临界压力应立即进入 critical");
+    require(std::abs(criticalSystemController.status().catchUpMultiplier - 1.0) < 1e-12,
+            "系统临界压力下 K=2 的清债预算应收紧到 0.5K");
+
+    for (std::uint64_t sample = 2; sample <= 6; ++sample) {
+        controller.update(protoscope::app::AdaptivePerformanceInput{
+            .nowMs = sample * 1000,
+            .system = {.cpuBusyRatio = 0.80},
+        });
+    }
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "仍有轻度压力时不应被视为健康采样而恢复预算");
+
+    for (std::uint64_t sample = 7; sample <= 10; ++sample) {
+        controller.update(protoscope::app::AdaptivePerformanceInput{
+            .nowMs = sample * 1000,
+        });
+    }
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "恢复不足五个采样周期时不应提前升档");
+
+    controller.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 11000,
+    });
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::Elevated,
+            "连续五个健康采样后应只恢复一个压力等级");
+    require(controller.status().reason == "recovery_wait",
+            "滞回恢复期间状态原因应说明仍在等待恢复，而不是误报 normal");
+
+    controller.configure(protoscope::config::AdaptivePerformanceConfig{
+        .enabled = true,
+        .maxMultiplier = 99.0,
+    });
+    require(std::abs(controller.status().maxMultiplier - 4.0) < 1e-12, "K 应限制在 4.0");
+    controller.update(protoscope::app::AdaptivePerformanceInput{
+        .nowMs = 1000,
+        .pendingRxBytes = 1024,
+        .rawBacklogWarnBytes = 1024,
+    });
+    require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
+            "系统指标缺失时原始 RX backlog 仍应驱动降档");
+    require(std::abs(controller.status().effectiveMultiplier - 2.0) < 1e-12,
+            "软件 backlog 高时渲染预算应降档释放主线程");
+    require(std::abs(controller.status().catchUpMultiplier - 4.0) < 1e-12,
+            "软件 backlog 高时清债预算不应被同步压低");
+    require(controller.budget().rxChunkBytesPerPump == 16384U,
+            "软件 backlog 高时 RX 清债预算应保持 K 档");
+}
+
+void test_application_adaptive_performance_keeps_static_config()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    auto config = application.captureConfig();
+    config.performance.adaptive.enabled = true;
+    config.performance.adaptive.maxMultiplier = 0.5;
+    config.app.fpsLimit = 144;
+    config.gui.wave.maxRenderPointsPerChannel = 9999;
+    config.gui.realtimeBacklog.rxChunkBytesPerPump = 7777;
+    require(application.applyConfig(config), "自适应配置应可应用");
+
+    require(application.effectiveFpsLimit() == 30U, "启用自适应后 fps 应使用有效预算而非静态值");
+    require(application.docks().waveState().view.adaptiveMaxRenderPointsPerChannel == 600U,
+            "波形渲染应使用自适应覆盖预算");
+    const auto captured = application.captureConfig();
+    require(captured.app.fpsLimit == 144U, "保存配置不应写入自适应 fps 覆盖值");
+    require(captured.gui.wave.maxRenderPointsPerChannel == 9999U, "保存配置不应改写静态波形预算");
+    require(captured.gui.realtimeBacklog.rxChunkBytesPerPump == 7777U, "保存配置不应改写静态 backlog 预算");
 }

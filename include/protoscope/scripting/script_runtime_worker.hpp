@@ -91,6 +91,7 @@ public:
     void postDialogEvent(transport::ConnectionContext context, DialogEvent event);
     void postFileDialogEvent(transport::ConnectionContext context, FileDialogEvent event);
     [[nodiscard]] bool applyStreamRuntimeProfileEvent(StreamRuntimeProfileEvent event, std::string& error);
+    void resetStreamReplayState();
     void postRequestAwaitingCompletion(bool active);
 
     void waitIdle();

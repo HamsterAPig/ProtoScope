@@ -1,5 +1,6 @@
 #pragma once
 
+#include "protoscope/app/adaptive_performance.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/logging/logging.hpp"
@@ -30,6 +31,7 @@ public:
     bool applyConfig(const config::AppConfig& config);
     config::AppConfig captureConfig() const;
     [[nodiscard]] const config::AppConfig& runtimeConfig() const;
+    [[nodiscard]] std::uint32_t effectiveFpsLimit() const;
     [[nodiscard]] bool loadedConfigFromDisk() const;
     bool reloadProtocolDirectory(const std::string& protocolDir, bool forceReload = false);
     bool pumpOnce();
@@ -192,6 +194,9 @@ private:
     std::unique_ptr<transport::ITransport> createTransport(transport::TransportKind kind) const;
     transport::TransportConfig currentTransportConfig(transport::TransportKind kind) const;
     void syncDockState();
+    void updateAdaptivePerformance();
+    void applyAdaptiveWaveBudget();
+    void syncAdaptivePerformanceStatus();
     void maybeLogCommPressureDebug(const dock::CommDockState& comm);
     bool applyScriptOutputBatch(const scripting::ScriptRuntimeOutputBatch& batch);
     void applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot& snapshot);
@@ -224,6 +229,7 @@ private:
     [[nodiscard]] std::size_t rxBytesPerPump() const;
     [[nodiscard]] std::size_t transferFrameRowsPerPump() const;
     [[nodiscard]] std::size_t plotAppendsPerPump() const;
+    [[nodiscard]] double outputFlushBudgetMs() const;
     [[nodiscard]] std::size_t pendingRxByteCount() const;
     [[nodiscard]] bool hasPendingRequestDrainWork() const;
     bool drainRequestTimeoutBacklog();
@@ -261,6 +267,7 @@ private:
     void resetStreamBufferAlertState(std::uint64_t connectionId = 0);
     void enqueueDialogRequest(const scripting::DialogRequest& request);
     void appendTransferRow(dock::ReceiveRow row);
+    [[nodiscard]] bool validateOfflineReplayTransport(std::string& error) const;
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
     void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
     void appendRawCaptureEvent(const plot::RawCaptureEvent& event);
@@ -277,6 +284,7 @@ private:
     bool applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent& event, bool cleared, std::string& error);
     void replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
                                const std::vector<std::uint8_t>& bytes);
+    bool applyTransferFrameRuntimeProfileEvent(const scripting::StreamRuntimeProfileEvent& event, std::string& error);
     void finishRawCaptureImportReplay();
     void cancelRawCaptureImportReplay();
     bool applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup);
@@ -297,6 +305,8 @@ private:
     dock::DockStore dockStore_;
     config::ConfigStore configStore_{};
     config::AppConfig runtimeConfig_{};
+    AdaptivePerformanceController adaptivePerformance_{};
+    std::optional<AdaptivePerformanceStatus> loggedAdaptivePerformanceStatus_{};
     bool loadedConfigFromDisk_{false};
     std::optional<config::ProtocolConfig> captureProtocolConfigOverride_;
     logging::LoggingFacade loggingFacade_{};
@@ -320,6 +330,7 @@ private:
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
     RawCaptureReplayState rawCaptureReplay_;
+    bool replayReceiveHistory_{false};
     std::deque<transport::TransportEvent> pendingTransportEvents_;
     std::deque<PendingRxBytes> pendingRxByteChunks_;
     std::deque<dock::ReceiveRow> pendingTransferFrameRows_;

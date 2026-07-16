@@ -58,7 +58,8 @@ void GuiRuntime::drawFileMenu()
     if (ImGui::MenuItem("打开 ELF/ElfStaticView 数据文件...", shortcutLabel(ShortcutAction::OpenElfDataFile).data())) {
         openElfStaticAddressDialog();
     }
-    if (menuItemWithHelp("导入现场会话包...", nullptr, "打开 .pssession，恢复协议、原始缓存和现场复现上下文。")) {
+    if (menuItemWithHelp(
+            "导入现场会话包...", nullptr, "打开 .pssession，恢复协议与现场上下文，并在时间轴起点暂停等待回放。")) {
         openSessionPackageImportDialog();
     }
     if (menuItemWithHelp("导入原始波形...",

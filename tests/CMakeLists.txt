@@ -64,6 +64,7 @@ if(PROTOSCOPE_ENABLE_GUI)
     target_include_directories(protoscope_tests
         PRIVATE
             ${PROJECT_SOURCE_DIR}/include
+            ${PROJECT_BINARY_DIR}/generated/include
     )
     target_link_libraries(protoscope_tests
         PRIVATE

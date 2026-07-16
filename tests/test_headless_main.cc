@@ -35,6 +35,22 @@ const TestCase kHeadlessTests[] = {
     {"application_request_done_failure_sets_comm_error", &test_application_request_done_failure_sets_comm_error},
     {"application_initialize_prepares_default_config_and_protocol_dirs",
      &test_application_initialize_prepares_default_config_and_protocol_dirs},
+    {"adaptive_performance_controller_applies_pressure_hysteresis",
+     &test_adaptive_performance_controller_applies_pressure_hysteresis},
+    {"application_adaptive_performance_keeps_static_config",
+     &test_application_adaptive_performance_keeps_static_config},
+    {"application_raw_capture_replay_timeline_steps_events",
+     &test_application_raw_capture_replay_timeline_steps_events},
+    {"application_raw_capture_replay_populates_parsed_receive_rows",
+     &test_application_raw_capture_replay_populates_parsed_receive_rows},
+    {"application_raw_capture_replay_rejects_live_transport",
+     &test_application_raw_capture_replay_rejects_live_transport},
+    {"application_raw_capture_import_replays_runtime_profile_events",
+     &test_application_raw_capture_import_replays_runtime_profile_events},
+    {"application_session_package_export_contains_replay_assets",
+     &test_application_session_package_export_contains_replay_assets},
+    {"application_session_package_import_invalid_protocol_rolls_back_runtime",
+     &test_application_session_package_import_invalid_protocol_rolls_back_runtime},
 };
 
 } // namespace

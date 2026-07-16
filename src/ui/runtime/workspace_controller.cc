@@ -459,6 +459,12 @@ void GuiRuntime::restorePersistedControlValues(const YAML::Node& controlsNode)
         if (!saved || saved["type"].as<std::string>("") != controlTypeName(descriptor.type)) {
             continue;
         }
+        if (descriptor.type == scripting::ControlType::TxSequence) {
+            if (const auto value = readTxSequenceValue(saved["value"], descriptor)) {
+                application_.restoreControlValue(descriptor.id, *value);
+            }
+            continue;
+        }
         if (const auto value = readControlValue(saved["value"], descriptor.type)) {
             application_.restoreControlValue(descriptor.id, *value);
         }

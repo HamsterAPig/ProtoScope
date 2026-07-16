@@ -65,9 +65,10 @@ void drawOverviewWindow(plot::WaveViewState& view,
 
         const float contentWidth = ImGui::GetContentRegionAvail().x;
         const std::size_t pixelWidth = static_cast<std::size_t>((std::max)(contentWidth, 64.0F));
+        const auto overviewMaxSamples = view.adaptiveOverviewMaxSamples.value_or(view.overviewMaxSamples);
         const std::size_t overviewPointLimit =
-            view.overviewMaxSamples > 0
-                ? (std::min)({pixelWidth, renderBudget.pointsPerChannel, view.overviewMaxSamples})
+            overviewMaxSamples > 0
+                ? (std::min)({pixelWidth, renderBudget.pointsPerChannel, overviewMaxSamples})
                 : (std::min)(pixelWidth, renderBudget.pointsPerChannel);
         for (const std::size_t channelIndex : channelIndices) {
             if (channelIndex >= fullSnapshot.channels.size() || channelIndex >= displayData.channels.size()) {

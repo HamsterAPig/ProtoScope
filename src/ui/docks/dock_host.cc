@@ -5,8 +5,11 @@
 #include "protoscope/ui/ui_theme.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <limits>
 #include <string_view>
 
 namespace protoscope::ui {
@@ -75,6 +78,195 @@ namespace {
         return type == scripting::ControlType::InputText || type == scripting::ControlType::InputInt ||
                type == scripting::ControlType::InputFloat || type == scripting::ControlType::Combo ||
                type == scripting::ControlType::ElfSymbolCombo;
+    }
+
+    std::uint32_t nextTxSequenceFrameId(const scripting::TxSequenceValue& value)
+    {
+        std::uint32_t maxId = 0;
+        for (const auto& frame : value.frames) {
+            maxId = std::max(maxId, frame.id);
+        }
+        return maxId == std::numeric_limits<std::uint32_t>::max() ? maxId : maxId + 1U;
+    }
+
+    scripting::TxSequenceFieldValue defaultTxSequenceFieldValue(
+        const scripting::TxSequenceFieldDescriptor& field)
+    {
+        if (field.type == scripting::TxSequenceFieldType::String) {
+            if (const auto* text = std::get_if<std::string>(&field.defaultValue)) {
+                return *text;
+            }
+            return std::string();
+        }
+        if (const auto* number = std::get_if<std::int64_t>(&field.defaultValue)) {
+            return *number;
+        }
+        return std::int64_t{0};
+    }
+
+    scripting::TxSequenceFrameValue makeTxSequenceUiFrame(const scripting::ControlDescriptor& descriptor,
+                                                          std::uint32_t id)
+    {
+        scripting::TxSequenceFrameValue frame;
+        frame.id = id;
+        frame.enabled = true;
+        frame.name = "Frame " + std::to_string(id);
+        for (const auto& field : descriptor.txSequenceFields) {
+            frame.fields[field.id] = defaultTxSequenceFieldValue(field);
+        }
+        return frame;
+    }
+
+    std::int64_t clampTxSequenceUiInteger(const scripting::TxSequenceFieldDescriptor& field, std::int64_t value)
+    {
+        switch (field.type) {
+            case scripting::TxSequenceFieldType::U8:
+                return std::clamp<std::int64_t>(value, 0, 0xFF);
+            case scripting::TxSequenceFieldType::U16:
+                return std::clamp<std::int64_t>(value, 0, 0xFFFF);
+            case scripting::TxSequenceFieldType::I16:
+                return std::clamp<std::int64_t>(value, -32768, 32767);
+            case scripting::TxSequenceFieldType::U32:
+                return std::clamp<std::int64_t>(
+                    value, 0, static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()));
+            case scripting::TxSequenceFieldType::String:
+                break;
+        }
+        return value;
+    }
+
+    bool drawTxSequenceIntegerInput(const char* label,
+                                    const scripting::TxSequenceFieldDescriptor& field,
+                                    std::int64_t& value)
+    {
+        if (field.radix != scripting::TxSequenceFieldRadix::Hex) {
+            std::int64_t edited = value;
+            if (ImGui::InputScalar(label, ImGuiDataType_S64, &edited, nullptr, nullptr, "%lld")) {
+                value = edited;
+                return true;
+            }
+            return false;
+        }
+
+        char buffer[32]{};
+        std::snprintf(buffer, sizeof(buffer), "%llX", static_cast<unsigned long long>(std::max<std::int64_t>(0, value)));
+        if (!ImGui::InputText(label, buffer, sizeof(buffer), ImGuiInputTextFlags_CharsHexadecimal)) {
+            return false;
+        }
+        std::uint64_t parsed = 0;
+        const auto* begin = buffer;
+        const auto* end = buffer + std::strlen(buffer);
+        const auto result = std::from_chars(begin, end, parsed, 16);
+        if (result.ec == std::errc{} && result.ptr == end) {
+            value = static_cast<std::int64_t>(std::min<std::uint64_t>(
+                parsed, static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())));
+        } else if (begin == end) {
+            value = 0;
+        }
+        return true;
+    }
+
+    scripting::TxSequenceFieldValue txSequenceFieldValueOrDefault(
+        const scripting::TxSequenceFieldDescriptor& field,
+        const scripting::TxSequenceFrameValue& frame)
+    {
+        const auto iter = frame.fields.find(field.id);
+        if (iter != frame.fields.end()) {
+            return iter->second;
+        }
+        return defaultTxSequenceFieldValue(field);
+    }
+
+    std::string txSequenceFieldPreviewText(const scripting::TxSequenceFieldDescriptor& field,
+                                           const scripting::TxSequenceFieldValue& value)
+    {
+        if (const auto* text = std::get_if<std::string>(&value)) {
+            return *text;
+        }
+        const auto number = std::get_if<std::int64_t>(&value);
+        if (number == nullptr) {
+            return {};
+        }
+        char buffer[32]{};
+        if (field.radix == scripting::TxSequenceFieldRadix::Hex) {
+            std::snprintf(buffer, sizeof(buffer), "0x%llX", static_cast<unsigned long long>(*number));
+        } else {
+            std::snprintf(buffer, sizeof(buffer), "%lld", static_cast<long long>(*number));
+        }
+        return buffer;
+    }
+
+    bool drawTxSequenceOptionCombo(const char* label,
+                                   const scripting::TxSequenceFieldDescriptor& field,
+                                   scripting::TxSequenceFieldValue& value)
+    {
+        if (field.options.empty()) {
+            return false;
+        }
+
+        const auto selected = std::find_if(field.options.begin(), field.options.end(), [&](const auto& option) {
+            return option.value == value;
+        });
+        const std::string fallbackPreview = txSequenceFieldPreviewText(field, value);
+        const char* preview = selected == field.options.end() ? fallbackPreview.c_str() : selected->label.c_str();
+        bool updated = false;
+        if (ImGui::BeginCombo(label, preview)) {
+            for (const auto& option : field.options) {
+                const bool isSelected = option.value == value;
+                if (ImGui::Selectable(option.label.c_str(), isSelected)) {
+                    value = option.value;
+                    updated = true;
+                }
+                if (isSelected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        return updated;
+    }
+
+    bool drawTxSequenceFieldEditor(const scripting::TxSequenceFieldDescriptor& field,
+                                   scripting::TxSequenceFrameValue& frame)
+    {
+        constexpr float kFieldWidth = 118.0F;
+        ImGui::SetNextItemWidth(kFieldWidth);
+        auto value = txSequenceFieldValueOrDefault(field, frame);
+        if (drawTxSequenceOptionCombo(("##" + field.id).c_str(), field, value)) {
+            frame.fields[field.id] = value;
+            return true;
+        }
+
+        if (field.type == scripting::TxSequenceFieldType::String) {
+            std::string text;
+            if (const auto* stored = std::get_if<std::string>(&value)) {
+                text = *stored;
+            }
+            char buffer[256]{};
+            std::snprintf(buffer, sizeof(buffer), "%s", text.c_str());
+            if (ImGui::InputText(("##" + field.id).c_str(), buffer, sizeof(buffer))) {
+                frame.fields[field.id] = std::string(buffer);
+                return true;
+            }
+            return false;
+        }
+
+        std::int64_t integerValue = 0;
+        if (const auto* number = std::get_if<std::int64_t>(&value)) {
+            integerValue = *number;
+        }
+        if (drawTxSequenceIntegerInput(("##" + field.id).c_str(), field, integerValue)) {
+            frame.fields[field.id] = clampTxSequenceUiInteger(field, integerValue);
+            return true;
+        }
+        return false;
+    }
+
+    std::size_t enabledTxSequenceFrameCount(const scripting::TxSequenceValue& value)
+    {
+        return static_cast<std::size_t>(std::count_if(value.frames.begin(), value.frames.end(), [](const auto& frame) {
+            return frame.enabled;
+        }));
     }
 
     float luaDynamicControlLabelPartWidth(std::string_view visibleLabel)
@@ -407,6 +599,16 @@ void GuiRuntime::drawCommStatus(const dock::CommDockState& comm)
     ImGui::Text("TX=%llu RX=%llu",
                 static_cast<unsigned long long>(comm.txCount),
                 static_cast<unsigned long long>(comm.rxCount));
+    if (comm.adaptivePerformanceEnabled) {
+        ImGui::Text("自适应性能: K=%.2f 渲染=%.2f 清债=%.2f 等级=%s",
+                    comm.adaptivePerformanceMaxMultiplier,
+                    comm.adaptivePerformanceEffectiveMultiplier,
+                    comm.adaptivePerformanceCatchUpMultiplier,
+                    comm.adaptivePerformanceLevel.c_str());
+        ImGui::TextWrapped("自适应原因: %s%s",
+                           comm.adaptivePerformanceReason.c_str(),
+                           comm.adaptivePerformanceSystemMetricsAvailable ? "" : " (仅软件指标)");
+    }
     if (!comm.lastError.empty()) {
         ImGui::TextWrapped("错误：%s", comm.lastError.c_str());
     }
@@ -1130,6 +1332,9 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
         case scripting::ControlType::ValueTable:
             updated = drawValueTableControl(control, visibleLabel);
             break;
+        case scripting::ControlType::TxSequence:
+            updated = drawTxSequenceControl(control, visibleLabel);
+            break;
         case scripting::ControlType::InputInt:
             updated = drawDynamicIntControl(control, inputLabel, visibleLabel);
             drawLuaControlCompactTooltip(descriptor, visibleLabel);
@@ -1434,6 +1639,160 @@ bool GuiRuntime::drawValueTableControl(const scripting::ControlSnapshot& control
         }
     }
     ImGui::EndTable();
+    return false;
+}
+
+bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control, std::string_view visibleLabel)
+{
+    const auto* current = std::get_if<scripting::TxSequenceValue>(&control.value);
+    if (current == nullptr) {
+        return false;
+    }
+
+    const auto& descriptor = control.descriptor;
+    auto next = *current;
+    bool updated = false;
+    if (!visibleLabel.empty()) {
+        ImGui::TextUnformatted(visibleLabel.data(), visibleLabel.data() + visibleLabel.size());
+        drawLuaControlCompactTooltip(descriptor, visibleLabel);
+    }
+
+    ImGui::PushID(descriptor.id.c_str());
+    const float toolbarHeight = compactLogToolbarHeight();
+    if (beginToolbarGroup("tx_sequence_toolbar", nullptr, toolbarHeight)) {
+        if (drawTransferToolbarButton(next.running ? PROTOSCOPE_ICON_PAUSE " 停止" : PROTOSCOPE_ICON_PLAY " 开始",
+                                      next.running ? "停止发送序列" : "开始发送序列",
+                                      next.running,
+                                      76.0F)) {
+            next.running = !next.running;
+            updated = true;
+        }
+        ImGui::SameLine();
+        if (drawTransferToolbarButton("添加", "添加一行发送帧", false, 54.0F)) {
+            next.frames.push_back(makeTxSequenceUiFrame(descriptor, nextTxSequenceFrameId(next)));
+            updated = true;
+        }
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(PROTOSCOPE_ICON_CLOCK " interval_ms");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(82.0F);
+        int intervalMs = next.intervalMs;
+        if (ImGui::InputInt("##interval_ms", &intervalMs, 0, 0)) {
+            next.intervalMs = std::max(1, intervalMs);
+            updated = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Checkbox("loop", &next.loop)) {
+            updated = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("启用 %zu / %zu", enabledTxSequenceFrameCount(next), next.frames.size());
+    }
+    endToolbarGroup();
+
+    const int columnCount = 3 + static_cast<int>(descriptor.txSequenceFields.size());
+    const std::string tableId = "##lua_tx_sequence_" + descriptor.id;
+    constexpr ImGuiTableFlags flags =
+        ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_SizingFixedFit;
+    const float rowHeight = ImGui::GetFrameHeightWithSpacing() + 6.0F;
+    const float tableHeight =
+        std::min(280.0F, std::max(120.0F, rowHeight * static_cast<float>(std::min<std::size_t>(next.frames.size() + 1U, 8U))));
+    if (ImGui::BeginChild("##tx_sequence_table_scroll",
+                          ImVec2(0.0F, tableHeight),
+                          ImGuiChildFlags_Borders,
+                          ImGuiWindowFlags_HorizontalScrollbar)) {
+        if (ImGui::BeginTable(tableId.c_str(), columnCount, flags)) {
+            ImGui::TableSetupColumn("启用", ImGuiTableColumnFlags_WidthFixed, 48.0F);
+            ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthFixed, 128.0F);
+            for (const auto& field : descriptor.txSequenceFields) {
+                ImGui::TableSetupColumn(field.label.c_str(), ImGuiTableColumnFlags_WidthFixed, 124.0F);
+            }
+            ImGui::TableSetupColumn("操作", ImGuiTableColumnFlags_WidthFixed, 160.0F);
+            ImGui::TableHeadersRow();
+
+            for (std::size_t rowIndex = 0; rowIndex < next.frames.size(); ++rowIndex) {
+                auto& frame = next.frames[rowIndex];
+                ImGui::PushID(static_cast<int>(frame.id));
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0);
+                if (ImGui::Checkbox("##enabled", &frame.enabled)) {
+                    updated = true;
+                }
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(118.0F);
+                char nameBuffer[128]{};
+                std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", frame.name.c_str());
+                if (ImGui::InputText("##name", nameBuffer, sizeof(nameBuffer))) {
+                    frame.name = nameBuffer;
+                    updated = true;
+                }
+
+                int column = 2;
+                for (const auto& field : descriptor.txSequenceFields) {
+                    ImGui::TableSetColumnIndex(column++);
+                    if (drawTxSequenceFieldEditor(field, frame)) {
+                        updated = true;
+                    }
+                }
+
+                ImGui::TableSetColumnIndex(column);
+                const bool canMoveUp = rowIndex > 0;
+                const bool canMoveDown = rowIndex + 1 < next.frames.size();
+                if (!canMoveUp) {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("上", ImVec2(30.0F, 0.0F))) {
+                    std::swap(next.frames[rowIndex - 1], next.frames[rowIndex]);
+                    updated = true;
+                }
+                drawIconTooltip("上移一行");
+                if (!canMoveUp) {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SameLine();
+                if (!canMoveDown) {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("下", ImVec2(30.0F, 0.0F))) {
+                    std::swap(next.frames[rowIndex], next.frames[rowIndex + 1]);
+                    updated = true;
+                }
+                drawIconTooltip("下移一行");
+                if (!canMoveDown) {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("复制", ImVec2(44.0F, 0.0F))) {
+                    auto copy = frame;
+                    copy.id = nextTxSequenceFrameId(next);
+                    next.frames.insert(next.frames.begin() + static_cast<std::ptrdiff_t>(rowIndex + 1), std::move(copy));
+                    updated = true;
+                }
+                drawIconTooltip("复制当前帧");
+                ImGui::SameLine();
+                if (ImGui::Button(PROTOSCOPE_ICON_TRASH, ImVec2(30.0F, 0.0F))) {
+                    next.frames.erase(next.frames.begin() + static_cast<std::ptrdiff_t>(rowIndex));
+                    updated = true;
+                    ImGui::PopID();
+                    break;
+                }
+                drawIconTooltip("删除当前帧");
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopID();
+
+    if (updated) {
+        updateDynamicControlValueWithFeedback(descriptor, next);
+        return true;
+    }
     return false;
 }
 

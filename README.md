@@ -43,6 +43,8 @@ scripting:
 ```
 
 - `performance.scale` 只影响未显式写出的预算项；YAML 里写出的单项会优先覆盖公共系数。
+- 可选的 `performance.adaptive.enabled` 默认关闭。开启后用 `performance.adaptive.max_multiplier` 作为 K（`0.25..4.0`），按系统 CPU/内存和应用 backlog 动态接管 FPS、波形渲染、UI backlog 追赶和脚本输出 flush 预算；系统压力收紧渲染，软件 backlog 高时清债预算保持在 K 档，`performance.scale` 与这些热调项不参与运行时调度。
+- 自适应不会热改队列/内存上限、worker 线程、传输读缓冲、`batch_bytes`、背压水位或 `pump_min_interval_ms`；它们继续作为资源安全和协议行为边界。
 - `batch_bytes`、`transport_read_buffer_bytes`、`rx_chunk_bytes_per_pump` 控制数据投递颗粒度，越小越容易平滑刷新。
 - `fps_limit`、`pump_min_interval_ms` 控制 UI 刷新频率和 CPU 占用。
 - `max_render_points_per_channel`、`max_render_vertices`、`peak_detect_downsample` 控制绘制压力，不负责拆分数据批次。

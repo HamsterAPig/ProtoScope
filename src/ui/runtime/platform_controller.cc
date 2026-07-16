@@ -12,7 +12,7 @@ namespace protoscope::ui {
 
 void GuiRuntime::sleepUntilNextFrame(std::uint64_t frameStartMs) const
 {
-    sleepUntil(frameStartMs + renderFrameIntervalMs(application_.docks().configState().fpsLimit));
+    sleepUntil(frameStartMs + renderFrameIntervalMs(application_.effectiveFpsLimit()));
 }
 
 void GuiRuntime::sleepUntil(std::uint64_t targetMs) const

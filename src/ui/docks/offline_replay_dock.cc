@@ -160,7 +160,7 @@ void GuiRuntime::drawOfflineReplayDock()
     if (ImGui::BeginTable("##offline_replay_inputs", 2, ImGuiTableFlags_SizingStretchSame)) {
         drawTwoColumnActionRow(
             "导入现场包",
-            "导入 .pssession 现场会话包，恢复协议、原始缓存和复现上下文。",
+            "导入 .pssession 现场会话包，恢复协议与复现上下文，并在时间轴起点暂停。",
             true,
             "导出现场包",
             "导出 .pssession 现场会话包，打包当前协议和复现证据。",

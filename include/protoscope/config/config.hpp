@@ -35,8 +35,14 @@ struct PerformanceExplicitOverrides {
     bool realtimeBacklogRawFirstBacklogWarnBytes{false};
 };
 
+struct AdaptivePerformanceConfig {
+    bool enabled{false};
+    double maxMultiplier{1.0};
+};
+
 struct PerformanceConfig {
     double scale{1.0};
+    AdaptivePerformanceConfig adaptive{};
     PerformanceExplicitOverrides explicitOverrides{};
 };
 
