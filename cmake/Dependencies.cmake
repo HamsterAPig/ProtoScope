@@ -26,6 +26,7 @@ add_library(elf_static_view_core
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/project_summary.cc
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/analysis/static_address_query.cc
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/elf_symbol_table.cc
+    ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_expression.cc
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_reader.cc
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/raw_dwarf_reader.cc
     ${PROJECT_SOURCE_DIR}/3rdparty/ElfStaticView/src/elf/dwarf_wrappers.cc
