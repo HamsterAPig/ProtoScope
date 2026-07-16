@@ -1,4 +1,4 @@
--- 核心流程：主机只负责三件事——把 SN Scope 请求交给 proto.request 排队、在 ACK 到达时 request_done、把 4 路上传帧推成波形。
+-- 核心流程：主机只负责三件事——把半双工 Modbus 请求交给 proto.request 排队、在 ACK 到达时 request_done、把 4 路上传帧推成波形。
 
 local FUNC_READ_HOLDING = 0x03
 local FUNC_WRITE_SINGLE = 0x06
@@ -27,9 +27,15 @@ local pending_requests = {}
 local active_request_id = nil
 local upload_frame_cursor = 0
 local upload_sequence_state = nil
-local stopping_stream = false
 local last_noise_discarded_message = nil
 local scope_running = false
+local scope_transition = "idle"
+local scope_desired_running = false
+local pending_start_config = nil
+local applied_start_config = nil
+local start_batch_failed = false
+local start_failure_message = nil
+local start_config_dirty = false
 
 local function append_bytes(target, source)
   for index = 1, #source do
@@ -116,14 +122,6 @@ local function read_positive_int(id, fallback)
   return value
 end
 
-local function read_selector(id, fallback)
-  local value = read_positive_int(id, fallback)
-  if value < 1 then
-    return fallback
-  end
-  return value
-end
-
 local function read_gain(id, fallback)
   local value = math.floor(tonumber(read_control(id, fallback)) or fallback or 0)
   if value < 0 then
@@ -136,15 +134,16 @@ local function history_limit()
   return read_positive_int("history_limit", 30000)
 end
 
-local function setup_plot(reset_history)
+local function setup_plot(config, reset_history)
+  local labels = config and config.labels or {}
   proto.plot.setup({
-    source = "sn_scope_master",
+    source = "half_duplex_modbus_master",
     reset_history = reset_history,
     channels = {
-      { label = "CH1", unit = "V", scale = 1.0, color = "#4FC3F7" },
-      { label = "CH2", unit = "V", scale = 1.0, color = "#81C784" },
-      { label = "CH3", unit = "V", scale = 1.0, color = "#FFB74D" },
-      { label = "CH4", unit = "V", scale = 1.0, color = "#E57373" },
+      { label = labels[1] or "CH1", unit = "V", scale = 1.0, color = "#4FC3F7" },
+      { label = labels[2] or "CH2", unit = "V", scale = 1.0, color = "#81C784" },
+      { label = labels[3] or "CH3", unit = "V", scale = 1.0, color = "#FFB74D" },
+      { label = labels[4] or "CH4", unit = "V", scale = 1.0, color = "#E57373" },
     },
     history_limit = history_limit(),
   })
@@ -191,29 +190,35 @@ local function finish_active_request(ok, message, level)
     message = message,
   })
   if meta then
-    if meta.tag == "stop_stream" then
-      stopping_stream = false
-    end
     clear_request_state(meta.id)
   end
   proto.status.set(message, { level = level or (ok and "info" or "error") })
+  return meta
 end
 
-local function enqueue_request(frame, meta)
-  local request_id, err = proto.request(frame, {
+local function enqueue_request(frame, meta, guarded)
+  local options = {
     timeout_ms = REQUEST_TIMEOUT_MS,
     tag = meta.tag,
-  })
+  }
+  local request_id, err
+  if guarded then
+    options.max_attempts = 1
+    request_id, err = proto.request_guarded(frame, options)
+  else
+    request_id, err = proto.request(frame, options)
+  end
   if not request_id then
     proto.status.set("请求入队失败: " .. tostring(err), { level = "error" })
     return false
   end
   meta.id = request_id
+  meta.guarded = guarded == true
   pending_requests[request_id] = meta
   return true
 end
 
-local function queue_fc16(address, values, tag)
+local function queue_fc16(address, values, tag, guarded)
   local frame = build_fc16_request(address, values)
   return enqueue_request(frame, {
     kind = "fc16",
@@ -221,17 +226,17 @@ local function queue_fc16(address, values, tag)
     register_count = #values,
     values = values,
     tag = tag,
-  })
+  }, guarded)
 end
 
-local function queue_fc06(address, value, tag)
+local function queue_fc06(address, value, tag, guarded)
   local frame = build_fc06_request(address, value)
   return enqueue_request(frame, {
     kind = "fc06",
     address = address,
     value = value,
     tag = tag,
-  })
+  }, guarded)
 end
 
 local function queue_fc03(address, count, tag)
@@ -241,87 +246,205 @@ local function queue_fc03(address, count, tag)
     address = address,
     register_count = count,
     tag = tag,
-  })
+  }, false)
 end
 
-local function auto_configure_and_start()
+local function build_start_config()
+  local address_offset = math.floor(tonumber(read_control("address_offset", 0)) or 0)
+  local selectors = {}
+  local labels = {}
+  local channels = {}
+
+  for channel_index = 1, CHANNEL_COUNT do
+    local enabled = read_control("enable_ch" .. channel_index, true) == true
+    local selector = 0
+    local address = nil
+    local label = "CH" .. channel_index .. "（禁用）"
+    local symbol = read_control("sym_addr_ch" .. channel_index, nil)
+
+    if enabled then
+      if type(symbol) ~= "table" then
+        return nil, string.format("CH%d 尚未选择 ELF 变量", channel_index)
+      end
+      local raw_address = tonumber(symbol.value)
+      if not raw_address then
+        return nil, string.format("CH%d ELF 地址无效: %s", channel_index, tostring(symbol.value))
+      end
+      address = math.floor(raw_address) + address_offset
+      if address < 0 or address > 0xFFFF then
+        return nil, string.format(
+          "CH%d 地址加偏移后超出 16 位范围: %s",
+          channel_index,
+          tostring(symbol.value)
+        )
+      end
+      selector = address & 0xFFFF
+      label = tostring(symbol.label or ("CH" .. channel_index))
+    end
+
+    selectors[channel_index] = selector
+    labels[channel_index] = label
+    channels[channel_index] = {
+      enabled = enabled,
+      label = label,
+      address = address,
+      selector = selector,
+    }
+  end
+
+  return {
+    address_offset = address_offset,
+    channels = channels,
+    labels = labels,
+    selectors = selectors,
+    gains = {
+      read_gain("gain_ch1", 1000),
+      read_gain("gain_ch2", 1000),
+      read_gain("gain_ch3", 1000),
+      read_gain("gain_ch4", 1000),
+    },
+  }
+end
+
+local function mark_start_failed(message)
+  if start_batch_failed then
+    proto.status.set(start_failure_message or "启动配置失败，新变量尚未应用", { level = "error" })
+    return
+  end
+  start_batch_failed = true
+  start_failure_message = "启动配置失败，新变量尚未应用: " .. tostring(message)
+  scope_transition = "idle"
+  scope_desired_running = scope_running
+  pending_start_config = nil
+  sync_scope_running(scope_running)
+  proto.status.set(start_failure_message, { level = "error" })
+end
+
+local function mark_stop_failed()
+  scope_transition = "idle"
+  scope_desired_running = scope_running
+  sync_scope_running(scope_running)
+  local message = "停止失败，设备可能仍按旧地址运行；新变量配置尚未应用，请重新停止"
+  proto.set_control("scope_state", message)
+  proto.status.set(message, { level = "error" })
+end
+
+local function begin_scope_start(config)
+  proto.reset_request_guard()
+  scope_transition = "starting"
+  scope_desired_running = true
+  pending_start_config = config
+  start_batch_failed = false
+  start_failure_message = nil
+
   local requests = {
-    {
-      kind = "fc16",
-      address = REG_SELECT_CH12,
-      values = {
-        read_selector("selector_ch1", 1),
-        read_selector("selector_ch2", 2),
-      },
-      tag = "cfg_select_ch12",
-    },
-    {
-      kind = "fc16",
-      address = REG_SELECT_CH34,
-      values = {
-        read_selector("selector_ch3", 3),
-        read_selector("selector_ch4", 4),
-      },
-      tag = "cfg_select_ch34",
-    },
     {
       kind = "fc16",
       address = REG_GAIN_CH12,
       values = {
-        read_gain("gain_ch1", 1000),
-        read_gain("gain_ch2", 1000),
+        config.gains[1],
+        config.gains[2],
       },
-      tag = "cfg_gain_ch12",
+      tag = "cfg_gain_pair1",
     },
     {
       kind = "fc16",
       address = REG_GAIN_CH34,
       values = {
-        read_gain("gain_ch3", 1000),
-        read_gain("gain_ch4", 1000),
+        config.gains[3],
+        config.gains[4],
       },
-      tag = "cfg_gain_ch34",
+      tag = "cfg_gain_pair2",
+    },
+    {
+      kind = "fc16",
+      address = REG_SELECT_CH12,
+      values = {
+        config.selectors[1],
+        config.selectors[2],
+      },
+      tag = "cfg_select_pair1",
+    },
+    {
+      kind = "fc16",
+      address = REG_SELECT_CH34,
+      values = {
+        config.selectors[3],
+        config.selectors[4],
+      },
+      tag = "cfg_select_pair2",
     },
     {
       kind = "fc06",
       address = REG_STREAM_SWITCH,
       value = 0x0001,
-      tag = "start_stream",
+      tag = "stream_start",
     },
   }
 
   for _, item in ipairs(requests) do
     local ok = false
     if item.kind == "fc16" then
-      ok = queue_fc16(item.address, item.values, item.tag)
+      ok = queue_fc16(item.address, item.values, item.tag, true)
     else
-      ok = queue_fc06(item.address, item.value, item.tag)
+      ok = queue_fc06(item.address, item.value, item.tag, true)
     end
     if not ok then
+      mark_start_failed("请求入队失败")
       return false
     end
   end
 
   proto.set_control("scope_state", "等待启动 ACK")
-  proto.status.set("已入队 5 条 SN Scope 请求，等待宿主半双工调度", { level = "info" })
+  proto.status.set("已入队 5 条受保护半双工 Modbus 启动请求，等待调度", { level = "info" })
   return true
 end
 
-local function send_start_stop(start_value)
-  local tag = start_value == 0 and "stop_stream" or "start_stream"
-  if tag == "stop_stream" then
-    stopping_stream = true
-  else
-    stopping_stream = false
+local function request_scope_start()
+  if scope_transition == "stopping" then
+    scope_desired_running = true
+    proto.set_control("scope_state", "等待停止 ACK，随后自动启动")
+    return true
   end
-  local queued = queue_fc06(REG_STREAM_SWITCH, start_value, tag)
-  if not queued and tag == "stop_stream" then
-    stopping_stream = false
+  if scope_transition == "starting" or scope_running then
+    scope_desired_running = true
+    return true
   end
+
+  local config, err = build_start_config()
+  if not config then
+    scope_desired_running = false
+    proto.status.set("无法启动: " .. tostring(err), { level = "error" })
+    return false
+  end
+  return begin_scope_start(config)
+end
+
+local function begin_scope_stop()
+  if scope_transition == "stopping" then
+    return true
+  end
+  scope_transition = "stopping"
+  local queued = queue_fc06(REG_STREAM_SWITCH, 0x0000, "stream_stop", false)
   if queued then
-    proto.set_control("scope_state", start_value == 0 and "等待停止 ACK" or "等待启动 ACK")
+    proto.set_control("scope_state", "等待停止 ACK")
+  else
+    mark_stop_failed()
   end
   return queued
+end
+
+local function request_scope_stop()
+  scope_desired_running = false
+  if scope_transition == "stopping" then
+    return true
+  end
+  if scope_transition == "starting" then
+    proto.set_control("scope_state", "等待启动 ACK，随后自动停止")
+    return true
+  end
+  -- 即使本地认为已停止也照常下发，确保设备异常重连后仍有机会被显式停住。
+  return begin_scope_stop()
 end
 
 local function read_gain_registers()
@@ -365,7 +488,7 @@ local function flush_upload_samples(samples_by_channel)
     local series = samples_by_channel[channel_index]
     if #series.values > 0 then
       proto.plot.push(channel_index, {
-        source = "sn_scope_upload",
+        source = "half_duplex_modbus_upload",
         t0 = series.t0 or 0,
         dt = UPLOAD_SAMPLE_DT,
         values = series.values,
@@ -417,15 +540,31 @@ local function handle_fc06_ack(ctx, frame)
   if active.kind == "fc06" and received_address == active.address and received_value == active.value then
     local tag = active.tag
     finish_active_request(true, "FC06 ACK 匹配: " .. request_summary(active), "info")
-    if tag == "start_stream" then
+    if tag == "stream_start" then
+      if start_batch_failed or not pending_start_config then
+        mark_start_failed("启动 ACK 到达时配置快照已失效")
+        return
+      end
+      applied_start_config = pending_start_config
+      pending_start_config = nil
+      start_config_dirty = false
+      scope_transition = "idle"
+      setup_plot(applied_start_config, true)
       sync_scope_running(true)
-    elseif tag == "stop_stream" then
+      if not scope_desired_running then
+        begin_scope_stop()
+      end
+    elseif tag == "stream_stop" then
+      scope_transition = "idle"
       sync_scope_running(false)
+      if scope_desired_running then
+        request_scope_start()
+      end
     end
     return
   end
 
-  finish_active_request(
+  local meta = finish_active_request(
     false,
     string.format(
       "FC06 ACK 不匹配，收到 %s=%s，期望 %s",
@@ -435,6 +574,11 @@ local function handle_fc06_ack(ctx, frame)
     ),
     "error"
   )
+  if meta and meta.tag == "stream_stop" then
+    mark_stop_failed()
+  elseif meta and meta.guarded then
+    mark_start_failed("FC06 ACK 不匹配")
+  end
 end
 
 local function handle_fc16_ack(ctx, frame)
@@ -452,7 +596,7 @@ local function handle_fc16_ack(ctx, frame)
     return
   end
 
-  finish_active_request(
+  local meta = finish_active_request(
     false,
     string.format(
       "FC16 ACK 不匹配，收到 %s x %d，期望 %s",
@@ -462,6 +606,9 @@ local function handle_fc16_ack(ctx, frame)
     ),
     "error"
   )
+  if meta and meta.guarded then
+    mark_start_failed("FC16 ACK 不匹配")
+  end
 end
 
 local function handle_exception(ctx, frame)
@@ -473,7 +620,12 @@ local function handle_exception(ctx, frame)
     format_u16(fields.exception_code or 0)
   )
   if active then
-    finish_active_request(false, message .. "，活动请求 " .. request_summary(active), "error")
+    local meta = finish_active_request(false, message .. "，活动请求 " .. request_summary(active), "error")
+    if meta and meta.tag == "stream_stop" then
+      mark_stop_failed()
+    elseif meta and meta.guarded then
+      mark_start_failed(message)
+    end
   else
     proto.status.set(message, { level = "error" })
   end
@@ -504,7 +656,12 @@ local function handle_stream_error(ctx, err)
   if err.code == "crc_mismatch" then
     local message = "CRC 校验失败: " .. tostring(err.message)
     if current_request() then
-      finish_active_request(false, message, "warn")
+      local meta = finish_active_request(false, message, "warn")
+      if meta and meta.tag == "stream_stop" then
+        mark_stop_failed()
+      elseif meta and meta.guarded then
+        mark_start_failed(message)
+      end
     else
       proto.status.set(message, { level = "warn" })
     end
@@ -647,14 +804,19 @@ end
 function ui()
   return {
     {
-      id = "sn_scope_master",
-      title = "SN Scope Master",
+      id = "half_duplex_modbus_master",
+      title = "Half-Duplex Modbus Master",
       anchor = "left_bottom",
       controls = {
-        { type = "input_int", id = "selector_ch1", label = "CH1 选择", default = 1 },
-        { type = "input_int", id = "selector_ch2", label = "CH2 选择", default = 2 },
-        { type = "input_int", id = "selector_ch3", label = "CH3 选择", default = 3 },
-        { type = "input_int", id = "selector_ch4", label = "CH4 选择", default = 4 },
+        { type = "checkbox", id = "enable_ch1", label = "启用 CH1", default = true },
+        { type = "elf_symbol_combo", id = "sym_addr_ch1", label = "CH1 ELF 变量" },
+        { type = "checkbox", id = "enable_ch2", label = "启用 CH2", default = true },
+        { type = "elf_symbol_combo", id = "sym_addr_ch2", label = "CH2 ELF 变量" },
+        { type = "checkbox", id = "enable_ch3", label = "启用 CH3", default = true },
+        { type = "elf_symbol_combo", id = "sym_addr_ch3", label = "CH3 ELF 变量" },
+        { type = "checkbox", id = "enable_ch4", label = "启用 CH4", default = true },
+        { type = "elf_symbol_combo", id = "sym_addr_ch4", label = "CH4 ELF 变量" },
+        { type = "input_int", id = "address_offset", label = "地址偏移", default = 0 },
         { type = "input_int", id = "gain_ch1", label = "CH1 系数", default = 1000 },
         { type = "input_int", id = "gain_ch2", label = "CH2 系数", default = 1000 },
         { type = "input_int", id = "gain_ch3", label = "CH3 系数", default = 1000 },
@@ -676,21 +838,36 @@ function on_open(ctx)
   active_request_id = nil
   upload_frame_cursor = 0
   upload_sequence_state = nil
-  stopping_stream = false
   last_noise_discarded_message = nil
+  scope_transition = "idle"
+  scope_desired_running = false
+  pending_start_config = nil
+  applied_start_config = nil
+  start_batch_failed = false
+  start_failure_message = nil
+  start_config_dirty = false
   proto.status.clear()
-  setup_plot(true)
+  setup_plot(nil, true)
   sync_scope_running(false)
 end
 
 function on_close(ctx)
-  stopping_stream = false
   last_noise_discarded_message = nil
+  scope_transition = "idle"
+  scope_desired_running = false
+  pending_start_config = nil
+  start_batch_failed = false
+  start_failure_message = nil
   sync_scope_running(false)
   proto.status.clear()
 end
 
 function on_error(ctx, message)
+  scope_transition = "idle"
+  scope_desired_running = false
+  pending_start_config = nil
+  start_batch_failed = false
+  start_failure_message = nil
   sync_scope_running(false)
   proto.status.set("连接错误: " .. tostring(message), { level = "error" })
 end
@@ -716,48 +893,67 @@ function on_tx(ctx, evt)
     end
   elseif evt.state == "timeout" then
     local label = meta and request_summary(meta) or tostring(evt.tag)
-    if meta and meta.tag == "stop_stream" then
-      stopping_stream = false
-    end
     clear_request_state(evt.id)
-    proto.status.set("请求超时: " .. label, { level = "warn" })
-  elseif evt.state == "rejected" or evt.state == "dropped" or evt.state == "canceled" then
+    if (meta and meta.tag == "stream_stop") or evt.tag == "stream_stop" then
+      mark_stop_failed()
+    elseif (meta and meta.guarded) or evt.guarded then
+      mark_start_failed("请求超时: " .. label)
+    else
+      proto.status.set("请求超时: " .. label, { level = "warn" })
+    end
+  elseif evt.state == "failed" or evt.state == "rejected" or evt.state == "dropped" or evt.state == "canceled" then
     local label = meta and request_summary(meta) or tostring(evt.tag)
-    if meta and meta.tag == "stop_stream" then
-      stopping_stream = false
-    end
     clear_request_state(evt.id)
-    proto.status.set("请求失败: " .. label .. " / " .. tostring(evt.error or evt.state), { level = "error" })
+    if (meta and meta.tag == "stream_stop") or evt.tag == "stream_stop" then
+      mark_stop_failed()
+    elseif (meta and meta.guarded) or evt.guarded then
+      mark_start_failed("请求失败: " .. label .. " / " .. tostring(evt.error or evt.state))
+    else
+      proto.status.set("请求失败: " .. label .. " / " .. tostring(evt.error or evt.state), { level = "error" })
+    end
   end
+end
+
+local function is_start_config_control(id)
+  return id == "address_offset"
+    or id:match("^sym_addr_ch%d$")
+    or id:match("^enable_ch%d$")
+    or id:match("^gain_ch%d$")
 end
 
 function on_control(ctx, id, value)
   controls[id] = value
   if id == "auto_start" then
-    auto_configure_and_start()
+    scope_desired_running = true
+    request_scope_start()
   elseif id == "start_stream" then
-    send_start_stop(0x0001)
+    scope_desired_running = true
+    request_scope_start()
   elseif id == "stop_stream" then
-    send_start_stop(0x0000)
+    request_scope_stop()
   elseif id == "read_gain" then
     read_gain_registers()
   elseif id == "clear_plot" then
     upload_frame_cursor = 0
     upload_sequence_state = nil
-    setup_plot(true)
+    setup_plot(applied_start_config, true)
     proto.status.set("波形已清空", { level = "info" })
   elseif id == "history_limit" then
-    setup_plot(false)
+    setup_plot(applied_start_config, false)
     proto.status.set("波形历史上限已应用: " .. tostring(history_limit()), { level = "info" })
+  elseif is_start_config_control(id) then
+    start_config_dirty = true
+    proto.status.set("启动配置已修改，将在下一次成功启动后生效", { level = "info" })
   end
 end
 
 function on_oscilloscope_toggle(ctx, current_running, target_running)
   -- 真实设备范式：工具栏只发起启停请求，等 FC06 ACK 匹配后再同步运行态。
   if target_running then
-    auto_configure_and_start()
+    scope_desired_running = true
+    request_scope_start()
   else
-    send_start_stop(0x0000)
+    request_scope_stop()
   end
   return false
 end
