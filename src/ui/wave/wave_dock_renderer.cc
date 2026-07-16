@@ -486,6 +486,12 @@ namespace {
         static_cast<void>(config);
         static_cast<void>(displayData);
         drawTopToolbarSeparator();
+        if (drawTopToolbarButton("精调",
+                                 view.wheelFineAdjustmentEnabled,
+                                 "滚轮精细调节：通道及主视图均为连续 1%；主图内也可按 Shift+中键切换。")) {
+            setWheelFineAdjustmentEnabled(view, !view.wheelFineAdjustmentEnabled);
+        }
+        ImGui::SameLine();
         if (drawTopToolbarButton("-", false, "缩小时间轴视图，显示更长时间范围。")) {
             zoomTimeAroundCenter(view, 1.25);
         }
@@ -1353,7 +1359,7 @@ ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool 
 
     const bool cancelByEscape = ImGui::IsKeyPressed(ImGuiKey_Escape) && !suppressEscapeCancel;
     if (cancelByEscape || ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
-        ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+        (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) && !ImGui::GetIO().KeyShift)) {
         cancelZoomSelection(view);
         return result;
     }

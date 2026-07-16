@@ -37,7 +37,6 @@ gui:
     control_mode: oscilloscope
     display_formula: offset_then_scale
     grid_division_readout_mode: display_value
-    channel_scale_display_mode: scale
     channel_scale_wheel:
       enabled: true
       acceleration: log

@@ -1099,9 +1099,10 @@ namespace {
         explicit ScopedImPlotInputMap(const plot::WaveControlMode controlMode)
             : inputMap_(ImPlot::GetInputMap()), savedInputMap_(inputMap_)
         {
+            inputMap_.Fit = resolveMainPlotFitMouseButton(
+                controlMode, ImGui::GetIO().KeyShift, savedInputMap_.Fit, ImGuiMouseButton_Middle);
             if (controlMode == plot::WaveControlMode::Oscilloscope) {
                 inputMap_.PanMod = ImGuiMod_Ctrl;
-                inputMap_.Fit = ImGuiMouseButton_Middle;
                 inputMap_.ZoomMod = ImGuiMod_Ctrl;
             }
         }
@@ -1768,6 +1769,12 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
         const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
         const std::vector<std::size_t> splitChannelIndices{channelIndex};
         const bool plotHovered = ImPlot::IsPlotHovered();
+        handleWheelFineAdjustmentShortcut(view,
+                                          ImGui::GetIO().KeyShift,
+                                          ImGui::IsMouseClicked(ImGuiMouseButton_Middle),
+                                          plotHovered,
+                                          ImPlot::IsAxisHovered(ImAxis_X1),
+                                          ImPlot::IsAxisHovered(ImAxis_Y1));
         outcome.viewportChanged = handleMainPlotZoom(view, mousePos);
         if (outcome.viewportChanged) {
             view.forceNextMainPlotLimits = true;
@@ -2035,9 +2042,10 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     ImPlot::PushStyleColor(ImPlotCol_PlotBg, ImVec4(0.043F, 0.067F, 0.094F, 1.0F));
     auto& inputMap = ImPlot::GetInputMap();
     const auto savedInputMap = inputMap;
+    inputMap.Fit = resolveMainPlotFitMouseButton(
+        view.controlMode, ImGui::GetIO().KeyShift, savedInputMap.Fit, ImGuiMouseButton_Middle);
     if (view.controlMode == plot::WaveControlMode::Oscilloscope) {
         inputMap.PanMod = ImGuiMod_Ctrl;
-        inputMap.Fit = ImGuiMouseButton_Middle;
         inputMap.ZoomMod = ImGuiMod_Ctrl;
     }
     if (!ImPlot::BeginPlot("##oscilloscope", ImVec2(-1.0F, -1.0F), ImPlotFlags_NoLegend)) {
@@ -2095,6 +2103,12 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         smartSnapDistance = (std::max)(smartSnapDistance, derivedBounds.minStep * 2.0);
     }
     const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
+    handleWheelFineAdjustmentShortcut(view,
+                                      ImGui::GetIO().KeyShift,
+                                      ImGui::IsMouseClicked(ImGuiMouseButton_Middle),
+                                      ImPlot::IsPlotHovered(),
+                                      ImPlot::IsAxisHovered(ImAxis_X1),
+                                      ImPlot::IsAxisHovered(ImAxis_Y1));
 
     const bool zoomSelectionMode = view.zoomSelectionActive || view.zoomSelectionDragging;
     bool viewportChangedThisFrame = false;

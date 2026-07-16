@@ -909,6 +909,13 @@ void drawWaveMainControlSection(app::Application& application,
                                   true)) {
         view.mouseYOffsetDragMode = nextMouseYOffsetDragMode(view.mouseYOffsetDragMode);
     }
+    if (drawAdaptiveToolbarButton("滚轮精细调节",
+                                  "精调",
+                                  "开启后通道及主视图滚轮均为连续 1%；主图内也可按 Shift+中键切换。",
+                                  view.wheelFineAdjustmentEnabled,
+                                  true)) {
+        setWheelFineAdjustmentEnabled(view, !view.wheelFineAdjustmentEnabled);
+    }
     if (drawAdaptiveToolbarButton(view.showHoverReadout ? "显示悬停读数" : "隐藏悬停读数",
                                   "读",
                                   view.showHoverReadout
@@ -969,6 +976,12 @@ void drawCollapsedWaveToolbar(app::Application& application,
                                                        : "纵轴自动：点击后锁定当前纵轴范围。",
                                 collapsedButtonSize)) {
         view.lockVerticalRange = !view.lockVerticalRange;
+    }
+    if (drawToolbarToggleButton("精",
+                                view.wheelFineAdjustmentEnabled,
+                                "滚轮精细调节：通道及主视图均为连续 1%；主图内也可按 Shift+中键切换。",
+                                collapsedButtonSize)) {
+        setWheelFineAdjustmentEnabled(view, !view.wheelFineAdjustmentEnabled);
     }
     if (drawToolbarToggleButton("游",
                                 view.showCursors,

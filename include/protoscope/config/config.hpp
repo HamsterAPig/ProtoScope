@@ -107,7 +107,6 @@ struct GuiWaveConfig {
     plot::WaveControlMode controlMode{plot::WaveControlMode::Oscilloscope};
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
     plot::WaveGridDivisionReadoutMode gridDivisionReadoutMode{plot::WaveGridDivisionReadoutMode::DisplayValue};
-    plot::WaveChannelScaleDisplayMode channelScaleDisplayMode{plot::WaveChannelScaleDisplayMode::Scale};
     bool channelScaleWheelEnabled{true};
     plot::WaveChannelScaleWheelAcceleration channelScaleWheelAcceleration{
         plot::WaveChannelScaleWheelAcceleration::Log};

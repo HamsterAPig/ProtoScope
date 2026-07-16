@@ -55,11 +55,6 @@ enum class WaveGridDivisionReadoutMode {
     RawValue,
 };
 
-enum class WaveChannelScaleDisplayMode {
-    Scale,
-    ValuePerDivision,
-};
-
 enum class WaveChannelScaleWheelAcceleration {
     None,
     Linear,
@@ -178,6 +173,10 @@ std::optional<double> waveScaleForActualValuePerDivision(double minValue,
                                                          double maxValue,
                                                          double targetValuePerDivision,
                                                          double currentScale);
+std::optional<double> parseWaveScaleFromActualValuePerDivision(double minValue,
+                                                               double maxValue,
+                                                               std::string_view text,
+                                                               double currentScale);
 std::optional<double> waveChannelValuePerDivision(double displayValuePerDivision,
                                                   const ChannelSpec& spec,
                                                   WaveDisplayFormula formula,
@@ -211,7 +210,8 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
                           double centerValue,
                           const WaveDataBounds& bounds,
                           double minTimeWidth,
-                          bool clampTimeToBounds);
+                          bool clampTimeToBounds,
+                          bool fineAdjustmentEnabled = false);
 CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           const CursorReadout& right,
                                           WaveTimeAxisSource axisSource,

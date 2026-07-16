@@ -82,7 +82,6 @@ gui:
     control_mode: oscilloscope
     display_formula: offset_then_scale
     grid_division_readout_mode: display_value
-    channel_scale_display_mode: scale
     channel_scale_wheel:
       enabled: true
       acceleration: log
@@ -119,8 +118,7 @@ gui:
 - `control_mode`：`legacy_global` 或 `oscilloscope`。
 - `display_formula`：`offset_then_scale` 或 `scale_then_offset`。
 - `grid_division_readout_mode`：`display_value`、`actual_value` 或 `raw_value`，控制通道卡片展示每格读数的换算口径。
-- `channel_scale_display_mode`：`scale` 保持原 Scale 展示与编辑；`value_per_division` 改为展示和编辑“实际值/格”，换算固定为当前 Y 显示范围除以 `8 × abs(scale)`，不改变 `grid_division_readout_mode` 的语义。
-- `channel_scale_wheel.enabled`：默认 `true`，Y 轴热区滚轮按 1-2-5 工程刻度调整激活模拟通道的实际值/格；设为 `false` 时回退 `pow(1.1, wheel)` 连续缩放。
+- `channel_scale_wheel.enabled`：默认 `true`，精调关闭时 Y 轴热区滚轮按 1-2-5 工程刻度调整激活模拟通道的实际值/格；设为 `false` 时回退 `pow(1.1, wheel)` 连续缩放。
 - `channel_scale_wheel.acceleration`：`none`、`linear` 或 `log`，默认 `log`；非法值回退 `log`。同通道同方向且事件间隔不超过 250ms 时累计加速。
 - `channel_card_width_mode`：`fixed` 或 `adaptive`。
 - `channel_double_click_action`：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset`。

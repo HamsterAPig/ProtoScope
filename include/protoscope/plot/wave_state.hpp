@@ -239,8 +239,8 @@ struct WaveViewState {
     WaveControlMode controlMode{WaveControlMode::Oscilloscope};
     WaveDisplayFormula displayFormula{WaveDisplayFormula::OffsetThenScale};
     WaveGridDivisionReadoutMode gridDivisionReadoutMode{WaveGridDivisionReadoutMode::DisplayValue};
-    WaveChannelScaleDisplayMode channelScaleDisplayMode{WaveChannelScaleDisplayMode::Scale};
     bool channelScaleWheelEnabled{true};
+    bool wheelFineAdjustmentEnabled{false};
     WaveChannelScaleWheelAcceleration channelScaleWheelAcceleration{WaveChannelScaleWheelAcceleration::Log};
     WaveChannelScaleWheelState channelScaleWheelState{};
     WaveChannelCardWidthMode channelCardWidthMode{WaveChannelCardWidthMode::Fixed};

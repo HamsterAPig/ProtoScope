@@ -42,6 +42,9 @@ bool updateActiveChannelScale(plot::WaveDockState& wave, double factor)
 bool updateActiveChannelScaleFromWheel(plot::WaveDockState& wave, double wheelDelta, double eventTimeSec)
 {
     auto& view = wave.view;
+    if (view.wheelFineAdjustmentEnabled) {
+        return updateActiveChannelScale(wave, std::pow(1.01, wheelDelta));
+    }
     if (!view.channelScaleWheelEnabled) {
         return updateActiveChannelScale(wave, std::pow(1.1, wheelDelta));
     }
@@ -73,6 +76,41 @@ bool updateActiveChannelScaleFromWheel(plot::WaveDockState& wave, double wheelDe
     updated.scale = *scale;
     applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
     return true;
+}
+
+void setWheelFineAdjustmentEnabled(plot::WaveViewState& view, bool enabled)
+{
+    if (view.wheelFineAdjustmentEnabled == enabled) {
+        return;
+    }
+    view.wheelFineAdjustmentEnabled = enabled;
+    // 核心流程：切换连续精调与工程步进时清空旧累计，避免模式切换后继承半格或加速档位。
+    view.channelScaleWheelState = {};
+}
+
+bool handleWheelFineAdjustmentShortcut(plot::WaveViewState& view,
+                                       bool shiftDown,
+                                       bool middleClicked,
+                                       bool plotHovered,
+                                       bool xAxisHovered,
+                                       bool yAxisHovered)
+{
+    if (!shiftDown || !middleClicked || (!plotHovered && !xAxisHovered && !yAxisHovered)) {
+        return false;
+    }
+    setWheelFineAdjustmentEnabled(view, !view.wheelFineAdjustmentEnabled);
+    return true;
+}
+
+int resolveMainPlotFitMouseButton(plot::WaveControlMode controlMode,
+                                  bool shiftDown,
+                                  int defaultFitMouseButton,
+                                  int middleMouseButton)
+{
+    if (controlMode != plot::WaveControlMode::Oscilloscope) {
+        return defaultFitMouseButton;
+    }
+    return shiftDown ? -1 : middleMouseButton;
 }
 
 bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta)

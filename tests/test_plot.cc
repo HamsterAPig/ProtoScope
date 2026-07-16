@@ -3617,8 +3617,15 @@ void test_wave_viewport_zoom_modes_and_clamp()
     const auto xOnly = protoscope::plot::zoomViewport(
         viewport, protoscope::plot::WaveZoomMode::XOnly, 1.0, 4.0, 0.0, bounds, 0.1, true);
     require((xOnly.maxTime - xOnly.minTime) < 4.0, "X-only 滚轮应缩小横轴范围");
+    require(std::abs((xOnly.maxTime - xOnly.minTime) - 4.0 * std::pow(0.85, 1.0)) < 1e-12,
+            "普通主视图及概览缩放应保持原 pow(0.85, wheel) 结果");
     require(std::abs(xOnly.minValue - viewport.minValue) < 1e-12, "X-only 不应改变纵轴最小值");
     require(std::abs(xOnly.maxValue - viewport.maxValue) < 1e-12, "X-only 不应改变纵轴最大值");
+
+    const auto fineXOnly = protoscope::plot::zoomViewport(
+        viewport, protoscope::plot::WaveZoomMode::XOnly, 0.5, 4.0, 0.0, bounds, 0.1, false, true);
+    require(std::abs((fineXOnly.maxTime - fineXOnly.minTime) - 4.0 * std::pow(1.01, -0.5)) < 1e-12,
+            "主视图精调缩放应按 pow(1.01, -wheel) 连续生效");
 
     const auto yOnly = protoscope::plot::zoomViewport(
         viewport, protoscope::plot::WaveZoomMode::YOnly, 1.0, 4.0, 0.0, bounds, 0.1, true);
@@ -4268,6 +4275,22 @@ void test_wave_channel_scale_value_per_division_conversions()
                  -40.0, 40.0, std::numeric_limits<double>::infinity(), 1.0)
                  .has_value(),
             "非有限实际值/格输入应被拒绝");
+    const auto parsedNegativeScale =
+        protoscope::plot::parseWaveScaleFromActualValuePerDivision(-40.0, 40.0, " 2.0 ", -2.0);
+    require(parsedNegativeScale.has_value() && std::abs(*parsedNegativeScale + 5.0) < 1e-12,
+            "展开图例输入应支持空白并保留负 Scale 符号");
+    const auto parsedZeroScale =
+        protoscope::plot::parseWaveScaleFromActualValuePerDivision(-40.0, 40.0, "2", 0.0);
+    require(parsedZeroScale.has_value() && std::abs(*parsedZeroScale - 5.0) < 1e-12,
+            "展开图例应允许从 Scale=0 的 n/a 恢复");
+    require(!protoscope::plot::parseWaveScaleFromActualValuePerDivision(-40.0, 40.0, "abc", 1.0).has_value(),
+            "展开图例应拒绝非数字输入");
+    require(!protoscope::plot::parseWaveScaleFromActualValuePerDivision(-40.0, 40.0, "2V", 1.0).has_value(),
+            "展开图例应拒绝带无效尾缀的输入");
+    require(!protoscope::plot::parseWaveScaleFromActualValuePerDivision(-40.0, 40.0, "-2", 1.0).has_value(),
+            "展开图例应拒绝非正实际值/格");
+    require(!protoscope::plot::parseWaveScaleFromActualValuePerDivision(-40.0, 40.0, "nan", 1.0).has_value(),
+            "展开图例应拒绝非有限输入");
 }
 
 void test_wave_channel_scale_wheel_engineering_steps()
@@ -4370,6 +4393,85 @@ void test_wave_channel_scale_wheel_disabled_uses_legacy_zoom()
     wave.buffer.setChannelSpec(0, bitSpec);
     require(!protoscope::ui::updateActiveChannelScaleFromWheel(wave, 1.0, 0.1),
             "通道 Scale 滚轮不应作用于 Bit 通道");
+}
+
+void test_wave_channel_scale_wheel_fine_adjustment()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.view.measurementChannelIndex = 0;
+    wave.view.wheelFineAdjustmentEnabled = true;
+    wave.view.channelScaleWheelEnabled = true;
+    wave.buffer.configureChannels(1);
+    wave.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = -2.0});
+
+    require(protoscope::ui::updateActiveChannelScaleFromWheel(wave, 0.25, 0.0),
+            "精调模式下触控板小数滚轮应立即更新激活模拟通道");
+    auto updated = wave.buffer.channelSpec(0);
+    require(updated.has_value() && std::abs(updated->scale - (-2.0 * std::pow(1.01, 0.25))) < 1e-12,
+            "精调模式应按 pow(1.01, wheel) 连续缩放并保留负号");
+
+    auto zeroScale = *updated;
+    zeroScale.scale = 0.0;
+    wave.buffer.setChannelSpec(0, zeroScale);
+    require(protoscope::ui::updateActiveChannelScaleFromWheel(wave, 0.5, 0.1),
+            "精调模式应允许从 Scale=0 恢复");
+    updated = wave.buffer.channelSpec(0);
+    require(updated.has_value() && std::abs(updated->scale - std::pow(1.01, 0.5)) < 1e-12,
+            "Scale=0 精调恢复应使用正号和连续 1% 因子");
+
+    auto bitSpec = *updated;
+    bitSpec.bitDisplay.enabled = true;
+    bitSpec.bitDisplay.bitCount = 1;
+    wave.buffer.setChannelSpec(0, bitSpec);
+    require(!protoscope::ui::updateActiveChannelScaleFromWheel(wave, 0.5, 0.2),
+            "精调模式仍不应修改 Bit 通道 Scale");
+}
+
+void test_wave_wheel_fine_adjustment_shortcut_and_fit_binding()
+{
+    using protoscope::plot::WaveViewMode;
+    protoscope::plot::WaveViewState view;
+    require(!view.wheelFineAdjustmentEnabled, "滚轮精细调节默认应关闭");
+    require(!protoscope::ui::handleWheelFineAdjustmentShortcut(view, true, true, false, false, false),
+            "主图及坐标轴均未悬停时 Shift+中键不应切换精调");
+    require(!protoscope::ui::handleWheelFineAdjustmentShortcut(view, false, true, true, false, false),
+            "未按 Shift 时中键不应切换精调");
+
+    for (const auto mode : {WaveViewMode::Overlay, WaveViewMode::Stacked, WaveViewMode::Split}) {
+        view.viewMode = mode;
+        view.wheelFineAdjustmentEnabled = false;
+        view.channelScaleWheelState.channelIndex = 2;
+        view.channelScaleWheelState.direction = 1;
+        view.channelScaleWheelState.continuousStepCount = 4;
+        view.channelScaleWheelState.fractionalDelta = 0.5;
+        require(protoscope::ui::handleWheelFineAdjustmentShortcut(view, true, true, true, false, false),
+                "三种主图布局悬停时 Shift+中键都应切换精调");
+        require(view.wheelFineAdjustmentEnabled, "Shift+中键应开启精调");
+        require(!view.channelScaleWheelState.channelIndex.has_value() &&
+                    view.channelScaleWheelState.continuousStepCount == 0 &&
+                    std::abs(view.channelScaleWheelState.fractionalDelta) < 1e-12,
+                "切换精调时应清空旧滚轮累计和加速状态");
+    }
+
+    require(protoscope::ui::handleWheelFineAdjustmentShortcut(view, true, true, false, true, false),
+            "主图 X 轴悬停时 Shift+中键应切换精调");
+    require(!view.wheelFineAdjustmentEnabled, "X 轴快捷键应关闭精调");
+    require(protoscope::ui::handleWheelFineAdjustmentShortcut(view, true, true, false, false, true),
+            "主图 Y 轴悬停时 Shift+中键应切换精调");
+    require(view.wheelFineAdjustmentEnabled, "Y 轴快捷键应开启精调");
+
+    constexpr int defaultFitButton = 0;
+    constexpr int middleButton = 2;
+    require(protoscope::ui::resolveMainPlotFitMouseButton(
+                protoscope::plot::WaveControlMode::Oscilloscope, false, defaultFitButton, middleButton) == middleButton,
+            "普通状态应保留中键双击 Fit");
+    require(protoscope::ui::resolveMainPlotFitMouseButton(
+                protoscope::plot::WaveControlMode::Oscilloscope, true, defaultFitButton, middleButton) == -1,
+            "Shift 按下期间应屏蔽中键 Fit");
+    require(protoscope::ui::resolveMainPlotFitMouseButton(
+                protoscope::plot::WaveControlMode::LegacyGlobal, true, defaultFitButton, middleButton) ==
+                defaultFitButton,
+            "非示波器控制模式应保留原 Fit 按钮绑定");
 }
 
 void test_wave_status_overlay_items_only_show_non_default_states()

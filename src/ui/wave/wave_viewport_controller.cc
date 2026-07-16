@@ -640,7 +640,15 @@ bool handleMainPlotZoom(plot::WaveViewState& view, const ImPlotPoint& mousePos)
         .valid = false,
     };
     const auto zoomed = plot::zoomViewport(
-        currentViewport(view), zoomMode, io.MouseWheel, mousePos.x, mousePos.y, bounds, minVisibleTimeSpan, false);
+        currentViewport(view),
+        zoomMode,
+        io.MouseWheel,
+        mousePos.x,
+        mousePos.y,
+        bounds,
+        minVisibleTimeSpan,
+        false,
+        view.wheelFineAdjustmentEnabled);
     applyViewport(view, zoomed, WaveViewportAutoFollowPolicy::UserInteraction);
     return true;
 }

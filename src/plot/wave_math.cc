@@ -678,6 +678,26 @@ std::optional<double> waveScaleForActualValuePerDivision(double minValue,
     return sign * magnitude;
 }
 
+std::optional<double> parseWaveScaleFromActualValuePerDivision(double minValue,
+                                                               double maxValue,
+                                                               std::string_view text,
+                                                               double currentScale)
+{
+    const std::string trimmed = trimCopy(text);
+    if (trimmed.empty()) {
+        return std::nullopt;
+    }
+
+    char* parseEnd = nullptr;
+    errno = 0;
+    const double targetValuePerDivision = std::strtod(trimmed.c_str(), &parseEnd);
+    if (parseEnd == trimmed.c_str() || *parseEnd != '\0' || errno == ERANGE) {
+        return std::nullopt;
+    }
+    return waveScaleForActualValuePerDivision(
+        minValue, maxValue, targetValuePerDivision, currentScale);
+}
+
 std::optional<double> waveChannelValuePerDivision(double displayValuePerDivision,
                                                   const ChannelSpec& spec,
                                                   WaveDisplayFormula formula,
@@ -787,13 +807,15 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
                           double centerValue,
                           const WaveDataBounds& bounds,
                           double minTimeWidth,
-                          bool clampTimeToBounds)
+                          bool clampTimeToBounds,
+                          bool fineAdjustmentEnabled)
 {
     if (std::abs(wheelDelta) <= kEpsilon) {
         return viewport;
     }
 
-    const double zoomFactor = std::pow(0.85, wheelDelta);
+    const double zoomFactor =
+        fineAdjustmentEnabled ? std::pow(1.01, -wheelDelta) : std::pow(0.85, wheelDelta);
     WaveViewport next = viewport;
     const double timeWidth = clampPositiveWidth(viewport.maxTime - viewport.minTime, minTimeWidth);
     const double valueHeight = clampPositiveWidth(viewport.maxValue - viewport.minValue, 1e-6);

@@ -329,6 +329,8 @@ void test_wave_channel_scale_value_per_division_conversions();
 void test_wave_channel_scale_wheel_engineering_steps();
 void test_wave_channel_scale_wheel_acceleration_and_reset();
 void test_wave_channel_scale_wheel_disabled_uses_legacy_zoom();
+void test_wave_channel_scale_wheel_fine_adjustment();
+void test_wave_wheel_fine_adjustment_shortcut_and_fit_binding();
 void test_wave_status_overlay_items_only_show_non_default_states();
 void test_wave_auto_follow_pause_policy_respects_interaction_setting();
 void test_wave_viewport_animation_disabled_jumps_to_target();

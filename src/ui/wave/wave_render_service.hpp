@@ -342,10 +342,10 @@ void drawChannelLegendPopup(plot::WaveDockState& wave,
                             std::size_t channelIndex,
                             const plot::ChannelSpec& spec,
                             bool active);
-bool drawChannelScaleEditor(const char* label,
-                            const plot::WaveViewState& view,
-                            plot::ChannelSpec& updated,
-                            const char* format);
+bool drawChannelActualValuePerDivisionEditor(const char* label,
+                                             const plot::WaveViewState& view,
+                                             plot::ChannelSpec& updated,
+                                             const char* format);
 ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth, const plot::WaveViewState& view);
 double offsetParameterDeltaFromDisplayDelta(const plot::ChannelSpec& spec,
                                             plot::WaveDisplayFormula formula,
@@ -366,6 +366,17 @@ void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& sn
 
 bool updateActiveChannelScale(plot::WaveDockState& wave, double factor);
 bool updateActiveChannelScaleFromWheel(plot::WaveDockState& wave, double wheelDelta, double eventTimeSec);
+void setWheelFineAdjustmentEnabled(plot::WaveViewState& view, bool enabled);
+bool handleWheelFineAdjustmentShortcut(plot::WaveViewState& view,
+                                       bool shiftDown,
+                                       bool middleClicked,
+                                       bool plotHovered,
+                                       bool xAxisHovered,
+                                       bool yAxisHovered);
+int resolveMainPlotFitMouseButton(plot::WaveControlMode controlMode,
+                                  bool shiftDown,
+                                  int defaultFitMouseButton,
+                                  int middleMouseButton);
 bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta);
 bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown);
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,

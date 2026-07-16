@@ -551,6 +551,7 @@ namespace {
     {
         node["auto_follow_latest"] = view.autoFollowLatest;
         node["pause_auto_follow_on_interaction"] = view.pauseAutoFollowOnInteraction;
+        node["wheel_fine_adjustment_enabled"] = view.wheelFineAdjustmentEnabled;
         node["lock_vertical_range"] = view.lockVerticalRange;
         node["show_points_when_sparse"] = view.showPointsWhenSparse;
         node["show_axis_labels"] = view.showAxisLabels;
@@ -727,6 +728,8 @@ namespace {
 
     void resetMissingWaveProtocolState(plot::WaveDockState& wave)
     {
+        wave.view.wheelFineAdjustmentEnabled = false;
+        wave.view.channelScaleWheelState = {};
         wave.hiddenChannelIndices.clear();
         wave.hiddenChannelLabels.clear();
         wave.analysisMarkers.clear();
@@ -738,6 +741,8 @@ namespace {
         view.autoFollowLatest = node["auto_follow_latest"].as<bool>(view.autoFollowLatest);
         view.pauseAutoFollowOnInteraction =
             node["pause_auto_follow_on_interaction"].as<bool>(view.pauseAutoFollowOnInteraction);
+        view.wheelFineAdjustmentEnabled = node["wheel_fine_adjustment_enabled"].as<bool>(false);
+        view.channelScaleWheelState = {};
         view.lockVerticalRange = node["lock_vertical_range"].as<bool>(view.lockVerticalRange);
         view.showPointsWhenSparse = node["show_points_when_sparse"].as<bool>(view.showPointsWhenSparse);
         view.showAxisLabels = node["show_axis_labels"].as<bool>(view.showAxisLabels);
