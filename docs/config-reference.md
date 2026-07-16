@@ -57,6 +57,7 @@ app:
 
 ```yaml
 gui:
+  theme: professional_dark
   show_app_header: false
   window:
     title: ProtoScope
@@ -67,6 +68,13 @@ gui:
     chinese_glyph_range: simplified_common
 ```
 
+- `theme`：全局界面主题，支持 `professional_dark`（默认，保持原有专业深色外观）
+  和 `debug_high_contrast`（示波器高对比网格）。缺失或填写非法值时回退到
+  `professional_dark`。
+- 运行中可通过 `设置 -> 主题` 即时切换，无需重启，也不会重载当前协议。
+  切换会把配置标记为待保存；启用自动保存时自动写回，否则使用
+  `文件 -> 保存配置` 持久化。
+- 主题属于本机全局偏好，不随协议切换或现场包导入改变。
 - `show_app_header`：是否显示应用顶部 header。
 - `window.title`：窗口标题。
 - `window.width` / `window.height`：初始窗口尺寸。
