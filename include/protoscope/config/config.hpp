@@ -107,11 +107,15 @@ struct GuiWaveConfig {
     plot::WaveControlMode controlMode{plot::WaveControlMode::Oscilloscope};
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
     plot::WaveGridDivisionReadoutMode gridDivisionReadoutMode{plot::WaveGridDivisionReadoutMode::DisplayValue};
+    plot::WaveChannelScaleDisplayMode channelScaleDisplayMode{plot::WaveChannelScaleDisplayMode::Scale};
+    bool channelScaleWheelEnabled{true};
+    plot::WaveChannelScaleWheelAcceleration channelScaleWheelAcceleration{
+        plot::WaveChannelScaleWheelAcceleration::Log};
     plot::WaveChannelCardWidthMode channelCardWidthMode{plot::WaveChannelCardWidthMode::Fixed};
     plot::WaveChannelDoubleClickAction channelDoubleClickAction{plot::WaveChannelDoubleClickAction::ResetScaleOffset};
     plot::WaveXAxisDoubleClickAction xAxisDoubleClickAction{plot::WaveXAxisDoubleClickAction::FitFullHistory};
     plot::WaveYAxisDoubleClickAction yAxisDoubleClickAction{plot::WaveYAxisDoubleClickAction::FitVisibleChannels};
-    bool yAxisDoubleClickAdjustOffset{true};
+    bool yAxisDoubleClickAdjustOffset{false};
     plot::WaveHiddenChannelPolicy hiddenChannelPolicy{plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews};
     plot::WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{plot::WaveCursorExtremeSnapPolicy::NearestWaveform};
     plot::WaveMouseYOffsetDragMode mouseYOffsetDragMode{plot::WaveMouseYOffsetDragMode::Direct};

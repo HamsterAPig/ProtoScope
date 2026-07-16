@@ -1,8 +1,15 @@
 #include "wave_render_service.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
 #include <string>
+#include <unordered_map>
+
+#include <imgui_internal.h>
 
 namespace protoscope::ui {
 
@@ -32,13 +39,23 @@ void drawChannelCardText(const ImVec2& min, const ImVec2& max, const std::string
     drawList->PopClipRect();
 }
 
-void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active)
+void drawChannelCardTooltip(const plot::WaveViewState& view, const plot::ChannelSpec& spec, bool active)
 {
     ImGui::BeginTooltip();
     ImGui::TextUnformatted(spec.label.c_str());
     ImGui::Text("单位：%s", spec.unit.empty() ? "-" : spec.unit.c_str());
     ImGui::Text("Ratio：%.6g", spec.ratio);
-    ImGui::Text("Scale：%.6g", spec.scale);
+    if (view.channelScaleDisplayMode == plot::WaveChannelScaleDisplayMode::ValuePerDivision) {
+        const auto valuePerDivision =
+            plot::waveActualValuePerDivision(view.viewMinValue, view.viewMaxValue, spec.scale);
+        if (valuePerDivision.has_value()) {
+            ImGui::Text("实际值/格：%.6g", *valuePerDivision);
+        } else {
+            ImGui::TextUnformatted("实际值/格：n/a");
+        }
+    } else {
+        ImGui::Text("Scale：%.6g", spec.scale);
+    }
     ImGui::Text("Offset：%.6g", spec.offset);
     if (bitDisplayEnabled(spec.bitDisplay)) {
         ImGui::Text(
@@ -47,6 +64,45 @@ void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active)
     }
     ImGui::TextUnformatted(active ? "状态：激活" : "状态：未激活");
     ImGui::EndTooltip();
+}
+
+bool drawChannelScaleEditor(const char* label,
+                            const plot::WaveViewState& view,
+                            plot::ChannelSpec& updated,
+                            const char* format)
+{
+    if (view.channelScaleDisplayMode == plot::WaveChannelScaleDisplayMode::Scale) {
+        return ImGui::InputDouble(label, &updated.scale, 0.0, 0.0, format);
+    }
+
+    const ImGuiID inputId = ImGui::GetID(label);
+    static std::unordered_map<ImGuiID, std::array<char, 64>> inputBuffers;
+    auto& buffer = inputBuffers[inputId];
+    if (ImGui::GetActiveID() != inputId) {
+        const auto valuePerDivision =
+            plot::waveActualValuePerDivision(view.viewMinValue, view.viewMaxValue, updated.scale);
+        if (valuePerDivision.has_value()) {
+            std::snprintf(buffer.data(), buffer.size(), format, *valuePerDivision);
+        } else {
+            std::snprintf(buffer.data(), buffer.size(), "n/a");
+        }
+    }
+
+    if (!ImGui::InputText(label, buffer.data(), buffer.size())) {
+        return false;
+    }
+    char* parseEnd = nullptr;
+    const double targetValuePerDivision = std::strtod(buffer.data(), &parseEnd);
+    if (parseEnd == buffer.data() || *parseEnd != '\0') {
+        return false;
+    }
+    const auto scale = plot::waveScaleForActualValuePerDivision(
+        view.viewMinValue, view.viewMaxValue, targetValuePerDivision, updated.scale);
+    if (!scale.has_value()) {
+        return false;
+    }
+    updated.scale = *scale;
+    return true;
 }
 
 void drawChannelLegendPopup(plot::WaveDockState& wave,
@@ -82,7 +138,10 @@ void drawChannelLegendPopup(plot::WaveDockState& wave,
         ImGui::EndDisabled();
         ImGui::BeginDisabled();
     }
-    if (ImGui::InputDouble("缩放", &updated.scale, 0.1, 1.0, "%.6g") && !bitChannel) {
+    const char* scaleLabel =
+        wave.view.channelScaleDisplayMode == plot::WaveChannelScaleDisplayMode::ValuePerDivision ? "实际值/格"
+                                                                                                : "缩放";
+    if (drawChannelScaleEditor(scaleLabel, wave.view, updated, "%.6g") && !bitChannel) {
         applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
     }
     if (bitChannel) {

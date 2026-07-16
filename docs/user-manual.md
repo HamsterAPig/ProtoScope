@@ -252,10 +252,10 @@ Lua 脚本通过 `proto.plot.setup()` 创建通道，再通过 `proto.plot.push(
 - 点击波形工具栏最左侧的播放/暂停按钮会调用 `on_oscilloscope_toggle(ctx, current_running, target_running)`；纯 Lua 演示可直接调用 `proto.oscilloscope.set_running(target_running)` 并返回 `true`，真实设备建议先发送启停请求并返回 `false`，等 ACK 到达后再调用 `proto.oscilloscope.set_running(running)`。
 - Lua Dock 可以把 `history_limit` 做成控件，并通过重新调用 `proto.plot.setup({ history_limit = ... })` 调整历史保留；`reset_history = true` 可用于清空当前历史。
 - 通过通道卡片查看通道状态，设置激活通道。
-- 在通道卡片里修改标签、缩放和偏移。
+- 在通道卡片里修改标签、缩放和偏移；`channel_scale_display_mode: value_per_division` 可把 Scale 切换为“实际值/格”展示和编辑。
 - 使用总览区域快速定位长时间数据。
 - 双击主图 X 轴会缩放到当前仍保留的完整历史；如需旧行为，可把 `gui.wave.x_axis_double_click_action` 设为 `fit_visible_window`。
-- 双击主图 Y 轴默认按图例可见的模拟通道自动调整缩放和偏移，让数据包络约占当前视图高度 80%；可把 `gui.wave.y_axis_double_click_action` 设为 `fit_active_channel` 改为只适配当前激活模拟通道，或把 `gui.wave.y_axis_double_click_adjust_offset` 设为 `false` 保留原 offset。
+- 双击主图 Y 轴默认按图例可见的模拟通道自动调整 Scale、保留 Offset，让数据包络约占当前视图高度 80%；可把 `gui.wave.y_axis_double_click_action` 设为 `fit_active_channel` 改为只适配当前激活模拟通道，或把 `gui.wave.y_axis_double_click_adjust_offset` 设为 `true` 同时调整 Offset。
 - 使用游标和测量覆盖层观察时间差和值差。
 - 启用 FFT 频谱模式查看当前可视区频谱。
 - 通过 `文件 -> 导入现场会话包...` 恢复包内协议、配置和分析标记，并把原始事件时间轴载入到起点暂停状态。

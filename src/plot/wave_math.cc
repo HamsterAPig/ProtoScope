@@ -30,6 +30,53 @@ namespace {
         return (std::max)(width, (std::max)(minWidth, kEpsilon));
     }
 
+    double adjacentEngineeringValue(double value, int direction)
+    {
+        if (!std::isfinite(value) || value <= 0.0 || direction == 0) {
+            return value;
+        }
+
+        const double exponent = std::floor(std::log10(value));
+        double candidate = direction > 0 ? std::numeric_limits<double>::infinity() : 0.0;
+        constexpr double kMantissas[]{1.0, 2.0, 5.0};
+        for (int exponentOffset = -2; exponentOffset <= 2; ++exponentOffset) {
+            const double power = std::pow(10.0, exponent + static_cast<double>(exponentOffset));
+            for (const double mantissa : kMantissas) {
+                const double engineeringValue = mantissa * power;
+                const double tolerance = (std::max)(std::abs(value), engineeringValue) * 1e-12;
+                if (direction > 0 && engineeringValue > value + tolerance) {
+                    candidate = (std::min)(candidate, engineeringValue);
+                } else if (direction < 0 && engineeringValue < value - tolerance) {
+                    candidate = (std::max)(candidate, engineeringValue);
+                }
+            }
+        }
+        if (direction > 0 && std::isfinite(candidate)) {
+            return candidate;
+        }
+        if (direction < 0 && candidate > 0.0) {
+            return candidate;
+        }
+        return value;
+    }
+
+    std::size_t acceleratedEngineeringStepCount(WaveChannelScaleWheelAcceleration acceleration,
+                                                std::size_t continuousStepCount)
+    {
+        switch (acceleration) {
+            case WaveChannelScaleWheelAcceleration::None:
+                return 1U;
+            case WaveChannelScaleWheelAcceleration::Linear:
+                return (std::min)(std::size_t{4}, std::size_t{1} + (continuousStepCount - 1U) / 2U);
+            case WaveChannelScaleWheelAcceleration::Log:
+                if (continuousStepCount >= 8U) {
+                    return 3U;
+                }
+                return continuousStepCount >= 4U ? 2U : 1U;
+        }
+        return 1U;
+    }
+
     double resolveActualValue(const WaveDisplayChannel& channel, std::size_t sampleIndex, double fallbackValue)
     {
         if (sampleIndex < channel.actualValues.size()) {
@@ -599,6 +646,38 @@ double waveDisplayValuePerDivision(double minValue, double maxValue)
     return std::abs(maxValue - minValue) / static_cast<double>(kWaveGridMajorYDivisions);
 }
 
+std::optional<double> waveActualValuePerDivision(double minValue, double maxValue, double scale)
+{
+    if (!std::isfinite(scale) || std::abs(scale) <= kEpsilon) {
+        return std::nullopt;
+    }
+    const double displayValuePerDivision = waveDisplayValuePerDivision(minValue, maxValue);
+    if (!std::isfinite(displayValuePerDivision)) {
+        return std::nullopt;
+    }
+    return displayValuePerDivision / std::abs(scale);
+}
+
+std::optional<double> waveScaleForActualValuePerDivision(double minValue,
+                                                         double maxValue,
+                                                         double targetValuePerDivision,
+                                                         double currentScale)
+{
+    if (!std::isfinite(targetValuePerDivision) || targetValuePerDivision <= 0.0) {
+        return std::nullopt;
+    }
+    const double displayValuePerDivision = waveDisplayValuePerDivision(minValue, maxValue);
+    if (!std::isfinite(displayValuePerDivision) || displayValuePerDivision <= kEpsilon) {
+        return std::nullopt;
+    }
+    const double sign = std::signbit(currentScale) ? -1.0 : 1.0;
+    const double magnitude = displayValuePerDivision / targetValuePerDivision;
+    if (!std::isfinite(magnitude) || magnitude <= kEpsilon) {
+        return std::nullopt;
+    }
+    return sign * magnitude;
+}
+
 std::optional<double> waveChannelValuePerDivision(double displayValuePerDivision,
                                                   const ChannelSpec& spec,
                                                   WaveDisplayFormula formula,
@@ -623,6 +702,47 @@ std::optional<double> waveChannelValuePerDivision(double displayValuePerDivision
         }
     }
     return std::nullopt;
+}
+
+WaveChannelScaleWheelResult stepWaveChannelValuePerDivision(double currentValuePerDivision,
+                                                            double wheelDelta,
+                                                            std::size_t channelIndex,
+                                                            double eventTimeSec,
+                                                            WaveChannelScaleWheelAcceleration acceleration,
+                                                            WaveChannelScaleWheelState& state)
+{
+    WaveChannelScaleWheelResult result{.valuePerDivision = currentValuePerDivision};
+    if (!std::isfinite(currentValuePerDivision) || currentValuePerDivision <= 0.0 || !std::isfinite(wheelDelta) ||
+        wheelDelta == 0.0) {
+        return result;
+    }
+
+    const int direction = wheelDelta > 0.0 ? 1 : -1;
+    constexpr double kContinuationTimeoutSec = 0.250;
+    const bool timedOut = !std::isfinite(eventTimeSec) || eventTimeSec < state.lastEventTimeSec ||
+                          eventTimeSec - state.lastEventTimeSec > kContinuationTimeoutSec;
+    if (state.channelIndex != channelIndex || state.direction != direction || timedOut) {
+        state.channelIndex = channelIndex;
+        state.direction = direction;
+        state.continuousStepCount = 0;
+        state.fractionalDelta = 0.0;
+    }
+    state.lastEventTimeSec = std::isfinite(eventTimeSec) ? eventTimeSec : 0.0;
+    state.fractionalDelta += wheelDelta;
+
+    // 核心逻辑：触控板小数滚轮先累计到完整刻度，再按 1-2-5 工程刻度推进。
+    while (std::abs(state.fractionalDelta) + kEpsilon >= 1.0) {
+        ++state.continuousStepCount;
+        const std::size_t engineeringSteps =
+            acceleratedEngineeringStepCount(acceleration, state.continuousStepCount);
+        const int valueDirection = direction > 0 ? -1 : 1;
+        for (std::size_t step = 0; step < engineeringSteps; ++step) {
+            result.valuePerDivision = adjacentEngineeringValue(result.valuePerDivision, valueDirection);
+        }
+        state.fractionalDelta -= static_cast<double>(direction);
+        ++result.appliedNotches;
+    }
+    return result;
 }
 
 WaveViewport normalizeOverviewViewport(const WaveViewport& viewport, const WaveDataBounds& bounds, double minTimeWidth)

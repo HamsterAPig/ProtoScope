@@ -316,7 +316,7 @@ namespace {
         const bool hovered = ImGui::IsItemHovered();
         drawChannelLegendCardBody(cardMin, cardSize, cardStyle, spec, view, channelIndex, active);
         if (hovered) {
-            drawChannelCardTooltip(spec, active);
+            drawChannelCardTooltip(wave.view, spec, active);
         }
         if (ImGui::BeginPopupContextItem("##channel_popup")) {
             drawChannelLegendPopup(wave, channelIndex, spec, active);
@@ -738,7 +738,7 @@ namespace {
         if (bitChannel) {
             ImGui::BeginDisabled();
         }
-        if (ImGui::InputDouble("##scale", &updated.scale, 0.0, 0.0, "%.4g") && !bitChannel) {
+        if (drawChannelScaleEditor("##scale", wave.view, updated, "%.4g") && !bitChannel) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
         if (bitChannel) {
@@ -802,7 +802,12 @@ namespace {
                     ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthStretch, 120.0F);
                 }
                 ImGui::TableSetupColumn("Ratio", ImGuiTableColumnFlags_WidthFixed, 68.0F);
-                ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+                ImGui::TableSetupColumn(
+                    wave.view.channelScaleDisplayMode == plot::WaveChannelScaleDisplayMode::ValuePerDivision
+                        ? "实际值/格"
+                        : "Scale",
+                    ImGuiTableColumnFlags_WidthFixed,
+                    68.0F);
                 ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, 78.0F);
                 ImGui::TableSetupColumn("操作", ImGuiTableColumnFlags_WidthFixed, 118.0F);
                 ImGui::TableHeadersRow();

@@ -27,11 +27,50 @@ bool updateActiveChannelScale(plot::WaveDockState& wave, double factor)
 {
     const auto channelIndex = wave.view.measurementChannelIndex;
     const auto spec = wave.buffer.channelSpec(channelIndex);
-    if (!spec.has_value()) {
+    if (!spec.has_value() || bitDisplayEnabled(spec->bitDisplay)) {
         return false;
     }
     auto updated = *spec;
     updated.scale = scaleFromInteractionFactor(updated.scale, factor);
+    if (updated.scale == spec->scale) {
+        return false;
+    }
+    applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
+    return true;
+}
+
+bool updateActiveChannelScaleFromWheel(plot::WaveDockState& wave, double wheelDelta, double eventTimeSec)
+{
+    auto& view = wave.view;
+    if (!view.channelScaleWheelEnabled) {
+        return updateActiveChannelScale(wave, std::pow(1.1, wheelDelta));
+    }
+
+    const auto channelIndex = view.measurementChannelIndex;
+    const auto spec = wave.buffer.channelSpec(channelIndex);
+    if (!spec.has_value() || bitDisplayEnabled(spec->bitDisplay)) {
+        return false;
+    }
+    const double displayPerDivision = plot::waveDisplayValuePerDivision(view.viewMinValue, view.viewMaxValue);
+    const double currentValuePerDivision =
+        plot::waveActualValuePerDivision(view.viewMinValue, view.viewMaxValue, spec->scale)
+            .value_or(displayPerDivision);
+    const auto wheelResult = plot::stepWaveChannelValuePerDivision(currentValuePerDivision,
+                                                                   wheelDelta,
+                                                                   channelIndex,
+                                                                   eventTimeSec,
+                                                                   view.channelScaleWheelAcceleration,
+                                                                   view.channelScaleWheelState);
+    if (wheelResult.appliedNotches == 0U) {
+        return false;
+    }
+    const auto scale = plot::waveScaleForActualValuePerDivision(
+        view.viewMinValue, view.viewMaxValue, wheelResult.valuePerDivision, spec->scale);
+    if (!scale.has_value()) {
+        return false;
+    }
+    auto updated = *spec;
+    updated.scale = *scale;
     applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
     return true;
 }
@@ -145,7 +184,7 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     bool changed = false;
     const bool yAxisScaleHotZoneHovered = isYAxisScaleHotZoneHovered();
     if (yAxisScaleHotZoneHovered && io.MouseWheel != 0.0F) {
-        changed = updateActiveChannelScale(wave, std::pow(1.1, io.MouseWheel)) || changed;
+        changed = updateActiveChannelScaleFromWheel(wave, io.MouseWheel, ImGui::GetTime()) || changed;
     }
     if (yAxisScaleHotZoneHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         view.activeChannelScaleDrag = true;

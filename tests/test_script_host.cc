@@ -2525,6 +2525,12 @@ void test_config_default_roundtrip()
             "波形显示公式默认值应为 offset_then_scale");
     require(config.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue,
             "网格每格读数默认值应为 display_value");
+    require(config.gui.wave.channelScaleDisplayMode == protoscope::plot::WaveChannelScaleDisplayMode::Scale,
+            "通道 Scale 显示模式默认值应为 scale");
+    require(config.gui.wave.channelScaleWheelEnabled, "通道 Scale 1-2-5 滚轮默认应开启");
+    require(config.gui.wave.channelScaleWheelAcceleration ==
+                protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
+            "通道 Scale 滚轮加速默认值应为 log");
     require(config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "CH 卡片宽度模式默认值应为 fixed");
     require(
@@ -2534,7 +2540,7 @@ void test_config_default_roundtrip()
             "X 轴双击默认值应为 fit_full_history");
     require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "Y 轴双击默认值应为 fit_visible_channels");
-    require(config.gui.wave.yAxisDoubleClickAdjustOffset, "Y 轴双击默认应同步调整 offset");
+    require(!config.gui.wave.yAxisDoubleClickAdjustOffset, "Y 轴双击默认应保留 offset");
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.25) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.25");
@@ -2608,6 +2614,9 @@ void test_config_default_roundtrip()
     config.gui.wave.controlMode = protoscope::plot::WaveControlMode::LegacyGlobal;
     config.gui.wave.displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset;
     config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
+    config.gui.wave.channelScaleDisplayMode = protoscope::plot::WaveChannelScaleDisplayMode::ValuePerDivision;
+    config.gui.wave.channelScaleWheelEnabled = false;
+    config.gui.wave.channelScaleWheelAcceleration = protoscope::plot::WaveChannelScaleWheelAcceleration::Linear;
     config.gui.wave.channelCardWidthMode = protoscope::plot::WaveChannelCardWidthMode::Adaptive;
     config.gui.wave.channelDoubleClickAction = protoscope::plot::WaveChannelDoubleClickAction::ResetAll;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
@@ -2678,6 +2687,13 @@ void test_config_default_roundtrip()
             "波形显示公式 roundtrip 失败");
     require(reloaded.config.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::RawValue,
             "网格每格读数模式 roundtrip 失败");
+    require(reloaded.config.gui.wave.channelScaleDisplayMode ==
+                protoscope::plot::WaveChannelScaleDisplayMode::ValuePerDivision,
+            "通道 Scale 显示模式 roundtrip 失败");
+    require(!reloaded.config.gui.wave.channelScaleWheelEnabled, "通道 Scale 滚轮开关 roundtrip 失败");
+    require(reloaded.config.gui.wave.channelScaleWheelAcceleration ==
+                protoscope::plot::WaveChannelScaleWheelAcceleration::Linear,
+            "通道 Scale 滚轮加速 roundtrip 失败");
     require(reloaded.config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Adaptive,
             "CH 卡片宽度模式 roundtrip 失败");
     require(
@@ -2771,6 +2787,9 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     protoscope::config::AppConfig config;
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
     config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::ActualValue;
+    config.gui.wave.channelScaleDisplayMode = protoscope::plot::WaveChannelScaleDisplayMode::ValuePerDivision;
+    config.gui.wave.channelScaleWheelEnabled = false;
+    config.gui.wave.channelScaleWheelAcceleration = protoscope::plot::WaveChannelScaleWheelAcceleration::None;
     config.gui.wave.cursorFftHighlightRgba = {0.30F, 0.40F, 0.50F, 0.60F};
     config.gui.wave.followMeasurementCursorsOnScroll = true;
     config.gui.wave.peakDetectDownsample = false;
@@ -2783,6 +2802,13 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     require(dockStore.waveState().view.gridDivisionReadoutMode ==
                 protoscope::plot::WaveGridDivisionReadoutMode::ActualValue,
             "applyToDock 应写入网格每格读数模式");
+    require(dockStore.waveState().view.channelScaleDisplayMode ==
+                protoscope::plot::WaveChannelScaleDisplayMode::ValuePerDivision,
+            "applyToDock 应写入通道 Scale 显示模式");
+    require(!dockStore.waveState().view.channelScaleWheelEnabled, "applyToDock 应写入通道 Scale 滚轮开关");
+    require(dockStore.waveState().view.channelScaleWheelAcceleration ==
+                protoscope::plot::WaveChannelScaleWheelAcceleration::None,
+            "applyToDock 应写入通道 Scale 滚轮加速");
     require(std::abs(dockStore.waveState().view.cursorFftHighlightRgba[3] - 0.60F) < 1e-6F,
             "applyToDock 应写入游标 FFT 高亮色");
     require(dockStore.waveState().view.followMeasurementCursorsOnScroll, "applyToDock 应写入测量游标跟随滚动开关");
@@ -2791,6 +2817,10 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
 
     dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
     dockStore.waveState().view.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
+    dockStore.waveState().view.channelScaleDisplayMode = protoscope::plot::WaveChannelScaleDisplayMode::Scale;
+    dockStore.waveState().view.channelScaleWheelEnabled = true;
+    dockStore.waveState().view.channelScaleWheelAcceleration =
+        protoscope::plot::WaveChannelScaleWheelAcceleration::Log;
     dockStore.waveState().view.cursorFftHighlightRgba = {0.70F, 0.60F, 0.50F, 0.40F};
     dockStore.waveState().view.followMeasurementCursorsOnScroll = false;
     dockStore.waveState().view.peakDetectDownsample = true;
@@ -2800,6 +2830,12 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
             "captureFromDock 应捕获鼠标 Y 偏移拖动模式");
     require(captured.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::RawValue,
             "captureFromDock 应捕获网格每格读数模式");
+    require(captured.gui.wave.channelScaleDisplayMode == protoscope::plot::WaveChannelScaleDisplayMode::Scale,
+            "captureFromDock 应捕获通道 Scale 显示模式");
+    require(captured.gui.wave.channelScaleWheelEnabled, "captureFromDock 应捕获通道 Scale 滚轮开关");
+    require(captured.gui.wave.channelScaleWheelAcceleration ==
+                protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
+            "captureFromDock 应捕获通道 Scale 滚轮加速");
     require(std::abs(captured.gui.wave.cursorFftHighlightRgba[0] - 0.70F) < 1e-6F &&
                 std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
             "captureFromDock 应捕获游标 FFT 高亮色");
@@ -3000,6 +3036,9 @@ void test_config_wave_mode_invalid_fallback()
            "    control_mode: weird\n"
            "    display_formula: wrong\n"
            "    grid_division_readout_mode: weird\n"
+           "    channel_scale_display_mode: weird\n"
+           "    channel_scale_wheel:\n"
+           "      acceleration: weird\n"
            "    channel_card_width_mode: weird\n"
            "    channel_double_click_action: weird\n"
            "    x_axis_double_click_action: weird\n"
@@ -3018,6 +3057,11 @@ void test_config_wave_mode_invalid_fallback()
             "非法 display_formula 应回退到 offset_then_scale");
     require(loaded.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue,
             "非法 grid_division_readout_mode 应回退到 display_value");
+    require(loaded.gui.wave.channelScaleDisplayMode == protoscope::plot::WaveChannelScaleDisplayMode::Scale,
+            "非法 channel_scale_display_mode 应回退到 scale");
+    require(loaded.gui.wave.channelScaleWheelAcceleration ==
+                protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
+            "非法 channel_scale_wheel.acceleration 应回退到 log");
     require(loaded.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "非法 channel_card_width_mode 应回退到 fixed");
     require(

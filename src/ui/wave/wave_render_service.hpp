@@ -336,11 +336,15 @@ void drawWaveChannel(const plot::ChannelView& channel,
                      bool glowEnabled);
 
 void drawChannelCardText(const ImVec2& min, const ImVec2& max, const std::string& text, ImU32 color);
-void drawChannelCardTooltip(const plot::ChannelSpec& spec, bool active);
+void drawChannelCardTooltip(const plot::WaveViewState& view, const plot::ChannelSpec& spec, bool active);
 void drawChannelLegendPopup(plot::WaveDockState& wave,
                             std::size_t channelIndex,
                             const plot::ChannelSpec& spec,
                             bool active);
+bool drawChannelScaleEditor(const char* label,
+                            const plot::WaveViewState& view,
+                            plot::ChannelSpec& updated,
+                            const char* format);
 ChannelLegendMetrics measureChannelLegendMetrics(float availableWidth, const plot::WaveViewState& view);
 double offsetParameterDeltaFromDisplayDelta(const plot::ChannelSpec& spec,
                                             plot::WaveDisplayFormula formula,
@@ -360,6 +364,7 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
 void drawChannelControls(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot);
 
 bool updateActiveChannelScale(plot::WaveDockState& wave, double factor);
+bool updateActiveChannelScaleFromWheel(plot::WaveDockState& wave, double wheelDelta, double eventTimeSec);
 bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta);
 bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown);
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,

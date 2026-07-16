@@ -4283,6 +4283,130 @@ void test_wave_grid_division_readout_formula_offset_cancels()
     require(!rawNa.has_value(), "ratio 为 0 时 raw_value 每格应为 n/a");
 }
 
+void test_wave_channel_scale_value_per_division_conversions()
+{
+    const auto valuePerDivision = protoscope::plot::waveActualValuePerDivision(-40.0, 40.0, -2.0);
+    require(valuePerDivision.has_value() && std::abs(*valuePerDivision - 5.0) < 1e-12,
+            "实际值/格应按 Y 显示范围除以 8 和 abs(scale) 计算");
+
+    const auto negativeScale = protoscope::plot::waveScaleForActualValuePerDivision(-40.0, 40.0, 2.0, -2.0);
+    require(negativeScale.has_value() && std::abs(*negativeScale + 5.0) < 1e-12,
+            "实际值/格反算应保留负 scale 符号");
+    const auto recoveredScale = protoscope::plot::waveScaleForActualValuePerDivision(-40.0, 40.0, 2.0, 0.0);
+    require(recoveredScale.has_value() && std::abs(*recoveredScale - 5.0) < 1e-12,
+            "scale 为 0 时输入有限正值应恢复为正 scale");
+    require(!protoscope::plot::waveActualValuePerDivision(-40.0, 40.0, 0.0).has_value(),
+            "scale 为 0 时实际值/格应为 n/a");
+    require(!protoscope::plot::waveScaleForActualValuePerDivision(-40.0, 40.0, 0.0, 1.0).has_value(),
+            "零实际值/格输入应被拒绝");
+    require(!protoscope::plot::waveScaleForActualValuePerDivision(
+                 -40.0, 40.0, std::numeric_limits<double>::infinity(), 1.0)
+                 .has_value(),
+            "非有限实际值/格输入应被拒绝");
+}
+
+void test_wave_channel_scale_wheel_engineering_steps()
+{
+    using protoscope::plot::WaveChannelScaleWheelAcceleration;
+    protoscope::plot::WaveChannelScaleWheelState state;
+
+    auto result = protoscope::plot::stepWaveChannelValuePerDivision(
+        3.0, 1.0, 0, 0.0, WaveChannelScaleWheelAcceleration::None, state);
+    require(result.appliedNotches == 1 && std::abs(result.valuePerDivision - 2.0) < 1e-12,
+            "非标准值向上滚动应吸附到更小的相邻工程刻度");
+    result = protoscope::plot::stepWaveChannelValuePerDivision(
+        result.valuePerDivision, 1.0, 0, 0.1, WaveChannelScaleWheelAcceleration::None, state);
+    require(std::abs(result.valuePerDivision - 1.0) < 1e-12, "向上滚动应减小实际值/格");
+    result = protoscope::plot::stepWaveChannelValuePerDivision(
+        result.valuePerDivision, -1.0, 0, 0.2, WaveChannelScaleWheelAcceleration::None, state);
+    require(std::abs(result.valuePerDivision - 2.0) < 1e-12, "向下滚动应增大实际值/格");
+
+    state = {};
+    result = protoscope::plot::stepWaveChannelValuePerDivision(
+        0.1, 1.0, 0, 0.0, WaveChannelScaleWheelAcceleration::None, state);
+    require(std::abs(result.valuePerDivision - 0.05) < 1e-12, "1-2-5 步进应支持跨数量级缩小");
+    result = protoscope::plot::stepWaveChannelValuePerDivision(
+        result.valuePerDivision, -1.0, 0, 0.1, WaveChannelScaleWheelAcceleration::None, state);
+    require(std::abs(result.valuePerDivision - 0.1) < 1e-12, "1-2-5 步进应支持跨数量级放大");
+
+    state = {};
+    result = protoscope::plot::stepWaveChannelValuePerDivision(
+        5.0, 0.4, 0, 0.0, WaveChannelScaleWheelAcceleration::None, state);
+    require(result.appliedNotches == 0 && std::abs(result.valuePerDivision - 5.0) < 1e-12,
+            "小数滚轮未累计到完整刻度时不应步进");
+    result = protoscope::plot::stepWaveChannelValuePerDivision(
+        5.0, 0.6, 0, 0.1, WaveChannelScaleWheelAcceleration::None, state);
+    require(result.appliedNotches == 1 && std::abs(result.valuePerDivision - 2.0) < 1e-12,
+            "小数滚轮累计到完整刻度后应步进");
+}
+
+void test_wave_channel_scale_wheel_acceleration_and_reset()
+{
+    using protoscope::plot::WaveChannelScaleWheelAcceleration;
+    protoscope::plot::WaveChannelScaleWheelState state;
+
+    double value = 100.0;
+    value = protoscope::plot::stepWaveChannelValuePerDivision(
+                value, 1.0, 0, 0.00, WaveChannelScaleWheelAcceleration::Linear, state)
+                .valuePerDivision;
+    value = protoscope::plot::stepWaveChannelValuePerDivision(
+                value, 1.0, 0, 0.05, WaveChannelScaleWheelAcceleration::Linear, state)
+                .valuePerDivision;
+    const auto linearThird = protoscope::plot::stepWaveChannelValuePerDivision(
+        value, 1.0, 0, 0.10, WaveChannelScaleWheelAcceleration::Linear, state);
+    require(std::abs(linearThird.valuePerDivision - 5.0) < 1e-12,
+            "linear 连续第三刻度应跨两级工程刻度");
+
+    state = {};
+    value = 100.0;
+    for (int index = 0; index < 3; ++index) {
+        value = protoscope::plot::stepWaveChannelValuePerDivision(
+                    value,
+                    1.0,
+                    0,
+                    static_cast<double>(index) * 0.05,
+                    WaveChannelScaleWheelAcceleration::Log,
+                    state)
+                    .valuePerDivision;
+    }
+    const auto logFourth = protoscope::plot::stepWaveChannelValuePerDivision(
+        value, 1.0, 0, 0.15, WaveChannelScaleWheelAcceleration::Log, state);
+    require(std::abs(logFourth.valuePerDivision - 2.0) < 1e-12,
+            "log 连续第四刻度应温和加速到跨两级");
+
+    const auto timeoutReset = protoscope::plot::stepWaveChannelValuePerDivision(
+        logFourth.valuePerDivision, 1.0, 0, 0.50, WaveChannelScaleWheelAcceleration::Log, state);
+    require(std::abs(timeoutReset.valuePerDivision - 1.0) < 1e-12, "超过 250ms 应重置加速并只跨一级");
+    const auto channelReset = protoscope::plot::stepWaveChannelValuePerDivision(
+        timeoutReset.valuePerDivision, 1.0, 1, 0.55, WaveChannelScaleWheelAcceleration::Log, state);
+    require(std::abs(channelReset.valuePerDivision - 0.5) < 1e-12, "切换通道应重置加速");
+    const auto directionReset = protoscope::plot::stepWaveChannelValuePerDivision(
+        channelReset.valuePerDivision, -1.0, 1, 0.60, WaveChannelScaleWheelAcceleration::Log, state);
+    require(std::abs(directionReset.valuePerDivision - 1.0) < 1e-12, "换向应重置加速");
+}
+
+void test_wave_channel_scale_wheel_disabled_uses_legacy_zoom()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.view.measurementChannelIndex = 0;
+    wave.view.channelScaleWheelEnabled = false;
+    wave.buffer.configureChannels(1);
+    wave.buffer.setChannelSpec(0, {.label = "CH1", .unit = "V", .scale = -2.0});
+
+    require(protoscope::ui::updateActiveChannelScaleFromWheel(wave, 0.5, 0.0),
+            "关闭工程步进后滚轮仍应更新激活模拟通道");
+    const auto updated = wave.buffer.channelSpec(0);
+    require(updated.has_value() && std::abs(updated->scale - (-2.0 * std::pow(1.1, 0.5))) < 1e-12,
+            "关闭工程步进后应与旧 pow(1.1, wheel) 连续缩放一致");
+
+    auto bitSpec = *updated;
+    bitSpec.bitDisplay.enabled = true;
+    bitSpec.bitDisplay.bitCount = 1;
+    wave.buffer.setChannelSpec(0, bitSpec);
+    require(!protoscope::ui::updateActiveChannelScaleFromWheel(wave, 1.0, 0.1),
+            "通道 Scale 滚轮不应作用于 Bit 通道");
+}
+
 void test_wave_status_overlay_items_only_show_non_default_states()
 {
     protoscope::plot::WaveViewState view;

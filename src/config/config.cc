@@ -240,6 +240,18 @@ namespace {
         {plot::WaveGridDivisionReadoutMode::RawValue, "raw_value"},
     }};
 
+    constexpr std::array<EnumNamePair<plot::WaveChannelScaleDisplayMode>, 2> kWaveChannelScaleDisplayModeNames{{
+        {plot::WaveChannelScaleDisplayMode::Scale, "scale"},
+        {plot::WaveChannelScaleDisplayMode::ValuePerDivision, "value_per_division"},
+    }};
+
+    constexpr std::array<EnumNamePair<plot::WaveChannelScaleWheelAcceleration>, 3>
+        kWaveChannelScaleWheelAccelerationNames{{
+            {plot::WaveChannelScaleWheelAcceleration::None, "none"},
+            {plot::WaveChannelScaleWheelAcceleration::Linear, "linear"},
+            {plot::WaveChannelScaleWheelAcceleration::Log, "log"},
+        }};
+
     constexpr std::array<EnumNamePair<plot::WaveChannelCardWidthMode>, 2> kWaveChannelCardWidthModeNames{{
         {plot::WaveChannelCardWidthMode::Fixed, "fixed"},
         {plot::WaveChannelCardWidthMode::Adaptive, "adaptive"},
@@ -359,6 +371,30 @@ namespace {
     const char* toWaveGridDivisionReadoutModeText(const plot::WaveGridDivisionReadoutMode mode)
     {
         return enumToText(mode, kWaveGridDivisionReadoutModeNames, "display_value");
+    }
+
+    plot::WaveChannelScaleDisplayMode parseWaveChannelScaleDisplayMode(
+        const std::string& value,
+        plot::WaveChannelScaleDisplayMode fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveChannelScaleDisplayModeNames, fallback);
+    }
+
+    const char* toWaveChannelScaleDisplayModeText(const plot::WaveChannelScaleDisplayMode mode)
+    {
+        return enumToText(mode, kWaveChannelScaleDisplayModeNames, "scale");
+    }
+
+    plot::WaveChannelScaleWheelAcceleration parseWaveChannelScaleWheelAcceleration(
+        const std::string& value,
+        plot::WaveChannelScaleWheelAcceleration fallback)
+    {
+        return lookupEnum(std::string_view{value}, kWaveChannelScaleWheelAccelerationNames, fallback);
+    }
+
+    const char* toWaveChannelScaleWheelAccelerationText(const plot::WaveChannelScaleWheelAcceleration acceleration)
+    {
+        return enumToText(acceleration, kWaveChannelScaleWheelAccelerationNames, "log");
     }
 
     plot::WaveChannelCardWidthMode parseWaveChannelCardWidthMode(const std::string& value)
@@ -609,6 +645,21 @@ namespace {
                                     "grid_division_readout_mode",
                                     toWaveGridDivisionReadoutModeText(config.gui.wave.gridDivisionReadoutMode)),
             config.gui.wave.gridDivisionReadoutMode);
+        config.gui.wave.channelScaleDisplayMode = parseWaveChannelScaleDisplayMode(
+            readScalar<std::string>(wave,
+                                    "channel_scale_display_mode",
+                                    toWaveChannelScaleDisplayModeText(config.gui.wave.channelScaleDisplayMode)),
+            config.gui.wave.channelScaleDisplayMode);
+        if (const auto channelScaleWheel = childNode(wave, "channel_scale_wheel")) {
+            config.gui.wave.channelScaleWheelEnabled =
+                readScalar<bool>(channelScaleWheel, "enabled", config.gui.wave.channelScaleWheelEnabled);
+            config.gui.wave.channelScaleWheelAcceleration = parseWaveChannelScaleWheelAcceleration(
+                readScalar<std::string>(
+                    channelScaleWheel,
+                    "acceleration",
+                    toWaveChannelScaleWheelAccelerationText(config.gui.wave.channelScaleWheelAcceleration)),
+                plot::WaveChannelScaleWheelAcceleration::Log);
+        }
         config.gui.wave.channelCardWidthMode =
             parseWaveChannelCardWidthMode(readScalar<std::string>(wave, "channel_card_width_mode", "fixed"));
         config.gui.wave.channelDoubleClickAction = parseWaveChannelDoubleClickAction(
@@ -1017,6 +1068,11 @@ namespace {
         gui["wave"]["display_formula"] = toWaveDisplayFormulaText(config.gui.wave.displayFormula);
         gui["wave"]["grid_division_readout_mode"] =
             toWaveGridDivisionReadoutModeText(config.gui.wave.gridDivisionReadoutMode);
+        gui["wave"]["channel_scale_display_mode"] =
+            toWaveChannelScaleDisplayModeText(config.gui.wave.channelScaleDisplayMode);
+        gui["wave"]["channel_scale_wheel"]["enabled"] = config.gui.wave.channelScaleWheelEnabled;
+        gui["wave"]["channel_scale_wheel"]["acceleration"] =
+            toWaveChannelScaleWheelAccelerationText(config.gui.wave.channelScaleWheelAcceleration);
         gui["wave"]["channel_card_width_mode"] = toWaveChannelCardWidthModeText(config.gui.wave.channelCardWidthMode);
         gui["wave"]["channel_double_click_action"] =
             toWaveChannelDoubleClickActionText(config.gui.wave.channelDoubleClickAction);
@@ -1561,6 +1617,10 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.controlMode = config.gui.wave.controlMode;
     wave.displayFormula = config.gui.wave.displayFormula;
     wave.gridDivisionReadoutMode = config.gui.wave.gridDivisionReadoutMode;
+    wave.channelScaleDisplayMode = config.gui.wave.channelScaleDisplayMode;
+    wave.channelScaleWheelEnabled = config.gui.wave.channelScaleWheelEnabled;
+    wave.channelScaleWheelAcceleration = config.gui.wave.channelScaleWheelAcceleration;
+    wave.channelScaleWheelState = {};
     wave.channelCardWidthMode = config.gui.wave.channelCardWidthMode;
     wave.channelDoubleClickAction = config.gui.wave.channelDoubleClickAction;
     wave.xAxisDoubleClickAction = config.gui.wave.xAxisDoubleClickAction;
@@ -1625,6 +1685,9 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.controlMode = dockStore.waveState().view.controlMode;
     config.gui.wave.displayFormula = dockStore.waveState().view.displayFormula;
     config.gui.wave.gridDivisionReadoutMode = dockStore.waveState().view.gridDivisionReadoutMode;
+    config.gui.wave.channelScaleDisplayMode = dockStore.waveState().view.channelScaleDisplayMode;
+    config.gui.wave.channelScaleWheelEnabled = dockStore.waveState().view.channelScaleWheelEnabled;
+    config.gui.wave.channelScaleWheelAcceleration = dockStore.waveState().view.channelScaleWheelAcceleration;
     config.gui.wave.channelCardWidthMode = dockStore.waveState().view.channelCardWidthMode;
     config.gui.wave.channelDoubleClickAction = dockStore.waveState().view.channelDoubleClickAction;
     config.gui.wave.xAxisDoubleClickAction = dockStore.waveState().view.xAxisDoubleClickAction;
