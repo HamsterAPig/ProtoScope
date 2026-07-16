@@ -1,3 +1,5 @@
+#include "protoscope/ui/ui_theme.hpp"
+
 #include "wave_render_service.hpp"
 
 #include <algorithm>
@@ -980,8 +982,13 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
     ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
     const float bgAlpha = 0.78F + (0.96F - 0.78F) * overlayProgress;
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.051F, 0.075F, 0.106F, bgAlpha));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.30F, 0.42F, 0.54F, 0.55F));
+    const auto& waveTokens = activeWaveStyleTokens();
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImVec4(waveTokens.legendOverlayBackground.x,
+                                 waveTokens.legendOverlayBackground.y,
+                                 waveTokens.legendOverlayBackground.z,
+                                 bgAlpha));
+    ImGui::PushStyleColor(ImGuiCol_Border, waveTokens.legendOverlayBorder);
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                                    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoFocusOnAppearing;

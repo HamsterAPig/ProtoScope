@@ -1335,6 +1335,28 @@ void test_application_set_log_level_updates_runtime_config()
     application.shutdown();
 }
 
+void test_application_set_gui_theme_updates_runtime_without_protocol_reload()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    const auto beforeLua = application.docks().luaState();
+    const auto beforeScriptRows = application.docks().scriptState().rows.size();
+
+    application.setGuiTheme(protoscope::config::GuiTheme::DebugHighContrast);
+
+    const auto captured = application.captureConfig();
+    const auto& afterLua = application.docks().luaState();
+    require(captured.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
+            "setGuiTheme 后 captureConfig 应保留高对比主题");
+    require(afterLua.protocolDir == beforeLua.protocolDir, "切换主题不应改变协议目录");
+    require(afterLua.scriptPath == beforeLua.scriptPath, "切换主题不应改变协议脚本路径");
+    require(afterLua.controls.size() == beforeLua.controls.size(), "切换主题不应重建协议控件");
+    require(application.docks().scriptState().rows.size() == beforeScriptRows, "切换主题不应产生协议重载日志");
+
+    application.shutdown();
+}
+
 void test_application_capture_config_preserves_protocol_tx_runtime_config()
 {
     protoscope::app::Application application;
@@ -1367,7 +1389,8 @@ void test_application_wave_legend_visibility_config_roundtrip()
     config.gui.interactionFeedback.enabled = false;
     config.gui.wave.interactionAnimationEnabled = true;
     require(application.applyConfig(config), "全局交互反馈配置应用失败");
-    require(application.docks().waveState().view.interactionAnimationEnabled, "全局关闭不应覆盖 Wave Dock 局部动效开关");
+    require(application.docks().waveState().view.interactionAnimationEnabled,
+            "全局关闭不应覆盖 Wave Dock 局部动效开关");
     require(!application.docks().waveState().view.effectiveInteractionAnimationEnabled,
             "全局关闭时 Wave Dock effective 动效应关闭");
     {
@@ -1766,10 +1789,8 @@ void test_application_plot_setup_reset_history_preserves_channel_overrides()
     require(std::abs(spec->ratio - 3.0) < 1e-12, "reset_history 不应清除 ratio 覆盖");
     require(std::abs(spec->scale - 4.0) < 1e-12, "reset_history 不应清除 scale 覆盖");
     require(std::abs(spec->offset - 10.0) < 1e-12, "reset_history 不应清除 offset 覆盖");
-    require(spec->color.has_value() && std::abs((*spec->color)[0] - 0.9F) < 1e-6F,
-            "reset_history 不应清除 color 覆盖");
-    require(std::abs(spec->bitDisplay.yOffset - 6.0) < 1e-12,
-            "reset_history 不应清除 bit_y_offset 覆盖");
+    require(spec->color.has_value() && std::abs((*spec->color)[0] - 0.9F) < 1e-6F, "reset_history 不应清除 color 覆盖");
+    require(std::abs(spec->bitDisplay.yOffset - 6.0) < 1e-12, "reset_history 不应清除 bit_y_offset 覆盖");
     require(wave.channelOverrides.size() == 1 && wave.channelOverrides[0].colorOverridden,
             "覆盖状态应保留 colorOverridden 标记");
     require(wave.defaultChannelSpecs.size() == 1 && wave.defaultChannelSpecs[0].label == "温度A",
@@ -1987,11 +2008,14 @@ void test_application_session_package_export_contains_replay_assets()
 
     protoscope::app::Application importedApplication;
     require(importedApplication.initialize(), "导入应用初始化失败");
+    importedApplication.setGuiTheme(protoscope::config::GuiTheme::DebugHighContrast);
     require(importedApplication.importSessionPackage(packagePath, error), "导入现场会话包应成功");
     const auto& importedLua = importedApplication.docks().luaState();
     require(importedLua.protocolDir.find("ProtoScope-session-protocol-") != std::string::npos,
             "导入现场包应使用释放出的临时协议目录");
     const auto importedConfig = importedApplication.captureConfig();
+    require(importedConfig.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
+            "现场包导入不应覆盖本机全局主题偏好");
     require(importedConfig.protocol.selectedDir.find("ProtoScope-session-protocol-") == std::string::npos,
             "保存配置时不应写入现场包临时协议目录");
     require(importedApplication.docks().waveState().rawCapture.payload == transportState->queuedRxBytes,
@@ -2410,16 +2434,14 @@ void test_application_raw_capture_replay_populates_parsed_receive_rows()
     require(receive.rows.size() == 2U, "两个录制事件应保留为两条原始接收记录");
     require(receive.frameRows.size() == 1U, "跨事件拼成完整帧后应生成一条逐帧记录");
     require(receive.frameRows.front().bytes == frame, "逐帧记录应保留完整帧字节");
-    require(receive.frameRows.front().message.find("value=52") != std::string::npos,
-            "逐帧记录应包含 schema 解析字段");
+    require(receive.frameRows.front().message.find("value=52") != std::string::npos, "逐帧记录应包含 schema 解析字段");
 
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
     require(receive.frameRows.size() == 1U, "切换逐帧视图不应清空预生成的回放帧");
 
     require(application.seekRawCaptureReplay(1, error), "逐帧回放应可向后定位到半帧位置");
-    require(receive.rows.size() == 1U && receive.frameRows.empty(),
-            "向后定位后原始行和逐帧结果应重建到目标位置");
+    require(receive.rows.size() == 1U && receive.frameRows.empty(), "向后定位后原始行和逐帧结果应重建到目标位置");
     require(application.seekRawCaptureReplay(2, error), "逐帧回放应可重新定位到完整帧位置");
     require(receive.rows.size() == 2U && receive.frameRows.size() == 1U,
             "重新定位到完整帧位置后应恢复对应原始行和解析帧");
@@ -3586,10 +3608,8 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
     });
     require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
             "CPU 高压力应立即进入 high");
-    require(std::abs(controller.status().effectiveMultiplier - 1.0) < 1e-12,
-            "high 压力下 K=2 应回落到 1.0");
-    require(std::abs(controller.status().catchUpMultiplier - 1.5) < 1e-12,
-            "系统高压且无软件积压时清债预算应温和收紧");
+    require(std::abs(controller.status().effectiveMultiplier - 1.0) < 1e-12, "high 压力下 K=2 应回落到 1.0");
+    require(std::abs(controller.status().catchUpMultiplier - 1.5) < 1e-12, "系统高压且无软件积压时清债预算应温和收紧");
 
     protoscope::app::AdaptivePerformanceController criticalSystemController;
     criticalSystemController.configure(protoscope::config::AdaptivePerformanceConfig{
@@ -3627,8 +3647,7 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
     });
     require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::Elevated,
             "连续五个健康采样后应只恢复一个压力等级");
-    require(controller.status().reason == "recovery_wait",
-            "滞回恢复期间状态原因应说明仍在等待恢复，而不是误报 normal");
+    require(controller.status().reason == "recovery_wait", "滞回恢复期间状态原因应说明仍在等待恢复，而不是误报 normal");
 
     controller.configure(protoscope::config::AdaptivePerformanceConfig{
         .enabled = true,
@@ -3644,10 +3663,8 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
             "系统指标缺失时原始 RX backlog 仍应驱动降档");
     require(std::abs(controller.status().effectiveMultiplier - 2.0) < 1e-12,
             "软件 backlog 高时渲染预算应降档释放主线程");
-    require(std::abs(controller.status().catchUpMultiplier - 4.0) < 1e-12,
-            "软件 backlog 高时清债预算不应被同步压低");
-    require(controller.budget().rxChunkBytesPerPump == 16384U,
-            "软件 backlog 高时 RX 清债预算应保持 K 档");
+    require(std::abs(controller.status().catchUpMultiplier - 4.0) < 1e-12, "软件 backlog 高时清债预算不应被同步压低");
+    require(controller.budget().rxChunkBytesPerPump == 16384U, "软件 backlog 高时 RX 清债预算应保持 K 档");
 }
 
 void test_application_adaptive_performance_keeps_static_config()

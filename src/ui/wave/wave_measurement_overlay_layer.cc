@@ -1,3 +1,5 @@
+#include "protoscope/ui/ui_theme.hpp"
+
 #include "wave_render_service.hpp"
 
 #include <algorithm>
@@ -422,15 +424,16 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
 
     const ImVec2 overlayMin(overlayMax.x - overlayWidth, plotPos.y + margin);
 
-    const ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.035F, 0.040F, 0.050F, 0.72F));
-    const ImU32 borderColor = ImGui::ColorConvertFloat4ToU32(ImVec4(1.000F, 1.000F, 1.000F, 0.15F));
-    const ImU32 accentColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.300F, 0.620F, 1.000F, 0.85F));
+    const auto& waveTokens = activeWaveStyleTokens();
+    const ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(waveTokens.measurementOverlayBackground);
+    const ImU32 borderColor = ImGui::ColorConvertFloat4ToU32(waveTokens.measurementOverlayBorder);
+    const ImU32 accentColor = ImGui::ColorConvertFloat4ToU32(waveTokens.measurementOverlayAccent);
 
-    const ImU32 titleColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.960F, 0.970F, 1.000F, 0.98F));
-    const ImU32 chipBgColor = ImGui::ColorConvertFloat4ToU32(ImVec4(1.000F, 1.000F, 1.000F, 0.075F));
-    const ImU32 chipBorderColor = ImGui::ColorConvertFloat4ToU32(ImVec4(1.000F, 1.000F, 1.000F, 0.12F));
-    const ImU32 chipLabelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.660F, 0.720F, 0.800F, 0.94F));
-    const ImU32 chipValueColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.940F, 0.960F, 0.990F, 0.98F));
+    const ImU32 titleColor = ImGui::ColorConvertFloat4ToU32(waveTokens.measurementOverlayTitle);
+    const ImU32 chipBgColor = ImGui::ColorConvertFloat4ToU32(waveTokens.measurementChipBackground);
+    const ImU32 chipBorderColor = ImGui::ColorConvertFloat4ToU32(waveTokens.measurementChipBorder);
+    const ImU32 chipLabelColor = ImGui::ColorConvertFloat4ToU32(waveTokens.measurementChipLabel);
+    const ImU32 chipValueColor = ImGui::ColorConvertFloat4ToU32(waveTokens.measurementChipValue);
 
     drawList->AddRectFilled(overlayMin, overlayMax, bgColor, overlayRounding);
     drawList->AddRect(overlayMin, overlayMax, borderColor, overlayRounding);

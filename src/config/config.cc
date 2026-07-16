@@ -295,12 +295,11 @@ namespace {
         {plot::WaveResetViewportAnchor::Latest, "latest"},
     }};
 
-    constexpr std::array<EnumNamePair<plot::WaveResetViewportAutoFollowMode>, 3>
-        kWaveResetViewportAutoFollowModeNames{{
-            {plot::WaveResetViewportAutoFollowMode::Existing, "existing"},
-            {plot::WaveResetViewportAutoFollowMode::Enable, "enable"},
-            {plot::WaveResetViewportAutoFollowMode::Disable, "disable"},
-        }};
+    constexpr std::array<EnumNamePair<plot::WaveResetViewportAutoFollowMode>, 3> kWaveResetViewportAutoFollowModeNames{{
+        {plot::WaveResetViewportAutoFollowMode::Existing, "existing"},
+        {plot::WaveResetViewportAutoFollowMode::Enable, "enable"},
+        {plot::WaveResetViewportAutoFollowMode::Disable, "disable"},
+    }};
 
     constexpr std::array<EnumNamePair<plot::WaveLegendOverlayOpenMode>, 3> kWaveLegendOverlayOpenModeNames{{
         {plot::WaveLegendOverlayOpenMode::Hover, "hover"},
@@ -311,6 +310,11 @@ namespace {
     constexpr std::array<EnumNamePair<GuiWaveFullscreenMode>, 2> kWaveFullscreenModeNames{{
         {GuiWaveFullscreenMode::Focus, "focus"},
         {GuiWaveFullscreenMode::Overlay, "overlay"},
+    }};
+
+    constexpr std::array<EnumNamePair<GuiTheme>, 2> kGuiThemeNames{{
+        {GuiTheme::ProfessionalDark, "professional_dark"},
+        {GuiTheme::DebugHighContrast, "debug_high_contrast"},
     }};
 
     constexpr std::array<EnumNamePair<GuiFontChineseGlyphRange>, 2> kFontChineseGlyphRangeNames{{
@@ -369,8 +373,7 @@ namespace {
     }
 
     plot::WaveChannelScaleWheelAcceleration parseWaveChannelScaleWheelAcceleration(
-        const std::string& value,
-        plot::WaveChannelScaleWheelAcceleration fallback)
+        const std::string& value, plot::WaveChannelScaleWheelAcceleration fallback)
     {
         return lookupEnum(std::string_view{value}, kWaveChannelScaleWheelAccelerationNames, fallback);
     }
@@ -457,8 +460,8 @@ namespace {
         return enumToText(mode, kWaveMouseYOffsetDragModeNames, "direct");
     }
 
-    plot::WaveResetViewportScaleMode parseWaveResetViewportScaleMode(
-        const std::string& value, plot::WaveResetViewportScaleMode fallback)
+    plot::WaveResetViewportScaleMode parseWaveResetViewportScaleMode(const std::string& value,
+                                                                     plot::WaveResetViewportScaleMode fallback)
     {
         return lookupEnum(std::string_view{value}, kWaveResetViewportScaleModeNames, fallback);
     }
@@ -524,6 +527,11 @@ namespace {
     const char* toRendererBackendText(const GuiRendererBackend backend)
     {
         return enumToText(backend, kRendererBackendNames, "opengl");
+    }
+
+    const char* toGuiThemeText(const GuiTheme theme)
+    {
+        return enumToText(theme, kGuiThemeNames, "professional_dark");
     }
 
     double positiveOrFallback(double value, double fallback)
@@ -655,8 +663,8 @@ namespace {
                                     "y_axis_double_click_action",
                                     toWaveYAxisDoubleClickActionText(config.gui.wave.yAxisDoubleClickAction)),
             config.gui.wave.yAxisDoubleClickAction);
-        config.gui.wave.yAxisDoubleClickAdjustOffset = readScalar<bool>(
-            wave, "y_axis_double_click_adjust_offset", config.gui.wave.yAxisDoubleClickAdjustOffset);
+        config.gui.wave.yAxisDoubleClickAdjustOffset =
+            readScalar<bool>(wave, "y_axis_double_click_adjust_offset", config.gui.wave.yAxisDoubleClickAdjustOffset);
         config.gui.wave.hiddenChannelPolicy = parseWaveHiddenChannelPolicy(
             readScalar<std::string>(
                 wave, "hidden_channel_policy", toWaveHiddenChannelPolicyText(config.gui.wave.hiddenChannelPolicy)),
@@ -718,8 +726,8 @@ namespace {
             config.gui.wave.fullscreenMode);
         if (const auto resetViewport = childNode(wave, "reset_viewport")) {
             auto& policy = config.gui.wave.resetViewport;
-            policy.applyOnPlotSetupReset = readScalar<bool>(
-                resetViewport, "apply_on_plot_setup_reset", policy.applyOnPlotSetupReset);
+            policy.applyOnPlotSetupReset =
+                readScalar<bool>(resetViewport, "apply_on_plot_setup_reset", policy.applyOnPlotSetupReset);
             policy.applyOnManualClear =
                 readScalar<bool>(resetViewport, "apply_on_manual_clear", policy.applyOnManualClear);
             policy.applyOnRawImport = readScalar<bool>(resetViewport, "apply_on_raw_import", policy.applyOnRawImport);
@@ -823,10 +831,11 @@ namespace {
     void loadGuiConfig(const YAML::Node& root, AppConfig& config)
     {
         const auto gui = root["gui"];
+        const auto themeText = readScalar<std::string>(gui, "theme", toGuiThemeText(config.gui.theme));
+        config.gui.theme = lookupEnum(std::string_view{themeText}, kGuiThemeNames, GuiTheme::ProfessionalDark);
         const auto rendererBackendText =
             readScalar<std::string>(gui, "renderer_backend", toRendererBackendText(config.gui.rendererBackend));
-        config.gui.rendererBackend =
-            parseGuiRendererBackend(rendererBackendText).value_or(GuiRendererBackend::OpenGL);
+        config.gui.rendererBackend = parseGuiRendererBackend(rendererBackendText).value_or(GuiRendererBackend::OpenGL);
         loadGuiWindowConfig(gui, config);
         loadGuiFontConfig(gui, config);
         loadGuiInteractionFeedbackConfig(gui, config);
@@ -1160,6 +1169,7 @@ namespace {
     void writeGuiConfig(YAML::Node& root, const AppConfig& config, const AppConfig& scaledDefaults)
     {
         auto gui = root["gui"];
+        gui["theme"] = toGuiThemeText(config.gui.theme);
         gui["renderer_backend"] = toRendererBackendText(config.gui.rendererBackend);
         gui["window"]["title"] = config.gui.window.title;
         gui["window"]["width"] = config.gui.window.width;
@@ -1368,6 +1378,11 @@ std::optional<GuiRendererBackend> parseGuiRendererBackend(std::string_view value
 std::string_view guiRendererBackendId(const GuiRendererBackend backend)
 {
     return toRendererBackendText(backend);
+}
+
+std::string_view guiThemeId(const GuiTheme theme)
+{
+    return toGuiThemeText(theme);
 }
 
 ConfigStore::ConfigStore()
@@ -1687,8 +1702,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.showFftLegend = dockStore.waveState().view.showFftLegend;
     config.gui.wave.followMeasurementCursorsOnScroll = dockStore.waveState().view.followMeasurementCursorsOnScroll;
     config.gui.wave.cursorFftHighlightRgba = dockStore.waveState().view.cursorFftHighlightRgba;
-    config.gui.wave.resetViewport.applyOnPlotSetupReset =
-        dockStore.waveState().view.resetViewportApplyOnPlotSetupReset;
+    config.gui.wave.resetViewport.applyOnPlotSetupReset = dockStore.waveState().view.resetViewportApplyOnPlotSetupReset;
     config.gui.wave.resetViewport.applyOnManualClear = dockStore.waveState().view.resetViewportApplyOnManualClear;
     config.gui.wave.resetViewport.applyOnRawImport = dockStore.waveState().view.resetViewportApplyOnRawImport;
     config.gui.wave.resetViewport.xScale = dockStore.waveState().view.defaultViewportXScale;

@@ -536,8 +536,7 @@ end
     const auto& descriptor = controls[0];
     require(descriptor.type == protoscope::scripting::ControlType::TxSequence, "应解析 tx_sequence 控件类型");
     require(descriptor.txSequenceFields.size() == 4, "应解析 4 个 tx_sequence 字段");
-    require(descriptor.txSequenceFields[0].type == protoscope::scripting::TxSequenceFieldType::U8,
-            "func 应为 u8 字段");
+    require(descriptor.txSequenceFields[0].type == protoscope::scripting::TxSequenceFieldType::U8, "func 应为 u8 字段");
     require(descriptor.txSequenceFields[0].radix == protoscope::scripting::TxSequenceFieldRadix::Hex,
             "func 应为 hex 显示");
     require(descriptor.txSequenceFields[0].options.size() == 3, "func 应解析 3 个下拉选项");
@@ -590,7 +589,8 @@ end
         writeMainLua(protocolDir.path(), script.c_str());
 
         protoscope::scripting::ScriptHost host;
-        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "非法 tx_sequence options 应加载失败");
+        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()),
+                "非法 tx_sequence options 应加载失败");
         require(host.lastError().find("tx_sequence field option") != std::string::npos ||
                     host.lastError().find("tx_sequence 字段 func") != std::string::npos,
                 "非法 tx_sequence options 应记录明确错误");
@@ -617,8 +617,7 @@ end
 
     protoscope::scripting::ScriptHost host;
     require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "非法 tx_sequence 配置应加载失败");
-    require(host.lastError().find("tx_sequence field type") != std::string::npos,
-            "非法 tx_sequence 应记录明确错误");
+    require(host.lastError().find("tx_sequence field type") != std::string::npos, "非法 tx_sequence 应记录明确错误");
 }
 
 void test_script_tx_sequence_timer_send_flow()
@@ -2526,8 +2525,7 @@ void test_config_default_roundtrip()
     require(config.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue,
             "网格每格读数默认值应为 display_value");
     require(config.gui.wave.channelScaleWheelEnabled, "通道 Scale 1-2-5 滚轮默认应开启");
-    require(config.gui.wave.channelScaleWheelAcceleration ==
-                protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
+    require(config.gui.wave.channelScaleWheelAcceleration == protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
             "通道 Scale 滚轮加速默认值应为 log");
     require(config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "CH 卡片宽度模式默认值应为 fixed");
@@ -2566,6 +2564,7 @@ void test_config_default_roundtrip()
             "波形全屏模式默认应为 overlay");
     require(config.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
             "GUI 渲染后端默认应为 opengl");
+    require(config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark, "GUI 主题默认应为 professional_dark");
     require(config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
             "中文字体默认应只加载常用简中字形");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
@@ -2808,8 +2807,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
     dockStore.waveState().view.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
     dockStore.waveState().view.channelScaleWheelEnabled = true;
-    dockStore.waveState().view.channelScaleWheelAcceleration =
-        protoscope::plot::WaveChannelScaleWheelAcceleration::Log;
+    dockStore.waveState().view.channelScaleWheelAcceleration = protoscope::plot::WaveChannelScaleWheelAcceleration::Log;
     dockStore.waveState().view.cursorFftHighlightRgba = {0.70F, 0.60F, 0.50F, 0.40F};
     dockStore.waveState().view.followMeasurementCursorsOnScroll = false;
     dockStore.waveState().view.peakDetectDownsample = true;
@@ -2820,8 +2818,7 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     require(captured.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::RawValue,
             "captureFromDock 应捕获网格每格读数模式");
     require(captured.gui.wave.channelScaleWheelEnabled, "captureFromDock 应捕获通道 Scale 滚轮开关");
-    require(captured.gui.wave.channelScaleWheelAcceleration ==
-                protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
+    require(captured.gui.wave.channelScaleWheelAcceleration == protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
             "captureFromDock 应捕获通道 Scale 滚轮加速");
     require(std::abs(captured.gui.wave.cursorFftHighlightRgba[0] - 0.70F) < 1e-6F &&
                 std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
@@ -2851,11 +2848,49 @@ void test_config_repo_default_yaml_loads()
             "源码默认配置应读取 overlay 波形全屏模式");
     require(loaded.config.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
             "源码默认配置应读取 opengl 渲染后端");
+    require(loaded.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
+            "源码默认配置应读取 professional_dark 主题");
     require(loaded.config.gui.wave.peakDetectDownsample, "源码默认配置应开启 peak-detect 降采样");
     require(loaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "源码默认配置应开启图例双击展开自动收起");
     require(loaded.config.gui.interactionFeedback.enabled, "源码默认配置应开启全局交互反馈");
     require(loaded.config.gui.interactionFeedback.statusDurationMs == 2000,
             "源码默认配置应保持全局交互反馈状态提示 2000ms");
+}
+
+void test_config_gui_theme_values_and_fallback()
+{
+    protoscope::config::ConfigStore store;
+
+    const auto professional = store.loadText("gui:\n  theme: professional_dark\n");
+    require(professional.error.empty(), "professional_dark 主题配置应可读取");
+    require(professional.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
+            "professional_dark 应映射到专业深色主题");
+
+    const auto highContrast = store.loadText("gui:\n  theme: debug_high_contrast\n");
+    require(highContrast.error.empty(), "debug_high_contrast 主题配置应可读取");
+    require(highContrast.config.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
+            "debug_high_contrast 应映射到示波器高对比主题");
+
+    const auto missing = store.loadText("gui:\n  show_app_header: false\n");
+    require(missing.error.empty(), "缺失 theme 字段时配置仍应可读取");
+    require(missing.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
+            "缺失 theme 字段应回退到 professional_dark");
+
+    const auto invalid = store.loadText("gui:\n  theme: neon_unknown\n");
+    require(invalid.error.empty(), "非法 theme 字段不应导致配置读取失败");
+    require(invalid.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
+            "非法 theme 字段应回退到 professional_dark");
+
+    auto savedConfig = highContrast.config;
+    std::string yamlText;
+    std::string error;
+    require(store.saveText(savedConfig, yamlText, error), "高对比主题配置应可保存");
+    require(yamlText.find("theme: debug_high_contrast") != std::string::npos,
+            "保存配置应写出 debug_high_contrast 标识");
+    const auto reloaded = store.loadText(yamlText);
+    require(reloaded.error.empty(), "保存后的高对比主题配置应可重新读取");
+    require(reloaded.config.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
+            "高对比主题保存并重载后应保持一致");
 }
 
 void test_script_file_io_proto_buffer_roundtrip()
@@ -3043,8 +3078,7 @@ void test_config_wave_mode_invalid_fallback()
             "非法 display_formula 应回退到 offset_then_scale");
     require(loaded.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue,
             "非法 grid_division_readout_mode 应回退到 display_value");
-    require(loaded.gui.wave.channelScaleWheelAcceleration ==
-                protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
+    require(loaded.gui.wave.channelScaleWheelAcceleration == protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
             "非法 channel_scale_wheel.acceleration 应回退到 log");
     require(loaded.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "非法 channel_card_width_mode 应回退到 fixed");
@@ -3418,7 +3452,8 @@ void test_half_duplex_modbus_oscilloscope_toolbar_waits_for_ack()
             host.onTransportBytes(
                 protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc16Ack(readBe16(request.payload, 2), 2)});
         } else {
-            host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc06Ack(0x8888U, 0x0001U)});
+            host.onTransportBytes(
+                protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc06Ack(0x8888U, 0x0001U)});
         }
         host.drainRequestDoneResults();
     }

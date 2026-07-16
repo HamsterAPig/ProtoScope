@@ -93,6 +93,11 @@ enum class GuiWaveFullscreenMode {
     Overlay,
 };
 
+enum class GuiTheme {
+    ProfessionalDark,
+    DebugHighContrast,
+};
+
 struct GuiWaveResetViewportConfig {
     bool applyOnPlotSetupReset{true};
     bool applyOnManualClear{true};
@@ -108,8 +113,7 @@ struct GuiWaveConfig {
     plot::WaveDisplayFormula displayFormula{plot::WaveDisplayFormula::OffsetThenScale};
     plot::WaveGridDivisionReadoutMode gridDivisionReadoutMode{plot::WaveGridDivisionReadoutMode::DisplayValue};
     bool channelScaleWheelEnabled{true};
-    plot::WaveChannelScaleWheelAcceleration channelScaleWheelAcceleration{
-        plot::WaveChannelScaleWheelAcceleration::Log};
+    plot::WaveChannelScaleWheelAcceleration channelScaleWheelAcceleration{plot::WaveChannelScaleWheelAcceleration::Log};
     plot::WaveChannelCardWidthMode channelCardWidthMode{plot::WaveChannelCardWidthMode::Fixed};
     plot::WaveChannelDoubleClickAction channelDoubleClickAction{plot::WaveChannelDoubleClickAction::ResetScaleOffset};
     plot::WaveXAxisDoubleClickAction xAxisDoubleClickAction{plot::WaveXAxisDoubleClickAction::FitFullHistory};
@@ -189,6 +193,7 @@ struct GuiInteractionFeedbackConfig {
 };
 
 struct GuiConfig {
+    GuiTheme theme{GuiTheme::ProfessionalDark};
     GuiWindowConfig window{};
     GuiRendererBackend rendererBackend{GuiRendererBackend::OpenGL};
     GuiInteractionFeedbackConfig interactionFeedback{};
@@ -315,5 +320,6 @@ private:
 
 std::optional<GuiRendererBackend> parseGuiRendererBackend(std::string_view value);
 std::string_view guiRendererBackendId(GuiRendererBackend backend);
+std::string_view guiThemeId(GuiTheme theme);
 
 } // namespace protoscope::config

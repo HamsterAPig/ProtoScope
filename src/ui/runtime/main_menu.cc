@@ -24,6 +24,16 @@ namespace {
         {.label = "错误", .level = config::LogLevel::Error},
     };
 
+    struct ThemeMenuItem {
+        const char* label;
+        config::GuiTheme theme;
+    };
+
+    constexpr ThemeMenuItem kThemeMenuItems[] = {
+        {.label = "专业深色", .theme = config::GuiTheme::ProfessionalDark},
+        {.label = "示波器高对比", .theme = config::GuiTheme::DebugHighContrast},
+    };
+
     bool menuItemWithHelp(
         const char* label, const char* shortcut, const char* help, bool selected = false, bool enabled = true)
     {
@@ -239,6 +249,18 @@ void GuiRuntime::drawSettingsMenu()
             if (ImGui::MenuItem(item.label, nullptr, selected) && !selected) {
                 application_.setLogLevel(item.level);
                 application_.setStatusMessage(std::string("日志等级已切换为：") + item.label, true);
+            }
+        }
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("主题")) {
+        const auto currentTheme = application_.runtimeConfig().gui.theme;
+        for (const auto& item : kThemeMenuItems) {
+            const bool selected = currentTheme == item.theme;
+            if (ImGui::MenuItem(item.label, nullptr, selected) && !selected) {
+                application_.setGuiTheme(item.theme);
+                applyUiTheme(item.theme);
+                application_.setStatusMessage(std::string("主题已切换为：") + item.label, true);
             }
         }
         ImGui::EndMenu();

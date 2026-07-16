@@ -1,5 +1,6 @@
 #include "protoscope/app/application.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 
 #include <filesystem>
 
@@ -12,11 +13,12 @@ bool GuiRuntime::reloadConfigFromDisk()
     if (!application_.applyConfig(loaded.config)) {
         return false;
     }
+    applyUiTheme(loaded.config.gui.theme);
     if (loaded.config.gui.rendererBackend != options_.rendererBackend) {
-        application_.setStatusMessage(
-            "渲染后端配置已更新为 " +
-                std::string(config::guiRendererBackendId(loaded.config.gui.rendererBackend)) + "，重启后生效",
-            false);
+        application_.setStatusMessage("渲染后端配置已更新为 " +
+                                          std::string(config::guiRendererBackendId(loaded.config.gui.rendererBackend)) +
+                                          "，重启后生效",
+                                      false);
     }
     loadCurrentProtocolWorkspace();
     configSnapshot_ = configStore_.snapshot(configStore_.defaultConfigPath());
