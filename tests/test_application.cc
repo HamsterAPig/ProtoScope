@@ -1455,7 +1455,7 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
             "captureConfig 默认应保持 X 轴双击全历史缩放");
     require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "captureConfig 默认应保持 Y 轴双击适配可见通道");
-    require(config.gui.wave.yAxisDoubleClickAdjustOffset, "captureConfig 默认应保持 Y 轴双击同步调整 offset");
+    require(!config.gui.wave.yAxisDoubleClickAdjustOffset, "captureConfig 默认应保持 Y 轴双击只调整 scale");
 
     config.gui.wave.zoomSelectionAutoExit = true;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;

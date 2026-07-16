@@ -45,7 +45,8 @@ void drawChannelCardTooltip(const plot::WaveViewState& view, const plot::Channel
     ImGui::TextUnformatted(spec.label.c_str());
     ImGui::Text("单位：%s", spec.unit.empty() ? "-" : spec.unit.c_str());
     ImGui::Text("Ratio：%.6g", spec.ratio);
-    if (view.channelScaleDisplayMode == plot::WaveChannelScaleDisplayMode::ValuePerDivision) {
+    if (view.channelScaleDisplayMode == plot::WaveChannelScaleDisplayMode::ValuePerDivision &&
+        !bitDisplayEnabled(spec.bitDisplay)) {
         const auto valuePerDivision =
             plot::waveActualValuePerDivision(view.viewMinValue, view.viewMaxValue, spec.scale);
         if (valuePerDivision.has_value()) {

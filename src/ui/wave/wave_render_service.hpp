@@ -182,6 +182,7 @@ bool handleMainPlotAxisDoubleClick(plot::WaveDockState& wave,
 enum class WaveViewportAutoFollowPolicy {
     Preserve,
     UserInteraction,
+    OverviewDrag,
     ExplicitCommand,
 };
 void applyAutoFollowPausePolicy(plot::WaveViewState& view, WaveViewportAutoFollowPolicy policy);

@@ -914,53 +914,6 @@ std::optional<VisibleActualRange> visibleActualRangeForChannel(const plot::Chann
     };
 }
 
-std::optional<double> constrainedYAxisMagnitudeForFixedOffset(const plot::WaveViewState& view,
-                                                              const plot::ChannelSpec& updated,
-                                                              const VisibleActualRange& actual,
-                                                              double targetMagnitude,
-                                                              double sign,
-                                                              double viewMin,
-                                                              double viewMax)
-{
-    double lowerMagnitude = 0.0;
-    double upperMagnitude = std::numeric_limits<double>::infinity();
-    bool feasible = true;
-    const auto applyFixedOffsetConstraint = [&](double basis, double additive) {
-        if (!std::isfinite(basis) || !feasible) {
-            feasible = false;
-            return;
-        }
-        if (std::abs(basis) <= 1e-12) {
-            feasible = viewMin <= additive && additive <= viewMax;
-            return;
-        }
-        double lower = (viewMin - additive) / basis;
-        double upper = (viewMax - additive) / basis;
-        if (lower > upper) {
-            std::swap(lower, upper);
-        }
-        lowerMagnitude = (std::max)(lowerMagnitude, lower);
-        upperMagnitude = (std::min)(upperMagnitude, upper);
-    };
-
-    if (view.displayFormula == plot::WaveDisplayFormula::ScaleThenOffset) {
-        applyFixedOffsetConstraint(sign * actual.min, updated.offset);
-        applyFixedOffsetConstraint(sign * actual.max, updated.offset);
-    } else {
-        applyFixedOffsetConstraint(sign * (actual.min + updated.offset), 0.0);
-        applyFixedOffsetConstraint(sign * (actual.max + updated.offset), 0.0);
-    }
-
-    if (!feasible || lowerMagnitude < -1e-12 || lowerMagnitude - upperMagnitude > 1e-12) {
-        return std::nullopt;
-    }
-    const double safeMagnitude = (std::min)(targetMagnitude, upperMagnitude);
-    if (!std::isfinite(safeMagnitude) || safeMagnitude + 1e-12 < lowerMagnitude || safeMagnitude <= 1e-12) {
-        return std::nullopt;
-    }
-    return safeMagnitude;
-}
-
 bool applyYAxisSingleSideScaleToChannels(plot::WaveDockState& wave,
                                          const plot::WaveSnapshot& snapshot,
                                          const std::vector<std::size_t>& visibleChannelIndices)
@@ -1010,19 +963,12 @@ bool applyYAxisSingleSideScaleToChannels(plot::WaveDockState& wave,
         updated.scale = sign * targetMagnitude;
 
         if (wave.view.yAxisDoubleClickAdjustOffset) {
-            // 核心流程：默认同步反推 offset，让实际值区间落在当前 Y 视口内部目标区间。
+            // 显式开启兼容模式时同步反推 offset，让实际值区间落在当前 Y 视口内部目标区间。
             if (wave.view.displayFormula == plot::WaveDisplayFormula::ScaleThenOffset) {
                 updated.offset = viewCenter - actual->center * updated.scale;
             } else {
                 updated.offset = viewCenter / updated.scale - actual->center;
             }
-        } else {
-            const auto safeMagnitude = constrainedYAxisMagnitudeForFixedOffset(
-                wave.view, updated, *actual, targetMagnitude, sign, viewMin, viewMax);
-            if (!safeMagnitude.has_value()) {
-                continue;
-            }
-            updated.scale = sign * *safeMagnitude;
         }
         applyChannelTransformOverride(
             wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *currentSpec));
@@ -1185,6 +1131,10 @@ void applyAutoFollowPausePolicy(plot::WaveViewState& view, WaveViewportAutoFollo
             if (view.pauseAutoFollowOnInteraction) {
                 view.autoFollowLatest = false;
             }
+            return;
+        case WaveViewportAutoFollowPolicy::OverviewDrag:
+            // 概览框拖动代表用户明确选择历史窗口，始终停留在放下位置。
+            view.autoFollowLatest = false;
             return;
         case WaveViewportAutoFollowPolicy::ExplicitCommand:
             view.autoFollowLatest = false;
