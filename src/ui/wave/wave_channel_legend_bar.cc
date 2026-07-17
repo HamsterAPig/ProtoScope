@@ -1,3 +1,5 @@
+#include "protoscope/ui/ui_theme.hpp"
+
 #include "wave_render_service.hpp"
 
 #include <algorithm>
@@ -316,7 +318,7 @@ namespace {
         const bool hovered = ImGui::IsItemHovered();
         drawChannelLegendCardBody(cardMin, cardSize, cardStyle, spec, view, channelIndex, active);
         if (hovered) {
-            drawChannelCardTooltip(spec, active);
+            drawChannelCardTooltip(wave.view, spec, active);
         }
         if (ImGui::BeginPopupContextItem("##channel_popup")) {
             drawChannelLegendPopup(wave, channelIndex, spec, active);
@@ -594,12 +596,22 @@ namespace {
             auto* drawList = ImGui::GetWindowDrawList();
             const ImVec2 rowMax(rowMin.x + rowSize.x, rowMin.y + rowSize.y);
             const ImVec4 tint = channelColor(*spec, channelIndex);
+            const auto& waveTokens = activeWaveStyleTokens();
             if (active || hovered) {
-                const ImVec4 fill = active ? ImVec4(tint.x, tint.y, tint.z, 0.24F) : ImVec4(1.0F, 1.0F, 1.0F, 0.06F);
+                const ImVec4 fill =
+                    active ? (waveTokens.legendOverlayRowActive.w > 0.0F
+                                  ? waveTokens.legendOverlayRowActive
+                                  : ImVec4(tint.x, tint.y, tint.z, 0.24F))
+                           : (waveTokens.legendOverlayRowHover.w > 0.0F
+                                  ? waveTokens.legendOverlayRowHover
+                                  : ImVec4(1.0F, 1.0F, 1.0F, 0.06F));
                 drawList->AddRectFilled(rowMin, rowMax, ImGui::GetColorU32(fill), 4.0F);
             }
             if (active) {
-                drawList->AddRect(rowMin, rowMax, ImGui::ColorConvertFloat4ToU32(tint), 4.0F, 0, 1.5F);
+                const ImVec4 border = waveTokens.legendOverlayRowActiveBorder.w > 0.0F
+                                          ? waveTokens.legendOverlayRowActiveBorder
+                                          : tint;
+                drawList->AddRect(rowMin, rowMax, ImGui::ColorConvertFloat4ToU32(border), 4.0F, 0, 1.5F);
             }
 
             float x = rowMin.x + 4.0F;
@@ -667,9 +679,6 @@ namespace {
         const bool active = channelIndex == wave.view.measurementChannelIndex;
         const bool bitChannel = bitDisplayEnabled(spec.bitDisplay);
         LegendRowBlankHitTest blankHitTest;
-        if (active) {
-            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImVec4(0.20F, 0.38F, 0.22F, 0.42F)));
-        }
 
         ImGui::TableNextColumn();
         recordCurrentTableCell(blankHitTest);
@@ -696,7 +705,11 @@ namespace {
 
         ImGui::TableNextColumn();
         recordCurrentTableCell(blankHitTest);
-        ImGui::Text("CH%zu", channelIndex + 1U);
+        if (activeWaveStyleTokens().legendOverlayRowActiveBorder.w > 0.0F) {
+            ImGui::TextDisabled("CH%zu", channelIndex + 1U);
+        } else {
+            ImGui::Text("CH%zu", channelIndex + 1U);
+        }
         if (bitChannel) {
             ImGui::SameLine();
             ImGui::TextDisabled(
@@ -738,7 +751,7 @@ namespace {
         if (bitChannel) {
             ImGui::BeginDisabled();
         }
-        if (ImGui::InputDouble("##scale", &updated.scale, 0.0, 0.0, "%.4g") && !bitChannel) {
+        if (drawChannelActualValuePerDivisionEditor("##scale", wave.view, updated, "%.4g") && !bitChannel) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
         if (bitChannel) {
@@ -777,6 +790,26 @@ namespace {
         }
         ImGui::SetItemTooltip("恢复该通道的颜色、名称、比例和偏移；不清空波形数据。");
         recordLastItem(blankHitTest);
+        const auto& waveTokens = activeWaveStyleTokens();
+        const bool hovered = blankHitTest.hasRowRect &&
+                             ImGui::IsMouseHoveringRect(blankHitTest.rowRect.Min, blankHitTest.rowRect.Max);
+        if (active) {
+            const ImVec4 fill = waveTokens.legendOverlayRowActive.w > 0.0F
+                                    ? waveTokens.legendOverlayRowActive
+                                    : ImVec4(0.20F, 0.38F, 0.22F, 0.42F);
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(fill));
+            if (waveTokens.legendOverlayRowActiveBorder.w > 0.0F && blankHitTest.hasRowRect) {
+                ImGui::GetWindowDrawList()->AddRect(blankHitTest.rowRect.Min,
+                                                    blankHitTest.rowRect.Max,
+                                                    ImGui::GetColorU32(waveTokens.legendOverlayRowActiveBorder),
+                                                    3.0F,
+                                                    0,
+                                                    1.5F);
+            }
+        } else if (hovered && waveTokens.legendOverlayRowHover.w > 0.0F) {
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                   ImGui::GetColorU32(waveTokens.legendOverlayRowHover));
+        }
         activateLegendRowFromBlankArea(wave, blankHitTest, channelIndex);
         ImGui::PopID();
     }
@@ -802,7 +835,7 @@ namespace {
                     ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthStretch, 120.0F);
                 }
                 ImGui::TableSetupColumn("Ratio", ImGuiTableColumnFlags_WidthFixed, 68.0F);
-                ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+                ImGui::TableSetupColumn("实际值/格", ImGuiTableColumnFlags_WidthFixed, 68.0F);
                 ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, 78.0F);
                 ImGui::TableSetupColumn("操作", ImGuiTableColumnFlags_WidthFixed, 118.0F);
                 ImGui::TableHeadersRow();
@@ -979,14 +1012,35 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
     }
     ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
-    const float bgAlpha = 0.78F + (0.96F - 0.78F) * overlayProgress;
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.051F, 0.075F, 0.106F, bgAlpha));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.30F, 0.42F, 0.54F, 0.55F));
+    const float animatedBgAlpha = 0.78F + (0.96F - 0.78F) * overlayProgress;
+    const auto& waveTokens = activeWaveStyleTokens();
+    const float bgAlpha =
+        waveTokens.legendOverlayBackground.w < 1.0F ? waveTokens.legendOverlayBackground.w : animatedBgAlpha;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0F, 0.0F, 0.0F, 0.0F));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.0F, 0.0F, 0.0F, 0.0F));
+    ImGui::PushStyleColor(ImGuiCol_Text, waveTokens.legendOverlayTextPrimary);
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled, waveTokens.legendOverlayTextSecondary);
+    ImGui::PushStyleColor(
+        ImGuiCol_ChildBg,
+        waveTokens.legendOverlayRowActiveBorder.w > 0.0F ? ImVec4(0.0F, 0.0F, 0.0F, 0.0F)
+                                                        : ImGui::GetStyleColorVec4(ImGuiCol_ChildBg));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                                    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoFocusOnAppearing;
     if (ImGui::Begin("##wave_channel_overlay_legend", nullptr, flags)) {
         ImGuiWindow* legendWindow = ImGui::GetCurrentWindow();
+        const ImVec2 legendMin = ImGui::GetWindowPos();
+        const ImVec2 legendMax(legendMin.x + ImGui::GetWindowWidth(), legendMin.y + ImGui::GetWindowHeight());
+        auto* drawList = ImGui::GetWindowDrawList();
+        // 图例背景独立于通用 WindowBg 绘制，避免主题切换后继承灰白窗口底色。
+        drawList->AddRectFilled(
+            legendMin,
+            legendMax,
+            ImGui::GetColorU32(ImVec4(waveTokens.legendOverlayBackground.x,
+                                      waveTokens.legendOverlayBackground.y,
+                                      waveTokens.legendOverlayBackground.z,
+                                      bgAlpha)),
+            ImGui::GetStyle().WindowRounding);
         bool legendPopupOpen = legendOverlayPopupOpen(legendWindow);
         if (layerPolicy == WaveLegendOverlayLayerPolicy::ForceDisplayFront && !legendPopupOpen) {
             ImGui::BringWindowToDisplayFront(legendWindow);
@@ -1014,9 +1068,15 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
         }
 
         updateLegendOverlayInteractionState(wave, legendPopupOpen, hovered, mouseInActualWindow, collapseRequested);
+        drawList->AddRect(legendMin,
+                          legendMax,
+                          ImGui::GetColorU32(waveTokens.legendOverlayBorder),
+                          ImGui::GetStyle().WindowRounding,
+                          0,
+                          1.0F);
     }
     ImGui::End();
-    ImGui::PopStyleColor(2);
+    ImGui::PopStyleColor(5);
     ImGui::PopStyleVar(3);
 }
 

@@ -22,7 +22,7 @@ local UPLOAD_SAMPLE_RATE_HZ = UPLOAD_BATCH_FRAMES * 1000.0 / UPLOAD_TICK_MS
 local FUNDAMENTAL_HZ = 50.0
 local FUNDAMENTAL_PHASE_STEP = 2.0 * math.pi * FUNDAMENTAL_HZ / UPLOAD_SAMPLE_RATE_HZ
 local THIRD_HARMONIC_RATIO = 0.5
-local TIMER_NAME = "sn_scope_upload_tick"
+local TIMER_NAME = "half_duplex_modbus_upload_tick"
 local CHANNEL_SCALE = 1000
 
 local registers = {}
@@ -299,8 +299,8 @@ end
 function ui()
   return {
     {
-      id = "sn_scope_slave",
-      title = "SN Scope Slave",
+      id = "half_duplex_modbus_slave",
+      title = "Half-Duplex Modbus Slave",
       anchor = "left_bottom",
       controls = {
         { type = "button", id = "noop", label = "从机自动应答中" },

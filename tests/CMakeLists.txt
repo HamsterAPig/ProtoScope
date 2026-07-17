@@ -60,6 +60,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         test_version_utils.cc
         test_update_check.cc
         test_transport.cc
+        test_ui_theme.cc
     )
     target_include_directories(protoscope_tests
         PRIVATE

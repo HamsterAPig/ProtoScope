@@ -55,6 +55,12 @@ enum class WaveGridDivisionReadoutMode {
     RawValue,
 };
 
+enum class WaveChannelScaleWheelAcceleration {
+    None,
+    Linear,
+    Log,
+};
+
 enum class WaveExtremeKind {
     Maximum,
     Minimum,
@@ -104,6 +110,19 @@ struct WaveValueRange {
     double maxValue{1.0};
 };
 
+struct WaveChannelScaleWheelState {
+    std::optional<std::size_t> channelIndex;
+    int direction{0};
+    std::size_t continuousStepCount{0};
+    double fractionalDelta{0.0};
+    double lastEventTimeSec{0.0};
+};
+
+struct WaveChannelScaleWheelResult {
+    double valuePerDivision{0.0};
+    std::size_t appliedNotches{0};
+};
+
 struct CursorIntervalText {
     bool valid{false};
     bool showFrequency{false};
@@ -149,10 +168,25 @@ const WaveDataBounds& selectXAxisDoubleClickBounds(WaveXAxisDoubleClickAction ac
                                                    const WaveDataBounds& visibleWindowBounds,
                                                    const WaveDataBounds& fullHistoryBounds);
 double waveDisplayValuePerDivision(double minValue, double maxValue);
+std::optional<double> waveActualValuePerDivision(double minValue, double maxValue, double scale);
+std::optional<double> waveScaleForActualValuePerDivision(double minValue,
+                                                         double maxValue,
+                                                         double targetValuePerDivision,
+                                                         double currentScale);
+std::optional<double> parseWaveScaleFromActualValuePerDivision(double minValue,
+                                                               double maxValue,
+                                                               std::string_view text,
+                                                               double currentScale);
 std::optional<double> waveChannelValuePerDivision(double displayValuePerDivision,
                                                   const ChannelSpec& spec,
                                                   WaveDisplayFormula formula,
                                                   WaveGridDivisionReadoutMode mode);
+WaveChannelScaleWheelResult stepWaveChannelValuePerDivision(double currentValuePerDivision,
+                                                            double wheelDelta,
+                                                            std::size_t channelIndex,
+                                                            double eventTimeSec,
+                                                            WaveChannelScaleWheelAcceleration acceleration,
+                                                            WaveChannelScaleWheelState& state);
 std::optional<CursorReadout> findNearestDisplayByTime(const WaveDisplayData& displayData,
                                                       std::size_t channelIndex,
                                                       double time,
@@ -176,7 +210,8 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
                           double centerValue,
                           const WaveDataBounds& bounds,
                           double minTimeWidth,
-                          bool clampTimeToBounds);
+                          bool clampTimeToBounds,
+                          bool fineAdjustmentEnabled = false);
 CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           const CursorReadout& right,
                                           WaveTimeAxisSource axisSource,

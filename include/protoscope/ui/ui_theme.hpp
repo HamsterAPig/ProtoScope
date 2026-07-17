@@ -1,5 +1,7 @@
 #pragma once
 
+#include "protoscope/config/config.hpp"
+
 #include <imgui.h>
 
 namespace protoscope::ui {
@@ -16,6 +18,7 @@ struct UiStyleTokens {
     ImVec4 danger;
     ImVec4 textStrong;
     ImVec4 textMuted;
+    ImVec4 genericPlotBackground;
     float windowRounding{10.0F};
     float frameRounding{8.0F};
     float grabRounding{8.0F};
@@ -28,6 +31,51 @@ struct UiStyleTokens {
     float framePaddingY{7.0F};
 };
 
+struct WaveStyleTokens {
+    ImVec4 plotBackground;
+    ImVec4 gridMajor;
+    ImVec4 gridMinorTick;
+    ImVec4 gridCenter;
+    ImVec4 statusOverlayBackground;
+    ImVec4 statusOverlayBorder;
+    ImVec4 statusOverlayText;
+    ImVec4 channelSeparator;
+    ImVec4 channelLabel;
+    ImVec4 splitChannelLabel;
+    ImVec4 bitLabel;
+    ImVec4 legendOverlayBackground;
+    ImVec4 legendOverlayBorder;
+    ImVec4 legendOverlayTextPrimary;
+    ImVec4 legendOverlayTextSecondary;
+    ImVec4 legendOverlayRowHover;
+    ImVec4 legendOverlayRowActive;
+    ImVec4 legendOverlayRowActiveBorder;
+    ImVec4 measurementOverlayBackground;
+    ImVec4 measurementOverlayBorder;
+    ImVec4 measurementOverlayAccent;
+    ImVec4 measurementOverlayTitle;
+    ImVec4 measurementChipBackground;
+    ImVec4 measurementChipBorder;
+    ImVec4 measurementChipLabel;
+    ImVec4 measurementChipValue;
+    float gridMajorWidth{1.0F};
+    float gridMinorTickWidth{1.0F};
+    float gridCenterWidth{1.4F};
+    float gridMinorTickHalfLength{2.0F};
+};
+
+struct UiThemeDefinition {
+    config::GuiTheme theme{config::GuiTheme::ProfessionalDark};
+    UiStyleTokens ui{};
+    WaveStyleTokens wave{};
+};
+
+const UiThemeDefinition& uiThemeDefinition(config::GuiTheme theme);
+const UiStyleTokens& activeUiStyleTokens();
+const WaveStyleTokens& activeWaveStyleTokens();
+void applyUiTheme(config::GuiTheme theme);
+
+// 兼容既有调用；返回当前活动主题令牌。
 const UiStyleTokens& defaultUiStyleTokens();
 void applyImGuiProfessionalDarkTheme();
 void applyImPlotProfessionalDarkTheme();

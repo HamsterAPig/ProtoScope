@@ -1,3 +1,5 @@
+#include "protoscope/ui/ui_theme.hpp"
+
 #include "wave_context.hpp"
 #include "wave_render_service.hpp"
 
@@ -180,9 +182,10 @@ void drawWaveStatusOverlay(const plot::WaveViewState& view,
     }
 
     auto* drawList = ImPlot::GetPlotDrawList();
-    const ImU32 chipBgColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.045F, 0.05F, 0.68F));
-    const ImU32 chipBorderColor = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 1.0F, 1.0F, 0.18F));
-    const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.92F, 0.94F, 0.98F, 0.95F));
+    const auto& waveTokens = activeWaveStyleTokens();
+    const ImU32 chipBgColor = ImGui::ColorConvertFloat4ToU32(waveTokens.statusOverlayBackground);
+    const ImU32 chipBorderColor = ImGui::ColorConvertFloat4ToU32(waveTokens.statusOverlayBorder);
+    const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(waveTokens.statusOverlayText);
 
     for (std::size_t index = 0; index < items.size(); ++index) {
         const ImVec2 chipMin(origin.x + layout.offsets[index].x, origin.y + layout.offsets[index].y);
@@ -658,8 +661,9 @@ namespace {
             return;
         }
         const ImPlotRect limits = ImPlot::GetPlotLimits();
-        const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.16F, 0.24F, 0.31F, 0.70F));
-        const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.89F, 0.94F, 0.76F));
+        const auto& waveTokens = activeWaveStyleTokens();
+        const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(waveTokens.channelSeparator);
+        const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(waveTokens.channelLabel);
         const ImVec2 plotPos = ImPlot::GetPlotPos();
         for (std::size_t channelIndex = 0;
              channelIndex < channelBaseY.size() && channelIndex < snapshot.channels.size();
@@ -847,7 +851,7 @@ void renderBitWaveChannels(plot::WaveDockState& wave,
 void drawBitLaneLabelsIfNeeded(const BitLaneLayout& bitLayout, const ImPlotRect& limits)
 {
     if (!bitLayout.lanes.empty()) {
-        const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.88F, 0.92F, 0.72F));
+        const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().bitLabel);
         drawBitLaneLabels(bitLayout, limits, labelColor);
     }
 }
@@ -1099,9 +1103,10 @@ namespace {
         explicit ScopedImPlotInputMap(const plot::WaveControlMode controlMode)
             : inputMap_(ImPlot::GetInputMap()), savedInputMap_(inputMap_)
         {
+            inputMap_.Fit = resolveMainPlotFitMouseButton(
+                controlMode, ImGui::GetIO().KeyShift, savedInputMap_.Fit, ImGuiMouseButton_Middle);
             if (controlMode == plot::WaveControlMode::Oscilloscope) {
                 inputMap_.PanMod = ImGuiMod_Ctrl;
-                inputMap_.Fit = ImGuiMouseButton_Middle;
                 inputMap_.ZoomMod = ImGuiMod_Ctrl;
             }
         }
@@ -1431,30 +1436,6 @@ bool handleSplitPlotCursors(plot::WaveViewState& view,
                                  context.channelIndex);
 }
 
-void drawDashedGridLine(ImDrawList* drawList,
-                        const ImVec2& from,
-                        const ImVec2& to,
-                        ImU32 color,
-                        float thickness,
-                        float dashLength,
-                        float gapLength)
-{
-    const ImVec2 delta(to.x - from.x, to.y - from.y);
-    const float length = std::sqrt(delta.x * delta.x + delta.y * delta.y);
-    if (drawList == nullptr || length <= 0.0F) {
-        return;
-    }
-    const ImVec2 direction(delta.x / length, delta.y / length);
-    float cursor = 0.0F;
-    while (cursor < length) {
-        const float next = (std::min)(cursor + dashLength, length);
-        const ImVec2 segmentFrom(from.x + direction.x * cursor, from.y + direction.y * cursor);
-        const ImVec2 segmentTo(from.x + direction.x * next, from.y + direction.y * next);
-        drawList->AddLine(segmentFrom, segmentTo, color, thickness);
-        cursor = next + gapLength;
-    }
-}
-
 void drawOscilloscopeGrid(const ImPlotRect& limits)
 {
     if (!std::isfinite(limits.X.Min) || !std::isfinite(limits.X.Max) || !std::isfinite(limits.Y.Min) ||
@@ -1466,50 +1447,23 @@ void drawOscilloscopeGrid(const ImPlotRect& limits)
     if (drawList == nullptr) {
         return;
     }
-    const ImU32 minorColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.071F, 0.106F, 0.141F, 0.35F));
-    const ImU32 majorColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.114F, 0.169F, 0.220F, 0.60F));
-    const ImU32 centerColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.90F, 0.96F, 1.0F, 0.42F));
+    const auto& waveTokens = activeWaveStyleTokens();
+    const ImU32 tickColor = ImGui::ColorConvertFloat4ToU32(waveTokens.gridMinorTick);
+    const ImU32 majorColor = ImGui::ColorConvertFloat4ToU32(waveTokens.gridMajor);
+    const ImU32 centerColor = ImGui::ColorConvertFloat4ToU32(waveTokens.gridCenter);
     const double xStep = (limits.X.Max - limits.X.Min) / static_cast<double>(plot::kWaveGridMajorXDivisions);
     const double yStep = (limits.Y.Max - limits.Y.Min) / static_cast<double>(plot::kWaveGridMajorYDivisions);
     const int xMinorCount = plot::kWaveGridMajorXDivisions * plot::kWaveGridMinorDivisionsPerMajor;
     const int yMinorCount = plot::kWaveGridMajorYDivisions * plot::kWaveGridMinorDivisionsPerMajor;
 
     ImPlot::PushPlotClipRect();
-    for (int index = 1; index < xMinorCount; ++index) {
-        if (index % plot::kWaveGridMinorDivisionsPerMajor == 0) {
-            continue;
-        }
-        const double x = limits.X.Min +
-                         (limits.X.Max - limits.X.Min) * static_cast<double>(index) / static_cast<double>(xMinorCount);
-        drawDashedGridLine(drawList,
-                           ImPlot::PlotToPixels(x, limits.Y.Min),
-                           ImPlot::PlotToPixels(x, limits.Y.Max),
-                           minorColor,
-                           1.0F,
-                           3.0F,
-                           5.0F);
-    }
-    for (int index = 1; index < yMinorCount; ++index) {
-        if (index % plot::kWaveGridMinorDivisionsPerMajor == 0) {
-            continue;
-        }
-        const double y = limits.Y.Min +
-                         (limits.Y.Max - limits.Y.Min) * static_cast<double>(index) / static_cast<double>(yMinorCount);
-        drawDashedGridLine(drawList,
-                           ImPlot::PlotToPixels(limits.X.Min, y),
-                           ImPlot::PlotToPixels(limits.X.Max, y),
-                           minorColor,
-                           1.0F,
-                           3.0F,
-                           5.0F);
-    }
     for (int index = 0; index <= plot::kWaveGridMajorXDivisions; ++index) {
         const double x = limits.X.Min + xStep * static_cast<double>(index);
         const bool center = index == plot::kWaveGridMajorXDivisions / 2;
         drawList->AddLine(ImPlot::PlotToPixels(x, limits.Y.Min),
                           ImPlot::PlotToPixels(x, limits.Y.Max),
                           center ? centerColor : majorColor,
-                          center ? 1.4F : 1.0F);
+                          center ? waveTokens.gridCenterWidth : waveTokens.gridMajorWidth);
     }
     for (int index = 0; index <= plot::kWaveGridMajorYDivisions; ++index) {
         const double y = limits.Y.Min + yStep * static_cast<double>(index);
@@ -1517,7 +1471,38 @@ void drawOscilloscopeGrid(const ImPlotRect& limits)
         drawList->AddLine(ImPlot::PlotToPixels(limits.X.Min, y),
                           ImPlot::PlotToPixels(limits.X.Max, y),
                           center ? centerColor : majorColor,
-                          center ? 1.4F : 1.0F);
+                          center ? waveTokens.gridCenterWidth : waveTokens.gridMajorWidth);
+    }
+    // 核心绘制规则：不再贯穿次网格线，只在主网格线上用短刻度标出每大格五等分。
+    for (int majorIndex = 0; majorIndex <= plot::kWaveGridMajorXDivisions; ++majorIndex) {
+        const double x = limits.X.Min + xStep * static_cast<double>(majorIndex);
+        for (int minorIndex = 1; minorIndex < yMinorCount; ++minorIndex) {
+            if (minorIndex % plot::kWaveGridMinorDivisionsPerMajor == 0) {
+                continue;
+            }
+            const double y = limits.Y.Min + (limits.Y.Max - limits.Y.Min) * static_cast<double>(minorIndex) /
+                                                static_cast<double>(yMinorCount);
+            const ImVec2 pixel = ImPlot::PlotToPixels(x, y);
+            drawList->AddLine(ImVec2(pixel.x - waveTokens.gridMinorTickHalfLength, pixel.y),
+                              ImVec2(pixel.x + waveTokens.gridMinorTickHalfLength, pixel.y),
+                              tickColor,
+                              waveTokens.gridMinorTickWidth);
+        }
+    }
+    for (int majorIndex = 0; majorIndex <= plot::kWaveGridMajorYDivisions; ++majorIndex) {
+        const double y = limits.Y.Min + yStep * static_cast<double>(majorIndex);
+        for (int minorIndex = 1; minorIndex < xMinorCount; ++minorIndex) {
+            if (minorIndex % plot::kWaveGridMinorDivisionsPerMajor == 0) {
+                continue;
+            }
+            const double x = limits.X.Min + (limits.X.Max - limits.X.Min) * static_cast<double>(minorIndex) /
+                                                static_cast<double>(xMinorCount);
+            const ImVec2 pixel = ImPlot::PlotToPixels(x, y);
+            drawList->AddLine(ImVec2(pixel.x, pixel.y - waveTokens.gridMinorTickHalfLength),
+                              ImVec2(pixel.x, pixel.y + waveTokens.gridMinorTickHalfLength),
+                              tickColor,
+                              waveTokens.gridMinorTickWidth);
+        }
     }
     ImPlot::PopPlotClipRect();
 }
@@ -1686,7 +1671,7 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
         return outcome;
     }
 
-    ImPlot::PushStyleColor(ImPlotCol_PlotBg, ImVec4(0.043F, 0.067F, 0.094F, 1.0F));
+    ImPlot::PushStyleColor(ImPlotCol_PlotBg, activeWaveStyleTokens().plotBackground);
     const std::string plotId = "##wave_split_" + std::to_string(channelIndex);
     if (ImPlot::BeginPlot(plotId.c_str(), ImVec2(-1.0F, plotHeight), ImPlotFlags_NoLegend)) {
         constexpr ImPlotAxisFlags xFlags = ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoGridLines;
@@ -1754,7 +1739,7 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
             view.lastRenderSourceSampleCount += entry.sourceSampleCount;
             view.lastRenderPointCount += renderedPoints;
             drawBitRenderLanes(entry, color, plot::resolveChannelLineWidth(channel));
-            const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.84F, 0.88F, 0.92F, 0.72F));
+            const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().bitLabel);
             drawBitLaneLabels(bitLayout, limits, labelColor);
         } else {
             WaveSampleGetterPayload payload{.samples = samples.data()};
@@ -1776,7 +1761,7 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
         const ImVec2 plotPos = ImPlot::GetPlotPos();
         const ImVec2 plotSize = ImPlot::GetPlotSize();
         drawList->AddText(ImVec2(plotPos.x + 8.0F, plotPos.y + 6.0F),
-                          ImGui::ColorConvertFloat4ToU32(ImVec4(0.90F, 0.94F, 0.98F, 0.86F)),
+                          ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().splitChannelLabel),
                           ("CH" + std::to_string(channelIndex + 1U) + "  " + channel.label).c_str());
 
         const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
@@ -1786,6 +1771,12 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
         const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
         const std::vector<std::size_t> splitChannelIndices{channelIndex};
         const bool plotHovered = ImPlot::IsPlotHovered();
+        handleWheelFineAdjustmentShortcut(view,
+                                          ImGui::GetIO().KeyShift,
+                                          ImGui::IsMouseClicked(ImGuiMouseButton_Middle),
+                                          plotHovered,
+                                          ImPlot::IsAxisHovered(ImAxis_X1),
+                                          ImPlot::IsAxisHovered(ImAxis_Y1));
         outcome.viewportChanged = handleMainPlotZoom(view, mousePos);
         if (outcome.viewportChanged) {
             view.forceNextMainPlotLimits = true;
@@ -2050,12 +2041,13 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(10.0F, 10.0F));
         ImPlot::PushStyleVar(ImPlotStyleVar_LabelPadding, ImVec2(8.0F, 6.0F));
     }
-    ImPlot::PushStyleColor(ImPlotCol_PlotBg, ImVec4(0.043F, 0.067F, 0.094F, 1.0F));
+    ImPlot::PushStyleColor(ImPlotCol_PlotBg, activeWaveStyleTokens().plotBackground);
     auto& inputMap = ImPlot::GetInputMap();
     const auto savedInputMap = inputMap;
+    inputMap.Fit = resolveMainPlotFitMouseButton(
+        view.controlMode, ImGui::GetIO().KeyShift, savedInputMap.Fit, ImGuiMouseButton_Middle);
     if (view.controlMode == plot::WaveControlMode::Oscilloscope) {
         inputMap.PanMod = ImGuiMod_Ctrl;
-        inputMap.Fit = ImGuiMouseButton_Middle;
         inputMap.ZoomMod = ImGuiMod_Ctrl;
     }
     if (!ImPlot::BeginPlot("##oscilloscope", ImVec2(-1.0F, -1.0F), ImPlotFlags_NoLegend)) {
@@ -2113,6 +2105,12 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         smartSnapDistance = (std::max)(smartSnapDistance, derivedBounds.minStep * 2.0);
     }
     const double valueSnapDistance = (limits.Y.Max - limits.Y.Min) / 30.0;
+    handleWheelFineAdjustmentShortcut(view,
+                                      ImGui::GetIO().KeyShift,
+                                      ImGui::IsMouseClicked(ImGuiMouseButton_Middle),
+                                      ImPlot::IsPlotHovered(),
+                                      ImPlot::IsAxisHovered(ImAxis_X1),
+                                      ImPlot::IsAxisHovered(ImAxis_Y1));
 
     const bool zoomSelectionMode = view.zoomSelectionActive || view.zoomSelectionDragging;
     bool viewportChangedThisFrame = false;

@@ -153,7 +153,7 @@ void requireProtocolLoaded(protoscope::scripting::ScriptHost& host, const char* 
     }
 }
 
-std::vector<std::uint8_t> makeSnScopeFc06Ack(std::uint16_t address, std::uint16_t value)
+std::vector<std::uint8_t> makeHalfDuplexModbusFc06Ack(std::uint16_t address, std::uint16_t value)
 {
     std::vector<std::uint8_t> frame{
         0xFF,
@@ -169,7 +169,7 @@ std::vector<std::uint8_t> makeSnScopeFc06Ack(std::uint16_t address, std::uint16_
     return frame;
 }
 
-std::vector<std::uint8_t> makeSnScopeFc16Ack(std::uint16_t address, std::uint16_t count)
+std::vector<std::uint8_t> makeHalfDuplexModbusFc16Ack(std::uint16_t address, std::uint16_t count)
 {
     std::vector<std::uint8_t> frame{
         0xFF,
@@ -185,7 +185,7 @@ std::vector<std::uint8_t> makeSnScopeFc16Ack(std::uint16_t address, std::uint16_
     return frame;
 }
 
-std::vector<std::uint8_t> makeSnScopeFc03Response(std::initializer_list<std::uint16_t> values)
+std::vector<std::uint8_t> makeHalfDuplexModbusFc03Response(std::initializer_list<std::uint16_t> values)
 {
     std::vector<std::uint8_t> frame{
         0xFF,
@@ -202,7 +202,7 @@ std::vector<std::uint8_t> makeSnScopeFc03Response(std::initializer_list<std::uin
     return frame;
 }
 
-std::vector<std::uint8_t> makeSnScopeUploadFrame(
+std::vector<std::uint8_t> makeHalfDuplexModbusUploadFrame(
     std::uint16_t sequence, std::int16_t ch1, std::int16_t ch2, std::int16_t ch3, std::int16_t ch4)
 {
     std::vector<std::uint8_t> frame{
@@ -225,6 +225,25 @@ std::vector<std::uint8_t> makeSnScopeUploadFrame(
     return frame;
 }
 
+void setHalfDuplexModbusSymbols(protoscope::scripting::ScriptHost& host,
+                               const protoscope::transport::ConnectionContext& ctx,
+                               const std::string& labelPrefix = "signal",
+                               std::uint16_t firstAddress = 0x0001U,
+                               std::uint16_t addressStep = 0x0001U)
+{
+    for (std::size_t index = 0; index < 4; ++index) {
+        std::ostringstream address;
+        address << "0x" << std::hex << static_cast<unsigned>(firstAddress + index * addressStep);
+        host.onControl(ctx,
+                       "sym_addr_ch" + std::to_string(index + 1U),
+                       protoscope::scripting::ElfSymbolValue{
+                           .label = labelPrefix + std::to_string(index + 1U),
+                           .value = address.str(),
+                           .type = "float",
+                       });
+    }
+}
+
 void completeHalfDuplexStartup(protoscope::scripting::ScriptHost& master,
                                protoscope::scripting::ScriptHost& slave,
                                const protoscope::transport::ConnectionContext& ctx)
@@ -232,11 +251,15 @@ void completeHalfDuplexStartup(protoscope::scripting::ScriptHost& master,
     master.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
     slave.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
     master.drainPlotSetups();
+    setHalfDuplexModbusSymbols(master, ctx);
     master.onControl(ctx, "auto_start", true);
 
     const auto requests = master.drainTxRequests();
     require(requests.size() == 5, "应先生成 5 条配置/启动请求");
+    require(master.drainRequestGuardResets().size() == 1, "每次新启动前应解除 guarded 熔断");
     for (const auto& request : requests) {
+        require(request.guarded, "启动配置和 stream_start 应全部走 guarded request");
+        require(request.maxAttempts == 1U, "启动批次不应改变 max_attempts=1 策略");
         master.onTxEvent(ctx,
                          protoscope::scripting::TxEvent{
                              .id = request.id,
@@ -246,13 +269,16 @@ void completeHalfDuplexStartup(protoscope::scripting::ScriptHost& master,
                              .bytes = request.payload.size(),
                              .queuedMs = nowMs(),
                              .finishedMs = nowMs(),
+                             .guarded = request.guarded,
+                             .attempt = request.attempt,
+                             .maxAttempts = request.maxAttempts,
                              .error = std::nullopt,
                          });
         slave.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, request.payload});
         const auto replies = slave.drainTxRequests();
         if (replies.size() != 1) {
             std::ostringstream detail;
-            detail << "每次 SN Scope 请求都应返回 1 个 ACK" << " | request_size=" << request.payload.size()
+            detail << "每次半双工 Modbus 请求都应返回 1 个 ACK" << " | request_size=" << request.payload.size()
                    << " | func=0x" << std::hex << static_cast<int>(request.payload[1]);
             for (const auto& update : slave.drainStatusUpdates()) {
                 detail << " | slave_status=" << update.text;
@@ -275,6 +301,9 @@ void completeHalfDuplexStartup(protoscope::scripting::ScriptHost& master,
                              .bytes = request.payload.size(),
                              .queuedMs = nowMs(),
                              .finishedMs = nowMs(),
+                             .guarded = request.guarded,
+                             .attempt = request.attempt,
+                             .maxAttempts = request.maxAttempts,
                              .error = std::nullopt,
                          });
     }
@@ -289,7 +318,7 @@ std::vector<std::uint8_t> nextHalfDuplexWaveFrame(protoscope::scripting::ScriptH
     const auto waveRequests = slave.drainTxRequests();
     require(waveRequests.size() == 1, "定时器触发后应主动发送 1 帧波形");
     require(waveRequests[0].kind == protoscope::scripting::TxRequestKind::Send, "主动上报应走 proto.send");
-    require(waveRequests[0].payload.size() == 1680, "SN Scope 每次 tick 应拼成 1680 字节上传批");
+    require(waveRequests[0].payload.size() == 1680, "半双工 Modbus 每次 tick 应拼成 1680 字节上传批");
     return waveRequests[0].payload;
 }
 
@@ -536,8 +565,7 @@ end
     const auto& descriptor = controls[0];
     require(descriptor.type == protoscope::scripting::ControlType::TxSequence, "应解析 tx_sequence 控件类型");
     require(descriptor.txSequenceFields.size() == 4, "应解析 4 个 tx_sequence 字段");
-    require(descriptor.txSequenceFields[0].type == protoscope::scripting::TxSequenceFieldType::U8,
-            "func 应为 u8 字段");
+    require(descriptor.txSequenceFields[0].type == protoscope::scripting::TxSequenceFieldType::U8, "func 应为 u8 字段");
     require(descriptor.txSequenceFields[0].radix == protoscope::scripting::TxSequenceFieldRadix::Hex,
             "func 应为 hex 显示");
     require(descriptor.txSequenceFields[0].options.size() == 3, "func 应解析 3 个下拉选项");
@@ -590,7 +618,8 @@ end
         writeMainLua(protocolDir.path(), script.c_str());
 
         protoscope::scripting::ScriptHost host;
-        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "非法 tx_sequence options 应加载失败");
+        require(!host.loadProtocolDirectory(protocolDir.path().generic_string()),
+                "非法 tx_sequence options 应加载失败");
         require(host.lastError().find("tx_sequence field option") != std::string::npos ||
                     host.lastError().find("tx_sequence 字段 func") != std::string::npos,
                 "非法 tx_sequence options 应记录明确错误");
@@ -617,8 +646,7 @@ end
 
     protoscope::scripting::ScriptHost host;
     require(!host.loadProtocolDirectory(protocolDir.path().generic_string()), "非法 tx_sequence 配置应加载失败");
-    require(host.lastError().find("tx_sequence field type") != std::string::npos,
-            "非法 tx_sequence 应记录明确错误");
+    require(host.lastError().find("tx_sequence field type") != std::string::npos, "非法 tx_sequence 应记录明确错误");
 }
 
 void test_script_tx_sequence_timer_send_flow()
@@ -2525,6 +2553,9 @@ void test_config_default_roundtrip()
             "波形显示公式默认值应为 offset_then_scale");
     require(config.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue,
             "网格每格读数默认值应为 display_value");
+    require(config.gui.wave.channelScaleWheelEnabled, "通道 Scale 1-2-5 滚轮默认应开启");
+    require(config.gui.wave.channelScaleWheelAcceleration == protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
+            "通道 Scale 滚轮加速默认值应为 log");
     require(config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "CH 卡片宽度模式默认值应为 fixed");
     require(
@@ -2534,7 +2565,7 @@ void test_config_default_roundtrip()
             "X 轴双击默认值应为 fit_full_history");
     require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "Y 轴双击默认值应为 fit_visible_channels");
-    require(config.gui.wave.yAxisDoubleClickAdjustOffset, "Y 轴双击默认应同步调整 offset");
+    require(!config.gui.wave.yAxisDoubleClickAdjustOffset, "Y 轴双击默认应保留 offset");
     require(std::abs(config.gui.wave.channelCardFixedWidth - 128.0) < 1e-12, "CH 卡片固定宽度默认值应为 128");
     require(std::abs(config.gui.wave.channelCardAdaptiveRatio - 0.22) < 1e-12, "CH 卡片自适应比例默认值应为 0.22");
     require(std::abs(config.gui.wave.verticalAutoFitMultiplier - 1.25) < 1e-12, "Y 轴 Auto Fit 系数默认值应为 1.25");
@@ -2562,6 +2593,7 @@ void test_config_default_roundtrip()
             "波形全屏模式默认应为 overlay");
     require(config.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
             "GUI 渲染后端默认应为 opengl");
+    require(config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark, "GUI 主题默认应为 professional_dark");
     require(config.gui.font.chineseGlyphRange == protoscope::config::GuiFontChineseGlyphRange::SimplifiedCommon,
             "中文字体默认应只加载常用简中字形");
     require(config.gui.logHistory.transferRawLimit == 10000, "原始收发历史默认上限应为 10000");
@@ -2608,6 +2640,8 @@ void test_config_default_roundtrip()
     config.gui.wave.controlMode = protoscope::plot::WaveControlMode::LegacyGlobal;
     config.gui.wave.displayFormula = protoscope::plot::WaveDisplayFormula::ScaleThenOffset;
     config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
+    config.gui.wave.channelScaleWheelEnabled = false;
+    config.gui.wave.channelScaleWheelAcceleration = protoscope::plot::WaveChannelScaleWheelAcceleration::Linear;
     config.gui.wave.channelCardWidthMode = protoscope::plot::WaveChannelCardWidthMode::Adaptive;
     config.gui.wave.channelDoubleClickAction = protoscope::plot::WaveChannelDoubleClickAction::ResetAll;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
@@ -2678,6 +2712,10 @@ void test_config_default_roundtrip()
             "波形显示公式 roundtrip 失败");
     require(reloaded.config.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::RawValue,
             "网格每格读数模式 roundtrip 失败");
+    require(!reloaded.config.gui.wave.channelScaleWheelEnabled, "通道 Scale 滚轮开关 roundtrip 失败");
+    require(reloaded.config.gui.wave.channelScaleWheelAcceleration ==
+                protoscope::plot::WaveChannelScaleWheelAcceleration::Linear,
+            "通道 Scale 滚轮加速 roundtrip 失败");
     require(reloaded.config.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Adaptive,
             "CH 卡片宽度模式 roundtrip 失败");
     require(
@@ -2771,6 +2809,8 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     protoscope::config::AppConfig config;
     config.gui.wave.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Shift;
     config.gui.wave.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::ActualValue;
+    config.gui.wave.channelScaleWheelEnabled = false;
+    config.gui.wave.channelScaleWheelAcceleration = protoscope::plot::WaveChannelScaleWheelAcceleration::None;
     config.gui.wave.cursorFftHighlightRgba = {0.30F, 0.40F, 0.50F, 0.60F};
     config.gui.wave.followMeasurementCursorsOnScroll = true;
     config.gui.wave.peakDetectDownsample = false;
@@ -2783,6 +2823,10 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     require(dockStore.waveState().view.gridDivisionReadoutMode ==
                 protoscope::plot::WaveGridDivisionReadoutMode::ActualValue,
             "applyToDock 应写入网格每格读数模式");
+    require(!dockStore.waveState().view.channelScaleWheelEnabled, "applyToDock 应写入通道 Scale 滚轮开关");
+    require(dockStore.waveState().view.channelScaleWheelAcceleration ==
+                protoscope::plot::WaveChannelScaleWheelAcceleration::None,
+            "applyToDock 应写入通道 Scale 滚轮加速");
     require(std::abs(dockStore.waveState().view.cursorFftHighlightRgba[3] - 0.60F) < 1e-6F,
             "applyToDock 应写入游标 FFT 高亮色");
     require(dockStore.waveState().view.followMeasurementCursorsOnScroll, "applyToDock 应写入测量游标跟随滚动开关");
@@ -2791,6 +2835,8 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
 
     dockStore.waveState().view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
     dockStore.waveState().view.gridDivisionReadoutMode = protoscope::plot::WaveGridDivisionReadoutMode::RawValue;
+    dockStore.waveState().view.channelScaleWheelEnabled = true;
+    dockStore.waveState().view.channelScaleWheelAcceleration = protoscope::plot::WaveChannelScaleWheelAcceleration::Log;
     dockStore.waveState().view.cursorFftHighlightRgba = {0.70F, 0.60F, 0.50F, 0.40F};
     dockStore.waveState().view.followMeasurementCursorsOnScroll = false;
     dockStore.waveState().view.peakDetectDownsample = true;
@@ -2800,6 +2846,9 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
             "captureFromDock 应捕获鼠标 Y 偏移拖动模式");
     require(captured.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::RawValue,
             "captureFromDock 应捕获网格每格读数模式");
+    require(captured.gui.wave.channelScaleWheelEnabled, "captureFromDock 应捕获通道 Scale 滚轮开关");
+    require(captured.gui.wave.channelScaleWheelAcceleration == protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
+            "captureFromDock 应捕获通道 Scale 滚轮加速");
     require(std::abs(captured.gui.wave.cursorFftHighlightRgba[0] - 0.70F) < 1e-6F &&
                 std::abs(captured.gui.wave.cursorFftHighlightRgba[3] - 0.40F) < 1e-6F,
             "captureFromDock 应捕获游标 FFT 高亮色");
@@ -2828,11 +2877,49 @@ void test_config_repo_default_yaml_loads()
             "源码默认配置应读取 overlay 波形全屏模式");
     require(loaded.config.gui.rendererBackend == protoscope::config::GuiRendererBackend::OpenGL,
             "源码默认配置应读取 opengl 渲染后端");
+    require(loaded.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
+            "源码默认配置应读取 professional_dark 主题");
     require(loaded.config.gui.wave.peakDetectDownsample, "源码默认配置应开启 peak-detect 降采样");
     require(loaded.config.gui.wave.legendOverlayDoubleClickAutoCollapse, "源码默认配置应开启图例双击展开自动收起");
     require(loaded.config.gui.interactionFeedback.enabled, "源码默认配置应开启全局交互反馈");
     require(loaded.config.gui.interactionFeedback.statusDurationMs == 2000,
             "源码默认配置应保持全局交互反馈状态提示 2000ms");
+}
+
+void test_config_gui_theme_values_and_fallback()
+{
+    protoscope::config::ConfigStore store;
+
+    const auto professional = store.loadText("gui:\n  theme: professional_dark\n");
+    require(professional.error.empty(), "professional_dark 主题配置应可读取");
+    require(professional.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
+            "professional_dark 应映射到专业深色主题");
+
+    const auto highContrast = store.loadText("gui:\n  theme: debug_high_contrast\n");
+    require(highContrast.error.empty(), "debug_high_contrast 主题配置应可读取");
+    require(highContrast.config.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
+            "debug_high_contrast 应映射到示波器高对比主题");
+
+    const auto missing = store.loadText("gui:\n  show_app_header: false\n");
+    require(missing.error.empty(), "缺失 theme 字段时配置仍应可读取");
+    require(missing.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
+            "缺失 theme 字段应回退到 professional_dark");
+
+    const auto invalid = store.loadText("gui:\n  theme: neon_unknown\n");
+    require(invalid.error.empty(), "非法 theme 字段不应导致配置读取失败");
+    require(invalid.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
+            "非法 theme 字段应回退到 professional_dark");
+
+    auto savedConfig = highContrast.config;
+    std::string yamlText;
+    std::string error;
+    require(store.saveText(savedConfig, yamlText, error), "高对比主题配置应可保存");
+    require(yamlText.find("theme: debug_high_contrast") != std::string::npos,
+            "保存配置应写出 debug_high_contrast 标识");
+    const auto reloaded = store.loadText(yamlText);
+    require(reloaded.error.empty(), "保存后的高对比主题配置应可重新读取");
+    require(reloaded.config.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
+            "高对比主题保存并重载后应保持一致");
 }
 
 void test_script_file_io_proto_buffer_roundtrip()
@@ -3000,6 +3087,8 @@ void test_config_wave_mode_invalid_fallback()
            "    control_mode: weird\n"
            "    display_formula: wrong\n"
            "    grid_division_readout_mode: weird\n"
+           "    channel_scale_wheel:\n"
+           "      acceleration: weird\n"
            "    channel_card_width_mode: weird\n"
            "    channel_double_click_action: weird\n"
            "    x_axis_double_click_action: weird\n"
@@ -3018,6 +3107,8 @@ void test_config_wave_mode_invalid_fallback()
             "非法 display_formula 应回退到 offset_then_scale");
     require(loaded.gui.wave.gridDivisionReadoutMode == protoscope::plot::WaveGridDivisionReadoutMode::DisplayValue,
             "非法 grid_division_readout_mode 应回退到 display_value");
+    require(loaded.gui.wave.channelScaleWheelAcceleration == protoscope::plot::WaveChannelScaleWheelAcceleration::Log,
+            "非法 channel_scale_wheel.acceleration 应回退到 log");
     require(loaded.gui.wave.channelCardWidthMode == protoscope::plot::WaveChannelCardWidthMode::Fixed,
             "非法 channel_card_width_mode 应回退到 fixed");
     require(
@@ -3330,13 +3421,17 @@ void test_half_duplex_modbus_request_batches()
     const auto setups = host.drainPlotSetups();
     require(setups.size() == 1, "半双工主站打开连接后应配置波形");
     require(setups[0].view.historyLimit == 30000U, "高速上传波形应限制实时显示历史");
+    setHalfDuplexModbusSymbols(host, ctx, "batch", 0x0110U, 0x0010U);
     host.onControl(ctx, "auto_start", true);
 
     const auto requests = host.drainTxRequests();
     require(requests.size() == 5, "自动配置并启动应入队 5 条请求");
+    require(host.drainRequestGuardResets().size() == 1, "自动启动前应重置 guarded 熔断");
     for (std::size_t index = 0; index < requests.size(); ++index) {
         const auto& request = requests[index];
         require(request.kind == protoscope::scripting::TxRequestKind::Request, "主机寄存器写入应全部走 proto.request");
+        require(request.guarded, "启动批次应全部走 proto.request_guarded");
+        require(request.maxAttempts == 1U, "启动批次 max_attempts 应保持 1");
         require(request.payload[0] == 0xFF, "请求帧头不正确");
         if (index < 4) {
             require(request.payload.size() == 13, "前 4 条请求都应是 13 字节 FC16");
@@ -3349,12 +3444,16 @@ void test_half_duplex_modbus_request_batches()
         }
     }
 
-    require(readBe16(requests[0].payload, 2) == 0x1010U, "第一批请求起始地址错误");
-    require(readBe16(requests[1].payload, 2) == 0x1012U, "第二批请求起始地址错误");
-    require(readBe16(requests[2].payload, 2) == 0x5A5AU, "第三批请求起始地址错误");
-    require(readBe16(requests[3].payload, 2) == 0x5A5CU, "第四批请求起始地址错误");
+    require(readBe16(requests[0].payload, 2) == 0x5A5AU, "第一批应写 CH1/CH2 缩放系数");
+    require(readBe16(requests[1].payload, 2) == 0x5A5CU, "第二批应写 CH3/CH4 缩放系数");
+    require(readBe16(requests[2].payload, 2) == 0x1010U, "第三批应写 CH1/CH2 变量地址");
+    require(readBe16(requests[3].payload, 2) == 0x1012U, "第四批应写 CH3/CH4 变量地址");
     require(readBe16(requests[4].payload, 2) == 0x8888U, "第五批请求起始地址错误");
     require(readBe16(requests[4].payload, 4) == 0x0001U, "启动请求应写 0x8888=0x0001");
+    require(readBe16(requests[2].payload, 7) == 0x0110U, "CH1 应使用 ELF 地址快照");
+    require(readBe16(requests[2].payload, 9) == 0x0120U, "CH2 应使用 ELF 地址快照");
+    require(readBe16(requests[3].payload, 7) == 0x0130U, "CH3 应使用 ELF 地址快照");
+    require(readBe16(requests[3].payload, 9) == 0x0140U, "CH4 应使用 ELF 地址快照");
 }
 
 void test_half_duplex_modbus_oscilloscope_toolbar_waits_for_ack()
@@ -3366,11 +3465,14 @@ void test_half_duplex_modbus_oscilloscope_toolbar_waits_for_ack()
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
     host.drainPlotSetups();
     host.drainOscilloscopeRunningUpdates();
+    setHalfDuplexModbusSymbols(host, ctx, "toolbar", 0x0210U, 0x0010U);
 
     require(!host.requestOscilloscopeToggle(ctx, false, true), "真实设备示例应等待启动 ACK 后再同步运行态");
     const auto requests = host.drainTxRequests();
     require(requests.size() == 5, "工具栏启动应复用自动配置并启动流程");
+    require(host.drainRequestGuardResets().size() == 1, "工具栏启动前应重置 guarded 熔断");
     require(host.drainOscilloscopeRunningUpdates().empty(), "启动 ACK 前不应同步 running=true");
+    require(host.drainPlotSetups().empty(), "启动 ACK 前不应切换波形图例");
 
     for (std::size_t index = 0; index < requests.size(); ++index) {
         const auto& request = requests[index];
@@ -3383,25 +3485,36 @@ void test_half_duplex_modbus_oscilloscope_toolbar_waits_for_ack()
                            .bytes = request.payload.size(),
                            .queuedMs = nowMs(),
                            .finishedMs = nowMs(),
+                           .guarded = request.guarded,
+                           .attempt = request.attempt,
+                           .maxAttempts = request.maxAttempts,
                            .error = std::nullopt,
                        });
         host.setRequestAwaitingCompletion(true);
         if (index < 4) {
             host.onTransportBytes(
-                protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc16Ack(readBe16(request.payload, 2), 2)});
+                protoscope::transport::TransportBytesEvent{
+                    ctx, makeHalfDuplexModbusFc16Ack(readBe16(request.payload, 2), 2)});
         } else {
-            host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc06Ack(0x8888U, 0x0001U)});
+            host.onTransportBytes(
+                protoscope::transport::TransportBytesEvent{ctx,
+                                                           makeHalfDuplexModbusFc06Ack(0x8888U, 0x0001U)});
         }
         host.drainRequestDoneResults();
     }
 
     auto updates = host.drainOscilloscopeRunningUpdates();
     require(updates.size() == 1 && updates[0].running, "启动 ACK 匹配后应同步 running=true");
+    auto appliedSetups = host.drainPlotSetups();
+    require(appliedSetups.size() == 1, "stream_start ACK 成功后才应应用新图例");
+    require(appliedSetups[0].channels[0].label == "toolbar1", "成功启动后 CH1 图例应切换为变量名");
+    require(appliedSetups[0].channels[3].label == "toolbar4", "成功启动后 CH4 图例应切换为变量名");
 
     host.onControl(ctx, "history_limit", 512);
-    const auto setups = host.drainPlotSetups();
-    require(setups.size() == 1, "Modbus 主机修改历史上限应重新 setup 波形");
-    require(setups[0].view.historyLimit == 512U, "Modbus 主机应从 Lua Dock 读取 history_limit");
+    appliedSetups = host.drainPlotSetups();
+    require(appliedSetups.size() == 1, "Modbus 主机修改历史上限应重新 setup 波形");
+    require(appliedSetups[0].view.historyLimit == 512U, "Modbus 主机应从 Lua Dock 读取 history_limit");
+    require(appliedSetups[0].channels[0].label == "toolbar1", "修改历史上限不应丢失已应用图例");
 
     host.onControl(ctx, "stop_stream", true);
     const auto stopRequests = host.drainTxRequests();
@@ -3416,10 +3529,14 @@ void test_half_duplex_modbus_oscilloscope_toolbar_waits_for_ack()
                        .bytes = stopRequest.payload.size(),
                        .queuedMs = nowMs(),
                        .finishedMs = nowMs(),
+                       .guarded = stopRequest.guarded,
+                       .attempt = stopRequest.attempt,
+                       .maxAttempts = stopRequest.maxAttempts,
                        .error = std::nullopt,
                    });
     host.setRequestAwaitingCompletion(true);
-    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc06Ack(0x8888U, 0x0000U)});
+    host.onTransportBytes(
+        protoscope::transport::TransportBytesEvent{ctx, makeHalfDuplexModbusFc06Ack(0x8888U, 0x0000U)});
     host.drainRequestDoneResults();
 
     updates = host.drainOscilloscopeRunningUpdates();
@@ -3458,7 +3575,7 @@ void test_half_duplex_modbus_ack_and_plot_flow()
     require(perChannel[0] == 120 && perChannel[1] == 120 && perChannel[2] == 120 && perChannel[3] == 120,
             "四个通道都应各收到 120 个样本");
     for (const auto& append : appends) {
-        require(append.second.source == "sn_scope_upload", "上传波形应保留 source");
+        require(append.second.source == "half_duplex_modbus_upload", "上传波形应保留 source");
         require(std::abs(append.second.samples[0].time - 0.0) < 1e-12, "首批上传波形应从 0 秒开始");
         require(std::abs(append.second.samples[1].time - append.second.samples[0].time - (0.01 / 120.0)) < 1e-12,
                 "compact 上传波形展开后应保持固定 dt");
@@ -3502,11 +3619,12 @@ void test_half_duplex_modbus_loss_status_keeps_valid_frame()
     master.drainPlotSetups();
 
     master.onTransportBytes(
-        protoscope::transport::TransportBytesEvent{ctx, makeSnScopeUploadFrame(1, 100, 200, 300, 400)});
+        protoscope::transport::TransportBytesEvent{ctx,
+                                                   makeHalfDuplexModbusUploadFrame(1, 100, 200, 300, 400)});
     master.drainPlotAppends();
     master.drainStatusUpdates();
 
-    const auto skippedFrame = makeSnScopeUploadFrame(3, 110, 210, 310, 410);
+    const auto skippedFrame = makeHalfDuplexModbusUploadFrame(3, 110, 210, 310, 410);
 
     master.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, skippedFrame});
     const auto appends = master.drainPlotAppends();
@@ -3563,16 +3681,16 @@ void test_half_duplex_modbus_ack_matching_rules()
             require(foundStatus, "状态栏应包含 ACK 匹配结果");
         };
 
-    runRequest("start_stream", makeSnScopeFc06Ack(0x8888U, 0x0001U), true, "FC06 ACK 匹配");
-    runRequest("start_stream", makeSnScopeFc06Ack(0x8888U, 0x0000U), false, "期望");
-    runRequest("stop_stream", makeSnScopeFc06Ack(0x8888U, 0x0000U), true, "FC06 ACK 匹配");
-    runRequest("read_gain", makeSnScopeFc03Response({1000U, 1000U, 1000U, 1000U}), true, "读取应答");
+    runRequest("stop_stream", makeHalfDuplexModbusFc06Ack(0x8888U, 0x0000U), true, "FC06 ACK 匹配");
+    runRequest(
+        "read_gain", makeHalfDuplexModbusFc03Response({1000U, 1000U, 1000U, 1000U}), true, "读取应答");
 
     protoscope::scripting::ScriptHost host;
     requireProtocolLoaded(host, "protocols/half_duplex_modbus_master");
     const auto ctx = sampleCtx();
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
     host.drainPlotSetups();
+    setHalfDuplexModbusSymbols(host, ctx);
     host.onControl(ctx, "auto_start", true);
 
     const auto requests = host.drainTxRequests();
@@ -3587,10 +3705,15 @@ void test_half_duplex_modbus_ack_matching_rules()
                        .bytes = fc16.payload.size(),
                        .queuedMs = nowMs(),
                        .finishedMs = nowMs(),
+                       .guarded = fc16.guarded,
+                       .attempt = fc16.attempt,
+                       .maxAttempts = fc16.maxAttempts,
                        .error = std::nullopt,
                    });
     host.setRequestAwaitingCompletion(true);
-    host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, makeSnScopeFc16Ack(0x1010U, 1U)});
+    host.onTransportBytes(
+        protoscope::transport::TransportBytesEvent{ctx,
+                                                   makeHalfDuplexModbusFc16Ack(readBe16(fc16.payload, 2), 1U)});
 
     const auto results = host.drainRequestDoneResults();
     require(results.size() == 1, "FC16 ACK 返回后应调用 request_done");
@@ -3631,8 +3754,8 @@ void test_half_duplex_modbus_stop_drains_late_upload_before_ack()
                    });
     host.setRequestAwaitingCompletion(true);
 
-    auto tailUploadAndAck = makeSnScopeUploadFrame(1, 100, 200, 300, 400);
-    appendBytes(tailUploadAndAck, makeSnScopeFc06Ack(0x8888U, 0x0000U));
+    auto tailUploadAndAck = makeHalfDuplexModbusUploadFrame(1, 100, 200, 300, 400);
+    appendBytes(tailUploadAndAck, makeHalfDuplexModbusFc06Ack(0x8888U, 0x0000U));
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, tailUploadAndAck});
 
     const auto appends = host.drainPlotAppends();
@@ -3650,10 +3773,11 @@ void test_half_duplex_modbus_crc_error_finishes_request()
     const auto ctx = sampleCtx();
     host.onTransportOpen(protoscope::transport::TransportOpenEvent{ctx});
     host.drainPlotSetups();
+    setHalfDuplexModbusSymbols(host, ctx);
     host.onControl(ctx, "start_stream", true);
 
     const auto requests = host.drainTxRequests();
-    require(requests.size() == 1, "启动按钮应生成 1 条 request");
+    require(requests.size() == 5, "启动按钮应生成 5 条 guarded 配置/启动请求");
     const auto& request = requests.front();
     host.onTxEvent(ctx,
                    protoscope::scripting::TxEvent{
@@ -3664,11 +3788,14 @@ void test_half_duplex_modbus_crc_error_finishes_request()
                        .bytes = request.payload.size(),
                        .queuedMs = nowMs(),
                        .finishedMs = nowMs(),
+                       .guarded = request.guarded,
+                       .attempt = request.attempt,
+                       .maxAttempts = request.maxAttempts,
                        .error = std::nullopt,
                    });
     host.setRequestAwaitingCompletion(true);
 
-    auto brokenAck = makeSnScopeFc06Ack(0x8888U, 0x0001U);
+    auto brokenAck = makeHalfDuplexModbusFc16Ack(readBe16(request.payload, 2), 2U);
     brokenAck.back() = static_cast<std::uint8_t>(brokenAck.back() ^ 0x01U);
     host.onTransportBytes(protoscope::transport::TransportBytesEvent{ctx, brokenAck});
 
@@ -3683,6 +3810,10 @@ void test_half_duplex_modbus_crc_error_finishes_request()
         }
     }
     require(foundWarn, "CRC 错误应以 warn 状态提示");
+    require(host.drainPlotSetups().empty(), "启动配置 CRC 失败时不应切换图例");
+    for (const auto& update : host.drainOscilloscopeRunningUpdates()) {
+        require(!update.running, "启动配置 CRC 失败时不应切换 running=true");
+    }
 }
 
 void test_half_duplex_modbus_sticky_frames()
@@ -3741,9 +3872,9 @@ void test_half_duplex_modbus_crc_resync_keeps_following_frame()
     master.drainPlotSetups();
     master.drainStatusUpdates();
 
-    auto broken = makeSnScopeUploadFrame(1, 100, 200, 300, 400);
+    auto broken = makeHalfDuplexModbusUploadFrame(1, 100, 200, 300, 400);
     broken[12] = static_cast<std::uint8_t>(broken[12] ^ 0x01U);
-    const auto good = makeSnScopeUploadFrame(2, 101, 201, 301, 401);
+    const auto good = makeHalfDuplexModbusUploadFrame(2, 101, 201, 301, 401);
 
     std::vector<std::uint8_t> combined;
     appendBytes(combined, broken);

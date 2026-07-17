@@ -6,119 +6,293 @@ namespace protoscope::ui {
 
 namespace {
 
-    UiStyleTokens makeDefaultTokens()
+    ImVec4 rgb8(const int red, const int green, const int blue, const float alpha = 1.0F)
     {
-        return UiStyleTokens{
-            .appBackground = ImVec4(0.05F, 0.07F, 0.10F, 1.0F),
-            .panelBackground = ImVec4(0.09F, 0.11F, 0.15F, 1.0F),
-            .panelBackgroundAlt = ImVec4(0.12F, 0.14F, 0.19F, 1.0F),
-            .panelBorder = ImVec4(0.22F, 0.29F, 0.38F, 0.95F),
-            .accent = ImVec4(0.18F, 0.58F, 0.88F, 1.0F),
-            .accentMuted = ImVec4(0.18F, 0.58F, 0.88F, 0.24F),
-            .success = ImVec4(0.24F, 0.74F, 0.48F, 1.0F),
-            .warning = ImVec4(0.93F, 0.70F, 0.20F, 1.0F),
-            .danger = ImVec4(0.91F, 0.33F, 0.33F, 1.0F),
-            .textStrong = ImVec4(0.93F, 0.96F, 0.99F, 1.0F),
-            .textMuted = ImVec4(0.58F, 0.67F, 0.76F, 1.0F),
+        constexpr float kColorScale = 1.0F / 255.0F;
+        return ImVec4(static_cast<float>(red) * kColorScale,
+                      static_cast<float>(green) * kColorScale,
+                      static_cast<float>(blue) * kColorScale,
+                      alpha);
+    }
+
+    UiThemeDefinition makeProfessionalDarkTheme()
+    {
+        return UiThemeDefinition{
+            .theme = config::GuiTheme::ProfessionalDark,
+            .ui =
+                {
+                    .appBackground = ImVec4(0.05F, 0.07F, 0.10F, 1.0F),
+                    .panelBackground = ImVec4(0.09F, 0.11F, 0.15F, 1.0F),
+                    .panelBackgroundAlt = ImVec4(0.12F, 0.14F, 0.19F, 1.0F),
+                    .panelBorder = ImVec4(0.22F, 0.29F, 0.38F, 0.95F),
+                    .accent = ImVec4(0.18F, 0.58F, 0.88F, 1.0F),
+                    .accentMuted = ImVec4(0.18F, 0.58F, 0.88F, 0.24F),
+                    .success = ImVec4(0.24F, 0.74F, 0.48F, 1.0F),
+                    .warning = ImVec4(0.93F, 0.70F, 0.20F, 1.0F),
+                    .danger = ImVec4(0.91F, 0.33F, 0.33F, 1.0F),
+                    .textStrong = ImVec4(0.93F, 0.96F, 0.99F, 1.0F),
+                    .textMuted = ImVec4(0.58F, 0.67F, 0.76F, 1.0F),
+                    .genericPlotBackground = ImVec4(0.07F, 0.09F, 0.13F, 1.0F),
+                },
+            .wave =
+                {
+                    .plotBackground = ImVec4(0.043F, 0.067F, 0.094F, 1.0F),
+                    .gridMajor = ImVec4(0.12F, 0.19F, 0.27F, 0.78F),
+                    .gridMinorTick = ImVec4(0.30F, 0.46F, 0.60F, 0.76F),
+                    .gridCenter = ImVec4(0.90F, 0.96F, 1.0F, 0.66F),
+                    .statusOverlayBackground = ImVec4(0.04F, 0.045F, 0.05F, 0.68F),
+                    .statusOverlayBorder = ImVec4(1.0F, 1.0F, 1.0F, 0.18F),
+                    .statusOverlayText = ImVec4(0.92F, 0.94F, 0.98F, 0.95F),
+                    .channelSeparator = ImVec4(0.16F, 0.24F, 0.31F, 0.70F),
+                    .channelLabel = ImVec4(0.84F, 0.89F, 0.94F, 0.76F),
+                    .splitChannelLabel = ImVec4(0.90F, 0.94F, 0.98F, 0.86F),
+                    .bitLabel = ImVec4(0.84F, 0.88F, 0.92F, 0.72F),
+                    .legendOverlayBackground = ImVec4(0.051F, 0.075F, 0.106F, 1.0F),
+                    .legendOverlayBorder = ImVec4(0.30F, 0.42F, 0.54F, 0.55F),
+                    .legendOverlayTextPrimary = ImVec4(0.93F, 0.96F, 0.99F, 1.0F),
+                    .legendOverlayTextSecondary = ImVec4(0.58F, 0.67F, 0.76F, 1.0F),
+                    // 透明令牌表示沿用专业深色已有的图例行绘制逻辑。
+                    .legendOverlayRowHover = ImVec4(0.0F, 0.0F, 0.0F, 0.0F),
+                    .legendOverlayRowActive = ImVec4(0.0F, 0.0F, 0.0F, 0.0F),
+                    .legendOverlayRowActiveBorder = ImVec4(0.0F, 0.0F, 0.0F, 0.0F),
+                    .measurementOverlayBackground = ImVec4(0.035F, 0.040F, 0.050F, 0.72F),
+                    .measurementOverlayBorder = ImVec4(1.000F, 1.000F, 1.000F, 0.15F),
+                    .measurementOverlayAccent = ImVec4(0.300F, 0.620F, 1.000F, 0.85F),
+                    .measurementOverlayTitle = ImVec4(0.960F, 0.970F, 1.000F, 0.98F),
+                    .measurementChipBackground = ImVec4(1.000F, 1.000F, 1.000F, 0.075F),
+                    .measurementChipBorder = ImVec4(1.000F, 1.000F, 1.000F, 0.12F),
+                    .measurementChipLabel = ImVec4(0.660F, 0.720F, 0.800F, 0.94F),
+                    .measurementChipValue = ImVec4(0.940F, 0.960F, 0.990F, 0.98F),
+                },
         };
+    }
+
+    UiThemeDefinition makeDebugHighContrastTheme()
+    {
+        return UiThemeDefinition{
+            .theme = config::GuiTheme::DebugHighContrast,
+            .ui =
+                {
+                    .appBackground = rgb8(6, 9, 12),
+                    .panelBackground = rgb8(9, 12, 16),
+                    .panelBackgroundAlt = rgb8(14, 19, 25),
+                    .panelBorder = rgb8(46, 82, 107),
+                    .accent = rgb8(46, 184, 250),
+                    .accentMuted = rgb8(46, 184, 250, 0.24F),
+                    .success = ImVec4(0.24F, 0.74F, 0.48F, 1.0F),
+                    .warning = ImVec4(0.93F, 0.70F, 0.20F, 1.0F),
+                    .danger = ImVec4(0.91F, 0.33F, 0.33F, 1.0F),
+                    .textStrong = rgb8(245, 250, 255),
+                    .textMuted = rgb8(179, 194, 209),
+                    .genericPlotBackground = rgb8(5, 7, 10),
+                    .windowRounding = 4.0F,
+                    .frameRounding = 3.0F,
+                    .grabRounding = 3.0F,
+                    .tabRounding = 3.0F,
+                },
+            .wave =
+                {
+                    .plotBackground = rgb8(5, 7, 10),
+                    // 三级网格按主网格、短刻度、中心线逐级增强，避免同时抢眼。
+                    .gridMajor = rgb8(46, 82, 107, 0.92F),
+                    .gridMinorTick = rgb8(88, 137, 174, 0.92F),
+                    .gridCenter = rgb8(225, 245, 255, 0.96F),
+                    .statusOverlayBackground = rgb8(5, 7, 10, 0.88F),
+                    .statusOverlayBorder = rgb8(46, 82, 107, 0.78F),
+                    .statusOverlayText = rgb8(245, 250, 255, 0.98F),
+                    .channelSeparator = rgb8(46, 82, 107, 0.80F),
+                    .channelLabel = rgb8(179, 194, 209, 0.98F),
+                    .splitChannelLabel = rgb8(245, 250, 255, 0.96F),
+                    .bitLabel = rgb8(179, 194, 209, 0.92F),
+                    .legendOverlayBackground = rgb8(8, 12, 17, 0.98F),
+                    .legendOverlayBorder = rgb8(56, 127, 170),
+                    .legendOverlayTextPrimary = rgb8(245, 250, 255),
+                    .legendOverlayTextSecondary = rgb8(179, 194, 209),
+                    .legendOverlayRowHover = rgb8(14, 26, 36),
+                    .legendOverlayRowActive = rgb8(14, 46, 66),
+                    .legendOverlayRowActiveBorder = rgb8(46, 184, 250),
+                    .measurementOverlayBackground = rgb8(8, 12, 17, 0.90F),
+                    .measurementOverlayBorder = rgb8(56, 127, 170, 0.68F),
+                    .measurementOverlayAccent = rgb8(46, 184, 250, 0.90F),
+                    .measurementOverlayTitle = rgb8(245, 250, 255, 0.98F),
+                    .measurementChipBackground = rgb8(14, 19, 25, 0.92F),
+                    .measurementChipBorder = rgb8(46, 82, 107, 0.65F),
+                    .measurementChipLabel = rgb8(179, 194, 209, 0.96F),
+                    .measurementChipValue = rgb8(245, 250, 255, 0.99F),
+                    .gridMajorWidth = 1.2F,
+                    .gridMinorTickWidth = 1.2F,
+                    .gridCenterWidth = 1.8F,
+                    .gridMinorTickHalfLength = 2.5F,
+                },
+        };
+    }
+
+    const UiThemeDefinition& professionalDarkTheme()
+    {
+        static const UiThemeDefinition definition = makeProfessionalDarkTheme();
+        return definition;
+    }
+
+    const UiThemeDefinition& debugHighContrastTheme()
+    {
+        static const UiThemeDefinition definition = makeDebugHighContrastTheme();
+        return definition;
+    }
+
+    config::GuiTheme activeTheme{config::GuiTheme::ProfessionalDark};
+
+    ImVec4 withAlpha(const ImVec4& color, float alpha)
+    {
+        return ImVec4(color.x, color.y, color.z, alpha);
+    }
+
+    void applyImGuiTheme(const UiThemeDefinition& definition)
+    {
+        const auto& tokens = definition.ui;
+        const bool highContrast = definition.theme == config::GuiTheme::DebugHighContrast;
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.WindowRounding = tokens.windowRounding;
+        style.ChildRounding = tokens.windowRounding;
+        style.FrameRounding = tokens.frameRounding;
+        style.GrabRounding = tokens.grabRounding;
+        style.TabRounding = tokens.tabRounding;
+        style.PopupRounding = tokens.frameRounding;
+        style.ScrollbarRounding = tokens.frameRounding;
+        style.WindowPadding = ImVec2(tokens.windowPaddingX, tokens.windowPaddingY);
+        style.FramePadding = ImVec2(tokens.framePaddingX, tokens.framePaddingY);
+        style.ItemSpacing = ImVec2(tokens.itemSpacingX, tokens.itemSpacingY);
+        style.ItemInnerSpacing = ImVec2(8.0F, 6.0F);
+        style.CellPadding = ImVec2(8.0F, 6.0F);
+        style.WindowBorderSize = 1.0F;
+        style.ChildBorderSize = 1.0F;
+        style.FrameBorderSize = 1.0F;
+        style.TabBorderSize = 0.0F;
+
+        ImVec4* colors = style.Colors;
+        colors[ImGuiCol_Text] = tokens.textStrong;
+        colors[ImGuiCol_TextDisabled] = tokens.textMuted;
+        colors[ImGuiCol_WindowBg] = tokens.appBackground;
+        colors[ImGuiCol_ChildBg] = tokens.panelBackground;
+        colors[ImGuiCol_PopupBg] = tokens.panelBackground;
+        colors[ImGuiCol_Border] = tokens.panelBorder;
+        colors[ImGuiCol_FrameBg] = tokens.panelBackgroundAlt;
+        colors[ImGuiCol_FrameBgHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.28F);
+        colors[ImGuiCol_FrameBgActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.38F);
+        colors[ImGuiCol_TitleBg] = tokens.panelBackground;
+        colors[ImGuiCol_TitleBgActive] = tokens.panelBackgroundAlt;
+        colors[ImGuiCol_MenuBarBg] =
+            highContrast ? withAlpha(tokens.panelBackground, 0.95F) : ImVec4(0.08F, 0.10F, 0.14F, 0.95F);
+        colors[ImGuiCol_ScrollbarBg] = highContrast ? tokens.appBackground : ImVec4(0.06F, 0.08F, 0.11F, 1.0F);
+        colors[ImGuiCol_ScrollbarGrab] =
+            highContrast ? withAlpha(tokens.panelBorder, 0.90F) : ImVec4(0.25F, 0.34F, 0.45F, 0.90F);
+        colors[ImGuiCol_CheckMark] = tokens.accent;
+        colors[ImGuiCol_SliderGrab] = tokens.accent;
+        colors[ImGuiCol_SliderGrabActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.85F);
+        colors[ImGuiCol_Button] =
+            highContrast ? tokens.panelBackgroundAlt
+                         : ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.20F);
+        colors[ImGuiCol_ButtonHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.36F);
+        colors[ImGuiCol_ButtonActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.52F);
+        colors[ImGuiCol_Header] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.18F);
+        colors[ImGuiCol_HeaderHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.28F);
+        colors[ImGuiCol_HeaderActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.38F);
+        colors[ImGuiCol_Separator] = tokens.panelBorder;
+        colors[ImGuiCol_ResizeGrip] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.20F);
+        colors[ImGuiCol_ResizeGripHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.40F);
+        colors[ImGuiCol_ResizeGripActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.62F);
+        colors[ImGuiCol_Tab] = highContrast ? tokens.panelBackgroundAlt : ImVec4(0.10F, 0.13F, 0.18F, 1.0F);
+        colors[ImGuiCol_TabHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.45F);
+        colors[ImGuiCol_TabActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.28F);
+        colors[ImGuiCol_TabUnfocused] = highContrast ? tokens.panelBackground : ImVec4(0.08F, 0.11F, 0.16F, 1.0F);
+        colors[ImGuiCol_TabUnfocusedActive] =
+            highContrast ? tokens.panelBackgroundAlt : ImVec4(0.11F, 0.15F, 0.22F, 1.0F);
+        colors[ImGuiCol_DockingPreview] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.45F);
+        colors[ImGuiCol_DockingEmptyBg] = tokens.appBackground;
+        colors[ImGuiCol_TableHeaderBg] = highContrast ? tokens.panelBackgroundAlt : ImVec4(0.10F, 0.13F, 0.18F, 1.0F);
+        colors[ImGuiCol_TableBorderStrong] = tokens.panelBorder;
+        colors[ImGuiCol_TableBorderLight] =
+            ImVec4(tokens.panelBorder.x, tokens.panelBorder.y, tokens.panelBorder.z, 0.55F);
+        colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.0F, 1.0F, 1.0F, 0.02F);
+        colors[ImGuiCol_TextSelectedBg] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.30F);
+    }
+
+    void applyImPlotTheme(const UiThemeDefinition& definition)
+    {
+        const auto& tokens = definition.ui;
+        ImPlotStyle& style = ImPlot::GetStyle();
+        style.PlotBorderSize = 1.0F;
+        style.MinorAlpha = 0.20F;
+        style.MajorTickLen = ImVec2(10.0F, 10.0F);
+        style.MinorTickLen = ImVec2(5.0F, 5.0F);
+        style.PlotPadding = ImVec2(12.0F, 10.0F);
+
+        ImVec4* colors = style.Colors;
+        colors[ImPlotCol_FrameBg] = tokens.panelBackground;
+        colors[ImPlotCol_PlotBg] = tokens.genericPlotBackground;
+        colors[ImPlotCol_PlotBorder] = tokens.panelBorder;
+        colors[ImPlotCol_LegendBg] =
+            ImVec4(tokens.panelBackgroundAlt.x, tokens.panelBackgroundAlt.y, tokens.panelBackgroundAlt.z, 0.92F);
+        colors[ImPlotCol_LegendBorder] = tokens.panelBorder;
+        colors[ImPlotCol_LegendText] = tokens.textStrong;
+        colors[ImPlotCol_TitleText] = tokens.textStrong;
+        colors[ImPlotCol_InlayText] = tokens.textMuted;
+        colors[ImPlotCol_AxisText] = tokens.textMuted;
+        colors[ImPlotCol_AxisGrid] = ImVec4(tokens.panelBorder.x, tokens.panelBorder.y, tokens.panelBorder.z, 0.28F);
+        colors[ImPlotCol_AxisTick] = tokens.textMuted;
+        colors[ImPlotCol_Crosshairs] = tokens.accent;
+        colors[ImPlotCol_Selection] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.35F);
     }
 
 } // namespace
 
+const UiThemeDefinition& uiThemeDefinition(const config::GuiTheme theme)
+{
+    switch (theme) {
+        case config::GuiTheme::DebugHighContrast:
+            return debugHighContrastTheme();
+        case config::GuiTheme::ProfessionalDark:
+        default:
+            return professionalDarkTheme();
+    }
+}
+
+const UiStyleTokens& activeUiStyleTokens()
+{
+    return uiThemeDefinition(activeTheme).ui;
+}
+
+const WaveStyleTokens& activeWaveStyleTokens()
+{
+    return uiThemeDefinition(activeTheme).wave;
+}
+
+void applyUiTheme(const config::GuiTheme theme)
+{
+    activeTheme = theme;
+    const auto& definition = uiThemeDefinition(activeTheme);
+    if (ImGui::GetCurrentContext() != nullptr) {
+        applyImGuiTheme(definition);
+    }
+    if (ImPlot::GetCurrentContext() != nullptr) {
+        applyImPlotTheme(definition);
+    }
+}
+
 const UiStyleTokens& defaultUiStyleTokens()
 {
-    static const UiStyleTokens tokens = makeDefaultTokens();
-    return tokens;
+    return activeUiStyleTokens();
 }
 
 void applyImGuiProfessionalDarkTheme()
 {
-    const auto& tokens = defaultUiStyleTokens();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = tokens.windowRounding;
-    style.ChildRounding = tokens.windowRounding;
-    style.FrameRounding = tokens.frameRounding;
-    style.GrabRounding = tokens.grabRounding;
-    style.TabRounding = tokens.tabRounding;
-    style.PopupRounding = tokens.frameRounding;
-    style.ScrollbarRounding = tokens.frameRounding;
-    style.WindowPadding = ImVec2(tokens.windowPaddingX, tokens.windowPaddingY);
-    style.FramePadding = ImVec2(tokens.framePaddingX, tokens.framePaddingY);
-    style.ItemSpacing = ImVec2(tokens.itemSpacingX, tokens.itemSpacingY);
-    style.ItemInnerSpacing = ImVec2(8.0F, 6.0F);
-    style.CellPadding = ImVec2(8.0F, 6.0F);
-    style.WindowBorderSize = 1.0F;
-    style.ChildBorderSize = 1.0F;
-    style.FrameBorderSize = 1.0F;
-    style.TabBorderSize = 0.0F;
-
-    ImVec4* colors = style.Colors;
-    colors[ImGuiCol_Text] = tokens.textStrong;
-    colors[ImGuiCol_TextDisabled] = tokens.textMuted;
-    colors[ImGuiCol_WindowBg] = tokens.appBackground;
-    colors[ImGuiCol_ChildBg] = tokens.panelBackground;
-    colors[ImGuiCol_PopupBg] = tokens.panelBackground;
-    colors[ImGuiCol_Border] = tokens.panelBorder;
-    colors[ImGuiCol_FrameBg] = tokens.panelBackgroundAlt;
-    colors[ImGuiCol_FrameBgHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.28F);
-    colors[ImGuiCol_FrameBgActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.38F);
-    colors[ImGuiCol_TitleBg] = tokens.panelBackground;
-    colors[ImGuiCol_TitleBgActive] = tokens.panelBackgroundAlt;
-    colors[ImGuiCol_MenuBarBg] = ImVec4(0.08F, 0.10F, 0.14F, 0.95F);
-    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.06F, 0.08F, 0.11F, 1.0F);
-    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.25F, 0.34F, 0.45F, 0.90F);
-    colors[ImGuiCol_CheckMark] = tokens.accent;
-    colors[ImGuiCol_SliderGrab] = tokens.accent;
-    colors[ImGuiCol_SliderGrabActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.85F);
-    colors[ImGuiCol_Button] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.20F);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.36F);
-    colors[ImGuiCol_ButtonActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.52F);
-    colors[ImGuiCol_Header] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.18F);
-    colors[ImGuiCol_HeaderHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.28F);
-    colors[ImGuiCol_HeaderActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.38F);
-    colors[ImGuiCol_Separator] = tokens.panelBorder;
-    colors[ImGuiCol_ResizeGrip] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.20F);
-    colors[ImGuiCol_ResizeGripHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.40F);
-    colors[ImGuiCol_ResizeGripActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.62F);
-    colors[ImGuiCol_Tab] = ImVec4(0.10F, 0.13F, 0.18F, 1.0F);
-    colors[ImGuiCol_TabHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.45F);
-    colors[ImGuiCol_TabActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.28F);
-    colors[ImGuiCol_TabUnfocused] = ImVec4(0.08F, 0.11F, 0.16F, 1.0F);
-    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.11F, 0.15F, 0.22F, 1.0F);
-    colors[ImGuiCol_DockingPreview] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.45F);
-    colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.05F, 0.07F, 0.10F, 1.0F);
-    colors[ImGuiCol_TableHeaderBg] = ImVec4(0.10F, 0.13F, 0.18F, 1.0F);
-    colors[ImGuiCol_TableBorderStrong] = tokens.panelBorder;
-    colors[ImGuiCol_TableBorderLight] = ImVec4(tokens.panelBorder.x, tokens.panelBorder.y, tokens.panelBorder.z, 0.55F);
-    colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.0F, 1.0F, 1.0F, 0.02F);
-    colors[ImGuiCol_TextSelectedBg] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.30F);
+    activeTheme = config::GuiTheme::ProfessionalDark;
+    applyImGuiTheme(professionalDarkTheme());
 }
 
 void applyImPlotProfessionalDarkTheme()
 {
-    const auto& tokens = defaultUiStyleTokens();
-    ImPlotStyle& style = ImPlot::GetStyle();
-    style.PlotBorderSize = 1.0F;
-    style.MinorAlpha = 0.20F;
-    style.MajorTickLen = ImVec2(10.0F, 10.0F);
-    style.MinorTickLen = ImVec2(5.0F, 5.0F);
-    style.PlotPadding = ImVec2(12.0F, 10.0F);
-
-    ImVec4* colors = style.Colors;
-    colors[ImPlotCol_FrameBg] = tokens.panelBackground;
-    colors[ImPlotCol_PlotBg] = ImVec4(0.07F, 0.09F, 0.13F, 1.0F);
-    colors[ImPlotCol_PlotBorder] = tokens.panelBorder;
-    colors[ImPlotCol_LegendBg] =
-        ImVec4(tokens.panelBackgroundAlt.x, tokens.panelBackgroundAlt.y, tokens.panelBackgroundAlt.z, 0.92F);
-    colors[ImPlotCol_LegendBorder] = tokens.panelBorder;
-    colors[ImPlotCol_LegendText] = tokens.textStrong;
-    colors[ImPlotCol_TitleText] = tokens.textStrong;
-    colors[ImPlotCol_InlayText] = tokens.textMuted;
-    colors[ImPlotCol_AxisText] = tokens.textMuted;
-    colors[ImPlotCol_AxisGrid] = ImVec4(tokens.panelBorder.x, tokens.panelBorder.y, tokens.panelBorder.z, 0.28F);
-    colors[ImPlotCol_AxisTick] = tokens.textMuted;
-    colors[ImPlotCol_Crosshairs] = tokens.accent;
-    colors[ImPlotCol_Selection] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.35F);
+    activeTheme = config::GuiTheme::ProfessionalDark;
+    applyImPlotTheme(professionalDarkTheme());
 }
 
 bool beginToolbarGroup(const char* id, const char* title, float minHeight)

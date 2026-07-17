@@ -33,8 +33,9 @@
 
 #include <cmrc/cmrc.hpp>
 #if defined(_WIN32)
-#include <d3d11.h>
 #include <dxgi.h>
+
+#include <d3d11.h>
 #include <imgui_impl_dx11.h>
 #endif
 #include <imgui_impl_opengl3.h>
@@ -86,8 +87,8 @@ namespace {
 
     std::string lastGlfwErrorText(std::string_view prefix)
     {
-        return std::string(prefix) + ", code=" + std::to_string(gLastGlfwErrorCode) + ", message=" +
-               (gLastGlfwErrorDescription.empty() ? "unknown" : gLastGlfwErrorDescription);
+        return std::string(prefix) + ", code=" + std::to_string(gLastGlfwErrorCode) +
+               ", message=" + (gLastGlfwErrorDescription.empty() ? "unknown" : gLastGlfwErrorDescription);
     }
 
     const ImWchar* chineseGlyphRangesForConfig(ImFontAtlas& fonts, config::GuiFontChineseGlyphRange range)
@@ -160,8 +161,7 @@ namespace {
                 const auto* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
                 const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
                 const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-                diagnostics->logEvent("OpenGL",
-                                      std::string("GL_VENDOR=") + (vendor == nullptr ? "unknown" : vendor));
+                diagnostics->logEvent("OpenGL", std::string("GL_VENDOR=") + (vendor == nullptr ? "unknown" : vendor));
                 diagnostics->logEvent("OpenGL",
                                       std::string("GL_RENDERER=") + (renderer == nullptr ? "unknown" : renderer));
                 diagnostics->logEvent("OpenGL",
@@ -298,21 +298,19 @@ namespace {
         bool initialize(GLFWwindow* window, app::StartupDiagnosticsSink* diagnostics) override
         {
             if (diagnostics != nullptr) {
-                diagnostics->logEvent(
-                    "D3D11",
-                    "开始初始化后端, backend=" + std::string(name()) +
-                        ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
-                        lastGlfwErrorText("glfwCreateWindow state"));
+                diagnostics->logEvent("D3D11",
+                                      "开始初始化后端, backend=" + std::string(name()) +
+                                          ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
+                                          lastGlfwErrorText("glfwCreateWindow state"));
             }
 
             const HWND hwnd = glfwGetWin32Window(window);
             if (hwnd == nullptr) {
                 if (diagnostics != nullptr) {
-                    diagnostics->logFailure(
-                        "D3D11",
-                        "无法获取 GLFW Win32 窗口句柄, backend=" + std::string(name()) +
-                            ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
-                            lastGlfwErrorText("glfwCreateWindow state"));
+                    diagnostics->logFailure("D3D11",
+                                            "无法获取 GLFW Win32 窗口句柄, backend=" + std::string(name()) +
+                                                ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
+                                                lastGlfwErrorText("glfwCreateWindow state"));
                 }
                 return false;
             }
@@ -345,23 +343,24 @@ namespace {
                                                                  &deviceContext_);
             if (FAILED(result)) {
                 if (diagnostics != nullptr) {
-                    diagnostics->logFailure(
-                        "D3D11CreateDeviceAndSwapChain",
-                        "backend=" + std::string(name()) + ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
-                            hresultText("D3D11 device/swap chain 创建失败", result) + ", " +
-                            lastGlfwErrorText("glfwCreateWindow state"));
+                    diagnostics->logFailure("D3D11CreateDeviceAndSwapChain",
+                                            "backend=" + std::string(name()) +
+                                                ", driver_type=" + d3d11DriverTypeName(warp_) + ", " +
+                                                hresultText("D3D11 device/swap chain 创建失败", result) + ", " +
+                                                lastGlfwErrorText("glfwCreateWindow state"));
                 }
                 return false;
             }
             if (diagnostics != nullptr) {
                 diagnostics->logEvent(
                     "D3D11CreateDeviceAndSwapChain",
-                    "backend=" + std::string(name()) + ", driver_type=" + d3d11DriverTypeName(warp_) +
-                        ", HRESULT=0x" + [&] {
+                    "backend=" + std::string(name()) + ", driver_type=" + d3d11DriverTypeName(warp_) + ", HRESULT=0x" +
+                        [&] {
                             std::ostringstream out;
                             out << std::uppercase << std::hex << static_cast<unsigned long>(result);
                             return out.str();
-                        }() + ", feature_level=" + d3d11FeatureLevelName(selectedFeatureLevel));
+                        }() +
+                        ", feature_level=" + d3d11FeatureLevelName(selectedFeatureLevel));
             }
             if (!createRenderTarget(diagnostics)) {
                 return false;
@@ -627,11 +626,10 @@ bool runRendererProbe(app::StartupDiagnosticsSink* diagnostics)
             const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
             const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
             if (diagnostics != nullptr) {
-                diagnostics->logEvent(
-                    "renderer_probe_opengl",
-                    std::string("GL_VENDOR=") + (vendor == nullptr ? "unknown" : vendor) +
-                        ", GL_RENDERER=" + (renderer == nullptr ? "unknown" : renderer) +
-                        ", GL_VERSION=" + (version == nullptr ? "unknown" : version));
+                diagnostics->logEvent("renderer_probe_opengl",
+                                      std::string("GL_VENDOR=") + (vendor == nullptr ? "unknown" : vendor) +
+                                          ", GL_RENDERER=" + (renderer == nullptr ? "unknown" : renderer) +
+                                          ", GL_VERSION=" + (version == nullptr ? "unknown" : version));
             }
             glfwDestroyWindow(probeWindow);
         }
@@ -837,19 +835,18 @@ bool GuiRuntime::initializeWindow()
 
     const auto& window = application_.captureConfig().gui.window;
     if (startupDiagnostics_ != nullptr) {
-        startupDiagnostics_->logEvent(
-            "glfwCreateWindow",
-            isOpenGlRenderer(options_.rendererBackend) ? "尝试创建 OpenGL 3.2 Core 窗口"
-                                                       : "尝试创建无 OpenGL 上下文的 GLFW 窗口");
+        startupDiagnostics_->logEvent("glfwCreateWindow",
+                                      isOpenGlRenderer(options_.rendererBackend)
+                                          ? "尝试创建 OpenGL 3.2 Core 窗口"
+                                          : "尝试创建无 OpenGL 上下文的 GLFW 窗口");
     }
     gLastGlfwErrorCode = 0;
     gLastGlfwErrorDescription.clear();
     window_ = glfwCreateWindow(window.width, window.height, window.title.c_str(), nullptr, nullptr);
     if (!window_ && isOpenGlRenderer(options_.rendererBackend)) {
         if (startupDiagnostics_ != nullptr) {
-            startupDiagnostics_->logEvent(
-                "glfwCreateWindow",
-                lastGlfwErrorText("OpenGL 3.2 Core 窗口创建失败，准备回退 3.0"));
+            startupDiagnostics_->logEvent("glfwCreateWindow",
+                                          lastGlfwErrorText("OpenGL 3.2 Core 窗口创建失败，准备回退 3.0"));
         }
         // 核心流程：优先使用 3.2 Core 以启用 ImGui 顶点偏移能力；失败时回退 3.0，兼容老显卡/驱动。
         glfwDefaultWindowHints();
@@ -897,7 +894,7 @@ bool GuiRuntime::initializeImGui()
     }
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    applyImGuiProfessionalDarkTheme();
+    applyUiTheme(application_.runtimeConfig().gui.theme);
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename = nullptr;
@@ -912,7 +909,7 @@ bool GuiRuntime::initializePlotContext()
         startupDiagnostics_->setStage("GuiRuntime::initializePlotContext");
     }
     ImPlot::CreateContext();
-    applyImPlotProfessionalDarkTheme();
+    applyUiTheme(application_.runtimeConfig().gui.theme);
     auto& inputMap = ImPlot::GetInputMap();
     inputMap.Pan = ImGuiMouseButton_Left;
     inputMap.Select = ImGuiMouseButton_Right;
@@ -1307,10 +1304,7 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
                 stopRawCaptureRecordingWithStatus();
             }
         } else if (drawToolbarSectionButton(
-                       "开始录制",
-                       "选择 .psraw 文件后开始记录完整原始事件流",
-                       false,
-                       ImVec2(0.0F, 0.0F))) {
+                       "开始录制", "选择 .psraw 文件后开始记录完整原始事件流", false, ImVec2(0.0F, 0.0F))) {
             openRawCaptureRecordingDialog();
         }
         ImGui::SameLine();

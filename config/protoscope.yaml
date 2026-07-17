@@ -19,6 +19,7 @@ app:
     enabled: false
 
 gui:
+  theme: professional_dark
   show_app_header: false
   renderer_backend: opengl
   window:
@@ -37,11 +38,14 @@ gui:
     control_mode: oscilloscope
     display_formula: offset_then_scale
     grid_division_readout_mode: display_value
+    channel_scale_wheel:
+      enabled: true
+      acceleration: log
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
     x_axis_double_click_action: fit_full_history
     y_axis_double_click_action: fit_visible_channels
-    y_axis_double_click_adjust_offset: true
+    y_axis_double_click_adjust_offset: false
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct

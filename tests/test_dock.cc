@@ -494,6 +494,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     waveA.view.showHoverReadout = false;
     waveA.view.preferWaveformHoverReadout = false;
     waveA.view.showCursorIntersectionReadouts = true;
+    waveA.view.wheelFineAdjustmentEnabled = true;
     waveA.view.sampleFrequencyHz = 2048.0;
     waveA.view.sampleFrequencyInput = "2048";
     waveA.view.fft.enabled = true;
@@ -608,6 +609,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(!restoredA.view.showHoverReadout, "proto_a 应恢复自己的显示开关");
     require(!restoredA.view.preferWaveformHoverReadout, "proto_a 应恢复自己的悬浮读数优先级策略");
     require(restoredA.view.showCursorIntersectionReadouts, "proto_a 应恢复自己的游标交点读数开关");
+    require(restoredA.view.wheelFineAdjustmentEnabled, "proto_a 应按协议恢复滚轮精细调节开关");
     require(restoredA.analysisMarkers.size() == 1 && restoredA.analysisMarkers[0].label == "标记A",
             "proto_a 应恢复自己的分析标记");
 
@@ -626,6 +628,7 @@ void test_wave_protocol_state_isolated_by_protocol_key()
     require(restoredBSpec->scale == 0.5, "不同协议不应串用 proto_a 缩放");
     require(restoredB.view.sampleFrequencyHz == 512.0, "不同协议不应串用 proto_a 采样频率");
     require(!restoredB.view.showCursorIntersectionReadouts, "不同协议不应串用 proto_a 游标交点读数开关");
+    require(!restoredB.view.wheelFineAdjustmentEnabled, "不同协议缺省时滚轮精细调节应保持关闭");
     require(!restoredB.view.fft.enabled, "不同协议不应串用 proto_a FFT 开关");
     require(restoredB.view.fft.displayMode == protoscope::plot::WaveFftDisplayMode::FullSpectrum,
             "不同协议应保留默认完整频谱显示模式");
@@ -640,6 +643,8 @@ void test_wave_protocol_state_missing_wave_node_clears_analysis_markers()
     root["protocols"]["other"]["wave"]["show_hover_readout"] = true;
 
     protoscope::plot::WaveDockState wave;
+    wave.view.wheelFineAdjustmentEnabled = true;
+    wave.view.channelScaleWheelState.fractionalDelta = 0.5;
     wave.hiddenChannelIndices = {0};
     wave.analysisMarkers = {{
         .id = 1,
@@ -653,7 +658,16 @@ void test_wave_protocol_state_missing_wave_node_clears_analysis_markers()
     protoscope::ui::restoreWaveProtocolState(root, "missing", wave);
     require(wave.hiddenChannelIndices.empty(), "缺失协议 wave 节点时应清空隐藏通道状态");
     require(wave.analysisMarkers.empty(), "缺失协议 wave 节点时应清空分析标记");
+    require(!wave.view.wheelFineAdjustmentEnabled, "缺失协议 wave 节点时精调应回到默认关闭");
+    require(std::abs(wave.view.channelScaleWheelState.fractionalDelta) < 1e-12,
+            "缺失协议 wave 节点时应清空滚轮累计状态");
     require(wave.legendVisibilityRestorePending, "缺失协议 wave 节点时应重新应用图例可见性");
+
+    YAML::Node legacy;
+    legacy["show_hover_readout"] = true;
+    wave.view.wheelFineAdjustmentEnabled = true;
+    protoscope::ui::decodeWaveProtocolState(legacy, wave);
+    require(!wave.view.wheelFineAdjustmentEnabled, "旧协议状态缺少精调字段时应使用默认关闭");
 }
 
 void test_wave_protocol_state_hidden_channel_indices_roundtrip_and_legacy_labels()

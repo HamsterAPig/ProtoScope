@@ -215,6 +215,110 @@ std::uint64_t currentTimeMs()
             .count());
 }
 
+std::uint16_t readModbusBe16(const std::vector<std::uint8_t>& bytes, std::size_t offset)
+{
+    return (static_cast<std::uint16_t>(bytes.at(offset)) << 8U) | static_cast<std::uint16_t>(bytes.at(offset + 1U));
+}
+
+void rewriteModbusCrcLoHi(std::vector<std::uint8_t>& frame)
+{
+    require(frame.size() >= 2U, "Modbus 帧至少应包含 CRC");
+    const std::vector<std::uint8_t> payload(frame.begin(), frame.end() - 2);
+    const auto crc = protoscope::protocol_utils::crc16Modbus(payload);
+    frame[frame.size() - 2U] = static_cast<std::uint8_t>(crc & 0xFFU);
+    frame[frame.size() - 1U] = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
+}
+
+std::vector<std::uint8_t> makeHalfDuplexModbusAck(const std::vector<std::uint8_t>& request)
+{
+    require(request.size() >= 8U, "半双工 Modbus 请求长度不足");
+    if (request[1] == 0x10U) {
+        std::vector<std::uint8_t> ack{
+            0xFFU,
+            0x10U,
+            request[2],
+            request[3],
+            request[4],
+            request[5],
+            0x00U,
+            0x00U,
+        };
+        rewriteModbusCrcLoHi(ack);
+        return ack;
+    }
+    if (request[1] == 0x06U) {
+        auto ack = request;
+        rewriteModbusCrcLoHi(ack);
+        return ack;
+    }
+    throw std::runtime_error("半双工 Modbus 测试仅支持 FC06/FC16 ACK");
+}
+
+protoscope::transport::ConnectionContext queuedTransportContext()
+{
+    return protoscope::transport::ConnectionContext{
+        .endpoint = "queued://wave",
+        .connectionId = 7,
+        .timestampMs = currentTimeMs(),
+        .readyForIo = true,
+    };
+}
+
+void queueHalfDuplexModbusRx(const std::shared_ptr<QueuedEventTransport::State>& state,
+                             std::vector<std::uint8_t> bytes)
+{
+    state->pendingEvents.push_back(
+        protoscope::transport::TransportBytesEvent{queuedTransportContext(), std::move(bytes)});
+}
+
+void setApplicationHalfDuplexModbusSymbols(protoscope::app::Application& application,
+                                           const std::string& labelPrefix,
+                                           std::uint16_t firstAddress)
+{
+    for (std::size_t index = 0; index < 4U; ++index) {
+        std::ostringstream address;
+        address << "0x" << std::hex << static_cast<unsigned>(firstAddress + index * 0x10U);
+        application.updateControlValue(
+            "sym_addr_ch" + std::to_string(index + 1U),
+            protoscope::scripting::ElfSymbolValue{
+                .label = labelPrefix + std::to_string(index + 1U),
+                .value = address.str(),
+                .type = "float",
+            });
+    }
+}
+
+void waitForSentTaskCount(protoscope::app::Application& application,
+                          const std::shared_ptr<QueuedEventTransport::State>& state,
+                          std::size_t expected,
+                          const char* message)
+{
+    require(waitUntil([&]() {
+        application.pumpOnce();
+        return state->sentTasks.size() >= expected;
+    }), message);
+}
+
+void completeApplicationHalfDuplexModbusStart(protoscope::app::Application& application,
+                                              const std::shared_ptr<QueuedEventTransport::State>& state,
+                                              std::size_t firstTaskIndex)
+{
+    for (std::size_t offset = 0; offset < 5U; ++offset) {
+        const auto taskIndex = firstTaskIndex + offset;
+        waitForSentTaskCount(application, state, taskIndex + 1U, "半双工 Modbus 启动请求未按顺序发出");
+        queueHalfDuplexModbusRx(state, makeHalfDuplexModbusAck(state->sentTasks[taskIndex].payload));
+        if (offset < 4U) {
+            waitForSentTaskCount(
+                application, state, taskIndex + 2U, "半双工 Modbus ACK 后未继续下一条 guarded 请求");
+        } else {
+            require(waitUntil([&]() {
+                application.pumpOnce();
+                return application.docks().waveState().oscilloscopeRunning;
+            }), "stream_start ACK 后未同步 running=true");
+        }
+    }
+}
+
 protoscope::plot::RawCaptureEvent makePlotSetupEvent(bool resetHistory = true)
 {
     protoscope::plot::RawCaptureEvent event;
@@ -547,6 +651,164 @@ end
 
     require(application.requestOscilloscopeToggle(true, false), "显式 set_running 不应改变 true 返回语义");
     require(wave.oscilloscopeRunning, "显式 set_running(true) 应优先于默认 target_running=false");
+
+    application.shutdown();
+}
+
+void test_application_half_duplex_modbus_guarded_failure_halts_start_batch()
+{
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory("protocols/half_duplex_modbus_master", true),
+            "半双工 Modbus 主机协议应可加载");
+    application.openTransport();
+    require(waitUntil([&]() {
+        application.pumpOnce();
+        return application.docks().waveState().defaultChannelSpecs.size() == 4U;
+    }), "连接打开后应先保留默认 CH1~CH4 图例");
+
+    setApplicationHalfDuplexModbusSymbols(application, "failed", 0x0210U);
+    application.updateControlValue("auto_start", true);
+    waitForSentTaskCount(application, transportState, 1U, "首条 guarded 增益请求未发送");
+    require(readModbusBe16(transportState->sentTasks[0].payload, 2U) == 0x5A5AU,
+            "启动批次第一条应写缩放系数");
+
+    auto brokenAck = makeHalfDuplexModbusAck(transportState->sentTasks[0].payload);
+    brokenAck.back() = static_cast<std::uint8_t>(brokenAck.back() ^ 0x01U);
+    queueHalfDuplexModbusRx(transportState, std::move(brokenAck));
+    require(waitUntil([&]() {
+        application.pumpOnce();
+        return application.docks().configState().statusMessage.find("启动配置失败") != std::string::npos;
+    }), "FC16 CRC 失败后应进入启动失败状态");
+
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        application.pumpOnce();
+    }
+    require(transportState->sentTasks.size() == 1U, "首条 guarded 请求失败后不得继续发送地址或 stream_start");
+    const auto& wave = application.docks().waveState();
+    require(!wave.oscilloscopeRunning, "启动配置失败后 running 应保持 false");
+    require(wave.defaultChannelSpecs[0].label == "CH1", "启动配置失败后图例不应提前切换为新变量");
+
+    application.shutdown();
+}
+
+void test_application_half_duplex_modbus_stop_ack_restarts_with_latest_symbols()
+{
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory("protocols/half_duplex_modbus_master", true),
+            "半双工 Modbus 主机协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    setApplicationHalfDuplexModbusSymbols(application, "old", 0x0310U);
+    application.updateControlValue("auto_start", true);
+    completeApplicationHalfDuplexModbusStart(application, transportState, 0U);
+    require(application.docks().waveState().defaultChannelSpecs[0].label == "old1",
+            "首次启动成功后应应用旧变量图例");
+
+    application.updateControlValue("stop_stream", true);
+    waitForSentTaskCount(application, transportState, 6U, "停止请求未发送");
+    require(readModbusBe16(transportState->sentTasks[5].payload, 4U) == 0x0000U,
+            "停止请求应写 stream_switch=0");
+
+    application.updateControlValue(
+        "sym_addr_ch1",
+        protoscope::scripting::ElfSymbolValue{
+            .label = "new1",
+            .value = "0x0400",
+            .type = "float",
+        });
+    application.updateControlValue("address_offset", 0x0010);
+    application.updateControlValue("enable_ch4", false);
+    application.updateControlValue("start_stream", true);
+    application.pumpOnce();
+    require(transportState->sentTasks.size() == 6U, "停止 ACK 前的开始意图不应抢先发送新配置");
+
+    queueHalfDuplexModbusRx(transportState, makeHalfDuplexModbusAck(transportState->sentTasks[5].payload));
+    waitForSentTaskCount(application, transportState, 7U, "停止 ACK 后未自动发送最新启动配置");
+    require(application.docks().waveState().defaultChannelSpecs[0].label == "old1",
+            "第二次 stream_start ACK 前应继续保留旧图例");
+
+    completeApplicationHalfDuplexModbusStart(application, transportState, 6U);
+    require(transportState->sentTasks.size() == 11U, "停止后自动启动应完整发送 5 条新批次请求");
+    const auto& selectPair1 = transportState->sentTasks[8].payload;
+    require(readModbusBe16(selectPair1, 2U) == 0x1010U, "第二次启动第三条应为 cfg_select_pair1");
+    require(readModbusBe16(selectPair1, 7U) == 0x0410U, "第二次启动应对最新 CH1 地址应用地址偏移");
+    require(readModbusBe16(selectPair1, 9U) == 0x0330U, "地址偏移应统一应用到未修改的 CH2");
+    const auto& selectPair2 = transportState->sentTasks[9].payload;
+    require(readModbusBe16(selectPair2, 7U) == 0x0340U, "地址偏移应统一应用到 CH3");
+    require(readModbusBe16(selectPair2, 9U) == 0x0000U, "停止期间禁用的 CH4 应在下次启动写入 0");
+
+    const auto& wave = application.docks().waveState();
+    require(wave.oscilloscopeRunning, "第二次 stream_start ACK 后 running 应恢复 true");
+    require(wave.defaultChannelSpecs[0].label == "new1", "第二次启动成功后图例应切换为最新变量");
+    require(wave.defaultChannelSpecs[1].label == "old2", "未修改通道的图例应保持原变量");
+    require(wave.defaultChannelSpecs[3].label == "CH4（禁用）", "禁用通道图例应在成功启动后才更新");
+
+    application.shutdown();
+}
+
+void test_application_half_duplex_modbus_stop_failure_keeps_old_running_config()
+{
+    auto transportState = std::make_shared<QueuedEventTransport::State>();
+    protoscope::app::Application application;
+    application.setTransportFactoryForTest([transportState](protoscope::transport::TransportKind kind) {
+        static_cast<void>(kind);
+        return std::make_unique<QueuedEventTransport>(transportState);
+    });
+
+    require(application.initialize(), "应用初始化失败");
+    require(application.reloadProtocolDirectory("protocols/half_duplex_modbus_master", true),
+            "半双工 Modbus 主机协议应可加载");
+    application.openTransport();
+    application.pumpOnce();
+
+    setApplicationHalfDuplexModbusSymbols(application, "stable", 0x0510U);
+    application.updateControlValue("auto_start", true);
+    completeApplicationHalfDuplexModbusStart(application, transportState, 0U);
+
+    application.updateControlValue("stop_stream", true);
+    waitForSentTaskCount(application, transportState, 6U, "停止请求未发送");
+    application.updateControlValue(
+        "sym_addr_ch1",
+        protoscope::scripting::ElfSymbolValue{
+            .label = "pending1",
+            .value = "0x0610",
+            .type = "float",
+        });
+    application.updateControlValue("start_stream", true);
+
+    auto mismatchedStopAck = makeHalfDuplexModbusAck(transportState->sentTasks[5].payload);
+    mismatchedStopAck[4] = 0x00U;
+    mismatchedStopAck[5] = 0x01U;
+    rewriteModbusCrcLoHi(mismatchedStopAck);
+    queueHalfDuplexModbusRx(transportState, std::move(mismatchedStopAck));
+    require(waitUntil([&]() {
+        application.pumpOnce();
+        return application.docks().configState().statusMessage.find("停止失败，设备可能仍按旧地址运行") !=
+               std::string::npos;
+    }), "停止 ACK 不匹配时应显示明确的旧配置风险提示");
+
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        application.pumpOnce();
+    }
+    const auto& wave = application.docks().waveState();
+    require(transportState->sentTasks.size() == 6U, "停止失败后不得执行延后启动");
+    require(wave.oscilloscopeRunning, "停止失败后应保留 ACK 已确认的旧 running=true");
+    require(wave.defaultChannelSpecs[0].label == "stable1", "停止失败后应继续保留旧变量图例");
 
     application.shutdown();
 }
@@ -1335,6 +1597,28 @@ void test_application_set_log_level_updates_runtime_config()
     application.shutdown();
 }
 
+void test_application_set_gui_theme_updates_runtime_without_protocol_reload()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+
+    const auto beforeLua = application.docks().luaState();
+    const auto beforeScriptRows = application.docks().scriptState().rows.size();
+
+    application.setGuiTheme(protoscope::config::GuiTheme::DebugHighContrast);
+
+    const auto captured = application.captureConfig();
+    const auto& afterLua = application.docks().luaState();
+    require(captured.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
+            "setGuiTheme 后 captureConfig 应保留高对比主题");
+    require(afterLua.protocolDir == beforeLua.protocolDir, "切换主题不应改变协议目录");
+    require(afterLua.scriptPath == beforeLua.scriptPath, "切换主题不应改变协议脚本路径");
+    require(afterLua.controls.size() == beforeLua.controls.size(), "切换主题不应重建协议控件");
+    require(application.docks().scriptState().rows.size() == beforeScriptRows, "切换主题不应产生协议重载日志");
+
+    application.shutdown();
+}
+
 void test_application_capture_config_preserves_protocol_tx_runtime_config()
 {
     protoscope::app::Application application;
@@ -1367,7 +1651,8 @@ void test_application_wave_legend_visibility_config_roundtrip()
     config.gui.interactionFeedback.enabled = false;
     config.gui.wave.interactionAnimationEnabled = true;
     require(application.applyConfig(config), "全局交互反馈配置应用失败");
-    require(application.docks().waveState().view.interactionAnimationEnabled, "全局关闭不应覆盖 Wave Dock 局部动效开关");
+    require(application.docks().waveState().view.interactionAnimationEnabled,
+            "全局关闭不应覆盖 Wave Dock 局部动效开关");
     require(!application.docks().waveState().view.effectiveInteractionAnimationEnabled,
             "全局关闭时 Wave Dock effective 动效应关闭");
     {
@@ -1455,7 +1740,7 @@ void test_application_wave_zoom_selection_auto_exit_config_roundtrip()
             "captureConfig 默认应保持 X 轴双击全历史缩放");
     require(config.gui.wave.yAxisDoubleClickAction == protoscope::plot::WaveYAxisDoubleClickAction::FitVisibleChannels,
             "captureConfig 默认应保持 Y 轴双击适配可见通道");
-    require(config.gui.wave.yAxisDoubleClickAdjustOffset, "captureConfig 默认应保持 Y 轴双击同步调整 offset");
+    require(!config.gui.wave.yAxisDoubleClickAdjustOffset, "captureConfig 默认应保持 Y 轴双击只调整 scale");
 
     config.gui.wave.zoomSelectionAutoExit = true;
     config.gui.wave.xAxisDoubleClickAction = protoscope::plot::WaveXAxisDoubleClickAction::FitVisibleWindow;
@@ -1766,10 +2051,8 @@ void test_application_plot_setup_reset_history_preserves_channel_overrides()
     require(std::abs(spec->ratio - 3.0) < 1e-12, "reset_history 不应清除 ratio 覆盖");
     require(std::abs(spec->scale - 4.0) < 1e-12, "reset_history 不应清除 scale 覆盖");
     require(std::abs(spec->offset - 10.0) < 1e-12, "reset_history 不应清除 offset 覆盖");
-    require(spec->color.has_value() && std::abs((*spec->color)[0] - 0.9F) < 1e-6F,
-            "reset_history 不应清除 color 覆盖");
-    require(std::abs(spec->bitDisplay.yOffset - 6.0) < 1e-12,
-            "reset_history 不应清除 bit_y_offset 覆盖");
+    require(spec->color.has_value() && std::abs((*spec->color)[0] - 0.9F) < 1e-6F, "reset_history 不应清除 color 覆盖");
+    require(std::abs(spec->bitDisplay.yOffset - 6.0) < 1e-12, "reset_history 不应清除 bit_y_offset 覆盖");
     require(wave.channelOverrides.size() == 1 && wave.channelOverrides[0].colorOverridden,
             "覆盖状态应保留 colorOverridden 标记");
     require(wave.defaultChannelSpecs.size() == 1 && wave.defaultChannelSpecs[0].label == "温度A",
@@ -1987,11 +2270,14 @@ void test_application_session_package_export_contains_replay_assets()
 
     protoscope::app::Application importedApplication;
     require(importedApplication.initialize(), "导入应用初始化失败");
+    importedApplication.setGuiTheme(protoscope::config::GuiTheme::DebugHighContrast);
     require(importedApplication.importSessionPackage(packagePath, error), "导入现场会话包应成功");
     const auto& importedLua = importedApplication.docks().luaState();
     require(importedLua.protocolDir.find("ProtoScope-session-protocol-") != std::string::npos,
             "导入现场包应使用释放出的临时协议目录");
     const auto importedConfig = importedApplication.captureConfig();
+    require(importedConfig.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
+            "现场包导入不应覆盖本机全局主题偏好");
     require(importedConfig.protocol.selectedDir.find("ProtoScope-session-protocol-") == std::string::npos,
             "保存配置时不应写入现场包临时协议目录");
     require(importedApplication.docks().waveState().rawCapture.payload == transportState->queuedRxBytes,
@@ -2410,16 +2696,14 @@ void test_application_raw_capture_replay_populates_parsed_receive_rows()
     require(receive.rows.size() == 2U, "两个录制事件应保留为两条原始接收记录");
     require(receive.frameRows.size() == 1U, "跨事件拼成完整帧后应生成一条逐帧记录");
     require(receive.frameRows.front().bytes == frame, "逐帧记录应保留完整帧字节");
-    require(receive.frameRows.front().message.find("value=52") != std::string::npos,
-            "逐帧记录应包含 schema 解析字段");
+    require(receive.frameRows.front().message.find("value=52") != std::string::npos, "逐帧记录应包含 schema 解析字段");
 
     application.docks().receiveState().displayMode = protoscope::dock::TransferLogDisplayMode::ParsedFrames;
     application.activateParsedTransferLogView();
     require(receive.frameRows.size() == 1U, "切换逐帧视图不应清空预生成的回放帧");
 
     require(application.seekRawCaptureReplay(1, error), "逐帧回放应可向后定位到半帧位置");
-    require(receive.rows.size() == 1U && receive.frameRows.empty(),
-            "向后定位后原始行和逐帧结果应重建到目标位置");
+    require(receive.rows.size() == 1U && receive.frameRows.empty(), "向后定位后原始行和逐帧结果应重建到目标位置");
     require(application.seekRawCaptureReplay(2, error), "逐帧回放应可重新定位到完整帧位置");
     require(receive.rows.size() == 2U && receive.frameRows.size() == 1U,
             "重新定位到完整帧位置后应恢复对应原始行和解析帧");
@@ -3586,10 +3870,8 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
     });
     require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::High,
             "CPU 高压力应立即进入 high");
-    require(std::abs(controller.status().effectiveMultiplier - 1.0) < 1e-12,
-            "high 压力下 K=2 应回落到 1.0");
-    require(std::abs(controller.status().catchUpMultiplier - 1.5) < 1e-12,
-            "系统高压且无软件积压时清债预算应温和收紧");
+    require(std::abs(controller.status().effectiveMultiplier - 1.0) < 1e-12, "high 压力下 K=2 应回落到 1.0");
+    require(std::abs(controller.status().catchUpMultiplier - 1.5) < 1e-12, "系统高压且无软件积压时清债预算应温和收紧");
 
     protoscope::app::AdaptivePerformanceController criticalSystemController;
     criticalSystemController.configure(protoscope::config::AdaptivePerformanceConfig{
@@ -3627,8 +3909,7 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
     });
     require(controller.status().pressureLevel == protoscope::app::AdaptivePressureLevel::Elevated,
             "连续五个健康采样后应只恢复一个压力等级");
-    require(controller.status().reason == "recovery_wait",
-            "滞回恢复期间状态原因应说明仍在等待恢复，而不是误报 normal");
+    require(controller.status().reason == "recovery_wait", "滞回恢复期间状态原因应说明仍在等待恢复，而不是误报 normal");
 
     controller.configure(protoscope::config::AdaptivePerformanceConfig{
         .enabled = true,
@@ -3644,10 +3925,8 @@ void test_adaptive_performance_controller_applies_pressure_hysteresis()
             "系统指标缺失时原始 RX backlog 仍应驱动降档");
     require(std::abs(controller.status().effectiveMultiplier - 2.0) < 1e-12,
             "软件 backlog 高时渲染预算应降档释放主线程");
-    require(std::abs(controller.status().catchUpMultiplier - 4.0) < 1e-12,
-            "软件 backlog 高时清债预算不应被同步压低");
-    require(controller.budget().rxChunkBytesPerPump == 16384U,
-            "软件 backlog 高时 RX 清债预算应保持 K 档");
+    require(std::abs(controller.status().catchUpMultiplier - 4.0) < 1e-12, "软件 backlog 高时清债预算不应被同步压低");
+    require(controller.budget().rxChunkBytesPerPump == 16384U, "软件 backlog 高时 RX 清债预算应保持 K 档");
 }
 
 void test_application_adaptive_performance_keeps_static_config()

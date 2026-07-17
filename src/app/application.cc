@@ -113,19 +113,19 @@ namespace {
         out << ' ' << name << '=' << value;
     }
 
-    std::string payloadPreviewSuffix(const config::AppLoggingConfig& logging,
-                                     const std::vector<std::uint8_t>& payload)
+    std::string payloadPreviewSuffix(const config::AppLoggingConfig& logging, const std::vector<std::uint8_t>& payload)
     {
         if (!logging.payloadPreview.enabled || payload.empty()) {
             return {};
         }
         std::ostringstream out;
         const auto maxBytes = logging.payloadPreview.maxBytes == 0U ? payload.size() : logging.payloadPreview.maxBytes;
-        out << " payload_hex=" << protocol_utils::bytesToHex(
-            std::vector<std::uint8_t>(payload.begin(),
-                                      payload.begin() + static_cast<std::ptrdiff_t>(
-                                                          (std::min)(payload.size(), maxBytes))),
-            true);
+        out << " payload_hex="
+            << protocol_utils::bytesToHex(
+                   std::vector<std::uint8_t>(
+                       payload.begin(),
+                       payload.begin() + static_cast<std::ptrdiff_t>((std::min)(payload.size(), maxBytes))),
+                   true);
         if (payload.size() > maxBytes) {
             out << "...";
         }
@@ -1300,6 +1300,12 @@ void Application::setLogLevel(const config::LogLevel level)
     loggingFacade_.applyConfig(logging);
 }
 
+void Application::setGuiTheme(const config::GuiTheme theme)
+{
+    // 主题是纯 GUI 全局偏好，只更新运行态配置，避免无关协议重载。
+    runtimeConfig_.gui.theme = theme;
+}
+
 config::AppConfig Application::captureConfig() const
 {
     auto captured = configStore_.captureFromDock(dockStore_);
@@ -1308,6 +1314,7 @@ config::AppConfig Application::captureConfig() const
         captured.protocol.selectedDir = captureProtocolConfigOverride_->selectedDir;
     }
     captured.performance = runtimeConfig_.performance;
+    captured.gui.theme = runtimeConfig_.gui.theme;
     captured.gui.window = runtimeConfig_.gui.window;
     captured.gui.rendererBackend = runtimeConfig_.gui.rendererBackend;
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
@@ -1316,8 +1323,7 @@ config::AppConfig Application::captureConfig() const
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
     captured.gui.interactionFeedback = runtimeConfig_.gui.interactionFeedback;
     captured.gui.wave.resetHistoryOnTimeReset = runtimeConfig_.gui.wave.resetHistoryOnTimeReset;
-    captured.gui.wave.resetViewport.applyOnPlotSetupReset =
-        runtimeConfig_.gui.wave.resetViewport.applyOnPlotSetupReset;
+    captured.gui.wave.resetViewport.applyOnPlotSetupReset = runtimeConfig_.gui.wave.resetViewport.applyOnPlotSetupReset;
     captured.gui.wave.resetViewport.applyOnManualClear = runtimeConfig_.gui.wave.resetViewport.applyOnManualClear;
     captured.gui.wave.resetViewport.applyOnRawImport = runtimeConfig_.gui.wave.resetViewport.applyOnRawImport;
     captured.gui.wave.resetViewport.autoFollow = runtimeConfig_.gui.wave.resetViewport.autoFollow;
@@ -1538,8 +1544,9 @@ void Application::openTransport()
     transport_ = createTransport(kind);
     if (!transport_) {
         dockStore_.commState().lastError = "创建 transport 失败";
-        loggingFacade_.error("transport", "transport create failed kind=" + std::string(transport::transportKindId(kind)) +
-                                              " error=" + dockStore_.commState().lastError);
+        loggingFacade_.error("transport",
+                             "transport create failed kind=" + std::string(transport::transportKindId(kind)) +
+                                 " error=" + dockStore_.commState().lastError);
         return;
     }
 
@@ -1547,14 +1554,14 @@ void Application::openTransport()
     const bool opened = transport_->open(currentTransportConfig(kind));
     if (!opened) {
         dockStore_.commState().lastError = "打开连接失败";
-        loggingFacade_.error("transport", "transport open rejected kind=" +
-                                              std::string(transport::transportKindId(kind)) +
-                                              " error=" + dockStore_.commState().lastError);
+        loggingFacade_.error("transport",
+                             "transport open rejected kind=" + std::string(transport::transportKindId(kind)) +
+                                 " error=" + dockStore_.commState().lastError);
     } else {
         dockStore_.commState().lastError.clear();
         dockStore_.commState().reconnectRequired = false;
-        loggingFacade_.info("transport", "transport open submitted kind=" +
-                                              std::string(transport::transportKindId(kind)));
+        loggingFacade_.info("transport",
+                            "transport open submitted kind=" + std::string(transport::transportKindId(kind)));
     }
 
     syncDockState();
@@ -1573,8 +1580,9 @@ void Application::closeTransport()
         loggingFacade_.error("raw_capture", "停止完整原始数据录制失败: " + recordingError);
     }
     if (transport_) {
-        loggingFacade_.info("transport", "transport close requested kind=" +
-                                          std::string(transport::transportKindId(dockStore_.commState().kind)));
+        loggingFacade_.info(
+            "transport",
+            "transport close requested kind=" + std::string(transport::transportKindId(dockStore_.commState().kind)));
         transport_->close();
     }
     activeConnection_.reset();
@@ -1732,15 +1740,15 @@ bool Application::applyResetViewportPolicy(const WaveResetViewportTrigger trigge
     const auto& policy = runtimeConfig_.gui.wave.resetViewport;
     bool enabled = false;
     switch (trigger) {
-    case WaveResetViewportTrigger::PlotSetupReset:
-        enabled = policy.applyOnPlotSetupReset;
-        break;
-    case WaveResetViewportTrigger::ManualClear:
-        enabled = policy.applyOnManualClear;
-        break;
-    case WaveResetViewportTrigger::RawImport:
-        enabled = policy.applyOnRawImport;
-        break;
+        case WaveResetViewportTrigger::PlotSetupReset:
+            enabled = policy.applyOnPlotSetupReset;
+            break;
+        case WaveResetViewportTrigger::ManualClear:
+            enabled = policy.applyOnManualClear;
+            break;
+        case WaveResetViewportTrigger::RawImport:
+            enabled = policy.applyOnRawImport;
+            break;
     }
     if (!enabled) {
         return false;
@@ -1787,9 +1795,9 @@ bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup
     const bool hasPreviousDefaults = !previousDefaultChannelSpecs.empty();
     const bool channelsChanged = hasPreviousDefaults ? !sameChannelSpecs(setup.channels, previousDefaultChannelSpecs)
                                                      : !sameChannelSpecs(setup.channels, wave.buffer);
-    const bool channelIdentityChanged =
-        hasPreviousDefaults ? !sameChannelIdentity(setup.channels, previousDefaultChannelSpecs)
-                            : !sameChannelIdentity(setup.channels, wave.buffer);
+    const bool channelIdentityChanged = hasPreviousDefaults
+                                            ? !sameChannelIdentity(setup.channels, previousDefaultChannelSpecs)
+                                            : !sameChannelIdentity(setup.channels, wave.buffer);
 
     // 核心流程：Lua 和 psraw 回放共用同一套配置应用逻辑，确保通道默认值、覆盖状态和视图重置一致。
     if (setup.resetHistory) {
@@ -2242,9 +2250,8 @@ bool Application::exportWaveCsv(const std::filesystem::path& path,
                                 std::string& error) const
 {
     const auto& wave = dockStore_.waveState();
-    auto snapshot = wave.buffer.snapshot(-std::numeric_limits<double>::infinity(),
-                                         std::numeric_limits<double>::infinity(),
-                                         false);
+    auto snapshot =
+        wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
     const auto displayData = plot::buildDisplayData(snapshot, wave.view.sampleFrequencyHz);
 
     plot::WaveCsvData data;
@@ -2404,6 +2411,8 @@ bool Application::importSessionPackage(const std::filesystem::path& path, std::s
         return false;
     }
     loaded.config.configPath = runtimeConfig_.configPath;
+    // 现场包只恢复采集和协议现场，不覆盖本机全局界面偏好。
+    loaded.config.gui.theme = previousConfig.gui.theme;
 
     std::optional<config::ProtocolConfig> persistentProtocolConfig;
     std::optional<std::string> importedProtocolDir;
@@ -2614,8 +2623,7 @@ bool Application::pumpRawCaptureReplay(std::string& error)
     }
     if (rawCaptureReplay_.capture.events.empty()) {
         loggingFacade_.trace("raw_capture",
-                             "raw replay payload kind=raw_replay endpoint=" +
-                                 rawCaptureReplay_.capture.protocolDir +
+                             "raw replay payload kind=raw_replay endpoint=" + rawCaptureReplay_.capture.protocolDir +
                                  " bytes=" + std::to_string(rawCaptureReplay_.capture.payload.size()));
         replayRawCaptureBytes(rawCaptureReplay_.context, rawCaptureReplay_.capture.payload);
         finishRawCaptureImportReplay();
@@ -2765,13 +2773,12 @@ bool Application::applyTransferFrameRuntimeProfileEvent(const scripting::StreamR
             }
             return parser.clearRuntimeProfile(std::optional<std::string>{event.frameName}, error);
         }
-        return parser.setRuntimeProfile(
-            event.frameName,
-            scripting::StreamRuntimeProfile{
-                .length = event.length,
-                .channelMap = event.channelMap,
-            },
-            error);
+        return parser.setRuntimeProfile(event.frameName,
+                                        scripting::StreamRuntimeProfile{
+                                            .length = event.length,
+                                            .channelMap = event.channelMap,
+                                        },
+                                        error);
     };
 
     return applyToParser(transferFrameParser_->rx) && applyToParser(transferFrameParser_->tx);
@@ -2829,8 +2836,8 @@ void Application::finishRawCaptureImportReplay()
     wave.buffer.preserveHistoryLimitAtLeast(importedHistoryLimit);
     syncDockState();
     wave.statusMessage = "原始波形已导入";
-    loggingFacade_.info("raw_capture", "raw import finished kind=raw_import endpoint=" +
-                                           dockStore_.luaState().protocolDir);
+    loggingFacade_.info("raw_capture",
+                        "raw import finished kind=raw_import endpoint=" + dockStore_.luaState().protocolDir);
 }
 
 void Application::cancelRawCaptureImportReplay()
@@ -3340,9 +3347,10 @@ void Application::syncAdaptivePerformanceStatus()
         return;
     }
     loggingFacade_.info("adaptive_performance",
-                        "adaptive performance level=" + comm.adaptivePerformanceLevel + " render_multiplier=" +
-                            std::to_string(status.effectiveMultiplier) + " catchup_multiplier=" +
-                            std::to_string(status.catchUpMultiplier) + " reason=" + status.reason);
+                        "adaptive performance level=" + comm.adaptivePerformanceLevel +
+                            " render_multiplier=" + std::to_string(status.effectiveMultiplier) +
+                            " catchup_multiplier=" + std::to_string(status.catchUpMultiplier) +
+                            " reason=" + status.reason);
     loggedAdaptivePerformanceStatus_ = status;
 }
 
@@ -3722,12 +3730,12 @@ bool Application::processTransportCloseEvent(const transport::TransportCloseEven
         scriptWorker_.postTransportClose(event);
         scriptWorker_.waitIdle();
     }
-    loggingFacade_.host(config::LogLevel::Info,
-                        "CLOSE",
-                        event.context.endpoint,
-                        "transport close" + transportContextFields("transport_close", event.context) +
-                            " reason=" + event.reason,
-                        event.context.timestampMs);
+    loggingFacade_.host(
+        config::LogLevel::Info,
+        "CLOSE",
+        event.context.endpoint,
+        "transport close" + transportContextFields("transport_close", event.context) + " reason=" + event.reason,
+        event.context.timestampMs);
     resetStreamBufferAlertState(event.context.connectionId);
     if (activeConnection_.has_value() && activeConnection_->connectionId == event.context.connectionId) {
         activeConnection_.reset();
@@ -3746,12 +3754,12 @@ bool Application::processTransportErrorEvent(const transport::TransportErrorEven
         scriptWorker_.postTransportError(event);
         scriptWorker_.waitIdle();
     }
-    loggingFacade_.host(config::LogLevel::Error,
-                        "ERROR",
-                        event.context.endpoint,
-                        "transport error" + transportContextFields("transport_error", event.context) +
-                            " error=" + event.message,
-                        event.context.timestampMs);
+    loggingFacade_.host(
+        config::LogLevel::Error,
+        "ERROR",
+        event.context.endpoint,
+        "transport error" + transportContextFields("transport_error", event.context) + " error=" + event.message,
+        event.context.timestampMs);
     dockStore_.commState().lastError = event.message;
     return true;
 }
@@ -3824,13 +3832,10 @@ bool Application::processTransportTxEvent(const transport::TransportTxEvent& eve
         scriptWorker_.waitIdle();
         dockStore_.appendRequestTraceRow(
             makeRequestTraceRow(activeWrite.request, dock::RequestTraceState::Sent, error, event.finishedAtMs));
-        loggingFacade_.trace("tx",
-                             txRequestLogMessage("sent",
-                                                 activeWrite.request,
-                                                 pendingTxQueue_.size(),
-                                                 std::nullopt,
-                                                 event.finishedAtMs) +
-                                 payloadPreviewSuffix(loggingFacade_.currentConfig(), activeWrite.request.payload));
+        loggingFacade_.trace(
+            "tx",
+            txRequestLogMessage("sent", activeWrite.request, pendingTxQueue_.size(), std::nullopt, event.finishedAtMs) +
+                payloadPreviewSuffix(loggingFacade_.currentConfig(), activeWrite.request.payload));
         appendTransferRow(dock::ReceiveRow{
             .timestampMs = event.finishedAtMs,
             .direction = "TX",
@@ -3911,8 +3916,7 @@ bool Application::applyScriptTxOutputs(const scripting::ScriptRuntimeOutputBatch
         loggingFacade_.trace("tx",
                              txRequestLogMessage("received",
                                                  request,
-                                                 pendingTxQueue_.size() +
-                                                     (activeWrite_.has_value() ? 1U : 0U) +
+                                                 pendingTxQueue_.size() + (activeWrite_.has_value() ? 1U : 0U) +
                                                      (activeHalfDuplexRequest_.has_value() ? 1U : 0U)) +
                                  payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
         enqueueTxRequest(std::move(request));
@@ -4170,13 +4174,10 @@ bool Application::processRequestTimeouts()
         // 核心流程：guarded request 的重试只属于当前请求；
         // 超时后把下一次 attempt 放回队首，避免后续请求抢在重试前发送。
         ++request.attempt;
-        loggingFacade_.trace("tx",
-                             txRequestLogMessage("retry_queued",
-                                                 request,
-                                                 pendingTxQueue_.size(),
-                                                 std::nullopt,
-                                                 currentMs) +
-                                 payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
+        loggingFacade_.trace(
+            "tx",
+            txRequestLogMessage("retry_queued", request, pendingTxQueue_.size(), std::nullopt, currentMs) +
+                payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
         dockStore_.appendRequestTraceRow(
             makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, currentMs));
         pendingTxQueue_.push_front(std::move(request));
@@ -4192,12 +4193,10 @@ bool Application::driveTxScheduler()
         if (!transport_ || transport_->state() != transport::TransportState::Open) {
             auto request = std::move(pendingTxQueue_.front());
             pendingTxQueue_.pop_front();
-            loggingFacade_.trace("tx",
-                                 txRequestLogMessage("rejected",
-                                                     request,
-                                                     pendingTxQueue_.size(),
-                                                     std::string_view("连接未打开"),
-                                                     nowMs()));
+            loggingFacade_.trace(
+                "tx",
+                txRequestLogMessage(
+                    "rejected", request, pendingTxQueue_.size(), std::string_view("连接未打开"), nowMs()));
             finishTxRequest(request, scripting::TxEventState::Rejected, std::string("连接未打开"), nowMs());
             changed = true;
             continue;
@@ -4208,12 +4207,13 @@ bool Application::driveTxScheduler()
         pendingTxQueue_.pop_front();
 
         if (active.request.guarded && txRequestGuardHalted_) {
-            loggingFacade_.warn("tx",
-                                txRequestLogMessage("guard_halted",
-                                                    active.request,
-                                                    pendingTxQueue_.size(),
-                                                    std::string_view("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
-                                                    nowMs()));
+            loggingFacade_.warn(
+                "tx",
+                txRequestLogMessage("guard_halted",
+                                    active.request,
+                                    pendingTxQueue_.size(),
+                                    std::string_view("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
+                                    nowMs()));
             finishTxRequest(active.request,
                             scripting::TxEventState::Rejected,
                             std::string("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
@@ -4241,13 +4241,10 @@ bool Application::driveTxScheduler()
             continue;
         }
 
-        loggingFacade_.trace("tx",
-                             txRequestLogMessage("sending",
-                                                 active.request,
-                                                 pendingTxQueue_.size(),
-                                                 std::nullopt,
-                                                 nowMs()) +
-                                 payloadPreviewSuffix(loggingFacade_.currentConfig(), active.request.payload));
+        loggingFacade_.trace(
+            "tx",
+            txRequestLogMessage("sending", active.request, pendingTxQueue_.size(), std::nullopt, nowMs()) +
+                payloadPreviewSuffix(loggingFacade_.currentConfig(), active.request.payload));
         activeWrite_ = std::move(active);
         changed = true;
     }
@@ -4264,12 +4261,13 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     request.attempt = std::max<std::uint32_t>(1U, request.attempt);
 
     if (request.guarded && txRequestGuardHalted_) {
-        loggingFacade_.warn("tx",
-                            txRequestLogMessage("guard_halted",
-                                                request,
-                                                pendingTxQueue_.size(),
-                                                std::string_view("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
-                                                nowMs()));
+        loggingFacade_.warn(
+            "tx",
+            txRequestLogMessage("guard_halted",
+                                request,
+                                pendingTxQueue_.size(),
+                                std::string_view("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
+                                nowMs()));
         finishTxRequest(request,
                         scripting::TxEventState::Rejected,
                         std::string("guarded request 已熔断，请先调用 proto.reset_request_guard()"),
@@ -4281,11 +4279,7 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
                                     (activeHalfDuplexRequest_.has_value() ? 1U : 0U);
     if (activeCount < runtimeConfig_.protocol.tx.maxPending) {
         loggingFacade_.trace("tx",
-                             txRequestLogMessage("queued",
-                                                 request,
-                                                 activeCount + 1U,
-                                                 std::nullopt,
-                                                 nowMs()) +
+                             txRequestLogMessage("queued", request, activeCount + 1U, std::nullopt, nowMs()) +
                                  payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
         dockStore_.appendRequestTraceRow(
             makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, nowMs()));
@@ -4297,19 +4291,11 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     if (runtimeConfig_.protocol.tx.overflowPolicy == "drop_oldest_waiting" && !pendingTxQueue_.empty()) {
         auto dropped = std::move(pendingTxQueue_.front());
         pendingTxQueue_.pop_front();
-        loggingFacade_.warn("tx",
-                            txRequestLogMessage("dropped",
-                                                dropped,
-                                                activeCount,
-                                                std::string_view(overflowMessage),
-                                                nowMs()));
+        loggingFacade_.warn(
+            "tx", txRequestLogMessage("dropped", dropped, activeCount, std::string_view(overflowMessage), nowMs()));
         finishTxRequest(dropped, scripting::TxEventState::Dropped, overflowMessage, nowMs());
         loggingFacade_.trace("tx",
-                             txRequestLogMessage("queued",
-                                                 request,
-                                                 activeCount,
-                                                 std::nullopt,
-                                                 nowMs()) +
+                             txRequestLogMessage("queued", request, activeCount, std::nullopt, nowMs()) +
                                  payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
         dockStore_.appendRequestTraceRow(
             makeRequestTraceRow(request, dock::RequestTraceState::Queued, std::nullopt, nowMs()));
@@ -4319,23 +4305,15 @@ bool Application::enqueueTxRequest(scripting::TxRequest request)
     }
 
     if (runtimeConfig_.protocol.tx.overflowPolicy == "drop_newest") {
-        loggingFacade_.warn("tx",
-                            txRequestLogMessage("dropped",
-                                                request,
-                                                activeCount,
-                                                std::string_view(overflowMessage),
-                                                nowMs()));
+        loggingFacade_.warn(
+            "tx", txRequestLogMessage("dropped", request, activeCount, std::string_view(overflowMessage), nowMs()));
         finishTxRequest(request, scripting::TxEventState::Dropped, overflowMessage, nowMs());
         notifyTxOverflow(overflowMessage);
         return true;
     }
 
-    loggingFacade_.warn("tx",
-                        txRequestLogMessage("rejected",
-                                            request,
-                                            activeCount,
-                                            std::string_view(overflowMessage),
-                                            nowMs()));
+    loggingFacade_.warn(
+        "tx", txRequestLogMessage("rejected", request, activeCount, std::string_view(overflowMessage), nowMs()));
     finishTxRequest(request, scripting::TxEventState::Rejected, overflowMessage, nowMs());
     notifyTxOverflow(overflowMessage);
     return true;
@@ -4370,8 +4348,7 @@ void Application::finishTxRequest(const scripting::TxRequest& request,
                          txRequestLogMessage(stateText,
                                              request,
                                              pendingTxQueue_.size(),
-                                             error.has_value() ? std::optional<std::string_view>{*error}
-                                                               : std::nullopt,
+                                             error.has_value() ? std::optional<std::string_view>{*error} : std::nullopt,
                                              finishedAtMs) +
                              payloadPreviewSuffix(loggingFacade_.currentConfig(), request.payload));
 

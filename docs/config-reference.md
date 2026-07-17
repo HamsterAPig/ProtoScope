@@ -57,6 +57,7 @@ app:
 
 ```yaml
 gui:
+  theme: professional_dark
   show_app_header: false
   window:
     title: ProtoScope
@@ -67,6 +68,13 @@ gui:
     chinese_glyph_range: simplified_common
 ```
 
+- `theme`：全局界面主题，支持 `professional_dark`（默认，保持原有专业深色外观）
+  和 `debug_high_contrast`（示波器高对比网格）。缺失或填写非法值时回退到
+  `professional_dark`。
+- 运行中可通过 `设置 -> 主题` 即时切换，无需重启，也不会重载当前协议。
+  切换会把配置标记为待保存；启用自动保存时自动写回，否则使用
+  `文件 -> 保存配置` 持久化。
+- 主题属于本机全局偏好，不随协议切换或现场包导入改变。
 - `show_app_header`：是否显示应用顶部 header。
 - `window.title`：窗口标题。
 - `window.width` / `window.height`：初始窗口尺寸。
@@ -82,11 +90,14 @@ gui:
     control_mode: oscilloscope
     display_formula: offset_then_scale
     grid_division_readout_mode: display_value
+    channel_scale_wheel:
+      enabled: true
+      acceleration: log
     channel_card_width_mode: fixed
     channel_double_click_action: reset_scale_offset
     x_axis_double_click_action: fit_full_history
     y_axis_double_click_action: fit_visible_channels
-    y_axis_double_click_adjust_offset: true
+    y_axis_double_click_adjust_offset: false
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct
@@ -115,11 +126,13 @@ gui:
 - `control_mode`：`legacy_global` 或 `oscilloscope`。
 - `display_formula`：`offset_then_scale` 或 `scale_then_offset`。
 - `grid_division_readout_mode`：`display_value`、`actual_value` 或 `raw_value`，控制通道卡片展示每格读数的换算口径。
+- `channel_scale_wheel.enabled`：默认 `true`，精调关闭时 Y 轴热区滚轮按 1-2-5 工程刻度调整激活模拟通道的实际值/格；设为 `false` 时回退 `pow(1.1, wheel)` 连续缩放。
+- `channel_scale_wheel.acceleration`：`none`、`linear` 或 `log`，默认 `log`；非法值回退 `log`。同通道同方向且事件间隔不超过 250ms 时累计加速。
 - `channel_card_width_mode`：`fixed` 或 `adaptive`。
 - `channel_double_click_action`：`reset_all`、`reset_scale_offset`、`reset_scale`、`reset_offset`。
 - `x_axis_double_click_action`：`fit_full_history` 或 `fit_visible_window`。
 - `y_axis_double_click_action`：`fit_visible_channels` 或 `fit_active_channel`。默认聚合所有图例可见模拟通道；激活通道模式只取当前激活模拟通道，激活通道无效、隐藏或为 bit-display 时回退到可见模拟通道。
-- `y_axis_double_click_adjust_offset`：Y 轴双击拟合时是否同步调整通道 offset，默认 `true`，会保持当前主图 Y 视口不变并把目标模拟波形移入视口内部。
+- `y_axis_double_click_adjust_offset`：Y 轴双击拟合时是否同步调整通道 offset，默认 `false`，只调整 Scale 并保留原 Offset；设为 `true` 时保持当前主图 Y 视口不变，并把目标模拟波形完整移入视口内部。
 - `hidden_channel_policy`：`visible_only` 或 `include_hidden`，控制隐藏通道是否参与派生视图。
 - `cursor_extreme_snap_policy`：`nearest_waveform` 或 `viewport_zone`。
 - `mouse_y_offset_drag_mode`：`direct`、`shift` 或 `disabled`，控制鼠标拖动通道 Y 偏移的触发方式。

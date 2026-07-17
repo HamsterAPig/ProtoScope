@@ -135,7 +135,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
             view.viewMaxTime = normalized.maxTime;
             view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
             view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
-            applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
+            applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::OverviewDrag);
             view.forceNextMainPlotLimits = true;
         }
         const auto mousePlotPos = ImPlot::GetPlotMousePos();
@@ -158,11 +158,11 @@ void drawOverviewWindow(plot::WaveViewState& view,
             const double deltaTime = mousePlotPos.x - view.overviewDragLastTime;
             const auto moved =
                 plot::moveViewportByDelta(currentViewport(view), deltaTime, overviewBounds, minVisibleTimeSpan);
-            applyViewport(view, moved, WaveViewportAutoFollowPolicy::UserInteraction);
+            applyViewport(view, moved, WaveViewportAutoFollowPolicy::OverviewDrag);
             view.overviewDragLastTime = mousePlotPos.x;
         }
         if ((rectHovered || rectHeld) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
+            applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::OverviewDrag);
         }
         const auto& io = ImGui::GetIO();
         if (ImPlot::IsPlotHovered() && io.MouseWheel != 0.0F) {
