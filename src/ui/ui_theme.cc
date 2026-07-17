@@ -6,6 +6,15 @@ namespace protoscope::ui {
 
 namespace {
 
+    ImVec4 rgb8(const int red, const int green, const int blue, const float alpha = 1.0F)
+    {
+        constexpr float kColorScale = 1.0F / 255.0F;
+        return ImVec4(static_cast<float>(red) * kColorScale,
+                      static_cast<float>(green) * kColorScale,
+                      static_cast<float>(blue) * kColorScale,
+                      alpha);
+    }
+
     UiThemeDefinition makeProfessionalDarkTheme()
     {
         return UiThemeDefinition{
@@ -40,6 +49,12 @@ namespace {
                     .bitLabel = ImVec4(0.84F, 0.88F, 0.92F, 0.72F),
                     .legendOverlayBackground = ImVec4(0.051F, 0.075F, 0.106F, 1.0F),
                     .legendOverlayBorder = ImVec4(0.30F, 0.42F, 0.54F, 0.55F),
+                    .legendOverlayTextPrimary = ImVec4(0.93F, 0.96F, 0.99F, 1.0F),
+                    .legendOverlayTextSecondary = ImVec4(0.58F, 0.67F, 0.76F, 1.0F),
+                    // 透明令牌表示沿用专业深色已有的图例行绘制逻辑。
+                    .legendOverlayRowHover = ImVec4(0.0F, 0.0F, 0.0F, 0.0F),
+                    .legendOverlayRowActive = ImVec4(0.0F, 0.0F, 0.0F, 0.0F),
+                    .legendOverlayRowActiveBorder = ImVec4(0.0F, 0.0F, 0.0F, 0.0F),
                     .measurementOverlayBackground = ImVec4(0.035F, 0.040F, 0.050F, 0.72F),
                     .measurementOverlayBorder = ImVec4(1.000F, 1.000F, 1.000F, 0.15F),
                     .measurementOverlayAccent = ImVec4(0.300F, 0.620F, 1.000F, 0.85F),
@@ -58,42 +73,52 @@ namespace {
             .theme = config::GuiTheme::DebugHighContrast,
             .ui =
                 {
-                    .appBackground = ImVec4(0.035F, 0.047F, 0.067F, 1.0F),
-                    .panelBackground = ImVec4(0.055F, 0.071F, 0.096F, 1.0F),
-                    .panelBackgroundAlt = ImVec4(0.080F, 0.104F, 0.140F, 1.0F),
-                    .panelBorder = ImVec4(0.300F, 0.400F, 0.520F, 0.95F),
-                    .accent = ImVec4(0.200F, 0.650F, 0.980F, 1.0F),
-                    .accentMuted = ImVec4(0.200F, 0.650F, 0.980F, 0.24F),
+                    .appBackground = rgb8(6, 9, 12),
+                    .panelBackground = rgb8(9, 12, 16),
+                    .panelBackgroundAlt = rgb8(14, 19, 25),
+                    .panelBorder = rgb8(46, 82, 107),
+                    .accent = rgb8(46, 184, 250),
+                    .accentMuted = rgb8(46, 184, 250, 0.24F),
                     .success = ImVec4(0.24F, 0.74F, 0.48F, 1.0F),
                     .warning = ImVec4(0.93F, 0.70F, 0.20F, 1.0F),
                     .danger = ImVec4(0.91F, 0.33F, 0.33F, 1.0F),
-                    .textStrong = ImVec4(0.960F, 0.980F, 1.000F, 1.0F),
-                    .textMuted = ImVec4(0.680F, 0.760F, 0.840F, 1.0F),
-                    .genericPlotBackground = ImVec4(0.045F, 0.058F, 0.078F, 1.0F),
+                    .textStrong = rgb8(245, 250, 255),
+                    .textMuted = rgb8(179, 194, 209),
+                    .genericPlotBackground = rgb8(5, 7, 10),
+                    .windowRounding = 4.0F,
+                    .frameRounding = 3.0F,
+                    .grabRounding = 3.0F,
+                    .tabRounding = 3.0F,
                 },
             .wave =
                 {
-                    .plotBackground = ImVec4(0.025F, 0.040F, 0.058F, 1.0F),
-                    .gridMajor = ImVec4(0.210F, 0.310F, 0.420F, 0.82F),
-                    .gridMinorTick = ImVec4(0.320F, 0.490F, 0.640F, 0.86F),
-                    .gridCenter = ImVec4(0.750F, 0.840F, 0.920F, 0.84F),
-                    .statusOverlayBackground = ImVec4(0.025F, 0.040F, 0.058F, 0.84F),
-                    .statusOverlayBorder = ImVec4(0.300F, 0.400F, 0.520F, 0.72F),
-                    .statusOverlayText = ImVec4(0.960F, 0.980F, 1.000F, 0.98F),
-                    .channelSeparator = ImVec4(0.300F, 0.400F, 0.520F, 0.78F),
-                    .channelLabel = ImVec4(0.680F, 0.760F, 0.840F, 0.94F),
-                    .splitChannelLabel = ImVec4(0.960F, 0.980F, 1.000F, 0.94F),
-                    .bitLabel = ImVec4(0.750F, 0.840F, 0.920F, 0.92F),
-                    .legendOverlayBackground = ImVec4(0.055F, 0.071F, 0.096F, 1.0F),
-                    .legendOverlayBorder = ImVec4(0.300F, 0.400F, 0.520F, 0.72F),
-                    .measurementOverlayBackground = ImVec4(0.025F, 0.040F, 0.058F, 0.86F),
-                    .measurementOverlayBorder = ImVec4(0.300F, 0.400F, 0.520F, 0.68F),
-                    .measurementOverlayAccent = ImVec4(0.300F, 0.620F, 1.000F, 0.85F),
-                    .measurementOverlayTitle = ImVec4(0.960F, 0.980F, 1.000F, 0.98F),
-                    .measurementChipBackground = ImVec4(0.080F, 0.104F, 0.140F, 0.82F),
-                    .measurementChipBorder = ImVec4(0.300F, 0.400F, 0.520F, 0.55F),
-                    .measurementChipLabel = ImVec4(0.680F, 0.760F, 0.840F, 0.96F),
-                    .measurementChipValue = ImVec4(0.960F, 0.980F, 1.000F, 0.99F),
+                    .plotBackground = rgb8(5, 7, 10),
+                    // 三级网格按主网格、短刻度、中心线逐级增强，避免同时抢眼。
+                    .gridMajor = rgb8(46, 82, 107, 0.92F),
+                    .gridMinorTick = rgb8(88, 137, 174, 0.92F),
+                    .gridCenter = rgb8(225, 245, 255, 0.96F),
+                    .statusOverlayBackground = rgb8(5, 7, 10, 0.88F),
+                    .statusOverlayBorder = rgb8(46, 82, 107, 0.78F),
+                    .statusOverlayText = rgb8(245, 250, 255, 0.98F),
+                    .channelSeparator = rgb8(46, 82, 107, 0.80F),
+                    .channelLabel = rgb8(179, 194, 209, 0.98F),
+                    .splitChannelLabel = rgb8(245, 250, 255, 0.96F),
+                    .bitLabel = rgb8(179, 194, 209, 0.92F),
+                    .legendOverlayBackground = rgb8(8, 12, 17, 0.98F),
+                    .legendOverlayBorder = rgb8(56, 127, 170),
+                    .legendOverlayTextPrimary = rgb8(245, 250, 255),
+                    .legendOverlayTextSecondary = rgb8(179, 194, 209),
+                    .legendOverlayRowHover = rgb8(14, 26, 36),
+                    .legendOverlayRowActive = rgb8(14, 46, 66),
+                    .legendOverlayRowActiveBorder = rgb8(46, 184, 250),
+                    .measurementOverlayBackground = rgb8(8, 12, 17, 0.90F),
+                    .measurementOverlayBorder = rgb8(56, 127, 170, 0.68F),
+                    .measurementOverlayAccent = rgb8(46, 184, 250, 0.90F),
+                    .measurementOverlayTitle = rgb8(245, 250, 255, 0.98F),
+                    .measurementChipBackground = rgb8(14, 19, 25, 0.92F),
+                    .measurementChipBorder = rgb8(46, 82, 107, 0.65F),
+                    .measurementChipLabel = rgb8(179, 194, 209, 0.96F),
+                    .measurementChipValue = rgb8(245, 250, 255, 0.99F),
                     .gridMajorWidth = 1.2F,
                     .gridMinorTickWidth = 1.2F,
                     .gridCenterWidth = 1.8F,
@@ -163,7 +188,9 @@ namespace {
         colors[ImGuiCol_CheckMark] = tokens.accent;
         colors[ImGuiCol_SliderGrab] = tokens.accent;
         colors[ImGuiCol_SliderGrabActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.85F);
-        colors[ImGuiCol_Button] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.20F);
+        colors[ImGuiCol_Button] =
+            highContrast ? tokens.panelBackgroundAlt
+                         : ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.20F);
         colors[ImGuiCol_ButtonHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.36F);
         colors[ImGuiCol_ButtonActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.52F);
         colors[ImGuiCol_Header] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.18F);

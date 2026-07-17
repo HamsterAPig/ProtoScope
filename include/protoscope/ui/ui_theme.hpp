@@ -45,6 +45,11 @@ struct WaveStyleTokens {
     ImVec4 bitLabel;
     ImVec4 legendOverlayBackground;
     ImVec4 legendOverlayBorder;
+    ImVec4 legendOverlayTextPrimary;
+    ImVec4 legendOverlayTextSecondary;
+    ImVec4 legendOverlayRowHover;
+    ImVec4 legendOverlayRowActive;
+    ImVec4 legendOverlayRowActiveBorder;
     ImVec4 measurementOverlayBackground;
     ImVec4 measurementOverlayBorder;
     ImVec4 measurementOverlayAccent;

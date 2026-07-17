@@ -31,7 +31,7 @@ namespace {
 
     constexpr ThemeMenuItem kThemeMenuItems[] = {
         {.label = "专业深色", .theme = config::GuiTheme::ProfessionalDark},
-        {.label = "示波器高对比", .theme = config::GuiTheme::DebugHighContrast},
+        {.label = "仪器深黑（高对比）", .theme = config::GuiTheme::DebugHighContrast},
     };
 
     bool menuItemWithHelp(

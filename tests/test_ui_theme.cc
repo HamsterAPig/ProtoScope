@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include <implot.h>
+
 namespace {
 
 bool nearlyEqual(const float left, const float right)
@@ -45,6 +47,15 @@ double compositedContrast(const ImVec4& foreground, const ImVec4& background)
     return (lighter + 0.05) / (darker + 0.05);
 }
 
+ImVec4 rgb8(const int red, const int green, const int blue, const float alpha = 1.0F)
+{
+    constexpr float kColorScale = 1.0F / 255.0F;
+    return ImVec4(static_cast<float>(red) * kColorScale,
+                  static_cast<float>(green) * kColorScale,
+                  static_cast<float>(blue) * kColorScale,
+                  alpha);
+}
+
 } // namespace
 
 void test_ui_theme_professional_dark_preserves_existing_tokens()
@@ -77,33 +88,72 @@ void test_ui_theme_high_contrast_tokens_and_grid_contrast()
     const auto& ui = definition.ui;
     const auto& wave = definition.wave;
 
-    requireColor(ui.appBackground, ImVec4(0.035F, 0.047F, 0.067F, 1.0F), "高对比全局背景应匹配预设");
-    requireColor(ui.panelBackground, ImVec4(0.055F, 0.071F, 0.096F, 1.0F), "高对比面板背景应匹配预设");
-    requireColor(ui.panelBackgroundAlt, ImVec4(0.080F, 0.104F, 0.140F, 1.0F), "高对比次级面板应匹配预设");
-    requireColor(ui.panelBorder, ImVec4(0.300F, 0.400F, 0.520F, 0.95F), "高对比面板边框应匹配预设");
-    requireColor(ui.accent, ImVec4(0.200F, 0.650F, 0.980F, 1.0F), "高对比强调色应匹配预设");
-    requireColor(ui.textStrong, ImVec4(0.960F, 0.980F, 1.000F, 1.0F), "高对比主文字应匹配预设");
-    requireColor(ui.textMuted, ImVec4(0.680F, 0.760F, 0.840F, 1.0F), "高对比次文字应匹配预设");
-    requireColor(ui.genericPlotBackground, ImVec4(0.045F, 0.058F, 0.078F, 1.0F), "高对比普通图表背景应匹配预设");
-    requireColor(wave.plotBackground, ImVec4(0.025F, 0.040F, 0.058F, 1.0F), "高对比波形背景应匹配预设");
-    requireColor(wave.gridMajor, ImVec4(0.210F, 0.310F, 0.420F, 0.82F), "高对比主网格应匹配预设");
-    requireColor(wave.gridMinorTick, ImVec4(0.320F, 0.490F, 0.640F, 0.86F), "高对比五等分短刻度应匹配预设");
-    requireColor(wave.gridCenter, ImVec4(0.750F, 0.840F, 0.920F, 0.84F), "高对比中心十字线应匹配预设");
+    requireColor(ui.appBackground, rgb8(6, 9, 12), "高对比全局背景应匹配预设");
+    requireColor(ui.panelBackground, rgb8(9, 12, 16), "高对比面板背景应匹配预设");
+    requireColor(ui.panelBackgroundAlt, rgb8(14, 19, 25), "高对比次级面板应匹配预设");
+    requireColor(ui.panelBorder, rgb8(46, 82, 107), "高对比面板边框应匹配预设");
+    requireColor(ui.accent, rgb8(46, 184, 250), "高对比强调色应匹配预设");
+    requireColor(ui.textStrong, rgb8(245, 250, 255), "高对比主文字应匹配预设");
+    requireColor(ui.textMuted, rgb8(179, 194, 209), "高对比次文字应匹配预设");
+    requireColor(ui.genericPlotBackground, rgb8(5, 7, 10), "高对比普通图表背景应匹配预设");
+    requireColor(wave.plotBackground, rgb8(5, 7, 10), "高对比波形背景应匹配预设");
+    requireColor(wave.gridMajor, rgb8(46, 82, 107, 0.92F), "高对比主网格应匹配预设");
+    requireColor(wave.gridMinorTick, rgb8(88, 137, 174, 0.92F), "高对比五等分短刻度应匹配预设");
+    requireColor(wave.gridCenter, rgb8(225, 245, 255, 0.96F), "高对比中心十字线应匹配预设");
+    requireColor(wave.legendOverlayBackground, rgb8(8, 12, 17, 0.98F), "高对比图例背景应匹配预设");
+    requireColor(wave.legendOverlayBorder, rgb8(56, 127, 170), "高对比图例边框应匹配预设");
+    requireColor(wave.legendOverlayTextPrimary, rgb8(245, 250, 255), "高对比图例主文字应匹配预设");
+    requireColor(wave.legendOverlayTextSecondary, rgb8(179, 194, 209), "高对比图例辅助文字应匹配预设");
+    requireColor(wave.legendOverlayRowHover, rgb8(14, 26, 36), "高对比图例悬停行应匹配预设");
+    requireColor(wave.legendOverlayRowActive, rgb8(14, 46, 66), "高对比图例激活行应匹配预设");
+    requireColor(wave.legendOverlayRowActiveBorder, rgb8(46, 184, 250), "高对比图例激活边框应匹配预设");
     protoscope::tests::require(nearlyEqual(wave.gridMajorWidth, 1.2F) && nearlyEqual(wave.gridMinorTickWidth, 1.2F) &&
                                    nearlyEqual(wave.gridCenterWidth, 1.8F) &&
                                    nearlyEqual(wave.gridMinorTickHalfLength, 2.5F),
                                "高对比网格线宽和短刻度长度应匹配预设");
 
-    protoscope::tests::require(compositedContrast(wave.gridMajor, wave.plotBackground) >= 1.90,
-                               "高对比主网格与背景对比度不得低于 1.90:1");
-    protoscope::tests::require(compositedContrast(wave.gridMinorTick, wave.plotBackground) >= 3.60,
-                              "高对比短刻度与背景对比度不得低于 3.60:1");
-    protoscope::tests::require(compositedContrast(wave.gridCenter, wave.plotBackground) >= 9.40,
-                              "高对比中心线与背景对比度不得低于 9.40:1");
+    protoscope::tests::require(compositedContrast(wave.legendOverlayTextPrimary, wave.legendOverlayBackground) >= 12.0,
+                               "图例主文字与背景对比度不得低于 12:1");
+    protoscope::tests::require(
+        compositedContrast(wave.legendOverlayTextSecondary, wave.legendOverlayBackground) >= 7.0,
+        "图例辅助文字与普通背景对比度不得低于 7:1");
+    protoscope::tests::require(
+        compositedContrast(wave.legendOverlayTextSecondary, wave.legendOverlayRowActive) >= 7.0,
+        "图例辅助文字与激活行背景对比度不得低于 7:1");
+    protoscope::tests::require(compositedContrast(wave.gridMajor, wave.plotBackground) >= 2.10,
+                               "高对比主网格与背景对比度不得低于 2.10:1");
+    protoscope::tests::require(compositedContrast(wave.gridMinorTick, wave.plotBackground) >= 4.0,
+                               "高对比短刻度与背景对比度不得低于 4:1");
+    protoscope::tests::require(compositedContrast(wave.gridCenter, wave.plotBackground) >= 10.0,
+                               "高对比中心线与背景对比度不得低于 10:1");
 
+    ImGui::CreateContext();
+    ImPlot::CreateContext();
+    protoscope::ui::applyUiTheme(protoscope::config::GuiTheme::ProfessionalDark);
+    requireColor(ImGui::GetStyle().Colors[ImGuiCol_WindowBg],
+                 ImVec4(0.05F, 0.07F, 0.10F, 1.0F),
+                 "专业深色实际 ImGui 样式应先应用");
     protoscope::ui::applyUiTheme(protoscope::config::GuiTheme::DebugHighContrast);
     requireColor(protoscope::ui::activeWaveStyleTokens().plotBackground,
                  wave.plotBackground,
                  "applyUiTheme 后活动波形令牌应立即切换");
+    requireColor(ImGui::GetStyle().Colors[ImGuiCol_WindowBg], ui.appBackground, "动态切换应立即更新 ImGui 窗口背景");
+    requireColor(ImGui::GetStyle().Colors[ImGuiCol_Button],
+                 ui.panelBackgroundAlt,
+                 "高对比按钮默认态应使用中性深色");
+    requireColor(ImPlot::GetStyle().Colors[ImPlotCol_PlotBg],
+                 ui.genericPlotBackground,
+                 "动态切换应立即更新 ImPlot 绘图区背景");
+    protoscope::tests::require(nearlyEqual(ImGui::GetStyle().WindowRounding, 4.0F) &&
+                                   nearlyEqual(ImGui::GetStyle().FrameRounding, 3.0F),
+                               "高对比实际 ImGui 样式应使用 3-4px 圆角");
     protoscope::ui::applyUiTheme(protoscope::config::GuiTheme::ProfessionalDark);
+    requireColor(ImGui::GetStyle().Colors[ImGuiCol_WindowBg],
+                 ImVec4(0.05F, 0.07F, 0.10F, 1.0F),
+                 "往返切换后专业深色实际 ImGui 样式应恢复");
+    requireColor(ImPlot::GetStyle().Colors[ImPlotCol_PlotBg],
+                 ImVec4(0.07F, 0.09F, 0.13F, 1.0F),
+                 "往返切换后专业深色实际 ImPlot 样式应恢复");
+    ImPlot::DestroyContext();
+    ImGui::DestroyContext();
 }
