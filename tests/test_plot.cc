@@ -1180,11 +1180,12 @@ void test_wave_bit_display_bounds_and_hidden_policy()
     require(std::abs(yAutoFitBounds.maxValue - 4.0) < 1e-12, "普通 Y fit 不应受 bit 原始值影响");
 }
 
-void test_bit_cursor_only_snaps_to_transitions()
+void test_bit_cursor_edge_priority_and_stable_fallback()
 {
     std::vector<protoscope::plot::WaveSample> samples{
         {.time = 0.0, .value = 0.0},
         {.time = 1.0, .value = 1.0},
+        {.time = 1.04, .value = 1.0},
         {.time = 2.0, .value = 1.0},
         {.time = 3.0, .value = 0.0},
     };
@@ -1193,10 +1194,16 @@ void test_bit_cursor_only_snaps_to_transitions()
         .label = "CH1",
         .unit = "raw",
         .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
-        .totalSamples = 4,
+        .totalSamples = samples.size(),
         .visibleBegin = 0,
-        .visibleEnd = 4,
+        .visibleEnd = samples.size(),
         .samples = samples.data(),
+    });
+
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = samples,
+        .actualValues = {0.0, 1.0, 1.0, 1.0, 0.0},
     });
 
     const ImPlotRect limits(0.0, 4.0, -1.0, 2.0);
@@ -1205,12 +1212,17 @@ void test_bit_cursor_only_snaps_to_transitions()
     const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
     require(!layout.lanes.empty(), "应至少生成一条 bit lane");
 
-    const auto snapAtTransition = protoscope::ui::findNearestBitTransition(snapshot, layout, 1.05, 0.5, 0.2, 10.0);
+    const auto snapAtTransition =
+        protoscope::ui::findNearestBitTransition(snapshot, displayData, layout, 1.04, 0.5, 0.2, 10.0);
     require(snapAtTransition.has_value(), "鼠标靠近跳变点时应有吸附");
-    require(std::abs(snapAtTransition->time - 1.0) < 0.01, "应吸附到跳变时间而不是稳定电平采样点");
+    require(std::abs(snapAtTransition->time - 1.0) < 0.01, "阈值内存在跳变时应优先吸附边沿");
+    require(snapAtTransition->bit.has_value() && snapAtTransition->bit->edge, "边沿候选应标记为 transition");
 
-    const auto snapAtSteadyState = protoscope::ui::findNearestBitTransition(snapshot, layout, 2.0, 0.5, 0.1, 10.0);
-    require(!snapAtSteadyState.has_value(), "稳定电平采样点不应被吸附");
+    const auto snapAtSteadyState =
+        protoscope::ui::findNearestBitTransition(snapshot, displayData, layout, 2.0, 0.5, 0.1, 10.0);
+    require(snapAtSteadyState.has_value(), "阈值内没有跳变时应吸附稳定电平采样点");
+    require(snapAtSteadyState->bit.has_value() && !snapAtSteadyState->bit->edge, "稳定兜底候选不应伪装成跳变边沿");
+    require(std::abs(snapAtSteadyState->time - 2.0) < 1e-12, "稳定兜底应使用显示时间");
 }
 
 void test_hidden_bit_lane_excluded_from_layout_hit_and_snap()
@@ -1229,6 +1241,11 @@ void test_hidden_bit_lane_excluded_from_layout_hit_and_snap()
         .visibleEnd = samples.size(),
         .samples = samples.data(),
     });
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.channels.push_back({
+        .samples = samples,
+        .actualValues = {0.0, 1.0, 0.0},
+    });
 
     const ImPlotRect limits(0.0, 2.0, -1.0, 2.0);
     const ImVec2 plotPos(0.0F, 0.0F);
@@ -1237,15 +1254,51 @@ void test_hidden_bit_lane_excluded_from_layout_hit_and_snap()
     require(hiddenLayout.lanes.empty(), "隐藏 bit_display 通道不应生成 lane");
     require(!protoscope::ui::findBitLaneAtPlotValue(hiddenLayout, 0.5, 10.0).has_value(),
             "隐藏 bit_display 通道不应参与 hit test");
-    require(!protoscope::ui::findNearestBitTransition(snapshot, hiddenLayout, 1.0, 0.5, 0.5, 10.0).has_value(),
-            "隐藏 bit_display 通道不应参与 bit snap");
+    require(
+        !protoscope::ui::findNearestBitTransition(snapshot, displayData, hiddenLayout, 1.0, 0.5, 0.5, 10.0).has_value(),
+        "隐藏 bit_display 通道不应参与 bit snap");
 
     const auto visibleLayout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
     require(visibleLayout.lanes.size() == 1, "可见 bit_display 通道应生成 lane");
-    require(
-        protoscope::ui::findNearestBitTransition(snapshot, visibleLayout, 1.0, visibleLayout.lanes[0].highY, 0.5, 10.0)
-            .has_value(),
-        "可见 bit_display 通道应允许吸附跳变");
+    require(protoscope::ui::findNearestBitTransition(
+                snapshot, displayData, visibleLayout, 1.0, visibleLayout.lanes[0].highY, 0.5, 10.0)
+                .has_value(),
+            "可见 bit_display 通道应允许吸附跳变");
+}
+
+void test_bit_snap_uses_sample_frequency_display_time_and_source_index()
+{
+    std::vector<protoscope::plot::WaveSample> samples{
+        {.time = 100.0, .value = 1.0},
+        {.time = 101.0, .value = 0.0},
+        {.time = 102.0, .value = 1.0},
+    };
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({
+        .label = "BIT",
+        .unit = "raw",
+        .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 0.0},
+        .totalSamples = samples.size(),
+        .sampleIndexOffset = 10U,
+        .visibleBegin = 1U,
+        .visibleEnd = samples.size(),
+        .samples = samples.data(),
+    });
+    const auto displayData = protoscope::plot::buildDisplayData(snapshot, 2.0);
+    require(displayData.axisSource == protoscope::plot::WaveTimeAxisSource::SampleFrequency,
+            "采样频率测试应使用显示时间轴");
+    require(displayData.channels[0].samples.size() == 2U, "显示样本应按可见范围投影");
+    require(std::abs(displayData.channels[0].samples[0].time - 5.5) < 1e-12,
+            "显示时间应包含 sampleIndexOffset 并使用采样频率换算");
+
+    const ImPlotRect limits(5.4, 6.1, -1.0, 2.0);
+    const auto layout =
+        protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, ImVec2(0.0F, 0.0F), ImVec2(400.0F, 200.0F));
+    const auto snap =
+        protoscope::ui::findNearestBitTransition(snapshot, displayData, layout, 6.0, layout.lanes[0].lowY, 0.2, 10.0);
+    require(snap.has_value() && snap->bit.has_value() && snap->bit->edge, "采样频率轴应吸附显示时间上的 bit 跳变");
+    require(std::abs(snap->time - 6.0) < 1e-12, "bit 吸附不得返回原始 sample.time");
+    require(snap->sampleIndex == 2U, "显示样本索引应映射回包含 sampleIndexOffset 的源码样本索引");
 }
 
 void test_split_bit_cursor_forced_channel_still_snaps_to_transition()
@@ -1273,7 +1326,10 @@ void test_split_bit_cursor_forced_channel_still_snaps_to_transition()
         .samples = {{.time = 1.0, .value = 100.0}},
         .actualValues = {100.0},
     });
-    displayData.channels.push_back({});
+    displayData.channels.push_back({
+        .samples = bitSamples,
+        .actualValues = {0.0, 1.0, 1.0},
+    });
 
     protoscope::plot::WaveViewState view;
     view.cursorSnapScope = protoscope::plot::WaveCursorSnapScope::AllChannels;
@@ -1364,7 +1420,10 @@ void test_bit_cursor_cross_lane_refresh_uses_own_y_anchor()
         .samples = samples.data(),
     });
     protoscope::plot::WaveDisplayData displayData;
-    displayData.channels.push_back({});
+    displayData.channels.push_back({
+        .samples = samples,
+        .actualValues = {0.0, 1.0, 3.0},
+    });
     protoscope::plot::WaveViewState view;
     view.activeBitLane = {.active = true, .parentChannelIndex = 0, .bitIndex = 0, .laneIndex = 0};
 
@@ -3853,6 +3912,82 @@ void test_wave_cursor_interval_text_by_axis()
     require(sampledTime.valid, "采样频率时间轴游标间隔应有效");
     require(sampledTime.showFrequency, "采样频率时间轴应显示倒数频率");
     require(std::abs(sampledTime.frequencyHz - 0.25) < 1e-12, "采样频率时间轴频率计算错误");
+
+    const auto degraded =
+        protoscope::plot::makeCursorIntervalText(2.0, 6.0, protoscope::plot::WaveTimeAxisSource::ScriptTime, "ms");
+    require(degraded.valid, "游标 readout 缺失时仍应按时间生成 ΔT");
+    require(std::abs(degraded.delta - 4.0) < 1e-12, "时间级降级应保留 Δt");
+    require(std::abs(degraded.frequencyHz - 0.25) < 1e-12, "时间级降级应保留频率");
+}
+
+void test_wave_cursor_metrics_degrade_without_complete_readouts()
+{
+    protoscope::plot::WaveSnapshot snapshot;
+    snapshot.channels.push_back({.label = "CH1", .unit = "V"});
+    protoscope::plot::WaveDisplayData displayData;
+    displayData.axisSource = protoscope::plot::WaveTimeAxisSource::ScriptTime;
+    displayData.timeUnit = "ms";
+
+    protoscope::plot::WaveViewState view;
+    view.cursors[0] = {.enabled = true, .channelIndex = 0, .time = 2.0};
+    view.cursors[1] = {.enabled = true, .channelIndex = 0, .time = 6.0};
+    view.measurement.cursorA = true;
+    view.measurement.cursorB = true;
+    view.measurement.deltaTime = true;
+    view.measurement.deltaValue = true;
+    view.measurement.frequency = true;
+    view.measurement.period = true;
+    view.measurement.sampleCount = true;
+    view.measurement.span = true;
+
+    protoscope::ui::PlotRenderResult result;
+    result.cursorReadouts[0] = protoscope::plot::CursorReadout{
+        .valid = true,
+        .channelIndex = 0,
+        .sampleIndex = 1,
+        .time = 2.0,
+        .value = 1.5,
+    };
+
+    const auto chips = protoscope::ui::buildCursorMetricChips(view, snapshot, displayData, result);
+    const auto hasChip = [&chips](std::string_view label) {
+        return std::ranges::any_of(chips, [label](const auto& chip) { return chip.label == label; });
+    };
+    require(hasChip("A·t") && hasChip("B·t"), "缺少单侧 readout 时仍应显示 A/B 时间");
+    require(hasChip("Δt") && hasChip("Freq") && hasChip("T"), "缺少单侧 readout 时仍应显示时间指标");
+    require(!hasChip("Δy"), "缺少单侧 readout 时不应显示 Δy");
+    require(protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result).empty(),
+            "缺少完整 readout 时不应生成采样统计项");
+
+    result.cursorReadouts[0]->bit = protoscope::plot::BitLaneReadout{
+        .parentChannelIndex = 0,
+        .bitIndex = 0,
+        .laneIndex = 0,
+        .value = true,
+        .y = 1.0,
+    };
+    result.cursorReadouts[1] = protoscope::plot::CursorReadout{
+        .valid = true,
+        .channelIndex = 0,
+        .sampleIndex = 3,
+        .time = 6.0,
+        .value = false,
+        .bit =
+            protoscope::plot::BitLaneReadout{
+                .parentChannelIndex = 0,
+                .bitIndex = 1,
+                .laneIndex = 1,
+                .value = false,
+                .y = 0.0,
+            },
+    };
+    const auto bitChips = protoscope::ui::buildCursorMetricChips(view, snapshot, displayData, result);
+    const auto bitHasChip = [&bitChips](std::string_view label) {
+        return std::ranges::any_of(bitChips, [label](const auto& chip) { return chip.label == label; });
+    };
+    require(bitHasChip("A·val") && bitHasChip("B·val"), "bit 跨 lane 应显示两侧 bit 值");
+    require(bitHasChip("Δt") && bitHasChip("Freq") && bitHasChip("T"), "bit 跨 lane 应保留时间指标");
+    require(!bitHasChip("Δy"), "bit 跨 lane 不应生成模拟量 Δy");
 }
 
 void test_wave_cursor_interval_lock()
@@ -4811,6 +4946,103 @@ void test_wave_mouse_y_offset_drag_mode_gate()
             "disabled 模式不按 Shift 不应允许鼠标写回 Y 偏移");
     require(!protoscope::ui::allowsMouseYOffsetDrag(WaveMouseYOffsetDragMode::Disabled, true),
             "disabled 模式按住 Shift 也不应允许鼠标写回 Y 偏移");
+}
+
+void test_wave_cursor_owns_channel_interaction_and_stacked_blocks_vertical_drag()
+{
+    protoscope::plot::WaveViewState view;
+    view.controlMode = protoscope::plot::WaveControlMode::Oscilloscope;
+    require(protoscope::ui::canHandleOscilloscopeChannelInteractions(view, false), "无游标所有权时通道交互应可用");
+    require(!protoscope::ui::canHandleOscilloscopeChannelInteractions(view, true),
+            "游标取得所有权时通道平移和纵向拖动应被阻断");
+
+    view.viewMode = protoscope::plot::WaveViewMode::Overlay;
+    require(protoscope::ui::canDragWaveYOffset(view, false, false), "叠加视图应允许纵向拖动通道");
+    require(!protoscope::ui::canDragWaveYOffset(view, false, true), "游标取得所有权时纵向拖动资格也应失效");
+    view.viewMode = protoscope::plot::WaveViewMode::Stacked;
+    require(!protoscope::ui::canDragWaveYOffset(view, false, false), "堆叠视图应禁用纵向拖动");
+}
+
+void test_wave_view_mode_isolates_stacked_vertical_range()
+{
+    protoscope::plot::WaveDockState wave;
+    wave.buffer.configureChannels(1);
+    wave.buffer.setChannelSpec(0,
+                               {
+                                   .label = "CH1",
+                                   .unit = "V",
+                                   .offset = 7.0,
+                                   .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 1, .yOffset = 3.0},
+                               });
+
+    auto& view = wave.view;
+    view.viewMinValue = -2.0;
+    view.viewMaxValue = 2.0;
+    require(protoscope::ui::setWaveViewMode(view, protoscope::plot::WaveViewMode::Stacked), "应能切换到堆叠视图");
+    view.activeChannelOffsetDrag = true;
+    view.activeBitYOffsetDrag = true;
+    require(protoscope::ui::setWaveViewMode(view, protoscope::plot::WaveViewMode::Overlay), "应能切回叠加视图");
+    require(!view.activeChannelOffsetDrag && !view.activeBitYOffsetDrag, "切换视图模式应清理纵向拖动状态");
+
+    view.viewMinValue = -2.0;
+    view.viewMaxValue = 2.0;
+    require(protoscope::ui::setWaveViewMode(view, protoscope::plot::WaveViewMode::Stacked),
+            "范围隔离测试应再次进入堆叠视图");
+    const protoscope::plot::WaveDataBounds stackedBounds{
+        .minValue = -4.0,
+        .maxValue = 6.0,
+        .valid = true,
+    };
+    require(protoscope::ui::applyWaveViewModeVerticalRange(view, stackedBounds), "进入堆叠视图应执行一次内容适配");
+    require(std::abs(view.normalViewMinValue + 2.0) < 1e-12 && std::abs(view.normalViewMaxValue - 2.0) < 1e-12,
+            "进入堆叠前应保存普通模式 Y 范围");
+    require(std::abs(view.viewMinValue + 4.0) < 1e-12 && std::abs(view.viewMaxValue - 6.0) < 1e-12,
+            "堆叠视图应使用堆叠内容范围");
+
+    const protoscope::plot::WaveDataBounds changedStackedBounds{
+        .minValue = -20.0,
+        .maxValue = 20.0,
+        .valid = true,
+    };
+    require(!protoscope::ui::applyWaveViewModeVerticalRange(view, changedStackedBounds),
+            "堆叠适配只应在切模式或解除锁定时执行一次");
+    require(std::abs(view.viewMinValue + 4.0) < 1e-12 && std::abs(view.viewMaxValue - 6.0) < 1e-12,
+            "后续帧不应持续覆盖堆叠 Y 范围");
+
+    require(protoscope::ui::setWaveViewMode(view, protoscope::plot::WaveViewMode::Overlay), "应能离开堆叠视图");
+    require(protoscope::ui::applyWaveViewModeVerticalRange(view, std::nullopt), "离开堆叠视图应恢复此前普通模式范围");
+    require(std::abs(view.viewMinValue + 2.0) < 1e-12 && std::abs(view.viewMaxValue - 2.0) < 1e-12,
+            "返回普通模式应恢复进入堆叠前的 Y 范围");
+    require(view.forceNextMainPlotLimits, "恢复普通 Y 范围后应强制刷新主图轴限");
+
+    const auto spec = wave.buffer.channelSpec(0);
+    require(
+        spec.has_value() && std::abs(spec->offset - 7.0) < 1e-12 && std::abs(spec->bitDisplay.yOffset - 3.0) < 1e-12,
+        "视图模式切换不得修改通道 offset 或 bitDisplay.yOffset");
+}
+
+void test_wave_stacked_unlock_reapplies_vertical_fit()
+{
+    protoscope::plot::WaveViewState view;
+    view.lockVerticalRange = true;
+    view.manualVerticalMin = -5.0;
+    view.manualVerticalMax = 5.0;
+    view.viewMode = protoscope::plot::WaveViewMode::Stacked;
+    const protoscope::plot::WaveDataBounds stackedBounds{
+        .minValue = -8.0,
+        .maxValue = 8.0,
+        .valid = true,
+    };
+
+    require(!protoscope::ui::applyWaveViewModeVerticalRange(view, stackedBounds), "锁定纵轴进入堆叠时不应执行内容适配");
+    require(std::abs(view.manualVerticalMin + 5.0) < 1e-12 && std::abs(view.manualVerticalMax - 5.0) < 1e-12,
+            "锁定纵轴时模式切换不得覆盖手动范围");
+
+    view.lockVerticalRange = false;
+    require(protoscope::ui::applyWaveViewModeVerticalRange(view, stackedBounds),
+            "堆叠视图内解除纵轴锁定后应重新执行一次适配");
+    require(std::abs(view.viewMinValue + 8.0) < 1e-12 && std::abs(view.viewMaxValue - 8.0) < 1e-12,
+            "解除锁定后应应用堆叠内容范围");
 }
 
 void test_raw_capture_file_roundtrip()

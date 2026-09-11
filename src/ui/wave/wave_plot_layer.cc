@@ -1254,10 +1254,11 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
 
     const auto& io = ImGui::GetIO();
     const bool timeRefreshPending = view.measurementCursorReadoutRefreshPending && !splitChannelIndex.has_value();
-    bool anyCursorHeld = false;
+    bool anyCursorInteractionClaimed = false;
     for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
         auto& cursor = view.cursors[cursorIndex];
         if (!cursor.enabled) {
+            cursorReadouts[cursorIndex].reset();
             continue;
         }
         std::optional<plot::CursorReadout> smartSnap;
@@ -1278,7 +1279,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
                                                          : static_cast<int>(100 + cursorIndex);
         ImPlot::DragLineX(
             dragId, &dragTime, cursorColor, (hovered || held) ? 2.0F : 1.0F, dragFlags, &clicked, &hovered, &held);
-        anyCursorHeld = anyCursorHeld || held;
+        anyCursorInteractionClaimed = anyCursorInteractionClaimed || clicked || held;
         if (splitChannelIndex.has_value() && !held && !hovered && !ImPlot::IsPlotHovered() &&
             (!cursor.pinned || cursor.channelIndex != *splitChannelIndex)) {
             continue;
@@ -1334,6 +1335,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
             best = smartSnap;
         }
         if (!best.has_value()) {
+            cursorReadouts[cursorIndex].reset();
             continue;
         }
         // 核心流程：每帧都刷新游标读数；拖动中保留连续时间，避免采样点吸附导致抖动。
@@ -1387,7 +1389,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
     if (timeRefreshPending) {
         view.measurementCursorReadoutRefreshPending = false;
     }
-    return anyCursorHeld;
+    return anyCursorInteractionClaimed;
 }
 
 bool handlePlotCursors(plot::WaveViewState& view,
@@ -1593,7 +1595,7 @@ void updateSplitMeasurementResult(const plot::WaveViewState& view,
 {
     result.bitMeasurementActive = false;
     result.measurement.reset();
-    if (!view.showCursors || !result.cursorReadouts[0].has_value() || !result.cursorReadouts[1].has_value()) {
+    if (!view.showCursors || !cursorPairHasCompleteReadouts(result.cursorReadouts)) {
         return;
     }
 
@@ -2033,6 +2035,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         return result;
     }
     auto& view = wave.view;
+    // 核心流程：分屏早退前也完成视图模式切换，确保离开堆叠时恢复普通模式 Y 范围。
+    applyWaveViewModeVerticalRange(view, std::nullopt);
     if (view.viewMode == plot::WaveViewMode::Split) {
         return drawSplitOscilloscopePlots(wave, frame, overlayPolicy, frameState);
     }
@@ -2084,10 +2088,9 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         fullHistoryBounds =
             boundsForVisibleWaveforms(view, *frame.fullSnapshot, *frame.overviewDisplayData, fullHistoryChannelIndices);
     }
-    if (stackedDisplay.has_value() && !view.lockVerticalRange) {
-        view.viewMinValue = stackedDisplay->bounds.minValue;
-        view.viewMaxValue = stackedDisplay->bounds.maxValue;
-    }
+    const auto stackedVerticalBounds =
+        stackedDisplay.has_value() ? std::optional<plot::WaveDataBounds>(stackedDisplay->bounds) : std::nullopt;
+    applyWaveViewModeVerticalRange(view, stackedVerticalBounds);
     applyMainPlotAxesAndLimits(view, frame.snapshot, plotDisplayData);
 
     const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
@@ -2145,7 +2148,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     }
     const auto zoomSelectionResult = handleMainPlotZoomSelection(view, wave.suppressZoomSelectionEscapeThisFrame);
     viewportChangedThisFrame = zoomSelectionResult.viewportChanged || viewportChangedThisFrame;
-    if (!axisDoubleClickConsumed) {
+    if (!axisDoubleClickConsumed && view.viewMode != plot::WaveViewMode::Stacked) {
         viewportChangedThisFrame =
             applyPendingVerticalAutoFitOverride(view, yAutoFitBounds) || viewportChangedThisFrame;
     }
@@ -2159,15 +2162,28 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                                                         timeSnapDistance,
                                                                         valueSnapDistance);
     const bool blockPlotInteractions = zoomSelectionResult.consumed || offsetReset;
+    bool cursorDragClaimed = false;
     if (!blockPlotInteractions) {
-        handleHoverReadout(view,
-                           frame.snapshot,
-                           plotDisplayData,
-                           visibleChannelIndices,
-                           bitLayout,
-                           mousePos,
-                           timeSnapDistance,
-                           valueSnapDistance);
+        cursorDragClaimed = handlePlotCursors(view,
+                                              frame.snapshot,
+                                              plotDisplayData,
+                                              bitLayout,
+                                              mousePos,
+                                              limits,
+                                              timeSnapDistance,
+                                              smartSnapDistance,
+                                              valueSnapDistance,
+                                              result.cursorReadouts);
+        if (!cursorDragClaimed) {
+            handleHoverReadout(view,
+                               frame.snapshot,
+                               plotDisplayData,
+                               visibleChannelIndices,
+                               bitLayout,
+                               mousePos,
+                               timeSnapDistance,
+                               valueSnapDistance);
+        }
         viewportChangedThisFrame = handleOscilloscopeChannelInteractions(wave,
                                                                          frame.snapshot,
                                                                          plotDisplayData,
@@ -2175,25 +2191,15 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                                                          limits,
                                                                          mousePos,
                                                                          timeSnapDistance,
-                                                                         valueSnapDistance) ||
+                                                                         valueSnapDistance,
+                                                                         cursorDragClaimed) ||
                                    viewportChangedThisFrame;
     }
 
-    const bool anyCursorHeld = blockPlotInteractions ? false
-                                                     : handlePlotCursors(view,
-                                                                         frame.snapshot,
-                                                                         plotDisplayData,
-                                                                         bitLayout,
-                                                                         mousePos,
-                                                                         limits,
-                                                                         timeSnapDistance,
-                                                                         smartSnapDistance,
-                                                                         valueSnapDistance,
-                                                                         result.cursorReadouts);
     const auto intersectionReadouts = collectCursorIntersectionReadouts(
         view, frame.snapshot, plotDisplayData, visibleChannelIndices, timeSnapDistance);
     drawCursorIntersectionReadouts(intersectionReadouts, frame.snapshot);
-    const bool userInteracting = plotInteractionActive(anyCursorHeld);
+    const bool userInteracting = plotInteractionActive(cursorDragClaimed);
     if (!viewportChangedThisFrame) {
         const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
         const bool limitsSynced = syncAutoFitAxisLimits(view, updatedLimits);
@@ -2205,10 +2211,10 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
     }
 
-    if (view.showCursors && result.cursorReadouts[0].has_value() && result.cursorReadouts[1].has_value()) {
+    if (view.showCursors && view.cursors[0].enabled && view.cursors[1].enabled) {
         const auto intervalText = plot::makeCursorIntervalText(
-            *result.cursorReadouts[0], *result.cursorReadouts[1], displayData.axisSource, displayData.timeUnit);
-        drawCursorIntervalHint(*result.cursorReadouts[0], *result.cursorReadouts[1], intervalText, limits);
+            view.cursors[0].time, view.cursors[1].time, plotDisplayData.axisSource, plotDisplayData.timeUnit);
+        drawCursorIntervalHint(view.cursors[0].time, view.cursors[1].time, intervalText, limits);
     }
 
     updateMainMeasurementResult(view, displayData, bitLayout, result);

@@ -465,17 +465,17 @@ namespace {
     {
         drawTopToolbarSeparator();
         if (drawTopToolbarButton("叠加", view.viewMode == plot::WaveViewMode::Overlay, "多通道共用同一个波形区域。")) {
-            view.viewMode = plot::WaveViewMode::Overlay;
+            setWaveViewMode(view, plot::WaveViewMode::Overlay);
         }
         ImGui::SameLine();
         if (drawTopToolbarButton(
                 "堆叠", view.viewMode == plot::WaveViewMode::Stacked, "按通道纵向错开显示，不修改原始采样。")) {
-            view.viewMode = plot::WaveViewMode::Stacked;
+            setWaveViewMode(view, plot::WaveViewMode::Stacked);
         }
         ImGui::SameLine();
         if (drawTopToolbarButton(
                 "分屏", view.viewMode == plot::WaveViewMode::Split, "每个可见通道使用独立子图，共享时间轴。")) {
-            view.viewMode = plot::WaveViewMode::Split;
+            setWaveViewMode(view, plot::WaveViewMode::Split);
         }
     }
 
@@ -791,7 +791,8 @@ void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits)
     view.viewMaxTime = limits.X.Max;
     view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
     view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
-    if (!view.lockVerticalRange) {
+    // 堆叠视图的 Y 范围只在进入或解除锁定时适配一次，横向交互不再回写共享 Y 状态。
+    if (!view.lockVerticalRange && view.viewMode != plot::WaveViewMode::Stacked) {
         view.viewMinValue = limits.Y.Min;
         view.viewMaxValue = limits.Y.Max;
     }
@@ -803,8 +804,9 @@ bool syncAutoFitAxisLimits(plot::WaveViewState& view, const ImPlotRect& limits)
     constexpr double kLimitEpsilon = 1e-9;
     const bool xChanged = std::abs(limits.X.Min - view.viewMinTime) > kLimitEpsilon ||
                           std::abs(limits.X.Max - view.viewMaxTime) > kLimitEpsilon;
-    const bool yChanged = !view.lockVerticalRange && (std::abs(limits.Y.Min - view.viewMinValue) > kLimitEpsilon ||
-                                                      std::abs(limits.Y.Max - view.viewMaxValue) > kLimitEpsilon);
+    const bool yChanged = !view.lockVerticalRange && view.viewMode != plot::WaveViewMode::Stacked &&
+                          (std::abs(limits.Y.Min - view.viewMinValue) > kLimitEpsilon ||
+                           std::abs(limits.Y.Max - view.viewMaxValue) > kLimitEpsilon);
     if (!xChanged && !yChanged) {
         return false;
     }

@@ -255,6 +255,10 @@ struct WaveViewState {
     WaveFftConfig fft{};
     WaveFftXAxisMode fftXAxisMode{WaveFftXAxisMode::FrequencyHz};
     WaveViewMode viewMode{WaveViewMode::Overlay};
+    // 以下字段仅用于运行时隔离叠加/堆叠纵轴，不参与协议状态持久化。
+    WaveViewMode lastAppliedViewMode{WaveViewMode::Overlay};
+    bool stackedVerticalFitPending{false};
+    bool appliedVerticalRangeLock{false};
     bool fftSourceWindowValid{false};
     bool fftViewportInitialized{false};
     bool fftFitAllRequested{false};
@@ -286,6 +290,8 @@ struct WaveViewState {
     double fftPhaseMax{180.0};
     double manualVerticalMin{-1.0};
     double manualVerticalMax{1.0};
+    double normalViewMinValue{-1.0};
+    double normalViewMaxValue{1.0};
     double viewMinValue{-1.0};
     double viewMaxValue{1.0};
     double zoomSelectionStartX{0.0};

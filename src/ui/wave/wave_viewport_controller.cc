@@ -612,6 +612,69 @@ void applyMainPlotAxesAndLimits(plot::WaveViewState& view,
     }
 }
 
+bool setWaveViewMode(plot::WaveViewState& view, plot::WaveViewMode mode)
+{
+    if (view.viewMode == mode) {
+        return false;
+    }
+    view.viewMode = mode;
+    // 核心流程：布局切换只清理纵向拖动状态，不触碰协议通道 offset 或 bitDisplay.yOffset。
+    view.activeChannelOffsetDrag = false;
+    view.activeBitYOffsetDrag = false;
+    return true;
+}
+
+bool applyWaveViewModeVerticalRange(plot::WaveViewState& view, const std::optional<plot::WaveDataBounds>& stackedBounds)
+{
+    bool changed = false;
+    const bool modeChanged = view.viewMode != view.lastAppliedViewMode;
+    if (modeChanged) {
+        const auto previousMode = view.lastAppliedViewMode;
+        view.activeChannelOffsetDrag = false;
+        view.activeBitYOffsetDrag = false;
+
+        const bool enteringStacked =
+            previousMode != plot::WaveViewMode::Stacked && view.viewMode == plot::WaveViewMode::Stacked;
+        const bool leavingStacked =
+            previousMode == plot::WaveViewMode::Stacked && view.viewMode != plot::WaveViewMode::Stacked;
+        if (enteringStacked) {
+            view.normalViewMinValue = view.viewMinValue;
+            view.normalViewMaxValue = view.viewMaxValue;
+            view.stackedVerticalFitPending = !view.lockVerticalRange;
+        } else if (leavingStacked) {
+            view.viewMinValue = view.normalViewMinValue;
+            view.viewMaxValue = view.normalViewMaxValue;
+            view.stackedVerticalFitPending = false;
+            view.forceNextMainPlotLimits = true;
+            changed = true;
+        } else {
+            view.stackedVerticalFitPending = false;
+        }
+        view.lastAppliedViewMode = view.viewMode;
+    }
+
+    if (view.lockVerticalRange != view.appliedVerticalRangeLock) {
+        if (!view.lockVerticalRange && view.viewMode == plot::WaveViewMode::Stacked) {
+            // 核心流程：在堆叠视图中解除锁定后重新执行一次堆叠内容自动适配。
+            view.stackedVerticalFitPending = true;
+        } else if (view.lockVerticalRange) {
+            view.stackedVerticalFitPending = false;
+        }
+        view.appliedVerticalRangeLock = view.lockVerticalRange;
+    }
+
+    if (view.viewMode == plot::WaveViewMode::Stacked && !view.lockVerticalRange && view.stackedVerticalFitPending &&
+        stackedBounds.has_value() && stackedBounds->valid && std::isfinite(stackedBounds->minValue) &&
+        std::isfinite(stackedBounds->maxValue) && stackedBounds->maxValue > stackedBounds->minValue) {
+        view.viewMinValue = stackedBounds->minValue;
+        view.viewMaxValue = stackedBounds->maxValue;
+        view.stackedVerticalFitPending = false;
+        view.forceNextMainPlotLimits = true;
+        changed = true;
+    }
+    return changed;
+}
+
 bool handleMainPlotZoom(plot::WaveViewState& view, const ImPlotPoint& mousePos)
 {
     const auto& io = ImGui::GetIO();

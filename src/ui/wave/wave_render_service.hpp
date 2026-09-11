@@ -52,6 +52,11 @@ struct PlotRenderResult {
     OverlayGeometry legendOverlay{};
 };
 
+struct WaveMetricChip {
+    std::string label;
+    std::string value;
+};
+
 struct WavePlotOverlayPolicy {
     bool drawMeasurementOverlay{true};
     bool drawLegendOverlay{true};
@@ -300,6 +305,7 @@ BitLaneLayout buildBitLaneLayout(const plot::WaveSnapshot& snapshot,
                                  const ImVec2& plotSize);
 std::optional<BitLaneHit> findBitLaneAtPlotValue(const BitLaneLayout& layout, double plotY, double maxDistance);
 std::optional<plot::CursorReadout> findNearestBitTransition(const plot::WaveSnapshot& snapshot,
+                                                            const plot::WaveDisplayData& displayData,
                                                             const BitLaneLayout& layout,
                                                             double time,
                                                             double plotY,
@@ -325,7 +331,16 @@ std::vector<CursorIntersectionReadout> collectCursorIntersectionReadouts(
     double maxTimeDistance);
 bool bitLaneMeasurementActive(const plot::WaveViewState& view);
 bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout);
+bool cursorPairHasCompleteReadouts(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);
 bool cursorPairUsesBitLanes(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);
+std::vector<WaveMetricChip> buildCursorMetricChips(const plot::WaveViewState& view,
+                                                   const plot::WaveSnapshot& snapshot,
+                                                   const plot::WaveDisplayData& displayData,
+                                                   const PlotRenderResult& result);
+std::vector<WaveMetricChip> buildMeasurementMetricChips(const plot::WaveViewState& view,
+                                                        const plot::WaveSnapshot& snapshot,
+                                                        const plot::WaveDisplayData& displayData,
+                                                        const PlotRenderResult& result);
 plot::MeasurementReadout makeBitIntervalMeasurement(const plot::CursorReadout& left, const plot::CursorReadout& right);
 std::optional<std::size_t> findBitDisplayChannelAtValue(const plot::WaveDockState& wave,
                                                         const plot::WaveSnapshot& snapshot,
@@ -379,6 +394,8 @@ int resolveMainPlotFitMouseButton(plot::WaveControlMode controlMode,
                                   int middleMouseButton);
 bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta);
 bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown);
+bool canHandleOscilloscopeChannelInteractions(const plot::WaveViewState& view, bool cursorDragClaimed);
+bool canDragWaveYOffset(const plot::WaveViewState& view, bool shiftDown, bool cursorDragClaimed);
 bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const plot::WaveSnapshot& snapshot,
                                            const plot::WaveDisplayData& displayData,
@@ -386,8 +403,12 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const ImPlotRect& limits,
                                            const ImPlotPoint& mousePos,
                                            double timeSnapDistance,
-                                           double valueSnapDistance);
+                                           double valueSnapDistance,
+                                           bool cursorDragClaimed);
 bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::WaveDataBounds& bounds);
+bool applyWaveViewModeVerticalRange(plot::WaveViewState& view,
+                                    const std::optional<plot::WaveDataBounds>& stackedBounds);
+bool setWaveViewMode(plot::WaveViewState& view, plot::WaveViewMode mode);
 bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channelIndex);
 bool excludesLegendHiddenChannels(const plot::WaveViewState& view);
 std::string waveChannelItemLabel(std::string_view label, std::size_t channelIndex);
@@ -459,6 +480,10 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
                                               std::optional<double> manualReferenceValue = std::nullopt);
 void drawCursorIntervalHint(const plot::CursorReadout& left,
                             const plot::CursorReadout& right,
+                            const plot::CursorIntervalText& intervalText,
+                            const ImPlotRect& limits);
+void drawCursorIntervalHint(double leftTime,
+                            double rightTime,
                             const plot::CursorIntervalText& intervalText,
                             const ImPlotRect& limits);
 void drawCursorAnnotation(std::size_t cursorIndex,

@@ -87,6 +87,7 @@ struct BitLaneReadout {
     std::size_t laneIndex{0};
     bool value{false};
     double y{0.0};
+    bool edge{false};
 };
 
 struct CursorReadout {

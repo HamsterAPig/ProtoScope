@@ -164,6 +164,17 @@ bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown)
     return true;
 }
 
+bool canHandleOscilloscopeChannelInteractions(const plot::WaveViewState& view, bool cursorDragClaimed)
+{
+    return !cursorDragClaimed && view.controlMode == plot::WaveControlMode::Oscilloscope;
+}
+
+bool canDragWaveYOffset(const plot::WaveViewState& view, bool shiftDown, bool cursorDragClaimed)
+{
+    return !cursorDragClaimed && view.controlMode == plot::WaveControlMode::Oscilloscope &&
+           view.viewMode != plot::WaveViewMode::Stacked && allowsMouseYOffsetDrag(view.mouseYOffsetDragMode, shiftDown);
+}
+
 bool isYAxisScaleHotZoneHovered()
 {
     if (ImPlot::IsAxisHovered(ImAxis_Y1)) {
@@ -201,14 +212,17 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                                            const ImPlotRect& limits,
                                            const ImPlotPoint& mousePos,
                                            double timeSnapDistance,
-                                           double valueSnapDistance)
+                                           double valueSnapDistance,
+                                           bool cursorDragClaimed)
 {
     auto& view = wave.view;
-    if (view.controlMode != plot::WaveControlMode::Oscilloscope) {
+    if (!canHandleOscilloscopeChannelInteractions(view, cursorDragClaimed)) {
         view.activeChannelOffsetDrag = false;
-        view.activeChannelScaleDrag = false;
         view.activeBitYOffsetDrag = false;
-        view.activeBitLane = {};
+        if (view.controlMode != plot::WaveControlMode::Oscilloscope) {
+            view.activeChannelScaleDrag = false;
+            view.activeBitLane = {};
+        }
         return false;
     }
 
@@ -238,7 +252,11 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
         return changed;
     }
 
-    const bool canDragYOffset = allowsMouseYOffsetDrag(view.mouseYOffsetDragMode, io.KeyShift);
+    const bool canDragYOffset = canDragWaveYOffset(view, io.KeyShift, cursorDragClaimed);
+    if (!canDragYOffset) {
+        view.activeChannelOffsetDrag = false;
+        view.activeBitYOffsetDrag = false;
+    }
     std::optional<plot::CursorReadout> clickedWaveform;
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const auto waveformChannels = selectableWaveformChannels(snapshot, displayData, visibleChannelIndices);
@@ -253,7 +271,7 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
         }
     }
 
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && canDragYOffset) {
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const auto bitLayout =
             buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
         if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
@@ -265,11 +283,11 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
                 .bitIndex = bitLane->lane.bitIndex,
                 .laneIndex = bitLane->lane.laneIndex,
             };
-            view.activeBitYOffsetDrag = true;
+            view.activeBitYOffsetDrag = canDragYOffset;
             view.activeChannelOffsetDrag = false;
             changed = channelChanged || changed;
         } else if (clickedWaveform.has_value()) {
-            view.activeChannelOffsetDrag = true;
+            view.activeChannelOffsetDrag = canDragYOffset;
             view.activeBitYOffsetDrag = false;
             view.activeBitLane = {};
         }
@@ -884,8 +902,8 @@ std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnap
     }
 
     if (bitCursorCandidateAllowed(view, bitLayout, plotY, maxValueDistance)) {
-        if (const auto bitTransition =
-                findNearestBitTransition(snapshot, bitLayout, time, plotY, maxTimeDistance, maxValueDistance)) {
+        if (const auto bitTransition = findNearestBitTransition(
+                snapshot, displayData, bitLayout, time, plotY, maxTimeDistance, maxValueDistance)) {
             const double bitScore =
                 cursorCandidateScore(*bitTransition, time, plotY, maxTimeDistance, maxValueDistance);
             if (!best.has_value() || bitScore < bestScore) {

@@ -216,6 +216,10 @@ CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           const CursorReadout& right,
                                           WaveTimeAxisSource axisSource,
                                           std::string_view timeUnit);
+CursorIntervalText makeCursorIntervalText(double leftTime,
+                                          double rightTime,
+                                          WaveTimeAxisSource axisSource,
+                                          std::string_view timeUnit);
 std::optional<CursorReadout> findStrongestEdgeNearTime(const WaveDisplayData& displayData,
                                                        std::size_t channelIndex,
                                                        double centerTime,

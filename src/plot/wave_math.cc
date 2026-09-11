@@ -857,7 +857,15 @@ CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
     if (!left.valid || !right.valid) {
         return {};
     }
-    const double delta = std::abs(right.time - left.time);
+    return makeCursorIntervalText(left.time, right.time, axisSource, timeUnit);
+}
+
+CursorIntervalText makeCursorIntervalText(double leftTime,
+                                          double rightTime,
+                                          WaveTimeAxisSource axisSource,
+                                          std::string_view timeUnit)
+{
+    const double delta = std::abs(rightTime - leftTime);
     if (!std::isfinite(delta)) {
         return {};
     }
