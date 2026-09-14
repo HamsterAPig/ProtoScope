@@ -1042,7 +1042,9 @@ void drawChannelLegendOverlay(plot::WaveDockState& wave,
                                       bgAlpha)),
             ImGui::GetStyle().WindowRounding);
         bool legendPopupOpen = legendOverlayPopupOpen(legendWindow);
-        if (layerPolicy == WaveLegendOverlayLayerPolicy::ForceDisplayFront && !legendPopupOpen) {
+        const bool anyPopupOpen =
+            ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        if (layerPolicy == WaveLegendOverlayLayerPolicy::ForceDisplayFront && !legendPopupOpen && !anyPopupOpen) {
             ImGui::BringWindowToDisplayFront(legendWindow);
         }
         ImGui::SetWindowFontScale(kLegendOverlayFontScale);
