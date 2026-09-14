@@ -1049,8 +1049,7 @@ void handleHoverReadout(plot::WaveViewState& view,
                                           timeSnapDistance,
                                           valueSnapDistance,
                                           view.preferWaveformHoverReadout,
-                                          view.bitDisplayReadoutPolicy,
-                                          activeBitLaneVisible(view, bitLayout));
+                                          view.bitDisplayReadoutPolicy);
     if (!hovered.has_value() || hovered->readout.channelIndex >= snapshot.channels.size()) {
         return;
     }
@@ -1068,15 +1067,6 @@ void handleHoverReadout(plot::WaveViewState& view,
                            hoveredChannel.label.c_str(),
                            laneInfo.bitIndex,
                            laneInfo.value ? "1" : "0");
-        if (view.showCursors && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            view.measurementChannelIndex = laneInfo.parentChannelIndex;
-            view.activeBitLane = {
-                .active = true,
-                .parentChannelIndex = laneInfo.parentChannelIndex,
-                .bitIndex = laneInfo.bitIndex,
-                .laneIndex = laneInfo.laneIndex,
-            };
-        }
         return;
     }
 
@@ -1092,7 +1082,6 @@ void handleHoverReadout(plot::WaveViewState& view,
                        hoveredChannel.unit.c_str());
     if (view.showCursors && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         view.measurementChannelIndex = readout.channelIndex;
-        view.activeBitLane = {};
     }
 }
 
@@ -1248,9 +1237,6 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
         return false;
     }
     clampActiveChannel(view, snapshot.channels.size());
-    if (view.activeBitLane.active && !activeBitLaneVisible(view, bitLayout)) {
-        view.activeBitLane = {};
-    }
 
     const auto& io = ImGui::GetIO();
     const bool timeRefreshPending = view.measurementCursorReadoutRefreshPending && !splitChannelIndex.has_value();
@@ -1352,16 +1338,6 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
             best->time = cursor.time;
         }
         cursorReadouts[cursorIndex] = best;
-        if (best->bit.has_value()) {
-            view.activeBitLane = {
-                .active = true,
-                .parentChannelIndex = best->bit->parentChannelIndex,
-                .bitIndex = best->bit->bitIndex,
-                .laneIndex = best->bit->laneIndex,
-            };
-        } else if (!smartSnap.has_value()) {
-            view.activeBitLane = {};
-        }
         if (shouldDrawCursorReadoutAnnotation(held, cursor.pinned)) {
             if (best->bit.has_value()) {
                 const auto& laneInfo = *best->bit;
@@ -1511,10 +1487,10 @@ void drawOscilloscopeGrid(const ImPlotRect& limits)
 
 std::optional<plot::CursorReadout> findSplitBitCursorReadout(const plot::WaveSnapshot& snapshot,
                                                              const plot::WaveDisplayData& displayData,
-                                                             const plot::WaveViewState& view,
                                                              std::size_t channelIndex,
                                                              double time,
-                                                             double maxTimeDistance)
+                                                             double maxTimeDistance,
+                                                             const std::optional<plot::CursorReadout>& preferredReadout)
 {
     if (channelIndex >= snapshot.channels.size() || channelIndex >= displayData.channels.size() ||
         !std::isfinite(time) || !std::isfinite(maxTimeDistance) || maxTimeDistance < 0.0) {
@@ -1549,10 +1525,13 @@ std::optional<plot::CursorReadout> findSplitBitCursorReadout(const plot::WaveSna
 
     std::size_t laneIndex = 0;
     std::size_t bitIndex = sourceChannel.bitDisplay.firstBit;
-    if (view.activeBitLane.active && view.activeBitLane.parentChannelIndex == channelIndex &&
-        view.activeBitLane.laneIndex < sourceChannel.bitDisplay.bitCount) {
-        laneIndex = view.activeBitLane.laneIndex;
-        bitIndex = sourceChannel.bitDisplay.firstBit + laneIndex;
+    if (preferredReadout.has_value() && preferredReadout->bit.has_value()) {
+        const auto& preferredBit = *preferredReadout->bit;
+        if (preferredBit.parentChannelIndex == channelIndex &&
+            preferredBit.laneIndex < sourceChannel.bitDisplay.bitCount) {
+            laneIndex = preferredBit.laneIndex;
+            bitIndex = sourceChannel.bitDisplay.firstBit + laneIndex;
+        }
     }
 
     double rawValue = best->value;
@@ -1627,6 +1606,7 @@ void updateSplitCursorReadoutsForChannel(const plot::WaveSnapshot& snapshot,
                                          PlotRenderResult& result)
 {
     for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
+        const auto preferredReadout = result.cursorReadouts[cursorIndex];
         result.cursorReadouts[cursorIndex].reset();
         if (!view.cursors[cursorIndex].enabled || channelIndex >= snapshot.channels.size() ||
             channelIndex >= displayData.channels.size()) {
@@ -1634,7 +1614,12 @@ void updateSplitCursorReadoutsForChannel(const plot::WaveSnapshot& snapshot,
         }
         if (bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
             result.cursorReadouts[cursorIndex] = findSplitBitCursorReadout(
-                snapshot, displayData, view, channelIndex, view.cursors[cursorIndex].time, maxTimeDistance);
+                snapshot,
+                displayData,
+                channelIndex,
+                view.cursors[cursorIndex].time,
+                maxTimeDistance,
+                preferredReadout);
         } else {
             result.cursorReadouts[cursorIndex] = plot::findNearestDisplayByTime(
                 displayData, channelIndex, view.cursors[cursorIndex].time, maxTimeDistance);
@@ -1795,17 +1780,8 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
             .smartSnapDistance = smartSnapDistance,
             .valueSnapDistance = valueSnapDistance,
         };
-        bool bitLaneDoubleClickConsumed = false;
-        if (plotHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && bitChannel) {
-            if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
-                bitLaneDoubleClickConsumed = true;
-                resetBitLaneYOffsetFromHit(wave, bitLane->lane);
-            }
-        }
         outcome.cursorHeld =
-            bitLaneDoubleClickConsumed
-                ? false
-                : handleSplitPlotCursors(view, snapshot, displayData, interactionContext, result.cursorReadouts);
+            handleSplitPlotCursors(view, snapshot, displayData, interactionContext, result.cursorReadouts);
         const auto intersectionReadouts =
             collectCursorIntersectionReadouts(view, snapshot, displayData, splitChannelIndices, timeSnapDistance);
         drawCursorIntersectionReadouts(intersectionReadouts, snapshot);
@@ -1832,7 +1808,7 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
             recordMainPlotLimits(view, updatedLimits);
         }
         // 核心流程：ImPlot 交互查询必须在当前子图 EndPlot 前完成，避免分屏结束后访问空 active plot。
-        outcome.userInteracting = bitLaneDoubleClickConsumed || plotInteractionActive(outcome.cursorHeld);
+        outcome.userInteracting = plotInteractionActive(outcome.cursorHeld);
         ImGui::PushID(static_cast<int>(channelIndex));
         drawMainPlotContextMenu(wave, frameState);
         ImGui::PopID();
@@ -1854,6 +1830,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
     }
 
     auto& view = wave.view;
+    result.cursorReadouts = view.lastCursorReadouts;
     if (view.phosphorEnabled) {
         view.lastRenderStats.phosphorBackendStatus = "Split 暂不支持";
     }
@@ -1917,6 +1894,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
     if (view.showCursors) {
         const double maxDistance = (std::max)(view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan) / 80.0;
         for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
+            const auto preferredReadout = result.cursorReadouts[cursorIndex];
             result.cursorReadouts[cursorIndex].reset();
             if (!view.cursors[cursorIndex].enabled) {
                 continue;
@@ -1928,7 +1906,12 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
             if (channelIndex < snapshot.channels.size() &&
                 bitDisplayEnabled(snapshot.channels[channelIndex].bitDisplay)) {
                 result.cursorReadouts[cursorIndex] = findSplitBitCursorReadout(
-                    snapshot, displayData, view, channelIndex, view.cursors[cursorIndex].time, maxDistance);
+                    snapshot,
+                    displayData,
+                    channelIndex,
+                    view.cursors[cursorIndex].time,
+                    maxDistance,
+                    preferredReadout);
             } else if (channelIndex < displayData.channels.size()) {
                 result.cursorReadouts[cursorIndex] = plot::findNearestDisplayByTime(
                     displayData, channelIndex, view.cursors[cursorIndex].time, maxDistance);
@@ -1937,6 +1920,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
         updateSplitMeasurementResult(view, displayData, result);
     }
     view.measurementCursorReadoutRefreshPending = false;
+    view.lastCursorReadouts = result.cursorReadouts;
     result.plotRendered = true;
     return result;
 }
@@ -1996,15 +1980,13 @@ void renderMainWaveContent(plot::WaveDockState& wave,
 
 void updateMainMeasurementResult(const plot::WaveViewState& view,
                                  const plot::WaveDisplayData& displayData,
-                                 const BitLaneLayout& bitLayout,
                                  PlotRenderResult& result)
 {
     if (!view.showCursors || !result.cursorReadouts[0].has_value() || !result.cursorReadouts[1].has_value()) {
         return;
     }
 
-    result.bitMeasurementActive =
-        cursorPairUsesBitLanes(result.cursorReadouts) && activeBitLaneVisible(view, bitLayout);
+    result.bitMeasurementActive = cursorPairUsesBitLanes(result.cursorReadouts);
     if (result.bitMeasurementActive) {
         result.measurement = makeBitIntervalMeasurement(*result.cursorReadouts[0], *result.cursorReadouts[1]);
         return;
@@ -2035,10 +2017,13 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         return result;
     }
     auto& view = wave.view;
+    result.cursorReadouts = view.lastCursorReadouts;
     // 核心流程：分屏早退前也完成视图模式切换，确保离开堆叠时恢复普通模式 Y 范围。
     applyWaveViewModeVerticalRange(view, std::nullopt);
     if (view.viewMode == plot::WaveViewMode::Split) {
-        return drawSplitOscilloscopePlots(wave, frame, overlayPolicy, frameState);
+        result = drawSplitOscilloscopePlots(wave, frame, overlayPolicy, frameState);
+        view.lastCursorReadouts = result.cursorReadouts;
+        return result;
     }
 
     if (!view.showAxisLabels) {
@@ -2129,9 +2114,6 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     if (stackedDisplay.has_value()) {
         drawStackedChannelGuides(frame.snapshot, stackedDisplay->channelBaseY);
     }
-    if (view.activeBitLane.active && !activeBitLaneVisible(view, bitLayout)) {
-        view.activeBitLane = {};
-    }
     syncLegendVisibilityState(wave, frame.snapshot);
     if (!zoomSelectionMode) {
         axisDoubleClickConsumed = handleMainPlotAxisDoubleClick(
@@ -2152,18 +2134,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         viewportChangedThisFrame =
             applyPendingVerticalAutoFitOverride(view, yAutoFitBounds) || viewportChangedThisFrame;
     }
-    const bool offsetReset = !axisDoubleClickConsumed && !zoomSelectionResult.consumed &&
-                             handleActiveWaveformDoubleClickOffsetReset(wave,
-                                                                        frame.snapshot,
-                                                                        bitLayout,
-                                                                        plotDisplayData,
-                                                                        visibleChannelIndices,
-                                                                        mousePos,
-                                                                        timeSnapDistance,
-                                                                        valueSnapDistance);
-    const bool blockPlotInteractions = zoomSelectionResult.consumed || offsetReset;
     bool cursorDragClaimed = false;
-    if (!blockPlotInteractions) {
+    if (!zoomSelectionResult.consumed) {
         cursorDragClaimed = handlePlotCursors(view,
                                               frame.snapshot,
                                               plotDisplayData,
@@ -2174,6 +2146,19 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                               smartSnapDistance,
                                               valueSnapDistance,
                                               result.cursorReadouts);
+    }
+
+    const bool offsetReset =
+        !axisDoubleClickConsumed && !zoomSelectionResult.consumed && !cursorDragClaimed &&
+        handleActiveWaveformDoubleClickOffsetReset(wave,
+                                                   frame.snapshot,
+                                                   plotDisplayData,
+                                                   visibleChannelIndices,
+                                                   mousePos,
+                                                   timeSnapDistance,
+                                                   valueSnapDistance);
+    const bool blockPlotInteractions = zoomSelectionResult.consumed || offsetReset;
+    if (!blockPlotInteractions) {
         if (!cursorDragClaimed) {
             handleHoverReadout(view,
                                frame.snapshot,
@@ -2217,7 +2202,8 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         drawCursorIntervalHint(view.cursors[0].time, view.cursors[1].time, intervalText, limits);
     }
 
-    updateMainMeasurementResult(view, displayData, bitLayout, result);
+    updateMainMeasurementResult(view, displayData, result);
+    view.lastCursorReadouts = result.cursorReadouts;
     auto* hostViewport = ImGui::GetWindowViewport();
     if (overlayPolicy.drawMeasurementOverlay) {
         const auto placement =

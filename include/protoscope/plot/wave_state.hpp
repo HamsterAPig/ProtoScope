@@ -127,13 +127,6 @@ struct WaveMeasurementSelection {
     bool bias{false};
 };
 
-struct ActiveBitLaneState {
-    bool active{false};
-    std::size_t parentChannelIndex{0};
-    std::size_t bitIndex{0};
-    std::size_t laneIndex{0};
-};
-
 enum class WaveMouseYOffsetDragMode {
     Direct,
     Shift,
@@ -201,7 +194,6 @@ struct WaveViewState {
     bool forceNextMainPlotLimits{false};
     bool activeChannelOffsetDrag{false};
     bool activeChannelScaleDrag{false};
-    bool activeBitYOffsetDrag{false};
     bool activeFftMagnitudeOffsetDrag{false};
     bool zoomSelectionActive{false};
     bool zoomSelectionDragging{false};
@@ -230,7 +222,7 @@ struct WaveViewState {
     std::size_t measurementChannelIndex{0};
     std::size_t activeFftMagnitudeOffsetDragChannelIndex{0};
     std::size_t lastCursorFftAnchorIndex{1};
-    ActiveBitLaneState activeBitLane{};
+    std::array<std::optional<CursorReadout>, 2> lastCursorReadouts{};
     std::size_t referenceChannelIndex{0};
     std::size_t triggerChannelIndex{0};
     WaveMeasurementReferenceMode referenceMode{WaveMeasurementReferenceMode::Channel};

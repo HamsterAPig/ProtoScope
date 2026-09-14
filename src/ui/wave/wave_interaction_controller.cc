@@ -126,31 +126,6 @@ bool updateActiveChannelOffset(plot::WaveDockState& wave, double displayDelta)
     return true;
 }
 
-bool updateActiveBitYOffset(plot::WaveDockState& wave, double displayDelta)
-{
-    const auto channelIndex = wave.view.measurementChannelIndex;
-    const auto spec = wave.buffer.channelSpec(channelIndex);
-    if (!spec.has_value() || !bitDisplayEnabled(spec->bitDisplay)) {
-        return false;
-    }
-    auto updated = *spec;
-    updated.bitDisplay.yOffset += displayDelta;
-    applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
-    return true;
-}
-
-bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channelIndex)
-{
-    const auto spec = wave.buffer.channelSpec(channelIndex);
-    if (!spec.has_value() || !bitDisplayEnabled(spec->bitDisplay)) {
-        return false;
-    }
-    auto updated = *spec;
-    updated.bitDisplay.yOffset = 0.0;
-    applyChannelTransformOverride(wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *spec));
-    return true;
-}
-
 bool allowsMouseYOffsetDrag(plot::WaveMouseYOffsetDragMode mode, bool shiftDown)
 {
     switch (mode) {
@@ -218,10 +193,8 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     auto& view = wave.view;
     if (!canHandleOscilloscopeChannelInteractions(view, cursorDragClaimed)) {
         view.activeChannelOffsetDrag = false;
-        view.activeBitYOffsetDrag = false;
         if (view.controlMode != plot::WaveControlMode::Oscilloscope) {
             view.activeChannelScaleDrag = false;
-            view.activeBitLane = {};
         }
         return false;
     }
@@ -230,7 +203,6 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         view.activeChannelOffsetDrag = false;
         view.activeChannelScaleDrag = false;
-        view.activeBitYOffsetDrag = false;
     }
 
     bool changed = false;
@@ -255,41 +227,16 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     const bool canDragYOffset = canDragWaveYOffset(view, io.KeyShift, cursorDragClaimed);
     if (!canDragYOffset) {
         view.activeChannelOffsetDrag = false;
-        view.activeBitYOffsetDrag = false;
     }
-    std::optional<plot::CursorReadout> clickedWaveform;
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const auto waveformChannels = selectableWaveformChannels(snapshot, displayData, visibleChannelIndices);
-        clickedWaveform = plot::findNearestDisplayPointInChannels(
+        const auto clickedWaveform = plot::findNearestDisplayPointInChannels(
             displayData, waveformChannels, mousePos.x, mousePos.y, timeSnapDistance, valueSnapDistance);
         if (clickedWaveform.has_value()) {
             const bool channelChanged = view.measurementChannelIndex != clickedWaveform->channelIndex;
-            const bool bitLaneCleared = view.activeBitLane.active;
             view.measurementChannelIndex = clickedWaveform->channelIndex;
-            view.activeBitLane = {};
-            changed = channelChanged || bitLaneCleared || changed;
-        }
-    }
-
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const auto bitLayout =
-            buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
-        if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
-            const bool channelChanged = view.measurementChannelIndex != bitLane->lane.parentChannelIndex;
-            view.measurementChannelIndex = bitLane->lane.parentChannelIndex;
-            view.activeBitLane = {
-                .active = true,
-                .parentChannelIndex = bitLane->lane.parentChannelIndex,
-                .bitIndex = bitLane->lane.bitIndex,
-                .laneIndex = bitLane->lane.laneIndex,
-            };
-            view.activeBitYOffsetDrag = canDragYOffset;
-            view.activeChannelOffsetDrag = false;
-            changed = channelChanged || changed;
-        } else if (clickedWaveform.has_value()) {
             view.activeChannelOffsetDrag = canDragYOffset;
-            view.activeBitYOffsetDrag = false;
-            view.activeBitLane = {};
+            changed = channelChanged || changed;
         }
     }
 
@@ -310,13 +257,7 @@ bool handleOscilloscopeChannelInteractions(plot::WaveDockState& wave,
     applyViewport(view, viewport, WaveViewportAutoFollowPolicy::UserInteraction);
     changed = true;
 
-    if (canDragYOffset && view.activeBitYOffsetDrag) {
-        const auto bitLayout =
-            buildBitLaneLayout(snapshot, visibleChannelIndices, limits, ImPlot::GetPlotPos(), ImPlot::GetPlotSize());
-        const auto activeLane = findBitLaneAtPlotValue(bitLayout, currentPlot.y, std::abs(limits.Y.Max - limits.Y.Min));
-        const double lanePixelPitch = activeLane.has_value() ? (std::max)(activeLane->lane.lanePixelPitch, 1.0F) : 1.0F;
-        changed = updateActiveBitYOffset(wave, static_cast<double>(io.MouseDelta.y) / lanePixelPitch) || changed;
-    } else if (canDragYOffset && view.activeChannelOffsetDrag) {
+    if (canDragYOffset && view.activeChannelOffsetDrag) {
         changed = updateActiveChannelOffset(wave, currentPlot.y - previousPlot.y) || changed;
     }
     return changed;
@@ -876,8 +817,7 @@ bool bitCursorCandidateAllowed(const plot::WaveViewState& view,
     if (view.bitDisplayReadoutPolicy == plot::WaveBitDisplayReadoutPolicy::MixedNearest) {
         return true;
     }
-    return activeBitLaneVisible(view, bitLayout) ||
-           findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
+    return findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
 }
 
 std::optional<plot::CursorReadout> findNearestCursorByScope(const plot::WaveSnapshot& snapshot,

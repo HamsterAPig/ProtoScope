@@ -1424,7 +1424,6 @@ ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool 
 
 bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
                                                 const plot::WaveSnapshot& snapshot,
-                                                const BitLaneLayout& bitLayout,
                                                 const plot::WaveDisplayData& displayData,
                                                 const std::vector<std::size_t>& visibleChannelIndices,
                                                 const ImPlotPoint& mousePos,
@@ -1442,7 +1441,6 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
         if (view.measurementChannelIndex != waveform->channelIndex) {
             // 核心流程：双击非当前模拟波形只切换激活 CH，不顺手复位用户配置。
             view.measurementChannelIndex = waveform->channelIndex;
-            view.activeBitLane = {};
             return true;
         }
 
@@ -1450,30 +1448,10 @@ bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
         if (!plot::resetChannelOffsetToDefault(wave, view.measurementChannelIndex)) {
             return false;
         }
-        view.activeBitLane = {};
         invalidateWaveDisplayCaches(wave);
         return true;
     }
-
-    if (const auto bitLane = findBitLaneAtPlotValue(bitLayout, mousePos.y, valueSnapDistance)) {
-        return resetBitLaneYOffsetFromHit(wave, bitLane->lane);
-    }
-
     return false;
-}
-
-bool resetBitLaneYOffsetFromHit(plot::WaveDockState& wave, const BitLaneLayoutEntry& lane)
-{
-    auto& view = wave.view;
-    // 核心流程：bit lane 双击不依赖预先选中，也不受 Y offset 拖动模式影响。
-    view.measurementChannelIndex = lane.parentChannelIndex;
-    view.activeBitLane = {
-        .active = true,
-        .parentChannelIndex = lane.parentChannelIndex,
-        .bitIndex = lane.bitIndex,
-        .laneIndex = lane.laneIndex,
-    };
-    return resetChannelBitYOffsetToZero(wave, lane.parentChannelIndex);
 }
 
 const char* axisSourceName(plot::WaveTimeAxisSource source)

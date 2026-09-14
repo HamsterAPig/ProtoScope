@@ -209,13 +209,11 @@ bool applyFitVisibleWaveforms(plot::WaveViewState& view,
 ZoomSelectionResult handleMainPlotZoomSelection(plot::WaveViewState& view, bool suppressEscapeCancel = false);
 bool handleActiveWaveformDoubleClickOffsetReset(plot::WaveDockState& wave,
                                                 const plot::WaveSnapshot& snapshot,
-                                                const BitLaneLayout& bitLayout,
                                                 const plot::WaveDisplayData& displayData,
                                                 const std::vector<std::size_t>& visibleChannelIndices,
                                                 const ImPlotPoint& mousePos,
                                                 double timeSnapDistance,
                                                 double valueSnapDistance);
-bool resetBitLaneYOffsetFromHit(plot::WaveDockState& wave, const BitLaneLayoutEntry& lane);
 const char* axisSourceName(plot::WaveTimeAxisSource source);
 plot::WaveViewport currentViewport(const plot::WaveViewState& view);
 void applyViewport(plot::WaveViewState& view,
@@ -321,16 +319,13 @@ std::optional<HoverReadout> findHoverReadout(
     double maxTimeDistance,
     double maxValueDistance,
     bool preferWaveformHoverReadout = true,
-    plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy = plot::WaveBitDisplayReadoutPolicy::MixedNearest,
-    bool activeBitLaneVisibleForReadout = false);
+    plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy = plot::WaveBitDisplayReadoutPolicy::MixedNearest);
 std::vector<CursorIntersectionReadout> collectCursorIntersectionReadouts(
     const plot::WaveViewState& view,
     const plot::WaveSnapshot& snapshot,
     const plot::WaveDisplayData& displayData,
     const std::vector<std::size_t>& visibleChannelIndices,
     double maxTimeDistance);
-bool bitLaneMeasurementActive(const plot::WaveViewState& view);
-bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout);
 bool cursorPairHasCompleteReadouts(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);
 bool cursorPairUsesBitLanes(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts);
 std::vector<WaveMetricChip> buildCursorMetricChips(const plot::WaveViewState& view,
@@ -409,7 +404,6 @@ bool applyPendingVerticalAutoFitOverride(plot::WaveViewState& view, const plot::
 bool applyWaveViewModeVerticalRange(plot::WaveViewState& view,
                                     const std::optional<plot::WaveDataBounds>& stackedBounds);
 bool setWaveViewMode(plot::WaveViewState& view, plot::WaveViewMode mode);
-bool resetChannelBitYOffsetToZero(plot::WaveDockState& wave, std::size_t channelIndex);
 bool excludesLegendHiddenChannels(const plot::WaveViewState& view);
 std::string waveChannelItemLabel(std::string_view label, std::size_t channelIndex);
 bool channelHiddenByLegendState(const plot::WaveDockState& wave, std::size_t channelIndex);

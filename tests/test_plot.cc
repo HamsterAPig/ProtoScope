@@ -1036,47 +1036,6 @@ void test_plot_channel_bit_display_reaches_snapshot()
     require(snapshot.channels[0].bitDisplay.bitCount == 4, "snapshot 应保留 bit_display.bitCount");
     require(std::abs(snapshot.channels[0].bitDisplay.yOffset - 1.5) < 1e-12, "snapshot 应保留 bit_display.yOffset");
 
-    protoscope::plot::WaveDockState wave;
-    wave.buffer.configureChannels(1);
-    wave.buffer.setChannelSpec(
-        0,
-        {.label = "CH1", .unit = "raw", .bitDisplay = {.enabled = true, .firstBit = 0, .bitCount = 2, .yOffset = 3.0}});
-    require(protoscope::ui::resetChannelBitYOffsetToZero(wave, 0), "双击 bit CH 应可将 y_offset 复位为 0");
-    const auto resetSpec = wave.buffer.channelSpec(0);
-    require(resetSpec.has_value(), "复位后 bit_display 通道配置应存在");
-    require(std::abs(resetSpec->bitDisplay.yOffset) < 1e-12, "bit_display y_offset 应复位为 0");
-}
-
-void test_bit_lane_double_click_reset_selects_without_active_lane()
-{
-    protoscope::plot::WaveDockState wave;
-    wave.buffer.configureChannels(1);
-    wave.buffer.setChannelSpec(0,
-                               {.label = "BITS",
-                                .unit = "raw",
-                                .bitDisplay = {.enabled = true, .firstBit = 2, .bitCount = 4, .yOffset = 5.0}});
-    wave.view.measurementChannelIndex = 99;
-    wave.view.activeBitLane = {};
-    wave.view.mouseYOffsetDragMode = protoscope::plot::WaveMouseYOffsetDragMode::Disabled;
-
-    const protoscope::ui::BitLaneLayoutEntry lane{
-        .parentChannelIndex = 0,
-        .bitIndex = 4,
-        .laneIndex = 2,
-        .rowIndex = 0,
-    };
-
-    require(protoscope::ui::resetBitLaneYOffsetFromHit(wave, lane), "bit lane 双击应在未预先激活时直接复位 y_offset");
-
-    const auto resetSpec = wave.buffer.channelSpec(0);
-    require(resetSpec.has_value(), "bit lane 双击复位后通道配置应存在");
-    require(std::abs(resetSpec->bitDisplay.yOffset) < 1e-12, "bit lane 双击应将 y_offset 清为 0");
-    require(wave.view.measurementChannelIndex == 0, "bit lane 双击应切换 measurementChannelIndex 到父通道");
-    require(wave.view.activeBitLane.active, "bit lane 双击应激活命中的 lane");
-    require(wave.view.activeBitLane.parentChannelIndex == lane.parentChannelIndex,
-            "active bit lane 父通道应匹配命中 lane");
-    require(wave.view.activeBitLane.bitIndex == lane.bitIndex, "active bit lane bitIndex 应匹配命中 lane");
-    require(wave.view.activeBitLane.laneIndex == lane.laneIndex, "active bit lane laneIndex 应匹配命中 lane");
 }
 
 void test_bit_render_lane_downsample_keeps_orthogonal_segments()
@@ -1398,6 +1357,17 @@ void test_bit_measurement_cross_lane_still_outputs_dt_f()
     require(protoscope::ui::cursorPairUsesBitLanes({{left, right}}), "两个游标都带 bit 信息时应返回 true");
     require(left.bit->bitIndex != right.bit->bitIndex, "应允许 A/B 游标分别命中不同 bit lane");
 
+    protoscope::plot::CursorReadout waveform{
+        .valid = true,
+        .channelIndex = 1,
+        .sampleIndex = 2,
+        .time = 2.0,
+        .value = 1.0,
+        .displayValue = 1.0,
+    };
+    require(!protoscope::ui::cursorPairUsesBitLanes({{left, waveform}}),
+            "一个 bit、一个普通波形时应回退普通测量路径");
+
     const auto measurement = protoscope::ui::makeBitIntervalMeasurement(left, right);
     require(measurement.valid, "bit 模式跨 lane 测量应有效");
     require(std::abs(measurement.duration - 1.0) < 0.01, "时间差应为 1.0 s");
@@ -1425,7 +1395,6 @@ void test_bit_cursor_cross_lane_refresh_uses_own_y_anchor()
         .actualValues = {0.0, 1.0, 3.0},
     });
     protoscope::plot::WaveViewState view;
-    view.activeBitLane = {.active = true, .parentChannelIndex = 0, .bitIndex = 0, .laneIndex = 0};
 
     const ImPlotRect limits(0.0, 2.0, -1.0, 2.0);
     const ImVec2 plotPos(0.0F, 0.0F);
@@ -1447,21 +1416,38 @@ void test_bit_cursor_cross_lane_refresh_uses_own_y_anchor()
             "跨 lane bit interval 应继续输出 dt/T/f 所需 duration");
 }
 
-void test_bit_active_switches_measurement_mode()
+void test_bit_cursor_pair_switches_measurement_mode()
 {
-    protoscope::plot::WaveViewState view;
-    view.activeBitLane = {.active = true, .parentChannelIndex = 0, .bitIndex = 0, .laneIndex = 0};
-    require(protoscope::ui::bitLaneMeasurementActive(view), "激活 bit lane 后应为 bit 测量模式");
+    const auto bitReadout = [](double time, std::size_t laneIndex) {
+        return protoscope::plot::CursorReadout{
+            .valid = true,
+            .channelIndex = 0,
+            .sampleIndex = static_cast<std::size_t>(time),
+            .time = time,
+            .value = 1.0,
+            .displayValue = laneIndex == 0 ? 0.5 : 1.5,
+            .bit =
+                protoscope::plot::BitLaneReadout{
+                    .parentChannelIndex = 0,
+                    .bitIndex = laneIndex,
+                    .laneIndex = laneIndex,
+                    .value = true,
+                    .y = laneIndex == 0 ? 0.5 : 1.5,
+                },
+        };
+    };
 
-    view.activeBitLane = {};
-    require(!protoscope::ui::bitLaneMeasurementActive(view), "清空 bit lane 后应回到普通测量模式");
+    const auto left = bitReadout(0.0, 0);
+    const auto right = bitReadout(1.0, 1);
+    require(protoscope::ui::cursorPairUsesBitLanes({{left, right}}),
+            "两个 bit readout 应直接触发 bit 测量模式");
 
-    protoscope::plot::CursorReadout left{.valid = true, .channelIndex = 0, .time = 0.0, .value = 1.0};
-    protoscope::plot::CursorReadout right{.valid = true, .channelIndex = 0, .time = 1.0, .value = 2.0};
-    require(!protoscope::ui::cursorPairUsesBitLanes({{left, right}}), "普通波形游标不应触发 bit 测量判断");
+    protoscope::plot::CursorReadout waveform{.valid = true, .channelIndex = 0, .time = 1.0, .value = 2.0};
+    require(!protoscope::ui::cursorPairUsesBitLanes({{left, waveform}}),
+            "普通波形游标不应触发 bit 测量判断");
 }
 
-void test_invisible_active_bit_lane_falls_back_to_waveform_cursor()
+void test_bit_display_cursor_falls_back_to_waveform()
 {
     protoscope::plot::WaveSnapshot snapshot;
     snapshot.channels.push_back({
@@ -1481,13 +1467,11 @@ void test_invisible_active_bit_lane_falls_back_to_waveform_cursor()
         .actualValues = {-1.0, 0.0},
     });
     protoscope::plot::WaveViewState view;
-    view.activeBitLane = {.active = true, .parentChannelIndex = 0, .bitIndex = 0, .laneIndex = 0};
 
     const protoscope::ui::BitLaneLayout emptyLayout;
-    require(!protoscope::ui::activeBitLaneVisible(view, emptyLayout), "active bit lane 不在当前 layout 中时应判定失效");
     const auto fallback =
         protoscope::ui::findNearestCursorByScope(snapshot, displayData, view, emptyLayout, 1.0, 0.0, 0.2, 10.0);
-    require(fallback.has_value(), "active bit lane 失效后应允许普通波形游标刷新");
+    require(fallback.has_value(), "bit display 通道不可命中时应允许普通波形游标刷新");
     require(!fallback->bit.has_value(), "回退普通路径后不应带 bit readout");
     require(fallback->channelIndex == 1, "bit display 通道不应以 raw waveform 作为回退候选");
     require(std::abs(fallback->displayValue) < 1e-9, "普通波形刷新应返回显示值");
@@ -1560,7 +1544,7 @@ void test_active_channel_cursor_time_fallback_restores_pair_measurement()
     require(std::abs(measurement.peakToPeak - 10.0) < 1e-9, "测量统计应基于新激活通道数据");
 }
 
-void test_active_bit_lane_cursor_can_return_nearby_waveform()
+void test_bit_cursor_can_return_nearby_waveform()
 {
     std::vector<protoscope::plot::WaveSample> bitSamples{
         {.time = 0.0, .value = 0.0},
@@ -1600,17 +1584,15 @@ void test_active_bit_lane_cursor_can_return_nearby_waveform()
     });
 
     protoscope::plot::WaveViewState view;
-    view.activeBitLane = {.active = true, .parentChannelIndex = 0, .bitIndex = 0, .laneIndex = 0};
 
     const ImPlotRect limits(0.0, 2.0, -1.0, 2.0);
     const ImVec2 plotPos(0.0F, 0.0F);
     const ImVec2 plotSize(400.0F, 200.0F);
     const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0, 1}, limits, plotPos, plotSize);
-    require(protoscope::ui::activeBitLaneVisible(view, layout), "测试前 active bit lane 应可见");
 
     const auto readout =
         protoscope::ui::findNearestCursorByScope(snapshot, displayData, view, layout, 1.0, 5.0, 0.2, 0.2);
-    require(readout.has_value(), "active bit lane 不应屏蔽附近普通波形候选");
+    require(readout.has_value(), "bit lane 不应屏蔽附近普通波形候选");
     require(readout->channelIndex == 1, "游标应回到离鼠标最近的普通波形通道");
     require(!readout->bit.has_value(), "普通波形候选不应携带 bit readout");
 }
@@ -1648,7 +1630,7 @@ void test_bit_display_cursor_excludes_same_channel_raw_waveform()
     require(!readout.has_value(), "bit display 通道不应以原始 waveform 参与普通游标候选");
 }
 
-void test_explicit_bit_readout_policy_keeps_waveform_when_bit_not_active()
+void test_explicit_bit_readout_policy_keeps_waveform_outside_lane()
 {
     std::vector<protoscope::plot::WaveSample> bitSamples{
         {.time = 0.0, .value = 0.0},
@@ -1694,8 +1676,8 @@ void test_explicit_bit_readout_policy_keeps_waveform_when_bit_not_active()
 
     const auto readout =
         protoscope::ui::findNearestCursorByScope(snapshot, displayData, view, layout, 1.0, 4.0, 0.2, 0.2);
-    require(readout.has_value(), "显式激活策略未激活 bit lane 时仍应允许普通波形候选");
-    require(readout->channelIndex == 1 && !readout->bit.has_value(), "未激活 bit lane 不应抢普通波形游标");
+    require(readout.has_value(), "显式激活策略在鼠标未靠近 bit lane 时仍应允许普通波形候选");
+    require(readout->channelIndex == 1 && !readout->bit.has_value(), "鼠标未靠近 bit lane 时不应抢普通波形游标");
 }
 
 void test_bit_layout_independent_of_axis_range()
@@ -4980,9 +4962,8 @@ void test_wave_view_mode_isolates_stacked_vertical_range()
     view.viewMaxValue = 2.0;
     require(protoscope::ui::setWaveViewMode(view, protoscope::plot::WaveViewMode::Stacked), "应能切换到堆叠视图");
     view.activeChannelOffsetDrag = true;
-    view.activeBitYOffsetDrag = true;
     require(protoscope::ui::setWaveViewMode(view, protoscope::plot::WaveViewMode::Overlay), "应能切回叠加视图");
-    require(!view.activeChannelOffsetDrag && !view.activeBitYOffsetDrag, "切换视图模式应清理纵向拖动状态");
+    require(!view.activeChannelOffsetDrag, "切换视图模式应清理纵向拖动状态");
 
     view.viewMinValue = -2.0;
     view.viewMaxValue = 2.0;

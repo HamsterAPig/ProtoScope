@@ -620,7 +620,6 @@ bool setWaveViewMode(plot::WaveViewState& view, plot::WaveViewMode mode)
     view.viewMode = mode;
     // 核心流程：布局切换只清理纵向拖动状态，不触碰协议通道 offset 或 bitDisplay.yOffset。
     view.activeChannelOffsetDrag = false;
-    view.activeBitYOffsetDrag = false;
     return true;
 }
 
@@ -631,7 +630,6 @@ bool applyWaveViewModeVerticalRange(plot::WaveViewState& view, const std::option
     if (modeChanged) {
         const auto previousMode = view.lastAppliedViewMode;
         view.activeChannelOffsetDrag = false;
-        view.activeBitYOffsetDrag = false;
 
         const bool enteringStacked =
             previousMode != plot::WaveViewMode::Stacked && view.viewMode == plot::WaveViewMode::Stacked;

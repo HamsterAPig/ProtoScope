@@ -239,13 +239,12 @@ namespace {
     bool bitReadoutCandidateAllowed(plot::WaveBitDisplayReadoutPolicy policy,
                                     const BitLaneLayout& bitLayout,
                                     double plotY,
-                                    double maxValueDistance,
-                                    bool activeBitLaneVisibleForReadout)
+                                    double maxValueDistance)
     {
         if (policy == plot::WaveBitDisplayReadoutPolicy::MixedNearest) {
             return true;
         }
-        return activeBitLaneVisibleForReadout || findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
+        return findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance).has_value();
     }
 
 } // namespace
@@ -259,8 +258,7 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
                                              double maxTimeDistance,
                                              double maxValueDistance,
                                              bool preferWaveformHoverReadout,
-                                             plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy,
-                                             bool activeBitLaneVisibleForReadout)
+                                             plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy)
 {
     if (visibleChannelIndices.empty()) {
         return std::nullopt;
@@ -294,8 +292,7 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
     const auto waveformReadout = findWaveformReadout();
     std::optional<HoverReadout> bitLaneReadout;
     if (hasVisibleBitLane(bitLayout, visibleChannelIndices) &&
-        bitReadoutCandidateAllowed(
-            bitDisplayReadoutPolicy, bitLayout, plotY, maxValueDistance, activeBitLaneVisibleForReadout)) {
+        bitReadoutCandidateAllowed(bitDisplayReadoutPolicy, bitLayout, plotY, maxValueDistance)) {
         bitLaneReadout = findBitLaneReadout();
     }
 
@@ -355,25 +352,6 @@ std::vector<CursorIntersectionReadout> collectCursorIntersectionReadouts(
         }
     }
     return readouts;
-}
-
-bool bitLaneMeasurementActive(const plot::WaveViewState& view)
-{
-    return view.activeBitLane.active;
-}
-
-bool activeBitLaneVisible(const plot::WaveViewState& view, const BitLaneLayout& layout)
-{
-    if (!view.activeBitLane.active) {
-        return false;
-    }
-    for (const auto& lane : layout.lanes) {
-        if (lane.parentChannelIndex == view.activeBitLane.parentChannelIndex &&
-            lane.bitIndex == view.activeBitLane.bitIndex && lane.laneIndex == view.activeBitLane.laneIndex) {
-            return true;
-        }
-    }
-    return false;
 }
 
 bool cursorPairHasCompleteReadouts(const std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts)
@@ -596,8 +574,7 @@ std::optional<SmartCursorSnap> findSmartCursorSnapByScope(const plot::WaveSnapsh
     if (bitReadoutCandidateAllowed(view.bitDisplayReadoutPolicy,
                                    bitLayout,
                                    mouseValue,
-                                   maxValueDistance,
-                                   activeBitLaneVisible(view, bitLayout))) {
+                                   maxValueDistance)) {
         if (const auto transition = findNearestBitTransition(
                 snapshot, displayData, bitLayout, time, mouseValue, maxTimeDistance, maxValueDistance)) {
             bitSnap = SmartCursorSnap{
