@@ -283,8 +283,11 @@ private:
                                transport::ConnectionContext& replayContext,
                                std::string& error);
     bool applyRawCaptureRuntimeProfileEvent(const plot::RawCaptureEvent& event, bool cleared, std::string& error);
+    void enqueueRawCaptureBytes(const transport::ConnectionContext& replayContext,
+                                const std::vector<std::uint8_t>& bytes);
     void replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
                                const std::vector<std::uint8_t>& bytes);
+    void flushRawCaptureReplayBatch();
     bool applyTransferFrameRuntimeProfileEvent(const scripting::StreamRuntimeProfileEvent& event, std::string& error);
     void finishRawCaptureImportReplay();
     void cancelRawCaptureImportReplay();
@@ -331,6 +334,10 @@ private:
     std::optional<TransferFrameParserState> transferFrameParser_;
     plot::RawCaptureStreamWriter rawCaptureRecording_;
     RawCaptureReplayState rawCaptureReplay_;
+    std::size_t rawCaptureReplayChunkBytes_{1024U};
+    std::size_t rawCaptureReplayPendingBytes_{0U};
+    std::vector<std::uint8_t> rawCaptureReplayBatchBytes_;
+    transport::ConnectionContext rawCaptureReplayBatchContext_{};
     bool replayReceiveHistory_{false};
     std::deque<transport::TransportEvent> pendingTransportEvents_;
     std::deque<PendingRxBytes> pendingRxByteChunks_;

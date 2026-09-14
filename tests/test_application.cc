@@ -3233,6 +3233,49 @@ void test_application_raw_capture_import_replays_stream_in_chunks()
             "导入回放应按分块解析全部 stream 帧，而不是只保留尾部数据");
 }
 
+void test_application_raw_capture_import_batches_small_rx_events()
+{
+    constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_chunked_stream";
+    constexpr std::size_t frameCount = 1024;
+    constexpr std::size_t eventBytes = 3;
+
+    protoscope::app::Application application;
+    require(application.initialize(), "应用应可初始化默认 Lua 工作区");
+    require(application.reloadProtocolDirectory(protocolDir, true), "分块导入 stream 协议应可加载");
+
+    const auto payload = makeRawImportStreamPayload(frameCount);
+    protoscope::plot::RawCaptureFileData capture{
+        .protocolName = "raw_import_chunked_stream",
+        .protocolDir = protocolDir,
+        .sampleFrequencyHz = 1000.0,
+        .capturedAtMs = 123,
+        .payload = payload,
+        .events = {},
+    };
+    capture.events.reserve((payload.size() + eventBytes - 1U) / eventBytes);
+    for (std::size_t offset = 0; offset < payload.size(); offset += eventBytes) {
+        const auto end = (std::min)(payload.size(), offset + eventBytes);
+        capture.events.push_back(protoscope::plot::RawCaptureEvent{
+            .type = protoscope::plot::RawCaptureEventType::RxBytes,
+            .timestampMs = capture.capturedAtMs + capture.events.size(),
+            .bytes = std::vector<std::uint8_t>(payload.begin() + static_cast<std::ptrdiff_t>(offset),
+                                               payload.begin() + static_cast<std::ptrdiff_t>(end)),
+            .profile = {},
+            .plotSetup = {},
+        });
+    }
+
+    std::string error;
+    require(application.importWaveRawCapture(capture, error), "大量小 RX 事件导入应成功");
+    const auto importedSnapshot = application.docks().waveState().buffer.snapshot(
+        -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+    require(!importedSnapshot.channels.empty(), "合批导入后应生成波形通道");
+    require(importedSnapshot.channels.front().totalSamples == frameCount, "跨事件合批导入应按顺序解析全部 stream 帧");
+    require(application.docks().receiveState().rows.size() == capture.events.size(),
+            "跨事件合批导入不应丢失原始接收记录");
+    application.shutdown();
+}
+
 void test_application_raw_capture_import_updates_last_pump_diagnostics()
 {
     constexpr const char* protocolDir = "tests/fixtures/protocols/raw_import_chunked_stream";

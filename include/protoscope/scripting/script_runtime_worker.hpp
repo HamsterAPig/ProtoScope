@@ -84,7 +84,7 @@ public:
     void postTransportOpen(transport::TransportOpenEvent event);
     void postTransportClose(transport::TransportCloseEvent event);
     void postTransportError(transport::TransportErrorEvent event);
-    void postTransportBytes(transport::TransportBytesEvent event);
+    void postTransportBytes(transport::TransportBytesEvent event, bool mergeAdjacent = true);
     void postControl(transport::ConnectionContext context, std::string id, ControlValue value);
     void postTick(std::uint64_t currentMs);
     void postTxEvent(transport::ConnectionContext context, TxEvent event);

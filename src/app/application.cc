@@ -27,12 +27,25 @@ namespace protoscope::app {
 
 namespace {
 
-    constexpr std::size_t kRawCaptureReplayChunkBytes = 1024;
+    constexpr std::size_t kRawCaptureReplayLargeChunkBytes = 64U * 1024U;
+    constexpr std::size_t kRawCaptureReplaySyncBatchBytes = 1024U * 1024U;
     constexpr std::size_t kRawCaptureReplaySeekNoticeEvents = 4096;
     constexpr std::size_t kTransportEventsPerPump = 256;
     constexpr auto kTransportEventBudget = std::chrono::milliseconds(4);
     constexpr std::uint64_t kCommPressureDebugLogIntervalMs = 2000;
     constexpr std::string_view kSessionProtocolEntryPrefix = "protocol/";
+
+    std::size_t resolveRawCaptureReplayChunkBytes(const std::optional<scripting::StreamBufferDefinition>& streamBuffer)
+    {
+        if (!streamBuffer.has_value()) {
+            return kRawCaptureReplayLargeChunkBytes;
+        }
+        if (streamBuffer->dropOldest) {
+            // drop_oldest 模式下输入块必须小于环形缓冲区容量，避免覆盖上一个块留下的半帧。
+            return (std::max)(std::size_t{1U}, streamBuffer->capacity / 2U);
+        }
+        return kRawCaptureReplayLargeChunkBytes;
+    }
 
     std::uint64_t nowMs()
     {
@@ -2576,6 +2589,10 @@ void Application::prepareRawCaptureImportReplay(const plot::RawCaptureFileData& 
     wave.view.sampleFrequencyInput = formatFrequencyInput(capture.sampleFrequencyHz);
     wave.view.sampleFrequencyError.clear();
     wave.buffer.setHistoryTrimSuspended(true);
+    rawCaptureReplayChunkBytes_ = resolveRawCaptureReplayChunkBytes(scriptWorker_.snapshot().streamBuffer);
+    rawCaptureReplayPendingBytes_ = 0U;
+    rawCaptureReplayBatchBytes_.clear();
+    rawCaptureReplayBatchContext_ = {};
     loggingFacade_.info("raw_capture",
                         "raw import prepared kind=raw_import endpoint=" + capture.protocolDir +
                             " bytes=" + std::to_string(capture.payload.size()) +
@@ -2604,13 +2621,20 @@ bool Application::replayRawCaptureEvents(const plot::RawCaptureFileData& capture
     for (const auto& recordedEvent : capture.events) {
         replayContext.timestampMs =
             recordedEvent.timestampMs == 0 ? replayContext.timestampMs : recordedEvent.timestampMs;
+        if (recordedEvent.type == plot::RawCaptureEventType::RxBytes) {
+            enqueueRawCaptureBytes(replayContext, recordedEvent.bytes);
+            continue;
+        }
+        // 核心流程：配置事件必须在前一批 RX 字节完全处理后再生效，保持导入事件顺序。
+        flushRawCaptureReplayBatch();
         if (!replayRawCaptureEvent(recordedEvent, replayContext, error)) {
             cancelRawCaptureImportReplay();
             return false;
         }
     }
 
-    flushScriptOutputs();
+    flushRawCaptureReplayBatch();
+    flushScriptOutputsUnbounded();
     suppressRawCaptureProfileEvents_ = false;
     suppressRawCapturePlotSetupEvents_ = false;
     return true;
@@ -2787,6 +2811,17 @@ bool Application::applyTransferFrameRuntimeProfileEvent(const scripting::StreamR
 void Application::replayRawCaptureBytes(const transport::ConnectionContext& replayContext,
                                         const std::vector<std::uint8_t>& bytes)
 {
+    enqueueRawCaptureBytes(replayContext, bytes);
+    flushRawCaptureReplayBatch();
+}
+
+void Application::enqueueRawCaptureBytes(const transport::ConnectionContext& replayContext,
+                                         const std::vector<std::uint8_t>& bytes)
+{
+    if (bytes.empty()) {
+        return;
+    }
+
     loggingFacade_.trace("raw_capture",
                          "raw replay bytes" + transportContextFields("raw_replay", replayContext) +
                              " bytes=" + std::to_string(bytes.size()) +
@@ -2798,9 +2833,10 @@ void Application::replayRawCaptureBytes(const transport::ConnectionContext& repl
         .bytes = bytes,
         .message = {},
     });
+    const auto chunkBytes = (std::max)(std::size_t{1U}, rawCaptureReplayChunkBytes_);
     std::size_t cursor = 0;
     while (cursor < bytes.size()) {
-        const auto chunkSize = (std::min)(kRawCaptureReplayChunkBytes, bytes.size() - cursor);
+        const auto chunkSize = (std::min)(chunkBytes, bytes.size() - cursor);
         std::vector<std::uint8_t> chunk(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
                                         bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkSize));
         appendTransferFrameRows(dock::ReceiveRow{
@@ -2810,21 +2846,71 @@ void Application::replayRawCaptureBytes(const transport::ConnectionContext& repl
             .bytes = chunk,
             .message = {},
         });
-        scriptWorker_.postTransportBytes(transport::TransportBytesEvent{replayContext, std::move(chunk)});
-        if (runtimeConfig_.scripting.workerEnabled) {
-            // 核心流程：异步 worker 需要先等到脚本消费完当前 chunk，再把输出合并到回放结果。
-            scriptWorker_.waitIdle();
-        }
-        flushScriptOutputs();
         cursor += chunkSize;
     }
+
+    rawCaptureReplayBatchContext_ = replayContext;
+    cursor = 0;
+    if (!rawCaptureReplayBatchBytes_.empty()) {
+        const auto required = chunkBytes - rawCaptureReplayBatchBytes_.size();
+        const auto copied = (std::min)(required, bytes.size());
+        rawCaptureReplayBatchBytes_.insert(
+            rawCaptureReplayBatchBytes_.end(), bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(copied));
+        cursor = copied;
+        if (rawCaptureReplayBatchBytes_.size() == chunkBytes) {
+            scriptWorker_.postTransportBytes(
+                transport::TransportBytesEvent{rawCaptureReplayBatchContext_, std::move(rawCaptureReplayBatchBytes_)},
+                false);
+            rawCaptureReplayBatchBytes_.clear();
+            rawCaptureReplayPendingBytes_ += chunkBytes;
+        }
+    }
+    while (bytes.size() - cursor >= chunkBytes) {
+        std::vector<std::uint8_t> chunk(bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+                                        bytes.begin() + static_cast<std::ptrdiff_t>(cursor + chunkBytes));
+        scriptWorker_.postTransportBytes(
+            transport::TransportBytesEvent{rawCaptureReplayBatchContext_, std::move(chunk)}, false);
+        cursor += chunkBytes;
+        rawCaptureReplayPendingBytes_ += chunkBytes;
+        if (rawCaptureReplayPendingBytes_ >= kRawCaptureReplaySyncBatchBytes) {
+            flushRawCaptureReplayBatch();
+        }
+    }
+    if (cursor < bytes.size()) {
+        rawCaptureReplayBatchBytes_.insert(
+            rawCaptureReplayBatchBytes_.end(), bytes.begin() + static_cast<std::ptrdiff_t>(cursor), bytes.end());
+    }
+    if (rawCaptureReplayPendingBytes_ + rawCaptureReplayBatchBytes_.size() >= kRawCaptureReplaySyncBatchBytes) {
+        flushRawCaptureReplayBatch();
+    }
+}
+
+void Application::flushRawCaptureReplayBatch()
+{
+    if (!rawCaptureReplayBatchBytes_.empty()) {
+        rawCaptureReplayPendingBytes_ += rawCaptureReplayBatchBytes_.size();
+        scriptWorker_.postTransportBytes(
+            transport::TransportBytesEvent{rawCaptureReplayBatchContext_, std::move(rawCaptureReplayBatchBytes_)},
+            false);
+        rawCaptureReplayBatchBytes_.clear();
+    }
+    if (rawCaptureReplayPendingBytes_ == 0U) {
+        return;
+    }
+    rawCaptureReplayPendingBytes_ = 0U;
+    if (runtimeConfig_.scripting.workerEnabled) {
+        // 核心流程：连续 RX 事件只在此处等待一次，避免每个录制小块都做一次线程往返。
+        scriptWorker_.waitIdle();
+    }
+    // 导入期间必须无预算清空脚本输出，避免 pending 波形追加影响最终快照。
+    flushScriptOutputsUnbounded();
     flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
 }
 
 void Application::finishRawCaptureImportReplay()
 {
     auto& wave = dockStore_.waveState();
-    flushScriptOutputs();
+    flushScriptOutputsUnbounded();
     flushPendingTransferFrameRows(std::numeric_limits<std::size_t>::max());
     const auto importedSnapshot =
         wave.buffer.snapshot(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), false);
@@ -2844,6 +2930,8 @@ void Application::cancelRawCaptureImportReplay()
 {
     suppressRawCaptureProfileEvents_ = false;
     suppressRawCapturePlotSetupEvents_ = false;
+    rawCaptureReplayPendingBytes_ = 0U;
+    rawCaptureReplayBatchBytes_.clear();
     dockStore_.waveState().buffer.setHistoryTrimSuspended(false);
 }
 

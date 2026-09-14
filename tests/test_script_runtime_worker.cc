@@ -266,6 +266,32 @@ void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events()
             "超过 batch_bytes 的后续 RX 应保留为新块");
 }
 
+void test_script_runtime_worker_can_disable_adjacent_rx_merge()
+{
+    const ScopedTempPath protocolDir(makeWorkerProtocolDir("no-batch-bytes", workerBatchProbeScript()));
+    protoscope::scripting::ScriptRuntimeWorker worker;
+    worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
+        .enabled = true,
+        .rxQueueLimitBytes = 64U * 1024U,
+        .outputQueueLimit = 128U,
+        .batchBytes = 8U,
+        .backpressureEnabled = false,
+    });
+    const auto loaded = worker.loadProtocolDirectory(protocolDir.path().generic_string());
+    require(loaded.ok, "worker 禁止合并测试协议应可加载");
+    (void) worker.drainOutputs();
+
+    worker.postTransportBytes(bytesEvent({0x01, 0x02, 0x03}, 1), false);
+    worker.postTransportBytes(bytesEvent({0x04, 0x05}, 2), false);
+    worker.waitIdle();
+    const auto outputs = worker.drainOutputs();
+
+    require(hasEventWithTokens(outputs, "worker_bytes", "first=1", "size=3"),
+            "禁止相邻 RX 合并时首个导入块应保持原大小");
+    require(hasEventWithTokens(outputs, "worker_bytes", "first=4", "size=2"),
+            "禁止相邻 RX 合并时后续导入块应保持原大小");
+}
+
 void test_script_runtime_worker_oscilloscope_toggle_sync_returns_lua_result()
 {
     const ScopedTempPath protocolDir(makeWorkerProtocolDir(

@@ -315,7 +315,7 @@ struct ScriptRuntimeWorker::Impl {
         signalCommandAvailable();
     }
 
-    void pushBytes(transport::TransportBytesEvent event)
+    void pushBytes(transport::TransportBytesEvent event, bool mergeAdjacent)
     {
         if (event.bytes.empty()) {
             return;
@@ -329,7 +329,7 @@ struct ScriptRuntimeWorker::Impl {
             }
             pendingRxBytes += event.bytes.size();
             syncMode = !config.enabled;
-            if (!commands.empty()) {
+            if (mergeAdjacent && !commands.empty()) {
                 auto* previous = std::get_if<BytesCommand>(&commands.back());
                 if (previous != nullptr && previous->event.context.connectionId == event.context.connectionId &&
                     previous->event.context.readyForIo == event.context.readyForIo &&
@@ -893,9 +893,9 @@ void ScriptRuntimeWorker::postTransportError(transport::TransportErrorEvent even
     impl_->pushCommand(ErrorCommand{.event = std::move(event)});
 }
 
-void ScriptRuntimeWorker::postTransportBytes(transport::TransportBytesEvent event)
+void ScriptRuntimeWorker::postTransportBytes(transport::TransportBytesEvent event, bool mergeAdjacent)
 {
-    impl_->pushBytes(std::move(event));
+    impl_->pushBytes(std::move(event), mergeAdjacent);
 }
 
 void ScriptRuntimeWorker::postControl(transport::ConnectionContext context, std::string id, ControlValue value)

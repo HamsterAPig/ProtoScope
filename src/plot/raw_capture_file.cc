@@ -4,6 +4,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -20,7 +21,7 @@ namespace {
     constexpr std::string_view kVersionLegacyEvents = "2";
     constexpr std::size_t kStreamHeaderBytes = 4096;
 
-    std::string trim(std::string_view text)
+    std::string_view trimView(std::string_view text)
     {
         std::size_t begin = 0;
         while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0) {
@@ -30,12 +31,17 @@ namespace {
         while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
             --end;
         }
-        return std::string(text.substr(begin, end - begin));
+        return text.substr(begin, end - begin);
+    }
+
+    std::string trim(std::string_view text)
+    {
+        return std::string(trimView(text));
     }
 
     bool parseUnsigned(std::string_view text, std::uint64_t& value)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         const auto* begin = cleaned.data();
         const auto* end = cleaned.data() + cleaned.size();
         const auto [ptr, ec] = std::from_chars(begin, end, value);
@@ -59,7 +65,7 @@ namespace {
 
     bool parseBool(std::string_view text, bool& value)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned == "true" || cleaned == "1") {
             value = true;
             return true;
@@ -103,7 +109,7 @@ namespace {
 
     bool decodeStringHex(std::string_view text, std::string& value)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned.size() % 2 != 0) {
             return false;
         }
@@ -135,7 +141,7 @@ namespace {
     bool parseChannelMap(std::string_view text, std::vector<std::size_t>& outMap)
     {
         outMap.clear();
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned.empty()) {
             return true;
         }
@@ -170,7 +176,7 @@ namespace {
 
     bool parseColor(std::string_view text, std::optional<std::array<float, 4>>& color)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned == "none" || cleaned.empty()) {
             color = std::nullopt;
             return true;
@@ -207,7 +213,7 @@ namespace {
 
     bool parseLineWidth(std::string_view text, std::optional<float>& lineWidth)
     {
-        const auto cleaned = trim(text);
+        const auto cleaned = trimView(text);
         if (cleaned == "none" || cleaned.empty()) {
             lineWidth = std::nullopt;
             return true;
@@ -733,7 +739,7 @@ namespace {
             if (lineEnd == std::string::npos) {
                 lineEnd = bytes.size();
             }
-            const auto firstLine = trim(bytes.substr(cursor, lineEnd - cursor));
+            const auto firstLine = trimView(bytes.substr(cursor, lineEnd - cursor));
             if (firstLine.empty()) {
                 cursor = lineEnd + 1;
                 continue;
@@ -752,7 +758,7 @@ namespace {
                 if (lineEnd == std::string::npos) {
                     lineEnd = bytes.size();
                 }
-                const auto line = trim(bytes.substr(cursor, lineEnd - cursor));
+                const auto line = trimView(bytes.substr(cursor, lineEnd - cursor));
                 cursor = lineEnd + 1;
                 if (line.empty()) {
                     break;
@@ -762,8 +768,8 @@ namespace {
                     error = "psraw 事件字段格式错误";
                     return false;
                 }
-                const auto key = trim(line.substr(0, pos));
-                const auto value = trim(line.substr(pos + 1));
+                const auto key = trimView(line.substr(0, pos));
+                const auto value = trimView(line.substr(pos + 1));
                 if (!parseDecodedEventField(key, value, event, state, error)) {
                     return false;
                 }
@@ -850,7 +856,7 @@ namespace {
             if (lineEnd == std::string::npos) {
                 lineEnd = headerText.size();
             }
-            auto line = trim(headerText.substr(lineBegin, lineEnd - lineBegin));
+            const auto line = trimView(headerText.substr(lineBegin, lineEnd - lineBegin));
             lineBegin = lineEnd + 1;
             if (line.empty()) {
                 state.separatorSeen = true;
@@ -864,8 +870,8 @@ namespace {
                 error = "psraw 文件头字段格式错误";
                 return false;
             }
-            const auto key = trim(line.substr(0, separator));
-            const auto value = trim(line.substr(separator + 1));
+            const auto key = trimView(line.substr(0, separator));
+            const auto value = trimView(line.substr(separator + 1));
             if (!parseRawCaptureHeaderField(key, value, header, state, error)) {
                 return false;
             }
@@ -904,7 +910,14 @@ namespace {
 
     void rebuildRawCapturePayloadFromEvents(RawCaptureFileData& capture)
     {
+        std::size_t payloadSize = 0;
+        for (const auto& event : capture.events) {
+            if (event.type == RawCaptureEventType::RxBytes) {
+                payloadSize += event.bytes.size();
+            }
+        }
         capture.payload.clear();
+        capture.payload.reserve(payloadSize);
         for (const auto& event : capture.events) {
             if (event.type == RawCaptureEventType::RxBytes) {
                 capture.payload.insert(capture.payload.end(), event.bytes.begin(), event.bytes.end());
@@ -1054,12 +1067,30 @@ bool writeRawCaptureFile(const std::filesystem::path& path, const RawCaptureFile
 std::optional<RawCaptureFileData> readRawCaptureFile(const std::filesystem::path& path, std::string& error)
 {
     try {
+        std::error_code sizeError;
+        const auto fileSize = std::filesystem::file_size(path, sizeError);
+        if (sizeError) {
+            error = "无法获取 psraw 文件大小: " + sizeError.message();
+            return std::nullopt;
+        }
+        if (fileSize > static_cast<std::uint64_t>((std::numeric_limits<std::streamsize>::max)())) {
+            error = "psraw 文件过大，无法读取";
+            return std::nullopt;
+        }
+
         std::ifstream in(path, std::ios::binary);
         if (!in.good()) {
             error = "无法打开 psraw 文件";
             return std::nullopt;
         }
-        std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string contents(static_cast<std::size_t>(fileSize), '\0');
+        if (!contents.empty()) {
+            in.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+            if (in.gcount() != static_cast<std::streamsize>(contents.size())) {
+                error = "psraw 文件读取不完整";
+                return std::nullopt;
+            }
+        }
         return decodeRawCaptureFile(contents, error);
     } catch (const std::exception& ex) {
         error = ex.what();
