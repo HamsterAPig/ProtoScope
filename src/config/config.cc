@@ -691,6 +691,9 @@ namespace {
             readScalar<bool>(wave, "zoom_selection_auto_exit", config.gui.wave.zoomSelectionAutoExit);
         config.gui.wave.peakDetectDownsample =
             readScalar<bool>(wave, "peak_detect_downsample", config.gui.wave.peakDetectDownsample);
+        const auto bitDenseMode = readScalar<std::string>(wave, "bit_dense_render_mode", "compressed_steps");
+        config.gui.wave.bitDenseRenderMode = bitDenseMode == "activity_band"
+            ? plot::WaveBitDenseRenderMode::ActivityBand : plot::WaveBitDenseRenderMode::CompressedSteps;
         config.gui.wave.maxRenderPointsPerChannel =
             readScalar<std::size_t>(wave, "max_render_points_per_channel", config.gui.wave.maxRenderPointsPerChannel);
         config.gui.wave.maxRenderVertices =
@@ -1078,6 +1081,8 @@ namespace {
         gui["wave"]["interaction_animation_enabled"] = config.gui.wave.interactionAnimationEnabled;
         gui["wave"]["zoom_selection_auto_exit"] = config.gui.wave.zoomSelectionAutoExit;
         gui["wave"]["peak_detect_downsample"] = config.gui.wave.peakDetectDownsample;
+        gui["wave"]["bit_dense_render_mode"] = config.gui.wave.bitDenseRenderMode == plot::WaveBitDenseRenderMode::ActivityBand
+            ? "activity_band" : "compressed_steps";
         gui["wave"]["channel_card_fixed_width"] = config.gui.wave.channelCardFixedWidth;
         gui["wave"]["channel_card_adaptive_ratio"] = config.gui.wave.channelCardAdaptiveRatio;
         gui["wave"]["legend_channel_name_max_width"] = config.gui.wave.legendChannelNameMaxWidth;
@@ -1622,6 +1627,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.mouseYOffsetDragMode = config.gui.wave.mouseYOffsetDragMode;
     wave.zoomSelectionAutoExit = config.gui.wave.zoomSelectionAutoExit;
     wave.peakDetectDownsample = config.gui.wave.peakDetectDownsample;
+    wave.bitDenseRenderMode = config.gui.wave.bitDenseRenderMode;
     wave.maxRenderPointsPerChannel = config.gui.wave.maxRenderPointsPerChannel;
     wave.maxRenderVertices = config.gui.wave.maxRenderVertices;
     wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
@@ -1689,6 +1695,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.mouseYOffsetDragMode = dockStore.waveState().view.mouseYOffsetDragMode;
     config.gui.wave.zoomSelectionAutoExit = dockStore.waveState().view.zoomSelectionAutoExit;
     config.gui.wave.peakDetectDownsample = dockStore.waveState().view.peakDetectDownsample;
+    config.gui.wave.bitDenseRenderMode = dockStore.waveState().view.bitDenseRenderMode;
     config.gui.wave.maxRenderPointsPerChannel = dockStore.waveState().view.maxRenderPointsPerChannel;
     config.gui.wave.maxRenderVertices = dockStore.waveState().view.maxRenderVertices;
     config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;

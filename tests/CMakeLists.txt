@@ -1,3 +1,15 @@
+add_executable(protoscope_wave_query_tests test_wave_query.cc)
+target_link_libraries(protoscope_wave_query_tests PRIVATE protoscope_plot)
+add_test(NAME protoscope_wave_query_tests COMMAND protoscope_wave_query_tests)
+set_tests_properties(protoscope_wave_query_tests PROPERTIES TIMEOUT 60)
+
+add_executable(protoscope_wave_pan_benchmark benchmark_wave_pan.cc)
+target_link_libraries(protoscope_wave_pan_benchmark PRIVATE protoscope_plot)
+add_executable(protoscope_wave_analysis_tests test_wave_analysis.cc)
+target_link_libraries(protoscope_wave_analysis_tests PRIVATE protoscope_plot)
+add_test(NAME protoscope_wave_analysis_tests COMMAND protoscope_wave_analysis_tests)
+set_tests_properties(protoscope_wave_analysis_tests PROPERTIES TIMEOUT 60)
+
 set(PROTOSCOPE_HEADLESS_TEST_SOURCES
     test_headless_main.cc
     test_headless_core.cc
@@ -39,6 +51,10 @@ set_tests_properties(protoscope_headless_unit_tests PROPERTIES
 )
 
 if(PROTOSCOPE_ENABLE_GUI)
+    add_executable(protoscope_wave_ui_benchmark benchmark_wave_ui.cc)
+    target_link_libraries(protoscope_wave_ui_benchmark PRIVATE protoscope_ui)
+    add_test(NAME protoscope_wave_ui_multiframe COMMAND protoscope_wave_ui_benchmark --verify)
+    set_tests_properties(protoscope_wave_ui_multiframe PROPERTIES TIMEOUT 60)
     add_executable(protoscope_tests
         test_main.cc
         test_registry.cc
