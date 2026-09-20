@@ -145,7 +145,8 @@ gui:
 - `max_render_points_per_channel` / `max_render_vertices`：单通道和总顶点渲染预算。
 - `peak_detect_downsample`：高密度主图是否启用示波器式 peak-detect 降采样，默认 `true`。开启时每个桶保留首点、极小值、极大值和末点并连成单条轨迹；关闭时回退旧的 min/max 包络渲染，便于对比。
 - `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。
-- `overview_max_samples`：总览数据上限。
+- `overview_max_samples`：概览桶数上限，每桶最多两个极值点；0 仅取消此项限制。
+  预算公式、降采样阈值与当前限制见[波形渲染计划](wave-view-render-plan.md#渲染预算)。
 - `max_total_samples`：每通道历史样本上限，`0` 表示不额外限制。
 - `min_visible_time_span`：X 轴最小可见时间跨度。
 - `reset_history_on_time_reset`：时间轴重置时是否清空历史。
