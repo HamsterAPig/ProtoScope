@@ -235,6 +235,7 @@ function ProtoBuffer:bytes(max_bytes) end
 ---@field first_bit? integer @起始 bit，默认 0，范围 0..63。
 ---@field bit_count? integer @显示 bit 数，默认 8，范围 1..64，且 first_bit + bit_count 不超过 64。
 ---@field y_offset? number @bit 轨道组纵向偏移，默认 0。
+---@field hover_readout? boolean @默认 false；与全局悬停读数同时开启时显示本通道 bit 的 0/1 标注，不影响游标吸附和测量。
 
 -- 波形通道描述：定义曲线显示名称、单位、缩放、颜色和可选 bit 显示。
 ---@class ProtoPlotChannel

@@ -2061,6 +2061,34 @@ void test_application_plot_setup_reset_history_preserves_channel_overrides()
     application.shutdown();
 }
 
+void test_application_bit_hover_setup_preserves_history()
+{
+    protoscope::app::Application application;
+    require(application.initialize(), "应用初始化失败");
+    auto first = makePlotSetupEvent(false);
+    first.plotSetup.channels[0].bitDisplay.enabled = true;
+    auto second = first;
+    second.timestampMs = first.timestampMs + 100;
+    second.plotSetup.channels[0].bitDisplay.hoverReadout = true;
+    const auto& lua = application.docks().luaState();
+    const protoscope::plot::RawCaptureFileData capture{
+        .protocolName = lua.protocolName,
+        .protocolDir = lua.protocolDir,
+        .events = {first, second},
+    };
+    std::string error;
+    require(application.loadRawCaptureReplayTimeline(capture, error), "悬停配置回放应可载入");
+    require(application.stepRawCaptureReplay(error), "首次 setup 应成功");
+    auto& wave = application.docks().waveState();
+    wave.buffer.append(0, {.samples = {{0.0, 42.0}}});
+    wave.view.defaultViewportPending = false;
+    require(application.stepRawCaptureReplay(error), "悬停开关 setup 应成功");
+    require(wave.buffer.channelSpec(0)->bitDisplay.hoverReadout, "回放应更新悬停开关");
+    require(wave.buffer.snapshot(0, 1).channels[0].totalSamples == 1, "仅修改悬停开关不能清空历史");
+    require(!wave.view.defaultViewportPending, "仅修改悬停开关不能重置视口");
+    application.shutdown();
+}
+
 void test_application_logging_filters_script_and_host()
 {
     const ScopedTempPath tempRoot(makeUniqueTempDir("protoscope-logging-test"));

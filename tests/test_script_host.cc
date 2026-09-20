@@ -3321,8 +3321,10 @@ function on_open(ctx)
   proto.plot.setup({
     channels = {
       { label = "CH1", unit = "raw", bit_display = true },
-      { label = "CH2", unit = "raw", bit_display = { first_bit = 4, bit_count = 12, y_offset = 2.5 } },
+      { label = "CH2", unit = "raw", bit_display = { first_bit = 4, bit_count = 12, y_offset = 2.5, hover_readout = true } },
       { label = "CH3", unit = "raw", bit_display = { enabled = false, first_bit = 2, bit_count = 3 } },
+      { label = "CH4", bit_display = { hover_readout = false } },
+      { label = "CH5", bit_display = { hover_readout = nil } },
     }
   })
 end
@@ -3334,7 +3336,13 @@ end
 
     const auto setups = host.drainPlotSetups();
     require(setups.size() == 1, "bit_display setup 应生成 1 次配置");
-    require(setups[0].channels.size() == 3, "bit_display setup 应保留所有通道");
+    require(setups[0].channels.size() == 5, "bit_display setup 应保留所有通道");
+    require(!setups[0].channels[0].bitDisplay.hoverReadout &&
+                setups[0].channels[1].bitDisplay.hoverReadout &&
+                !setups[0].channels[2].bitDisplay.hoverReadout &&
+                !setups[0].channels[3].bitDisplay.hoverReadout &&
+                !setups[0].channels[4].bitDisplay.hoverReadout,
+            "悬停开关须支持 true、false、省略与 nil");
     require(setups[0].channels[0].bitDisplay.enabled, "bit_display=true 应启用 bit 显示");
     require(setups[0].channels[0].bitDisplay.firstBit == 0, "bit_display=true first_bit 默认值错误");
     require(setups[0].channels[0].bitDisplay.bitCount == 8, "bit_display=true bit_count 默认值错误");
@@ -3373,6 +3381,19 @@ end
         }
     }
     require(hasBitDisplayError, "非法 bit_display 应记录明确字段错误");
+    writeMainLua(protocolDir.path(), R"lua(
+function on_open(ctx)
+  proto.plot.setup({channels = {{bit_display = {hover_readout = "true"}}}})
+end
+)lua");
+    require(host.loadProtocolDirectory(protocolDir.path().generic_string()), "非法字段脚本应能加载");
+    host.onTransportOpen(protoscope::transport::TransportOpenEvent{.context = sampleCtx()});
+    require(host.drainPlotSetups().empty(), "非法 hover_readout 不得产生 setup");
+    bool hoverError = false;
+    for (const auto& log : host.drainLogs()) {
+        hoverError = hoverError || log.message.find("bit_display.hover_readout") != std::string::npos;
+    }
+    require(hoverError, "非法 hover_readout 应报告字段错误");
 }
 
 void test_script_plot_push_accepts_compact_series()

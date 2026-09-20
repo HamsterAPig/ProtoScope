@@ -258,14 +258,22 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
                                              double maxTimeDistance,
                                              double maxValueDistance,
                                              bool preferWaveformHoverReadout,
-                                             plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy)
+                                             plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy,
+                                             bool showHoverReadout)
 {
-    if (visibleChannelIndices.empty()) {
+    if (!showHoverReadout || visibleChannelIndices.empty()) {
         return std::nullopt;
     }
 
+    // 核心流程：先过滤悬停候选，避免关闭读数的重叠轨道抢占命中；游标仍使用完整布局。
+    auto hoverLayout = bitLayout;
+    std::erase_if(hoverLayout.lanes, [&](const auto& lane) {
+        return lane.parentChannelIndex >= snapshot.channels.size() ||
+               !snapshot.channels[lane.parentChannelIndex].bitDisplay.hoverReadout ||
+               !visibleChannelContains(visibleChannelIndices, lane.parentChannelIndex);
+    });
     const auto findBitLaneReadout = [&]() -> std::optional<HoverReadout> {
-        const auto bitLane = findBitLaneAtPlotValue(bitLayout, plotY, maxValueDistance);
+        const auto bitLane = findBitLaneAtPlotValue(hoverLayout, plotY, maxValueDistance);
         if (!bitLane.has_value()) {
             return std::nullopt;
         }
@@ -291,8 +299,8 @@ std::optional<HoverReadout> findHoverReadout(const plot::WaveSnapshot& snapshot,
 
     const auto waveformReadout = findWaveformReadout();
     std::optional<HoverReadout> bitLaneReadout;
-    if (hasVisibleBitLane(bitLayout, visibleChannelIndices) &&
-        bitReadoutCandidateAllowed(bitDisplayReadoutPolicy, bitLayout, plotY, maxValueDistance)) {
+    if (hasVisibleBitLane(hoverLayout, visibleChannelIndices) &&
+        bitReadoutCandidateAllowed(bitDisplayReadoutPolicy, hoverLayout, plotY, maxValueDistance)) {
         bitLaneReadout = findBitLaneReadout();
     }
 

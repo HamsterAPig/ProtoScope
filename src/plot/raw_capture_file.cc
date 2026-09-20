@@ -248,7 +248,9 @@ namespace {
                 << "channel." << index << ".bit_display.first_bit: " << channel.bitDisplay.firstBit << '\n'
                 << "channel." << index << ".bit_display.bit_count: " << channel.bitDisplay.bitCount << '\n'
                 << "channel." << index << ".bit_display.y_offset: " << std::setprecision(17)
-                << channel.bitDisplay.yOffset << '\n';
+                << channel.bitDisplay.yOffset << '\n'
+                << "channel." << index << ".bit_display.hover_readout: "
+                << (channel.bitDisplay.hoverReadout ? "true" : "false") << '\n';
         }
         out << "view.time_scale: " << std::setprecision(17) << event.plotSetup.view.timeScale << '\n'
             << "view.time_unit: " << encodeStringHex(event.plotSetup.view.timeUnit) << '\n'
@@ -558,6 +560,12 @@ namespace {
         } else if (field == "bit_display.enabled") {
             if (!parseBool(value, channel.bitDisplay.enabled)) {
                 error = "psraw plot_setup channel bit_display.enabled 格式错误";
+                return EventFieldParseResult::Failed;
+            }
+            return EventFieldParseResult::Handled;
+        } else if (field == "bit_display.hover_readout") {
+            if (!parseBool(value, channel.bitDisplay.hoverReadout)) {
+                error = "psraw plot_setup channel bit_display.hover_readout 格式错误";
                 return EventFieldParseResult::Failed;
             }
             return EventFieldParseResult::Handled;

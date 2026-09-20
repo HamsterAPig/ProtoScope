@@ -2022,6 +2022,14 @@ void test_bit_hover_readout_tracks_steady_level()
     const ImVec2 plotSize(400.0F, 200.0F);
     const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
     require(!layout.lanes.empty(), "应生成 bit hover lane");
+    require(!protoscope::ui::findHoverReadout(
+                snapshot, displayData, {0}, layout, 2.4, layout.lanes[0].centerY, 0.2, 0.2, true),
+            "bit 悬停读数默认关闭");
+    snapshot.channels[0].bitDisplay.hoverReadout = true;
+    require(!protoscope::ui::findHoverReadout(
+                snapshot, displayData, {0}, layout, 2.4, layout.lanes[0].centerY, 0.2, 0.2, true,
+                protoscope::plot::WaveBitDisplayReadoutPolicy::MixedNearest, false),
+            "全局悬停关闭时通道开启也不得显示");
 
     const auto high = protoscope::ui::findHoverReadout(
         snapshot, displayData, {0}, layout, 2.4, layout.lanes[0].centerY, 0.2, 0.2, true);
@@ -2036,6 +2044,13 @@ void test_bit_hover_readout_tracks_steady_level()
     require(low.has_value(), "低电平平台区间应有 bit hover 读数");
     require(low->readout.bit.has_value() && !low->readout.bit->value, "低电平平台应读取为 0");
     require(std::abs(low->readout.displayValue - layout.lanes[0].lowY) < 1e-12, "bit hover 低电平应锚定 lowY");
+    snapshot.channels.push_back(snapshot.channels[0]);
+    displayData.channels.push_back(displayData.channels[0]);
+    snapshot.channels[0].bitDisplay.hoverReadout = false;
+    const auto overlapping = protoscope::ui::buildBitLaneLayout(snapshot, {0, 1}, limits, plotPos, plotSize);
+    const auto selected = protoscope::ui::findHoverReadout(
+        snapshot, displayData, {0, 1}, overlapping, 2.4, overlapping.lanes[0].centerY, 0.2, 0.2, true);
+    require(selected && selected->readout.channelIndex == 1, "关闭的重叠 bit CH 不得遮挡开启通道");
 }
 
 void test_bit_hover_readout_uses_sample_frequency_time_axis()
@@ -2073,6 +2088,7 @@ void test_bit_hover_readout_uses_sample_frequency_time_axis()
     const ImVec2 plotSize(400.0F, 200.0F);
     const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0}, limits, plotPos, plotSize);
     require(!layout.lanes.empty(), "采样频率时间轴应生成 bit lane");
+    snapshot.channels[0].bitDisplay.hoverReadout = true;
 
     const auto readout = protoscope::ui::findHoverReadout(
         snapshot, displayData, {0}, layout, 0.0024, layout.lanes[0].centerY, 0.001, 0.2, true);
@@ -2145,6 +2161,7 @@ void test_bit_hover_readout_uses_nearest_display_shape_in_mixed_view()
     const ImVec2 plotSize(400.0F, 200.0F);
     const auto layout = protoscope::ui::buildBitLaneLayout(snapshot, {0, 1}, limits, plotPos, plotSize);
     require(!layout.lanes.empty(), "混合场景应生成 bit lane");
+    snapshot.channels[0].bitDisplay.hoverReadout = true;
 
     waveSamples[0].value = layout.lanes[0].centerY;
     protoscope::plot::WaveDisplayData displayData;
@@ -5270,7 +5287,7 @@ void test_raw_capture_file_plot_setup_roundtrip()
          .offset = -1.0,
          .color = std::array<float, 4>{1.0F, 0.25F, 0.0F, 1.0F},
          .lineWidth = std::optional<float>{2.75F},
-         .bitDisplay = {.enabled = true, .firstBit = 4, .bitCount = 8, .yOffset = 1.25}},
+         .bitDisplay = {.enabled = true, .firstBit = 4, .bitCount = 8, .yOffset = 1.25, .hoverReadout = true}},
         {.label = "压力B", .unit = "kPa", .ratio = 1.5, .scale = 3.0, .offset = 4.0},
     };
     setupEvent.plotSetup.view.timeScale = 0.25;
@@ -5311,6 +5328,8 @@ void test_raw_capture_file_plot_setup_roundtrip()
             "psraw 应写出 bit_display.bit_count");
     require(bytes.find("channel.0.bit_display.y_offset: 1.25\n") != std::string::npos,
             "psraw 应写出 bit_display.y_offset");
+    require(bytes.find("channel.0.bit_display.hover_readout: true\n") != std::string::npos,
+            "psraw 应写出悬停读数选项");
 
     const auto loaded = protoscope::plot::readRawCaptureFile(tempPath, error);
     if (!loaded.has_value()) {
@@ -5333,6 +5352,7 @@ void test_raw_capture_file_plot_setup_roundtrip()
     require(std::abs(*loadedSetup.channels[0].lineWidth - 2.75F) < 1e-6F, "plot_setup line_width 数值错误");
     require(!loadedSetup.channels[1].lineWidth.has_value(), "plot_setup 应保留默认 line_width 为空");
     require(loadedSetup.channels[0].bitDisplay.enabled, "plot_setup 应保留 bit_display.enabled");
+    require(loadedSetup.channels[0].bitDisplay.hoverReadout, "plot_setup 应保留 bit 悬停读数");
     require(loadedSetup.channels[0].bitDisplay.firstBit == 4, "plot_setup 应保留 bit_display.first_bit");
     require(loadedSetup.channels[0].bitDisplay.bitCount == 8, "plot_setup 应保留 bit_display.bit_count");
     require(std::abs(loadedSetup.channels[0].bitDisplay.yOffset - 1.25) < 1e-12,
@@ -5385,6 +5405,20 @@ void test_raw_capture_file_plot_setup_rejects_bad_fields()
         header.resize(4096, '\0');
         return header + eventStream;
     };
+
+    auto legacyStream = validBytes.substr(4096);
+    const std::string hoverField = "channel.0.bit_display.hover_readout: false\n";
+    const auto hoverPos = legacyStream.find(hoverField);
+    require(hoverPos != std::string::npos, "新录制应写出 hover_readout");
+    legacyStream.erase(hoverPos, hoverField.size());
+    const auto legacy = protoscope::plot::decodeRawCaptureFile(rebuildRawCaptureBytes(legacyStream), error);
+    require(legacy && !legacy->events[0].plotSetup.channels[0].bitDisplay.hoverReadout,
+            "旧录制缺少 hover_readout 应默认为 false");
+    auto invalidHoverStream = validBytes.substr(4096);
+    invalidHoverStream.replace(invalidHoverStream.find(hoverField), hoverField.size(),
+                               "channel.0.bit_display.hover_readout: wrong\n");
+    require(!protoscope::plot::decodeRawCaptureFile(rebuildRawCaptureBytes(invalidHoverStream), error),
+            "录制非法 hover_readout 应拒绝");
 
     auto broken = validBytes;
     const auto channelCountPos = broken.find("channel_count: 1\n");

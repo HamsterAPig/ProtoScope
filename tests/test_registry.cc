@@ -5,6 +5,7 @@ namespace {
 static const TestCase kAllTests[] = {
     {"wave_channel_affine_transform", &test_wave_channel_affine_transform},
     {"wave_layout_multiframe_parameter_roundtrip", &test_wave_layout_multiframe_parameter_roundtrip},
+    {"application_bit_hover_setup_preserves_history", &test_application_bit_hover_setup_preserves_history},
     {"hex_roundtrip", &test_hex_roundtrip},
     {"hex_invalid_input", &test_hex_invalid_input},
     {"hex_normalize_input", &test_hex_normalize_input},

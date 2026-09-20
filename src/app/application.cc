@@ -214,7 +214,8 @@ namespace {
 
     bool sameBitDisplaySpec(const plot::BitDisplaySpec& left, const plot::BitDisplaySpec& right)
     {
-        return sameBitDisplayIdentity(left, right) && std::abs(left.yOffset - right.yOffset) <= 1e-12;
+        return sameBitDisplayIdentity(left, right) && std::abs(left.yOffset - right.yOffset) <= 1e-12 &&
+               left.hoverReadout == right.hoverReadout;
     }
 
     bool sameChannelSpecs(const std::vector<plot::ChannelSpec>& setupChannels, const plot::OscilloscopeBuffer& buffer)

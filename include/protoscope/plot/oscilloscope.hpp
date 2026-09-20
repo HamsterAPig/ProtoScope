@@ -29,6 +29,7 @@ struct BitDisplaySpec {
     std::size_t firstBit{0};
     std::size_t bitCount{8};
     double yOffset{0.0};
+    bool hoverReadout{false};
 
     bool operator==(const BitDisplaySpec&) const = default;
 };

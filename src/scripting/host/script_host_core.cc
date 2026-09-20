@@ -3156,6 +3156,14 @@ bool applyPlotChannelBitDisplay(PlotChannelDescriptor& descriptor,
 
     const sol::table bitTable = bitDisplayObject.as<sol::table>();
     spec.enabled = true;
+    const sol::object hoverObject = bitTable["hover_readout"];
+    if (hoverObject.valid() && hoverObject.get_type() != sol::type::lua_nil) {
+        if (!hoverObject.is<bool>()) {
+            error = "plot.setup.channels[" + std::to_string(index) + "].bit_display.hover_readout 必须是 boolean";
+            return false;
+        }
+        spec.hoverReadout = hoverObject.as<bool>();
+    }
     const sol::object enabledObject = bitTable["enabled"];
     if (enabledObject.valid() && enabledObject.get_type() != sol::type::lua_nil) {
         if (!enabledObject.is<bool>()) {

@@ -100,6 +100,7 @@ bit 保持固定数字轨道与 bit_display.y_offset；FFT 不在本项范围。
   application_large_rx_event_drains_by_byte_budget 单独重跑通过。
   这些不是本次重新构建的结果。
 - 文档提交：`ad167be`。
+- 主图提交：`b810cf7`。
 - 主图：新增仿射计算、参数化布局与适配、分屏固定 Y 基准及仅同步 X、
   主图整图 Y 操作提交参数；新增真实 ImGui/ImPlot 多帧布局测试。
   `y_axis_double_click_adjust_offset` 保留配置往返兼容，适配统一居中写入两项参数。
@@ -112,3 +113,8 @@ bit 保持固定数字轨道与 bit_display.y_offset；FFT 不在本项范围。
   application_large_rx_event_drains_by_byte_budget 与
   application_complete_disconnect_keeps_realtime_backlog 各自定向重跑通过。
   不将定向重跑解释为全量稳定通过。
+- bit：`cmake --build build-wave-view -j 6` 成功；
+  `PROTOSCOPE_TEST_FILTER=bit_` 30/30，
+  `PROTOSCOPE_TEST_FILTER=raw_capture_file_plot_setup` 2/2，
+  `python tools/generate_luals_api.py --check` 通过。
+  覆盖开关解析、全局开关、重叠候选、游标不受影响、setup 历史保留、旧录制兼容。

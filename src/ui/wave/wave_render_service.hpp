@@ -331,7 +331,8 @@ std::optional<HoverReadout> findHoverReadout(
     double maxTimeDistance,
     double maxValueDistance,
     bool preferWaveformHoverReadout = true,
-    plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy = plot::WaveBitDisplayReadoutPolicy::MixedNearest);
+    plot::WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy = plot::WaveBitDisplayReadoutPolicy::MixedNearest,
+    bool showHoverReadout = true);
 std::vector<CursorIntersectionReadout> collectCursorIntersectionReadouts(
     const plot::WaveViewState& view,
     const plot::WaveSnapshot& snapshot,

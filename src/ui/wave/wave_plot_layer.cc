@@ -1034,7 +1034,7 @@ void handleHoverReadout(plot::WaveViewState& view,
                         double timeSnapDistance,
                         double valueSnapDistance)
 {
-    if (!ImPlot::IsPlotHovered() || !view.showHoverReadout || visibleChannelIndices.empty()) {
+    if (!ImPlot::IsPlotHovered() || visibleChannelIndices.empty()) {
         return;
     }
     const auto hovered = findHoverReadout(snapshot,
@@ -1046,7 +1046,8 @@ void handleHoverReadout(plot::WaveViewState& view,
                                           timeSnapDistance,
                                           valueSnapDistance,
                                           view.preferWaveformHoverReadout,
-                                          view.bitDisplayReadoutPolicy);
+                                          view.bitDisplayReadoutPolicy,
+                                          view.showHoverReadout);
     if (!hovered.has_value() || hovered->readout.channelIndex >= snapshot.channels.size()) {
         return;
     }
