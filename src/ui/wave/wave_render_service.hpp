@@ -19,6 +19,14 @@
 
 namespace protoscope::ui {
 
+std::optional<plot::ChannelSpec> channelDisplayAffineTransform(
+    const plot::ChannelSpec& spec, plot::WaveDisplayFormula formula, double a, double b);
+bool fitChannelDisplayRange(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot,
+                           std::size_t channelIndex, double center, double height);
+bool alignWaveLayoutChannels(plot::WaveDockState& wave);
+bool commitWaveVerticalViewport(plot::WaveDockState& wave, const plot::WaveViewport& baseline,
+                                const std::vector<std::size_t>& channels);
+
 struct RenderBudget {
     std::size_t pointsPerChannel{1};
     std::size_t estimatedVerticesPerPoint{4};
@@ -202,6 +210,10 @@ bool startViewportAnimation(plot::WaveViewState& view,
                             WaveViewportAutoFollowPolicy policy,
                             double durationSec = 0.16);
 bool advanceViewportAnimation(plot::WaveViewState& view, double deltaSec);
+bool applyFitVisibleWaveforms(plot::WaveDockState& wave,
+                              const plot::WaveSnapshot& fullSnapshot,
+                              const plot::WaveDisplayData& displayData,
+                              const std::vector<std::size_t>& visibleChannelIndices);
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveSnapshot& fullSnapshot,
                               const plot::WaveDisplayData& displayData,
@@ -523,7 +535,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
                         std::vector<std::size_t>& visibleChannelIndices,
                         BitLaneLayout& outBitLayout);
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
-                                      const WaveFrameData& frame,
+                                      WaveFrameData& frame,
                                       const WavePlotOverlayPolicy& overlayPolicy = {},
                                       WaveFrameState* frameState = nullptr);
 PlotRenderResult drawWaveFftPlot(plot::WaveDockState& wave,

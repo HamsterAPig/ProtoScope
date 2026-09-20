@@ -4130,23 +4130,23 @@ void test_wave_y_axis_double_click_single_side_scale()
     auto hidden = wave.buffer.channelSpec(4);
     auto zero = wave.buffer.channelSpec(5);
     require(ch0.has_value() && std::abs(ch0->scale - (80.0 / 15.0)) < 1e-12 &&
-                std::abs(ch0->offset) < 1e-12,
-            "默认 Y 轴双击应调整双极性数据 scale 并保留 offset");
-    require(ch1.has_value() && std::abs(ch1->scale - 10.0) < 1e-12 && std::abs(ch1->offset) < 1e-12,
-            "正值通道应按 ratio 后的实际区间计算 scale 并保留 offset");
-    require(ch2.has_value() && std::abs(ch2->scale + 10.0) < 1e-12 && std::abs(ch2->offset) < 1e-12,
-            "负 scale 应保持反向并保留 offset");
+                std::abs(ch0->offset - 11.875) < 1e-12,
+            "Y 轴双击应同时缩放并居中");
+    require(ch1.has_value() && std::abs(ch1->scale - 10.0) < 1e-12 && std::abs(ch1->offset + 1.0) < 1e-12,
+            "正值通道应按 ratio 后的实际区间居中适配");
+    require(ch2.has_value() && std::abs(ch2->scale + 10.0) < 1e-12 && std::abs(ch2->offset + 5.0) < 1e-12,
+            "负 scale 应保持反向并居中");
     require(bit.has_value() && std::abs(bit->scale - 1.0) < 1e-12 && std::abs(bit->offset) < 1e-12,
             "bit 通道不应参与 Y 轴 scale/offset 计算");
     require(hidden.has_value() && std::abs(hidden->scale - 1.0) < 1e-12,
             "隐藏通道不应参与 Y 轴 scale 计算");
-    require(zero.has_value() && std::abs(zero->scale - 7.0) < 1e-12 && std::abs(zero->offset) < 1e-12,
-            "无有效幅值跨度时不应修改 scale/offset");
+    require(zero.has_value() && std::abs(zero->scale - 7.0) < 1e-12 && std::abs(zero->offset - 50.0 / 7.0) < 1e-12,
+            "常量通道仅居中");
     require(wave.channelOverrides.size() >= 3 && wave.channelOverrides[0].scaleOverridden &&
-                !wave.channelOverrides[0].offsetOverridden && wave.channelOverrides[1].scaleOverridden &&
-                !wave.channelOverrides[1].offsetOverridden && wave.channelOverrides[2].scaleOverridden &&
-                !wave.channelOverrides[2].offsetOverridden,
-            "默认 Y 轴缩放应只通过通道覆盖路径写回 scale");
+                wave.channelOverrides[0].offsetOverridden && wave.channelOverrides[1].scaleOverridden &&
+                wave.channelOverrides[1].offsetOverridden && wave.channelOverrides[2].scaleOverridden &&
+                wave.channelOverrides[2].offsetOverridden,
+            "Y 轴适配应通过覆盖路径写回 scale 和 offset");
 
     wave.view.yAxisDoubleClickAction = protoscope::plot::WaveYAxisDoubleClickAction::FitActiveChannel;
     wave.view.measurementChannelIndex = 1;
@@ -4158,8 +4158,8 @@ void test_wave_y_axis_double_click_single_side_scale()
     ch1 = wave.buffer.channelSpec(1);
     require(ch0.has_value() && std::abs(ch0->scale - (80.0 / 15.0)) < 1e-12,
             "激活通道模式不应修改其他可见模拟通道");
-    require(ch1.has_value() && std::abs(ch1->scale - 5.0) < 1e-12 && std::abs(ch1->offset) < 1e-12,
-            "激活通道模式应按当前 Y 高度重算目标 CH scale 并保留 offset");
+    require(ch1.has_value() && std::abs(ch1->scale - 5.0) < 1e-12 && std::abs(ch1->offset + 1.0) < 1e-12,
+            "激活通道模式应按当前 Y 高度居中适配");
 
     wave.view.measurementChannelIndex = 3;
     wave.view.viewMaxValue = 100.0;
@@ -4219,8 +4219,8 @@ void test_wave_y_axis_double_click_single_side_scale()
             "默认关闭 offset 自动调整时仍应按数据跨度更新 scale");
     const auto fixedOffsetSpec = fixedOffsetWave.buffer.channelSpec(0);
     require(fixedOffsetSpec.has_value() && std::abs(fixedOffsetSpec->scale - (80.0 / 15.0)) < 1e-12 &&
-                std::abs(fixedOffsetSpec->offset - 17.0) < 1e-12,
-            "默认 Y 轴双击应保留固定 offset 并更新 scale");
+                std::abs(fixedOffsetSpec->offset - 11.875) < 1e-12,
+            "Y 轴双击应将最新居中结果写入真实 offset");
 }
 
 void test_wave_visible_channel_bounds_ignore_hidden_channels()
@@ -4942,7 +4942,7 @@ void test_wave_cursor_owns_channel_interaction_and_stacked_blocks_vertical_drag(
     require(protoscope::ui::canDragWaveYOffset(view, false, false), "叠加视图应允许纵向拖动通道");
     require(!protoscope::ui::canDragWaveYOffset(view, false, true), "游标取得所有权时纵向拖动资格也应失效");
     view.viewMode = protoscope::plot::WaveViewMode::Stacked;
-    require(!protoscope::ui::canDragWaveYOffset(view, false, false), "堆叠视图应禁用纵向拖动");
+    require(protoscope::ui::canDragWaveYOffset(view, false, false), "堆叠视图应允许写入真实纵向偏移");
 }
 
 void test_wave_view_mode_isolates_stacked_vertical_range()

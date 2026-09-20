@@ -1,5 +1,8 @@
 #pragma once
 
+void test_wave_channel_affine_transform();
+void test_wave_layout_multiframe_parameter_roundtrip();
+
 using TestFn = void (*)();
 
 struct TestCase {

@@ -627,12 +627,9 @@ namespace {
                 result.bounds.minTime = (std::min)(result.bounds.minTime, sample.time);
                 result.bounds.maxTime = (std::max)(result.bounds.maxTime, sample.time);
             }
-            const double span = (std::max)(maxValue - minValue, 1e-12);
-            const double center = 0.5 * (minValue + maxValue);
             const double baseY = static_cast<double>(visibleRow) * 1.6;
             result.channelBaseY[channelIndex] = baseY;
             for (auto& sample : channel.samples) {
-                sample.value = baseY + (sample.value - center) / span;
                 result.bounds.minValue = (std::min)(result.bounds.minValue, sample.value);
                 result.bounds.maxValue = (std::max)(result.bounds.maxValue, sample.value);
             }
@@ -1682,23 +1679,12 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
         if (bitChannel) {
             ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
         } else {
-            double minValue = std::numeric_limits<double>::infinity();
-            double maxValue = -std::numeric_limits<double>::infinity();
-            for (const auto& sample : samples) {
-                if (sample.time < view.viewMinTime || sample.time > view.viewMaxTime) {
-                    continue;
-                }
-                minValue = (std::min)(minValue, sample.value);
-                maxValue = (std::max)(maxValue, sample.value);
-            }
-            if (!std::isfinite(minValue) || !std::isfinite(maxValue) || std::abs(maxValue - minValue) <= 1e-12) {
-                minValue = channel.stats.minValue - 1.0;
-                maxValue = channel.stats.maxValue + 1.0;
-            }
-            const auto range = plot::makeVerticalAutoFitRange(minValue, maxValue, view.verticalAutoFitMultiplier);
-            ImPlot::SetupAxisLimits(ImAxis_Y1, range.minValue, range.maxValue, ImPlotCond_Always);
+            const auto baseline = currentViewport(view);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, baseline.minValue, baseline.maxValue,
+                                    view.forceNextMainPlotLimits ? ImPlotCond_Always : ImPlotCond_Once);
         }
 
+        const auto verticalBaseline = currentViewport(view);
         const ImPlotRect limits = ImPlot::GetPlotLimits();
         drawOscilloscopeGrid(limits);
         const ImVec4 color = channelColor(channel, channelIndex);
@@ -1782,6 +1768,27 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
         };
         outcome.cursorHeld =
             handleSplitPlotCursors(view, snapshot, displayData, interactionContext, result.cursorReadouts);
+        if (plotHovered && !outcome.cursorHeld) {
+            view.measurementChannelIndex = channelIndex;
+        }
+        outcome.viewportChanged = handleOscilloscopeChannelInteractions(
+            wave, snapshot, displayData, splitChannelIndices, limits, mousePos,
+            timeSnapDistance, valueSnapDistance, outcome.cursorHeld) || outcome.viewportChanged;
+        if (!outcome.cursorHeld) {
+            const auto selection = handleMainPlotZoomSelection(view, wave.suppressZoomSelectionEscapeThisFrame);
+            outcome.viewportChanged = selection.viewportChanged || outcome.viewportChanged;
+        }
+        auto& splitYAxis = GImPlot->CurrentPlot->YAxis(0);
+        if (!bitChannel && !view.lockVerticalRange &&
+            (splitYAxis.FitThisFrame || splitYAxis.IsAutoFitting())) {
+            fitChannelDisplayRange(wave, snapshot, channelIndex,
+                                   (verticalBaseline.minValue + verticalBaseline.maxValue) * 0.5,
+                                   (verticalBaseline.maxValue - verticalBaseline.minValue) /
+                                       (std::max)(view.verticalAutoFitMultiplier, 1.0));
+            splitYAxis.FitThisFrame = false;
+            splitYAxis.SetRange(verticalBaseline.minValue, verticalBaseline.maxValue);
+            outcome.viewportChanged = true;
+        }
         const auto intersectionReadouts =
             collectCursorIntersectionReadouts(view, snapshot, displayData, splitChannelIndices, timeSnapDistance);
         drawCursorIntersectionReadouts(intersectionReadouts, snapshot);
@@ -1813,6 +1820,14 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
         drawMainPlotContextMenu(wave, frameState);
         ImGui::PopID();
         ImPlot::EndPlot();
+        if (!bitChannel && !view.lockVerticalRange) {
+            if (!outcome.viewportChanged && outcome.userInteracting) {
+                view.viewMinValue = updatedLimits.Y.Min;
+                view.viewMaxValue = updatedLimits.Y.Max;
+            }
+            outcome.viewportChanged =
+                commitWaveVerticalViewport(wave, verticalBaseline, splitChannelIndices) || outcome.viewportChanged;
+        }
     }
     ImPlot::PopStyleColor();
     return outcome;
@@ -1853,7 +1868,7 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
     if (frame.overviewDisplayData != nullptr) {
         const auto fitChannelIndices = channelIndicesForDerivedViews(wave, *frame.fullSnapshot);
         viewportChangedThisFrame =
-            applyFitVisibleWaveforms(view, *frame.fullSnapshot, *frame.overviewDisplayData, fitChannelIndices);
+            applyFitVisibleWaveforms(wave, *frame.fullSnapshot, *frame.overviewDisplayData, fitChannelIndices);
     }
     bool anyCursorHeld = false;
     bool userInteractingInAnySplitPlot = false;
@@ -2007,10 +2022,24 @@ void updateMainMeasurementResult(const plot::WaveViewState& view,
 }
 
 PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
-                                      const WaveFrameData& frame,
+                                      WaveFrameData& frame,
                                       const WavePlotOverlayPolicy& overlayPolicy,
                                       WaveFrameState* frameState)
 {
+    // 工具栏可能在 prepareWaveFrame 之后修改布局或参数，重建共享帧供主图与覆盖层共同使用。
+    if (alignWaveLayoutChannels(wave) || !wave.cachedDisplayKeyValid) {
+        frame = prepareWaveFrame(wave, ImGui::GetContentRegionAvail().x);
+    }
+    if (wave.view.fitVisibleWaveformsRequested && frame.fullSnapshot && frame.overviewDisplayData) {
+        std::vector<std::size_t> visible;
+        for (std::size_t i = 0; i < frame.fullSnapshot->channels.size(); ++i) {
+            if (!channelHiddenByLegendState(wave, i)) {
+                visible.push_back(i);
+            }
+        }
+        applyFitVisibleWaveforms(wave, *frame.fullSnapshot, *frame.overviewDisplayData, visible);
+        frame = prepareWaveFrame(wave, ImGui::GetContentRegionAvail().x);
+    }
     PlotRenderResult result;
     if (frame.fullSnapshot == nullptr || frame.displayData == nullptr || frame.fullSnapshot->channels.empty()) {
         ImGui::TextUnformatted("Lua 尚未通过 proto.plot.setup / proto.plot.push 提供波形数据。");
@@ -2062,10 +2091,6 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         stackedDisplay.has_value()
             ? stackedDisplay->bounds
             : boundsForDerivedViews(wave, frame.snapshot, plotDisplayData, derivedChannelIndices);
-    const auto yAutoFitBounds =
-        stackedDisplay.has_value()
-            ? stackedDisplay->bounds
-            : boundsForYAxisAutoFit(wave, frame.snapshot, plotDisplayData, derivedChannelIndices);
     auto fullHistoryBounds = derivedBounds;
     if (frame.fullSnapshot != nullptr && frame.overviewDisplayData != nullptr) {
         const auto fullHistoryChannelIndices = channelIndicesForDerivedViews(wave, *frame.fullSnapshot);
@@ -2077,6 +2102,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         stackedDisplay.has_value() ? std::optional<plot::WaveDataBounds>(stackedDisplay->bounds) : std::nullopt;
     applyWaveViewModeVerticalRange(view, stackedVerticalBounds);
     applyMainPlotAxesAndLimits(view, frame.snapshot, plotDisplayData);
+    const auto verticalBaseline = currentViewport(view);
 
     const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
     const ImVec2 plotPos = ImPlot::GetPlotPos();
@@ -2125,14 +2151,20 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                                            ? channelIndicesForDerivedViews(wave, *frame.fullSnapshot)
                                            : visibleChannelIndicesForFit(*frame.fullSnapshot);
         viewportChangedThisFrame =
-            applyFitVisibleWaveforms(view, *frame.fullSnapshot, *frame.overviewDisplayData, fitChannelIndices) ||
+            applyFitVisibleWaveforms(wave, *frame.fullSnapshot, *frame.overviewDisplayData, fitChannelIndices) ||
             viewportChangedThisFrame;
     }
     const auto zoomSelectionResult = handleMainPlotZoomSelection(view, wave.suppressZoomSelectionEscapeThisFrame);
     viewportChangedThisFrame = zoomSelectionResult.viewportChanged || viewportChangedThisFrame;
-    if (!axisDoubleClickConsumed && view.viewMode != plot::WaveViewMode::Stacked) {
-        viewportChangedThisFrame =
-            applyPendingVerticalAutoFitOverride(view, yAutoFitBounds) || viewportChangedThisFrame;
+    if (!axisDoubleClickConsumed && GImPlot->CurrentPlot != nullptr) {
+        auto& yAxis = GImPlot->CurrentPlot->YAxis(0);
+        if (yAxis.FitThisFrame || yAxis.IsAutoFitting()) {
+            viewportChangedThisFrame =
+                applyYAxisSingleSideScaleToChannels(wave, frame.snapshot, visibleChannelIndices) ||
+                viewportChangedThisFrame;
+            yAxis.FitThisFrame = false;
+            yAxis.SetRange(verticalBaseline.minValue, verticalBaseline.maxValue);
+        }
     }
     bool cursorDragClaimed = false;
     if (!zoomSelectionResult.consumed) {
@@ -2191,6 +2223,10 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         if (userInteracting && !limitsSynced) {
             recordMainPlotLimits(view, updatedLimits);
         }
+        if (userInteracting && !view.lockVerticalRange) {
+            view.viewMinValue = updatedLimits.Y.Min;
+            view.viewMaxValue = updatedLimits.Y.Max;
+        }
     }
     if (userInteracting) {
         applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::UserInteraction);
@@ -2217,6 +2253,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     drawMainPlotContextMenu(wave, frameState);
 
     ImPlot::EndPlot();
+    commitWaveVerticalViewport(wave, verticalBaseline, visibleChannelIndices);
     if (overlayPolicy.drawLegendOverlay) {
         drawChannelLegendOverlay(wave, frame.snapshot, plotPos, plotSize, hostViewport);
     }

@@ -792,7 +792,7 @@ void recordMainPlotLimits(plot::WaveViewState& view, const ImPlotRect& limits)
     view.visibleDuration = (std::max)(view.viewMaxTime - view.viewMinTime, minVisibleTimeSpan);
     view.centerTime = 0.5 * (view.viewMinTime + view.viewMaxTime);
     // 堆叠视图的 Y 范围只在进入或解除锁定时适配一次，横向交互不再回写共享 Y 状态。
-    if (!view.lockVerticalRange && view.viewMode != plot::WaveViewMode::Stacked) {
+    if (!view.lockVerticalRange && view.viewMode == plot::WaveViewMode::Overlay) {
         view.viewMinValue = limits.Y.Min;
         view.viewMaxValue = limits.Y.Max;
     }
@@ -945,42 +945,10 @@ bool applyYAxisSingleSideScaleToChannels(plot::WaveDockState& wave,
     bool changed = false;
     const auto targets = yAxisSingleSideScaleTargets(wave, snapshot, visibleChannelIndices);
     for (const std::size_t channelIndex : targets) {
-        if (channelIndex >= snapshot.channels.size()) {
-            continue;
+        // 主图自动适配统一居中并写入 scale/offset，兼容字段不再引入另一套变换语义。
+        if (!channelHiddenByLegendState(wave, channelIndex)) {
+            changed = fitChannelDisplayRange(wave, snapshot, channelIndex, viewCenter, targetHeight) || changed;
         }
-        const auto& channel = snapshot.channels[channelIndex];
-        if (bitDisplayEnabled(channel.bitDisplay) || channel.samples == nullptr) {
-            continue;
-        }
-        const auto currentSpec = wave.buffer.channelSpec(channelIndex);
-        if (!currentSpec.has_value()) {
-            continue;
-        }
-
-        const auto actual = visibleActualRangeForChannel(channel, *currentSpec);
-        if (!actual.has_value()) {
-            continue;
-        }
-
-        auto updated = *currentSpec;
-        const double sign = updated.scale < 0.0 ? -1.0 : 1.0;
-        const double targetMagnitude = targetHeight / actual->span;
-        if (!std::isfinite(targetMagnitude) || targetMagnitude <= 1e-12) {
-            continue;
-        }
-        updated.scale = sign * targetMagnitude;
-
-        if (wave.view.yAxisDoubleClickAdjustOffset) {
-            // 显式开启兼容模式时同步反推 offset，让实际值区间落在当前 Y 视口内部目标区间。
-            if (wave.view.displayFormula == plot::WaveDisplayFormula::ScaleThenOffset) {
-                updated.offset = viewCenter - actual->center * updated.scale;
-            } else {
-                updated.offset = viewCenter / updated.scale - actual->center;
-            }
-        }
-        applyChannelTransformOverride(
-            wave, channelIndex, updated, channelDefaultSpec(wave, channelIndex, *currentSpec));
-        changed = true;
     }
     return changed;
 }
@@ -1198,6 +1166,11 @@ bool startViewportAnimation(plot::WaveViewState& view,
     }
 
     applyAutoFollowPausePolicy(view, policy);
+    // Y 目标在本帧转换为通道参数，动画只插值 X，避免后续帧再叠加隐式纵向缩放。
+    if (!view.lockVerticalRange) {
+        view.viewMinValue = target.minValue;
+        view.viewMaxValue = target.maxValue;
+    }
     view.viewportAnimation.active = true;
     view.viewportAnimation.start = currentViewport(view);
     view.viewportAnimation.target = target;
@@ -1315,6 +1288,39 @@ namespace {
     }
 
 } // namespace
+
+bool applyFitVisibleWaveforms(plot::WaveDockState& wave,
+                              const plot::WaveSnapshot& fullSnapshot,
+                              const plot::WaveDisplayData& displayData,
+                              const std::vector<std::size_t>& visibleChannelIndices)
+{
+    auto& view = wave.view;
+    if (!view.fitVisibleWaveformsRequested) {
+        return false;
+    }
+    const auto baseline = currentViewport(view);
+    std::size_t row = 0;
+    for (auto index : visibleChannelIndices) {
+        if (channelHiddenByLegendState(wave, index) || index >= fullSnapshot.channels.size() ||
+            bitDisplayEnabled(fullSnapshot.channels[index].bitDisplay)) {
+            continue;
+        }
+        const bool stacked = view.viewMode == plot::WaveViewMode::Stacked;
+        fitChannelDisplayRange(wave, fullSnapshot, index,
+                               stacked ? static_cast<double>(row) * 1.6
+                                       : (baseline.minValue + baseline.maxValue) * 0.5,
+                               stacked ? 1.0 : (baseline.maxValue - baseline.minValue) /
+                                                    (std::max)(view.verticalAutoFitMultiplier, 1.0));
+        ++row;
+    }
+    // 保留全历史 X 首尾语义；Y 适配已写回参数，仅为 X 保留动画。
+    const bool result = applyFitVisibleWaveforms(view, fullSnapshot, displayData, visibleChannelIndices);
+    view.viewMinValue = baseline.minValue;
+    view.viewMaxValue = baseline.maxValue;
+    view.viewportAnimation.start.minValue = view.viewportAnimation.target.minValue = baseline.minValue;
+    view.viewportAnimation.start.maxValue = view.viewportAnimation.target.maxValue = baseline.maxValue;
+    return result;
+}
 
 bool applyFitVisibleWaveforms(plot::WaveViewState& view,
                               const plot::WaveSnapshot& fullSnapshot,

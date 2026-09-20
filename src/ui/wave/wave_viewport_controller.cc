@@ -396,6 +396,7 @@ void initializeWaveViewIfNeeded(plot::WaveViewState& view)
 
 WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
 {
+    alignWaveLayoutChannels(wave);
     auto& view = wave.view;
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
 
@@ -618,8 +619,9 @@ bool setWaveViewMode(plot::WaveViewState& view, plot::WaveViewMode mode)
         return false;
     }
     view.viewMode = mode;
-    // 核心流程：布局切换只清理纵向拖动状态，不触碰协议通道 offset 或 bitDisplay.yOffset。
+    // 布局对齐在构建下一份显示快照前写入真实通道参数。
     view.activeChannelOffsetDrag = false;
+    view.forceNextMainPlotLimits = true;
     return true;
 }
 
@@ -628,6 +630,7 @@ bool applyWaveViewModeVerticalRange(plot::WaveViewState& view, const std::option
     bool changed = false;
     const bool modeChanged = view.viewMode != view.lastAppliedViewMode;
     if (modeChanged) {
+        view.forceNextMainPlotLimits = true;
         const auto previousMode = view.lastAppliedViewMode;
         view.activeChannelOffsetDrag = false;
 

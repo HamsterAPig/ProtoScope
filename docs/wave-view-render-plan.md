@@ -99,4 +99,16 @@ bit 保持固定数字轨道与 bit_display.y_offset；FFT 不在本项范围。
 - 既有结果仅作参考：headless 32/32，主测试 505/506；
   application_large_rx_event_drains_by_byte_budget 单独重跑通过。
   这些不是本次重新构建的结果。
-- 已核对基线与预算源码，创建任务分支。实现与验证待执行。
+- 文档提交：`ad167be`。
+- 主图：新增仿射计算、参数化布局与适配、分屏固定 Y 基准及仅同步 X、
+  主图整图 Y 操作提交参数；新增真实 ImGui/ImPlot 多帧布局测试。
+  `y_axis_double_click_adjust_offset` 保留配置往返兼容，适配统一居中写入两项参数。
+- 配置：`cmake -S . -B build-wave-view -G Ninja
+  -DCMAKE_MAKE_PROGRAM=C:/Users/jinming/AppData/Local/Programs/CLion/bin/ninja/win/x64/ninja.exe
+  -DCMAKE_BUILD_TYPE=Release` 成功。
+- `cmake --build build-wave-view -j 6` 成功；波形定向测试 108/108。
+- 首次 `ctest --test-dir build-wave-view --output-on-failure`：
+  headless 与 LuaLS 通过，主测试 506/508；
+  application_large_rx_event_drains_by_byte_budget 与
+  application_complete_disconnect_keeps_realtime_backlog 各自定向重跑通过。
+  不将定向重跑解释为全量稳定通过。

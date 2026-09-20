@@ -249,6 +249,9 @@ struct WaveViewState {
     WaveViewMode viewMode{WaveViewMode::Overlay};
     // 以下字段仅用于运行时隔离叠加/堆叠纵轴，不参与协议状态持久化。
     WaveViewMode lastAppliedViewMode{WaveViewMode::Overlay};
+    WaveViewMode channelLayoutMode{WaveViewMode::Overlay};
+    std::vector<std::size_t> channelLayoutVisible;
+    std::vector<std::size_t> channelLayoutAligned;
     bool stackedVerticalFitPending{false};
     bool appliedVerticalRangeLock{false};
     bool fftSourceWindowValid{false};
