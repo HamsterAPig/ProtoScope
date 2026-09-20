@@ -111,6 +111,7 @@ gui:
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
     peak_detect_downsample: true
+    bit_dense_render_mode: compressed_steps
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
     overview_normalize_channels: false
@@ -146,6 +147,10 @@ gui:
 - `vertical_auto_fit_multiplier`：纵向自动适配余量倍数，默认 `1.25`，即数据包络约占视图高度 80%。
 - `max_render_points_per_channel` / `max_render_vertices`：单通道和总顶点渲染预算。
 - `peak_detect_downsample`：高密度主图是否启用示波器式 peak-detect 降采样，默认 `true`。开启时每个桶保留首点、极小值、极大值和末点并连成单条轨迹；关闭时回退旧的 min/max 包络渲染，便于对比。
+- `bit_dense_render_mode`：密集 bit 轨迹样式，默认 `compressed_steps`。`compressed_steps` 用预算内阶梯表达首尾状态及桶内跳变活动；`activity_band` 用半透明带标记桶内同时出现高低电平的区间，稳定区间保留电平线。缺省或未知字符串使用默认值。两种模式均在低密度时恢复精确阶梯，不改变原始数据或游标读数，也不增加 Lua 字段。
+- 绘图预算同时约束压缩输出和 Glow/线段的顶点开销。每通道以 256 点基础块建立二合一摘要，追加和裁剪只更新边界及其上层；改变颜色、偏移、缩放、布局不重建原始摘要。初次建立摘要和松手后的分析输入提取仍有与输入规模相关的开销。
+- 拖动期间停止提交统计与 FFT 重计算，旧结果显示为待更新；没有旧结果时显示空状态。松手后使用独立输入快照后台计算，过时查询结果不会覆盖新查询。只移动频谱坐标轴不改变 FFT 输入窗口；持续采集可以发布同查询最近完成的快照。
+- 余辉在拖动期间暂停累积，显示轻量轨迹。旧视口纹理在交互后失效，松手按最终坐标重建一次；冻结状态随后继续冻结，不自动恢复数据跟随。触发模式在 32 个时间分区中各选至多一个真实触发，采用原始样本插值确定触发时间，各轨迹共享绘图预算。分屏继续使用普通轨迹回退。
 - `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。
 - `overview_max_samples`：概览桶数上限，每桶最多两个极值点；0 仅取消此项限制。
   预算公式、降采样阈值与当前限制见[波形渲染计划](wave-view-render-plan.md#渲染预算)。
