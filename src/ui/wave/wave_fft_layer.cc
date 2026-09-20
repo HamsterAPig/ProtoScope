@@ -915,7 +915,8 @@ namespace {
                              const plot::WaveSnapshot& snapshot,
                              const FftXAxisScale& xAxis,
                              bool phasePlot,
-                             std::span<const double> magnitudeOffsets)
+                             std::span<const double> magnitudeOffsets,
+                             const plot::WaveViewState& view)
     {
         for (const auto& channel : frame.channels) {
             if (!channel.enabled || !channel.valid || channel.bins.empty() ||
@@ -931,8 +932,25 @@ namespace {
                 continue;
             }
             const auto color = channelColor(snapshot.channels[channel.channelIndex], channel.channelIndex);
+            std::vector<plot::WaveFftBin> drawBins;
+            const auto& trace = phasePlot ? channel.phaseTrace : channel.magnitudeTrace;
+            if (!trace.empty()) {
+                plot::ChannelView source;
+                source.samples = trace.data();
+                source.totalSamples = trace.size();
+                source.summaryIndex = phasePlot ? &channel.phaseSummary : &channel.magnitudeSummary;
+                const plot::WaveQueryView query(source, plot::WaveTimeAxisSource::ScriptTime, 0,
+                                                plot::WaveDisplayFormula::OffsetThenScale);
+                const auto limits = ImPlot::GetPlotLimits();
+                const auto minHz = fftFrequencyHzFromDisplayX(xAxis, limits.X.Min).value_or(trace.front().time);
+                const auto maxHz = fftFrequencyHzFromDisplayX(xAxis, limits.X.Max).value_or(trace.back().time);
+                const auto budget = makeRenderBudget(view, frame.channels.size(),
+                    static_cast<std::size_t>((std::max)(ImPlot::GetPlotSize().x, 1.0F)), false);
+                for (const auto index : query.traceIndices(minHz, maxHz, budget.pointsPerChannel))
+                    if (index >= firstDrawableBin) drawBins.push_back(channel.bins[index]);
+            }
             FftGetterPayload payload{
-                .bins = channel.bins.data() + firstDrawableBin,
+                .bins = trace.empty() ? channel.bins.data() + firstDrawableBin : drawBins.data(),
                 .xAxis = &xAxis,
                 .phase = phasePlot,
                 .magnitudeOffset = fftMagnitudeOffsetForChannel(magnitudeOffsets, channel.channelIndex)};
@@ -945,7 +963,7 @@ namespace {
             ImPlot::PlotLineG(itemLabel.c_str(),
                               &fftBinGetter,
                               &payload,
-                              static_cast<int>(channel.bins.size() - firstDrawableBin),
+                              static_cast<int>(trace.empty() ? channel.bins.size() - firstDrawableBin : drawBins.size()),
                               spec);
             if (!phasePlot && channel.fundamental.has_value() && std::isfinite(channel.fundamental->frequencyHz)) {
                 if (const auto fundamentalX = fftDisplayX(xAxis, channel.fundamental->frequencyHz)) {
@@ -1117,9 +1135,10 @@ namespace {
                                             bool enableCursorInteraction)
     {
         PlotRenderResult result{};
+        if (wave.view.fftUpdatePending) ImGui::TextUnformatted("FFT 待更新");
         const auto* fftFrame = frame.fftFrame;
         if (fftFrame == nullptr || !fftFrame->enabled) {
-            drawCenteredHint("FFT 未启用");
+            drawCenteredHint(wave.view.fftUpdatePending ? "FFT 待更新" : "FFT 未启用");
             return result;
         }
         if (!fftFrame->valid) {
@@ -1166,7 +1185,7 @@ namespace {
             ImPlot::SetupAxes(fftXAxisLabel(xAxis), yLabel);
             ImPlot::SetupAxisLimits(ImAxis_X1, frequencyRange->min, frequencyRange->max, ImGuiCond_Always);
             ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftMagnitudeMin, view.fftMagnitudeMax, ImGuiCond_Always);
-            drawFftChannelLines(*fftFrame, *frame.fullSnapshot, xAxis, false, magnitudeOffsets);
+            drawFftChannelLines(*fftFrame, *frame.fullSnapshot, xAxis, false, magnitudeOffsets, view);
             const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
             const bool zoomSelectionConsumed = handleFftZoomSelection(
                 view, xAxis, false, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);
@@ -1207,7 +1226,7 @@ namespace {
             ImPlot::SetupAxes(fftXAxisLabel(xAxis), "相位 (deg)");
             ImPlot::SetupAxisLimits(ImAxis_X1, frequencyRange->min, frequencyRange->max, ImGuiCond_Always);
             ImPlot::SetupAxisLimits(ImAxis_Y1, view.fftPhaseMin, view.fftPhaseMax, ImGuiCond_Always);
-            drawFftChannelLines(*fftFrame, *frame.fullSnapshot, xAxis, true, magnitudeOffsets);
+            drawFftChannelLines(*fftFrame, *frame.fullSnapshot, xAxis, true, magnitudeOffsets, view);
             const double minFrequencyWidth = (std::max)(fftFrame->frequencyResolutionHz, 1e-9);
             const bool zoomSelectionConsumed =
                 handleFftZoomSelection(view, xAxis, true, minFrequencyWidth, wave.suppressZoomSelectionEscapeThisFrame);

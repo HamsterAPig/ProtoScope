@@ -68,6 +68,7 @@ namespace {
         }
         const std::size_t channelIndex = fftReferenceChannelIndex(wave, displayData.channels.size());
         const auto& channel = displayData.channels[channelIndex];
+        if (channel.source) return channel.source->visibleEnd - channel.source->visibleBegin;
         return (std::min)(channel.samples.size(), channel.actualValues.size());
     }
 
@@ -227,95 +228,6 @@ namespace {
         return firstTime.value_or(0.0);
     }
 
-    double overviewSampleTime(const plot::WaveSample& sample,
-                              std::size_t sampleIndexOffset,
-                              std::size_t sampleIndex,
-                              plot::WaveTimeAxisSource axisSource,
-                              double sampleFrequencyHz)
-    {
-        const std::size_t globalSampleIndex = sampleIndexOffset + sampleIndex;
-        if (axisSource == plot::WaveTimeAxisSource::SampleFrequency) {
-            return static_cast<double>(globalSampleIndex) / sampleFrequencyHz;
-        }
-        if (axisSource == plot::WaveTimeAxisSource::ScriptTime) {
-            return sample.time;
-        }
-        return static_cast<double>(globalSampleIndex);
-    }
-
-    void buildOverviewDisplayDataInto(const plot::WaveSnapshot& snapshot,
-                                      double sampleFrequencyHz,
-                                      std::size_t pointLimit,
-                                      plot::WaveDisplayData& data)
-    {
-        data.channels.resize(snapshot.channels.size());
-        for (auto& channel : data.channels) {
-            channel.samples.clear();
-            channel.actualValues.clear();
-        }
-        const auto axisSource = overviewAxisSource(snapshot, sampleFrequencyHz);
-        data.axisSource = axisSource;
-        data.timeUnit = axisSource == plot::WaveTimeAxisSource::SampleFrequency
-                            ? "s"
-                            : (axisSource == plot::WaveTimeAxisSource::ScriptTime
-                                   ? (snapshot.config.timeUnit.empty() ? "s" : snapshot.config.timeUnit)
-                                   : "sample");
-        if (pointLimit == 0) {
-            return;
-        }
-
-        for (std::size_t channelIndex = 0; channelIndex < snapshot.channels.size(); ++channelIndex) {
-            const auto& channel = snapshot.channels[channelIndex];
-            auto& displayChannel = data.channels[channelIndex];
-            const auto [begin, end] = visibleSampleRange(channel);
-            if (channel.samples == nullptr || begin >= end) {
-                continue;
-            }
-            const std::size_t visibleCount = end - begin;
-            const std::size_t bucketCount = (std::min)(pointLimit, visibleCount);
-            displayChannel.samples.reserve(bucketCount * 2);
-            displayChannel.actualValues.reserve(bucketCount * 2);
-            const bool offsetThenScale = snapshot.config.displayFormula == plot::WaveDisplayFormula::OffsetThenScale;
-            for (std::size_t bucket = 0; bucket < bucketCount; ++bucket) {
-                const std::size_t bucketBegin = begin + bucket * visibleCount / bucketCount;
-                const std::size_t bucketEnd = begin + (bucket + 1) * visibleCount / bucketCount;
-                double minValue = std::numeric_limits<double>::infinity();
-                double maxValue = -std::numeric_limits<double>::infinity();
-                double minActualValue = std::numeric_limits<double>::infinity();
-                double maxActualValue = -std::numeric_limits<double>::infinity();
-                double timeSum = 0.0;
-                std::size_t count = 0;
-                for (std::size_t sampleIndex = bucketBegin; sampleIndex < bucketEnd; ++sampleIndex) {
-                    const auto& sample = channel.samples[sampleIndex];
-                    const double actualValue = sample.value * channel.ratio;
-                    const double displayValue = offsetThenScale ? (actualValue + channel.offset) * channel.scale
-                                                                : actualValue * channel.scale + channel.offset;
-                    const double time = overviewSampleTime(
-                        sample, channel.sampleIndexOffset, sampleIndex, axisSource, sampleFrequencyHz);
-                    if (!std::isfinite(displayValue) || !std::isfinite(actualValue) || !std::isfinite(time)) {
-                        continue;
-                    }
-                    minValue = (std::min)(minValue, displayValue);
-                    maxValue = (std::max)(maxValue, displayValue);
-                    minActualValue = (std::min)(minActualValue, actualValue);
-                    maxActualValue = (std::max)(maxActualValue, actualValue);
-                    timeSum += time;
-                    ++count;
-                }
-                if (count == 0) {
-                    continue;
-                }
-                const double bucketTime = timeSum / static_cast<double>(count);
-                displayChannel.samples.push_back({.time = bucketTime, .value = minValue});
-                displayChannel.actualValues.push_back(minActualValue);
-                if (maxValue != minValue) {
-                    displayChannel.samples.push_back({.time = bucketTime, .value = maxValue});
-                    displayChannel.actualValues.push_back(maxActualValue);
-                }
-            }
-        }
-    }
-
     void clampViewportLowerBoundToZero(plot::WaveViewState& view)
     {
         if (view.viewMinTime >= 0.0) {
@@ -402,9 +314,24 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
 {
     alignWaveLayoutChannels(wave);
     auto& view = wave.view;
+    view.interactionActive = (ImGui::GetCurrentContext() != nullptr &&
+        (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Middle) ||
+         ImGui::IsMouseDown(ImGuiMouseButton_Right))) ||
+        view.overviewWindowDragging || view.viewportAnimation.active;
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
 
     WaveFrameData frame;
+    if (wave.analysisEpoch != wave.buffer.historyEpoch()) {
+        wave.analysisEpoch = wave.buffer.historyEpoch();
+        ++wave.fftRequestGeneration;
+        ++wave.measurementRequestGeneration;
+        wave.fftRequestActive = false;
+        wave.measurementRequestActive = false;
+        wave.measurementKeyValid = false;
+        wave.cachedMeasurement.reset();
+        wave.cachedFftKeyValid = false;
+        wave.cachedFftFrame = {};
+    }
     const auto dataRevision = wave.buffer.dataRevision();
     if (wave.displayDataRevision != dataRevision || wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) {
         // 核心流程：全量快照只保留通道元数据和原始样本指针，显示缓存按当前窗口单独构建，避免高速采样时反复复制全历史。
@@ -415,7 +342,6 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.cachedDisplayKeyValid = false;
         wave.cachedOverviewKeyValid = false;
         wave.renderEnvelopeCache.clear();
-        wave.cachedFftKeyValid = false;
     }
 
     frame.fullSnapshot = &wave.cachedFullSnapshot;
@@ -428,6 +354,10 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
                                           wave.cachedFullSnapshot.channels.size(),
                                           contentPixelWidth,
                                           view.glowEnabled);
+    if (wave.displayPointBudget != frame.renderBudget.pointsPerChannel) {
+        wave.displayPointBudget = frame.renderBudget.pointsPerChannel;
+        wave.cachedDisplayKeyValid = false;
+    }
     const auto latestTime = hasSampleFrequencyTimebase(view)
                                 ? latestDisplayTime(wave.cachedFullSnapshot, view.sampleFrequencyHz)
                                 : wave.buffer.latestTime();
@@ -449,12 +379,13 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
             plot::applySampleFrequencyVisibleRange(
                 frame.snapshot, view.viewMinTime, view.viewMaxTime, view.sampleFrequencyHz);
         } else {
-            frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime);
+            frame.snapshot = wave.buffer.snapshot(view.viewMinTime, view.viewMaxTime, false);
         }
         const auto displayKey = makeDisplayDataCacheKey(frame.snapshot, view, dataRevision);
         if (!wave.cachedDisplayKeyValid || !(wave.cachedDisplayKey == displayKey)) {
             // 核心流程：主显示窗口完全未变时复用上一帧显示数据和边界，避免 UI 空转重复构建。
-            plot::buildDisplayDataInto(frame.snapshot, view.sampleFrequencyHz, wave.cachedDisplayData);
+            plot::buildQueryDisplayDataInto(frame.snapshot, view.sampleFrequencyHz,
+                                            frame.renderBudget.pointsPerChannel, wave.cachedDisplayData);
             wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
             wave.cachedDisplayKey = displayKey;
             wave.cachedDisplayKeyValid = true;
@@ -476,7 +407,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.cachedFullSnapshot, view, dataRevision, (std::max)(overviewPointLimit, std::size_t{1}));
     if (!wave.cachedOverviewKeyValid || !(wave.cachedOverviewKey == overviewKey)) {
         // 核心流程：概览只保留按像素预算压缩后的完整历史包络点，避免每次数据变更复制全历史显示样本。
-        buildOverviewDisplayDataInto(
+        plot::buildQueryDisplayDataInto(
             wave.cachedFullSnapshot, view.sampleFrequencyHz, overviewKey.pointLimit, wave.cachedOverviewDisplayData);
         wave.cachedOverviewKey = overviewKey;
         wave.cachedOverviewKeyValid = true;
@@ -501,33 +432,79 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
             view.fftViewportInitialized = false;
             wave.cachedFftKeyValid = false;
         }
-        const plot::WaveFftCacheKey key{
-            .dataRevision = dataRevision,
+        plot::WaveFftCacheKey key{
+            .dataRevision = wave.buffer.analysisRevision(),
             .viewMinTime = view.fftSourceMinTime,
             .viewMaxTime = view.fftSourceMaxTime,
             .sampleFrequencyHz = view.sampleFrequencyHz,
             .config = view.fft,
             .channelEnabled = wave.fftChannelEnabled,
         };
-        if (!wave.cachedFftKeyValid || !(wave.cachedFftKey == key)) {
+        for (const auto& channel : wave.cachedFullSnapshot.channels) key.channelRatios.push_back(channel.ratio);
+        auto queryKey = key;
+        queryKey.dataRevision = 0;
+        auto requestedQuery = wave.fftRequestedKey;
+        requestedQuery.dataRevision = 0;
+        if (!(queryKey == requestedQuery)) {
+            ++wave.fftRequestGeneration;
+            wave.fftRequestActive = false;
+            wave.fftRequestedKey = key;
+        }
+        if (wave.analysisWorker) {
+            if (auto output = wave.analysisWorker->takeFft();
+                output && output->generation == wave.fftRequestGeneration) {
+                wave.cachedFftFrame = std::move(output->result);
+                wave.cachedFftKey = output->key;
+                wave.cachedFftKeyValid = true;
+                wave.fftRequestActive = false;
+            }
+        }
+        view.fftUpdatePending = !wave.cachedFftKeyValid || !(wave.cachedFftKey == key);
+        if (view.fftUpdatePending && !view.interactionActive && !wave.fftRequestActive) {
             // 核心流程：FFT 输入窗口与频域视口分离，频域缩放不会反向改变待分析的时域样本。
             auto fftSnapshot = hasSampleFrequencyTimebase(view)
                                    ? wave.cachedFullSnapshot
-                                   : wave.buffer.snapshot(view.fftSourceMinTime, view.fftSourceMaxTime);
+                                   : wave.buffer.snapshot(view.fftSourceMinTime, view.fftSourceMaxTime, false);
             if (hasSampleFrequencyTimebase(view)) {
                 plot::applySampleFrequencyVisibleRange(
                     fftSnapshot, view.fftSourceMinTime, view.fftSourceMaxTime, view.sampleFrequencyHz);
             }
-            const auto fftDisplayData = plot::buildDisplayData(fftSnapshot, view.sampleFrequencyHz);
-            wave.cachedFftFrame = plot::buildWaveFftFrame(fftSnapshot,
-                                                          fftDisplayData,
-                                                          view.fft,
-                                                          wave.fftChannelEnabled,
-                                                          view.fftSourceMinTime,
-                                                          view.fftSourceMaxTime,
-                                                          view.sampleFrequencyHz);
-            wave.cachedFftKey = key;
-            wave.cachedFftKeyValid = true;
+            for (std::size_t i = 0; i < fftSnapshot.channels.size(); ++i) {
+                if (i >= wave.fftChannelEnabled.size() || !wave.fftChannelEnabled[i])
+                    fftSnapshot.channels[i].visibleEnd = fftSnapshot.channels[i].visibleBegin;
+            }
+            plot::WaveDisplayData fftDisplayData;
+            fftDisplayData.axisSource = frame.displayData->axisSource;
+            fftDisplayData.timeUnit = frame.displayData->timeUnit;
+            fftDisplayData.channels.resize(fftSnapshot.channels.size());
+            for (std::size_t i = 0; i < fftSnapshot.channels.size(); ++i) {
+                if (i >= wave.fftChannelEnabled.size() || !wave.fftChannelEnabled[i]) continue;
+                const auto& source = fftSnapshot.channels[i];
+                const plot::WaveQueryView query(source, fftDisplayData.axisSource, view.sampleFrequencyHz,
+                                                fftSnapshot.config.displayFormula);
+                const auto [begin, end] = query.range(view.fftSourceMinTime, view.fftSourceMaxTime, false);
+                auto& output = fftDisplayData.channels[i];
+                output.analysisSampleCount = query.summary(begin, end).finiteCount;
+                const auto required = plot::resolveWaveFftPointCount(view.fft, *output.analysisSampleCount);
+                output.samples.reserve((std::min)(required, end - begin));
+                output.actualValues.reserve(output.samples.capacity());
+                // 与原始 FFT 一致，取窗口尾部实际需要的有限值；无需复制其余历史。
+                for (auto index = end; index > begin && output.samples.size() < required;) {
+                    --index;
+                    const auto actual = query.actual(index);
+                    if (!std::isfinite(actual)) continue;
+                    output.samples.push_back(query.sample(index));
+                    output.actualValues.push_back(actual);
+                }
+                std::ranges::reverse(output.samples);
+                std::ranges::reverse(output.actualValues);
+            }
+            if (!wave.analysisWorker) wave.analysisWorker = std::make_shared<plot::WaveAnalysisWorker>();
+            wave.analysisWorker->submit(plot::WaveFftInput{wave.fftRequestGeneration, key,
+                                                          std::move(fftSnapshot), std::move(fftDisplayData)});
+            ++wave.fftSubmittedCount;
+            wave.fftRequestedKey = key;
+            wave.fftRequestActive = true;
         }
         frame.fftFrame = &wave.cachedFftFrame;
     } else {
@@ -535,6 +512,9 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         view.fftViewportInitialized = false;
         wave.cachedFftKeyValid = false;
         wave.cachedFftFrame = {};
+        if (wave.fftRequestActive) ++wave.fftRequestGeneration;
+        wave.fftRequestActive = false;
+        view.fftUpdatePending = false;
         frame.fftFrame = &wave.cachedFftFrame;
     }
 

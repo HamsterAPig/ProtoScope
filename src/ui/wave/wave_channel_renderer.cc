@@ -33,7 +33,8 @@ std::size_t clampRenderConfig(const std::size_t value, const std::size_t fallbac
 
 std::size_t estimateVerticesPerPoint(const bool glowEnabled)
 {
-    return glowEnabled ? 16 : 6;
+    // AddLine 的抗锯齿宽线和三层 Glow、包络连接线均计入预算。
+    return glowEnabled ? 64 : 12;
 }
 
 RenderBudget makeRenderBudget(const plot::WaveViewState& view,

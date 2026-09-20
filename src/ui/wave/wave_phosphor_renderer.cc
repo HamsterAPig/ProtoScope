@@ -191,6 +191,18 @@ void main()
                     const std::vector<std::size_t>& visibleChannelIndices,
                     const ImPlotRect& limits)
         {
+            if (lastViewport_ && !view.autoFollowLatest &&
+                (lastViewport_->X.Min != limits.X.Min || lastViewport_->X.Max != limits.X.Max ||
+                 lastViewport_->Y.Min != limits.Y.Min || lastViewport_->Y.Max != limits.Y.Max)) {
+                viewportInvalid_ = true;
+            }
+            lastViewport_ = limits;
+            if (view.interactionActive || ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
+                ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                viewportInvalid_ = true;
+                view.lastRenderStats.phosphorBackendStatus = "交互轨迹";
+                return false;
+            }
             if (!view.phosphorEnabled) {
                 view.lastRenderStats.phosphorBackendStatus = "关闭";
                 return false;
@@ -207,13 +219,20 @@ void main()
             const int width = plotPixelWidth();
             const int height = plotPixelHeight();
             const bool advance = wavePhosphorShouldAdvance(view);
-            if (!ensureBackend(view, width, height, advance)) {
+            const bool rebuild = viewportInvalid_;
+            if (viewportInvalid_) {
+                // 松手按最终坐标重建一次，随后继续冻结，不改变数据跟随状态。
+                width_ = 0;
+                height_ = 0;
+                viewportInvalid_ = false;
+            }
+            if (!ensureBackend(view, width, height, advance || rebuild)) {
                 view.lastRenderStats.phosphorBackendStatus =
                     advance ? "禁用: 后端不可用" : "冻结: 等待跟随模式";
                 return false;
             }
 
-            if (advance) {
+            if (advance || rebuild) {
                 if (activeBackend_ == plot::WavePhosphorBackend::GpuFbo && beginGpuFrame(view.persistenceWindow)) {
                     accumulate(view, snapshot, displayData, visibleChannelIndices, limits);
                     endGpuFrame();
@@ -263,6 +282,9 @@ void main()
             activeBackend_ = plot::WavePhosphorBackend::CpuTexture;
             return true;
         }
+
+        bool viewportInvalid_{false};
+        std::optional<ImPlotRect> lastViewport_;
 
         bool textureApiAvailable() const
         {
@@ -614,6 +636,36 @@ void main()
         {
             if (view.triggerChannelIndex >= snapshot.channels.size() ||
                 !channelCanEnterPhosphor(snapshot, view.triggerChannelIndex)) {
+                return;
+            }
+            const auto& sourceDisplay = displayData.channels[view.triggerChannelIndex];
+            if (sourceDisplay.source) {
+                const plot::WaveQueryView triggerQuery(*sourceDisplay.source, sourceDisplay.axis,
+                                                       sourceDisplay.frequency, sourceDisplay.formula);
+                const double duration = (std::max)(safeDuration(limits), view.minVisibleTimeSpan);
+                const auto totalBudget = view.adaptiveMaxRenderPointsPerChannel.value_or(view.maxRenderPointsPerChannel);
+                const auto vertexBudget = view.adaptiveMaxRenderVertices.value_or(view.maxRenderVertices);
+                const auto points = (std::max)(std::size_t{2}, (std::min)(totalBudget / 32,
+                    vertexBudget / (32 * (std::max)(std::size_t{1}, visibleChannelIndices.size()) * 16)));
+                // 每个时间分区至多取一个真实触发，避免枚举全部跳变后反复扫描整窗。
+                for (std::size_t segment = 0; segment < 32; ++segment) {
+                    const double begin = limits.X.Min + duration * static_cast<double>(segment) / 32.0;
+                    const double end = limits.X.Min + duration * static_cast<double>(segment + 1) / 32.0;
+                    const auto trigger = triggerQuery.firstCrossing(begin, end, view.triggerThreshold,
+                        view.triggerEdge == plot::WavePhosphorTriggerEdge::Rising);
+                    if (!trigger) continue;
+                    const auto window = makeWavePhosphorTriggerWindow(*trigger, limits.X.Min, duration, view.triggerPositionRatio);
+                    for (const auto channelIndex : visibleChannelIndices) {
+                        if (!channelCanEnterPhosphor(snapshot, channelIndex)) continue;
+                        const auto& c = displayData.channels[channelIndex];
+                        const plot::WaveQueryView query(snapshot.channels[channelIndex], c.axis, c.frequency, c.formula);
+                        std::vector<plot::WaveSample> trace;
+                        for (const auto index : query.traceIndices(window.sourceMinTime, window.sourceMaxTime, points))
+                            trace.push_back(query.sample(index));
+                        accumulateSampleWindow(trace, window.sourceMinTime, window.sourceMaxTime, limits,
+                            wavePhosphorStrokeStyle(snapshot.channels[channelIndex], channelIndex), &window);
+                    }
+                }
                 return;
             }
             const auto* triggerSamples = samplesForChannel(displayData, view.triggerChannelIndex);

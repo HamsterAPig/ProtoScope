@@ -2804,7 +2804,8 @@ void test_wave_default_viewport_duration_tracks_render_budget()
     vertexLimited.view.maxRenderPointsPerChannel = 1000;
     vertexLimited.view.maxRenderVertices = 3200;
     static_cast<void>(protoscope::ui::prepareWaveFrame(vertexLimited, 1000.0F));
-    require(std::abs(vertexLimited.view.visibleDuration - 1.0) < 1e-12,
+    // 三层宽线及包络连接按每点 64 顶点预留：3200 / 2 / 64 / 100 = 0.25 秒。
+    require(std::abs(vertexLimited.view.visibleDuration - 0.25) < 1e-12,
             "max_render_vertices 和通道数应限制默认 X duration");
 }
 

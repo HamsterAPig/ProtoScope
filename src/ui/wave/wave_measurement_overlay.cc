@@ -67,10 +67,45 @@ std::optional<plot::CursorReadout> findNearestBitTransition(const plot::WaveSnap
         !std::isfinite(maxValueDistance) || maxTimeDistance < 0.0 || maxValueDistance < 0.0) {
         return std::nullopt;
     }
+    if (std::ranges::any_of(displayData.channels, [](const auto& c) { return c.source.has_value(); })) {
+        std::optional<BitSnapCandidate> edge, stable;
+        for (const auto& lane : layout.lanes) {
+            if (lane.parentChannelIndex >= displayData.channels.size()) continue;
+            const auto& c = displayData.channels[lane.parentChannelIndex];
+            if (!c.source) continue;
+            const plot::WaveQueryView query(*c.source, c.axis, c.frequency, c.formula);
+            const auto accept = [&](std::size_t index, bool state, bool transition) {
+                const double y = state ? lane.highY : lane.lowY;
+                const double dt = std::abs(query.time(index) - time), dy = std::abs(y - plotY);
+                if (dt > maxTimeDistance || dy > maxValueDistance) return;
+                BitSnapCandidate candidate{.readout = {.valid = true, .channelIndex = lane.parentChannelIndex,
+                    .sampleIndex = index, .time = query.time(index), .value = state ? 1.0 : 0.0, .displayValue = y,
+                    .bit = plot::BitLaneReadout{lane.parentChannelIndex, lane.bitIndex, lane.laneIndex, state, y, transition}},
+                    .score = dt * dt + dy * dy, .timeDistance = dt, .laneIndex = lane.laneIndex,
+                    .sourceSampleIndex = index};
+                auto& best = transition ? edge : stable;
+                if (!best || bitSnapCandidateBetter(candidate, *best)) best = candidate;
+            };
+            for (const bool state : {false, true}) {
+                if (std::abs((state ? lane.highY : lane.lowY) - plotY) > maxValueDistance) continue;
+                if (auto index = query.bitEdge(time - maxTimeDistance, time, lane.bitIndex, state, true))
+                    accept(*index, state, true);
+                if (auto index = query.bitEdge(time, time + maxTimeDistance, lane.bitIndex, state, false))
+                    accept(*index, state, true);
+            }
+            const auto [begin, end] = query.range(time, time);
+            for (auto i = begin; i < end; ++i)
+                accept(i, rawBitEnabled(c.source->samples[i].value, lane.bitIndex), false);
+        }
+        const auto& best = edge ? edge : stable;
+        return best ? std::optional<plot::CursorReadout>(best->readout) : std::nullopt;
+    }
 
     std::optional<BitSnapCandidate> bestTransition;
     std::optional<BitSnapCandidate> bestStable;
     for (const auto& lane : layout.lanes) {
+        if (plotY < (std::min)(lane.lowY, lane.highY) - maxValueDistance ||
+            plotY > (std::max)(lane.lowY, lane.highY) + maxValueDistance) continue;
         if (lane.parentChannelIndex >= snapshot.channels.size() ||
             lane.parentChannelIndex >= displayData.channels.size()) {
             continue;
@@ -154,6 +189,19 @@ namespace {
 
         const auto& sourceChannel = snapshot.channels[lane.parentChannelIndex];
         const auto& displayChannel = displayData.channels[lane.parentChannelIndex];
+        if (displayChannel.source) {
+            const plot::WaveQueryView query(sourceChannel, displayChannel.axis, displayChannel.frequency, displayChannel.formula);
+            if (query.size() == 0 || time < query.time(0) - maxTimeDistance ||
+                time > query.time(query.size() - 1) + maxTimeDistance) return std::nullopt;
+            const auto range = query.range(time, time, false);
+            const auto index = range.second > 0 ? range.second - 1 : 0;
+            const bool value = rawBitEnabled(sourceChannel.samples[index].value, lane.bitIndex);
+            const double y = value ? lane.highY : lane.lowY;
+            return plot::CursorReadout{.valid = true, .channelIndex = lane.parentChannelIndex,
+                .sampleIndex = index, .time = query.time(index), .value = value ? 1.0 : 0.0, .displayValue = y,
+                .bit = plot::BitLaneReadout{.parentChannelIndex = lane.parentChannelIndex,
+                    .bitIndex = lane.bitIndex, .laneIndex = lane.laneIndex, .value = value, .y = y}};
+        }
         const auto& samples = displayChannel.samples;
         if (samples.empty()) {
             return std::nullopt;
@@ -613,6 +661,18 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
     plot::MeasurementReadout result{};
     if (channelIndex >= displayData.channels.size()) {
         return result;
+    }
+    if (displayData.channels[channelIndex].source) {
+        plot::WaveDisplayData exact;
+        exact.channels.resize(displayData.channels.size());
+        exact.channels[channelIndex] = plot::extractDisplayWindow(
+            displayData.channels[channelIndex], (std::min)(beginTime, endTime), (std::max)(beginTime, endTime));
+        if (referenceChannelIndex && *referenceChannelIndex < displayData.channels.size() &&
+            *referenceChannelIndex != channelIndex) {
+            exact.channels[*referenceChannelIndex] = plot::extractDisplayWindow(
+                displayData.channels[*referenceChannelIndex], (std::min)(beginTime, endTime), (std::max)(beginTime, endTime));
+        }
+        return measureDisplayWindow(exact, channelIndex, beginTime, endTime, referenceChannelIndex, manualReferenceValue);
     }
     if (endTime < beginTime) {
         std::swap(beginTime, endTime);
