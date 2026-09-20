@@ -85,6 +85,10 @@ struct WaveFftChannelResult {
     std::string label;
     std::string unit;
     std::vector<WaveFftBin> bins;
+    std::vector<WaveSample> magnitudeTrace;
+    std::vector<WaveSample> phaseTrace;
+    WaveSummaryIndex magnitudeSummary;
+    WaveSummaryIndex phaseSummary;
     std::optional<WaveFftPeak> fundamental;
     std::size_t visibleSampleCount{0};
     std::size_t usedSampleCount{0};
@@ -149,6 +153,7 @@ struct WaveFftCacheKey {
     double sampleFrequencyHz{0.0};
     WaveFftConfig config{};
     std::vector<std::uint8_t> channelEnabled;
+    std::vector<double> channelRatios;
 };
 
 bool operator==(const WaveFftConfig& lhs, const WaveFftConfig& rhs);

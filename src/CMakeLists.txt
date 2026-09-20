@@ -5,6 +5,7 @@ add_library(protoscope_plot STATIC
     plot/wave_fft.cc
     plot/wave_math.cc
     plot/wave_query.cc
+    plot/wave_analysis.cc
 )
 target_include_directories(protoscope_plot
     PUBLIC
@@ -13,6 +14,7 @@ target_include_directories(protoscope_plot
 target_link_libraries(protoscope_plot
     PUBLIC
         protoscope_pocketfft
+        Threads::Threads
 )
 target_compile_features(protoscope_plot PUBLIC cxx_std_20)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

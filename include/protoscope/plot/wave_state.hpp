@@ -4,6 +4,8 @@
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plot/wave_fft.hpp"
 #include "protoscope/plot/wave_math.hpp"
+#include "protoscope/plot/wave_analysis.hpp"
+#include <memory>
 
 #include <array>
 #include <cstddef>
@@ -200,6 +202,12 @@ struct WaveViewState {
     bool zoomSelectionAutoExit{false};
     bool fftMagnitudeAutoFitIgnoreFundamental{false};
     bool peakDetectDownsample{true};
+    bool interactionActive{false};
+    bool fftUpdatePending{false};
+    bool measurementUpdatePending{false};
+    mutable bool statusOverlayPositionValid{false};
+    mutable std::array<float, 2> statusOverlayOffset{};
+    WaveBitDenseRenderMode bitDenseRenderMode{WaveBitDenseRenderMode::CompressedSteps};
     bool fitVisibleWaveformsRequested{false};
     bool defaultViewportPending{true};
     bool defaultViewportLegacyBehavior{false};
@@ -461,6 +469,7 @@ struct WaveDockState {
         std::size_t plotPixelHeight{0};
         std::size_t layoutFingerprint{0};
         std::size_t vertexBudget{0};
+        WaveBitDenseRenderMode denseMode{WaveBitDenseRenderMode::CompressedSteps};
 
         bool operator==(const BitRenderCacheKey&) const = default;
     };
@@ -469,6 +478,7 @@ struct WaveDockState {
         bool valid{false};
         BitRenderCacheKey key{};
         std::vector<std::vector<WaveSample>> lanes;
+        std::vector<WaveDigitalBucket> activityBuckets;
         std::size_t sourceSampleCount{0};
     };
 
@@ -485,6 +495,30 @@ struct WaveDockState {
     bool cachedFftKeyValid{false};
     WaveFftCacheKey cachedFftKey{};
     WaveFftFrame cachedFftFrame{};
+    std::shared_ptr<WaveAnalysisWorker> analysisWorker;
+    std::uint64_t analysisEpoch{0};
+    std::size_t displayPointBudget{0};
+    std::uint64_t fftRequestGeneration{0};
+    std::uint64_t fftSubmittedCount{0};
+    std::uint64_t measurementSubmittedCount{0};
+    bool fftRequestActive{false};
+    WaveFftCacheKey fftRequestedKey{};
+    struct MeasurementKey {
+        std::size_t channel{0};
+        double begin{0}, end{0};
+        std::optional<std::size_t> reference;
+        std::optional<double> manual;
+        double frequency{0};
+        double ratio{1};
+        double referenceRatio{1};
+        bool operator==(const MeasurementKey&) const = default;
+    };
+    MeasurementKey measurementKey{};
+    std::uint64_t measurementRequestGeneration{0};
+    std::uint64_t measurementDataRevision{0};
+    bool measurementRequestActive{false};
+    bool measurementKeyValid{false};
+    std::optional<MeasurementReadout> cachedMeasurement;
     bool suppressZoomSelectionEscapeThisFrame{false};
 };
 
