@@ -1,0 +1,414 @@
+#include "protoscope/plot/wave_query.hpp"
+
+#include "protoscope/plot/oscilloscope.hpp"
+#include "protoscope/plot/wave_math.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+
+namespace protoscope::plot {
+namespace {
+    WaveSummary merge(WaveSummary a, const WaveSummary& b)
+    {
+        if (a.count == 0)
+            return b;
+        if (b.count == 0)
+            return a;
+        const auto step = b.firstTime - a.lastTime;
+        a.timeIncreasing = a.timeIncreasing && b.timeIncreasing && step > 0;
+        if (step > 0 && (a.minStep == 0 || step < a.minStep))
+            a.minStep = step;
+        if (b.minStep > 0 && (a.minStep == 0 || b.minStep < a.minStep))
+            a.minStep = b.minStep;
+        a.lastTime = b.lastTime;
+        a.count += b.count;
+        a.finiteCount += b.finiteCount;
+        a.last = b.last;
+        a.lastBits = b.lastBits;
+        if ((b.minValue < a.minValue || !std::isfinite(a.minValue)) && std::isfinite(b.minValue)) {
+            a.minValue = b.minValue;
+            a.minimum = b.minimum;
+        }
+        if ((b.maxValue > a.maxValue || !std::isfinite(a.maxValue)) && std::isfinite(b.maxValue)) {
+            a.maxValue = b.maxValue;
+            a.maximum = b.maximum;
+        }
+        a.bitsAnd &= b.bitsAnd;
+        a.bitsOr |= b.bitsOr;
+        return a;
+    }
+
+    WaveSummary scan(std::span<const WaveSample> samples,
+                     std::size_t offset,
+                     std::size_t begin,
+                     std::size_t end,
+                     WaveQueryCounters* counters)
+    {
+        WaveSummary result;
+        for (auto i = begin; i < end; ++i) {
+            const auto value = samples[i - offset].value;
+            const auto bits = waveRawBits(value);
+            const auto time = samples[i - offset].time;
+            result = merge(result,
+                           {1,
+                            i,
+                            i,
+                            i,
+                            i,
+                            value,
+                            value,
+                            bits,
+                            bits,
+                            bits,
+                            bits,
+                            time,
+                            time,
+                            0,
+                            std::isfinite(time),
+                            std::isfinite(value) ? 1U : 0U});
+        }
+        if (counters)
+            counters->rawSamples += end - begin;
+        return result;
+    }
+} // namespace
+
+std::uint64_t waveRawBits(double value)
+{
+    if (!std::isfinite(value) || value <= 0)
+        return 0;
+    if (value >= static_cast<double>((std::numeric_limits<std::uint64_t>::max)()))
+        return (std::numeric_limits<std::uint64_t>::max)();
+    return static_cast<std::uint64_t>(value);
+}
+
+void WaveSummaryIndex::clear()
+{
+    levels_.clear();
+    begin_ = end_ = 0;
+}
+
+void WaveSummaryIndex::synchronize(std::span<const WaveSample> samples, std::size_t offset)
+{
+    if (samples.empty()) {
+        clear();
+        return;
+    }
+    const auto newEnd = offset + samples.size();
+    if (offset < begin_ || newEnd < end_ || offset >= end_)
+        clear();
+    const auto oldEnd = end_;
+    begin_ = offset;
+    end_ = newEnd;
+    std::size_t width = blockSize;
+    std::size_t levelIndex = 0;
+    // 首块因裁剪而变化，尾部因追加而变化；中间完整块始终复用。
+    while (true) {
+        if (levels_.size() <= levelIndex)
+            levels_.emplace_back();
+        auto& level = levels_[levelIndex];
+        const auto first = offset / width;
+        const auto last = (newEnd - 1) / width;
+        while (!level.blocks.empty() && level.firstBlock < first) {
+            level.blocks.pop_front();
+            ++level.firstBlock;
+        }
+        if (level.blocks.empty())
+            level.firstBlock = first;
+        level.blocks.resize(last - first + 1);
+        const auto rebuild = [&](std::size_t block) {
+            if (levelIndex == 0) {
+                return scan(samples,
+                            offset,
+                            (std::max)(offset, block * width),
+                            (std::min)(newEnd, (block + 1) * width),
+                            nullptr);
+            }
+            WaveSummary result;
+            const auto& child = levels_[levelIndex - 1];
+            for (auto id = block * 2; id < block * 2 + 2; ++id) {
+                if (id >= child.firstBlock && id - child.firstBlock < child.blocks.size())
+                    result = merge(result, child.blocks[id - child.firstBlock]);
+            }
+            return result;
+        };
+        level.blocks.front() = rebuild(first);
+        const auto tail = (std::max)(first + 1, oldEnd / width);
+        for (auto block = tail; block <= last; ++block)
+            level.blocks[block - first] = rebuild(block);
+        ++levelIndex;
+        if (first == last)
+            break;
+        width *= 2;
+    }
+    levels_.resize(levelIndex);
+}
+
+WaveSummary WaveSummaryIndex::query(std::span<const WaveSample> samples,
+                                    std::size_t offset,
+                                    std::size_t begin,
+                                    std::size_t end,
+                                    WaveQueryCounters* counters) const
+{
+    begin = (std::min)(begin, samples.size()) + offset;
+    end = (std::min)(end, samples.size()) + offset;
+    WaveSummary result;
+    // 两端不足基础块的部分精确读取，中间贪心选取最大的对齐摘要。
+    while (begin < end) {
+        std::size_t selected = levels_.size();
+        std::size_t width = blockSize;
+        for (std::size_t l = 0; l < levels_.size(); ++l, width *= 2) {
+            if (begin % width != 0 || width > end - begin)
+                break;
+            const auto id = begin / width;
+            const auto& level = levels_[l];
+            if (id >= level.firstBlock && id - level.firstBlock < level.blocks.size() &&
+                level.blocks[id - level.firstBlock].count == width)
+                selected = l;
+        }
+        if (selected < levels_.size()) {
+            width = blockSize << selected;
+            const auto& level = levels_[selected];
+            result = merge(result, level.blocks[begin / width - level.firstBlock]);
+            begin += width;
+            if (counters)
+                ++counters->summaryHits;
+        } else {
+            const auto next = (std::min)(end, (begin / blockSize + 1) * blockSize);
+            result = merge(result, scan(samples, offset, begin, next, counters));
+            begin = next;
+        }
+    }
+    return result;
+}
+
+std::size_t WaveSummaryIndex::memoryBytes() const
+{
+    std::size_t bytes = levels_.capacity() * sizeof(Level);
+    for (const auto& level : levels_)
+        bytes += level.blocks.size() * sizeof(WaveSummary);
+    return bytes;
+}
+
+WaveQueryView::WaveQueryView(const ChannelView& channel,
+                             WaveTimeAxisSource axis,
+                             double frequency,
+                             WaveDisplayFormula formula)
+    : channel_(channel), axis_(axis), frequency_(frequency), formula_(formula)
+{
+}
+
+std::size_t WaveQueryView::size() const
+{
+    return channel_.samples ? channel_.totalSamples : 0;
+}
+
+double WaveQueryView::time(std::size_t index) const
+{
+    if (axis_ == WaveTimeAxisSource::ScriptTime)
+        return channel_.samples[index].time;
+    const auto global = static_cast<double>(channel_.sampleIndexOffset + index);
+    return axis_ == WaveTimeAxisSource::SampleFrequency && frequency_ > 0 ? global / frequency_ : global;
+}
+
+double WaveQueryView::actual(std::size_t index) const
+{
+    return channel_.samples[index].value * channel_.ratio;
+}
+
+WaveSample WaveQueryView::sample(std::size_t index) const
+{
+    const auto value = actual(index);
+    return {time(index),
+            formula_ == WaveDisplayFormula::OffsetThenScale ? (value + channel_.offset) * channel_.scale
+                                                            : value * channel_.scale + channel_.offset};
+}
+
+std::pair<std::size_t, std::size_t> WaveQueryView::range(double minTime, double maxTime, bool guards) const
+{
+    if (maxTime < minTime)
+        std::swap(minTime, maxTime);
+    const auto bound = [&](double t, bool upper) {
+        std::size_t lo = 0, hi = size();
+        while (lo < hi) {
+            const auto mid = lo + (hi - lo) / 2;
+            if (time(mid) < t || (upper && time(mid) == t))
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    };
+    auto begin = bound(minTime, false), end = bound(maxTime, true);
+    if (guards && begin > 0)
+        --begin;
+    if (guards && end < size())
+        ++end;
+    return {begin, end};
+}
+
+WaveSummary WaveQueryView::summary(std::size_t begin, std::size_t end, WaveQueryCounters* counters) const
+{
+    const std::span<const WaveSample> samples{channel_.samples, size()};
+    if (channel_.summaryIndex)
+        return channel_.summaryIndex->query(samples, channel_.sampleIndexOffset, begin, end, counters);
+    begin = (std::min)(begin, size());
+    end = (std::max)(begin, (std::min)(end, size()));
+    return scan(samples,
+                channel_.sampleIndexOffset,
+                begin + channel_.sampleIndexOffset,
+                end + channel_.sampleIndexOffset,
+                counters);
+}
+
+std::vector<std::size_t> WaveQueryView::traceIndices(
+    double minTime, double maxTime, std::size_t budget, WaveQueryCounters* counters, bool guards) const
+{
+    std::vector<std::size_t> result;
+    const auto [begin, end] = range(minTime, maxTime, guards);
+    if (begin == end || budget == 0)
+        return result;
+    result.reserve((std::min)(budget, end - begin));
+    if (end - begin <= budget) {
+        for (auto i = begin; i < end; ++i)
+            result.push_back(i);
+        if (counters)
+            counters->rawSamples += end - begin;
+        return result;
+    }
+    if (budget < 4) {
+        result.push_back(begin);
+        if (budget > 1)
+            result.push_back(end - 1);
+        return result;
+    }
+    const auto buckets = budget / 4;
+    auto left = begin;
+    for (std::size_t bucket = 0; bucket < buckets; ++bucket) {
+        auto right = end;
+        if (bucket + 1 < buckets) {
+            const auto t =
+                minTime + (maxTime - minTime) * static_cast<double>(bucket + 1) / static_cast<double>(buckets);
+            right = range(t, t, false).first;
+            right = (std::clamp)(right, left, end);
+        }
+        const auto s = summary(left, right, counters);
+        if (s.count) {
+            std::array<std::size_t, 4> indices{s.first, s.minimum, s.maximum, s.last};
+            std::ranges::sort(indices);
+            for (const auto global : indices) {
+                const auto index = global - channel_.sampleIndexOffset;
+                if (result.empty() || result.back() != index)
+                    result.push_back(index);
+            }
+        }
+        left = right;
+    }
+    return result;
+}
+
+std::vector<WaveSample> WaveQueryView::extract(double minTime, double maxTime) const
+{
+    const auto [begin, end] = range(minTime, maxTime, false);
+    std::vector<WaveSample> result;
+    result.reserve(end - begin);
+    for (auto i = begin; i < end; ++i)
+        result.push_back({time(i), actual(i)});
+    return result;
+}
+
+std::vector<WaveDigitalBucket> WaveQueryView::digitalBuckets(double minTime,
+                                                             double maxTime,
+                                                             std::size_t budget,
+                                                             WaveQueryCounters* counters) const
+{
+    std::vector<WaveDigitalBucket> result;
+    const auto [begin, end] = range(minTime, maxTime);
+    if (begin == end || budget == 0)
+        return result;
+    const auto count = (std::min)(budget, end - begin);
+    result.reserve(count);
+    auto left = begin;
+    for (std::size_t b = 0; b < count; ++b) {
+        const auto t = minTime + (maxTime - minTime) * static_cast<double>(b + 1) / static_cast<double>(count);
+        const auto right = b + 1 == count ? end : (std::clamp)(range(t, t, false).first, left, end);
+        if (left == right)
+            continue;
+        const auto s = summary(left, right, counters);
+        result.push_back({time(left), time(right - 1), s.firstBits, s.lastBits, s.bitsAnd ^ s.bitsOr});
+        left = right;
+    }
+    return result;
+}
+
+std::optional<std::size_t> WaveQueryView::bitEdge(
+    double minTime, double maxTime, std::size_t bit, bool state, bool reverse) const
+{
+    if (bit >= 64 || size() < 2)
+        return std::nullopt;
+    auto [begin, end] = range(minTime, maxTime, false);
+    begin = (std::max)(std::size_t{1}, begin);
+    const auto mask = std::uint64_t{1} << bit;
+    // 恒定块由 AND/OR 一次排除，只在含目标跳变的叶块读取原始样本。
+    const auto search = [&](auto&& self, std::size_t left, std::size_t right) -> std::optional<std::size_t> {
+        if (left >= right)
+            return std::nullopt;
+        const auto s = summary(left - 1, right);
+        if (((s.bitsAnd ^ s.bitsOr) & mask) == 0)
+            return std::nullopt;
+        if (right - left > WaveSummaryIndex::blockSize) {
+            const auto mid = left + (right - left) / 2;
+            if (auto hit = reverse ? self(self, mid, right) : self(self, left, mid))
+                return hit;
+            return reverse ? self(self, left, mid) : self(self, mid, right);
+        }
+        for (auto n = left; n < right; ++n) {
+            const auto i = reverse ? right - 1 - (n - left) : n;
+            const bool previous = (waveRawBits(channel_.samples[i - 1].value) & mask) != 0;
+            const bool current = (waveRawBits(channel_.samples[i].value) & mask) != 0;
+            if (current != previous && current == state)
+                return i;
+        }
+        return std::nullopt;
+    };
+    return search(search, begin, end);
+}
+
+std::optional<double> WaveQueryView::firstCrossing(double minTime, double maxTime, double threshold, bool rising) const
+{
+    if (!std::isfinite(threshold) || size() < 2)
+        return std::nullopt;
+    auto [begin, end] = range(minTime, maxTime);
+    begin = (std::max)(begin, std::size_t{1});
+    const auto search = [&](auto&& self, std::size_t left, std::size_t right) -> std::optional<double> {
+        if (left >= right)
+            return std::nullopt;
+        const auto s = summary(left - 1, right);
+        const auto a = sample(s.minimum - channel_.sampleIndexOffset).value;
+        const auto b = sample(s.maximum - channel_.sampleIndexOffset).value;
+        if ((std::min)(a, b) > threshold || (std::max)(a, b) < threshold || a == b)
+            return std::nullopt;
+        if (right - left > WaveSummaryIndex::blockSize) {
+            const auto mid = left + (right - left) / 2;
+            if (auto hit = self(self, left, mid))
+                return hit;
+            return self(self, mid, right);
+        }
+        for (auto i = left; i < right; ++i) {
+            const auto previous = sample(i - 1), current = sample(i);
+            const bool crosses = rising ? previous.value < threshold && current.value >= threshold
+                                        : previous.value > threshold && current.value <= threshold;
+            if (!crosses || current.value == previous.value)
+                continue;
+            const auto t = previous.time + (threshold - previous.value) * (current.time - previous.time) /
+                                               (current.value - previous.value);
+            if (t >= minTime && t <= maxTime)
+                return t;
+        }
+        return std::nullopt;
+    };
+    return search(search, begin, end);
+}
+} // namespace protoscope::plot

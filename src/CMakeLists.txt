@@ -4,6 +4,7 @@ add_library(protoscope_plot STATIC
     plot/raw_capture_file.cc
     plot/wave_fft.cc
     plot/wave_math.cc
+    plot/wave_query.cc
 )
 target_include_directories(protoscope_plot
     PUBLIC

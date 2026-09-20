@@ -79,6 +79,13 @@ struct FrequencyParseResult {
 struct WaveDisplayChannel {
     std::vector<WaveSample> samples;
     std::vector<double> actualValues;
+    // 绘图点可压缩；精确查点和分析始终回到当前帧的原始视图。
+    std::optional<ChannelView> source;
+    std::vector<std::size_t> sourceIndices;
+    WaveTimeAxisSource axis{WaveTimeAxisSource::SampleIndex};
+    double frequency{0};
+    WaveDisplayFormula formula{WaveDisplayFormula::OffsetThenScale};
+    std::optional<std::size_t> analysisSampleCount;
 };
 
 struct WaveDisplayData {
@@ -158,6 +165,10 @@ float solveSplitWavePlotHeight(std::size_t visibleChannelCount,
                                std::size_t maxRowsWithoutScroll);
 bool scriptTimeUsable(const std::vector<WaveSample>& samples);
 void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data);
+void buildQueryDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz,
+                              std::size_t pointBudget, WaveDisplayData& data);
+WaveDisplayChannel extractDisplayWindow(const WaveDisplayChannel& channel, double minTime, double maxTime,
+                                       bool guards = false);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);
 void applySampleFrequencyVisibleRange(WaveSnapshot& snapshot, double minTime, double maxTime, double sampleFrequencyHz);
 WaveDataBounds computeDisplayBounds(const WaveDisplayData& data, double fallbackStep);
