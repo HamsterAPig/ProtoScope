@@ -131,6 +131,7 @@ struct GuiWaveConfig {
     std::size_t maxRenderVertices{60000};
     double downsampleStartMultiplier{2.0};
     std::size_t overviewMaxSamples{20000};
+    bool overviewNormalizeChannels{false};
     double minVisibleTimeSpan{0.001};
     std::size_t maxTotalSamples{0};
     double channelCardFixedWidth{128.0};

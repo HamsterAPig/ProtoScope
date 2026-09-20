@@ -1,8 +1,11 @@
 #include "../src/ui/wave/wave_render_service.hpp"
 #include "test_registry.hpp"
+#include "protoscope/config/config.hpp"
+#include "protoscope/dock/docks.hpp"
 
 #include <cmath>
 #include <stdexcept>
+#include <limits>
 
 namespace {
 void check(bool value, const char* message)
@@ -139,4 +142,71 @@ void test_wave_layout_multiframe_parameter_roundtrip()
               "隐藏通道参数不变");
         check(wave.buffer.snapshot(0, 1).channels[0].samples[0].value == -100.0, "原始采样不变");
     }
+}
+
+void test_wave_overview_channel_normalization()
+{
+    using namespace protoscope;
+    plot::WaveDockState wave;
+    check(!wave.view.overviewNormalizeChannels, "概览归一化默认关闭");
+    wave.buffer.configureChannels(4);
+    wave.buffer.append(0, {.samples = {{0, -1}, {1, 1}}});
+    wave.buffer.append(1, {.samples = {{0, -1e6}, {1, 1e6}}});
+    wave.buffer.append(2, {.samples = {{0, 42}, {1, 42}}});
+    wave.view.viewMinTime = 0;
+    wave.view.viewMaxTime = 1;
+    auto frame = ui::prepareWaveFrame(wave, 1000);
+    const auto before = *frame.overviewDisplayData;
+    const auto spec = *wave.buffer.channelSpec(1);
+    wave.view.overviewNormalizeChannels = true;
+    frame = ui::prepareWaveFrame(wave, 1000);
+    for (std::size_t i = 0; i < 4; ++i) {
+        auto envelope = ui::buildDisplayEnvelope(frame.overviewDisplayData->channels[i].samples, 0, 1, 100);
+        ui::normalizeOverviewEnvelope(envelope);
+        if (i == 3) {
+            check(envelope.empty(), "空通道应保持空");
+        } else if (i == 2) {
+            check(envelope.front().minValue == 0 && envelope.back().maxValue == 0, "常量应位于 0");
+        } else {
+            check(envelope.front().minValue == -1 && envelope.back().maxValue == 1,
+                  "百万倍幅值差的通道应各自映射到 [-1,1]");
+        }
+        const auto& samples = frame.overviewDisplayData->channels[i].samples;
+        check(samples.size() == before.channels[i].samples.size(), "归一化不得修改共享缓存大小");
+        for (std::size_t j = 0; j < samples.size(); ++j) {
+            check(samples[j].value == before.channels[i].samples[j].value &&
+                      samples[j].time == before.channels[i].samples[j].time, "归一化不得修改缓存时间或幅值");
+        }
+    }
+    check(wave.buffer.channelSpec(1)->scale == spec.scale && wave.buffer.channelSpec(1)->offset == spec.offset,
+          "概览归一化不得修改主图参数");
+    std::vector<plot::EnvelopePoint> invalid{{.time = 0, .minValue = -2, .maxValue = 2},
+                                            {.time = 1, .minValue = std::numeric_limits<double>::infinity(),
+                                             .maxValue = std::numeric_limits<double>::infinity()}};
+    ui::normalizeOverviewEnvelope(invalid);
+    check(invalid.size() == 1 && invalid[0].minValue == -1 && invalid[0].maxValue == 1,
+          "非有限值不得参与归一化范围");
+
+    config::ConfigStore store;
+    config::AppConfig config;
+    check(!config.gui.wave.overviewNormalizeChannels, "配置默认关闭");
+    config.gui.wave.overviewNormalizeChannels = true;
+    dock::DockStore docks;
+    store.applyToDock(config, docks);
+    check(docks.waveState().view.overviewNormalizeChannels, "配置应应用到运行态");
+    check(store.captureFromDock(docks).gui.wave.overviewNormalizeChannels, "运行态应可回收配置");
+    for (bool enabled : {true, false}) {
+        config.gui.wave.overviewNormalizeChannels = enabled;
+        std::string yaml, error;
+        check(store.saveText(config, yaml, error), "概览配置应可保存");
+        const auto loaded = store.loadText(yaml);
+        check(loaded.config.gui.wave.overviewNormalizeChannels == enabled, "概览配置应支持往返保存");
+    }
+    const plot::WaveDataBounds bounds{.minTime = 0, .maxTime = 100, .minValue = -1, .maxValue = 1,
+                                      .minStep = 0.01, .valid = true};
+    const plot::WaveViewport viewport{.minTime = 10, .maxTime = 20, .minValue = -100, .maxValue = 200};
+    const auto navigated = plot::moveViewportByDelta(viewport, 200, bounds, 0.01);
+    check(navigated.maxTime == 100 && navigated.minTime == 90 &&
+              navigated.minValue == -100 && navigated.maxValue == 200,
+          "归一化概览的时间导航不能改变主图 Y 范围");
 }

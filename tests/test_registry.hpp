@@ -3,6 +3,7 @@
 void test_wave_channel_affine_transform();
 void test_wave_layout_multiframe_parameter_roundtrip();
 void test_application_bit_hover_setup_preserves_history();
+void test_wave_overview_channel_normalization();
 
 using TestFn = void (*)();
 

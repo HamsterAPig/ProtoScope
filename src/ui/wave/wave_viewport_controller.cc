@@ -290,12 +290,16 @@ namespace {
                     const double actualValue = sample.value * channel.ratio;
                     const double displayValue = offsetThenScale ? (actualValue + channel.offset) * channel.scale
                                                                 : actualValue * channel.scale + channel.offset;
+                    const double time = overviewSampleTime(
+                        sample, channel.sampleIndexOffset, sampleIndex, axisSource, sampleFrequencyHz);
+                    if (!std::isfinite(displayValue) || !std::isfinite(actualValue) || !std::isfinite(time)) {
+                        continue;
+                    }
                     minValue = (std::min)(minValue, displayValue);
                     maxValue = (std::max)(maxValue, displayValue);
                     minActualValue = (std::min)(minActualValue, actualValue);
                     maxActualValue = (std::max)(maxActualValue, actualValue);
-                    timeSum += overviewSampleTime(
-                        sample, channel.sampleIndexOffset, sampleIndex, axisSource, sampleFrequencyHz);
+                    timeSum += time;
                     ++count;
                 }
                 if (count == 0) {

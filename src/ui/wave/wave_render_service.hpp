@@ -60,6 +60,8 @@ struct PlotRenderResult {
     OverlayGeometry legendOverlay{};
 };
 
+void normalizeOverviewEnvelope(std::vector<plot::EnvelopePoint>& envelope);
+
 struct WaveMetricChip {
     std::string label;
     std::string value;

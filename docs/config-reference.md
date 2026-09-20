@@ -113,6 +113,7 @@ gui:
     peak_detect_downsample: true
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
+    overview_normalize_channels: false
     max_total_samples: 0
     min_visible_time_span: 0.001
     reset_history_on_time_reset: true
@@ -148,6 +149,9 @@ gui:
 - `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。
 - `overview_max_samples`：概览桶数上限，每桶最多两个极值点；0 仅取消此项限制。
   预算公式、降采样阈值与当前限制见[波形渲染计划](wave-view-render-plan.md#渲染预算)。
+- `overview_normalize_channels`：默认 `false`；开启后各 CH 的全历史概览包络独立映射到
+  `[-1,1]`，常量位于 0，空通道和非有限值跳过。只改变概览绘制，不修改主图
+  `scale`、`offset`、共享缓存或实际读数；隐藏策略、时间导航和游标保持原行为。
 - `max_total_samples`：每通道历史样本上限，`0` 表示不额外限制。
 - `min_visible_time_span`：X 轴最小可见时间跨度。
 - `reset_history_on_time_reset`：时间轴重置时是否清空历史。

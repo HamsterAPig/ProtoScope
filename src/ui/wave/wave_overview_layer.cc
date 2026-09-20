@@ -6,6 +6,29 @@
 
 namespace protoscope::ui {
 
+void normalizeOverviewEnvelope(std::vector<plot::EnvelopePoint>& envelope)
+{
+    std::erase_if(envelope, [](const auto& point) {
+        return !std::isfinite(point.time) || !std::isfinite(point.minValue) || !std::isfinite(point.maxValue);
+    });
+    if (envelope.empty()) {
+        return;
+    }
+    double low = std::numeric_limits<double>::infinity();
+    double high = -low;
+    for (const auto& point : envelope) {
+        low = (std::min)(low, point.minValue);
+        high = (std::max)(high, point.maxValue);
+    }
+    // 核心逻辑：只归一化本次绘制副本，半跨度计算避免大幅值正负相减溢出。
+    const double center = low * 0.5 + high * 0.5;
+    const double halfSpan = high * 0.5 - low * 0.5;
+    for (auto& point : envelope) {
+        point.minValue = halfSpan > 0.0 ? (point.minValue * 0.5 - center * 0.5) / halfSpan * 2.0 : 0.0;
+        point.maxValue = halfSpan > 0.0 ? (point.maxValue * 0.5 - center * 0.5) / halfSpan * 2.0 : 0.0;
+    }
+}
+
 void drawOverviewWindow(plot::WaveViewState& view,
                         const plot::ViewConfig& config,
                         const plot::WaveSnapshot& fullSnapshot,
@@ -48,6 +71,10 @@ void drawOverviewWindow(plot::WaveViewState& view,
         overviewMinValue = config.verticalMin;
         overviewMaxValue = config.verticalMax;
     }
+    if (view.overviewNormalizeChannels) {
+        overviewMinValue = -1.0;
+        overviewMaxValue = 1.0;
+    }
 
     const ImPlotFlags plotFlags = ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText |
                                   ImPlotFlags_NoMenus | ImPlotFlags_NoFrame;
@@ -76,6 +103,9 @@ void drawOverviewWindow(plot::WaveViewState& view,
             }
             auto overview = buildDisplayEnvelope(
                 displayData.channels[channelIndex].samples, overviewMinTime, overviewMaxTime, overviewPointLimit);
+            if (view.overviewNormalizeChannels) {
+                normalizeOverviewEnvelope(overview);
+            }
             if (overview.empty()) {
                 continue;
             }

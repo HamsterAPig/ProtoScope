@@ -100,7 +100,8 @@ bit 保持固定数字轨道与 bit_display.y_offset；FFT 不在本项范围。
   application_large_rx_event_drains_by_byte_budget 单独重跑通过。
   这些不是本次重新构建的结果。
 - 文档提交：`ad167be`。
-- 主图提交：`b810cf7`。
+- 主图提交：`3603999`。
+- bit 提交：`13c887a`。
 - 主图：新增仿射计算、参数化布局与适配、分屏固定 Y 基准及仅同步 X、
   主图整图 Y 操作提交参数；新增真实 ImGui/ImPlot 多帧布局测试。
   `y_axis_double_click_adjust_offset` 保留配置往返兼容，适配统一居中写入两项参数。
@@ -118,3 +119,17 @@ bit 保持固定数字轨道与 bit_display.y_offset；FFT 不在本项范围。
   `PROTOSCOPE_TEST_FILTER=raw_capture_file_plot_setup` 2/2，
   `python tools/generate_luals_api.py --check` 通过。
   覆盖开关解析、全局开关、重叠候选、游标不受影响、setup 历史保留、旧录制兼容。
+- 概览：新增默认关闭配置与局部包络归一化；配置保存/加载、应用/回收、
+  百万倍幅值差、常量、空数据、非有限值和导航隔离测试通过。
+- 最终构建 `cmake --build build-wave-view -j 6` 成功。
+  `ctest --test-dir build-wave-view --output-on-failure` 本轮 3/3 通过，
+  headless 32/32、主测试 510/510、LuaLS Manifest 检查通过；
+  补齐共享帧刷新后的最终一轮耗时 10.15 秒。
+  先前接收队列偶发失败仍保留在记录中，本轮通过不代表已修复该时序问题。
+- `python tools/generate_luals_api.py --check` 与 `git diff --check` 通过。
+  UI 验证使用无窗口的真实 ImGui/ImPlot 多帧绘制与顶点检查；
+  未进行真实 GPU 窗口的人工鼠标验收。
+- 多帧测试还覆盖“帧准备后再通过工具栏切换布局”，校验共享帧中的 scale/offset
+  已刷新，确保后续全屏覆盖层使用同一份通道元数据。
+- 概览提交为包含本节最终记录的 `feat: 增加概览逐通道归一化配置`，
+  最终 hash 记录于系统临时计划文件，避免提交内自引用 hash。
