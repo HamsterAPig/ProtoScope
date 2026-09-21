@@ -778,7 +778,8 @@ namespace {
         const std::string timestamp = showTimestamps ? formatShortLogTimestamp(row.timestampMs) : std::string{};
         const std::string copyLine = dock::formatReceiveRowSingleLine(row, showTimestamps, showHex);
         const ImVec2 contentSize = ImGui::CalcTextSize(content.c_str());
-        const float rowHeight = ImGui::GetTextLineHeightWithSpacing() + style.FramePadding.y * 1.8F;
+        // 固定为整像素，避免离屏负坐标与正坐标截断方向不同，使首行测量相差一像素。
+        const float rowHeight = std::ceil(ImGui::GetTextLineHeightWithSpacing() + style.FramePadding.y * 1.8F);
         const float leftPadding = style.FramePadding.x + 6.0F;
         const float badgeWidth = 66.0F;
         const float gap = style.ItemSpacing.x + 8.0F;
@@ -864,13 +865,15 @@ namespace {
             if (rows.empty()) {
                 ImGui::TextDisabled("%s", emptyText.c_str());
             } else {
-                const float rowHeight = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FramePadding.y * 1.8F;
                 ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(rows.size()), rowHeight);
+                // 实测首行布局步长，包含 ItemSpacing 和像素取整，避免虚拟高度与实际行布局漂移。
+                clipper.Begin(static_cast<int>(rows.size()));
                 while (clipper.Step()) {
                     for (int rowIndex = clipper.DisplayStart; rowIndex < clipper.DisplayEnd; ++rowIndex) {
                         const auto* row = rows[static_cast<std::size_t>(rowIndex)];
                         if (row == nullptr) {
+                            ImGui::Dummy(ImVec2(0, std::ceil(ImGui::GetTextLineHeightWithSpacing() +
+                                                      ImGui::GetStyle().FramePadding.y * 1.8F)));
                             continue;
                         }
                         // 核心流程：日志历史可能很长，只绘制当前视口内的行，避免停流后每帧重画全部历史。
