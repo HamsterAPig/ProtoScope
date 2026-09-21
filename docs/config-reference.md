@@ -125,6 +125,7 @@ gui:
     max_render_points_per_channel: 1200
     max_render_vertices: 60000
     peak_detect_downsample: true
+    downsample_mode: stable_edges
     bit_dense_render_mode: compressed_steps
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
@@ -161,12 +162,14 @@ gui:
 - `legend_channel_name_max_width`：通道图例名称显示宽度上限，单位为 ImGui 逻辑像素；`0.0`、缺失或非正值表示不限制。作用于展开态表格、紧凑态浮窗和底部通道卡片，超长名称会裁剪并在悬浮时显示完整 tooltip。
 - `vertical_auto_fit_multiplier`：纵向自动适配余量倍数，默认 `1.25`，即数据包络约占视图高度 80%。
 - `max_render_points_per_channel` / `max_render_vertices`：单通道和总顶点渲染预算。
-- `peak_detect_downsample`：高密度主图是否启用示波器式 peak-detect 降采样，默认 `true`。开启时每个桶保留首点、极小值、极大值和末点并连成单条轨迹；关闭时回退旧的 min/max 包络渲染，便于对比。
+- `downsample_mode`：仅通过配置文件选择模拟波形显示降采样策略，不增加界面控件或专用文件监听。默认、缺省及未知值均为 `stable_edges`，使用固定时间桶并保留边沿相邻点，主图、堆叠和 Split 直接绘制查询轨迹，避免二次压缩。`legacy_uniform` 恢复 `e6320e1` 的快照可见范围、窗口均匀四点分桶，以及主图／Split 的原有绘制分支。启动读取、现有“重新加载配置”和保存均支持此项；重载保留原有工作区与应用配置流程及副作用。模式改变会刷新显示、概览与包络缓存并重建余辉，不改变游标改进、概览配色、FFT 计算、测量读数或数字通道算法。
+- `peak_detect_downsample`：默认 `true`。在 `legacy_uniform` 中，高密度主图开启时按原有 peak-detect 路径绘制首点、极小值、极大值、末点轨迹，关闭时绘制 min/max 包络；Split 开启时直接绘制查询轨迹，关闭且可见点数超过单通道预算时绘制包络。在 `stable_edges` 中，查询轨迹始终直接绘制，此开关不再二次压缩模拟通道。
+- 旧版兼容限制：`legacy_uniform` 且 `peak_detect_downsample: false` 时，查询降采样后的数据还会进入旧包络路径，单点桶或常量桶的 min/max 相等，零高度竖线可能不可见。这是保留的 `e6320e1` 表现；查看连续轨迹可保持 `peak_detect_downsample: true`。
 - `bit_dense_render_mode`：密集 bit 轨迹样式，默认 `compressed_steps`。`compressed_steps` 用预算内阶梯表达首尾状态及桶内跳变活动；`activity_band` 用半透明带标记桶内同时出现高低电平的区间，稳定区间保留电平线。缺省或未知字符串使用默认值。两种模式均在低密度时恢复精确阶梯，不改变原始数据或游标读数，也不增加 Lua 字段。
 - 绘图预算同时约束压缩输出和 Glow/线段的顶点开销。每通道以 256 点基础块建立二合一摘要，追加和裁剪只更新边界及其上层；改变颜色、偏移、缩放、布局不重建原始摘要。初次建立摘要和松手后的分析输入提取仍有与输入规模相关的开销。
 - 拖动期间停止提交统计与 FFT 重计算，旧结果显示为待更新；没有旧结果时显示空状态。松手后使用独立输入快照后台计算，过时查询结果不会覆盖新查询。只移动频谱坐标轴不改变 FFT 输入窗口；持续采集可以发布同查询最近完成的快照。
 - 余辉在拖动期间暂停累积，显示轻量轨迹。旧视口纹理在交互后失效，松手按最终坐标重建一次；冻结状态随后继续冻结，不自动恢复数据跟随。触发模式在 32 个时间分区中各选至多一个真实触发，采用原始样本插值确定触发时间，各轨迹共享绘图预算。分屏继续使用普通轨迹回退。
-- `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。
+- `downsample_start_multiplier`：最小为 `1.0`，默认 `2.0`；在 `legacy_uniform` 中控制主图进入峰值检测／包络绘制的原始可见点数阈值，Split 包络仍沿用单通道预算阈值。在 `stable_edges` 中控制稀疏点标记阈值，不延后查询层降采样。两种模式的查询输出均严格遵守点数预算，此倍数不会放大预算；概览高密度填充包络维持原算法，概览显示数据、FFT 显示与触发余辉取点传递同一模式。
 - `overview_max_samples`：概览桶数上限，每桶最多两个极值点；0 仅取消此项限制。
 - `overview_show_bit_channels`：默认 `false`，Bit 通道不参与概览绘制和纵轴范围计算。
   开启后 Bit 通道先绘制，普通通道覆盖其上，选框与游标位于最上层；遵循现有图例隐藏状态。
