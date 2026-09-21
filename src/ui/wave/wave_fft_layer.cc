@@ -1135,14 +1135,14 @@ namespace {
                                             bool enableCursorInteraction)
     {
         PlotRenderResult result{};
-        if (wave.view.fftUpdatePending) ImGui::TextUnformatted("FFT 待更新");
+        wave.fftDisplayError.clear();
         const auto* fftFrame = frame.fftFrame;
         if (fftFrame == nullptr || !fftFrame->enabled) {
-            drawCenteredHint(wave.view.fftUpdatePending ? "FFT 待更新" : "FFT 未启用");
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
             return result;
         }
         if (!fftFrame->valid) {
-            drawCenteredHint(fftFrame->message.empty() ? "当前视图无法计算 FFT" : fftFrame->message.c_str());
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
             return result;
         }
 
@@ -1151,11 +1151,13 @@ namespace {
         const auto magnitudeOffsets = fftMagnitudeOffsets(wave);
         const FftXAxisScale xAxis = makeFftXAxisScale(view, *fftFrame);
         if (!xAxis.valid) {
-            drawCenteredHint(invalidFftXAxisMessage(xAxis));
+            wave.fftDisplayError = invalidFftXAxisMessage(xAxis);
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
             return result;
         }
         if (!displayFftFrequencyRange(view, *fftFrame, xAxis).has_value()) {
-            drawCenteredHint("当前 FFT 横轴范围无效");
+            wave.fftDisplayError = "当前 FFT 横轴范围无效";
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
             return result;
         }
         const char* yLabel = fftMagnitudeAxisLabel(view.fft.magnitudeMode);
@@ -1197,7 +1199,6 @@ namespace {
                 if (showFrequencyCursors && view.showMeasurementOverlay) {
                     drawCursorOverlay(cursorReadouts, xAxis, view.fft.magnitudeMode);
                 }
-                drawWaveStatusOverlay(view);
                 const bool axisResetConsumed = handleFftAxisDoubleClick(wave, *fftFrame, false);
                 const bool offsetResetConsumed =
                     !axisResetConsumed &&

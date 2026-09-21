@@ -776,19 +776,6 @@ namespace {
             config.gui.logHistory.requestTraceLimit =
                 readScalar<std::size_t>(logHistory, "request_trace_limit", config.gui.logHistory.requestTraceLimit);
         }
-        if (const auto last = childNode(gui, "last_data_export")) {
-            auto& value = config.gui.lastDataExport;
-            value.valid = readScalar<bool>(last, "valid", false);
-            value.content = readScalar<int>(last, "content", 0);
-            value.format = readScalar<int>(last, "format", 0);
-            value.waveRange = readScalar<int>(last, "wave_range", 0);
-            value.recordRange = readScalar<int>(last, "record_range", 0);
-            value.csvShape = readScalar<int>(last, "csv_shape", 0);
-            value.directory = readScalar<std::string>(last, "directory", "");
-            if (value.content < 0 || value.content > 3 || value.format < 0 || value.format > 3 ||
-                value.waveRange < 0 || value.waveRange > 2 || value.recordRange < 0 || value.recordRange > 2 ||
-                value.csvShape < 0 || value.csvShape > 1) value.valid = false;
-        }
         if (const auto rawCapture = childNode(gui, "raw_capture")) {
             config.gui.rawCapture.liveLimitBytes =
                 readScalar<std::size_t>(rawCapture, "live_limit_bytes", config.gui.rawCapture.liveLimitBytes);
@@ -873,6 +860,19 @@ namespace {
             readScalar<std::string>(dialogs, "last_import_directory", "");
         config.gui.fileDialogs.lastExportDirectory = readScalar<std::string>(
             dialogs, "last_export_directory", readScalar<std::string>(lastExport, "directory", ""));
+        if (lastExport) {
+            auto& value = config.gui.lastDataExport;
+            value.valid = readScalar<bool>(lastExport, "valid", false);
+            value.content = readScalar<int>(lastExport, "content", 0);
+            value.format = readScalar<int>(lastExport, "format", 0);
+            value.waveRange = readScalar<int>(lastExport, "wave_range", 0);
+            value.recordRange = readScalar<int>(lastExport, "record_range", 0);
+            value.csvShape = readScalar<int>(lastExport, "csv_shape", 0);
+            value.directory = readScalar<std::string>(lastExport, "directory", "");
+            if (value.content < 0 || value.content > 3 || value.format < 0 || value.format > 3 ||
+                value.waveRange < 0 || value.waveRange > 2 || value.recordRange < 0 || value.recordRange > 2 ||
+                value.csvShape < 0 || value.csvShape > 1) value.valid = false;
+        }
         if (const auto wave = childNode(gui, "wave")) {
             loadGuiWaveConfig(wave, config);
             loadGuiWaveScopedRuntimeConfig(gui, config);

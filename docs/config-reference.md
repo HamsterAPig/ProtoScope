@@ -81,7 +81,21 @@ gui:
 - `window.maximized`：启动时是否最大化。
 - `font.chinese_glyph_range`：`simplified_common` 或 `full`；`full` 适合需要显示更多 CJK 字形的场景。
 
+### gui.file_dialogs
+
+- `last_import_directory`：内置导入及回放载入共用的历史目录。
+- `last_export_directory`：内置导出、报告、日志、请求追踪和录制共用的历史目录。
+
+文件对话框确认后立即保存，取消浏览不更新；目录失效时逐级回退，不创建目录、不改写历史。
+未配置新导出字段时从 `gui.last_data_export.directory` 迁移；目录偏好保存不提交其他未保存设置。
+ELF 文件继续按协议记忆，Lua 自定义文件对话框与协议根目录选择不使用这两个字段。
+
 ### gui.wave
+
+波形状态统一显示在底部状态栏，独立于连接信息和通用操作结果。
+普通状态最多每 500ms 更新一次；等待不足 300ms 不显示，已显示的等待至少保留 1000ms。
+新错误立即显示；关闭功能、切换协议或清空历史时立即清除过期状态。
+这些固定显示时间不影响 FFT 计算、曲线刷新、采集频率或窗口 FPS，也不提供额外配置项。
 
 ```yaml
 gui:
@@ -366,7 +380,3 @@ communication:
 - `serial.flow_control`：`none`、`hardware`、`software`。
 - `udp_peer.bind_address` / `bind_port`：UDP 本地绑定地址和端口。
 - `udp_peer.remote_host` / `remote_port`：UDP 远端地址和端口。
-- `gui.file_dialogs.last_import_directory`：内置导入及回放载入共用的历史目录。
-- `gui.file_dialogs.last_export_directory`：内置导出、报告、日志、请求追踪和录制共用的历史目录。
-  文件对话框确认后立即保存，取消浏览不更新；目录失效时逐级回退，不创建目录、不改写历史。
-  未配置新导出字段时从 `gui.last_data_export.directory` 迁移；目录偏好保存不提交其他未保存设置。

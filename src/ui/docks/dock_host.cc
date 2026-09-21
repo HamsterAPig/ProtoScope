@@ -373,49 +373,61 @@ void GuiRuntime::drawStatusBar()
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - kStatusBarHeight));
     ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, kStatusBarHeight));
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0F, 8.0F));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07F, 0.09F, 0.13F, 0.98F));
     ImGui::PushStyleColor(ImGuiCol_Border, tokens.panelBorder);
     if (ImGui::Begin("状态栏", nullptr, flags)) {
-        drawHeaderBadge(transportStateLabel(comm.state),
-                        comm.state == transport::TransportState::Open ? tokens.success : tokens.warning,
-                        false);
-        if (config.dirty) {
-            ImGui::SameLine();
-            drawHeaderBadge("配置未保存", tokens.warning, false);
-        }
-        if (config.pendingExternalReload) {
-            ImGui::SameLine();
-            drawHeaderBadge(
-                config.externalReloadMessage.empty() ? "检测到外部更新" : config.externalReloadMessage.c_str(),
-                tokens.warning,
-                false);
-            ImGui::SameLine();
-            if (drawGhostIconButton("重载配置", "从磁盘重载当前配置")) {
-                if (!reloadConfigFromDisk()) {
-                    application_.setStatusMessage("从磁盘重载配置失败", true);
-                }
-            }
-        }
-        if (comm.reconnectRequired) {
-            ImGui::SameLine();
-            drawHeaderBadge("通讯参数变更待重连", tokens.warning, false);
-        }
+        const auto snapshot = makeWaveStatusSnapshot(application_.docks().waveState(),
+                                                      application_.docks().luaState().protocolDir);
+        const auto& waveStatus = waveStatusPresenter_.update(snapshot, nowMs());
+        std::string connection = transportStateLabel(comm.state);
+        if (comm.reconnectRequired) connection += " | 通讯参数变更待重连";
         if (application_.isRawCaptureRecording()) {
             const auto fileName = application_.rawCaptureRecordingPath().filename().generic_string();
-            const std::string recordingText =
-                "录制 " + (fileName.empty() ? std::string("(未命名)") : fileName) + " " +
-                std::to_string(static_cast<unsigned long long>(application_.rawCaptureRecordingBytes())) + " bytes";
-            ImGui::SameLine();
-            drawHeaderBadge(recordingText.c_str(), tokens.danger, true);
+            connection += " | 录制 " + fileName + " " +
+                std::to_string(application_.rawCaptureRecordingBytes()) + " bytes";
         }
-        const std::string_view statusText = !config.transientStatusMessage.empty()
-                                                ? std::string_view{config.transientStatusMessage}
-                                                : std::string_view{config.statusMessage};
-        if (!statusText.empty()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%.*s", static_cast<int>(statusText.size()), statusText.data());
+        std::string general = !config.transientStatusMessage.empty() ?
+            config.transientStatusMessage : config.statusMessage;
+        if (config.dirty) general = "配置未保存 | " + general;
+        if (config.pendingExternalReload)
+            general = (config.externalReloadMessage.empty() ? "检测到外部更新" : config.externalReloadMessage) +
+                      " | " + general;
+        if (!fileDialogPreferenceError_.empty()) general = fileDialogPreferenceError_ + " | " + general;
+
+        // 三个固定分区只绘制一行，文字变化不会挤压相邻区域或撑高状态栏。
+        const auto textCell = [](const char* id, const std::string& text, const ImVec4& color) {
+            const ImVec2 start = ImGui::GetCursorScreenPos();
+            const float width = (std::max)(1.0F, ImGui::GetContentRegionAvail().x);
+            const ImVec2 end(start.x + width, start.y + ImGui::GetTextLineHeight());
+            ImGui::InvisibleButton(id, ImVec2(width, ImGui::GetTextLineHeight()));
+            ImGui::PushStyleColor(ImGuiCol_Text, color);
+            ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), start, end, end.x,
+                                      text.c_str(), nullptr, nullptr);
+            ImGui::PopStyleColor();
+            if (!text.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text.c_str());
+        };
+        if (ImGui::BeginTable("##status_regions", 3, ImGuiTableFlags_SizingStretchProp |
+                                                    ImGuiTableFlags_NoSavedSettings)) {
+            ImGui::TableSetupColumn("connection", ImGuiTableColumnFlags_WidthStretch, 0.22F);
+            ImGui::TableSetupColumn("general", ImGuiTableColumnFlags_WidthStretch, 0.38F);
+            ImGui::TableSetupColumn("wave", ImGuiTableColumnFlags_WidthStretch, 0.40F);
+            ImGui::TableNextColumn();
+            textCell("##connection_status", connection,
+                     comm.state == transport::TransportState::Open ? tokens.success : tokens.warning);
+            ImGui::TableNextColumn();
+            if (config.pendingExternalReload && ImGui::GetContentRegionAvail().x > 100.0F) {
+                if (ImGui::SmallButton("重载") && !reloadConfigFromDisk())
+                    application_.setStatusMessage("从磁盘重载配置失败", true);
+                ImGui::SameLine();
+            }
+            textCell("##general_status", general, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TableNextColumn();
+            textCell("##wave_status", waveStatus.text(),
+                     waveStatus.fftError ? tokens.danger : ImGui::GetStyleColorVec4(ImGuiCol_Text));
+            ImGui::EndTable();
         }
     }
     ImGui::End();

@@ -1442,7 +1442,6 @@ void GuiRuntime::renderFrame()
     const bool previousShowWaveDock = showWaveDock_;
 
     application_.clearExpiredTransientStatus(nowMs());
-    drawStatusBar();
     drawRegisteredDocks();
     const bool waveOverlayFullscreen =
         waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Overlay;
@@ -1457,6 +1456,7 @@ void GuiRuntime::renderFrame()
         // Overlay 已完整绘制波形，跳过底层 Dock 可避免同一滚轮输入被处理两次。
         waveDockRenderer_.drawOverlay(waveFullscreenActive_, &waveFullscreenToggleRequested_);
     }
+    drawStatusBar();
     drawRegisteredDialogs();
     if (waveFullscreenActive_ && waveFullscreenActiveMode_ == config::GuiWaveFullscreenMode::Focus && !showWaveDock_) {
         waveFullscreenToggleRequested_ = true;

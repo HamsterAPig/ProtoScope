@@ -2337,11 +2337,15 @@ void test_application_session_package_export_contains_replay_assets()
     protoscope::app::Application importedApplication;
     require(importedApplication.initialize(), "导入应用初始化失败");
     importedApplication.setGuiTheme(protoscope::config::GuiTheme::DebugHighContrast);
+    importedApplication.rememberFileDialogPreferences({"local-import", "local-export"});
     require(importedApplication.importSessionPackage(packagePath, error), "导入现场会话包应成功");
     const auto& importedLua = importedApplication.docks().luaState();
     require(importedLua.protocolDir.find("ProtoScope-session-protocol-") != std::string::npos,
             "导入现场包应使用释放出的临时协议目录");
     const auto importedConfig = importedApplication.captureConfig();
+    require(importedConfig.gui.fileDialogs.lastImportDirectory == "local-import" &&
+                importedConfig.gui.fileDialogs.lastExportDirectory == "local-export",
+            "现场包导入不应覆盖本机目录偏好");
     require(importedConfig.gui.theme == protoscope::config::GuiTheme::DebugHighContrast,
             "现场包导入不应覆盖本机全局主题偏好");
     require(importedConfig.protocol.selectedDir.find("ProtoScope-session-protocol-") == std::string::npos,

@@ -181,9 +181,6 @@ float resolveMeasurementSafeRightX(float contentLeftX,
 MeasurementOverlayPlacementSize resolveMeasurementOverlayPlacementSize(const ImVec2& plotPos,
                                                                        const ImVec2& plotSize,
                                                                        float measurementSafeRightX);
-void drawWaveStatusOverlay(const plot::WaveViewState& view,
-                           const plot::WaveDisplayData* displayData = nullptr,
-                           const std::vector<std::size_t>* channelIndices = nullptr);
 bool drawRightPanelSplitter(
     const char* id, float& rightWidth, float minRightWidth, float minLeftWidth, float totalWidth, float thickness);
 bool drawHorizontalSplitter(

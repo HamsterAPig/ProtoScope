@@ -335,6 +335,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.cachedMeasurement.reset();
         wave.cachedFftKeyValid = false;
         wave.cachedFftFrame = {};
+        wave.fftDisplayError.clear();
         wave.bitCountCache.clear();
         wave.bitRenderCache.clear();
         wave.overviewRenderCache.clear();
@@ -519,6 +520,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         view.fftViewportInitialized = false;
         wave.cachedFftKeyValid = false;
         wave.cachedFftFrame = {};
+        wave.fftDisplayError.clear();
         if (wave.fftRequestActive) ++wave.fftRequestGeneration;
         wave.fftRequestActive = false;
         view.fftUpdatePending = false;

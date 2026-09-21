@@ -10,6 +10,7 @@
 #include "protoscope/ui/ui_host_context.hpp"
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
+#include "protoscope/ui/wave_status.hpp"
 
 #include <array>
 #include <chrono>
@@ -129,6 +130,7 @@ private:
     void renderFrame();
     void drawAppHeader(float menuBarHeight);
     void drawStatusBar();
+    WaveStatusPresenter waveStatusPresenter_;
     void processWaveFullscreenInput();
     bool deferBuiltinFileOperation(std::function<void()> operation);
     void prepareBuiltinFileOperation();
@@ -153,7 +155,7 @@ private:
     void submitUnifiedDataExport();
     std::optional<std::filesystem::path> builtinFileDialog(
         GLFWwindow* window, const wchar_t* title, const wchar_t* filter,
-        const std::filesystem::path& defaultPath, bool saveDialog,
+        const std::filesystem::path& initialDirectory, const std::filesystem::path& suggestedFileName, bool saveDialog,
         const wchar_t* extension, std::string& error, bool remember = true);
     void rememberFileDialogPath(const std::filesystem::path& path, bool exporting);
     void saveFileDialogPreferences(const config::DataExportConfig* lastExport = nullptr);

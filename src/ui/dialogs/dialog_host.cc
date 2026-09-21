@@ -493,9 +493,12 @@ void GuiRuntime::drawDialogs()
 
 void GuiRuntime::rememberFileDialogPath(const std::filesystem::path& path, bool exporting)
 {
+    if (path.empty()) return;
     auto preferences = application_.runtimeConfig().gui.fileDialogs;
     auto& directory = exporting ? preferences.lastExportDirectory : preferences.lastImportDirectory;
-    directory = fileDialogPathText(path.parent_path());
+    std::error_code absoluteError;
+    const auto absolute = std::filesystem::absolute(path, absoluteError);
+    directory = fileDialogPathText((absoluteError ? path : absolute).parent_path());
     application_.rememberFileDialogPreferences(preferences);
     saveFileDialogPreferences();
 }
@@ -507,7 +510,7 @@ void GuiRuntime::saveFileDialogPreferences(const config::DataExportConfig* lastE
     if (!configStore_.saveFileDialogPreferences(
             configPath, application_.runtimeConfig().gui.fileDialogs, error, lastExport)) {
         fileDialogPreferenceError_ = "保存文件目录偏好失败: " + error;
-        application_.setStatusMessage(fileDialogPreferenceError_, true);
+        application_.setStatusMessage(fileDialogPreferenceError_);
         return;
     }
     fileDialogPreferenceError_.clear();
@@ -517,20 +520,20 @@ void GuiRuntime::saveFileDialogPreferences(const config::DataExportConfig* lastE
 
 std::optional<std::filesystem::path> GuiRuntime::builtinFileDialog(
     GLFWwindow* window, const wchar_t* title, const wchar_t* filter,
-    const std::filesystem::path& defaultPath, bool saveDialog,
+    const std::filesystem::path& initialDirectory, const std::filesystem::path& suggestedFileName, bool saveDialog,
     const wchar_t* extension, std::string& error, bool remember)
 {
 #if defined(_WIN32)
     const auto& preferences = application_.runtimeConfig().gui.fileDialogs;
     const auto directory = resolveFileDialogDirectory(
         remember ? (saveDialog ? preferences.lastExportDirectory : preferences.lastImportDirectory) : "",
-        defaultPath.parent_path(), executableDir_);
-    const auto fileName = defaultPath.filename();
+        initialDirectory, executableDir_);
     const auto selected = nativeCommonItemDialog(
-        window, title, filter, directory, saveDialog, false, extension, error, &fileName);
-    if (selected && remember) rememberFileDialogPath(*selected, saveDialog);
+        window, title, filter, directory, saveDialog, false, extension, error, &suggestedFileName);
     return selected;
 #else
+    (void) window; (void) title; (void) filter; (void) initialDirectory;
+    (void) suggestedFileName; (void) saveDialog; (void) extension; (void) error; (void) remember;
     return std::nullopt;
 #endif
 }
@@ -547,8 +550,9 @@ void GuiRuntime::openUnifiedDataImport()
 #if defined(_WIN32)
     const auto path = builtinFileDialog(window_, L"导入数据",
         L"ProtoScope Data (*.csv;*.psraw;*.pssession)\0*.csv;*.psraw;*.pssession\0All Files (*.*)\0*.*\0",
-        executableDir_ / "captures" / "", false, L"", unifiedDataError_);
+        executableDir_ / "captures", {}, false, L"", unifiedDataError_);
     if (path) {
+        rememberFileDialogPath(*path, false);
         unifiedDataPath_ = fileDialogPathText(*path);
         application_.startDataImport(*path, unifiedDataError_);
     }
@@ -559,6 +563,19 @@ void GuiRuntime::openUnifiedDataExport(int content, bool useLast)
 {
     if (application_.dataTransferStatus().active) return;
     if (useLast && !application_.runtimeConfig().gui.lastDataExport.valid) return;
+    if (useLast) {
+        const auto& last = application_.runtimeConfig().gui.lastDataExport;
+        const int effectiveContent = content >= 0 ? content : last.content;
+        if ((effectiveContent == 0 || effectiveContent == 3) && last.waveRange == 2 &&
+            !validateWaveCursorExport(application_.docks().waveState().view, unifiedDataError_)) {
+            application_.setStatusMessage(unifiedDataError_);
+            return;
+        }
+        if (effectiveContent != 0 && last.recordRange == 2 && dataRecordBeginMs_ == 0 && dataRecordEndMs_ == 0) {
+            application_.setStatusMessage("请先指定收发时间段");
+            return;
+        }
+    }
     if (deferBuiltinFileOperation([this, content, useLast] { openUnifiedDataExport(content, useLast); })) return;
     focusUnifiedDataDialog_ = true;
     unifiedExportMode_ = true;
@@ -611,13 +628,14 @@ void GuiRuntime::submitUnifiedDataExport()
 #if defined(_WIN32)
     const auto directory = executableDir_ / "captures";
     const auto path = builtinFileDialog(window_, L"导出数据", L"All Files (*.*)\0*.*\0",
-        directory / ("data" + std::string(extension)), true,
+        directory, "data" + std::string(extension), true,
         dataExportDraft_.format == 0 ? L"csv" : dataExportDraft_.format == 1 ? L"psraw" :
         dataExportDraft_.format == 2 ? L"log" : L"pssession", unifiedDataError_);
     if (!path) return;
 #else
     const auto path = std::optional<std::filesystem::path>(unifiedDataPath_);
 #endif
+    rememberFileDialogPath(*path, true);
     if (application_.startDataExport(*path, dataExportDraft_.content, dataExportDraft_.format, range,
         dataExportDraft_.recordRange, dataRecordBeginMs_, dataRecordEndMs_,
         dataExportDraft_.csvShape == 0 ? plot::WaveCsvShape::Wide : plot::WaveCsvShape::Long, unifiedDataError_)) {
@@ -726,7 +744,7 @@ void GuiRuntime::openRawCaptureImportDialog()
     const auto path = builtinFileDialog(window_,
                                        L"导入原始波形",
                                        L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        false,
                                        L"psraw",
                                        dialogError);
@@ -756,7 +774,7 @@ void GuiRuntime::openCsvDataImportDialog()
     const auto path = builtinFileDialog(window_,
                                        L"导入 CSV 数据",
                                        L"ProtoScope CSV (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        false,
                                        L"csv",
                                        dialogError);
@@ -786,7 +804,7 @@ void GuiRuntime::openRawCaptureReplayTimelineDialog()
     const auto path = builtinFileDialog(window_,
                                        L"载入原始回放时间轴",
                                        L"ProtoScope Replay (*.psraw;*.csv)\0*.psraw;*.csv\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        false,
                                        nullptr,
                                        dialogError);
@@ -818,7 +836,7 @@ void GuiRuntime::openRawCaptureExportDialog()
     const auto path = builtinFileDialog(window_,
                                        L"导出当前缓存快照",
                                        L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        true,
                                        L"psraw",
                                        dialogError);
@@ -848,7 +866,7 @@ void GuiRuntime::openWaveCsvExportDialog()
     const auto path = builtinFileDialog(window_,
                                        L"导出波形 CSV",
                                        L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        true,
                                        L"csv",
                                        dialogError);
@@ -878,7 +896,7 @@ void GuiRuntime::openRawCaptureCsvExportDialog()
     const auto path = builtinFileDialog(window_,
                                        L"导出原始事件 CSV",
                                        L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        true,
                                        L"csv",
                                        dialogError);
@@ -909,7 +927,7 @@ void GuiRuntime::openRawCaptureRecordingDialog()
     const auto path = builtinFileDialog(window_,
                                        L"开始完整原始数据录制",
                                        L"ProtoScope Raw Capture (*.psraw)\0*.psraw\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        true,
                                        L"psraw",
                                        dialogError);
@@ -937,7 +955,7 @@ void GuiRuntime::openSessionPackageImportDialog()
     const auto path = builtinFileDialog(window_,
                                        L"导入现场会话包",
                                        L"ProtoScope Session Package (*.pssession)\0*.pssession\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        false,
                                        L"pssession",
                                        dialogError);
@@ -969,7 +987,7 @@ void GuiRuntime::openSessionPackageExportDialog()
     const auto path = builtinFileDialog(window_,
                                        L"导出现场会话包",
                                        L"ProtoScope Session Package (*.pssession)\0*.pssession\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        true,
                                        L"pssession",
                                        dialogError);
@@ -1012,7 +1030,7 @@ void GuiRuntime::openRequestTraceExportDialog()
     const auto path = builtinFileDialog(window_,
                                        L"导出请求追踪",
                                        L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        true,
                                        L"csv",
                                        dialogError);
@@ -1067,7 +1085,7 @@ void GuiRuntime::openLogExportDialog(LogExportTarget target)
     const auto path = builtinFileDialog(window_,
                                        windowsTitle,
                                        L"ProtoScope Log (*.log)\0*.log\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        true,
                                        L"log",
                                        dialogError);
@@ -1099,7 +1117,7 @@ void GuiRuntime::openElfStaticAddressDialog()
                          L"打开 ELF/ElfStaticView 数据文件",
                          L"ELF/ElfStaticView Files "
                          L"(*.elf;*.out;*.axf;*.json;*.esv)\0*.elf;*.out;*.axf;*.json;*.esv\0All Files (*.*)\0*.*\0",
-                         defaultPath,
+                         defaultPath.parent_path(), defaultPath.filename(),
                          false,
                          nullptr,
                          dialogError, false);
@@ -1121,6 +1139,7 @@ void GuiRuntime::openElfStaticAddressDialog()
 
 void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, false);
     // 核心流程：原生对话框和非 Windows 回退弹窗共用同一条导入链路，避免两套行为分叉。
     rawCaptureImportPath_ = fileDialogPathText(path);
     std::string error;
@@ -1157,6 +1176,7 @@ void GuiRuntime::importRawCaptureFromPath(const std::filesystem::path& path)
 
 void GuiRuntime::importCsvDataFromPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, false);
     csvDataImportPath_ = fileDialogPathText(path);
     std::string error;
     const auto kind = plot::detectCsvKind(path, error);
@@ -1216,6 +1236,7 @@ void GuiRuntime::importCsvDataFromPath(const std::filesystem::path& path)
 
 void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, true);
     // 核心流程：导出路径只在 UI 层选择，实际写入仍交给 Application 统一处理。
     rawCaptureExportPath_ = fileDialogPathText(path);
     std::string error;
@@ -1234,6 +1255,7 @@ void GuiRuntime::exportRawCaptureToPath(const std::filesystem::path& path)
 
 void GuiRuntime::exportWaveCsvToPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, true);
     waveCsvExportPath_ = fileDialogPathText(path);
     std::string error;
     if (!application_.exportWaveCsv(path, plot::WaveCsvShape::Wide, plot::CsvExportRange{}, error)) {
@@ -1247,6 +1269,7 @@ void GuiRuntime::exportWaveCsvToPath(const std::filesystem::path& path)
 
 void GuiRuntime::exportRawCaptureCsvToPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, true);
     rawCaptureCsvExportPath_ = fileDialogPathText(path);
     std::string error;
     if (!application_.exportRawCaptureCsv(path, plot::CsvExportRange{}, error)) {
@@ -1260,6 +1283,7 @@ void GuiRuntime::exportRawCaptureCsvToPath(const std::filesystem::path& path)
 
 void GuiRuntime::loadRawCaptureReplayTimelineFromPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, false);
     rawCaptureReplayTimelinePath_ = fileDialogPathText(path);
     std::string error;
     std::optional<plot::RawCaptureFileData> capture;
@@ -1309,6 +1333,7 @@ void GuiRuntime::loadRawCaptureReplayTimelineFromPath(const std::filesystem::pat
 
 void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, true);
     // 核心流程：菜单只负责选择完整录制路径，录制状态和写入错误统一收口到 Application。
     rawCaptureRecordingPath_ = fileDialogPathText(path);
     std::string error;
@@ -1324,6 +1349,7 @@ void GuiRuntime::startRawCaptureRecordingToPath(const std::filesystem::path& pat
 
 void GuiRuntime::importSessionPackageFromPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, false);
     sessionPackageImportPath_ = fileDialogPathText(path);
     std::string error;
     if (!application_.importSessionPackage(path, error)) {
@@ -1341,6 +1367,7 @@ void GuiRuntime::importSessionPackageFromPath(const std::filesystem::path& path)
 
 void GuiRuntime::exportSessionPackageToPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, true);
     sessionPackageExportPath_ = fileDialogPathText(path);
     std::string error;
     if (!application_.exportSessionPackage(path, error)) {
@@ -1366,7 +1393,7 @@ void GuiRuntime::openWaveAnalysisExportDialog()
     const auto path = builtinFileDialog(window_,
                                        L"导出波形分析报告",
                                        L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0",
-                                       defaultPath,
+                                       defaultPath.parent_path(), defaultPath.filename(),
                                        true,
                                        L"csv",
                                        dialogError);
@@ -1383,6 +1410,7 @@ void GuiRuntime::openWaveAnalysisExportDialog()
 
 void GuiRuntime::exportWaveAnalysisReportToPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, true);
     std::string error;
     if (!application_.exportWaveAnalysisReport(path, error)) {
         application_.setStatusMessage("波形分析报告导出失败: " + error);
@@ -1431,6 +1459,7 @@ std::vector<dock::ReceiveRow> GuiRuntime::logExportRows(LogExportTarget target)
 
 bool GuiRuntime::exportLogTargetToPath(LogExportTarget target, const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, true);
     auto& docks = application_.docks();
     bool showTimestamps = true;
     bool showHex = false;
@@ -1535,6 +1564,7 @@ std::vector<dock::RequestTraceRow> GuiRuntime::requestTraceExportRows()
 
 bool GuiRuntime::exportRequestTraceToPath(const std::filesystem::path& path)
 {
+    rememberFileDialogPath(path, true);
     const auto& trace = application_.docks().requestTraceState();
     const auto rows = requestTraceExportRows();
     const bool exported = exportRequestTraceRowsToPath(path, rows, trace.showTimestamps);

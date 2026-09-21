@@ -2797,6 +2797,7 @@ bool Application::applySessionPackage(const session::SessionPackageData& package
     loaded.config.configPath = runtimeConfig_.configPath;
     // 现场包只恢复采集和协议现场，不覆盖本机全局界面偏好。
     loaded.config.gui.theme = previousConfig.gui.theme;
+    loaded.config.gui.fileDialogs = previousConfig.gui.fileDialogs;
 
     std::optional<config::ProtocolConfig> persistentProtocolConfig;
     std::optional<std::string> importedProtocolDir;

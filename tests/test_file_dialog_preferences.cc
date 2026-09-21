@@ -40,6 +40,22 @@ int main()
         std::ifstream input(path);
         const std::string text((std::istreambuf_iterator<char>(input)), {});
         require(text.find("custom: keep") != std::string::npos, "preserve unknown fields");
+        config::DataExportConfig lastExport;
+        lastExport.valid = true;
+        lastExport.directory = "successful-export";
+#if defined(_WIN32)
+        require(!store.saveFileDialogPreferences(path, preferences, error, &lastExport),
+                "locked config reports save failure");
+#endif
+        input.close();
+        require(store.saveFileDialogPreferences(path, preferences, error, &lastExport), "save last export only");
+        require(store.load(path).config.gui.lastDataExport.valid, "last export reload without wave");
+        preferences.lastExportDirectory = "failed-export";
+        require(store.saveFileDialogPreferences(path, preferences, error), "remember later confirmation");
+        require(store.load(path).config.gui.lastDataExport.directory == "successful-export",
+                "confirmation must not overwrite successful export parameters");
+        require(store.load(path).config.gui.fileDialogs.lastExportDirectory == "failed-export",
+                "directory independent from successful parameters");
         require(ui::resolveFileDialogDirectory(ui::fileDialogPathText(unicodeDir / "missing" / "nested"), {}, root)
                     == unicodeDir, "nearest existing parent");
         require(ui::resolveFileDialogDirectory("?:/missing", unicodeDir, root) == unicodeDir, "invalid drive fallback");

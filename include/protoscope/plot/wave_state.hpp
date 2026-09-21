@@ -531,6 +531,7 @@ struct WaveDockState {
     bool cachedFftKeyValid{false};
     WaveFftCacheKey cachedFftKey{};
     WaveFftFrame cachedFftFrame{};
+    std::string fftDisplayError;
     std::shared_ptr<WaveAnalysisWorker> analysisWorker;
     std::uint64_t analysisEpoch{0};
     std::size_t displayPointBudget{0};

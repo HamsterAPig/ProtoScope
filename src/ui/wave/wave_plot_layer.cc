@@ -1,4 +1,5 @@
 #include "protoscope/ui/ui_theme.hpp"
+#include "protoscope/ui/wave_status.hpp"
 
 #include "wave_context.hpp"
 #include "wave_render_service.hpp"
@@ -46,166 +47,9 @@ bool shouldDrawCursorReadoutAnnotation(bool held, bool pinned)
     return held || pinned;
 }
 
-namespace {
-
-    struct StatusOverlayLayout {
-        std::vector<ImVec2> offsets;
-        std::vector<ImVec2> sizes;
-        ImVec2 size{0.0F, 0.0F};
-    };
-
-    StatusOverlayLayout makeStatusOverlayLayout(const std::vector<WaveStatusOverlayItem>& items, float maxWidth)
-    {
-        StatusOverlayLayout layout;
-        constexpr float chipPadX = 7.0F;
-        constexpr float chipPadY = 3.0F;
-        constexpr float gapX = 4.0F;
-        constexpr float gapY = 4.0F;
-
-        float x = 0.0F;
-        float y = 0.0F;
-        float rowHeight = 0.0F;
-        for (const auto& item : items) {
-            const ImVec2 textSize = ImGui::CalcTextSize(item.label.data(), item.label.data() + item.label.size());
-            const ImVec2 chipSize(textSize.x + chipPadX * 2.0F, textSize.y + chipPadY * 2.0F);
-            float itemX = x > 0.0F ? x + gapX : x;
-            if (x > 0.0F && itemX + chipSize.x > maxWidth) {
-                layout.size.x = (std::max)(layout.size.x, x);
-                x = 0.0F;
-                y += rowHeight + gapY;
-                rowHeight = 0.0F;
-                itemX = 0.0F;
-            }
-            layout.offsets.push_back(ImVec2(itemX, y));
-            layout.sizes.push_back(chipSize);
-            x = itemX + chipSize.x;
-            rowHeight = (std::max)(rowHeight, chipSize.y);
-        }
-        layout.size.x = (std::max)(layout.size.x, x);
-        layout.size.y = y + rowHeight;
-        return layout;
-    }
-
-    std::size_t countSamplesInOverlayRect(const plot::WaveDisplayData& displayData,
-                                          const std::vector<std::size_t>& channelIndices,
-                                          const ImVec2& rectMin,
-                                          const ImVec2& rectMax,
-                                          std::size_t stopAfter)
-    {
-        const ImPlotPoint plotA = ImPlot::PixelsToPlot(rectMin);
-        const ImPlotPoint plotB = ImPlot::PixelsToPlot(rectMax);
-        const double minTime = (std::min)(plotA.x, plotB.x);
-        const double maxTime = (std::max)(plotA.x, plotB.x);
-        const double minValue = (std::min)(plotA.y, plotB.y);
-        const double maxValue = (std::max)(plotA.y, plotB.y);
-
-        std::size_t count = 0;
-        for (const std::size_t channelIndex : channelIndices) {
-            if (channelIndex >= displayData.channels.size()) {
-                continue;
-            }
-            for (const auto& sample : displayData.channels[channelIndex].samples) {
-                if (sample.time >= minTime && sample.time <= maxTime && sample.value >= minValue &&
-                    sample.value <= maxValue) {
-                    ++count;
-                    if (count > stopAfter) {
-                        return count;
-                    }
-                }
-            }
-        }
-        return count;
-    }
-
-    ImVec2 chooseStatusOverlayPosition(const plot::WaveDisplayData& displayData,
-                                       const std::vector<std::size_t>& channelIndices,
-                                       const ImVec2& plotPos,
-                                       const ImVec2& plotSize,
-                                       const ImVec2& overlaySize,
-                                       float margin)
-    {
-        const float left = plotPos.x + margin;
-        const float top = plotPos.y + margin;
-        const float right = (std::max)(left, plotPos.x + plotSize.x - margin - overlaySize.x);
-        const float bottom = (std::max)(top, plotPos.y + plotSize.y - margin - overlaySize.y);
-        const std::array<ImVec2, 4> candidates{
-            ImVec2(right, top),
-            ImVec2(left, top),
-            ImVec2(right, bottom),
-            ImVec2(left, bottom),
-        };
-
-        ImVec2 best = candidates.front();
-        std::size_t bestScore = std::numeric_limits<std::size_t>::max();
-        for (const ImVec2& candidate : candidates) {
-            const ImVec2 candidateMax(candidate.x + overlaySize.x, candidate.y + overlaySize.y);
-            const std::size_t score =
-                countSamplesInOverlayRect(displayData, channelIndices, candidate, candidateMax, bestScore);
-            if (score < bestScore) {
-                bestScore = score;
-                best = candidate;
-            }
-        }
-        return best;
-    }
-
-} // namespace
-
 int splitCursorDragId(const std::size_t channelIndex, const std::size_t cursorIndex)
 {
     return static_cast<int>(300U + channelIndex * 8U + cursorIndex);
-}
-
-void drawWaveStatusOverlay(const plot::WaveViewState& view,
-                           const plot::WaveDisplayData* displayData,
-                           const std::vector<std::size_t>* channelIndices)
-{
-    const auto items = buildWaveStatusOverlayItems(view);
-    if (items.empty()) {
-        return;
-    }
-
-    const ImVec2 plotPos = ImPlot::GetPlotPos();
-    const ImVec2 plotSize = ImPlot::GetPlotSize();
-    constexpr float margin = 8.0F;
-    const float maxWidth = (std::min)(360.0F, plotSize.x - margin * 2.0F);
-    if (maxWidth <= 32.0F || plotSize.y <= margin * 2.0F) {
-        return;
-    }
-
-    const StatusOverlayLayout layout = makeStatusOverlayLayout(items, maxWidth);
-    if (layout.size.x <= 0.0F || layout.size.y <= 0.0F) {
-        return;
-    }
-
-    ImVec2 origin((std::max)(plotPos.x + margin, plotPos.x + plotSize.x - margin - layout.size.x), plotPos.y + margin);
-    const bool hasBitLabels = displayData != nullptr && std::ranges::any_of(displayData->channels, [](const auto& channel) {
-        return channel.source && bitDisplayEnabled(channel.source->bitDisplay);
-    });
-    if (!hasBitLabels && view.interactionActive && view.statusOverlayPositionValid) {
-        origin = ImVec2(plotPos.x + view.statusOverlayOffset[0], plotPos.y + view.statusOverlayOffset[1]);
-    } else if (!hasBitLabels && displayData != nullptr && channelIndices != nullptr && !channelIndices->empty()) {
-        origin = chooseStatusOverlayPosition(*displayData, *channelIndices, plotPos, plotSize, layout.size, margin);
-        view.statusOverlayOffset = {origin.x - plotPos.x, origin.y - plotPos.y};
-        view.statusOverlayPositionValid = true;
-    }
-
-    auto* drawList = ImPlot::GetPlotDrawList();
-    const auto& waveTokens = activeWaveStyleTokens();
-    const ImU32 chipBgColor = ImGui::ColorConvertFloat4ToU32(waveTokens.statusOverlayBackground);
-    const ImU32 chipBorderColor = ImGui::ColorConvertFloat4ToU32(waveTokens.statusOverlayBorder);
-    const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(waveTokens.statusOverlayText);
-
-    for (std::size_t index = 0; index < items.size(); ++index) {
-        const ImVec2 chipMin(origin.x + layout.offsets[index].x, origin.y + layout.offsets[index].y);
-        const ImVec2 chipMax(chipMin.x + layout.sizes[index].x, chipMin.y + layout.sizes[index].y);
-        drawList->AddRectFilled(chipMin, chipMax, chipBgColor, 5.0F);
-        drawList->AddRect(chipMin, chipMax, chipBorderColor, 5.0F);
-        drawList->AddText(ImVec2(chipMin.x + 7.0F, chipMin.y + 3.0F),
-                          textColor,
-                          items[index].label.data(),
-                          items[index].label.data() + items[index].label.size());
-    }
 }
 
 std::vector<plot::WaveSample> buildBitRenderLanePoints(const std::vector<plot::WaveSample>& displaySamples,
@@ -708,6 +552,32 @@ void updateBitTransitionCounts(plot::WaveDockState& wave, const plot::ChannelVie
     entry.pending = false;
     wave.lastBitCountQueryMs += std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - start).count();
+}
+
+WaveStatusSnapshot makeWaveStatusSnapshot(const plot::WaveDockState& wave, std::string context)
+{
+    const auto& view = wave.view;
+    WaveStatusSnapshot snapshot;
+    snapshot.context = std::move(context);
+    snapshot.epoch = wave.buffer.historyEpoch();
+    snapshot.fftEnabled = view.fft.enabled;
+    const bool currentContext = wave.analysisEpoch == snapshot.epoch;
+    snapshot.fftPending = currentContext && view.fftUpdatePending;
+    snapshot.statisticsEnabled = view.showCursors && view.cursors[0].enabled && view.cursors[1].enabled &&
+        wave.buffer.channelCount() > view.measurementChannelIndex &&
+        (!view.fft.enabled || view.fft.displayMode == plot::WaveFftDisplayMode::CursorSplit);
+    snapshot.statisticsPending = currentContext && view.measurementUpdatePending;
+    if (snapshot.fftEnabled && currentContext) {
+        if (!wave.fftDisplayError.empty()) snapshot.fftError = wave.fftDisplayError;
+        else if (wave.cachedFftKeyValid && !wave.cachedFftFrame.valid)
+            snapshot.fftError = wave.cachedFftFrame.message.empty() ? "当前视图无法计算 FFT" : wave.cachedFftFrame.message;
+    }
+    for (const auto& item : buildWaveStatusOverlayItems(view)) {
+        if (item.label == "FFT" || item.label == "FFT 待更新" || item.label == "统计待更新") continue;
+        if (!snapshot.modes.empty()) snapshot.modes += " | ";
+        snapshot.modes += item.label;
+    }
+    return snapshot;
 }
 
 void renderBitWaveChannels(plot::WaveDockState& wave,
@@ -2305,7 +2175,6 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
                 view, frame.snapshot, displayData, result, plotPos, placement.plotSize, ImPlot::GetPlotDrawList());
         }
     }
-    drawWaveStatusOverlay(view, &renderDisplayData, &visibleChannelIndices);
     drawMainPlotContextMenu(wave, frameState);
 
     ImPlot::EndPlot();
