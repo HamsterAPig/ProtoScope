@@ -17,19 +17,10 @@ void verifyChoice(std::span<const plot::OverviewColor> colors, plot::OverviewCol
     const auto selected = plot::selectOverviewColor(colors, background);
     require(std::ranges::find(plot::kOverviewPalette, selected) != plot::kOverviewPalette.end(), "non-palette color");
     require(plot::overviewContrast(plot::overviewRgb(selected), background) >= 3, "border contrast below 3:1");
-    const auto minDistance = [&](std::uint32_t rgb) {
-        const auto lab = plot::overviewLab(plot::overviewRgb(rgb));
-        double nearest = std::numeric_limits<double>::infinity();
-        for (const auto channel : colors) {
-            const auto other = plot::overviewLab(plot::compositeOverviewColor(channel, background));
-            const auto distance = std::hypot(lab[0] - other[0], lab[1] - other[1], lab[2] - other[2]);
-            nearest = (std::min)(nearest, distance);
-        }
-        return nearest;
-    };
     for (const auto candidate : plot::kOverviewPalette)
         if (plot::overviewContrast(plot::overviewRgb(candidate), background) >= 3)
-            require(minDistance(selected) >= minDistance(candidate) - 1e-9, "not maximum minimum Lab distance");
+            require(plot::overviewColorScore(plot::overviewRgb(selected), colors, background) >=
+                    plot::overviewColorScore(plot::overviewRgb(candidate), colors, background), "not best contrast score");
 }
 
 int main()
@@ -88,15 +79,16 @@ int main()
             ImGui::End();
             ImGui::Render();
         };
-        for (const auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::DebugHighContrast}) {
+        for (const auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::DebugHighContrast,
+                                 config::GuiTheme::ProfessionalLight}) {
             ui::applyUiTheme(theme);
             wave.buffer.setChannelSpec(1, {});
             wave.hiddenChannelIndices.clear();
             render();
             render();
             require(wave.overviewColorCache.channels.size() == 2, "visible channel color missing");
-            require(std::abs(wave.overviewColorCache.channels[0].a - 0.325) < 1e-6, "overview alpha lost");
-            verifyChoice(wave.overviewColorCache.channels, wave.overviewColorCache.background);
+            require(wave.overviewColorCache.channels[0].a >= .325 - 1e-6, "overview alpha lost");
+            require(wave.overviewColorCache.alpha <= .28, "overview alpha cap");
             const auto updates = wave.overviewColorCache.updates;
             const auto color = wave.overviewColorCache.selected;
             for (int n = 0; n < 8; ++n) {
@@ -109,7 +101,6 @@ int main()
             render();
             require(wave.overviewColorCache.channels.size() == 1 &&
                     wave.overviewColorCache.updates == updates + 1, "hidden channel still affects selection");
-            verifyChoice(wave.overviewColorCache.channels, wave.overviewColorCache.background);
             wave.buffer.setChannelSpec(1, {.color = std::array{0.3F, 0.2F, 0.8F, 0.8F}});
             render();
             require(wave.overviewColorCache.updates == updates + 2, "custom color did not invalidate selection");
@@ -119,7 +110,42 @@ int main()
             for (const auto* list : ImGui::GetDrawData()->CmdLists)
                 for (const auto& vertex : list->VtxBuffer) found = found || vertex.col == border;
             require(found, "rectangle border is not opaque palette color");
+            wave.view.overviewSelection.automatic = false;
+            wave.view.overviewSelection.fixedColor = std::array{.5F, .25F, .75F};
+            wave.view.overviewSelection.minAlpha = .05F;
+            wave.view.overviewSelection.maxAlpha = .08F;
+            wave.view.viewMaxTime = wave.view.viewMinTime + 1e-9;
+            wave.hiddenChannelIndices = {0, 1};
+            render();
+            require(wave.overviewColorCache.alpha <= .08F, "fixed alpha maximum");
+            require(wave.overviewColorCache.channels.empty(), "all hidden channels must not contribute");
+            wave.view.overviewSelection = {};
+            wave.view.viewMaxTime = .6;
         }
+        plot::OverviewColorRaster raster({1,1,1,1});
+        raster.rectangle(0, 0, 1, 1, {1,0,0,.5});
+        raster.rectangle(0, 0, 1, 1, {0,0,1,.5});
+        require(raster.pixels[0] == plot::OverviewColor{.5,.25,.75,1}, "raster draw order/alpha");
+        plot::OverviewColorCache cache;
+        const plot::OverviewColor bg{.02,.02,.02,1};
+        plot::OverviewSelectionStyle settings;
+        std::array sample{plot::OverviewColor{.8,.2,.5,1}};
+        cache.resolveSamples({}, bg, sample, settings, 1, 0, 0, .016);
+        const auto initial = cache.selected;
+        const auto count = cache.updates;
+        sample[0] = plot::overviewRgb(initial);
+        cache.resolveSamples({}, bg, sample, settings, 1, 0, .1, .016);
+        require(cache.updates == count, "evaluation throttling");
+        cache.dragging = true;
+        cache.resolveSamples({}, bg, sample, settings, 1, 0, 2, .016);
+        require(cache.selected == initial && cache.updates == count, "drag locks color");
+        cache.dragging = false;
+        cache.resolveSamples({}, bg, sample, settings, 1, 0, 2.1, .016);
+        require(cache.selected == initial, "candidate changed without hysteresis");
+        cache.resolveSamples({}, bg, sample, settings, 1, 0, 2.31, .016);
+        require(cache.selected == initial, "candidate changed before 400ms");
+        cache.resolveSamples({}, bg, sample, settings, 1, 0, 2.52, .016);
+        require(cache.selected != initial, "persistent improved candidate not adopted");
         std::cout << "overview_color: palette, Lab, alpha, contrast, visibility, themes and cache passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

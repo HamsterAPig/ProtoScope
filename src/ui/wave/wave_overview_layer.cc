@@ -153,6 +153,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
     // 概览图需要跟随 splitter 压缩，避免 ImPlot 默认 150px 最小高度撑住内部绘图区。
     ImPlot::PushStyleVar(ImPlotStyleVar_PlotMinSize, ImVec2(64.0F, 24.0F));
     ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(2.0F, 2.0F));
+    ImPlot::PushStyleColor(ImPlotCol_PlotBg, activeWaveStyleTokens().plotBackground);
     if (ImPlot::BeginPlot("##wave_overview", ImVec2(-1.0F, -1.0F), plotFlags)) {
         constexpr ImPlotAxisFlags axisFlags =
             ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoDecorations;
@@ -167,13 +168,44 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             overviewMaxSamples > 0
                 ? (std::min)({pixelWidth, renderBudget.pointsPerChannel, overviewMaxSamples})
                 : (std::min)(pixelWidth, renderBudget.pointsPerChannel);
+        const auto background = activeWaveStyleTokens().plotBackground;
+        const auto window = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+        const auto effectiveBackground = plot::compositeOverviewColor(
+            {background.x, background.y, background.z, background.w}, {window.x, window.y, window.z, 1});
+        const auto settings = overviewSelectionStyle(view.overviewSelection);
+        auto& colorCache = wave.overviewColorCache;
+        colorCache.dragging = ImGui::IsMouseDown(0) &&
+            (view.overviewWindowDragging || colorCache.dragging || ImPlot::IsPlotHovered());
+        std::uint64_t visibility = view.overviewNormalizeChannels ? 1 : 0;
         std::vector<plot::OverviewColor> drawnColors;
+        for (const auto index : overviewChannels) {
+            visibility = visibility * 1099511628211ULL + index + 1;
+            const auto color = displayColor(channelColor(fullSnapshot.channels[index], index), background, .65F);
+            drawnColors.push_back({color.x, color.y, color.z, color.w});
+        }
+        const bool invalidated = colorCache.revision != activeThemeRevision() || colorCache.visibility != visibility ||
+            colorCache.background != effectiveBackground || colorCache.style != settings ||
+            colorCache.channels != drawnColors;
+        const bool sampleNow = colorCache.needsEvaluation(ImGui::GetTime(), invalidated);
+        plot::OverviewColorRaster raster(effectiveBackground);
+        const auto normX = [&](double t) { return (t - overviewMinTime) / (overviewMaxTime - overviewMinTime); };
+        const auto normY = [&](double v) { return (v - overviewMinValue) / (overviewMaxValue - overviewMinValue); };
+        std::size_t drawnIndex = 0;
         for (const std::size_t channelIndex : overviewChannels) {
             const auto& overview = cachedOverviewChannel(wave, fullSnapshot.channels[channelIndex], channelIndex,
                 displayData.axisSource, overviewMinTime, overviewMaxTime, pixelWidth, overviewPointLimit);
-            const auto color = withAlpha(channelColor(fullSnapshot.channels[channelIndex], channelIndex), 0.65F);
-            if (!overview.trace.empty() || !overview.envelope.empty())
-                drawnColors.push_back({color.x, color.y, color.z, color.w});
+            const auto sampledColor = drawnColors[drawnIndex++];
+            const ImVec4 color(float(sampledColor.r), float(sampledColor.g), float(sampledColor.b), float(sampledColor.a));
+            if (sampleNow) {
+                for (std::size_t i = 1; i < overview.trace.size(); ++i) {
+                    const auto& a = overview.trace[i - 1];
+                    const auto& b = overview.trace[i];
+                    raster.line(normX(a.time), normY(a.value), normX(b.time), normY(b.value), sampledColor);
+                }
+                for (const auto& bucket : overview.envelope)
+                    raster.rectangle(normX(bucket.beginTime), normY(bucket.minValue),
+                                     normX(bucket.endTime), normY(bucket.maxValue), sampledColor);
+            }
             if (!overview.trace.empty()) {
                 WaveSampleGetterPayload payload{.samples = overview.trace.data()};
                 ImPlotSpec spec{};
@@ -197,12 +229,8 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             ImPlot::PopPlotClipRect();
         }
 
-        const auto background = ImPlot::GetStyleColorVec4(ImPlotCol_PlotBg);
-        const auto window = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
-        const auto effectiveBackground = plot::compositeOverviewColor(
-            {background.x, background.y, background.z, background.w}, {window.x, window.y, window.z, 1});
-        const auto rectangleRgb = wave.overviewColorCache.resolve(drawnColors, effectiveBackground);
-        const auto rectangleColor = plot::overviewRgb(rectangleRgb);
+        const auto rectangleColor = colorCache.resolveSamples(drawnColors, effectiveBackground, raster.pixels,
+            settings, activeThemeRevision(), visibility, ImGui::GetTime(), ImGui::GetIO().DeltaTime);
         double rectMinTime = view.viewMinTime;
         double rectMaxTime = view.viewMaxTime;
         double rectMinValue = overviewMinValue;
@@ -222,7 +250,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
                              &rectMinValue,
                              &rectMaxTime,
                              &rectMaxValue,
-                             ImVec4(float(rectangleColor.r), float(rectangleColor.g), float(rectangleColor.b), 1.0F),
+                             ImVec4(0, 0, 0, 0),
                              ImPlotDragToolFlags_NoFit,
                              nullptr,
                              &rectHovered,
@@ -240,29 +268,37 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::OverviewDrag);
             view.forceNextMainPlotLimits = true;
         }
-        const auto mousePlotPos = ImPlot::GetPlotMousePos();
         const ImVec2 rectMinPixel = ImPlot::PlotToPixels((std::min)(rectMinTime, rectMaxTime), overviewMaxValue);
         const ImVec2 rectMaxPixel = ImPlot::PlotToPixels((std::max)(rectMinTime, rectMaxTime), overviewMinValue);
-        const ImVec2 mousePixel = ImGui::GetMousePos();
-        constexpr float kDragEdgePadding = 8.0F;
-        const bool mouseInsideWindowBody =
-            ImPlot::IsPlotHovered() && mousePixel.x > rectMinPixel.x + kDragEdgePadding &&
-            mousePixel.x < rectMaxPixel.x - kDragEdgePadding && mousePixel.y > rectMinPixel.y + kDragEdgePadding &&
-            mousePixel.y < rectMaxPixel.y - kDragEdgePadding;
-        if (mouseInsideWindowBody && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            view.overviewWindowDragging = true;
-            view.overviewDragLastTime = mousePlotPos.x;
+        // 保留 DragRect 的命中与范围计算；独立绘制可控 alpha、护边及窄选区标记。
+        colorCache.dragging = rectHeld || view.overviewWindowDragging;
+        const auto pos = ImPlot::GetPlotPos();
+        const auto size = ImPlot::GetPlotSize();
+        float left = std::clamp(rectMinPixel.x, pos.x + 2.F, pos.x + size.x - 2.F);
+        float right = std::clamp(rectMaxPixel.x, pos.x + 2.F, pos.x + size.x - 2.F);
+        if (right - left < 4.F) {
+            const float center = std::clamp((left + right) * .5F, pos.x + 4.F, pos.x + size.x - 4.F);
+            left = center - 2.F; right = center + 2.F;
         }
-        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            view.overviewWindowDragging = false;
+        const ImVec2 visualMin(left, pos.y + 2.F), visualMax(right, pos.y + size.y - 2.F);
+        const ImVec4 border(float(rectangleColor.r), float(rectangleColor.g), float(rectangleColor.b), 1.F);
+        const auto guard = plot::overviewLuminance(rectangleColor) > .35
+            ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
+        auto* selectionDraw = ImPlot::GetPlotDrawList();
+        ImPlot::PushPlotClipRect();
+        selectionDraw->AddRectFilled(visualMin, visualMax, ImGui::ColorConvertFloat4ToU32(
+            ImVec4(border.x, border.y, border.z, float(rectangleColor.a))));
+        selectionDraw->AddRect(visualMin, visualMax, guard, 0, 0, 4.F);
+        selectionDraw->AddRect(visualMin, visualMax, ImGui::ColorConvertFloat4ToU32(border), 0, 0, 2.F);
+        const float centerY = pos.y + size.y * .5F;
+        for (const auto x : {left, right}) {
+            selectionDraw->AddLine(ImVec2(x, centerY - 5), ImVec2(x, centerY + 5), guard, 6.F);
+            selectionDraw->AddLine(ImVec2(x, centerY - 5), ImVec2(x, centerY + 5),
+                                  ImGui::ColorConvertFloat4ToU32(border), 3.F);
         }
-        if (view.overviewWindowDragging && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            const double deltaTime = mousePlotPos.x - view.overviewDragLastTime;
-            const auto moved =
-                plot::moveViewportByDelta(currentViewport(view), deltaTime, overviewBounds, minVisibleTimeSpan);
-            applyViewport(view, moved, WaveViewportAutoFollowPolicy::OverviewDrag);
-            view.overviewDragLastTime = mousePlotPos.x;
-        }
+        ImPlot::PopPlotClipRect();
+        // DragRect 已处理框体平移，不能再次叠加鼠标位移。
+        view.overviewWindowDragging = rectHeld && ImGui::IsMouseDown(ImGuiMouseButton_Left);
         if ((rectHovered || rectHeld) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
             applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::OverviewDrag);
         }
@@ -290,13 +326,14 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             const bool highlighted = lineTime >= view.viewMinTime && lineTime <= view.viewMaxTime;
             ImPlot::DragLineX(static_cast<int>(400 + cursorIndex),
                               &lineTime,
-                              withAlpha(measurementCursorColor(cursorIndex), highlighted ? 0.95F : 0.35F),
+                              displayColor(measurementCursorColor(cursorIndex), background, highlighted ? .95F : .35F),
                               2.0F,
                               ImPlotDragToolFlags_NoInputs | ImPlotDragToolFlags_NoFit);
         }
         ImPlot::EndPlot();
     }
     ImPlot::PopStyleVar(2);
+    ImPlot::PopStyleColor();
 }
 
 } // namespace protoscope::ui

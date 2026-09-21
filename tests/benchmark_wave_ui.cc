@@ -341,12 +341,14 @@ int main(int argc, char** argv)
                             const auto time = wave.view.cursors[c].time;
                             const auto alpha = time >= wave.view.viewMinTime && time <= wave.view.viewMaxTime ? 0.95F : 0.35F;
                             if (cursorVertex < 0 && vertexColor ==
-                                ImGui::ColorConvertFloat4ToU32(ui::withAlpha(ui::measurementCursorColor(c), alpha)))
+                                ImGui::ColorConvertFloat4ToU32(ui::displayColor(ui::measurementCursorColor(c),
+                                    ui::activeWaveStyleTokens().plotBackground, alpha)))
                                 cursorVertex = v;
                         }
                         for (std::size_t i = 0; i < colors.size(); ++i) {
-                            const auto color = ImGui::ColorConvertFloat4ToU32(
-                                ImVec4(colors[i][0], colors[i][1], colors[i][2], 0.65F));
+                            const auto color = ImGui::ColorConvertFloat4ToU32(ui::displayColor(
+                                ui::channelColor(*wave.buffer.channelSpec(i), i),
+                                ui::activeWaveStyleTokens().plotBackground, .65F));
                             if (drawList->VtxBuffer[v].col == color) {
                                 if (first[i] < 0) first[i] = v;
                                 last[i] = v;
