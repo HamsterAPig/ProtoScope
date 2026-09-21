@@ -949,6 +949,12 @@ namespace {
 
     void loadScriptingWorkerConfig(const YAML::Node& scripting, AppConfig& config)
     {
+        if (const auto execution = childNode(scripting, "execution")) {
+            config.scripting.execution.loadTimeoutMs = std::clamp<std::uint64_t>(
+                readScalar<std::uint64_t>(execution, "load_timeout_ms", 5000), 1, 3600000);
+            config.scripting.execution.callbackTimeoutMs = std::clamp<std::uint64_t>(
+                readScalar<std::uint64_t>(execution, "callback_timeout_ms", 500), 1, 3600000);
+        }
         if (const auto pipeline = childNode(scripting, "pipeline")) {
             if (pipeline["worker_threads"]) {
                 config.scripting.pipeline.workerThreads = readScalar<std::size_t>(pipeline, "worker_threads", 1U);
@@ -1309,6 +1315,8 @@ namespace {
         if (config.scripting.pipeline.workerThreads.has_value()) {
             scripting["pipeline"]["worker_threads"] = *config.scripting.pipeline.workerThreads;
         }
+        scripting["execution"]["load_timeout_ms"] = config.scripting.execution.loadTimeoutMs;
+        scripting["execution"]["callback_timeout_ms"] = config.scripting.execution.callbackTimeoutMs;
         scripting["worker"]["enabled"] = config.scripting.workerEnabled;
         writePerformanceScalar(scripting["worker"],
                                "rx_queue_limit_bytes",

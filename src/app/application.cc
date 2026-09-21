@@ -919,6 +919,7 @@ namespace {
 
     bool validateReleasedProtocolDirectory(const std::filesystem::path& protocolDir,
                                            const scripting::FileIoConfig& fileIoConfig,
+                                           const scripting::ExecutionConfig& executionConfig,
                                            std::string& error)
     {
         std::error_code protocolEntryError;
@@ -933,6 +934,7 @@ namespace {
 
         scripting::ScriptHost probeHost;
         probeHost.setFileIoConfig(fileIoConfig);
+        probeHost.setExecutionConfig(executionConfig);
         if (!probeHost.loadProtocolDirectory(protocolDir.generic_string())) {
             error = "现场包协议脚本无效: " + probeHost.lastError();
             return false;
@@ -1286,6 +1288,7 @@ bool Application::applyConfig(const config::AppConfig& config)
     const auto postprocessWorkerThreads = scripting::resolvePipelineWorkerThreads(
         config.scripting.pipeline.workerThreads, std::thread::hardware_concurrency());
     scriptWorker_.configure(scripting::ScriptRuntimeWorkerConfig{
+        .execution = config.scripting.execution,
         .enabled = config.scripting.workerEnabled,
         .postprocessWorkerThreads = postprocessWorkerThreads,
         .rxQueueLimitBytes = config.scripting.workerRxQueueLimitBytes,
@@ -1438,6 +1441,7 @@ bool Application::probeProtocolDirectory(const std::string& resolvedDirText)
 {
     scripting::ScriptHost probeHost;
     probeHost.setFileIoConfig(runtimeConfig_.scripting.fileIo);
+    probeHost.setExecutionConfig(runtimeConfig_.scripting.execution);
     if (probeHost.loadProtocolDirectory(resolvedDirText)) {
         return true;
     }
@@ -2817,7 +2821,8 @@ bool Application::applySessionPackage(const session::SessionPackageData& package
         if (!releaseSessionProtocolEntries(protocolEntries, protocolDir, error)) {
             return false;
         }
-        if (!validateReleasedProtocolDirectory(protocolDir, loaded.config.scripting.fileIo, error)) {
+        if (!validateReleasedProtocolDirectory(protocolDir, loaded.config.scripting.fileIo,
+                                               loaded.config.scripting.execution, error)) {
             return false;
         }
         loaded.config.protocol.rootDir = protocolDir.parent_path().generic_string();

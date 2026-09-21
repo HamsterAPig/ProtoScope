@@ -75,6 +75,7 @@ target_link_libraries(protoscope_ui_layout
 target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
+    scripting/host/lua_execution_guard.cc
     scripting/frame_stream_parser.cc
     scripting/pipeline_threading.cc
     scripting/script_runtime_worker.cc
@@ -99,6 +100,7 @@ target_include_directories(protoscope_scripting
 )
 target_link_libraries(protoscope_scripting
     PUBLIC
+        protoscope_plot
         protoscope_protocol_utils
         protoscope_transport
         protoscope_lua

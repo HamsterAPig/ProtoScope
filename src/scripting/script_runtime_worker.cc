@@ -265,6 +265,7 @@ struct ScriptRuntimeWorker::Impl {
     bool stopping{false};
     bool executing{false};
     std::atomic_bool failed{false};
+    std::shared_ptr<std::atomic_bool> stopSignal{std::make_shared<std::atomic_bool>(false)};
     std::thread thread;
     std::condition_variable rxBackpressureChanged;
 
@@ -287,6 +288,8 @@ struct ScriptRuntimeWorker::Impl {
 
     void stop()
     {
+        // 停止信号直接被 Lua 指令钩子读取，不排在可能卡住的业务回调之后。
+        stopSignal->store(true, std::memory_order_relaxed);
         bool shouldNotify = false;
         {
             std::lock_guard lock(mutex);
@@ -634,8 +637,9 @@ struct ScriptRuntimeWorker::Impl {
         return true;
     }
 
-    CommandExecutionResult executeCommandItem(ScriptHost&, std::optional<std::uint64_t>&, ConfigureCommand& command)
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, ConfigureCommand& command)
     {
+        host.setExecutionConfig(command.config.execution);
         std::lock_guard lock(mutex);
         config = command.config;
         return {};
@@ -810,7 +814,7 @@ struct ScriptRuntimeWorker::Impl {
 
     void run()
     {
-        ScriptHost host;
+        ScriptHost host(stopSignal);
         std::optional<std::uint64_t> activeConnectionId;
         publishSnapshot(host);
 

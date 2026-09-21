@@ -3,10 +3,12 @@
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
+#include "protoscope/scripting/execution_config.hpp"
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/transport/transport.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -416,7 +418,7 @@ struct ScriptHostTransportStats {
 
 class ScriptHost {
 public:
-    ScriptHost();
+    explicit ScriptHost(std::shared_ptr<std::atomic_bool> stopSignal = {});
     ~ScriptHost();
     ScriptHost(ScriptHost&&) noexcept;
     ScriptHost& operator=(ScriptHost&&) noexcept;
@@ -426,6 +428,9 @@ public:
     bool loadScriptFile(const std::string& path);
     bool loadProtocolDirectory(const std::string& directory);
     void setFileIoConfig(FileIoConfig config);
+    void setExecutionConfig(ExecutionConfig config);
+    void requestStop() noexcept;
+    [[nodiscard]] bool executionFaulted() const;
     void resetRuntime();
 
     void onTransportOpen(const transport::TransportOpenEvent& event);
@@ -480,6 +485,7 @@ public:
 
 private:
     struct Runtime;
+    struct CallbackScope;
     struct FileHandle;
     struct AuthorizedPath;
     struct FileSendJob;
@@ -608,6 +614,7 @@ private:
         std::string name;
         std::uint64_t dueAtMs{0};
         bool active{false};
+        std::uint64_t generation{0};
     };
 
     bool scriptLoaded_{false};
@@ -635,12 +642,15 @@ private:
     std::vector<AuthorizedPath> dialogAuthorizedPaths_;
     std::optional<transport::ConnectionContext> activeConnection_;
     std::unique_ptr<Runtime> runtime_;
+    std::shared_ptr<std::atomic_bool> stopSignal_;
+    ExecutionConfig executionConfig_{};
     FileIoConfig fileIoConfig_{};
     std::uint64_t nextTxRequestId_{1};
     std::uint64_t nextDialogId_{1};
     std::uint64_t nextFileDialogId_{1};
     std::uint64_t nextFileHandleId_{1};
     std::uint64_t nextFileJobId_{1};
+    std::uint64_t nextTimerGeneration_{1};
     bool requestAwaitingCompletion_{false};
     ScriptHostTransportStats lastTransportStats_{};
 };

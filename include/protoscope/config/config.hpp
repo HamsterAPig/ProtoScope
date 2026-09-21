@@ -2,6 +2,7 @@
 
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
+#include "protoscope/scripting/execution_config.hpp"
 
 #include <array>
 #include <cstddef>
@@ -262,6 +263,7 @@ struct ScriptingPipelineConfig {
 };
 
 struct ScriptingConfig {
+    scripting::ExecutionConfig execution{};
     scripting::FileIoConfig fileIo{};
     ScriptingPipelineConfig pipeline{};
     bool workerEnabled{true};

@@ -96,5 +96,18 @@ proto.ui.alert({
 文件读写和文件发送的稳定字段：
 
 - `proto.fs.open(path, opts)`：`mode = "read" | "write" | "append"`、`binary`、`create_dirs`、`overwrite`。
-- `proto.fs.read(handle, opts)`：`size`。
+- `proto.fs.read(handle, opts)`：`max_bytes`，上限为 `scripting.file_io.max_chunk_bytes`；到达文件末尾返回 `nil, "eof"`，其他读取错误返回 `nil, error`。
 - `proto.fs.send_file(path, opts)`：`kind = "send" | "request"`、`chunk_size`、`tag`。
+- `send_file` 的发送块在 `sent` 后推进，请求块在 `completed` 后推进；失败、拒绝、丢弃、取消或超时终止该任务，不再排入后续块。已经交给传输层的块仍可能收到完成事件。
+- `proto.fs.write` 的追加限额包含原文件长度；`proto.fs.close` 显式刷新并关闭，失败返回 `false, error`，读到 EOF 后正常关闭返回 `true`。
+
+### Lua 执行预算
+
+`scripting.execution.load_timeout_ms` 默认 5000，覆盖脚本顶层、`stream()` 和 `ui()` 声明；
+`scripting.execution.callback_timeout_ms` 默认 500，覆盖宿主派发的业务回调。
+配置范围为 1 到 3600000 毫秒，独立于性能缩放。
+
+每 1000 条 Lua 指令检查时间和 worker 停止信号。回调超时后，当前脚本停止业务回调和定时器，
+清除尚未交给传输层的发送，错误进入脚本运行时状态。成功重载后恢复；
+加载新脚本失败时保留旧运行时。已发出的设备命令无法撤回。
+该机制仅中断 Lua 指令执行，不构成完整沙箱，也不能中断阻塞的原生调用。

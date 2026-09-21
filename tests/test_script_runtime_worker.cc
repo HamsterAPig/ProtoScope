@@ -198,6 +198,8 @@ void test_script_runtime_worker_rx_limit_keeps_all_queued_bytes()
     const ScopedTempPath protocolDir(makeWorkerProtocolDir("rx-limit", workerProbeScript()));
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
+        // 此用例故意忙等一秒制造队列积压，执行预算需覆盖探针耗时。
+        .execution = {.callbackTimeoutMs = 5000},
         .enabled = true,
         .rxQueueLimitBytes = 6U,
         .outputQueueLimit = 1U,
@@ -241,6 +243,7 @@ void test_script_runtime_worker_batch_bytes_merges_adjacent_rx_events()
     const ScopedTempPath protocolDir(makeWorkerProtocolDir("batch-bytes", workerBatchProbeScript()));
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
+        .execution = {.callbackTimeoutMs = 5000},
         .enabled = true,
         .rxQueueLimitBytes = 64U * 1024U,
         .outputQueueLimit = 128U,
@@ -271,6 +274,7 @@ void test_script_runtime_worker_can_disable_adjacent_rx_merge()
     const ScopedTempPath protocolDir(makeWorkerProtocolDir("no-batch-bytes", workerBatchProbeScript()));
     protoscope::scripting::ScriptRuntimeWorker worker;
     worker.configure(protoscope::scripting::ScriptRuntimeWorkerConfig{
+        .execution = {.callbackTimeoutMs = 5000},
         .enabled = true,
         .rxQueueLimitBytes = 64U * 1024U,
         .outputQueueLimit = 128U,

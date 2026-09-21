@@ -3439,7 +3439,26 @@ namespace script_host_lua {
 
 } // namespace script_host_lua
 
-ScriptHost::ScriptHost() : runtime_(std::make_unique<Runtime>()) {}
+ScriptHost::ScriptHost(std::shared_ptr<std::atomic_bool> stopSignal)
+    : runtime_(std::make_unique<Runtime>()),
+      stopSignal_(stopSignal ? std::move(stopSignal) : std::make_shared<std::atomic_bool>(false)) {}
+
+void ScriptHost::setExecutionConfig(ExecutionConfig config)
+{
+    config.loadTimeoutMs = std::clamp<std::uint64_t>(config.loadTimeoutMs, 1, 3600000);
+    config.callbackTimeoutMs = std::clamp<std::uint64_t>(config.callbackTimeoutMs, 1, 3600000);
+    executionConfig_ = config;
+}
+
+void ScriptHost::requestStop() noexcept
+{
+    stopSignal_->store(true, std::memory_order_relaxed);
+}
+
+bool ScriptHost::executionFaulted() const
+{
+    return stopSignal_->load(std::memory_order_relaxed) || (runtime_ && runtime_->execution.failure != nullptr);
+}
 
 ScriptHost::~ScriptHost() = default;
 ScriptHost::ScriptHost(ScriptHost&&) noexcept = default;
@@ -3909,19 +3928,24 @@ bool ScriptHost::setControlValue(const std::string& id, const ControlValue& valu
 
 void ScriptHost::tick(std::uint64_t currentMs)
 {
-    std::vector<std::string> dueTimers;
+    if (executionFaulted()) {
+        return;
+    }
+    std::vector<std::pair<std::string, std::uint64_t>> dueTimers;
     dueTimers.reserve(timers_.size());
     for (const auto& [name, timer] : timers_) {
         if (timer.active && currentMs >= timer.dueAtMs) {
-            dueTimers.push_back(name);
+            dueTimers.emplace_back(name, timer.generation);
         }
     }
 
-    for (const auto& name : dueTimers) {
+    for (const auto& [name, generation] : dueTimers) {
         auto iter = timers_.find(name);
-        if (iter != timers_.end()) {
-            iter->second.active = false;
+        // 前一个回调可能取消或重设本轮到期项；新代次必须留给下一次 tick。
+        if (iter == timers_.end() || !iter->second.active || iter->second.generation != generation) {
+            continue;
         }
+        iter->second.active = false;
         if (activeConnection_.has_value()) {
             callbackOnTimer(ScriptHostContext{*activeConnection_}, name);
         } else {
@@ -4153,6 +4177,9 @@ void ScriptHost::registerLuaApi(sol::state_view lua, sol::table& proto)
 
 std::optional<std::uint64_t> ScriptHost::nextWakeupAtMs() const
 {
+    if (executionFaulted()) {
+        return std::nullopt;
+    }
     std::optional<std::uint64_t> nextWakeup;
     for (const auto& [_, timer] : timers_) {
         if (!timer.active) {
@@ -4182,14 +4209,24 @@ const std::string& ScriptHost::lastError() const
 
 void ScriptHost::onTxEvent(const transport::ConnectionContext& ctx, const TxEvent& event)
 {
-    const bool releaseFileChunk = event.state == TxEventState::Sent || event.state == TxEventState::Rejected ||
-                                  event.state == TxEventState::Dropped || event.state == TxEventState::Canceled ||
-                                  event.state == TxEventState::Timeout;
-    if (event.fileJobId != 0 && releaseFileChunk) {
+    if (event.fileJobId != 0 && !executionFaulted()) {
         const auto iter = fileSendJobs_.find(event.fileJobId);
-        if (iter != fileSendJobs_.end()) {
-            iter->second.inflight = iter->second.inflight == 0 ? 0 : iter->second.inflight - 1;
-            pumpFileSendJob(event.fileJobId);
+        if (iter != fileSendJobs_.end() && iter->second.inflight.contains(event.id)) {
+            const bool failed = event.state == TxEventState::Failed || event.state == TxEventState::Rejected ||
+                                event.state == TxEventState::Dropped || event.state == TxEventState::Canceled ||
+                                event.state == TxEventState::Timeout;
+            const bool completed = iter->second.kind == TxRequestKind::Request
+                ? event.state == TxEventState::Completed : event.state == TxEventState::Sent;
+            if (failed) {
+                // 失败立即停止推进并释放句柄；已交给传输层的在途块仍由传输层报告结果。
+                const auto handleId = iter->second.handleId;
+                fileSendJobs_.erase(iter);
+                std::erase_if(txRequests_, [&](const auto& request) { return request.fileJobId == event.fileJobId; });
+                protoFsClose(luaView(), handleId);
+            } else if (completed) {
+                iter->second.inflight.erase(event.id);
+                pumpFileSendJob(event.fileJobId);
+            }
         }
     }
     callbackOnTx(ScriptHostContext{ctx}, event);
@@ -4532,6 +4569,7 @@ void ScriptHost::protoSetTimer(const std::string& name, std::uint64_t intervalMs
         .name = name,
         .dueAtMs = nowMs() + intervalMs,
         .active = true,
+        .generation = nextTimerGeneration_++,
     };
 }
 

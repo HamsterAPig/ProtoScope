@@ -1,6 +1,7 @@
 #include "script_host_internal.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <optional>
@@ -11,6 +12,39 @@
 namespace protoscope::scripting {
 
 namespace {
+
+    bool canReuseControlValue(const ControlDescriptor& previous,
+                              const ControlDescriptor& next,
+                              const ControlValue& value)
+    {
+        if (previous.type != next.type || value.index() != defaultValueFor(next).index()) {
+            return false;
+        }
+        switch (next.type) {
+        case ControlType::Button:
+        case ControlType::ValueTable:
+            return false;
+        case ControlType::Combo: {
+            const auto index = std::get<int>(value);
+            return index >= 0 && static_cast<std::size_t>(index) < next.comboOptions.size() &&
+                   static_cast<std::size_t>(index) < previous.comboOptions.size() &&
+                   previous.comboOptions[index] == next.comboOptions[index];
+        }
+        case ControlType::InputFloat:
+            return std::isfinite(std::get<float>(value));
+        case ControlType::TxSequence:
+            // 发送字段的结构或选项变化后旧帧不再可信，整体回退到脚本默认值。
+            return previous.txSequenceFields.size() == next.txSequenceFields.size() &&
+                std::equal(previous.txSequenceFields.begin(), previous.txSequenceFields.end(),
+                           next.txSequenceFields.begin(), [](const auto& lhs, const auto& rhs) {
+                    return lhs.id == rhs.id && lhs.type == rhs.type && lhs.options.size() == rhs.options.size() &&
+                        std::equal(lhs.options.begin(), lhs.options.end(), rhs.options.begin(),
+                                   [](const auto& a, const auto& b) { return a.value == b.value; });
+                });
+        default:
+            return true;
+        }
+    }
 
     std::optional<std::filesystem::path> resolveScriptFilePath(const std::string& path, std::string& error)
     {
@@ -190,6 +224,7 @@ std::unique_ptr<ScriptHost::LoadedScript> ScriptHost::loadScriptIntoRuntime(Runt
                                                                             std::string& error)
 {
     auto& lua = runtime.lua;
+    LuaExecutionScope execution(lua.lua_state(), runtime.execution, *stopSignal_, executionConfig_.loadTimeoutMs);
     auto scriptResult = lua.safe_script_file(path, &sol::script_pass_on_error);
     if (!scriptResult.valid()) {
         error = "执行脚本失败: " + protectedCallError(scriptResult);
@@ -207,6 +242,10 @@ std::unique_ptr<ScriptHost::LoadedScript> ScriptHost::loadScriptIntoRuntime(Runt
     auto parsedDocks = parseDockDescriptors(lua, parseError);
     if (!parsedDocks.has_value()) {
         error = std::move(parseError);
+        return nullptr;
+    }
+    if (runtime.execution.failure != nullptr || stopSignal_->load(std::memory_order_relaxed)) {
+        error = runtime.execution.failure != nullptr ? runtime.execution.failure : "Lua execution stopped";
         return nullptr;
     }
 
@@ -228,8 +267,15 @@ void ScriptHost::commitLoadedScript(std::unique_ptr<Runtime> runtime,
         for (const auto& control : dock.controls) {
             nextControls.push_back(control);
             const auto existing = previousControlValues.find(control.id);
-            nextControlValues[control.id] =
-                existing == previousControlValues.end() ? defaultValueFor(control) : existing->second;
+            const auto* previous = findControlDescriptor(controls_, control.id);
+            // 控件 ID 相同不足以复用；实测表值和发送运行状态属于当前运行时。
+            auto value = existing != previousControlValues.end() && previous != nullptr &&
+                         canReuseControlValue(*previous, control, existing->second)
+                ? existing->second : defaultValueFor(control);
+            if (auto* sequence = std::get_if<TxSequenceValue>(&value)) {
+                sequence->running = false;
+            }
+            nextControlValues[control.id] = std::move(value);
         }
     }
 
