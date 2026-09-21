@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <optional>
@@ -22,6 +23,22 @@ struct WaveDigitalBucket {
     std::uint64_t firstBits{0};
     std::uint64_t lastBits{0};
     std::uint64_t activity{0};
+};
+
+struct WaveDigitalSegment {
+    double beginTime{0};
+    double endTime{0};
+    bool firstState{false};
+    bool lastState{false};
+    bool activity{false};
+};
+
+struct WaveTimeEnvelope {
+    double beginTime{0};
+    double endTime{0};
+    double minValue{0};
+    double maxValue{0};
+    std::size_t sampleCount{0};
 };
 
 struct WaveSummary {
@@ -54,23 +71,28 @@ class WaveSummaryIndex {
 public:
     static constexpr std::size_t blockSize = 256;
     void clear();
-    void synchronize(std::span<const WaveSample> samples, std::size_t sampleOffset);
+    void synchronize(std::span<const WaveSample> samples, std::size_t sampleOffset, bool digital = false);
     WaveSummary query(std::span<const WaveSample> samples,
                       std::size_t sampleOffset,
                       std::size_t begin,
                       std::size_t end,
                       WaveQueryCounters* counters = nullptr) const;
     std::size_t memoryBytes() const;
+    std::uint64_t bitTransitions(std::span<const WaveSample> samples, std::size_t sampleOffset,
+                                 std::size_t begin, std::size_t end, std::size_t bit,
+                                 WaveQueryCounters* counters = nullptr) const;
 
 private:
     struct Level {
         std::size_t firstBlock{0};
         std::deque<WaveSummary> blocks;
+        std::deque<std::array<std::uint64_t, 64>> transitions;
     };
 
     std::vector<Level> levels_;
     std::size_t begin_{0};
     std::size_t end_{0};
+    bool digital_{false};
 };
 
 // 查询视图只在当前 UI 帧借用原始样本；跨线程分析必须使用 extract() 的独立副本。
@@ -93,6 +115,13 @@ public:
                                                   double maxTime,
                                                   std::size_t budget,
                                                   WaveQueryCounters* counters = nullptr) const;
+    std::vector<WaveDigitalSegment> digitalSegments(double minTime, double maxTime, std::size_t bit,
+                                                     std::size_t primitiveBudget, std::size_t pixelWidth,
+                                                     WaveQueryCounters* counters = nullptr) const;
+    std::uint64_t bitTransitions(double minTime, double maxTime, std::size_t bit,
+                                 WaveQueryCounters* counters = nullptr) const;
+    std::vector<WaveTimeEnvelope> timeEnvelope(double minTime, double maxTime, std::size_t buckets,
+                                               WaveQueryCounters* counters = nullptr) const;
     std::optional<double> firstCrossing(double minTime, double maxTime, double threshold, bool rising) const;
     std::optional<std::size_t> bitEdge(double minTime, double maxTime, std::size_t bit, bool state, bool reverse) const;
 

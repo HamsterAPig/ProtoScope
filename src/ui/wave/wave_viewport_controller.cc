@@ -318,6 +318,10 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Middle) ||
          ImGui::IsMouseDown(ImGuiMouseButton_Right))) ||
         view.overviewWindowDragging || view.viewportAnimation.active;
+    wave.lastBitCountQueryMs = 0;
+    for (std::size_t i = 0; i < wave.bitCountCache.size(); ++i)
+        if (i >= wave.buffer.channelCount() || !wave.buffer.channelSpec(i)->bitDisplay.enabled)
+            wave.bitCountCache[i] = {};
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
 
     WaveFrameData frame;
@@ -331,6 +335,8 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.cachedMeasurement.reset();
         wave.cachedFftKeyValid = false;
         wave.cachedFftFrame = {};
+        wave.bitCountCache.clear();
+        wave.bitRenderCache.clear();
     }
     const auto dataRevision = wave.buffer.dataRevision();
     if (wave.displayDataRevision != dataRevision || wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) {

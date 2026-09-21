@@ -32,6 +32,10 @@ struct RenderBudget {
     std::size_t estimatedVerticesPerPoint{4};
 };
 
+void updateBitTransitionCounts(plot::WaveDockState& wave, const plot::ChannelView& channel,
+                                std::size_t channelIndex, plot::WaveTimeAxisSource axis,
+                                double minTime, double maxTime);
+
 struct WaveFrameData {
     plot::WaveSnapshot snapshot;
     const plot::WaveSnapshot* fullSnapshot{nullptr};

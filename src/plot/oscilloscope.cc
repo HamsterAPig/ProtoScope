@@ -352,6 +352,8 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
         channelSpec.scale != spec.scale || channelSpec.offset != spec.offset || channelSpec.color != spec.color ||
         channelSpec.lineWidth != spec.lineWidth || channelSpec.bitDisplay != spec.bitDisplay) {
         channelSpec = std::move(spec);
+        auto& channel = channels_[channelIndex];
+        channel.summary.synchronize(channel.samples, channel.sampleIndexOffset, channel.spec.bitDisplay.enabled);
         ++dataRevision_;
     }
 }
@@ -509,7 +511,7 @@ bool OscilloscopeBuffer::appendPreparedSamples(ChannelBuffer& channel, const std
     }
     channel.samples.insert(channel.samples.end(), samples.begin(), samples.end());
     trimHistory(channel);
-    channel.summary.synchronize(channel.samples, channel.sampleIndexOffset);
+    channel.summary.synchronize(channel.samples, channel.sampleIndexOffset, channel.spec.bitDisplay.enabled);
     ++dataRevision_;
     ++analysisRevision_;
     return true;
@@ -859,7 +861,7 @@ bool OscilloscopeBuffer::trimHistory(ChannelBuffer& channel)
               channel.samples.end(),
               channel.samples.begin());
     channel.samples.resize(effectiveLimit);
-    channel.summary.synchronize(channel.samples, channel.sampleIndexOffset);
+    channel.summary.synchronize(channel.samples, channel.sampleIndexOffset, channel.spec.bitDisplay.enabled);
     return true;
 }
 

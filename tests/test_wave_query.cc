@@ -15,9 +15,126 @@ void require(bool value, const char* message)
         throw std::runtime_error(message);
 }
 
+void testDigitalFidelity()
+{
+    OscilloscopeBuffer buffer;
+    std::vector<WaveSample> samples(1000000);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+        samples[i] = {0.25 + static_cast<double>(i) * 0.01,
+                      i >= 12345 && i < 765432 ? 1.0 : 0.0};
+    buffer.append(0, {{}, samples});
+    buffer.setChannelSpec(0, {.bitDisplay = {.enabled = true, .bitCount = 8}});
+    const auto snapshot = buffer.snapshot(-1e20, 1e20, false);
+    for (const auto axis : {WaveTimeAxisSource::ScriptTime, WaveTimeAxisSource::SampleIndex,
+                            WaveTimeAxisSource::SampleFrequency}) {
+        const WaveQueryView query(snapshot.channels[0], axis, 200, snapshot.config.displayFormula);
+        for (const auto budget : {8U, 32U, 128U}) {
+            for (const auto width : {300U, 1200U}) {
+                WaveQueryCounters counters;
+                const auto segments = query.digitalSegments(query.time(0), query.time(samples.size() - 1),
+                                                             0, budget, width, &counters);
+                require(segments.size() <= budget, "digital primitive budget");
+                std::vector<double> edges;
+                for (const auto& segment : segments) {
+                    require(!segment.activity, "sparse transitions must remain exact");
+                    if (segment.firstState != segment.lastState) edges.push_back(segment.endTime);
+                }
+                require(edges == std::vector<double>{query.time(12345), query.time(765432)},
+                        "zoom must not relocate digital edges");
+                require(counters.rawSamples < 50000, "sparse million samples must use summaries");
+            }
+        }
+        require(query.bitTransitions(query.time(12345), query.time(765432), 0) == 2, "inclusive edge count");
+        require(query.bitTransitions(query.time(12345) + 0.001, query.time(765432) - 0.001, 0) == 0,
+                "outside edge exclusion");
+        require(query.bitTransitions(query.time(0), query.time(0), 0) == 0, "first sample is not an edge");
+    }
+}
+
+void testDigitalCounts()
+{
+    OscilloscopeBuffer buffer;
+    buffer.setChannelSpec(0, {.bitDisplay = {.enabled = true, .bitCount = 8}});
+    std::mt19937 rng(19);
+    const auto check = [&] {
+        const auto snapshot = buffer.snapshot(-1e20, 1e20, false);
+        const auto& channel = snapshot.channels[0];
+        for (const auto axis : {WaveTimeAxisSource::ScriptTime, WaveTimeAxisSource::SampleIndex,
+                                WaveTimeAxisSource::SampleFrequency}) {
+            const WaveQueryView query(channel, axis, 31, snapshot.config.displayFormula);
+            for (int trial = 0; trial < 80; ++trial) {
+                auto a = static_cast<std::size_t>(rng()) % channel.totalSamples;
+                auto b = static_cast<std::size_t>(rng()) % channel.totalSamples;
+                if (a > b) std::swap(a, b);
+                for (std::size_t bit = 0; bit < 8; ++bit) {
+                    std::size_t expected = 0;
+                    // 独立逐样本扫描，以新状态的时间判定是否落窗。
+                    for (std::size_t i = 1; i < channel.totalSamples; ++i)
+                        if (query.time(i) >= query.time(a) && query.time(i) <= query.time(b) &&
+                            ((static_cast<unsigned>(channel.samples[i - 1].value) ^
+                              static_cast<unsigned>(channel.samples[i].value)) & (1U << bit)))
+                            ++expected;
+                    require(query.bitTransitions(query.time(a), query.time(b), bit) == expected,
+                            "indexed count disagrees with independent scan");
+                }
+            }
+        }
+    };
+    std::vector<WaveSample> samples;
+    for (int i = 0; i < 4097; ++i) samples.push_back({i * 0.125, static_cast<double>(rng() % 256)});
+    buffer.append(0, {{}, samples});
+    check();
+    for (int i = 4097; i < 4400; ++i) buffer.append(0, {{}, {{i * 0.125, static_cast<double>(rng() % 256)}}});
+    check();
+    buffer.setMaxTotalSamples(777);
+    check();
+    buffer.append(0, {{}, {{0, 1}, {1, 0}, {2, 3}}});
+    check();
+    buffer.clear();
+    buffer.setChannelSpec(0, {.bitDisplay = {.enabled = true, .bitCount = 8}});
+    buffer.appendImported(0, {{5, 1}, {5, 0}, {6, 3}, {9, 2}}, 1000);
+    check();
+    buffer.setChannelSpec(0, {});
+    check();
+    buffer.setChannelSpec(0, {.bitDisplay = {.enabled = true}});
+    check();
+}
+
+void testDigitalActivity()
+{
+    OscilloscopeBuffer buffer;
+    buffer.setChannelSpec(0, {.bitDisplay = {.enabled = true}});
+    std::vector<WaveSample> samples;
+    for (int i = 0; i < 8192; ++i) samples.push_back({i * 0.1, i >= 1024 && i < 2048 ? double(i % 2) : 0.0});
+    buffer.append(0, {{}, samples});
+    const auto snap = buffer.snapshot(0, 1000, false);
+    const WaveQueryView query(snap.channels[0], WaveTimeAxisSource::ScriptTime, 0, snap.config.displayFormula);
+    for (const auto budget : {1U, 2U, 3U, 8U, 32U, 1200U}) {
+        for (const auto width : {20U, 300U, 1200U}) {
+            const auto segments = query.digitalSegments(0, 819.1, 0, budget, width);
+            require(segments.size() <= budget, "dense geometry budget");
+            require(std::ranges::any_of(segments, [](const auto& s) { return s.activity; }),
+                    "complex intervals must be activity bands");
+            for (const auto& s : segments) {
+                if (s.activity || s.firstState == s.lastState) continue;
+                require(s.beginTime == s.endTime, "exact transition must be vertical");
+                const auto found = std::ranges::find_if(samples, [&](const auto& sample) { return sample.time == s.endTime; });
+                require(found != samples.end() && found != samples.begin() && found->value != (found - 1)->value,
+                        "no bucket-generated digital edges");
+            }
+        }
+    }
+    const auto zoom = query.digitalSegments(102.4, 103.0, 0, 32, 1200);
+    require(std::ranges::none_of(zoom, [](const auto& s) { return s.activity; }), "zoom restores narrow pulses");
+    require(query.bitTransitions(102.4, 103.0, 0) == 6, "narrow pulse count");
+}
+
 int main()
 {
     try {
+        testDigitalFidelity();
+        testDigitalCounts();
+        testDigitalActivity();
         OscilloscopeBuffer buffer;
         std::vector<WaveSample> samples(10000);
         for (std::size_t i = 0; i < samples.size(); ++i)

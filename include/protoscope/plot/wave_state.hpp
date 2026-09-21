@@ -456,6 +456,8 @@ struct WaveDockState {
 
     struct BitRenderCacheKey {
         std::uint64_t dataRevision{0};
+        std::uint64_t historyEpoch{0};
+        WaveTimeAxisSource axis{WaveTimeAxisSource::ScriptTime};
         std::size_t channelIndex{0};
         double visibleMinTime{0.0};
         double visibleMaxTime{0.0};
@@ -477,10 +479,25 @@ struct WaveDockState {
     struct BitRenderCacheEntry {
         bool valid{false};
         BitRenderCacheKey key{};
-        std::vector<std::vector<WaveSample>> lanes;
-        std::vector<WaveDigitalBucket> activityBuckets;
+        std::vector<std::vector<WaveDigitalSegment>> lanes;
         std::size_t sourceSampleCount{0};
     };
+
+    struct BitCountCacheKey {
+        std::uint64_t revision{0}, epoch{0};
+        std::size_t channel{0}, firstBit{0}, bitCount{0};
+        WaveTimeAxisSource axis{WaveTimeAxisSource::ScriptTime};
+        double frequency{0}, minTime{0}, maxTime{0};
+        bool operator==(const BitCountCacheKey&) const = default;
+    };
+    struct BitCountCacheEntry {
+        bool valid{false}, pending{false};
+        BitCountCacheKey key{};
+        std::vector<std::uint64_t> counts;
+    };
+    std::vector<BitCountCacheEntry> bitCountCache;
+    std::uint64_t bitCountQueryCount{0};
+    double lastBitCountQueryMs{0};
 
     bool cachedDisplayKeyValid{false};
     DisplayDataCacheKey cachedDisplayKey{};

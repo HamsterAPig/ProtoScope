@@ -1052,11 +1052,7 @@ void test_bit_render_lane_downsample_keeps_orthogonal_segments()
         samples, samples.data(), samples.size(), 0, lowY, highY, samples.back().time, 8U);
 
     require(lane.size() <= 8U, "bit 降采样输出点数不应超过预算");
-    requireOrthogonalBitSegments(lane);
-    require(hasValue(lane, lowY), "bit 降采样应保留低电平活动信息");
-    require(hasValue(lane, highY), "bit 降采样应保留高电平活动信息");
-    require(std::abs(lane.back().time - samples.back().time) < 1e-12, "bit 降采样应保留末尾时间");
-    require(std::abs(lane.back().value - highY) < 1e-12, "bit 降采样应保留末尾状态");
+    require(lane.empty(), "旧折线接口超预算时不得伪造跳变；活动区由数字区段查询负责");
 }
 
 void test_bit_render_lane_low_density_keeps_exact_steps()

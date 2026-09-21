@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 
@@ -90,8 +91,10 @@ void WaveSummaryIndex::clear()
     begin_ = end_ = 0;
 }
 
-void WaveSummaryIndex::synchronize(std::span<const WaveSample> samples, std::size_t offset)
+void WaveSummaryIndex::synchronize(std::span<const WaveSample> samples, std::size_t offset, bool digital)
 {
+    if (digital_ != digital) clear();
+    digital_ = digital;
     if (samples.empty()) {
         clear();
         return;
@@ -113,12 +116,43 @@ void WaveSummaryIndex::synchronize(std::span<const WaveSample> samples, std::siz
         const auto last = (newEnd - 1) / width;
         while (!level.blocks.empty() && level.firstBlock < first) {
             level.blocks.pop_front();
+            if (digital_) level.transitions.pop_front();
             ++level.firstBlock;
         }
         if (level.blocks.empty())
             level.firstBlock = first;
         level.blocks.resize(last - first + 1);
+        if (digital_) level.transitions.resize(last - first + 1);
         const auto rebuild = [&](std::size_t block) {
+            if (digital_) {
+                auto& counts = level.transitions[block - first];
+                counts.fill(0);
+                const auto addBoundary = [&](std::uint64_t changed) {
+                    while (changed) {
+                        ++counts[std::countr_zero(changed)];
+                        changed &= changed - 1;
+                    }
+                };
+                if (levelIndex == 0) {
+                    const auto begin = (std::max)(offset, block * width);
+                    const auto end = (std::min)(newEnd, (block + 1) * width);
+                    for (auto i = begin + 1; i < end; ++i)
+                        addBoundary(waveRawBits(samples[i - offset - 1].value) ^
+                                    waveRawBits(samples[i - offset].value));
+                } else {
+                    const auto& child = levels_[levelIndex - 1];
+                    const WaveSummary* previous = nullptr;
+                    // 子块只记内部翻转，合并时补计两个子块交界处的真实变化。
+                    for (auto id = block * 2; id < block * 2 + 2; ++id) {
+                        if (id < child.firstBlock || id - child.firstBlock >= child.blocks.size()) continue;
+                        const auto index = id - child.firstBlock;
+                        for (std::size_t bit = 0; bit < 64; ++bit)
+                            counts[bit] += child.transitions[index][bit];
+                        if (previous) addBoundary(previous->lastBits ^ child.blocks[index].firstBits);
+                        previous = &child.blocks[index];
+                    }
+                }
+            }
             if (levelIndex == 0) {
                 return scan(samples,
                             offset,
@@ -188,8 +222,53 @@ std::size_t WaveSummaryIndex::memoryBytes() const
 {
     std::size_t bytes = levels_.capacity() * sizeof(Level);
     for (const auto& level : levels_)
-        bytes += level.blocks.size() * sizeof(WaveSummary);
+        bytes += level.blocks.size() * sizeof(WaveSummary) +
+                 level.transitions.size() * sizeof(std::array<std::uint64_t, 64>);
     return bytes;
+}
+
+std::uint64_t WaveSummaryIndex::bitTransitions(std::span<const WaveSample> samples, std::size_t offset,
+                                               std::size_t begin, std::size_t end, std::size_t bit,
+                                               WaveQueryCounters* counters) const
+{
+    if (bit >= 64) return 0;
+    begin = (std::min)(begin, samples.size()) + offset;
+    end = (std::min)(end, samples.size()) + offset;
+    const auto mask = std::uint64_t{1} << bit;
+    std::uint64_t result = 0, previous = 0;
+    bool hasPrevious = false;
+    while (begin < end) {
+        std::size_t selected = levels_.size(), width = blockSize;
+        if (digital_) {
+            for (std::size_t l = 0; l < levels_.size(); ++l, width *= 2) {
+                if (begin % width || width > end - begin) break;
+                const auto& level = levels_[l];
+                const auto id = begin / width;
+                if (id >= level.firstBlock && id - level.firstBlock < level.blocks.size() &&
+                    level.blocks[id - level.firstBlock].count == width) selected = l;
+            }
+        }
+        if (selected < levels_.size()) {
+            width = blockSize << selected;
+            const auto& level = levels_[selected];
+            const auto id = begin / width - level.firstBlock;
+            const auto& summary = level.blocks[id];
+            result += level.transitions[id][bit];
+            if (hasPrevious && ((previous ^ summary.firstBits) & mask)) ++result;
+            previous = summary.lastBits;
+            hasPrevious = true;
+            begin += width;
+            if (counters) ++counters->summaryHits;
+        } else {
+            const auto bits = waveRawBits(samples[begin - offset].value);
+            if (hasPrevious && ((previous ^ bits) & mask)) ++result;
+            previous = bits;
+            hasPrevious = true;
+            ++begin;
+            if (counters) ++counters->rawSamples;
+        }
+    }
+    return result;
 }
 
 WaveQueryView::WaveQueryView(const ChannelView& channel,
@@ -316,6 +395,132 @@ std::vector<WaveSample> WaveQueryView::extract(double minTime, double maxTime) c
     result.reserve(end - begin);
     for (auto i = begin; i < end; ++i)
         result.push_back({time(i), actual(i)});
+    return result;
+}
+
+std::uint64_t WaveQueryView::bitTransitions(double minTime, double maxTime, std::size_t bit,
+                                           WaveQueryCounters* counters) const
+{
+    if (bit >= 64 || size() < 2) return 0;
+    auto [begin, end] = range(minTime, maxTime, false);
+    if (begin >= end) return 0;
+    // 左邻样本只用于判断边界变化；首个留存样本没有已知前态，不计为跳变。
+    if (begin > 0) --begin;
+    if (channel_.summaryIndex)
+        return channel_.summaryIndex->bitTransitions({channel_.samples, size()}, channel_.sampleIndexOffset,
+                                                     begin, end, bit, counters);
+    std::uint64_t result = 0;
+    const auto mask = std::uint64_t{1} << bit;
+    for (auto i = begin + 1; i < end; ++i)
+        if ((waveRawBits(channel_.samples[i - 1].value) ^ waveRawBits(channel_.samples[i].value)) & mask) ++result;
+    if (counters) counters->rawSamples += end - begin;
+    return result;
+}
+
+std::vector<WaveDigitalSegment> WaveQueryView::digitalSegments(
+    double minTime, double maxTime, std::size_t bit, std::size_t budget, std::size_t pixelWidth,
+    WaveQueryCounters* counters) const
+{
+    std::vector<WaveDigitalSegment> result;
+    if (bit >= 64 || size() == 0 || budget == 0) return result;
+    if (maxTime < minTime) std::swap(minTime, maxTime);
+    auto [begin, end] = range(minTime, maxTime, false);
+    if (begin > 0) --begin;
+    if (begin >= end) return result;
+    const auto mask = std::uint64_t{1} << bit;
+    const auto state = [&](std::size_t i) { return (waveRawBits(channel_.samples[i].value) & mask) != 0; };
+    const auto start = (std::max)(minTime, time(begin));
+    const double pixelTime = (maxTime - minTime) / static_cast<double>((std::max)(pixelWidth, std::size_t{1}));
+    std::vector<std::size_t> edges;
+    // 只枚举预算内的真实边沿，摘要排除恒定区间；绝不为绘制调用整窗次数统计。
+    const auto findEdges = [&](auto&& self, std::size_t left, std::size_t right, std::size_t limit) -> bool {
+        if (left >= right) return true;
+        const auto s = summary(left - 1, right, counters);
+        if (((s.bitsAnd ^ s.bitsOr) & mask) == 0) return true;
+        if (right - left <= WaveSummaryIndex::blockSize) {
+            for (auto i = left; i < right; ++i) {
+                if (counters) ++counters->rawSamples;
+                if (state(i) != state(i - 1)) {
+                    if (edges.size() == limit) return false;
+                    edges.push_back(i);
+                }
+            }
+            return true;
+        }
+        const auto mid = left + (right - left) / 2;
+        return self(self, left, mid, limit) && self(self, mid, right, limit);
+    };
+    const auto append = [&](WaveDigitalSegment segment) {
+        if (!result.empty() && !segment.activity && !result.back().activity &&
+            segment.firstState == segment.lastState && result.back().firstState == segment.firstState &&
+            result.back().lastState == segment.firstState && result.back().endTime == segment.beginTime)
+            result.back().endTime = segment.endTime;
+        else result.push_back(segment);
+    };
+    const auto emitExact = [&](double left, double right, bool initial) {
+        auto t = left;
+        auto current = initial;
+        for (std::size_t n = 0; n < edges.size();) {
+            auto last = n;
+            // 同像素内多个边沿使用活动带，窄脉冲不会变成虚假的单边沿。
+            while (last + 1 < edges.size() &&
+                   std::floor((time(edges[last + 1]) - minTime) / (std::max)(pixelTime, 1e-300)) ==
+                   std::floor((time(edges[n]) - minTime) / (std::max)(pixelTime, 1e-300))) ++last;
+            const auto edgeTime = time(edges[n]);
+            if (edgeTime > t) append({t, edgeTime, current, current, false});
+            const auto next = state(edges[last]);
+            append({edgeTime, time(edges[last]), current, next, last != n});
+            t = time(edges[last]);
+            current = next;
+            n = last + 1;
+        }
+        if (right > t || result.empty()) append({t, right, current, current, false});
+    };
+    if (findEdges(findEdges, begin + 1, end, (budget - 1) / 2)) {
+        emitExact(start, maxTime, state(begin));
+        return result;
+    }
+    // 预算不足时按时间细分。每桶最多三个图元，复杂桶只画活动带。
+    const auto buckets = (std::max)(std::size_t{1}, budget / 3);
+    auto left = begin;
+    for (std::size_t b = 0; b < buckets; ++b) {
+        const auto t0 = start + (maxTime - start) * static_cast<double>(b) / static_cast<double>(buckets);
+        const auto t1 = start + (maxTime - start) * static_cast<double>(b + 1) / static_cast<double>(buckets);
+        const auto right = b + 1 == buckets ? end : (std::clamp)(range(t1, t1, false).first, left + 1, end);
+        edges.clear();
+        const auto initial = state(left);
+        if (budget >= 3 && findEdges(findEdges, left + 1, right, 1))
+            emitExact(t0, t1, initial);
+        else {
+            const auto s = summary(left, right, counters);
+            const bool activity = ((s.bitsAnd ^ s.bitsOr) & mask) != 0;
+            append({t0, t1, initial, state(right - 1), activity});
+        }
+        left = right - 1;
+    }
+    return result;
+}
+
+std::vector<WaveTimeEnvelope> WaveQueryView::timeEnvelope(
+    double minTime, double maxTime, std::size_t buckets, WaveQueryCounters* counters) const
+{
+    std::vector<WaveTimeEnvelope> result;
+    if (maxTime < minTime) std::swap(minTime, maxTime);
+    const auto [begin, end] = range(minTime, maxTime, false);
+    if (begin == end || buckets == 0) return result;
+    auto left = begin;
+    for (std::size_t b = 0; b < buckets; ++b) {
+        const auto t0 = minTime + (maxTime - minTime) * static_cast<double>(b) / static_cast<double>(buckets);
+        const auto t1 = minTime + (maxTime - minTime) * static_cast<double>(b + 1) / static_cast<double>(buckets);
+        const auto right = b + 1 == buckets ? end : (std::clamp)(range(t1, t1, false).first, left, end);
+        const auto s = summary(left, right, counters);
+        if (s.finiteCount) {
+            const auto a = sample(s.minimum - channel_.sampleIndexOffset).value;
+            const auto z = sample(s.maximum - channel_.sampleIndexOffset).value;
+            result.push_back({t0, t1, (std::min)(a, z), (std::max)(a, z), s.count});
+        }
+        left = right;
+    }
     return result;
 }
 

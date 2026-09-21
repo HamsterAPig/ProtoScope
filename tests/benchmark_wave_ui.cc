@@ -49,6 +49,80 @@ int main(int argc, char** argv)
             wave.view.initialized = true;
             wave.view.defaultViewportPending = false;
             wave.view.autoFollowLatest = false;
+            wave.view.viewMinTime = 0;
+            wave.view.viewMaxTime = 2048;
+            wave.view.visibleDuration = 2048;
+            wave.view.showCursors = true;
+            for (std::size_t channel = 0; channel < 2; ++channel) {
+                wave.buffer.setChannelSpec(channel, {.bitDisplay = {.enabled = true, .bitCount = 8}});
+                std::vector<plot::WaveSample> samples;
+                for (int i = 0; i < 4096; ++i)
+                    samples.push_back({double(i), channel == 0 ? double(i % 256) : double((i / 10) % 256)});
+                wave.buffer.append(channel, {{}, samples});
+            }
+            const auto draw = [&] {
+                if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                ImGui::NewFrame();
+                ImGui::SetNextWindowSize(ImVec2(1200, 850));
+                ImGui::Begin("digital verification");
+                auto frame = ui::prepareWaveFrame(wave, 1200);
+                ui::drawOscilloscopePlot(wave, frame,
+                    {.drawMeasurementOverlay = false, .drawLegendOverlay = false}, nullptr);
+                ImGui::End();
+                ImGui::Render();
+            };
+            io.MouseDown[0] = false;
+            draw();
+            const auto initialQueries = wave.bitCountQueryCount;
+            if (initialQueries != 16 || wave.bitCountCache[0].counts == wave.bitCountCache[1].counts)
+                throw std::runtime_error("per-channel digital count initialization");
+            const auto original = wave.bitCountCache[0].counts;
+            draw();
+            if (wave.bitCountQueryCount != initialQueries) throw std::runtime_error("count cache miss without changes");
+            io.MouseDown[0] = true;
+            for (int n = 0; n < 4; ++n) {
+                wave.view.viewMinTime = 50.0 * n;
+                wave.view.viewMaxTime = 1500.0 + 50.0 * n;
+                wave.view.forceNextMainPlotLimits = true;
+                wave.buffer.append(0, {{}, {{4096.0 + n, double(n)}}});
+                draw();
+                if (wave.bitCountQueryCount != initialQueries || wave.bitCountCache[0].counts != original)
+                    throw std::runtime_error("digital counts updated during drag");
+            }
+            io.MouseDown[0] = false;
+            wave.view.overviewWindowDragging = true;
+            draw();
+            wave.view.overviewWindowDragging = false;
+            wave.view.viewportAnimation.active = true;
+            draw();
+            if (wave.bitCountQueryCount != initialQueries) throw std::runtime_error("digital counts updated in animation");
+            wave.view.viewportAnimation.active = false;
+            draw();
+            if (wave.bitCountQueryCount != initialQueries + 16) throw std::runtime_error("release count must refresh once");
+            draw();
+            if (wave.bitCountQueryCount != initialQueries + 16) throw std::runtime_error("release count queried twice");
+            for (std::size_t c = 0; c < 2; ++c) {
+                const auto& cached = wave.bitCountCache[c];
+                const auto snap = wave.buffer.snapshot(-1e20, 1e20, false);
+                const auto& channel = snap.channels[c];
+                for (std::size_t bit = 0; bit < 8; ++bit) {
+                    std::uint64_t expected = 0;
+                    for (std::size_t i = 1; i < channel.totalSamples; ++i)
+                        if (channel.samples[i].time >= cached.key.minTime && channel.samples[i].time <= cached.key.maxTime &&
+                            ((unsigned(channel.samples[i].value) ^ unsigned(channel.samples[i - 1].value)) & (1U << bit)))
+                            ++expected;
+                    if (cached.counts[bit] != expected) throw std::runtime_error("rendered viewport count mismatch");
+                }
+            }
+            wave.buffer.clear();
+            ui::prepareWaveFrame(wave, 1200);
+            if (!wave.bitCountCache.empty()) throw std::runtime_error("clear retained digital counts");
+        }
+        {
+            plot::WaveDockState wave;
+            wave.view.initialized = true;
+            wave.view.defaultViewportPending = false;
+            wave.view.autoFollowLatest = false;
             wave.view.sampleFrequencyHz = 1000;
             wave.view.viewMaxTime = 10;
             wave.view.fft = {.enabled = true, .pointCount = plot::WaveFftPointCount::N1024};
