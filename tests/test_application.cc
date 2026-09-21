@@ -3810,12 +3810,16 @@ void test_application_complete_disconnect_keeps_realtime_backlog()
     application.closeTransport();
     require(application.docks().commState().state == protoscope::transport::TransportState::Closed,
             "complete 断开后通讯状态也应立即关闭");
-    require(application.docks().commState().pendingRxBytes == 0U, "complete 模式不应保留已转交 worker 的 RX 字节");
+    require(application.docks().commState().rxInputQueueBytes == 0U,
+            "complete 模式不应在主线程队列保留已转交 worker 的 RX 字节");
     require(application.docks().commState().pendingTransferFrameRows > 0U, "complete 断开后应保留 pending 逐帧行");
 
-    for (int attempt = 0; attempt < 20 && application.docks().receiveState().frameRows.size() < frameCount; ++attempt) {
+    // pendingRxBytes 包含 worker 尚未解析的字节，断开不会同步等待 worker。
+    require(waitUntil([&]() {
         application.pumpOnce();
-    }
+        return application.docks().receiveState().frameRows.size() == frameCount &&
+               application.docks().commState().pendingRxBytes == 0U;
+    }), "complete 模式断开后应异步处理完 RX 字节");
     require(application.docks().receiveState().frameRows.size() == frameCount,
             "complete 模式应在后续 pump 小步补完逐帧 backlog");
     require(application.docks().commState().state == protoscope::transport::TransportState::Closed,
