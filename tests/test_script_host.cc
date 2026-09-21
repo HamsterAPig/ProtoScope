@@ -2907,8 +2907,8 @@ void test_config_gui_theme_values_and_fallback()
 
     const auto invalid = store.loadText("gui:\n  theme: neon_unknown\n");
     require(invalid.error.empty(), "非法 theme 字段不应导致配置读取失败");
-    require(invalid.config.gui.theme == protoscope::config::GuiTheme::ProfessionalDark,
-            "非法 theme 字段应回退到 professional_dark");
+    require(invalid.config.gui.theme == "neon_unknown",
+            "未知主题 ID 应保留，由主题管理器决定显示回退");
 
     auto savedConfig = highContrast.config;
     std::string yamlText;

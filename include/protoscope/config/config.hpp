@@ -96,6 +96,7 @@ enum class GuiWaveFullscreenMode {
 enum class GuiTheme {
     ProfessionalDark,
     DebugHighContrast,
+    ProfessionalLight,
 };
 
 struct GuiWaveResetViewportConfig {
@@ -135,6 +136,7 @@ struct GuiWaveConfig {
     std::size_t overviewMaxSamples{20000};
     bool overviewNormalizeChannels{false};
     bool overviewShowBitChannels{false};
+    plot::OverviewSelectionConfig overviewSelection{};
     double minVisibleTimeSpan{0.001};
     std::size_t maxTotalSamples{0};
     double channelCardFixedWidth{128.0};
@@ -214,7 +216,7 @@ struct GuiFileDialogConfig {
 struct GuiConfig {
     GuiFileDialogConfig fileDialogs{};
     DataExportConfig lastDataExport{};
-    GuiTheme theme{GuiTheme::ProfessionalDark};
+    std::string theme{"professional_dark"};
     GuiWindowConfig window{};
     GuiRendererBackend rendererBackend{GuiRendererBackend::OpenGL};
     GuiInteractionFeedbackConfig interactionFeedback{};
@@ -345,5 +347,7 @@ private:
 std::optional<GuiRendererBackend> parseGuiRendererBackend(std::string_view value);
 std::string_view guiRendererBackendId(GuiRendererBackend backend);
 std::string_view guiThemeId(GuiTheme theme);
+// 兼容原内置枚举的比较入口；持久化与用户主题统一使用字符串 ID。
+inline bool operator==(const std::string& id, GuiTheme theme) { return id == guiThemeId(theme); }
 
 } // namespace protoscope::config

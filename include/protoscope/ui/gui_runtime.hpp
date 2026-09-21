@@ -11,6 +11,7 @@
 #include "protoscope/ui/update_check.hpp"
 #include "protoscope/ui/wave_dock_renderer.hpp"
 #include "protoscope/ui/wave_status.hpp"
+#include "protoscope/ui/theme_manager.hpp"
 
 #include <array>
 #include <chrono>
@@ -378,6 +379,7 @@ private:
 
     app::Application& application_;
     const config::ConfigStore& configStore_;
+    ThemeManager themeManager_;
     GuiRuntimeOptions options_{};
     app::StartupDiagnosticsSink* startupDiagnostics_{nullptr};
     GLFWwindow* window_{nullptr};

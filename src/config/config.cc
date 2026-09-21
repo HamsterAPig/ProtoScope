@@ -319,7 +319,8 @@ namespace {
         {GuiWaveFullscreenMode::Overlay, "overlay"},
     }};
 
-    constexpr std::array<EnumNamePair<GuiTheme>, 2> kGuiThemeNames{{
+    constexpr std::array<EnumNamePair<GuiTheme>, 3> kGuiThemeNames{{
+        {GuiTheme::ProfessionalLight, "professional_light"},
         {GuiTheme::ProfessionalDark, "professional_dark"},
         {GuiTheme::DebugHighContrast, "debug_high_contrast"},
     }};
@@ -715,6 +716,37 @@ namespace {
             readScalar<bool>(wave, "overview_normalize_channels", config.gui.wave.overviewNormalizeChannels);
         config.gui.wave.overviewShowBitChannels =
             readScalar<bool>(wave, "overview_show_bit_channels", config.gui.wave.overviewShowBitChannels);
+        if (const auto selection = wave["overview_selection"]) {
+            const auto fail = [&](const YAML::Node& node, const std::string& field) {
+                throw YAML::Exception(node.Mark(), "gui.wave.overview_selection." + field + ": 非法字段或数值");
+            };
+            if (!selection.IsMap()) fail(selection, "mapping");
+            std::vector<std::string> seen;
+            auto& target = config.gui.wave.overviewSelection;
+            for (const auto& item : selection) {
+                const auto key = item.first.as<std::string>();
+                if (std::find(seen.begin(), seen.end(), key) != seen.end()) fail(item.first, key);
+                seen.push_back(key);
+                if (key == "mode") {
+                    const auto value = item.second.as<std::string>();
+                    if (value != "auto" && value != "fixed") fail(item.second, key);
+                    target.automatic = value == "auto";
+                } else if (key == "fixed_color") {
+                    const auto value = item.second.as<std::string>();
+                    if (value.size() != 7 || value.front() != '#' ||
+                        value.find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos) fail(item.second, key);
+                    std::array<float, 3> rgb{};
+                    for (std::size_t i = 0; i < 3; ++i)
+                        rgb[i] = static_cast<float>(std::stoul(value.substr(1 + 2*i, 2), nullptr, 16)) / 255.F;
+                    target.fixedColor = rgb;
+                } else if (key == "min_alpha" || key == "max_alpha") {
+                    const auto value = item.second.as<float>();
+                    if (!std::isfinite(value) || value < 0 || value > 1) fail(item.second, key);
+                    (key == "min_alpha" ? target.minAlpha : target.maxAlpha) = value;
+                } else fail(item.first, key);
+            }
+            if (target.minAlpha && target.maxAlpha && *target.minAlpha > *target.maxAlpha) fail(selection, "min_alpha/max_alpha");
+        }
         config.gui.wave.maxTotalSamples =
             readScalar<std::size_t>(wave, "max_total_samples", config.gui.wave.maxTotalSamples);
         config.gui.wave.minVisibleTimeSpan =
@@ -847,8 +879,7 @@ namespace {
     void loadGuiConfig(const YAML::Node& root, AppConfig& config)
     {
         const auto gui = root["gui"];
-        const auto themeText = readScalar<std::string>(gui, "theme", toGuiThemeText(config.gui.theme));
-        config.gui.theme = lookupEnum(std::string_view{themeText}, kGuiThemeNames, GuiTheme::ProfessionalDark);
+        config.gui.theme = readScalar<std::string>(gui, "theme", config.gui.theme);
         const auto rendererBackendText =
             readScalar<std::string>(gui, "renderer_backend", toRendererBackendText(config.gui.rendererBackend));
         config.gui.rendererBackend = parseGuiRendererBackend(rendererBackendText).value_or(GuiRendererBackend::OpenGL);
@@ -1126,6 +1157,20 @@ namespace {
         gui["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
         gui["wave"]["overview_normalize_channels"] = config.gui.wave.overviewNormalizeChannels;
         gui["wave"]["overview_show_bit_channels"] = config.gui.wave.overviewShowBitChannels;
+        const auto& selection = config.gui.wave.overviewSelection;
+        auto selectionNode = gui["wave"]["overview_selection"];
+        selectionNode["mode"] = selection.automatic ? "auto" : "fixed";
+        if (selection.minAlpha) selectionNode["min_alpha"] = *selection.minAlpha;
+        if (selection.maxAlpha) selectionNode["max_alpha"] = *selection.maxAlpha;
+        if (selection.fixedColor) {
+            constexpr char hex[] = "0123456789ABCDEF";
+            std::string text = "#";
+            for (float component : *selection.fixedColor) {
+                const auto byte = static_cast<unsigned>(std::lround(std::clamp(component, 0.F, 1.F) * 255.F));
+                text += hex[byte >> 4]; text += hex[byte & 15];
+            }
+            selectionNode["fixed_color"] = text;
+        }
         gui["wave"]["max_total_samples"] = config.gui.wave.maxTotalSamples;
         gui["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
         gui["wave"]["reset_history_on_time_reset"] = config.gui.wave.resetHistoryOnTimeReset;
@@ -1221,7 +1266,7 @@ namespace {
     void writeGuiConfig(YAML::Node& root, const AppConfig& config, const AppConfig& scaledDefaults)
     {
         auto gui = root["gui"];
-        gui["theme"] = toGuiThemeText(config.gui.theme);
+        gui["theme"] = config.gui.theme;
         gui["renderer_backend"] = toRendererBackendText(config.gui.rendererBackend);
         gui["window"]["title"] = config.gui.window.title;
         gui["window"]["width"] = config.gui.window.width;
@@ -1749,6 +1794,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.overviewMaxSamples = config.gui.wave.overviewMaxSamples;
     wave.overviewNormalizeChannels = config.gui.wave.overviewNormalizeChannels;
     wave.overviewShowBitChannels = config.gui.wave.overviewShowBitChannels;
+    wave.overviewSelection = config.gui.wave.overviewSelection;
     wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
     wave.channelCardFixedWidth = positiveOrFallback(config.gui.wave.channelCardFixedWidth, 128.0);
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
@@ -1819,6 +1865,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.overviewMaxSamples = dockStore.waveState().view.overviewMaxSamples;
     config.gui.wave.overviewNormalizeChannels = dockStore.waveState().view.overviewNormalizeChannels;
     config.gui.wave.overviewShowBitChannels = dockStore.waveState().view.overviewShowBitChannels;
+    config.gui.wave.overviewSelection = dockStore.waveState().view.overviewSelection;
     config.gui.wave.minVisibleTimeSpan = dockStore.waveState().view.minVisibleTimeSpan;
     config.gui.wave.channelCardFixedWidth = dockStore.waveState().view.channelCardFixedWidth;
     config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;

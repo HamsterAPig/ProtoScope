@@ -147,7 +147,7 @@ void test_update_check_evaluates_newer_version();
 void test_update_check_reports_up_to_date_for_exact_tag();
 void test_update_check_reports_development_build();
 void test_update_check_rejects_response_without_semantic_tags();
-void test_ui_theme_professional_dark_preserves_existing_tokens();
+void test_ui_theme_professional_dark_preset();
 void test_ui_theme_high_contrast_tokens_and_grid_contrast();
 void test_protocol_directory_reload();
 void test_config_default_roundtrip();

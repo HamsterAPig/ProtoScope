@@ -240,6 +240,7 @@ if(PROTOSCOPE_ENABLE_GUI)
         ui/editable_combo.cc
         ui/keyboard_shortcuts.cc
         ui/ui_theme.cc
+        ui/theme_manager.cc
         ui/runtime/gui_runtime_core.cc
         ui/runtime/shortcut_controller.cc
         ui/runtime/ui_components.cc

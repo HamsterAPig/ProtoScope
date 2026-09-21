@@ -893,7 +893,11 @@ bool GuiRuntime::initializeImGui()
     }
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    applyUiTheme(application_.runtimeConfig().gui.theme);
+    themeManager_.setConfigPath(application_.docks().configState().loadedFromPath);
+    std::string themeError;
+    themeManager_.startup(application_.runtimeConfig().gui.theme, themeError);
+    themeManager_.applyPending();
+    if (!themeError.empty()) application_.setStatusMessage(themeError, false);
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.IniFilename = nullptr;
@@ -908,7 +912,7 @@ bool GuiRuntime::initializePlotContext()
         startupDiagnostics_->setStage("GuiRuntime::initializePlotContext");
     }
     ImPlot::CreateContext();
-    applyUiTheme(application_.runtimeConfig().gui.theme);
+    applyUiTheme(activeThemeDefinition());
     auto& inputMap = ImPlot::GetInputMap();
     inputMap.Pan = ImGuiMouseButton_Left;
     inputMap.Select = ImGuiMouseButton_Right;
@@ -1419,6 +1423,7 @@ void GuiRuntime::dispatchBuiltinFileOperation()
 
 void GuiRuntime::renderFrame()
 {
+    themeManager_.applyPending();
     refreshWindowTitle();
     prepareBuiltinFileOperation();
 

@@ -7,6 +7,10 @@
 #include <string>
 
 #include <imgui.h>
+#if defined(_WIN32)
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 namespace protoscope::ui {
 
@@ -22,16 +26,6 @@ namespace {
         {.label = "信息", .level = config::LogLevel::Info},
         {.label = "警告", .level = config::LogLevel::Warn},
         {.label = "错误", .level = config::LogLevel::Error},
-    };
-
-    struct ThemeMenuItem {
-        const char* label;
-        config::GuiTheme theme;
-    };
-
-    constexpr ThemeMenuItem kThemeMenuItems[] = {
-        {.label = "专业深色", .theme = config::GuiTheme::ProfessionalDark},
-        {.label = "仪器深黑（高对比）", .theme = config::GuiTheme::DebugHighContrast},
     };
 
     bool menuItemWithHelp(
@@ -230,14 +224,38 @@ void GuiRuntime::drawSettingsMenu()
     }
     if (ImGui::BeginMenu("主题")) {
         const auto currentTheme = application_.runtimeConfig().gui.theme;
-        for (const auto& item : kThemeMenuItems) {
-            const bool selected = currentTheme == item.theme;
-            if (ImGui::MenuItem(item.label, nullptr, selected) && !selected) {
-                application_.setGuiTheme(item.theme);
-                applyUiTheme(item.theme);
-                application_.setStatusMessage(std::string("主题已切换为：") + item.label, true);
+        std::string error;
+        for (const auto& item : themeManager_.themes()) {
+            const bool selected = currentTheme == item.id;
+            ImGui::PushID(item.id.c_str());
+            if (ImGui::MenuItem(item.name.c_str(), nullptr, selected) && !selected) {
+                if (themeManager_.request(item.id, error)) application_.setGuiTheme(item.id);
             }
+            ImGui::PopID();
         }
+        ImGui::Separator();
+        if (ImGui::MenuItem("重载主题")) {
+            themeManager_.setConfigPath(application_.docks().configState().loadedFromPath);
+            if (themeManager_.reload(error)) themeManager_.request(currentTheme, error);
+        }
+        if (ImGui::MenuItem("导出当前主题")) {
+            const auto path = themeManager_.directory() / ("exported_" + std::to_string(nowMs()) + ".yaml");
+            if (themeManager_.exportCurrent(path, error))
+                application_.setStatusMessage("主题已导出: " + path.string(), false);
+        }
+        if (ImGui::MenuItem("打开主题目录")) {
+            std::error_code ec;
+            std::filesystem::create_directories(themeManager_.directory(), ec);
+            if (ec) error = ec.message();
+#if defined(_WIN32)
+            else if (reinterpret_cast<std::intptr_t>(ShellExecuteW(nullptr, L"open",
+                         std::filesystem::absolute(themeManager_.directory()).c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32)
+                error = "无法打开主题目录";
+#else
+            else error = "主题目录: " + std::filesystem::absolute(themeManager_.directory()).string();
+#endif
+        }
+        if (!error.empty()) application_.setStatusMessage(error, false);
         ImGui::EndMenu();
     }
     ImGui::EndMenu();

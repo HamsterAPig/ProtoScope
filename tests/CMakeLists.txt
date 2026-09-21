@@ -60,6 +60,12 @@ set_tests_properties(protoscope_headless_unit_tests PROPERTIES
 )
 
 if(PROTOSCOPE_ENABLE_GUI)
+    add_executable(protoscope_theme_render_tests test_theme_render.cc)
+    target_link_libraries(protoscope_theme_render_tests PRIVATE protoscope_ui)
+    add_executable(protoscope_theme_manager_tests test_theme_manager.cc)
+    target_link_libraries(protoscope_theme_manager_tests PRIVATE protoscope_ui)
+    add_test(NAME protoscope_theme_manager_tests COMMAND protoscope_theme_manager_tests)
+    set_tests_properties(protoscope_theme_manager_tests PROPERTIES TIMEOUT 60)
     add_executable(protoscope_wave_downsample_mode_tests test_wave_downsample_mode.cc)
     target_link_libraries(protoscope_wave_downsample_mode_tests PRIVATE protoscope_ui protoscope_config)
     add_test(NAME protoscope_wave_downsample_mode_tests COMMAND protoscope_wave_downsample_mode_tests)

@@ -1320,8 +1320,14 @@ void Application::setLogLevel(const config::LogLevel level)
 
 void Application::setGuiTheme(const config::GuiTheme theme)
 {
+    setGuiTheme(config::guiThemeId(theme));
+}
+
+void Application::setGuiTheme(const std::string_view theme)
+{
     // 主题是纯 GUI 全局偏好，只更新运行态配置，避免无关协议重载。
     runtimeConfig_.gui.theme = theme;
+    dockStore_.markDirty("主题已更改");
 }
 
 config::AppConfig Application::captureConfig() const

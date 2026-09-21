@@ -1,4 +1,5 @@
 #include "protoscope/ui/ui_theme.hpp"
+#include "protoscope/plot/wave_overview_color.hpp"
 
 #include <implot.h>
 
@@ -15,142 +16,141 @@ namespace {
                       alpha);
     }
 
-    UiThemeDefinition makeProfessionalDarkTheme()
+    void finishPreset(UiThemeDefinition& d, bool light)
     {
-        return UiThemeDefinition{
-            .theme = config::GuiTheme::ProfessionalDark,
-            .ui =
-                {
-                    .appBackground = ImVec4(0.05F, 0.07F, 0.10F, 1.0F),
-                    .panelBackground = ImVec4(0.09F, 0.11F, 0.15F, 1.0F),
-                    .panelBackgroundAlt = ImVec4(0.12F, 0.14F, 0.19F, 1.0F),
-                    .panelBorder = ImVec4(0.22F, 0.29F, 0.38F, 0.95F),
-                    .accent = ImVec4(0.18F, 0.58F, 0.88F, 1.0F),
-                    .accentMuted = ImVec4(0.18F, 0.58F, 0.88F, 0.24F),
-                    .success = ImVec4(0.24F, 0.74F, 0.48F, 1.0F),
-                    .warning = ImVec4(0.93F, 0.70F, 0.20F, 1.0F),
-                    .danger = ImVec4(0.91F, 0.33F, 0.33F, 1.0F),
-                    .textStrong = ImVec4(0.93F, 0.96F, 0.99F, 1.0F),
-                    .textMuted = ImVec4(0.58F, 0.67F, 0.76F, 1.0F),
-                    .genericPlotBackground = ImVec4(0.07F, 0.09F, 0.13F, 1.0F),
-                },
-            .wave =
-                {
-                    .plotBackground = ImVec4(0.043F, 0.067F, 0.094F, 1.0F),
-                    .gridMajor = ImVec4(0.12F, 0.19F, 0.27F, 0.78F),
-                    .gridMinorTick = ImVec4(0.30F, 0.46F, 0.60F, 0.76F),
-                    .gridCenter = ImVec4(0.90F, 0.96F, 1.0F, 0.66F),
-                    .statusOverlayBackground = ImVec4(0.04F, 0.045F, 0.05F, 0.68F),
-                    .statusOverlayBorder = ImVec4(1.0F, 1.0F, 1.0F, 0.18F),
-                    .statusOverlayText = ImVec4(0.92F, 0.94F, 0.98F, 0.95F),
-                    .channelSeparator = ImVec4(0.16F, 0.24F, 0.31F, 0.70F),
-                    .channelLabel = ImVec4(0.84F, 0.89F, 0.94F, 0.76F),
-                    .splitChannelLabel = ImVec4(0.90F, 0.94F, 0.98F, 0.86F),
-                    .bitLabel = ImVec4(0.84F, 0.88F, 0.92F, 0.72F),
-                    .legendOverlayBackground = ImVec4(0.051F, 0.075F, 0.106F, 1.0F),
-                    .legendOverlayBorder = ImVec4(0.30F, 0.42F, 0.54F, 0.55F),
-                    .legendOverlayTextPrimary = ImVec4(0.93F, 0.96F, 0.99F, 1.0F),
-                    .legendOverlayTextSecondary = ImVec4(0.58F, 0.67F, 0.76F, 1.0F),
-                    // 透明令牌表示沿用专业深色已有的图例行绘制逻辑。
-                    .legendOverlayRowHover = ImVec4(0.0F, 0.0F, 0.0F, 0.0F),
-                    .legendOverlayRowActive = ImVec4(0.0F, 0.0F, 0.0F, 0.0F),
-                    .legendOverlayRowActiveBorder = ImVec4(0.0F, 0.0F, 0.0F, 0.0F),
-                    .measurementOverlayBackground = ImVec4(0.035F, 0.040F, 0.050F, 0.72F),
-                    .measurementOverlayBorder = ImVec4(1.000F, 1.000F, 1.000F, 0.15F),
-                    .measurementOverlayAccent = ImVec4(0.300F, 0.620F, 1.000F, 0.85F),
-                    .measurementOverlayTitle = ImVec4(0.960F, 0.970F, 1.000F, 0.98F),
-                    .measurementChipBackground = ImVec4(1.000F, 1.000F, 1.000F, 0.075F),
-                    .measurementChipBorder = ImVec4(1.000F, 1.000F, 1.000F, 0.12F),
-                    .measurementChipLabel = ImVec4(0.660F, 0.720F, 0.800F, 0.94F),
-                    .measurementChipValue = ImVec4(0.940F, 0.960F, 0.990F, 0.98F),
-                },
-        };
-    }
-
-    UiThemeDefinition makeDebugHighContrastTheme()
-    {
-        return UiThemeDefinition{
-            .theme = config::GuiTheme::DebugHighContrast,
-            .ui =
-                {
-                    .appBackground = rgb8(6, 9, 12),
-                    .panelBackground = rgb8(9, 12, 16),
-                    .panelBackgroundAlt = rgb8(14, 19, 25),
-                    .panelBorder = rgb8(46, 82, 107),
-                    .accent = rgb8(46, 184, 250),
-                    .accentMuted = rgb8(46, 184, 250, 0.24F),
-                    .success = ImVec4(0.24F, 0.74F, 0.48F, 1.0F),
-                    .warning = ImVec4(0.93F, 0.70F, 0.20F, 1.0F),
-                    .danger = ImVec4(0.91F, 0.33F, 0.33F, 1.0F),
-                    .textStrong = rgb8(245, 250, 255),
-                    .textMuted = rgb8(179, 194, 209),
-                    .genericPlotBackground = rgb8(5, 7, 10),
-                    .windowRounding = 4.0F,
-                    .frameRounding = 3.0F,
-                    .grabRounding = 3.0F,
-                    .tabRounding = 3.0F,
-                },
-            .wave =
-                {
-                    .plotBackground = rgb8(5, 7, 10),
-                    // 三级网格按主网格、短刻度、中心线逐级增强，避免同时抢眼。
-                    .gridMajor = rgb8(46, 82, 107, 0.92F),
-                    .gridMinorTick = rgb8(88, 137, 174, 0.92F),
-                    .gridCenter = rgb8(225, 245, 255, 0.96F),
-                    .statusOverlayBackground = rgb8(5, 7, 10, 0.88F),
-                    .statusOverlayBorder = rgb8(46, 82, 107, 0.78F),
-                    .statusOverlayText = rgb8(245, 250, 255, 0.98F),
-                    .channelSeparator = rgb8(46, 82, 107, 0.80F),
-                    .channelLabel = rgb8(179, 194, 209, 0.98F),
-                    .splitChannelLabel = rgb8(245, 250, 255, 0.96F),
-                    .bitLabel = rgb8(179, 194, 209, 0.92F),
-                    .legendOverlayBackground = rgb8(8, 12, 17, 0.98F),
-                    .legendOverlayBorder = rgb8(56, 127, 170),
-                    .legendOverlayTextPrimary = rgb8(245, 250, 255),
-                    .legendOverlayTextSecondary = rgb8(179, 194, 209),
-                    .legendOverlayRowHover = rgb8(14, 26, 36),
-                    .legendOverlayRowActive = rgb8(14, 46, 66),
-                    .legendOverlayRowActiveBorder = rgb8(46, 184, 250),
-                    .measurementOverlayBackground = rgb8(8, 12, 17, 0.90F),
-                    .measurementOverlayBorder = rgb8(56, 127, 170, 0.68F),
-                    .measurementOverlayAccent = rgb8(46, 184, 250, 0.90F),
-                    .measurementOverlayTitle = rgb8(245, 250, 255, 0.98F),
-                    .measurementChipBackground = rgb8(14, 19, 25, 0.92F),
-                    .measurementChipBorder = rgb8(46, 82, 107, 0.65F),
-                    .measurementChipLabel = rgb8(179, 194, 209, 0.96F),
-                    .measurementChipValue = rgb8(245, 250, 255, 0.99F),
-                    .gridMajorWidth = 1.2F,
-                    .gridMinorTickWidth = 1.2F,
-                    .gridCenterWidth = 1.8F,
-                    .gridMinorTickHalfLength = 2.5F,
-                },
-        };
+        auto& w = d.wave;
+        const auto& u = d.ui;
+        w.statusOverlayBackground = w.legendOverlayBackground = w.measurementOverlayBackground = u.panelBackground;
+        w.statusOverlayBorder = w.legendOverlayBorder = w.measurementOverlayBorder = u.panelBorder;
+        w.statusOverlayText = w.legendOverlayTextPrimary = w.measurementOverlayTitle = u.textStrong;
+        w.channelLabel = w.splitChannelLabel = w.bitLabel = w.legendOverlayTextSecondary = u.textMuted;
+        w.channelSeparator = u.panelBorder;
+        w.legendOverlayRowHover = u.panelBackgroundAlt;
+        w.legendOverlayRowActive = u.panelBackgroundAlt;
+        w.legendOverlayRowActiveBorder = w.measurementOverlayAccent = u.accent;
+        w.measurementChipBackground = u.panelBackgroundAlt;
+        w.measurementChipBorder = u.panelBorder;
+        w.measurementChipLabel = u.textMuted;
+        w.measurementChipValue = u.textStrong;
+        w.lightPersistence = light;
+        w.channelPalette = light
+            ? std::vector<ImVec4>{rgb8(20, 120, 65), rgb8(0, 105, 175), rgb8(145, 101, 0), rgb8(120, 55, 183),
+                                 rgb8(195, 42, 48), rgb8(0, 120, 119), rgb8(177, 78, 0), rgb8(57, 89, 157)}
+            : std::vector<ImVec4>{rgb8(55, 226, 122), rgb8(51, 199, 255), rgb8(255, 194, 71), rgb8(182, 109, 255),
+                                 rgb8(255, 93, 93), rgb8(85, 233, 226), rgb8(255, 143, 56), rgb8(158, 204, 255)};
+        w.cursorPalette = light
+            ? std::vector<ImVec4>{rgb8(146, 98, 0), rgb8(0, 103, 150), rgb8(51, 99, 150), rgb8(185, 60, 78),
+                                 rgb8(34, 136, 51), rgb8(170, 51, 119), rgb8(95, 100, 110)}
+            : std::vector<ImVec4>{rgb8(255, 209, 102), rgb8(102, 204, 238), rgb8(68, 119, 170), rgb8(238, 102, 119),
+                                 rgb8(34, 136, 51), rgb8(170, 51, 119), rgb8(187, 187, 187)};
     }
 
     const UiThemeDefinition& professionalDarkTheme()
     {
-        static const UiThemeDefinition definition = makeProfessionalDarkTheme();
+        static const UiThemeDefinition definition = [] {
+            UiThemeDefinition d;
+            d.ui.accent = rgb8(46, 148, 224);
+            d.ui.accentMuted = rgb8(46, 148, 224, .24F);
+            d.ui.success = rgb8(61, 189, 122);
+            d.ui.warning = rgb8(237, 179, 51);
+            d.ui.danger = rgb8(239, 106, 106);
+            d.ui.textStrong = rgb8(237, 245, 252);
+            d.ui.appBackground = rgb8(27, 29, 33);
+            d.ui.panelBackground = rgb8(36, 39, 44);
+            d.ui.panelBackgroundAlt = rgb8(46, 49, 55);
+            d.ui.panelBorder = rgb8(113, 123, 135);
+            d.ui.textMuted = rgb8(180, 188, 200);
+            d.ui.genericPlotBackground = d.wave.plotBackground = rgb8(21, 23, 27);
+            d.wave.gridMajor = rgb8(90, 96, 106, .36F);
+            d.wave.gridMinorTick = rgb8(130, 139, 151, .48F);
+            d.wave.gridCenter = rgb8(145, 155, 167, .50F);
+            finishPreset(d, false);
+            return d;
+        }();
         return definition;
     }
 
     const UiThemeDefinition& debugHighContrastTheme()
     {
-        static const UiThemeDefinition definition = makeDebugHighContrastTheme();
+        static const UiThemeDefinition definition = [] {
+            auto d = professionalDarkTheme();
+            d.theme = config::GuiTheme::DebugHighContrast;
+            d.ui.accent = rgb8(46, 184, 250);
+            d.ui.accentMuted = rgb8(46, 184, 250, .24F);
+            d.ui.textStrong = rgb8(245, 250, 255);
+            d.ui.windowRounding = 4.F;
+            d.ui.frameRounding = d.ui.grabRounding = d.ui.tabRounding = 3.F;
+            d.wave.gridMajorWidth = d.wave.gridMinorTickWidth = 1.2F;
+            d.wave.gridCenterWidth = 1.8F;
+            d.wave.gridMinorTickHalfLength = 2.5F;
+            d.id = d.base = "debug_high_contrast";
+            d.name = "仪器深黑（高对比）";
+            d.ui.appBackground = rgb8(12, 13, 15);
+            d.ui.panelBackground = rgb8(19, 21, 24);
+            d.ui.panelBackgroundAlt = rgb8(28, 30, 34);
+            d.ui.panelBorder = rgb8(125, 137, 151);
+            d.ui.textMuted = rgb8(196, 203, 213);
+            d.ui.genericPlotBackground = d.wave.plotBackground = rgb8(8, 9, 11);
+            d.wave.gridMajor = rgb8(92, 100, 111, .42F);
+            d.wave.gridMinorTick = rgb8(149, 162, 178, .50F);
+            d.wave.gridCenter = rgb8(176, 188, 202, .55F);
+            finishPreset(d, false);
+            return d;
+        }();
         return definition;
     }
 
-    config::GuiTheme activeTheme{config::GuiTheme::ProfessionalDark};
-
-    ImVec4 withAlpha(const ImVec4& color, float alpha)
+    const UiThemeDefinition& professionalLightTheme()
     {
-        return ImVec4(color.x, color.y, color.z, alpha);
+        static const UiThemeDefinition definition = [] {
+            auto d = professionalDarkTheme();
+            d.theme = config::GuiTheme::ProfessionalLight;
+            d.id = d.base = "professional_light";
+            d.name = "专业浅色";
+            d.ui.appBackground = rgb8(240, 242, 244);
+            d.ui.panelBackground = rgb8(247, 248, 250);
+            d.ui.panelBackgroundAlt = rgb8(229, 233, 239);
+            d.ui.panelBorder = rgb8(120, 128, 139);
+            d.ui.accent = rgb8(20, 91, 170);
+            d.ui.accentMuted = rgb8(20, 91, 170, .16F);
+            d.ui.success = rgb8(22, 112, 60);
+            d.ui.warning = rgb8(131, 85, 0);
+            d.ui.danger = rgb8(178, 35, 48);
+            d.ui.textStrong = rgb8(36, 41, 47);
+            d.ui.textMuted = rgb8(86, 97, 111);
+            d.ui.genericPlotBackground = d.wave.plotBackground = rgb8(252, 253, 254);
+            d.wave.gridMajor = rgb8(119, 132, 148, .24F);
+            d.wave.gridMinorTick = rgb8(106, 120, 136, .38F);
+            d.wave.gridCenter = rgb8(88, 102, 118, .45F);
+            finishPreset(d, true);
+            return d;
+        }();
+        return definition;
     }
+
+    UiThemeDefinition activeDefinition = professionalDarkTheme();
+    std::uint64_t themeRevision{0};
 
     void applyImGuiTheme(const UiThemeDefinition& definition)
     {
         const auto& tokens = definition.ui;
-        const bool highContrast = definition.theme == config::GuiTheme::DebugHighContrast;
+        const auto interaction = [&](float alpha) {
+            const plot::OverviewColor base{tokens.panelBackgroundAlt.x, tokens.panelBackgroundAlt.y,
+                                            tokens.panelBackgroundAlt.z, 1};
+            plot::OverviewColor mixed;
+            // 交互填充按实际背景验证辅助文字，不让浅色主题悬停时出现低对比文字。
+            for (alpha = (std::min)(alpha, .14F); ; alpha = (std::max)(0.F, alpha - .01F)) {
+                mixed = plot::compositeOverviewColor({tokens.accent.x, tokens.accent.y, tokens.accent.z, alpha}, base);
+                if (alpha == 0 || plot::overviewContrast(
+                        plot::compositeOverviewColor({tokens.textMuted.x,tokens.textMuted.y,tokens.textMuted.z,tokens.textMuted.w},mixed),
+                        mixed) >= 4.5) break;
+            }
+            return ImVec4(float(mixed.r),float(mixed.g),float(mixed.b),1);
+        };
         ImGuiStyle& style = ImGui::GetStyle();
+        // 每次从同一基准重建样式，防止旧主题颜色或重复缩放残留。
+        style = ImGuiStyle{};
+        ImGui::StyleColorsDark(&style);
         style.WindowRounding = tokens.windowRounding;
         style.ChildRounding = tokens.windowRounding;
         style.FrameRounding = tokens.frameRounding;
@@ -176,44 +176,49 @@ namespace {
         colors[ImGuiCol_PopupBg] = tokens.panelBackground;
         colors[ImGuiCol_Border] = tokens.panelBorder;
         colors[ImGuiCol_FrameBg] = tokens.panelBackgroundAlt;
-        colors[ImGuiCol_FrameBgHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.28F);
-        colors[ImGuiCol_FrameBgActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.38F);
+        colors[ImGuiCol_FrameBgHovered] = interaction(.10F);
+        colors[ImGuiCol_FrameBgActive] = interaction(.16F);
         colors[ImGuiCol_TitleBg] = tokens.panelBackground;
         colors[ImGuiCol_TitleBgActive] = tokens.panelBackgroundAlt;
-        colors[ImGuiCol_MenuBarBg] =
-            highContrast ? withAlpha(tokens.panelBackground, 0.95F) : ImVec4(0.08F, 0.10F, 0.14F, 0.95F);
-        colors[ImGuiCol_ScrollbarBg] = highContrast ? tokens.appBackground : ImVec4(0.06F, 0.08F, 0.11F, 1.0F);
-        colors[ImGuiCol_ScrollbarGrab] =
-            highContrast ? withAlpha(tokens.panelBorder, 0.90F) : ImVec4(0.25F, 0.34F, 0.45F, 0.90F);
+        colors[ImGuiCol_MenuBarBg] = tokens.panelBackground;
+        colors[ImGuiCol_ScrollbarBg] = tokens.appBackground;
+        colors[ImGuiCol_ScrollbarGrab] = tokens.panelBorder;
+        colors[ImGuiCol_ScrollbarGrabHovered] = tokens.textMuted;
+        colors[ImGuiCol_ScrollbarGrabActive] = tokens.accent;
         colors[ImGuiCol_CheckMark] = tokens.accent;
         colors[ImGuiCol_SliderGrab] = tokens.accent;
         colors[ImGuiCol_SliderGrabActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.85F);
-        colors[ImGuiCol_Button] =
-            highContrast ? tokens.panelBackgroundAlt
-                         : ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.20F);
-        colors[ImGuiCol_ButtonHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.36F);
-        colors[ImGuiCol_ButtonActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.52F);
-        colors[ImGuiCol_Header] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.18F);
-        colors[ImGuiCol_HeaderHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.28F);
-        colors[ImGuiCol_HeaderActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.38F);
+        colors[ImGuiCol_Button] = tokens.panelBackgroundAlt;
+        colors[ImGuiCol_ButtonHovered] = interaction(.10F);
+        colors[ImGuiCol_ButtonActive] = interaction(.16F);
+        colors[ImGuiCol_Header] = interaction(.06F);
+        colors[ImGuiCol_HeaderHovered] = interaction(.10F);
+        colors[ImGuiCol_HeaderActive] = interaction(.16F);
         colors[ImGuiCol_Separator] = tokens.panelBorder;
         colors[ImGuiCol_ResizeGrip] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.20F);
         colors[ImGuiCol_ResizeGripHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.40F);
         colors[ImGuiCol_ResizeGripActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.62F);
-        colors[ImGuiCol_Tab] = highContrast ? tokens.panelBackgroundAlt : ImVec4(0.10F, 0.13F, 0.18F, 1.0F);
-        colors[ImGuiCol_TabHovered] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.45F);
-        colors[ImGuiCol_TabActive] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.28F);
-        colors[ImGuiCol_TabUnfocused] = highContrast ? tokens.panelBackground : ImVec4(0.08F, 0.11F, 0.16F, 1.0F);
-        colors[ImGuiCol_TabUnfocusedActive] =
-            highContrast ? tokens.panelBackgroundAlt : ImVec4(0.11F, 0.15F, 0.22F, 1.0F);
+        colors[ImGuiCol_Tab] = tokens.panelBackgroundAlt;
+        colors[ImGuiCol_TabHovered] = interaction(.10F);
+        colors[ImGuiCol_TabActive] = interaction(.16F);
+        colors[ImGuiCol_TabUnfocused] = tokens.panelBackground;
+        colors[ImGuiCol_TabUnfocusedActive] = tokens.panelBackgroundAlt;
         colors[ImGuiCol_DockingPreview] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.45F);
         colors[ImGuiCol_DockingEmptyBg] = tokens.appBackground;
-        colors[ImGuiCol_TableHeaderBg] = highContrast ? tokens.panelBackgroundAlt : ImVec4(0.10F, 0.13F, 0.18F, 1.0F);
+        colors[ImGuiCol_TableHeaderBg] = tokens.panelBackgroundAlt;
         colors[ImGuiCol_TableBorderStrong] = tokens.panelBorder;
         colors[ImGuiCol_TableBorderLight] =
             ImVec4(tokens.panelBorder.x, tokens.panelBorder.y, tokens.panelBorder.z, 0.55F);
         colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.0F, 1.0F, 1.0F, 0.02F);
         colors[ImGuiCol_TextSelectedBg] = ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.30F);
+        colors[ImGuiCol_TitleBgCollapsed] = tokens.panelBackground;
+        colors[ImGuiCol_SeparatorHovered] = tokens.accent;
+        colors[ImGuiCol_SeparatorActive] = tokens.accent;
+        colors[ImGuiCol_PlotLines] = tokens.accent;
+        colors[ImGuiCol_PlotLinesHovered] = tokens.warning;
+        colors[ImGuiCol_PlotHistogram] = tokens.accent;
+        colors[ImGuiCol_PlotHistogramHovered] = tokens.warning;
+        colors[ImGuiCol_NavHighlight] = tokens.accent;
     }
 
     void applyImPlotTheme(const UiThemeDefinition& definition)
@@ -250,6 +255,8 @@ const UiThemeDefinition& uiThemeDefinition(const config::GuiTheme theme)
     switch (theme) {
         case config::GuiTheme::DebugHighContrast:
             return debugHighContrastTheme();
+        case config::GuiTheme::ProfessionalLight:
+            return professionalLightTheme();
         case config::GuiTheme::ProfessionalDark:
         default:
             return professionalDarkTheme();
@@ -258,18 +265,60 @@ const UiThemeDefinition& uiThemeDefinition(const config::GuiTheme theme)
 
 const UiStyleTokens& activeUiStyleTokens()
 {
-    return uiThemeDefinition(activeTheme).ui;
+    return activeDefinition.ui;
 }
 
 const WaveStyleTokens& activeWaveStyleTokens()
 {
-    return uiThemeDefinition(activeTheme).wave;
+    return activeDefinition.wave;
 }
 
 void applyUiTheme(const config::GuiTheme theme)
 {
-    activeTheme = theme;
-    const auto& definition = uiThemeDefinition(activeTheme);
+    applyUiTheme(uiThemeDefinition(theme));
+}
+
+const UiThemeDefinition& activeThemeDefinition() { return activeDefinition; }
+std::uint64_t activeThemeRevision() { return themeRevision; }
+
+ImVec4 displayColor(ImVec4 color, ImVec4 background, float opacity, float minimumContrast)
+{
+    color.w *= std::clamp(opacity, 0.F, 1.F);
+    if (!activeWaveStyleTokens().correctContrast || color.w <= 0.F) return color;
+    const plot::OverviewColor back{background.x, background.y, background.z, 1};
+    const auto ratio = [&](ImVec4 c) {
+        return plot::overviewContrast(plot::compositeOverviewColor({c.x, c.y, c.z, c.w}, back), back);
+    };
+    if (ratio(color) >= minimumContrast) return color;
+    const float end = plot::overviewContrast({0, 0, 0, 1}, back) >
+                      plot::overviewContrast({1, 1, 1, 1}, back) ? 0.F : 1.F;
+    const auto original = color;
+    // 先沿明暗方向最小幅度修正 RGB；透明度不足时才增加 alpha，原始通道颜色不变。
+    for (int step = 1; step <= 48; ++step) {
+        const float t = step / 64.F;
+        color.x = std::lerp(original.x, end, t);
+        color.y = std::lerp(original.y, end, t);
+        color.z = std::lerp(original.z, end, t);
+        if (ratio(color) >= minimumContrast) return color;
+    }
+    for (int step = 1; step <= 64; ++step) {
+        color.w = std::lerp(original.w, 1.F, step / 64.F);
+        if (ratio(color) >= minimumContrast) return color;
+    }
+    // 先保留至少四分之一原色，避免低 alpha 直接褪为纯黑/纯白；极端背景再用剩余明暗范围。
+    for (int step = 49; step <= 64; ++step) {
+        color.x = std::lerp(original.x, end, step / 64.F);
+        color.y = std::lerp(original.y, end, step / 64.F);
+        color.z = std::lerp(original.z, end, step / 64.F);
+        if (ratio(color) >= minimumContrast) return color;
+    }
+    return color;
+}
+
+void applyUiTheme(const UiThemeDefinition& definition)
+{
+    activeDefinition = definition;
+    ++themeRevision;
     if (ImGui::GetCurrentContext() != nullptr) {
         applyImGuiTheme(definition);
     }
@@ -285,13 +334,15 @@ const UiStyleTokens& defaultUiStyleTokens()
 
 void applyImGuiProfessionalDarkTheme()
 {
-    activeTheme = config::GuiTheme::ProfessionalDark;
+    activeDefinition = professionalDarkTheme();
+    ++themeRevision;
     applyImGuiTheme(professionalDarkTheme());
 }
 
 void applyImPlotProfessionalDarkTheme()
 {
-    activeTheme = config::GuiTheme::ProfessionalDark;
+    activeDefinition = professionalDarkTheme();
+    ++themeRevision;
     applyImPlotTheme(professionalDarkTheme());
 }
 
@@ -325,11 +376,10 @@ void endToolbarGroup()
 
 bool drawToolbarSectionButton(const char* label, const char* tooltip, bool active, const ImVec2& size)
 {
-    const auto& tokens = defaultUiStyleTokens();
     if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.42F));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.58F));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(tokens.accent.x, tokens.accent.y, tokens.accent.z, 0.74F));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
     }
     const bool clicked = ImGui::Button(label, size.x == 0.0F && size.y == 0.0F ? ImVec2(-1.0F, 0.0F) : size);
     if (active) {
@@ -346,7 +396,10 @@ void drawHeaderBadge(const char* label, const ImVec4& color, bool filled)
     const auto& tokens = defaultUiStyleTokens();
     const ImVec4 background = filled ? color : ImVec4(color.x, color.y, color.z, 0.16F);
     const ImVec4 border = filled ? color : ImVec4(color.x, color.y, color.z, 0.55F);
-    const ImVec4 textColor = filled ? tokens.textStrong : color;
+    const auto composite = plot::compositeOverviewColor({background.x, background.y, background.z, background.w},
+        {tokens.panelBackground.x, tokens.panelBackground.y, tokens.panelBackground.z, 1});
+    const ImVec4 backdrop(float(composite.r), float(composite.g), float(composite.b), 1);
+    const ImVec4 textColor = displayColor(filled ? tokens.textStrong : color, backdrop, 1.F, 4.5F);
     ImGui::PushStyleColor(ImGuiCol_Button, background);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, background);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, background);

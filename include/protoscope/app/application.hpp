@@ -54,6 +54,7 @@ public:
     void clearExpiredTransientStatus(std::uint64_t nowMs);
     void setLogLevel(config::LogLevel level);
     void setGuiTheme(config::GuiTheme theme);
+    void setGuiTheme(std::string_view theme);
     bool setSendHexMode(bool enabled);
     bool exportWaveRawCapture(const std::filesystem::path& path, std::string& error) const;
     bool exportWaveRawCapture(const std::filesystem::path& path,

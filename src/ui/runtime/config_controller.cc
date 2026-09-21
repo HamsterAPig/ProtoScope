@@ -13,7 +13,9 @@ bool GuiRuntime::reloadConfigFromDisk()
     if (!application_.applyConfig(loaded.config)) {
         return false;
     }
-    applyUiTheme(loaded.config.gui.theme);
+    std::string themeError;
+    themeManager_.setConfigPath(loaded.resolvedPath);
+    if (themeManager_.reload(themeError)) themeManager_.request(loaded.config.gui.theme, themeError);
     if (loaded.config.gui.rendererBackend != options_.rendererBackend) {
         application_.setStatusMessage("渲染后端配置已更新为 " +
                                           std::string(config::guiRendererBackendId(loaded.config.gui.rendererBackend)) +
@@ -26,6 +28,7 @@ bool GuiRuntime::reloadConfigFromDisk()
     application_.docks().clearPendingExternalReload();
     application_.docks().clearDirty("已从磁盘重载配置");
     configState.fileTimestampMs = configSnapshot_.timestampMs;
+    if (!themeError.empty()) application_.setStatusMessage(themeError, false);
     return true;
 }
 
