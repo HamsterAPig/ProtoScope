@@ -205,7 +205,13 @@ struct DataExportConfig {
     std::string directory;
 };
 
+struct GuiFileDialogConfig {
+    std::string lastImportDirectory;
+    std::string lastExportDirectory;
+};
+
 struct GuiConfig {
+    GuiFileDialogConfig fileDialogs{};
     DataExportConfig lastDataExport{};
     GuiTheme theme{GuiTheme::ProfessionalDark};
     GuiWindowConfig window{};
@@ -302,6 +308,9 @@ public:
     ConfigLoadResult loadText(std::string_view yamlText, const std::filesystem::path& sourcePath = {}) const;
     bool save(const std::filesystem::path& path, const AppConfig& config, std::string& error) const;
     bool saveText(const AppConfig& config, std::string& yamlText, std::string& error) const;
+    bool saveFileDialogPreferences(const std::filesystem::path& path,
+                                   const GuiFileDialogConfig& preferences, std::string& error,
+                                   const DataExportConfig* lastExport = nullptr) const;
 
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& dir) const;
     std::filesystem::path normalizeProtocolDir(const std::filesystem::path& rootDir,

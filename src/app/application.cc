@@ -1338,6 +1338,7 @@ config::AppConfig Application::captureConfig() const
     captured.gui.logHistory = runtimeConfig_.gui.logHistory;
     captured.gui.rawCapture = runtimeConfig_.gui.rawCapture;
     captured.gui.lastDataExport = runtimeConfig_.gui.lastDataExport;
+    captured.gui.fileDialogs = runtimeConfig_.gui.fileDialogs;
     captured.gui.realtimeBacklog = runtimeConfig_.gui.realtimeBacklog;
     captured.gui.elfSymbolCombo = runtimeConfig_.gui.elfSymbolCombo;
     captured.gui.interactionFeedback = runtimeConfig_.gui.interactionFeedback;

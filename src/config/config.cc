@@ -13,6 +13,13 @@
 
 #include <yaml-cpp/yaml.h>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace protoscope::config {
 
 namespace {
@@ -859,6 +866,13 @@ namespace {
         loadGuiWindowConfig(gui, config);
         loadGuiFontConfig(gui, config);
         loadGuiInteractionFeedbackConfig(gui, config);
+        // 目录偏好独立于波形配置；只有新字段缺失时才迁移旧导出目录。
+        const auto dialogs = childNode(gui, "file_dialogs");
+        const auto lastExport = childNode(gui, "last_data_export");
+        config.gui.fileDialogs.lastImportDirectory =
+            readScalar<std::string>(dialogs, "last_import_directory", "");
+        config.gui.fileDialogs.lastExportDirectory = readScalar<std::string>(
+            dialogs, "last_export_directory", readScalar<std::string>(lastExport, "directory", ""));
         if (const auto wave = childNode(gui, "wave")) {
             loadGuiWaveConfig(wave, config);
             loadGuiWaveScopedRuntimeConfig(gui, config);
@@ -1150,6 +1164,8 @@ namespace {
         gui["last_data_export"]["record_range"] = last.recordRange;
         gui["last_data_export"]["csv_shape"] = last.csvShape;
         gui["last_data_export"]["directory"] = last.directory;
+        gui["file_dialogs"]["last_import_directory"] = config.gui.fileDialogs.lastImportDirectory;
+        gui["file_dialogs"]["last_export_directory"] = config.gui.fileDialogs.lastExportDirectory;
         gui["raw_capture"]["live_limit_bytes"] = config.gui.rawCapture.liveLimitBytes;
         gui["raw_capture"]["recording_queue_limit_bytes"] = config.gui.rawCapture.recordingQueueLimitBytes;
         gui["transfer_log"]["replay_raw_history_on_schema_switch"] = config.gui.replayRawHistoryOnSchemaSwitch;
@@ -1388,6 +1404,11 @@ namespace {
                 return false;
             }
             out << root;
+            out.flush();
+            if (!out.good()) {
+                error = "写入配置文件失败";
+                return false;
+            }
             return true;
         } catch (const std::exception& ex) {
             error = ex.what();
@@ -1495,6 +1516,71 @@ bool ConfigStore::saveText(const AppConfig& config, std::string& yamlText, std::
         return true;
     } catch (const std::exception& ex) {
         error = std::string("生成 YAML 文本失败: ") + ex.what();
+        return false;
+    }
+}
+
+bool ConfigStore::saveFileDialogPreferences(const std::filesystem::path& path,
+                                           const GuiFileDialogConfig& preferences, std::string& error,
+                                           const DataExportConfig* lastExport) const
+{
+    try {
+        error.clear();
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(path, ec);
+        if (ec) {
+            error = ec.message();
+            return false;
+        }
+        YAML::Node root(YAML::NodeType::Map);
+        if (exists) {
+            std::ifstream input(path);
+            if (!input) {
+                error = "无法读取现有配置";
+                return false;
+            }
+            root = YAML::Load(input);
+            if (input.bad() || !root.IsMap() ||
+                (root["gui"] && !root["gui"].IsMap()) ||
+                (root["gui"]["file_dialogs"] && !root["gui"]["file_dialogs"].IsMap())) {
+                error = "配置结构损坏，未保存目录偏好";
+                return false;
+            }
+            // 完整校验已知字段，禁止以默认配置覆盖损坏文件。
+            auto validated = withDefaults();
+            loadConfigYamlRoot(root, validated);
+        }
+        root["gui"]["file_dialogs"]["last_import_directory"] = preferences.lastImportDirectory;
+        root["gui"]["file_dialogs"]["last_export_directory"] = preferences.lastExportDirectory;
+        if (lastExport) {
+            auto last = root["gui"]["last_data_export"];
+            last["valid"] = lastExport->valid;
+            last["content"] = lastExport->content;
+            last["format"] = lastExport->format;
+            last["wave_range"] = lastExport->waveRange;
+            last["record_range"] = lastExport->recordRange;
+            last["csv_shape"] = lastExport->csvShape;
+            last["directory"] = lastExport->directory;
+        }
+        // 先写同目录临时文件再替换，磁盘写满时保留原配置。
+        auto temporary = path;
+        temporary += ".file-dialog.tmp";
+        if (!writeConfigYamlFile(temporary, root, error)) return false;
+#if defined(_WIN32)
+        if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            error = std::system_category().message(static_cast<int>(GetLastError()));
+            return false;
+        }
+#else
+        std::filesystem::rename(temporary, path, ec);
+        if (ec) {
+            error = ec.message();
+            return false;
+        }
+#endif
+        return true;
+    } catch (const std::exception& ex) {
+        error = ex.what();
         return false;
     }
 }

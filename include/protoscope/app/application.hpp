@@ -71,6 +71,7 @@ public:
         return status;
     }
     void rememberDataExport(const config::DataExportConfig& value) { runtimeConfig_.gui.lastDataExport = value; }
+    void rememberFileDialogPreferences(const config::GuiFileDialogConfig& value) { runtimeConfig_.gui.fileDialogs = value; }
     bool startDataExport(const std::filesystem::path& path, int content, int format,
                          const plot::CsvExportRange& waveRange, int recordRange,
                          std::uint64_t recordBeginMs, std::uint64_t recordEndMs,

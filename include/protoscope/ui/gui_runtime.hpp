@@ -3,6 +3,7 @@
 #include "protoscope/config/config.hpp"
 #include "protoscope/ui/dock_layout.hpp"
 #include "protoscope/ui/elf_static_address_file_watch.hpp"
+#include "protoscope/ui/file_dialog_paths.hpp"
 #include "protoscope/ui/protocol_state_file.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/ui_component.hpp"
@@ -141,6 +142,13 @@ private:
     void openUnifiedDataImport();
     void openUnifiedDataExport(int content = -1, bool useLast = false);
     void submitUnifiedDataExport();
+    std::optional<std::filesystem::path> builtinFileDialog(
+        GLFWwindow* window, const wchar_t* title, const wchar_t* filter,
+        const std::filesystem::path& defaultPath, bool saveDialog,
+        const wchar_t* extension, std::string& error, bool remember = true);
+    void rememberFileDialogPath(const std::filesystem::path& path, bool exporting);
+    void saveFileDialogPreferences(const config::DataExportConfig* lastExport = nullptr);
+    std::string fileDialogPreferenceError_;
     void drawRawCaptureFileDialogs();
     void handleGlobalShortcuts();
     void drawMainMenu();

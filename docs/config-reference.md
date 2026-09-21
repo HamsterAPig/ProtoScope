@@ -366,3 +366,7 @@ communication:
 - `serial.flow_control`：`none`、`hardware`、`software`。
 - `udp_peer.bind_address` / `bind_port`：UDP 本地绑定地址和端口。
 - `udp_peer.remote_host` / `remote_port`：UDP 远端地址和端口。
+- `gui.file_dialogs.last_import_directory`：内置导入及回放载入共用的历史目录。
+- `gui.file_dialogs.last_export_directory`：内置导出、报告、日志、请求追踪和录制共用的历史目录。
+  文件对话框确认后立即保存，取消浏览不更新；目录失效时逐级回退，不创建目录、不改写历史。
+  未配置新导出字段时从 `gui.last_data_export.directory` 迁移；目录偏好保存不提交其他未保存设置。

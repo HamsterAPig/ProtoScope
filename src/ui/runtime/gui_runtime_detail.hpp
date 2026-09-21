@@ -236,7 +236,8 @@ namespace {
         bool saveDialog,
         bool pickFolder,
         const wchar_t* defaultExtension,
-        std::string& error)
+        std::string& error,
+        const std::filesystem::path* suggestedFileName = nullptr)
     {
         // 核心流程：Windows 文件与目录选择统一走 Common Item Dialog，避免同一应用出现两套系统对话框体验。
         const ScopedComInitializer com;
@@ -284,7 +285,13 @@ namespace {
         if (defaultExtension != nullptr && *defaultExtension != L'\0') {
             dialog->SetDefaultExtension(defaultExtension);
         }
-        setNativeDialogDefaultPath(dialog, defaultPath, pickFolder);
+        if (suggestedFileName != nullptr) {
+            // 内置入口明确传入目录与文件名，不靠目录是否存在猜测路径类型。
+            setNativeDialogDefaultPath(dialog, defaultPath, true);
+            if (!suggestedFileName->empty()) dialog->SetFileName(suggestedFileName->c_str());
+        } else {
+            setNativeDialogDefaultPath(dialog, defaultPath, pickFolder);
+        }
 
         result = dialog->Show(nativeWindowHandle(window));
         if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
