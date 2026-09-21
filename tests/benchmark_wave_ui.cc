@@ -629,9 +629,13 @@ int main(int argc, char** argv)
             std::vector<plot::WaveSample> samples;
             for (int i = 0; i < 10000; ++i) samples.push_back({double(i), double(i >= 1234)});
             wave.buffer.append(0, {{}, samples});
-            // 主图、堆叠、分屏必须使用查询层的同一轨迹，不能再次丢掉跳变邻点。
+            // 同一数据往返切换：稳定模式不得二次压缩，旧模式必须恢复各布局原有分支。
+            for (const auto downsample : {plot::WaveDownsampleMode::StableEdges,
+                                          plot::WaveDownsampleMode::LegacyUniform,
+                                          plot::WaveDownsampleMode::StableEdges})
             for (const auto mode : {plot::WaveViewMode::Overlay, plot::WaveViewMode::Stacked,
                                     plot::WaveViewMode::Split}) {
+                view.downsampleMode = downsample;
                 view.viewMode = mode;
                 for (const bool peakDetect : {false, true}) {
                     view.peakDetectDownsample = peakDetect;
@@ -656,14 +660,26 @@ int main(int argc, char** argv)
                             throw std::runtime_error("stable trace froze live viewport following");
                         const auto& indices = frame.displayData->channels[0].sourceIndices;
                         const auto edge = std::ranges::find(indices, 1233);
-                        if (edge == indices.end() || edge + 1 == indices.end() || *(edge + 1) != 1234)
+                        if (downsample == plot::WaveDownsampleMode::StableEdges &&
+                            (edge == indices.end() || edge + 1 == indices.end() || *(edge + 1) != 1234))
                             throw std::runtime_error("display cache lost fixed analog edge pair");
                         const auto rendered = ui::drawOscilloscopePlot(wave, frame,
                             {.drawMeasurementOverlay = false, .drawLegendOverlay = false}, nullptr);
                         ImGui::End();
                         ImGui::Render();
-                        if (!rendered.plotRendered || !wave.renderEnvelopeCache.empty())
-                            throw std::runtime_error("analog query trace was compressed again by renderer");
+                        if (!rendered.plotRendered)
+                            throw std::runtime_error("analog mode switch produced no plot");
+                        if (downsample == plot::WaveDownsampleMode::StableEdges) {
+                            if (!wave.renderEnvelopeCache.empty())
+                                throw std::runtime_error("analog query trace was compressed again by renderer");
+                        } else if (mode != plot::WaveViewMode::Split || !peakDetect) {
+                            if (wave.renderEnvelopeCache.empty() || !wave.renderEnvelopeCache[0].valid)
+                                throw std::runtime_error("legacy drawing branch was not restored");
+                            const auto& cached = wave.renderEnvelopeCache[0];
+                            if (cached.key.downsampleMode != downsample || cached.key.peakDetectDownsample != peakDetect ||
+                                (peakDetect ? cached.peakDetectTrace.empty() : cached.envelope.empty()))
+                                throw std::runtime_error("legacy peak/envelope cache used wrong mode");
+                        }
                         if (view.lastRenderPointCount > frame.renderBudget.pointsPerChannel ||
                             ImGui::GetDrawData()->TotalVtxCount > int(view.maxRenderVertices))
                             throw std::runtime_error("analog stable rendering exceeds budget");
@@ -672,7 +688,8 @@ int main(int argc, char** argv)
                             glClear(GL_COLOR_BUFFER_BIT);
                             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
                             glFinish();
-                            captureFrame(captureDirectory, "analog-stable-" + std::to_string(int(mode)) +
+                            captureFrame(captureDirectory, "analog-mode-" + std::to_string(int(downsample)) +
+                                "-" + std::to_string(int(mode)) +
                                 "-" + std::to_string(peakDetect));
                         }
                     }
@@ -720,7 +737,10 @@ int main(int argc, char** argv)
                 << " enable_digital_ms=" << std::chrono::duration<double, std::milli>(indexEnd - indexStart).count()
                 << " append_one_ms=" << std::chrono::duration<double, std::milli>(appendEnd - appendStart).count()
                 << " summary_bytes=" << bytes << '\n';
-            for (int mode = 0; mode < 8; ++mode) {
+            for (int scenario = 0; scenario < 16; ++scenario) {
+                const int mode = scenario % 8;
+                wave.view.downsampleMode = scenario < 8
+                    ? plot::WaveDownsampleMode::StableEdges : plot::WaveDownsampleMode::LegacyUniform;
                 wave.view.maxRenderVertices = mode == 7 ? 30000 : 60000;
                 wave.view.glowEnabled = mode != 0 && mode != 7;
                 wave.view.viewMode = mode == 2   ? plot::WaveViewMode::Stacked
@@ -830,7 +850,8 @@ int main(int argc, char** argv)
                 if (withGl) {
                     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
                     glFinish();
-                    if (mode == 0) captureFrame(captureDirectory, "overview-" + std::to_string(count));
+                    if (mode == 0) captureFrame(captureDirectory, "overview-" + std::to_string(count) +
+                        "-" + std::to_string(int(wave.view.downsampleMode)));
                     glfwSwapBuffers(window);
                 }
                 if (ImGui::GetDrawData()->TotalVtxCount > static_cast<int>(wave.view.maxRenderVertices))
@@ -842,12 +863,16 @@ int main(int argc, char** argv)
                     << " frame_ms=" << std::chrono::duration<double, std::milli>(Clock::now() - releaseStart).count() << '\n';
                 std::ranges::sort(times);
                 std::cout << "ui_pan samples=" << count << " mode=" << mode
+                          << " downsample=" << int(wave.view.downsampleMode)
                           << " p95_ms=" << times[times.size() * 95 / 100] << " vertices=" << vertices
                           << " phosphor_status=" << wave.view.lastRenderStats.phosphorBackendStatus << '\n';
                 if (withGl && (mode == 4 || mode == 5)) {
                     std::cout << "warm_backend mode=" << mode << " status=" << backend << '\n';
                     if (backend.find(mode == 4 ? "GPU FBO" : "CPU Texture") == std::string::npos)
                         throw std::runtime_error("requested phosphor backend did not render");
+                    // 在冻结状态切换，下一帧必须重建而不能复用旧模式纹理。
+                    wave.view.downsampleMode = wave.view.downsampleMode == plot::WaveDownsampleMode::StableEdges
+                        ? plot::WaveDownsampleMode::LegacyUniform : plot::WaveDownsampleMode::StableEdges;
                     io.MouseDown[ImGuiMouseButton_Left] = false;
                     ImGui_ImplOpenGL3_NewFrame();
                     ImGui::NewFrame();

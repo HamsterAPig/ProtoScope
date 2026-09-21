@@ -191,6 +191,12 @@ void main()
                     const std::vector<std::size_t>& visibleChannelIndices,
                     const ImPlotRect& limits)
         {
+            // 即使冻结或隐藏期间往返切换，也必须清空旧模式的 CPU/GPU 余辉累积。
+            if (lastResetGeneration_ != view.phosphorResetGeneration || lastDownsampleMode_ != view.downsampleMode) {
+                viewportInvalid_ = true;
+                lastResetGeneration_ = view.phosphorResetGeneration;
+                lastDownsampleMode_ = view.downsampleMode;
+            }
             if (lastViewport_ && !view.autoFollowLatest &&
                 (lastViewport_->X.Min != limits.X.Min || lastViewport_->X.Max != limits.X.Max ||
                  lastViewport_->Y.Min != limits.Y.Min || lastViewport_->Y.Max != limits.Y.Max)) {
@@ -284,6 +290,8 @@ void main()
         }
 
         bool viewportInvalid_{false};
+        std::uint64_t lastResetGeneration_{0};
+        plot::WaveDownsampleMode lastDownsampleMode_{plot::WaveDownsampleMode::StableEdges};
         std::optional<ImPlotRect> lastViewport_;
 
         bool textureApiAvailable() const
@@ -660,7 +668,8 @@ void main()
                         const auto& c = displayData.channels[channelIndex];
                         const plot::WaveQueryView query(snapshot.channels[channelIndex], c.axis, c.frequency, c.formula);
                         std::vector<plot::WaveSample> trace;
-                        for (const auto index : query.traceIndices(window.sourceMinTime, window.sourceMaxTime, points))
+                        for (const auto index : query.traceIndices(window.sourceMinTime, window.sourceMaxTime, points,
+                                                                   nullptr, true, view.downsampleMode))
                             trace.push_back(query.sample(index));
                         accumulateSampleWindow(trace, window.sourceMinTime, window.sourceMaxTime, limits,
                             wavePhosphorStrokeStyle(snapshot.channels[channelIndex], channelIndex), &window);

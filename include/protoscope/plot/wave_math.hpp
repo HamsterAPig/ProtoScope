@@ -167,7 +167,8 @@ bool scriptTimeUsable(const std::vector<WaveSample>& samples);
 void buildDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz, WaveDisplayData& data);
 void buildQueryDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz,
                               std::size_t pointBudget, WaveDisplayData& data,
-                              std::optional<std::pair<double, double>> timeRange = std::nullopt);
+                              std::optional<std::pair<double, double>> timeRange = std::nullopt,
+                              WaveDownsampleMode mode = WaveDownsampleMode::StableEdges);
 WaveDisplayChannel extractDisplayWindow(const WaveDisplayChannel& channel, double minTime, double maxTime,
                                        bool guards = false);
 WaveDisplayData buildDisplayData(const WaveSnapshot& snapshot, double sampleFrequencyHz);

@@ -425,7 +425,7 @@ WaveDisplayChannel extractDisplayWindow(const WaveDisplayChannel& channel, doubl
 
 void buildQueryDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz,
                                std::size_t pointBudget, WaveDisplayData& data,
-                               std::optional<std::pair<double, double>> timeRange)
+                               std::optional<std::pair<double, double>> timeRange, WaveDownsampleMode mode)
 {
     resetDisplayDataChannels(data, snapshot.channels.size());
     // Buffer 已保证时间递增；避免为判定时间轴每次重新遍历整个窗口。
@@ -450,9 +450,12 @@ void buildQueryDisplayDataInto(const WaveSnapshot& snapshot, double sampleFreque
         const auto [begin, end] = displaySampleRange(source);
         if (begin == end) continue;
         WaveQueryView query(source, data.axisSource, sampleFrequencyHz, snapshot.config.displayFormula);
-        output.sourceIndices = timeRange
-            ? query.traceIndices(timeRange->first, timeRange->second, pointBudget)
-            : query.traceIndices(query.time(begin), query.time(end - 1), pointBudget, nullptr, false);
+        // 旧路径以快照可见范围为分桶端点，保留当时的边界邻点选择。
+        // 数字通道仍沿用当前路径，其专用数字渲染算法不受模拟降采样选项影响。
+        const auto channelMode = source.bitDisplay.enabled ? WaveDownsampleMode::StableEdges : mode;
+        output.sourceIndices = timeRange && channelMode == WaveDownsampleMode::StableEdges
+            ? query.traceIndices(timeRange->first, timeRange->second, pointBudget, nullptr, true, channelMode)
+            : query.traceIndices(query.time(begin), query.time(end - 1), pointBudget, nullptr, false, channelMode);
         for (const auto index : output.sourceIndices) {
             output.samples.push_back(query.sample(index));
             output.actualValues.push_back(query.actual(index));

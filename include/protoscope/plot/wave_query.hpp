@@ -16,6 +16,7 @@ struct ChannelView;
 enum class WaveDisplayFormula;
 enum class WaveTimeAxisSource;
 enum class WaveBitDenseRenderMode { CompressedSteps, ActivityBand };
+enum class WaveDownsampleMode { StableEdges, LegacyUniform };
 
 struct WaveDigitalBucket {
     double beginTime{0};
@@ -115,7 +116,8 @@ public:
                                           double maxTime,
                                           std::size_t budget,
                                           WaveQueryCounters* counters = nullptr,
-                                          bool guards = true) const;
+                                          bool guards = true,
+                                          WaveDownsampleMode mode = WaveDownsampleMode::StableEdges) const;
     std::vector<WaveSample> extract(double minTime, double maxTime) const;
     std::vector<WaveDigitalBucket> digitalBuckets(double minTime,
                                                   double maxTime,
@@ -132,6 +134,10 @@ public:
     std::optional<std::size_t> bitEdge(double minTime, double maxTime, std::size_t bit, bool state, bool reverse) const;
 
 private:
+    std::vector<std::size_t> stableEdgeIndices(double minTime, double maxTime, std::size_t begin,
+        std::size_t end, std::size_t budget, WaveQueryCounters* counters) const;
+    std::vector<std::size_t> legacyUniformIndices(double minTime, double maxTime, std::size_t begin,
+        std::size_t end, std::size_t budget, WaveQueryCounters* counters) const;
     const ChannelView& channel_;
     WaveTimeAxisSource axis_;
     double frequency_;

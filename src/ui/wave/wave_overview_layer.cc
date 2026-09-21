@@ -38,7 +38,8 @@ const plot::WaveDockState::OverviewRenderEntry& cachedOverviewChannel(
     const plot::WaveDockState::OverviewRenderKey key{
         wave.buffer.analysisRevision(), wave.buffer.historyEpoch(), channelIndex, width, budget, axis,
         wave.view.sampleFrequencyHz, minTime, maxTime, channel.ratio, channel.scale, channel.offset,
-        wave.buffer.viewConfig().displayFormula, wave.view.overviewNormalizeChannels};
+        wave.buffer.viewConfig().displayFormula, wave.view.overviewNormalizeChannels,
+        wave.view.downsampleMode};
     if (entry.valid && entry.key == key) return entry;
     entry = {};
     entry.key = key;

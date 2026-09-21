@@ -363,20 +363,69 @@ WaveSummary WaveQueryView::summary(std::size_t begin, std::size_t end, WaveQuery
 }
 
 std::vector<std::size_t> WaveQueryView::traceIndices(
-    double minTime, double maxTime, std::size_t budget, WaveQueryCounters* counters, bool guards) const
+    double minTime, double maxTime, std::size_t budget, WaveQueryCounters* counters, bool guards,
+    WaveDownsampleMode mode) const
 {
+    if (maxTime < minTime) std::swap(minTime, maxTime);
     std::vector<std::size_t> result;
     const auto [begin, end] = range(minTime, maxTime, guards);
     if (begin == end || budget == 0)
         return result;
-    result.reserve((std::min)(budget, end - begin));
     if (end - begin <= budget) {
+        result.reserve(end - begin);
         for (auto i = begin; i < end; ++i)
             result.push_back(i);
         if (counters)
             counters->rawSamples += end - begin;
         return result;
     }
+    // 两种策略共享范围、原始数据和预算入口；仅高密度取点方式不同。
+    return mode == WaveDownsampleMode::LegacyUniform
+        ? legacyUniformIndices(minTime, maxTime, begin, end, budget, counters)
+        : stableEdgeIndices(minTime, maxTime, begin, end, budget, counters);
+}
+
+std::vector<std::size_t> WaveQueryView::legacyUniformIndices(
+    double minTime, double maxTime, std::size_t begin, std::size_t end,
+    std::size_t budget, WaveQueryCounters* counters) const
+{
+    std::vector<std::size_t> result;
+    result.reserve((std::min)(budget, end - begin));
+    if (budget < 4) {
+        result.push_back(begin);
+        if (budget > 1) result.push_back(end - 1);
+        return result;
+    }
+    // 兼容 e6320e1：按当前窗口均匀分桶，每桶按时间顺序保留首、极小、极大、末点。
+    const auto buckets = budget / 4;
+    auto left = begin;
+    for (std::size_t bucket = 0; bucket < buckets; ++bucket) {
+        auto right = end;
+        if (bucket + 1 < buckets) {
+            const auto t = minTime + (maxTime - minTime) *
+                static_cast<double>(bucket + 1) / static_cast<double>(buckets);
+            right = (std::clamp)(range(t, t, false).first, left, end);
+        }
+        const auto s = summary(left, right, counters);
+        if (s.count) {
+            std::array<std::size_t, 4> indices{s.first, s.minimum, s.maximum, s.last};
+            std::ranges::sort(indices);
+            for (const auto global : indices) {
+                const auto index = global - channel_.sampleIndexOffset;
+                if (result.empty() || result.back() != index) result.push_back(index);
+            }
+        }
+        left = right;
+    }
+    return result;
+}
+
+std::vector<std::size_t> WaveQueryView::stableEdgeIndices(
+    double minTime, double maxTime, std::size_t begin, std::size_t end,
+    std::size_t budget, WaveQueryCounters* counters) const
+{
+    std::vector<std::size_t> result;
+    result.reserve((std::min)(budget, end - begin));
     const auto add = [&](std::size_t global) {
         const auto index = global - channel_.sampleIndexOffset;
         if (std::ranges::find(result, index) == result.end()) result.push_back(index);
@@ -413,7 +462,6 @@ std::vector<std::size_t> WaveQueryView::traceIndices(
         std::ranges::sort(result);
         return result;
     }
-    if (maxTime < minTime) std::swap(minTime, maxTime);
     const auto buckets = (budget - 2) / 8;
     // 完整桶以横轴零点为锚，桶宽只在二倍层级上改变，滚动不会重分完整桶。
     const auto span = maxTime - minTime;

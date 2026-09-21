@@ -126,6 +126,7 @@ namespace {
             hashCombine(rangeHash, channel.sampleIndexOffset);
         }
         return {
+            .downsampleMode = view.downsampleMode,
             .dataRevision = dataRevision,
             .sampleFrequencyHz = view.sampleFrequencyHz,
             .viewMinTime = view.viewMinTime,
@@ -143,6 +144,7 @@ namespace {
     {
         const auto displayKey = makeDisplayDataCacheKey(snapshot, view, dataRevision);
         return {
+            .downsampleMode = view.downsampleMode,
             .dataRevision = dataRevision,
             .sampleFrequencyHz = view.sampleFrequencyHz,
             .channelCount = displayKey.channelCount,
@@ -314,6 +316,15 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
 {
     alignWaveLayoutChannels(wave);
     auto& view = wave.view;
+    if (wave.displayDataDownsampleMode != view.downsampleMode) {
+        // 模式切换只重建显示缓存与余辉，保留测量、FFT 计算结果及游标状态。
+        wave.displayDataDownsampleMode = view.downsampleMode;
+        wave.cachedDisplayKeyValid = false;
+        wave.cachedOverviewKeyValid = false;
+        wave.renderEnvelopeCache.clear();
+        wave.overviewRenderCache.clear();
+        ++view.phosphorResetGeneration;
+    }
     view.interactionActive = (ImGui::GetCurrentContext() != nullptr &&
         (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Middle) ||
          ImGui::IsMouseDown(ImGuiMouseButton_Right))) ||
@@ -397,7 +408,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
             // 核心流程：主显示窗口完全未变时复用上一帧显示数据和边界，避免 UI 空转重复构建。
             plot::buildQueryDisplayDataInto(frame.snapshot, view.sampleFrequencyHz,
                                             frame.renderBudget.pointsPerChannel, wave.cachedDisplayData,
-                                            std::pair{view.viewMinTime, view.viewMaxTime});
+                                            std::pair{view.viewMinTime, view.viewMaxTime}, view.downsampleMode);
             wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
             wave.cachedDisplayKey = displayKey;
             wave.cachedDisplayKeyValid = true;
@@ -421,7 +432,8 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         // 核心流程：概览只保留按像素预算压缩后的完整历史包络点，避免每次数据变更复制全历史显示样本。
         const auto previousAxis = wave.cachedOverviewDisplayData.axisSource;
         plot::buildQueryDisplayDataInto(
-            wave.cachedFullSnapshot, view.sampleFrequencyHz, overviewKey.pointLimit, wave.cachedOverviewDisplayData);
+            wave.cachedFullSnapshot, view.sampleFrequencyHz, overviewKey.pointLimit, wave.cachedOverviewDisplayData,
+            std::nullopt, view.downsampleMode);
         // 以完整历史判断时间基准，普通缩放到空白区域不能误清辅助游标。
         if (previousAxis != wave.cachedOverviewDisplayData.axisSource) view.auxiliaryCursors.clear();
         wave.cachedOverviewKey = overviewKey;

@@ -280,9 +280,68 @@ void testIrregularAnalogEdges()
             "analog query must reuse summary index");
 }
 
+void testLegacyUniform()
+{
+    std::vector<WaveSample> samples;
+    for (int i = 0; i < 32; ++i) samples.push_back({double(i), double(i * 7 % 19 - 9)});
+    ChannelView channel;
+    channel.samples = samples.data();
+    channel.totalSamples = samples.size();
+    channel.sampleIndexOffset = 100;
+    const WaveQueryView query(channel, WaveTimeAxisSource::ScriptTime, 0, WaveDisplayFormula::OffsetThenScale);
+    const auto legacy = WaveDownsampleMode::LegacyUniform;
+    // 固定预期由 e6320e1 的 wave_query.cc 独立编译运行获得，不使用新实现生成期望。
+    require(query.traceIndices(3.5, 27.5, 12, nullptr, false, legacy) ==
+            std::vector<std::size_t>{4, 8, 11, 12, 16, 19, 20, 22, 27}, "legacy no-guard golden");
+    require(query.traceIndices(3.5, 27.5, 12, nullptr, true, legacy) ==
+            std::vector<std::size_t>{3, 8, 11, 12, 16, 19, 20, 22, 27, 28}, "legacy guard golden");
+    for (int i = 0; i < 32; ++i) samples[i].time = double(i * i) * 0.25;
+    require(query.traceIndices(3.5, 170, 12, nullptr, true, legacy) ==
+            std::vector<std::size_t>{3, 8, 11, 15, 16, 19, 21, 22, 27}, "legacy irregular golden");
+
+    OscilloscopeBuffer buffer;
+    samples.clear();
+    for (int i = 0; i < 4000; ++i) samples.push_back({double(i * i) * 0.25, double(i * 7 % 19 - 9)});
+    buffer.append(0, {{}, samples});
+    for (bool trimmed : {false, true}) {
+        if (trimmed) buffer.setMaxTotalSamples(1500);
+        auto snapshot = buffer.snapshot(-1e20, 1e20, false);
+        auto indexedChannel = snapshot.channels[0];
+        auto rawChannel = indexedChannel;
+        rawChannel.summaryIndex = nullptr;
+        require(!trimmed || indexedChannel.sampleIndexOffset > 0, "history must actually be trimmed");
+        for (auto axis : {WaveTimeAxisSource::ScriptTime, WaveTimeAxisSource::SampleIndex,
+                          WaveTimeAxisSource::SampleFrequency}) {
+            const WaveQueryView indexed(indexedChannel, axis, 100, snapshot.config.displayFormula);
+            const WaveQueryView raw(rawChannel, axis, 100, snapshot.config.displayFormula);
+            for (auto mode : {WaveDownsampleMode::StableEdges, legacy}) {
+                for (std::size_t budget : {0U, 1U, 2U, 3U, 4U, 8U, 17U, 18U, 33U, 1200U}) {
+                    const double first = indexed.time(10), last = indexed.time(indexed.size() - 10);
+                    const auto trace = indexed.traceIndices(first, last, budget, nullptr, true, mode);
+                    require(trace.size() <= budget, "both modes strict point budget");
+                    require(trace == raw.traceIndices(first, last, budget, nullptr, true, mode),
+                            "indexed and raw selection agree after trim");
+                    require(trace == indexed.traceIndices(last, first, budget, nullptr, true, mode),
+                            "reversed range normalized");
+                    require(std::ranges::is_sorted(trace) &&
+                            std::adjacent_find(trace.begin(), trace.end()) == trace.end(), "ordered unique indices");
+                    require(trace.empty() || trace.back() < indexed.size(), "trimmed indices remain local");
+                    require(indexed.traceIndices(last + 1e10, last + 2e10, budget, nullptr, false, mode).empty(),
+                            "empty range without guards");
+                }
+            }
+        }
+    }
+    const ChannelView empty;
+    const WaveQueryView emptyQuery(empty, WaveTimeAxisSource::SampleIndex, 0, WaveDisplayFormula::OffsetThenScale);
+    for (auto mode : {WaveDownsampleMode::StableEdges, legacy})
+        require(emptyQuery.traceIndices(1, -1, 4, nullptr, true, mode).empty(), "empty source");
+}
+
 int main()
 {
     try {
+        testLegacyUniform();
         testAnalogEdgeStability();
         testIrregularAnalogEdges();
         testDigitalFidelity();

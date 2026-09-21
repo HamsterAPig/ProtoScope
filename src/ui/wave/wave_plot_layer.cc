@@ -125,6 +125,7 @@ namespace {
                                                                            bool peakDetectDownsample)
     {
         return {
+            .downsampleMode = wave.view.downsampleMode,
             .dataRevision = wave.displayDataRevision,
             .sampleFrequencyHz = wave.view.sampleFrequencyHz,
             .visibleMinTime = limits.X.Min,
@@ -720,7 +721,8 @@ void renderWaveChannels(plot::WaveDockState& wave,
         if (visibleBegin < visibleEnd) {
             sourceSampleCount = static_cast<std::size_t>(std::distance(visibleBegin, visibleEnd));
         }
-        if (channelSamples.empty()) {
+        const bool stableEdges = view.downsampleMode == plot::WaveDownsampleMode::StableEdges;
+        if (channelSamples.empty() || (!stableEdges && sourceSampleCount == 0)) {
             continue;
         }
 
@@ -729,7 +731,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             const auto range = query.range(limits.X.Min, limits.X.Max, false);
             sourceSampleCount = range.second - range.first;
         }
-        if (displayData.channels[channelIndex].source || sourceSampleCount <= downsampleThreshold) {
+        if ((stableEdges && displayData.channels[channelIndex].source) || sourceSampleCount <= downsampleThreshold) {
             auto begin = visibleBegin;
             auto end = visibleEnd;
             if (begin != channelSamples.begin()) {
@@ -743,7 +745,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             }
             const std::size_t rawVisibleCount = static_cast<std::size_t>(std::distance(begin, end));
 
-            // 查询层已按预算保留原始边沿邻点；所有布局直接复用轨迹，禁止二次压缩。
+            // 稳定模式直接复用查询轨迹；旧模式继续按原有阈值选择峰值检测或包络。
             WaveSampleGetterPayload payload{.samples = &(*begin)};
             ImPlotSpec spec{};
             spec.LineColor = color;
@@ -1828,13 +1830,18 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
             const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().bitLabel);
             drawBitLaneLabels(wave, bitLayout, limits, labelColor);
         } else {
-            const bool legacyEnvelope = !displayData.channels[channelIndex].source && !view.peakDetectDownsample &&
+            const bool legacyEnvelope =
+                (view.downsampleMode == plot::WaveDownsampleMode::LegacyUniform ||
+                 !displayData.channels[channelIndex].source) && !view.peakDetectDownsample &&
                 channel.visibleEnd - channel.visibleBegin > frame.renderBudget.pointsPerChannel;
             if (legacyEnvelope) {
                 const auto& envelope = cachedRenderEnvelope(wave, channel, channelIndex, samples, limits,
                                                              frame.renderBudget.pointsPerChannel, nullptr);
                 if (view.glowEnabled) renderGlowEnvelope(envelope, color, view.glowIntensity, plot::resolveChannelLineWidth(channel));
                 else renderEnvelopeAsBars(envelope, color, plot::resolveChannelLineWidth(channel));
+                view.lastRenderPointCount += envelope.size();
+                view.lastRenderSourceSampleCount += channel.visibleEnd - channel.visibleBegin;
+                ++view.lastRenderStats.envelopeDownsampleChannelCount;
             } else {
             WaveSampleGetterPayload payload{.samples = samples.data()};
             ImPlotSpec spec{};

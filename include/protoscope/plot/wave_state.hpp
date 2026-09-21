@@ -272,6 +272,8 @@ struct WaveViewState {
     double visibleDuration{1.0};
     double minVisibleTimeSpan{0.001};
     double downsampleStartMultiplier{2.0};
+    WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
+    std::uint64_t phosphorResetGeneration{0};
     double channelCardFixedWidth{128.0};
     double channelCardAdaptiveRatio{0.22};
     double legendChannelNameMaxWidth{0.0};
@@ -389,9 +391,11 @@ struct WaveDockState {
     bool mainToolbarNeedsHorizontalScroll{true};
     std::uint64_t displayDataRevision{0};
     double displayDataSampleFrequencyHz{0.0};
+    WaveDownsampleMode displayDataDownsampleMode{WaveDownsampleMode::StableEdges};
     std::size_t lastLegendMeasurementChannelIndex{static_cast<std::size_t>(-1)};
 
     struct DisplayDataCacheKey {
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
         double viewMinTime{0.0};
@@ -402,7 +406,8 @@ struct WaveDockState {
 
         bool operator==(const DisplayDataCacheKey& other) const
         {
-            return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
+            return downsampleMode == other.downsampleMode &&
+                   dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
                    viewMinTime == other.viewMinTime && viewMaxTime == other.viewMaxTime &&
                    channelCount == other.channelCount && displayFormula == other.displayFormula &&
                    rangeHash == other.rangeHash;
@@ -410,6 +415,7 @@ struct WaveDockState {
     };
 
     struct OverviewDisplayDataCacheKey {
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
         std::size_t channelCount{0};
@@ -419,13 +425,15 @@ struct WaveDockState {
 
         bool operator==(const OverviewDisplayDataCacheKey& other) const
         {
-            return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
+            return downsampleMode == other.downsampleMode &&
+                   dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
                    channelCount == other.channelCount && displayFormula == other.displayFormula &&
                    rangeHash == other.rangeHash && pointLimit == other.pointLimit;
         }
     };
 
     struct RenderEnvelopeCacheKey {
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
         std::uint64_t dataRevision{0};
         double sampleFrequencyHz{0.0};
         double visibleMinTime{0.0};
@@ -441,7 +449,8 @@ struct WaveDockState {
 
         bool operator==(const RenderEnvelopeCacheKey& other) const
         {
-            return dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
+            return downsampleMode == other.downsampleMode &&
+                   dataRevision == other.dataRevision && sampleFrequencyHz == other.sampleFrequencyHz &&
                    visibleMinTime == other.visibleMinTime && visibleMaxTime == other.visibleMaxTime &&
                    channelIndex == other.channelIndex && pointLimit == other.pointLimit &&
                    sampleCount == other.sampleCount && peakDetectDownsample == other.peakDetectDownsample &&
@@ -510,6 +519,7 @@ struct WaveDockState {
         double frequency{0}, minTime{0}, maxTime{0}, ratio{1}, scale{1}, offset{0};
         WaveDisplayFormula formula{WaveDisplayFormula::OffsetThenScale};
         bool normalize{false};
+        WaveDownsampleMode downsampleMode{WaveDownsampleMode::StableEdges};
         bool operator==(const OverviewRenderKey&) const = default;
     };
     struct OverviewRenderEntry {

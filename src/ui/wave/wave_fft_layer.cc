@@ -947,7 +947,8 @@ namespace {
                 const auto maxHz = fftFrequencyHzFromDisplayX(xAxis, limits.X.Max).value_or(trace.back().time);
                 const auto budget = makeRenderBudget(view, frame.channels.size(),
                     static_cast<std::size_t>((std::max)(ImPlot::GetPlotSize().x, 1.0F)), false);
-                for (const auto index : query.traceIndices(minHz, maxHz, budget.pointsPerChannel))
+                for (const auto index : query.traceIndices(minHz, maxHz, budget.pointsPerChannel,
+                                                           nullptr, true, view.downsampleMode))
                     if (index >= firstDrawableBin) drawBins.push_back(channel.bins[index]);
             }
             FftGetterPayload payload{
