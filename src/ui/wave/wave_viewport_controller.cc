@@ -396,7 +396,8 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         if (!wave.cachedDisplayKeyValid || !(wave.cachedDisplayKey == displayKey)) {
             // 核心流程：主显示窗口完全未变时复用上一帧显示数据和边界，避免 UI 空转重复构建。
             plot::buildQueryDisplayDataInto(frame.snapshot, view.sampleFrequencyHz,
-                                            frame.renderBudget.pointsPerChannel, wave.cachedDisplayData);
+                                            frame.renderBudget.pointsPerChannel, wave.cachedDisplayData,
+                                            std::pair{view.viewMinTime, view.viewMaxTime});
             wave.cachedDisplayBounds = plot::computeDisplayBounds(wave.cachedDisplayData, minVisibleTimeSpan);
             wave.cachedDisplayKey = displayKey;
             wave.cachedDisplayKeyValid = true;

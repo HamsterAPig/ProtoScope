@@ -58,6 +58,12 @@ struct WaveSummary {
     double minStep{0};
     bool timeIncreasing{false};
     std::size_t finiteCount{0};
+    double firstValue{0};
+    double lastValue{0};
+    double rise{0};
+    double fall{0};
+    std::size_t riseBefore{0};
+    std::size_t fallBefore{0};
 };
 
 struct WaveQueryCounters {

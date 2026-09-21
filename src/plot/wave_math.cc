@@ -424,7 +424,8 @@ WaveDisplayChannel extractDisplayWindow(const WaveDisplayChannel& channel, doubl
 }
 
 void buildQueryDisplayDataInto(const WaveSnapshot& snapshot, double sampleFrequencyHz,
-                               std::size_t pointBudget, WaveDisplayData& data)
+                               std::size_t pointBudget, WaveDisplayData& data,
+                               std::optional<std::pair<double, double>> timeRange)
 {
     resetDisplayDataChannels(data, snapshot.channels.size());
     // Buffer 已保证时间递增；避免为判定时间轴每次重新遍历整个窗口。
@@ -449,7 +450,9 @@ void buildQueryDisplayDataInto(const WaveSnapshot& snapshot, double sampleFreque
         const auto [begin, end] = displaySampleRange(source);
         if (begin == end) continue;
         WaveQueryView query(source, data.axisSource, sampleFrequencyHz, snapshot.config.displayFormula);
-        output.sourceIndices = query.traceIndices(query.time(begin), query.time(end - 1), pointBudget, nullptr, false);
+        output.sourceIndices = timeRange
+            ? query.traceIndices(timeRange->first, timeRange->second, pointBudget)
+            : query.traceIndices(query.time(begin), query.time(end - 1), pointBudget, nullptr, false);
         for (const auto index : output.sourceIndices) {
             output.samples.push_back(query.sample(index));
             output.actualValues.push_back(query.actual(index));

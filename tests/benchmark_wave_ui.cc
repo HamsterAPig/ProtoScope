@@ -615,6 +615,70 @@ int main(int argc, char** argv)
             if (configStore.captureFromDock(store).gui.wave.bitDenseRenderMode != expected)
                 throw std::runtime_error("bit mode runtime roundtrip");
         }
+        {
+            plot::WaveDockState wave;
+            auto& view = wave.view;
+            view.initialized = true;
+            view.defaultViewportPending = false;
+            view.autoFollowLatest = false;
+            view.glowEnabled = false;
+            view.showCursors = false;
+            view.showChannelLegend = false;
+            view.interactionAnimationEnabled = false;
+            view.maxRenderVertices = 30000;
+            std::vector<plot::WaveSample> samples;
+            for (int i = 0; i < 10000; ++i) samples.push_back({double(i), double(i >= 1234)});
+            wave.buffer.append(0, {{}, samples});
+            // 主图、堆叠、分屏必须使用查询层的同一轨迹，不能再次丢掉跳变邻点。
+            for (const auto mode : {plot::WaveViewMode::Overlay, plot::WaveViewMode::Stacked,
+                                    plot::WaveViewMode::Split}) {
+                view.viewMode = mode;
+                for (const bool peakDetect : {false, true}) {
+                    view.peakDetectDownsample = peakDetect;
+                    for (int pan = 0; pan < 9; ++pan) {
+                        view.autoFollowLatest = pan >= 6;
+                        if (view.autoFollowLatest) {
+                            const auto latest = wave.buffer.latestTime().value();
+                            wave.buffer.append(0, {{}, {{latest + 20, 1}}});
+                        }
+                        view.viewMinTime = pan * 20;
+                        view.viewMaxTime = view.viewMinTime + 10000;
+                        view.visibleDuration = 10000;
+                        view.forceNextMainPlotLimits = true;
+                        io.MouseDown[0] = false;
+                        if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                        ImGui::NewFrame();
+                        ImGui::SetNextWindowSize(ImVec2(1200, 800));
+                        ImGui::Begin("analog stability");
+                        auto frame = ui::prepareWaveFrame(wave, 1100);
+                        if (view.autoFollowLatest &&
+                            view.viewMaxTime != wave.buffer.latestTime().value())
+                            throw std::runtime_error("stable trace froze live viewport following");
+                        const auto& indices = frame.displayData->channels[0].sourceIndices;
+                        const auto edge = std::ranges::find(indices, 1233);
+                        if (edge == indices.end() || edge + 1 == indices.end() || *(edge + 1) != 1234)
+                            throw std::runtime_error("display cache lost fixed analog edge pair");
+                        const auto rendered = ui::drawOscilloscopePlot(wave, frame,
+                            {.drawMeasurementOverlay = false, .drawLegendOverlay = false}, nullptr);
+                        ImGui::End();
+                        ImGui::Render();
+                        if (!rendered.plotRendered || !wave.renderEnvelopeCache.empty())
+                            throw std::runtime_error("analog query trace was compressed again by renderer");
+                        if (view.lastRenderPointCount > frame.renderBudget.pointsPerChannel ||
+                            ImGui::GetDrawData()->TotalVtxCount > int(view.maxRenderVertices))
+                            throw std::runtime_error("analog stable rendering exceeds budget");
+                        if (withGl && pan == 5) {
+                            glViewport(0, 0, 1280, 900);
+                            glClear(GL_COLOR_BUFFER_BIT);
+                            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                            glFinish();
+                            captureFrame(captureDirectory, "analog-stable-" + std::to_string(int(mode)) +
+                                "-" + std::to_string(peakDetect));
+                        }
+                    }
+                }
+            }
+        }
         for (const std::size_t count : {100000U, 1000000U}) {
             plot::WaveDockState wave;
             wave.view.initialized = true;

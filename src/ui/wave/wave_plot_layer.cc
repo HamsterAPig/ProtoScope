@@ -720,7 +720,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
         if (visibleBegin < visibleEnd) {
             sourceSampleCount = static_cast<std::size_t>(std::distance(visibleBegin, visibleEnd));
         }
-        if (sourceSampleCount == 0) {
+        if (channelSamples.empty()) {
             continue;
         }
 
@@ -729,7 +729,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             const auto range = query.range(limits.X.Min, limits.X.Max, false);
             sourceSampleCount = range.second - range.first;
         }
-        if (sourceSampleCount <= downsampleThreshold) {
+        if (displayData.channels[channelIndex].source || sourceSampleCount <= downsampleThreshold) {
             auto begin = visibleBegin;
             auto end = visibleEnd;
             if (begin != channelSamples.begin()) {
@@ -743,7 +743,7 @@ void renderWaveChannels(plot::WaveDockState& wave,
             }
             const std::size_t rawVisibleCount = static_cast<std::size_t>(std::distance(begin, end));
 
-            // 核心流程：低密度视图直接绘制原始点，避免桶包络把单条波形误画成双边界。
+            // 查询层已按预算保留原始边沿邻点；所有布局直接复用轨迹，禁止二次压缩。
             WaveSampleGetterPayload payload{.samples = &(*begin)};
             ImPlotSpec spec{};
             spec.LineColor = color;
@@ -761,11 +761,12 @@ void renderWaveChannels(plot::WaveDockState& wave,
             visibleChannelIndices.push_back(channelIndex);
             view.lastRenderPointCount += rawVisibleCount;
             view.lastRenderSourceSampleCount += sourceSampleCount;
-            ++view.lastRenderStats.rawChannelCount;
+            if (sourceSampleCount > rawVisibleCount) ++view.lastRenderStats.peakDownsampleChannelCount;
+            else ++view.lastRenderStats.rawChannelCount;
             if (view.glowEnabled) {
                 renderGlowSamples(&(*begin), rawVisibleCount, color, view.glowIntensity, lineWidth);
             }
-            if (view.showPointsWhenSparse) {
+            if (view.showPointsWhenSparse && sourceSampleCount <= downsampleThreshold) {
                 ImPlotSpec pointSpec{};
                 pointSpec.Marker = ImPlotMarker_Circle;
                 pointSpec.MarkerSize = 2.5F;
@@ -1827,7 +1828,7 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
             const ImU32 labelColor = ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().bitLabel);
             drawBitLaneLabels(wave, bitLayout, limits, labelColor);
         } else {
-            const bool legacyEnvelope = !view.peakDetectDownsample &&
+            const bool legacyEnvelope = !displayData.channels[channelIndex].source && !view.peakDetectDownsample &&
                 channel.visibleEnd - channel.visibleBegin > frame.renderBudget.pointsPerChannel;
             if (legacyEnvelope) {
                 const auto& envelope = cachedRenderEnvelope(wave, channel, channelIndex, samples, limits,
@@ -1848,6 +1849,8 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
             if (view.glowEnabled) {
                 renderGlowSamples(samples.data(), samples.size(), color, view.glowIntensity, spec.LineWeight);
             }
+            view.lastRenderPointCount += samples.size();
+            view.lastRenderSourceSampleCount += channel.visibleEnd - channel.visibleBegin;
             }
         }
 

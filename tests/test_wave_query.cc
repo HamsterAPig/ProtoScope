@@ -195,9 +195,96 @@ void testTimeEnvelope()
     }
 }
 
+void testAnalogEdgeStability()
+{
+    // 独立用原始相邻点验收，不以降采样输出推导预期边沿。
+    for (int signal = 0; signal < 3; ++signal) {
+        OscilloscopeBuffer buffer;
+        buffer.setChannelSpec(0, {.ratio = -2, .scale = 3, .offset = 5});
+        std::vector<WaveSample> samples;
+        for (int i = 0; i < 8192; ++i) {
+            const double value = signal == 0 ? double(i >= 1234) :
+                signal == 1 ? double((i / 700) % 2) : double(i >= 1234 && i < 1236);
+            samples.push_back({double(i), value});
+        }
+        buffer.appendImported(0, samples, 97);
+        const auto verify = [&] {
+            const auto snapshot = buffer.snapshot(-1e20, 1e20, false);
+            const auto& channel = snapshot.channels[0];
+            for (const auto axis : {WaveTimeAxisSource::ScriptTime, WaveTimeAxisSource::SampleIndex,
+                                    WaveTimeAxisSource::SampleFrequency}) {
+                const WaveQueryView query(channel, axis, 1000, snapshot.config.displayFormula);
+                for (const auto budget : {64U, 128U, 257U}) {
+                    for (int pan = 0; pan < 240; pan += 3) {
+                        const auto first = query.time(std::size_t(pan));
+                        const auto last = query.time(std::size_t(pan + 3000));
+                        const auto trace = query.traceIndices(first, last, budget);
+                        require(trace.size() <= budget, "analog strict point budget");
+                        require(std::is_sorted(trace.begin(), trace.end()), "analog trace order");
+                        require(std::adjacent_find(trace.begin(), trace.end()) == trace.end(), "analog unique points");
+                        for (std::size_t i = std::size_t(pan + 1); i <= std::size_t(pan + 3000); ++i) {
+                            if (channel.samples[i].value == channel.samples[i - 1].value) continue;
+                            const auto left = std::ranges::find(trace, i - 1);
+                            require(left != trace.end() && left + 1 != trace.end() && *(left + 1) == i,
+                                    "isolated analog edge must retain both original neighbors");
+                            const double expected = std::midpoint(query.time(i - 1), query.time(i));
+                            const auto a = query.sample(*(left)), b = query.sample(*(left + 1));
+                            require(std::midpoint(a.time, b.time) == expected, "analog half-height crossing drift");
+                        }
+                    }
+                }
+                for (std::size_t budget = 0; budget < 24; ++budget) {
+                    const auto trace = query.traceIndices(query.time(0), query.time(3000), budget);
+                    require(trace.size() <= budget, "small analog budget");
+                    if (budget >= 2)
+                        require(trace.front() == 0 && trace.back() == 3001, "small budget keeps guarded endpoints");
+                }
+            }
+        };
+        verify();
+        buffer.appendImported(0, {{8192, 0}, {8193, 1}, {8194, 0}}, 97 + 8192);
+        verify();
+        buffer.setMaxTotalSamples(7000);
+        verify();
+    }
+}
+
+void testIrregularAnalogEdges()
+{
+    OscilloscopeBuffer buffer;
+    std::vector<WaveSample> samples;
+    double time = -4000;
+    for (std::size_t i = 0; i < 12000; ++i) {
+        time += i % 3 == 0 ? 0.75 : 1.125;
+        samples.push_back({time, i >= 4096 && i < 4098 ? 11.0 : 0.0});
+    }
+    buffer.appendImported(0, samples, 900);
+    const auto snapshot = buffer.snapshot(-1e20, 1e20, false);
+    const WaveQueryView query(snapshot.channels[0], WaveTimeAxisSource::ScriptTime, 0, snapshot.config.displayFormula);
+    for (const auto budget : {18U, 24U, 32U, 80U, 1200U}) {
+        for (int pan = 0; pan < 100; ++pan) {
+            const auto trace = query.traceIndices(-3900 + pan * 0.7, 7000 + pan * 0.7, budget);
+            require(trace.size() <= budget, "irregular analog budget");
+            for (const auto i : {4095U, 4096U, 4097U, 4098U})
+                require(std::ranges::find(trace, i) != trace.end(), "irregular pulse lost original edge neighbors");
+        }
+    }
+    for (const auto budget : {0U, 1U, 2U, 3U, 8U, 18U, 1200U})
+        for (const auto bounds : {std::pair{-1e300, 1e300}, std::pair{7000.0, -3900.0},
+                                 std::pair{0.0, 0.0}, std::pair{1e6, 1e7}})
+            require(query.traceIndices(bounds.first, bounds.second, budget).size() <= budget,
+                    "degenerate window budget");
+    WaveQueryCounters counters;
+    query.traceIndices(-3900, 7000, 80, &counters);
+    require(counters.summaryHits > 0 && counters.rawSamples < samples.size() / 2,
+            "analog query must reuse summary index");
+}
+
 int main()
 {
     try {
+        testAnalogEdgeStability();
+        testIrregularAnalogEdges();
         testDigitalFidelity();
         testDigitalCounts();
         testDigitalActivity();
@@ -235,6 +322,18 @@ int main()
                 require(summary.minValue == minimum && summary.maxValue == maximum, "summary extrema");
                 require(summary.bitsAnd == bitsAnd && summary.bitsOr == bitsOr, "digital summary");
                 require(summary.first == c.sampleIndexOffset + begin, "stable source index");
+                require(summary.firstValue == c.samples[begin].value &&
+                        summary.lastValue == c.samples[end - 1].value, "summary endpoint values");
+                double rise = 0, fall = 0;
+                std::size_t riseBefore = 0, fallBefore = 0;
+                for (auto i = begin + 1; i < end; ++i) {
+                    const auto delta = c.samples[i].value - c.samples[i - 1].value;
+                    if (delta > rise) { rise = delta; riseBefore = c.sampleIndexOffset + i - 1; }
+                    if (-delta > fall) { fall = -delta; fallBefore = c.sampleIndexOffset + i - 1; }
+                }
+                require(summary.rise == rise && summary.fall == fall, "summary strongest jump values");
+                require((rise == 0 || summary.riseBefore == riseBefore) &&
+                        (fall == 0 || summary.fallBefore == fallBefore), "summary earliest jump boundary");
             }
         };
         check();

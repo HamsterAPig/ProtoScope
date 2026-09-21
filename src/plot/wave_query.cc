@@ -17,6 +17,21 @@ namespace {
             return b;
         if (b.count == 0)
             return a;
+        // 摘要保留最强相邻跳变的前点，合并时补上块间边界；同强度取较早位置。
+        const auto keep = [](double strength, std::size_t before, double& best, std::size_t& bestBefore) {
+            if (strength > best || (strength > 0 && strength == best && before < bestBefore)) {
+                best = strength;
+                bestBefore = before;
+            }
+        };
+        keep(b.rise, b.riseBefore, a.rise, a.riseBefore);
+        keep(b.fall, b.fallBefore, a.fall, a.fallBefore);
+        if (std::isfinite(a.lastValue) && std::isfinite(b.firstValue) && a.last + 1 == b.first) {
+            const auto delta = b.firstValue - a.lastValue;
+            keep(delta, a.last, a.rise, a.riseBefore);
+            keep(-delta, a.last, a.fall, a.fallBefore);
+        }
+        a.lastValue = b.lastValue;
         const auto step = b.firstTime - a.lastTime;
         a.timeIncreasing = a.timeIncreasing && b.timeIncreasing && step > 0;
         if (step > 0 && (a.minStep == 0 || step < a.minStep))
@@ -68,7 +83,9 @@ namespace {
                             time,
                             0,
                             std::isfinite(time),
-                            std::isfinite(value) ? 1U : 0U});
+                            std::isfinite(value) ? 1U : 0U,
+                            value,
+                            value});
         }
         if (counters)
             counters->rawSamples += end - begin;
@@ -360,34 +377,71 @@ std::vector<std::size_t> WaveQueryView::traceIndices(
             counters->rawSamples += end - begin;
         return result;
     }
-    if (budget < 4) {
+    const auto add = [&](std::size_t global) {
+        const auto index = global - channel_.sampleIndexOffset;
+        if (std::ranges::find(result, index) == result.end()) result.push_back(index);
+    };
+    const auto addSummary = [&](const WaveSummary& s) {
+        if (!s.count) return;
+        std::array<std::size_t, 8> indices{s.first, s.last, s.minimum, s.maximum,
+            s.rise > 0 ? s.riseBefore : s.first, s.rise > 0 ? s.riseBefore + 1 : s.first,
+            s.fall > 0 ? s.fallBefore : s.first, s.fall > 0 ? s.fallBefore + 1 : s.first};
+        std::ranges::sort(indices);
+        for (const auto global : indices) {
+            const auto index = global - channel_.sampleIndexOffset;
+            if (result.empty() || result.back() < index) result.push_back(index);
+        }
+    };
+    // 低预算优先端点，再按强度保留完整跳变点对，最后才填入极值。
+    if (budget < 18) {
         result.push_back(begin);
-        if (budget > 1)
-            result.push_back(end - 1);
+        if (budget > 1) result.push_back(end - 1);
+        const auto s = summary(begin, end, counters);
+        std::array<std::pair<double, std::size_t>, 2> jumps{{{s.rise, s.riseBefore}, {s.fall, s.fallBefore}}};
+        std::sort(jumps.begin(), jumps.end(), [](auto a, auto b) {
+            return a.first == b.first ? a.second < b.second : a.first > b.first;
+        });
+        for (const auto [strength, before] : jumps) {
+            if (!(strength > 0)) continue;
+            const auto first = before - channel_.sampleIndexOffset;
+            const auto extra = std::size_t(std::ranges::find(result, first) == result.end()) +
+                std::size_t(std::ranges::find(result, first + 1) == result.end());
+            if (result.size() + extra <= budget) { add(before); add(before + 1); }
+        }
+        for (const auto index : {s.minimum, s.maximum})
+            if (result.size() < budget) add(index);
+        std::ranges::sort(result);
         return result;
     }
-    const auto buckets = budget / 4;
+    if (maxTime < minTime) std::swap(minTime, maxTime);
+    const auto buckets = (budget - 2) / 8;
+    // 完整桶以横轴零点为锚，桶宽只在二倍层级上改变，滚动不会重分完整桶。
+    const auto span = maxTime - minTime;
+    const auto requestedWidth = span / static_cast<double>(buckets - 1);
+    double width = std::exp2(std::ceil(std::log2(requestedWidth)));
+    if (width < requestedWidth) width *= 2;
+    if (!(width > 0) || !std::isfinite(width)) {
+        addSummary(summary(begin, end, counters));
+        std::ranges::sort(result);
+        return result;
+    }
+    result.push_back(begin);
+    const auto firstBucket = std::floor(minTime / width);
     auto left = begin;
     for (std::size_t bucket = 0; bucket < buckets; ++bucket) {
         auto right = end;
         if (bucket + 1 < buckets) {
-            const auto t =
-                minTime + (maxTime - minTime) * static_cast<double>(bucket + 1) / static_cast<double>(buckets);
+            const auto t = (firstBucket + static_cast<double>(bucket + 1)) * width;
             right = range(t, t, false).first;
             right = (std::clamp)(right, left, end);
         }
-        const auto s = summary(left, right, counters);
-        if (s.count) {
-            std::array<std::size_t, 4> indices{s.first, s.minimum, s.maximum, s.last};
-            std::ranges::sort(indices);
-            for (const auto global : indices) {
-                const auto index = global - channel_.sampleIndexOffset;
-                if (result.empty() || result.back() != index)
-                    result.push_back(index);
-            }
-        }
+        // 左邻点纳入当前摘要，桶边界上的跳变也必须保留原始点对。
+        if (right > left) addSummary(summary(left > begin ? left - 1 : left, right, counters));
         left = right;
+        if (left == end) break;
     }
+    add(end - 1 + channel_.sampleIndexOffset);
+    std::ranges::sort(result);
     return result;
 }
 
