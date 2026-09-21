@@ -17,11 +17,6 @@ enum class CsvKind {
     RawEvents,
 };
 
-enum class WaveCsvShape {
-    Wide,
-    Long,
-};
-
 enum class CsvExportRangeKind {
     Full,
     CurrentView,
@@ -39,20 +34,13 @@ struct CsvExportRange {
     double manualMaxTime{0.0};
 };
 
-struct WaveCsvChannel {
-    std::string label;
-    std::string unit;
-    std::vector<WaveSample> samples;
-};
-
-struct WaveCsvData {
-    WaveCsvShape shape{WaveCsvShape::Wide};
-    double sampleFrequencyHz{0.0};
-    ViewConfig view{};
-    std::vector<WaveCsvChannel> channels;
-};
-
 std::optional<std::pair<double, double>> resolveCsvExportTimeRange(const CsvExportRange& range);
+bool validateCsvExportRange(const CsvExportRange& range, std::string& error);
+bool encodeWaveCsv(std::ostream& out, const WaveCsvData& data, WaveCsvShape shape,
+                   const CsvExportRange& range, std::string& error);
+std::optional<WaveCsvData> decodeWaveCsv(std::string_view text, std::string& error);
+std::optional<WaveCsvData> readWaveCsvStream(std::istream& input, std::string& error,
+                                          const DataFileReadCallbacks* callbacks = nullptr);
 
 CsvKind detectCsvKind(const std::filesystem::path& path, std::string& error);
 bool writeWaveCsvFile(const std::filesystem::path& path,
@@ -60,11 +48,13 @@ bool writeWaveCsvFile(const std::filesystem::path& path,
                       WaveCsvShape shape,
                       const CsvExportRange& range,
                       std::string& error);
-std::optional<WaveCsvData> readWaveCsvFile(const std::filesystem::path& path, std::string& error);
+std::optional<WaveCsvData> readWaveCsvFile(const std::filesystem::path& path, std::string& error,
+                                        const DataFileReadCallbacks* callbacks = nullptr);
 bool writeRawCaptureCsvFile(const std::filesystem::path& path,
                             const RawCaptureFileData& capture,
                             const CsvExportRange& range,
                             std::string& error);
-std::optional<RawCaptureFileData> readRawCaptureCsvFile(const std::filesystem::path& path, std::string& error);
+std::optional<RawCaptureFileData> readRawCaptureCsvFile(const std::filesystem::path& path, std::string& error,
+                                                      const DataFileReadCallbacks* callbacks = nullptr);
 
 } // namespace protoscope::plot

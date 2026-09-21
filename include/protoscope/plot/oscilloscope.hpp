@@ -208,6 +208,11 @@ public:
     std::optional<double> latestTime() const;
 
     bool append(std::size_t channelIndex, WaveAppendRequest request);
+    bool appendImported(std::size_t channelIndex, const std::vector<WaveSample>& samples,
+                        std::size_t sampleIndexOffset = 0);
+    void setImportedLabelsReadOnly(bool readOnly) { importedLabelsReadOnly_ = readOnly; }
+    bool importedLabelsReadOnly() const { return importedLabelsReadOnly_; }
+    void setImportedSource(std::string source) { source_ = std::move(source); }
     WaveSnapshot snapshot(double visibleMinTime, double visibleMaxTime, bool computeStats = true) const;
     EnvelopeView buildEnvelope(std::size_t channelIndex,
                                double visibleMinTime,
@@ -257,6 +262,7 @@ private:
     std::size_t maxTotalSamples_{0};
     bool resetHistoryOnTimeReset_{true};
     bool historyTrimSuspended_{false};
+    bool importedLabelsReadOnly_{false};
 };
 
 } // namespace protoscope::plot

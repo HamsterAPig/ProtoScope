@@ -5317,7 +5317,7 @@ void test_raw_capture_file_plot_setup_roundtrip()
     std::ifstream in(tempPath, std::ios::binary);
     std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     in.close();
-    require(bytes.find("version: 3\n") != std::string::npos, "新 psraw 应写出 v3");
+    require(bytes.find("version: 4\n") != std::string::npos, "新 psraw 应写出 v4");
     require(bytes.find("event: plot_setup\n") != std::string::npos, "psraw 应包含 plot_setup 事件");
     require(bytes.find("channel.0.line_width: 2.75\n") != std::string::npos, "psraw 应写出显式 line_width");
     require(bytes.find("channel.1.line_width: none\n") != std::string::npos, "psraw 应写出默认 line_width 标记");

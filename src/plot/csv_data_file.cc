@@ -1,4 +1,5 @@
 #include "protoscope/plot/csv_data_file.hpp"
+#include "protoscope/plot/data_file_output.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -13,6 +14,8 @@
 #include <sstream>
 #include <system_error>
 #include <utility>
+#include <functional>
+#include <queue>
 
 namespace protoscope::plot {
 namespace {
@@ -164,7 +167,8 @@ namespace {
         return out.str();
     }
 
-    bool parseCsvText(std::string_view text, ParsedCsv& csv, std::string& error)
+    bool parseCsvStream(std::istream& input, ParsedCsv& csv, std::string& error,
+                        const std::function<bool(CsvRow&&)>& consume = {})
     {
         csv = {};
         std::vector<std::string> fields;
@@ -175,6 +179,7 @@ namespace {
         bool atRowStart = true;
         bool commentLine = false;
         std::string comment;
+        bool failed = false;
 
         const auto finishComment = [&]() {
             const auto content = trim(comment);
@@ -190,7 +195,9 @@ namespace {
         const auto finishRow = [&]() {
             if (!field.empty() || !fields.empty()) {
                 fields.push_back(std::move(field));
-                csv.rows.push_back(CsvRow{.line = rowLine, .fields = std::move(fields)});
+                CsvRow row{.line = rowLine, .fields = std::move(fields)};
+                if (consume) failed = !consume(std::move(row));
+                else csv.rows.push_back(std::move(row));
             }
             field.clear();
             fields.clear();
@@ -198,19 +205,25 @@ namespace {
             rowLine = line + 1;
         };
 
-        for (std::size_t index = 0; index <= text.size(); ++index) {
-            const char ch = index < text.size() ? text[index] : '\n';
+        for (;;) {
+            if (failed || dataFileStopToken().stop_requested()) {
+                if (error.empty()) error = "CSV 读取已取消";
+                return false;
+            }
+            const int next = input.get();
+            const bool eof = next == std::char_traits<char>::eof();
+            if (eof && inQuotes) { error = "CSV 引号未闭合"; return false; }
+            const char ch = eof ? '\n' : static_cast<char>(next);
             if (commentLine) {
                 if (ch == '\n' || ch == '\r') {
                     finishComment();
-                    if (ch == '\r' && index + 1 < text.size() && text[index + 1] == '\n') {
-                        ++index;
-                    }
+                    if (ch == '\r' && input.peek() == '\n') input.get();
                     ++line;
                     rowLine = line;
                 } else {
                     comment.push_back(ch);
                 }
+                if (eof) break;
                 continue;
             }
             if (atRowStart && fields.empty() && field.empty() && ch == '#') {
@@ -220,9 +233,9 @@ namespace {
             atRowStart = false;
             if (inQuotes) {
                 if (ch == '"') {
-                    if (index + 1 < text.size() && text[index + 1] == '"') {
+                    if (input.peek() == '"') {
                         field.push_back('"');
-                        ++index;
+                        input.get();
                     } else {
                         inQuotes = false;
                     }
@@ -241,33 +254,42 @@ namespace {
                 field.clear();
             } else if (ch == '\n' || ch == '\r') {
                 finishRow();
-                if (ch == '\r' && index + 1 < text.size() && text[index + 1] == '\n') {
-                    ++index;
-                }
+                if (ch == '\r' && input.peek() == '\n') input.get();
                 ++line;
                 rowLine = line;
             } else {
                 field.push_back(ch);
             }
+            if (eof) break;
         }
         if (inQuotes) {
             error = "CSV 引号未闭合";
             return false;
         }
-        return true;
+        if (input.bad()) { error = "CSV 文件读取失败"; return false; }
+        return !failed;
     }
 
     std::optional<ParsedCsv> readParsedCsvFile(const std::filesystem::path& path, std::string& error)
     {
         try {
-            std::ifstream in(path, std::ios::binary);
+            std::array<char, 65536> buffer{};
+            std::ifstream in;
+            in.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+            in.open(path, std::ios::binary);
             if (!in.good()) {
                 error = "无法打开 CSV 文件";
                 return std::nullopt;
             }
-            const std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
             ParsedCsv parsed;
-            if (!parseCsvText(contents, parsed, error)) {
+            // 探测仅消费文件头和第一条表头记录，避免导入时重复扫描整个文件。
+            std::string probeError;
+            parseCsvStream(in, parsed, probeError, [&](CsvRow&& row) {
+                parsed.rows.push_back(std::move(row));
+                return false;
+            });
+            if (parsed.rows.empty()) {
+                error = probeError.empty() ? "CSV 缺少表头" : probeError;
                 return std::nullopt;
             }
             return parsed;
@@ -359,6 +381,8 @@ namespace {
         switch (type) {
             case RawCaptureEventType::RxBytes:
                 return "rx_bytes";
+            case RawCaptureEventType::TxBytes:
+                return "tx_bytes";
             case RawCaptureEventType::ProfileSet:
                 return "profile_set";
             case RawCaptureEventType::ProfileClear:
@@ -374,6 +398,10 @@ namespace {
         const auto cleaned = trim(text);
         if (cleaned == "rx_bytes") {
             type = RawCaptureEventType::RxBytes;
+            return true;
+        }
+        if (cleaned == "tx_bytes") {
+            type = RawCaptureEventType::TxBytes;
             return true;
         }
         if (cleaned == "profile_set") {
@@ -447,7 +475,8 @@ namespace {
             std::uint64_t oneBasedChannel = 0;
             double time = 0.0;
             double value = 0.0;
-            if (!parseUnsigned(cell(row, channelIndexColumn->second), oneBasedChannel) || oneBasedChannel == 0) {
+            if (!parseUnsigned(cell(row, channelIndexColumn->second), oneBasedChannel) || oneBasedChannel == 0 ||
+                oneBasedChannel > 65536) {
                 error = "CSV 第 " + std::to_string(row.line) + " 行 channel_index 格式错误";
                 return false;
             }
@@ -537,7 +566,7 @@ namespace {
             if (channel.label.empty()) {
                 channel.label = "CH" + std::to_string(channelIndex + 1);
             }
-            std::sort(channel.samples.begin(),
+            std::stable_sort(channel.samples.begin(),
                       channel.samples.end(),
                       [](const WaveSample& left, const WaveSample& right) { return left.time < right.time; });
         }
@@ -545,8 +574,23 @@ namespace {
 
     bool readRawCaptureCsvMetadata(const ParsedCsv& parsed, RawCaptureFileData& capture, std::string& error)
     {
+        capture.source = metadataValue(parsed.metadata, "source");
+        capture.truncated = metadataValue(parsed.metadata, "truncated") == "true";
+        capture.filtered = metadataValue(parsed.metadata, "filtered") == "true";
+        capture.incomplete = metadataValue(parsed.metadata, "incomplete") == "true";
+        capture.rxOnly = metadataValue(parsed.metadata, "rx_only") != "false";
+        if (const auto range = metadataValue(parsed.metadata, "range"); !range.empty())
+            capture.rangeDescription = range;
         capture.protocolName = metadataValue(parsed.metadata, "protocol_name");
         capture.protocolDir = metadataValue(parsed.metadata, "protocol_dir");
+        for (auto [key, target] : {std::pair{"source_hex", &capture.source},
+                                  std::pair{"protocol_name_hex", &capture.protocolName},
+                                  std::pair{"protocol_dir_hex", &capture.protocolDir}}) {
+            if (!parsed.metadata.contains(key)) continue;
+            std::vector<std::uint8_t> bytes;
+            if (!decodeHexBytes(metadataValue(parsed.metadata, key), bytes, 1, error)) return false;
+            target->assign(bytes.begin(), bytes.end());
+        }
         if (const auto capturedAt = metadataValue(parsed.metadata, "captured_at_ms"); !capturedAt.empty()) {
             if (!parseUnsigned(capturedAt, capture.capturedAtMs)) {
                 error = "原始事件 CSV captured_at_ms 格式错误";
@@ -581,7 +625,7 @@ namespace {
         if (capture.capturedAtMs == 0) {
             capture.capturedAtMs = event.timestampMs;
         }
-        if (event.type == RawCaptureEventType::RxBytes) {
+        if (event.type == RawCaptureEventType::RxBytes || event.type == RawCaptureEventType::TxBytes) {
             const auto bytesColumn = columns.find("bytes_hex");
             if (bytesColumn == columns.end() ||
                 !decodeHexBytes(cell(row, bytesColumn->second), event.bytes, row.line, error)) {
@@ -626,6 +670,14 @@ namespace {
                 return parseUnsigned(cell(row, timestampColumn), timestamp) ? timestamp : event.timestampMs;
             }();
         }
+        if (const auto it = columns.find("endpoint"); it != columns.end()) event.endpoint = cell(row, it->second);
+        if (const auto it = columns.find("write_status"); it != columns.end()) event.writeStatus = cell(row, it->second);
+        if (const auto it = columns.find("sequence"); it != columns.end() &&
+            !parseUnsigned(cell(row, it->second), event.sequence)) {
+            error = "CSV 事件顺序格式错误";
+            return false;
+        }
+        if (event.type == RawCaptureEventType::TxBytes) capture.rxOnly = false;
         capture.events.push_back(std::move(event));
         return true;
     }
@@ -656,6 +708,16 @@ namespace {
 
 } // namespace
 
+bool validateCsvExportRange(const CsvExportRange& range, std::string& error)
+{
+    const auto resolved = resolveCsvExportTimeRange(range);
+    if (resolved && (!std::isfinite(resolved->first) || !std::isfinite(resolved->second))) {
+        error = "导出范围包含无效时间";
+        return false;
+    }
+    return true;
+}
+
 std::optional<std::pair<double, double>> resolveCsvExportTimeRange(const CsvExportRange& range)
 {
     switch (range.kind) {
@@ -684,6 +746,7 @@ CsvKind detectCsvKind(const std::filesystem::path& path, std::string& error)
     if (kind == "raw_events") {
         return CsvKind::RawEvents;
     }
+    if (!kind.empty()) { error = "CSV 类型不支持无损导入"; return CsvKind::Unknown; }
     if (parsed->rows.empty()) {
         error = "CSV 缺少表头";
         return CsvKind::Unknown;
@@ -707,28 +770,67 @@ bool writeWaveCsvFile(const std::filesystem::path& path,
                       std::string& error)
 {
     try {
+        if (!validateCsvExportRange(range, error)) return false;
         if (!ensureParentDirectory(path, error)) {
             return false;
         }
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        DataFileOutput output(path);
+        auto& out = output.stream;
         if (!out.good()) {
             error = "无法打开波形 CSV 文件";
             return false;
         }
-        out << "# protoscope_csv_version=1\n";
+        return encodeWaveCsv(out, data, shape, range, error) && output.commit(error);
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return false;
+    }
+}
+
+bool encodeWaveCsv(std::ostream& out, const WaveCsvData& data, WaveCsvShape shape,
+                   const CsvExportRange& range, std::string& error)
+{
+    try {
+        if (!validateCsvExportRange(range, error)) return false;
+        for (const auto& channel : data.channels) {
+            for (const auto& sample : channel.samples) {
+                if (!std::isfinite(sample.time) || !std::isfinite(sample.value)) {
+                    error = "波形样本包含非有限数值";
+                    return false;
+                }
+            }
+        }
+        out << "# protoscope_csv_version=2\n";
         out << "# kind=wave\n";
         out << "# shape=" << (shape == WaveCsvShape::Long ? "long" : "wide") << '\n';
+        const bool ordered = std::all_of(data.channels.begin(), data.channels.end(), [](const auto& channel) {
+            return std::is_sorted(channel.samples.begin(), channel.samples.end(),
+                [](const auto& a, const auto& b) { return a.time < b.time; });
+        });
+        if (ordered) out << "# sample_order=channel_time\n";
         out << "# sample_frequency_hz=" << formatDouble(data.sampleFrequencyHz) << '\n';
+        out << "# time_axis=" << data.timeAxis << '\n';
+        out << "# incomplete=" << (data.incomplete ? "true" : "false") << '\n';
+        out << "# range=" << data.rangeDescription << '\n';
+        RawCaptureEvent setup;
+        setup.type = RawCaptureEventType::PlotSetup;
+        setup.plotSetup.source = data.source;
+        setup.plotSetup.view = data.view;
         for (std::size_t index = 0; index < data.channels.size(); ++index) {
-            out << "# channel." << (index + 1) << ".label=" << data.channels[index].label << '\n';
-            out << "# channel." << (index + 1) << ".unit=" << data.channels[index].unit << '\n';
+            auto spec = data.channels[index].spec;
+            spec.label = data.channels[index].label;
+            spec.unit = data.channels[index].unit;
+            setup.plotSetup.channels.push_back(std::move(spec));
+            out << "# channel." << (index + 1) << ".index_offset=" << data.channels[index].sampleIndexOffset << '\n';
         }
+        out << "# plot_setup_hex=" << encodePlotSetupRecordHex(setup) << '\n';
         const auto resolvedRange = resolveCsvExportTimeRange(range);
         if (shape == WaveCsvShape::Long) {
             writeCsvRow(out, {"channel_index", "channel_label", "unit", "time", "value"});
             for (std::size_t channelIndex = 0; channelIndex < data.channels.size(); ++channelIndex) {
                 const auto& channel = data.channels[channelIndex];
                 for (const auto& sample : channel.samples) {
+                    if (dataFileStopToken().stop_requested()) { error = "导出已取消"; return false; }
                     if (!timeInRange(sample.time, resolvedRange)) {
                         continue;
                     }
@@ -738,47 +840,45 @@ bool writeWaveCsvFile(const std::filesystem::path& path,
                                  channel.unit,
                                  formatDouble(sample.time),
                                  formatDouble(sample.value)});
+                    reportDataFileProgress(1);
                 }
             }
             return out.good();
         }
 
-        std::vector<double> times;
-        for (const auto& channel : data.channels) {
-            for (const auto& sample : channel.samples) {
-                if (timeInRange(sample.time, resolvedRange)) {
-                    times.push_back(sample.time);
-                }
-            }
-        }
-        std::sort(times.begin(), times.end());
-        times.erase(
-            std::unique(
-                times.begin(), times.end(), [](double left, double right) { return std::abs(left - right) < 1e-12; }),
-            times.end());
+        // 同一时间的第 N 个样本占独立一行；仅按精确时间配对，绝不使用绘图容差去重。
+        struct Position { double time; std::size_t channel; std::size_t sample; };
+        const auto later = [](const Position& a, const Position& b) {
+            return a.time > b.time || (a.time == b.time && a.channel > b.channel);
+        };
+        std::priority_queue<Position, std::vector<Position>, decltype(later)> rows(later);
+        const auto enqueue = [&](std::size_t c, std::size_t i) {
+            const auto& samples = data.channels[c].samples;
+            while (i < samples.size() && !timeInRange(samples[i].time, resolvedRange)) ++i;
+            if (i < samples.size()) rows.push({samples[i].time, c, i});
+        };
+        for (std::size_t c = 0; c < data.channels.size(); ++c) enqueue(c, 0);
 
         std::vector<std::string> header{"time"};
         for (std::size_t channelIndex = 0; channelIndex < data.channels.size(); ++channelIndex) {
-            header.push_back(data.channels[channelIndex].label.empty() ? "CH" + std::to_string(channelIndex + 1)
-                                                                       : data.channels[channelIndex].label);
+            header.push_back("channel_" + std::to_string(channelIndex + 1));
         }
         writeCsvRow(out, header);
-        std::vector<std::size_t> cursors(data.channels.size(), 0);
-        for (const double time : times) {
-            std::vector<std::string> row{formatDouble(time)};
-            for (std::size_t channelIndex = 0; channelIndex < data.channels.size(); ++channelIndex) {
-                const auto& samples = data.channels[channelIndex].samples;
-                auto& cursor = cursors[channelIndex];
-                while (cursor < samples.size() && samples[cursor].time < time - 1e-12) {
-                    ++cursor;
-                }
-                if (cursor < samples.size() && std::abs(samples[cursor].time - time) < 1e-12) {
-                    row.push_back(formatDouble(samples[cursor].value));
-                } else {
-                    row.emplace_back();
-                }
+        while (!rows.empty()) {
+            if (dataFileStopToken().stop_requested()) { error = "导出已取消"; return false; }
+            const double time = rows.top().time;
+            std::vector<std::string> row(data.channels.size() + 1);
+            row[0] = formatDouble(time);
+            std::vector<Position> consumed;
+            while (!rows.empty() && rows.top().time == time) {
+                const auto position = rows.top();
+                rows.pop();
+                row[position.channel + 1] = formatDouble(data.channels[position.channel].samples[position.sample].value);
+                consumed.push_back(position);
             }
             writeCsvRow(out, row);
+            reportDataFileProgress(consumed.size());
+            for (const auto& position : consumed) enqueue(position.channel, position.sample + 1);
         }
         return out.good();
     } catch (const std::exception& ex) {
@@ -787,13 +887,12 @@ bool writeWaveCsvFile(const std::filesystem::path& path,
     }
 }
 
-std::optional<WaveCsvData> readWaveCsvFile(const std::filesystem::path& path, std::string& error)
+static std::optional<WaveCsvData> decodeParsedWaveCsv(const ParsedCsv& parsedData, std::string& error,
+                                                    std::optional<WaveCsvData> streamed = std::nullopt)
 {
-    const auto parsed = readParsedCsvFile(path, error);
-    if (!parsed.has_value()) {
-        return std::nullopt;
-    }
-    if (detectCsvKind(path, error) != CsvKind::Wave) {
+    const auto* parsed = &parsedData;
+    const auto kind = metadataValue(parsed->metadata, "kind");
+    if (!kind.empty() && kind != "wave") {
         error = "CSV 不是波形数据";
         return std::nullopt;
     }
@@ -801,14 +900,19 @@ std::optional<WaveCsvData> readWaveCsvFile(const std::filesystem::path& path, st
         error = "波形 CSV 缺少表头";
         return std::nullopt;
     }
-    WaveCsvData data;
+    WaveCsvData data = streamed ? std::move(*streamed) : WaveCsvData{};
+    if (const auto range = metadataValue(parsed->metadata, "range"); !range.empty()) data.rangeDescription = range;
     data.shape = metadataShape(parsed->metadata);
     if (!readWaveCsvFrequency(*parsed, data, error)) {
         return std::nullopt;
     }
 
     const auto columns = headerIndex(parsed->rows.front());
-    if (data.shape == WaveCsvShape::Long || columns.contains("channel_index")) {
+    if (columns.contains("channel_index")) data.shape = WaveCsvShape::Long;
+    if (streamed) {
+        if (!columns.contains("channel_index"))
+            initializeWideWaveCsvChannels(*parsed, columns, columns.at("time"), data);
+    } else if (data.shape == WaveCsvShape::Long || columns.contains("channel_index")) {
         if (!readWaveCsvLongRows(*parsed, columns, data, error)) {
             return std::nullopt;
         }
@@ -819,7 +923,142 @@ std::optional<WaveCsvData> readWaveCsvFile(const std::filesystem::path& path, st
     }
 
     finalizeWaveCsvChannels(data);
+    if (const auto setupHex = metadataValue(parsed->metadata, "plot_setup_hex"); !setupHex.empty()) {
+        RawCaptureEvent setup;
+        if (!decodePlotSetupRecordHex(setupHex, setup, 1, error)) return std::nullopt;
+        if (data.channels.size() > setup.plotSetup.channels.size()) {
+            error = "波形 CSV 通道数量与元数据不一致";
+            return std::nullopt;
+        }
+        data.channels.resize(setup.plotSetup.channels.size());
+        data.source = setup.plotSetup.source;
+        data.view = setup.plotSetup.view;
+        data.timeAxis = metadataValue(parsed->metadata, "time_axis");
+        data.incomplete = metadataValue(parsed->metadata, "incomplete") == "true";
+        for (std::size_t i = 0; i < data.channels.size(); ++i) {
+            auto& channel = data.channels[i];
+            channel.spec = setup.plotSetup.channels[i];
+            channel.label = channel.spec.label;
+            channel.unit = channel.spec.unit;
+            std::uint64_t offset = 0;
+            if (!parseUnsigned(metadataValue(parsed->metadata, "channel." + std::to_string(i + 1) + ".index_offset"), offset)) {
+                error = "波形 CSV 样本序号偏移无效";
+                return std::nullopt;
+            }
+            channel.sampleIndexOffset = static_cast<std::size_t>(offset);
+        }
+    }
     return data;
+}
+
+std::optional<WaveCsvData> decodeWaveCsv(std::string_view text, std::string& error)
+{
+    struct ViewBuffer : std::streambuf {
+        explicit ViewBuffer(std::string_view value) {
+            auto* begin = const_cast<char*>(value.data());
+            setg(begin, begin, begin + value.size());
+        }
+    } buffer(text);
+    std::istream input(&buffer);
+    return readWaveCsvStream(input, error);
+}
+
+std::optional<WaveCsvData> readWaveCsvFile(const std::filesystem::path& path, std::string& error,
+                                        const DataFileReadCallbacks* callbacks)
+{
+    std::array<char, 65536> buffer{};
+    std::ifstream input;
+    input.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+    input.open(path, std::ios::binary);
+    if (!input) { error = "无法打开波形 CSV"; return std::nullopt; }
+    return readWaveCsvStream(input, error, callbacks);
+}
+
+std::optional<WaveCsvData> readWaveCsvStream(std::istream& input, std::string& error,
+                                          const DataFileReadCallbacks* callbacks)
+{
+    ParsedCsv parsed;
+    WaveCsvData data;
+    CsvColumns columns;
+    CsvRow header;
+    bool streaming = false;
+    std::size_t pending = 0;
+    WaveCsvData metadata;
+    std::vector<double> lastTimes;
+    const auto flush = [&]() {
+        for (std::size_t c = 0; c < data.channels.size(); ++c) {
+            auto& values = data.channels[c].samples;
+            if (values.empty()) continue;
+            if (!callbacks->samples(c, metadata.channels[c].sampleIndexOffset, std::move(values))) return false;
+            values.clear();
+        }
+        pending = 0;
+        return true;
+    };
+    const auto consume = [&](CsvRow&& row) {
+        if (header.fields.empty()) {
+            header = std::move(row);
+            columns = headerIndex(header);
+            if (!columns.contains("time")) { error = "波形 CSV 缺少 time 列"; return false; }
+            // 原生有序文件只解析一次；旧版或乱序文件仍在后台完整排序，禁止 UI 全历史排序。
+            streaming = callbacks && metadataValue(parsed.metadata, "sample_order") == "channel_time" &&
+                        !metadataValue(parsed.metadata, "plot_setup_hex").empty();
+            if (streaming) {
+                parsed.rows.push_back(header);
+                auto decoded = decodeParsedWaveCsv(parsed, error);
+                parsed.rows.clear();
+                if (!decoded) return false;
+                metadata = std::move(*decoded);
+                data = metadata;
+                lastTimes.assign(metadata.channels.size(), -std::numeric_limits<double>::infinity());
+                if (!callbacks->metadata(RawCaptureFileData{.waveform = metadata}, false)) return false;
+            }
+            return true;
+        }
+        ParsedCsv batch;
+        batch.rows.push_back(header);
+        batch.rows.push_back(std::move(row));
+        if (!(columns.contains("channel_index") ? readWaveCsvLongRows(batch, columns, data, error) :
+                                                 readWaveCsvWideRows(batch, columns, data, error))) return false;
+        if (streaming) {
+            if (data.channels.size() != metadata.channels.size()) {
+                error = "波形 CSV 通道数量与元数据不一致"; return false;
+            }
+            pending = 0;
+            for (std::size_t c = 0; c < data.channels.size(); ++c) {
+                const auto& values = data.channels[c].samples;
+                pending += values.size();
+                if (!values.empty()) {
+                    if (values.back().time < lastTimes[c]) {
+                        error = "波形 CSV 与有序样本声明不一致"; return false;
+                    }
+                    lastTimes[c] = values.back().time;
+                }
+            }
+            if (pending >= 8192 && !flush()) return false;
+        }
+        return true;
+    };
+    if (!parseCsvStream(input, parsed, error, consume)) return std::nullopt;
+    if (streaming) {
+        if (!flush()) return std::nullopt;
+        return metadata;
+    }
+    if (!header.fields.empty()) parsed.rows.push_back(std::move(header));
+    auto decoded = decodeParsedWaveCsv(parsed, error, std::move(data));
+    if (!decoded || !callbacks) return decoded;
+    metadata = *decoded;
+    for (auto& channel : metadata.channels) channel.samples.clear();
+    if (!callbacks->metadata(RawCaptureFileData{.waveform = metadata}, false)) return std::nullopt;
+    for (std::size_t c = 0; c < decoded->channels.size(); ++c) {
+        const auto& channel = decoded->channels[c];
+        for (std::size_t i = 0; i < channel.samples.size(); i += 8192) {
+            const auto end = (std::min)(i + 8192, channel.samples.size());
+            if (!callbacks->samples(c, channel.sampleIndexOffset,
+                {channel.samples.begin() + i, channel.samples.begin() + end})) return std::nullopt;
+        }
+    }
+    return metadata;
 }
 
 bool writeRawCaptureCsvFile(const std::filesystem::path& path,
@@ -828,18 +1067,29 @@ bool writeRawCaptureCsvFile(const std::filesystem::path& path,
                             std::string& error)
 {
     try {
+        if (!validateCsvExportRange(range, error)) return false;
         if (!ensureParentDirectory(path, error)) {
             return false;
         }
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        DataFileOutput output(path);
+        auto& out = output.stream;
         if (!out.good()) {
             error = "无法打开原始事件 CSV 文件";
             return false;
         }
-        out << "# protoscope_csv_version=1\n";
+        out << "# protoscope_csv_version=2\n";
         out << "# kind=raw_events\n";
-        out << "# protocol_name=" << capture.protocolName << '\n';
-        out << "# protocol_dir=" << capture.protocolDir << '\n';
+        const auto textHex = [](const std::string& text) {
+            return encodeHex({reinterpret_cast<const std::uint8_t*>(text.data()), text.size()});
+        };
+        out << "# source_hex=" << textHex(capture.source) << '\n';
+        out << "# truncated=" << (capture.truncated ? "true" : "false") << '\n';
+        out << "# filtered=" << (capture.filtered || range.kind != CsvExportRangeKind::Full ? "true" : "false") << '\n';
+        out << "# incomplete=" << (capture.incomplete ? "true" : "false") << '\n';
+        out << "# rx_only=" << (capture.rxOnly ? "true" : "false") << '\n';
+        out << "# range=" << capture.rangeDescription << '\n';
+        out << "# protocol_name_hex=" << textHex(capture.protocolName) << '\n';
+        out << "# protocol_dir_hex=" << textHex(capture.protocolDir) << '\n';
         out << "# sample_frequency_hz=" << formatDouble(capture.sampleFrequencyHz) << '\n';
         out << "# captured_at_ms=" << capture.capturedAtMs << '\n';
         writeCsvRow(out,
@@ -850,7 +1100,7 @@ bool writeRawCaptureCsvFile(const std::filesystem::path& path,
                      "profile_frame",
                      "profile_length",
                      "profile_channel_map",
-                     "plot_setup_record_hex"});
+                     "plot_setup_record_hex", "endpoint", "sequence", "write_status"});
 
         const auto resolvedRange = resolveCsvExportTimeRange(range);
         const auto events = capture.events.empty() ? std::vector<RawCaptureEvent>{RawCaptureEvent{
@@ -860,9 +1110,13 @@ bool writeRawCaptureCsvFile(const std::filesystem::path& path,
                                                      }}
                                                    : capture.events;
         for (const auto& event : events) {
+            if (dataFileStopToken().stop_requested()) { error = "导出已取消"; return false; }
             const double elapsedSeconds =
                 (static_cast<double>(event.timestampMs) - static_cast<double>(capture.capturedAtMs)) / 1000.0;
-            if (!timeInRange(elapsedSeconds, resolvedRange)) {
+            // 配置事件保留至范围末端，保证所选字节之前的解析配置仍可恢复。
+            const bool bytesEvent = event.type == RawCaptureEventType::RxBytes || event.type == RawCaptureEventType::TxBytes;
+            if ((bytesEvent && !timeInRange(elapsedSeconds, resolvedRange)) ||
+                (!bytesEvent && resolvedRange && elapsedSeconds > resolvedRange->second)) {
                 continue;
             }
             std::vector<std::string> row{
@@ -875,8 +1129,11 @@ bool writeRawCaptureCsvFile(const std::filesystem::path& path,
                 {},
                 {},
                 {},
+                event.endpoint,
+                std::to_string(event.sequence),
+                event.writeStatus,
             };
-            if (event.type == RawCaptureEventType::RxBytes) {
+            if (bytesEvent) {
                 row[3] = encodeHex(event.bytes);
             } else if (event.type == RawCaptureEventType::ProfileSet) {
                 row[4] = event.profile.frameName;
@@ -888,47 +1145,66 @@ bool writeRawCaptureCsvFile(const std::filesystem::path& path,
                 row[7] = encodePlotSetupRecordHex(event);
             }
             writeCsvRow(out, row);
+            reportDataFileProgress(1);
         }
-        return out.good();
+        return output.commit(error);
     } catch (const std::exception& ex) {
         error = ex.what();
         return false;
     }
 }
 
-std::optional<RawCaptureFileData> readRawCaptureCsvFile(const std::filesystem::path& path, std::string& error)
+std::optional<RawCaptureFileData> readRawCaptureCsvFile(const std::filesystem::path& path, std::string& error,
+                                                      const DataFileReadCallbacks* callbacks)
 {
-    const auto parsed = readParsedCsvFile(path, error);
-    if (!parsed.has_value()) {
-        return std::nullopt;
-    }
-    if (detectCsvKind(path, error) != CsvKind::RawEvents) {
+    std::array<char, 65536> buffer{};
+    std::ifstream input;
+    input.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+    input.open(path, std::ios::binary);
+    if (!input) { error = "无法打开收发 CSV"; return std::nullopt; }
+    ParsedCsv parsed;
+    CsvColumns columns;
+    RawCaptureFileData capture;
+    bool headerSeen = false;
+    const auto consume = [&](CsvRow&& row) {
+        if (!headerSeen) {
+            headerSeen = true;
+            columns = headerIndex(row);
+            if (!columns.contains("event_type") || !columns.contains("timestamp_ms")) {
+                error = "原始事件 CSV 缺少必要列";
+                return false;
+            }
+            if (const auto kind = metadataValue(parsed.metadata, "kind"); !kind.empty() && kind != "raw_events") {
+                error = "CSV 不是原始事件数据"; return false;
+            }
+            if (!readRawCaptureCsvMetadata(parsed, capture, error)) return false;
+            if (callbacks && !callbacks->metadata(capture, true)) return false;
+            return true;
+        }
+        if (!appendRawCaptureCsvEvent(row, columns, columns.at("event_type"), columns.at("timestamp_ms"), capture, error))
+            return false;
+        if (callbacks) {
+            auto event = std::move(capture.events.back());
+            capture.events.clear();
+            if (!callbacks->event(std::move(event), false)) return false;
+        }
+        return true;
+    };
+    if (!parseCsvStream(input, parsed, error, consume)) return std::nullopt;
+    if (const auto kind = metadataValue(parsed.metadata, "kind"); !kind.empty() && kind != "raw_events") {
         error = "CSV 不是原始事件数据";
         return std::nullopt;
     }
-    if (parsed->rows.empty()) {
+    if (!headerSeen) {
         error = "原始事件 CSV 缺少表头";
         return std::nullopt;
     }
-    const auto columns = headerIndex(parsed->rows.front());
-    const auto eventTypeColumn = columns.find("event_type");
-    const auto timestampColumn = columns.find("timestamp_ms");
-    if (eventTypeColumn == columns.end() || timestampColumn == columns.end()) {
-        error = "原始事件 CSV 缺少必要列";
+    if (!readRawCaptureCsvMetadata(parsed, capture, error)) {
         return std::nullopt;
     }
 
-    RawCaptureFileData capture;
-    if (!readRawCaptureCsvMetadata(*parsed, capture, error)) {
-        return std::nullopt;
-    }
-
-    for (std::size_t rowIndex = 1; rowIndex < parsed->rows.size(); ++rowIndex) {
-        const auto& row = parsed->rows[rowIndex];
-        if (!appendRawCaptureCsvEvent(row, columns, eventTypeColumn->second, timestampColumn->second, capture, error)) {
-            return std::nullopt;
-        }
-    }
+    for (const auto& event : capture.events)
+        if (event.type == RawCaptureEventType::TxBytes) capture.rxOnly = false;
     rebuildRawCapturePayload(capture);
     return capture;
 }

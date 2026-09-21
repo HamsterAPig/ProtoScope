@@ -310,6 +310,8 @@ void OscilloscopeBuffer::clear()
     channels_.clear();
     config_ = ViewConfig{};
     preservedHistoryLimit_ = 0;
+    if (importedLabelsReadOnly_) historyTrimSuspended_ = false;
+    importedLabelsReadOnly_ = false;
     ++dataRevision_;
 }
 
@@ -344,6 +346,7 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
     }
     spec.bitDisplay = sanitizeBitDisplaySpec(spec.bitDisplay);
     auto& channelSpec = channels_[channelIndex].spec;
+    if (importedLabelsReadOnly_) spec.label = channelSpec.label;
     if (channelSpec.ratio != spec.ratio) ++analysisRevision_;
     if (channelSpec.label != spec.label || channelSpec.unit != spec.unit || channelSpec.ratio != spec.ratio ||
         channelSpec.scale != spec.scale || channelSpec.offset != spec.offset || channelSpec.color != spec.color ||
@@ -457,6 +460,16 @@ bool OscilloscopeBuffer::append(std::size_t channelIndex, WaveAppendRequest requ
     }
 
     return appendPreparedSamples(channel, request.samples);
+}
+
+bool OscilloscopeBuffer::appendImported(std::size_t channelIndex, const std::vector<WaveSample>& samples,
+                                       std::size_t sampleIndexOffset)
+{
+    auto& channel = ensureChannel(channelIndex);
+    if (channel.samples.empty()) channel.sampleIndexOffset = sampleIndexOffset;
+    // 离线样本保留重复时间和原始序号，禁止实时重置、平移、去重及历史裁剪。
+    historyTrimSuspended_ = true;
+    return appendPreparedSamples(channel, samples);
 }
 
 OscilloscopeBuffer::ChannelBuffer& OscilloscopeBuffer::ensureChannel(std::size_t channelIndex)

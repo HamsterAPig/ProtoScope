@@ -1252,6 +1252,7 @@ bool resetChannelConfigToDefault(WaveDockState& wave,
         wave.channelOverrides.resize(channelIndex + 1);
     }
     auto& overrideState = wave.channelOverrides[channelIndex];
+    if (wave.buffer.importedLabelsReadOnly()) updated.label = currentSpec->label;
     overrideState.labelOverridden = updated.label != defaultSpec.label;
     overrideState.ratioOverridden = std::abs(updated.ratio - defaultSpec.ratio) > kEpsilon;
     overrideState.scaleOverridden = std::abs(updated.scale - defaultSpec.scale) > kEpsilon;
