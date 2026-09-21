@@ -19,6 +19,16 @@
 
 namespace protoscope::ui {
 
+inline ImVec4 cursorRgb(std::uint32_t rgb)
+{
+    return ImVec4(((rgb >> 16) & 255) / 255.0F, ((rgb >> 8) & 255) / 255.0F, (rgb & 255) / 255.0F, 1.0F);
+}
+
+inline ImVec4 measurementCursorColor(std::size_t index)
+{
+    return cursorRgb(plot::kMeasurementCursorRgb[index]);
+}
+
 std::optional<plot::ChannelSpec> channelDisplayAffineTransform(
     const plot::ChannelSpec& spec, plot::WaveDisplayFormula formula, double a, double b);
 bool fitChannelDisplayRange(plot::WaveDockState& wave, const plot::WaveSnapshot& snapshot,

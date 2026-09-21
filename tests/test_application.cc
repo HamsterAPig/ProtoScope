@@ -989,6 +989,8 @@ void test_application_failed_protocol_reload_keeps_previous_runtime()
     require(application.reloadProtocolDirectory("protocols/lua_waveform_demo", true), "Lua 波形演示脚本应可加载");
 
     const auto before = application.docks().luaState();
+    auto& auxiliary = application.docks().waveState().view.auxiliaryCursors;
+    auxiliary.add(0, 1);
     require(!application.reloadProtocolDirectory("tests/fixtures/protocols/invalid_controls", true),
             "非法协议脚本应加载失败");
 
@@ -998,6 +1000,9 @@ void test_application_failed_protocol_reload_keeps_previous_runtime()
     require(after.scriptPath == before.scriptPath, "加载失败后不应改写当前入口脚本路径");
     require(!after.controlStates.empty(), "加载失败后应保留上一份动态控件快照");
     require(!after.lastError.empty(), "加载失败后应保留错误信息供界面展示");
+    require(auxiliary.items.size() == 1, "加载失败应保留当前会话辅助游标");
+    require(application.reloadProtocolDirectory("protocols/templates/default_protocol", true), "应能切换有效协议");
+    require(auxiliary.items.empty(), "切换协议应清空辅助游标");
 
     application.shutdown();
 }
@@ -1835,9 +1840,11 @@ void test_application_reset_wave_history_restores_default_viewport()
     wave.view.visibleDuration = 2.0;
     wave.view.viewMinTime = 5.0;
     wave.view.viewMaxTime = 7.0;
+    wave.view.auxiliaryCursors.add(5, 7);
 
     application.resetWaveHistory();
 
+    require(wave.view.auxiliaryCursors.items.empty(), "清空历史应立即清空辅助游标");
     require(wave.view.autoFollowLatest, "清空历史后应恢复自动跟随");
     require(wave.view.defaultViewportPending, "清空历史后应等待按真实宽度应用默认视口");
     require(!wave.view.initialized, "清空历史后应重新初始化视口");

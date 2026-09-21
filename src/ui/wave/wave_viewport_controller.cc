@@ -326,6 +326,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
 
     WaveFrameData frame;
     if (wave.analysisEpoch != wave.buffer.historyEpoch()) {
+        view.auxiliaryCursors.clear();
         wave.analysisEpoch = wave.buffer.historyEpoch();
         ++wave.fftRequestGeneration;
         ++wave.measurementRequestGeneration;
@@ -342,6 +343,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.overviewRenderCache.clear();
     }
     const auto dataRevision = wave.buffer.dataRevision();
+    if (wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) view.auxiliaryCursors.clear();
     if (wave.displayDataRevision != dataRevision || wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) {
         // 核心流程：全量快照只保留通道元数据和原始样本指针，显示缓存按当前窗口单独构建，避免高速采样时反复复制全历史。
         wave.cachedFullSnapshot = wave.buffer.snapshot(
@@ -416,8 +418,11 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.cachedFullSnapshot, view, dataRevision, (std::max)(overviewPointLimit, std::size_t{1}));
     if (!wave.cachedOverviewKeyValid || !(wave.cachedOverviewKey == overviewKey)) {
         // 核心流程：概览只保留按像素预算压缩后的完整历史包络点，避免每次数据变更复制全历史显示样本。
+        const auto previousAxis = wave.cachedOverviewDisplayData.axisSource;
         plot::buildQueryDisplayDataInto(
             wave.cachedFullSnapshot, view.sampleFrequencyHz, overviewKey.pointLimit, wave.cachedOverviewDisplayData);
+        // 以完整历史判断时间基准，普通缩放到空白区域不能误清辅助游标。
+        if (previousAxis != wave.cachedOverviewDisplayData.axisSource) view.auxiliaryCursors.clear();
         wave.cachedOverviewKey = overviewKey;
         wave.cachedOverviewKeyValid = true;
     }

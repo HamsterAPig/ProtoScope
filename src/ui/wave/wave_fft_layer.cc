@@ -685,7 +685,8 @@ namespace {
                               const FftXAxisScale& xAxis,
                               plot::WaveFftMagnitudeMode magnitudeMode,
                               bool phasePlot,
-                              std::span<const double> magnitudeOffsets)
+                              std::span<const double> magnitudeOffsets,
+                              const ImVec4& color = ImVec4(1.0F, 1.0F, 0.2F, 1.0F))
     {
         const auto x = fftDisplayX(xAxis, readout.frequencyHz);
         if (!x.has_value()) {
@@ -694,7 +695,6 @@ namespace {
         const double y =
             phasePlot ? readout.phaseDegrees
                       : readout.displayMagnitude + fftMagnitudeOffsetForChannel(magnitudeOffsets, readout.channelIndex);
-        const ImVec4 color(1.0F, 1.0F, 0.2F, 1.0F);
         const std::string axisText = formatXAxisReadout(xAxis, readout.frequencyHz);
         const char* magnitudeUnit = fftMagnitudeReadoutUnit(magnitudeMode);
         ImPlot::Annotation(*x,
@@ -723,8 +723,8 @@ namespace {
 
         bool heldAny = false;
         const ImVec4 cursorColors[2] = {
-            ImVec4(1.0F, 0.85F, 0.15F, 1.0F),
-            ImVec4(0.2F, 0.85F, 1.0F, 1.0F),
+            measurementCursorColor(0),
+            measurementCursorColor(1),
         };
         for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
             auto& cursor = view.cursors[cursorIndex];
@@ -751,7 +751,8 @@ namespace {
                 cursor.channelIndex = readout->channelIndex;
                 cursorReadouts[cursorIndex] = readout;
                 if (held || hovered || cursor.pinned) {
-                    drawCursorAnnotation(*readout, xAxis, view.fft.magnitudeMode, phasePlot, magnitudeOffsets);
+                    drawCursorAnnotation(*readout, xAxis, view.fft.magnitudeMode, phasePlot,
+                                         magnitudeOffsets, cursorColors[cursorIndex]);
                 }
             }
         }
@@ -1033,8 +1034,8 @@ namespace {
                            const FftXAxisScale& xAxis,
                            plot::WaveFftMagnitudeMode magnitudeMode)
     {
-        ImGui::TextUnformatted(readoutText("C1", cursorReadouts[0], xAxis, magnitudeMode).c_str());
-        ImGui::TextUnformatted(readoutText("C2", cursorReadouts[1], xAxis, magnitudeMode).c_str());
+        ImGui::TextColored(measurementCursorColor(0), "%s", readoutText("A", cursorReadouts[0], xAxis, magnitudeMode).c_str());
+        ImGui::TextColored(measurementCursorColor(1), "%s", readoutText("B", cursorReadouts[1], xAxis, magnitudeMode).c_str());
         if (!cursorReadouts[0].has_value() || !cursorReadouts[1].has_value()) {
             return;
         }

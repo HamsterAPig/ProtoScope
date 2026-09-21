@@ -1476,6 +1476,8 @@ bool Application::applyProtocolLoadResult(const std::string& resolvedDirText,
         return false;
     }
 
+    // 辅助游标只属于当前数据会话，协议成功切换后立即清理；加载失败保留旧会话。
+    dockStore_.waveState().view.auxiliaryCursors.clear();
     lua.protocolDir = resolvedDirText;
     lua.protocolName = protocolName;
     lua.scriptPath = scriptPath;
@@ -3573,6 +3575,7 @@ void Application::resetWaveHistoryForTrigger(const WaveResetViewportTrigger trig
     auto& wave = dockStore_.waveState();
     wave.buffer.clear();
     wave.rawCapture = {};
+    wave.view.auxiliaryCursors.clear();
     wave.analysisMarkers.clear();
     wave.channelSummaries.clear();
     wave.view.autoFollowLatest = true;

@@ -738,7 +738,7 @@ void drawCursorAnnotation(std::size_t cursorIndex,
     const std::string labelPrefix = snapLabel.empty() ? "" : std::string(snapLabel) + " ";
     ImPlot::Annotation(readout.time,
                        readout.displayValue,
-                       ImVec4(1.0F, 1.0F, 1.0F, 0.92F),
+                       measurementCursorColor(cursorIndex),
                        ImVec2(10.0F, cursorIndex == 0 ? -18.0F : 18.0F),
                        true,
                        "%c %s%s\n%s %.6g",
@@ -762,7 +762,7 @@ void drawCursorIntersectionReadouts(const std::vector<CursorIntersectionReadout>
         const float xOffset = 10.0F + static_cast<float>(index % 3U) * 4.0F;
         ImPlot::Annotation(entry.cursorTime,
                            entry.readout.displayValue,
-                           ImVec4(1.0F, 1.0F, 1.0F, 0.86F),
+                           measurementCursorColor(entry.cursorIndex),
                            ImVec2(xOffset, yOffset),
                            true,
                            "%c %s\n%.6g %s",
@@ -799,7 +799,7 @@ void drawCursorIntervalHint(double leftTime,
     const ImVec2 start = ImPlot::PlotToPixels(beginTime, centerValue);
     const ImVec2 end = ImPlot::PlotToPixels(endTime, centerValue);
     auto* drawList = ImPlot::GetPlotDrawList();
-    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 0.92F, 0.25F, 0.9F));
+    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(measurementCursorColor(0));
     ImPlot::PushPlotClipRect();
     constexpr float kDashLength = 8.0F;
     constexpr float kGapLength = 5.0F;
@@ -831,8 +831,8 @@ void drawCursorIntervalHint(double leftTime,
         drawList->AddRect(chipMin, chipMax, chipTextColor, 3.0F);
         drawList->AddText(ImVec2(chipMin.x + 5.0F, chipMin.y + 2.0F), chipTextColor, chip.c_str());
     };
-    drawTimeChip("A", leftTime, ImVec4(1.0F, 0.761F, 0.278F, 1.0F));
-    drawTimeChip("B", rightTime, ImVec4(0.0F, 0.722F, 1.0F, 1.0F));
+    drawTimeChip("A", leftTime, measurementCursorColor(0));
+    drawTimeChip("B", rightTime, measurementCursorColor(1));
     ImPlot::PopPlotClipRect();
 }
 

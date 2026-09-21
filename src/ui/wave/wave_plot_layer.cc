@@ -971,7 +971,8 @@ namespace {
         auto& view = wave.view;
         const ImVec2 rightDrag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right);
         const bool rightDragged = std::hypot(rightDrag.x, rightDrag.y) > 4.0F;
-        const bool canOpen = ImPlot::IsPlotHovered() && !view.zoomSelectionActive && !view.zoomSelectionDragging &&
+        const bool canOpen = ImPlot::IsPlotHovered() && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId) &&
+                             !view.zoomSelectionActive && !view.zoomSelectionDragging &&
                              !ImGui::IsAnyItemActive() && !ImGui::IsMouseDragging(ImGuiMouseButton_Right) &&
                              !rightDragged;
         if (canOpen && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
@@ -1047,6 +1048,170 @@ namespace {
 
 } // namespace
 
+namespace {
+
+bool drawAuxiliaryCursors(plot::WaveViewState& view,
+                          const plot::WaveSnapshot& snapshot,
+                          const plot::WaveDisplayData& displayData,
+                          const BitLaneLayout& bitLayout,
+                          const ImPlotRect& limits,
+                          double snapDistance,
+                          std::optional<std::size_t> splitChannel)
+{
+    auto& auxiliary = view.auxiliaryCursors;
+    if (auxiliary.items.empty()) return false;
+    ImGui::PushID("auxiliary_time_cursors");
+    ImGui::PushID(splitChannel ? std::to_string(*splitChannel).c_str() : "overlay");
+    auto* draw = ImPlot::GetPlotDrawList();
+    const auto pos = ImPlot::GetPlotPos();
+    const auto size = ImPlot::GetPlotSize();
+    const ImRect bounds(pos, ImVec2(pos.x + size.x, pos.y + size.y));
+    const auto mouse = ImGui::GetMousePos();
+    const auto plotMouse = ImPlot::GetPlotMousePos();
+    const bool mouseInPlot = bounds.Contains(mouse) && ImGui::IsWindowHovered();
+    const float lineHeight = ImGui::GetTextLineHeight() + 4;
+    // 顶部标注避开分屏通道名、测量浮窗与居中的 A/B 差值，窄图不足时降级为悬停。
+    const float bandBottom = view.showCursors && view.cursors[0].enabled && view.cursors[1].enabled
+        ? (std::max)(pos.y + lineHeight, pos.y + size.y * 0.5F - 2 * ImGui::GetTextLineHeight() - 14)
+        : bounds.Max.y;
+    std::vector<ImRect> reserved;
+    if (splitChannel && *splitChannel < snapshot.channels.size()) {
+        const auto& channel = snapshot.channels[*splitChannel];
+        const auto title = "CH" + std::to_string(*splitChannel + 1) + "  " + channel.label;
+        reserved.emplace_back(pos, ImVec2(pos.x + 12 + ImGui::CalcTextSize(title.c_str()).x, pos.y + lineHeight + 8));
+    }
+    if (view.showMeasurementOverlay)
+        reserved.emplace_back(ImVec2(bounds.Max.x - (std::min)(360.0F, size.x * 0.52F) - 8, pos.y),
+                              bounds.Max);
+    auto labels = reserved;
+    std::vector<std::uint64_t> hits;
+    std::string tooltip;
+    bool claimed = false;
+    ImPlot::PushPlotClipRect();
+    for (auto& cursor : auxiliary.items) {
+        const std::string name = "T" + std::to_string(cursor.id);
+        ImGui::PushID(name.c_str());
+        bool clicked = false, hovered = false, held = false;
+        double time = cursor.time;
+        // 复用 ImPlot 拖动命中和现有吸附策略，线条由下方按虚线绘制。
+        ImPlot::DragLineX(0, &time, ImVec4(0, 0, 0, 0), 1,
+                         ImPlotDragToolFlags_NoFit, &clicked, &hovered, &held);
+        if (held) {
+            std::optional<plot::CursorReadout> snap;
+            if (cursorSmartSnapActive(view, ImGui::GetIO())) {
+                if (const auto target = findSmartCursorSnapByScope(
+                        snapshot, displayData, view, bitLayout, time, plotMouse.y,
+                        limits, snapDistance, splitChannel))
+                    snap = target->readout;
+            }
+            cursor.time = plot::applyCursorDragSnap(time, snap);
+        }
+        claimed = claimed || clicked || held;
+        const float x = ImPlot::PlotToPixels(cursor.time, limits.Y.Max).x;
+        const auto color = ImGui::ColorConvertFloat4ToU32(cursorRgb(plot::kAuxiliaryCursorRgb[cursor.colorIndex]));
+        if (x >= bounds.Min.x && x <= bounds.Max.x) {
+            for (float y = pos.y; y < bounds.Max.y; y += 10)
+                draw->AddLine(ImVec2(x, y), ImVec2(x, (std::min)(y + 6, bounds.Max.y)), color, held ? 2 : 1.5F);
+            const auto textSize = ImGui::CalcTextSize(name.c_str());
+            const float labelX = (std::clamp)(x + 4, bounds.Min.x,
+                (std::max)(bounds.Min.x, bounds.Max.x - textSize.x - 4));
+            bool labelHovered = false;
+            for (int lane = 0; lane < 3; ++lane) {
+                const ImRect rect(ImVec2(labelX, pos.y + 4 + lane * lineHeight),
+                                  ImVec2(labelX + textSize.x + 4, pos.y + 4 + (lane + 1) * lineHeight));
+                if (rect.Max.y > bandBottom) break;
+                if (std::any_of(labels.begin(), labels.end(), [&](const auto& other) { return rect.Overlaps(other); }))
+                    continue;
+                labels.push_back(rect);
+                draw->AddRectFilled(rect.Min, rect.Max, ImGui::GetColorU32(ImGuiCol_WindowBg));
+                draw->AddText(rect.Min, color, name.c_str());
+                labelHovered = rect.Contains(mouse);
+                break;
+            }
+            if (mouseInPlot && (std::abs(mouse.x - x) <= 5 || labelHovered)) {
+                hits.push_back(cursor.id);
+                tooltip += name + ": " + formatMetricText(cursor.time, displayData.timeUnit.c_str()) + "\n";
+            }
+        }
+        ImGui::PopID();
+    }
+    // 只按 T 的横轴位置计算相邻差值；拥挤标签不重叠，悬停短横线可查看完整读数。
+    auto intervalLabels = reserved;
+    for (const auto& interval : auxiliary.intervals()) {
+        const float leftX = ImPlot::PlotToPixels(interval.left.time, limits.Y.Max).x;
+        const float rightX = ImPlot::PlotToPixels(interval.right.time, limits.Y.Max).x;
+        if (rightX < bounds.Min.x || leftX > bounds.Max.x) continue;
+        const auto leftColor = ImGui::ColorConvertFloat4ToU32(cursorRgb(plot::kAuxiliaryCursorRgb[interval.left.colorIndex]));
+        const auto rightColor = ImGui::ColorConvertFloat4ToU32(cursorRgb(plot::kAuxiliaryCursorRgb[interval.right.colorIndex]));
+        const std::string text = "T" + std::to_string(interval.left.id) + " - T" + std::to_string(interval.right.id) +
+            ": " + formatMetricText(interval.delta,
+                displayData.axisSource == plot::WaveTimeAxisSource::SampleIndex ? "sample" : displayData.timeUnit.c_str());
+        const auto textSize = ImGui::CalcTextSize(text.c_str());
+        const float x1 = (std::max)(leftX, bounds.Min.x);
+        const float x2 = (std::min)(rightX, bounds.Max.x);
+        const float center = (x1 + x2) * 0.5F;
+        const float textX = (std::clamp)(center - textSize.x * 0.5F, bounds.Min.x,
+            (std::max)(bounds.Min.x, bounds.Max.x - textSize.x));
+        int lane = 0;
+        ImRect textRect;
+        bool visible = false;
+        for (; lane < 3; ++lane) {
+            const float y = pos.y + 6 + (3 + lane) * lineHeight;
+            textRect = ImRect(ImVec2(textX, y), ImVec2(textX + textSize.x + 4, y + lineHeight));
+            if (textRect.Max.y > bandBottom || textSize.x > size.x) break;
+            if (std::none_of(intervalLabels.begin(), intervalLabels.end(),
+                            [&](const auto& other) { return textRect.Overlaps(other); })) {
+                visible = true;
+                intervalLabels.push_back(textRect);
+                break;
+            }
+        }
+        const float y = (std::min)(bandBottom - 4, pos.y + 6 + (3 + (std::min)(lane, 2)) * lineHeight);
+        draw->AddLine(ImVec2(x1, y), ImVec2(center, y), leftColor);
+        draw->AddLine(ImVec2(center, y), ImVec2(x2, y), rightColor);
+        if (visible) {
+            draw->AddRectFilled(textRect.Min, textRect.Max, ImGui::GetColorU32(ImGuiCol_WindowBg));
+            const auto leftName = "T" + std::to_string(interval.left.id) + " - ";
+            const auto rightName = "T" + std::to_string(interval.right.id);
+            draw->AddText(textRect.Min, leftColor, leftName.c_str());
+            const float rightNameX = textRect.Min.x + ImGui::CalcTextSize(leftName.c_str()).x;
+            draw->AddText(ImVec2(rightNameX, textRect.Min.y), rightColor, rightName.c_str());
+            draw->AddText(ImVec2(rightNameX + ImGui::CalcTextSize(rightName.c_str()).x, textRect.Min.y),
+                          leftColor, text.c_str() + leftName.size() + rightName.size());
+        }
+        if (mouseInPlot && ((visible && textRect.Contains(mouse)) ||
+            (mouse.x >= x1 - 4 && mouse.x <= x2 + 4 && std::abs(mouse.y - y) < 5)))
+            tooltip += text + "\n";
+    }
+    ImPlot::PopPlotClipRect();
+    if (!tooltip.empty() && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
+        ImGui::SetTooltip("%s", tooltip.c_str());
+    const auto drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right);
+    if (!hits.empty() && ImGui::IsMouseReleased(ImGuiMouseButton_Right) && std::hypot(drag.x, drag.y) <= 4) {
+        auxiliary.contextHits = hits;
+        ImGui::OpenPopup("remove");
+    }
+    if (ImGui::BeginPopup("remove")) {
+        std::uint64_t removeId = 0;
+        for (const auto id : auxiliary.contextHits) {
+            const auto found = std::find_if(auxiliary.items.begin(), auxiliary.items.end(),
+                                           [id](const auto& cursor) { return cursor.id == id; });
+            if (found == auxiliary.items.end()) continue;
+            ImGui::PushStyleColor(ImGuiCol_Text, cursorRgb(plot::kAuxiliaryCursorRgb[found->colorIndex]));
+            if (ImGui::MenuItem(("删除 T" + std::to_string(id)).c_str())) removeId = id;
+            ImGui::PopStyleColor();
+        }
+        if (removeId) auxiliary.remove(removeId);
+        ImGui::EndPopup();
+        claimed = true;
+    }
+    ImGui::PopID();
+    ImGui::PopID();
+    return claimed;
+}
+
+} // namespace
+
 bool handlePlotCursorsImpl(plot::WaveViewState& view,
                            const plot::WaveSnapshot& snapshot,
                            const plot::WaveDisplayData& displayData,
@@ -1059,17 +1224,19 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
                            std::array<std::optional<plot::CursorReadout>, 2>& cursorReadouts,
                            std::optional<std::size_t> splitChannelIndex)
 {
+    const bool auxiliaryClaimed = drawAuxiliaryCursors(
+        view, snapshot, displayData, bitLayout, limits, smartSnapDistance, splitChannelIndex);
     if (!view.showCursors) {
         if (!splitChannelIndex.has_value()) {
             view.measurementCursorReadoutRefreshPending = false;
         }
-        return false;
+        return auxiliaryClaimed;
     }
     clampActiveChannel(view, snapshot.channels.size());
 
     const auto& io = ImGui::GetIO();
     const bool timeRefreshPending = view.measurementCursorReadoutRefreshPending && !splitChannelIndex.has_value();
-    bool anyCursorInteractionClaimed = false;
+    bool anyCursorInteractionClaimed = auxiliaryClaimed;
     for (std::size_t cursorIndex = 0; cursorIndex < view.cursors.size(); ++cursorIndex) {
         auto& cursor = view.cursors[cursorIndex];
         if (!cursor.enabled) {
@@ -1087,8 +1254,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
         if (smartSnapActive) {
             dragFlags |= ImPlotDragToolFlags_Delayed;
         }
-        const ImVec4 cursorColor =
-            cursorIndex == 0 ? ImVec4(1.0F, 0.761F, 0.278F, 1.0F) : ImVec4(0.0F, 0.722F, 1.0F, 1.0F);
+        const ImVec4 cursorColor = measurementCursorColor(cursorIndex);
         // 核心流程：分屏每行必须使用独立 DragLine ID，避免同帧多个子图共享 ImPlot 状态。
         const int dragId = splitChannelIndex.has_value() ? splitCursorDragId(*splitChannelIndex, cursorIndex)
                                                          : static_cast<int>(100 + cursorIndex);
@@ -1175,7 +1341,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
                 const std::string timeText = formatMetricText(best->time, displayData.timeUnit.c_str());
                 ImPlot::Annotation(best->time,
                                    best->displayValue,
-                                   ImVec4(1.0F, 1.0F, 1.0F, 0.92F),
+                                   cursorColor,
                                    ImVec2(10.0F, cursorIndex == 0 ? -18.0F : 18.0F),
                                    true,
                                    "%c %s%s.%zu %s\nvalue %d",

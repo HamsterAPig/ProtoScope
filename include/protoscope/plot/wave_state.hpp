@@ -3,6 +3,7 @@
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/plot/wave_fft.hpp"
+#include "protoscope/plot/wave_cursors.hpp"
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_analysis.hpp"
 #include <memory>
@@ -313,6 +314,7 @@ struct WaveViewState {
     WaveCursorExtremeSnapPolicy cursorExtremeSnapPolicy{WaveCursorExtremeSnapPolicy::NearestWaveform};
     WaveRenderStats lastRenderStats{};
     std::array<WaveCursorState, 2> cursors{};
+    WaveAuxiliaryCursors auxiliaryCursors{};
 };
 
 struct WaveAnalysisMarker {

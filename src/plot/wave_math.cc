@@ -1187,6 +1187,10 @@ bool shiftMeasurementCursorsForViewportScroll(WaveViewState& view,
         // 核心流程：跟随滚动只平移时间；下一帧主图按时间重绑定读数，避免旧 Y 锚点失效。
         view.measurementCursorReadoutRefreshPending = true;
     }
+    for (auto& cursor : view.auxiliaryCursors.items) {
+        cursor.time += deltaTime;
+        shifted = true;
+    }
     return shifted;
 }
 

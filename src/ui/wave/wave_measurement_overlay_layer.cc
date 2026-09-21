@@ -97,6 +97,10 @@ namespace {
         constexpr float labelValueGap = 6.0F;
 
         const ImVec2 chipSize = calcChipSize(chip, padX, padY);
+        if (chip.label.starts_with("A·") || chip.label.starts_with("B·")) {
+            labelColor = valueColor = ImGui::ColorConvertFloat4ToU32(
+                measurementCursorColor(chip.label.starts_with("A·") ? 0 : 1));
+        }
         const ImVec2 chipMax(pos.x + chipSize.x, pos.y + chipSize.y);
 
         const ImVec2 labelSize = ImGui::CalcTextSize(chip.label.c_str());

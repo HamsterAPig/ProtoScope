@@ -525,6 +525,13 @@ namespace {
                                    const plot::WaveDisplayData& displayData)
     {
         drawTopToolbarSeparator();
+        const bool fullSpectrum = view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::FullSpectrum;
+        ImGui::BeginDisabled(fullSpectrum);
+        if (drawTopToolbarButton("+T", false, "添加辅助游标")) {
+            view.auxiliaryCursors.add(view.viewMinTime, view.viewMaxTime);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
         if (drawTopToolbarButton(
                 "A",
                 view.cursors[0].enabled,

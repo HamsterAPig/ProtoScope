@@ -52,6 +52,13 @@ void run(plot::WaveFftDisplayMode mode)
     append(2048, 32);
     settle(wave);
     require(std::abs(peak() - 32) < 1, "initial peak wrong");
+    const auto beforeAuxiliary = wave.cachedFftKey;
+    const auto beforeAuxiliarySubmissions = wave.fftSubmittedCount;
+    view.auxiliaryCursors.add(0, 1);
+    view.auxiliaryCursors.add(0.3, 0.7);
+    ui::prepareWaveFrame(wave, 900);
+    require(wave.cachedFftKey == beforeAuxiliary && wave.fftSubmittedCount == beforeAuxiliarySubmissions,
+            "auxiliary cursors changed FFT input or cache key");
     const auto generation = wave.fftRequestGeneration;
     const auto firstRevision = wave.cachedFftKey.dataRevision;
     bool updatedWhileStreaming = false;

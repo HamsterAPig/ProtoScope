@@ -60,6 +60,10 @@ set_tests_properties(protoscope_headless_unit_tests PROPERTIES
 )
 
 if(PROTOSCOPE_ENABLE_GUI)
+    add_executable(protoscope_auxiliary_cursor_tests test_auxiliary_cursors.cc)
+    target_link_libraries(protoscope_auxiliary_cursor_tests PRIVATE protoscope_ui)
+    add_test(NAME protoscope_auxiliary_cursor_tests COMMAND protoscope_auxiliary_cursor_tests)
+    set_tests_properties(protoscope_auxiliary_cursor_tests PROPERTIES TIMEOUT 60)
     add_executable(protoscope_wave_fft_live_tests test_wave_fft_live.cc)
     target_link_libraries(protoscope_wave_fft_live_tests PRIVATE protoscope_ui)
     add_test(NAME protoscope_wave_fft_live_tests COMMAND protoscope_wave_fft_live_tests)
