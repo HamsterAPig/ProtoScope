@@ -60,6 +60,10 @@ set_tests_properties(protoscope_headless_unit_tests PROPERTIES
 )
 
 if(PROTOSCOPE_ENABLE_GUI)
+    add_executable(protoscope_wave_fft_live_tests test_wave_fft_live.cc)
+    target_link_libraries(protoscope_wave_fft_live_tests PRIVATE protoscope_ui)
+    add_test(NAME protoscope_wave_fft_live_tests COMMAND protoscope_wave_fft_live_tests)
+    set_tests_properties(protoscope_wave_fft_live_tests PROPERTIES TIMEOUT 60)
     add_executable(protoscope_log_scroll_tests test_log_scroll.cc)
     target_include_directories(protoscope_log_scroll_tests PRIVATE ${PROJECT_BINARY_DIR}/generated/include)
     target_link_libraries(protoscope_log_scroll_tests PRIVATE protoscope_ui)

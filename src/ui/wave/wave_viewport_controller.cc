@@ -329,7 +329,8 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.analysisEpoch = wave.buffer.historyEpoch();
         ++wave.fftRequestGeneration;
         ++wave.measurementRequestGeneration;
-        wave.fftRequestActive = false;
+        wave.fftTargetKeyValid = false;
+        view.fftSourceWindowValid = false;
         wave.measurementRequestActive = false;
         wave.measurementKeyValid = false;
         wave.cachedMeasurement.reset();
@@ -433,6 +434,10 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
             }
         }
         syncCursorSplitFftWindow(wave, *frame.displayData, latestTime);
+        if (view.fft.displayMode == plot::WaveFftDisplayMode::FullSpectrum && view.autoFollowLatest) {
+            view.fftSourceMinTime = view.viewMinTime;
+            view.fftSourceMaxTime = view.viewMaxTime;
+        }
         if (!view.fftSourceWindowValid) {
             view.fftSourceMinTime = view.viewMinTime;
             view.fftSourceMaxTime = view.viewMaxTime;
@@ -451,24 +456,42 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         for (const auto& channel : wave.cachedFullSnapshot.channels) key.channelRatios.push_back(channel.ratio);
         auto queryKey = key;
         queryKey.dataRevision = 0;
-        auto requestedQuery = wave.fftRequestedKey;
+        auto requestedQuery = wave.fftTargetKey;
         requestedQuery.dataRevision = 0;
-        if (!(queryKey == requestedQuery)) {
-            ++wave.fftRequestGeneration;
-            wave.fftRequestActive = false;
-            wave.fftRequestedKey = key;
+        // 跟随时仅窗口平移属于实时推进；窗口宽度、参数、通道和时间基准变化仍使旧任务失效。
+        const double targetWidth = key.viewMaxTime - key.viewMinTime;
+        const double previousWidth = requestedQuery.viewMaxTime - requestedQuery.viewMinTime;
+        const bool advancing = view.autoFollowLatest && wave.fftTargetFollowing &&
+            std::abs(targetWidth - previousWidth) <= (std::max)(1.0, std::abs(targetWidth)) * 1e-9;
+        if (advancing) {
+            requestedQuery.viewMinTime = queryKey.viewMinTime;
+            requestedQuery.viewMaxTime = queryKey.viewMaxTime;
         }
+        if (!wave.fftTargetKeyValid || !(queryKey == requestedQuery) ||
+            wave.fftTargetFollowing != view.autoFollowLatest || wave.fftTargetAxis != view.timeAxisSource ||
+            wave.fftRefreshRequested) {
+            ++wave.fftRequestGeneration;
+            wave.cachedFftKeyValid = false;
+            wave.cachedFftFrame = {};
+        }
+        wave.fftTargetKey = key;
+        wave.fftTargetKeyValid = true;
+        wave.fftTargetFollowing = view.autoFollowLatest;
+        wave.fftTargetAxis = view.timeAxisSource;
+        wave.fftRefreshRequested = false;
         if (wave.analysisWorker) {
-            if (auto output = wave.analysisWorker->takeFft();
-                output && output->generation == wave.fftRequestGeneration) {
-                wave.cachedFftFrame = std::move(output->result);
-                wave.cachedFftKey = output->key;
-                wave.cachedFftKeyValid = true;
+            if (auto output = wave.analysisWorker->takeFft()) {
                 wave.fftRequestActive = false;
+                if (output->generation == wave.fftRequestGeneration) {
+                    wave.cachedFftFrame = std::move(output->result);
+                    wave.cachedFftKey = output->key;
+                    wave.cachedFftKeyValid = true;
+                }
             }
         }
         view.fftUpdatePending = !wave.cachedFftKeyValid || !(wave.cachedFftKey == key);
-        if (view.fftUpdatePending && !view.interactionActive && !wave.fftRequestActive) {
+        if (view.fftUpdatePending && !wave.fftRequestActive) {
+            // 只保留一个执行任务；忙碌期间目标更新在上面合并，完成后直接提交本帧最新窗口。
             // 核心流程：FFT 输入窗口与频域视口分离，频域缩放不会反向改变待分析的时域样本。
             auto fftSnapshot = hasSampleFrequencyTimebase(view)
                                    ? wave.cachedFullSnapshot
@@ -521,8 +544,9 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.cachedFftKeyValid = false;
         wave.cachedFftFrame = {};
         wave.fftDisplayError.clear();
-        if (wave.fftRequestActive) ++wave.fftRequestGeneration;
-        wave.fftRequestActive = false;
+        if (wave.fftTargetKeyValid) ++wave.fftRequestGeneration;
+        wave.fftTargetKeyValid = false;
+        if (wave.analysisWorker && wave.analysisWorker->takeFft()) wave.fftRequestActive = false;
         view.fftUpdatePending = false;
         frame.fftFrame = &wave.cachedFftFrame;
     }

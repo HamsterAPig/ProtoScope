@@ -685,6 +685,7 @@ void drawFftInputWindowActions(plot::WaveDockState& wave)
                                   "重新使用当前时域主视图范围作为 FFT 输入；频域缩放不会改变这个输入窗口。",
                                   false,
                                   true)) {
+        wave.fftRefreshRequested = true;
         view.fftSourceMinTime = view.viewMinTime;
         view.fftSourceMaxTime = view.viewMaxTime;
         view.fftSourceWindowValid = true;

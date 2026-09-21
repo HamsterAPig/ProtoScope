@@ -540,6 +540,11 @@ struct WaveDockState {
     std::uint64_t measurementSubmittedCount{0};
     bool fftRequestActive{false};
     WaveFftCacheKey fftRequestedKey{};
+    bool fftTargetKeyValid{false};
+    bool fftTargetFollowing{false};
+    bool fftRefreshRequested{false};
+    WaveTimeAxisSource fftTargetAxis{WaveTimeAxisSource::SampleIndex};
+    WaveFftCacheKey fftTargetKey{};
     struct MeasurementKey {
         std::size_t channel{0};
         double begin{0}, end{0};
