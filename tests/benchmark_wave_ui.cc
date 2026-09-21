@@ -462,16 +462,36 @@ int main(int argc, char** argv)
             wave.view.cursors[0].value = std::sin(100.0);
             wave.view.cursors[1].value = std::sin(200.0);
             wave.view.cursors[0].pinned = wave.view.cursors[1].pinned = true;
+            // 只保留统计项，直接检查悬浮层确实产生绘制顶点。
+            wave.view.measurement.cursorA = wave.view.measurement.cursorB = false;
+            wave.view.measurement.deltaTime = wave.view.measurement.deltaValue = false;
+            wave.view.measurement.frequency = wave.view.measurement.period = false;
+            wave.view.showMeasurementOverlay = true;
+            bool hasSelectedMetrics = true;
+            std::string measurementCapture;
             const auto drawMeasurementFrame = [&] {
                 if (withGl) ImGui_ImplOpenGL3_NewFrame();
                 ImGui::NewFrame();
                 ImGui::SetNextWindowSize(ImVec2(1200, 850));
                 ImGui::Begin("measurement verification");
                 auto frame = ui::prepareWaveFrame(wave, 1200);
-                ui::drawOscilloscopePlot(wave, frame,
+                const auto result = ui::drawOscilloscopePlot(wave, frame,
                     {.drawMeasurementOverlay = false, .drawLegendOverlay = false}, nullptr);
+                auto* drawList = ImGui::GetForegroundDrawList();
+                const auto vertexCount = drawList->VtxBuffer.Size;
+                ui::drawMeasurementOverlay(wave.view, frame.snapshot, *frame.displayData, result,
+                    ImVec2(100, 100), ImVec2(1000, 700), drawList);
+                const bool visible = wave.view.showCursors && wave.view.showMeasurementOverlay && hasSelectedMetrics;
+                if ((drawList->VtxBuffer.Size > vertexCount) != visible)
+                    throw std::runtime_error("statistics-only overlay visibility mismatch");
                 ImGui::End();
                 ImGui::Render();
+                if (withGl && !measurementCapture.empty()) {
+                    glClear(GL_COLOR_BUFFER_BIT);
+                    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                    glFinish();
+                    captureFrame(captureDirectory, measurementCapture);
+                }
             };
             io.MouseDown[ImGuiMouseButton_Left] = true;
             drawMeasurementFrame();
@@ -493,6 +513,79 @@ int main(int argc, char** argv)
                     << wave.view.lastCursorReadouts[1].has_value() << " key=" << wave.measurementKeyValid << '\n';
                 throw std::runtime_error("statistics release result mismatch");
             }
+            for (const auto mode : {plot::WaveViewMode::Overlay, plot::WaveViewMode::Split}) {
+                wave.view.viewMode = mode;
+                const auto submitted = wave.measurementSubmittedCount;
+                const auto generation = wave.measurementRequestGeneration;
+                io.MouseDown[ImGuiMouseButton_Left] = true;
+                measurementCapture = mode == plot::WaveViewMode::Overlay ? "measurement-pending" : "measurement-split-pending";
+                for (int i = 0; i < 8; ++i) {
+                    wave.view.cursors[1].time = 3.0 + i * 0.1;
+                    wave.view.cursors[1].value = std::sin(wave.view.cursors[1].time * 100.0);
+                    wave.view.lastCursorReadouts[1].reset();
+                    wave.view.measurementCursorReadoutRefreshPending = true;
+                    drawMeasurementFrame();
+                    if (wave.cachedMeasurement || wave.measurementSubmittedCount != submitted) {
+                        std::cerr << "measurement drag mode=" << static_cast<int>(mode) << " frame=" << i
+                            << " cached=" << wave.cachedMeasurement.has_value() << " submitted="
+                            << wave.measurementSubmittedCount << " baseline=" << submitted
+                            << " cursor=" << wave.view.cursors[1].time << " key=" << wave.measurementKey.end << '\n';
+                        throw std::runtime_error("drag retained stale statistics or submitted work");
+                    }
+                }
+                if (wave.measurementRequestGeneration <= generation)
+                    throw std::runtime_error("measurement query generation unchanged");
+                // 在新代次等待期间注入旧任务，不能将旧区间结果填回当前窗口。
+                wave.analysisWorker->submit(plot::WaveMeasurementInput{generation, 0, {1, 2}, {999, 999}, {}});
+                for (int i = 0; i < 8; ++i) {
+                    drawMeasurementFrame();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    if (wave.cachedMeasurement)
+                        throw std::runtime_error("stale measurement accepted during drag");
+                }
+                io.MouseDown[ImGuiMouseButton_Left] = false;
+                measurementCapture.clear();
+                const auto deadline = Clock::now() + std::chrono::seconds(5);
+                do {
+                    drawMeasurementFrame();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                } while (!wave.cachedMeasurement && Clock::now() < deadline);
+                const auto expected = wave.buffer.measureWindow(0, wave.measurementKey.begin, wave.measurementKey.end);
+                if (!wave.cachedMeasurement || !wave.cachedMeasurement->valid ||
+                    std::abs(wave.cachedMeasurement->meanValue - expected.meanValue) > 1e-12 ||
+                    wave.measurementSubmittedCount != submitted + 1)
+                    throw std::runtime_error("final measurement did not recover after drag");
+                measurementCapture = mode == plot::WaveViewMode::Overlay ? "measurement-ready" : "measurement-split-ready";
+                drawMeasurementFrame();
+                wave.view.showMeasurementOverlay = false;
+                measurementCapture = "measurement-closed";
+                drawMeasurementFrame();
+                wave.view.showMeasurementOverlay = true;
+                wave.view.showCursors = false;
+                drawMeasurementFrame();
+                wave.view.showCursors = true;
+                measurementCapture.clear();
+            }
+            // bit 模式仍只显示游标与时间项目，取消全部适用项应隐藏悬浮窗。
+            wave.view.viewMode = plot::WaveViewMode::Overlay;
+            auto bitSpec = *wave.buffer.channelSpec(0);
+            bitSpec.bitDisplay.enabled = true;
+            bitSpec.bitDisplay.bitCount = 2;
+            wave.buffer.setChannelSpec(0, bitSpec);
+            wave.view.measurement.cursorA = wave.view.measurement.cursorB = true;
+            wave.view.measurement.deltaTime = wave.view.measurement.frequency = true;
+            measurementCapture = "measurement-bit";
+            drawMeasurementFrame();
+            drawMeasurementFrame();
+            wave.view.measurement.cursorA = wave.view.measurement.cursorB = false;
+            wave.view.measurement.deltaTime = wave.view.measurement.frequency = false;
+            wave.view.measurement.sampleCount = wave.view.measurement.span = false;
+            wave.view.measurement.min = wave.view.measurement.max = false;
+            wave.view.measurement.peakToPeak = wave.view.measurement.mean = false;
+            wave.view.measurement.rms = wave.view.measurement.stddev = false;
+            hasSelectedMetrics = false;
+            measurementCapture = "measurement-none";
+            drawMeasurementFrame();
             const auto oldGeneration = wave.fftRequestGeneration;
             wave.buffer.clear();
             ui::prepareWaveFrame(wave, 1200);

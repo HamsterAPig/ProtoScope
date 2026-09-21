@@ -3952,9 +3952,70 @@ void test_wave_cursor_metrics_degrade_without_complete_readouts()
     };
     require(hasChip("A·t") && hasChip("B·t"), "缺少单侧 readout 时仍应显示 A/B 时间");
     require(hasChip("Δt") && hasChip("Freq") && hasChip("T"), "缺少单侧 readout 时仍应显示时间指标");
-    require(!hasChip("Δy"), "缺少单侧 readout 时不应显示 Δy");
-    require(protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result).empty(),
-            "缺少完整 readout 时不应生成采样统计项");
+    require(hasChip("Δy") && hasChip("B·y"), "缺少单侧 readout 时应保留不可用项目");
+    const auto findValue = [](const auto& items, std::string_view label) {
+        const auto item = std::ranges::find_if(items, [label](const auto& chip) { return chip.label == label; });
+        return item == items.end() ? std::string{} : item->value;
+    };
+    require(findValue(chips, "Δy") == "N/A" && findValue(chips, "B·y") == "N/A",
+            "缺少读数应显示 N/A");
+    auto measurements = protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result);
+    require(!measurements.empty() && std::ranges::all_of(measurements, [](const auto& chip) {
+        return chip.value == "N/A";
+    }), "缺少统计结果应保留勾选项并显示 N/A");
+
+    result.measurement = protoscope::plot::MeasurementReadout{};
+    measurements = protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result);
+    require(findValue(measurements, "Mean") == "N/A", "valid=false 应显示 N/A");
+    result.measurement->valid = true;
+    result.measurement->sampleCount = 2;
+    result.measurement->channelIndex = 99;
+    measurements = protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result);
+    require(findValue(measurements, "N") == "N/A", "越界通道应安全降级");
+    result.measurement->channelIndex = 0;
+    result.measurement->meanValue = std::numeric_limits<double>::quiet_NaN();
+    result.measurement->maxValue = std::numeric_limits<double>::infinity();
+    result.measurement->rmsValue = -std::numeric_limits<double>::infinity();
+    view.measurement.cv = true;
+    result.measurement->cv = std::numeric_limits<double>::infinity();
+    measurements = protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result);
+    for (const auto* label : {"Mean", "Max", "RMS", "CV"}) {
+        require(findValue(measurements, label) == "N/A", "非有限数应逐项降级");
+    }
+    require(findValue(measurements, "N") == "2", "其他有效项目应继续显示");
+    result.measurement->meanValue = 7;
+    measurements = protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result);
+    require(findValue(measurements, "Mean") != "N/A", "有效结果应恢复数值");
+    result.measurement->sampleCount = 0;
+    measurements = protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result);
+    require(findValue(measurements, "Mean") == "N/A", "空区间不可伪装有效统计");
+    result.cursorReadouts[0]->channelIndex = 99;
+    auto degraded = protoscope::ui::buildCursorMetricChips(view, snapshot, displayData, result);
+    require(findValue(degraded, "A·y") == "N/A", "游标通道越界应安全降级");
+    result.cursorReadouts[0]->channelIndex = 0;
+    result.cursorReadouts[0]->valid = false;
+    degraded = protoscope::ui::buildCursorMetricChips(view, snapshot, displayData, result);
+    require(findValue(degraded, "A·y") == "N/A", "无效游标读数应降级");
+    result.cursorReadouts[0]->valid = true;
+    result.cursorReadouts[0]->value = std::numeric_limits<double>::infinity();
+    degraded = protoscope::ui::buildCursorMetricChips(view, snapshot, displayData, result);
+    require(findValue(degraded, "A·y") == "N/A", "非有限游标值应降级");
+    result.cursorReadouts[0]->value = 1.5;
+    view.cursors[1].time = 2.0;
+    degraded = protoscope::ui::buildCursorMetricChips(view, snapshot, displayData, result);
+    require(findValue(degraded, "Δt") == protoscope::ui::formatMetricText(0, "ms") &&
+                findValue(degraded, "Freq") == "N/A", "零间隔应保留时间差，频率显示 N/A");
+    displayData.axisSource = protoscope::plot::WaveTimeAxisSource::SampleIndex;
+    degraded = protoscope::ui::buildCursorMetricChips(view, snapshot, displayData, result);
+    require(!findValue(degraded, "ΔS").empty() && findValue(degraded, "Freq").empty() &&
+                findValue(degraded, "T").empty(), "采样点轴不应显示频率和周期");
+    displayData.axisSource = protoscope::plot::WaveTimeAxisSource::ScriptTime;
+    view.cursors[1].time = 6.0;
+    view.showCursors = false;
+    require(protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result).empty() &&
+                protoscope::ui::buildCursorMetricChips(view, snapshot, displayData, result).empty(),
+            "主动关闭游标应隐藏所有项目");
+    view.showCursors = true;
 
     result.cursorReadouts[0]->bit = protoscope::plot::BitLaneReadout{
         .parentChannelIndex = 0,
@@ -3985,6 +4046,8 @@ void test_wave_cursor_metrics_degrade_without_complete_readouts()
     require(bitHasChip("A·val") && bitHasChip("B·val"), "bit 跨 lane 应显示两侧 bit 值");
     require(bitHasChip("Δt") && bitHasChip("Freq") && bitHasChip("T"), "bit 跨 lane 应保留时间指标");
     require(!bitHasChip("Δy"), "bit 跨 lane 不应生成模拟量 Δy");
+    require(protoscope::ui::buildMeasurementMetricChips(view, snapshot, displayData, result).empty(),
+            "bit 游标不应生成模拟统计项");
 }
 
 void test_wave_cursor_interval_lock()

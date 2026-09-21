@@ -1541,20 +1541,30 @@ std::optional<plot::MeasurementReadout> requestWaveMeasurement(plot::WaveDockSta
     const plot::WaveDisplayData& display, std::size_t channel, double begin, double end,
     std::optional<std::size_t> reference, std::optional<double> manual)
 {
-    if (channel >= display.channels.size()) return std::nullopt;
-    if (end < begin) std::swap(begin, end);
     auto& view = wave.view;
+    if (channel >= display.channels.size() || !std::isfinite(begin) || !std::isfinite(end)) {
+        ++wave.measurementRequestGeneration;
+        wave.measurementKeyValid = false;
+        wave.measurementRequestActive = false;
+        wave.cachedMeasurement.reset();
+        view.measurementUpdatePending = false;
+        return std::nullopt;
+    }
+    if (end < begin) std::swap(begin, end);
     const auto ratio = [&](std::size_t i) {
         return i < display.channels.size() && display.channels[i].source ? display.channels[i].source->ratio : 1.0;
     };
     const plot::WaveDockState::MeasurementKey key{channel, begin, end, reference, manual,
         view.sampleFrequencyHz, ratio(channel), reference ? ratio(*reference) : 1.0};
+    // 区间或通道变化后立即作废缓存和在途结果，拖动期间只保留轻量读数。
+    // 同一区间的持续采集仍沿用原有刷新调度，避免每帧追加数据使后台结果永久失效。
     if (!wave.measurementKeyValid || !(wave.measurementKey == key)) {
         wave.measurementKey = key;
         wave.measurementKeyValid = true;
         ++wave.measurementRequestGeneration;
         wave.measurementRequestActive = false;
         wave.measurementDataRevision = (std::numeric_limits<std::uint64_t>::max)();
+        wave.cachedMeasurement.reset();
     }
     if (wave.analysisWorker) {
         if (auto output = wave.analysisWorker->takeMeasurement();
@@ -1563,7 +1573,7 @@ std::optional<plot::MeasurementReadout> requestWaveMeasurement(plot::WaveDockSta
             wave.measurementRequestActive = false;
         }
     }
-    view.measurementUpdatePending = wave.measurementRequestActive ||
+    view.measurementUpdatePending = wave.measurementRequestActive || !wave.cachedMeasurement.has_value() ||
         wave.measurementDataRevision != wave.buffer.analysisRevision();
     const bool interacting = view.interactionActive || ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
         ImGui::IsMouseDown(ImGuiMouseButton_Middle) || ImGui::IsMouseDown(ImGuiMouseButton_Right);
