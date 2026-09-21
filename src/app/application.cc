@@ -3522,6 +3522,7 @@ void Application::refreshSelectedElfSymbolControls()
     }
 
     const auto luaSnapshot = scriptWorker_.snapshot();
+    std::string missingLabels;
     for (const auto& control : luaSnapshot.controlStates) {
         if (control.descriptor.type != scripting::ControlType::ElfSymbolCombo) {
             continue;
@@ -3532,7 +3533,13 @@ void Application::refreshSelectedElfSymbolControls()
         }
 
         const auto refreshed = elfStaticView_.findExactLabel(current->label);
-        if (!refreshed.has_value() || (refreshed->value == current->value && refreshed->type == current->type)) {
+        // 完整名称消失时保留原值，集中报告，避免误绑定同名或近似变量。
+        if (!refreshed.has_value()) {
+            if (!missingLabels.empty()) missingLabels += ", ";
+            missingLabels += current->label;
+            continue;
+        }
+        if (refreshed->value == current->value && refreshed->type == current->type) {
             continue;
         }
 
@@ -3550,6 +3557,11 @@ void Application::refreshSelectedElfSymbolControls()
     }
     flushScriptOutputs();
     syncDockState();
+    if (!missingLabels.empty()) {
+        const auto warning = "未找到变量，旧地址未更新: " + missingLabels;
+        setStatusMessage(warning, true);
+        loggingFacade_.warn("elf", warning);
+    }
 }
 
 void Application::resetWaveHistoryForTrigger(const WaveResetViewportTrigger trigger)

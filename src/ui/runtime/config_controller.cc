@@ -59,7 +59,7 @@ bool GuiRuntime::pollElfStaticAddressFileChanges()
         elfStaticAddressError_ = loadError;
         elfStaticAddressWatch_.pendingReload = true;
         elfStaticAddressWatch_.pendingReloadSinceMs = nowMs();
-        elfStaticAddressWatch_.pendingStatusMessage = "ELF 数据文件重建后自动重载失败，继续使用旧模型";
+        elfStaticAddressWatch_.pendingStatusMessage = "ELF 数据文件自动重载失败，继续使用旧模型";
         application_.setStatusMessage(elfStaticAddressWatch_.pendingStatusMessage + ": " + loadError, true);
         return true;
     }

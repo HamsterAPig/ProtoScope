@@ -2,6 +2,7 @@
 #include "protoscope/plot/raw_capture_file.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/session/session_package.hpp"
+#include "protoscope/ui/elf_static_address_file_watch.hpp"
 
 #include "test_helpers.hpp"
 #include "test_registry.hpp"
@@ -863,7 +864,19 @@ void test_application_refreshes_selected_elf_symbol_controls_silently()
                                    });
     const auto beforeEvents = countScriptEvents(application.docks().scriptState(), "symbol");
 
+    protoscope::ui::ElfStaticAddressFileWatchState watch;
+    watch.path = elfPath;
+    watch.watching = true;
+    std::error_code watchError;
+    static_cast<void>(protoscope::ui::pollElfStaticAddressFileWatchState(watch, 1000, watchError));
     writeElfSymbolDump(elfPath, 0x20000044ULL, "uint64_t");
+    // 从普通文件变更触发稳定等待，再串联应用加载和已选控件刷新。
+    const auto timestamp = std::filesystem::last_write_time(elfPath);
+    std::filesystem::last_write_time(elfPath, timestamp + std::chrono::seconds(2));
+    require(!protoscope::ui::pollElfStaticAddressFileWatchState(watch, 1500, watchError).shouldReload,
+            "写入后应等待稳定");
+    const auto reload = protoscope::ui::pollElfStaticAddressFileWatchState(watch, 2500, watchError);
+    require(!watchError && reload.shouldReload && reload.clearComboCache, "普通覆盖应触发自动重载链路");
     require(application.loadElfStaticAddressFile(elfPath, error), "更新后的 ELF 数据应可加载");
     application.refreshSelectedElfSymbolControls();
 
@@ -881,6 +894,31 @@ void test_application_refreshes_selected_elf_symbol_controls_silently()
     refreshed = findElfSymbolControl(application, "target");
     require(refreshed != nullptr && refreshed->value == "0x20000044" && refreshed->type == "uint64_t",
             "label 消失时旧地址和类型应保持不变");
+    require(application.docks().configState().statusMessage.find("未找到变量，旧地址未更新: global.target") !=
+                std::string::npos,
+            "变量消失应报告完整变量名称及旧地址保留警告");
+
+    {
+        std::ofstream output(elfPath, std::ios::binary | std::ios::trunc);
+        output << "invalid symbol data";
+    }
+    const auto revision = application.elfStaticAddressRevision();
+    require(!application.loadElfStaticAddressFile(elfPath, error), "解析失败应返回失败");
+    require(!error.empty() && application.elfStaticAddressRevision() == revision, "加载失败应保留模型版本并说明原因");
+    refreshed = findElfSymbolControl(application, "target");
+    require(refreshed && refreshed->label == "global.target" && refreshed->value == "0x20000044" &&
+                refreshed->type == "uint64_t",
+            "加载失败应保留全部控件值");
+
+    auto config = application.captureConfig();
+    config.gui.elfSymbolCombo.autoRefreshSelectedAddress = false;
+    require(application.applyConfig(config), "应可关闭已选符号自动刷新");
+    writeElfSymbolDump(elfPath, 0x20000088ULL, "uint16_t");
+    require(application.loadElfStaticAddressFile(elfPath, error), "失败后应可重新加载");
+    application.refreshSelectedElfSymbolControls();
+    refreshed = findElfSymbolControl(application, "target");
+    require(refreshed && refreshed->value == "0x20000044" && refreshed->type == "uint64_t",
+            "关闭自动刷新应保留旧地址及类型");
 
     application.shutdown();
 }
