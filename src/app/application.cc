@@ -1843,7 +1843,26 @@ bool Application::applyResetViewportPolicy(const WaveResetViewportTrigger trigge
 bool Application::applyPlotSetup(const plot::RawCapturePlotSetupEventData& setup)
 {
     auto& wave = dockStore_.waveState();
-    if (wave.buffer.importedLabelsReadOnly()) return false;
+    if (wave.buffer.importedLabelsReadOnly()) {
+        bool changed = false;
+        // 导入数据只接受共有通道的 Bit 总开关，不应用清历史、通道身份或视窗配置。
+        const auto count = (std::min)(setup.channels.size(), wave.buffer.channelCount());
+        for (std::size_t index = 0; index < count; ++index) {
+            const bool enabled = setup.channels[index].bitDisplay.enabled;
+            auto spec = *wave.buffer.channelSpec(index);
+            if (spec.bitDisplay.enabled != enabled) {
+                spec.bitDisplay.enabled = enabled;
+                wave.buffer.setChannelSpec(index, std::move(spec));
+                changed = true;
+            }
+            if (index < wave.defaultChannelSpecs.size() &&
+                wave.defaultChannelSpecs[index].bitDisplay.enabled != enabled) {
+                wave.defaultChannelSpecs[index].bitDisplay.enabled = enabled;
+                changed = true;
+            }
+        }
+        return changed;
+    }
     const auto previousConfig = wave.buffer.viewConfig();
     const auto previousDefaultChannelSpecs = wave.defaultChannelSpecs;
     const bool configChanged = !nearlyEqual(previousConfig.timeScale, setup.view.timeScale) ||
@@ -4508,10 +4527,11 @@ bool Application::applyScriptPlotSetups(const std::vector<scripting::PlotSetup>&
     bool changed = false;
     for (const auto& setup : setups) {
         auto rawSetup = toRawPlotSetup(setup);
-        applyPlotSetup(rawSetup);
+        changed = applyPlotSetup(rawSetup) || changed;
+        // 导入保护只应用 Bit 开关，不能把被拒绝的整份 Lua 配置记成实际采集事件。
+        if (dockStore_.waveState().buffer.importedLabelsReadOnly()) continue;
         const auto timestampMs = activeConnection_.has_value() ? activeConnection_->timestampMs : nowMs();
         recordPlotSetupSnapshot(rawSetup, timestampMs);
-        changed = true;
     }
     return changed;
 }

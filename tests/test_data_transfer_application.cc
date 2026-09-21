@@ -3,6 +3,7 @@
 #include "test_helpers.hpp"
 
 #include <chrono>
+#include <algorithm>
 #include <iostream>
 #include <thread>
 #ifdef _WIN32
@@ -62,9 +63,91 @@ static void waitFor(app::Application& app, const std::function<bool()>& ready, b
     }
 }
 
+static void testImportedLuaBitToggle()
+{
+    app::Application application;
+    require(application.initialize(), "Bit test application initialization failed");
+    const auto protocol = std::filesystem::path(__FILE__).parent_path() / "fixtures/protocols/import_bit_toggle";
+    require(application.reloadProtocolDirectory(protocol.generic_string(), true), "Bit fixture did not load");
+    plot::WaveCsvData data;
+    data.source = "protected-import";
+    data.timeAxis = "frequency";
+    data.sampleFrequencyHz = 10;
+    data.channels.resize(2);
+    for (std::size_t i = 0; i < data.channels.size(); ++i) {
+        auto& channel = data.channels[i];
+        channel.label = "import-" + std::to_string(i);
+        channel.unit = "V";
+        channel.spec = {.ratio = 2, .scale = 3, .offset = 4,
+                        .color = std::array<float, 4>{0.2F, 0.4F, 0.6F, 1.0F}, .lineWidth = 2.0F,
+                        .bitDisplay = {.firstBit = 3, .bitCount = 5, .yOffset = 7, .hoverReadout = false}};
+        channel.samples = {{1, 17}, {2, 18}, {3, 19}};
+        channel.sampleIndexOffset = 42;
+    }
+    std::string error;
+    require(application.importWaveCsvData(data, error), error);
+    auto& wave = application.docks().waveState();
+    wave.view.initialized = true;
+    wave.view.defaultViewportPending = false;
+    wave.view.viewMinTime = 1.5;
+    wave.view.viewMaxTime = 2.5;
+    const auto originalConfig = wave.buffer.viewConfig();
+    const auto originalEpoch = wave.buffer.historyEpoch();
+    const auto originalEvents = wave.rawCapture.events.size();
+    for (const std::string id : {"enable", "disable", "enable", "omit"}) {
+        application.updateControlValue(id, true);
+        waitFor(application, [&] {
+            require(application.docks().luaState().lastError.empty(), application.docks().luaState().lastError);
+            const auto& rows = application.docks().scriptState().rows;
+            return std::any_of(rows.begin(), rows.end(), [&](const auto& row) {
+                return row.message.find("bit-toggle-" + id) != std::string::npos;
+            });
+        });
+        // 日志与 setup 在同一输出批次应用；清除日志保证下一次同名控件等待的是新回调。
+        application.docks().scriptState().rows.clear();
+        require(wave.buffer.channelSpec(0)->bitDisplay.enabled == (id == "enable"), "Lua Bit toggle not applied");
+        require(wave.buffer.channelSpec(1)->bitDisplay.enabled, "unmentioned imported channel changed");
+        const auto snapshot = wave.buffer.snapshot(-1e9, 1e9, false);
+        require(snapshot.channels.size() == 2, "Lua changed imported channel count");
+        for (std::size_t i = 0; i < 2; ++i) {
+            auto expected = data.channels[i].spec;
+            expected.label = data.channels[i].label;
+            expected.unit = data.channels[i].unit;
+            expected.bitDisplay.enabled = i == 1 || id == "enable";
+            const auto actual = *wave.buffer.channelSpec(i);
+            require(actual.label == expected.label && actual.unit == expected.unit &&
+                    actual.ratio == expected.ratio && actual.scale == expected.scale && actual.offset == expected.offset &&
+                    actual.color == expected.color && actual.lineWidth == expected.lineWidth &&
+                    actual.bitDisplay == expected.bitDisplay, "Lua modified protected channel metadata");
+            require(wave.defaultChannelSpecs[i].bitDisplay == expected.bitDisplay &&
+                    wave.defaultChannelSpecs[i].label == expected.label, "default Bit spec not synchronized");
+            require(snapshot.channels[i].totalSamples == 3 && snapshot.channels[i].sampleIndexOffset == 42,
+                    "Lua reset history or appended samples");
+            for (std::size_t j = 0; j < 3; ++j)
+                require(snapshot.channels[i].samples[j].time == data.channels[i].samples[j].time &&
+                        snapshot.channels[i].samples[j].value == data.channels[i].samples[j].value,
+                        "Lua changed imported sample");
+        }
+        require(wave.buffer.historyEpoch() == originalEpoch && wave.buffer.importedLabelsReadOnly(),
+                "Lua reset imported history protection");
+        require(wave.buffer.viewConfig().timeScale == originalConfig.timeScale &&
+                wave.buffer.viewConfig().historyLimit == originalConfig.historyLimit &&
+                wave.buffer.viewConfig().verticalMin == originalConfig.verticalMin,
+                "Lua changed imported view config");
+        require(wave.view.initialized && !wave.view.defaultViewportPending &&
+                wave.view.viewMinTime == 1.5 && wave.view.viewMaxTime == 2.5, "Lua reset viewport");
+        require(wave.view.sampleFrequencyHz == 10 &&
+                wave.view.timeAxisSource == plot::WaveTimeAxisSource::SampleFrequency,
+                "Lua changed imported time axis");
+        require(wave.rawCapture.events.size() == originalEvents, "unapplied Lua setup recorded in raw capture");
+    }
+    application.shutdown();
+}
+
 int main(int argc, char**)
 {
     try {
+        testImportedLuaBitToggle();
         const bool benchmark = argc > 1;
         const std::size_t sampleCount = benchmark ? 1000000 : 25000;
         const std::size_t recordCount = benchmark ? 100000 : 600;
