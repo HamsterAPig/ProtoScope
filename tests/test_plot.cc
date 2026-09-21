@@ -2603,10 +2603,12 @@ void test_wave_phosphor_stroke_style_uses_channel_style()
     styledChannel.lineWidth = 2.75F;
 
     const auto styled = protoscope::ui::wavePhosphorStrokeStyle(styledChannel, 3);
-    require(std::abs(styled.color.x - 0.12F) < 1e-6F, "余辉颜色应使用通道 R 分量");
-    require(std::abs(styled.color.y - 0.34F) < 1e-6F, "余辉颜色应使用通道 G 分量");
-    require(std::abs(styled.color.z - 0.56F) < 1e-6F, "余辉颜色应使用通道 B 分量");
-    require(std::abs(styled.color.w - 0.78F) < 1e-6F, "余辉颜色应使用通道 alpha 分量");
+    const auto corrected = protoscope::ui::channelColor(styledChannel, 3);
+    require(std::abs(styled.color.x - corrected.x) < 1e-6F &&
+            std::abs(styled.color.y - corrected.y) < 1e-6F &&
+            std::abs(styled.color.z - corrected.z) < 1e-6F &&
+            std::abs(styled.color.w - corrected.w) < 1e-6F, "余辉应使用统一的显示对比度修正");
+    require(styledChannel.color == std::array<float, 4>{.12F,.34F,.56F,.78F}, "显示修正不得改写通道原始颜色");
     require(std::abs(styled.lineWidth - 2.75F) < 1e-6F, "余辉线宽应使用通道 line_width");
 
     const protoscope::plot::ChannelView fallbackChannel;

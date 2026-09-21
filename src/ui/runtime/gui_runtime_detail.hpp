@@ -11,6 +11,7 @@
 #include "protoscope/ui/icons.hpp"
 #include "protoscope/ui/protocol_ui_state.hpp"
 #include "protoscope/ui/update_check.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 
 #if defined(_WIN32)
 #include <shellapi.h>
@@ -698,54 +699,28 @@ namespace {
 
     [[maybe_unused]] LogRowPalette paletteForRow(const dock::ReceiveRow& row)
     {
+        const auto& tokens = activeUiStyleTokens();
+        ImVec4 accent = tokens.textMuted;
         switch (dock::classifyReceiveRow(row)) {
             case dock::ReceiveRowVisualKind::Rx:
-                return {ImVec4(0.22F, 0.78F, 0.62F, 1.0F),
-                        ImVec4(0.08F, 0.34F, 0.28F, 1.0F),
-                        ImVec4(0.70F, 1.0F, 0.88F, 1.0F),
-                        ImVec4(0.05F, 0.22F, 0.17F, 0.28F)};
+                accent = tokens.success; break;
             case dock::ReceiveRowVisualKind::Tx:
-                return {ImVec4(1.0F, 0.63F, 0.20F, 1.0F),
-                        ImVec4(0.40F, 0.23F, 0.06F, 1.0F),
-                        ImVec4(1.0F, 0.88F, 0.58F, 1.0F),
-                        ImVec4(0.26F, 0.15F, 0.04F, 0.32F)};
+                accent = tokens.warning; break;
             case dock::ReceiveRowVisualKind::Error:
-                return {ImVec4(1.0F, 0.30F, 0.34F, 1.0F),
-                        ImVec4(0.42F, 0.10F, 0.13F, 1.0F),
-                        ImVec4(1.0F, 0.78F, 0.80F, 1.0F),
-                        ImVec4(0.30F, 0.05F, 0.08F, 0.32F)};
+                accent = tokens.danger; break;
             case dock::ReceiveRowVisualKind::Warn:
-                return {ImVec4(1.0F, 0.78F, 0.24F, 1.0F),
-                        ImVec4(0.43F, 0.32F, 0.08F, 1.0F),
-                        ImVec4(1.0F, 0.92F, 0.62F, 1.0F),
-                        ImVec4(0.28F, 0.21F, 0.05F, 0.28F)};
+                accent = tokens.warning; break;
             case dock::ReceiveRowVisualKind::Event:
-                return {ImVec4(0.66F, 0.48F, 1.0F, 1.0F),
-                        ImVec4(0.26F, 0.18F, 0.48F, 1.0F),
-                        ImVec4(0.86F, 0.78F, 1.0F, 1.0F),
-                        ImVec4(0.16F, 0.10F, 0.30F, 0.30F)};
             case dock::ReceiveRowVisualKind::ScriptLog:
-                return {ImVec4(0.36F, 0.66F, 1.0F, 1.0F),
-                        ImVec4(0.10F, 0.25F, 0.50F, 1.0F),
-                        ImVec4(0.75F, 0.88F, 1.0F, 1.0F),
-                        ImVec4(0.06F, 0.15F, 0.30F, 0.28F)};
-            case dock::ReceiveRowVisualKind::Debug:
-                return {ImVec4(0.56F, 0.58F, 0.70F, 1.0F),
-                        ImVec4(0.20F, 0.21F, 0.28F, 1.0F),
-                        ImVec4(0.82F, 0.84F, 0.92F, 1.0F),
-                        ImVec4(0.12F, 0.13F, 0.18F, 0.26F)};
             case dock::ReceiveRowVisualKind::Info:
-                return {ImVec4(0.30F, 0.70F, 1.0F, 1.0F),
-                        ImVec4(0.08F, 0.28F, 0.46F, 1.0F),
-                        ImVec4(0.72F, 0.88F, 1.0F, 1.0F),
-                        ImVec4(0.05F, 0.16F, 0.27F, 0.26F)};
+                accent = tokens.accent; break;
+            case dock::ReceiveRowVisualKind::Debug:
             case dock::ReceiveRowVisualKind::Other:
             default:
-                return {ImVec4(0.54F, 0.60F, 0.68F, 1.0F),
-                        ImVec4(0.20F, 0.24F, 0.30F, 1.0F),
-                        ImVec4(0.86F, 0.90F, 0.96F, 1.0F),
-                        ImVec4(0.13F, 0.15F, 0.18F, 0.24F)};
+                break;
         }
+        return {displayColor(accent, tokens.panelBackground, 1.F, 4.5F),
+                tokens.panelBackgroundAlt, tokens.textStrong, tokens.panelBackground};
     }
 
     [[maybe_unused]] void drawFilledBadge(
@@ -827,8 +802,8 @@ namespace {
                         badgeWidth);
 
         float cursorX = rowMin.x + leftPadding + badgeWidth + gap;
-        const ImU32 mutedText = ImGui::ColorConvertFloat4ToU32(ImVec4(0.68F, 0.72F, 0.78F, 1.0F));
-        const ImU32 endpointText = ImGui::ColorConvertFloat4ToU32(ImVec4(0.82F, 0.86F, 0.92F, 1.0F));
+        const ImU32 mutedText = ImGui::ColorConvertFloat4ToU32(activeUiStyleTokens().textMuted);
+        const ImU32 endpointText = ImGui::ColorConvertFloat4ToU32(activeUiStyleTokens().textStrong);
         const ImU32 contentText = ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(ImGuiCol_Text));
         if (showTimestamps) {
             drawList->AddText(ImVec2(cursorX, textY), mutedText, timestamp.c_str());

@@ -336,7 +336,8 @@ void uiTests(bool withGl, const std::filesystem::path& directory)
     for (int n = 0; n < 12; ++n) view.auxiliaryCursors.add(n * 0.075, n * 0.075);
     view.auxiliaryCursors.add(0.5, 0.5);
     const auto identities = view.auxiliaryCursors.items;
-    for (auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::DebugHighContrast}) {
+    for (auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::ProfessionalLight,
+                       config::GuiTheme::DebugHighContrast}) {
         ui::applyUiTheme(theme);
         for (auto mode : {plot::WaveViewMode::Overlay, plot::WaveViewMode::Stacked, plot::WaveViewMode::Split}) {
             view.viewMode = mode;
@@ -378,7 +379,7 @@ void uiTests(bool withGl, const std::filesystem::path& directory)
         const auto* data = ImGui::GetDrawData();
         for (const auto* list : data->CmdLists)
             for (const auto& vertex : list->VtxBuffer)
-                if (vertex.col == IM_COL32(170, 51, 119, 255)) return true;
+                if (vertex.col == ImGui::ColorConvertFloat4ToU32(ui::auxiliaryCursorColor(3))) return true;
         return false;
     };
     require(hasAuxiliaryColor(), "time plot did not draw T cursor color");

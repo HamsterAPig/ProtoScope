@@ -3,6 +3,7 @@
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/wave_math.hpp"
 #include "protoscope/plot/wave_state.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 
 #include <array>
 #include <cstddef>
@@ -21,12 +22,41 @@ namespace protoscope::ui {
 
 inline ImVec4 cursorRgb(std::uint32_t rgb)
 {
-    return ImVec4(((rgb >> 16) & 255) / 255.0F, ((rgb >> 8) & 255) / 255.0F, (rgb & 255) / 255.0F, 1.0F);
+    return displayColor(ImVec4(((rgb >> 16) & 255) / 255.0F, ((rgb >> 8) & 255) / 255.0F,
+                               (rgb & 255) / 255.0F, 1.0F), activeWaveStyleTokens().plotBackground);
 }
 
 inline ImVec4 measurementCursorColor(std::size_t index)
 {
-    return cursorRgb(plot::kMeasurementCursorRgb[index]);
+    const auto& tokens = activeWaveStyleTokens();
+    return displayColor(displayColor(tokens.cursorPalette[index % tokens.cursorPalette.size()],
+                                    tokens.plotBackground, 1.F, 4.5F),
+                        activeUiStyleTokens().panelBackgroundAlt, 1.F, 4.5F);
+}
+
+inline ImVec4 auxiliaryCursorColor(std::size_t colorIndex)
+{
+    const auto& tokens = activeWaveStyleTokens();
+    return displayColor(displayColor(tokens.cursorPalette[(colorIndex + 2) % tokens.cursorPalette.size()],
+                                    tokens.plotBackground, 1.F, 4.5F),
+                        activeUiStyleTokens().panelBackgroundAlt, 1.F, 4.5F);
+}
+
+inline plot::OverviewSelectionStyle overviewSelectionStyle(const plot::OverviewSelectionConfig& config)
+{
+    const auto& theme = activeWaveStyleTokens();
+    plot::OverviewSelectionStyle result;
+    result.automatic = config.automatic;
+    const auto color = config.fixedColor.value_or(std::array{theme.selectionColor.x, theme.selectionColor.y, theme.selectionColor.z});
+    result.fixedColor = {color[0], color[1], color[2], 1};
+    result.minAlpha = config.minAlpha.value_or(theme.selectionMinAlpha);
+    result.maxAlpha = config.maxAlpha.value_or(theme.selectionMaxAlpha);
+    // 单侧用户覆盖跨主题后冲突时，以显式覆盖为准收缩另一侧。
+    if (result.minAlpha > result.maxAlpha) {
+        if (config.minAlpha) result.maxAlpha = result.minAlpha;
+        else result.minAlpha = result.maxAlpha;
+    }
+    return result;
 }
 
 std::optional<plot::ChannelSpec> channelDisplayAffineTransform(

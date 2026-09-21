@@ -892,7 +892,7 @@ void handleHoverReadout(plot::WaveViewState& view,
         const auto& laneInfo = *readout.bit;
         ImPlot::Annotation(readout.time,
                            readout.displayValue,
-                           ImVec4(1.0F, 1.0F, 0.2F, 1.0F),
+                           activeUiStyleTokens().warning,
                            ImVec2(12.0F, -12.0F),
                            true,
                            "%s.%zu = %s",
@@ -904,7 +904,7 @@ void handleHoverReadout(plot::WaveViewState& view,
 
     ImPlot::Annotation(readout.time,
                        readout.displayValue,
-                       ImVec4(1.0F, 1.0F, 0.2F, 1.0F),
+                       activeUiStyleTokens().warning,
                        ImVec2(12.0F, -12.0F),
                        true,
                        "%s t=%s y=%.6g %s",
@@ -1115,7 +1115,7 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
         }
         claimed = claimed || clicked || held;
         const float x = ImPlot::PlotToPixels(cursor.time, limits.Y.Max).x;
-        const auto color = ImGui::ColorConvertFloat4ToU32(cursorRgb(plot::kAuxiliaryCursorRgb[cursor.colorIndex]));
+        const auto color = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(cursor.colorIndex));
         if (x >= bounds.Min.x && x <= bounds.Max.x) {
             for (float y = pos.y; y < bounds.Max.y; y += 10)
                 draw->AddLine(ImVec2(x, y), ImVec2(x, (std::min)(y + 6, bounds.Max.y)), color, dragging ? 3 : 2);
@@ -1149,8 +1149,8 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
         const float leftX = ImPlot::PlotToPixels(interval.left.time, limits.Y.Max).x;
         const float rightX = ImPlot::PlotToPixels(interval.right.time, limits.Y.Max).x;
         if (rightX < bounds.Min.x || leftX > bounds.Max.x) continue;
-        const auto leftColor = ImGui::ColorConvertFloat4ToU32(cursorRgb(plot::kAuxiliaryCursorRgb[interval.left.colorIndex]));
-        const auto rightColor = ImGui::ColorConvertFloat4ToU32(cursorRgb(plot::kAuxiliaryCursorRgb[interval.right.colorIndex]));
+        const auto leftColor = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(interval.left.colorIndex));
+        const auto rightColor = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(interval.right.colorIndex));
         std::string text = "T" + std::to_string(interval.left.id) + " - T" + std::to_string(interval.right.id) +
             ": " + formatMetricText(interval.delta,
                 displayData.axisSource == plot::WaveTimeAxisSource::SampleIndex ? "sample" : displayData.timeUnit.c_str());
@@ -1231,7 +1231,8 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
             const auto found = std::find_if(auxiliary.items.begin(), auxiliary.items.end(),
                                            [id](const auto& cursor) { return cursor.id == id; });
             if (found == auxiliary.items.end()) continue;
-            ImGui::PushStyleColor(ImGuiCol_Text, cursorRgb(plot::kAuxiliaryCursorRgb[found->colorIndex]));
+            ImGui::PushStyleColor(ImGuiCol_Text, displayColor(auxiliaryCursorColor(found->colorIndex),
+                                                          activeUiStyleTokens().panelBackground, 1.F, 4.5F));
             if (ImGui::MenuItem(("删除 T" + std::to_string(id)).c_str())) removeId = id;
             ImGui::PopStyleColor();
         }

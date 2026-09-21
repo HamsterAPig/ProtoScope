@@ -288,8 +288,8 @@ namespace {
                                      const ImVec2& selectionStart,
                                      const ImVec2& selectionCurrent)
     {
-        const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.2F, 0.55F, 1.0F, 0.16F));
-        const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.45F, 0.75F, 1.0F, 0.95F));
+        const ImU32 fillColor = ImGui::ColorConvertFloat4ToU32(withAlpha(activeUiStyleTokens().accent, .16F));
+        const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(activeUiStyleTokens().accent);
         switch (mode) {
             case FftZoomSelectionAxisMode::XOnly: {
                 const float lineY = 0.5F * (selectionStart.y + selectionCurrent.y);
@@ -686,7 +686,7 @@ namespace {
                               plot::WaveFftMagnitudeMode magnitudeMode,
                               bool phasePlot,
                               std::span<const double> magnitudeOffsets,
-                              const ImVec4& color = ImVec4(1.0F, 1.0F, 0.2F, 1.0F))
+                              const ImVec4& color = activeUiStyleTokens().warning)
     {
         const auto x = fftDisplayX(xAxis, readout.frequencyHz);
         if (!x.has_value()) {
@@ -932,7 +932,8 @@ namespace {
             if (firstDrawableBin >= channel.bins.size()) {
                 continue;
             }
-            const auto color = channelColor(snapshot.channels[channel.channelIndex], channel.channelIndex);
+            const auto color = displayColor(channelColor(snapshot.channels[channel.channelIndex], channel.channelIndex),
+                                            activeUiStyleTokens().genericPlotBackground);
             std::vector<plot::WaveFftBin> drawBins;
             const auto& trace = phasePlot ? channel.phaseTrace : channel.magnitudeTrace;
             if (!trace.empty()) {
@@ -1116,11 +1117,11 @@ namespace {
         const ImVec2 overlayMin(overlayMax.x - textSize.x - padding * 2.0F, plotPos.y + padding);
         auto* drawList = ImPlot::GetPlotDrawList();
         drawList->AddRectFilled(
-            overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.045F, 0.05F, 0.68F)), 5.0F);
+            overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().statusOverlayBackground), 5.0F);
         drawList->AddRect(
-            overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 1.0F, 1.0F, 0.18F)), 5.0F);
+            overlayMin, overlayMax, ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().statusOverlayBorder), 5.0F);
         ImVec2 textPos(overlayMin.x + padding, overlayMin.y + padding);
-        const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.92F, 0.94F, 0.98F, 0.95F));
+        const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().statusOverlayText);
         for (const auto& line : lines) {
             drawList->AddText(textPos, textColor, line.c_str());
             textPos.y += lineSpacing;
