@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <future>
 #include <optional>
 #include <string>
 #include <vector>
@@ -92,9 +93,13 @@ public:
     void postFileDialogEvent(transport::ConnectionContext context, FileDialogEvent event);
     [[nodiscard]] bool applyStreamRuntimeProfileEvent(StreamRuntimeProfileEvent event, std::string& error);
     void resetStreamReplayState();
+    [[nodiscard]] std::future<bool> resetStreamReplayStateAsync();
+    [[nodiscard]] std::future<std::pair<bool, std::string>>
+        applyStreamRuntimeProfileEventAsync(StreamRuntimeProfileEvent event);
     void postRequestAwaitingCompletion(bool active);
 
     void waitIdle();
+    [[nodiscard]] bool idle() const;
     [[nodiscard]] std::size_t pendingRxBytes() const;
     [[nodiscard]] std::vector<ScriptRuntimeOutputBatch> drainOutputs();
     [[nodiscard]] std::optional<ScriptRuntimeOutputBatch> drainOneOutput();

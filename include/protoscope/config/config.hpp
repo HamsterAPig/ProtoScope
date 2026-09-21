@@ -194,7 +194,18 @@ struct GuiInteractionFeedbackConfig {
     std::uint64_t statusDurationMs{2000};
 };
 
+struct DataExportConfig {
+    bool valid{false};
+    int content{0};
+    int format{0};
+    int waveRange{0};
+    int recordRange{0};
+    int csvShape{0};
+    std::string directory;
+};
+
 struct GuiConfig {
+    DataExportConfig lastDataExport{};
     GuiTheme theme{GuiTheme::ProfessionalDark};
     GuiWindowConfig window{};
     GuiRendererBackend rendererBackend{GuiRendererBackend::OpenGL};

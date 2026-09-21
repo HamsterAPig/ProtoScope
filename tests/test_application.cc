@@ -3648,9 +3648,12 @@ void test_application_large_rx_event_drains_by_byte_budget()
 
     require(application.pumpOnce(), "第一轮 pump 应快速转交大 RX 到脚本 worker");
 
-    for (int attempt = 0; attempt < 10 && application.docks().receiveState().frameRows.size() < frameCount; ++attempt) {
+    // 帧展示与脚本解析由不同队列推进，必须同时等待两者完成，不能用可见行数推断 worker 已空闲。
+    require(waitUntil([&] {
         application.pumpOnce();
-    }
+        return application.docks().receiveState().frameRows.size() == frameCount &&
+               application.docks().commState().pendingRxBytes == 0U;
+    }), "worker 应在超时前 drain 大 RX 事件");
     require(application.docks().receiveState().frameRows.size() == frameCount, "worker 应异步 drain 大 RX 事件");
     require(application.docks().commState().pendingRxBytes == 0U, "worker drain 完成后不应残留 pending 字节");
 }

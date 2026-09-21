@@ -263,6 +263,7 @@ struct ScriptRuntimeWorker::Impl {
     bool rxBackpressureWarningActive{false};
     bool outputQueueWarningActive{false};
     bool stopping{false};
+    bool executing{false};
     std::atomic_bool failed{false};
     std::thread thread;
     std::condition_variable rxBackpressureChanged;
@@ -556,6 +557,7 @@ struct ScriptRuntimeWorker::Impl {
                 } else {
                     command = std::move(commands.front());
                     commands.pop_front();
+                    executing = true;
                     hasCommand = true;
                 }
             }
@@ -821,6 +823,10 @@ struct ScriptRuntimeWorker::Impl {
             const auto execution = executeCommand(host, activeConnectionId, *command);
             publishOutputs(drainHostOutputs(host, execution.includeTransportStats));
             publishSnapshot(host);
+            {
+                std::lock_guard lock(mutex);
+                executing = false;
+            }
             if (execution.boolPromise) {
                 execution.boolPromise->set_value(execution.boolValue);
             }
@@ -834,6 +840,30 @@ struct ScriptRuntimeWorker::Impl {
 ScriptRuntimeWorker::ScriptRuntimeWorker() : impl_(std::make_unique<Impl>()) {}
 
 ScriptRuntimeWorker::~ScriptRuntimeWorker() = default;
+
+bool ScriptRuntimeWorker::idle() const
+{
+    std::lock_guard lock(impl_->mutex);
+    // 队列为空不代表执行完成，必须同时等待输出发布和 UI 消费。
+    return !impl_->executing && impl_->commands.empty() && impl_->outputs.empty();
+}
+
+std::future<bool> ScriptRuntimeWorker::resetStreamReplayStateAsync()
+{
+    auto promise = std::make_shared<std::promise<bool>>();
+    auto future = promise->get_future();
+    impl_->pushCommand(ResetStreamReplayStateCommand{.result = promise});
+    return future;
+}
+
+std::future<std::pair<bool, std::string>>
+ScriptRuntimeWorker::applyStreamRuntimeProfileEventAsync(StreamRuntimeProfileEvent event)
+{
+    auto promise = std::make_shared<std::promise<std::pair<bool, std::string>>>();
+    auto future = promise->get_future();
+    impl_->pushCommand(ApplyStreamRuntimeProfileCommand{.event = std::move(event), .result = promise});
+    return future;
+}
 
 void ScriptRuntimeWorker::configure(ScriptRuntimeWorkerConfig config)
 {

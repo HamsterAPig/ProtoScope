@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protoscope/app/adaptive_performance.hpp"
+#include "protoscope/app/data_transfer_task.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/dock/docks.hpp"
 #include "protoscope/logging/logging.hpp"
@@ -59,6 +60,21 @@ public:
                               const plot::CsvExportRange& range,
                               std::string& error) const;
     bool importWaveCsvData(const plot::WaveCsvData& data, std::string& error);
+    std::optional<plot::WaveCsvData> captureWaveData(const plot::CsvExportRange& range, std::string& error) const;
+    bool importRawRecords(const plot::RawCaptureFileData& data, std::string& error);
+    bool startDataImport(const std::filesystem::path& path, std::string& error);
+    void confirmDataImport(bool parseWaveform = false) { parseImportedWave_ = parseWaveform; dataTransfer_.confirm(); }
+    void cancelDataTransfer() { dataTransfer_.cancel(); }
+    DataTransferStatus dataTransferStatus() const {
+        auto status = dataTransfer_.status();
+        status.active = status.active || dataImportActive_;
+        return status;
+    }
+    void rememberDataExport(const config::DataExportConfig& value) { runtimeConfig_.gui.lastDataExport = value; }
+    bool startDataExport(const std::filesystem::path& path, int content, int format,
+                         const plot::CsvExportRange& waveRange, int recordRange,
+                         std::uint64_t recordBeginMs, std::uint64_t recordEndMs,
+                         plot::WaveCsvShape shape, std::string& error);
     bool exportWaveCsv(const std::filesystem::path& path,
                        plot::WaveCsvShape shape,
                        const plot::CsvExportRange& range,
@@ -68,6 +84,8 @@ public:
                              std::string& error) const;
     bool exportSessionPackage(const std::filesystem::path& path, std::string& error) const;
     bool importSessionPackage(const std::filesystem::path& path, std::string& error);
+    bool applySessionPackage(const session::SessionPackageData& package, bool restoreCapture, std::string& error,
+                             bool allowMissingProtocol = false);
     bool importWaveRawCapture(const plot::RawCaptureFileData& capture, std::string& error);
 
     struct RawCaptureReplayStatus {
@@ -270,7 +288,6 @@ private:
     void appendTransferRow(dock::ReceiveRow row);
     [[nodiscard]] bool validateOfflineReplayTransport(std::string& error) const;
     void appendLiveRawCapture(const transport::TransportBytesEvent& event);
-    void appendRawCaptureRecording(const transport::TransportBytesEvent& event);
     void appendRawCaptureEvent(const plot::RawCaptureEvent& event);
     bool validateRawCaptureImport(const plot::RawCaptureFileData& capture, std::string& error) const;
     void prepareRawCaptureImportReplay(const plot::RawCaptureFileData& capture);
@@ -346,6 +363,19 @@ private:
     CommPressureDebugLogState commPressureDebugLog_{};
     bool suppressRawCaptureProfileEvents_{false};
     bool suppressRawCapturePlotSetupEvents_{false};
+    std::uint64_t rawEventSequence_{0};
+    std::size_t retainedRawBytes_{0};
+    DataTransferTask dataTransfer_;
+    bool dataImportActive_{false};
+    bool importedWaveIncomplete_{false};
+    std::string importedWaveRange_{"full"};
+    bool importReplacedWave_{false};
+    bool importReplacedRecords_{false};
+    bool applyingImportContext_{false};
+    bool parseImportedWave_{false};
+    std::optional<std::future<bool>> importReset_;
+    std::optional<std::future<std::pair<bool, std::string>>> importProfile_;
+    bool pumpDataImport();
 };
 
 } // namespace protoscope::app

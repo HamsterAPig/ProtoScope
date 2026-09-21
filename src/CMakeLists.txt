@@ -199,6 +199,7 @@ target_compile_features(protoscope_startup_diagnostics PUBLIC cxx_std_20)
 add_library(protoscope_app STATIC
     app/adaptive_performance.cc
     app/application.cc
+    app/data_transfer_task.cc
 )
 target_include_directories(protoscope_app
     PUBLIC
