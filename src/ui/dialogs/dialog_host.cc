@@ -538,6 +538,8 @@ std::optional<std::filesystem::path> GuiRuntime::builtinFileDialog(
 void GuiRuntime::openUnifiedDataImport()
 {
     if (application_.dataTransferStatus().active) return;
+    if (deferBuiltinFileOperation([this] { openUnifiedDataImport(); })) return;
+    focusUnifiedDataDialog_ = true;
     unifiedDataError_.clear();
     unifiedExportMode_ = false;
     importParseWaveform_ = false;
@@ -556,6 +558,9 @@ void GuiRuntime::openUnifiedDataImport()
 void GuiRuntime::openUnifiedDataExport(int content, bool useLast)
 {
     if (application_.dataTransferStatus().active) return;
+    if (useLast && !application_.runtimeConfig().gui.lastDataExport.valid) return;
+    if (deferBuiltinFileOperation([this, content, useLast] { openUnifiedDataExport(content, useLast); })) return;
+    focusUnifiedDataDialog_ = true;
     unifiedExportMode_ = true;
     unifiedDataDialogOpen_ = true;
     unifiedDataError_.clear();
@@ -600,6 +605,7 @@ void GuiRuntime::submitUnifiedDataExport()
         unifiedDataError_ = "请先指定收发时间段";
         return;
     }
+    if (deferBuiltinFileOperation([this] { submitUnifiedDataExport(); })) return;
     const char* extension = dataExportDraft_.format == 0 ? ".csv" : dataExportDraft_.format == 1 ? ".psraw" :
                             dataExportDraft_.format == 2 ? ".log" : ".pssession";
 #if defined(_WIN32)
@@ -635,6 +641,10 @@ void GuiRuntime::drawUnifiedDataDialog()
     }
     if (!unifiedDataDialogOpen_) return;
     ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
+    if (focusUnifiedDataDialog_) {
+        ImGui::SetNextWindowFocus();
+        focusUnifiedDataDialog_ = false;
+    }
     if (!ImGui::Begin("数据导入导出", &unifiedDataDialogOpen_)) { ImGui::End(); return; }
     ImGui::TextWrapped("%s", unifiedDataPath_.c_str());
     if (status.active || (!unifiedExportMode_ && status.id != 0)) {
@@ -708,6 +718,7 @@ void GuiRuntime::drawUnifiedDataDialog()
 
 void GuiRuntime::openRawCaptureImportDialog()
 {
+    if (deferBuiltinFileOperation([this] { openRawCaptureImportDialog(); })) return;
 #if defined(_WIN32)
     const auto defaultPath = rawCaptureImportPath_.empty() ? executableDir_ / "captures" / "capture.psraw"
                                                            : std::filesystem::u8path(rawCaptureImportPath_);
@@ -737,6 +748,7 @@ void GuiRuntime::openRawCaptureImportDialog()
 
 void GuiRuntime::openCsvDataImportDialog()
 {
+    if (deferBuiltinFileOperation([this] { openCsvDataImportDialog(); })) return;
 #if defined(_WIN32)
     const auto defaultPath = csvDataImportPath_.empty() ? executableDir_ / "captures" / "data.csv"
                                                         : std::filesystem::u8path(csvDataImportPath_);
@@ -765,6 +777,7 @@ void GuiRuntime::openCsvDataImportDialog()
 
 void GuiRuntime::openRawCaptureReplayTimelineDialog()
 {
+    if (deferBuiltinFileOperation([this] { openRawCaptureReplayTimelineDialog(); })) return;
 #if defined(_WIN32)
     const auto defaultPath = rawCaptureReplayTimelinePath_.empty()
                                  ? executableDir_ / "captures" / "capture.psraw"
@@ -795,6 +808,7 @@ void GuiRuntime::openRawCaptureReplayTimelineDialog()
 
 void GuiRuntime::openRawCaptureExportDialog()
 {
+    if (deferBuiltinFileOperation([this] { openRawCaptureExportDialog(); })) return;
     const auto& lua = application_.docks().luaState();
     const std::string baseName = lua.protocolName.empty() ? std::string("wave-capture") : lua.protocolName + "-wave";
     const auto defaultPath = rawCaptureExportPath_.empty() ? executableDir_ / "captures" / (baseName + ".psraw")
@@ -824,6 +838,7 @@ void GuiRuntime::openRawCaptureExportDialog()
 
 void GuiRuntime::openWaveCsvExportDialog()
 {
+    if (deferBuiltinFileOperation([this] { openWaveCsvExportDialog(); })) return;
     const auto& lua = application_.docks().luaState();
     const std::string baseName = lua.protocolName.empty() ? std::string("wave") : lua.protocolName + "-wave";
     const auto defaultPath = waveCsvExportPath_.empty() ? executableDir_ / "captures" / (baseName + ".csv")
@@ -852,6 +867,7 @@ void GuiRuntime::openWaveCsvExportDialog()
 
 void GuiRuntime::openRawCaptureCsvExportDialog()
 {
+    if (deferBuiltinFileOperation([this] { openRawCaptureCsvExportDialog(); })) return;
     const auto& lua = application_.docks().luaState();
     const std::string baseName =
         lua.protocolName.empty() ? std::string("raw-events") : lua.protocolName + "-raw-events";
@@ -881,6 +897,8 @@ void GuiRuntime::openRawCaptureCsvExportDialog()
 
 void GuiRuntime::openRawCaptureRecordingDialog()
 {
+    if (application_.isRawCaptureRecording()) return;
+    if (deferBuiltinFileOperation([this] { openRawCaptureRecordingDialog(); })) return;
     const auto& lua = application_.docks().luaState();
     const std::string baseName =
         lua.protocolName.empty() ? std::string("raw-recording") : lua.protocolName + "-raw-recording";
@@ -911,6 +929,7 @@ void GuiRuntime::openRawCaptureRecordingDialog()
 
 void GuiRuntime::openSessionPackageImportDialog()
 {
+    if (deferBuiltinFileOperation([this] { openSessionPackageImportDialog(); })) return;
 #if defined(_WIN32)
     const auto defaultPath = sessionPackageImportPath_.empty() ? executableDir_ / "captures" / "session.pssession"
                                                                : std::filesystem::u8path(sessionPackageImportPath_);
@@ -940,6 +959,7 @@ void GuiRuntime::openSessionPackageImportDialog()
 
 void GuiRuntime::openSessionPackageExportDialog()
 {
+    if (deferBuiltinFileOperation([this] { openSessionPackageExportDialog(); })) return;
     const auto& lua = application_.docks().luaState();
     const std::string baseName = lua.protocolName.empty() ? std::string("session") : lua.protocolName + "-session";
     const auto defaultPath = sessionPackageExportPath_.empty() ? executableDir_ / "captures" / (baseName + ".pssession")
@@ -984,6 +1004,7 @@ void GuiRuntime::openScriptLogExportDialog()
 
 void GuiRuntime::openRequestTraceExportDialog()
 {
+    if (deferBuiltinFileOperation([this] { openRequestTraceExportDialog(); })) return;
     const auto defaultPath = requestTraceExportPath_.empty() ? executableDir_ / "logs" / "request-trace.csv"
                                                              : std::filesystem::u8path(requestTraceExportPath_);
 #if defined(_WIN32)
@@ -1011,6 +1032,7 @@ void GuiRuntime::openRequestTraceExportDialog()
 
 void GuiRuntime::openLogExportDialog(LogExportTarget target)
 {
+    if (deferBuiltinFileOperation([this, target] { openLogExportDialog(target); })) return;
     const char* title = "收发数据日志";
     const char* defaultFileName = "transfer-log.log";
 #if defined(_WIN32)
@@ -1067,6 +1089,7 @@ void GuiRuntime::openLogExportDialog(LogExportTarget target)
 
 void GuiRuntime::openElfStaticAddressDialog()
 {
+    if (deferBuiltinFileOperation([this] { openElfStaticAddressDialog(); })) return;
 #if defined(_WIN32)
     const auto defaultPath =
         elfStaticAddressPath_.empty() ? executableDir_ / "" : std::filesystem::u8path(elfStaticAddressPath_);
@@ -1333,6 +1356,7 @@ void GuiRuntime::exportSessionPackageToPath(const std::filesystem::path& path)
 
 void GuiRuntime::openWaveAnalysisExportDialog()
 {
+    if (deferBuiltinFileOperation([this] { openWaveAnalysisExportDialog(); })) return;
 #if defined(_WIN32)
     const auto& lua = application_.docks().luaState();
     const std::string baseName =

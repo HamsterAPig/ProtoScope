@@ -18,6 +18,8 @@ enum class WaveToolsDrawer;
 
 namespace protoscope::ui {
 
+inline constexpr float kStatusBarHeight = 44.0F;
+
 struct WaveOverlayFrame;
 
 void addItemHelp(const char* text);

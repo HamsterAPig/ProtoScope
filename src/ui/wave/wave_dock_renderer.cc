@@ -2042,7 +2042,9 @@ void WaveDockRenderer::drawOverlay(bool fullscreenActive, bool* fullscreenToggle
 {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
+    const float bottom = (std::min)(viewport->WorkPos.y + viewport->WorkSize.y,
+                                    viewport->Pos.y + viewport->Size.y - kStatusBarHeight);
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, (std::max)(1.0F, bottom - viewport->WorkPos.y)));
     ImGui::SetNextWindowViewport(viewport->ID);
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |

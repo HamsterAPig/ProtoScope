@@ -75,7 +75,6 @@ namespace protoscope::ui {
 
 namespace {
     constexpr float kAppHeaderHeight = 58.0F;
-    constexpr float kStatusBarHeight = 44.0F;
     int gLastGlfwErrorCode = 0;
     std::string gLastGlfwErrorDescription;
 
@@ -1389,9 +1388,39 @@ void GuiRuntime::drawAppShell()
     ImGui::PopStyleVar(2);
 }
 
+bool GuiRuntime::deferBuiltinFileOperation(std::function<void()> operation)
+{
+    if (executingBuiltinFileOperation_) return false;
+    if (!pendingBuiltinFileOperation_) {
+        pendingBuiltinFileOperation_ = std::move(operation);
+        builtinFileOperationPrepared_ = false;
+    }
+    return true;
+}
+
+void GuiRuntime::prepareBuiltinFileOperation()
+{
+    if (!pendingBuiltinFileOperation_ || builtinFileOperationPrepared_) return;
+    // 在 NewFrame 之前恢复 Dock 快照，避免销毁当前帧正在使用的窗口节点。
+    exitWaveFullscreen();
+    builtinFileOperationPrepared_ = true;
+}
+
+void GuiRuntime::dispatchBuiltinFileOperation()
+{
+    if (!pendingBuiltinFileOperation_ || !builtinFileOperationPrepared_) return;
+    auto operation = std::move(pendingBuiltinFileOperation_);
+    pendingBuiltinFileOperation_ = {};
+    builtinFileOperationPrepared_ = false;
+    executingBuiltinFileOperation_ = true;
+    operation();
+    executingBuiltinFileOperation_ = false;
+}
+
 void GuiRuntime::renderFrame()
 {
     refreshWindowTitle();
+    prepareBuiltinFileOperation();
 
     rendererBackend_->newFrame();
     ImGui::NewFrame();
@@ -1440,7 +1469,7 @@ void GuiRuntime::renderFrame()
             pendingProtocolWorkspaceSave_ = true;
         }
     }
-    if (waveFullscreenToggleRequested_) {
+    if (waveFullscreenToggleRequested_ && !pendingBuiltinFileOperation_) {
         if (waveFullscreenActive_) {
             exitWaveFullscreen();
         } else {
@@ -1451,6 +1480,8 @@ void GuiRuntime::renderFrame()
     ImGui::Render();
     rendererBackend_->renderDrawData(window_, ImGui::GetDrawData());
     rendererBackend_->present(window_);
+    // 普通布局已实际呈现一帧，此时才允许阻塞式原生对话框接管焦点。
+    dispatchBuiltinFileOperation();
 }
 
 void GuiRuntime::refreshWindowTitle()

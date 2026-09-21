@@ -60,6 +60,10 @@ set_tests_properties(protoscope_headless_unit_tests PROPERTIES
 )
 
 if(PROTOSCOPE_ENABLE_GUI)
+    add_executable(protoscope_file_operation_ui_tests test_file_operation_ui.cc)
+    target_link_libraries(protoscope_file_operation_ui_tests PRIVATE protoscope_ui)
+    add_test(NAME protoscope_file_operation_ui_tests COMMAND protoscope_file_operation_ui_tests)
+    set_tests_properties(protoscope_file_operation_ui_tests PROPERTIES TIMEOUT 60)
     add_executable(protoscope_wave_ui_benchmark benchmark_wave_ui.cc)
     target_link_libraries(protoscope_wave_ui_benchmark PRIVATE protoscope_ui)
     add_test(NAME protoscope_wave_ui_multiframe COMMAND protoscope_wave_ui_benchmark --verify)

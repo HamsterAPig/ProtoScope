@@ -370,8 +370,8 @@ void GuiRuntime::drawStatusBar()
     auto& config = application_.docks().configState();
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - 44.0F));
-    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, 44.0F));
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - kStatusBarHeight));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, kStatusBarHeight));
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0F, 8.0F));

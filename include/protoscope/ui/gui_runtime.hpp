@@ -17,6 +17,7 @@
 #include <deque>
 #include <filesystem>
 #include <future>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -65,6 +66,7 @@ public:
     void shutdown();
 
 private:
+    friend struct GuiRuntimeTestAccess;
     friend class RuntimeMenuComponent;
     friend class RuntimeDialogComponent;
     friend class CommDockComponent;
@@ -128,6 +130,13 @@ private:
     void drawAppHeader(float menuBarHeight);
     void drawStatusBar();
     void processWaveFullscreenInput();
+    bool deferBuiltinFileOperation(std::function<void()> operation);
+    void prepareBuiltinFileOperation();
+    void dispatchBuiltinFileOperation();
+    std::function<void()> pendingBuiltinFileOperation_;
+    bool builtinFileOperationPrepared_{false};
+    bool executingBuiltinFileOperation_{false};
+    bool focusUnifiedDataDialog_{false};
     void enterWaveFullscreen();
     void exitWaveFullscreen();
     void captureWaveFullscreenDockSnapshot();
