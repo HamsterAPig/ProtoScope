@@ -116,16 +116,19 @@ void WaveSummaryIndex::synchronize(std::span<const WaveSample> samples, std::siz
         const auto last = (newEnd - 1) / width;
         while (!level.blocks.empty() && level.firstBlock < first) {
             level.blocks.pop_front();
-            if (digital_) level.transitions.pop_front();
+            if (digital_) level.transitions->pop_front();
             ++level.firstBlock;
         }
         if (level.blocks.empty())
             level.firstBlock = first;
         level.blocks.resize(last - first + 1);
-        if (digital_) level.transitions.resize(last - first + 1);
+        if (digital_) {
+            if (!level.transitions) level.transitions.emplace();
+            level.transitions->resize(last - first + 1);
+        }
         const auto rebuild = [&](std::size_t block) {
             if (digital_) {
-                auto& counts = level.transitions[block - first];
+                auto& counts = (*level.transitions)[block - first];
                 counts.fill(0);
                 const auto addBoundary = [&](std::uint64_t changed) {
                     while (changed) {
@@ -147,7 +150,7 @@ void WaveSummaryIndex::synchronize(std::span<const WaveSample> samples, std::siz
                         if (id < child.firstBlock || id - child.firstBlock >= child.blocks.size()) continue;
                         const auto index = id - child.firstBlock;
                         for (std::size_t bit = 0; bit < 64; ++bit)
-                            counts[bit] += child.transitions[index][bit];
+                            counts[bit] += (*child.transitions)[index][bit];
                         if (previous) addBoundary(previous->lastBits ^ child.blocks[index].firstBits);
                         previous = &child.blocks[index];
                     }
@@ -223,7 +226,7 @@ std::size_t WaveSummaryIndex::memoryBytes() const
     std::size_t bytes = levels_.capacity() * sizeof(Level);
     for (const auto& level : levels_)
         bytes += level.blocks.size() * sizeof(WaveSummary) +
-                 level.transitions.size() * sizeof(std::array<std::uint64_t, 64>);
+                 (level.transitions ? level.transitions->size() * sizeof(std::array<std::uint64_t, 64>) : 0);
     return bytes;
 }
 
@@ -253,7 +256,7 @@ std::uint64_t WaveSummaryIndex::bitTransitions(std::span<const WaveSample> sampl
             const auto& level = levels_[selected];
             const auto id = begin / width - level.firstBlock;
             const auto& summary = level.blocks[id];
-            result += level.transitions[id][bit];
+            result += (*level.transitions)[id][bit];
             if (hasPrevious && ((previous ^ summary.firstBits) & mask)) ++result;
             previous = summary.lastBits;
             hasPrevious = true;
@@ -517,7 +520,8 @@ std::vector<WaveTimeEnvelope> WaveQueryView::timeEnvelope(
         if (s.finiteCount) {
             const auto a = sample(s.minimum - channel_.sampleIndexOffset).value;
             const auto z = sample(s.maximum - channel_.sampleIndexOffset).value;
-            result.push_back({t0, t1, (std::min)(a, z), (std::max)(a, z), s.count});
+            if (std::isfinite(a) && std::isfinite(z))
+                result.push_back({t0, t1, (std::min)(a, z), (std::max)(a, z), s.count});
         }
         left = right;
     }

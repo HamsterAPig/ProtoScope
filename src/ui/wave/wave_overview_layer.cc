@@ -29,7 +29,55 @@ void normalizeOverviewEnvelope(std::vector<plot::EnvelopePoint>& envelope)
     }
 }
 
-void drawOverviewWindow(plot::WaveViewState& view,
+const plot::WaveDockState::OverviewRenderEntry& cachedOverviewChannel(
+    plot::WaveDockState& wave, const plot::ChannelView& channel, std::size_t channelIndex,
+    plot::WaveTimeAxisSource axis, double minTime, double maxTime, std::size_t width, std::size_t budget)
+{
+    if (wave.overviewRenderCache.size() <= channelIndex) wave.overviewRenderCache.resize(channelIndex + 1);
+    auto& entry = wave.overviewRenderCache[channelIndex];
+    const plot::WaveDockState::OverviewRenderKey key{
+        wave.buffer.analysisRevision(), wave.buffer.historyEpoch(), channelIndex, width, budget, axis,
+        wave.view.sampleFrequencyHz, minTime, maxTime, channel.ratio, channel.scale, channel.offset,
+        wave.buffer.viewConfig().displayFormula, wave.view.overviewNormalizeChannels};
+    if (entry.valid && entry.key == key) return entry;
+    entry = {};
+    entry.key = key;
+    const plot::WaveQueryView query(channel, axis, key.frequency, key.formula);
+    const auto [begin, end] = query.range(minTime, maxTime, false);
+    if (end - begin <= budget) {
+        for (auto i = begin; i < end; ++i) entry.trace.push_back(query.sample(i));
+    } else {
+        entry.envelope = query.timeEnvelope(minTime, maxTime, (std::min)(width, budget));
+    }
+    if (key.normalize) {
+        double low = std::numeric_limits<double>::infinity(), high = -low;
+        for (const auto& point : entry.trace) {
+            if (!std::isfinite(point.value)) continue;
+            low = (std::min)(low, point.value);
+            high = (std::max)(high, point.value);
+        }
+        for (const auto& bucket : entry.envelope) {
+            low = (std::min)(low, bucket.minValue);
+            high = (std::max)(high, bucket.maxValue);
+        }
+        const auto center = low * 0.5 + high * 0.5;
+        const auto halfSpan = high * 0.5 - low * 0.5;
+        const auto normalize = [&](double value) {
+            return halfSpan > 0 ? (value * 0.5 - center * 0.5) / halfSpan * 2 : 0.0;
+        };
+        // 归一化只写缓存内的绘制副本，原始样本和显示变换保持原值。
+        for (auto& point : entry.trace) point.value = normalize(point.value);
+        for (auto& bucket : entry.envelope) {
+            bucket.minValue = normalize(bucket.minValue);
+            bucket.maxValue = normalize(bucket.maxValue);
+        }
+    }
+    entry.valid = true;
+    ++wave.overviewQueryCount;
+    return entry;
+}
+
+void drawOverviewWindow(plot::WaveDockState& wave,
                         const plot::ViewConfig& config,
                         const plot::WaveSnapshot& fullSnapshot,
                         const plot::WaveDisplayData& displayData,
@@ -37,6 +85,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
                         const std::vector<std::size_t>& channelIndices,
                         const RenderBudget& renderBudget)
 {
+    auto& view = wave.view;
     if (fullSnapshot.channels.empty()) {
         return;
     }
@@ -67,9 +116,13 @@ void drawOverviewWindow(plot::WaveViewState& view,
     if (!std::isfinite(overviewMinTime) || !std::isfinite(overviewMaxTime) || overviewMinTime >= overviewMaxTime) {
         return;
     }
-    if (!std::isfinite(overviewMinValue) || !std::isfinite(overviewMaxValue) || overviewMinValue >= overviewMaxValue) {
+    if (!std::isfinite(overviewMinValue) || !std::isfinite(overviewMaxValue)) {
         overviewMinValue = config.verticalMin;
         overviewMaxValue = config.verticalMax;
+    } else if (overviewMinValue >= overviewMaxValue) {
+        const auto padding = (std::max)(1.0, std::abs(overviewMinValue) * 0.05);
+        overviewMinValue -= padding;
+        overviewMaxValue += padding;
     }
     if (view.overviewNormalizeChannels) {
         overviewMinValue = -1.0;
@@ -90,8 +143,7 @@ void drawOverviewWindow(plot::WaveViewState& view,
         ImPlot::SetupAxisLimits(ImAxis_X1, overviewMinTime, overviewMaxTime, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, overviewMinValue, overviewMaxValue, ImPlotCond_Always);
 
-        const float contentWidth = ImGui::GetContentRegionAvail().x;
-        const std::size_t pixelWidth = static_cast<std::size_t>((std::max)(contentWidth, 64.0F));
+        const std::size_t pixelWidth = static_cast<std::size_t>((std::max)(ImPlot::GetPlotSize().x, 1.0F));
         const auto overviewMaxSamples = view.adaptiveOverviewMaxSamples.value_or(view.overviewMaxSamples);
         const std::size_t overviewPointLimit =
             overviewMaxSamples > 0
@@ -101,34 +153,30 @@ void drawOverviewWindow(plot::WaveViewState& view,
             if (channelIndex >= fullSnapshot.channels.size() || channelIndex >= displayData.channels.size()) {
                 continue;
             }
-            auto overview = buildDisplayEnvelope(
-                displayData.channels[channelIndex].samples, overviewMinTime, overviewMaxTime, overviewPointLimit);
-            if (view.overviewNormalizeChannels) {
-                normalizeOverviewEnvelope(overview);
-            }
-            if (overview.empty()) {
-                continue;
-            }
-            PlotGetterPayload payload{.points = overview.data()};
+            const auto& overview = cachedOverviewChannel(wave, fullSnapshot.channels[channelIndex], channelIndex,
+                displayData.axisSource, overviewMinTime, overviewMaxTime, pixelWidth, overviewPointLimit);
             const auto color = withAlpha(channelColor(fullSnapshot.channels[channelIndex], channelIndex), 0.65F);
-            ImPlotSpec spec{};
-            spec.LineColor = color;
-            spec.LineWeight = 1.0F;
-            spec.Flags = ImPlotItemFlags_NoLegend | ImPlotItemFlags_NoFit;
-            const auto minItemLabel = std::string(fullSnapshot.channels[channelIndex].label) +
-                                      " overview min##wave_channel_overview_min_" + std::to_string(channelIndex);
-            const auto maxItemLabel = std::string(fullSnapshot.channels[channelIndex].label) +
-                                      " overview max##wave_channel_overview_max_" + std::to_string(channelIndex);
-            ImPlot::PlotLineG(minItemLabel.c_str(),
-                              reinterpret_cast<ImPlotGetter>(&envelopeLineMinGetter),
-                              &payload,
-                              static_cast<int>(overview.size()),
-                              spec);
-            ImPlot::PlotLineG(maxItemLabel.c_str(),
-                              reinterpret_cast<ImPlotGetter>(&envelopeLineMaxGetter),
-                              &payload,
-                              static_cast<int>(overview.size()),
-                              spec);
+            if (!overview.trace.empty()) {
+                WaveSampleGetterPayload payload{.samples = overview.trace.data()};
+                ImPlotSpec spec{};
+                spec.LineColor = color;
+                spec.LineWeight = 1.0F;
+                spec.Flags = ImPlotItemFlags_NoLegend | ImPlotItemFlags_NoFit;
+                const auto label = "##wave_overview_trace_" + std::to_string(channelIndex);
+                ImPlot::PlotLineG(label.c_str(), reinterpret_cast<ImPlotGetter>(&waveSampleGetter),
+                                  &payload, static_cast<int>(overview.trace.size()), spec);
+            }
+            ImPlot::PushPlotClipRect();
+            auto* drawList = ImPlot::GetPlotDrawList();
+            for (const auto& bucket : overview.envelope) {
+                const auto a = ImPlot::PlotToPixels(bucket.beginTime, bucket.minValue);
+                const auto b = ImPlot::PlotToPixels(bucket.endTime, bucket.maxValue);
+                // 桶只表示这段时间内的幅值覆盖范围，不把桶中心或代表点连接成假周期。
+                drawList->AddRectFilled(ImVec2(a.x, (std::min)(a.y, b.y)),
+                    ImVec2((std::max)(a.x + 1.0F, b.x), (std::max)((std::min)(a.y, b.y) + 1.0F, (std::max)(a.y, b.y))),
+                    ImGui::ColorConvertFloat4ToU32(color));
+            }
+            ImPlot::PopPlotClipRect();
         }
 
         double rectMinTime = view.viewMinTime;

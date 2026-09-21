@@ -23,8 +23,10 @@ void testDigitalFidelity()
         samples[i] = {0.25 + static_cast<double>(i) * 0.01,
                       i >= 12345 && i < 765432 ? 1.0 : 0.0};
     buffer.append(0, {{}, samples});
+    const auto analogBytes = buffer.snapshot(-1e20, 1e20, false).channels[0].summaryIndex->memoryBytes();
     buffer.setChannelSpec(0, {.bitDisplay = {.enabled = true, .bitCount = 8}});
     const auto snapshot = buffer.snapshot(-1e20, 1e20, false);
+    require(snapshot.channels[0].summaryIndex->memoryBytes() > analogBytes, "digital-only count storage");
     for (const auto axis : {WaveTimeAxisSource::ScriptTime, WaveTimeAxisSource::SampleIndex,
                             WaveTimeAxisSource::SampleFrequency}) {
         const WaveQueryView query(snapshot.channels[0], axis, 200, snapshot.config.displayFormula);
@@ -48,7 +50,22 @@ void testDigitalFidelity()
         require(query.bitTransitions(query.time(12345) + 0.001, query.time(765432) - 0.001, 0) == 0,
                 "outside edge exclusion");
         require(query.bitTransitions(query.time(0), query.time(0), 0) == 0, "first sample is not an edge");
+        for (const auto [left, right] : {std::pair{0U, 20000U}, std::pair{12000U, 790000U},
+                                         std::pair{765000U, 780000U}, std::pair{12344U, 12346U}}) {
+            const auto segments = query.digitalSegments(query.time(left), query.time(right), 0, 8, 300);
+            std::vector<double> actual, expected;
+            for (const auto i : {12345U, 765432U})
+                if (i >= left && i <= right) expected.push_back(query.time(i));
+            for (const auto& segment : segments) {
+                require(!segment.activity, "sparse pan and zoom must remain exact");
+                if (segment.firstState != segment.lastState) actual.push_back(segment.endTime);
+            }
+            require(actual == expected, "pan and zoom must preserve original edge times");
+        }
     }
+    buffer.setChannelSpec(0, {});
+    require(buffer.snapshot(-1e20, 1e20, false).channels[0].summaryIndex->memoryBytes() == analogBytes,
+            "disabling digital display releases count storage");
 }
 
 void testDigitalCounts()
@@ -129,12 +146,62 @@ void testDigitalActivity()
     require(query.bitTransitions(102.4, 103.0, 0) == 6, "narrow pulse count");
 }
 
+void testTimeEnvelope()
+{
+    for (int signal = 0; signal < 4; ++signal) {
+        OscilloscopeBuffer buffer;
+        buffer.setChannelSpec(0, {.ratio = 2, .scale = -3, .offset = 5});
+        std::vector<WaveSample> samples;
+        double t = 0;
+        for (int i = 0; i < 100000; ++i) {
+            t += i % 3 == 0 ? 0.002 : 0.001;
+            if (i == 50000) t += 100;
+            const auto value = signal == 0 ? std::sin(i * 0.7) :
+                signal == 1 ? (1 + 0.8 * std::sin(i * 0.0003)) * std::sin(i * 0.9) :
+                signal == 2 ? (i == 255 ? 999.0 : i == 256 ? -777.0 : 0.0) : 4.0;
+            samples.push_back({t, value});
+        }
+        buffer.appendImported(0, samples, 71);
+        const auto snapshot = buffer.snapshot(-1e20, 1e20, false);
+        for (const auto axis : {WaveTimeAxisSource::ScriptTime, WaveTimeAxisSource::SampleIndex,
+                                WaveTimeAxisSource::SampleFrequency}) {
+            const WaveQueryView query(snapshot.channels[0], axis, 123, WaveDisplayFormula::ScaleThenOffset);
+            for (const auto buckets : {17U, 511U}) {
+                const auto first = query.time(0), last = query.time(samples.size() - 1);
+                const auto actual = query.timeEnvelope(first, last, buckets);
+                std::size_t index = 0, output = 0;
+                for (std::size_t b = 0; b < buckets; ++b) {
+                    const auto t0 = first + (last - first) * double(b) / double(buckets);
+                    const auto t1 = first + (last - first) * double(b + 1) / double(buckets);
+                    const auto begin = index;
+                    double low = 1e100, high = -1e100;
+                    // 原始数据独立逐桶扫描，不使用摘要或查询返回的极值作为预期值。
+                    while (index < samples.size() && (b + 1 == buckets || query.time(index) < t1)) {
+                        const auto value = samples[index].value * -6 + 5;
+                        low = (std::min)(low, value);
+                        high = (std::max)(high, value);
+                        ++index;
+                    }
+                    if (index == begin) continue;
+                    require(output < actual.size(), "missing nonempty overview bucket");
+                    const auto& a = actual[output++];
+                    require(a.beginTime == t0 && a.endTime == t1, "overview must retain bucket time extent");
+                    require(a.minValue == low && a.maxValue == high && a.sampleCount == index - begin,
+                            "overview extrema disagree with raw samples");
+                }
+                require(output == actual.size(), "empty overview bucket must not be zero-filled");
+            }
+        }
+    }
+}
+
 int main()
 {
     try {
         testDigitalFidelity();
         testDigitalCounts();
         testDigitalActivity();
+        testTimeEnvelope();
         OscilloscopeBuffer buffer;
         std::vector<WaveSample> samples(10000);
         for (std::size_t i = 0; i < samples.size(); ++i)

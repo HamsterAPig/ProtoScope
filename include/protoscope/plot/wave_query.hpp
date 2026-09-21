@@ -86,7 +86,7 @@ private:
     struct Level {
         std::size_t firstBlock{0};
         std::deque<WaveSummary> blocks;
-        std::deque<std::array<std::uint64_t, 64>> transitions;
+        std::optional<std::deque<std::array<std::uint64_t, 64>>> transitions;
     };
 
     std::vector<Level> levels_;

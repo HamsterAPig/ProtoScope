@@ -337,6 +337,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         wave.cachedFftFrame = {};
         wave.bitCountCache.clear();
         wave.bitRenderCache.clear();
+        wave.overviewRenderCache.clear();
     }
     const auto dataRevision = wave.buffer.dataRevision();
     if (wave.displayDataRevision != dataRevision || wave.displayDataSampleFrequencyHz != view.sampleFrequencyHz) {

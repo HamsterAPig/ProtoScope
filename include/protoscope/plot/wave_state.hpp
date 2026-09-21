@@ -499,6 +499,24 @@ struct WaveDockState {
     std::uint64_t bitCountQueryCount{0};
     double lastBitCountQueryMs{0};
 
+    struct OverviewRenderKey {
+        std::uint64_t revision{0}, epoch{0};
+        std::size_t channel{0}, width{0}, budget{0};
+        WaveTimeAxisSource axis{WaveTimeAxisSource::ScriptTime};
+        double frequency{0}, minTime{0}, maxTime{0}, ratio{1}, scale{1}, offset{0};
+        WaveDisplayFormula formula{WaveDisplayFormula::OffsetThenScale};
+        bool normalize{false};
+        bool operator==(const OverviewRenderKey&) const = default;
+    };
+    struct OverviewRenderEntry {
+        bool valid{false};
+        OverviewRenderKey key{};
+        std::vector<WaveSample> trace;
+        std::vector<WaveTimeEnvelope> envelope;
+    };
+    std::vector<OverviewRenderEntry> overviewRenderCache;
+    std::uint64_t overviewQueryCount{0};
+
     bool cachedDisplayKeyValid{false};
     DisplayDataCacheKey cachedDisplayKey{};
     bool cachedOverviewKeyValid{false};

@@ -2723,10 +2723,11 @@ void test_wave_default_viewport_uses_sample_frequency_budget()
 
     require(!wave.view.defaultViewportPending, "采样频率默认视口应用后应清除 pending 标记");
     require(!wave.view.autoFollowLatest, "采样频率默认视口后仍应保留暂停跟随");
-    require(std::abs(wave.view.visibleDuration - 0.8) < 1e-12,
+    // 60000 顶点预留一成覆盖物，主图与概览合计每点 68 顶点，当前预算为 794 点。
+    require(std::abs(wave.view.visibleDuration - 0.794) < 1e-12,
             "默认 X duration 应使用 pointsPerChannel / sample_frequency_hz");
     require(std::abs(wave.view.viewMaxTime - 1.999) < 1e-12, "默认 X 右边界应对齐最新全局样本时间");
-    require(std::abs(wave.view.viewMinTime - 1.199) < 1e-12, "默认 X 左边界应按预算窗口回推");
+    require(std::abs(wave.view.viewMinTime - 1.205) < 1e-12, "默认 X 左边界应按预算窗口回推");
     require(std::abs(wave.view.viewMinValue + 2.0) < 1e-12, "采样频率默认视口不应覆盖 Y 下限");
     require(std::abs(wave.view.viewMaxValue - 2.0) < 1e-12, "采样频率默认视口不应覆盖 Y 上限");
     require(frame.displayData != nullptr, "采样频率默认视口后本帧显示数据不能为空");
@@ -2800,8 +2801,8 @@ void test_wave_default_viewport_duration_tracks_render_budget()
     vertexLimited.view.maxRenderPointsPerChannel = 1000;
     vertexLimited.view.maxRenderVertices = 3200;
     static_cast<void>(protoscope::ui::prepareWaveFrame(vertexLimited, 1000.0F));
-    // 三层宽线及包络连接按每点 64 顶点预留：3200 / 2 / 64 / 100 = 0.25 秒。
-    require(std::abs(vertexLimited.view.visibleDuration - 0.25) < 1e-12,
+    // 保留一成覆盖物预算，主图每点 64 顶点、概览每桶四顶点：2880 / 2 / 68 = 21 点。
+    require(std::abs(vertexLimited.view.visibleDuration - 0.21) < 1e-12,
             "max_render_vertices 和通道数应限制默认 X duration");
 }
 

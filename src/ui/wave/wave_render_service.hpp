@@ -507,7 +507,10 @@ void drawCursorAnnotation(std::size_t cursorIndex,
 void drawCursorIntersectionReadouts(const std::vector<CursorIntersectionReadout>& readouts,
                                     const plot::WaveSnapshot& snapshot);
 
-void drawOverviewWindow(plot::WaveViewState& view,
+const plot::WaveDockState::OverviewRenderEntry& cachedOverviewChannel(
+    plot::WaveDockState& wave, const plot::ChannelView& channel, std::size_t channelIndex,
+    plot::WaveTimeAxisSource axis, double minTime, double maxTime, std::size_t width, std::size_t budget);
+void drawOverviewWindow(plot::WaveDockState& wave,
                         const plot::ViewConfig& config,
                         const plot::WaveSnapshot& fullSnapshot,
                         const plot::WaveDisplayData& displayData,

@@ -48,8 +48,10 @@ RenderBudget makeRenderBudget(const plot::WaveViewState& view,
         view.adaptiveMaxRenderPointsPerChannel.value_or(view.maxRenderPointsPerChannel), 1200);
     const std::size_t configuredVertexLimit =
         clampRenderConfig(view.adaptiveMaxRenderVertices.value_or(view.maxRenderVertices), 60000);
+    // 主图与概览共用顶点上限：概览桶预留四顶点，另留一成给坐标轴、标签和交互覆盖物。
+    const auto contentVertices = configuredVertexLimit - configuredVertexLimit / 10;
     const std::size_t pointsByVertexBudget =
-        (std::max)(std::size_t{1}, configuredVertexLimit / (safeChannelCount * estimatedVerticesPerPoint));
+        (std::max)(std::size_t{1}, contentVertices / (safeChannelCount * (estimatedVerticesPerPoint + 4)));
     // 核心流程：每通道最终点数同时受像素宽度、用户配置和 16-bit 顶点预算约束，避免单帧 DrawList 溢出。
     const std::size_t pointsPerChannel =
         (std::max)(std::size_t{1}, (std::min)({pixelWidth, configuredPointLimit, pointsByVertexBudget}));

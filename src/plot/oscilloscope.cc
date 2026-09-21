@@ -351,9 +351,11 @@ void OscilloscopeBuffer::setChannelSpec(std::size_t channelIndex, ChannelSpec sp
     if (channelSpec.label != spec.label || channelSpec.unit != spec.unit || channelSpec.ratio != spec.ratio ||
         channelSpec.scale != spec.scale || channelSpec.offset != spec.offset || channelSpec.color != spec.color ||
         channelSpec.lineWidth != spec.lineWidth || channelSpec.bitDisplay != spec.bitDisplay) {
+        const bool digitalChanged = channelSpec.bitDisplay.enabled != spec.bitDisplay.enabled;
         channelSpec = std::move(spec);
         auto& channel = channels_[channelIndex];
-        channel.summary.synchronize(channel.samples, channel.sampleIndexOffset, channel.spec.bitDisplay.enabled);
+        if (digitalChanged)
+            channel.summary.synchronize(channel.samples, channel.sampleIndexOffset, channel.spec.bitDisplay.enabled);
         ++dataRevision_;
     }
 }

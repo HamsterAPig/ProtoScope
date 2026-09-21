@@ -179,9 +179,12 @@ void drawWaveStatusOverlay(const plot::WaveViewState& view,
     }
 
     ImVec2 origin((std::max)(plotPos.x + margin, plotPos.x + plotSize.x - margin - layout.size.x), plotPos.y + margin);
-    if (view.interactionActive && view.statusOverlayPositionValid) {
+    const bool hasBitLabels = displayData != nullptr && std::ranges::any_of(displayData->channels, [](const auto& channel) {
+        return channel.source && bitDisplayEnabled(channel.source->bitDisplay);
+    });
+    if (!hasBitLabels && view.interactionActive && view.statusOverlayPositionValid) {
         origin = ImVec2(plotPos.x + view.statusOverlayOffset[0], plotPos.y + view.statusOverlayOffset[1]);
-    } else if (displayData != nullptr && channelIndices != nullptr && !channelIndices->empty()) {
+    } else if (!hasBitLabels && displayData != nullptr && channelIndices != nullptr && !channelIndices->empty()) {
         origin = chooseStatusOverlayPosition(*displayData, *channelIndices, plotPos, plotSize, layout.size, margin);
         view.statusOverlayOffset = {origin.x - plotPos.x, origin.y - plotPos.y};
         view.statusOverlayPositionValid = true;
@@ -431,6 +434,7 @@ namespace {
             return;
         }
         const ImVec2 plotPos = ImPlot::GetPlotPos();
+        ImPlot::PushPlotClipRect();
         std::vector<float> labeledCenters;
         for (const auto& layoutLane : bitLayout.lanes) {
             if (std::ranges::find(labeledCenters, layoutLane.centerPixelY) != labeledCenters.end()) {
@@ -450,11 +454,22 @@ namespace {
             }
             // 同行多通道合并排版，按轨道高度和可用宽度收缩字号，不注册鼠标命中区域。
             const auto textSize = ImGui::CalcTextSize(label.c_str());
-            const auto scale = (std::min)({1.0F, (std::max)(1.0F, layoutLane.lanePixelPitch - 2.0F) / textSize.y,
+            float labelPitch = layoutLane.lanePixelPitch;
+            for (const auto& other : bitLayout.lanes) {
+                const auto distance = std::abs(other.centerPixelY - layoutLane.centerPixelY);
+                if (distance > 0.5F) labelPitch = (std::min)(labelPitch, distance);
+            }
+            const auto scale = (std::min)({1.0F, (std::max)(1.0F, labelPitch - 2.0F) / textSize.y,
                 (std::max)(1.0F, ImPlot::GetPlotSize().x - 12.0F) / (std::max)(1.0F, textSize.x)});
+            const ImVec2 labelPos(plotPos.x + 6.0F, lanePixel.y - textSize.y * scale * 0.5F);
+            // 文字优先可读，背景只遮住字形区域，不参与命中测试或改变游标交互。
+            drawList->AddRectFilled(ImVec2(labelPos.x - 2, labelPos.y),
+                ImVec2(labelPos.x + textSize.x * scale + 2, labelPos.y + textSize.y * scale),
+                ImGui::ColorConvertFloat4ToU32(withAlpha(activeWaveStyleTokens().plotBackground, 0.9F)));
             drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize() * scale,
-                ImVec2(plotPos.x + 6.0F, lanePixel.y - textSize.y * scale * 0.5F), textColor, label.c_str());
+                labelPos, textColor, label.c_str());
         }
+        ImPlot::PopPlotClipRect();
     }
 
     void drawBitRenderLanes(const plot::WaveDockState::BitRenderCacheEntry& entry, const ImVec4& color, float lineWidth,
@@ -465,6 +480,7 @@ namespace {
             return;
         }
         const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(withAlpha(color, 0.9F));
+        ImPlot::PushPlotClipRect();
         for (std::size_t laneIndex = 0; laneIndex < entry.lanes.size(); ++laneIndex) {
             const auto& lane = entry.lanes[laneIndex];
             const auto location = std::ranges::find_if(layout.lanes, [&](const auto& item) {
@@ -485,6 +501,7 @@ namespace {
                 }
             }
         }
+        ImPlot::PopPlotClipRect();
     }
 
     struct StackedDisplayData {
@@ -1759,9 +1776,11 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
         auto* drawList = ImPlot::GetPlotDrawList();
         const ImVec2 plotPos = ImPlot::GetPlotPos();
         const ImVec2 plotSize = ImPlot::GetPlotSize();
-        drawList->AddText(ImVec2(plotPos.x + 8.0F, plotPos.y + 6.0F),
-                          ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().splitChannelLabel),
-                          ("CH" + std::to_string(channelIndex + 1U) + "  " + channel.label).c_str());
+        if (!bitChannel) {
+            drawList->AddText(ImVec2(plotPos.x + 8.0F, plotPos.y + 6.0F),
+                              ImGui::ColorConvertFloat4ToU32(activeWaveStyleTokens().splitChannelLabel),
+                              ("CH" + std::to_string(channelIndex + 1U) + "  " + channel.label).c_str());
+        }
 
         const ImPlotPoint mousePos = ImPlot::GetPlotMousePos();
         const double visibleTimeWidth = std::abs(limits.X.Max - limits.X.Min);

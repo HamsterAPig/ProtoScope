@@ -1,12 +1,16 @@
 #include "../src/ui/wave/wave_render_service.hpp"
 
 #include "protoscope/config/config.hpp"
+#include "protoscope/ui/ui_theme.hpp"
 #include <imgui_impl_opengl3.h>
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
@@ -15,11 +19,38 @@
 using namespace protoscope;
 using Clock = std::chrono::steady_clock;
 
+void captureFrame(const std::filesystem::path& directory, const std::string& name)
+{
+    if (directory.empty()) return;
+    std::filesystem::create_directories(directory);
+    std::vector<unsigned char> pixels(1280 * 900 * 3);
+    glReadPixels(0, 0, 1280, 900, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+    for (std::size_t i = 0; i < pixels.size(); i += 3) std::swap(pixels[i], pixels[i + 2]);
+    const auto extrema = std::minmax_element(pixels.begin(), pixels.end());
+    if (*extrema.first == *extrema.second || glGetError() != GL_NO_ERROR)
+        throw std::runtime_error("blank verification framebuffer");
+    std::array<unsigned char, 54> header{};
+    header[0] = 'B'; header[1] = 'M';
+    const auto put = [&](std::size_t offset, std::uint32_t value) {
+        for (unsigned i = 0; i < 4; ++i) header[offset + i] = static_cast<unsigned char>(value >> (8 * i));
+    };
+    put(2, static_cast<std::uint32_t>(54 + pixels.size()));
+    put(10, 54); put(14, 40); put(18, 1280); put(22, 900);
+    header[26] = 1; header[28] = 24;
+    std::ofstream output(directory / (name + ".bmp"), std::ios::binary);
+    output.write(reinterpret_cast<const char*>(header.data()), header.size());
+    output.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+    if (!output) throw std::runtime_error("framebuffer capture write failed");
+}
+
 int main(int argc, char** argv)
 {
     const bool verify = argc > 1 && std::string_view(argv[1]) == "--verify";
     bool withGl = false;
     for (int i = 1; i < argc; ++i) withGl = withGl || std::string_view(argv[i]) == "--gl";
+    std::filesystem::path captureDirectory;
+    for (int i = 1; i + 1 < argc; ++i)
+        if (std::string_view(argv[i]) == "--capture") captureDirectory = argv[i + 1];
     GLFWwindow* window = nullptr;
     if (withGl) {
         if (!glfwInit()) return 2;
@@ -33,12 +64,18 @@ int main(int argc, char** argv)
     }
     ImGui::CreateContext();
     ImPlot::CreateContext();
+    ui::applyUiTheme(config::GuiTheme::ProfessionalDark);
     if (withGl && !ImGui_ImplOpenGL3_Init("#version 330")) return 2;
     auto& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(1280, 900);
     io.DeltaTime = 1.0F / 60.0F;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+    if (const auto* windows = std::getenv("SystemRoot")) {
+        const auto font = std::filesystem::path(windows) / "Fonts" / "msyh.ttc";
+        if (std::filesystem::exists(font))
+            io.Fonts->AddFontFromFileTTF(font.string().c_str(), 16.0F, nullptr, io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+    }
     unsigned char* pixels;
     int width, height;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
@@ -60,10 +97,11 @@ int main(int argc, char** argv)
                     samples.push_back({double(i), channel == 0 ? double(i % 256) : double((i / 10) % 256)});
                 wave.buffer.append(channel, {{}, samples});
             }
+            ImVec2 verificationSize(1200, 850);
             const auto draw = [&] {
                 if (withGl) ImGui_ImplOpenGL3_NewFrame();
                 ImGui::NewFrame();
-                ImGui::SetNextWindowSize(ImVec2(1200, 850));
+                ImGui::SetNextWindowSize(verificationSize);
                 ImGui::Begin("digital verification");
                 auto frame = ui::prepareWaveFrame(wave, 1200);
                 ui::drawOscilloscopePlot(wave, frame,
@@ -101,6 +139,59 @@ int main(int argc, char** argv)
             if (wave.bitCountQueryCount != initialQueries + 16) throw std::runtime_error("release count must refresh once");
             draw();
             if (wave.bitCountQueryCount != initialQueries + 16) throw std::runtime_error("release count queried twice");
+            if (withGl) {
+                glClear(GL_COLOR_BUFFER_BIT);
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                glFinish();
+                captureFrame(captureDirectory, "digital-dark");
+            }
+            ui::applyUiTheme(config::GuiTheme::DebugHighContrast);
+            draw();
+            if (withGl) {
+                glClear(GL_COLOR_BUFFER_BIT);
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                glFinish();
+                captureFrame(captureDirectory, "digital-contrast");
+            }
+            ui::applyUiTheme(config::GuiTheme::ProfessionalDark);
+            verificationSize = ImVec2(480, 420);
+            for (int i = 0; i < 2; ++i) {
+                wave.view.forceNextMainPlotLimits = true;
+                draw();
+            }
+            if (wave.bitCountQueryCount != initialQueries + 16)
+                throw std::runtime_error("width-only change repeated total count");
+            if (withGl) {
+                glClear(GL_COLOR_BUFFER_BIT);
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                glFinish();
+                captureFrame(captureDirectory, "digital-narrow");
+            }
+            verificationSize = ImVec2(1200, 850);
+            wave.view.viewMode = plot::WaveViewMode::Split;
+            wave.view.viewMinTime = 200;
+            wave.view.viewMaxTime = 800;
+            wave.view.forceNextMainPlotLimits = true;
+            draw();
+            wave.view.forceNextMainPlotLimits = true;
+            draw();
+            if (wave.bitCountQueryCount != initialQueries + 32) {
+                if (withGl) {
+                    glClear(GL_COLOR_BUFFER_BIT);
+                    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                    glFinish();
+                    captureFrame(captureDirectory, "split-diagnostic");
+                }
+                std::cerr << "split counts=" << wave.bitCountQueryCount << " expected=" << initialQueries + 32
+                    << " interacting=" << wave.view.interactionActive << " range=" << wave.view.viewMinTime
+                    << ',' << wave.view.viewMaxTime << " first=" << wave.bitCountCache[0].key.minTime
+                    << ',' << wave.bitCountCache[0].key.maxTime << " second=" << wave.bitCountCache[1].key.minTime
+                    << ',' << wave.bitCountCache[1].key.maxTime << '\n';
+                for (const auto& c : wave.cachedDisplayData.channels)
+                    std::cerr << "display samples=" << c.samples.size() << " raw="
+                        << (c.source ? c.source->totalSamples : 0) << '\n';
+                throw std::runtime_error("visible split digital counts did not update");
+            }
             for (std::size_t c = 0; c < 2; ++c) {
                 const auto& cached = wave.bitCountCache[c];
                 const auto snap = wave.buffer.snapshot(-1e20, 1e20, false);
@@ -117,6 +208,80 @@ int main(int argc, char** argv)
             wave.buffer.clear();
             ui::prepareWaveFrame(wave, 1200);
             if (!wave.bitCountCache.empty()) throw std::runtime_error("clear retained digital counts");
+        }
+        {
+            plot::WaveDockState wave;
+            std::vector<plot::WaveSample> samples;
+            for (int i = 0; i < 20000; ++i)
+                samples.push_back({i * 0.1, (0.2 + 0.8 * i / 20000.0) * std::sin(i * 0.7)});
+            wave.buffer.append(0, {{}, samples});
+            auto snap = wave.buffer.snapshot(-1e20, 1e20, false);
+            const auto update = [&](std::size_t width = 500) -> const auto& {
+                return ui::cachedOverviewChannel(wave, snap.channels[0], 0,
+                    plot::WaveTimeAxisSource::ScriptTime, 0, 1999.9, width, width);
+            };
+            if (update().envelope.empty()) throw std::runtime_error("overview must query raw envelopes");
+            const auto queries = wave.overviewQueryCount;
+            wave.view.viewMinTime = 100;
+            wave.view.viewMaxTime = 200;
+            update();
+            if (wave.overviewQueryCount != queries) throw std::runtime_error("main pan rebuilt overview");
+            wave.view.overviewNormalizeChannels = true;
+            const auto& normalized = update();
+            if (wave.overviewQueryCount != queries + 1) throw std::runtime_error("normalization cache key");
+            for (const auto& bucket : normalized.envelope)
+                if (bucket.minValue < -1.000001 || bucket.maxValue > 1.000001)
+                    throw std::runtime_error("normalized overview outside range");
+            for (std::size_t i = 0; i < samples.size(); ++i)
+                if (snap.channels[0].samples[i].value != samples[i].value)
+                    throw std::runtime_error("normalization changed source");
+            update(300);
+            if (wave.overviewQueryCount != queries + 2) throw std::runtime_error("overview width cache key");
+            wave.buffer.setChannelSpec(0, {.scale = -2, .offset = 3});
+            snap = wave.buffer.snapshot(-1e20, 1e20, false);
+            update(300);
+            if (wave.overviewQueryCount != queries + 3) throw std::runtime_error("overview transform cache key");
+            wave.buffer.append(0, {{}, {{2000, 12}}});
+            snap = wave.buffer.snapshot(-1e20, 1e20, false);
+            update(300);
+            if (wave.overviewQueryCount != queries + 4) throw std::runtime_error("overview append cache key");
+            const auto& rawOverview = ui::cachedOverviewChannel(wave, snap.channels[0], 0,
+                plot::WaveTimeAxisSource::ScriptTime, 0, 2000, 30000, 30000);
+            if (rawOverview.trace.size() != 20001 || !rawOverview.envelope.empty())
+                throw std::runtime_error("low-density overview must retain real polyline");
+            wave.buffer.clear();
+            wave.buffer.append(0, {{}, samples});
+            wave.view.initialized = true;
+            wave.view.defaultViewportPending = false;
+            wave.view.autoFollowLatest = false;
+            wave.view.viewMinTime = 300;
+            wave.view.viewMaxTime = 900;
+            wave.view.visibleDuration = 600;
+            const auto drawOverview = [&](const std::string& name) {
+                if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos(ImVec2(0, 0));
+                ImGui::SetNextWindowSize(ImVec2(1100, 300));
+                ImGui::Begin("overview verification");
+                auto frame = ui::prepareWaveFrame(wave, 1100);
+                ui::drawOverviewWindow(wave, frame.fullSnapshot->config, *frame.fullSnapshot,
+                    *frame.overviewDisplayData, plot::computeDisplayBounds(*frame.overviewDisplayData, 1e-6),
+                    {0}, frame.renderBudget);
+                ImGui::End();
+                ImGui::Render();
+                if (withGl) {
+                    glClear(GL_COLOR_BUFFER_BIT);
+                    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                    glFinish();
+                    captureFrame(captureDirectory, name);
+                }
+            };
+            drawOverview("overview-am");
+            wave.buffer.clear();
+            for (auto& sample : samples) sample.value = 4;
+            wave.buffer.append(0, {{}, samples});
+            wave.view.overviewNormalizeChannels = false;
+            drawOverview("overview-constant");
         }
         {
             plot::WaveDockState wave;
@@ -236,6 +401,8 @@ int main(int argc, char** argv)
                 cursor.value = std::sin(cursor.time * 0.03);
             }
             wave.view.interactionAnimationEnabled = false;
+            wave.view.overviewNormalizeChannels = true;
+            const auto constructionStart = Clock::now();
             for (std::size_t c = 0; c < 5; ++c) {
                 plot::WaveAppendRequest input;
                 input.samples.reserve(count + 30000);
@@ -246,9 +413,23 @@ int main(int argc, char** argv)
                                                  : std::sin(static_cast<double>(i) * 0.03 + static_cast<double>(c))});
                 wave.buffer.append(c, std::move(input));
             }
+            const auto indexStart = Clock::now();
             wave.buffer.setChannelSpec(4, {.label = "digital", .bitDisplay = {.enabled = true, .bitCount = 32}});
-            for (int mode = 0; mode < 7; ++mode) {
-                wave.view.glowEnabled = mode != 0;
+            const auto indexEnd = Clock::now();
+            const auto appendStart = Clock::now();
+            wave.buffer.append(4, {{}, {{double(count + 30000), 17}}});
+            const auto appendEnd = Clock::now();
+            const auto memorySnapshot = wave.buffer.snapshot(-1e20, 1e20, false);
+            std::size_t bytes = 0;
+            for (const auto& channel : memorySnapshot.channels) bytes += channel.summaryIndex->memoryBytes();
+            std::cout << "index samples=" << count << " initial_all_ms="
+                << std::chrono::duration<double, std::milli>(indexEnd - constructionStart).count()
+                << " enable_digital_ms=" << std::chrono::duration<double, std::milli>(indexEnd - indexStart).count()
+                << " append_one_ms=" << std::chrono::duration<double, std::milli>(appendEnd - appendStart).count()
+                << " summary_bytes=" << bytes << '\n';
+            for (int mode = 0; mode < 8; ++mode) {
+                wave.view.maxRenderVertices = mode == 7 ? 30000 : 60000;
+                wave.view.glowEnabled = mode != 0 && mode != 7;
                 wave.view.viewMode = mode == 2   ? plot::WaveViewMode::Stacked
                                      : mode == 3 ? plot::WaveViewMode::Split
                                                  : plot::WaveViewMode::Overlay;
@@ -281,7 +462,8 @@ int main(int argc, char** argv)
                 for (int frameNumber = -7; frameNumber < (verify ? 6 : 300); ++frameNumber) {
                     const bool warmBackend = withGl && (mode == 4 || mode == 5) && frameNumber < -5;
                     wave.view.autoFollowLatest = warmBackend;
-                    io.MouseDown[ImGuiMouseButton_Left] = !warmBackend;
+                    const bool stationary = frameNumber == -7;
+                    io.MouseDown[ImGuiMouseButton_Left] = !warmBackend && !stationary;
                     if (withGl) ImGui_ImplOpenGL3_NewFrame();
                     ImGui::NewFrame();
                     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -293,7 +475,15 @@ int main(int argc, char** argv)
                     const auto start = Clock::now();
                     const auto fftSubmissions = wave.fftSubmittedCount;
                     const auto measurementSubmissions = wave.measurementSubmittedCount;
+                    const auto countQueries = wave.bitCountQueryCount;
                     auto frame = ui::prepareWaveFrame(wave, 1200);
+                    if (mode != 6) {
+                        ImGui::BeginChild("overview", ImVec2(0, 110));
+                        ui::drawOverviewWindow(wave, frame.fullSnapshot->config, *frame.fullSnapshot,
+                            *frame.overviewDisplayData, plot::computeDisplayBounds(*frame.overviewDisplayData, 1e-6),
+                            {0, 1, 2, 3, 4}, frame.renderBudget);
+                        ImGui::EndChild();
+                    }
                     const auto rendered =
                         mode == 6
                             ? ui::drawWaveFftPlot(wave, frame, true, false)
@@ -315,8 +505,8 @@ int main(int argc, char** argv)
                         throw std::runtime_error("empty ImPlot frame");
                     if (ImGui::GetDrawData()->TotalVtxCount > static_cast<int>(wave.view.maxRenderVertices))
                         throw std::runtime_error("actual vertex budget exceeded");
-                    if (!warmBackend && (wave.fftSubmittedCount != fftSubmissions ||
-                        wave.measurementSubmittedCount != measurementSubmissions))
+                    if (!warmBackend && !stationary && (wave.fftSubmittedCount != fftSubmissions ||
+                        wave.measurementSubmittedCount != measurementSubmissions || wave.bitCountQueryCount != countQueries))
                         throw std::runtime_error("analysis submitted during drag");
                     for (const auto& c : frame.displayData->channels)
                         if (c.samples.size() > frame.renderBudget.pointsPerChannel)
@@ -326,6 +516,37 @@ int main(int argc, char** argv)
                     if (warmBackend) backend = wave.view.lastRenderStats.phosphorBackendStatus;
                     vertices = (std::max)(vertices, ImGui::GetDrawData()->TotalVtxCount);
                 }
+                io.MouseDown[ImGuiMouseButton_Left] = false;
+                if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                ImGui::NewFrame();
+                ImGui::Begin("wave pan benchmark");
+                const auto releaseStart = Clock::now();
+                const auto releaseQueries = wave.bitCountQueryCount;
+                auto released = ui::prepareWaveFrame(wave, 1200);
+                if (mode != 6) {
+                    ImGui::BeginChild("overview", ImVec2(0, 110));
+                    ui::drawOverviewWindow(wave, released.fullSnapshot->config, *released.fullSnapshot,
+                        *released.overviewDisplayData, plot::computeDisplayBounds(*released.overviewDisplayData, 1e-6),
+                        {0, 1, 2, 3, 4}, released.renderBudget);
+                    ImGui::EndChild();
+                    ui::drawOscilloscopePlot(wave, released,
+                        {.drawMeasurementOverlay = false, .drawLegendOverlay = false}, nullptr);
+                } else ui::drawWaveFftPlot(wave, released, true, false);
+                ImGui::End();
+                ImGui::Render();
+                if (withGl) {
+                    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                    glFinish();
+                    if (mode == 0) captureFrame(captureDirectory, "overview-" + std::to_string(count));
+                    glfwSwapBuffers(window);
+                }
+                if (ImGui::GetDrawData()->TotalVtxCount > static_cast<int>(wave.view.maxRenderVertices))
+                    throw std::runtime_error("release frame vertex budget exceeded");
+                // 分屏默认四行，第五个数字通道在滚动区外；其可见路径由双通道多帧测试覆盖。
+                if (mode != 6 && mode != 3 && wave.bitCountQueryCount != releaseQueries + 32)
+                    throw std::runtime_error("benchmark release did not count final viewport");
+                std::cout << "release samples=" << count << " mode=" << mode << " count_ms=" << wave.lastBitCountQueryMs
+                    << " frame_ms=" << std::chrono::duration<double, std::milli>(Clock::now() - releaseStart).count() << '\n';
                 std::ranges::sort(times);
                 std::cout << "ui_pan samples=" << count << " mode=" << mode
                           << " p95_ms=" << times[times.size() * 95 / 100] << " vertices=" << vertices

@@ -1582,7 +1582,7 @@ public:
                     ? plot::computeDisplayBoundsForChannels(
                           *frame.overviewDisplayData, derivedChannelIndices, minVisibleTimeSpan)
                     : plot::computeDisplayBounds(*frame.overviewDisplayData, minVisibleTimeSpan);
-            drawOverviewWindow(view,
+            drawOverviewWindow(wave,
                                config,
                                *frame.fullSnapshot,
                                *frame.overviewDisplayData,
