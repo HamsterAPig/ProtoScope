@@ -1309,8 +1309,10 @@ void GuiRuntime::drawAppHeader(const float menuBarHeight)
         }
         ImGui::SameLine();
         if (drawGhostIconButton("导入波形", "导入 .psraw 快照并重建当前波形缓存")) {
-            openRawCaptureImportDialog();
+            openUnifiedDataImport();
         }
+        ImGui::SameLine();
+        if (drawGhostIconButton("导出数据", "导出波形数据")) openUnifiedDataExport(0);
     }
     ImGui::End();
     ImGui::PopStyleColor(2);

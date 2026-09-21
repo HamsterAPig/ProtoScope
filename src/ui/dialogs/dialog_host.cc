@@ -429,6 +429,7 @@ void GuiRuntime::syncDialogQueue()
 
 void GuiRuntime::drawDialogs()
 {
+    drawUnifiedDataDialog();
     syncDialogQueue();
     if (!activeDialog_.has_value()) {
         return;
@@ -487,6 +488,165 @@ void GuiRuntime::drawDialogs()
     }
 
     ImGui::EndPopup();
+}
+
+void GuiRuntime::openUnifiedDataImport()
+{
+    if (application_.dataTransferStatus().active) return;
+    unifiedDataError_.clear();
+    unifiedExportMode_ = false;
+    importParseWaveform_ = false;
+    unifiedDataDialogOpen_ = true;
+#if defined(_WIN32)
+    const auto path = nativeFileDialog(window_, L"导入数据",
+        L"ProtoScope Data (*.csv;*.psraw;*.pssession)\0*.csv;*.psraw;*.pssession\0All Files (*.*)\0*.*\0",
+        executableDir_ / "captures", false, L"", unifiedDataError_);
+    if (path) {
+        unifiedDataPath_ = path->generic_string();
+        application_.startDataImport(*path, unifiedDataError_);
+    }
+#endif
+}
+
+void GuiRuntime::openUnifiedDataExport(int content, bool useLast)
+{
+    if (application_.dataTransferStatus().active) return;
+    unifiedExportMode_ = true;
+    unifiedDataDialogOpen_ = true;
+    unifiedDataError_.clear();
+    dataExportDraft_ = application_.runtimeConfig().gui.lastDataExport;
+    if (!dataExportDraft_.valid) dataExportDraft_ = {};
+    if (content >= 0) dataExportDraft_.content = content;
+    if (dataExportDraft_.content == 3) dataExportDraft_.format = 3;
+    else if (dataExportDraft_.format == 3 || (dataExportDraft_.content == 0 && dataExportDraft_.format > 1) ||
+             (dataExportDraft_.content == 2 && dataExportDraft_.format == 1)) dataExportDraft_.format = 0;
+    if (useLast) submitUnifiedDataExport();
+}
+
+void GuiRuntime::submitUnifiedDataExport()
+{
+    plot::CsvExportRange range;
+    range.kind = static_cast<plot::CsvExportRangeKind>(dataExportDraft_.waveRange);
+    const auto& view = application_.docks().waveState().view;
+    range.currentViewMinTime = view.viewMinTime;
+    range.currentViewMaxTime = view.viewMaxTime;
+    range.cursorATime = view.cursors[0].time;
+    range.cursorBTime = view.cursors[1].time;
+    if ((dataExportDraft_.content == 0 || dataExportDraft_.content == 3) && dataExportDraft_.waveRange == 2 &&
+        (!view.cursors[0].enabled || !view.cursors[1].enabled || !view.cursors[0].pinned || !view.cursors[1].pinned)) {
+        unifiedDataError_ = "请先放置两个波形游标";
+        return;
+    }
+    if (dataExportDraft_.content != 0 && dataExportDraft_.recordRange == 2 &&
+        dataRecordBeginMs_ == 0 && dataRecordEndMs_ == 0) {
+        unifiedDataError_ = "请先指定收发时间段";
+        return;
+    }
+    const char* extension = dataExportDraft_.format == 0 ? ".csv" : dataExportDraft_.format == 1 ? ".psraw" :
+                            dataExportDraft_.format == 2 ? ".log" : ".pssession";
+#if defined(_WIN32)
+    const auto directory = dataExportDraft_.directory.empty() ? executableDir_ / "captures" :
+                           std::filesystem::path(dataExportDraft_.directory);
+    const auto path = nativeFileDialog(window_, L"导出数据", L"All Files (*.*)\0*.*\0",
+        directory / ("data" + std::string(extension)), true,
+        dataExportDraft_.format == 0 ? L"csv" : dataExportDraft_.format == 1 ? L"psraw" :
+        dataExportDraft_.format == 2 ? L"log" : L"pssession", unifiedDataError_);
+    if (!path) return;
+#else
+    const auto path = std::optional<std::filesystem::path>(unifiedDataPath_);
+#endif
+    if (application_.startDataExport(*path, dataExportDraft_.content, dataExportDraft_.format, range,
+        dataExportDraft_.recordRange, dataRecordBeginMs_, dataRecordEndMs_,
+        dataExportDraft_.csvShape == 0 ? plot::WaveCsvShape::Wide : plot::WaveCsvShape::Long, unifiedDataError_)) {
+        pendingDataExport_ = dataExportDraft_;
+        pendingDataExport_.valid = true;
+        pendingDataExport_.directory = path->parent_path().generic_string();
+        pendingDataExportTask_ = application_.dataTransferStatus().id;
+        unifiedDataPath_ = path->generic_string();
+    }
+}
+
+void GuiRuntime::drawUnifiedDataDialog()
+{
+    const auto status = application_.dataTransferStatus();
+    if (pendingDataExportTask_ == status.id && status.complete && !status.active) {
+        if (!status.canceled && status.error.empty()) {
+            application_.rememberDataExport(pendingDataExport_);
+            saveCurrentConfigToDisk();
+        }
+        pendingDataExportTask_ = 0;
+    }
+    if (!unifiedDataDialogOpen_) return;
+    ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("数据导入导出", &unifiedDataDialogOpen_)) { ImGui::End(); return; }
+    ImGui::TextWrapped("%s", unifiedDataPath_.c_str());
+    if (status.active || (!unifiedExportMode_ && status.id != 0)) {
+        if (status.awaitingConfirmation) {
+            ImGui::Text("内容: %s%s", status.metadata.waveform ? "波形数据 " : "",
+                        status.includesRecords ? "收发记录" : "");
+            ImGui::TextWrapped("来源: %s", status.metadata.waveform ?
+                status.metadata.waveform->source.c_str() : status.metadata.source.c_str());
+            ImGui::TextWrapped("协议: %s", status.metadata.protocolName.c_str());
+            ImGui::Text("完整性: %s%s%s", status.metadata.incomplete ? "不完整 " : "完整 ",
+                status.metadata.truncated ? "历史已截断 " : "", status.metadata.filtered ? "范围筛选 " : "");
+            if (status.includesRecords) ImGui::TextUnformatted(status.metadata.rxOnly ? "RX-only" : "RX / TX");
+            if (status.metadata.waveform)
+                ImGui::TextWrapped("波形范围: %s", status.metadata.waveform->rangeDescription.c_str());
+            if (status.includesRecords) ImGui::TextWrapped("收发范围: %s", status.metadata.rangeDescription.c_str());
+            if (status.includesRecords && !status.metadata.waveform) {
+                ImGui::BeginDisabled(!application_.docks().luaState().loaded);
+                ImGui::Checkbox("使用当前协议解析波形", &importParseWaveform_);
+                ImGui::EndDisabled();
+            }
+            if (ImGui::Button("确认替换并导入")) application_.confirmDataImport(importParseWaveform_);
+        } else {
+            const float progress = status.total ? static_cast<float>(status.submitted) / static_cast<float>(status.total) :
+                                   status.complete ? 1.0F : 0.0F;
+            ImGui::ProgressBar(progress);
+            ImGui::Text("%s: %llu / %llu", status.importing ? "已提交 / 已解析" : "已编码 / 总数",
+                        static_cast<unsigned long long>(status.submitted),
+                        static_cast<unsigned long long>(status.total));
+            if (status.complete) ImGui::TextUnformatted(status.canceled ? "已取消" :
+                status.error.empty() ? "任务完成" : "任务失败");
+        }
+        if (status.active && ImGui::Button("取消任务")) application_.cancelDataTransfer();
+        if (!status.error.empty()) ImGui::TextWrapped("%s", status.error.c_str());
+    } else if (unifiedExportMode_) {
+        if (ImGui::Combo("内容", &dataExportDraft_.content, "波形数据\0收发原始记录\0逐帧分析结果\0完整现场\0")) {
+            dataExportDraft_.format = dataExportDraft_.content == 3 ? 3 : 0;
+        }
+        if (dataExportDraft_.content == 3) ImGui::TextUnformatted("格式: .pssession");
+        else {
+            const char* formats[] = {"CSV", ".psraw", "可读日志"};
+            if (ImGui::BeginCombo("格式", formats[dataExportDraft_.format])) {
+                for (int f = 0; f < 3; ++f) {
+                    if ((dataExportDraft_.content == 0 && f == 2) || (dataExportDraft_.content == 2 && f == 1)) continue;
+                    if (ImGui::Selectable(formats[f], dataExportDraft_.format == f)) dataExportDraft_.format = f;
+                }
+                ImGui::EndCombo();
+            }
+        }
+        if (dataExportDraft_.content == 0 || dataExportDraft_.content == 3) {
+            ImGui::Combo("波形范围", &dataExportDraft_.waveRange, "全部保留历史\0当前横轴视图\0双游标闭区间\0");
+            if (dataExportDraft_.content == 0 && dataExportDraft_.format == 0)
+                ImGui::Combo("CSV 表形", &dataExportDraft_.csvShape, "宽表\0长表\0");
+        }
+        if (dataExportDraft_.content != 0) {
+            ImGui::Combo("收发范围", &dataExportDraft_.recordRange, "全部保留历史\0当前筛选结果\0指定收发时间段\0");
+            if (dataExportDraft_.recordRange == 2) {
+                ImGui::InputScalar("开始时间 (ms)", ImGuiDataType_U64, &dataRecordBeginMs_);
+                ImGui::InputScalar("结束时间 (ms)", ImGuiDataType_U64, &dataRecordEndMs_);
+            }
+        }
+        if (ImGui::Button("选择文件并导出")) submitUnifiedDataExport();
+    }
+    if (unifiedExportMode_ && status.complete && !status.active) {
+        ImGui::TextUnformatted(status.canceled ? "导出已取消" : status.error.empty() ? "导出完成" : "导出失败");
+        if (!status.error.empty()) ImGui::TextWrapped("%s", status.error.c_str());
+        ImGui::Text("数量: %llu", static_cast<unsigned long long>(status.submitted));
+    }
+    if (!unifiedDataError_.empty()) ImGui::TextWrapped("%s", unifiedDataError_.c_str());
+    ImGui::End();
 }
 
 void GuiRuntime::openRawCaptureImportDialog()

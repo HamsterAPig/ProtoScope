@@ -722,7 +722,8 @@ namespace {
         char labelBuffer[128]{};
         std::snprintf(labelBuffer, sizeof(labelBuffer), "%s", updated.label.c_str());
         setNextLegendNameInputWidth(wave.view);
-        if (ImGui::InputText("##label", labelBuffer, sizeof(labelBuffer))) {
+        if (ImGui::InputText("##label", labelBuffer, sizeof(labelBuffer),
+            wave.buffer.importedLabelsReadOnly() ? ImGuiInputTextFlags_ReadOnly : 0)) {
             updated.label = labelBuffer;
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }

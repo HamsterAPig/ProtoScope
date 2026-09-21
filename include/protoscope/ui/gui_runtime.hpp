@@ -136,6 +136,10 @@ private:
     bool stopRawCaptureRecordingWithStatus();
     void syncDialogQueue();
     void drawDialogs();
+    void drawUnifiedDataDialog();
+    void openUnifiedDataImport();
+    void openUnifiedDataExport(int content = -1, bool useLast = false);
+    void submitUnifiedDataExport();
     void drawRawCaptureFileDialogs();
     void handleGlobalShortcuts();
     void drawMainMenu();
@@ -419,6 +423,16 @@ private:
     std::deque<scripting::DialogRequest> dialogQueue_;
     std::optional<scripting::DialogRequest> activeDialog_;
     bool activeDialogOpened_{false};
+    bool unifiedDataDialogOpen_{false};
+    bool unifiedExportMode_{false};
+    bool importParseWaveform_{false};
+    config::DataExportConfig dataExportDraft_{};
+    config::DataExportConfig pendingDataExport_{};
+    std::uint64_t pendingDataExportTask_{0};
+    std::uint64_t dataRecordBeginMs_{0};
+    std::uint64_t dataRecordEndMs_{0};
+    std::string unifiedDataError_;
+    std::string unifiedDataPath_;
     bool rawCaptureImportDialogOpen_{false};
     bool rawCaptureImportDialogOpened_{false};
     std::string rawCaptureImportPath_;

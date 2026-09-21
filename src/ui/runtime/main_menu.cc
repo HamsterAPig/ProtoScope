@@ -68,37 +68,12 @@ void GuiRuntime::drawFileMenu()
     if (ImGui::MenuItem("打开 ELF/ElfStaticView 数据文件...", shortcutLabel(ShortcutAction::OpenElfDataFile).data())) {
         openElfStaticAddressDialog();
     }
-    if (menuItemWithHelp(
-            "导入现场会话包...", nullptr, "打开 .pssession，恢复协议与现场上下文，并在时间轴起点暂停等待回放。")) {
-        openSessionPackageImportDialog();
-    }
-    if (menuItemWithHelp("导入原始波形...",
-                         shortcutLabel(ShortcutAction::ImportRawWave).data(),
-                         "打开 .psraw 快照，重建当前可查看的原始波形缓存。")) {
-        openRawCaptureImportDialog();
-    }
-    if (ImGui::MenuItem("导入 CSV 数据...")) {
-        openCsvDataImportDialog();
-    }
-    if (menuItemWithHelp(
-            "载入原始回放时间轴...", nullptr, "打开 .psraw 完整事件流，用原始时间戳按时间轴复现采集过程。")) {
-        openRawCaptureReplayTimelineDialog();
-    }
-    ImGui::Separator();
-    if (menuItemWithHelp("导出现场会话包...", nullptr, "保存 .pssession，打包当前协议、原始缓存和复现证据。")) {
-        openSessionPackageExportDialog();
-    }
-    if (menuItemWithHelp("导出当前缓存快照...",
-                         shortcutLabel(ShortcutAction::ExportRawWave).data(),
-                         "导出当前可回放窗口内的 .psraw 原始字节和必要配置快照。")) {
-        openRawCaptureExportDialog();
-    }
-    if (ImGui::MenuItem("导出波形 CSV...")) {
-        openWaveCsvExportDialog();
-    }
-    if (ImGui::MenuItem("导出原始事件 CSV...")) {
-        openRawCaptureCsvExportDialog();
-    }
+    ImGui::BeginDisabled(application_.dataTransferStatus().active);
+    if (ImGui::MenuItem("导入数据...")) openUnifiedDataImport();
+    if (ImGui::MenuItem("导出数据...")) openUnifiedDataExport();
+    if (ImGui::MenuItem("使用上次配置导出", nullptr, false,
+                        application_.runtimeConfig().gui.lastDataExport.valid)) openUnifiedDataExport(-1, true);
+    ImGui::EndDisabled();
     if (ImGui::MenuItem("导出波形分析报告...")) {
         openWaveAnalysisExportDialog();
     }

@@ -858,7 +858,8 @@ void GuiRuntime::drawTransferLogSection(float logHeight)
 
             ImGui::TableSetColumnIndex(10);
             if (drawTransferToolbarButton("导出", "导出当前过滤结果中的收发记录。", false)) {
-                openTransferLogExportDialog();
+                openUnifiedDataExport(application_.docks().receiveState().displayMode ==
+                    dock::TransferLogDisplayMode::ParsedFrames ? 2 : 1);
             }
 
             ImGui::TableSetColumnIndex(11);

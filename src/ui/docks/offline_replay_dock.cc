@@ -165,8 +165,8 @@ void GuiRuntime::drawOfflineReplayDock()
             "导出现场包",
             "导出 .pssession 现场会话包，打包当前协议和复现证据。",
             true,
-            [&]() { openSessionPackageImportDialog(); },
-            [&]() { openSessionPackageExportDialog(); });
+            [&]() { openUnifiedDataImport(); },
+            [&]() { openUnifiedDataExport(3); });
         drawTwoColumnActionRow(
             "导入缓存快照",
             "导入 .psraw 缓存快照，重建当前可查看的原始波形。",
@@ -174,8 +174,8 @@ void GuiRuntime::drawOfflineReplayDock()
             "导出缓存快照",
             "导出当前窗口内的 .psraw 原始字节和必要配置快照。",
             true,
-            [&]() { openRawCaptureImportDialog(); },
-            [&]() { openRawCaptureExportDialog(); });
+            [&]() { openUnifiedDataImport(); },
+            [&]() { openUnifiedDataExport(0); });
         drawTwoColumnActionRow(
             "载入回放时间轴",
             "载入 .psraw 完整事件流，用原始时间戳回放采集过程。",
@@ -285,7 +285,7 @@ void GuiRuntime::drawOfflineReplayDock()
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         if (drawToolbarSectionButton("收发日志", "导出当前筛选后的收发日志", false, ImVec2(-1.0F, 0.0F))) {
-            openTransferLogExportDialog();
+            openUnifiedDataExport(1);
         }
         ImGui::TableNextColumn();
         if (drawToolbarSectionButton("宿主日志", "导出当前筛选后的宿主日志", false, ImVec2(-1.0F, 0.0F))) {
