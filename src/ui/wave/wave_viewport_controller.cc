@@ -490,7 +490,7 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
             }
         }
         view.fftUpdatePending = !wave.cachedFftKeyValid || !(wave.cachedFftKey == key);
-        if (view.fftUpdatePending && !wave.fftRequestActive) {
+        if (view.fftUpdatePending && !view.interactionActive && !wave.fftRequestActive) {
             // 只保留一个执行任务；忙碌期间目标更新在上面合并，完成后直接提交本帧最新窗口。
             // 核心流程：FFT 输入窗口与频域视口分离，频域缩放不会反向改变待分析的时域样本。
             auto fftSnapshot = hasSampleFrequencyTimebase(view)

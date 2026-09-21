@@ -228,7 +228,8 @@ struct GuiRuntimeTestAccess {
             wave.cachedFftFrame = plot::buildWaveFftFrame(*prepared.fullSnapshot, *prepared.displayData,
                                                         wave.view.fft, {1}, 0, 1, 1024);
             require(wave.cachedFftFrame.valid, "fullscreen FFT fixture");
-            wave.cachedFftKey = wave.fftRequestedKey;
+            // 拖动期间尚未提交任务，夹具应使用最新目标键而非上次执行任务的键。
+            wave.cachedFftKey = wave.fftTargetKey;
             wave.cachedFftKeyValid = true;
             runtime.enterWaveFullscreen();
             for (const auto size : {ImVec2(1280, 900), ImVec2(480, 600)}) {
