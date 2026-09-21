@@ -223,6 +223,7 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
                           double minTimeWidth,
                           bool clampTimeToBounds,
                           bool fineAdjustmentEnabled = false);
+double cursorFrequencyHz(double delta, WaveTimeAxisSource axisSource, std::string_view timeUnit);
 CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           const CursorReadout& right,
                                           WaveTimeAxisSource axisSource,

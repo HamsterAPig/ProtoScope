@@ -1068,7 +1068,8 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
     const ImRect bounds(pos, ImVec2(pos.x + size.x, pos.y + size.y));
     const auto mouse = ImGui::GetMousePos();
     const auto plotMouse = ImPlot::GetPlotMousePos();
-    const bool mouseInPlot = bounds.Contains(mouse) && ImGui::IsWindowHovered();
+    const bool mouseInPlot = bounds.Contains(mouse) &&
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const float lineHeight = ImGui::GetTextLineHeight() + 4;
     // 顶部标注避开分屏通道名、测量浮窗与居中的 A/B 差值，窄图不足时降级为悬停。
     const float bandBottom = view.showCursors && view.cursors[0].enabled && view.cursors[1].enabled
@@ -1087,6 +1088,7 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
     std::vector<std::uint64_t> hits;
     std::string tooltip;
     bool claimed = false;
+    const bool doubleClicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
     ImPlot::PushPlotClipRect();
     for (auto& cursor : auxiliary.items) {
         const std::string name = "T" + std::to_string(cursor.id);
@@ -1094,9 +1096,11 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
         bool clicked = false, hovered = false, held = false;
         double time = cursor.time;
         // 复用 ImPlot 拖动命中和现有吸附策略，线条由下方按虚线绘制。
-        ImPlot::DragLineX(0, &time, ImVec4(0, 0, 0, 0), 1,
-                         ImPlotDragToolFlags_NoFit, &clicked, &hovered, &held);
-        if (held) {
+        if (!doubleClicked)
+            ImPlot::DragLineX(0, &time, ImVec4(0, 0, 0, 0), 2,
+                             ImPlotDragToolFlags_NoFit, &clicked, &hovered, &held);
+        const bool dragging = held && ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+        if (dragging) {
             std::optional<plot::CursorReadout> snap;
             if (cursorSmartSnapActive(view, ImGui::GetIO())) {
                 if (const auto target = findSmartCursorSnapByScope(
@@ -1111,7 +1115,7 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
         const auto color = ImGui::ColorConvertFloat4ToU32(cursorRgb(plot::kAuxiliaryCursorRgb[cursor.colorIndex]));
         if (x >= bounds.Min.x && x <= bounds.Max.x) {
             for (float y = pos.y; y < bounds.Max.y; y += 10)
-                draw->AddLine(ImVec2(x, y), ImVec2(x, (std::min)(y + 6, bounds.Max.y)), color, held ? 2 : 1.5F);
+                draw->AddLine(ImVec2(x, y), ImVec2(x, (std::min)(y + 6, bounds.Max.y)), color, dragging ? 3 : 2);
             const auto textSize = ImGui::CalcTextSize(name.c_str());
             const float labelX = (std::clamp)(x + 4, bounds.Min.x,
                 (std::max)(bounds.Min.x, bounds.Max.x - textSize.x - 4));
@@ -1131,6 +1135,7 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
             if (mouseInPlot && (std::abs(mouse.x - x) <= 5 || labelHovered)) {
                 hits.push_back(cursor.id);
                 tooltip += name + ": " + formatMetricText(cursor.time, displayData.timeUnit.c_str()) + "\n";
+                claimed = claimed || ImGui::IsMouseClicked(ImGuiMouseButton_Left);
             }
         }
         ImGui::PopID();
@@ -1143,9 +1148,12 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
         if (rightX < bounds.Min.x || leftX > bounds.Max.x) continue;
         const auto leftColor = ImGui::ColorConvertFloat4ToU32(cursorRgb(plot::kAuxiliaryCursorRgb[interval.left.colorIndex]));
         const auto rightColor = ImGui::ColorConvertFloat4ToU32(cursorRgb(plot::kAuxiliaryCursorRgb[interval.right.colorIndex]));
-        const std::string text = "T" + std::to_string(interval.left.id) + " - T" + std::to_string(interval.right.id) +
+        std::string text = "T" + std::to_string(interval.left.id) + " - T" + std::to_string(interval.right.id) +
             ": " + formatMetricText(interval.delta,
                 displayData.axisSource == plot::WaveTimeAxisSource::SampleIndex ? "sample" : displayData.timeUnit.c_str());
+        if (displayData.axisSource != plot::WaveTimeAxisSource::SampleIndex)
+            text += " / " + formatMetricText(
+                plot::cursorFrequencyHz(interval.delta, displayData.axisSource, displayData.timeUnit), "Hz");
         const auto textSize = ImGui::CalcTextSize(text.c_str());
         const float x1 = (std::max)(leftX, bounds.Min.x);
         const float x2 = (std::min)(rightX, bounds.Max.x);
@@ -1184,6 +1192,29 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
             tooltip += text + "\n";
     }
     ImPlot::PopPlotClipRect();
+    if (doubleClicked && !hits.empty()) {
+        // 先命中整条虚线及标签，再选择最近者；完全重合时只删除最后绘制的编号。
+        std::uint64_t removeId = 0;
+        float nearest = std::numeric_limits<float>::infinity();
+        for (const auto& cursor : auxiliary.items) {
+            if (std::ranges::find(hits, cursor.id) == hits.end()) continue;
+            const auto distance = std::abs(mouse.x - ImPlot::PlotToPixels(cursor.time, limits.Y.Max).x);
+            if (distance < nearest || (distance == nearest && cursor.id > removeId)) {
+                nearest = distance;
+                removeId = cursor.id;
+            }
+        }
+        auxiliary.remove(removeId);
+        view.zoomSelectionDragging = false;
+        // ImPlot 在 Setup 阶段已标记双击适配，删除事件必须同时清除内部适配及框选状态。
+        auto& current = *GImPlot->CurrentPlot;
+        current.FitThisFrame = current.Selecting = current.Selected = false;
+        for (auto& axis : current.Axes) axis.FitThisFrame = false;
+        ImGui::ClearActiveID();
+        ImGui::PopID();
+        ImGui::PopID();
+        return true;
+    }
     if (!tooltip.empty() && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
         ImGui::SetTooltip("%s", tooltip.c_str());
     const auto drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right);
@@ -1226,6 +1257,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
 {
     const bool auxiliaryClaimed = drawAuxiliaryCursors(
         view, snapshot, displayData, bitLayout, limits, smartSnapDistance, splitChannelIndex);
+    if (auxiliaryClaimed && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) return true;
     if (!view.showCursors) {
         if (!splitChannelIndex.has_value()) {
             view.measurementCursorReadoutRefreshPending = false;
@@ -1259,7 +1291,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
         const int dragId = splitChannelIndex.has_value() ? splitCursorDragId(*splitChannelIndex, cursorIndex)
                                                          : static_cast<int>(100 + cursorIndex);
         ImPlot::DragLineX(
-            dragId, &dragTime, cursorColor, (hovered || held) ? 2.0F : 1.0F, dragFlags, &clicked, &hovered, &held);
+            dragId, &dragTime, cursorColor, 2.0F, dragFlags, &clicked, &hovered, &held);
         anyCursorInteractionClaimed = anyCursorInteractionClaimed || clicked || held;
         if (splitChannelIndex.has_value() && !held && !hovered && !ImPlot::IsPlotHovered() &&
             (!cursor.pinned || cursor.channelIndex != *splitChannelIndex)) {
@@ -2233,7 +2265,11 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
         drawStackedChannelGuides(frame.snapshot, stackedDisplay->channelBaseY);
     }
     syncLegendVisibilityState(wave, frame.snapshot);
-    if (!zoomSelectionMode) {
+    // 游标先处理点击，删除和拖动优先于框选、自动适配以及通道偏移复位。
+    const bool cursorDragClaimed = handlePlotCursors(view,
+        frame.snapshot, plotDisplayData, bitLayout, mousePos, limits,
+        timeSnapDistance, smartSnapDistance, valueSnapDistance, result.cursorReadouts);
+    if (!zoomSelectionMode && !cursorDragClaimed) {
         axisDoubleClickConsumed = handleMainPlotAxisDoubleClick(
             wave, frame.snapshot, derivedBounds, fullHistoryBounds, visibleChannelIndices);
         viewportChangedThisFrame = axisDoubleClickConsumed || viewportChangedThisFrame;
@@ -2246,9 +2282,10 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
             applyFitVisibleWaveforms(wave, *frame.fullSnapshot, *frame.overviewDisplayData, fitChannelIndices) ||
             viewportChangedThisFrame;
     }
-    const auto zoomSelectionResult = handleMainPlotZoomSelection(view, wave.suppressZoomSelectionEscapeThisFrame);
+    const auto zoomSelectionResult = cursorDragClaimed ? ZoomSelectionResult{} :
+        handleMainPlotZoomSelection(view, wave.suppressZoomSelectionEscapeThisFrame);
     viewportChangedThisFrame = zoomSelectionResult.viewportChanged || viewportChangedThisFrame;
-    if (!axisDoubleClickConsumed && GImPlot->CurrentPlot != nullptr) {
+    if (!cursorDragClaimed && !axisDoubleClickConsumed && GImPlot->CurrentPlot != nullptr) {
         auto& yAxis = GImPlot->CurrentPlot->YAxis(0);
         if (yAxis.FitThisFrame || yAxis.IsAutoFitting()) {
             viewportChangedThisFrame =
@@ -2258,20 +2295,6 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
             yAxis.SetRange(verticalBaseline.minValue, verticalBaseline.maxValue);
         }
     }
-    bool cursorDragClaimed = false;
-    if (!zoomSelectionResult.consumed) {
-        cursorDragClaimed = handlePlotCursors(view,
-                                              frame.snapshot,
-                                              plotDisplayData,
-                                              bitLayout,
-                                              mousePos,
-                                              limits,
-                                              timeSnapDistance,
-                                              smartSnapDistance,
-                                              valueSnapDistance,
-                                              result.cursorReadouts);
-    }
-
     const bool offsetReset =
         !axisDoubleClickConsumed && !zoomSelectionResult.consumed && !cursorDragClaimed &&
         handleActiveWaveformDoubleClickOffsetReset(wave,

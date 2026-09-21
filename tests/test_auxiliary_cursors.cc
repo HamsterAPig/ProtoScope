@@ -28,7 +28,12 @@ void modelTests()
         const auto previous = cursors.items;
         const auto id = cursors.add(4, 8);
         const auto& added = cursors.items.back();
-        require(id == static_cast<std::uint64_t>(n + 1) && added.time == 6, "midpoint or stable ID wrong");
+        require(id == static_cast<std::uint64_t>(n + 1) && added.time >= 4 && added.time <= 8,
+                "visible position or stable ID wrong");
+        if (n == 0) require(added.time == 6, "first cursor must use midpoint");
+        if (n < 20)
+            for (const auto& cursor : previous)
+                require(std::abs(added.time - cursor.time) >= 0.2 - 1e-12, "new cursor overlaps existing T");
         require(usage[added.colorIndex] == *std::min_element(usage.begin(), usage.end()),
                 "color did not choose minimum occupancy");
         ++usage[added.colorIndex];
@@ -66,6 +71,43 @@ void modelTests()
     view.followMeasurementCursorsOnScroll = true;
     plot::shiftMeasurementCursorsForViewportScroll(view, oldViewport, {.minTime = 4, .maxTime = 8});
     require(view.auxiliaryCursors.items[0].time == 4, "zoom moved auxiliary cursor");
+    cursors.clear();
+    const std::array<double, 2> ab{5, 5.5};
+    cursors.add(0, 10, ab);
+    require(std::abs(cursors.items.back().time - 6) < 1e-12, "new cursor must avoid visible A/B");
+    cursors.clear();
+    for (int i = 10; i <= 20; ++i) cursors.add(i * 0.5, i * 0.5);
+    cursors.add(0, 10);
+    require(std::abs(cursors.items.back().time - 4.5) < 1e-12, "full right side must search left");
+    cursors.clear();
+    for (int i = 0; i <= 40; ++i) cursors.add(i * 0.25, i * 0.25);
+    cursors.items[20].time = 4.75;
+    cursors.add(0, 10);
+    require(std::abs(cursors.items.back().time - 5) < 1e-12, "crowded layout must choose largest gap midpoint");
+    require(cursors.add(std::nan(""), 10) == 0, "nonfinite range accepted");
+    cursors.add(3, 3);
+    require(cursors.items.back().time == 3, "zero range did not terminate");
+    cursors.add(-1e308, 1e308);
+    require(std::isfinite(cursors.items.back().time), "extreme finite range overflow");
+    for (const auto [unit, scale] : std::array<std::pair<const char*, double>, 7>{{
+             {"s", 1}, {"ms", 1e-3}, {"us", 1e-6}, {"\xC2\xB5s", 1e-6},
+             {"\xCE\xBCs", 1e-6}, {"ns", 1e-9}, {"ps", 1e-12}}}) {
+        const auto hz = plot::cursorFrequencyHz(2, plot::WaveTimeAxisSource::ScriptTime, unit);
+        require(std::abs(hz * (2 * scale) - 1) < 1e-12, "SI cursor frequency conversion");
+        const auto interval = plot::makeCursorIntervalText(0, 2, plot::WaveTimeAxisSource::ScriptTime, unit);
+        require(interval.frequencyHz == hz, "A/B and T frequency disagree");
+    }
+    for (const auto delta : {0.0, std::numeric_limits<double>::infinity(), std::nan("")})
+        require(std::isnan(plot::cursorFrequencyHz(delta, plot::WaveTimeAxisSource::ScriptTime, "s")),
+                "invalid interval must show N/A");
+    require(std::isnan(plot::cursorFrequencyHz(2, plot::WaveTimeAxisSource::ScriptTime, "tick")),
+            "unknown time unit must show N/A");
+    require(std::isnan(plot::cursorFrequencyHz(2, plot::WaveTimeAxisSource::SampleIndex, "s")),
+            "sample axis must not produce Hz");
+    require(plot::cursorFrequencyHz(-2, plot::WaveTimeAxisSource::ScriptTime, "ms") == 500,
+            "frequency must use absolute interval");
+    require(std::isnan(plot::cursorFrequencyHz(1e-320, plot::WaveTimeAxisSource::ScriptTime, "ps")),
+            "underflow interval must not produce infinite Hz");
 }
 
 void capture(const std::filesystem::path& directory, const std::string& name)
@@ -131,6 +173,10 @@ void uiTests(bool withGl, const std::filesystem::path& directory)
                 {.drawMeasurementOverlay = view.showMeasurementOverlay, .drawLegendOverlay = false}, nullptr);
             require(result.plotRendered, "time-domain plot missing");
             plot = ImPlot::GetPlot("##oscilloscope");
+            if (view.viewMode == plot::WaveViewMode::Split)
+                for (auto* child : ImGui::GetCurrentWindow()->DC.ChildWindows)
+                    if (std::string_view(child->Name).find("wave_split_scroll") != std::string_view::npos)
+                        plot = GImPlot->Plots.GetByKey(child->GetID("##wave_split_0"));
             if (view.fft.enabled) {
                 ImGui::EndChild();
                 ImGui::BeginChild("spectrum");
@@ -233,6 +279,56 @@ void uiTests(bool withGl, const std::filesystem::path& directory)
     render();
     io.AddKeyEvent(ImGuiKey_Escape, false);
     render();
+    // 通过真实按下/释放事件覆盖实段、虚线间隙、标签、重合和分屏；第一击不能吸附。
+    view.showCursors = true;
+    for (const auto mode : {plot::WaveViewMode::Overlay, plot::WaveViewMode::Split}) {
+        view.viewMode = mode;
+        view.forceNextMainPlotLimits = true;
+        for (int scenario = 0; scenario < 5; ++scenario) {
+            view.auxiliaryCursors.clear();
+            const auto first = view.auxiliaryCursors.add(0.5, 0.5);
+            const auto second = scenario == 3 ? view.auxiliaryCursors.add(0.5, 0.5) :
+                scenario == 4 ? view.auxiliaryCursors.add(0.504, 0.504) : 0;
+            view.zoomSelectionActive = scenario % 2 == 0;
+            for (int n = 0; n < 25; ++n) render();
+            require(plot != nullptr, "mouse fixture plot missing");
+            const auto beforeView = ui::currentViewport(view);
+            const auto beforeAb = view.cursors;
+            auto target = pixel(scenario == 4 ? 0.501 : 0.5);
+            target.y = plot->PlotRect.Min.y + (scenario == 1 ? 208 : 206);
+            if (scenario == 2) target = ImVec2(pixel(0.5).x + 12, plot->PlotRect.Min.y + 10);
+            io.AddMousePosEvent(target.x, target.y);
+            render();
+            io.AddMouseButtonEvent(0, true);
+            render();
+            require(view.auxiliaryCursors.items[0].time == 0.5, "first click snapped T cursor");
+            io.AddMouseButtonEvent(0, false);
+            render();
+            io.AddMouseButtonEvent(0, true);
+            render();
+            io.AddMouseButtonEvent(0, false);
+            render();
+            capture(directory, "delete-" + std::to_string(int(mode)) + "-" + std::to_string(scenario));
+            if (view.auxiliaryCursors.items.size() != (second ? 1U : 0U))
+                throw std::runtime_error("double-click must remove exactly one T: mode=" +
+                    std::to_string(int(mode)) + " scenario=" + std::to_string(scenario) +
+                    " count=" + std::to_string(view.auxiliaryCursors.items.size()));
+            if (second)
+                require(view.auxiliaryCursors.items[0].id == (scenario == 3 ? first : second),
+                        "overlap nearest/topmost deletion rule");
+            const auto afterView = ui::currentViewport(view);
+            require(beforeView.minTime == afterView.minTime && beforeView.maxTime == afterView.maxTime &&
+                    beforeView.minValue == afterView.minValue && beforeView.maxValue == afterView.maxValue,
+                    "cursor double-click changed viewport");
+            require(view.cursors[0].time == beforeAb[0].time && view.cursors[1].time == beforeAb[1].time,
+                    "cursor double-click changed A/B");
+            require(!view.zoomSelectionDragging, "cursor double-click started box selection");
+        }
+    }
+    view.zoomSelectionActive = false;
+    view.viewMode = plot::WaveViewMode::Overlay;
+    view.forceNextMainPlotLimits = true;
+    view.auxiliaryCursors.clear();
     io.AddMousePosEvent(-100, -100);
     view.showCursors = true;
     view.cursors[0].time = 0.15;

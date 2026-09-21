@@ -1,4 +1,5 @@
 #pragma once
+#include "protoscope/plot/wave_overview_color.hpp"
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
@@ -519,6 +520,7 @@ struct WaveDockState {
     };
     std::vector<OverviewRenderEntry> overviewRenderCache;
     std::uint64_t overviewQueryCount{0};
+    OverviewColorCache overviewColorCache;
 
     bool cachedDisplayKeyValid{false};
     DisplayDataCacheKey cachedDisplayKey{};

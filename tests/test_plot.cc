@@ -3902,7 +3902,7 @@ void test_wave_cursor_interval_text_by_axis()
         protoscope::plot::makeCursorIntervalText(left, right, protoscope::plot::WaveTimeAxisSource::ScriptTime, "ms");
     require(scriptTime.valid, "脚本时间轴游标间隔应有效");
     require(scriptTime.showFrequency, "脚本时间轴应显示倒数频率");
-    require(std::abs(scriptTime.frequencyHz - 0.25) < 1e-12, "脚本时间轴频率计算错误");
+    require(std::abs(scriptTime.frequencyHz - 250.0) < 1e-12, "脚本时间轴毫秒应换算为 Hz");
 
     const auto sampledTime = protoscope::plot::makeCursorIntervalText(
         left, right, protoscope::plot::WaveTimeAxisSource::SampleFrequency, "s");
@@ -3914,7 +3914,7 @@ void test_wave_cursor_interval_text_by_axis()
         protoscope::plot::makeCursorIntervalText(2.0, 6.0, protoscope::plot::WaveTimeAxisSource::ScriptTime, "ms");
     require(degraded.valid, "游标 readout 缺失时仍应按时间生成 ΔT");
     require(std::abs(degraded.delta - 4.0) < 1e-12, "时间级降级应保留 Δt");
-    require(std::abs(degraded.frequencyHz - 0.25) < 1e-12, "时间级降级应保留频率");
+    require(std::abs(degraded.frequencyHz - 250.0) < 1e-12, "时间级降级应保留毫秒换算后的频率");
 }
 
 void test_wave_cursor_metrics_degrade_without_complete_readouts()

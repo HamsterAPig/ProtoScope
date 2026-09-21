@@ -95,6 +95,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
     overviewChannels.reserve(channelIndices.size());
     for (const auto index : channelIndices) {
         if (index < fullSnapshot.channels.size() && index < displayData.channels.size() &&
+            !channelHiddenByLegendState(wave, index) &&
             (view.overviewShowBitChannels || !fullSnapshot.channels[index].bitDisplay.enabled)) {
             overviewChannels.push_back(index);
         }
@@ -165,10 +166,13 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             overviewMaxSamples > 0
                 ? (std::min)({pixelWidth, renderBudget.pointsPerChannel, overviewMaxSamples})
                 : (std::min)(pixelWidth, renderBudget.pointsPerChannel);
+        std::vector<plot::OverviewColor> drawnColors;
         for (const std::size_t channelIndex : overviewChannels) {
             const auto& overview = cachedOverviewChannel(wave, fullSnapshot.channels[channelIndex], channelIndex,
                 displayData.axisSource, overviewMinTime, overviewMaxTime, pixelWidth, overviewPointLimit);
             const auto color = withAlpha(channelColor(fullSnapshot.channels[channelIndex], channelIndex), 0.65F);
+            if (!overview.trace.empty() || !overview.envelope.empty())
+                drawnColors.push_back({color.x, color.y, color.z, color.w});
             if (!overview.trace.empty()) {
                 WaveSampleGetterPayload payload{.samples = overview.trace.data()};
                 ImPlotSpec spec{};
@@ -192,6 +196,12 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             ImPlot::PopPlotClipRect();
         }
 
+        const auto background = ImPlot::GetStyleColorVec4(ImPlotCol_PlotBg);
+        const auto window = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+        const auto effectiveBackground = plot::compositeOverviewColor(
+            {background.x, background.y, background.z, background.w}, {window.x, window.y, window.z, 1});
+        const auto rectangleRgb = wave.overviewColorCache.resolve(drawnColors, effectiveBackground);
+        const auto rectangleColor = plot::overviewRgb(rectangleRgb);
         double rectMinTime = view.viewMinTime;
         double rectMaxTime = view.viewMaxTime;
         double rectMinValue = overviewMinValue;
@@ -211,7 +221,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
                              &rectMinValue,
                              &rectMaxTime,
                              &rectMaxValue,
-                             ImVec4(1.0F, 0.85F, 0.2F, 0.35F),
+                             ImVec4(float(rectangleColor.r), float(rectangleColor.g), float(rectangleColor.b), 1.0F),
                              ImPlotDragToolFlags_NoFit,
                              nullptr,
                              &rectHovered,
@@ -279,8 +289,8 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             const bool highlighted = lineTime >= view.viewMinTime && lineTime <= view.viewMaxTime;
             ImPlot::DragLineX(static_cast<int>(400 + cursorIndex),
                               &lineTime,
-                              highlighted ? ImVec4(1.0F, 0.95F, 0.2F, 0.95F) : ImVec4(1.0F, 1.0F, 1.0F, 0.35F),
-                              highlighted ? 1.3F : 1.0F,
+                              withAlpha(measurementCursorColor(cursorIndex), highlighted ? 0.95F : 0.35F),
+                              2.0F,
                               ImPlotDragToolFlags_NoInputs | ImPlotDragToolFlags_NoFit);
         }
         ImPlot::EndPlot();

@@ -330,14 +330,20 @@ int main(int argc, char** argv)
                     const auto* drawList = ImGui::GetWindowDrawList();
                     std::array<int, 4> first{-1, -1, -1, -1}, last{-1, -1, -1, -1};
                     int selectionVertex = -1, cursorVertex = -1;
+                    const auto rectangleColor = plot::overviewRgb(wave.overviewColorCache.selected);
                     for (int v = 0; v < drawList->VtxBuffer.Size; ++v) {
                         const auto vertexColor = drawList->VtxBuffer[v].col;
                         if (selectionVertex < 0 && vertexColor ==
-                            ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 0.85F, 0.2F, 0.35F)))
+                            ImGui::ColorConvertFloat4ToU32(ImVec4(float(rectangleColor.r),
+                                float(rectangleColor.g), float(rectangleColor.b), 1)))
                             selectionVertex = v;
-                        if (cursorVertex < 0 && vertexColor ==
-                            ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 0.95F, 0.2F, 0.95F)))
-                            cursorVertex = v;
+                        for (std::size_t c = 0; c < wave.view.cursors.size(); ++c) {
+                            const auto time = wave.view.cursors[c].time;
+                            const auto alpha = time >= wave.view.viewMinTime && time <= wave.view.viewMaxTime ? 0.95F : 0.35F;
+                            if (cursorVertex < 0 && vertexColor ==
+                                ImGui::ColorConvertFloat4ToU32(ui::withAlpha(ui::measurementCursorColor(c), alpha)))
+                                cursorVertex = v;
+                        }
                         for (std::size_t i = 0; i < colors.size(); ++i) {
                             const auto color = ImGui::ColorConvertFloat4ToU32(
                                 ImVec4(colors[i][0], colors[i][1], colors[i][2], 0.65F));

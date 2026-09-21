@@ -242,8 +242,8 @@ namespace {
         }
 
         if (selection.frequency && showFrequency) {
-            addMetricChip(chips, "Freq", deltaTime > 0.0 && std::isfinite(deltaTime)
-                ? 1.0 / deltaTime : std::numeric_limits<double>::quiet_NaN(), "Hz");
+            addMetricChip(chips, "Freq",
+                plot::cursorFrequencyHz(deltaTime, displayData.axisSource, displayData.timeUnit), "Hz");
         }
 
         if (selection.period && showFrequency) {

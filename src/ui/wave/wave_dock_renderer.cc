@@ -528,7 +528,11 @@ namespace {
         const bool fullSpectrum = view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::FullSpectrum;
         ImGui::BeginDisabled(fullSpectrum);
         if (drawTopToolbarButton("+T", false, "添加辅助游标")) {
-            view.auxiliaryCursors.add(view.viewMinTime, view.viewMaxTime);
+            std::vector<double> occupied;
+            if (view.showCursors)
+                for (const auto& cursor : view.cursors)
+                    if (cursor.enabled) occupied.push_back(cursor.time);
+            view.auxiliaryCursors.add(view.viewMinTime, view.viewMaxTime, occupied);
         }
         ImGui::EndDisabled();
         ImGui::SameLine();

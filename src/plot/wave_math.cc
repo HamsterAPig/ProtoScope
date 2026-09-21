@@ -945,6 +945,24 @@ WaveViewport zoomViewport(const WaveViewport& viewport,
     return next;
 }
 
+double cursorFrequencyHz(double delta, WaveTimeAxisSource axisSource, std::string_view timeUnit)
+{
+    const auto invalid = std::numeric_limits<double>::quiet_NaN();
+    if (axisSource == WaveTimeAxisSource::SampleIndex || !std::isfinite(delta) || delta == 0)
+        return invalid;
+    // A/B 与 T 共用时间单位换算；未知单位不得隐式当作秒。
+    double secondsPerUnit = 0;
+    if (timeUnit == "s") secondsPerUnit = 1;
+    else if (timeUnit == "ms") secondsPerUnit = 1e-3;
+    else if (timeUnit == "us" || timeUnit == "\xC2\xB5s" || timeUnit == "\xCE\xBCs") secondsPerUnit = 1e-6;
+    else if (timeUnit == "ns") secondsPerUnit = 1e-9;
+    else if (timeUnit == "ps") secondsPerUnit = 1e-12;
+    if (secondsPerUnit == 0) return invalid;
+    const auto seconds = std::abs(delta) * secondsPerUnit;
+    const auto frequency = 1.0 / seconds;
+    return seconds > 0 && std::isfinite(seconds) && std::isfinite(frequency) ? frequency : invalid;
+}
+
 CursorIntervalText makeCursorIntervalText(const CursorReadout& left,
                                           const CursorReadout& right,
                                           WaveTimeAxisSource axisSource,
@@ -967,9 +985,9 @@ CursorIntervalText makeCursorIntervalText(double leftTime,
     }
     CursorIntervalText text{
         .valid = true,
-        .showFrequency = axisSource != WaveTimeAxisSource::SampleIndex && delta > kEpsilon,
+        .showFrequency = axisSource != WaveTimeAxisSource::SampleIndex,
         .delta = delta,
-        .frequencyHz = delta > kEpsilon ? 1.0 / delta : 0.0,
+        .frequencyHz = cursorFrequencyHz(delta, axisSource, timeUnit),
         .deltaUnit = std::string(timeUnit.empty() ? "sample" : timeUnit),
     };
     if (axisSource == WaveTimeAxisSource::SampleIndex) {
