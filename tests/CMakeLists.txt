@@ -176,3 +176,11 @@ target_include_directories(protoscope_wave_status_tests PRIVATE ${PROJECT_SOURCE
 target_compile_features(protoscope_wave_status_tests PRIVATE cxx_std_20)
 add_test(NAME protoscope_wave_status_tests COMMAND protoscope_wave_status_tests)
 set_tests_properties(protoscope_wave_status_tests PROPERTIES TIMEOUT 60)
+
+if(MSVC)
+    # 测试和基准目标统一使用 UTF-8，避免中文注释及字符串受系统代码页影响。
+    get_property(protoscope_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(target_name IN LISTS protoscope_test_targets)
+        target_compile_options(${target_name} PRIVATE /utf-8)
+    endforeach()
+endif()
