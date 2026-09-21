@@ -1,0 +1,33 @@
+# 放入当前配置文件旁的 themes 目录，再通过“设置 → 主题 → 重载主题”加载。
+# 只继承内置主题，未写字段沿用基底；完整字段可从应用导出获得。
+version: 1
+id: laboratory_light
+name: 实验室浅色
+base: professional_light
+
+ui:
+  accent: "#145BAA"
+  text_strong: "#24292F"
+  text_muted: "#56616F"
+
+wave:
+  plot_background: "#FCFDFE"
+  # 色板按通道序号循环；显示修正不会改写用户或 Lua 配置的原始颜色。
+  channel_palette: ["#147841", "#0069AF", "#916500", "#7837B7", "#C32A30", "#007877"]
+  # 前两项为 A/B，后五项为辅助 T 游标。
+  cursor_palette: ["#926200", "#006796", "#336396", "#B93C4E", "#228833", "#AA3377", "#5F646E"]
+  correct_contrast: true
+  light_persistence: true
+  # 选区边框使用 RGB，填充透明度独立在以下范围内自适应。
+  selection_color: "#4477AA"
+  selection_min_alpha: 0.10
+  selection_max_alpha: 0.28
+
+metrics:
+  window_rounding: 6
+  frame_rounding: 4
+  item_spacing_x: 10
+  item_spacing_y: 8
+  grid_major_width: 1
+  grid_minor_tick_width: 1
+  grid_center_width: 1.4

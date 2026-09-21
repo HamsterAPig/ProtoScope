@@ -68,13 +68,17 @@ gui:
     chinese_glyph_range: simplified_common
 ```
 
-- `theme`：全局界面主题，支持 `professional_dark`（默认，保持原有专业深色外观）
-  和 `debug_high_contrast`（示波器高对比网格）。缺失或填写非法值时回退到
-  `professional_dark`。
+- `theme`：主题字符串 ID，内置 `professional_dark`（默认，中性深灰）、
+  `debug_high_contrast`（仪器深黑）和 `professional_light`（专业浅色）。
+  可选择配置文件旁 `themes` 目录中的 YAML 用户主题。启动加载失败时显示专业深色，
+  但保留原 ID；缺失字段默认 `professional_dark`。详见 [主题管理与模板](theme-management.md)。
 - 运行中可通过 `设置 -> 主题` 即时切换，无需重启，也不会重载当前协议。
   切换会把配置标记为待保存；启用自动保存时自动写回，否则使用
   `文件 -> 保存配置` 持久化。
 - 主题属于本机全局偏好，不随协议切换或现场包导入改变。
+- `gui.wave.overview_selection`：概览缩放框可选覆盖，`mode` 为 `auto`（默认）或 `fixed`，
+  `fixed_color` 为 `"#RRGGBB"`，`min_alpha`、`max_alpha` 满足 `0 <= min <= max <= 1`。
+  未覆盖项随主题变化；主题默认 alpha 范围为 `0.10..0.28`。
 - `show_app_header`：是否显示应用顶部 header。
 - `window.title`：窗口标题。
 - `window.width` / `window.height`：初始窗口尺寸。
