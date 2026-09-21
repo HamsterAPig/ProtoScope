@@ -47,6 +47,7 @@ gui:
     y_axis_double_click_action: fit_visible_channels
     y_axis_double_click_adjust_offset: false
     overview_normalize_channels: false
+    overview_show_bit_channels: false
     hidden_channel_policy: visible_only
     cursor_extreme_snap_policy: nearest_waveform
     mouse_y_offset_drag_mode: direct

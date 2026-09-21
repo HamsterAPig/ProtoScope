@@ -284,6 +284,136 @@ int main(int argc, char** argv)
             drawOverview("overview-constant");
         }
         {
+            dock::DockStore docks;
+            auto& wave = docks.waveState();
+            wave.buffer.configureChannels(4);
+            wave.view.initialized = true;
+            wave.view.defaultViewportPending = false;
+            wave.view.autoFollowLatest = false;
+            const std::array<std::array<float, 4>, 4> colors{{
+                {1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {1, 0, 1, 1}}};
+            for (std::size_t i = 0; i < colors.size(); ++i)
+                wave.buffer.setChannelSpec(i, {.color = colors[i], .bitDisplay = {.enabled = i % 2 == 1}});
+            wave.view.viewMinTime = 0.25;
+            wave.view.viewMaxTime = 0.75;
+            wave.view.visibleDuration = 0.5;
+            wave.view.showCursors = true;
+            wave.view.cursors[0] = {.enabled = true, .time = 0.4};
+            wave.view.cursors[1] = {.enabled = true, .time = 0.6};
+            config::ConfigStore configStore;
+            const auto draw = [&](bool showBits, bool normalize, const std::vector<std::size_t>& indices,
+                                  const std::string& name) {
+                const auto loaded = configStore.loadText(
+                    std::string("gui:\n  wave:\n    overview_show_bit_channels: ") +
+                    (showBits ? "true\n" : "false\n"));
+                configStore.applyToDock(loaded.config, docks);
+                wave.view.overviewNormalizeChannels = normalize;
+                const bool verifyNavigation = name == "overview-all-bit-navigation";
+                const auto previousSpan = wave.view.viewMaxTime - wave.view.viewMinTime;
+                // 同时验证真正的 ImPlot 坐标范围与提交给后端的顶点顺序。
+                const int passes = verifyNavigation ? 3 : 2;
+                for (int pass = 0; pass < passes; ++pass) {
+                    if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                    ImGui::NewFrame();
+                    ImGui::SetNextWindowPos(ImVec2(0, 0));
+                    ImGui::SetNextWindowSize(ImVec2(1100, 300));
+                    ImGui::Begin("overview bit layers");
+                    auto frame = ui::prepareWaveFrame(wave, 1100);
+                    ui::drawOverviewWindow(wave, frame.fullSnapshot->config, *frame.fullSnapshot,
+                        *frame.overviewDisplayData, plot::computeDisplayBounds(*frame.overviewDisplayData, 1e-6),
+                        indices, frame.renderBudget);
+                    const auto* plot = ImPlot::GetPlot("##wave_overview");
+                    if (!plot || plot->Axes[ImAxis_X1].Range.Min != 0 || plot->Axes[ImAxis_X1].Range.Max != 2)
+                        throw std::runtime_error("overview lost full history navigation");
+                    if (!showBits && !normalize && indices.size() > 2 && plot->Axes[ImAxis_Y1].Range.Max > 2)
+                        throw std::runtime_error("hidden Bit channels changed overview Y bounds");
+                    const auto* drawList = ImGui::GetWindowDrawList();
+                    std::array<int, 4> first{-1, -1, -1, -1}, last{-1, -1, -1, -1};
+                    int selectionVertex = -1, cursorVertex = -1;
+                    for (int v = 0; v < drawList->VtxBuffer.Size; ++v) {
+                        const auto vertexColor = drawList->VtxBuffer[v].col;
+                        if (selectionVertex < 0 && vertexColor ==
+                            ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 0.85F, 0.2F, 0.35F)))
+                            selectionVertex = v;
+                        if (cursorVertex < 0 && vertexColor ==
+                            ImGui::ColorConvertFloat4ToU32(ImVec4(1.0F, 0.95F, 0.2F, 0.95F)))
+                            cursorVertex = v;
+                        for (std::size_t i = 0; i < colors.size(); ++i) {
+                            const auto color = ImGui::ColorConvertFloat4ToU32(
+                                ImVec4(colors[i][0], colors[i][1], colors[i][2], 0.65F));
+                            if (drawList->VtxBuffer[v].col == color) {
+                                if (first[i] < 0) first[i] = v;
+                                last[i] = v;
+                            }
+                        }
+                    }
+                    for (std::size_t i = 0; i < colors.size(); ++i) {
+                        const bool visible = std::find(indices.begin(), indices.end(), i) != indices.end() &&
+                                             (showBits || !wave.buffer.channelSpec(i)->bitDisplay.enabled);
+                        if ((first[i] >= 0) != visible) throw std::runtime_error("overview Bit/legend filtering failed");
+                    }
+                    if (showBits && indices.size() == 4 &&
+                        (last[1] >= first[0] || last[3] >= first[0] || last[1] >= first[2] || last[3] >= first[2]))
+                        throw std::runtime_error("Bit overview rendered above analog");
+                    if (selectionVertex <= *std::max_element(last.begin(), last.end()) ||
+                        cursorVertex <= selectionVertex)
+                        throw std::runtime_error("overview selection/cursors order: " + name +
+                            " wave=" + std::to_string(*std::max_element(last.begin(), last.end())) +
+                            " selection=" + std::to_string(selectionVertex) + " cursor=" + std::to_string(cursorVertex));
+                    if (verifyNavigation) {
+                        if (pass == 0) {
+                            const auto center = plot->PlotRect.GetCenter();
+                            io.AddMousePosEvent(center.x, center.y);
+                        } else if (pass == 1) {
+                            io.AddMouseWheelEvent(0, 1);
+                        } else if (wave.view.viewMaxTime - wave.view.viewMinTime >= previousSpan) {
+                            throw std::runtime_error("empty Bit overview cannot zoom time window: wheel=" +
+                                std::to_string(io.MouseWheel) + " hovered=" + std::to_string(plot->Hovered) +
+                                " span=" + std::to_string(wave.view.viewMaxTime - wave.view.viewMinTime));
+                        }
+                    }
+                    ImGui::End();
+                    ImGui::Render();
+                    if (withGl && pass == passes - 1) {
+                        glClear(GL_COLOR_BUFFER_BIT);
+                        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                        glFinish();
+                        captureFrame(captureDirectory, name);
+                    }
+                }
+            };
+            for (bool dense : {false, true}) {
+                wave.buffer.clear();
+                for (std::size_t i = 0; i < colors.size(); ++i) {
+                    wave.buffer.setChannelSpec(i, {.color = colors[i], .bitDisplay = {.enabled = i % 2 == 1}});
+                    std::vector<plot::WaveSample> samples;
+                    const int count = dense && (i == 1 || i == 2) ? 6000 : 20;
+                    for (int j = 0; j <= count; ++j)
+                        samples.push_back({2.0 * j / count,
+                            i % 2 ? (j % 2 ? 100.0 : -100.0) :
+                                    std::sin(6.283185307179586 * j / count * (i + 1))});
+                    wave.buffer.append(i, {{}, samples});
+                }
+                const std::string mode = dense ? "-envelope" : "-trace";
+                draw(false, false, {0, 1, 2, 3}, "overview-bit-hidden" + mode);
+                draw(true, true, {0, 1, 2, 3}, "overview-bit-layers" + mode);
+                draw(true, false, {1, 2, 3}, "overview-legend-hidden" + mode);
+                draw(false, false, {1, 3}, "overview-bits-only" + mode);
+                auto spec = *wave.buffer.channelSpec(1);
+                spec.bitDisplay.enabled = false;
+                wave.buffer.setChannelSpec(1, spec);
+                draw(false, true, {1, 3}, "overview-bit-toggle" + mode);
+                spec.bitDisplay.enabled = true;
+                wave.buffer.setChannelSpec(1, spec);
+            }
+            for (std::size_t i : {0U, 2U}) {
+                auto spec = *wave.buffer.channelSpec(i);
+                spec.bitDisplay.enabled = true;
+                wave.buffer.setChannelSpec(i, spec);
+            }
+            draw(false, false, {0, 1, 2, 3}, "overview-all-bit-navigation");
+        }
+        {
             plot::WaveDockState wave;
             wave.view.initialized = true;
             wave.view.defaultViewportPending = false;

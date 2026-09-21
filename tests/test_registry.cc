@@ -8,6 +8,7 @@ static const TestCase kAllTests[] = {
     {"application_bit_hover_setup_preserves_history", &test_application_bit_hover_setup_preserves_history},
     {"wave_overview_channel_normalization", &test_wave_overview_channel_normalization},
     {"wave_cursor_export_visibility", &test_wave_cursor_export_visibility},
+    {"wave_overview_bit_config", &test_wave_overview_bit_config},
     {"hex_roundtrip", &test_hex_roundtrip},
     {"hex_invalid_input", &test_hex_invalid_input},
     {"hex_normalize_input", &test_hex_normalize_input},

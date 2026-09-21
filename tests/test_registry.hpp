@@ -1,5 +1,6 @@
 #pragma once
 void test_wave_cursor_export_visibility();
+void test_wave_overview_bit_config();
 
 void test_wave_channel_affine_transform();
 void test_wave_layout_multiframe_parameter_roundtrip();

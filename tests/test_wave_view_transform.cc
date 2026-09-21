@@ -48,6 +48,26 @@ void test_wave_cursor_export_visibility()
     }
 }
 
+void test_wave_overview_bit_config()
+{
+    using namespace protoscope;
+    config::ConfigStore store;
+    for (bool enabled : {true, false}) {
+        const auto loaded = store.loadText(std::string("gui:\n  wave:\n    overview_show_bit_channels: ") +
+                                          (enabled ? "true\n" : "false\n"));
+        check(loaded.error.empty(), "Bit 概览配置应可读取");
+        dock::DockStore docks;
+        store.applyToDock(loaded.config, docks);
+        std::string yaml, error;
+        check(store.saveText(store.captureFromDock(docks), yaml, error), "Bit 概览配置应可回收并保存");
+        check(yaml.find(std::string("overview_show_bit_channels: ") + (enabled ? "true" : "false")) !=
+                  std::string::npos, "Bit 概览开关必须贯通读取、运行态与保存");
+    }
+    std::string yaml, error;
+    check(store.saveText(store.loadText("gui:\n  wave: {}\n").config, yaml, error), "旧配置应可读取");
+    check(yaml.find("overview_show_bit_channels: false") != std::string::npos, "旧配置的 Bit 概览应默认关闭");
+}
+
 void test_wave_channel_affine_transform()
 {
     using namespace protoscope;

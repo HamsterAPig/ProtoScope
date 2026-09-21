@@ -115,6 +115,7 @@ gui:
     downsample_start_multiplier: 2.0
     overview_max_samples: 20000
     overview_normalize_channels: false
+    overview_show_bit_channels: false
     max_total_samples: 0
     min_visible_time_span: 0.001
     reset_history_on_time_reset: true
@@ -153,6 +154,9 @@ gui:
 - 余辉在拖动期间暂停累积，显示轻量轨迹。旧视口纹理在交互后失效，松手按最终坐标重建一次；冻结状态随后继续冻结，不自动恢复数据跟随。触发模式在 32 个时间分区中各选至多一个真实触发，采用原始样本插值确定触发时间，各轨迹共享绘图预算。分屏继续使用普通轨迹回退。
 - `downsample_start_multiplier`：可见点数超过预算多少倍后开始降采样。
 - `overview_max_samples`：概览桶数上限，每桶最多两个极值点；0 仅取消此项限制。
+- `overview_show_bit_channels`：默认 `false`，Bit 通道不参与概览绘制和纵轴范围计算。
+  开启后 Bit 通道先绘制，普通通道覆盖其上，选框与游标位于最上层；遵循现有图例隐藏状态。
+  所有通道均为 Bit 且关闭此项时，概览仍保留完整历史时间导航。仅支持配置文件控制。
   预算公式、降采样阈值与当前限制见[波形渲染计划](wave-view-render-plan.md#渲染预算)。
 - `overview_normalize_channels`：默认 `false`；开启后各 CH 的全历史概览包络独立映射到
   `[-1,1]`，常量位于 0，空通道和非有限值跳过。只改变概览绘制，不修改主图

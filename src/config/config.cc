@@ -704,6 +704,8 @@ namespace {
             readScalar<std::size_t>(wave, "overview_max_samples", config.gui.wave.overviewMaxSamples);
         config.gui.wave.overviewNormalizeChannels =
             readScalar<bool>(wave, "overview_normalize_channels", config.gui.wave.overviewNormalizeChannels);
+        config.gui.wave.overviewShowBitChannels =
+            readScalar<bool>(wave, "overview_show_bit_channels", config.gui.wave.overviewShowBitChannels);
         config.gui.wave.maxTotalSamples =
             readScalar<std::size_t>(wave, "max_total_samples", config.gui.wave.maxTotalSamples);
         config.gui.wave.minVisibleTimeSpan =
@@ -1105,6 +1107,7 @@ namespace {
         gui["wave"]["downsample_start_multiplier"] = config.gui.wave.downsampleStartMultiplier;
         gui["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
         gui["wave"]["overview_normalize_channels"] = config.gui.wave.overviewNormalizeChannels;
+        gui["wave"]["overview_show_bit_channels"] = config.gui.wave.overviewShowBitChannels;
         gui["wave"]["max_total_samples"] = config.gui.wave.maxTotalSamples;
         gui["wave"]["min_visible_time_span"] = config.gui.wave.minVisibleTimeSpan;
         gui["wave"]["reset_history_on_time_reset"] = config.gui.wave.resetHistoryOnTimeReset;
@@ -1654,6 +1657,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.downsampleStartMultiplier = (std::max)(config.gui.wave.downsampleStartMultiplier, 1.0);
     wave.overviewMaxSamples = config.gui.wave.overviewMaxSamples;
     wave.overviewNormalizeChannels = config.gui.wave.overviewNormalizeChannels;
+    wave.overviewShowBitChannels = config.gui.wave.overviewShowBitChannels;
     wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
     wave.channelCardFixedWidth = positiveOrFallback(config.gui.wave.channelCardFixedWidth, 128.0);
     wave.channelCardAdaptiveRatio = positiveOrFallback(config.gui.wave.channelCardAdaptiveRatio, 0.22);
@@ -1722,6 +1726,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.downsampleStartMultiplier = dockStore.waveState().view.downsampleStartMultiplier;
     config.gui.wave.overviewMaxSamples = dockStore.waveState().view.overviewMaxSamples;
     config.gui.wave.overviewNormalizeChannels = dockStore.waveState().view.overviewNormalizeChannels;
+    config.gui.wave.overviewShowBitChannels = dockStore.waveState().view.overviewShowBitChannels;
     config.gui.wave.minVisibleTimeSpan = dockStore.waveState().view.minVisibleTimeSpan;
     config.gui.wave.channelCardFixedWidth = dockStore.waveState().view.channelCardFixedWidth;
     config.gui.wave.channelCardAdaptiveRatio = dockStore.waveState().view.channelCardAdaptiveRatio;

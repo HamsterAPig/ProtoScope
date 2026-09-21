@@ -90,10 +90,25 @@ void drawOverviewWindow(plot::WaveDockState& wave,
         return;
     }
 
+    // 先筛选可见通道，再稳定地把 Bit 放到底层；折线与包络共用此顺序。
+    std::vector<std::size_t> overviewChannels;
+    overviewChannels.reserve(channelIndices.size());
+    for (const auto index : channelIndices) {
+        if (index < fullSnapshot.channels.size() && index < displayData.channels.size() &&
+            (view.overviewShowBitChannels || !fullSnapshot.channels[index].bitDisplay.enabled)) {
+            overviewChannels.push_back(index);
+        }
+    }
+    std::stable_partition(overviewChannels.begin(), overviewChannels.end(), [&](std::size_t index) {
+        return fullSnapshot.channels[index].bitDisplay.enabled;
+    });
+    const auto valueBounds =
+        plot::computeDisplayBoundsForChannels(displayData, overviewChannels, view.minVisibleTimeSpan);
+    // 时间范围独立于绘制筛选，全部 Bit 被隐藏时仍保留全历史窗口导航。
     double overviewMinTime = displayBounds.valid ? displayBounds.minTime : std::numeric_limits<double>::infinity();
     double overviewMaxTime = displayBounds.valid ? displayBounds.maxTime : -std::numeric_limits<double>::infinity();
-    double overviewMinValue = displayBounds.valid ? displayBounds.minValue : std::numeric_limits<double>::infinity();
-    double overviewMaxValue = displayBounds.valid ? displayBounds.maxValue : -std::numeric_limits<double>::infinity();
+    double overviewMinValue = valueBounds.valid ? valueBounds.minValue : std::numeric_limits<double>::infinity();
+    double overviewMaxValue = valueBounds.valid ? valueBounds.maxValue : -std::numeric_limits<double>::infinity();
     if (!displayBounds.valid) {
         for (const std::size_t channelIndex : channelIndices) {
             if (channelIndex >= fullSnapshot.channels.size()) {
@@ -107,7 +122,8 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             const auto& last = channel.samples[channel.totalSamples - 1];
             overviewMinTime = (std::min)(overviewMinTime, first.time);
             overviewMaxTime = (std::max)(overviewMaxTime, last.time);
-            if (channel.stats.visibleSamples > 0) {
+            if (!valueBounds.valid && channel.stats.visibleSamples > 0 &&
+                (view.overviewShowBitChannels || !channel.bitDisplay.enabled)) {
                 overviewMinValue = (std::min)(overviewMinValue, channel.stats.minValue);
                 overviewMaxValue = (std::max)(overviewMaxValue, channel.stats.maxValue);
             }
@@ -149,10 +165,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             overviewMaxSamples > 0
                 ? (std::min)({pixelWidth, renderBudget.pointsPerChannel, overviewMaxSamples})
                 : (std::min)(pixelWidth, renderBudget.pointsPerChannel);
-        for (const std::size_t channelIndex : channelIndices) {
-            if (channelIndex >= fullSnapshot.channels.size() || channelIndex >= displayData.channels.size()) {
-                continue;
-            }
+        for (const std::size_t channelIndex : overviewChannels) {
             const auto& overview = cachedOverviewChannel(wave, fullSnapshot.channels[channelIndex], channelIndex,
                 displayData.axisSource, overviewMinTime, overviewMaxTime, pixelWidth, overviewPointLimit);
             const auto color = withAlpha(channelColor(fullSnapshot.channels[channelIndex], channelIndex), 0.65F);
