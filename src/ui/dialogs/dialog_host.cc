@@ -6,6 +6,7 @@
 #include "protoscope/ui/keyboard_shortcuts.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <optional>
 #include <span>
@@ -523,6 +524,20 @@ void GuiRuntime::openUnifiedDataExport(int content, bool useLast)
     if (useLast) submitUnifiedDataExport();
 }
 
+bool validateWaveCursorExport(const plot::WaveViewState& view, std::string& error)
+{
+    // 固定仅约束游标交互；可见且时间有效的双游标即可导出闭区间。
+    if (!view.showCursors || !view.cursors[0].enabled || !view.cursors[1].enabled) {
+        error = "请先显示两个波形游标";
+        return false;
+    }
+    if (!std::isfinite(view.cursors[0].time) || !std::isfinite(view.cursors[1].time)) {
+        error = "波形游标时间无效";
+        return false;
+    }
+    return true;
+}
+
 void GuiRuntime::submitUnifiedDataExport()
 {
     plot::CsvExportRange range;
@@ -533,8 +548,7 @@ void GuiRuntime::submitUnifiedDataExport()
     range.cursorATime = view.cursors[0].time;
     range.cursorBTime = view.cursors[1].time;
     if ((dataExportDraft_.content == 0 || dataExportDraft_.content == 3) && dataExportDraft_.waveRange == 2 &&
-        (!view.cursors[0].enabled || !view.cursors[1].enabled || !view.cursors[0].pinned || !view.cursors[1].pinned)) {
-        unifiedDataError_ = "请先放置两个波形游标";
+        !validateWaveCursorExport(view, unifiedDataError_)) {
         return;
     }
     if (dataExportDraft_.content != 0 && dataExportDraft_.recordRange == 2 &&

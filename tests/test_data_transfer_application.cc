@@ -93,6 +93,10 @@ int main(int argc, char**)
                 "hidden channel or closed cursor range lost");
         require(selected->channels[0].samples[0].value == 2, "display transformed value exported");
         require(selected->rangeDescription == "cursors:1,2", "wave range provenance lost");
+        const auto coincident = application.captureWaveData(
+            {.kind = plot::CsvExportRangeKind::CursorPair, .cursorATime = 1, .cursorBTime = 1}, error);
+        require(coincident && coincident->channels[0].samples.size() == 2 &&
+                coincident->channels[1].samples.size() == 1, "coincident cursor endpoint samples lost");
         wave.view.sampleFrequencyHz = 10;
         const auto frequency = application.captureWaveData(
             {.kind = plot::CsvExportRangeKind::CurrentView, .currentViewMinTime = 10.1, .currentViewMaxTime = 10.2}, error);

@@ -46,6 +46,7 @@ struct GuiRuntimeOptions {
 };
 
 bool runRendererProbe(app::StartupDiagnosticsSink* diagnostics);
+bool validateWaveCursorExport(const plot::WaveViewState& view, std::string& error);
 
 class GuiRuntime {
 public:

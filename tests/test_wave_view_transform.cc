@@ -2,6 +2,7 @@
 #include "test_registry.hpp"
 #include "protoscope/config/config.hpp"
 #include "protoscope/dock/docks.hpp"
+#include "protoscope/ui/gui_runtime.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -14,6 +15,37 @@ void check(bool value, const char* message)
         throw std::runtime_error(message);
     }
 }
+}
+
+void test_wave_cursor_export_visibility()
+{
+    using namespace protoscope;
+    plot::WaveViewState view;
+    std::string error;
+    view.showCursors = true;
+    for (auto& cursor : view.cursors) cursor.enabled = true;
+    // 快捷定位、拖动和重合位置都不以 pinned 作为导出前提。
+    for (const auto times : {std::pair{1.0, 2.0}, std::pair{2.0, 1.0}, std::pair{1.0, 1.0}}) {
+        view.cursors[0].time = times.first;
+        view.cursors[1].time = times.second;
+        check(ui::validateWaveCursorExport(view, error), "未固定的可见双游标应允许导出");
+    }
+    view.showCursors = false;
+    check(!ui::validateWaveCursorExport(view, error), "隐藏总开关应拒绝导出");
+    view.showCursors = true;
+    for (auto& cursor : view.cursors) {
+        cursor.enabled = false;
+        check(!ui::validateWaveCursorExport(view, error), "任一游标隐藏应拒绝导出");
+        cursor.enabled = true;
+        const auto time = cursor.time;
+        for (double invalid : {std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity(),
+                               -std::numeric_limits<double>::infinity()}) {
+            cursor.time = invalid;
+            check(!ui::validateWaveCursorExport(view, error), "无效游标时间应拒绝导出");
+        }
+        cursor.time = time;
+    }
 }
 
 void test_wave_channel_affine_transform()
