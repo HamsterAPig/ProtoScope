@@ -1,0 +1,72 @@
+# Lua 数据与存储 API
+
+## 声明和生命周期
+
+```lua
+function data()
+    return {{id = "telemetry", fields = {
+        {name = "temperature", type = "double", nullable = false},
+        {name = "sequence", type = "int64", nullable = false}
+    }}}
+end
+```
+
+模式只在加载时声明。支持 `int64`、`double`、`bool`、`string`、`bytes`。
+字段可空默认 true，发布时仍须显式写 `proto.data.null`，不允许遗漏字段。
+整数保留 Lua integer 的完整精度；double 字段接受整数并转换。
+`proto.data.bytes(raw_string)` 构造原始字节，不解释 HEX；查询返回 `ProtoBuffer`。
+
+所有运行期 API 必须在回调中调用，不能在脚本顶层或 `data/ui/controls` 声明中调用。
+加载失败保留旧会话；成功重载排空旧写入，新 runtime 不接收旧任务回调。
+`data()` 同样受加载指令预算保护。
+
+默认存储位置为可执行目录 `data/<协议目录哈希>/`，数据库同时校验完整规范协议路径。
+YAML `scripting.storage.root_dir` 可覆盖根目录，相对路径按进程工作目录解析。
+协议目录搬迁会得到新的存储身份。测试或独立 ScriptHost 通过 `setStorageRoot` 注入根目录。
+预加载探测宿主不设置根目录，因此只验证声明，不创建数据库。
+
+## 发布和最新值
+
+```lua
+proto.data.publish({
+    dataset = "telemetry", device = "sensor-1", device_time_us = 123,
+    values = {temperature = 23.5, sequence = 1}
+})
+local row = proto.data.latest("telemetry")
+```
+
+接收时间由宿主生成。`publish_batch(rows)` 先验证全部行，之后更新有界最新值缓存。
+最新值每数据集一条，不按设备缓存；需要区分设备时读取返回的 `device`。
+最多 128 个数据集，单次发布最多 1000 行、编码记录总量不超过 8MiB。
+未开启记录时仍更新最新值。队列拒绝抛出 Lua 错误，但已验证的最新值仍更新。
+API 返回成功不等于落盘成功，必须读取记录状态和任务结果。
+
+## 记录任务
+
+- `proto.record.start()`、`stop()` 返回任务 ID，完成后进入 `on_record(ctx, evt)`。
+- 应等待 start 成功事件后发布要记录的数据；stop 成功表示之前接受的记录已处理完毕。
+- `status()` 返回 `recording/recovered/faulted/received/queued/committed/failed/queue_bytes/error`。
+- `query({dataset, device, from_us, to_us, offset, limit, snapshot})` 异步查询。
+  默认页长 200，最多 1000；省略 snapshot 创建固定快照，后续页复用返回的 snapshot。
+- `cancel(task)` 请求取消查询。完成与取消竞争时允许收到已完成结果。
+
+`on_record` 事件含 `task/operation/ok/error/records/snapshot/more`。
+异步记录故障额外触发 `operation="fault"`、`task=0` 的事件；`status` 附带计数和错误。
+记录行含 `protocol/dataset/device/received_at_us/device_time_us/schema_version/values`。
+历史行按对应历史模式解码，字段变化不会使旧行被按当前模式误读。
+尚未提供字段条件查询、分卷和导入导出；当前不是完整长期记录版本。
+
+## KV
+
+`proto.kv.get(key)` 只读取已提交内存缓存，未找到返回 nil。
+`set(key,value)`、`delete(key)`、`flush()` 返回任务 ID；
+提交成功才更新缓存并进入 `on_kv(ctx,evt)`，事件结构同记录任务。
+设备级设置由脚本自行使用键前缀。
+
+支持标量、稠密数组、字符串键对象、显式 null 和 ProtoBuffer。
+空 Lua 表按对象保存；不接受混合键、稀疏数组、循环表、函数及其他 userdata。
+单值 256KiB、深度 16、每协议总量 8MiB；不自动序列化 metatable。
+无副作用的共享子表会按值复制，不保留表身份。
+输入错误或队列拒绝抛出 Lua 错误，可用 `pcall` 捕获；已排队任务的失败通过事件报告。
+
+当前的回调轮询周期为 20ms。回调仍在 Lua worker 内执行，受现有回调预算约束。

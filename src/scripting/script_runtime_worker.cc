@@ -640,6 +640,7 @@ struct ScriptRuntimeWorker::Impl {
     CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, ConfigureCommand& command)
     {
         host.setExecutionConfig(command.config.execution);
+        host.setStorageRoot(command.config.storageRoot);
         std::lock_guard lock(mutex);
         config = command.config;
         return {};

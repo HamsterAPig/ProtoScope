@@ -297,13 +297,14 @@ void executionConfig()
 {
     protoscope::config::ConfigStore store;
     const auto loaded = store.loadText(
-        "scripting:\n  execution:\n    load_timeout_ms: 25\n    callback_timeout_ms: 30\n");
+        "scripting:\n  storage:\n    root_dir: custom-data\n  execution:\n    load_timeout_ms: 25\n    callback_timeout_ms: 30\n");
     require(loaded.error.empty(), "执行预算配置应可读取");
     require(loaded.config.scripting.execution.loadTimeoutMs == 25 &&
             loaded.config.scripting.execution.callbackTimeoutMs == 30, "必须读取配置的加载与回调预算");
     std::string yaml, error;
     require(store.saveText(loaded.config, yaml, error), "执行预算应可保存");
     const auto reloaded = store.loadText(yaml);
+    require(reloaded.config.scripting.storageRootDir == "custom-data", "存储根目录必须往返保存");
     require(reloaded.config.scripting.execution.loadTimeoutMs == 25 &&
             reloaded.config.scripting.execution.callbackTimeoutMs == 30, "保存重载必须保持执行预算");
     const auto clamped = store.loadText(

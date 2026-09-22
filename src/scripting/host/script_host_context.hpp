@@ -9,6 +9,7 @@
 #include <sol/sol.hpp>
 
 namespace protoscope::scripting {
+class ScriptDataSession;
 
 struct ScriptHostQueues {
     // 核心流程说明：队列所有权仍在 ScriptHost，内部服务仅通过宿主门面调度。
@@ -20,6 +21,7 @@ struct ScriptHostContextInternal {
     FileIoConfig& fileIoConfig;
     std::optional<transport::ConnectionContext>& activeConnection;
     sol::state_view lua;
+    ScriptDataSession& dataSession;
 };
 
 } // namespace protoscope::scripting

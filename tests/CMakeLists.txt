@@ -1,4 +1,6 @@
 add_executable(protoscope_storage_tests test_storage.cc)
+add_executable(protoscope_storage_rate_benchmark benchmark_storage.cc)
+target_link_libraries(protoscope_storage_rate_benchmark PRIVATE protoscope_storage)
 target_link_libraries(protoscope_storage_tests PRIVATE protoscope_storage)
 add_test(NAME protoscope_storage_tests COMMAND protoscope_storage_tests)
 set_tests_properties(protoscope_storage_tests PROPERTIES TIMEOUT 60)
@@ -170,6 +172,11 @@ if(PROTOSCOPE_ENABLE_GUI)
 endif()
 
 find_package(Python3 COMPONENTS Interpreter)
+add_executable(protoscope_script_data_tests test_script_data.cc)
+target_link_libraries(protoscope_script_data_tests PRIVATE protoscope_scripting)
+add_test(NAME protoscope_script_data_tests COMMAND protoscope_script_data_tests)
+set_tests_properties(protoscope_script_data_tests PROPERTIES TIMEOUT 60)
+
 if(Python3_Interpreter_FOUND)
     add_test(
         NAME protoscope_luals_api_manifest_check

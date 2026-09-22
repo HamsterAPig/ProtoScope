@@ -88,6 +88,9 @@ target_link_libraries(protoscope_ui_layout
 target_compile_features(protoscope_ui_layout PUBLIC cxx_std_20)
 
 add_library(protoscope_scripting STATIC
+    scripting/host/script_data_session.cc
+    scripting/host/script_data_dispatcher.cc
+    scripting/host/data_api_module.cc
     scripting/host/lua_execution_guard.cc
     scripting/frame_stream_parser.cc
     scripting/pipeline_threading.cc
@@ -113,6 +116,7 @@ target_include_directories(protoscope_scripting
 )
 target_link_libraries(protoscope_scripting
     PUBLIC
+        protoscope_storage
         protoscope_plot
         protoscope_protocol_utils
         protoscope_transport

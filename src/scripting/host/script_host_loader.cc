@@ -178,6 +178,8 @@ void ScriptHost::resetForScriptLoad(const std::string& path, const std::string& 
 
 void ScriptHost::configureLuaRuntimeForScriptLoad(Runtime& runtime, const std::string& protocolDirectory)
 {
+    runtime.data = std::make_unique<ScriptDataSession>(
+        storageRoot_, canonicalPath(protocolDirectory).generic_string());
     runtime.lua.open_libraries(sol::lib::base,
                                sol::lib::math,
                                sol::lib::package,
@@ -216,7 +218,7 @@ void ScriptHost::configureLuaRuntimeForScriptLoad(Runtime& runtime, const std::s
     auto proto = lua.create_named_table("proto");
 
     // 核心流程：所有脚本侧能力统一经由模块注册器挂到 proto.*，避免加载流程继续膨胀。
-    registerLuaApi(lua, proto);
+    registerLuaApi(runtime, proto);
 }
 
 std::unique_ptr<ScriptHost::LoadedScript> ScriptHost::loadScriptIntoRuntime(Runtime& runtime,
@@ -244,6 +246,7 @@ std::unique_ptr<ScriptHost::LoadedScript> ScriptHost::loadScriptIntoRuntime(Runt
         error = std::move(parseError);
         return nullptr;
     }
+    runtime.data->loadSchemas(lua);
     if (runtime.execution.failure != nullptr || stopSignal_->load(std::memory_order_relaxed)) {
         error = runtime.execution.failure != nullptr ? runtime.execution.failure : "Lua execution stopped";
         return nullptr;
@@ -318,6 +321,9 @@ bool ScriptHost::loadScriptFile(const std::string& path)
             return restoreFailure(std::move(error));
         }
 
+        // 新会话读取已提交缓存前排空旧写入；加载失败仍保留旧 runtime 和回调。
+        if (runtime_ && runtime_->data) runtime_->data->waitIdle();
+        nextRuntime->data->activate();
         commitLoadedScript(
             std::move(nextRuntime), std::move(loadedScript), snapshot.controlValues, path, nextProtocolDirectory);
         return true;

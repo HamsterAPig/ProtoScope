@@ -949,6 +949,9 @@ namespace {
 
     void loadScriptingWorkerConfig(const YAML::Node& scripting, AppConfig& config)
     {
+        if (const auto storage = childNode(scripting, "storage")) {
+            config.scripting.storageRootDir = readScalar<std::string>(storage, "root_dir", "");
+        }
         if (const auto execution = childNode(scripting, "execution")) {
             config.scripting.execution.loadTimeoutMs = std::clamp<std::uint64_t>(
                 readScalar<std::uint64_t>(execution, "load_timeout_ms", 5000), 1, 3600000);
@@ -1316,6 +1319,7 @@ namespace {
             scripting["pipeline"]["worker_threads"] = *config.scripting.pipeline.workerThreads;
         }
         scripting["execution"]["load_timeout_ms"] = config.scripting.execution.loadTimeoutMs;
+        scripting["storage"]["root_dir"] = config.scripting.storageRootDir;
         scripting["execution"]["callback_timeout_ms"] = config.scripting.execution.callbackTimeoutMs;
         scripting["worker"]["enabled"] = config.scripting.workerEnabled;
         writePerformanceScalar(scripting["worker"],

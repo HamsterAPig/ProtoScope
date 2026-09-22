@@ -1,4 +1,5 @@
 #include "protoscope/app/application.hpp"
+#include "protoscope/config/embedded_protocols.hpp"
 #include "protoscope/plot/data_file_output.hpp"
 
 #include "protoscope/plot/wave_math.hpp"
@@ -1289,6 +1290,9 @@ bool Application::applyConfig(const config::AppConfig& config)
         config.scripting.pipeline.workerThreads, std::thread::hardware_concurrency());
     scriptWorker_.configure(scripting::ScriptRuntimeWorkerConfig{
         .execution = config.scripting.execution,
+        .storageRoot = config.scripting.storageRootDir.empty()
+            ? config::embedded::executableDirectory() / "data"
+            : std::filesystem::absolute(config.scripting.storageRootDir),
         .enabled = config.scripting.workerEnabled,
         .postprocessWorkerThreads = postprocessWorkerThreads,
         .rxQueueLimitBytes = config.scripting.workerRxQueueLimitBytes,

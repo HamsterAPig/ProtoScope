@@ -1,6 +1,7 @@
 # 工业控件与持久化实施状态
 
-本文件记录已实现边界，不替代完整扩展方案。当前实现尚未提供端到端 Lua 记录界面。
+本文件记录已实现边界，不替代完整扩展方案。当前提供基础 Lua 记录示例，
+尚未提供工业控件、历史表和文件交换的完整界面。
 
 ## 已验证的基础修复与执行保护
 
@@ -21,13 +22,13 @@
 - `protoscope_data`：纯 C++20 类型化值、模式、记录、验证及二进制值编码。
   不依赖 Lua、ImGui 或 SQLite。
 - `protoscope_storage`：基于固定 SQLite 3.50.4 的独立 C++ 服务。
-  当前应用和脚本宿主尚未装配此服务。
+  已通过独立 ScriptDataSession 接入 Lua worker 和应用配置。
 - `protoscope_sqlite`：随仓库静态编译，关闭动态扩展加载；来源和归档摘要见第三方目录说明。
 
 ### 当前 C++ 接口
 
 `storage::Store(root, protocol, schemas, config)` 接收已解析的协议标识、专用根目录及固定模式。
-根目录由调用方传入，默认应用目录解析和 `scripting.storage.root_dir` 尚未接入。
+根目录由调用方传入，应用默认使用可执行目录下的 data，支持 `scripting.storage.root_dir`。
 
 - `start/stop/set/erase/flush/query` 返回任务 ID；`poll()` 返回完成结果。
 - `publish` 整批校验后进入有界记录队列，成功代表已入队。
@@ -58,14 +59,22 @@ KV 单值 256KiB、深度 16、每协议 8MiB。最多保留 1024 个未消费�
 这只是恢复基础，尚未实现“重启开启新分卷”和异常退出区间标记。
 KV 独立于记录文件，记录故障不阻断 KV 任务。
 
+## Lua 接入
+
+- Lua 基础发布、KV、记录启停/状态/查询/取消及回调已接入；详见 `lua-data-storage.md`。
+  加载阶段禁止运行期 API，KV 初始化读取在成功激活后提供。
+- 每个 runtime 独占会话，旧任务不跨重载投递；KV 缓存只在提交后更新。
+- 转换检查循环、混合键、稀疏数组、大小和深度，保留 int64、null、字节和嵌入 NUL。
+- 存储轮询使用固定到期时间，连续收包或获取快照不会延迟任务结果。
+- `protocols/data_storage_demo/main.lua` 使用现有按钮和状态栏展示基础发布、记录和查询。
+
 ## 剩余工作
 
-- 数据声明及 `proto.data`、`proto.kv`、`proto.record` Lua 绑定、任务回调与应用装配。
 - 工业控件、动态属性原子更新、编辑草稿、业务菜单、运行时代次和 UI 状态兼容。
 - 实时字段绑定和历史表；字段条件查询。
 - 记录分卷、目录索引、占用保护、滚动清理、磁盘容量监测和完整重启恢复。
 - CSV 与 `.psrec` 导入导出、暂存分卷与导入取消。
-- 完整 Lua 示例、Manifest、LuaLS、新 API 文档。
+- 已提供基础存储示例及对应 Manifest/LuaLS/文档；完整 UI 与导入导出示例仍待完成。
 - 故障注入、持续 1000 条/秒以及 24 小时稳定性验收。
 
 ## 验证
@@ -79,3 +88,14 @@ ctest --test-dir build --output-on-failure
 已有 `build` 缓存使用 MinGW Makefiles，不能直接用 `-G Ninja` 改写该缓存。
 新增安全与存储测试独立于 GUI，CTest 超时均为 60s。
 目前未执行磁盘满故障注入和 24 小时稳定性测试。
+
+本轮 Lua 接入验证：
+
+- `cmake --build build -j 4`：通过。
+- `ctest --test-dir build --output-on-failure`：21/21 通过，33.91 秒。
+- 新增 `protoscope_script_data_tests`：记录分页、KV 重载、输入验证、声明预算、worker 回调。
+- 专项测试曾连续 5 次通过；补充固定轮询期限断言后全量测试通过。
+- `build-industrial-headless` 的 Lua 数据目标构建及专项测试通过。
+- `build/tests/protoscope_storage_rate_benchmark.exe 10`：
+  `rate=1000/s seconds=10 received=10000 queued=10000 committed=10000 queried=10000 failed=0`。
+  工具接受秒数参数（1..86400），目前仅运行 10 秒；不包含清理、导出和内存增长验收。

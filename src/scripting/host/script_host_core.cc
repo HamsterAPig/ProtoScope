@@ -3931,6 +3931,8 @@ void ScriptHost::tick(std::uint64_t currentMs)
     if (executionFaulted()) {
         return;
     }
+    pollStorageCompletions();
+    if (executionFaulted()) return;
     std::vector<std::pair<std::string, std::uint64_t>> dueTimers;
     dueTimers.reserve(timers_.size());
     for (const auto& [name, timer] : timers_) {
@@ -4153,10 +4155,11 @@ std::vector<FileDialogRequest> ScriptHost::drainFileDialogRequests()
     return drained;
 }
 
-void ScriptHost::registerLuaApi(sol::state_view lua, sol::table& proto)
+void ScriptHost::registerLuaApi(Runtime& runtime, sol::table& proto)
 {
     ScriptHostQueues queues;
-    ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_, lua};
+    ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_,
+                                  sol::state_view(runtime.lua), *runtime.data};
     std::array modules{
         makeCoreApiModule(*this),
         makeTxApiModule(*this),
@@ -4167,6 +4170,7 @@ void ScriptHost::registerLuaApi(sol::state_view lua, sol::table& proto)
         makePlotApiModule(*this),
         makeControlApiModule(*this),
         makeCodecApiModule(*this),
+        makeDataApiModule(*this),
     };
 
     // 核心流程：宿主只编排模块顺序，具体 Lua wire format 由各 API 模块原样注册。
@@ -4181,6 +4185,9 @@ std::optional<std::uint64_t> ScriptHost::nextWakeupAtMs() const
         return std::nullopt;
     }
     std::optional<std::uint64_t> nextWakeup;
+    if (runtime_ && runtime_->data && runtime_->data->needsPoll()) {
+        nextWakeup = runtime_->data->nextPollAtMs();
+    }
     for (const auto& [_, timer] : timers_) {
         if (!timer.active) {
             continue;

@@ -3,6 +3,7 @@
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/scripting/script_host.hpp"
 #include "lua_execution_guard.hpp"
+#include "script_data_session.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -45,6 +46,7 @@ struct LoadedStreamSchema {
 
 struct ScriptHost::Runtime {
     LuaExecutionState execution;
+    std::unique_ptr<ScriptDataSession> data;
     sol::state lua;
     std::unique_ptr<LoadedStreamSchema> stream;
     std::unordered_map<std::string, sol::protected_function> streamCallbacks;

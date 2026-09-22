@@ -429,6 +429,7 @@ public:
     bool loadProtocolDirectory(const std::string& directory);
     void setFileIoConfig(FileIoConfig config);
     void setExecutionConfig(ExecutionConfig config);
+    void setStorageRoot(std::filesystem::path root);
     void requestStop() noexcept;
     [[nodiscard]] bool executionFaulted() const;
     void resetRuntime();
@@ -535,7 +536,8 @@ private:
     void dispatchStreamFrames(const transport::ConnectionContext& context,
                               const std::vector<StreamParsedFrame>& frames);
 
-    void registerLuaApi(sol::state_view lua, sol::table& proto);
+    void registerLuaApi(Runtime& runtime, sol::table& proto);
+    void pollStorageCompletions();
     LoadSnapshot captureLoadSnapshot();
     void restoreLoadSnapshot(LoadSnapshot&& snapshot, std::string message);
     void resetForScriptLoad(const std::string& path, const std::string& protocolDirectory);
@@ -644,6 +646,7 @@ private:
     std::unique_ptr<Runtime> runtime_;
     std::shared_ptr<std::atomic_bool> stopSignal_;
     ExecutionConfig executionConfig_{};
+    std::filesystem::path storageRoot_;
     FileIoConfig fileIoConfig_{};
     std::uint64_t nextTxRequestId_{1};
     std::uint64_t nextDialogId_{1};

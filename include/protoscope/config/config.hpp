@@ -264,6 +264,7 @@ struct ScriptingPipelineConfig {
 
 struct ScriptingConfig {
     scripting::ExecutionConfig execution{};
+    std::string storageRootDir{};
     scripting::FileIoConfig fileIo{};
     ScriptingPipelineConfig pipeline{};
     bool workerEnabled{true};
