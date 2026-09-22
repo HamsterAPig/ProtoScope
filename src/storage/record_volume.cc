@@ -68,6 +68,7 @@ struct RecordVolume::Impl {
 RecordVolume::RecordVolume(std::unique_ptr<Impl> impl):impl_(std::move(impl)) {}
 RecordVolume::~RecordVolume()=default;
 const RecordVolumeInfo& RecordVolume::info() const {return impl_->info;}
+const std::map<std::uint64_t,data::Schema>& RecordVolume::schemas() const {return impl_->schemas;}
 std::string RecordVolume::newIdentity() {return identity();}
 
 std::unique_ptr<RecordVolume> RecordVolume::create(const std::filesystem::path& root,const std::string& protocol,
@@ -161,6 +162,10 @@ std::unique_ptr<RecordVolume> RecordVolume::reopen(const std::filesystem::path& 
             throw std::runtime_error("record volume index count mismatch");
         if (count) {impl->info.fromUs=rows.integer(3);impl->info.toUs=rows.integer(4);}
     }
+    if (count) {
+        sqlite::Statement last(db,"SELECT received_us FROM records ORDER BY id DESC LIMIT 1");last.row();
+        impl->info.lastReceivedTimeUs=last.integer(0);
+    }
     sqlite::Statement schemas(db,"SELECT id,definition FROM schemas");
     std::size_t bytes=0;
     while (schemas.row()) {
@@ -202,6 +207,7 @@ void RecordVolume::append(const std::vector<data::Record>& records,std::int64_t 
         db.exec("COMMIT");
     } catch (...) {db.exec("ROLLBACK");throw;}
     info.records+=records.size();info.lastId=last;info.fromUs=from;info.toUs=to;
+    if (!records.empty()) info.lastReceivedTimeUs=records.back().receivedAtUs;
 }
 
 void RecordVolume::seal(std::int64_t sealedAtUs)

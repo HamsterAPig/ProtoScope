@@ -28,6 +28,7 @@ public:
                              const Query& query,ExportOptions options,std::stop_token stop);
     void expireUnpinned();
     void switchActive(std::filesystem::path path,const std::function<void(std::shared_ptr<int>)>& sealPrevious);
+    std::filesystem::path activePath() const;
 private:
     std::shared_ptr<const RecordSnapshot> snapshot(std::optional<std::int64_t> token);
     std::filesystem::path active_;
@@ -35,7 +36,7 @@ private:
     std::size_t memoryBudget_;
     std::map<std::uint64_t,std::uint64_t> activeSchemas_;
     std::shared_ptr<int> activePin_{std::make_shared<int>(0)};
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::map<std::int64_t,std::shared_ptr<const RecordSnapshot>> snapshots_;
 };
 } // namespace protoscope::storage

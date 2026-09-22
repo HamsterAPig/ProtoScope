@@ -52,6 +52,8 @@ public:
     RetentionResult retain(RetentionPolicy policy,std::int64_t nowUs,std::stop_token stop={});
     std::uint64_t diskBytes() const;
     std::shared_ptr<void> claimWriter();
+    std::shared_ptr<int> trackActive(const std::filesystem::path& path,const std::shared_ptr<int>& pin);
+    void reserveLiveThrough(std::int64_t id);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

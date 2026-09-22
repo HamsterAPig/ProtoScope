@@ -183,19 +183,22 @@ private:
 };
 }
 RecordQueryService::RecordQueryService(std::filesystem::path active,VolumeCatalog& catalog,std::size_t budget)
-    :active_(std::move(active)),catalog_(catalog),memoryBudget_(budget)
+    :active_(std::filesystem::weakly_canonical(std::filesystem::absolute(active))),catalog_(catalog),memoryBudget_(budget)
 {
     activeSchemas_=catalog_.registerSchemas(sourceSchemas(active_));
+    activePin_=catalog_.trackActive(active_,activePin_);
 }
 void RecordQueryService::switchActive(std::filesystem::path path,
     const std::function<void(std::shared_ptr<int>)>& sealPrevious)
 {
     if (!sealPrevious) throw std::invalid_argument("missing active volume seal operation");
+    path=std::filesystem::weakly_canonical(std::filesystem::absolute(path));
     auto schemas=catalog_.registerSchemas(sourceSchemas(path));
     auto pin=std::make_shared<int>(0);
     std::lock_guard lock(mutex_);
     if (path==active_ || std::filesystem::equivalent(path,active_))
         throw std::invalid_argument("active volume source did not change");
+    pin=catalog_.trackActive(path,pin);
     // 冻结新快照创建，先登记旧源，再替换活动源；旧快照自身保留旧路径及占用引用。
     sealPrevious(activePin_);
     active_=std::move(path);
@@ -233,6 +236,8 @@ std::shared_ptr<const RecordSnapshot> RecordQueryService::snapshot(std::optional
     }
     for (const auto& volume:result->volumes->volumes())
     {
+        // 切换提交中途失败时，原源可能已登记封存但仍是当前活动指针，不能重复纳入快照。
+        if (volume.path==active_) continue;
         const auto sourceBytes=sizeof(RecordSource)+volume.path.native().size()*sizeof(std::filesystem::path::value_type)+
                                volume.schemaIds.size()*64;
         if (sourceBytes>valueLimits.maxBytes-bytes) throw std::runtime_error("snapshot volume metadata exceeds budget");
@@ -301,5 +306,10 @@ void RecordQueryService::expireUnpinned()
 {
     std::lock_guard lock(mutex_);
     std::erase_if(snapshots_,[](const auto& entry){return entry.second.use_count()==1;});
+}
+std::filesystem::path RecordQueryService::activePath() const
+{
+    std::lock_guard lock(mutex_);
+    return active_;
 }
 } // namespace protoscope::storage

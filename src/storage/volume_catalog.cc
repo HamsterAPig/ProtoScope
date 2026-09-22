@@ -24,6 +24,7 @@ struct CatalogRuntime {
     std::mutex mutex;
     std::map<std::uint64_t,std::shared_ptr<int>> pins;
     bool writerOwned{false};
+    std::map<std::string,std::weak_ptr<int>> activePins;
 #ifdef _WIN32
     HANDLE handle{INVALID_HANDLE_VALUE};
 #else
@@ -355,6 +356,11 @@ CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t seale
         if (high.row() && base<std::stoll(high.text(0)))
             throw std::runtime_error("import record IDs collide with sealed recordings");
     }
+    {
+        sqlite::Statement high(db,"SELECT value FROM metadata WHERE key='record_allocated'");
+        if (high.row() && base<std::stoll(high.text(0)))
+            throw std::runtime_error("import record IDs collide with reserved live range");
+    }
     if (std::filesystem::exists(impl_->root/"records.sqlite")) {
         sqlite::Database active(impl_->root/"records.sqlite",true);
         sqlite::Statement high(active,"SELECT coalesce(max(id),0) FROM records");high.row();
@@ -478,6 +484,10 @@ CatalogVolume VolumeCatalog::adoptRecording(const RecordVolumeInfo& info,std::in
                              "ON CONFLICT(key) DO UPDATE SET value=excluded.value");
     high.text(1,std::to_string(std::max(previous,info.lastId)));high.row();
     // 封存不移动源文件；把活动快照的占用引用转交给目录，清理不能趁切换丢失引用保护。
+    if (!activePin) {
+        const auto previousPin=impl_->runtime->activePins.find(info.identity);
+        if (previousPin!=impl_->runtime->activePins.end()) activePin=previousPin->second.lock();
+    }
     if (!activePin) activePin=std::make_shared<int>(0);
     impl_->runtime->pins.emplace(id,std::move(activePin));
     try {db.exec("COMMIT");}
@@ -574,5 +584,33 @@ RetentionResult VolumeCatalog::retain(RetentionPolicy policy,std::int64_t nowUs,
     }
     result.capacityExceeded=result.bytes>policy.maxBytes;
     return result;
+}
+std::shared_ptr<int> VolumeCatalog::trackActive(const std::filesystem::path& path,const std::shared_ptr<int>& pin)
+{
+    if (path==impl_->root/"records.sqlite") return pin;
+    const auto directory=path.parent_path().filename().string();
+    const auto id=directory.starts_with("vol-") ? directory.substr(4):std::string{};
+    checkIdentity(id);
+    if (!pin || path!=impl_->root/("vol-"+id)/"records.sqlite")
+        throw std::runtime_error("active query source is outside record directory");
+    std::lock_guard lock(impl_->runtime->mutex);
+    std::erase_if(impl_->runtime->activePins,[](const auto& item){return item.second.expired();});
+    if (auto existing=impl_->runtime->activePins[id].lock()) return existing;
+    impl_->runtime->activePins[id]=pin;
+    return pin;
+}
+void VolumeCatalog::reserveLiveThrough(std::int64_t id)
+{
+    if (id<0) throw std::invalid_argument("invalid live record ID reservation");
+    std::lock_guard lock(impl_->runtime->mutex);
+    sqlite::Database db(impl_->root/"index.sqlite");db.exec("PRAGMA synchronous=FULL; BEGIN IMMEDIATE");
+    const auto available=std::stoll(metadata(db,"import_next"));
+    if (id>available) throw std::runtime_error("live record ID space exhausted by imported ranges");
+    std::int64_t previous=0;
+    {sqlite::Statement high(db,"SELECT value FROM metadata WHERE key='record_allocated'");
+     if (high.row()) previous=std::stoll(high.text(0));}
+    sqlite::Statement reserve(db,"INSERT INTO metadata(key,value) VALUES('record_allocated',?) "
+                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+    reserve.text(1,std::to_string(std::max(previous,id)));reserve.row();db.exec("COMMIT");
 }
 } // namespace protoscope::storage

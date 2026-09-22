@@ -298,7 +298,7 @@ void executionConfig()
     protoscope::config::ConfigStore store;
     const auto loaded = store.loadText(
         "scripting:\n  storage:\n    root_dir: custom-data\n    queue_bytes: 65536\n    batch_rows: 25\n"
-        "    batch_interval_ms: 17\n    max_record_bytes: 12345678\n    retention_days: 7\n"
+        "    batch_interval_ms: 17\n    max_record_bytes: 12345678\n    max_volume_bytes: 7654321\n    retention_days: 7\n"
         "    maintenance_interval_ms: 250\n    kv_value_bytes: 1024\n    kv_total_bytes: 4096\n    kv_depth: 8\n"
         "  execution:\n    load_timeout_ms: 25\n    callback_timeout_ms: 30\n");
     require(loaded.error.empty(), "执行预算配置应可读取");
@@ -310,7 +310,8 @@ void executionConfig()
     require(reloaded.config.scripting.storageRootDir == "custom-data", "存储根目录必须往返保存");
     const auto& storage=reloaded.config.scripting.storage;
     require(storage.queueBytes==65536 && storage.batchRows==25 && storage.batchInterval.count()==17 &&
-            storage.recordMaxBytes==12345678 && storage.recordMaxAge==std::chrono::hours(24*7) &&
+            storage.recordMaxBytes==12345678 && storage.maxVolumeBytes==7654321 &&
+            storage.recordMaxAge==std::chrono::hours(24*7) &&
             storage.maintenanceInterval.count()==250 && storage.kvValueBytes==1024 &&
             storage.kvTotalBytes==4096 && storage.kvDepth==8,"存储队列、保留和 KV 限额必须往返保存");
     require(reloaded.config.scripting.execution.loadTimeoutMs == 25 &&

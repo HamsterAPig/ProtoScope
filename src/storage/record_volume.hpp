@@ -13,6 +13,7 @@ struct RecordVolumeInfo {
     std::int64_t openedAtUs{0};
     std::optional<std::int64_t> fromUs,toUs;
     bool sealed{false};
+    std::optional<std::int64_t> lastReceivedTimeUs;
 };
 
 // 单写线程拥有活动卷；封存不改路径，允许已有 SQLite 读事务继续持有原文件。
@@ -25,6 +26,7 @@ public:
     static std::unique_ptr<RecordVolume> reopen(const std::filesystem::path& path,const std::string& protocol);
     ~RecordVolume();
     const RecordVolumeInfo& info() const;
+    const std::map<std::uint64_t,data::Schema>& schemas() const;
     void append(const std::vector<data::Record>& records,std::int64_t idLimit=INT64_MAX);
     void seal(std::int64_t sealedAtUs);
     std::uint64_t diskBytes() const;

@@ -960,6 +960,8 @@ namespace {
                 readScalar<std::int64_t>(storage,"batch_interval_ms",options.batchInterval.count()),1,60000));
             options.recordMaxBytes=std::clamp<std::uint64_t>(
                 readScalar<std::uint64_t>(storage,"max_record_bytes",options.recordMaxBytes),1,1ULL<<50);
+            options.maxVolumeBytes=std::clamp<std::uint64_t>(
+                readScalar<std::uint64_t>(storage,"max_volume_bytes",options.maxVolumeBytes),1,1ULL<<50);
             const auto days=std::clamp<std::int64_t>(readScalar<std::int64_t>(storage,"retention_days",30),0,36500);
             options.recordMaxAge=std::chrono::hours(days*24);
             options.maintenanceInterval=std::chrono::milliseconds(std::clamp<std::int64_t>(
@@ -1344,6 +1346,7 @@ namespace {
         scripting["storage"]["batch_rows"]=storage.batchRows;
         scripting["storage"]["batch_interval_ms"]=storage.batchInterval.count();
         scripting["storage"]["max_record_bytes"]=storage.recordMaxBytes;
+        scripting["storage"]["max_volume_bytes"]=storage.maxVolumeBytes;
         scripting["storage"]["retention_days"]=std::chrono::duration_cast<std::chrono::hours>(storage.recordMaxAge).count()/24;
         scripting["storage"]["maintenance_interval_ms"]=storage.maintenanceInterval.count();
         scripting["storage"]["kv_value_bytes"]=storage.kvValueBytes;

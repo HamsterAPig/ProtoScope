@@ -1,6 +1,7 @@
 #include "protoscope/storage/store.hpp"
 #include "record_query.hpp"
 #include "record_session.hpp"
+#include "record_volume_coordinator.hpp"
 #include "sqlite_database.hpp"
 
 #include <sqlite3.h>
@@ -19,10 +20,15 @@ namespace protoscope::storage {
 namespace {
     static_assert(SQLITE_VERSION_NUMBER == 3050004, "SQLite version must remain pinned");
     constexpr int kApplicationId = 0x50534442;
-    constexpr data::ValueLimits kRecordLimits{32U * 1024U * 1024U, 16};
 
     using sqlite::Database;
     using sqlite::Statement;
+
+    std::int64_t wallTimeUs()
+    {
+        return std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    }
 
     void initialize(Database& db, const char* schema)
     {
@@ -152,6 +158,7 @@ struct Store::Impl {
     std::shared_ptr<void> writerLease;
     std::unique_ptr<RecordQueryService> queries;
     std::unique_ptr<RecordSession> session;
+    std::unique_ptr<RecordVolumeCoordinator> volumes;
     bool faultMetadataDirty{false};
     std::mutex maintenanceMutex;
     std::chrono::steady_clock::time_point nextMaintenance{};
@@ -161,7 +168,8 @@ struct Store::Impl {
     {
         if (protocol.empty() || config.queueBytes == 0 || config.batchRows == 0 ||
             config.batchInterval.count() < 1 || config.kvValueBytes == 0 || config.kvTotalBytes == 0 ||
-            !config.recordMaxBytes || config.recordMaxAge.count()<0 || config.maintenanceInterval.count()<1) {
+            !config.recordMaxBytes || !config.maxVolumeBytes ||
+            config.recordMaxAge.count()<0 || config.maintenanceInterval.count()<1) {
             throw std::invalid_argument("存储配置无效");
         }
         completions.reserve(1024);
@@ -177,21 +185,6 @@ struct Store::Impl {
         catalog=std::make_unique<VolumeCatalog>(root/"records",protocol);
         writerLease=catalog->claimWriter();
         session=std::make_unique<RecordSession>(root/"records",protocol);
-        if (!session->state().activeIdentity.empty() || !session->state().pendingIdentity.empty())
-            throw std::runtime_error("record volume transition requires coordinator recovery");
-        Database records(root / "records" / "records.sqlite");
-        initialize(records,
-            "CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
-            "CREATE TABLE IF NOT EXISTS schemas(id INTEGER PRIMARY KEY,dataset TEXT NOT NULL,definition BLOB NOT NULL,"
-            "UNIQUE(dataset,definition));"
-            "CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY AUTOINCREMENT,dataset TEXT NOT NULL,"
-            "device TEXT NOT NULL,received_us INTEGER NOT NULL,schema_id INTEGER NOT NULL,payload BLOB NOT NULL);"
-            "CREATE INDEX IF NOT EXISTS records_time ON records(received_us,id);"
-            "CREATE INDEX IF NOT EXISTS records_dataset_time ON records(dataset,received_us,id);");
-        const auto previousProtocol = metadata(records, "protocol");
-        if (!previousProtocol.empty() && previousProtocol != protocol) {
-            throw std::runtime_error("存储目录属于其他协议");
-        }
         Database kv(root / "kv" / "values.sqlite");
         initialize(kv, "CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
                        "CREATE TABLE IF NOT EXISTS values_store(key TEXT PRIMARY KEY,value BLOB NOT NULL);");
@@ -199,30 +192,7 @@ struct Store::Impl {
         if (!previousKvProtocol.empty() && previousKvProtocol != protocol) {
             throw std::runtime_error("KV 目录属于其他协议");
         }
-        metadata(records, "protocol", protocol);
         metadata(kv, "protocol", protocol);
-        for (auto& [name, schema] : schemas) {
-            const auto encoded = data::encodeValue(data::schemaValue(schema.first), kRecordLimits);
-            Statement insert(records, "INSERT OR IGNORE INTO schemas(dataset,definition) VALUES(?,?)");
-            insert.text(1, name);
-            insert.blob(2, encoded);
-            insert.row();
-            Statement find(records, "SELECT id FROM schemas WHERE dataset=? AND definition=?");
-            find.text(1, name);
-            find.blob(2, encoded);
-            if (!find.row()) throw std::runtime_error("登记数据集模式失败");
-            schema.second = find.integer(0);
-        }
-        // 只有已提交的记录开关触发恢复，构造本身不发送设备命令。
-        status.recording = metadata(records, "recording") == "1";
-        status.recovered = status.recording;
-        {
-            Statement last(records,"SELECT id,received_us FROM records ORDER BY id DESC LIMIT 1");
-            if (last.row()) {
-                status.lastCommittedId=static_cast<std::uint64_t>(last.integer(0));
-                status.lastCommittedTimeUs=last.integer(1);
-            }
-        }
         Statement values(kv, "SELECT key,value FROM values_store");
         while (values.row()) {
             auto name = values.text(0);
@@ -232,20 +202,12 @@ struct Store::Impl {
             if (cacheBytes > config.kvTotalBytes) throw std::runtime_error("已提交 KV 数据超过协议总量上限");
             cache.emplace(std::move(name), std::move(bytes));
         }
-        queries=std::make_unique<RecordQueryService>(root/"records"/"records.sqlite",*catalog,config.queueBytes);
-        if (session->state().lastCommittedId>static_cast<std::int64_t>(status.lastCommittedId))
-            throw std::runtime_error("record session position is ahead of committed database");
+        openVolumes(true);
         status.uncleanRecovery=!session->state().cleanExit;
-        if (session->state().run==0) {
-            if (status.recording) session->start();
-        } else {
-            status.recording=session->state().recording;
-            status.recovered=status.recording;
-            status.interruptedFromUs=session->state().interruptedFromUs;
-            status.interruptedToUs=session->state().interruptedToUs;
-        }
-        if (status.lastCommittedTimeUs)
-            session->committed(static_cast<std::int64_t>(status.lastCommittedId),*status.lastCommittedTimeUs);
+        status.recording=session->state().recording;
+        status.recovered=status.recording;
+        status.interruptedFromUs=session->state().interruptedFromUs;
+        status.interruptedToUs=session->state().interruptedToUs;
         session->beginRun();
         if (status.recording) session->start();
         status.sessionId=session->state().session;status.runId=session->state().run;
@@ -258,6 +220,23 @@ struct Store::Impl {
             writer.join();
             throw;
         }
+    }
+
+    void openVolumes(bool recover)
+    {
+        std::vector<data::Schema> declarations;
+        for (const auto& [name,schema]:schemas) declarations.push_back(schema.first);
+        volumes=std::make_unique<RecordVolumeCoordinator>(root/"records",protocol,declarations,
+            *catalog,*session,wallTimeUs(),recover && session->state().recording);
+        for (auto& [name,schema]:schemas)
+            schema.second=static_cast<std::int64_t>(volumes->schemaIds().at(name));
+        // 热重载失败回退时保留旧快照，仅替换新查询的活动源。
+        if (!queries) queries=std::make_unique<RecordQueryService>(volumes->info().path,*catalog,config.queueBytes);
+        else if (queries->activePath()!=volumes->info().path)
+            queries->switchActive(volumes->info().path,[](std::shared_ptr<int>){});
+        std::lock_guard lock(mutex);
+        status.lastCommittedId=static_cast<std::uint64_t>(session->state().lastCommittedId);
+        status.lastCommittedTimeUs=session->state().lastCommittedTimeUs;
     }
 
     ~Impl()
@@ -296,13 +275,12 @@ struct Store::Impl {
         return id;
     }
 
-    void writeOne(Database& records, Database& kv, const Command& command)
+    void writeOne(Database& kv, const Command& command)
     {
         if (command.operation == "start" || command.operation == "stop") {
             const bool active = command.operation == "start";
             persistFault();
             if (active) session->start(); else session->stop();
-            metadata(records, "recording", active ? "1" : "0");
             std::lock_guard lock(mutex);
             status.recording = active;
             status.sessionId=session->state().session;
@@ -397,9 +375,7 @@ struct Store::Impl {
     void writeLoop()
     {
         try {
-            Database records(root / "records" / "records.sqlite");
             Database kv(root / "kv" / "values.sqlite");
-            records.exec("PRAGMA synchronous=FULL");
             kv.exec("PRAGMA synchronous=FULL");
             for (;;) {
                 std::vector<Command> batch;
@@ -443,7 +419,6 @@ struct Store::Impl {
                     bytes += command.bytes;
                 }
                 std::string error;
-                bool inTransaction = false;
                 try {
                     if (publishing) {
                         {
@@ -451,31 +426,25 @@ struct Store::Impl {
                             if (status.faulted) throw std::runtime_error(status.error);
                         }
                         maintain();
-                        records.exec("BEGIN IMMEDIATE");
-                        inTransaction = true;
-                        for (const auto& command : batch) {
-                            for (const auto& record : command.records) {
-                                Statement statement(records, "INSERT INTO records(dataset,device,received_us,schema_id,payload) "
-                                                             "VALUES(?,?,?,?,?)");
-                                statement.text(1, record.dataset);
-                                statement.text(2, record.device);
-                                statement.integer(3, record.receivedAtUs);
-                                statement.integer(4, static_cast<std::int64_t>(record.schemaVersion));
-                                statement.blob(5, data::encodeValue(data::recordValue(record), kRecordLimits));
-                                statement.row();
-                            }
+                        // 相邻发布命令合为一次事务，移动记录避免再复制整批负载。
+                        std::vector<data::Record> combined;
+                        combined.reserve(rowCount);
+                        for (auto& command:batch)
+                            for (auto& record:command.records) combined.push_back(std::move(record));
+                        try {volumes->append(combined,wallTimeUs(),config.maxVolumeBytes,queries.get());}
+                        catch (...) {
+                            // 故障区间仍使用原记录时间；移回后统一走失败计数。
+                            auto record=combined.begin();
+                            for (auto& command:batch)
+                                for (auto& target:command.records) target=std::move(*record++);
+                            throw;
                         }
-                        records.exec("COMMIT");
-                        inTransaction = false;
                     } else {
                         if (batch.front().operation=="start") maintain(true);
-                        writeOne(records, kv, batch.front());
+                        writeOne(kv, batch.front());
                     }
                 } catch (const std::exception& failure) {
                     error = failure.what();
-                    if (inTransaction) {
-                        try { records.exec("ROLLBACK"); } catch (...) {}
-                    }
                 }
                 {
                     std::lock_guard lock(mutex);
@@ -483,13 +452,8 @@ struct Store::Impl {
                     if (error.empty()) {
                         status.committed += rowCount;
                         if (publishing && rowCount) {
-                            status.lastCommittedId=static_cast<std::uint64_t>(sqlite3_last_insert_rowid(records.get()));
-                            for (auto item=batch.rbegin();item!=batch.rend();++item) {
-                                if (!item->records.empty()) {
-                                    status.lastCommittedTimeUs=item->records.back().receivedAtUs;
-                                    break;
-                                }
-                            }
+                            status.lastCommittedId=static_cast<std::uint64_t>(volumes->info().lastId);
+                            status.lastCommittedTimeUs=volumes->info().lastReceivedTimeUs;
                         }
                     }
                     else if (publishing || batch.front().operation == "start" || batch.front().operation == "stop") {
@@ -795,6 +759,7 @@ void Store::suspend()
     if (impl_->writer.joinable()) impl_->writer.join();
     if (impl_->reader.joinable()) impl_->reader.join();
     impl_->persistFault();
+    impl_->volumes.reset();
     try {impl_->session->cleanExit();}
     catch (...) {impl_->writerLease.reset();throw;}
     impl_->writerLease.reset();
@@ -805,11 +770,20 @@ void Store::resume()
     impl_->writerLease=impl_->catalog->claimWriter();
     try {
         impl_->session=std::make_unique<RecordSession>(impl_->root/"records",impl_->protocol);
+        impl_->openVolumes(false);
         impl_->session->beginRun();
         std::lock_guard lock(impl_->mutex);
-        impl_->status.runId=impl_->session->state().run;
-        impl_->status.abnormalRuns=impl_->session->state().abnormalRuns;
-    } catch (...) {impl_->writerLease.reset();throw;}
+        const auto persisted=impl_->session->state();
+        impl_->status.runId=persisted.run;
+        impl_->status.sessionId=persisted.session;
+        impl_->status.abnormalRuns=persisted.abnormalRuns;
+        // 暂停期间可能有替换实例提交启停或故障，不能沿用旧内存中的录制开关。
+        impl_->status.recording=persisted.recording && !persisted.faulted;
+        impl_->status.faulted=persisted.faulted;
+        impl_->status.error=persisted.error;
+        impl_->status.interruptedFromUs=persisted.interruptedFromUs;
+        impl_->status.interruptedToUs=persisted.interruptedToUs;
+    } catch (...) {impl_->volumes.reset();impl_->writerLease.reset();throw;}
     {
         std::lock_guard lock(impl_->mutex);
         impl_->stopping=false;
@@ -821,6 +795,7 @@ void Store::resume()
         {std::lock_guard lock(impl_->mutex);impl_->stopping=true;}
         impl_->changed.notify_all();
         if (impl_->writer.joinable()) impl_->writer.join();
+        impl_->volumes.reset();
         impl_->writerLease.reset();
         throw;
     }

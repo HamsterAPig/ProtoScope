@@ -13,6 +13,7 @@ struct Config {
     std::size_t kvTotalBytes{8U * 1024U * 1024U};
     std::size_t kvDepth{16};
     std::uint64_t recordMaxBytes{10ULL*1024*1024*1024};
+    std::uint64_t maxVolumeBytes{256ULL*1024*1024};
     std::chrono::microseconds recordMaxAge{std::chrono::hours(24*30)};
     std::chrono::milliseconds maintenanceInterval{1000};
 };
