@@ -1,5 +1,6 @@
 #pragma once
 #include "protoscope/plot/wave_overview_color.hpp"
+#include "protoscope/plot/wave_cursor_color.hpp"
 
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/plot/raw_capture_file.hpp"
@@ -185,6 +186,13 @@ struct WaveViewState {
     bool showCursorIntersectionReadouts{false};
     WaveBitDisplayReadoutPolicy bitDisplayReadoutPolicy{WaveBitDisplayReadoutPolicy::MixedNearest};
     bool showCursors{true};
+    bool cursorAutoColor{true};
+    // 随 Dock 的 view 生命周期保存，所有布局显式读取同一帧结果。
+    mutable CursorColorCache cursorColors;
+    std::vector<std::size_t> cursorVisibleSplitChannels;
+    bool cursorSplitVisibilityValid{false};
+    mutable std::vector<std::size_t> cursorHiddenFftChannels;
+    bool cursorFftPhaseVisible{true};
     bool followMeasurementCursorsOnScroll{false};
     bool measurementCursorReadoutRefreshPending{false};
     bool showMeasurementOverlay{true};
@@ -195,6 +203,12 @@ struct WaveViewState {
     bool initialized{false};
     bool cursorIntervalLocked{false};
     bool overviewWindowDragging{false};
+    // 宿主拥有概览捕获；起点与总位移解耦，窄框视觉扩展不会改变真实跨度。
+    struct OverviewDrag {
+        unsigned int activeId{0};
+        int target{0}; // 1 左边，2 右边，3 整框。
+        double minTime{0}, maxTime{0}, mouseX{0}, timePerPixel{0};
+    } overviewDrag;
     bool forceNextMainPlotLimits{false};
     bool activeChannelOffsetDrag{false};
     bool activeChannelScaleDrag{false};

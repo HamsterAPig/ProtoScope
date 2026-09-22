@@ -316,6 +316,9 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
 {
     alignWaveLayoutChannels(wave);
     auto& view = wave.view;
+    if (view.overviewDrag.activeId && ImGui::GetCurrentContext() &&
+        (wave.overviewCollapsed || ImGui::GetIO().AppFocusLost || !ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+         ImGui::GetActiveID() != view.overviewDrag.activeId)) releaseOverviewDrag(wave);
     if (wave.displayDataDownsampleMode != view.downsampleMode) {
         // 模式切换只重建显示缓存与余辉，保留测量、FFT 计算结果及游标状态。
         wave.displayDataDownsampleMode = view.downsampleMode;
@@ -338,6 +341,9 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
     WaveFrameData frame;
     if (wave.analysisEpoch != wave.buffer.historyEpoch()) {
         view.auxiliaryCursors.clear();
+        view.cursorColors = {};
+        view.cursorSplitVisibilityValid = false;
+        view.cursorHiddenFftChannels.clear();
         wave.analysisEpoch = wave.buffer.historyEpoch();
         ++wave.fftRequestGeneration;
         ++wave.measurementRequestGeneration;
@@ -569,6 +575,94 @@ WaveFrameData prepareWaveFrame(plot::WaveDockState& wave, float availableWidth)
         frame.fftFrame = &wave.cachedFftFrame;
     }
 
+    // 仅元数据与既有绘制缓存参与选色，不扫描样本；先于概览及 Split 第一行冻结。
+    if (ImGui::GetCurrentContext()) {
+        auto& cache = view.cursorColors;
+        const int frameNumber = ImGui::GetFrameCount();
+        if (!cache.initialized || cache.frame != frameNumber) {
+            const auto& tokens = activeWaveStyleTokens();
+            const auto& ui = activeUiStyleTokens();
+            const auto composite = [](ImVec4 front, plot::OverviewColor back) {
+                return plot::compositeOverviewColor(cursorOverviewColor(front), back);
+            };
+            const auto window = composite(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg),
+                                           cursorOverviewColor(ui.appBackground));
+            const auto background = composite(tokens.plotBackground, window);
+            const auto fftBackground = composite(ui.genericPlotBackground, window);
+            const auto labelBackground = composite(ui.panelBackgroundAlt, background);
+            plot::CursorColorKey key;
+            key.themeRevision = activeThemeRevision();
+            key.automatic = view.cursorAutoColor;
+            key.mode = int(view.viewMode) + (view.fft.enabled ? 8 : 0) + (wave.overviewCollapsed ? 16 : 0) +
+                int(view.fft.displayMode) * 32 + (view.phosphorEnabled ? 128 : 0) + (view.glowEnabled ? 256 : 0);
+            key.backgrounds = {background};
+            if (view.fft.enabled) key.backgrounds.push_back(fftBackground);
+            key.textBackgrounds = {labelBackground, window,
+                composite(ImGui::GetStyleColorVec4(ImGuiCol_PopupBg), window)};
+            for (const auto color : tokens.cursorPalette) {
+                key.manualPalette.push_back(cursorOverviewColor(displayColor(
+                    displayColor(color, tokens.plotBackground, 1.F, 4.5F), ui.panelBackgroundAlt, 1.F, 4.5F)));
+            }
+            std::size_t splitRow = 0;
+            for (std::size_t index = 0; index < frame.fullSnapshot->channels.size(); ++index) {
+                const auto& channel = frame.fullSnapshot->channels[index];
+                const bool hiddenTime = channelHiddenByLegendState(wave, index);
+                const bool inSplit = view.viewMode != plot::WaveViewMode::Split ||
+                    (view.cursorSplitVisibilityValid
+                        ? std::ranges::find(view.cursorVisibleSplitChannels, index) != view.cursorVisibleSplitChannels.end()
+                        : splitRow < 4);
+                if (!hiddenTime) ++splitRow;
+                const auto color = channelColor(channel, index);
+                if (color.w <= 0) continue;
+                const auto add = [&](ImVec4 displayed, plot::OverviewColor backdrop, std::size_t path) {
+                    key.channels.push_back(index * 8 + path);
+                    key.colors.push_back(composite(displayed, backdrop));
+                };
+                const bool timeVisible = !view.fft.enabled || view.fft.displayMode != plot::WaveFftDisplayMode::FullSpectrum;
+                if (!hiddenTime && timeVisible && inSplit && index < frame.displayData->channels.size() &&
+                    !frame.displayData->channels[index].samples.empty()) {
+                    if (view.phosphorEnabled && view.viewMode != plot::WaveViewMode::Split && !bitDisplayEnabled(channel.bitDisplay)) {
+                        auto deposited = color;
+                        deposited.w = wavePhosphorDepositionAlpha(color);
+                        add(deposited, background, 0);
+                    } else add(bitDisplayEnabled(channel.bitDisplay) ? withAlpha(color, .9F) : color, background, 0);
+                    if (view.glowEnabled && !view.phosphorEnabled && !bitDisplayEnabled(channel.bitDisplay)) {
+                        const auto intensity = std::isfinite(view.glowIntensity) ? float(std::clamp(view.glowIntensity, 0., 3.)) : 1.F;
+                        add(withAlpha(color, std::clamp(.18F * intensity, 0.F, .55F)), background, 4);
+                        add(withAlpha(color, std::clamp(.08F * intensity, 0.F, .35F)), background, 5);
+                    }
+                    if (bitDisplayEnabled(channel.bitDisplay) && view.bitDenseRenderMode == plot::WaveBitDenseRenderMode::ActivityBand)
+                        add(withAlpha(color, .25F), background, 1);
+                }
+                if (!hiddenTime && !wave.overviewCollapsed && channel.totalSamples > 0 &&
+                    (view.overviewShowBitChannels || !bitDisplayEnabled(channel.bitDisplay)))
+                    add(displayColor(color, tokens.plotBackground, .65F), background, 2);
+                if (view.fft.enabled && frame.fftFrame) {
+                    const auto found = std::find_if(frame.fftFrame->channels.begin(), frame.fftFrame->channels.end(),
+                        [index](const auto& fft) { return fft.channelIndex == index && fft.enabled && fft.valid && !fft.bins.empty(); });
+                    const auto fftHidden = [&](std::size_t identity) {
+                        return std::ranges::find(view.cursorHiddenFftChannels, identity) != view.cursorHiddenFftChannels.end();
+                    };
+                    if (found != frame.fftFrame->channels.end() &&
+                        (!fftHidden(index * 2) || (view.cursorFftPhaseVisible && !fftHidden(index * 2 + 1))))
+                        add(displayColor(color, ui.genericPlotBackground), fftBackground, 3);
+                }
+            }
+            cache.prepare(std::move(key), frameNumber, view.interactionActive);
+            cache.labelBackground = labelBackground;
+            cache.labelText = cursorOverviewColor(displayColor(ui.textStrong, cursorImVec(labelBackground), 1.F, 4.5F));
+            std::erase_if(cache.entries, [&](const auto& entry) {
+                return entry.identity >= 2 && std::none_of(view.auxiliaryCursors.items.begin(), view.auxiliaryCursors.items.end(),
+                    [&](const auto& cursor) { return cursor.id + 2 == entry.identity; });
+            });
+            cache.resolve(0, 0);
+            cache.resolve(1, 1);
+            // id 而非随机 colorIndex 决定自动分配顺序；删除/添加不会重排既有身份。
+            auto cursors = view.auxiliaryCursors.items;
+            std::ranges::sort(cursors, {}, &plot::WaveAuxiliaryCursor::id);
+            for (const auto& cursor : cursors) cache.resolve(cursor.id + 2, cursor.colorIndex + 2);
+        }
+    }
     return frame;
 }
 

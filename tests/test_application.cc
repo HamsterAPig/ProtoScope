@@ -1707,12 +1707,17 @@ void test_application_wave_legend_visibility_config_roundtrip()
     config.gui.interactionFeedback.enabled = true;
     config.gui.wave.showChannelLegend = false;
     config.gui.wave.showFftLegend = false;
+    config.gui.wave.cursorAutoColor = false;
     config.gui.wave.cursorFftHighlightRgba = {0.11F, 0.22F, 0.33F, 0.44F};
     config.gui.wave.hiddenChannelPolicy = protoscope::plot::WaveHiddenChannelPolicy::ExcludeFromDerivedViews;
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
     config.gui.wave.interactionAnimationEnabled = false;
     require(application.applyConfig(config), "图例显示配置应用失败");
 
+    require(!application.docks().waveState().view.cursorAutoColor && !application.captureConfig().gui.wave.cursorAutoColor,
+            "应用配置与回收应保留手动游标色");
+    application.docks().waveState().view.cursorAutoColor = true;
+    require(application.captureConfig().gui.wave.cursorAutoColor, "应用回收不得覆盖 Dock 实时游标色开关");
     require(!application.docks().waveState().view.showChannelLegend, "应用配置后应隐藏图例");
     require(!application.docks().waveState().view.showFftLegend, "应用配置后应隐藏 FFT 图例");
     require(std::abs(application.docks().waveState().view.cursorFftHighlightRgba[3] - 0.44F) < 1e-6F,

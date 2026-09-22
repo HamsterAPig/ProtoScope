@@ -78,6 +78,15 @@ const plot::WaveDockState::OverviewRenderEntry& cachedOverviewChannel(
     return entry;
 }
 
+void releaseOverviewDrag(plot::WaveDockState& wave)
+{
+    const auto id = wave.view.overviewDrag.activeId;
+    if (id && ImGui::GetCurrentContext() && ImGui::GetActiveID() == id) ImGui::ClearActiveID();
+    wave.view.overviewDrag = {};
+    wave.view.overviewWindowDragging = false;
+    wave.overviewColorCache.dragging = false;
+}
+
 void drawOverviewWindow(plot::WaveDockState& wave,
                         const plot::ViewConfig& config,
                         const plot::WaveSnapshot& fullSnapshot,
@@ -87,7 +96,10 @@ void drawOverviewWindow(plot::WaveDockState& wave,
                         const RenderBudget& renderBudget)
 {
     auto& view = wave.view;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::GetIO().AppFocusLost)
+        releaseOverviewDrag(wave);
     if (fullSnapshot.channels.empty()) {
+        releaseOverviewDrag(wave);
         return;
     }
 
@@ -132,6 +144,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
         }
     }
     if (!std::isfinite(overviewMinTime) || !std::isfinite(overviewMaxTime) || overviewMinTime >= overviewMaxTime) {
+        releaseOverviewDrag(wave);
         return;
     }
     if (!std::isfinite(overviewMinValue) || !std::isfinite(overviewMaxValue)) {
@@ -148,7 +161,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
     }
 
     const ImPlotFlags plotFlags = ImPlotFlags_NoTitle | ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText |
-                                  ImPlotFlags_NoMenus | ImPlotFlags_NoFrame;
+                                  ImPlotFlags_NoMenus | ImPlotFlags_NoFrame | ImPlotFlags_NoBoxSelect;
     const double minVisibleTimeSpan = (std::max)(view.minVisibleTimeSpan, 1e-6);
     // 概览图需要跟随 splitter 压缩，避免 ImPlot 默认 150px 最小高度撑住内部绘图区。
     ImPlot::PushStyleVar(ImPlotStyleVar_PlotMinSize, ImVec2(64.0F, 24.0F));
@@ -156,7 +169,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
     ImPlot::PushStyleColor(ImPlotCol_PlotBg, activeWaveStyleTokens().plotBackground);
     if (ImPlot::BeginPlot("##wave_overview", ImVec2(-1.0F, -1.0F), plotFlags)) {
         constexpr ImPlotAxisFlags axisFlags =
-            ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoDecorations;
+            ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoDecorations | ImPlotAxisFlags_Lock;
         ImPlot::SetupAxis(ImAxis_X1, nullptr, axisFlags);
         ImPlot::SetupAxis(ImAxis_Y1, nullptr, axisFlags);
         ImPlot::SetupAxisLimits(ImAxis_X1, overviewMinTime, overviewMaxTime, ImPlotCond_Always);
@@ -174,8 +187,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             {background.x, background.y, background.z, background.w}, {window.x, window.y, window.z, 1});
         const auto settings = overviewSelectionStyle(view.overviewSelection);
         auto& colorCache = wave.overviewColorCache;
-        colorCache.dragging = ImGui::IsMouseDown(0) &&
-            (view.overviewWindowDragging || colorCache.dragging || ImPlot::IsPlotHovered());
+        colorCache.dragging = view.overviewWindowDragging;
         std::uint64_t visibility = view.overviewNormalizeChannels ? 1 : 0;
         std::vector<plot::OverviewColor> drawnColors;
         for (const auto index : overviewChannels) {
@@ -231,12 +243,71 @@ void drawOverviewWindow(plot::WaveDockState& wave,
 
         const auto rectangleColor = colorCache.resolveSamples(drawnColors, effectiveBackground, raster.pixels,
             settings, activeThemeRevision(), visibility, ImGui::GetTime(), ImGui::GetIO().DeltaTime);
-        double rectMinTime = view.viewMinTime;
-        double rectMaxTime = view.viewMaxTime;
-        double rectMinValue = overviewMinValue;
-        double rectMaxValue = overviewMaxValue;
-        bool rectHovered = false;
-        bool rectHeld = false;
+        const auto pos = ImPlot::GetPlotPos();
+        const auto size = ImPlot::GetPlotSize();
+        const float dpi = ImGui::GetWindowViewport()->DpiScale;
+        // 命中和绘制只使用这一个最终矩形，最小宽度仅用于视觉而不回写时间。
+        const auto visualRect = [&] {
+            float left = std::clamp(ImPlot::PlotToPixels(view.viewMinTime, overviewMaxValue).x,
+                                    pos.x + 2 * dpi, pos.x + size.x - 2 * dpi);
+            float right = std::clamp(ImPlot::PlotToPixels(view.viewMaxTime, overviewMinValue).x,
+                                     pos.x + 2 * dpi, pos.x + size.x - 2 * dpi);
+            if (right - left < 4 * dpi) {
+                const float center = std::clamp((left + right) * .5F, pos.x + 4 * dpi, pos.x + size.x - 4 * dpi);
+                left = center - 2 * dpi;
+                right = center + 2 * dpi;
+            }
+            return ImRect(ImVec2(left, pos.y + 2 * dpi), ImVec2(right, pos.y + size.y - 2 * dpi));
+        };
+        auto visual = visualRect();
+        auto& drag = view.overviewDrag;
+        const auto mouse = ImGui::GetMousePos();
+        const ImRect plotRect(pos, ImVec2(pos.x + size.x, pos.y + size.y));
+        const float centerY = pos.y + size.y * .5F;
+        const bool narrow = visual.GetWidth() <= 16 * dpi;
+        int target = 0;
+        if (plotRect.Contains(mouse) && !ImGui::GetIO().AppFocusLost &&
+            ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
+            // 极窄框只在中段把手捕获边缘，框体上下仍能平移；重叠容差按最近边互斥分区。
+            const bool edgeBand = !narrow || std::abs(mouse.y - centerY) <= 7 * dpi;
+            const auto dl = std::abs(mouse.x - visual.Min.x), dr = std::abs(mouse.x - visual.Max.x);
+            if (edgeBand && (std::min)(dl, dr) <= 5 * dpi) target = dl <= dr ? 1 : 2;
+            else if (visual.Contains(mouse)) target = 3;
+        }
+        ImGui::PushID("overview_viewport");
+        const ImGuiID id = ImGui::GetID("capture");
+        // ImPlot 的背景项允许覆盖；这里只接受当帧在目标内的按下，移入不劫持。
+        if (!drag.activeId && target && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            (ImGui::GetActiveID() == 0 || ImGui::GetActiveID() == GImPlot->CurrentPlot->ID)) {
+            ImGui::SetActiveID(id, ImGui::GetCurrentWindow());
+            GImGui->ActiveIdMouseButton = ImGuiMouseButton_Left;
+            ImGui::SetKeyOwner(ImGuiKey_MouseLeft, id);
+            ImGui::FocusWindow(ImGui::GetCurrentWindow());
+            drag = {id, target, view.viewMinTime, view.viewMaxTime, mouse.x,
+                    (overviewMaxTime - overviewMinTime) / size.x};
+        }
+        ImGui::PopID();
+        if (drag.activeId && ImGui::GetActiveID() != drag.activeId) releaseOverviewDrag(wave);
+        if (drag.activeId) ImGui::KeepAliveID(drag.activeId);
+        bool changed = false;
+        double rectMinTime = view.viewMinTime, rectMaxTime = view.viewMaxTime;
+        if (drag.activeId && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && drag.target != 3) {
+            if (drag.target == 1) rectMinTime = overviewMinTime;
+            else rectMaxTime = overviewMaxTime;
+            changed = true;
+            releaseOverviewDrag(wave);
+        } else if (drag.activeId && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            const double delta = (mouse.x - drag.mouseX) * drag.timePerPixel;
+            rectMinTime = drag.minTime + (drag.target != 2 ? delta : 0);
+            rectMaxTime = drag.maxTime + (drag.target != 1 ? delta : 0);
+            if (drag.target == 1) rectMinTime = (std::max)(overviewMinTime, (std::min)(rectMinTime, rectMaxTime - minVisibleTimeSpan));
+            if (drag.target == 2) rectMaxTime = (std::min)(overviewMaxTime, (std::max)(rectMaxTime, rectMinTime + minVisibleTimeSpan));
+            changed = true;
+        }
+        view.overviewWindowDragging = drag.activeId != 0;
+        colorCache.dragging = view.overviewWindowDragging;
+        if (target || drag.activeId) ImGui::SetMouseCursor(
+            (drag.activeId ? drag.target : target) == 3 ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_ResizeEW);
         const plot::WaveDataBounds overviewBounds{
             .minTime = overviewMinTime,
             .maxTime = overviewMaxTime,
@@ -245,16 +316,7 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             .minStep = minVisibleTimeSpan,
             .valid = true,
         };
-        if (ImPlot::DragRect(300,
-                             &rectMinTime,
-                             &rectMinValue,
-                             &rectMaxTime,
-                             &rectMaxValue,
-                             ImVec4(0, 0, 0, 0),
-                             ImPlotDragToolFlags_NoFit,
-                             nullptr,
-                             &rectHovered,
-                             &rectHeld)) {
+        if (changed) {
             const auto normalized = plot::normalizeOverviewViewport({.minTime = rectMinTime,
                                                                      .maxTime = rectMaxTime,
                                                                      .minValue = view.viewMinValue,
@@ -268,19 +330,9 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::OverviewDrag);
             view.forceNextMainPlotLimits = true;
         }
-        const ImVec2 rectMinPixel = ImPlot::PlotToPixels((std::min)(rectMinTime, rectMaxTime), overviewMaxValue);
-        const ImVec2 rectMaxPixel = ImPlot::PlotToPixels((std::max)(rectMinTime, rectMaxTime), overviewMinValue);
-        // 保留 DragRect 的命中与范围计算；独立绘制可控 alpha、护边及窄选区标记。
-        colorCache.dragging = rectHeld || view.overviewWindowDragging;
-        const auto pos = ImPlot::GetPlotPos();
-        const auto size = ImPlot::GetPlotSize();
-        float left = std::clamp(rectMinPixel.x, pos.x + 2.F, pos.x + size.x - 2.F);
-        float right = std::clamp(rectMaxPixel.x, pos.x + 2.F, pos.x + size.x - 2.F);
-        if (right - left < 4.F) {
-            const float center = std::clamp((left + right) * .5F, pos.x + 4.F, pos.x + size.x - 4.F);
-            left = center - 2.F; right = center + 2.F;
-        }
-        const ImVec2 visualMin(left, pos.y + 2.F), visualMax(right, pos.y + size.y - 2.F);
+        visual = visualRect();
+        const auto visualMin = visual.Min, visualMax = visual.Max;
+        const auto left = visual.Min.x, right = visual.Max.x;
         const ImVec4 border(float(rectangleColor.r), float(rectangleColor.g), float(rectangleColor.b), 1.F);
         const auto guard = plot::overviewLuminance(rectangleColor) > .35
             ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
@@ -290,18 +342,12 @@ void drawOverviewWindow(plot::WaveDockState& wave,
             ImVec4(border.x, border.y, border.z, float(rectangleColor.a))));
         selectionDraw->AddRect(visualMin, visualMax, guard, 0, 0, 4.F);
         selectionDraw->AddRect(visualMin, visualMax, ImGui::ColorConvertFloat4ToU32(border), 0, 0, 2.F);
-        const float centerY = pos.y + size.y * .5F;
         for (const auto x : {left, right}) {
-            selectionDraw->AddLine(ImVec2(x, centerY - 5), ImVec2(x, centerY + 5), guard, 6.F);
-            selectionDraw->AddLine(ImVec2(x, centerY - 5), ImVec2(x, centerY + 5),
-                                  ImGui::ColorConvertFloat4ToU32(border), 3.F);
+            selectionDraw->AddLine(ImVec2(x, centerY - 5 * dpi), ImVec2(x, centerY + 5 * dpi), guard, 6.F * dpi);
+            selectionDraw->AddLine(ImVec2(x, centerY - 5 * dpi), ImVec2(x, centerY + 5 * dpi),
+                                  ImGui::ColorConvertFloat4ToU32(border), 3.F * dpi);
         }
         ImPlot::PopPlotClipRect();
-        // DragRect 已处理框体平移，不能再次叠加鼠标位移。
-        view.overviewWindowDragging = rectHeld && ImGui::IsMouseDown(ImGuiMouseButton_Left);
-        if ((rectHovered || rectHeld) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            applyAutoFollowPausePolicy(view, WaveViewportAutoFollowPolicy::OverviewDrag);
-        }
         const auto& io = ImGui::GetIO();
         if (ImPlot::IsPlotHovered() && io.MouseWheel != 0.0F) {
             const auto mousePos = ImPlot::GetPlotMousePos();
@@ -323,14 +369,31 @@ void drawOverviewWindow(plot::WaveDockState& wave,
                 continue;
             }
             double lineTime = cursor.time;
-            const bool highlighted = lineTime >= view.viewMinTime && lineTime <= view.viewMaxTime;
+            if (!view.cursorColors.resolve(cursorIndex, cursorIndex).graphicsPass)
+                drawCursorGuard(lineTime, measurementCursorColor(view, cursorIndex));
             ImPlot::DragLineX(static_cast<int>(400 + cursorIndex),
                               &lineTime,
-                              displayColor(measurementCursorColor(cursorIndex), background, highlighted ? .95F : .35F),
+                              measurementCursorColor(view, cursorIndex),
                               2.0F,
                               ImPlotDragToolFlags_NoInputs | ImPlotDragToolFlags_NoFit);
         }
+        // T 是独立时间标记，概览沿用同一身份色和虚线，不与触发线混用。
+        ImPlot::PushPlotClipRect();
+        for (const auto& cursor : view.auxiliaryCursors.items) {
+            const float x = ImPlot::PlotToPixels(cursor.time, overviewMaxValue).x;
+            if (x < pos.x || x > pos.x + size.x) continue;
+            const auto color = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(view, cursor));
+            for (float y = pos.y; y < pos.y + size.y; y += 10 * dpi) {
+                if (!view.cursorColors.resolve(cursor.id + 2, cursor.colorIndex + 2).graphicsPass)
+                    selectionDraw->AddLine(ImVec2(x, y), ImVec2(x, (std::min)(y + 6 * dpi, pos.y + size.y)),
+                        cursorGuardColor(auxiliaryCursorColor(view, cursor)), 4 * dpi);
+                selectionDraw->AddLine(ImVec2(x, y), ImVec2(x, (std::min)(y + 6 * dpi, pos.y + size.y)), color, 2 * dpi);
+            }
+        }
+        ImPlot::PopPlotClipRect();
         ImPlot::EndPlot();
+    } else {
+        releaseOverviewDrag(wave);
     }
     ImPlot::PopStyleVar(2);
     ImPlot::PopStyleColor();

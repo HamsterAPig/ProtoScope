@@ -716,6 +716,8 @@ namespace {
             readScalar<bool>(wave, "overview_normalize_channels", config.gui.wave.overviewNormalizeChannels);
         config.gui.wave.overviewShowBitChannels =
             readScalar<bool>(wave, "overview_show_bit_channels", config.gui.wave.overviewShowBitChannels);
+        config.gui.wave.cursorAutoColor =
+            readScalar<bool>(wave, "cursor_auto_color", config.gui.wave.cursorAutoColor);
         if (const auto selection = wave["overview_selection"]) {
             const auto fail = [&](const YAML::Node& node, const std::string& field) {
                 throw YAML::Exception(node.Mark(), "gui.wave.overview_selection." + field + ": 非法字段或数值");
@@ -1187,6 +1189,7 @@ namespace {
         gui["wave"]["overview_max_samples"] = config.gui.wave.overviewMaxSamples;
         gui["wave"]["overview_normalize_channels"] = config.gui.wave.overviewNormalizeChannels;
         gui["wave"]["overview_show_bit_channels"] = config.gui.wave.overviewShowBitChannels;
+        gui["wave"]["cursor_auto_color"] = config.gui.wave.cursorAutoColor;
         const auto& selection = config.gui.wave.overviewSelection;
         auto selectionNode = gui["wave"]["overview_selection"];
         selectionNode["mode"] = selection.automatic ? "auto" : "fixed";
@@ -1838,6 +1841,7 @@ void ConfigStore::applyToDock(const AppConfig& config, dock::DockStore& dockStor
     wave.overviewMaxSamples = config.gui.wave.overviewMaxSamples;
     wave.overviewNormalizeChannels = config.gui.wave.overviewNormalizeChannels;
     wave.overviewShowBitChannels = config.gui.wave.overviewShowBitChannels;
+    wave.cursorAutoColor = config.gui.wave.cursorAutoColor;
     wave.overviewSelection = config.gui.wave.overviewSelection;
     wave.minVisibleTimeSpan = config.gui.wave.minVisibleTimeSpan;
     wave.channelCardFixedWidth = positiveOrFallback(config.gui.wave.channelCardFixedWidth, 128.0);
@@ -1909,6 +1913,7 @@ AppConfig ConfigStore::captureFromDock(const dock::DockStore& dockStore) const
     config.gui.wave.overviewMaxSamples = dockStore.waveState().view.overviewMaxSamples;
     config.gui.wave.overviewNormalizeChannels = dockStore.waveState().view.overviewNormalizeChannels;
     config.gui.wave.overviewShowBitChannels = dockStore.waveState().view.overviewShowBitChannels;
+    config.gui.wave.cursorAutoColor = dockStore.waveState().view.cursorAutoColor;
     config.gui.wave.overviewSelection = dockStore.waveState().view.overviewSelection;
     config.gui.wave.minVisibleTimeSpan = dockStore.waveState().view.minVisibleTimeSpan;
     config.gui.wave.channelCardFixedWidth = dockStore.waveState().view.channelCardFixedWidth;

@@ -1,3 +1,4 @@
+#include "protoscope/ui/ui_theme.hpp"
 #include "../runtime/gui_runtime_detail.hpp"
 
 #include "protoscope/plot/csv_data_file.hpp"
@@ -284,7 +285,7 @@ void GuiRuntime::drawAlgorithmHelpDialog()
             algorithmHelpScrollToCurrent_ = !algorithmHelpMatches_.empty();
         }
 
-        ImGui::BeginDisabled(algorithmHelpMatches_.empty());
+        protoscope::ui::beginDisabled(algorithmHelpMatches_.empty());
         ImGui::TableSetColumnIndex(1);
         if (ImGui::Button("上一个", ImVec2(-1.0F, 0.0F))) {
             algorithmHelpCurrentMatchOrdinal_ =
@@ -297,7 +298,7 @@ void GuiRuntime::drawAlgorithmHelpDialog()
                 nextAlgorithmHelpMatchOrdinal(algorithmHelpMatches_, algorithmHelpCurrentMatchOrdinal_);
             algorithmHelpScrollToCurrent_ = algorithmHelpCurrentMatchOrdinal_ != kNoAlgorithmHelpMatch;
         }
-        ImGui::EndDisabled();
+        protoscope::ui::endDisabled();
 
         ImGui::TableSetColumnIndex(3);
         const std::size_t displayOrdinal =
@@ -679,9 +680,9 @@ void GuiRuntime::drawUnifiedDataDialog()
                 ImGui::TextWrapped("波形范围: %s", status.metadata.waveform->rangeDescription.c_str());
             if (status.includesRecords) ImGui::TextWrapped("收发范围: %s", status.metadata.rangeDescription.c_str());
             if (status.includesRecords && !status.metadata.waveform) {
-                ImGui::BeginDisabled(!application_.docks().luaState().loaded);
+                protoscope::ui::beginDisabled(!application_.docks().luaState().loaded);
                 ImGui::Checkbox("使用当前协议解析波形", &importParseWaveform_);
-                ImGui::EndDisabled();
+                protoscope::ui::endDisabled();
             }
             if (ImGui::Button("确认替换并导入")) application_.confirmDataImport(importParseWaveform_);
         } else {

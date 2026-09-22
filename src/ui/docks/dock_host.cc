@@ -727,9 +727,9 @@ void GuiRuntime::drawProtocolDock()
         }
     }
 #else
-    ImGui::BeginDisabled();
+    protoscope::ui::beginDisabled();
     ImGui::Button("浏览...");
-    ImGui::EndDisabled();
+    protoscope::ui::endDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip("当前平台暂不支持原生目录选择，请直接输入路径。");
     }
@@ -1324,7 +1324,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
     }
     if (!descriptor.visible) { luaControlDrafts_.erase(descriptor.id); return false; }
     if (descriptor.type==scripting::ControlType::DataTable) return drawDataTableControl(control);
-    ImGui::BeginDisabled(descriptor.disabled ||
+    protoscope::ui::beginDisabled(descriptor.disabled ||
                          (descriptor.readOnly && !scripting::isOutputControl(descriptor.type) &&
                           scripting::controlValueKind(descriptor.type) != scripting::ControlType::InputText));
     const std::string visibleLabel = resolveLuaControlVisibleLabel(descriptor, layoutWidth);
@@ -1447,7 +1447,7 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
     if (!descriptor.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip("%s", descriptor.tooltip.c_str());
     }
-    ImGui::EndDisabled();
+    protoscope::ui::endDisabled();
     if (layoutWidth.has_value()) {
         reserveLuaDynamicControlWidth(startX, *layoutWidth);
     }
@@ -1888,7 +1888,7 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                 const bool canMoveUp = rowIndex > 0;
                 const bool canMoveDown = rowIndex + 1 < next.frames.size();
                 if (!canMoveUp) {
-                    ImGui::BeginDisabled();
+                    protoscope::ui::beginDisabled();
                 }
                 if (ImGui::Button("上", ImVec2(30.0F, 0.0F))) {
                     std::swap(next.frames[rowIndex - 1], next.frames[rowIndex]);
@@ -1896,11 +1896,11 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                 }
                 drawIconTooltip("上移一行");
                 if (!canMoveUp) {
-                    ImGui::EndDisabled();
+                    protoscope::ui::endDisabled();
                 }
                 ImGui::SameLine();
                 if (!canMoveDown) {
-                    ImGui::BeginDisabled();
+                    protoscope::ui::beginDisabled();
                 }
                 if (ImGui::Button("下", ImVec2(30.0F, 0.0F))) {
                     std::swap(next.frames[rowIndex], next.frames[rowIndex + 1]);
@@ -1908,7 +1908,7 @@ bool GuiRuntime::drawTxSequenceControl(const scripting::ControlSnapshot& control
                 }
                 drawIconTooltip("下移一行");
                 if (!canMoveDown) {
-                    ImGui::EndDisabled();
+                    protoscope::ui::endDisabled();
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("复制", ImVec2(44.0F, 0.0F))) {

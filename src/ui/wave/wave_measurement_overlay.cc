@@ -729,18 +729,16 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
         channelIndex, times, values, referenceValues.size() == values.size() ? &referenceValues : nullptr);
 }
 
-void drawCursorAnnotation(std::size_t cursorIndex,
+void drawCursorAnnotation(const plot::WaveViewState& view, std::size_t cursorIndex,
                           const plot::CursorReadout& readout,
                           const plot::ChannelView& channel,
                           std::string_view timeUnit,
                           std::string_view snapLabel)
 {
     const std::string labelPrefix = snapLabel.empty() ? "" : std::string(snapLabel) + " ";
-    ImPlot::Annotation(readout.time,
+    drawCursorReadoutLabel(view, measurementCursorColor(view, cursorIndex), readout.time,
                        readout.displayValue,
-                       measurementCursorColor(cursorIndex),
                        ImVec2(10.0F, cursorIndex == 0 ? -18.0F : 18.0F),
-                       true,
                        "%c %s%s\n%s %.6g",
                        cursorIndex == 0 ? 'A' : 'B',
                        labelPrefix.c_str(),
@@ -749,7 +747,7 @@ void drawCursorAnnotation(std::size_t cursorIndex,
                        readout.value);
 }
 
-void drawCursorIntersectionReadouts(const std::vector<CursorIntersectionReadout>& readouts,
+void drawCursorIntersectionReadouts(const plot::WaveViewState& view, const std::vector<CursorIntersectionReadout>& readouts,
                                     const plot::WaveSnapshot& snapshot)
 {
     for (std::size_t index = 0; index < readouts.size(); ++index) {
@@ -760,11 +758,9 @@ void drawCursorIntersectionReadouts(const std::vector<CursorIntersectionReadout>
         const auto& channel = snapshot.channels[entry.readout.channelIndex];
         const float yOffset = entry.cursorIndex == 0 ? -18.0F : 18.0F;
         const float xOffset = 10.0F + static_cast<float>(index % 3U) * 4.0F;
-        ImPlot::Annotation(entry.cursorTime,
+        drawCursorReadoutLabel(view, measurementCursorColor(view, entry.cursorIndex), entry.cursorTime,
                            entry.readout.displayValue,
-                           measurementCursorColor(entry.cursorIndex),
                            ImVec2(xOffset, yOffset),
-                           true,
                            "%c %s\n%.6g %s",
                            entry.cursorIndex == 0 ? 'A' : 'B',
                            channel.label.c_str(),
@@ -773,15 +769,15 @@ void drawCursorIntersectionReadouts(const std::vector<CursorIntersectionReadout>
     }
 }
 
-void drawCursorIntervalHint(const plot::CursorReadout& left,
+void drawCursorIntervalHint(const plot::WaveViewState& view, const plot::CursorReadout& left,
                             const plot::CursorReadout& right,
                             const plot::CursorIntervalText& intervalText,
                             const ImPlotRect& limits)
 {
-    drawCursorIntervalHint(left.time, right.time, intervalText, limits);
+    drawCursorIntervalHint(view, left.time, right.time, intervalText, limits);
 }
 
-void drawCursorIntervalHint(double leftTime,
+void drawCursorIntervalHint(const plot::WaveViewState& view, double leftTime,
                             double rightTime,
                             const plot::CursorIntervalText& intervalText,
                             const ImPlotRect& limits)
@@ -799,7 +795,7 @@ void drawCursorIntervalHint(double leftTime,
     const ImVec2 start = ImPlot::PlotToPixels(beginTime, centerValue);
     const ImVec2 end = ImPlot::PlotToPixels(endTime, centerValue);
     auto* drawList = ImPlot::GetPlotDrawList();
-    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(measurementCursorColor(0));
+    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(measurementCursorColor(view, 0));
     ImPlot::PushPlotClipRect();
     constexpr float kDashLength = 8.0F;
     constexpr float kGapLength = 5.0F;
@@ -815,8 +811,9 @@ void drawCursorIntervalHint(double leftTime,
     const ImVec2 center = ImVec2(0.5F * (start.x + end.x), start.y);
     const ImVec2 textMin = ImVec2(center.x - 0.5F * textSize.x - 5.0F, center.y - textSize.y - 7.0F);
     const ImVec2 textMax = ImVec2(center.x + 0.5F * textSize.x + 5.0F, center.y - 3.0F);
-    drawList->AddRectFilled(textMin, textMax, ImGui::ColorConvertFloat4ToU32(ImVec4(0.06F, 0.06F, 0.04F, 0.72F)), 3.0F);
-    drawList->AddText(ImVec2(textMin.x + 5.0F, textMin.y + 2.0F), lineColor, label.c_str());
+    drawList->AddRectFilled(textMin, textMax, ImGui::ColorConvertFloat4ToU32(cursorLabelBackground(view)), 3.0F);
+    drawList->AddText(ImVec2(textMin.x + 5.0F, textMin.y + 2.0F),
+                     ImGui::ColorConvertFloat4ToU32(cursorLabelText(view, 0, 0)), label.c_str());
 
     const auto drawTimeChip = [&](const char* prefix, double time, ImVec4 color) {
         const std::string chip = std::string(prefix) + " " + formatMetricText(time, intervalText.deltaUnit.c_str());
@@ -825,14 +822,16 @@ void drawCursorIntervalHint(double leftTime,
         const ImVec2 chipMin(anchor.x - chipSize.x * 0.5F - 5.0F, anchor.y - chipSize.y - 8.0F);
         const ImVec2 chipMax(anchor.x + chipSize.x * 0.5F + 5.0F, anchor.y - 3.0F);
         const ImU32 chipColor =
-            ImGui::ColorConvertFloat4ToU32(ImVec4(color.x * 0.20F, color.y * 0.20F, color.z * 0.20F, 0.82F));
+            ImGui::ColorConvertFloat4ToU32(cursorLabelBackground(view));
         const ImU32 chipTextColor = ImGui::ColorConvertFloat4ToU32(color);
         drawList->AddRectFilled(chipMin, chipMax, chipColor, 3.0F);
         drawList->AddRect(chipMin, chipMax, chipTextColor, 3.0F);
-        drawList->AddText(ImVec2(chipMin.x + 5.0F, chipMin.y + 2.0F), chipTextColor, chip.c_str());
+        const std::size_t identity = prefix[0] == 'A' ? 0 : 1;
+        drawList->AddText(ImVec2(chipMin.x + 5.0F, chipMin.y + 2.0F),
+                         ImGui::ColorConvertFloat4ToU32(cursorLabelText(view, identity, identity)), chip.c_str());
     };
-    drawTimeChip("A", leftTime, measurementCursorColor(0));
-    drawTimeChip("B", rightTime, measurementCursorColor(1));
+    drawTimeChip("A", leftTime, measurementCursorColor(view, 0));
+    drawTimeChip("B", rightTime, measurementCursorColor(view, 1));
     ImPlot::PopPlotClipRect();
 }
 

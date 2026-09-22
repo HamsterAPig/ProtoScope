@@ -62,12 +62,12 @@ void GuiRuntime::drawFileMenu()
     if (ImGui::MenuItem("打开 ELF/ElfStaticView 数据文件...", shortcutLabel(ShortcutAction::OpenElfDataFile).data())) {
         openElfStaticAddressDialog();
     }
-    ImGui::BeginDisabled(application_.dataTransferStatus().active);
+    protoscope::ui::beginDisabled(application_.dataTransferStatus().active);
     if (ImGui::MenuItem("导入数据...")) openUnifiedDataImport();
     if (ImGui::MenuItem("导出数据...")) openUnifiedDataExport();
     if (ImGui::MenuItem("使用上次配置导出", nullptr, false,
                         application_.runtimeConfig().gui.lastDataExport.valid)) openUnifiedDataExport(-1, true);
-    ImGui::EndDisabled();
+    protoscope::ui::endDisabled();
     if (ImGui::MenuItem("导出波形分析报告...")) {
         openWaveAnalysisExportDialog();
     }

@@ -82,6 +82,167 @@ int main(int argc, char** argv)
     int exitCode = 0;
     try {
         {
+            // 与生产入口相同的多帧输入，不直接写拖动状态；覆盖整框而非旧中心 8x8。
+            plot::WaveDockState wave;
+            auto& view = wave.view;
+            view.initialized = true;
+            view.defaultViewportPending = false;
+            view.autoFollowLatest = false;
+            view.showCursors = false;
+            view.viewMinValue = -7;
+            view.viewMaxValue = 9;
+            wave.buffer.append(0, {{}, {{0, 0}, {100, 1}}});
+            ImRect bounds;
+            bool collapsed = false;
+            const auto draw = [&] {
+                if (withGl) ImGui_ImplOpenGL3_NewFrame();
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos(ImVec2(0, 0));
+                ImGui::SetNextWindowSize(ImVec2(1100, 300));
+                ImGui::Begin("overview capture regression", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                auto frame = ui::prepareWaveFrame(wave, 1100);
+                if (collapsed) ui::releaseOverviewDrag(wave);
+                else {
+                    ui::drawOverviewWindow(wave, frame.fullSnapshot->config, *frame.fullSnapshot,
+                        *frame.overviewDisplayData, plot::computeDisplayBounds(*frame.overviewDisplayData, 1e-6),
+                        {0}, frame.renderBudget);
+                    if (const auto* p = ImPlot::GetPlot("##wave_overview")) bounds = p->PlotRect;
+                }
+                ImGui::End();
+                ImGui::Render();
+            };
+            const auto check = [](bool condition, const char* message) {
+                if (!condition) throw std::runtime_error(message);
+            };
+            const auto reset = [&] {
+                io.AddMouseButtonEvent(0, false);
+                io.AddMousePosEvent(-100, -100);
+                for (int n = 0; n < 24; ++n) draw(); // 隔离双击计时及事件队列。
+                view.viewMinTime = 20;
+                view.viewMaxTime = 60;
+                view.visibleDuration = 40;
+                view.autoFollowLatest = false;
+                view.forceNextMainPlotLimits = false;
+                draw();
+            };
+            const auto point = [&](double time, float y) {
+                return ImVec2(bounds.Min.x + bounds.GetWidth() * float(time / 100),
+                              bounds.Min.y + bounds.GetHeight() * y);
+            };
+            const auto press = [&](ImVec2 p) {
+                io.AddMousePosEvent(p.x, p.y); draw();
+                io.AddMouseButtonEvent(0, true); draw();
+            };
+            const auto move = [&](ImVec2 p) { io.AddMousePosEvent(p.x, p.y); draw(); };
+            for (float dpi : {1.F, 1.5F, 2.F}) {
+                ImGui::GetMainViewport()->DpiScale = dpi;
+                for (float x : {.2F, .8F}) for (float y : {.2F, .8F}) {
+                    reset();
+                    const auto start = point(20 + 40 * x, y);
+                    press(start);
+                    check(view.overviewDrag.target == 3 && ImGui::GetActiveID() == view.overviewDrag.activeId,
+                          "概览四象限未获得真实平移活动 ID");
+                    // 让跟随已定位到同一范围，再检验 OverviewDrag 强制暂停，不依赖通用暂停开关。
+                    view.pauseAutoFollowOnInteraction = false;
+                    // ImGui UpdateMouseInputs 对坐标向下取整；以真实整像素输入独立计算预期，
+                    // 不把107.1px指令误当成已送达107.1px，也不放宽时间断言容差。
+                    const float destinationX = std::floor(start.x + bounds.GetWidth() * .1F);
+                    const double expectedShift = (destinationX - std::floor(start.x)) * 100.0 / bounds.GetWidth();
+                    move(ImVec2(destinationX, start.y));
+                    check(std::abs(view.viewMinTime - (20 + expectedShift)) < 1e-4 &&
+                          std::abs(view.viewMaxTime - (60 + expectedShift)) < 1e-4,
+                          "概览总锚点平移错误或重复应用 delta");
+                    check(view.viewMinValue == -7 && view.viewMaxValue == 9 && view.forceNextMainPlotLimits,
+                          "概览平移改变 Y 或未刷新主图");
+                    draw();
+                    check(std::abs(view.viewMinTime - (20 + expectedShift)) < 1e-4, "静止持有累计位移");
+                    move(ImVec2(destinationX + .75F, start.y));
+                    check(io.MousePos.x == destinationX &&
+                          std::abs(view.viewMinTime - (20 + expectedShift)) < 1e-4 &&
+                          std::abs(view.viewMaxTime - (60 + expectedShift)) < 1e-4,
+                          "同一逻辑像素的分数坐标不得移动概览");
+                    move(ImVec2(bounds.Max.x + 100, bounds.Max.y + 50));
+                    check(view.overviewWindowDragging && std::abs(view.viewMaxTime - 100) < 1e-4,
+                          "图外捕获丢失或历史夹紧失败");
+                    io.AddMouseButtonEvent(0, false); draw();
+                    check(!view.overviewWindowDragging && !wave.overviewColorCache.dragging && !view.overviewDrag.activeId,
+                          "图外释放未清理捕获和锁色");
+                }
+                for (int edge : {1, 2}) {
+                    reset();
+                    const auto start = point(edge == 1 ? 20 : 60, .5F);
+                    press(start);
+                    check(view.overviewDrag.target == edge, "左右把手未互斥命中");
+                    const float destinationX=std::floor(start.x + bounds.GetWidth() * .05F);
+                    const double expectedShift=(destinationX-std::floor(start.x))*100.0/bounds.GetWidth();
+                    move(ImVec2(destinationX, start.y));
+                    check(std::abs(view.viewMinTime - (edge == 1 ? 20+expectedShift : 20)) < 1e-4 &&
+                          std::abs(view.viewMaxTime - (edge == 2 ? 60+expectedShift : 60)) < 1e-4, "边缘缩放移动错误端点");
+                    reset();
+                    const auto p = point(edge == 1 ? 20 : 60, .5F);
+                    press(p); io.AddMouseButtonEvent(0, false); draw();
+                    io.AddMouseButtonEvent(0, true); draw();
+                    check(std::abs((edge == 1 ? view.viewMinTime : view.viewMaxTime) - (edge == 1 ? 0 : 100)) < 1e-4,
+                          "双击边缘未恢复历史端点");
+                }
+                reset();
+                view.viewMinTime = 40; view.viewMaxTime = 40.001; view.visibleDuration = .001;
+                draw();
+                const auto narrow = point(40.0005, .2F);
+                press(narrow);
+                check(view.overviewDrag.target == 3, "极窄框没有平移入口");
+                check(std::abs(view.viewMinTime - 40) < 1e-8, "点击视觉扩展区发生跳转");
+                move(ImVec2(narrow.x + 20 * dpi, narrow.y));
+                check(std::abs(view.viewMaxTime - view.viewMinTime - .001) < 1e-8, "最小像素宽度污染时间跨度");
+                io.AddFocusEvent(false); draw();
+                check(!view.overviewDrag.activeId && !wave.overviewColorCache.dragging, "失焦未释放概览");
+                io.AddFocusEvent(true);
+                for (int edge : {1, 2}) {
+                    reset();
+                    view.viewMinTime = 40; view.viewMaxTime = 40.001; view.visibleDuration = .001;
+                    draw();
+                    auto handle = point(40.0005, .5F);
+                    handle.x += (edge == 1 ? -2 : 2) * dpi;
+                    press(handle);
+                    check(view.overviewDrag.target == edge, "极窄框左右把手不可抓取");
+                    move(ImVec2(handle.x + (edge == 1 ? -20 : 20) * dpi, handle.y));
+                    check(edge == 1 ? view.viewMinTime < 40 : view.viewMaxTime > 40.001,
+                          "极窄把手未扩大时间范围");
+                }
+                reset();
+                press(point(5, .2F));
+                move(point(35, .2F));
+                check(!view.overviewDrag.activeId && view.viewMinTime == 20, "框外按下移入被劫持");
+                reset();
+                press(point(35, .2F));
+                collapsed = true; draw();
+                check(!view.overviewDrag.activeId && !wave.overviewColorCache.dragging, "折叠未释放");
+                collapsed = false;
+                reset();
+                const auto anchor = point(30, .2F);
+                move(anchor);
+                const double actualAnchor=(std::floor(anchor.x)-bounds.Min.x)*100.0/bounds.GetWidth();
+                const double anchorRatio=(actualAnchor-20)/40;
+                io.AddMouseWheelEvent(0, 1); draw();
+                check(view.viewMaxTime - view.viewMinTime < 40 &&
+                      std::abs((actualAnchor - view.viewMinTime) / (view.viewMaxTime - view.viewMinTime) - anchorRatio) < 1e-5,
+                      "概览滚轮锚点回归");
+                reset();
+                // 最大时间为100，跟随40宽窗口对应60..100。
+                view.viewMinTime = 60; view.viewMaxTime = 100; view.autoFollowLatest = true;
+                press(point(75, .2F));
+                move(point(70, .2F));
+                check(!view.autoFollowLatest, "概览拖动未强制停止自动跟随");
+            }
+            reset();
+            press(point(35, .2F));
+            wave.buffer.clear(); draw();
+            check(!view.overviewDrag.activeId && !view.overviewWindowDragging, "无数据未释放概览");
+            io.AddMouseButtonEvent(0, false); draw();
+            ImGui::GetMainViewport()->DpiScale = 1;
+            std::cout << "overview_capture: quadrants, edges, narrow, DPI, release, focus, wheel passed\n";
+        }
+        {
             plot::WaveDockState wave;
             wave.view.initialized = true;
             wave.view.defaultViewportPending = false;
@@ -338,11 +499,10 @@ int main(int argc, char** argv)
                                 float(rectangleColor.g), float(rectangleColor.b), 1)))
                             selectionVertex = v;
                         for (std::size_t c = 0; c < wave.view.cursors.size(); ++c) {
-                            const auto time = wave.view.cursors[c].time;
-                            const auto alpha = time >= wave.view.viewMinTime && time <= wave.view.viewMaxTime ? 0.95F : 0.35F;
-                            if (cursorVertex < 0 && vertexColor ==
-                                ImGui::ColorConvertFloat4ToU32(ui::displayColor(ui::measurementCursorColor(c),
-                                    ui::activeWaveStyleTokens().plotBackground, alpha)))
+                            const float cursorX = plot->PlotRect.Min.x + plot->PlotRect.GetWidth() *
+                                float(wave.view.cursors[c].time / 2.0);
+                            if (cursorVertex < 0 && std::abs(drawList->VtxBuffer[v].pos.x - cursorX) < 3 && vertexColor ==
+                                ImGui::ColorConvertFloat4ToU32(ui::measurementCursorColor(wave.view, c)))
                                 cursorVertex = v;
                         }
                         for (std::size_t i = 0; i < colors.size(); ++i) {

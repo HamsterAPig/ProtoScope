@@ -798,15 +798,8 @@ void main()
                 return depositAlpha_;
             depositRevision_ = activeThemeRevision();
             depositColor_ = color;
-            const auto bg = activeWaveStyleTokens().plotBackground;
-            const plot::OverviewColor background{bg.x, bg.y, bg.z, 1};
-            // 最新核心线也要可辨；提高覆盖量，保留已修正的色相，旧轨迹仍按时间衰减。
-            for (int i = 0; i <= 64; ++i) {
-                const float alpha = std::lerp(initial, 1.F, i / 64.F);
-                if (plot::overviewContrast(plot::compositeOverviewColor(
-                    {color.x, color.y, color.z, alpha}, background), background) >= 3) return depositAlpha_ = alpha;
-            }
-            return depositAlpha_ = 1.F;
+            // 与游标元数据选色共用最新核心覆盖量；不改变既有余辉累积/衰减策略。
+            return depositAlpha_ = wavePhosphorDepositionAlpha(color);
         }
 
         void accumulateCpuLine(const float x0,

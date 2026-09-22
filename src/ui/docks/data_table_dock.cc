@@ -1,3 +1,4 @@
+#include "protoscope/ui/ui_theme.hpp"
 #include "../runtime/gui_runtime_detail.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
 #include "protoscope/ui/icons.hpp"
@@ -83,7 +84,7 @@ bool GuiRuntime::drawDataTableControl(const scripting::ControlSnapshot& control)
     ImGui::PushID(scope.c_str());
     ImGui::BeginGroup();
     ImGui::TextUnformatted(descriptor.label.c_str());
-    ImGui::BeginDisabled(descriptor.disabled || descriptor.readOnly);
+    protoscope::ui::beginDisabled(descriptor.disabled || descriptor.readOnly);
     if (!state.initialized && !descriptor.disabled && !descriptor.readOnly) {
         state.initialized=true;
         if (config.history) send(scripting::DataTableAction::Refresh);
@@ -104,13 +105,13 @@ bool GuiRuntime::drawDataTableControl(const scripting::ControlSnapshot& control)
     ImGui::SetItemTooltip("Filter comparison");
     const float button=ImGui::GetFrameHeight();
     const bool unary=state.filterOperation>=7;
-    ImGui::BeginDisabled(unary);
+    protoscope::ui::beginDisabled(unary);
     const auto type=config.columns[state.filterColumn].type;
     ImGui::SetNextItemWidth(std::max(30.0F,width-2*button-2*ImGui::GetStyle().ItemSpacing.x));
     if (type==data::FieldType::Bool) ImGui::Checkbox("Value",&state.filterBoolean);
     else ImGui::InputText("##value",state.filterValue.data(),state.filterValue.size());
     ImGui::SetItemTooltip(type==data::FieldType::Bytes ? "HEX filter value":"Filter value");
-    ImGui::EndDisabled();
+    protoscope::ui::endDisabled();
     ImGui::SameLine();
     if (iconButton(PROTOSCOPE_ICON_FILTER "##apply","Apply filter")) {
         try {
@@ -182,26 +183,26 @@ bool GuiRuntime::drawDataTableControl(const scripting::ControlSnapshot& control)
         }
         ImGui::EndTable();
     }
-    ImGui::BeginDisabled(view.offset==0 || page.loading);
+    protoscope::ui::beginDisabled(view.offset==0 || page.loading);
     if (ImGui::ArrowButton("##previous",ImGuiDir_Left)) {
         view.offset=view.offset>view.limit ? view.offset-view.limit:0;send(scripting::DataTableAction::View);
     }
-    ImGui::SetItemTooltip("Previous page");ImGui::EndDisabled();ImGui::SameLine();
-    ImGui::BeginDisabled(!page.more || page.loading);
+    ImGui::SetItemTooltip("Previous page");protoscope::ui::endDisabled();ImGui::SameLine();
+    protoscope::ui::beginDisabled(!page.more || page.loading);
     if (ImGui::ArrowButton("##next",ImGuiDir_Right)) {view.offset+=view.limit;send(scripting::DataTableAction::View);}
-    ImGui::SetItemTooltip("Next page");ImGui::EndDisabled();ImGui::SameLine();
+    ImGui::SetItemTooltip("Next page");protoscope::ui::endDisabled();ImGui::SameLine();
     if (iconButton(PROTOSCOPE_ICON_REFRESH "##refresh","Refresh snapshot")) {
         send(scripting::DataTableAction::Refresh);
     }
     ImGui::SameLine();
-    ImGui::BeginDisabled(!page.loading);
+    protoscope::ui::beginDisabled(!page.loading);
     if (iconButton(PROTOSCOPE_ICON_CLOSE "##cancel","Cancel query")) send(scripting::DataTableAction::Cancel);
-    ImGui::EndDisabled();ImGui::SameLine();
+    protoscope::ui::endDisabled();ImGui::SameLine();
     if (page.loading) ImGui::TextUnformatted("Loading...");
     else ImGui::Text("%llu-%llu",static_cast<unsigned long long>(page.rows.empty()?0:page.offset+1),
                      static_cast<unsigned long long>(page.offset+page.rows.size()));
     const auto& exporting=control.tableExport;
-    ImGui::BeginDisabled(exporting.choosingPath || exporting.running || page.loading ||
+    protoscope::ui::beginDisabled(exporting.choosingPath || exporting.running || page.loading ||
                          !page.error.empty() || (config.history && !page.snapshot));
     if (iconButton(PROTOSCOPE_ICON_DOWNLOAD "##export","Export matching rows")) ImGui::OpenPopup("##export_format");
     if (ImGui::BeginPopup("##export_format")) {
@@ -209,14 +210,14 @@ bool GuiRuntime::drawDataTableControl(const scripting::ControlSnapshot& control)
         if (ImGui::MenuItem("PSREC")) send(scripting::DataTableAction::ExportPsrec);
         ImGui::EndPopup();
     }
-    ImGui::EndDisabled();
+    protoscope::ui::endDisabled();
     ImGui::SameLine();
-    ImGui::BeginDisabled(!exporting.running);
+    protoscope::ui::beginDisabled(!exporting.running);
     if (iconButton(PROTOSCOPE_ICON_CLOSE "##cancel_export","Cancel export"))
         send(scripting::DataTableAction::CancelExport);
-    ImGui::EndDisabled();
+    protoscope::ui::endDisabled();
     if (!exporting.message.empty()) ImGui::TextWrapped("%s",exporting.message.c_str());
-    ImGui::EndDisabled();
+    protoscope::ui::endDisabled();
     if (!state.error.empty()) ImGui::TextWrapped("%s",state.error.c_str());
     if (!page.error.empty()) ImGui::TextWrapped("%s",page.error.c_str());
     ImGui::EndGroup();ImGui::PopID();

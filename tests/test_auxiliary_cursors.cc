@@ -5,6 +5,7 @@
 #include <GLFW/glfw3.h>
 
 #include <cmath>
+#include <cstdio>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -336,14 +337,106 @@ void uiTests(bool withGl, const std::filesystem::path& directory)
     for (int n = 0; n < 12; ++n) view.auxiliaryCursors.add(n * 0.075, n * 0.075);
     view.auxiliaryCursors.add(0.5, 0.5);
     const auto identities = view.auxiliaryCursors.items;
+    render();
+    const auto stableT = ui::cursorOverviewColor(ui::auxiliaryCursorColor(view, view.auxiliaryCursors.items.front()));
+    const auto addedId = view.auxiliaryCursors.add(.91, .91);
+    render();
+    require(ui::cursorOverviewColor(ui::auxiliaryCursorColor(view, view.auxiliaryCursors.items.front())) == stableT,
+            "新增 T 重新分配已有自动身份色");
+    view.auxiliaryCursors.remove(addedId);
+    render();
+    require(ui::cursorOverviewColor(ui::auxiliaryCursorColor(view, view.auxiliaryCursors.items.front())) == stableT,
+            "删除 T 重新分配已有自动身份色");
     for (auto theme : {config::GuiTheme::ProfessionalDark, config::GuiTheme::ProfessionalLight,
                        config::GuiTheme::DebugHighContrast}) {
         ui::applyUiTheme(theme);
+        const auto& themeTokens = ui::activeUiStyleTokens();
+        require(plot::overviewContrast(ui::cursorOverviewColor(themeTokens.textStrong),
+                                       ui::cursorOverviewColor(themeTokens.panelBackgroundAlt)) >=
+                    (theme == config::GuiTheme::DebugHighContrast ? 12 : 4.5),
+                "游标标签回退正文在新主题背景上不达标");
         for (auto mode : {plot::WaveViewMode::Overlay, plot::WaveViewMode::Stacked, plot::WaveViewMode::Split}) {
+            // 前面的拖动/缩放用例会留下旧Y锚点和读数。每个集成场景独立恢复确定夹具，
+            // 不能只设 pinned 后任由旧读数影响最近点查询；采样索引256/768确实存在。
             view.viewMode = mode;
+            view.initialized = true;
+            view.defaultViewportPending = false;
+            view.autoFollowLatest = false;
+            view.viewMinTime = 0; view.viewMaxTime = 1; view.visibleDuration = 1;
+            view.viewMinValue = -1.5; view.viewMaxValue = 1.5;
+            view.cursorSnapMode = plot::WaveCursorSnapMode::ModifierSnap;
+            view.cursorSnapScope = plot::WaveCursorSnapScope::ActiveChannel;
+            view.measurementChannelIndex = 0;
+            view.cursorIntervalLocked = false;
+            view.lastCursorReadouts = {};
+            view.measurementCursorReadoutRefreshPending = true;
+            view.cursors[0] = {.enabled=true,.pinned=true,.channelIndex=0,.time=.25,.value=std::sin(256*.04)};
+            view.cursors[1] = {.enabled=true,.pinned=true,.channelIndex=0,.time=.75,.value=std::sin(768*.04)};
             view.forceNextMainPlotLimits = true;
             for (int n = 0; n < 4; ++n) render();
+            for (std::size_t c=0;c<2;++c) {
+                const auto& readout=view.lastCursorReadouts[c];
+                require(readout.has_value(),"集成场景缺少A/B有效通道读数");
+                require(readout->channelIndex==0 && std::abs(readout->time-(c ? .75 : .25))<1e-9 &&
+                        std::abs(readout->value-std::sin((c ? 768 : 256)*.04))<1e-9,
+                        "集成场景A/B读数被旧锚点、初始化、跟随或吸附覆盖");
+                require(plot && readout->time>plot->Axes[ImAxis_X1].Range.Min &&
+                        readout->time<plot->Axes[ImAxis_X1].Range.Max,"A/B不在实际可见时间窗");
+            }
             require(view.auxiliaryCursors.items.size() == identities.size(), "display mode cleared T cursors");
+            const auto expectedColor = ImGui::ColorConvertFloat4ToU32(ui::auxiliaryCursorColor(view, view.auxiliaryCursors.items.front()));
+            bool hasIdentityColor = false;
+            for (const auto* list : ImGui::GetDrawData()->CmdLists)
+                for (const auto& vertex : list->VtxBuffer) hasIdentityColor = hasIdentityColor || vertex.col == expectedColor;
+            require(hasIdentityColor, "布局未使用本 Dock 冻结的 T 身份色");
+            // 在真实 drawOscilloscopePlot 的最终draw data中匹配完整两行字形UV/颜色/相对坐标，
+            // 不是搜索整帧任意同色背景，也不直接调用标签帮助函数充当集成结果。
+            for (std::size_t c=0;c<2;++c) {
+                const auto& readout=*view.lastCursorReadouts[c];
+                char text[128];
+                const auto time=ui::formatMetricText(readout.time,"s");
+                std::snprintf(text,sizeof(text),"%c %s\nSignal 1 %.6g",c ? 'B' : 'A',time.c_str(),readout.value);
+                ImDrawList expected(ImGui::GetDrawListSharedData());
+                expected._ResetForNewFrame();
+                expected.PushClipRectFullScreen();
+                expected.PushTexture(ImGui::GetIO().Fonts->TexRef);
+                expected.AddText({0,0},ImGui::ColorConvertFloat4ToU32(ui::cursorImVec(view.cursorColors.labelText)),text);
+                bool found=false;
+                for (const auto* list : ImGui::GetDrawData()->CmdLists)
+                    for(int start=0;start+expected.VtxBuffer.Size<=list->VtxBuffer.Size;++start) {
+                        if(expected.VtxBuffer.empty()) continue;
+                        const ImVec2 origin(list->VtxBuffer[start].pos.x-expected.VtxBuffer[0].pos.x,
+                                            list->VtxBuffer[start].pos.y-expected.VtxBuffer[0].pos.y);
+                        bool same=true;
+                        for(int n=0;n<expected.VtxBuffer.Size && same;++n) {
+                            const auto& actual=list->VtxBuffer[start+n]; const auto& wanted=expected.VtxBuffer[n];
+                            same=actual.col==wanted.col && std::abs(actual.uv.x-wanted.uv.x)<1e-6F &&
+                                std::abs(actual.uv.y-wanted.uv.y)<1e-6F &&
+                                std::abs(actual.pos.x-wanted.pos.x-origin.x)<.01F &&
+                                std::abs(actual.pos.y-wanted.pos.y-origin.y)<.01F && plot->PlotRect.Contains(actual.pos);
+                        }
+                        if(same) {
+                            // 字形必须被实际提交且位于命令裁剪内，不能只存在于未使用的顶点缓存。
+                            for(int n=0;n<expected.VtxBuffer.Size && same;++n) {
+                                bool visible=false;
+                                const auto p=list->VtxBuffer[start+n].pos;
+                                for(const auto& cmd:list->CmdBuffer) {
+                                    if(cmd.UserCallback || p.x<cmd.ClipRect.x || p.x>cmd.ClipRect.z ||
+                                       p.y<cmd.ClipRect.y || p.y>cmd.ClipRect.w) continue;
+                                    for(unsigned i=cmd.IdxOffset;i<cmd.IdxOffset+cmd.ElemCount;++i)
+                                        if(cmd.VtxOffset+list->IdxBuffer[i]==unsigned(start+n)) { visible=true; break; }
+                                    if(visible) break;
+                                }
+                                same=visible;
+                            }
+                        }
+                        found=found || same;
+                    }
+                if(!found) throw std::runtime_error("实际A/B两行标签缺失: theme="+std::to_string(int(theme))+
+                    " mode="+std::to_string(int(mode))+" text="+text);
+            }
+            require(plot::overviewContrast(view.cursorColors.labelText,view.cursorColors.labelBackground)>=
+                    (theme==config::GuiTheme::DebugHighContrast?12:4.5),"实际读数正文与标签背景阈值");
             for (std::size_t i = 0; i < identities.size(); ++i)
                 require(view.auxiliaryCursors.items[i].id == identities[i].id &&
                         view.auxiliaryCursors.items[i].colorIndex == identities[i].colorIndex,
@@ -360,6 +453,8 @@ void uiTests(bool withGl, const std::filesystem::path& directory)
     for (int n = 0; n < 4; ++n) render();
     capture(directory, "measurement-overlay");
     view.showMeasurementOverlay = false;
+    // 该既有“频域没有 T”像素检查使用独占的手动身份色，避免自动候选与 FFT 波形同色误报。
+    view.cursorAutoColor = false;
     view.fft.enabled = true;
     view.fft.displayMode = plot::WaveFftDisplayMode::CursorSplit;
     const auto settleFft = [&] {
@@ -377,9 +472,11 @@ void uiTests(bool withGl, const std::filesystem::path& directory)
     require(view.auxiliaryCursors.items.size() == identities.size(), "cursor-split FFT cleared T");
     const auto hasAuxiliaryColor = [&] {
         const auto* data = ImGui::GetDrawData();
+        const auto found = std::ranges::find(view.auxiliaryCursors.items, std::size_t{3}, &plot::WaveAuxiliaryCursor::colorIndex);
+        require(found != view.auxiliaryCursors.items.end(), "缺少手动色槽3的 T 测试样本");
         for (const auto* list : data->CmdLists)
             for (const auto& vertex : list->VtxBuffer)
-                if (vertex.col == ImGui::ColorConvertFloat4ToU32(ui::auxiliaryCursorColor(3))) return true;
+                if (vertex.col == ImGui::ColorConvertFloat4ToU32(ui::auxiliaryCursorColor(view, *found))) return true;
         return false;
     };
     require(hasAuxiliaryColor(), "time plot did not draw T cursor color");

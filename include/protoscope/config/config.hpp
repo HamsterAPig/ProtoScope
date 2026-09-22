@@ -138,6 +138,7 @@ struct GuiWaveConfig {
     std::size_t overviewMaxSamples{20000};
     bool overviewNormalizeChannels{false};
     bool overviewShowBitChannels{false};
+    bool cursorAutoColor{true};
     plot::OverviewSelectionConfig overviewSelection{};
     double minVisibleTimeSpan{0.001};
     std::size_t maxTotalSamples{0};

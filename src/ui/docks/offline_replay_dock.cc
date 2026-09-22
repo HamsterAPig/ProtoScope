@@ -81,11 +81,11 @@ namespace {
     bool drawDisabledAwareButton(const char* label, const char* tooltip, const bool enabled)
     {
         if (!enabled) {
-            ImGui::BeginDisabled();
+            protoscope::ui::beginDisabled();
         }
         const bool clicked = drawToolbarSectionButton(label, tooltip, false, ImVec2(-1.0F, 0.0F));
         if (!enabled) {
-            ImGui::EndDisabled();
+            protoscope::ui::endDisabled();
         }
         return clicked && enabled;
     }

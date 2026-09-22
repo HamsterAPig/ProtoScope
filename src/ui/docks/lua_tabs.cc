@@ -1,3 +1,4 @@
+#include "protoscope/ui/ui_theme.hpp"
 #include "../runtime/gui_runtime_detail.hpp"
 #include "protoscope/ui/gui_runtime.hpp"
 
@@ -39,9 +40,9 @@ bool GuiRuntime::drawLuaTabsLayoutNode(const scripting::LayoutNodeDescriptor& no
         const auto label = page.title + "###page_" + id;
         const auto flags = state.syncing && id == selected ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
         // 只禁止切页，不将选择器属性冒充页内控件属性；输入仍由各控件和 worker 校验。
-        ImGui::BeginDisabled(descriptor.disabled || descriptor.readOnly);
+        protoscope::ui::beginDisabled(descriptor.disabled || descriptor.readOnly);
         const bool open = ImGui::BeginTabItem(label.c_str(), nullptr, flags);
-        ImGui::EndDisabled();
+        protoscope::ui::endDisabled();
         if (!descriptor.tooltip.empty()) ImGui::SetItemTooltip("%s", descriptor.tooltip.c_str());
         if (open) {
             shown = id;

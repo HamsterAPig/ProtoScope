@@ -721,13 +721,13 @@ namespace {
         recordCurrentTableCell(blankHitTest);
         ImGui::SetNextItemWidth(-1.0F);
         if (bitChannel) {
-            ImGui::BeginDisabled();
+            protoscope::ui::beginDisabled();
         }
         if (ImGui::InputDouble("##ratio", &updated.ratio, 0.0, 0.0, "%.4g") && !bitChannel) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
         if (bitChannel) {
-            ImGui::EndDisabled();
+            protoscope::ui::endDisabled();
         }
         recordLastItem(blankHitTest);
 
@@ -735,13 +735,13 @@ namespace {
         recordCurrentTableCell(blankHitTest);
         ImGui::SetNextItemWidth(-1.0F);
         if (bitChannel) {
-            ImGui::BeginDisabled();
+            protoscope::ui::beginDisabled();
         }
         if (drawChannelActualValuePerDivisionEditor("##scale", wave.view, updated, "%.4g") && !bitChannel) {
             applyChannelTransformOverride(wave, channelIndex, updated, defaultSpec);
         }
         if (bitChannel) {
-            ImGui::EndDisabled();
+            protoscope::ui::endDisabled();
         }
         recordLastItem(blankHitTest);
 

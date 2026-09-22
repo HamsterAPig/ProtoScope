@@ -83,7 +83,7 @@ namespace {
         return size;
     }
 
-    void drawMetricChip(ImDrawList* drawList,
+    void drawMetricChip(const plot::WaveViewState& view, ImDrawList* drawList,
                         ImVec2 pos,
                         const MetricChip& chip,
                         ImU32 bgColor,
@@ -98,8 +98,10 @@ namespace {
 
         const ImVec2 chipSize = calcChipSize(chip, padX, padY);
         if (chip.label.starts_with("A·") || chip.label.starts_with("B·")) {
-            labelColor = valueColor = ImGui::ColorConvertFloat4ToU32(
-                measurementCursorColor(chip.label.starts_with("A·") ? 0 : 1));
+            const std::size_t identity = chip.label.starts_with("A·") ? 0 : 1;
+            labelColor = valueColor = ImGui::ColorConvertFloat4ToU32(cursorLabelText(view, identity, identity));
+            bgColor = ImGui::ColorConvertFloat4ToU32(cursorLabelBackground(view));
+            borderColor = ImGui::ColorConvertFloat4ToU32(measurementCursorColor(view, identity));
         }
         const ImVec2 chipMax(pos.x + chipSize.x, pos.y + chipSize.y);
 
@@ -116,7 +118,7 @@ namespace {
         drawList->AddText(ImVec2(valueX, textY), valueColor, chip.value.c_str());
     }
 
-    void drawChipGrid(ImDrawList* drawList,
+    void drawChipGrid(const plot::WaveViewState& view, ImDrawList* drawList,
                       ImVec2 pos,
                       const MetricChips& chips,
                       float maxWidth,
@@ -144,7 +146,7 @@ namespace {
                 rowHeight = 0.0F;
             }
 
-            drawMetricChip(drawList,
+            drawMetricChip(view, drawList,
                            ImVec2(x, y),
                            chip,
                            chipBgColor,
@@ -496,7 +498,7 @@ void drawMeasurementOverlay(const plot::WaveViewState& view,
 
     cursor.y += ImGui::GetTextLineHeight() + headerGap;
 
-    drawChipGrid(drawList,
+    drawChipGrid(view, drawList,
                  cursor,
                  chips,
                  overlayWidth - padding * 2.0F,

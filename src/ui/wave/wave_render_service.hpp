@@ -6,6 +6,7 @@
 #include "protoscope/ui/ui_theme.hpp"
 
 #include <array>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -26,20 +27,95 @@ inline ImVec4 cursorRgb(std::uint32_t rgb)
                                (rgb & 255) / 255.0F, 1.0F), activeWaveStyleTokens().plotBackground);
 }
 
-inline ImVec4 measurementCursorColor(std::size_t index)
+inline ImVec4 cursorImVec(plot::OverviewColor color)
 {
-    const auto& tokens = activeWaveStyleTokens();
-    return displayColor(displayColor(tokens.cursorPalette[index % tokens.cursorPalette.size()],
-                                    tokens.plotBackground, 1.F, 4.5F),
-                        activeUiStyleTokens().panelBackgroundAlt, 1.F, 4.5F);
+    return {float(color.r), float(color.g), float(color.b), float(color.a)};
 }
 
-inline ImVec4 auxiliaryCursorColor(std::size_t colorIndex)
+inline plot::OverviewColor cursorOverviewColor(ImVec4 color)
 {
-    const auto& tokens = activeWaveStyleTokens();
-    return displayColor(displayColor(tokens.cursorPalette[(colorIndex + 2) % tokens.cursorPalette.size()],
-                                    tokens.plotBackground, 1.F, 4.5F),
-                        activeUiStyleTokens().panelBackgroundAlt, 1.F, 4.5F);
+    return {color.x, color.y, color.z, color.w};
+}
+
+inline ImVec4 measurementCursorColor(const plot::WaveViewState& view, std::size_t index)
+{
+    return cursorImVec(view.cursorColors.resolve(index, index).color);
+}
+
+inline ImVec4 auxiliaryCursorColor(const plot::WaveViewState& view, const plot::WaveAuxiliaryCursor& cursor)
+{
+    return cursorImVec(view.cursorColors.resolve(cursor.id + 2, cursor.colorIndex + 2).color);
+}
+
+inline float wavePhosphorDepositionAlpha(ImVec4 color)
+{
+    const float initial = .20F * std::clamp(color.w, 0.F, 1.F);
+    if (!activeWaveStyleTokens().correctContrast || initial == 0.F) return initial;
+    const auto bg = activeWaveStyleTokens().plotBackground;
+    const plot::OverviewColor background{bg.x, bg.y, bg.z, 1};
+    for (int i = 0; i <= 64; ++i) {
+        const float alpha = std::lerp(initial, 1.F, i / 64.F);
+        if (plot::overviewContrast(plot::compositeOverviewColor(
+            {color.x, color.y, color.z, alpha}, background), background) >= 3) return alpha;
+    }
+    return 1.F;
+}
+
+inline ImU32 cursorGuardColor(ImVec4 color)
+{
+    return plot::overviewLuminance(cursorOverviewColor(color)) > .35 ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
+}
+
+inline void drawCursorGuard(double x, ImVec4 color, float width = 4.F)
+{
+    const auto limits = ImPlot::GetPlotLimits();
+    ImPlot::PushPlotClipRect();
+    ImPlot::GetPlotDrawList()->AddLine(ImPlot::PlotToPixels(x, limits.Y.Min),
+        ImPlot::PlotToPixels(x, limits.Y.Max), cursorGuardColor(color), width);
+    ImPlot::PopPlotClipRect();
+}
+
+inline ImVec4 cursorLabelBackground(const plot::WaveViewState& view)
+{
+    return cursorImVec(view.cursorColors.labelBackground);
+}
+
+inline ImVec4 cursorLabelText(const plot::WaveViewState& view, std::uint64_t identity, std::size_t manualIndex)
+{
+    const auto choice = view.cursorColors.resolve(identity, manualIndex);
+    const bool highContrast = activeThemeDefinition().base == "debug_high_contrast";
+    const bool readable = choice.textPass && (!view.cursorColors.key.automatic || !highContrast || choice.textContrast >= 12);
+    return cursorImVec(readable ? choice.color : view.cursorColors.labelText);
+}
+
+// 不使用 ImPlot::Annotation 的身份色填充/经验黑白正文；所有读数共享可验收的表面。
+inline ImRect drawCursorReadoutLabel(const plot::WaveViewState& view, ImVec4 identityColor,
+    double x, double y, ImVec2 offset, const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    const char* text = nullptr;
+    const char* end = nullptr;
+    ImFormatStringToTempBufferV(&text, &end, format, args);
+    va_end(args);
+    const auto textSize = ImGui::CalcTextSize(text, end);
+    const auto anchor = ImPlot::PlotToPixels(x, y);
+    const auto pos = ImPlot::GetPlotPos(), size = ImPlot::GetPlotSize();
+    const ImVec2 boxSize(textSize.x+12, textSize.y+8);
+    const ImVec2 min(std::clamp(anchor.x+offset.x, pos.x, (std::max)(pos.x, pos.x+size.x-boxSize.x)),
+                     std::clamp(anchor.y+offset.y-boxSize.y, pos.y, (std::max)(pos.y, pos.y+size.y-boxSize.y)));
+    const ImRect bounds(min, ImVec2(min.x+boxSize.x, min.y+boxSize.y));
+    // 读数是正文，不因手动游标身份色降低高对比主题12:1目标。
+    const auto background = cursorLabelBackground(view);
+    const auto foreground = cursorImVec(view.cursorColors.labelText);
+    ImPlot::PushPlotClipRect();
+    auto* draw = ImPlot::GetPlotDrawList();
+    draw->AddRectFilled(bounds.Min, bounds.Max, ImGui::ColorConvertFloat4ToU32(background), 3);
+    // ImGui 1.92.8 将 thickness/flags 换序；显式浮点厚度避免命中旧兼容重载。
+    draw->AddRect(bounds.Min, bounds.Max, ImGui::ColorConvertFloat4ToU32(identityColor), 3.F, 2.F, ImDrawFlags_None);
+    draw->AddText(ImVec2(min.x+6,min.y+4), ImGui::ColorConvertFloat4ToU32(foreground), text, end);
+    ImPlot::PopPlotClipRect();
+    return bounds;
 }
 
 inline plot::OverviewSelectionStyle overviewSelectionStyle(const plot::OverviewSelectionConfig& config)
@@ -105,6 +181,7 @@ struct PlotRenderResult {
 };
 
 void normalizeOverviewEnvelope(std::vector<plot::EnvelopePoint>& envelope);
+void releaseOverviewDrag(plot::WaveDockState& wave);
 
 struct WaveMetricChip {
     std::string label;
@@ -528,20 +605,20 @@ plot::MeasurementReadout measureDisplayWindow(const plot::WaveDisplayData& displ
                                               double endTime,
                                               std::optional<std::size_t> referenceChannelIndex = std::nullopt,
                                               std::optional<double> manualReferenceValue = std::nullopt);
-void drawCursorIntervalHint(const plot::CursorReadout& left,
+void drawCursorIntervalHint(const plot::WaveViewState& view, const plot::CursorReadout& left,
                             const plot::CursorReadout& right,
                             const plot::CursorIntervalText& intervalText,
                             const ImPlotRect& limits);
-void drawCursorIntervalHint(double leftTime,
+void drawCursorIntervalHint(const plot::WaveViewState& view, double leftTime,
                             double rightTime,
                             const plot::CursorIntervalText& intervalText,
                             const ImPlotRect& limits);
-void drawCursorAnnotation(std::size_t cursorIndex,
+void drawCursorAnnotation(const plot::WaveViewState& view, std::size_t cursorIndex,
                           const plot::CursorReadout& readout,
                           const plot::ChannelView& channel,
                           std::string_view timeUnit,
                           std::string_view snapLabel);
-void drawCursorIntersectionReadouts(const std::vector<CursorIntersectionReadout>& readouts,
+void drawCursorIntersectionReadouts(const plot::WaveViewState& view, const std::vector<CursorIntersectionReadout>& readouts,
                                     const plot::WaveSnapshot& snapshot);
 
 const plot::WaveDockState::OverviewRenderEntry& cachedOverviewChannel(

@@ -109,5 +109,8 @@ bool drawToolbarSectionButton(const char* label,
 void drawHeaderBadge(const char* label, const ImVec4& color, bool filled = false);
 bool drawDangerIconButton(const char* label, const char* tooltip);
 bool drawGhostIconButton(const char* label, const char* tooltip);
+// 成对调用；高对比禁用正文与表面分开淡化，保留字体核心对比度和边界状态反馈。
+void beginDisabled(bool disabled = true);
+void endDisabled();
 
 } // namespace protoscope::ui

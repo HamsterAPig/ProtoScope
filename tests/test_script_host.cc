@@ -2543,6 +2543,16 @@ void test_config_default_roundtrip()
     const auto tempPath = tempRoot.path() / "protoscope.yaml";
 
     auto config = store.load(tempPath).config;
+    require(config.gui.wave.cursorAutoColor, "游标自动色默认应开启");
+    const auto legacyCursorConfig = store.loadText("gui:\n  wave:\n    show_axis_labels: true\n");
+    require(legacyCursorConfig.error.empty() && legacyCursorConfig.config.gui.wave.cursorAutoColor,
+            "旧配置缺少游标色开关仍应开启");
+    const auto manualCursorConfig = store.loadText("gui:\n  wave:\n    cursor_auto_color: false\n");
+    require(manualCursorConfig.error.empty() && !manualCursorConfig.config.gui.wave.cursorAutoColor,
+            "显式 false 应恢复主题游标色板");
+    require(!store.loadText("gui:\n  wave:\n    cursor_auto_color: invalid_bool\n").error.empty(),
+            "非法游标 bool 必须保留解析错误语义");
+    config.gui.wave.cursorAutoColor = false;
     require(config.protocol.rootDir.find("protocols/templates") != std::string::npos,
             "默认协议根目录应指向 protocols/templates");
     require(config.protocol.selectedDir.find("protocols/templates/default_protocol") != std::string::npos,
@@ -2696,6 +2706,7 @@ void test_config_default_roundtrip()
     const auto reloaded = store.load(tempPath);
     require(reloaded.config.communication.kind == protoscope::transport::TransportKind::Serial,
             "串口模式 roundtrip 失败");
+    require(!reloaded.config.gui.wave.cursorAutoColor, "游标自动色保存重载失败");
     require(reloaded.config.communication.serial.portName == "COM9", "串口端口 roundtrip 失败");
     require(reloaded.config.communication.serial.dataBits == 7, "串口数据位 roundtrip 失败");
     require(reloaded.config.communication.serial.parity == "even", "串口奇偶校验 roundtrip 失败");
@@ -2817,7 +2828,12 @@ void test_config_wave_mouse_y_offset_drag_mode_apply_capture()
     config.gui.wave.legendOverlayDoubleClickAutoCollapse = false;
 
     protoscope::dock::DockStore dockStore;
+    config.gui.wave.cursorAutoColor = false;
     store.applyToDock(config, dockStore);
+    require(!dockStore.waveState().view.cursorAutoColor, "applyToDock 应应用手动游标色");
+    require(!store.captureFromDock(dockStore).gui.wave.cursorAutoColor, "captureFromDock 应回收 false");
+    dockStore.waveState().view.cursorAutoColor = true;
+    require(store.captureFromDock(dockStore).gui.wave.cursorAutoColor, "captureFromDock 应回收 true");
     require(dockStore.waveState().view.mouseYOffsetDragMode == protoscope::plot::WaveMouseYOffsetDragMode::Shift,
             "applyToDock 应写入鼠标 Y 偏移拖动模式");
     require(dockStore.waveState().view.gridDivisionReadoutMode ==

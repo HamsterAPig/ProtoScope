@@ -526,7 +526,7 @@ namespace {
     {
         drawTopToolbarSeparator();
         const bool fullSpectrum = view.fft.enabled && view.fft.displayMode == plot::WaveFftDisplayMode::FullSpectrum;
-        ImGui::BeginDisabled(fullSpectrum);
+        protoscope::ui::beginDisabled(fullSpectrum);
         if (drawTopToolbarButton("+T", false, "添加辅助游标")) {
             std::vector<double> occupied;
             if (view.showCursors)
@@ -534,7 +534,7 @@ namespace {
                     if (cursor.enabled) occupied.push_back(cursor.time);
             view.auxiliaryCursors.add(view.viewMinTime, view.viewMaxTime, occupied);
         }
-        ImGui::EndDisabled();
+        protoscope::ui::endDisabled();
         ImGui::SameLine();
         if (drawTopToolbarButton(
                 "A",
@@ -624,6 +624,7 @@ namespace {
                                  wave.overviewCollapsed ? "概览图已折叠；点击后显示全局时间轴概览。"
                                                         : "概览图已显示；点击后折叠概览区域。")) {
             wave.overviewCollapsed = !wave.overviewCollapsed;
+            if (wave.overviewCollapsed) releaseOverviewDrag(wave);
         }
         ImGui::SameLine();
         if (drawTopToolbarButton(
@@ -1600,10 +1601,13 @@ public:
                                overviewBounds,
                                derivedChannelIndices,
                                frame.renderBudget);
+        } else {
+            releaseOverviewDrag(wave);
         }
         ImGui::SetCursorPos(overviewPanelCursor);
         if (ImGui::Button(wave.overviewCollapsed ? "v" : "^", ImVec2(20.0F, 18.0F))) {
             wave.overviewCollapsed = !wave.overviewCollapsed;
+            if (wave.overviewCollapsed) releaseOverviewDrag(wave);
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(wave.overviewCollapsed ? "展开概览图" : "折叠概览图");

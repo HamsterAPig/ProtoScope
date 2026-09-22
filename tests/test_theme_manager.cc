@@ -34,6 +34,26 @@ int main()
         }
         check(!ui::ThemeManager::parse("version: 1\nid: x\nname: X\nbase: custom\n", "x", theme, error),
               "reject user inheritance");
+        // 显式颜色/透明度/色板优先于新预设，应用和序列化不能再次 finishPreset。
+        for (const auto* base : {"professional_dark", "professional_light", "debug_high_contrast"}) {
+            const std::string custom = std::string("version: 1\nid: explicit\nname: Explicit\nbase: ") + base +
+                "\nui:\n  panel_background: '#12345678'\n  accent: '#FA102030'\nwave:\n  correct_contrast: false\n"
+                "  plot_background: '#20406080'\n  channel_palette: ['#01A0FE20', '#12345600']\n"
+                "  cursor_palette: ['#D0804040', '#90B0D000']\n";
+            check(ui::ThemeManager::parse(custom, "explicit.yaml", theme, error), "显式定制解析");
+            const auto encoded = ui::ThemeManager::serialize(theme, "explicit_copy");
+            check(ui::ThemeManager::parse(encoded, "copy.yaml", roundtrip, error), "显式定制往返");
+            check(!roundtrip.wave.correctContrast && roundtrip.wave.channelPalette.size() == 2 &&
+                  roundtrip.wave.channelPalette[1].w == 0 && roundtrip.wave.cursorPalette[1].w == 0,
+                  "透明色和关闭修正必须保留");
+            check(std::abs(roundtrip.ui.panelBackground.w - 120.F/255) < 1e-6 &&
+                  std::abs(roundtrip.wave.cursorPalette[0].w - 64.F/255) < 1e-6,
+                  "显式 alpha 往返不变");
+            ui::applyUiTheme(roundtrip);
+            check(ui::activeUiStyleTokens().panelBackground.x == roundtrip.ui.panelBackground.x &&
+                  ui::activeWaveStyleTokens().cursorPalette[0].x == roundtrip.wave.cursorPalette[0].x,
+                  "应用不能覆盖用户字段");
+        }
         ui::ThemeManager manager;
         ui::applyUiTheme(config::GuiTheme::DebugHighContrast);
         const auto revision = ui::activeThemeRevision();

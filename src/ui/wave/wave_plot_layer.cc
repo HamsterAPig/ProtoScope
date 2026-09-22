@@ -1115,10 +1115,14 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
         }
         claimed = claimed || clicked || held;
         const float x = ImPlot::PlotToPixels(cursor.time, limits.Y.Max).x;
-        const auto color = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(cursor.colorIndex));
+        const auto color = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(view, cursor));
         if (x >= bounds.Min.x && x <= bounds.Max.x) {
-            for (float y = pos.y; y < bounds.Max.y; y += 10)
+            for (float y = pos.y; y < bounds.Max.y; y += 10) {
+                if (!view.cursorColors.resolve(cursor.id + 2, cursor.colorIndex + 2).graphicsPass)
+                    draw->AddLine(ImVec2(x, y), ImVec2(x, (std::min)(y + 6, bounds.Max.y)),
+                        cursorGuardColor(auxiliaryCursorColor(view, cursor)), dragging ? 5 : 4);
                 draw->AddLine(ImVec2(x, y), ImVec2(x, (std::min)(y + 6, bounds.Max.y)), color, dragging ? 3 : 2);
+            }
             const auto textSize = ImGui::CalcTextSize(name.c_str());
             const float labelX = (std::clamp)(x + 4, bounds.Min.x,
                 (std::max)(bounds.Min.x, bounds.Max.x - textSize.x - 4));
@@ -1130,8 +1134,10 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
                 if (std::any_of(labels.begin(), labels.end(), [&](const auto& other) { return rect.Overlaps(other); }))
                     continue;
                 labels.push_back(rect);
-                draw->AddRectFilled(rect.Min, rect.Max, ImGui::GetColorU32(ImGuiCol_WindowBg));
-                draw->AddText(rect.Min, color, name.c_str());
+                draw->AddRectFilled(rect.Min, rect.Max, ImGui::ColorConvertFloat4ToU32(cursorLabelBackground(view)));
+                draw->AddRect(rect.Min, rect.Max, color);
+                draw->AddText(rect.Min, ImGui::ColorConvertFloat4ToU32(
+                    cursorLabelText(view, cursor.id + 2, cursor.colorIndex + 2)), name.c_str());
                 labelHovered = rect.Contains(mouse);
                 break;
             }
@@ -1149,8 +1155,8 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
         const float leftX = ImPlot::PlotToPixels(interval.left.time, limits.Y.Max).x;
         const float rightX = ImPlot::PlotToPixels(interval.right.time, limits.Y.Max).x;
         if (rightX < bounds.Min.x || leftX > bounds.Max.x) continue;
-        const auto leftColor = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(interval.left.colorIndex));
-        const auto rightColor = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(interval.right.colorIndex));
+        const auto leftColor = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(view, interval.left));
+        const auto rightColor = ImGui::ColorConvertFloat4ToU32(auxiliaryCursorColor(view, interval.right));
         std::string text = "T" + std::to_string(interval.left.id) + " - T" + std::to_string(interval.right.id) +
             ": " + formatMetricText(interval.delta,
                 displayData.axisSource == plot::WaveTimeAxisSource::SampleIndex ? "sample" : displayData.timeUnit.c_str());
@@ -1181,14 +1187,16 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
         draw->AddLine(ImVec2(x1, y), ImVec2(center, y), leftColor);
         draw->AddLine(ImVec2(center, y), ImVec2(x2, y), rightColor);
         if (visible) {
-            draw->AddRectFilled(textRect.Min, textRect.Max, ImGui::GetColorU32(ImGuiCol_WindowBg));
+            draw->AddRectFilled(textRect.Min, textRect.Max, ImGui::ColorConvertFloat4ToU32(cursorLabelBackground(view)));
+            const auto leftText = ImGui::ColorConvertFloat4ToU32(cursorLabelText(view, interval.left.id + 2, interval.left.colorIndex + 2));
+            const auto rightText = ImGui::ColorConvertFloat4ToU32(cursorLabelText(view, interval.right.id + 2, interval.right.colorIndex + 2));
             const auto leftName = "T" + std::to_string(interval.left.id) + " - ";
             const auto rightName = "T" + std::to_string(interval.right.id);
-            draw->AddText(textRect.Min, leftColor, leftName.c_str());
+            draw->AddText(textRect.Min, leftText, leftName.c_str());
             const float rightNameX = textRect.Min.x + ImGui::CalcTextSize(leftName.c_str()).x;
-            draw->AddText(ImVec2(rightNameX, textRect.Min.y), rightColor, rightName.c_str());
+            draw->AddText(ImVec2(rightNameX, textRect.Min.y), rightText, rightName.c_str());
             draw->AddText(ImVec2(rightNameX + ImGui::CalcTextSize(rightName.c_str()).x, textRect.Min.y),
-                          leftColor, text.c_str() + leftName.size() + rightName.size());
+                          leftText, text.c_str() + leftName.size() + rightName.size());
         }
         if (mouseInPlot && ((visible && textRect.Contains(mouse)) ||
             (mouse.x >= x1 - 4 && mouse.x <= x2 + 4 && std::abs(mouse.y - y) < 5)))
@@ -1231,8 +1239,7 @@ bool drawAuxiliaryCursors(plot::WaveViewState& view,
             const auto found = std::find_if(auxiliary.items.begin(), auxiliary.items.end(),
                                            [id](const auto& cursor) { return cursor.id == id; });
             if (found == auxiliary.items.end()) continue;
-            ImGui::PushStyleColor(ImGuiCol_Text, displayColor(auxiliaryCursorColor(found->colorIndex),
-                                                          activeUiStyleTokens().panelBackground, 1.F, 4.5F));
+            ImGui::PushStyleColor(ImGuiCol_Text, cursorLabelText(view, found->id + 2, found->colorIndex + 2));
             if (ImGui::MenuItem(("删除 T" + std::to_string(id)).c_str())) removeId = id;
             ImGui::PopStyleColor();
         }
@@ -1290,7 +1297,8 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
         if (smartSnapActive) {
             dragFlags |= ImPlotDragToolFlags_Delayed;
         }
-        const ImVec4 cursorColor = measurementCursorColor(cursorIndex);
+        const ImVec4 cursorColor = measurementCursorColor(view, cursorIndex);
+        if (!view.cursorColors.resolve(cursorIndex, cursorIndex).graphicsPass) drawCursorGuard(dragTime, cursorColor);
         // 核心流程：分屏每行必须使用独立 DragLine ID，避免同帧多个子图共享 ImPlot 状态。
         const int dragId = splitChannelIndex.has_value() ? splitCursorDragId(*splitChannelIndex, cursorIndex)
                                                          : static_cast<int>(100 + cursorIndex);
@@ -1375,11 +1383,9 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
                 const auto& bitChannel = snapshot.channels[laneInfo.parentChannelIndex];
                 const std::string snapText = snapLabel.empty() ? "" : std::string(snapLabel) + " ";
                 const std::string timeText = formatMetricText(best->time, displayData.timeUnit.c_str());
-                ImPlot::Annotation(best->time,
+                drawCursorReadoutLabel(view, cursorColor, best->time,
                                    best->displayValue,
-                                   cursorColor,
                                    ImVec2(10.0F, cursorIndex == 0 ? -18.0F : 18.0F),
-                                   true,
                                    "%c %s%s.%zu %s\nvalue %d",
                                    cursorIndex == 0 ? 'A' : 'B',
                                    snapText.c_str(),
@@ -1388,7 +1394,7 @@ bool handlePlotCursorsImpl(plot::WaveViewState& view,
                                    timeText.c_str(),
                                    laneInfo.value ? 1 : 0);
             } else {
-                drawCursorAnnotation(
+                drawCursorAnnotation(view,
                     cursorIndex, *best, snapshot.channels[best->channelIndex], displayData.timeUnit, snapLabel);
             }
         }
@@ -1925,7 +1931,7 @@ SplitPlotRowOutcome drawSplitChannelPlot(plot::WaveDockState& wave,
         }
         const auto intersectionReadouts =
             collectCursorIntersectionReadouts(view, snapshot, displayData, splitChannelIndices, timeSnapDistance);
-        drawCursorIntersectionReadouts(intersectionReadouts, snapshot);
+        drawCursorIntersectionReadouts(view, intersectionReadouts, snapshot);
         if (plotHovered || (!mouseInsideSplitRegion && channelIndex == view.measurementChannelIndex)) {
             const double maxCursorReadoutDistance =
                 (std::max)(view.viewMaxTime - view.viewMinTime, view.minVisibleTimeSpan) / 80.0;
@@ -2010,7 +2016,11 @@ PlotRenderResult drawSplitOscilloscopePlots(plot::WaveDockState& wave,
     const float plotHeight = plot::solveSplitWavePlotHeight(
         visibleChannels.size(), ImGui::GetContentRegionAvail().y, ImGui::GetStyle().ItemSpacing.y, 120.0F, 4U);
     ImPlot::PushStyleVar(ImPlotStyleVar_PlotMinSize, ImVec2(64.0F, 24.0F));
+    view.cursorVisibleSplitChannels.clear();
+    view.cursorSplitVisibilityValid = true;
     for (std::size_t rowIndex = 0; rowIndex < visibleChannels.size(); ++rowIndex) {
+        const bool rowVisible = ImGui::IsRectVisible(ImVec2(ImGui::GetContentRegionAvail().x, plotHeight));
+        if (rowVisible) view.cursorVisibleSplitChannels.push_back(visibleChannels[rowIndex]);
         const auto row = drawSplitChannelPlot(wave,
                                               frame,
                                               snapshot,
@@ -2341,7 +2351,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
 
     const auto intersectionReadouts = collectCursorIntersectionReadouts(
         view, frame.snapshot, plotDisplayData, visibleChannelIndices, timeSnapDistance);
-    drawCursorIntersectionReadouts(intersectionReadouts, frame.snapshot);
+    drawCursorIntersectionReadouts(view, intersectionReadouts, frame.snapshot);
     const bool userInteracting = plotInteractionActive(cursorDragClaimed);
     if (!viewportChangedThisFrame) {
         const ImPlotRect updatedLimits = ImPlot::GetPlotLimits();
@@ -2361,7 +2371,7 @@ PlotRenderResult drawOscilloscopePlot(plot::WaveDockState& wave,
     if (view.showCursors && view.cursors[0].enabled && view.cursors[1].enabled) {
         const auto intervalText = plot::makeCursorIntervalText(
             view.cursors[0].time, view.cursors[1].time, plotDisplayData.axisSource, plotDisplayData.timeUnit);
-        drawCursorIntervalHint(view.cursors[0].time, view.cursors[1].time, intervalText, limits);
+        drawCursorIntervalHint(view, view.cursors[0].time, view.cursors[1].time, intervalText, limits);
     }
 
     updateMainMeasurementResult(wave, displayData, result);
