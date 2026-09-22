@@ -200,6 +200,22 @@ bool GuiRuntime::drawDataTableControl(const scripting::ControlSnapshot& control)
     if (page.loading) ImGui::TextUnformatted("Loading...");
     else ImGui::Text("%llu-%llu",static_cast<unsigned long long>(page.rows.empty()?0:page.offset+1),
                      static_cast<unsigned long long>(page.offset+page.rows.size()));
+    const auto& exporting=control.tableExport;
+    ImGui::BeginDisabled(exporting.choosingPath || exporting.running || page.loading ||
+                         !page.error.empty() || (config.history && !page.snapshot));
+    if (iconButton(PROTOSCOPE_ICON_DOWNLOAD "##export","Export matching rows")) ImGui::OpenPopup("##export_format");
+    if (ImGui::BeginPopup("##export_format")) {
+        if (ImGui::MenuItem("CSV")) send(scripting::DataTableAction::ExportCsv);
+        if (ImGui::MenuItem("PSREC")) send(scripting::DataTableAction::ExportPsrec);
+        ImGui::EndPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!exporting.running);
+    if (iconButton(PROTOSCOPE_ICON_CLOSE "##cancel_export","Cancel export"))
+        send(scripting::DataTableAction::CancelExport);
+    ImGui::EndDisabled();
+    if (!exporting.message.empty()) ImGui::TextWrapped("%s",exporting.message.c_str());
     ImGui::EndDisabled();
     if (!state.error.empty()) ImGui::TextWrapped("%s",state.error.c_str());
     if (!page.error.empty()) ImGui::TextWrapped("%s",page.error.c_str());

@@ -2,6 +2,8 @@
 #include "record_query.hpp"
 #include "record_session.hpp"
 #include "record_volume_coordinator.hpp"
+#include "record_export.hpp"
+#include "protoscope/data/table.hpp"
 #include "sqlite_database.hpp"
 
 #include <sqlite3.h>
@@ -129,6 +131,9 @@ struct Store::Impl {
         ImportFormat importFormat{ImportFormat::Psrec};
         std::optional<data::CsvImportMapping> importMapping;
         ImportLimits importLimits;
+        std::vector<data::Record> exportRows;
+        std::map<std::uint64_t,data::Schema> exportSchemas;
+        std::size_t exportBytes{0};
     };
 
     std::filesystem::path root;
@@ -146,6 +151,7 @@ struct Store::Impl {
     std::size_t cacheBytes{0};
     std::size_t pendingTasks{0};
     std::size_t pendingQueries{0};
+    std::size_t pendingExportBytes{0};
     std::size_t queuedRows{0};
     std::uint64_t nextTask{1};
     Status status;
@@ -535,6 +541,14 @@ struct Store::Impl {
                     const auto volume=catalog->adopt(staged,now,command.canceled->get_token());
                     result.processed=volume.records;
                     result.ok=true;
+                } else if (command.exportBytes) {
+                    std::size_t index=0;
+                    result.processed=exportRecordFile(command.exportPath,command.format,command.exportSchemas,
+                        [&]() -> std::optional<data::Record> {
+                            if (index==command.exportRows.size()) return {};
+                            return std::move(command.exportRows[index++]);
+                        },command.canceled->get_token(),command.exportOptions);
+                    result.ok=true;
                 } else result=exporting ? queries->exportRecords(command.exportPath,command.format,command.query,
                                                           command.exportOptions,command.canceled->get_token()):
                                    queries->query(command.query,command.canceled->get_token());
@@ -548,6 +562,7 @@ struct Store::Impl {
             {
                 std::lock_guard lock(mutex);
                 completions.push_back(std::move(result));
+                pendingExportBytes-=command.exportBytes;
                 cancellations.erase(command.task);
                 reading = false;
             }
@@ -669,6 +684,45 @@ void Store::cancel(std::uint64_t task)
     std::lock_guard lock(impl_->mutex);
     const auto found = impl_->cancellations.find(task);
     if (found != impl_->cancellations.end()) found->second->request_stop();
+}
+
+std::uint64_t Store::exportRows(std::filesystem::path path,ExportFormat format,std::vector<data::Record> rows,
+    std::map<std::uint64_t,data::Schema> schemas,ExportOptions options)
+{
+    if (format!=ExportFormat::Psrec && format!=ExportFormat::Csv)
+        throw std::invalid_argument("unsupported record export format");
+    if (rows.size()>1000 || schemas.size()>1000) throw std::invalid_argument("live export exceeds row/schema limit");
+    path=exportPath(impl_->root,path);
+    std::size_t bytes=sizeof(Impl::ReadCommand);
+    const auto add=[&](std::size_t size) {
+        if (size>impl_->config.queueBytes || bytes>impl_->config.queueBytes-size)
+            throw std::runtime_error("live export exceeds memory budget");
+        bytes+=size;
+    };
+    for (const auto& [id,schema]:schemas) {
+        if (!id || id>INT64_MAX) throw std::invalid_argument("invalid export schema ID");
+        data::validateSchema(schema);
+        add(data::encodeValue(data::schemaValue(schema)).size()+sizeof(data::Schema)+128);
+    }
+    for (const auto& row:rows) {
+        if (row.protocol!=impl_->protocol) throw std::invalid_argument("export protocol mismatch");
+        data::validateRecord(schemas.at(row.schemaVersion),row);
+        add(data::recordMemoryBytes(row));
+    }
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->stopping || impl_->pendingQueries>=16 || impl_->pendingTasks>=1024 ||
+        bytes>impl_->config.queueBytes-impl_->pendingExportBytes)
+        throw std::runtime_error("live export queue full or closing");
+    const auto task=impl_->nextTask++;
+    auto canceled=std::make_shared<std::stop_source>();
+    Impl::ReadCommand command{task,{},canceled,path,format,options};
+    command.exportRows=std::move(rows);command.exportSchemas=std::move(schemas);command.exportBytes=bytes;
+    impl_->cancellations.emplace(task,std::move(canceled));
+    impl_->reads.push_back(std::move(command));
+    impl_->pendingExportBytes+=bytes;
+    ++impl_->pendingTasks;++impl_->pendingQueries;
+    impl_->changed.notify_all();
+    return task;
 }
 
 std::uint64_t Store::importRecords(std::filesystem::path path,ImportFormat format,

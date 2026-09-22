@@ -287,6 +287,27 @@ sol::table ScriptDataSession::recordTable(sol::state_view lua, const data::Recor
     return result;
 }
 
+std::uint64_t ScriptDataSession::exportTable(const std::string& name,storage::ExportFormat format,
+    storage::Query query,const std::vector<data::TableRow>* rows)
+{
+    requireActive();
+    if (!exportAuthorizer_) throw std::runtime_error("record export authorization unavailable");
+    const auto [path,maxBytes]=exportAuthorizer_(name);
+    const storage::ExportOptions options{maxBytes,true};
+    if (!rows) return store().exportRecords(path,format,std::move(query),options);
+    const auto schema=std::find_if(schemas_.begin(),schemas_.end(),[&](const auto& value) {
+        return value.dataset==query.dataset;
+    });
+    if (schema==schemas_.end()) throw std::runtime_error("unknown live export dataset");
+    std::vector<data::Record> records;
+    records.reserve(rows->size());
+    for (const auto& row:*rows) {
+        records.push_back(*row.record);
+        records.back().schemaVersion=1;
+    }
+    return store().exportRows(path,format,std::move(records),{{1,*schema}},options);
+}
+
 bool ScriptDataSession::publish(const sol::table& rows)
 {
     requireActive();

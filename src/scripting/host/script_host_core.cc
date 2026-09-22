@@ -4292,6 +4292,11 @@ void ScriptHost::onFileDialogEvent(const transport::ConnectionContext& ctx, cons
             .writable = event.kind != FileDialogKind::OpenFile,
         });
     }
+    if (runtime_ && runtime_->tables && runtime_->tables->fileDialog(event,[this](const std::string& id) {
+        const auto* control=findControlDescriptor(controls_,id);
+        return scriptLoaded_ && !executionFaulted() && control && control->visible &&
+               !control->disabled && !control->readOnly;
+    })) return;
     callbackOnFileDialog(ScriptHostContext{ctx}, event);
 }
 

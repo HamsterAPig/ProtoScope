@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protoscope/storage/store.hpp"
+#include "protoscope/data/table.hpp"
 
 #include <sol/sol.hpp>
 #include <functional>
@@ -27,6 +28,8 @@ public:
     void setPublishObserver(std::function<void(const data::Record&)> observer) { publishObserver_ = std::move(observer); }
     std::uint64_t query(storage::Query query) { return store().query(std::move(query)); }
     void cancel(std::uint64_t task) { if (store_) store_->cancel(task); }
+    std::uint64_t exportTable(const std::string& path,storage::ExportFormat format,storage::Query query,
+                             const std::vector<data::TableRow>* rows);
     using ExportAuthorizer=std::function<std::pair<std::filesystem::path,std::uint64_t>(const std::string&)>;
     void setExportAuthorizer(ExportAuthorizer authorizer) { exportAuthorizer_=std::move(authorizer); }
     void setImportAuthorizer(ExportAuthorizer authorizer) { importAuthorizer_=std::move(authorizer); }

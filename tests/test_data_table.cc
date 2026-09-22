@@ -1,5 +1,7 @@
 #include "protoscope/scripting/script_host.hpp"
 #include "test_helpers.hpp"
+#include "protoscope/data/psrec.hpp"
+#include "protoscope/data/record_csv.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -18,6 +20,7 @@ const std::string script=R"(
     function on_open(ctx) proto.record.start() end
     function on_record(ctx,evt)
         assert(evt.ok,evt.error)
+        assert(evt.operation=="start" or evt.operation=="stop","internal table task leaked")
         if evt.operation=="start" then
             local rows={}
             for i=1,5 do rows[i]={dataset="samples",values={n=i}} end
@@ -144,13 +147,125 @@ void selectedLiveRowEviction()
             .selectedRow=page->rows[0].id});
     require(f.host.drainEvents().empty(),"evicted live row cannot be selected again");
 }
+std::vector<std::int64_t> exportedValues(const std::filesystem::path& path,bool csv)
+{
+    std::ifstream input(path,std::ios::binary);
+    std::vector<std::int64_t> values;
+    const auto read=[&](auto& reader) {
+        while (const auto record=reader.next()) values.push_back(std::get<std::int64_t>(record->values[0].value));
+    };
+    if (csv) {data::RecordCsvReader reader(input);read(reader);}
+    else {data::PsrecReader reader(input);read(reader);}
+    return values;
+}
+scripting::FileDialogRequest beginExport(Fixture& f,std::size_t index,bool csv)
+{
+    const auto current=f.control(index);
+    f.send({.id=current.descriptor.id,.pageRevision=current.tablePage->revision,
+            .action=csv ? scripting::DataTableAction::ExportCsv:scripting::DataTableAction::ExportPsrec});
+    auto dialogs=f.host.drainFileDialogRequests();
+    require(dialogs.size()==1 && dialogs[0].kind==scripting::FileDialogKind::SaveFile,"table opens save dialog");
+    require(f.control(index).tableExport.choosingPath,"table reports pending file selection");
+    return dialogs[0];
+}
+void selectExport(Fixture& f,const scripting::FileDialogRequest& request,const std::filesystem::path& path)
+{
+    f.host.onFileDialogEvent({},{.id=request.id,.kind=scripting::FileDialogKind::SaveFile,
+        .state="selected",.path=path.generic_string(),.runtimeGeneration=request.runtimeGeneration});
+}
+void exportFrozenViews()
+{
+    Fixture f;
+    require(f.load(script+R"(
+        function on_file_dialog(ctx,event) error("internal table dialog leaked") end
+        function on_close(ctx) assert(proto.data.publish({dataset="samples",values={n=99}})) end
+    )"),"table export fixture");
+    f.publish();
+    data::TableView view;
+    view.limit=1;view.offset=1;view.sort=data::FieldSort{"n",true};
+    view.conditions={{"n",data::CompareOp::Greater,{std::int64_t{3}}}};
+    f.send({.id="live",.action=scripting::DataTableAction::View,.view=view});
+    const auto live=beginExport(f,0,true);
+    f.send({.id="live",.action=scripting::DataTableAction::ExportCsv});
+    require(f.host.drainFileDialogRequests().empty(),"duplicate export ignored while dialog pending");
+    f.host.onTransportClose({transport::ConnectionContext{}});
+    require(f.host.lastError().empty(),"live update while choosing export destination");
+    f.send({.id="live",.action=scripting::DataTableAction::View,.view={}});
+    const auto csv=f.directory.path()/"live.csv";
+    selectExport(f,live,csv);
+    f.wait([&]{return !f.control(0).tableExport.running;});
+    require(exportedValues(csv,true)==std::vector<std::int64_t>{5,4},
+            "live export freezes all filtered rows and sort, ignoring pagination and later data");
+    require(f.control(0).tableExport.message=="Exported 2 rows" && f.host.lastError().empty(),
+            "internal export reports success without Lua dialog callback");
+
+    view.conditions={{"n",data::CompareOp::Greater,{std::int64_t{1}}}};
+    f.send({.id="history",.action=scripting::DataTableAction::View,.view=view});
+    f.wait([&]{return !f.control(1).tablePage->loading;});
+    const auto history=beginExport(f,1,false);
+    f.publish();
+    f.send({.id="history",.action=scripting::DataTableAction::Refresh});
+    f.wait([&]{return !f.control(1).tablePage->loading;});
+    const auto psrec=f.directory.path()/"history.psrec";
+    selectExport(f,history,psrec);
+    f.wait([&]{return !f.control(1).tableExport.running;});
+    require(exportedValues(psrec,false)==std::vector<std::int64_t>{5,4,3,2},
+            "history export retains original snapshot/filter/order despite refresh and appended records");
+    require(f.host.drainEvents().empty(),"internal export does not emit on_control or on_record events");
+}
+void exportRejectionAndCancellation()
+{
+    Fixture f;require(f.load(),"table export failures fixture");f.publish();
+    auto request=beginExport(f,0,true);
+    f.host.onFileDialogEvent({},{.id=request.id,.kind=scripting::FileDialogKind::SaveFile,
+        .state="canceled",.runtimeGeneration=request.runtimeGeneration});
+    require(f.control(0).tableExport.message=="Export canceled","file selection cancellation releases export");
+    request=beginExport(f,0,true);
+    scripting::FileIoConfig config;config.maxWriteFileSizeBytes=1;f.host.setFileIoConfig(config);
+    const auto path=f.directory.path()/"preserved.csv";
+    {std::ofstream file(path);file<<"original";}
+    selectExport(f,request,path);
+    f.wait([&]{return !f.control(0).tableExport.running;});
+    {std::ifstream file(path);std::string text;file>>text;require(text=="original","quota failure preserves old file");}
+    require(f.control(0).tableExport.message.find("max_write_file_size_bytes")!=std::string::npos,"quota error visible in table");
+    config.maxWriteFileSizeBytes=1024*1024;config.allowProtocolDir=false;config.allowDialogPaths=false;
+    f.host.setFileIoConfig(config);
+    request=beginExport(f,0,false);
+    const auto denied=f.directory.path()/"denied.psrec";
+    selectExport(f,request,denied);
+    require(!std::filesystem::exists(denied) &&
+            f.control(0).tableExport.message.find("not authorized")!=std::string::npos,"unauthorized export denied");
+    config.enabled=false;f.host.setFileIoConfig(config);
+    f.send({.id="live",.action=scripting::DataTableAction::ExportCsv});
+    require(f.host.drainFileDialogRequests().empty() && !f.control(0).tableExport.choosingPath,"disabled file IO rejects export");
+    config.enabled=true;config.allowDialogPaths=true;f.host.setFileIoConfig(config);
+    request=beginExport(f,0,false);
+    require(f.load(),"reload with pending table export");
+    selectExport(f,request,denied);
+    require(!std::filesystem::exists(denied) && !f.control(0).tableExport.running,"old-generation save result rejected");
+
+    Fixture blocked;
+    require(blocked.load(script+R"(
+        function on_close(ctx) assert(proto.ui.update_control("live",{disabled=true})) end
+    )"),"disabled table export fixture");
+    blocked.publish();
+    request=beginExport(blocked,0,false);
+    blocked.host.onTransportClose({transport::ConnectionContext{}});
+    const auto blockedPath=blocked.directory.path()/"blocked.psrec";
+    selectExport(blocked,request,blockedPath);
+    require(!std::filesystem::exists(blockedPath) &&
+            blocked.control(0).tableExport.message=="table export no longer permitted","worker rechecks disabled state after file dialog");
+    blocked.send({.id="live",.action=scripting::DataTableAction::ExportCsv});
+    require(blocked.host.drainFileDialogRequests().empty(),"disabled table rejects export event");
+}
 }
 int main()
 {
     int failed=0;
     for (const auto& [name,run]:std::initializer_list<std::pair<const char*,void(*)()>>{
         {"live_history",liveAndHistory},{"replacement_validation",replacementAndValidation},
-        {"selected_live_eviction",selectedLiveRowEviction}}) {
+        {"selected_live_eviction",selectedLiveRowEviction},{"export_frozen_views",exportFrozenViews},
+        {"export_rejection_cancellation",exportRejectionAndCancellation}}) {
         try {run();std::cout<<"[PASS] "<<name<<'\n';}
         catch(const std::exception& e){++failed;std::cerr<<"[FAIL] "<<name<<": "<<e.what()<<'\n';}
     }

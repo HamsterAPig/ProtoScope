@@ -20,7 +20,12 @@ struct DataTableConfig {
     std::size_t pageSize{200};
     int visibleRows{10};
 };
-enum class DataTableAction { Refresh, View, Select, Cancel };
+struct DataTableExportState {
+    bool choosingPath{false};
+    bool running{false};
+    std::string message;
+};
+enum class DataTableAction { Refresh, View, Select, Cancel, ExportCsv, ExportPsrec, CancelExport };
 struct DataTableEvent {
     std::string id;
     std::uint64_t runtimeGeneration{0};

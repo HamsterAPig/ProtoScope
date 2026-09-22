@@ -1,6 +1,7 @@
 #include "protoscope/ui/gui_runtime.hpp"
 #include "../src/ui/runtime/gui_runtime_detail.hpp"
 #include "test_helpers.hpp"
+#include "protoscope/data/record_csv.hpp"
 
 #include <imgui_impl_opengl3.h>
 #include <implot.h>
@@ -82,6 +83,13 @@ struct GuiRuntimeTestAccess {
         auto* table=ImGui::GetCurrentContext()->Tables.GetByKey(ImHashStr("##records",0,seed));
         if (!table) throw std::runtime_error("missing data table geometry");
         return table->OuterRect;
+    }
+    static ImVec2 firstPopupItem()
+    {
+        const auto& stack=ImGui::GetCurrentContext()->OpenPopupStack;
+        if (stack.empty() || !stack.back().Window) throw std::runtime_error("export format popup missing");
+        const auto start=stack.back().Window->DC.CursorStartPos;
+        return ImVec2(start.x+12,start.y+ImGui::GetTextLineHeight()/2);
     }
 };
 }
@@ -374,6 +382,24 @@ int main(int argc,char** argv)
         waitTable([&]{return tableControl().tablePage->rows.size()==1;});
         require(std::get<std::int64_t>(tableControl().tablePage->rows[0].record->values[0].value)==4,
                 "GUI filter must reach worker");
+        tableClick(ImVec2(tableRect.Min.x+button/2,
+            tableRect.Max.y+2*ImGui::GetStyle().ItemSpacing.y+button*1.5F));
+        tableFrame();tableFrame();
+        tableClick(ui::GuiRuntimeTestAccess::firstPopupItem());
+        std::vector<scripting::FileDialogRequest> exportDialogs;
+        waitTable([&]{exportDialogs=application.drainFileDialogRequests();return !exportDialogs.empty();});
+        require(exportDialogs.size()==1 && exportDialogs[0].kind==scripting::FileDialogKind::SaveFile,
+                "GUI export action opens save dialog through worker");
+        const auto exportPath=tableDirectory.path()/"gui-table.csv";
+        application.respondFileDialog({.id=exportDialogs[0].id,.kind=scripting::FileDialogKind::SaveFile,
+            .state="selected",.path=exportPath.generic_string(),.runtimeGeneration=exportDialogs[0].runtimeGeneration});
+        waitTable([&]{return tableControl().tableExport.message=="Exported 1 rows";});
+        {
+            std::ifstream input(exportPath,std::ios::binary);data::RecordCsvReader reader(input);
+            const auto record=reader.next();
+            require(record && std::get<std::int64_t>(record->values[0].value)==4 && !reader.next(),
+                    "GUI export contains filtered data");
+        }
         tableIndex=2;
         for (int i=0;i<4;++i) tableFrame();
         waitTable([&]{return !tableControl(2).tablePage->loading && tableControl(2).tablePage->rows.size()==2;});

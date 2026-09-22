@@ -82,6 +82,9 @@ public:
     std::uint64_t query(Query query);
     // 导出所有匹配记录，复用固定快照、筛选及排序；不使用分页 offset/limit。
     std::uint64_t exportRecords(std::filesystem::path path,ExportFormat format,Query query={},ExportOptions options={});
+    // 有界实时表快照复用后台导出队列，不写入历史或触发录制订阅。
+    std::uint64_t exportRows(std::filesystem::path path,ExportFormat format,std::vector<data::Record> rows,
+        std::map<std::uint64_t,data::Schema> schemas,ExportOptions options={});
     // 导入仅登记独立历史卷，不调用 publish，也不影响实时记录计数。
     std::uint64_t importRecords(std::filesystem::path path,ImportFormat format,
         std::optional<data::CsvImportMapping> mapping={},ImportLimits limits={});

@@ -12,3 +12,4 @@
 #define PROTOSCOPE_ICON_REFRESH "\xef\x80\xa1"
 #define PROTOSCOPE_ICON_FILTER "\xef\x82\xb0"
 #define PROTOSCOPE_ICON_CLOSE "\xef\x80\x8d"
+#define PROTOSCOPE_ICON_DOWNLOAD "\xef\x80\x99"

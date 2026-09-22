@@ -88,12 +88,44 @@ void cancellationAndPaths()
     for (const auto& entry:std::filesystem::directory_iterator(f.directory.path()))
         require(entry.path().filename().string().find(".tmp-")==std::string::npos,"no abandoned export temporary file");
 }
+void boundedLiveExport()
+{
+    tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-live-export"));
+    storage::Store store(directory.path(),"protocol",{schema});
+    auto record=row(INT64_MAX);record.schemaVersion=1;
+    const auto path=directory.path()/"live.psrec";
+    auto event=completion(store,store.exportRows(path,storage::ExportFormat::Psrec,{record},{{1,schema}}));
+    require(event.ok && event.processed==1 && store.status().committed==0,"live export does not require or alter recording");
+    {std::ifstream input(path,std::ios::binary);data::PsrecReader reader(input);
+     require(std::get<std::int64_t>(reader.next()->values[0].value)==INT64_MAX && !reader.next(),"live export preserves typed int64");}
+    const auto task=store.exportRows(path,storage::ExportFormat::Csv,std::vector<data::Record>(1000,record),{{1,schema}});
+    store.cancel(task);
+    event=completion(store,task);
+    require(!event.ok && !event.error.empty(),"live export cancellation reports failure");
+    {std::ifstream input(path,std::ios::binary);data::PsrecReader reader(input);
+     require(reader.next().has_value() && !reader.next(),"cancel leaves prior export untouched");}
+    for (int attempt=0;attempt<2;++attempt) {
+        event=completion(store,store.exportRows(path,storage::ExportFormat::Csv,{record},{{1,schema}},{1,true}));
+        require(!event.ok,"failed live exports release task memory budget");
+    }
+    bool rejected=false;
+    try {store.exportRows(path,storage::ExportFormat::Csv,std::vector<data::Record>(1001,record),{{1,schema}});}
+    catch(const std::exception&) {rejected=true;}
+    require(rejected,"live export bounded to 1000 rows");
+    storage::Config limits;limits.queueBytes=128;
+    storage::Store limited(directory.path()/"limited","protocol",{schema},limits);
+    rejected=false;
+    try {limited.exportRows(directory.path()/"limit.csv",storage::ExportFormat::Csv,{record},{{1,schema}});}
+    catch(const std::exception&) {rejected=true;}
+    require(rejected,"live export obeys aggregate memory budget");
+}
 }
 int main()
 {
     int failed=0;
     for (const auto& [name,run]:std::initializer_list<std::pair<const char*,void(*)()>>{
-        {"formats_snapshot",formatsAndSnapshot},{"cancellation_paths",cancellationAndPaths}}) {
+        {"formats_snapshot",formatsAndSnapshot},{"cancellation_paths",cancellationAndPaths},
+        {"bounded_live_export",boundedLiveExport}}) {
         try {run();std::cout<<"[PASS] "<<name<<'\n';}
         catch(const std::exception& e){++failed;std::cerr<<"[FAIL] "<<name<<": "<<e.what()<<'\n';}
     }

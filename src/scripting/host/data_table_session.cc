@@ -130,6 +130,65 @@ void DataTableSession::publish(const data::Record& record)
 }
 
 const data::TableView& DataTableSession::view(const std::string& id) const {return tables_.at(id).view;}
+const DataTableExportState& DataTableSession::exportState(const std::string& id) const {return tables_.at(id).exportState;}
+
+void DataTableSession::prepareExport(const std::string& id,storage::ExportFormat format)
+{
+    auto& table=tables_.at(id);
+    if (table.exportState.choosingPath || table.exportState.running) throw std::runtime_error("table export already active");
+    const auto current=page(id);
+    if (current->loading || !current->error.empty() || (table.config.history && !current->snapshot))
+        throw std::runtime_error("table snapshot is not ready");
+    storage::Query query;
+    query.dataset=table.config.dataset;query.device=table.view.device;
+    query.fromUs=table.view.fromUs;query.toUs=table.view.toUs;
+    query.conditions=table.view.conditions;query.sort=table.view.sort;query.snapshot=current->snapshot;
+    // 文件选择期间仍固定原视图：实时表最多 1000 行，历史表只保留卷引用和查询条件。
+    std::vector<data::TableRow> rows;
+    if (table.live) {
+        auto all=table.view;all.offset=0;all.limit=1000;
+        rows=table.live->page(all).rows;
+    }
+    table.exportQuery=std::move(query);table.exportRows=std::move(rows);
+    table.exportLease=table.snapshotLease;table.exportFormat=format;
+    table.exportState={true,false,"Choose export file"};
+}
+
+void DataTableSession::exportDialog(const std::string& id,std::uint64_t dialog) {exportDialogs_.emplace(dialog,id);}
+void DataTableSession::exportError(const std::string& id,const std::string& error)
+{
+    auto& table=tables_.at(id);
+    table.exportRows.clear();table.exportLease.reset();
+    table.exportState={false,false,error};
+}
+void DataTableSession::cancelExport(const std::string& id)
+{
+    auto& table=tables_.at(id);
+    if (table.exportTask) {data_.cancel(table.exportTask);table.exportState.message="Canceling export...";}
+}
+bool DataTableSession::fileDialog(const FileDialogEvent& event,const std::function<bool(const std::string&)>& allowed)
+{
+    const auto found=exportDialogs_.find(event.id);
+    if (found==exportDialogs_.end()) return false;
+    const auto id=found->second;
+    exportDialogs_.erase(found);
+    auto& table=tables_.at(id);
+    try {
+        if (!allowed(id)) throw std::runtime_error("table export no longer permitted");
+        if (event.state!="selected") {
+            exportError(id,event.error.empty() ? "Export canceled":event.error);
+            return true;
+        }
+        if (event.kind!=FileDialogKind::SaveFile || event.path.empty())
+            throw std::runtime_error("invalid table export file selection");
+        table.exportTask=data_.exportTable(event.path,table.exportFormat,table.exportQuery,
+            table.live ? &table.exportRows:nullptr);
+        exportTasks_.emplace(table.exportTask,id);
+        table.exportRows.clear();
+        table.exportState={false,true,"Exporting..."};
+    } catch (const std::exception& error) {exportError(id,error.what());}
+    return true;
+}
 
 std::shared_ptr<const data::TablePage> DataTableSession::page(const std::string& id)
 {
@@ -188,6 +247,14 @@ void DataTableSession::handle(const DataTableEvent& event)
 
 bool DataTableSession::complete(const storage::Completion& result)
 {
+    const auto exporting=exportTasks_.find(result.task);
+    if (exporting!=exportTasks_.end()) {
+        auto& table=tables_.at(exporting->second);
+        table.exportTask=0;table.exportLease.reset();
+        table.exportState={false,false,result.ok ? "Exported "+std::to_string(result.processed)+" rows":result.error};
+        exportTasks_.erase(exporting);
+        return true;
+    }
     const auto task=tasks_.find(result.task);
     if (task==tasks_.end()) return false;
     auto& table=tables_.at(task->second);
@@ -217,7 +284,29 @@ void ScriptHost::onDataTable(const transport::ConnectionContext& context,const D
     const auto found=std::find_if(controls_.begin(),controls_.end(),[&](const auto& c){return c.id==event.id;});
     if (found==controls_.end() || !found->dataTable || !found->visible || found->disabled || found->readOnly) return;
     try {
-        if (event.action==DataTableAction::Select) {
+        if (event.action==DataTableAction::ExportCsv || event.action==DataTableAction::ExportPsrec) {
+            auto& tables=*runtime_->tables;
+            const auto& state=tables.exportState(event.id);
+            if (state.choosingPath || state.running) return;
+            if (found->dataTable->history && tables.page(event.id)->revision!=event.pageRevision) return;
+            try {
+                const bool csv=event.action==DataTableAction::ExportCsv;
+                tables.prepareExport(event.id,csv ? storage::ExportFormat::Csv:storage::ExportFormat::Psrec);
+                auto opts=runtime_->lua.create_table();
+                opts["title"]="Export table";
+                opts["default_path"]=csv ? "table.csv":"table.psrec";
+                auto filter=runtime_->lua.create_table();
+                filter["name"]=csv ? "CSV":"PSREC";
+                filter["patterns"]=runtime_->lua.create_table_with(1,csv ? "*.csv":"*.psrec");
+                opts["filters"]=runtime_->lua.create_table_with(1,filter);
+                std::string error;
+                const auto dialog=protoFileDialog(FileDialogKind::SaveFile,opts,error);
+                if (!dialog) throw std::runtime_error(error);
+                tables.exportDialog(event.id,dialog->id);
+            } catch (const std::exception& error) {tables.exportError(event.id,error.what());}
+        } else if (event.action==DataTableAction::CancelExport) {
+            runtime_->tables->cancelExport(event.id);
+        } else if (event.action==DataTableAction::Select) {
             const auto page=runtime_->tables->page(event.id);
             if ((found->dataTable->history && page->revision!=event.pageRevision) || page->loading) return;
             if (std::none_of(page->rows.begin(),page->rows.end(),[&](const auto& row){return row.id==event.selectedRow;})) return;

@@ -239,6 +239,7 @@ struct ControlSnapshot {
     std::string dataError;
     std::shared_ptr<const data::TablePage> tablePage;
     std::optional<data::TableView> tableView;
+    DataTableExportState tableExport;
 };
 
 enum class LayoutNodeKind {

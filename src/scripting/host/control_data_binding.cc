@@ -135,6 +135,7 @@ ControlSnapshot ScriptHost::makeControlSnapshot(const ControlDescriptor& control
     if (control.dataTable) {
         snapshot.tablePage=runtime_->tables->page(control.id);
         snapshot.tableView=runtime_->tables->view(control.id);
+        snapshot.tableExport=runtime_->tables->exportState(control.id);
     }
     return snapshot;
 }
