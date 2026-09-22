@@ -2,6 +2,7 @@
 #include "test_helpers.hpp"
 
 #include <iostream>
+#include <fstream>
 
 namespace {
 using namespace protoscope;
@@ -145,6 +146,31 @@ void schemaChangeAndFailedSwitch()
             "old and new schemas remain independently readable");
     require(queries.query({.snapshot=old.snapshot},{}).records.size()==1,"old schema snapshot remains frozen");
 }
+void cleanupHeadroom()
+{
+    tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-cleanup-headroom"));
+    const auto root=directory.path()/"records";
+    storage::VolumeCatalog catalog(root,"protocol");
+    auto volume=storage::RecordVolume::create(root,"protocol",{{1,schema}},1,1);
+    volume->append({{"protocol","samples","device",1,{},1,{{std::int64_t{1}}}}});
+    volume->seal(2);catalog.adoptRecording(volume->info(),2);
+    const auto sealedPath=volume->info().path;
+    volume.reset();
+    {
+        std::ofstream ballast(root/"unowned.bin",std::ios::binary);
+        ballast<<std::string(2U*1024U*1024U,'x');
+        require(bool(ballast),"headroom fixture write failed");
+    }
+    const auto size=catalog.diskBytes();
+    storage::Config config;
+    config.recordMaxBytes=size+size/20;
+    storage::Store store(directory.path(),"protocol",{schema},config);
+    require(catalog.diskBytes()<config.recordMaxBytes,"fixture remains below hard capacity limit");
+    store.start();store.waitIdle();
+    require(!store.status().faulted && store.status().recording,"unreachable low watermark alone is not a fault");
+    require(!std::filesystem::exists(sealedPath),"eligible old volume cleaned before hard capacity reached");
+    require(std::filesystem::file_size(root/"unowned.bin")==2U*1024U*1024U,"headroom cleanup preserves unknown files");
+}
 }
 int main()
 {
@@ -152,7 +178,7 @@ int main()
     for (const auto& [name,run]:std::initializer_list<std::pair<const char*,void(*)()>>{
         {"rotation_snapshots",rotationAndSnapshots},{"pending_recovery",pendingRecovery},
         {"restart_recording",restartRecording},{"store_rotation_handoff",storeRotationAndHandoff},
-        {"schema_change_partial_switch",schemaChangeAndFailedSwitch}}) {
+        {"schema_change_partial_switch",schemaChangeAndFailedSwitch},{"cleanup_headroom",cleanupHeadroom}}) {
         try {run();std::cout<<"[PASS] "<<name<<'\n';}
         catch(const std::exception& error) {++failed;std::cerr<<"[FAIL] "<<name<<": "<<error.what()<<'\n';}
     }

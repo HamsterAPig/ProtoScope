@@ -341,13 +341,17 @@ struct Store::Impl {
         nextMaintenance=now+config.maintenanceInterval;
         const auto wall=std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
-        auto result=catalog->retain({config.recordMaxBytes,config.recordMaxAge},wall,stop);
+        // 提前腾出一成空间，避免短查询占用封存卷时下一批立即撞到硬上限。
+        // 低水位暂时无法达到不算故障，但实际总量超过配置上限仍必须明确失败。
+        const auto cleanupTarget=config.recordMaxBytes-config.recordMaxBytes/10;
+        auto result=catalog->retain({cleanupTarget,config.recordMaxAge},wall,stop);
         if (result.capacityExceeded || result.expiredPinned) {
             // 仅释放缓存自身持有的快照；当前历史页和正在导出的卷仍由引用保护。
             queries->expireUnpinned();
-            result=catalog->retain({config.recordMaxBytes,config.recordMaxAge},wall,stop);
+            result=catalog->retain({cleanupTarget,config.recordMaxAge},wall,stop);
         }
-        if (result.capacityExceeded) throw std::runtime_error("record capacity exceeded; no eligible sealed volume");
+        if (result.bytes>config.recordMaxBytes)
+            throw std::runtime_error("record capacity exceeded; no eligible sealed volume");
     }
 
     void maintenanceFault(const std::string& error)
