@@ -52,6 +52,7 @@ struct ScriptHost::Runtime {
     std::unordered_map<std::string, sol::protected_function> streamCallbacks;
     std::unordered_map<std::string, StreamRuntimeProfile> streamRuntimeProfiles;
     std::unordered_map<std::string, std::uint64_t> controlUpdatedAtMs;
+    BusinessUiSnapshot businessUi;
 };
 
 struct ScriptHost::CallbackScope {

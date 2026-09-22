@@ -22,6 +22,7 @@ struct ScriptHostContextInternal {
     std::optional<transport::ConnectionContext>& activeConnection;
     sol::state_view lua;
     ScriptDataSession& dataSession;
+    BusinessUiSnapshot& businessUi;
 };
 
 } // namespace protoscope::scripting

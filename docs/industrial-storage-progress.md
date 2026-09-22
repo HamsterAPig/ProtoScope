@@ -73,7 +73,8 @@ KV 独立于记录文件，记录故障不阻断 KV 任务。
 - 现有控件的属性原子更新、worker 显隐/禁用/只读及约束校验已接入；
   见 `lua-control-properties.md`。
 - 现有 UI 控件、示波器切换、弹窗/文件对话框已加入运行时代次隔离。
-- 8 种基础工业控件、编辑草稿、新输入 UI 记忆和 tabs 已接入；data_table 和业务菜单仍待实现。
+- 8 种基础工业控件、编辑草稿、新输入 UI 记忆、tabs、业务菜单和 Lua Dock 显隐已接入；
+  data_table 和数据绑定仍待实现。
 - 实时字段绑定和历史表；字段条件查询。
 - 记录分卷、目录索引、占用保护、滚动清理、磁盘容量监测和完整重启恢复。
 - CSV 与 `.psrec` 导入导出、暂存分卷与导入取消。
@@ -139,3 +140,17 @@ ctest --test-dir build --output-on-failure
 - GUI 真实输入帧覆盖程序切页不回传与用户点击回传，使用 ImGui 页签矩形定位点击。
   已查看 360px tabs OpenGL 截图，1000px/360px 非空检查通过。
 - 全量构建通过，CTest 23/23，35.55 秒；Manifest/LuaLS 同步检查通过。
+
+固定页签提交：`7d0b46d`。
+
+业务菜单验证：
+
+- 独立业务菜单状态与解析模块，`set_menu/update_menu/show_dock/on_menu` 已接入，
+  新业务菜单入口与内置菜单隔离；Lua Dock 显隐沿用原有状态文件。
+- 菜单可以在待加载 runtime 中声明，失败重载不污染旧菜单；运行时代次与菜单树版本
+  拒绝旧事件，worker 检查祖先和当前项的显隐、禁用；主线程只排队，不等待回调。
+- `protoscope_business_ui_tests` 4 组通过，包含循环/稀疏/超限、整批与单项原子校验、
+  重载隔离、worker 分派及 Lua 回调预算超时后重载恢复。
+- 实际 ImGui → Application → worker → Lua → 快照测试通过：
+  菜单点击隐藏 Dock，手动显示后旧请求不再覆盖用户操作。
+- 全量构建通过；CTest 24/24，33.83 秒；Manifest/LuaLS 同步检查通过。

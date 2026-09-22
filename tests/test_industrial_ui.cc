@@ -5,6 +5,7 @@
 #include <implot.h>
 #include <fstream>
 #include <iostream>
+#include <thread>
 
 namespace protoscope::ui {
 struct GuiRuntimeTestAccess {
@@ -48,6 +49,28 @@ struct GuiRuntimeTestAccess {
         auto* bar=ImGui::GetCurrentContext()->TabBars.GetByKey(id);
         if (!bar || bar->Tabs.empty()) throw std::runtime_error("missing tab bar geometry");
         return ImVec2(bar->BarRect.Min.x+bar->Tabs[0].Offset+bar->Tabs[0].Width/2,bar->BarRect.GetCenter().y);
+    }
+    static ImRect drawMenu(GuiRuntime& runtime)
+    {
+        ImGui::BeginMainMenuBar();
+        runtime.drawBusinessMenu();
+        const ImRect rectangle(ImGui::GetItemRectMin(),ImGui::GetItemRectMax());
+        ImGui::EndMainMenuBar();
+        return rectangle;
+    }
+    static bool dockVisible(GuiRuntime& runtime,app::Application& app)
+    {
+        runtime.syncLuaDockVisibilityDefaults();
+        runtime.applyBusinessDockRequests();
+        const auto& lua=app.docks().luaState();
+        return runtime.isLuaDockVisible(luaDockStableId(lua.docks.front().descriptor,
+            luaDockLayoutKey(lua.protocolDir,lua.scriptPath)));
+    }
+    static void manuallyShowDock(GuiRuntime& runtime,app::Application& app)
+    {
+        const auto& lua=app.docks().luaState();
+        runtime.setLuaDockVisible(luaDockStableId(lua.docks.front().descriptor,
+            luaDockLayoutKey(lua.protocolDir,lua.scriptPath)),true);
     }
 };
 }
@@ -220,6 +243,38 @@ int main(int argc,char** argv)
                 capture(std::filesystem::path(argv[2])/"tabs",width,900);
             }
         }
+        // 通过实际 Application -> worker -> 快照验证业务菜单及 Dock 请求，而非只检查绘制反馈。
+        require(application.reloadProtocolDirectory(std::filesystem::absolute(argv[1]).generic_string(),true),
+                "application must load menu demo");
+        ImRect menuRect;
+        auto menuFrame=[&] {
+            if (withGl) ImGui_ImplOpenGL3_NewFrame();
+            ImGui::NewFrame();
+            menuRect=ui::GuiRuntimeTestAccess::drawMenu(runtime);
+            ImGui::Render();
+        };
+        for (int i=0;i<4;++i) menuFrame();
+        const auto menuCenter=menuRect.GetCenter();
+        io.AddMousePosEvent(menuCenter.x,menuCenter.y);menuFrame();
+        io.AddMouseButtonEvent(0,true);menuFrame();
+        io.AddMouseButtonEvent(0,false);menuFrame();menuFrame();
+        auto& popups=ImGui::GetCurrentContext()->OpenPopupStack;
+        require(!popups.empty() && popups.back().Window,"business menu popup must open");
+        auto* popup=popups.back().Window;
+        const ImVec2 menuItem(popup->Pos.x+20,popup->Pos.y+popup->WindowPadding.y+ImGui::GetFontSize()/2);
+        io.AddMousePosEvent(menuItem.x,menuItem.y);menuFrame();
+        io.AddMouseButtonEvent(0,true);menuFrame();
+        io.AddMouseButtonEvent(0,false);menuFrame();
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+        while (application.docks().luaState().businessUi.dockRequests.empty() &&
+               std::chrono::steady_clock::now()<deadline) {
+            application.pumpOnce();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        require(!application.docks().luaState().businessUi.dockRequests.empty(),"menu click must reach Lua worker");
+        require(!ui::GuiRuntimeTestAccess::dockVisible(runtime,application),"show_dock(false) hides dock");
+        ui::GuiRuntimeTestAccess::manuallyShowDock(runtime,application);
+        require(ui::GuiRuntimeTestAccess::dockVisible(runtime,application),"old request must not override manual state");
         std::cout<<"industrial UI: 1000/360 px, nonblank frames, bounded widgets, input persistence passed\n";
     } catch (const std::exception& error) {std::cerr<<error.what()<<'\n';result=1;}
     if (withGl) ImGui_ImplOpenGL3_Shutdown();

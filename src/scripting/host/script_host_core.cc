@@ -4198,7 +4198,7 @@ void ScriptHost::registerLuaApi(Runtime& runtime, sol::table& proto)
 {
     ScriptHostQueues queues;
     ScriptHostContextInternal ctx{*this, queues, fileIoConfig_, activeConnection_,
-                                  sol::state_view(runtime.lua), *runtime.data};
+                                  sol::state_view(runtime.lua), *runtime.data, runtime.businessUi};
     std::array modules{
         makeCoreApiModule(*this),
         makeTxApiModule(*this),

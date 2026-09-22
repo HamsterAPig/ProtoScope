@@ -48,6 +48,7 @@ public:
                             std::optional<std::uint64_t> generation = {});
     bool requestOscilloscopeToggle(bool currentRunning, bool targetRunning);
     bool restoreControlValue(const std::string& id, const scripting::ControlValue& value);
+    void activateBusinessMenu(const std::string& id, bool checked, std::uint64_t generation, std::uint64_t revision);
     void markCommConfigEdited(bool reconnectRequired);
     void markProtocolEdited();
     void setStatusMessage(std::string message, bool markDirty = false);

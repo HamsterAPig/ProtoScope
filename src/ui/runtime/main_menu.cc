@@ -275,6 +275,7 @@ void GuiRuntime::drawMainMenu()
     drawSettingsMenu();
 
     drawLuaViewMenu();
+    drawBusinessMenu();
     drawHelpMenu();
 
     ImGui::EndMainMenuBar();

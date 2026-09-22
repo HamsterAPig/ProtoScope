@@ -92,4 +92,38 @@ layout = {type="tabs", id="pages", default="live", pages={
 `update_control` 可修改 value、visible、disabled、read_only、tooltip；
 disabled/read_only 限制切页，页内控件仍按自身属性校验，不隐式联动。
 
-业务菜单、数据绑定和历史表仍在后续实施范围。
+## 业务菜单
+
+```lua
+assert(proto.ui.set_menu({
+    {id="device", label="Device", children={
+        {id="monitor", label="Monitor", checkable=true, checked=true},
+        {separator=true},
+        {id="connect", label="Connect"}
+    }}
+}))
+
+function on_menu(ctx, id, checked)
+    if id=="monitor" then proto.ui.show_dock("telemetry", checked) end
+end
+```
+
+业务菜单位于独立的“业务”入口，不替代内置菜单。`set_menu(items)` 整批验证后替换，
+空数组清除；最多 256 项、深度 8，非分隔项 id 在整棵树中唯一，文本最多 4096 字节。
+勾选只适用于叶子命令；子菜单 children 不得为空。
+
+`update_menu(id, patch)` 原子更新 label、tooltip、visible、disabled、checked；
+不支持更换 ID、结构或 checkable。失败返回 nil 与错误字符串，不留下部分修改。
+菜单可在脚本加载期间设置，使用待加载 runtime 的独立状态；失败重载保留旧菜单。
+运行期重建菜单会增加版本，旧树上的排队点击也会被拒绝。
+
+点击以运行时代次和菜单版本进入 worker，worker 检查当前项及祖先显隐、禁用状态，
+更新勾选后调用 `on_menu(ctx,id,checked)`。普通命令 checked 为 false。
+主线程不等待菜单 Lua 执行，回调使用既有 Lua 指令预算；程序更新不触发回调。
+菜单状态不进入历史库或 UI YAML，重载从脚本声明重新建立。
+
+`show_dock(id, visible)` 仅接受当前协议 `ui()` 声明的 Dock ID 和布尔值，
+仅运行期可用；不控制内置窗口。请求经快照交给 GUI，并复用既有 Dock 显隐记忆。
+每条请求只应用一次，不会在后续刷新中反复覆盖用户手动显隐操作。
+
+数据绑定和历史表仍在后续实施范围。

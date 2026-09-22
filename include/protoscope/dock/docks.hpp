@@ -259,6 +259,7 @@ struct LuaDockState {
     std::vector<scripting::DockSnapshot> docks;
     std::vector<scripting::ControlDescriptor> controls;
     std::vector<scripting::ControlSnapshot> controlStates;
+    scripting::BusinessUiSnapshot businessUi;
 };
 
 struct ConfigConflictState {

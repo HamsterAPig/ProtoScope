@@ -31,6 +31,7 @@ struct ScriptRuntimeSnapshot {
     std::vector<ControlDescriptor> controls;
     std::vector<ControlSnapshot> controlStates;
     std::vector<DockSnapshot> docks;
+    BusinessUiSnapshot businessUi;
     std::optional<StreamBufferDefinition> streamBuffer;
     std::vector<StreamFrameDefinition> streamFrames;
     std::optional<std::uint64_t> nextWakeupAtMs;
@@ -92,6 +93,8 @@ public:
     void postControl(transport::ConnectionContext context, std::string id, ControlValue value,
                      std::optional<std::uint64_t> generation = {});
     void postTick(std::uint64_t currentMs);
+    void postMenu(transport::ConnectionContext context, std::string id, bool checked,
+                  std::uint64_t generation, std::uint64_t revision);
     void postTxEvent(transport::ConnectionContext context, TxEvent event);
     void postDialogEvent(transport::ConnectionContext context, DialogEvent event);
     void postFileDialogEvent(transport::ConnectionContext context, FileDialogEvent event);

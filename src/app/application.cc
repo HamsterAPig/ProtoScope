@@ -1439,6 +1439,7 @@ void Application::applyLuaScriptSnapshot(const scripting::ScriptRuntimeSnapshot&
     lua.docks = snapshot.docks;
     lua.controls = snapshot.controls;
     lua.controlStates = snapshot.controlStates;
+    lua.businessUi = snapshot.businessUi;
 }
 
 bool Application::probeProtocolDirectory(const std::string& resolvedDirText)
@@ -2318,6 +2319,18 @@ bool Application::exportWaveCsv(const std::filesystem::path& path,
 {
     const auto data = captureWaveData(range, error);
     return data && plot::writeWaveCsvFile(path, *data, shape, {}, error);
+}
+
+void Application::activateBusinessMenu(const std::string& id, bool checked,
+                                       std::uint64_t generation, std::uint64_t revision)
+{
+    auto context = activeConnection_.value_or(transport::ConnectionContext{});
+    if (!activeConnection_) {
+        context.endpoint = "detached";
+        context.timestampMs = nowMs();
+    }
+    // 菜单只入 worker 队列，主线程不等待 Lua 回调执行完毕。
+    scriptWorker_.postMenu(std::move(context),id,checked,generation,revision);
 }
 
 std::optional<plot::WaveCsvData> Application::captureWaveData(const plot::CsvExportRange& range, std::string& error) const
@@ -3777,6 +3790,7 @@ void Application::syncDockState()
     lua.docks = scriptSnapshot.docks;
     lua.controls = scriptSnapshot.controls;
     lua.controlStates = scriptSnapshot.controlStates;
+    lua.businessUi = scriptSnapshot.businessUi;
 
     auto& wave = dockStore_.waveState();
     const auto waveRevision = wave.buffer.dataRevision();

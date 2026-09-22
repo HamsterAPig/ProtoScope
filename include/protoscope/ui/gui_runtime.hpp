@@ -171,6 +171,10 @@ private:
     void drawSettingsMenu();
     void drawHelpMenu();
     void drawLuaViewMenu();
+    void drawBusinessMenu();
+    void drawBusinessMenuItems(const std::vector<scripting::BusinessMenuItem>& items,
+                               std::uint64_t generation, std::uint64_t revision);
+    void applyBusinessDockRequests();
     void drawCommDock();
     void drawCommTransportModeSelector(dock::CommDockState& comm);
     void drawCommTransportConfig(dock::CommDockState& comm);
@@ -532,6 +536,8 @@ private:
     };
     std::unordered_map<std::string, LuaTabsUiState> luaTabsUiStates_;
     std::uint64_t luaTabsGeneration_{0};
+    std::uint64_t businessDockGeneration_{0};
+    std::uint64_t businessDockRevision_{0};
     WaveDockRenderer waveDockRenderer_;
 };
 

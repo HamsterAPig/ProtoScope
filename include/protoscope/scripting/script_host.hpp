@@ -3,6 +3,7 @@
 #include "protoscope/plot/oscilloscope.hpp"
 #include "protoscope/protocol_utils/codec.hpp"
 #include "protoscope/scripting/file_io_config.hpp"
+#include "protoscope/scripting/business_ui.hpp"
 #include "protoscope/scripting/execution_config.hpp"
 #include "protoscope/scripting/frame_stream_parser.hpp"
 #include "protoscope/transport/transport.hpp"
@@ -506,6 +507,10 @@ public:
     void onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value,
                    std::optional<std::uint64_t> generation = {});
     [[nodiscard]] std::uint64_t runtimeGeneration() const { return runtimeGeneration_; }
+    void onMenu(const transport::ConnectionContext& context, const std::string& id, bool checked,
+                std::uint64_t generation, std::uint64_t revision);
+    BusinessUiSnapshot businessUiSnapshot() const;
+    bool showBusinessDock(const std::string& id, bool visible, std::string& error);
     [[nodiscard]] bool requestOscilloscopeToggle(const transport::ConnectionContext& ctx,
                                                  bool currentRunning,
                                                  bool targetRunning);

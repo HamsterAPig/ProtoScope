@@ -93,6 +93,13 @@ namespace {
     struct TickCommand {
         std::uint64_t currentMs{0};
     };
+    struct MenuCommand {
+        transport::ConnectionContext context;
+        std::string id;
+        bool checked{false};
+        std::uint64_t generation{0};
+        std::uint64_t revision{0};
+    };
 
     struct TxEventCommand {
         transport::ConnectionContext context;
@@ -130,6 +137,7 @@ namespace {
                                        ErrorCommand,
                                        BytesCommand,
                                        ControlCommand,
+                                       MenuCommand,
                                        TickCommand,
                                        TxEventCommand,
                                        DialogEventCommand,
@@ -147,6 +155,7 @@ namespace {
             .controls = host.controlsSnapshot(),
             .controlStates = host.controlStatesSnapshot(),
             .docks = host.dockSnapshots(),
+            .businessUi = host.businessUiSnapshot(),
             .streamBuffer = host.streamBufferDefinition(),
             .streamFrames = host.streamFrameDefinitions(),
             .nextWakeupAtMs = host.nextWakeupAtMs(),
@@ -767,6 +776,11 @@ struct ScriptRuntimeWorker::Impl {
         host.tick(command.currentMs);
         return {};
     }
+    CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, MenuCommand& command)
+    {
+        host.onMenu(command.context,command.id,command.checked,command.generation,command.revision);
+        return {};
+    }
 
     CommandExecutionResult executeCommandItem(ScriptHost& host, std::optional<std::uint64_t>&, TxEventCommand& command)
     {
@@ -948,6 +962,12 @@ void ScriptRuntimeWorker::postControl(transport::ConnectionContext context, std:
 void ScriptRuntimeWorker::postTick(std::uint64_t currentMs)
 {
     impl_->pushCommand(TickCommand{.currentMs = currentMs});
+}
+
+void ScriptRuntimeWorker::postMenu(transport::ConnectionContext context, std::string id, bool checked,
+                                   std::uint64_t generation, std::uint64_t revision)
+{
+    impl_->pushCommand(MenuCommand{std::move(context),std::move(id),checked,generation,revision});
 }
 
 void ScriptRuntimeWorker::postTxEvent(transport::ConnectionContext context, TxEvent event)

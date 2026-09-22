@@ -2,6 +2,24 @@
 local sequence = 0
 local snapshot
 
+assert(proto.ui.set_menu({
+    {id="telemetry_show",label="Telemetry",checkable=true,checked=true},
+    {separator=true},
+    {id="record_actions",label="Recording",children={
+        {id="record_start",label="Start"},
+        {id="record_stop",label="Stop"},
+        {id="record_query",label="Query"}
+    }}
+}))
+
+function on_menu(ctx,id,checked)
+    if id=="telemetry_show" then
+        proto.ui.show_dock("data_storage",checked)
+    else
+        on_control(ctx,id,checked)
+    end
+end
+
 function ui()
     return {
         id = "data_storage", title = "Data Storage",

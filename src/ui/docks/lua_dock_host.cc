@@ -460,6 +460,7 @@ void GuiRuntime::drawLuaDockWindows()
     const bool copyMode = application_.docks().configState().luaDockRenderCopyMode;
     const auto layoutKey = luaDockLayoutKey(lua.protocolDir, lua.scriptPath);
     syncLuaDockVisibilityDefaults();
+    applyBusinessDockRequests();
     if (copyMode) {
         // 拷贝模式：深拷贝快照，每帧独立遍历，忽略渲染函数返回值
         const auto dockSnapshots = lua.docks;
