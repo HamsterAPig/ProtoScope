@@ -5,6 +5,12 @@
 
 #include <fstream>
 #include <iostream>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 using namespace protoscope;
@@ -80,12 +86,152 @@ void identityProtection()
     {storage::sqlite::Database db(foreign/"index.sqlite");db.exec("CREATE TABLE unrelated(value)");}
     rejects([&]{storage::VolumeCatalog other(foreign,"protocol");});
 }
-}
-int main()
+void retentionBoundaries()
 {
+    tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-retention"));
+    const auto root=directory.path()/"records",input=directory.path()/"source.psrec";
+    source(input);
+    storage::VolumeCatalog catalog(root,"protocol");
+    auto oldest=storage::stageRecordImport(root,"protocol",input,storage::ImportFormat::Psrec);
+    const auto first=catalog.adopt(oldest,10);
+    auto pinned=catalog.pinAll();
+    storage::VolumeCatalog otherCatalog(root,"protocol");
+    require(otherCatalog.isPinned(first.id),"catalog instances share query occupancy");
+    auto newer=storage::stageRecordImport(root,"protocol",input,storage::ImportFormat::Psrec);
+    const auto second=catalog.adopt(newer,20);
+    // 活动库、临时占用和记录根外的文件不能成为清理候选。
+    {std::ofstream file(root/"records.sqlite");file<<std::string(8192,'a');}
+    {std::ofstream file(root/"records.sqlite-wal");file<<std::string(4096,'w');}
+    {std::ofstream file(root/".staging"/"unregistered");file<<"unregistered";}
+    const auto bytes=catalog.diskBytes();
+    require(bytes>=12288+std::filesystem::file_size(first.path)+std::filesystem::file_size(second.path),
+            "capacity includes active database WAL and sealed volumes");
+    const auto retained=otherCatalog.retain({UINT64_MAX,std::chrono::microseconds(50)},100);
+    require(retained.removedVolumes==1 && retained.expiredPinned && !retained.capacityExceeded,
+            "expired occupied volume skipped while next eligible volume removed");
+    require(std::filesystem::exists(first.path) && !std::filesystem::exists(second.path),
+            "query lease protects its volume");
+    pinned.reset();
+    const auto capacity=catalog.retain({1,std::chrono::hours(24*30)},100);
+    require(capacity.removedVolumes==1 && capacity.capacityExceeded,
+            "capacity limit removes remaining oldest volume and reports impossible quota");
+    require(std::filesystem::exists(root/"records.sqlite") && std::filesystem::exists(root/"records.sqlite-wal") &&
+            std::filesystem::exists(root/".staging"/"unregistered") && std::filesystem::exists(input),
+            "capacity failure never deletes active staging or external source files");
+    require(catalog.pinAll()->volumes().empty(),"removed volumes disappear from query index");
+}
+void retentionIdentityAndRecovery()
+{
+    tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-retention-recovery"));
+    const auto root=directory.path()/"records",input=directory.path()/"source.psrec";
+    source(input);
+    storage::CatalogVolume volume;
+    {
+        storage::VolumeCatalog catalog(root,"protocol");
+        auto staged=storage::stageRecordImport(root,"protocol",input,storage::ImportFormat::Psrec);
+        volume=catalog.adopt(staged,1);
+        std::stop_source canceled;canceled.request_stop();
+        rejects([&]{catalog.retain({1,std::chrono::microseconds(0)},100,canceled.get_token());});
+        require(std::filesystem::exists(volume.path),"cancel before retirement preserves volume");
+        // 模拟清理意图已提交、文件还未删除时异常退出。
+        storage::sqlite::Database db(root/"index.sqlite");
+        storage::sqlite::Statement intent(db,"INSERT INTO metadata VALUES(?,?)");
+        intent.text(1,"retiring:"+std::to_string(volume.id));intent.text(2,volume.identity);intent.row();
+    }
+    {
+        storage::VolumeCatalog recovered(root,"protocol");
+        require(recovered.pinAll()->volumes().empty() && !std::filesystem::exists(volume.path.parent_path()),
+                "restart completes committed retirement");
+        auto staged=storage::stageRecordImport(root,"protocol",input,storage::ImportFormat::Psrec);
+        volume=recovered.adopt(staged,1);
+        {std::ofstream owner(volume.path.parent_path()/"owner");owner<<"foreign";}
+        rejects([&]{recovered.retain({1,std::chrono::microseconds(0)},100);});
+        require(std::filesystem::exists(volume.path),"ownership mismatch blocks destructive retirement");
+    }
+    // 独立根覆盖数据库已删除但标记仍在的恢复窗口。
+    const auto other=directory.path()/"partial";
+    {
+        storage::VolumeCatalog catalog(other,"protocol");
+        auto staged=storage::stageRecordImport(other,"protocol",input,storage::ImportFormat::Psrec);
+        volume=catalog.adopt(staged,1);
+        storage::sqlite::Database db(other/"index.sqlite");
+        storage::sqlite::Statement intent(db,"INSERT INTO metadata VALUES(?,?)");
+        intent.text(1,"retiring:"+std::to_string(volume.id));intent.text(2,volume.identity);intent.row();
+        std::filesystem::remove(volume.path);
+    }
+    storage::VolumeCatalog recovered(other,"protocol");
+    require(recovered.pinAll()->volumes().empty() && !std::filesystem::exists(volume.path.parent_path()),
+            "restart handles partial file removal without recursive cleanup");
+}
+void directoryProcessLock()
+{
+#ifdef _WIN32
+    tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-directory-lock"));
+    std::shared_ptr<const storage::PinnedVolumes> lease;
+    {
+        storage::VolumeCatalog catalog(directory.path(),"protocol");
+        lease=catalog.pinAll();
+    }
+    // 即使宿主销毁，外部快照引用仍须保留进程锁，避免新进程清理占用卷。
+    wchar_t executable[32768]{};
+    require(GetModuleFileNameW(nullptr,executable,32768)>0,"probe executable path");
+    std::wstring command=L"\""+std::wstring(executable)+L"\" --probe-lock \""+directory.path().wstring()+L"\"";
+    STARTUPINFOW startup{};startup.cb=sizeof(startup);
+    PROCESS_INFORMATION process{};
+    require(CreateProcessW(executable,command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,
+                          &startup,&process)!=0,"start lock probe");
+    CloseHandle(process.hThread);
+    const auto wait=WaitForSingleObject(process.hProcess,10000);
+    if (wait!=WAIT_OBJECT_0) {TerminateProcess(process.hProcess,3);WaitForSingleObject(process.hProcess,10000);}
+    DWORD code=3;GetExitCodeProcess(process.hProcess,&code);CloseHandle(process.hProcess);
+    require(wait==WAIT_OBJECT_0 && code==0,"other process rejected while snapshot holds directory lock");
+    lease.reset();
+    storage::VolumeCatalog reopened(directory.path(),"protocol");
+    require(reopened.pinAll()->volumes().empty(),"directory lock released with last owner");
+#endif
+}
+void retirementDeleteFailure()
+{
+#ifdef _WIN32
+    tests::ScopedTempPath directory(tests::makeUniqueTempDir("protoscope-retention-locked-file"));
+    const auto root=directory.path()/"records",input=directory.path()/"source.psrec";
+    source(input);
+    storage::CatalogVolume volume;
+    {
+        storage::VolumeCatalog catalog(root,"protocol");
+        auto staged=storage::stageRecordImport(root,"protocol",input,storage::ImportFormat::Psrec);
+        volume=catalog.adopt(staged,1);
+        HANDLE held=CreateFileW(volume.path.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,
+                                 OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+        require(held!=INVALID_HANDLE_VALUE,"hold sealed database without delete sharing");
+        bool failed=false;
+        try {catalog.retain({1,std::chrono::microseconds(0)},100);}
+        catch(const std::exception&) {failed=true;}
+        CloseHandle(held);
+        require(failed && std::filesystem::exists(volume.path),"file-in-use failure preserves database");
+        storage::sqlite::Database db(root/"index.sqlite",true);
+        storage::sqlite::Statement intent(db,"SELECT value FROM metadata WHERE key=?");
+        intent.text(1,"retiring:"+std::to_string(volume.id));
+        require(intent.row() && intent.text(0)==volume.identity,"failed removal retains committed recovery intent");
+        require(catalog.pinAll()->volumes().empty(),"retiring volume cannot gain new query leases");
+    }
+    storage::VolumeCatalog recovered(root,"protocol");
+    require(!std::filesystem::exists(volume.path) && recovered.pinAll()->volumes().empty(),
+            "restart retries exact validated artifact after file-in-use failure");
+#endif
+}
+}
+int main(int argc,char** argv)
+{
+    if (argc==3 && std::string(argv[1])=="--probe-lock") {
+        try {storage::VolumeCatalog catalog(argv[2],"protocol");return 2;}
+        catch(const std::exception&) {return 0;}
+    }
     int failed=0;
     for (const auto& [name,run]:std::initializer_list<std::pair<const char*,void(*)()>>{
-        {"adoption_pins",adoptionAndPins},{"identity_protection",identityProtection}}) {
+        {"adoption_pins",adoptionAndPins},{"identity_protection",identityProtection},
+        {"retention_boundaries",retentionBoundaries},{"retention_recovery",retentionIdentityAndRecovery},
+        {"directory_process_lock",directoryProcessLock},{"retirement_delete_failure",retirementDeleteFailure}}) {
         try {run();std::cout<<"[PASS] "<<name<<'\n';}
         catch(const std::exception& e){++failed;std::cerr<<"[FAIL] "<<name<<": "<<e.what()<<'\n';}
     }

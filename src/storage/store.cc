@@ -166,6 +166,8 @@ struct Store::Impl {
         }
         std::filesystem::create_directories(root / "kv");
         std::filesystem::create_directories(root / "records");
+        // 在打开活动库前取得目录进程锁，防止另一进程写入或清理相同记录根。
+        catalog=std::make_unique<VolumeCatalog>(root/"records",protocol);
         Database records(root / "records" / "records.sqlite");
         initialize(records,
             "CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
@@ -212,7 +214,6 @@ struct Store::Impl {
             if (cacheBytes > config.kvTotalBytes) throw std::runtime_error("已提交 KV 数据超过协议总量上限");
             cache.emplace(std::move(name), std::move(bytes));
         }
-        catalog=std::make_unique<VolumeCatalog>(root/"records",protocol);
         queries=std::make_unique<RecordQueryService>(root/"records"/"records.sqlite",*catalog,config.queueBytes);
         writer = std::thread([this] { writeLoop(); });
         try { reader = std::thread([this] { readLoop(); }); }

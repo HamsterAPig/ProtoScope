@@ -1,6 +1,7 @@
 #pragma once
 
 #include "record_import.hpp"
+#include <chrono>
 #include <mutex>
 
 namespace protoscope::storage {
@@ -14,12 +15,23 @@ struct CatalogVolume {
     std::int64_t idBase{0};
     std::map<std::uint64_t,std::uint64_t> schemaIds;
 };
+struct RetentionPolicy {
+    std::uint64_t maxBytes{10ULL*1024*1024*1024};
+    std::chrono::microseconds maxAge{std::chrono::hours(24*30)};
+};
+struct RetentionResult {
+    std::uint64_t bytes{0};
+    std::uint64_t removedVolumes{0};
+    bool capacityExceeded{false};
+    bool expiredPinned{false};
+};
 class PinnedVolumes {
 public:
     const std::vector<CatalogVolume>& volumes() const {return volumes_;}
 private:
     std::vector<CatalogVolume> volumes_;
     std::vector<std::shared_ptr<int>> pins_;
+    std::shared_ptr<void> runtimeLease_;
     friend class VolumeCatalog;
 };
 
@@ -33,6 +45,8 @@ public:
     bool isPinned(std::uint64_t id) const;
     std::map<std::uint64_t,data::Schema> schemas() const;
     std::map<std::uint64_t,std::uint64_t> registerSchemas(const std::map<std::uint64_t,data::Schema>& schemas);
+    RetentionResult retain(RetentionPolicy policy,std::int64_t nowUs,std::stop_token stop={});
+    std::uint64_t diskBytes() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

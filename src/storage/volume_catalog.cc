@@ -3,12 +3,74 @@
 
 #include <algorithm>
 #include <fstream>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#endif
 
 namespace protoscope::storage {
 namespace {
 constexpr int catalogApplicationId=0x50534958;
 constexpr int volumeApplicationId=0x50534442;
 constexpr data::ValueLimits valueLimits{32U*1024U*1024U,16,131072};
+
+struct CatalogRuntime {
+    std::mutex mutex;
+    std::map<std::uint64_t,std::shared_ptr<int>> pins;
+#ifdef _WIN32
+    HANDLE handle{INVALID_HANDLE_VALUE};
+#else
+    int handle{-1};
+#endif
+    explicit CatalogRuntime(const std::filesystem::path& root)
+    {
+        const auto path=root/".owner.lock";
+        if (std::filesystem::is_symlink(path) || std::filesystem::weakly_canonical(path)!=path)
+            throw std::runtime_error("record directory lock must not follow links");
+#ifdef _WIN32
+        handle=CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+        if (handle==INVALID_HANDLE_VALUE) throw std::runtime_error("record directory is in use or lock is unavailable");
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (!GetFileInformationByHandle(handle,&info) || (info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)) {
+            CloseHandle(handle);handle=INVALID_HANDLE_VALUE;
+            throw std::runtime_error("invalid record directory lock file");
+        }
+#else
+        handle=::open(path.c_str(),O_RDWR|O_CREAT|O_NOFOLLOW,0600);
+        if (handle<0) throw std::runtime_error("record directory lock unavailable");
+        if (flock(handle,LOCK_EX|LOCK_NB)!=0) {
+            ::close(handle);handle=-1;
+            throw std::runtime_error("record directory is in use");
+        }
+#endif
+    }
+    ~CatalogRuntime()
+    {
+#ifdef _WIN32
+        if (handle!=INVALID_HANDLE_VALUE) CloseHandle(handle);
+#else
+        if (handle>=0) ::close(handle);
+#endif
+    }
+};
+std::shared_ptr<CatalogRuntime> runtimeFor(const std::filesystem::path& root)
+{
+    static std::mutex mutex;
+    static std::map<std::filesystem::path,std::weak_ptr<CatalogRuntime>> directories;
+    std::lock_guard lock(mutex);
+    std::erase_if(directories,[](const auto& entry){return entry.second.expired();});
+    if (auto found=directories[root].lock()) return found;
+    auto result=std::make_shared<CatalogRuntime>(root);
+    directories[root]=result;
+    return result;
+}
 
 std::string metadata(sqlite::Database& db,const std::string& key)
 {
@@ -58,17 +120,35 @@ void checkVolume(sqlite::Database& db,const std::string& protocol,const std::str
     if (!records.row() || records.integer(0)!=static_cast<std::int64_t>(count))
         throw std::runtime_error("volume record count mismatch");
 }
+std::uint64_t directoryBytes(const std::filesystem::path& root,std::stop_token stop={})
+{
+    std::uint64_t result=0;
+    std::size_t entries=0;
+    // 普通迭代不跟随链接，canonical 复验同时拒绝 Windows 目录联接。
+    for (const auto& entry:std::filesystem::recursive_directory_iterator(root)) {
+        if (stop.stop_requested()) throw std::runtime_error("record retention canceled");
+        if (++entries>1000000) throw std::runtime_error("record directory entry budget exceeded");
+        if (entry.is_symlink() || std::filesystem::weakly_canonical(entry.path())!=entry.path())
+            throw std::runtime_error("record capacity scan encountered a linked path");
+        if (!entry.is_regular_file()) continue;
+        const auto bytes=entry.file_size();
+        if (bytes>UINT64_MAX-result) throw std::overflow_error("record capacity overflow");
+        result+=bytes;
+    }
+    return result;
+}
 }
 struct VolumeCatalog::Impl {
     std::filesystem::path root;
     std::string protocol;
-    mutable std::mutex mutex;
-    std::map<std::uint64_t,std::shared_ptr<int>> pins;
+    std::shared_ptr<CatalogRuntime> runtime;
     Impl(std::filesystem::path path,std::string key):protocol(std::move(key))
     {
         if (protocol.empty() || protocol.size()>4096) throw std::invalid_argument("invalid catalog protocol");
         std::filesystem::create_directories(path);
         root=std::filesystem::weakly_canonical(std::filesystem::absolute(path));
+        runtime=runtimeFor(root);
+        std::lock_guard lock(runtime->mutex);
         const auto index=root/"index.sqlite";
         if (std::filesystem::is_symlink(index) || std::filesystem::weakly_canonical(index)!=index)
             throw std::runtime_error("catalog must not follow file links");
@@ -100,6 +180,7 @@ struct VolumeCatalog::Impl {
             sqlite::Statement integrity(db,"PRAGMA quick_check");
             if (!integrity.row() || integrity.text(0)!="ok") throw std::runtime_error("damaged catalog database");
         }
+        resumeRetirements(db);
         for (const auto& volume:volumes(db)) {
             checkOwner(volume.path.parent_path(),volume.identity);
             sqlite::Database file(volume.path,true);
@@ -114,7 +195,8 @@ struct VolumeCatalog::Impl {
             if (size>valueLimits.maxBytes-bytes) throw std::runtime_error("catalog volume metadata exceeds budget");
             bytes+=size;
         };
-        sqlite::Statement rows(db,"SELECT id,identity,records,from_us,to_us,sealed_us,id_base FROM volumes ORDER BY id");
+        sqlite::Statement rows(db,"SELECT id,identity,records,from_us,to_us,sealed_us,id_base FROM volumes "
+            "WHERE NOT EXISTS(SELECT 1 FROM metadata WHERE key='retiring:'||volumes.id) ORDER BY id");
         while (rows.row()) {
             CatalogVolume volume;
             volume.id=static_cast<std::uint64_t>(rows.integer(0));
@@ -136,6 +218,60 @@ struct VolumeCatalog::Impl {
         }
         return result;
     }
+    void finishRetirement(sqlite::Database& db,std::uint64_t id,const std::string& identity,std::uint64_t count)
+    {
+        checkIdentity(identity);
+        const auto directory=root/("vol-"+identity);
+        if (std::filesystem::weakly_canonical(directory)!=directory || std::filesystem::is_symlink(directory))
+            throw std::runtime_error("retiring volume resolves outside its owned path");
+        if (std::filesystem::exists(directory)) {
+            // 持久化清理意图之后允许恢复已删除数据库/标记的中间态，但绝不接管未知文件。
+            for (const auto& entry:std::filesystem::directory_iterator(directory)) {
+                const auto name=entry.path().filename().string();
+                if (entry.is_symlink() || !entry.is_regular_file() ||
+                    std::filesystem::weakly_canonical(entry.path())!=entry.path() ||
+                    (name!="owner" && name!="records.sqlite"))
+                    throw std::runtime_error("unrecognized file in retiring volume");
+            }
+            const auto database=directory/"records.sqlite",owner=directory/"owner";
+            if (std::filesystem::exists(database) || std::filesystem::exists(owner))
+                checkOwner(directory,identity);
+            if (std::filesystem::exists(database)) {
+                {sqlite::Database file(database,true);checkVolume(file,protocol,identity,count);}
+                if (!std::filesystem::remove(database)) throw std::runtime_error("cannot remove retired volume database");
+            }
+            if (std::filesystem::exists(owner) && !std::filesystem::remove(owner))
+                throw std::runtime_error("cannot remove retired volume marker");
+            if (!std::filesystem::remove(directory)) throw std::runtime_error("cannot remove retired volume directory");
+        }
+        db.exec("BEGIN IMMEDIATE");
+        try {
+            sqlite::Statement mappings(db,"DELETE FROM volume_schemas WHERE volume_id=?");
+            mappings.integer(1,static_cast<std::int64_t>(id));mappings.row();
+            sqlite::Statement volume(db,"DELETE FROM volumes WHERE id=? AND identity=?");
+            volume.integer(1,static_cast<std::int64_t>(id));volume.text(2,identity);volume.row();
+            sqlite::Statement intent(db,"DELETE FROM metadata WHERE key=?");
+            intent.text(1,"retiring:"+std::to_string(id));intent.row();
+            db.exec("COMMIT");
+        } catch (...) {db.exec("ROLLBACK");throw;}
+        runtime->pins.erase(id);
+    }
+    void resumeRetirements(sqlite::Database& db)
+    {
+        struct Intent {std::uint64_t id,count;std::string identity;};
+        std::vector<Intent> pending;
+        {
+            sqlite::Statement rows(db,"SELECT v.id,v.records,v.identity,m.value FROM volumes v "
+                "JOIN metadata m ON m.key='retiring:'||v.id");
+            while (rows.row()) {
+                if (rows.text(2)!=rows.text(3)) throw std::runtime_error("retirement identity mismatch");
+                pending.push_back({static_cast<std::uint64_t>(rows.integer(0)),
+                    static_cast<std::uint64_t>(rows.integer(1)),rows.text(2)});
+                if (pending.size()>131072) throw std::runtime_error("retirement metadata budget exceeded");
+            }
+        }
+        for (const auto& intent:pending) finishRetirement(db,intent.id,intent.identity,intent.count);
+    }
 };
 VolumeCatalog::VolumeCatalog(std::filesystem::path root,std::string protocol)
     :impl_(std::make_unique<Impl>(std::move(root),std::move(protocol))) {}
@@ -143,7 +279,7 @@ VolumeCatalog::~VolumeCatalog()=default;
 
 CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t sealedAtUs,std::stop_token stop)
 {
-    std::lock_guard lock(impl_->mutex);
+    std::lock_guard lock(impl_->runtime->mutex);
     const auto checkStop=[&] {
         if (stop.stop_requested()) throw std::runtime_error("record import canceled");
     };
@@ -210,15 +346,16 @@ CatalogVolume VolumeCatalog::adopt(StagedRecordImport& staged,std::int64_t seale
 }
 std::shared_ptr<const PinnedVolumes> VolumeCatalog::pinAll()
 {
-    std::lock_guard lock(impl_->mutex);
+    std::lock_guard lock(impl_->runtime->mutex);
     sqlite::Database db(impl_->root/"index.sqlite",true);
     auto result=std::make_shared<PinnedVolumes>();
+    result->runtimeLease_=impl_->runtime;
     result->volumes_=impl_->volumes(db);
     for (const auto& volume:result->volumes_) {
         checkOwner(volume.path.parent_path(),volume.identity);
         sqlite::Database file(volume.path,true);
         checkVolume(file,impl_->protocol,volume.identity,volume.records,false);
-        auto& pin=impl_->pins[volume.id];
+        auto& pin=impl_->runtime->pins[volume.id];
         if (!pin) pin=std::make_shared<int>(0);
         result->pins_.push_back(pin);
     }
@@ -226,13 +363,13 @@ std::shared_ptr<const PinnedVolumes> VolumeCatalog::pinAll()
 }
 bool VolumeCatalog::isPinned(std::uint64_t id) const
 {
-    std::lock_guard lock(impl_->mutex);
-    const auto pin=impl_->pins.find(id);
-    return pin!=impl_->pins.end() && pin->second.use_count()>1;
+    std::lock_guard lock(impl_->runtime->mutex);
+    const auto pin=impl_->runtime->pins.find(id);
+    return pin!=impl_->runtime->pins.end() && pin->second.use_count()>1;
 }
 std::map<std::uint64_t,data::Schema> VolumeCatalog::schemas() const
 {
-    std::lock_guard lock(impl_->mutex);
+    std::lock_guard lock(impl_->runtime->mutex);
     sqlite::Database db(impl_->root/"index.sqlite",true);
     sqlite::Statement rows(db,"SELECT id,definition FROM schemas");
     std::map<std::uint64_t,data::Schema> result;
@@ -249,7 +386,7 @@ std::map<std::uint64_t,data::Schema> VolumeCatalog::schemas() const
 }
 std::map<std::uint64_t,std::uint64_t> VolumeCatalog::registerSchemas(const std::map<std::uint64_t,data::Schema>& schemas)
 {
-    std::lock_guard lock(impl_->mutex);
+    std::lock_guard lock(impl_->runtime->mutex);
     sqlite::Database db(impl_->root/"index.sqlite");
     db.exec("PRAGMA synchronous=FULL; BEGIN IMMEDIATE");
     std::map<std::uint64_t,std::uint64_t> result;
@@ -263,6 +400,56 @@ std::map<std::uint64_t,std::uint64_t> VolumeCatalog::registerSchemas(const std::
         result.emplace(local,static_cast<std::uint64_t>(global.integer(0)));
     }
     db.exec("COMMIT");
+    return result;
+}
+std::uint64_t VolumeCatalog::diskBytes() const
+{
+    std::lock_guard lock(impl_->runtime->mutex);
+    return directoryBytes(impl_->root);
+}
+RetentionResult VolumeCatalog::retain(RetentionPolicy policy,std::int64_t nowUs,std::stop_token stop)
+{
+    if (!policy.maxBytes || policy.maxAge.count()<0 || nowUs<0)
+        throw std::invalid_argument("invalid retention policy or time");
+    std::lock_guard lock(impl_->runtime->mutex);
+    sqlite::Database db(impl_->root/"index.sqlite");
+    db.exec("PRAGMA synchronous=FULL");
+    impl_->resumeRetirements(db);
+    auto volumes=impl_->volumes(db);
+    std::sort(volumes.begin(),volumes.end(),[](const auto& a,const auto& b) {
+        return a.sealedAtUs!=b.sealedAtUs ? a.sealedAtUs<b.sealedAtUs:a.id<b.id;
+    });
+    RetentionResult result;
+    result.bytes=directoryBytes(impl_->root,stop);
+    for (const auto& volume:volumes) {
+        if (stop.stop_requested()) throw std::runtime_error("record retention canceled");
+        const bool expired=volume.sealedAtUs>=0 && volume.sealedAtUs<=nowUs &&
+            nowUs-volume.sealedAtUs>=policy.maxAge.count();
+        if (!expired && result.bytes<=policy.maxBytes) continue;
+        const auto pin=impl_->runtime->pins.find(volume.id);
+        if (pin!=impl_->runtime->pins.end() && pin->second.use_count()>1) {
+            result.expiredPinned=result.expiredPinned || expired;
+            continue;
+        }
+        checkOwner(volume.path.parent_path(),volume.identity);
+        {
+            sqlite::Database file(volume.path,true);
+            sqlite3_progress_handler(file.get(),1000,[](void* token) {
+                return static_cast<std::stop_token*>(token)->stop_requested() ? 1:0;
+            },&stop);
+            checkVolume(file,impl_->protocol,volume.identity,volume.records);
+        }
+        if (stop.stop_requested()) throw std::runtime_error("record retention canceled");
+        // 先提交清理意图，再删精确自有文件。崩溃后按索引身份恢复，禁止递归删除。
+        {
+            sqlite::Statement intent(db,"INSERT INTO metadata(key,value) VALUES(?,?)");
+            intent.text(1,"retiring:"+std::to_string(volume.id));intent.text(2,volume.identity);intent.row();
+        }
+        impl_->finishRetirement(db,volume.id,volume.identity,volume.records);
+        ++result.removedVolumes;
+        result.bytes=directoryBytes(impl_->root,stop);
+    }
+    result.capacityExceeded=result.bytes>policy.maxBytes;
     return result;
 }
 } // namespace protoscope::storage
