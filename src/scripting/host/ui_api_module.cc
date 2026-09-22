@@ -15,6 +15,9 @@ public:
         auto* host = &host_;
         sol::state_view lua = ctx.lua;
         sol::table uiApi = lua.create_table();
+        uiApi.set_function("get_selected_row", [host,state=lua.lua_state()](const std::string& id) {
+            return host->selectedTableRow(sol::state_view(state),id);
+        });
         // 捕获当前待加载 runtime 的状态，失败重载不会污染旧运行时的菜单。
         auto* businessUi = &ctx.businessUi;
         uiApi.set_function("set_menu", [businessUi,state=lua.lua_state()](const sol::table& items) {

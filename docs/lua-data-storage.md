@@ -99,6 +99,20 @@ descending 反转字段类型和值顺序；缺字段排在显式 null 之前（
 过期或重启后的旧令牌会返回错误，调用方必须刷新。历史表翻页期间持有快照引用及卷占用保护。
 该预算是元数据估算，不是进程 RSS 的精确上限。
 `data_table` 选择回调使用同一 ID 的十进制字符串，避免 UI 值转换损失精度。
+`proto.ui.get_selected_row(id)` 返回当前页选中记录的独立副本，包含 `row_id` 字符串、
+协议/数据集/设备、接收时间、模式版本及类型化 `values`；可在 `on_control` 中读取。
+没有选中、页面加载/错误、选中行已离开当前页或实时列表、协议重载时返回 `nil`。
+修改返回表不会修改历史或实时数据；该调用不执行磁盘 I/O，不查询已离页记录。
+
+```lua
+function on_control(ctx, id, value)
+    if id == "history_rows" then
+        local row = proto.ui.get_selected_row(id)
+        if row then proto.log("info", row.row_id .. ": " .. tostring(row.values.temperature)) end
+    end
+end
+```
+
 数据表内部查询由宿主消费，不进入脚本 `on_record`；脚本显式
 `proto.record.query` 仍按原有回调返回结果。
 # 异步记录导出

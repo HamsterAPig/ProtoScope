@@ -2,6 +2,7 @@
 #include "script_host_internal.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <set>
 #include <stdexcept>
 
@@ -225,5 +226,31 @@ void ScriptHost::onDataTable(const transport::ConnectionContext& context,const D
             callbackOnControl(ScriptHostContext{context},event.id,selected);
         } else runtime_->tables->handle(event);
     } catch (const std::exception& exception) {protoLog("warn","data_table: "+std::string(exception.what()));}
+}
+
+sol::object ScriptHost::selectedTableRow(sol::state_view lua,const std::string& id)
+{
+    const auto empty=sol::make_object(lua,sol::lua_nil);
+    // 待加载脚本不能读取旧 runtime 的选中数据，返回值也不持有内部页或可变记录引用。
+    if (!runtime_ || runtime_->lua.lua_state()!=lua.lua_state() || !runtime_->tables) return empty;
+    const auto descriptor=std::find_if(controls_.begin(),controls_.end(),[&](const auto& control) {
+        return control.id==id && control.dataTable.has_value();
+    });
+    if (descriptor==controls_.end()) return empty;
+    const auto selected=controlValues_.find(id);
+    if (selected==controlValues_.end()) return empty;
+    const auto* text=std::get_if<std::string>(&selected->second);
+    if (!text || text->empty()) return empty;
+    std::uint64_t rowId=0;
+    const auto parsed=std::from_chars(text->data(),text->data()+text->size(),rowId);
+    if (parsed.ec!=std::errc{} || parsed.ptr!=text->data()+text->size()) return empty;
+    const auto page=runtime_->tables->page(id);
+    if (page->loading || !page->error.empty()) return empty;
+    for (const auto& row:page->rows) if (row.id==rowId) {
+        auto result=runtime_->data->recordTable(lua,*row.record,*row.schema);
+        result["row_id"]=*text;
+        return sol::make_object(lua,result);
+    }
+    return empty;
 }
 } // namespace protoscope::scripting

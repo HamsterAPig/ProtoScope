@@ -21,6 +21,8 @@ public:
     std::uint64_t nextPollAtMs() const;
     std::vector<storage::Completion> poll();
     sol::table completionTable(sol::state_view lua, const storage::Completion& completion) const;
+    sol::table recordTable(sol::state_view lua, const data::Record& record,
+                           const data::Schema& schema) const;
     const std::vector<data::Schema>& schemas() const { return schemas_; }
     void setPublishObserver(std::function<void(const data::Record&)> observer) { publishObserver_ = std::move(observer); }
     std::uint64_t query(storage::Query query) { return store().query(std::move(query)); }
@@ -33,8 +35,6 @@ private:
     storage::Store& store();
     void requireActive() const;
     data::Record parseRecord(const sol::table& input) const;
-    sol::table recordTable(sol::state_view lua, const data::Record& record,
-                           const data::Schema& schema) const;
     bool publish(const sol::table& rows);
     std::filesystem::path root_;
     storage::Config config_;

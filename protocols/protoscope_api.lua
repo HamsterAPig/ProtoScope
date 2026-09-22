@@ -878,6 +878,11 @@ function proto.ui.update_control(id, patch) end
 ---@return boolean? ok
 ---@return string? error
 function proto.ui.update_controls(patches) end
+---@class ProtoSelectedTableRow: ProtoDataRow
+---@field row_id string @与 on_control 传递的选中行 ID 相同。
+---@param id string @data_table 控件 ID。
+---@return ProtoSelectedTableRow? row @当前页没有有效选中行时返回 nil；返回独立副本。
+function proto.ui.get_selected_row(id) end
 
 ---@class ProtoMenuItem
 ---@field id? string @非分隔项必填，全菜单树唯一。

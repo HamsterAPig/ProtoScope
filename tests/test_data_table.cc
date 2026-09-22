@@ -9,6 +9,7 @@ namespace {
 using namespace protoscope;
 using tests::require;
 const std::string script=R"(
+    assert(proto.ui.get_selected_row("history")==nil)
     function data() return {{id="samples",fields={{name="n",type="int64",nullable=false}}}} end
     function ui() return {id="panel",title="Tables",controls={
         {"data_table","live","Live",dataset="samples",max_rows=3,page_size=2,columns={{field="n",label="Number"}}},
@@ -22,9 +23,20 @@ const std::string script=R"(
             for i=1,5 do rows[i]={dataset="samples",values={n=i}} end
             assert(proto.data.publish_batch(rows))
             proto.record.stop()
-        elseif evt.operation=="stop" then proto.emit("ready","") end
+        elseif evt.operation=="stop" then
+            assert(proto.ui.get_selected_row("live")==nil)
+            proto.emit("ready","")
+        end
     end
-    function on_control(ctx,id,value) proto.emit(id,value) end
+    function on_control(ctx,id,value)
+        local row=assert(proto.ui.get_selected_row(id))
+        assert(row.row_id==value and row.dataset=="samples" and math.type(row.values.n)=="integer")
+        local n=row.values.n
+        row.values.n=-1
+        assert(proto.ui.get_selected_row(id).values.n==n)
+        assert(proto.ui.get_selected_row("missing")==nil)
+        proto.emit(id,value)
+    end
 )";
 struct Fixture {
     tests::ScopedTempPath directory{tests::makeUniqueTempDir("protoscope-data-table")};
@@ -117,12 +129,28 @@ void replacementAndValidation()
     bad.replace(bad.find("dataset=\"samples\",max_rows"),std::string("dataset=\"samples\"").size(),"dataset=\"missing\"");
     require(!f.load(bad),"unknown table dataset rejected");
 }
+void selectedLiveRowEviction()
+{
+    Fixture f;
+    require(f.load(),"selected row declaration");
+    f.publish();
+    const auto page=f.control(0).tablePage;
+    f.send({.id="live",.pageRevision=page->revision,.action=scripting::DataTableAction::Select,
+            .selectedRow=page->rows[0].id});
+    require(f.host.drainEvents().size()==1,"live selection exposes copied typed row in callback");
+    f.publish();
+    require(f.host.lastError().empty(),"evicted selected row returns nil");
+    f.send({.id="live",.pageRevision=page->revision,.action=scripting::DataTableAction::Select,
+            .selectedRow=page->rows[0].id});
+    require(f.host.drainEvents().empty(),"evicted live row cannot be selected again");
+}
 }
 int main()
 {
     int failed=0;
     for (const auto& [name,run]:std::initializer_list<std::pair<const char*,void(*)()>>{
-        {"live_history",liveAndHistory},{"replacement_validation",replacementAndValidation}}) {
+        {"live_history",liveAndHistory},{"replacement_validation",replacementAndValidation},
+        {"selected_live_eviction",selectedLiveRowEviction}}) {
         try {run();std::cout<<"[PASS] "<<name<<'\n';}
         catch(const std::exception& e){++failed;std::cerr<<"[FAIL] "<<name<<": "<<e.what()<<'\n';}
     }

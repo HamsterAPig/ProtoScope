@@ -537,6 +537,7 @@ public:
                 std::uint64_t generation, std::uint64_t revision);
     BusinessUiSnapshot businessUiSnapshot() const;
     void onDataTable(const transport::ConnectionContext& context,const DataTableEvent& event);
+    sol::object selectedTableRow(sol::state_view lua,const std::string& id);
     bool showBusinessDock(const std::string& id, bool visible, std::string& error);
     [[nodiscard]] bool requestOscilloscopeToggle(const transport::ConnectionContext& ctx,
                                                  bool currentRunning,
