@@ -68,8 +68,8 @@ gui:
     chinese_glyph_range: simplified_common
 ```
 
-- `theme`：主题字符串 ID，内置 `professional_dark`（默认，中性深灰）、
-  `debug_high_contrast`（仪器深黑）和 `professional_light`（专业浅色）。
+- `theme`：主题字符串 ID，内置 `professional_dark`（默认，深墨蓝灰分层与蓝青强调）、
+  `debug_high_contrast`（近黑底、明亮信号与清晰焦点）和 `professional_light`（冷白底、白面板与蓝强调）。
   可选择配置文件旁 `themes` 目录中的 YAML 用户主题。启动加载失败时显示专业深色，
   但保留原 ID；缺失字段默认 `professional_dark`。详见 [主题管理与模板](theme-management.md)。
 - 运行中可通过 `设置 -> 主题` 即时切换，无需重启，也不会重载当前协议。
@@ -79,6 +79,10 @@ gui:
 - `gui.wave.overview_selection`：概览缩放框可选覆盖，`mode` 为 `auto`（默认）或 `fixed`，
   `fixed_color` 为 `"#RRGGBB"`，`min_alpha`、`max_alpha` 满足 `0 <= min <= max <= 1`。
   未覆盖项随主题变化；主题默认 alpha 范围为 `0.10..0.28`。
+- `gui.wave.cursor_auto_color`：默认 `true`（旧配置缺省也启用），根据实际显示色与背景分配 A/B/T 身份色；
+  `false` 恢复主题 `wave.cursor_palette` 索引映射，与主题 `wave.correct_contrast` 独立。
+  后者保留源 RGBA，先补最小 alpha，再按需修正明暗；显式全透明与关闭修正不变。
+  自动色不能保证任意自定义背景与任意多通道均有解，无解时采用文字回退和图形护边。
 - `show_app_header`：是否显示应用顶部 header。
 - `window.title`：窗口标题。
 - `window.width` / `window.height`：初始窗口尺寸。
