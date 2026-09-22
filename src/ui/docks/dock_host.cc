@@ -1314,6 +1314,9 @@ bool GuiRuntime::drawDynamicLayoutControl(const scripting::ControlSnapshot& cont
 bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, std::optional<float> layoutWidth)
 {
     const auto& descriptor = control.descriptor;
+    if (!descriptor.visible) return false;
+    ImGui::BeginDisabled(descriptor.disabled ||
+                         (descriptor.readOnly && descriptor.type != scripting::ControlType::InputText));
     const std::string visibleLabel = resolveLuaControlVisibleLabel(descriptor, layoutWidth);
     const std::string imguiLabel = luaControlImGuiLabel(descriptor, visibleLabel);
     const std::string inputLabel = luaControlInputLabel(descriptor, visibleLabel);
@@ -1360,6 +1363,10 @@ bool GuiRuntime::drawDynamicControl(const scripting::ControlSnapshot& control, s
     if (feedbackStyleColors > 0) {
         ImGui::PopStyleColor(feedbackStyleColors);
     }
+    if (!descriptor.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("%s", descriptor.tooltip.c_str());
+    }
+    ImGui::EndDisabled();
     if (layoutWidth.has_value()) {
         reserveLuaDynamicControlWidth(startX, *layoutWidth);
     }
@@ -1469,7 +1476,8 @@ bool GuiRuntime::drawDynamicTextControl(const scripting::ControlSnapshot& contro
     char buffer[512]{};
     std::snprintf(buffer, sizeof(buffer), "%s", std::get<std::string>(control.value).c_str());
     drawLuaControlLeftLabel(descriptor, visibleLabel);
-    if (ImGui::InputText(inputLabel.c_str(), buffer, sizeof(buffer))) {
+    if (ImGui::InputText(inputLabel.c_str(), buffer, sizeof(buffer),
+                         descriptor.readOnly ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None)) {
         updateDynamicControlValueWithFeedback(descriptor, std::string(buffer));
         return true;
     }

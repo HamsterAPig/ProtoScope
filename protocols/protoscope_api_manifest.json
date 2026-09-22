@@ -767,7 +767,27 @@
         "function on_record(ctx, evt) end",
         "---@param ctx ProtoConnectionContext",
         "---@param evt ProtoStorageEvent",
-        "function on_kv(ctx, evt) end"
+        "function on_kv(ctx, evt) end",
+        "",
+        "---@class ProtoControlPatch",
+        "---@field value? any",
+        "---@field label? string",
+        "---@field visible? boolean",
+        "---@field disabled? boolean",
+        "---@field read_only? boolean",
+        "---@field tooltip? string",
+        "---@field min? number|false",
+        "---@field max? number|false",
+        "---@field options? string[]",
+        "---@param id string",
+        "---@param patch ProtoControlPatch",
+        "---@return boolean? ok",
+        "---@return string? error",
+        "function proto.ui.update_control(id, patch) end",
+        "---@param patches table<string, ProtoControlPatch>",
+        "---@return boolean? ok",
+        "---@return string? error",
+        "function proto.ui.update_controls(patches) end"
       ]
     }
   ]

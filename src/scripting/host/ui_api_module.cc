@@ -14,6 +14,20 @@ public:
         auto* host = &host_;
         sol::state_view lua = ctx.lua;
         sol::table uiApi = lua.create_table();
+        uiApi.set_function("update_control", [host, state = lua.lua_state()](const std::string& id, const sol::table& patch) {
+            sol::state_view view(state);
+            auto patches = view.create_table();
+            patches[id] = patch;
+            std::string error;
+            if (!host->updateControlProperties(patches, error)) return script_host_lua::luaNilError(view, error);
+            return script_host_lua::luaValueOk(view, true);
+        });
+        uiApi.set_function("update_controls", [host, state = lua.lua_state()](const sol::table& patches) {
+            sol::state_view view(state);
+            std::string error;
+            if (!host->updateControlProperties(patches, error)) return script_host_lua::luaNilError(view, error);
+            return script_host_lua::luaValueOk(view, true);
+        });
         uiApi.set_function("alert", [host, lua](const sol::object& opts) {
             std::string error;
             const auto dialog = host->protoDialog(DialogKind::Alert, opts, error);

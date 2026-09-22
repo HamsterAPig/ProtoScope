@@ -2,6 +2,7 @@
 
 #include "script_host_api_module.hpp"
 #include "script_host_internal.hpp"
+#include "control_properties.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1863,7 +1864,12 @@ std::optional<ControlDescriptor> parseControlDescriptor(const sol::object& objec
     descriptor.label = readStringFieldOrPosition(table, "label", 3);
     if (!applyControlLabelPosition(descriptor, table, error) || !validateControlIdentity(descriptor, error) ||
         !applyControlCompactLabelConfig(descriptor, table, error) ||
-        !applyControlTypeConfig(descriptor, table, error)) {
+        !applyControlTypeConfig(descriptor, table, error) ||
+        !applyControlProperties(descriptor, table, false, error)) {
+        return std::nullopt;
+    }
+    if (!validateControlValue(descriptor, defaultValueFor(descriptor))) {
+        error = "控件默认值违反约束";
         return std::nullopt;
     }
 
@@ -3873,8 +3879,10 @@ void ScriptHost::onTransportBytes(const transport::TransportBytesEvent& event)
 
 void ScriptHost::onControl(const transport::ConnectionContext& ctx, const std::string& id, const ControlValue& value)
 {
+    if (executionFaulted()) return;
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr) {
+    if (descriptor == nullptr || !descriptor->visible || descriptor->disabled || descriptor->readOnly ||
+        !validateControlValue(*descriptor, value)) {
         return;
     }
     if (descriptor->type == ControlType::ValueTable) {
@@ -3911,7 +3919,7 @@ bool ScriptHost::requestOscilloscopeToggle(const transport::ConnectionContext& c
 bool ScriptHost::setControlValue(const std::string& id, const ControlValue& value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);
-    if (descriptor == nullptr) {
+    if (descriptor == nullptr || !validateControlValue(*descriptor, value)) {
         return false;
     }
     if (descriptor->type == ControlType::ValueTable) {
@@ -4291,6 +4299,10 @@ const ControlValue* ScriptHost::findControlValue(const std::string& id) const
 void ScriptHost::updateControlValue(const std::string& id, ControlValue value)
 {
     const auto* descriptor = findControlDescriptor(controls_, id);
+    if (descriptor == nullptr || !validateControlValue(*descriptor, value)) {
+        protoLog("warn", "控件值违反当前约束: " + id);
+        return;
+    }
     if (descriptor != nullptr && descriptor->type == ControlType::ValueTable) {
         auto current = defaultValueTableFor(*descriptor);
         if (const auto iter = controlValues_.find(id); iter != controlValues_.end()) {

@@ -134,6 +134,12 @@ struct ControlDescriptor {
     std::string id;
     std::string label;
     std::string shortLabel;
+    bool visible{true};
+    bool disabled{false};
+    bool readOnly{false};
+    std::string tooltip;
+    std::optional<double> minimum;
+    std::optional<double> maximum;
     std::optional<float> compactLabelBelow;
     std::string textDefault;
     int intDefault{0};
@@ -507,6 +513,7 @@ private:
     const std::vector<ControlDescriptor>& controlDescriptors() const;
     const ControlValue* findControlValue(const std::string& id) const;
     void updateControlValue(const std::string& id, ControlValue value);
+    bool updateControlProperties(const sol::table& patches, std::string& error);
 
     void callbackOnOpen(const ScriptHostContext& ctx);
     void callbackOnClose(const ScriptHostContext& ctx);

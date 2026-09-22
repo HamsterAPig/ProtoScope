@@ -70,7 +70,9 @@ KV 独立于记录文件，记录故障不阻断 KV 任务。
 
 ## 剩余工作
 
-- 工业控件、动态属性原子更新、编辑草稿、业务菜单、运行时代次和 UI 状态兼容。
+- 现有控件的属性原子更新、worker 显隐/禁用/只读及约束校验已接入；
+  见 `lua-control-properties.md`。
+- 新工业控件、编辑草稿、业务菜单、运行时代次和新控件 UI 状态兼容仍待实现。
 - 实时字段绑定和历史表；字段条件查询。
 - 记录分卷、目录索引、占用保护、滚动清理、磁盘容量监测和完整重启恢复。
 - CSV 与 `.psrec` 导入导出、暂存分卷与导入取消。
@@ -99,3 +101,10 @@ ctest --test-dir build --output-on-failure
 - `build/tests/protoscope_storage_rate_benchmark.exe 10`：
   `rate=1000/s seconds=10 received=10000 queued=10000 committed=10000 queried=10000 failed=0`。
   工具接受秒数参数（1..86400），目前仅运行 10 秒；不包含清理、导出和内存增长验收。
+
+动态属性基础验证：
+
+- `protoscope_control_properties_tests`：3 组通过，覆盖整批回滚、worker 拒绝非法事件和重载约束。
+- `cmake --build build -j 4`：通过，包含 GUI；首次重编译超过命令超时，确认进程退出后增量重跑成功。
+- `ctest --test-dir build --output-on-failure`：22/22 通过，37.05 秒。
+- GUI 显隐、禁用和只读呈现尚未进行人工交互验收。

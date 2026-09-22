@@ -1,4 +1,5 @@
 #include "script_host_internal.hpp"
+#include "control_properties.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,7 +18,7 @@ namespace {
                               const ControlDescriptor& next,
                               const ControlValue& value)
     {
-        if (previous.type != next.type || value.index() != defaultValueFor(next).index()) {
+        if (previous.type != next.type || !validateControlValue(next, value)) {
             return false;
         }
         switch (next.type) {
