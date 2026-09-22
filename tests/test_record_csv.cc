@@ -35,8 +35,8 @@ void rows()
     data::CsvRowReader limited(excessive,{},32,2);
     rejects([&]{limited.next();},"column bound");
     std::istringstream big("123456789");
-    data::CsvRowReader small(big,{},8);
-    rejects([&]{small.next();},"row byte bound");
+    data::CsvRowReader byteLimited(big,{},8);
+    rejects([&]{byteLimited.next();},"row byte bound");
 }
 void typed()
 {
