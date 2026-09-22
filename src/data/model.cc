@@ -21,6 +21,7 @@ namespace {
     struct Encoder {
         Bytes result;
         ValueLimits limits;
+        std::size_t nodes{0};
 
         void byte(std::uint8_t value)
         {
@@ -43,6 +44,8 @@ namespace {
         }
         void encode(const Value& input, std::size_t depth)
         {
+            if (nodes>=limits.maxNodes) invalid("值超过节点数量上限");
+            ++nodes;
             if (depth > limits.maxDepth) invalid("值超过嵌套深度上限");
             byte(static_cast<std::uint8_t>(input.value.index()));
             switch (input.value.index()) {
@@ -80,6 +83,7 @@ namespace {
     struct Decoder {
         std::span<const std::uint8_t> remaining;
         ValueLimits limits;
+        std::size_t nodes{0};
 
         std::uint8_t byte()
         {
@@ -115,6 +119,9 @@ namespace {
         }
         Value decode(std::size_t depth)
         {
+            // 小标签也会分配 Value/容器，交换文件必须能限制解码放大。
+            if (nodes>=limits.maxNodes) invalid("值超过节点数量上限");
+            ++nodes;
             if (depth > limits.maxDepth) invalid("值超过嵌套深度上限");
             switch (byte()) {
             case 0: return {};

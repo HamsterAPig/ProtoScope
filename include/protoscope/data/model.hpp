@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -50,6 +51,7 @@ struct Record {
 struct ValueLimits {
     std::size_t maxBytes{256U * 1024U};
     std::size_t maxDepth{16};
+    std::size_t maxNodes{std::numeric_limits<std::size_t>::max()};
 };
 
 // 编解码严格保留整数、浮点位型、空值与字节；非法数据抛出 std::invalid_argument。
