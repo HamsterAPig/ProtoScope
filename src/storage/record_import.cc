@@ -81,6 +81,10 @@ StagedRecordImport::StagedRecordImport(StagedRecordImport&&) noexcept=default;
 StagedRecordImport& StagedRecordImport::operator=(StagedRecordImport&&) noexcept=default;
 const ImportedVolumeInfo& StagedRecordImport::info() const {return impl_->info;}
 void StagedRecordImport::release() {impl_->released=true;}
+void StagedRecordImport::relocate(const std::filesystem::path& directory)
+{
+    impl_->directory=directory;impl_->info.path=directory/"records.sqlite";
+}
 
 StagedRecordImport stageRecordImport(const std::filesystem::path& recordsRoot,const std::string& protocol,
     const std::filesystem::path& source,ImportFormat format,

@@ -27,6 +27,8 @@ public:
     const ImportedVolumeInfo& info() const;
     void release();
 private:
+    friend class VolumeCatalog;
+    void relocate(const std::filesystem::path& directory);
     struct Impl;
     std::unique_ptr<Impl> impl_;
     explicit StagedRecordImport(std::unique_ptr<Impl> impl);

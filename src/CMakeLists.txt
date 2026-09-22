@@ -4,7 +4,7 @@ target_include_directories(protoscope_data PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(protoscope_data PUBLIC cxx_std_20)
 
 add_library(protoscope_storage STATIC
-    storage/store.cc storage/query_functions.cc storage/record_export.cc storage/record_import.cc)
+    storage/store.cc storage/query_functions.cc storage/record_export.cc storage/record_import.cc storage/volume_catalog.cc)
 target_include_directories(protoscope_storage PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(protoscope_storage PUBLIC protoscope_data PRIVATE protoscope_sqlite Threads::Threads)
 target_compile_features(protoscope_storage PUBLIC cxx_std_20)
