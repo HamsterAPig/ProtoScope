@@ -13,6 +13,19 @@ namespace {
 struct NullValue {};
 constexpr std::size_t valueLimit = 256U * 1024U;
 
+std::optional<std::int64_t> dataInteger(const sol::object& object)
+{
+    if (!object.valid() || object.get_type()!=sol::type::number) return {};
+    // 快照令牌和设备时间不能经过 int 或 double 中转，否则会截断或丢失精度。
+    auto* state=object.lua_state();
+    sol::stack::push(state,object);
+    const bool integer=lua_isinteger(state,-1);
+    const auto value=integer ? lua_tointeger(state,-1):0;
+    lua_pop(state,1);
+    if (!integer) return {};
+    return static_cast<std::int64_t>(value);
+}
+
 std::uint64_t nextPollTime()
 {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -69,7 +82,7 @@ struct Decoder {
                     consume(key.size());
                     fields.emplace(std::string(key), read(pair.second, depth + 1));
                 } else if (pair.first.get_type() == sol::type::number) {
-                    const auto key = luaIntegerValue(pair.first);
+                    const auto key = dataInteger(pair.first);
                     if (!key || *key < 1 || *key > static_cast<std::int64_t>(valueLimit))
                         throw std::invalid_argument("invalid data array index");
                     elements.emplace(*key, read(pair.second, depth + 1));
@@ -117,7 +130,7 @@ std::vector<sol::table> tableArray(const sol::table& table, std::size_t maximum)
 {
     std::map<std::int64_t, sol::table> items;
     for (const auto& pair : table) {
-        const auto key = luaIntegerValue(pair.first);
+        const auto key = dataInteger(pair.first);
         if (!key || *key < 1 || *key > static_cast<std::int64_t>(maximum) ||
             pair.second.get_type() != sol::type::table)
             throw std::invalid_argument("expected a bounded dense array of tables");
@@ -228,7 +241,7 @@ data::Record ScriptDataSession::parseRecord(const sol::table& input) const
         std::chrono::system_clock::now().time_since_epoch()).count();
     const sol::object deviceTime = input["device_time_us"];
     if (deviceTime.valid() && deviceTime.get_type() != sol::type::lua_nil) {
-        record.deviceTimeUs = luaIntegerValue(deviceTime);
+        record.deviceTimeUs = dataInteger(deviceTime);
         if (!record.deviceTimeUs) throw std::invalid_argument("device_time_us must be int64");
     }
     const auto schema = std::find_if(schemas_.begin(), schemas_.end(),
@@ -392,7 +405,7 @@ void ScriptDataSession::registerApi(sol::state_view lua, sol::table& proto)
         auto integer = [&](const char* key) -> std::optional<std::int64_t> {
             sol::object value = options[key];
             if (!value.valid() || value.get_type() == sol::type::lua_nil) return {};
-            const auto result = luaIntegerValue(value);
+            const auto result = dataInteger(value);
             if (!result) throw std::invalid_argument(std::string(key) + " must be integer");
             return result;
         };

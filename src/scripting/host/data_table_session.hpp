@@ -21,6 +21,7 @@ private:
         data::TableView view;
         std::unique_ptr<data::LiveTable> live;
         std::shared_ptr<const data::TablePage> page;
+        std::shared_ptr<const storage::RecordSnapshot> snapshotLease;
         std::uint64_t task{0};
         std::uint64_t revision{0};
         bool dirty{true};

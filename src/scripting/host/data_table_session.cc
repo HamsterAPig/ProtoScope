@@ -193,6 +193,7 @@ bool DataTableSession::complete(const storage::Completion& result)
     tasks_.erase(task);
     if (result.task!=table.task) return true;
     table.task=0;
+    table.snapshotLease=result.snapshotLease;
     data::TablePage next;
     next.offset=table.view.offset;next.limit=table.view.limit;next.revision=++table.revision;
     next.snapshot=result.snapshot;next.more=result.more;next.error=result.error;

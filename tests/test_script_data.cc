@@ -175,7 +175,12 @@ void recording()
         function on_record(ctx, evt)
             assert(evt.ok, evt.error)
             if evt.operation == "start" then
-                assert(proto.data.publish_batch({row(9223372036854775807),row(2)}))
+                local first,second=row(9223372036854775807),row(2)
+                first.device_time_us=9223372036854775807
+                second.device_time_us=9223372036854775807
+                assert(not pcall(proto.record.query,{limit=1.5}))
+                assert(not pcall(proto.record.query,{snapshot=0.5}))
+                assert(proto.data.publish_batch({first,second}))
                 assert(proto.data.latest("sample").values.counter == 2)
                 proto.record.stop()
             elseif evt.operation == "stop" then
@@ -185,11 +190,12 @@ void recording()
             elseif evt.operation == "query" then
                 assert(#evt.records==1)
                 local value=evt.records[1]
-                assert(value.device=="device-a" and value.device_time_us==123)
+                assert(value.device=="device-a" and value.device_time_us==9223372036854775807)
                 if evt.more then
                     assert(value.values.counter==9223372036854775807)
                     assert(value.values.raw:to_hex(3)=="61 00 62")
                     assert(proto.data.is_null(value.values.note))
+                    assert(math.type(evt.snapshot)=="integer" and evt.snapshot>2147483647)
                     proto.record.query({dataset="sample",limit=1,offset=1,snapshot=evt.snapshot})
                 else
                     assert(value.values.counter==2)

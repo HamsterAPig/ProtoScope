@@ -737,7 +737,7 @@ function on_file_dialog(ctx, evt) end
 ---@field to_us? integer
 ---@field offset? integer
 ---@field limit? integer
----@field snapshot? integer
+---@field snapshot? integer @不透明跨卷快照令牌；过期或重启后必须刷新。
 ---@field conditions? ProtoFieldCondition[] @最多 16 个条件，全部满足才匹配。
 ---@field sort? ProtoFieldSort @在分页前对完整查询结果排序。
 ---@class ProtoFieldCondition
@@ -758,7 +758,7 @@ function on_file_dialog(ctx, evt) end
 ---@field ok boolean
 ---@field error string
 ---@field records ProtoDataRow[]
----@field snapshot? integer
+---@field snapshot? integer @固定卷集合及已提交范围，不是记录 ID。
 ---@field more boolean
 ---@field processed integer @导出成功记录数；失败为 0，原目标保持不变。
 ---@field path? string @导出目标。

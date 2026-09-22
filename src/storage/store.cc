@@ -1,6 +1,5 @@
 #include "protoscope/storage/store.hpp"
-#include "query_functions.hpp"
-#include "record_export.hpp"
+#include "record_query.hpp"
 #include "sqlite_database.hpp"
 
 #include <sqlite3.h>
@@ -144,6 +143,8 @@ struct Store::Impl {
     bool reading{false};
     std::thread writer;
     std::thread reader;
+    std::unique_ptr<VolumeCatalog> catalog;
+    std::unique_ptr<RecordQueryService> queries;
 
     Impl(std::filesystem::path directory, std::string key, std::vector<data::Schema> declarations, Config options)
         : root(std::move(directory)), protocol(std::move(key)), config(options)
@@ -207,6 +208,8 @@ struct Store::Impl {
             if (cacheBytes > config.kvTotalBytes) throw std::runtime_error("已提交 KV 数据超过协议总量上限");
             cache.emplace(std::move(name), std::move(bytes));
         }
+        catalog=std::make_unique<VolumeCatalog>(root/"records",protocol);
+        queries=std::make_unique<RecordQueryService>(root/"records"/"records.sqlite",*catalog,config.queueBytes);
         writer = std::thread([this] { writeLoop(); });
         try { reader = std::thread([this] { readLoop(); }); }
         catch (...) {
@@ -409,111 +412,10 @@ struct Store::Impl {
             result.path=command.exportPath;
             try {
                 if (command.canceled->stop_requested()) throw std::runtime_error("查询已取消");
-                Database db(root / "records" / "records.sqlite", true);
-                registerQueryFunctions(db.get());
-                sqlite3_progress_handler(db.get(), 1000, [](void* flag) {
-                    return static_cast<std::stop_source*>(flag)->stop_requested() ? 1 : 0;
-                }, command.canceled.get());
-                db.exec("BEGIN");
-                auto cutoff = command.query.snapshot;
-                {
-                    Statement high(db, "SELECT coalesce(max(id),0) FROM records");
-                    high.row();
-                    const auto maximum = high.integer(0);
-                    if (!cutoff) cutoff = maximum;
-                    else if (*cutoff > maximum) throw std::runtime_error("查询快照超出已提交高水位");
-                }
-                result.snapshot = cutoff;
-                const auto& query = command.query;
-                const bool fieldQuery=!query.conditions.empty() || query.sort.has_value();
-                std::string sql="SELECT r.id,r.payload FROM records r ";
-                if (fieldQuery) sql+="JOIN schemas s ON s.id=r.schema_id ";
-                sql+="WHERE r.id<=? AND (?='' OR r.dataset=?) AND (?=0 OR r.device=?) "
-                     "AND (?=0 OR r.received_us>=?) AND (?=0 OR r.received_us<=?) ";
-                if (!query.conditions.empty()) sql+="AND ps_matches(r.payload,s.definition,?) ";
-                sql+="ORDER BY ";
-                if (query.sort) {
-                    const std::string direction=query.sort->descending ? " DESC,":" ASC,";
-                    sql+="ps_field_type(r.payload,s.definition,?)"+direction+"ps_field(r.payload,s.definition,?)"+direction;
-                }
-                // 排序筛选在 LIMIT 之前完成；相同字段值始终以时间和记录 ID 打破平局。
-                sql+="r.received_us,r.id LIMIT ? OFFSET ?";
-                Statement statement(db,sql.c_str());
-                statement.integer(1, *cutoff);
-                statement.text(2, query.dataset);
-                statement.text(3, query.dataset);
-                statement.integer(4, query.device.has_value());
-                statement.text(5, query.device.value_or(""));
-                statement.integer(6, query.fromUs.has_value());
-                statement.integer(7, query.fromUs.value_or(0));
-                statement.integer(8, query.toUs.has_value());
-                statement.integer(9, query.toUs.value_or(0));
-                int parameter=10;
-                if (!query.conditions.empty())
-                    statement.blob(parameter++,data::encodeValue(data::conditionsValue(query.conditions),{128U*1024U,4}));
-                if (query.sort) {
-                    statement.text(parameter++,query.sort->field);
-                    statement.text(parameter++,query.sort->field);
-                }
-                statement.integer(parameter++, exporting ? -1:static_cast<std::int64_t>(query.limit + 1));
-                statement.integer(parameter, exporting ? 0:static_cast<std::int64_t>(query.offset));
-                if (exporting) {
-                    std::map<std::uint64_t,data::Schema> definitions;
-                    Statement versions(db,"SELECT id,definition FROM schemas WHERE (?='' OR dataset=?) LIMIT 1025");
-                    versions.text(1,query.dataset);versions.text(2,query.dataset);
-                    std::size_t schemaBytes=0;
-                    while (versions.row()) {
-                        if (command.canceled->stop_requested()) throw std::runtime_error("record export canceled");
-                        const auto encoded=versions.blob(1);
-                        if (definitions.size()>=1024 || encoded.size()>kRecordLimits.maxBytes-schemaBytes)
-                            throw std::runtime_error("export schema metadata exceeds limit");
-                        schemaBytes+=encoded.size();
-                        definitions.emplace(static_cast<std::uint64_t>(versions.integer(0)),
-                            data::schemaFromValue(data::decodeValue(encoded,kRecordLimits)));
-                    }
-                    result.processed=exportRecordFile(command.exportPath,command.format,definitions,[&]() -> std::optional<data::Record> {
-                        if (command.canceled->stop_requested()) throw std::runtime_error("record export canceled");
-                        if (!statement.row()) return std::nullopt;
-                        return data::recordFromValue(data::decodeValue(statement.blob(1),kRecordLimits));
-                    },command.canceled->get_token(),command.exportOptions);
-                } else {
-                std::size_t resultBytes = 0;
-                while (statement.row()) {
-                    if (command.canceled->stop_requested()) throw std::runtime_error("查询已取消");
-                    if (result.records.size() == query.limit) { result.more = true; break; }
-                    const auto payload = statement.blob(1);
-                    // 最多 16 个未消费查询共享结果内存预算，页大小不等于无界字节数。
-                    if (payload.size() > config.queueBytes / 16 - resultBytes) {
-                        throw std::runtime_error("查询页超过结果内存预算，请减小页大小");
-                    }
-                    auto record = data::recordFromValue(data::decodeValue(payload, kRecordLimits));
-                    if (!result.schemas.contains(record.schemaVersion)) {
-                        Statement schema(db, "SELECT definition FROM schemas WHERE id=?");
-                        schema.integer(1, static_cast<std::int64_t>(record.schemaVersion));
-                        if (!schema.row()) throw std::runtime_error("历史记录的模式版本缺失");
-                        auto definition = data::schemaFromValue(data::decodeValue(schema.blob(0), kRecordLimits));
-                        auto schemaBytes = sizeof(data::Schema) + definition.dataset.capacity() +
-                            definition.fields.capacity() * sizeof(data::Field);
-                        for (const auto& field : definition.fields) schemaBytes += field.name.capacity();
-                        if (schemaBytes > config.queueBytes / 16 - resultBytes) {
-                            throw std::runtime_error("查询模式超过结果内存预算，请减小页大小");
-                        }
-                        resultBytes += schemaBytes;
-                        result.schemas.emplace(record.schemaVersion, std::move(definition));
-                    }
-                    data::validateRecord(result.schemas.at(record.schemaVersion), record);
-                    const auto memory = payload.size() + sizeof(data::Record) + sizeof(std::uint64_t) +
-                        record.values.size() * sizeof(data::Value);
-                    if (memory > config.queueBytes / 16 - resultBytes) {
-                        throw std::runtime_error("查询页超过结果内存预算，请减小页大小");
-                    }
-                    resultBytes += memory;
-                    result.records.push_back(std::move(record));
-                    result.rowIds.push_back(static_cast<std::uint64_t>(statement.integer(0)));
-                }
-                if (command.canceled->stop_requested()) throw std::runtime_error("查询已取消");
-                }
-                result.ok = true;
+                result=exporting ? queries->exportRecords(command.exportPath,command.format,command.query,
+                                                          command.exportOptions,command.canceled->get_token()):
+                                   queries->query(command.query,command.canceled->get_token());
+                result.task=command.task;
             } catch (const std::exception& error) {
                 result.error = error.what();
                 result.records.clear();

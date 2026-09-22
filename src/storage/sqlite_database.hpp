@@ -54,6 +54,8 @@ public:
         const auto code=sqlite3_step(statement_);check(code,db_);return code==SQLITE_ROW;
     }
     std::int64_t integer(int index) const {return sqlite3_column_int64(statement_,index);}
+    double real(int index) const {return sqlite3_column_double(statement_,index);}
+    int type(int index) const {return sqlite3_column_type(statement_,index);}
     std::string text(int index) const
     {
         const auto* value=sqlite3_column_text(statement_,index);

@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace protoscope::storage {
+struct RecordSnapshot;
 
 struct Config {
     std::size_t queueBytes{32U * 1024U * 1024U};
@@ -42,7 +43,7 @@ struct Query {
     std::optional<std::int64_t> toUs;
     std::size_t offset{0};
     std::size_t limit{200};
-    // 未指定时创建快照；返回的高水位用于后续页，后续发布不会改变同一快照。
+    // 未指定时创建跨卷快照；令牌不透明，后续发布和导入不会改变同一快照。
     std::optional<std::int64_t> snapshot;
     std::vector<data::FieldCondition> conditions;
     std::optional<data::FieldSort> sort;
@@ -66,6 +67,7 @@ struct Completion {
     std::vector<std::uint64_t> rowIds;
     std::filesystem::path path;
     std::uint64_t processed{0};
+    std::shared_ptr<const RecordSnapshot> snapshotLease;
 };
 
 class Store {

@@ -109,20 +109,29 @@ struct VolumeCatalog::Impl {
     std::vector<CatalogVolume> volumes(sqlite::Database& db)
     {
         std::vector<CatalogVolume> result;
+        std::size_t bytes=0;
+        const auto account=[&](std::size_t size) {
+            if (size>valueLimits.maxBytes-bytes) throw std::runtime_error("catalog volume metadata exceeds budget");
+            bytes+=size;
+        };
         sqlite::Statement rows(db,"SELECT id,identity,records,from_us,to_us,sealed_us,id_base FROM volumes ORDER BY id");
         while (rows.row()) {
             CatalogVolume volume;
             volume.id=static_cast<std::uint64_t>(rows.integer(0));
             volume.identity=rows.text(1);checkIdentity(volume.identity);
             volume.path=root/("vol-"+volume.identity)/"records.sqlite";
+            account(sizeof(CatalogVolume)+volume.path.native().size()*sizeof(std::filesystem::path::value_type)+32);
             volume.records=static_cast<std::uint64_t>(rows.integer(2));
             if (volume.records) {volume.fromUs=rows.integer(3);volume.toUs=rows.integer(4);}
             volume.sealedAtUs=rows.integer(5);
             volume.idBase=rows.integer(6);
             sqlite::Statement schemas(db,"SELECT local_id,global_id FROM volume_schemas WHERE volume_id=?");
             schemas.integer(1,static_cast<std::int64_t>(volume.id));
-            while (schemas.row()) volume.schemaIds.emplace(static_cast<std::uint64_t>(schemas.integer(0)),
-                                                           static_cast<std::uint64_t>(schemas.integer(1)));
+            while (schemas.row()) {
+                account(64);
+                volume.schemaIds.emplace(static_cast<std::uint64_t>(schemas.integer(0)),
+                                          static_cast<std::uint64_t>(schemas.integer(1)));
+            }
             result.push_back(std::move(volume));
         }
         return result;
@@ -217,8 +226,15 @@ std::map<std::uint64_t,data::Schema> VolumeCatalog::schemas() const
     sqlite::Database db(impl_->root/"index.sqlite",true);
     sqlite::Statement rows(db,"SELECT id,definition FROM schemas");
     std::map<std::uint64_t,data::Schema> result;
-    while (rows.row())
-        result.emplace(static_cast<std::uint64_t>(rows.integer(0)),data::schemaFromValue(data::decodeValue(rows.blob(1),valueLimits)));
+    std::size_t bytes=0;
+    while (rows.row()) {
+        auto schema=data::schemaFromValue(data::decodeValue(rows.blob(1),valueLimits));
+        std::size_t size=sizeof(schema)+schema.dataset.capacity()+schema.fields.capacity()*sizeof(data::Field);
+        for (const auto& field:schema.fields) size+=field.name.capacity();
+        if (size>valueLimits.maxBytes-bytes) throw std::runtime_error("catalog schema metadata exceeds budget");
+        bytes+=size;
+        result.emplace(static_cast<std::uint64_t>(rows.integer(0)),std::move(schema));
+    }
     return result;
 }
 std::map<std::uint64_t,std::uint64_t> VolumeCatalog::registerSchemas(const std::map<std::uint64_t,data::Schema>& schemas)
